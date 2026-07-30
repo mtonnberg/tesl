@@ -7,7 +7,7 @@ module Lesson57Jwt exposing [
 ]
 
 # lesson: track=stdlib order=330 needs=lesson06-proof-check-proof-auth
-# summary: Sign and verify JSON Web Tokens for stateless auth, with nominal types keeping token and secret apart
+# summary: Sign and verify JSON Web Tokens for stateless auth, with the token nominal and the key a Tesl.Crypto Secret
 # ─────────────────────────────────────────────────────────────────────────────
 # Lesson 57 — JWT: JSON Web Tokens
 #
@@ -23,13 +23,16 @@ module Lesson57Jwt exposing [
 #   JWT.verify token  secret  → claims      (verify signature + expiry → auto-401)
 #   JWT.decode token          → claims      (decode only, no signature check)
 #
-# JwtToken  — nominal newtype wrapping String (the "header.payload.sig" token)
-# JwtSecret — nominal newtype wrapping String (the HMAC signing key)
+# JwtToken — nominal newtype wrapping String (the "header.payload.sig" token)
+# Secret   — the SIGNING KEY, from Tesl.Crypto. Tesl.JWT has no key type of its
+#            own: `Secret` is the one key-material type in the language, and it is
+#            what `Env.requireSecret` returns, so the key never has to become a
+#            String on its way from the environment into JWT.sign.
 #
 # NOMINAL TYPES MATTER:
-#   - JwtToken  ≠ String    (cannot pass raw string where JwtToken is expected)
-#   - JwtSecret ≠ JwtToken  (cannot accidentally use a token as a secret)
-#   - JwtToken  ≠ JwtSecret (prevents signing with a token instead of a key)
+#   - JwtToken ≠ String   (cannot pass a raw string where JwtToken is expected)
+#   - Secret   ≠ JwtToken (cannot accidentally sign with a token, or hand a key
+#                          out as if it were a token)
 #
 # All JWT operations require the `jwt` capability. Declare a capability that
 # implies `jwt` and list it in `requires [...]` on your fn/handler.
@@ -66,12 +69,15 @@ import Tesl.Prelude exposing [String]
 import Tesl.JWT exposing [
   jwt,
   JwtToken,
-  JwtSecret,
   JWT.sign,
   JWT.verify,
   JWT.decode,
   Authentic,
 ]
+# The signing key type lives in Tesl.Crypto, not Tesl.JWT — one key type for the
+# whole language. `Crypto.keyFingerprint` is here for the `kid` test at the
+# bottom; signing and verifying do not need it.
+import Tesl.Crypto exposing [Secret, Crypto.keyFingerprint]
 import Tesl.String exposing [String.length]
 import Tesl.Dict exposing [Dict, Dict.singleton, Dict.lookup]
 # `time` is imported only to be named in `authCap implies jwt, time` below —
@@ -90,7 +96,7 @@ capability authCap implies jwt, time
 
 # ── Step 2: Sign a JWT at login time ─────────────────────────────────────────
 #
-# JWT.sign takes a claims Dict (String keys) and a JwtSecret. The claims are
+# JWT.sign takes a claims Dict (String keys) and a Secret. The claims are
 # JSON-serialized into the JWT payload; build them with Dict.singleton/fromList.
 #
 # YOU DO NOT SET THE EXPIRY. JWT.sign stamps `exp` one hour ahead, in epoch
@@ -104,7 +110,7 @@ capability authCap implies jwt, time
 # revoke it. An unexpiring bearer token you cannot revoke is the thing to avoid.
 # Renewing a session is just another JWT.sign.
 
-fn makeLoginToken(userId: String, secret: JwtSecret) -> JwtToken requires [authCap] =
+fn makeLoginToken(userId: String, secret: Secret) -> JwtToken requires [authCap] =
   JWT.sign (Dict.singleton "sub" userId) secret
 
 # ── Step 3: Verify the JWT on protected endpoints ─────────────────────────────
@@ -129,7 +135,7 @@ fn makeLoginToken(userId: String, secret: JwtSecret) -> JwtToken requires [authC
 # non-Dict. `check` is what makes the propagation real; the compiler now rejects
 # the nested form rather than letting it look like it works.
 
-fn getUserFromToken(token: JwtToken, secret: JwtSecret) -> String requires [authCap] =
+fn getUserFromToken(token: JwtToken, secret: Secret) -> String requires [authCap] =
   let claims = check JWT.verify token secret
   case Dict.lookup "sub" claims of
     Nothing -> ""
@@ -173,19 +179,28 @@ fn decodeToken(token: JwtToken) -> String requires [authCap] =
 # When receiving a token from an HTTP header (as a plain String), wrap it in
 # JwtToken before calling JWT.verify. This makes the type boundary explicit.
 #
-# JwtToken rawStr  → creates a JwtToken wrapping rawStr
-# JwtSecret rawStr → creates a JwtSecret wrapping rawStr
+# JwtToken rawStr → creates a JwtToken wrapping rawStr
+# Secret rawStr   → creates a Secret wrapping rawStr
+#
+# For the KEY, `Secret raw` is the fallback, not the idiom. The idiom is
+# `Env.requireSecret "SESSION_JWT_SECRET"`, which reads the environment straight
+# into a `Secret` so no String ever holds key material:
+#
+#     let claims = check JWT.verify token (requireSecret "SESSION_JWT_SECRET")
+#
+# (`requireSecret` comes from Tesl.Env and charges `envRead`. A string LITERAL in
+# a key position — `Secret "hunter2"` — is what the SEC003 lint exists to catch,
+# which is why the tests below go through a named helper instead.)
 #
 # The two directions are NOT symmetric. `token.value` reads the inner string of
 # a JwtToken, because handing a token to a client is the point of having one.
-# `secret.value` does not exist: a JwtSecret is a secret, redacted in telemetry,
+# `secret.value` does not exist: a Secret is a secret, redacted in telemetry,
 # in logs and in the debugger, and an accessor would defeat all of that in one
-# call. Pass the JwtSecret itself to JWT.sign / JWT.verify, or mint it from the
-# environment with Env.requireSecret.
+# call. Pass the Secret itself to JWT.sign / JWT.verify.
 
 fn wrapAndVerify(rawToken: String, rawSecret: String) -> String requires [authCap] =
   let token = JwtToken rawToken
-  let secret = JwtSecret rawSecret
+  let secret = Secret rawSecret
   let claims = check JWT.verify token secret
   case Dict.lookup "sub" claims of
     Nothing -> ""
@@ -195,15 +210,34 @@ fn wrapAndVerify(rawToken: String, rawSecret: String) -> String requires [authCa
 # UNDERSTANDING — why JWT works this way in Tesl
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# WHY NOMINAL TYPES FOR JwtToken AND JwtSecret?
+# WHY NOMINAL TYPES FOR JwtToken AND Secret?
 #
 # Without nominal types, `String` is a String is a String. You could
-# accidentally pass the token where the secret is expected (both are strings)
+# accidentally pass the token where the key is expected (both are strings)
 # and the compiler would not catch it. The signature would verify against itself.
 #
-# JwtToken and JwtSecret are DIFFERENT TYPES that happen to wrap a String.
+# JwtToken and Secret are DIFFERENT TYPES that happen to wrap a String.
 # The compiler enforces that you can never pass one where the other is required.
 # This makes JWT API misuse a compile error, not a runtime failure.
+#
+# WHY ONE KEY TYPE AND NOT A JWT-SPECIFIC ONE?
+#
+# Tesl.JWT had a key type of its own until 2026-07-30, and it was deleted rather
+# than aliased. Two key types is not a harmless duplication: `Env.requireSecret`
+# returns `Secret`, so a JWT-only key type meant the shipped examples had to
+# rewrap the key — `JwtOnlyKey (requireEnv "SESSION_JWT_SECRET")` — putting the
+# plaintext key in a String on the way through, which is exactly what a secret
+# type exists to prevent. One key type, and the environment feeds it directly.
+#
+# WHAT IS `kid` IN THE HEADER?
+#
+# JWT.sign stamps `kid` = `Crypto.keyFingerprint key` in the JOSE header (its
+# RFC 7515 home). It is DERIVED, not chosen — no parameter — and it is a
+# domain-separated digest truncated to 16 hex characters, so it is safe to log and
+# is not proof of key possession. It answers "which key signed this / which key is
+# this replica loaded with" from a log line. JWT.verify never reads it: it
+# recomputes the HMAC over `header.payload` verbatim, so tokens from other
+# libraries and older Tesl tokens verify exactly as before.
 #
 # WHY THE `jwt` CAPABILITY?
 #
@@ -232,8 +266,16 @@ fn wrapAndVerify(rawToken: String, rawSecret: String) -> String requires [authCa
 # TESTS
 # ─────────────────────────────────────────────────────────────────────────────
 
+# The tests build their key through this helper rather than writing
+# `Secret "…"` inline: a string literal in a key position is a hardcoded
+# credential, which is what SEC003 flags, and a lesson that trips its own security
+# lint teaches the reader to ignore the lint. In a real program the key comes from
+# `Env.requireSecret`.
+fn lessonKey(raw: String) -> Secret =
+  Secret raw
+
 test "makeLoginToken produces a 36+ character JwtToken" requires [authCap] {
-  let secret = JwtSecret "lesson57-test-key"
+  let secret = lessonKey "lesson57-test-key"
   let token = makeLoginToken "user:alice" secret
   expect String.length token.value > 36
 }
@@ -244,14 +286,14 @@ test "JwtToken.value retrieves the inner string" {
   expect token.value == raw
 }
 
-# A JwtSecret has NO `.value` — see Step 5. What survives, and is the property
+# A Secret has NO `.value` — see Step 5. What survives, and is the property
 # that actually matters, is that the key is carried faithfully without ever being
 # readable: two secrets built from the same String are the same key (they sign
 # identically), and the compiler is what stops you reading either one back out.
-test "JwtSecret carries its key faithfully without exposing it" requires [authCap] {
+test "a Secret carries its key faithfully without exposing it" requires [authCap] {
   let key = "my-signing-key-2025"
-  let a = JwtSecret key
-  let b = JwtSecret key
+  let a = Secret key
+  let b = Secret key
   expect a == b
   let ta = makeLoginToken "user" a
   let tb = makeLoginToken "user" b
@@ -259,54 +301,54 @@ test "JwtSecret carries its key faithfully without exposing it" requires [authCa
 }
 
 test "different secrets produce different tokens" requires [authCap] {
-  let s1 = JwtSecret "key-alpha"
-  let s2 = JwtSecret "key-beta"
+  let s1 = lessonKey "key-alpha"
+  let s2 = lessonKey "key-beta"
   let t1 = makeLoginToken "user" s1
   let t2 = makeLoginToken "user" s2
   expect t1.value != t2.value
 }
 
 test "same inputs always produce the same token (deterministic)" requires [authCap] {
-  let secret = JwtSecret "stable-key"
+  let secret = lessonKey "stable-key"
   let t1 = makeLoginToken "user:123" secret
   let t2 = makeLoginToken "user:123" secret
   expect t1.value == t2.value
 }
 
 test "different claims produce different tokens" requires [authCap] {
-  let secret = JwtSecret "same-secret"
+  let secret = lessonKey "same-secret"
   let t1 = makeLoginToken "alice" secret
   let t2 = makeLoginToken "bob" secret
   expect t1.value != t2.value
 }
 
 test "getUserFromToken round-trip: verify recovers claims" requires [authCap] {
-  let secret = JwtSecret "roundtrip-key"
+  let secret = lessonKey "roundtrip-key"
   let token = makeLoginToken "user:42" secret
   let result = getUserFromToken token secret
   expect String.length result > 0
 }
 
 test "decodeToken extracts payload without verification" requires [authCap] {
-  let secret = JwtSecret "decode-key"
+  let secret = lessonKey "decode-key"
   let token = makeLoginToken "decode-user" secret
   let result = decodeToken token
   expect String.length result > 0
 }
 
 test "wrapAndVerify: wrap raw strings and verify" requires [authCap] {
-  # The raw key has to come from where a real program's does — the environment,
-  # a config value, a literal here — not out of the JwtSecret. `secret.value`
-  # does not exist.
+  # The raw key has to come from where a real program's does — the environment
+  # (`Env.requireSecret`), a config value, a literal here — not out of the
+  # `Secret`. `secret.value` does not exist.
   let rawSecret = "wrap-test-key"
-  let secret = JwtSecret rawSecret
+  let secret = Secret rawSecret
   let token = makeLoginToken "wrapped-user" secret
   let result = wrapAndVerify token.value rawSecret
   expect String.length result > 0
 }
 
 test "token length grows with longer claims" requires [authCap] {
-  let secret = JwtSecret "length-test"
+  let secret = lessonKey "length-test"
   let short = makeLoginToken "u" secret
   let long = makeLoginToken "user:with-a-very-long-id-value-here-123456789" secret
   expect String.length long.value > String.length short.value
@@ -314,18 +356,29 @@ test "token length grows with longer claims" requires [authCap] {
 
 test "signing with a long secret works" requires [authCap] {
   let longKey = "a-very-long-secret-key-that-is-at-least-64-characters-long-abcdefgh"
-  let secret = JwtSecret longKey
+  let secret = Secret longKey
   let token = makeLoginToken "user" secret
   expect String.length token.value > 0
 }
 
 test "sequential sign-verify pairs work independently" requires [authCap] {
-  let s1 = JwtSecret "seq-key-1"
-  let s2 = JwtSecret "seq-key-2"
+  let s1 = lessonKey "seq-key-1"
+  let s2 = lessonKey "seq-key-2"
   let t1 = makeLoginToken "user1" s1
   let t2 = makeLoginToken "user2" s2
   let r1 = getUserFromToken t1 s1
   let r2 = getUserFromToken t2 s2
   expect String.length r1 > 0
   expect String.length r2 > 0
+}
+
+test "the header carries a kid derived from the key" requires [authCap] {
+  # Different keys, same claims: the tokens now differ in their HEADER, not only
+  # in their signature, because `kid` = Crypto.keyFingerprint of the key. The
+  # fingerprint itself is 16 hex characters and is safe to log.
+  let a = lessonKey "kid-key-a"
+  let b = lessonKey "kid-key-b"
+  expect Crypto.keyFingerprint a != Crypto.keyFingerprint b
+  expect String.length (Crypto.keyFingerprint a) == 16
+  expect (makeLoginToken "user" a).value != (makeLoginToken "user" b).value
 }

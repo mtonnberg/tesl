@@ -3,10 +3,11 @@
 #  scripts/regen-rkt-snapshots.sh — regenerate every committed .rkt snapshot
 # ═══════════════════════════════════════════════════════════════════════════════
 #
-# The gate diffs `example/learn/*.rkt`, `example/*.rkt` and `tests/*.rkt` against
-# a fresh compile, BYTE FOR BYTE.  Any emitter change — and any edit that shifts a
-# line number, including adding a comment, because `thsl-src!` bakes line numbers
-# into the snapshot — invalidates the affected files.
+# The gate diffs `example/learn/*.rkt`, `example/*.rkt`, `tests/*.rkt` and
+# `templates/*/app.rkt` against a fresh compile, BYTE FOR BYTE.  Any emitter
+# change — and any edit that shifts a line number, including adding a comment,
+# because `thsl-src!` bakes line numbers into the snapshot — invalidates the
+# affected files.
 #
 # The regeneration command is one line per file
 # (`main.exe <f>.tesl > <f>.rkt`) and was previously only documented in prose, so
@@ -73,18 +74,43 @@ fi
 # (Learned the hard way: the ordered-comparison fix changed the emitted `<`, and
 # running only this script left ci.sh phase 4 red.)
 #
+# SEED DIRS — the ONE list, and the reason it has to exist.
+#
+# Discovery above is defined as "holds a `.rkt` with a sibling `.tesl`", which is
+# a chicken-and-egg for a directory that has no snapshot yet: it can never
+# acquire its first one. `templates/api` and `templates/minimal` are exactly
+# that case, and they are the `tesl init` scaffold — the first Tesl code a new
+# user ever runs — so they are the corpus that least deserves to be uncovered.
+# (Before this list they were in NO gate phase at all: not the validate sweep,
+# not the snapshot diff, not the Tesl-test batch runner.)
+#
+# Files here are ALSO minted when missing (see `mint_missing` below), unlike
+# discovered dirs where a missing `.rkt` is skipped on purpose. That keeps the
+# seed self-healing: delete templates/*/app.rkt and one run brings it back.
+#
+# Why the committed templates/*/app.rkt is NOT stray build output, for whoever
+# next reads `git status` and reaches for `rm`: it is what puts the scaffold into
+# ci.sh's exact-match snapshot phase (emit ratchet) and its Tesl-test batch
+# runner (the `test` blocks actually RUN, which loads the emitted module and so
+# catches a runtime-load regression such as the libsodium-backed `Secret`).
+# `tesl init` copies only app.tesl / tesl.toml / README.md, so the snapshot never
+# lands in a user's scaffolded project.
+SEED_DIRS="templates/api templates/minimal"
+
 # An explicit argument still overrides, for a fast single-directory loop.
 if [ "$#" -gt 0 ]; then
   DIRS="$*"
 else
   DIRS="$(
-    find "$REPO_ROOT" -name '*.rkt' \
+    { find "$REPO_ROOT" -name '*.rkt' \
          -not -path '*/compiled/*' -not -path '*/_build*' \
          -not -path '*/.claude/*' -not -path '*/node_modules/*' \
          -not -path "$REPO_ROOT/tesl/*" -not -path "$REPO_ROOT/dsl/*" 2>/dev/null \
-    | while read -r rkt; do
-        [ -f "${rkt%.rkt}.tesl" ] && printf '%s\n' "$(dirname "${rkt#$REPO_ROOT/}")"
-      done | sort -u | tr '\n' ' '
+      | while read -r rkt; do
+          [ -f "${rkt%.rkt}.tesl" ] && printf '%s\n' "$(dirname "${rkt#$REPO_ROOT/}")"
+        done
+      printf '%s\n' $SEED_DIRS
+    } | sort -u | tr '\n' ' '
   )"
 fi
 
@@ -94,6 +120,10 @@ orphans=0
 
 for dir in $DIRS; do
   [ -d "$REPO_ROOT/$dir" ] || continue
+
+  # Seed dirs mint a missing snapshot; discovered dirs never do (see SEED_DIRS).
+  mint_missing=0
+  case " $SEED_DIRS " in *" $dir "*) mint_missing=1 ;; esac
 
   # Orphan check — ONLY in example/learn, which is the one directory the gate
   # holds to a strict 1:1 .tesl/.rkt pairing (ci.sh reports "NO .tesl FOR
@@ -118,8 +148,9 @@ for dir in $DIRS; do
     case "$(basename "$tesl")" in tesl-lsp-*) continue ;; esac   # LSP scratch copies
     rkt="${tesl%.tesl}.rkt"
     # Only files that ALREADY have a committed snapshot are in the gate's diff
-    # set; compiling the rest would mint snapshots nobody asked for.
-    [ -f "$rkt" ] || continue
+    # set; compiling the rest would mint snapshots nobody asked for.  The one
+    # exception is a seed dir, whose whole point is to mint the first one.
+    [ -f "$rkt" ] || [ "$mint_missing" -eq 1 ] || continue
 
     # Invoke with a REPO-RELATIVE path.  The emitter bakes the input path into
     # every `(thsl-src! "PATH" …)` checkpoint, so an absolute invocation commits

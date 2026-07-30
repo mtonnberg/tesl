@@ -692,7 +692,11 @@ let stdlib_zero_arg_names : (string, unit) Hashtbl.t =
         once-evaluated constant. *)
      "randomFloat"; "generateId";
      (* Crypto.randomToken() — a fresh 256-bit token per call. *)
-     "Crypto.randomToken"]; h
+     "Crypto.randomToken";
+     (* Http.clearSessionCookie() — the logout half of the session cookie.  A
+        nullary EFFECT, so `()` must lower to `(Http.clearSessionCookie)` rather
+        than passing an empty list to a nullary runtime function. *)
+     "Http.clearSessionCookie"]; h
 
 let job_type_to_queue : (string, string) Hashtbl.t = Hashtbl.create 16
 

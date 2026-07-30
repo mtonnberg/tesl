@@ -1,5 +1,58 @@
 # Sessions over secure cookies — close the crypto/session/cookie surface
 
+> **Status: IMPLEMENTED 2026-07-30.** All four phases landed; audit **L2** is closed
+> (`roadmap/discarded/security_hardening_audit.md`, and the L2 line in
+> `security_hardening_program.md`). **L1 is untouched and stays open.**
+>
+> **What shipped, against the plan below.** Phase 0: the JWT-only key newtype is deleted,
+> not aliased — `JWT.sign`/`JWT.verify` take `Secret`, `Env.requireSecret` feeds them
+> directly, and no `String` holds key material anywhere in the corpus. Phase 1: `JWT.sign`
+> stamps `kid` = `Crypto.keyFingerprint key` in the JOSE header; the verify path is
+> untouched, and a kid-less token still verifies (pinned by a test that forges one out of
+> band). Phase 2: `cookieCap` + `Http.setSessionCookie` / `Http.clearSessionCookie` /
+> `Http.sessionToken` in `tesl/http.rkt`, with a request-scoped accumulator in the new
+> `dsl/response-cookies.rkt` that `dsl/web.rkt` reads when it builds a 2xx. Phase 3:
+> `example/learn/lesson76-sessions.tesl`, spec §21.8, `lesson06` demoted to a MAC
+> demonstration with a forward pointer, `manual/best-practices.md` leading with the JWT
+> cookie, and every `auth` block in the examples and templates reading the cookie through
+> `Http.sessionToken`.
+>
+> **Where the implementation deviates from this plan, and why.**
+> 1. **`Http.clearSessionCookie()`, not bare `Http.clearSessionCookie`.** The blessed screen
+>    below writes it bare. Tesl's shape for a nullary stdlib effect is `f()` (`nowMillis()`,
+>    `UUID.v4()`, `Crypto.randomToken()`), lowered via `Emit_racket.stdlib_zero_arg_names`;
+>    a bare reference would emit an identifier, not a call. Likewise
+>    `let _ = Http.setSessionCookie token`, which is the existing statement-position idiom
+>    (`Email.send`), not a bare statement.
+> 2. **`Tesl.Http` gained a real `tesl_module_exports` row.** It was one of the loosely
+>    validated internal modules, which also meant its names were invisible to the stdlib
+>    binding-existence seam test. `HttpRequest` was the only name anyone imported from it, so
+>    making the list strict broke nothing and closed that hole.
+> 3. **`responseCookie` returns the `name=value` PAIR, not the bare value.** That is what a
+>    request's `cookie` clause takes, so a round trip is `Something c -> get "/me" cookie c`
+>    with no string surgery. The attributes are asserted against `response.headers`'s
+>    `"set-cookie"` entry, which turned out to work already — `dsl/test-support.rkt`'s
+>    `api-test-response` was wired for it and had simply never had a non-empty header list.
+> 4. **The cookie scope is per REQUEST, not per handler invocation** — `parameterize`d around
+>    the whole match/auth/handler sequence in `dispatch-request`, so an `auth` block can also
+>    write and its cookie rides the handler's 2xx.
+> 5. **`JWT.sign`/`JWT.verify` were added to `secret_accepting_params` (index 1).** Not in the
+>    plan; it became a pure win once the key unified on `Secret`, extending SEC003 to the two
+>    slots where a hardcoded credential matters most.
+>
+> **Verification against the bar below:** `tests/session-cookie-tests.tesl` (8 api-tests:
+> the full `Set-Cookie` line from a handler that passed nothing, the login → protected
+> endpoint round trip, a tampered cookie, a second tenant's key, `Max-Age=0` on logout, and
+> no `Set-Cookie` from a handler that sets one and then `fail`s) plus
+> `compiler/test/test_session_cookie.ml` (15 checks: a `String` is a type error, both writers
+> need `cookieCap`, `cookieCap` is import-gated, nothing is ambient, the export list is
+> strict, and the generated TypeScript **and** Elm are byte-identical with and without the
+> cookie call). `grep -rn JwtSecret` over the tree is empty except two deliberate ratchet
+> probes in `compiler/test/test_jwt.ml` that spell the old name in order to assert it is
+> rejected, plus historical roadmap/log files.
+>
+> **Original planning notes follow, unedited.**
+
 > **Status:** Next · **Effort:** M.
 > Rewritten 2026-07-30 after a second analysis pass. Supersedes the earlier "response metadata"
 > framing of this file: the survey found that a *general* response-metadata feature is not needed

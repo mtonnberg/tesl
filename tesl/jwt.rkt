@@ -2,19 +2,29 @@
 
 ;;; Tesl.JWT — JSON Web Token support using HMAC-SHA256.
 ;;;
-;;; Provides nominal newtypes JwtToken (a signed JWT string) and JwtSecret
-;;; (a signing secret string), plus JWT.sign, JWT.verify, and JWT.decode.
+;;; Provides the nominal newtype JwtToken (a signed JWT string) plus JWT.sign,
+;;; JWT.verify and JWT.decode.
+;;;
+;;; The SIGNING KEY is `Secret`, Tesl.Crypto's key-material type — there is ONE
+;;; key type in the language.  A JWT-ONLY key newtype lived here until
+;;; 2026-07-30 and was DELETED, not aliased: `Env.requireSecret` returns
+;;; `Secret`, so with two types the shipped examples had to rewrap the signing key
+;;; through a plain `String`, which defeats the redaction the secret types exist to
+;;; guarantee.  `Env.requireSecret "…"` now feeds `JWT.sign` / `JWT.verify`
+;;; directly and no `String` ever holds key material.
 ;;;
 ;;; The `jwt` capability gates all JWT operations; `JWT.sign` additionally needs
 ;;; `time`, because it stamps the expiry from the wall clock.
 ;;;
 ;;; Usage:
-;;;   import Tesl.JWT exposing [jwt, JwtToken, JwtSecret,
-;;;                             JWT.sign, JWT.verify, JWT.decode, Authentic]
+;;;   import Tesl.JWT    exposing [jwt, JwtToken,
+;;;                                JWT.sign, JWT.verify, JWT.decode, Authentic]
+;;;   import Tesl.Crypto exposing [Secret]
+;;;   import Tesl.Env    exposing [envRead, requireSecret]
 ;;;
 ;;;   capability myAuth implies jwt, time
 ;;;
-;;;   fn makeSession(userId: String, secret: JwtSecret) requires [myAuth] -> JwtToken =
+;;;   fn makeSession(userId: String, secret: Secret) requires [myAuth] -> JwtToken =
 ;;;     JWT.sign (Dict.singleton "sub" userId) secret
 ;;;
 ;;; ── EXPIRY IS NOT THE CALLER'S TO SET ────────────────────────────────────────
@@ -67,7 +77,13 @@
          ;; binding-existence seam test enforces that).  Re-exporting keeps ONE
          ;; binding, so a program that reaches the name through both modules sees
          ;; the same identifier instead of a require conflict.
-         (only-in "crypto.rkt" Authentic)
+         ;;
+         ;; `Crypto.keyFingerprint` is used INTERNALLY (the `kid` header stamp)
+         ;; and is deliberately NOT re-provided — nor is `Secret`.  Both belong
+         ;; to Tesl.Crypto's export list, and duplicating them here would make
+         ;; the same name reachable through two module rows, which is exactly the
+         ;; drift the stdlib binding-existence seam test exists to prevent.
+         (only-in "crypto.rkt" Authentic Crypto.keyFingerprint)
          (only-in "../dsl/private/evidence.rkt" check-fail)
          openssl/libcrypto
          ffi/unsafe
@@ -77,9 +93,18 @@
          racket/string
          json)
 
-(provide jwt JwtToken JwtSecret JWT.sign JWT.verify JWT.decode
+(provide jwt JwtToken JWT.sign JWT.verify JWT.renew JWT.decode
          ;; re-exported from crypto.rkt — see the require note above
-         Authentic)
+         Authentic
+         ;; internal: `tesl/http.rkt` derives the session cookie's Max-Age from
+         ;; this, so the cookie can never outlive the token it carries.  Single
+         ;; source, one direction — jwt.rkt does not require http.rkt.  NOT a
+         ;; Tesl-importable name (it is absent from Tesl.JWT's export list).
+         jwt-ttl-seconds
+         ;; internal: the hard stop on a renewed session's total lifetime.
+         ;; Exported for the test suite, which asserts the bound rather than
+         ;; restating the number.  Also NOT Tesl-importable.
+         jwt-absolute-max-seconds)
 
 ;; ── Capability ───────────────────────────────────────────────────────────────
 
@@ -90,14 +115,11 @@
 ;; JwtToken wraps a String — the dot-separated JWT string "header.payload.sig"
 (define-newtype JwtToken String)
 
-;; JwtSecret wraps a String — the HMAC-SHA256 signing key.
-;; `define-secret-newtype` is `define-newtype` plus a registration in
-;; `dsl/types.rkt`'s secret-type registry, so every rendering sink (telemetry,
-;; the three debugger surfaces, structured logging) substitutes
-;; `secret-redaction-text` instead of printing the key.  It is additive at
-;; runtime — identical representation, identical SQL round-trip, `.value` still
-;; works — so no emitted code changes.
-(define-secret-newtype JwtSecret String)
+;; There is NO key newtype here.  The HMAC-SHA256 signing key is `Secret`, from
+;; tesl/crypto.rkt (`define-secret-newtype Secret String`), which is the single
+;; key-material type in the language and already carries the redaction: every
+;; rendering sink (telemetry, the three debugger surfaces, structured logging)
+;; substitutes `secret-redaction-text` instead of printing it.
 
 ;; ── Argument normalisation: raw-value FIRST, then strip the newtype ──────────
 ;;
@@ -171,16 +193,43 @@
 
 ;; ── Internal JWT helpers ─────────────────────────────────────────────────────
 
-;; Build the standard JWT header (alg=HS256, typ=JWT) encoded as base64url.
-(define jwt-header-b64
+;; Build the JOSE header for a given signing key, encoded as base64url:
+;;
+;;   {"alg":"HS256","typ":"JWT","kid":"<Crypto.keyFingerprint key>"}
+;;
+;; ── WHY `kid` IS STAMPED FROM DAY ONE ────────────────────────────────────────
+;;
+;; `kid` is the RFC 7515 §4.1.4 home for a key identifier, and it is DERIVED, not
+;; chosen: `Crypto.keyFingerprint` is a domain-separated SHA-256 truncated to 16
+;; hex characters, so it is safe to log, is not proof of key possession, and needs
+;; no parameter — there is no knob here either.  It answers "which key verified
+;; this / which key is this replica loaded with", which is the question a
+;; multi-replica or multi-tenant deployment asks from its logs, and it makes key
+;; rotation expressible later without a flag day.  Stamping is the part that is
+;; expensive to retrofit; there is deliberately no accessor in v1.
+;;
+;; SAFE TODAY, IN BOTH DIRECTIONS.  `JWT.verify` never parses the header — it
+;; recomputes the HMAC over `header.payload` VERBATIM — so a token minted before
+;; this change (no `kid`), and a foreign token with any header at all, verify
+;; exactly as before.  A `kid` mismatch is therefore not an error condition
+;; anywhere in this module.
+;;
+;; The header is assembled by string append rather than through `jsexpr->string`
+;; so the FIELD ORDER is fixed (alg, typ, kid) and stays stable across Racket
+;; hash-iteration order; the fingerprint is 16 hex characters, so no JSON string
+;; escaping can be needed.
+(define (jwt-header-b64 key)
   (base64url-encode
-   (string->bytes/utf-8 "{\"alg\":\"HS256\",\"typ\":\"JWT\"}")))
+   (string->bytes/utf-8
+    (string-append "{\"alg\":\"HS256\",\"typ\":\"JWT\",\"kid\":\""
+                   (Crypto.keyFingerprint key)
+                   "\"}"))))
 
 ;; Normalize an arbitrary Tesl claims value into a SYMBOL-KEYED jsexpr hash —
 ;; the shape `jsexpr->string` wants, and the shape the `exp` guard below
 ;; inspects.  Note what is deliberately NOT done here: a newtype-value claim is
 ;; left wrapped, so `jsexpr->string` raises on it.  Unwrapping would be more
-;; forgiving but would silently serialize a `JwtSecret` (or any other
+;; forgiving but would silently serialize a `Secret` (or any other
 ;; `define-secret-newtype`) into the payload in plaintext if one were ever
 ;; misplaced into the claims dict.  Fail loud instead.
 (define (claims->jsexpr-hash who claims)
@@ -206,6 +255,31 @@
 ;; knob here is a place where a non-expert makes a wrong call and gets a
 ;; plausible-looking result.  Renewing a session is one more `JWT.sign`.
 (define jwt-ttl-seconds 3600)
+
+;; ── The ABSOLUTE session lifetime (sliding renewal's hard stop) ──────────────
+;;
+;; `JWT.renew` slides the one-hour window forward while a session is in use, so
+;; an active user is not logged out mid-task.  That reintroduces a risk the fixed
+;; TTL had closed: a token captured off the wire can be presented to `JWT.renew`
+;; just like a legitimate one, so WITHOUT a hard stop a stolen token would be
+;; renewable forever.  Since Tesl deliberately has no server-side revocation
+;; (see the header and LANGUAGE-SPEC §21.8), the bound has to come from the token
+;; itself.
+;;
+;; So every token carries `iat` (issued-at, RFC 7519 §4.1.6), renewal PRESERVES
+;; it, and renewal refuses once `now - iat` exceeds this constant.  The guarantee
+;; that survives is the one the no-revocation decision rests on: **a captured
+;; token is useful for at most this long after the ORIGINAL login**, no matter how
+;; often it is renewed.
+;;
+;; Twelve renewals — expressed as a multiple of the TTL so the relationship is
+;; visible rather than a second unrelated magic number.  Twelve hours covers any
+;; single working day, which is the longest a browser session has a legitimate
+;; reason to live; a credential that must outlive that is not a session, and the
+;; documented answer for one is `Crypto.randomToken` plus a stored
+;; `Crypto.fingerprint`, which is revocable.  Not a parameter, for the same
+;; reason `exp` is not: a caller who can choose it will choose "never".
+(define jwt-absolute-max-seconds (* 12 jwt-ttl-seconds))
 
 ;; NOW in epoch SECONDS (RFC 7519 NumericDate).  Tesl's own clock type is
 ;; PosixMillis, so the ms→s conversion lives here, at the JWT boundary, once.
@@ -238,6 +312,25 @@
      (hash-ref h 'exp)
      jwt-ttl-seconds)))
 
+;; Same guard for `iat`, and it matters more than it looks.  `iat` is what bounds
+;; the absolute session lifetime across renewals, so a caller who could set it
+;; could set it to "now" on every renewal and defeat the hard stop entirely —
+;; turning a sliding session back into an unbounded one.  It is stamped by
+;; `JWT.sign` and PRESERVED by `JWT.renew`; nothing else may write it.
+(define (reject-caller-supplied-iat! who h)
+  (when (hash-has-key? h 'iat)
+    (raise-user-error
+     who
+     (string-append
+      "issued-at is not yours to set: the claims dict carries an `iat` (~s).\n"
+      "  JWT.sign stamps `iat` itself from the clock, and JWT.renew preserves it\n"
+      "  unchanged — it is what caps the total lifetime of a renewed session at\n"
+      "  ~a seconds from the original login.  A caller who could set it could\n"
+      "  reset it on every renewal and make the session immortal.\n"
+      "  Remove `iat` from the claims.")
+     (hash-ref h 'iat)
+     jwt-absolute-max-seconds)))
+
 (define (jsexpr-hash->json-bytes h)
   (string->bytes/utf-8 (jsexpr->string h)))
 
@@ -262,13 +355,13 @@
   (define payload-b64
     (base64url-encode (jsexpr-hash->json-bytes h)))
   (define signing-input
-    (string-append jwt-header-b64 "." payload-b64))
+    (string-append (jwt-header-b64 secret-str) "." payload-b64))
   (define sig-bytes
     (compute-signature secret-bytes signing-input))
   (define sig-b64 (base64url-encode sig-bytes))
   (JwtToken (string-append signing-input "." sig-b64)))
 
-;; JWT.sign : Dict String String → JwtSecret → JwtToken
+;; JWT.sign : Dict String String → Secret → JwtToken
 ;;
 ;; Creates a signed session JWT from a string-keyed, string-valued claims dict,
 ;; and stamps `exp` one hour ahead (epoch SECONDS, RFC 7519).  There is no way to
@@ -283,11 +376,16 @@
   (require-capabilities! (list jwt time))
   (define h (claims->jsexpr-hash 'JWT.sign claims))
   (reject-caller-supplied-exp! 'JWT.sign h)
+  (reject-caller-supplied-iat! 'JWT.sign h)
+  (define now (jwt-now-seconds))
+  ;; `iat` as well as `exp`: this is the ORIGINAL login time, and it is what
+  ;; `JWT.renew` reads to cap the total lifetime of a renewed session.  Both are
+  ;; epoch SECONDS (RFC 7519).
   (sign-claims-hash
-   (hash-set h 'exp (+ (jwt-now-seconds) jwt-ttl-seconds))
+   (hash-set (hash-set h 'iat now) 'exp (+ now jwt-ttl-seconds))
    secret))
 
-;; JWT.verify : JwtToken → JwtSecret → Dict String String
+;; JWT.verify : JwtToken → Secret → Dict String String
 ;;
 ;; Verifies the JWT signature and checks expiry (`exp` claim, in epoch SECONDS
 ;; per RFC 7519 §4.1.4 — see the unit note in the module header).
@@ -377,6 +475,84 @@
                     (if expired?
                         (check-fail "JWT token has expired" 401 '())
                         (jwt-claims->string-keyed claims)))))))))
+
+;; JWT.renew : JwtToken → Secret → JwtToken          (check-shaped)
+;;
+;; Slides the session window forward: verifies the token, then re-issues it with
+;; a fresh one-hour `exp` and the ORIGINAL `iat` preserved.  Pair it with
+;; `Http.setSessionCookie` and an active user is never logged out mid-task, while
+;; an idle one still expires an hour after their last request.
+;;
+;;   let claims = check JWT.verify token key
+;;   let _ = Http.setSessionCookie (check JWT.renew token key)
+;;
+;; WHY THIS EXISTS AS A FUNCTION.  Re-signing by hand is not merely tedious, it is
+;; a trap: `JWT.verify`'s claims contain `exp` and `iat`, and `JWT.sign` REJECTS
+;; both, so the author has to strip them — and an author who rebuilds the dict by
+;; hand to do that silently drops any claim they forget (a `role`, a tenant id),
+;; downgrading the session on every renewal.  One function that carries every
+;; claim across is the only safe shape.
+;;
+;; WHY IT REFUSES.  Renewal is presented WITH the token, so an attacker holding a
+;; captured token can renew it exactly as the legitimate holder can.  The hard
+;; stop is therefore not a policy knob but the thing that preserves the property
+;; the whole design rests on — that a captured token is useful for a bounded time
+;; even though nothing can revoke it.  Three refusals, all 401 and all through the
+;; same constant-time path as `JWT.verify`:
+;;
+;;   * the token does not verify, or has already expired — `JWT.verify`'s own
+;;     rejection, returned unchanged;
+;;   * the token carries no readable `iat`, so its total age cannot be bounded.
+;;     FAIL CLOSED: an unbounded-age token must not be renewable.  This also
+;;     covers foreign tokens (`iat` is OPTIONAL per the RFC) and tokens Tesl
+;;     minted before `iat` was stamped — those simply run out at their own `exp`,
+;;     within the hour, so the case self-heals;
+;;   * `now - iat` exceeds `jwt-absolute-max-seconds` — the session has lived its
+;;     maximum and the user must authenticate again.
+;;
+;; Charges `time` as well as `jwt`: it reads the clock twice over (the age check
+;; and the new expiry), and a capability marks an effect.
+(define (JWT.renew token secret)
+  (require-capabilities! (list jwt time))
+  ;; Reuse JWT.verify WHOLE rather than re-deriving the checks: the signature
+  ;; comparison, the malformed-token 401s and the expiry rule then cannot drift
+  ;; between verifying and renewing.  It returns either a check-fail (propagated
+  ;; verbatim) or the STRING-keyed claims.
+  (define verified (JWT.verify token secret))
+  (cond
+    [(check-fail? verified) verified]
+    [(not (hash? verified))
+     ;; Defensive: JWT.verify's contract is check-fail-or-hash.  If that ever
+     ;; changes, refuse rather than sign something unexamined.
+     (check-fail "Session cannot be renewed" 401 '())]
+    [else
+     (define iat (hash-ref verified "iat" #f))
+     (define now (jwt-now-seconds))
+     (cond
+       [(not (real? iat))
+        (check-fail "Session cannot be renewed: no issued-at claim" 401 '())]
+       [(> (- now iat) jwt-absolute-max-seconds)
+        (check-fail "Session has reached its maximum lifetime" 401 '())]
+       [else
+        ;; Carry EVERY claim across, replacing only `exp` and keeping `iat` as it
+        ;; was.  Re-key to symbols, which is what the signing path serializes.
+        (define renewed
+          (for/hash ([(k v) (in-hash verified)]
+                     #:unless (equal? k "exp"))
+            (values (if (string? k) (string->symbol k) k) v)))
+        ;; CLAMP the new expiry to the absolute deadline (`iat + max`), do not
+        ;; grant a full fresh TTL unconditionally.  Without the `min`, a token
+        ;; renewed just under the cap gets a whole extra hour of `exp` past the
+        ;; deadline — the effective ceiling becomes `max + ttl` (13h), not `max`
+        ;; (12h), contradicting the invariant this cap exists to hold ("useful
+        ;; for at most `max` after the ORIGINAL login").  Near the cap the
+        ;; renewed window therefore shrinks to zero rather than overshooting; a
+        ;; fresh token (iat ≈ now) is unaffected, since `iat + max` is far past
+        ;; `now + ttl`.
+        (define deadline (+ iat jwt-absolute-max-seconds))
+        (sign-claims-hash
+         (hash-set renewed 'exp (min (+ now jwt-ttl-seconds) deadline))
+         secret)])]))
 
 ;; JWT.decode : JwtToken → Dict String String
 ;;

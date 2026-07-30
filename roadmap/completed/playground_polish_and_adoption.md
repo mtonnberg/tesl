@@ -1,5 +1,39 @@
 # Playground polish — making the browser checker persuasive
 
+> **Status: IMPLEMENTED 2026-07-30.** All nine items shipped, plus a theme toggle
+> (System/Light/Dark, persisted) that was not in this list. The verification bar is met:
+> `playground/build.sh` still emits static files with relative paths only and no CDN, the
+> artifact is **1 130 679 B raw / 360 776 B gzipped** against the workflow's 2 MB ceiling
+> (the `teslExplain` export cost **+640 B raw / +288 B gzipped** — `Embedded_docs` is still
+> not linked, as item 3 demands), and the parity assertion is now **wired into CI** as
+> `scripts/playground-parity.sh` (ci.sh phase 19, `TOTAL_PHASES` 18 → 19), measuring
+> **29/30 byte-identical over the first 30 lessons with `lesson07-consumer.tesl` as a named
+> exception** — asserted to keep failing loudly rather than tolerated by a fuzzy threshold.
+> Verified in headless Chromium: 56 assertions, including that Apply round-trips
+> (fix → re-check → the diagnostic is gone), that both editor layers share every computed
+> text metric, and that a 375 px viewport never scrolls horizontally.
+>
+> **The one decision taken against this file: no CodeMirror 6, and no editor library at all.**
+> Item 1 permitted CM6 "only if that makes it easier". It does not. Bundling it needs a JS
+> toolchain the repo does not have (build.sh needs only js_of_ocaml and python3), it would
+> break "static files, relative paths, no CDN", and Tesl has no CM6 language mode so a
+> tokenizer had to be hand-written either way. What shipped is a zero-dependency
+> `<textarea>` over a highlighted `<pre>` underlay plus a gutter — which also keeps item 7's
+> accessibility bar intact, since a textarea has native selection, undo and screen-reader
+> support that a `contenteditable` gives up. The tokenizer's keyword table is transcribed
+> from `compiler/lib/lexer.mll` rather than guessed; its approximations (no state across
+> lines, contextual SQL/route words coloured as keywords) are commented in place.
+>
+> Two things worth knowing that this file did not anticipate: a bare `pre { max-height }`
+> rule for the artifact panes also matched the underlay, clipping the highlight layer so
+> squiggles below the fold drifted from the text (now scoped to `#artifacts pre, #diags pre`);
+> and `EXAMPLES[1]`'s proof error carries no machine-applicable fix, so item 4's "make Apply
+> the obvious next click" also offers example 3, which has one.
+>
+> **Original planning notes follow, unedited** — except the cross-reference in item 1 of
+> *The runnable version*, where `playground/README.md` § *Not wired into CI* is now
+> § *Wired into CI: the parity assertion*.
+
 > **Status:** Next · **Effort:** S for the first three items, M for the whole list. Every item is
 > independently shippable and none needs a backend.
 >
@@ -171,7 +205,9 @@ is still there in full.
    shape.** A server-run version needs a *different* transport, not a different contract. The moment
    the page grows a bespoke diagnostic format, the two implementations start to drift — and the
    parity assertion (`tesl --check-json` vs `teslCheck` on a fixture set, in
-   `playground/README.md` § *Not wired into CI*) is what would catch that. Wire it up.
+   `playground/README.md` § *Wired into CI: the parity assertion* — renamed from § *Not wired into
+   CI* when it was) is what would catch that. Wire it up. **Done: `scripts/playground-parity.sh`,
+   ci.sh phase 19.**
 2. **Keep the share fragment the only way source enters the page.** A run button would need to send
    source *somewhere*, and "the fragment is the source of truth" is the property that makes that a
    transport change rather than a redesign.

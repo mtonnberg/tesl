@@ -169,6 +169,7 @@ let capability_entries : entry list =
       let doc =
         match cap with
         | "emailCap" -> "The shared email-sending token (outbox pattern); import-gated like every stdlib capability."
+        | "cookieCap" -> "The right to set the session cookie on the response. Reading request.cookies needs no capability — reading request data is not an effect."
         | "time" -> "Reading the wall clock is an effect."
         | "dbRead" -> "Read access to the declared databases."
         | "dbWrite" -> "Write access to the declared databases (implies dbRead)."

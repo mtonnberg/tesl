@@ -335,30 +335,41 @@ value the client sends is a request, never a credential.** The compiler reports 
 the fact:
 
 ```tesl
-auth sessionAuth(request: HttpRequest) -> user: String ::: Authenticated user
-  requires [readSessionCookie, envRead] =
-  case Dict.lookup "session" request.cookies of
+auth sessionOwner(request: HttpRequest) -> user: String ::: Authenticated user
+  requires [sessions] =
+  case Http.sessionToken request of
     Nothing -> fail 401 "Not signed in"
-    Something payload ->
-      case Dict.lookup "sessionSig" request.cookies of
-        Nothing -> fail 401 "Not signed in"
-        Something sigHex ->
-          -- Recomputes the tag over `payload` with the server's key, in
-          -- constant time, and fails 401 unless it matches. `Authenticated`
-          -- is minted only on the far side of that check.
-          let verified = check Crypto.checkSignature
-                           (Secret (requireEnv "SESSION_SIGNING_KEY"))
-                           (Crypto.signatureFromHex sigHex) payload
-          ok verified ::: Authenticated verified
+    Something token ->
+      -- Checks the HMAC and the `exp` claim in constant time, auto-401s, and
+      -- mints `Authentic` on the claims. `Authenticated` is reachable only on
+      -- the far side of that check.
+      let claims = check JWT.verify token (requireSecret "SESSION_KEY")
+      ok (subjectOf claims) ::: Authenticated user
 ```
+
+**This is the blessed session pattern, and it is the only one you should be assembling by
+hand.** `Http.sessionToken` / `Http.setSessionCookie` / `Http.clearSessionCookie` (from
+`Tesl.Http`, gated by `cookieCap`) are the whole transport: one fixed cookie name, every attribute
+fixed, and a writer that demands a `JwtToken` so an unsigned session cookie cannot be expressed.
+`requireSecret` puts the key in a `Secret` without a `String` ever holding key material. See
+`example/learn/lesson76-sessions.tesl` for the full login → protected endpoint → logout program,
+including the CSRF story and the honest limitation (logout drops the browser's cookie; it does not
+revoke the token, which stays valid until `exp` — bounded at one hour).
+
+For a session that does not log out a user who is still working, add `JWT.renew` to the `auth`
+block and set the result — an `auth` block may write the cookie. Renewal carries every claim
+across (rebuilding the claims dict by hand is how a `role` gets silently dropped on every
+renewal), preserves the original `iat`, and refuses past a fixed 12-hour absolute maximum. That
+cap is the security core, not a preference: renewal is presented *with* the token, so without it a
+captured token would be renewable forever and nothing revokes it.
 
 Three shapes are honest, in rough order of how much machinery they need:
 
 | Shape | Verify with | Notes |
 |---|---|---|
-| Signed session value | `check Crypto.checkSignature key sig payload` → `Authentic payload` | Stateless; the payload is readable by the client but not writable |
-| Signed token (JWT) | `check JWT.verify token secret` | Checks the HMAC **and** the `exp` claim, auto-401s, and mints `Authentic` on the claims so a consumer can *demand* verification. Claims travel inside the signature. `JWT.sign` stamps a fixed one-hour `exp` (epoch seconds, RFC 7519) — the expiry is not a parameter, so signing also needs `time`. See LANGUAGE-SPEC.md §21.2 |
-| Opaque session id | your own session table lookup | `Crypto.randomToken` to mint; revocable, but needs storage |
+| **Session cookie (the default)** | `check JWT.verify token secret`, with `Http.sessionToken` reading it | The blessed pattern. Stateless, so it scales horizontally with no session store; claims travel inside the signature. `JWT.sign` stamps a fixed one-hour `exp` (epoch seconds, RFC 7519) — the expiry is not a parameter, so signing also needs `time`. See LANGUAGE-SPEC.md §21.2 |
+| Signed value, MAC by hand | `check Crypto.checkSignature key sig payload` → `Authentic payload` | The primitive underneath. Reach for it for signed non-credential payloads (a webhook body, a one-time link); do not hand-roll a session out of it |
+| Opaque session id | your own session table lookup | `Crypto.randomToken` to mint, storing only its `Crypto.fingerprint`; revocable, but needs storage. The right answer for long-lived credentials (API keys, machine tokens), not for browser sessions |
 
 Comparing an **already-verified** value against a literal is correct and does not fire — the
 verified subject is yours, not the client's. `SEC001` stops tracking a value the moment it passes
@@ -378,7 +389,7 @@ case Dict.lookup "role" request.cookies of
 -- ✅ the role is a claim inside the signed token, so editing the cookie invalidates it
 --    `check` is required: JWT.verify is check-shaped, and binding it is what makes
 --    the 401 propagate instead of handing the failure value on as if it were a Dict.
-let claims = check JWT.verify (JwtToken raw) (JwtSecret (requireEnv "SESSION_JWT_SECRET"))
+let claims = check JWT.verify (JwtToken raw) (requireSecret "SESSION_JWT_SECRET")
 case Dict.lookup "role" claims of
   Something role -> ok AdminUser { id: userId, role: role } ::: Authenticated requestUser
 ```

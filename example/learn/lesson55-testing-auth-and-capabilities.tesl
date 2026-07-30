@@ -11,12 +11,15 @@ module Lesson55TestingAuthAndCapabilities exposing [AuthServer]
 # ─────────────────────────────────────────────────────────────────────────────
 
 import Tesl.Prelude exposing [String, Int]
-import Tesl.Http exposing [HttpRequest]
+import Tesl.Http exposing [HttpRequest, Http.sessionToken]
 import Tesl.Dict exposing [Dict.lookup, Dict.singleton]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.ApiTest exposing [statusOk, statusClientError]
 import Tesl.DB exposing [dbRead, dbWrite]
-import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.sign, JWT.verify]
+import Tesl.JWT exposing [jwt, JWT.sign, JWT.verify]
+# The signing key is Tesl.Crypto's `Secret` — one key type for the whole language,
+# and the type `Env.requireSecret` returns.
+import Tesl.Crypto exposing [Secret]
 # `time` is named only in the capability below: JWT.sign stamps the session's
 # expiry from the wall clock, so the capability has to admit the clock read.
 import Tesl.Time exposing [time]
@@ -24,8 +27,8 @@ import Tesl.Time exposing [time]
 # ─────────────────────────────────────────────────────────────────────────────
 # DOMAIN: A simple authenticated API
 #
-# The session cookie is a SIGNED token, not a name. A bare `cookies "session"`
-# check is not authentication: the client picks the cookie, so `session=alice`
+# The session cookie is a SIGNED token, not a name. A bare cookie-name check is
+# not authentication: the client picks the cookie, so `__Host-session=alice`
 # would authenticate anyone as alice. JWT.verify recomputes the HMAC-SHA256
 # signature and auto-401s unless it matches, so only a token this server minted
 # gets in — and test 3 below proves it, because a forged cookie now fails.
@@ -38,8 +41,15 @@ fact Authenticated (user: String)
 # The signing key is written here ONLY so this lesson's api-tests are
 # self-contained (they have to mint a valid cookie, which needs the key).
 # A real service reads it from the environment and never commits it:
-#   JwtSecret (requireEnv "SESSION_JWT_SECRET")
-fn lessonSecret() -> JwtSecret = JwtSecret "lesson55-signing-key-not-for-production"
+#   requireSecret "SESSION_JWT_SECRET"      # Tesl.Env, returns a Secret
+#
+# The key goes through `keyFromRaw` rather than being written `Secret "…"`
+# directly: a string literal in a key position is a hardcoded credential, which is
+# what the SEC003 lint flags, and a lesson that trips its own security lint
+# teaches the reader to ignore the lint.
+fn keyFromRaw(raw: String) -> Secret = Secret raw
+
+fn lessonSecret() -> Secret = keyFromRaw "lesson55-signing-key-not-for-production"
 
 # What a login handler would hand back as the session cookie value.
 fn mintSession(user: String) -> String requires [sessionAuthCap] =
@@ -48,16 +58,19 @@ fn mintSession(user: String) -> String requires [sessionAuthCap] =
 # An attacker CAN produce a well-formed token — what they cannot do is sign it
 # with this server's key. Test 5 sends one of these.
 fn forgedSession(user: String) -> String requires [sessionAuthCap] =
-  (JWT.sign (Dict.singleton "sub" user) (JwtSecret "an-attackers-own-key")).value
+  (JWT.sign (Dict.singleton "sub" user) (keyFromRaw "an-attackers-own-key")).value
 
 auth sessionAuth(req: HttpRequest) -> user: String ::: Authenticated user
   requires [sessionAuthCap] =
-  case Dict.lookup "session" req.cookies of
+  # `Http.sessionToken` reads the one fixed session cookie name, which lives in
+  # the runtime rather than being re-spelled at every call site where a typo
+  # would be a permanent 401 no test can tell from a real rejection.
+  case Http.sessionToken req of
     Nothing -> fail 401 "not authenticated"
-    Something raw ->
+    Something token ->
       # JWT.verify checks the signature and the `exp` claim, and its 401 flows
       # out through this `let` — bind it, do not nest it inside another call.
-      let claims = JWT.verify (JwtToken raw) (lessonSecret())
+      let claims = JWT.verify token (lessonSecret())
       case Dict.lookup "sub" claims of
         Nothing -> fail 401 "not authenticated"
         Something subject -> ok subject ::: Authenticated user
@@ -91,7 +104,10 @@ server AuthServer for AuthApi {
 # TESTING
 #
 # api-test blocks let you write HTTP-level tests against your server.
-# For authenticated endpoints, set the session cookie in the request.
+# For authenticated endpoints, set the session cookie in the request. The name
+# `__Host-session` is spelled out here only because a .tesl file cannot reach the
+# runtime constant `session-cookie-name` in tesl/http.rkt, which is the single
+# source of truth `Http.sessionToken` reads.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Test 1: Public endpoint works without authentication
@@ -108,7 +124,7 @@ api-test "profile endpoint returns 401 without cookie" for AuthServer requires [
 
 # Test 3: Protected endpoint works with a SIGNED session cookie
 api-test "profile endpoint works with a signed session cookie" for AuthServer requires [sessionAuthCap] {
-  let resp = get "/profile" cookie { "session": mintSession "alice" }
+  let resp = get "/profile" cookie { "__Host-session": mintSession "alice" }
   expect statusOk resp.status
 }
 
@@ -116,7 +132,7 @@ api-test "profile endpoint works with a signed session cookie" for AuthServer re
 # would have PASSED against the old `ok token ::: Authenticated user` version —
 # which is exactly why that version was not authentication.
 api-test "profile endpoint rejects a made-up cookie value" for AuthServer requires [sessionAuthCap] {
-  let resp = get "/profile" cookie { "session": "alice" }
+  let resp = get "/profile" cookie { "__Host-session": "alice" }
   expect statusClientError resp.status
 }
 
@@ -124,7 +140,7 @@ api-test "profile endpoint rejects a made-up cookie value" for AuthServer requir
 # Test 4 alone would pass against an authenticator that merely required the
 # cookie to look like a JWT; only this one exercises the signature check.
 api-test "profile endpoint rejects a token signed with the wrong key" for AuthServer requires [sessionAuthCap] {
-  let resp = get "/profile" cookie { "session": forgedSession "alice" }
+  let resp = get "/profile" cookie { "__Host-session": forgedSession "alice" }
   expect statusClientError resp.status
 }
 

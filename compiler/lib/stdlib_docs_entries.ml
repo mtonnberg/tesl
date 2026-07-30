@@ -642,6 +642,10 @@ let api_test : entry list = [
   e "hasField" ~m:"Tesl.ApiTest" ~kind:(KSyntax "fn hasField(field: String, value: JsonValue) -> Bool") ~doc:"True when a JSON object has the field.";
   e "fieldAt" ~m:"Tesl.ApiTest" ~kind:(KSyntax "fn fieldAt(field: String, value: JsonValue) -> JsonValue") ~doc:"The object field's value (fails the test when missing).";
   e "bodyField" ~m:"Tesl.ApiTest" ~kind:(KSyntax "fn bodyField(field: String, response: HttpResponse) -> JsonValue") ~doc:"Shorthand for fieldAt on a response body.";
+  (* `f` (KFunction), not `KSyntax` like its neighbours: this one HAS a real
+     stdlib_env scheme, so the rendered signature comes from the live checker and
+     cannot drift from it. *)
+  f "responseCookie" [ "response" ] ~m:"Tesl.ApiTest" ~doc:"The session cookie a response set, as a Cookie-header-ready `name=value` pair you can hand straight to a request's `cookie` clause. Nothing when the response set none (including every error response — cookies attach to 2xx only). The attributes are stripped; assert those against response.headers's \"set-cookie\" entry.";
   e "jsonContains" ~m:"Tesl.ApiTest" ~kind:(KSyntax "fn jsonContains(needle: JsonValue, value: JsonValue) -> Bool") ~doc:"True when a JSON array contains an equal element.";
   e "includesWhere" ~m:"Tesl.ApiTest" ~kind:(KSyntax "expect events |> includesWhere { \"field\": expected, ... }") ~doc:"Passes when some array element matches every field of the pattern object.";
   e "excludesWhere" ~m:"Tesl.ApiTest" ~kind:(KSyntax "expect events |> excludesWhere { \"field\": expected, ... }") ~doc:"Passes when no array element matches every field of the pattern object.";
@@ -673,9 +677,9 @@ let api_test : entry list = [
 
 let jwt : entry list = [
   f "JwtToken" [ "raw" ] ~m:"Tesl.JWT" ~doc:"Newtype constructor wrapping a raw JWT string.";
-  f "JwtSecret" [ "raw" ] ~m:"Tesl.JWT" ~doc:"Newtype constructor wrapping a signing secret.";
-  f "JWT.sign" [ "claims"; "secret" ] ~m:"Tesl.JWT" ~doc:"Signs a string-keyed claims dict into a session JwtToken, stamping `exp` ONE HOUR ahead in epoch seconds (RFC 7519 NumericDate). The expiry is not a parameter and cannot be opted out of: a caller who can choose an expiry can choose ten years, and a JWT here is a session token — for a long-lived credential use Crypto.randomToken and store only its Crypto.fingerprint, which is revocable. An `exp` in the claims dict is an error, not an override. Requires `time` as well as `jwt` because it reads the clock. See LANGUAGE-SPEC §21.2.";
+  f "JWT.sign" [ "claims"; "secret" ] ~m:"Tesl.JWT" ~doc:"Signs a string-keyed claims dict into a session JwtToken, stamping `exp` ONE HOUR ahead in epoch seconds (RFC 7519 NumericDate). The signing key is Tesl.Crypto's `Secret` — there is one key type in the language, so `Env.requireSecret \"…\"` feeds this directly and no String ever holds key material. The JOSE header carries `kid` = Crypto.keyFingerprint of the key, so logs can say which key signed. The expiry is not a parameter and cannot be opted out of: a caller who can choose an expiry can choose ten years, and a JWT here is a session token — for a long-lived credential use Crypto.randomToken and store only its Crypto.fingerprint, which is revocable. An `exp` in the claims dict is an error, not an override. Requires `time` as well as `jwt` because it reads the clock. See LANGUAGE-SPEC §21.2.";
   f "JWT.verify" [ "token"; "secret" ] ~m:"Tesl.JWT" ~doc:"Verifies the signature and returns the claims carrying an `Authentic` fact; 401 on a tampered token, or an `exp` (epoch SECONDS, RFC 7519) in the past or unreadable. Check-shaped: bind it with `check`, then read claims with Dict.lookup. Demand `Authentic` on a downstream parameter and \"trusted the cookie without verifying it\" stops compiling.";
+  f "JWT.renew" [ "token"; "secret" ] ~m:"Tesl.JWT" ~doc:"Slides the session window forward: verifies the token, then re-issues it with a fresh one-hour `exp` and the ORIGINAL `iat` preserved, carrying every other claim across untouched. Check-shaped, so bind it with `check`; pair it with Http.setSessionCookie and an active user is never logged out mid-task, while an idle one still expires an hour after their last request. 401s on a token that does not verify or has expired, on one with no readable `iat` (its age cannot be bounded — fail closed), and once the session passes its absolute maximum lifetime of 12 hours from the original login. That cap is not a knob: renewal is presented WITH the token, so it is what keeps a captured token useful for a bounded time in a design that has no revocation.";
   f "JWT.decode" [ "token" ] ~m:"Tesl.JWT" ~doc:"Decodes the claims WITHOUT verifying the signature — never use for auth decisions. Mints no Authentic fact, which is the point.";
 ]
 
@@ -774,6 +778,20 @@ let http_client : entry list = [
   f "HttpClient.secretHeader" [ "name"; "secret" ] ~m:"Tesl.HttpClient" ~doc:"A (name, secret) header pair for any header that carries a credential (e.g. \"X-Api-Key\"). Same one-way guarantee as HttpClient.bearer: the value is never a String in Tesl code and renders as [redacted] everywhere.";
 ]
 
+(* ── Tesl.Http ─────────────────────────────────────────────────────────────── *)
+
+let http : entry list = [
+  e "HttpRequest" ~m:"Tesl.Http"
+    ~kind:(KType "type HttpRequest   # fields: method, path, headers, cookies, queryParameters, body")
+    ~doc:"The incoming request, as bound by an `auth` block or a handler that declares it.";
+  f "Http.setSessionCookie" [ "token" ] ~m:"Tesl.Http"
+    ~doc:"Sets the session cookie on the response: `__Host-session`, HttpOnly, Secure, SameSite=Lax, Path=/, Max-Age = the JWT TTL. Every attribute and the name are fixed — there are no options. It takes a JwtToken, so a session cookie always carries a signed value, and it attaches to 2xx responses only: a handler that sets a cookie and then `fail`s mints no session.";
+  v "Http.clearSessionCookie" ~m:"Tesl.Http"
+    ~doc:"The logout half — the same cookie with Max-Age=0, invoked as Http.clearSessionCookie(). It removes the browser's copy; it does not invalidate the token, which stays verifiable until `exp` (bounded at one hour by the fixed TTL).";
+  f "Http.sessionToken" [ "request" ] ~m:"Tesl.Http"
+    ~doc:"Reads the session cookie back as a Maybe JwtToken. Pure and ungated — request data is not an effect. Use it instead of `Dict.lookup \"__Host-session\" request.cookies`, where a typo is a permanent 401; feed the result to JWT.verify.";
+]
+
 (* ── Tesl.Agent ────────────────────────────────────────────────────────────── *)
 
 let agent : entry list = [
@@ -859,5 +877,5 @@ let entries : entry list =
   ambient @ prelude @ email @ maybe_result @ time
   @ int32 @ db @ either @ string_ @ regex @ list_ @ list_prim @ int_ @ float_
   @ dict @ set_ @ tuple @ money @ random_uuid_id_env @ json_codecs
-  @ api_test @ jwt @ crypto @ cache @ database @ http_client @ agent @ queue
+  @ api_test @ jwt @ crypto @ cache @ database @ http @ http_client @ agent @ queue
   @ telemetry

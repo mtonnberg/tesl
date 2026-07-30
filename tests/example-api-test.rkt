@@ -7,7 +7,14 @@
          racket/runtime-path
          racket/string
          "../example/bookmark-api.rkt"
-         (only-in "../tesl/jwt.rkt" JWT.sign JwtSecret jwt)
+         (only-in "../tesl/jwt.rkt" JWT.sign jwt)
+         ;; The signing key type lives in Tesl.Crypto — one key-material type for
+         ;; the language; jwt.rkt does not re-provide it.
+         (only-in "../tesl/crypto.rkt" Secret)
+         ;; The cookie NAME comes from the runtime, not from a literal here:
+         ;; `Http.sessionToken` reads exactly this constant, so the fixture cannot
+         ;; drift from the reader it is meant to exercise.
+         (only-in "../tesl/http.rkt" session-cookie-name)
          (only-in "../dsl/types.rkt" newtype-value? newtype-value-value)
          (only-in "../dsl/private/evidence.rkt" raw-value)
          "../dsl/capability.rkt"
@@ -159,8 +166,8 @@
               ;; the app hands us has to cover `time` as well as `jwt`.
               [token (with-capabilities (todo-web-service)
                        (JWT.sign (hash "sub" "mikael")
-                                 (JwtSecret secret)))])
-         (string-append "session="
+                                 (Secret secret)))])
+         (string-append session-cookie-name "="
                         (let ([raw (raw-value token)])
                           (if (newtype-value? raw) (newtype-value-value raw) raw)))))
 

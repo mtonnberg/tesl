@@ -29,7 +29,7 @@
 
     THE CONTEXTUAL KEYWORD.  `secret` is NOT a lexer keyword: it is already an
     ordinary identifier in the corpus (`fn signClaims(claims: String, secret:
-    JwtSecret)`, `let secret = …` in tests/jwt-tests.tesl).  The last group here
+    Secret)`, `let secret = …` in tests/jwt-tests.tesl).  The last group here
     pins that both readings still work — in the same file, so a future move of
     the recognition into the lexer fails here rather than in the corpus sweep. *)
 
@@ -578,7 +578,7 @@ let secret_still_usable_as_an_identifier () =
   (* Both readings, in ONE file: `secret` as a parameter name, as a `let` binder,
      AND as the declaration keyword.  If recognition ever moves into the lexer's
      keyword table, this file stops parsing — which is what happens to
-     tests/jwt-tests.tesl (`fn signClaims(claims: String, secret: JwtSecret)`)
+     tests/jwt-tests.tesl (`fn signClaims(claims: String, secret: Secret)`)
      and is the reason the keyword is contextual. *)
   should_pass
     ("module Probe exposing [Password, useIt]\n\

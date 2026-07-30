@@ -1,7 +1,7 @@
 # `Tesl.Crypto` — hashing, message authentication, password storage, secrets
 
 > **Status:** COMPLETE — Phases 0-4 landed 2026-07-29 · Phase 5 extracted to
-> `roadmap/next/response_metadata_and_cookies.md` (blocked, and not on crypto).
+> `roadmap/completed/response_metadata_and_cookies.md` (blocked, and not on crypto).
 >
 > Phase 2's last piece — **retrofitting the `Authentic` fact onto `JWT.verify`** — was initially
 > missed and reported as landed when it was not; it is now implemented additively (a `RetNamedPack`

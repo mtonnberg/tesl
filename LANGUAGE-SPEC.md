@@ -635,12 +635,12 @@ The current frontend gives special treatment to these module names:
 - `Tesl.Tuple` — tuple constructors and accessors (`Tuple2`, `Tuple3`, `Tuple2.first`, `Tuple2.second`, `Tuple3.first`, `Tuple3.second`, `Tuple3.third`).
 - `Tesl.Env` — environment variable access (`env`, `envInt`)
 - `Tesl.DB` — database capabilities (`dbRead`, `dbWrite`)
-- `Tesl.Http` — HTTP request type (`HttpRequest`). Dot-access fields, each a `Dict String String`: `request.cookies`, `request.headers` (names lowercased), `request.queryParameters` (URL-query values are form-url-decoded; repeated keys are last-wins; keys are case-sensitive). An api-test supplies query parameters inline in the path, e.g. `get "/search?q=hello%20world"`.
+- `Tesl.Http` — HTTP request type (`HttpRequest`). Dot-access fields, each a `Dict String String`: `request.cookies`, `request.headers` (names lowercased), `request.queryParameters` (URL-query values are form-url-decoded; repeated keys are last-wins; keys are case-sensitive). An api-test supplies query parameters inline in the path, e.g. `get "/search?q=hello%20world"`. Also the **session cookie**: `Http.setSessionCookie`, `Http.clearSessionCookie`, `Http.sessionToken` and the `cookieCap` capability. See §21.8.
 - `Tesl.Telemetry` — telemetry sentinel bindings (`telemetry`, `initTelemetry`) and the ambient metric instruments (`counter`, `histogram`, `gauge`). See §5.2.
 - `Tesl.Queue` — queue capabilities (`queueRead`, `queueWrite`, `pubsub`), proof predicates (`FromQueue`, `FromDeadQueue`)
 - `Tesl.Crypto` — password storage, message authentication, digests and secrets (`PasswordHash`, `Signature`, `Secret`; facts `HashFor`, `PasswordVerified`, `Authentic`). Every primitive is libsodium. Reuses `random` for the two operations that draw randomness; introduces no capability of its own. See §21.7.
 - `Tesl.UUID` — UUID generation and validation: `UUID.v4`, `UUID.v7`, `UUID.validate`, `IsUuid` proof predicate, `uuidV4Codec`, `uuidV7Codec`. The `uuid` capability gates generation; `UUID.validate` requires no capability. See §21.1.
-- `Tesl.JWT` — JSON Web Token support: `JWT.sign`, `JWT.verify`, `JWT.decode`, nominal newtypes `JwtToken` and `JwtSecret`. The `jwt` capability gates all operations; `JWT.sign` also requires `time`. Algorithm: HS256. Tokens are **session** tokens: `JWT.sign` stamps a fixed one-hour `exp` in epoch **seconds** (RFC 7519) and the expiry is not a parameter. `JWT.verify` mints `Authentic` on the claims. See §21.2.
+- `Tesl.JWT` — JSON Web Token support: `JWT.sign`, `JWT.verify`, `JWT.decode`, and the nominal newtype `JwtToken`. The signing key is `Tesl.Crypto`'s `Secret` — one key-material type for the whole language. The `jwt` capability gates all operations; `JWT.sign` also requires `time`. Algorithm: HS256. Tokens are **session** tokens: `JWT.sign` stamps a fixed one-hour `exp` in epoch **seconds** (RFC 7519) and the expiry is not a parameter. `JWT.verify` mints `Authentic` on the claims. See §21.2.
 - `Tesl.HttpClient` — outgoing HTTP requests: `HttpClient.get`, `HttpClient.post`, `HttpClient.put`, `HttpClient.delete`, the `HttpResponse` record, and the `httpClient` capability. See §21.3.
 
 **String and number utilities**
@@ -3683,28 +3683,40 @@ fn requiresValidId(id: String ::: IsUuid id) -> String = id
 Provides JSON Web Token signing, verification, and decoding using HMAC-SHA256 (HS256). Import:
 
 ```tesl
-import Tesl.JWT exposing [jwt, JwtToken, JwtSecret,
-                          JWT.sign, JWT.verify, JWT.decode, Authentic]
+import Tesl.JWT    exposing [jwt, JwtToken,
+                             JWT.sign, JWT.verify, JWT.decode, Authentic]
+import Tesl.Crypto exposing [Secret]          # the signing-key type
+import Tesl.Env    exposing [envRead, requireSecret]   # where the key comes from
 ```
 
 **Capabilities:** `jwt` — required by all three operations. `JWT.sign` additionally requires `time`, because it stamps the token's expiry from the wall clock, and a capability marks an effect.
 
 **Nominal newtypes:**
 
-- `JwtToken` — wraps `String`. Represents a signed JWT (`header.payload.signature`). Not interchangeable with `String` — the type system prevents passing a raw string where a `JwtToken` is expected, and vice versa.
-- `JwtSecret` — wraps `String`. Represents the HMAC signing key. Nominal separation ensures that secrets cannot be accidentally swapped with tokens or plain strings. It is a **secret newtype**: it has no readable `.value`, because handing the key back as a `String` would defeat the redaction every rendering sink applies to it.
+- `JwtToken` — wraps `String`. Represents a signed JWT (`header.payload.signature`). Not interchangeable with `String` — the type system prevents passing a raw string where a `JwtToken` is expected, and vice versa. It is the non-secret **wire** value, so it keeps a readable `.value`: handing a token to a client is the point of having one.
+- The **signing key** is `Secret` (§21.7), `Tesl.Crypto`'s key-material type. `Tesl.JWT` has no key type of its own: there is exactly one key type in the language, and it is the type `Env.requireSecret` returns, so `Env.requireSecret "SESSION_JWT_SECRET"` feeds `JWT.sign`/`JWT.verify` directly and **no `String` ever holds key material**. `Secret` is a **secret newtype**: it has no readable `.value`, because handing the key back as a `String` would defeat the redaction every rendering sink applies to it.
+
+> **Changed 2026-07-30 (breaking).** `Tesl.JWT` used to export a second key newtype of its own, distinct from `Secret` and with no conversion between them. That was not a cosmetic duplication: `Env.requireSecret` returns `Secret`, so a JWT-only key type forced every program to rewrap the key — putting the plaintext key in a `String` on the way through, which is exactly what a secret type exists to prevent. The JWT-only type was **deleted, not aliased** (the same policy as the `exp` unit fix the day before): a program that named it now gets an unknown-export error, and the fix is to take `Secret` from `Tesl.Crypto` or, better, to read the key with `Env.requireSecret`.
 
 **Functions:**
 
 | Function | Signature | Notes |
 |---|---|---|
-| `JWT.sign` | `(claims: Dict String String) (secret: JwtSecret) -> JwtToken` | Signs a claims dict into a **session** token, stamping `exp` one hour ahead. There is no expiry parameter. Requires `jwt` and `time`. |
-| `JWT.verify` | `(token: JwtToken) (secret: JwtSecret) -> Dict String String ::: Authentic claims` | Verifies signature and expiry; returns the claims carrying an `Authentic` fact. Fails 401 on a bad signature or an expired token. Check-shaped: bind with `check`. Requires `jwt`. |
+| `JWT.sign` | `(claims: Dict String String) (secret: Secret) -> JwtToken` | Signs a claims dict into a **session** token, stamping `exp` one hour ahead and `kid` in the header. There is no expiry parameter. Requires `jwt` and `time`. |
+| `JWT.verify` | `(token: JwtToken) (secret: Secret) -> Dict String String ::: Authentic claims` | Verifies signature and expiry; returns the claims carrying an `Authentic` fact. Fails 401 on a bad signature or an expired token. Check-shaped: bind with `check`. Requires `jwt`. |
 | `JWT.decode` | `(token: JwtToken) -> Dict String String` | Decodes the payload **without** verifying the signature, and mints no fact. Use only for non-security-critical inspection. Requires `jwt`. |
 
 Claims are a `Dict String String`, not a record: the payload is a JSON object, `JWT.verify`/`JWT.decode` return it string-keyed, and every consumer reads it with `Dict.lookup`. The result type is deliberately **concrete** rather than a free type variable — a free variable could be typed as anything at the call site, which let a verified payload be laundered into whatever shape the caller claimed.
 
-**Algorithm:** HS256 (HMAC-SHA256). The header is always `{"alg":"HS256","typ":"JWT"}`.
+**Algorithm:** HS256 (HMAC-SHA256). The JOSE header is `{"alg":"HS256","typ":"JWT","kid":"<key id>"}`, in that field order.
+
+#### The `kid` header is derived, not chosen
+
+`JWT.sign` stamps `kid` = `Crypto.keyFingerprint key` (§21.7) in the header, its RFC 7515 §4.1.4 home. There is no parameter: the value is a domain-separated SHA-256 truncated to 16 hex characters, so it is safe to log and is **not** proof of key possession. It answers the operational question a multi-replica or multi-tenant deployment asks from its logs — *which key signed this, and which key is this replica loaded with* — and it makes key rotation expressible later without a flag day. There is no accessor for it; stamping is the part that is expensive to retrofit.
+
+`JWT.verify` never **parses** the header. It recomputes the HMAC over `header.payload` verbatim, so `kid` is a diagnostic and never an authorization input: a token minted before this existed, and a foreign token with any header at all, verify exactly as their signature says they should. Because the header is inside the signed input, editing it — including swapping in a different `kid` — invalidates the signature and is a 401.
+
+> **Added 2026-07-30.** Tokens minted before this date carry no `kid` and keep verifying; there is nothing to migrate.
 
 #### The expiry is fixed at one hour, and is not yours to set
 
@@ -3743,14 +3755,15 @@ Only `check JWT.verify` can satisfy that parameter. `JWT.decode` reads the paylo
 import Tesl.Dict exposing [Dict, Dict.singleton, Dict.lookup]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Time exposing [time]
-import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.sign, JWT.verify, Authentic]
+import Tesl.JWT exposing [jwt, JwtToken, JWT.sign, JWT.verify, Authentic]
+import Tesl.Crypto exposing [Secret]
 
 capability authService implies jwt, time
 
-fn issueToken(userId: String, secret: JwtSecret) -> JwtToken requires [authService] =
+fn issueToken(userId: String, secret: Secret) -> JwtToken requires [authService] =
   JWT.sign (Dict.singleton "sub" userId) secret
 
-fn authenticate(token: JwtToken, secret: JwtSecret) -> String requires [authService] =
+fn authenticate(token: JwtToken, secret: Secret) -> String requires [authService] =
   let claims = check JWT.verify token secret
   subjectOf claims
 
@@ -3760,6 +3773,34 @@ fn subjectOf(claims: Dict String String ::: Authentic claims) -> String =
     Nothing -> ""
     Something userId -> userId
 ```
+
+#### Sliding sessions: `JWT.renew`
+
+`JWT.renew : JwtToken -> Secret -> JwtToken`, check-shaped, `requires [jwt, time]`.
+
+The fixed one-hour TTL means an idle session expires, which is the point — but on its own it also logs out a user who is *actively working*, one hour after they signed in. `JWT.renew` slides the window: it verifies the token, then re-issues it with a fresh `exp` and the **original `iat` preserved**, carrying every other claim across untouched. Pair it with `Http.setSessionCookie` (§21.8) inside an `auth` block and an active user is never logged out mid-task, while an idle one still expires an hour after their last request.
+
+```tesl
+auth sessionOwner(request: HttpRequest) -> user: String ::: Authenticated user
+  requires [sessions] =
+  case Http.sessionToken request of
+    Nothing -> fail 401 "no session"
+    Something token ->
+      let claims = check JWT.verify token (requireSecret "SESSION_KEY")
+      let fresh  = check JWT.renew  token (requireSecret "SESSION_KEY")
+      let _ = Http.setSessionCookie fresh
+      ok (subjectOf claims) ::: Authenticated user
+```
+
+**Why this is a function rather than two lines of user code.** Re-signing by hand is not merely tedious, it is a trap: `JWT.verify`'s claims contain `exp` and `iat`, `JWT.sign` rejects both (see below), so the author must strip them — and an author who rebuilds the claims dict to do that silently drops any claim they forget. A dropped `role` or tenant id downgrades the session on *every* renewal, on the success path, where no test looks. Carrying every claim across is the only safe shape, so it is the shipped one.
+
+**`iat` is stamped and reserved.** `JWT.sign` now also stamps `iat` (issued-at, epoch seconds, RFC 7519 §4.1.6) and **rejects a caller-supplied `iat`** exactly as it rejects `exp`. That guard is load-bearing rather than tidy: `iat` is what bounds a renewed session's total lifetime, so a caller who could set it could reset it on every renewal and make the session immortal.
+
+**The absolute maximum lifetime is 12 hours, and it is not a knob.** `JWT.renew` refuses once `now - iat` exceeds twelve times the TTL. This is the security core of the feature, not a policy preference: renewal is presented *with* the token, so an attacker holding a captured token can renew it exactly as its owner can. Without the cap a stolen token would be renewable forever — and since Tesl deliberately has no server-side revocation (§21.8), nothing else would stop it. With the cap, the guarantee the no-revocation decision rests on survives: **a captured token is useful for at most twelve hours after the original login, however often it is renewed.** Twelve hours covers any single working day; a credential that must outlive one is not a session, and the answer for it is `Crypto.randomToken` plus a stored `Crypto.fingerprint` (§21.7), which is revocable.
+
+`JWT.renew` returns a 401 in four cases, all through the same constant-time path as `JWT.verify`: the token does not verify; it has already expired (renewal is not resurrection); it carries no readable `iat`, so its age cannot be bounded — **fail closed**, which also covers foreign tokens, since `iat` is OPTIONAL per the RFC, and tokens minted before `iat` was stamped, which simply run out at their own `exp` within the hour; or the session has passed its absolute maximum.
+
+It mints **no** fact. The `Authentic` fact belongs on `JWT.verify`'s claims, where "this was verified" is the useful thing to prove downstream; a renewed token is a fresh credential on its way *out* to the browser.
 
 ### 21.3 `Tesl.HttpClient`
 **Implemented.**
@@ -4200,6 +4241,51 @@ All three are minted **only** by those functions. A hand-written `fn f(p) -> Pas
 **Native dependency.** `Tesl.Crypto` loads **libsodium** through the FFI. It is declared in `flake.nix` (so both the dev shell and an installed `nix profile install` resolve it by absolute store path via `$TESL_LIBSODIUM`) and installed in both `tesl build` Docker images. Resolution is *lazy*: requiring the module does not touch the library. A missing library produces an actionable install hint, and both properties are ratcheted by `tests/cli-portability.sh`.
 
 See `example/learn/lesson64-password-storage.tesl` and `tests/crypto-runtime-tests.rkt`.
+
+### 21.8 `Tesl.Http` — the session cookie
+**Implemented.**
+
+`Tesl.JWT` (§21.2) is the session *credential*. `Tesl.Http` is its *transport*: one cookie, with no options. Import:
+
+```tesl
+import Tesl.Http exposing [HttpRequest, cookieCap,
+                           Http.setSessionCookie, Http.clearSessionCookie,
+                           Http.sessionToken]
+```
+
+| Function | Type | Capability |
+|---|---|---|
+| `Http.setSessionCookie` | `JwtToken -> Unit` | `cookieCap` |
+| `Http.clearSessionCookie` | `() -> Unit` (written `Http.clearSessionCookie()`) | `cookieCap` |
+| `Http.sessionToken` | `HttpRequest -> Maybe JwtToken` | none |
+
+These are ordinary imported functions, not syntax and not ambient forms — the precedent is `Email.send`. The *names* arrive only through `import Tesl.Http exposing [...]`, and the *right to write* arrives only through `cookieCap` in a `requires` list. A handler's return type is unaffected, so setting a session cookie leaves every generated TypeScript and Elm client byte-identical.
+
+**Capability.** `cookieCap` is provided by `Tesl.Http` and is import-gated exactly like `emailCap`: declaring an `api` or a `server` does not grant it. Reading `request.cookies`, and calling `Http.sessionToken`, need **no** capability — reading request data is not an effect.
+
+**Every attribute is fixed, and so is the name.** `Http.setSessionCookie` emits exactly:
+
+```
+Set-Cookie: __Host-session=<token>; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=3600
+```
+
+There are no options, on the same rule as `Tesl.Crypto`: a caller who can pass `SameSite=None` eventually will. The `__Host-` prefix is load-bearing — it makes the *browser* enforce `Secure`, `Path=/` and no `Domain`, so a plain-HTTP deployment on a non-localhost origin visibly fails to store the session rather than transmitting one in the clear. Browsers exempt `http://localhost`, so local development is unaffected, and api-tests ignore cookie attributes entirely. `Max-Age` is taken from the same TTL constant `JWT.sign` stamps `exp` from, so the cookie can never outlive the token inside it.
+
+**The writer takes a `JwtToken`, not a `String`.** That is the type system, not documentation, guaranteeing a session cookie always carries a signed value. There is no way to express an unsigned session cookie and no second cookie-writing function.
+
+**Cookies attach to 2xx responses only.** A handler that sets a cookie and then `fail`s sends no `Set-Cookie` — no session is minted on an error path. The rule is enforced at the single point where every response is built, not by each handler remembering to undo the effect. Within one request the last call wins, per cookie name, so `setSessionCookie` followed by `clearSessionCookie` emits one header rather than two contradictory ones.
+
+**Sliding sessions.** By default a session ends one hour after login, whether or not the user is active. To slide the window instead, call `JWT.renew` (§21.2) in the `auth` block and set the result — an `auth` block may write the cookie, which is why the effect is scoped to the whole request rather than to the handler alone. Renewal preserves the original `iat` and refuses past a fixed 12-hour absolute maximum, so a captured token still cannot be renewed indefinitely.
+
+**`Http.clearSessionCookie()`** is the logout half: the same cookie with `Max-Age=0`. It removes the *browser's* copy; it does not invalidate the token, which stays verifiable until `exp` — bounded at one hour by the fixed TTL, or at 12 hours from login if the session was being renewed. That is the trade a stateless, horizontally scalable session makes: any replica holding the key verifies any token, with no session store, no sticky sessions and no cross-replica invalidation. Server-side revocation is stateful by nature and is deliberately not provided; for long-lived revocable credentials the answer is `Crypto.randomToken` plus a stored `Crypto.fingerprint` (§21.7).
+
+**CSRF.** `SameSite=Lax`, plus Tesl's existing 415 on non-`application/json` request bodies, plus the absence of CORS headers on JSON routes, means a cross-site form or `fetch` cannot reach a state-changing handler. The one remaining obligation is the rule Tesl already teaches: GET handlers do not mutate.
+
+**Testing.** `Tesl.ApiTest` exposes `responseCookie : HttpResponse -> Maybe String`, which returns the session cookie a response set as a Cookie-header-ready `name=value` pair — feed it straight to a request's `cookie` clause. It is `Nothing` when no cookie was set, including on every error response. For the attributes, read the raw `"set-cookie"` entry of `response.headers`.
+
+**Not provided, deliberately:** general response-header setting, success statuses other than 200, cookie options of any kind, a second cookie, general cookie handling for UI state or preferences (a permanent non-goal — client-only state belongs in the generated client's own storage, and anything the server must trust belongs in a row keyed by the session subject), a cookie-read capability, and server-side session revocation.
+
+See `example/learn/lesson76-sessions.tesl` and `tests/session-cookie-tests.tesl`.
 
 ---
 

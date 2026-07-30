@@ -9,12 +9,12 @@ module AiConversationService exposing [
 import Tesl.Prelude exposing [String, Unit, Bool(..)]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Json exposing [stringCodec]
-import Tesl.Env exposing [envInt, requireEnv, envRead]
+import Tesl.Env exposing [envInt, requireEnv, requireSecret, envRead]
 import Tesl.Telemetry exposing [initTelemetry]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Dict exposing [Dict.lookup]
-import Tesl.Http exposing [HttpRequest]
-import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.verify]
+import Tesl.Http exposing [HttpRequest, Http.sessionToken]
+import Tesl.JWT exposing [jwt, JWT.verify]
 import Tesl.App exposing [App]
 import Tesl.Queue exposing [pubsub]
 import Tesl.Agent exposing [
@@ -106,10 +106,13 @@ fn keyOf(request: HttpRequest) -> String =
 # who the consumer is. Nothing is authorized on their basis.
 auth consumerAuth(request: HttpRequest) -> requestUser: Consumer ::: Authenticated requestUser
   requires [httpAuth, envRead] =
-  case Dict.lookup "session" request.cookies of
+  # `Http.sessionToken` reads the one fixed session cookie name, which lives in
+  # the runtime rather than being re-spelled at every call site where a typo
+  # would be a permanent 401 no test can tell from a real rejection.
+  case Http.sessionToken request of
     Nothing -> fail 401 "Missing consumer identity"
-    Something raw ->
-      let claims = JWT.verify (JwtToken raw) (JwtSecret (requireEnv "SESSION_JWT_SECRET"))
+    Something token ->
+      let claims = JWT.verify token (requireSecret "SESSION_JWT_SECRET")
       case Dict.lookup "sub" claims of
         Nothing -> fail 401 "Missing consumer identity"
         Something cid ->

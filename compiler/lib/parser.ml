@@ -5081,7 +5081,7 @@ and parse_top_decl s =
   (* `secret Password = String` — the `secret` keyword is CONTEXTUAL, recognised
      here and NOT in the lexer's keyword table, because `secret` is already an
      ordinary identifier in the corpus (`fn signClaims(claims: String, secret:
-     JwtSecret)`, `let secret = …` in tests/jwt-tests.tesl).  Lexing it as a
+     Secret)`, `let secret = …` in tests/jwt-tests.tesl).  Lexing it as a
      keyword would break those files.  The lookahead makes it unambiguous: a
      type name is a UIDENT, so `secret UIDENT` cannot be the bare-const arm
      below (`name = value` requires EQ next) nor any expression. *)

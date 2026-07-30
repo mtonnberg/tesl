@@ -44,7 +44,11 @@ let t_timezone = TCon "TimeZone"
 let t_fact    = TCon "Fact"
 let t_delete_result = TCon "DeleteResult"
 let t_jwt_token  = TCon "JwtToken"
-let t_jwt_secret = TCon "JwtSecret"
+(* Tesl.Http's request.  Opaque: it has no record type, and field reads on it go
+   through the checker's [opaque_special_field_types] escape hatch, so this alias
+   exists only to give `Http.sessionToken` an argument type that a `String` or an
+   entity cannot be passed for. *)
+let t_http_request = TCon "HttpRequest"
 (* Tesl.Crypto.  All three are nominal wrappers over String.
    PasswordHash and Secret are additionally SECRET (redacted at every rendering
    sink); Signature is not, because a MAC tag is public data.
@@ -830,9 +834,14 @@ let stdlib_env : (string * scheme) list = [
   "introAnd",     mono (t_fun [t_fact; t_fact] t_fact);
 
   (* ── JWT ─────────────────────────────────────────────────────────────────── *)
-  (* JwtToken and JwtSecret are nominal newtypes wrapping String. *)
+  (* JwtToken is a nominal newtype wrapping String — the non-secret WIRE value.
+     There is no JWT key type: the signing key is Tesl.Crypto's `Secret` (the one
+     key-material type in the language).  A JWT-ONLY key newtype existed until
+     2026-07-30 and was DELETED, not aliased — with two types `Env.requireSecret`
+     (which returns `Secret`) could not feed `JWT.sign`/`JWT.verify`, so every
+     shipped example rewrapped the signing key through a plain `String`, defeating
+     the redaction the secret types exist to guarantee. *)
   "JwtToken",  mono (t_fun [t_string] t_jwt_token);
-  "JwtSecret", mono (t_fun [t_string] t_jwt_secret);
   (* Claims are a string-keyed JSON object; the runtime (jwt.rkt
      jwt-claims->string-keyed) always returns a string-keyed hash, and every
      consumer reads it via Dict.lookup. Pin to a CONCRETE Dict String String so
@@ -846,9 +855,53 @@ let stdlib_env : (string * scheme) list = [
      every knob is a place where a non-expert makes a wrong call and gets a
      plausible-looking result; a caller who can pass an expiry can pass ten
      years.  Because it reads the clock it charges `time` as well as `jwt`. *)
-  "JWT.sign",   mono (t_fun [t_dict t_string t_string; t_jwt_secret] t_jwt_token);
-  "JWT.verify", mono (t_fun [t_jwt_token; t_jwt_secret] (t_dict t_string t_string));
+  "JWT.sign",   mono (t_fun [t_dict t_string t_string; t_secret] t_jwt_token);
+  "JWT.verify", mono (t_fun [t_jwt_token; t_secret] (t_dict t_string t_string));
+  (* JWT.renew — sliding sessions.  Check-shaped: it verifies, then re-issues the
+     token with a fresh `exp` and the ORIGINAL `iat` preserved, so an active user
+     is not logged out mid-task while an idle one still expires an hour after
+     their last request.  It exists as a function because re-signing by hand is a
+     trap: the verified claims carry `exp` and `iat`, `JWT.sign` rejects both, and
+     an author who rebuilds the dict to strip them silently drops any claim they
+     forget (a `role`, a tenant id).  It refuses once `now - iat` passes the fixed
+     absolute maximum — renewal is presented WITH the token, so without that cap a
+     captured token would be renewable forever, and there is no revocation to fall
+     back on.  Charges `time` as well as `jwt`, like JWT.sign: it signs. *)
+  "JWT.renew",  mono (t_fun [t_jwt_token; t_secret] t_jwt_token);
   "JWT.decode", mono (t_fun [t_jwt_token] (t_dict t_string t_string));
+
+  (* ── Http: the session cookie ──────────────────────────────────────────────
+     The transport for the credential above.  Three ordinary imported functions,
+     no new syntax and nothing ambient: the NAMES arrive via `import Tesl.Http
+     exposing [...]` and the RIGHT to write arrives via `cookieCap` in a
+     `requires` list.  The handler's return type is untouched, so every generated
+     TS/Elm client and every api-test is unchanged by setting a cookie.
+
+     `setSessionCookie` demands a `JwtToken`, not a `String`: the type system,
+     not a lesson, is what guarantees a session cookie always carries a signed
+     value.  There is no way to set an unsigned cookie and no second
+     cookie-writing function — name, attributes and expiry are all fixed in
+     tesl/http.rkt.  General cookie handling (UI state, preferences, tracking) is
+     a permanent non-goal.
+
+     `clearSessionCookie` is typed as its RESULT, not as `t_fun []` — the house
+     shape for a nullary stdlib call (`nowMillis`, `UUID.v4`), written
+     `Http.clearSessionCookie()` in Tesl and lowered via
+     Emit_racket.stdlib_zero_arg_names.
+
+     `sessionToken` is the reader, pure and ungated: request data is not an
+     effect.  It exists so the fixed cookie name is written down once, in the
+     runtime, instead of appearing at call sites as
+     `Dict.lookup "__Host-session" request.cookies`, where a typo is a permanent
+     401. *)
+  "Http.setSessionCookie",   mono (t_fun [t_jwt_token] t_unit);
+  "Http.clearSessionCookie", mono t_unit;
+  "Http.sessionToken",       mono (t_fun [t_http_request] (t_maybe t_jwt_token));
+  (* Tesl.ApiTest's reader for the same cookie, so a round-trip test never parses
+     a `Set-Cookie` line by hand.  It lives beside the cookie functions rather
+     than with the other api-test helpers because it is part of this surface; the
+     `Maybe` is what makes "no cookie was set" a case the test must handle. *)
+  "responseCookie",          mono (t_fun [t_http_response] (t_maybe t_string));
 
   (* ── Crypto ──────────────────────────────────────────────────────────────
      Eight jobs, three types, three facts.  Every primitive is libsodium.
@@ -1066,6 +1119,18 @@ let secret_accepting_params : (string * int list) list = [
   (* Outbound headers: the whole point of these two functions. *)
   "HttpClient.bearer",       [0];
   "HttpClient.secretHeader", [1];
+  (* The JWT signing key, index 1 in both.  These were MISSING while `Tesl.JWT`
+     had a key newtype of its own: the old type had no `secret_param_expected_base`
+     row, so marking the slot would have rejected the stdlib key type itself.  With
+     the key unified on `Secret` (2026-07-30) the row is a pure win — it extends
+     SEC003 to the two slots where a hardcoded credential matters most, and it lets
+     a user's own `secret MyKey = String` be passed to `JWT.sign`/`JWT.verify`,
+     which it never could before.  The CLAIMS (index 0) are deliberately unmarked:
+     they are ordinary data, and marking them would bless signing a secret as a
+     payload — the same reason `Crypto.signWith`'s message index is unmarked. *)
+  "JWT.sign",                [1];
+  "JWT.verify",              [1];
+  "JWT.renew",               [1];
 ]
 
 let secret_accepting_indices (name : string) : int list =
@@ -1321,6 +1386,9 @@ let tesl_module_exports : (string * string list) list = [
       "jsonInt"; "jsonString"; "jsonBool"; "jsonArray"; "jsonObject"; "jsonLength";
       "isNull"; "isNotNull"; "includesWhere"; "excludesWhere";
       "hasLength"; "isEmpty"; "isNotEmpty"; "arrayAt"; "hasField"; "fieldAt"; "bodyField";
+      (* the session cookie a response set, as a Cookie-header-ready pair, so a
+         round-trip test never parses `Set-Cookie` by hand *)
+      "responseCookie";
       "jsonContains"; "subscribe"; "collect";
       "JobResult"; "JobOk"; "JobFailed";
       "processNextJob"; "processNextDeadJob"; "drainQueue"; "pendingJobCount";
@@ -1335,8 +1403,13 @@ let tesl_module_exports : (string * string list) list = [
        Tesl.Crypto to name the fact.  Same predicate, two minting sites, two
        subject types — see the note on the JWT.verify row in
        validation_common.ml's stdlib_func_infos. *)
-    [ "jwt"; "JwtToken"; "JwtSecret"; "JWT.sign";
-      "JWT.verify"; "JWT.decode"; "Authentic" ] );
+    (* No key type here: `JWT.sign`/`JWT.verify` take Tesl.Crypto's `Secret`, so
+       a program that signs imports `Secret` (or `requireSecret`) from where it
+       lives.  Re-exposing it under Tesl.JWT would make one name reachable
+       through two module rows, which is the drift the stdlib
+       binding-existence seam test exists to prevent. *)
+    [ "jwt"; "JwtToken"; "JWT.sign";
+      "JWT.verify"; "JWT.renew"; "JWT.decode"; "Authentic" ] );
   ( "Tesl.Crypto",
     (* Password storage, message authentication, digests and secrets.
        `PasswordHash` and `Signature` appear here as TYPES only — there is no
@@ -1384,7 +1457,16 @@ let tesl_module_exports : (string * string list) list = [
       "Conversation"; "Conversation?"; "ConversationTurn"; "ConversationTurn?";
       "newConversation"; "conversationFrom"; "converse"; "converseStreaming"; "turnReply";
       "turnConversation"; "conversationJson"; "conversationLength"; "agentRun" ] );
-  (* Tesl.Http, Tesl.DB, Tesl.Uuid, Tesl.Logging, Tesl.Queue, Tesl.Sse —
+  (* Tesl.Http gained a real export list when the session cookie landed
+     (2026-07-30).  Before that it was one of the loosely-validated internal
+     modules below, which meant its names were also invisible to the stdlib
+     binding-existence seam test — an importable name with no runtime `provide`
+     would have typechecked and then failed at load.  `HttpRequest` was the only
+     name anyone imported from it, so making the list strict breaks nothing. *)
+  ( "Tesl.Http",
+    [ "HttpRequest"; "cookieCap";
+      "Http.setSessionCookie"; "Http.clearSessionCookie"; "Http.sessionToken" ] );
+  (* Tesl.DB, Tesl.Uuid, Tesl.Logging, Tesl.Queue, Tesl.Sse —
      internal modules; imports validated loosely (unknown names accepted)
      Note: Tesl.UUID (uppercase) now has a full export list above. *)
 ]
@@ -1451,6 +1533,8 @@ let stdlib_bare_home_module : (string * string) list = [
   "statusOk", "Tesl.ApiTest"; "statusClientError", "Tesl.ApiTest";
   "statusServerError", "Tesl.ApiTest";
   "pendingJobCount", "Tesl.ApiTest"; "drainQueue", "Tesl.ApiTest";
+  (* the session-cookie reader — a bare name, import-gated like its siblings *)
+  "responseCookie", "Tesl.ApiTest";
   "processNextJob", "Tesl.ApiTest"; "processNextDeadJob", "Tesl.ApiTest";
   (* outbound-HTTP double — bare names, import-gated like their siblings *)
   "stubHttp", "Tesl.ApiTest"; "stubHttpFailure", "Tesl.ApiTest";
@@ -1552,6 +1636,13 @@ let stdlib_capabilities : (string * string list) list = [
      `exp` — see the drift note below; it is recorded, not yet propagated. *)
   "JWT.sign", ["jwt"; "time"];
   "JWT.verify", ["jwt"]; "JWT.decode", ["jwt"];
+  (* JWT.renew signs, so it charges `time` for the same reason JWT.sign does. *)
+  "JWT.renew", ["jwt"; "time"];
+  (* Http: writing a cookie is an effect ON THE RESPONSE, so both writers are
+     gated by `cookieCap`.  `Http.sessionToken` is deliberately absent — reading
+     request data is not an effect, exactly as `request.cookies` is ungated. *)
+  "Http.setSessionCookie", ["cookieCap"];
+  "Http.clearSessionCookie", ["cookieCap"];
   (* Crypto — ONLY the two that draw randomness.  A capability marks an effect;
      sensitivity is carried by the types and the facts, which track the VALUE
      rather than the function.  So signWith/checkSignature/checkPassword/

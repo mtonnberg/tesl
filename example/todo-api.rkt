@@ -13,12 +13,12 @@
   tesl/tesl/queue
   tesl/tesl/sse
   (only-in tesl/tesl/prelude Bool Int List Fact String Unit)
-  (only-in tesl/tesl/http HttpRequest)
+  (only-in tesl/tesl/http HttpRequest [Http.sessionToken tesl_import_Http_sessionToken])
   (only-in tesl/tesl/maybe Maybe Something Nothing)
   (only-in tesl/tesl/dict [Dict.lookup tesl_import_Dict_lookup])
   (only-in tesl/tesl/time nowMillis PosixMillis time)
-  (only-in tesl/tesl/env env envInt envRead requireEnv)
-  (only-in tesl/tesl/jwt jwt JwtToken JwtSecret [JWT.verify tesl_import_JWT_verify])
+  (only-in tesl/tesl/env env envInt envRead requireSecret)
+  (only-in tesl/tesl/jwt jwt [JWT.verify tesl_import_JWT_verify])
   (only-in tesl/tesl/string [String.length tesl_import_String_length] [String.startsWith tesl_import_String_startsWith] [String.contains tesl_import_String_contains])
   (only-in tesl/tesl/int [Int.parse tesl_import_Int_parse])
   (only-in tesl/tesl/list [List.isEmpty tesl_import_List_isEmpty] [List.filterCheck tesl_import_List_filterCheck])
@@ -34,7 +34,7 @@
 ;; Debugger: the lines whose statement is a READ-ONLY query.  The pause on
 ;; those happens AFTER the statement, so the SQL lens can show the exact
 ;; statement that ran (erased with the checkpoints in a release build).
-(register-sql-read-lines! "example/todo-api.tesl" '(189 222 229 235 247))
+(register-sql-read-lines! "example/todo-api.tesl" '(192 225 232 238 250))
 (define Authenticated 'Authenticated)
 (define ContainsAnA 'ContainsAnA)
 (define IsOpen 'IsOpen)
@@ -126,22 +126,22 @@
   (cookieAuth [request : HttpRequest])
   #:capabilities [todoReadHttpCookie]
   #:returns [requestUser : User ::: (Authenticated requestUser)]
-  (thsl-src-control! "example/todo-api.tesl" 125 (list (cons 'request *request)) (lambda () (let ([tesl-case-4 (raw-value (tesl_import_Dict_lookup "session" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Nothing)) (thsl-src! "example/todo-api.tesl" 126 (list) (lambda () (reject "Missing session cookie" #:http-code 401)))] [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Something)) (let ([raw (hash-ref (adt-value-fields *tesl-case-4) 'value)]) (thsl-src! "example/todo-api.tesl" 128 (list (cons 'raw raw)) (lambda () (let ([claims (raw-value (tesl_import_JWT_verify (JwtToken raw) (JwtSecret (raw-value (requireEnv "SESSION_JWT_SECRET")))))]) (let ([tesl-case-5 (raw-value (tesl_import_Dict_lookup "sub" (raw-value claims)))]) (cond [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Nothing)) (thsl-src! "example/todo-api.tesl" 130 (list) (lambda () (reject "Session token has no subject" #:http-code 401)))] [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-5) 'value)]) (thsl-src! "example/todo-api.tesl" 131 (list (cons 'userId userId)) (lambda () (accept Authenticated #:value (User #:id (UserId (raw-value userId)) #:role "user")))))]))))))])))))
+  (thsl-src-control! "example/todo-api.tesl" 128 (list (cons 'request *request)) (lambda () (let ([tesl-case-4 (raw-value (tesl_import_Http_sessionToken *request))]) (cond [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Nothing)) (thsl-src! "example/todo-api.tesl" 129 (list) (lambda () (reject "Missing session cookie" #:http-code 401)))] [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Something)) (let ([token (hash-ref (adt-value-fields *tesl-case-4) 'value)]) (thsl-src! "example/todo-api.tesl" 131 (list (cons 'token token)) (lambda () (let ([claims (raw-value (tesl_import_JWT_verify (raw-value token) (raw-value (requireSecret "SESSION_JWT_SECRET"))))]) (let ([tesl-case-5 (raw-value (tesl_import_Dict_lookup "sub" (raw-value claims)))]) (cond [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Nothing)) (thsl-src! "example/todo-api.tesl" 133 (list) (lambda () (reject "Session token has no subject" #:http-code 401)))] [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-5) 'value)]) (thsl-src! "example/todo-api.tesl" 134 (list (cons 'userId userId)) (lambda () (accept Authenticated #:value (User #:id (UserId (raw-value userId)) #:role "user")))))]))))))])))))
 
 (define-checker
   (isSafeTitle [title : String])
   #:returns [title : String ::: (TitleSafe title)]
-  (thsl-src! "example/todo-api.tesl" 136 (list (cons 'title *title)) (lambda () (if (and (tesl-le? 4 (raw-value (tesl_import_String_length *title))) (tesl-le? (raw-value (tesl_import_String_length *title)) 120)) (accept (TitleSafe title) #:value *title) (reject "Title must be between 3 and 120 characters" #:http-code 400)))))
+  (thsl-src! "example/todo-api.tesl" 139 (list (cons 'title *title)) (lambda () (if (and (tesl-le? 4 (raw-value (tesl_import_String_length *title))) (tesl-le? (raw-value (tesl_import_String_length *title)) 120)) (accept (TitleSafe title) #:value *title) (reject "Title must be between 3 and 120 characters" #:http-code 400)))))
 
 (define-checker
   (lengthLessThan30 [title : String])
   #:returns [title : String ::: (LengthLessThan30 title)]
-  (thsl-src! "example/todo-api.tesl" 144 (list (cons 'title *title)) (lambda () (if (tesl-lt? (raw-value (tesl_import_String_length *title)) 30) (accept (LengthLessThan30 title) #:value *title) (reject "Title must be be less than 30 characters" #:http-code 400)))))
+  (thsl-src! "example/todo-api.tesl" 147 (list (cons 'title *title)) (lambda () (if (tesl-lt? (raw-value (tesl_import_String_length *title)) 30) (accept (LengthLessThan30 title) #:value *title) (reject "Title must be be less than 30 characters" #:http-code 400)))))
 
 (define-checker
   (containsAnA [title : String])
   #:returns [title : String ::: (ContainsAnA title)]
-  (thsl-src! "example/todo-api.tesl" 152 (list (cons 'title *title)) (lambda () (if (tesl_import_String_contains *title "a") (accept (ContainsAnA title) #:value *title) (reject "Title must contain an a." #:http-code 400)))))
+  (thsl-src! "example/todo-api.tesl" 155 (list (cons 'title *title)) (lambda () (if (tesl_import_String_contains *title "a") (accept (ContainsAnA title) #:value *title) (reject "Title must contain an a." #:http-code 400)))))
 
 (define-record NewTodo
   [title : String ::: ((TitleSafe title) && ((LengthLessThan30 title) && (ContainsAnA title)))]
@@ -165,7 +165,7 @@
 (define-checker
   (isTodoId [todoId : String])
   #:returns [todoId : String ::: (TodoId todoId)]
-  (thsl-src! "example/todo-api.tesl" 173 (list (cons 'todoId *todoId)) (lambda () (if (and (raw-value (tesl_import_String_startsWith *todoId "todo-")) (tesl-gt? (raw-value (tesl_import_String_length *todoId)) 5)) (accept (TodoId todoId) #:value *todoId) (reject "Malformed todo id" #:http-code 400)))))
+  (thsl-src! "example/todo-api.tesl" 176 (list (cons 'todoId *todoId)) (lambda () (if (and (raw-value (tesl_import_String_startsWith *todoId "todo-")) (tesl-gt? (raw-value (tesl_import_String_length *todoId)) 5)) (accept (TodoId todoId) #:value *todoId) (reject "Malformed todo id" #:http-code 400)))))
 
 (define-capture todoIdCapture
   [todoId : String ::: (TodoId todoId)]
@@ -174,49 +174,49 @@
 (define-checker
   (checkOpen [todo : Todo])
   #:returns [todo : Todo ::: (IsOpen todo)]
-  (thsl-src-control! "example/todo-api.tesl" 183 (list (cons 'todo *todo)) (lambda () (let ([tesl-case-6 (tesl-dot/runtime todo 'status 'Todo)]) (cond [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'Open)) (thsl-src! "example/todo-api.tesl" 184 (list) (lambda () (accept (IsOpen todo) #:value *todo)))] [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'Done)) (thsl-src! "example/todo-api.tesl" 185 (list) (lambda () (reject "todo is already completed" #:http-code 422)))])))))
+  (thsl-src-control! "example/todo-api.tesl" 186 (list (cons 'todo *todo)) (lambda () (let ([tesl-case-6 (tesl-dot/runtime todo 'status 'Todo)]) (cond [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'Open)) (thsl-src! "example/todo-api.tesl" 187 (list) (lambda () (accept (IsOpen todo) #:value *todo)))] [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'Done)) (thsl-src! "example/todo-api.tesl" 188 (list) (lambda () (reject "todo is already completed" #:http-code 422)))])))))
 
 (define/pow
   (seedExampleData)
   #:capabilities [todoDbRead todoDbWrite time]
   #:returns Integer
-  (thsl-src! "example/todo-api.tesl" 189 (list) (lambda () (if (raw-value (tesl_import_List_isEmpty (select-many (from Todo)))) (let ([_ (insert-one! Todo (tesl-hash 'id "todo-1" 'title "Review the SQL layer" 'ownerId (raw-value (UserId "mikael")) 'status Open 'createdAt (raw-value (nowMillis))))]) (let ([_ (insert-one! Todo (tesl-hash 'id "todo-2" 'title "Sketch more DSL examples" 'ownerId (raw-value (UserId "anna")) 'status Open 'createdAt (raw-value (nowMillis))))]) (raw-value 2))) (raw-value 0)))))
+  (thsl-src! "example/todo-api.tesl" 192 (list) (lambda () (if (raw-value (tesl_import_List_isEmpty (select-many (from Todo)))) (let ([_ (insert-one! Todo (tesl-hash 'id "todo-1" 'title "Review the SQL layer" 'ownerId (raw-value (UserId "mikael")) 'status Open 'createdAt (raw-value (nowMillis))))]) (let ([_ (insert-one! Todo (tesl-hash 'id "todo-2" 'title "Sketch more DSL examples" 'ownerId (raw-value (UserId "anna")) 'status Open 'createdAt (raw-value (nowMillis))))]) (raw-value 2))) (raw-value 0)))))
 
 (define-handler
   (listTest [requestUser : User ::: (Authenticated requestUser)] [newTodos : (List String)])
   #:capabilities [todoDbRead todoDbWrite time random]
   #:returns String
-  (thsl-src! "example/todo-api.tesl" 202 (list (cons 'requestUser *requestUser) (cons 'newTodos *newTodos)) (lambda () "hej")))
+  (thsl-src! "example/todo-api.tesl" 205 (list (cons 'requestUser *requestUser) (cons 'newTodos *newTodos)) (lambda () "hej")))
 
 (define-handler
   (createTodo [requestUser : User ::: (Authenticated requestUser)] [newTodo : NewTodo])
   #:capabilities [todoDbRead todoDbWrite time random]
   #:returns (Exists [todoId : String] (? Todo _entity ::: (FromDb (Id == todoId) _entity)))
-  (let ([todoId (thsl-src! "example/todo-api.tesl" 208 (list (cons 'requestUser *requestUser) (cons 'newTodo *newTodo)) (lambda () (generateTodoId)))]) (thsl-src! "example/todo-api.tesl" 209 (list (cons 'todoId *todoId) (cons 'requestUser *requestUser) (cons 'newTodo *newTodo)) (lambda () (pack ([todoId]) (insert-one! Todo (tesl-hash 'id todoId 'title (raw-value newTodo.title) 'ownerId (raw-value requestUser.id) 'status Open 'createdAt (raw-value (nowMillis)))))))))
+  (let ([todoId (thsl-src! "example/todo-api.tesl" 211 (list (cons 'requestUser *requestUser) (cons 'newTodo *newTodo)) (lambda () (generateTodoId)))]) (thsl-src! "example/todo-api.tesl" 212 (list (cons 'todoId *todoId) (cons 'requestUser *requestUser) (cons 'newTodo *newTodo)) (lambda () (pack ([todoId]) (insert-one! Todo (tesl-hash 'id todoId 'title (raw-value newTodo.title) 'ownerId (raw-value requestUser.id) 'status Open 'createdAt (raw-value (nowMillis)))))))))
 
 (define-handler
   (listMyTodos [requestUser : User ::: (Authenticated requestUser)])
   #:capabilities [todoDbRead]
   #:returns (List Todo)
-  (let ([_ (thsl-src! "example/todo-api.tesl" 221 (list (cons 'requestUser *requestUser)) (lambda () (telemetry-event! "todo.list" #:attributes (["user.id" (raw-value requestUser.id)]))))]) (thsl-src! "example/todo-api.tesl" 222 (list (cons 'requestUser *requestUser)) (lambda () (select-many (from Todo) (where (==. (entity-field-ref Todo 'ownerId) (raw-value requestUser.id))))))))
+  (let ([_ (thsl-src! "example/todo-api.tesl" 224 (list (cons 'requestUser *requestUser)) (lambda () (telemetry-event! "todo.list" #:attributes (["user.id" (raw-value requestUser.id)]))))]) (thsl-src! "example/todo-api.tesl" 225 (list (cons 'requestUser *requestUser)) (lambda () (select-many (from Todo) (where (==. (entity-field-ref Todo 'ownerId) (raw-value requestUser.id))))))))
 
 (define-handler
   (listOpenTodos [requestUser : User ::: (Authenticated requestUser)])
   #:capabilities [todoDbRead]
   #:returns (List Todo)
-  (let ([myTodos (thsl-src! "example/todo-api.tesl" 229 (list (cons 'requestUser *requestUser)) (lambda () (select-many (from Todo) (where (==. (entity-field-ref Todo 'ownerId) (raw-value requestUser.id))))) 'myTodos)]) (thsl-src! "example/todo-api.tesl" 230 (list (cons 'myTodos *myTodos) (cons 'requestUser *requestUser)) (lambda () (tesl_import_List_filterCheck checkOpen (raw-value myTodos))))))
+  (let ([myTodos (thsl-src! "example/todo-api.tesl" 232 (list (cons 'requestUser *requestUser)) (lambda () (select-many (from Todo) (where (==. (entity-field-ref Todo 'ownerId) (raw-value requestUser.id))))) 'myTodos)]) (thsl-src! "example/todo-api.tesl" 233 (list (cons 'myTodos *myTodos) (cons 'requestUser *requestUser)) (lambda () (tesl_import_List_filterCheck checkOpen (raw-value myTodos))))))
 
 (define-handler
   (getTodo [requestUser : User ::: (Authenticated requestUser)] [todoId : String ::: (TodoId todoId)])
   #:capabilities [todoDbRead]
   #:returns (? Todo _entity ::: (FromDb (Id == todoId) _entity))
-  (let ([existing (thsl-src! "example/todo-api.tesl" 235 (list (cons 'requestUser *requestUser) (cons 'todoId *todoId)) (lambda () (let ([tesl_match (select-one (from Todo) (where (==. (entity-field-ref Todo 'id) todoId)))]) (if tesl_match (Something tesl_match) Nothing))) 'existing)]) (thsl-src-control! "example/todo-api.tesl" 236 (list (cons 'existing *existing) (cons 'requestUser *requestUser) (cons 'todoId *todoId)) (lambda () (let ([tesl-case-7 (raw-value existing)]) (cond [(and (adt-value? *tesl-case-7) (eq? (adt-value-variant *tesl-case-7) 'Nothing)) (thsl-src! "example/todo-api.tesl" 238 (list) (lambda () (reject "Todo not found" #:http-code 404)))] [(and (and (adt-value? *tesl-case-7) (eq? (adt-value-variant *tesl-case-7) 'Something)) (let ([todo (hash-ref (adt-value-fields *tesl-case-7) 'value)]) (not (tesl-equal? (raw-value todo.ownerId) (raw-value requestUser.id))))) (let ([todo (hash-ref (adt-value-fields *tesl-case-7) 'value)]) (thsl-src! "example/todo-api.tesl" 240 (list (cons 'todo todo)) (lambda () (reject "Todo not owned by request user" #:http-code 403))))] [(and (adt-value? *tesl-case-7) (eq? (adt-value-variant *tesl-case-7) 'Something)) (let ([todo (hash-ref (adt-value-fields *tesl-case-7) 'value)]) (thsl-src! "example/todo-api.tesl" 242 (list (cons 'todo todo)) (lambda () todo)))]))))))
+  (let ([existing (thsl-src! "example/todo-api.tesl" 238 (list (cons 'requestUser *requestUser) (cons 'todoId *todoId)) (lambda () (let ([tesl_match (select-one (from Todo) (where (==. (entity-field-ref Todo 'id) todoId)))]) (if tesl_match (Something tesl_match) Nothing))) 'existing)]) (thsl-src-control! "example/todo-api.tesl" 239 (list (cons 'existing *existing) (cons 'requestUser *requestUser) (cons 'todoId *todoId)) (lambda () (let ([tesl-case-7 (raw-value existing)]) (cond [(and (adt-value? *tesl-case-7) (eq? (adt-value-variant *tesl-case-7) 'Nothing)) (thsl-src! "example/todo-api.tesl" 241 (list) (lambda () (reject "Todo not found" #:http-code 404)))] [(and (and (adt-value? *tesl-case-7) (eq? (adt-value-variant *tesl-case-7) 'Something)) (let ([todo (hash-ref (adt-value-fields *tesl-case-7) 'value)]) (not (tesl-equal? (raw-value todo.ownerId) (raw-value requestUser.id))))) (let ([todo (hash-ref (adt-value-fields *tesl-case-7) 'value)]) (thsl-src! "example/todo-api.tesl" 243 (list (cons 'todo todo)) (lambda () (reject "Todo not owned by request user" #:http-code 403))))] [(and (adt-value? *tesl-case-7) (eq? (adt-value-variant *tesl-case-7) 'Something)) (let ([todo (hash-ref (adt-value-fields *tesl-case-7) 'value)]) (thsl-src! "example/todo-api.tesl" 245 (list (cons 'todo todo)) (lambda () todo)))]))))))
 
 (define-handler
   (completeTodo [requestUser : User ::: (Authenticated requestUser)] [todoId : String ::: (TodoId todoId)])
   #:capabilities [todoDbRead todoDbWrite]
   #:returns (? Todo _entity ::: (FromDb (Id == todoId) _entity))
-  (let ([existing (thsl-src! "example/todo-api.tesl" 247 (list (cons 'requestUser *requestUser) (cons 'todoId *todoId)) (lambda () (let ([tesl_match (select-one (from Todo) (where (==. (entity-field-ref Todo 'id) todoId)))]) (if tesl_match (Something tesl_match) Nothing))) 'existing)]) (thsl-src-control! "example/todo-api.tesl" 248 (list (cons 'existing *existing) (cons 'requestUser *requestUser) (cons 'todoId *todoId)) (lambda () (let ([tesl-case-8 (raw-value existing)]) (cond [(and (adt-value? *tesl-case-8) (eq? (adt-value-variant *tesl-case-8) 'Nothing)) (thsl-src! "example/todo-api.tesl" 250 (list) (lambda () (reject "Todo not found" #:http-code 404)))] [(and (and (adt-value? *tesl-case-8) (eq? (adt-value-variant *tesl-case-8) 'Something)) (let ([todo (hash-ref (adt-value-fields *tesl-case-8) 'value)]) (not (tesl-equal? (raw-value todo.ownerId) (raw-value requestUser.id))))) (let ([todo (hash-ref (adt-value-fields *tesl-case-8) 'value)]) (thsl-src! "example/todo-api.tesl" 252 (list (cons 'todo todo)) (lambda () (reject "Todo not owned by request user" #:http-code 403))))] [(and (adt-value? *tesl-case-8) (eq? (adt-value-variant *tesl-case-8) 'Something)) (thsl-src! "example/todo-api.tesl" 254 (list) (lambda () (car (update-many! (from Todo) (tesl-hash (entity-field-ref Todo 'status) Done) (where (==. (entity-field-ref Todo 'id) todoId))))))]))))))
+  (let ([existing (thsl-src! "example/todo-api.tesl" 250 (list (cons 'requestUser *requestUser) (cons 'todoId *todoId)) (lambda () (let ([tesl_match (select-one (from Todo) (where (==. (entity-field-ref Todo 'id) todoId)))]) (if tesl_match (Something tesl_match) Nothing))) 'existing)]) (thsl-src-control! "example/todo-api.tesl" 251 (list (cons 'existing *existing) (cons 'requestUser *requestUser) (cons 'todoId *todoId)) (lambda () (let ([tesl-case-8 (raw-value existing)]) (cond [(and (adt-value? *tesl-case-8) (eq? (adt-value-variant *tesl-case-8) 'Nothing)) (thsl-src! "example/todo-api.tesl" 253 (list) (lambda () (reject "Todo not found" #:http-code 404)))] [(and (and (adt-value? *tesl-case-8) (eq? (adt-value-variant *tesl-case-8) 'Something)) (let ([todo (hash-ref (adt-value-fields *tesl-case-8) 'value)]) (not (tesl-equal? (raw-value todo.ownerId) (raw-value requestUser.id))))) (let ([todo (hash-ref (adt-value-fields *tesl-case-8) 'value)]) (thsl-src! "example/todo-api.tesl" 255 (list (cons 'todo todo)) (lambda () (reject "Todo not owned by request user" #:http-code 403))))] [(and (adt-value? *tesl-case-8) (eq? (adt-value-variant *tesl-case-8) 'Something)) (thsl-src! "example/todo-api.tesl" 257 (list) (lambda () (car (update-many! (from Todo) (tesl-hash (entity-field-ref Todo 'status) Done) (where (==. (entity-field-ref Todo 'id) todoId))))))]))))))
 
 (define TodoServer-sse-routes '())
 (define-api TodoApi
@@ -271,4 +271,4 @@
 )
 
 (module+ main
-  (thsl-src! "example/todo-api.tesl" 298 (list) (lambda () (with-capabilities (todoWebService) (call-with-database TodoDatabase (lambda () (let ([_ (init-opentelemetry! #:service-name "todo-api" #:endpoint "in-memory" #:console? #t)]) (let ([port (resolveExamplePort (raw-value (env "TESL_TODO_API_PORT")) (raw-value (env "PORT")))]) (let ([_ (seedExampleData)]) (serve TodoServer #:port port #:capabilities (list todoWebService) #:sse-routes TodoServer-sse-routes))))))))))
+  (thsl-src! "example/todo-api.tesl" 301 (list) (lambda () (with-capabilities (todoWebService) (call-with-database TodoDatabase (lambda () (let ([_ (init-opentelemetry! #:service-name "todo-api" #:endpoint "in-memory" #:console? #t)]) (let ([port (resolveExamplePort (raw-value (env "TESL_TODO_API_PORT")) (raw-value (env "PORT")))]) (let ([_ (seedExampleData)]) (serve TodoServer #:port port #:capabilities (list todoWebService) #:sse-routes TodoServer-sse-routes))))))))))

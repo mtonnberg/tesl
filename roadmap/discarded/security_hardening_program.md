@@ -44,10 +44,14 @@ lint (L4).
   compiler + pinned nix).
 
 ## E. Language-surface / trust-model audits (L1–L7)
-`establish` trust escape hatch (L1); crypto-free `auth` root / no signed-session
-primitive (L2); no contextual output escaping (L3); telemetry as an ungated egress
-sink (L4); codec/deserialization of untrusted input (L5); resource exhaustion via
-unbounded computation (L6); auto-migration DDL at startup (L7).
+`establish` trust escape hatch (L1); ~~crypto-free `auth` root / no signed-session
+primitive (L2)~~ **— CLOSED 2026-07-30 by `completed/response_metadata_and_cookies.md`:
+the `Tesl.Http` session cookie (`cookieCap`, a writer that demands a `JwtToken`,
+every attribute fixed) plus `lesson76-sessions.tesl` as the one blessed pattern;
+`auth` itself is still a trust root, which is L1's problem, not L2's**; no contextual
+output escaping (L3); telemetry as an ungated egress sink (L4);
+codec/deserialization of untrusted input (L5); resource exhaustion via unbounded
+computation (L6); auto-migration DDL at startup (L7).
 
 ## Coverage matrix + completeness critic
 Maintain a table mapping vuln-class → test layer → location → CI gate, and run a

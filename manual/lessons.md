@@ -13,7 +13,7 @@ and every one is also a regression test — each has a committed byte-exact
 tesl help manual <lesson-name>      # e.g. tesl help manual lesson05-intro-to-proofs
 ```
 
-There are **77** lessons. That number is generated; it cannot drift.
+There are **78** lessons. That number is generated; it cannot drift.
 
 ## In a hurry? Start with these
 
@@ -136,7 +136,7 @@ exactly what you are missing.
 | 300 | [`lesson26-time-and-posix`](../example/learn/lesson26-time-and-posix.tesl) | One canonical timestamp type, PosixMillis, and the Tesl.Time functions that read and format it | [`lesson04-newtypes`](../example/learn/lesson04-newtypes.tesl) — Give a String or Int its own nominal type, so a UserId can never be passed where a ProjectId is expected |
 | 310 | [`lesson56-uuid`](../example/learn/lesson56-uuid.tesl) | Generate collision-resistant identifiers with UUID v4 and time-ordered v7 | [`lesson11-capabilities`](../example/learn/lesson11-capabilities.tesl) — Name the side effects a function may perform, build a hierarchy with implies, and let the compiler track them transitively |
 | 320 | [`lesson64-password-storage`](../example/learn/lesson64-password-storage.tesl) | Store and verify a password safely in two calls, with no cryptographic choices left to get wrong | [`lesson05-intro-to-proofs`](../example/learn/lesson05-intro-to-proofs.tesl) — A check function stamps a value as validated, and the stamp travels with it through the type system |
-| 330 | [`lesson57-jwt`](../example/learn/lesson57-jwt.tesl) | Sign and verify JSON Web Tokens for stateless auth, with nominal types keeping token and secret apart | [`lesson06-proof-check-proof-auth`](../example/learn/lesson06-proof-check-proof-auth.tesl) — The three proof-producing function kinds: check validates at runtime, establish asserts a trust boundary, auth proves identity |
+| 330 | [`lesson57-jwt`](../example/learn/lesson57-jwt.tesl) | Sign and verify JSON Web Tokens for stateless auth, with the token nominal and the key a Tesl.Crypto Secret | [`lesson06-proof-check-proof-auth`](../example/learn/lesson06-proof-check-proof-auth.tesl) — The three proof-producing function kinds: check validates at runtime, establish asserts a trust boundary, auth proves identity |
 | 380 | [`lesson17-telemetry`](../example/learn/lesson17-telemetry.tesl) | Emit an OpenTelemetry span from any function body with a telemetry block, no capability required | — |
 | 480 | [`lesson59-cache`](../example/learn/lesson59-cache.tesl) | Cache values in the Postgres-backed store that ships with Tesl — no Redis, no dual write | [`lesson18-database-sql-and-proofs`](../example/learn/lesson18-database-sql-and-proofs.tesl) — Declare a table with entity and query it in typed SQL whose results carry a proof that they came from the database |
 | 490 | [`lesson60-email`](../example/learn/lesson60-email.tesl) | Send email through the built-in outbox pattern — an email block, a database and emailCap | [`lesson11-capabilities`](../example/learn/lesson11-capabilities.tesl) — Name the side effects a function may perform, build a hierarchy with implies, and let the compiler track them transitively |
@@ -146,6 +146,7 @@ exactly what you are missing.
 | 690 | [`lesson75-regex-validation`](../example/learn/lesson75-regex-validation.tesl) | Match, extract and replace with Tesl.Regex, where the pattern always comes first | [`lesson25-standard-library-strings-lists-ints`](../example/learn/lesson25-standard-library-strings-lists-ints.tesl) — The three most-used standard modules: Tesl.String, Tesl.List and Tesl.Int |
 | 760 | [`lesson71-money`](../example/learn/lesson71-money.tesl) | Handle money as exact integer minor units carrying its own currency, never a Float | — |
 | 770 | [`lesson72-units`](../example/learn/lesson72-units.tesl) | Give physical quantities compile-time dimensions, checked when you multiply and erased at runtime | — |
+| 780 | [`lesson76-sessions`](../example/learn/lesson76-sessions.tesl) | Log a user in with a signed session cookie, read it back in auth, and log them out — one blessed pattern with no options | [`lesson57-jwt`](../example/learn/lesson57-jwt.tesl) — Sign and verify JSON Web Tokens for stateless auth, with the token nominal and the key a Tesl.Crypto Secret |
 
 ### AI-era surfaces
 

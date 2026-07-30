@@ -27,7 +27,8 @@
   (only-in tesl/tesl/api-test statusOk statusClientError)
   (only-in tesl/tesl/tuple Tuple2)
   (only-in tesl/tesl/uuid [UUID.validate tesl_import_UUID_validate] IsUuid)
-  (only-in tesl/tesl/jwt jwt JwtToken JwtSecret [JWT.sign tesl_import_JWT_sign] [JWT.verify tesl_import_JWT_verify])
+  (only-in tesl/tesl/jwt jwt JwtToken [JWT.sign tesl_import_JWT_sign] [JWT.verify tesl_import_JWT_verify])
+  (only-in tesl/tesl/crypto Secret)
   (only-in tesl/tesl/http-client httpClient HttpResponse [HttpClient.post tesl_import_HttpClient_post])
   (only-in tesl/tesl/email emailCap)
 )
@@ -38,7 +39,7 @@
 ;; Debugger: the lines whose statement is a READ-ONLY query.  The pause on
 ;; those happens AFTER the statement, so the SQL lens can show the exact
 ;; statement that ran (erased with the checkpoints in a release build).
-(register-sql-read-lines! "example/user-service-api.tesl" '(368 392 424 446 474))
+(register-sql-read-lines! "example/user-service-api.tesl" '(377 401 433 455 483))
 (define Authenticated 'Authenticated)
 (define ValidEmail 'ValidEmail)
 (define ValidPassword 'ValidPassword)
@@ -87,17 +88,17 @@
 (define-checker
   (checkEmail [s : String])
   #:returns [s : String ::: (ValidEmail s)]
-  (thsl-src! "example/user-service-api.tesl" 175 (list (cons 's *s)) (lambda () (if (and (raw-value (tesl_import_String_contains *s "@")) (tesl-ge? (raw-value (tesl_import_String_length *s)) 5)) (accept (ValidEmail s) #:value *s) (reject "Invalid email address" #:http-code 400)))))
+  (thsl-src! "example/user-service-api.tesl" 178 (list (cons 's *s)) (lambda () (if (and (raw-value (tesl_import_String_contains *s "@")) (tesl-ge? (raw-value (tesl_import_String_length *s)) 5)) (accept (ValidEmail s) #:value *s) (reject "Invalid email address" #:http-code 400)))))
 
 (define-checker
   (checkUsername [s : String])
   #:returns [s : String ::: (ValidUsername s)]
-  (thsl-src! "example/user-service-api.tesl" 183 (list (cons 's *s)) (lambda () (if (and (tesl-ge? (raw-value (tesl_import_String_length *s)) 2) (tesl-le? (raw-value (tesl_import_String_length *s)) 40)) (accept (ValidUsername s) #:value *s) (reject "Username must be 2-40 characters" #:http-code 400)))))
+  (thsl-src! "example/user-service-api.tesl" 186 (list (cons 's *s)) (lambda () (if (and (tesl-ge? (raw-value (tesl_import_String_length *s)) 2) (tesl-le? (raw-value (tesl_import_String_length *s)) 40)) (accept (ValidUsername s) #:value *s) (reject "Username must be 2-40 characters" #:http-code 400)))))
 
 (define-checker
   (checkPassword [s : String])
   #:returns [s : String ::: (ValidPassword s)]
-  (thsl-src! "example/user-service-api.tesl" 191 (list (cons 's *s)) (lambda () (if (tesl-ge? (raw-value (tesl_import_String_length *s)) 8) (accept (ValidPassword s) #:value *s) (reject "Password must be at least 8 characters" #:http-code 400)))))
+  (thsl-src! "example/user-service-api.tesl" 194 (list (cons 's *s)) (lambda () (if (tesl-ge? (raw-value (tesl_import_String_length *s)) 8) (accept (ValidPassword s) #:value *s) (reject "Password must be at least 8 characters" #:http-code 400)))))
 
 (define-record RegisterRequest
   [username : String ::: (ValidUsername username)]
@@ -204,55 +205,63 @@
   ))
 (register-type-codec! 'AuthResponse tesl-codec-encode-AuthResponse (list ))
 
-(define jwtSigningSecret (raw-value (JwtSecret "dev-secret-change-in-production")))
+(define/pow
+  (keyFromRaw [raw : String])
+  #:returns Secret
+  (thsl-src! "example/user-service-api.tesl" 307 (list (cons 'raw *raw)) (lambda () (raw-value (Secret *raw)))))
+
+(define/pow
+  (jwtSigningSecret)
+  #:returns Secret
+  (thsl-src! "example/user-service-api.tesl" 309 (list) (lambda () (raw-value (keyFromRaw "dev-secret-change-in-production")))))
 
 (define/pow
   (makeToken [userId : String])
   #:capabilities [userJwt]
   #:returns JwtToken
-  (thsl-src! "example/user-service-api.tesl" 310 (list (cons 'userId *userId)) (lambda () (raw-value (tesl_import_JWT_sign (raw-value (tesl_import_Dict_singleton "sub" *userId)) (raw-value jwtSigningSecret))))))
+  (thsl-src! "example/user-service-api.tesl" 319 (list (cons 'userId *userId)) (lambda () (raw-value (tesl_import_JWT_sign (raw-value (tesl_import_Dict_singleton "sub" *userId)) (raw-value (jwtSigningSecret)))))))
 
 (define-auther
   (jwtAuth [request : HttpRequest])
   #:capabilities [userJwt]
   #:returns [userId : String ::: (Authenticated userId)]
-  (thsl-src-control! "example/user-service-api.tesl" 315 (list (cons 'request *request)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Dict_lookup "authorization" (raw-value request.headers)))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/user-service-api.tesl" 317 (list) (lambda () (reject "Missing Authorization header" #:http-code 401)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([rawHeader (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/user-service-api.tesl" 319 (list (cons 'rawHeader rawHeader)) (lambda () (if (tesl_import_String_startsWith (raw-value rawHeader) "Bearer ") (let ([tokenStr (raw-value (tesl_import_String_dropPrefix (raw-value rawHeader) "Bearer "))]) (let/check ([tesl-checked-1 (tesl_import_JWT_verify (JwtToken tokenStr) jwtSigningSecret)]) (let ([claims tesl-checked-1]) (let ([tesl-case-2 (raw-value (tesl_import_Dict_lookup "sub" claims))]) (cond [(and (adt-value? *tesl-case-2) (eq? (adt-value-variant *tesl-case-2) 'Nothing)) (thsl-src! "example/user-service-api.tesl" 329 (list) (lambda () (reject "Invalid token: missing sub claim" #:http-code 401)))] [(and (adt-value? *tesl-case-2) (eq? (adt-value-variant *tesl-case-2) 'Something)) (let ([verifiedUserId (hash-ref (adt-value-fields *tesl-case-2) 'value)]) (thsl-src! "example/user-service-api.tesl" 331 (list (cons 'verifiedUserId verifiedUserId)) (lambda () (accept (Authenticated verifiedUserId) #:value *verifiedUserId))))]))))) (reject "Authorization header must start with 'Bearer '" #:http-code 401)))))])))))
+  (thsl-src-control! "example/user-service-api.tesl" 324 (list (cons 'request *request)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Dict_lookup "authorization" (raw-value request.headers)))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/user-service-api.tesl" 326 (list) (lambda () (reject "Missing Authorization header" #:http-code 401)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([rawHeader (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/user-service-api.tesl" 328 (list (cons 'rawHeader rawHeader)) (lambda () (if (tesl_import_String_startsWith (raw-value rawHeader) "Bearer ") (let ([tokenStr (raw-value (tesl_import_String_dropPrefix (raw-value rawHeader) "Bearer "))]) (let/check ([tesl-checked-1 (tesl_import_JWT_verify (JwtToken tokenStr) (jwtSigningSecret))]) (let ([claims tesl-checked-1]) (let ([tesl-case-2 (raw-value (tesl_import_Dict_lookup "sub" claims))]) (cond [(and (adt-value? *tesl-case-2) (eq? (adt-value-variant *tesl-case-2) 'Nothing)) (thsl-src! "example/user-service-api.tesl" 338 (list) (lambda () (reject "Invalid token: missing sub claim" #:http-code 401)))] [(and (adt-value? *tesl-case-2) (eq? (adt-value-variant *tesl-case-2) 'Something)) (let ([verifiedUserId (hash-ref (adt-value-fields *tesl-case-2) 'value)]) (thsl-src! "example/user-service-api.tesl" 340 (list (cons 'verifiedUserId verifiedUserId)) (lambda () (accept (Authenticated verifiedUserId) #:value *verifiedUserId))))]))))) (reject "Authorization header must start with 'Bearer '" #:http-code 401)))))])))))
 
 (define/pow
   (notifyWebhook [userId : String])
   #:capabilities [userHttp]
   #:returns HttpResponse
-  (let ([webhookUrl (thsl-src! "example/user-service-api.tesl" 345 (list (cons 'userId *userId)) (lambda () "https://example.com/webhooks/profile"))]) (let ([payload (thsl-src! "example/user-service-api.tesl" 346 (list (cons 'webhookUrl *webhookUrl) (cons 'userId *userId)) (lambda () (string-append "profile_updated:" *userId)))]) (let ([headers (thsl-src! "example/user-service-api.tesl" 347 (list (cons 'payload *payload) (cons 'webhookUrl *webhookUrl) (cons 'userId *userId)) (lambda () (list (Tuple2 "Content-Type" "application/json"))))]) (thsl-src! "example/user-service-api.tesl" 348 (list (cons 'headers *headers) (cons 'payload *payload) (cons 'webhookUrl *webhookUrl) (cons 'userId *userId)) (lambda () (raw-value (tesl_import_HttpClient_post (raw-value webhookUrl) (raw-value headers) (raw-value payload)))))))))
+  (let ([webhookUrl (thsl-src! "example/user-service-api.tesl" 354 (list (cons 'userId *userId)) (lambda () "https://example.com/webhooks/profile"))]) (let ([payload (thsl-src! "example/user-service-api.tesl" 355 (list (cons 'webhookUrl *webhookUrl) (cons 'userId *userId)) (lambda () (string-append "profile_updated:" *userId)))]) (let ([headers (thsl-src! "example/user-service-api.tesl" 356 (list (cons 'payload *payload) (cons 'webhookUrl *webhookUrl) (cons 'userId *userId)) (lambda () (list (Tuple2 "Content-Type" "application/json"))))]) (thsl-src! "example/user-service-api.tesl" 357 (list (cons 'headers *headers) (cons 'payload *payload) (cons 'webhookUrl *webhookUrl) (cons 'userId *userId)) (lambda () (raw-value (tesl_import_HttpClient_post (raw-value webhookUrl) (raw-value headers) (raw-value payload)))))))))
 
 (define-handler
   (register [body : RegisterRequest])
   #:capabilities [userDbRead userDbWrite userTime userRandom userJwt emailCap]
   #:returns AuthResponse
-  (let ([existing (thsl-src! "example/user-service-api.tesl" 368 (list (cons 'body *body)) (lambda () (let ([tesl_match (select-one (from User) (where (==. (entity-field-ref User 'emailAddress) (raw-value body.emailAddr))))]) (if tesl_match (Something tesl_match) Nothing))) 'existing)]) (thsl-src-control! "example/user-service-api.tesl" 369 (list (cons 'existing *existing) (cons 'body *body)) (lambda () (let ([tesl-case-3 (raw-value existing)]) (cond [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Something)) (thsl-src! "example/user-service-api.tesl" 371 (list) (lambda () (reject "Email is already registered" #:http-code 409)))] [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Nothing)) (thsl-src! "example/user-service-api.tesl" 375 (list) (lambda () (let ([userId (generatePrefixedId "user")]) (let ([passwordHash (string-append "hash:" (raw-value body.password))]) (let ([token (makeToken userId)]) (let ([userEmail (raw-value body.emailAddr)]) (let ([displayName (raw-value body.username)]) (let ([_ (insert-one! User (tesl-hash 'id userId 'username displayName 'emailAddress userEmail 'passwordHash passwordHash 'bio "" 'avatarUrl "" 'createdAt (raw-value (nowMillis))))]) (begin (send-email! UserServiceMail #:to userEmail #:subject "Welcome to UserService!" #:body (raw-value (TextBody (raw-value displayName)))) (AuthResponse #:token (raw-value token.value) #:userId *userId))))))))))]))))))
+  (let ([existing (thsl-src! "example/user-service-api.tesl" 377 (list (cons 'body *body)) (lambda () (let ([tesl_match (select-one (from User) (where (==. (entity-field-ref User 'emailAddress) (raw-value body.emailAddr))))]) (if tesl_match (Something tesl_match) Nothing))) 'existing)]) (thsl-src-control! "example/user-service-api.tesl" 378 (list (cons 'existing *existing) (cons 'body *body)) (lambda () (let ([tesl-case-3 (raw-value existing)]) (cond [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Something)) (thsl-src! "example/user-service-api.tesl" 380 (list) (lambda () (reject "Email is already registered" #:http-code 409)))] [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Nothing)) (thsl-src! "example/user-service-api.tesl" 384 (list) (lambda () (let ([userId (generatePrefixedId "user")]) (let ([passwordHash (string-append "hash:" (raw-value body.password))]) (let ([token (makeToken userId)]) (let ([userEmail (raw-value body.emailAddr)]) (let ([displayName (raw-value body.username)]) (let ([_ (insert-one! User (tesl-hash 'id userId 'username displayName 'emailAddress userEmail 'passwordHash passwordHash 'bio "" 'avatarUrl "" 'createdAt (raw-value (nowMillis))))]) (begin (send-email! UserServiceMail #:to userEmail #:subject "Welcome to UserService!" #:body (raw-value (TextBody (raw-value displayName)))) (AuthResponse #:token (raw-value token.value) #:userId *userId))))))))))]))))))
 
 (define-handler
   (login [body : LoginRequest])
   #:capabilities [userDbRead userJwt]
   #:returns AuthResponse
-  (let ([found (thsl-src! "example/user-service-api.tesl" 392 (list (cons 'body *body)) (lambda () (let ([tesl_match (select-one (from User) (where (==. (entity-field-ref User 'emailAddress) (raw-value body.emailAddr))))]) (if tesl_match (Something tesl_match) Nothing))) 'found)]) (thsl-src-control! "example/user-service-api.tesl" 393 (list (cons 'found *found) (cons 'body *body)) (lambda () (let ([tesl-case-4 (raw-value found)]) (cond [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Nothing)) (thsl-src! "example/user-service-api.tesl" 395 (list) (lambda () (reject "Invalid email or password" #:http-code 401)))] [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Something)) (let ([user (hash-ref (adt-value-fields *tesl-case-4) 'value)]) (thsl-src! "example/user-service-api.tesl" 398 (list (cons 'user user)) (lambda () (let ([expectedHash (string-append "hash:" (raw-value body.password))]) (if (tesl-equal? (raw-value user.passwordHash) (raw-value expectedHash)) (let ([token (makeToken (raw-value user.id))]) (AuthResponse #:token (raw-value token.value) #:userId (raw-value user.id))) (reject "Invalid email or password" #:http-code 401))))))]))))))
+  (let ([found (thsl-src! "example/user-service-api.tesl" 401 (list (cons 'body *body)) (lambda () (let ([tesl_match (select-one (from User) (where (==. (entity-field-ref User 'emailAddress) (raw-value body.emailAddr))))]) (if tesl_match (Something tesl_match) Nothing))) 'found)]) (thsl-src-control! "example/user-service-api.tesl" 402 (list (cons 'found *found) (cons 'body *body)) (lambda () (let ([tesl-case-4 (raw-value found)]) (cond [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Nothing)) (thsl-src! "example/user-service-api.tesl" 404 (list) (lambda () (reject "Invalid email or password" #:http-code 401)))] [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Something)) (let ([user (hash-ref (adt-value-fields *tesl-case-4) 'value)]) (thsl-src! "example/user-service-api.tesl" 407 (list (cons 'user user)) (lambda () (let ([expectedHash (string-append "hash:" (raw-value body.password))]) (if (tesl-equal? (raw-value user.passwordHash) (raw-value expectedHash)) (let ([token (makeToken (raw-value user.id))]) (AuthResponse #:token (raw-value token.value) #:userId (raw-value user.id))) (reject "Invalid email or password" #:http-code 401))))))]))))))
 
 (define-handler
   (getProfile [userId : String ::: (Authenticated userId)])
   #:capabilities [userDbRead cacheCap_UserProfileCache]
   #:returns User
-  (let ([cacheKey (thsl-src! "example/user-service-api.tesl" 416 (list (cons 'userId *userId)) (lambda () (string-append "profile_" *userId)))]) (thsl-src-control! "example/user-service-api.tesl" 418 (list (cons 'cacheKey *cacheKey) (cons 'userId *userId)) (lambda () (let ([tesl-case-5 (raw-value (cache-get! UserProfileCache cacheKey))]) (cond [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Something)) (let ([user (hash-ref (adt-value-fields *tesl-case-5) 'value)]) (thsl-src! "example/user-service-api.tesl" 421 (list (cons 'user user)) (lambda () *user)))] [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Nothing)) (thsl-src! "example/user-service-api.tesl" 424 (list) (lambda () (let ([found (let ([tesl_match (select-one (from User) (where (==. (entity-field-ref User 'id) userId)))]) (if tesl_match (Something tesl_match) Nothing))]) (let ([tesl-case-6 (raw-value found)]) (cond [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'Nothing)) (thsl-src! "example/user-service-api.tesl" 427 (list) (lambda () (reject "User not found" #:http-code 404)))] [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'Something)) (let ([user (hash-ref (adt-value-fields *tesl-case-6) 'value)]) (thsl-src! "example/user-service-api.tesl" 429 (list (cons 'user user)) (lambda () (begin (cache-set! UserProfileCache cacheKey *user) *user))))])))))]))))))
+  (let ([cacheKey (thsl-src! "example/user-service-api.tesl" 425 (list (cons 'userId *userId)) (lambda () (string-append "profile_" *userId)))]) (thsl-src-control! "example/user-service-api.tesl" 427 (list (cons 'cacheKey *cacheKey) (cons 'userId *userId)) (lambda () (let ([tesl-case-5 (raw-value (cache-get! UserProfileCache cacheKey))]) (cond [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Something)) (let ([user (hash-ref (adt-value-fields *tesl-case-5) 'value)]) (thsl-src! "example/user-service-api.tesl" 430 (list (cons 'user user)) (lambda () *user)))] [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Nothing)) (thsl-src! "example/user-service-api.tesl" 433 (list) (lambda () (let ([found (let ([tesl_match (select-one (from User) (where (==. (entity-field-ref User 'id) userId)))]) (if tesl_match (Something tesl_match) Nothing))]) (let ([tesl-case-6 (raw-value found)]) (cond [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'Nothing)) (thsl-src! "example/user-service-api.tesl" 436 (list) (lambda () (reject "User not found" #:http-code 404)))] [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'Something)) (let ([user (hash-ref (adt-value-fields *tesl-case-6) 'value)]) (thsl-src! "example/user-service-api.tesl" 438 (list (cons 'user user)) (lambda () (begin (cache-set! UserProfileCache cacheKey *user) *user))))])))))]))))))
 
 (define-handler
   (updateProfile [userId : String ::: (Authenticated userId)] [body : UpdateProfileRequest])
   #:capabilities [userDbRead userDbWrite cacheCap_UserProfileCache userHttp]
   #:returns User
-  (let ([found (thsl-src! "example/user-service-api.tesl" 446 (list (cons 'userId *userId) (cons 'body *body)) (lambda () (let ([tesl_match (select-one (from User) (where (==. (entity-field-ref User 'id) userId)))]) (if tesl_match (Something tesl_match) Nothing))) 'found)]) (thsl-src-control! "example/user-service-api.tesl" 447 (list (cons 'found *found) (cons 'userId *userId) (cons 'body *body)) (lambda () (let ([tesl-case-7 (raw-value found)]) (cond [(and (adt-value? *tesl-case-7) (eq? (adt-value-variant *tesl-case-7) 'Nothing)) (thsl-src! "example/user-service-api.tesl" 449 (list) (lambda () (reject "User not found" #:http-code 404)))] [(and (adt-value? *tesl-case-7) (eq? (adt-value-variant *tesl-case-7) 'Something)) (thsl-src! "example/user-service-api.tesl" 454 (list) (lambda () (let ([cacheKey (string-append "profile_" *userId)]) (begin (cache-delete! UserProfileCache cacheKey) (let ([_ (notifyWebhook userId)]) (car (update-many! (from User) (tesl-hash (entity-field-ref User 'bio) (raw-value body.bio)) (where (==. (entity-field-ref User 'id) userId)))))))))]))))))
+  (let ([found (thsl-src! "example/user-service-api.tesl" 455 (list (cons 'userId *userId) (cons 'body *body)) (lambda () (let ([tesl_match (select-one (from User) (where (==. (entity-field-ref User 'id) userId)))]) (if tesl_match (Something tesl_match) Nothing))) 'found)]) (thsl-src-control! "example/user-service-api.tesl" 456 (list (cons 'found *found) (cons 'userId *userId) (cons 'body *body)) (lambda () (let ([tesl-case-7 (raw-value found)]) (cond [(and (adt-value? *tesl-case-7) (eq? (adt-value-variant *tesl-case-7) 'Nothing)) (thsl-src! "example/user-service-api.tesl" 458 (list) (lambda () (reject "User not found" #:http-code 404)))] [(and (adt-value? *tesl-case-7) (eq? (adt-value-variant *tesl-case-7) 'Something)) (thsl-src! "example/user-service-api.tesl" 463 (list) (lambda () (let ([cacheKey (string-append "profile_" *userId)]) (begin (cache-delete! UserProfileCache cacheKey) (let ([_ (notifyWebhook userId)]) (car (update-many! (from User) (tesl-hash (entity-field-ref User 'bio) (raw-value body.bio)) (where (==. (entity-field-ref User 'id) userId)))))))))]))))))
 
 (define-handler
   (forgotPassword [body : ForgotPasswordRequest])
   #:capabilities [userDbRead emailCap]
   #:returns String
-  (let ([found (thsl-src! "example/user-service-api.tesl" 474 (list (cons 'body *body)) (lambda () (let ([tesl_match (select-one (from User) (where (==. (entity-field-ref User 'emailAddress) (raw-value body.emailAddr))))]) (if tesl_match (Something tesl_match) Nothing))) 'found)]) (thsl-src-control! "example/user-service-api.tesl" 475 (list (cons 'found *found) (cons 'body *body)) (lambda () (let ([tesl-case-8 (raw-value found)]) (cond [(and (adt-value? *tesl-case-8) (eq? (adt-value-variant *tesl-case-8) 'Nothing)) (thsl-src! "example/user-service-api.tesl" 478 (list) (lambda () "If that email is registered, a reset link has been sent."))] [(and (adt-value? *tesl-case-8) (eq? (adt-value-variant *tesl-case-8) 'Something)) (let ([user (hash-ref (adt-value-fields *tesl-case-8) 'value)]) (thsl-src! "example/user-service-api.tesl" 481 (list (cons 'user user)) (lambda () (let ([resetAddr (raw-value body.emailAddr)]) (begin (send-email! UserServiceMail #:to resetAddr #:subject "Reset your UserService password" #:body (raw-value (TextBody (raw-value user.id)))) "If that email is registered, a reset link has been sent.")))))]))))))
+  (let ([found (thsl-src! "example/user-service-api.tesl" 483 (list (cons 'body *body)) (lambda () (let ([tesl_match (select-one (from User) (where (==. (entity-field-ref User 'emailAddress) (raw-value body.emailAddr))))]) (if tesl_match (Something tesl_match) Nothing))) 'found)]) (thsl-src-control! "example/user-service-api.tesl" 484 (list (cons 'found *found) (cons 'body *body)) (lambda () (let ([tesl-case-8 (raw-value found)]) (cond [(and (adt-value? *tesl-case-8) (eq? (adt-value-variant *tesl-case-8) 'Nothing)) (thsl-src! "example/user-service-api.tesl" 487 (list) (lambda () "If that email is registered, a reset link has been sent."))] [(and (adt-value? *tesl-case-8) (eq? (adt-value-variant *tesl-case-8) 'Something)) (let ([user (hash-ref (adt-value-fields *tesl-case-8) 'value)]) (thsl-src! "example/user-service-api.tesl" 490 (list (cons 'user user)) (lambda () (let ([resetAddr (raw-value body.emailAddr)]) (begin (send-email! UserServiceMail #:to resetAddr #:subject "Reset your UserService password" #:body (raw-value (TextBody (raw-value user.id)))) "If that email is registered, a reset link has been sent.")))))]))))))
 
 (define UserServer-sse-routes '())
 (define-api UserApi
@@ -301,8 +310,8 @@
         (call-with-api-test-subscriptions
           (lambda ()
             (with-capabilities (userDbRead userDbWrite userTime userRandom userJwt emailCap)
-              (define resp (thsl-src! "example/user-service-api.tesl" 614 (list) (lambda () (dispatch-api-test-request UserServer 'post (list "register") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "username") "alice" (string->symbol "email") "alice@example.com" (string->symbol "password") "securepass") #:capabilities (list userDbRead userDbWrite userTime userRandom userJwt emailCap)))))
-              (check-true (raw-value (thsl-src! "example/user-service-api.tesl" 619 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
+              (define resp (thsl-src! "example/user-service-api.tesl" 623 (list) (lambda () (dispatch-api-test-request UserServer 'post (list "register") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "username") "alice" (string->symbol "email") "alice@example.com" (string->symbol "password") "securepass") #:capabilities (list userDbRead userDbWrite userTime userRandom userJwt emailCap)))))
+              (check-true (raw-value (thsl-src! "example/user-service-api.tesl" 628 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
             )
           ))
       ))
@@ -318,8 +327,8 @@
           (lambda ()
             (with-capabilities (userDbRead userDbWrite userJwt userTime)
               (insert-one! User (tesl-hash 'id "alice-id" 'username "alice" 'emailAddress "alice@example.com" 'passwordHash "hash:securepass" 'bio "" 'avatarUrl "" 'createdAt (raw-value (nowMillis))))
-              (define resp (thsl-src! "example/user-service-api.tesl" 626 (list) (lambda () (dispatch-api-test-request UserServer 'post (list "login") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "email") "alice@example.com" (string->symbol "password") "securepass") #:capabilities (list userDbRead userDbWrite userJwt userTime)))))
-              (check-true (raw-value (thsl-src! "example/user-service-api.tesl" 630 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
+              (define resp (thsl-src! "example/user-service-api.tesl" 635 (list) (lambda () (dispatch-api-test-request UserServer 'post (list "login") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "email") "alice@example.com" (string->symbol "password") "securepass") #:capabilities (list userDbRead userDbWrite userJwt userTime)))))
+              (check-true (raw-value (thsl-src! "example/user-service-api.tesl" 639 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
             )
           ))
       ))
@@ -334,8 +343,8 @@
         (call-with-api-test-subscriptions
           (lambda ()
             (with-capabilities (userDbRead emailCap)
-              (define resp (thsl-src! "example/user-service-api.tesl" 634 (list) (lambda () (dispatch-api-test-request UserServer 'post (list "forgot-password") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "email") "alice@example.com") #:capabilities (list userDbRead emailCap)))))
-              (check-true (raw-value (thsl-src! "example/user-service-api.tesl" 637 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
+              (define resp (thsl-src! "example/user-service-api.tesl" 643 (list) (lambda () (dispatch-api-test-request UserServer 'post (list "forgot-password") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "email") "alice@example.com") #:capabilities (list userDbRead emailCap)))))
+              (check-true (raw-value (thsl-src! "example/user-service-api.tesl" 646 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
             )
           ))
       ))
@@ -350,8 +359,8 @@
         (call-with-api-test-subscriptions
           (lambda ()
             (with-capabilities (userJwt userDbRead cacheCap_UserProfileCache)
-              (define resp (thsl-src! "example/user-service-api.tesl" 642 (list) (lambda () (dispatch-api-test-request UserServer 'get (list "me") #:headers (tesl-hash) #:capabilities (list userJwt userDbRead cacheCap_UserProfileCache)))))
-              (check-true (raw-value (thsl-src! "example/user-service-api.tesl" 643 (list (cons 'resp resp)) (lambda () (statusClientError (raw-value (api-test-field-access-ref resp 'status)))))))
+              (define resp (thsl-src! "example/user-service-api.tesl" 651 (list) (lambda () (dispatch-api-test-request UserServer 'get (list "me") #:headers (tesl-hash) #:capabilities (list userJwt userDbRead cacheCap_UserProfileCache)))))
+              (check-true (raw-value (thsl-src! "example/user-service-api.tesl" 652 (list (cons 'resp resp)) (lambda () (statusClientError (raw-value (api-test-field-access-ref resp 'status)))))))
             )
           ))
       ))
@@ -366,8 +375,8 @@
         (call-with-api-test-subscriptions
           (lambda ()
             (with-capabilities (userJwt userDbRead userDbWrite cacheCap_UserProfileCache userHttp)
-              (define resp (thsl-src! "example/user-service-api.tesl" 647 (list) (lambda () (dispatch-api-test-request UserServer 'put (list "me") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "bio") "Hello world") #:capabilities (list userJwt userDbRead userDbWrite cacheCap_UserProfileCache userHttp)))))
-              (check-true (raw-value (thsl-src! "example/user-service-api.tesl" 648 (list (cons 'resp resp)) (lambda () (statusClientError (raw-value (api-test-field-access-ref resp 'status)))))))
+              (define resp (thsl-src! "example/user-service-api.tesl" 656 (list) (lambda () (dispatch-api-test-request UserServer 'put (list "me") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "bio") "Hello world") #:capabilities (list userJwt userDbRead userDbWrite cacheCap_UserProfileCache userHttp)))))
+              (check-true (raw-value (thsl-src! "example/user-service-api.tesl" 657 (list (cons 'resp resp)) (lambda () (statusClientError (raw-value (api-test-field-access-ref resp 'status)))))))
             )
           ))
       ))
@@ -382,8 +391,8 @@
         (call-with-api-test-subscriptions
           (lambda ()
             (with-capabilities (userDbRead userDbWrite userTime userRandom userJwt emailCap)
-              (define resp (thsl-src! "example/user-service-api.tesl" 653 (list) (lambda () (dispatch-api-test-request UserServer 'post (list "register") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "username") "bob" (string->symbol "email") "not-an-email" (string->symbol "password") "securepass") #:capabilities (list userDbRead userDbWrite userTime userRandom userJwt emailCap)))))
-              (check-true (raw-value (thsl-src! "example/user-service-api.tesl" 658 (list (cons 'resp resp)) (lambda () (statusClientError (raw-value (api-test-field-access-ref resp 'status)))))))
+              (define resp (thsl-src! "example/user-service-api.tesl" 662 (list) (lambda () (dispatch-api-test-request UserServer 'post (list "register") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "username") "bob" (string->symbol "email") "not-an-email" (string->symbol "password") "securepass") #:capabilities (list userDbRead userDbWrite userTime userRandom userJwt emailCap)))))
+              (check-true (raw-value (thsl-src! "example/user-service-api.tesl" 667 (list (cons 'resp resp)) (lambda () (statusClientError (raw-value (api-test-field-access-ref resp 'status)))))))
             )
           ))
       ))
@@ -398,8 +407,8 @@
         (call-with-api-test-subscriptions
           (lambda ()
             (with-capabilities (userDbRead userDbWrite userTime userRandom userJwt emailCap)
-              (define resp (thsl-src! "example/user-service-api.tesl" 662 (list) (lambda () (dispatch-api-test-request UserServer 'post (list "register") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "username") "bob" (string->symbol "email") "bob@example.com" (string->symbol "password") "short") #:capabilities (list userDbRead userDbWrite userTime userRandom userJwt emailCap)))))
-              (check-true (raw-value (thsl-src! "example/user-service-api.tesl" 667 (list (cons 'resp resp)) (lambda () (statusClientError (raw-value (api-test-field-access-ref resp 'status)))))))
+              (define resp (thsl-src! "example/user-service-api.tesl" 671 (list) (lambda () (dispatch-api-test-request UserServer 'post (list "register") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "username") "bob" (string->symbol "email") "bob@example.com" (string->symbol "password") "short") #:capabilities (list userDbRead userDbWrite userTime userRandom userJwt emailCap)))))
+              (check-true (raw-value (thsl-src! "example/user-service-api.tesl" 676 (list (cons 'resp resp)) (lambda () (statusClientError (raw-value (api-test-field-access-ref resp 'status)))))))
             )
           ))
       ))
@@ -414,8 +423,8 @@
         (call-with-api-test-subscriptions
           (lambda ()
             (with-capabilities (userDbRead userDbWrite userTime userRandom userJwt emailCap)
-              (define resp (thsl-src! "example/user-service-api.tesl" 671 (list) (lambda () (dispatch-api-test-request UserServer 'post (list "register") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "username") "x" (string->symbol "email") "x@example.com" (string->symbol "password") "securepass") #:capabilities (list userDbRead userDbWrite userTime userRandom userJwt emailCap)))))
-              (check-true (raw-value (thsl-src! "example/user-service-api.tesl" 676 (list (cons 'resp resp)) (lambda () (statusClientError (raw-value (api-test-field-access-ref resp 'status)))))))
+              (define resp (thsl-src! "example/user-service-api.tesl" 680 (list) (lambda () (dispatch-api-test-request UserServer 'post (list "register") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "username") "x" (string->symbol "email") "x@example.com" (string->symbol "password") "securepass") #:capabilities (list userDbRead userDbWrite userTime userRandom userJwt emailCap)))))
+              (check-true (raw-value (thsl-src! "example/user-service-api.tesl" 685 (list (cons 'resp resp)) (lambda () (statusClientError (raw-value (api-test-field-access-ref resp 'status)))))))
             )
           ))
       ))
@@ -430,8 +439,8 @@
         (call-with-api-test-subscriptions
           (lambda ()
             (with-capabilities (userDbRead userJwt)
-              (define resp (thsl-src! "example/user-service-api.tesl" 680 (list) (lambda () (dispatch-api-test-request UserServer 'post (list "login") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "email") "alice@example.com") #:capabilities (list userDbRead userJwt)))))
-              (check-true (raw-value (thsl-src! "example/user-service-api.tesl" 683 (list (cons 'resp resp)) (lambda () (statusClientError (raw-value (api-test-field-access-ref resp 'status)))))))
+              (define resp (thsl-src! "example/user-service-api.tesl" 689 (list) (lambda () (dispatch-api-test-request UserServer 'post (list "login") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "email") "alice@example.com") #:capabilities (list userDbRead userJwt)))))
+              (check-true (raw-value (thsl-src! "example/user-service-api.tesl" 692 (list (cons 'resp resp)) (lambda () (statusClientError (raw-value (api-test-field-access-ref resp 'status)))))))
             )
           ))
       ))
@@ -442,91 +451,91 @@
   (require rackunit)
   (test-case "UUID.validate accepts a valid v4 UUID"
     (call-with-fresh-memory-db (list UserDatabase) (lambda ()
-  (define v4 (thsl-src! "example/user-service-api.tesl" 535 (list) (lambda () "550e8400-e29b-41d4-a716-446655440000")))
-  (check-equal? (raw-value (thsl-src! "example/user-service-api.tesl" 536 (list (cons 'v4 v4)) (lambda () (raw-value (tesl_import_UUID_validate (raw-value v4)))))) v4)
+  (define v4 (thsl-src! "example/user-service-api.tesl" 544 (list) (lambda () "550e8400-e29b-41d4-a716-446655440000")))
+  (check-equal? (raw-value (thsl-src! "example/user-service-api.tesl" 545 (list (cons 'v4 v4)) (lambda () (raw-value (tesl_import_UUID_validate (raw-value v4)))))) v4)
     ))
   )
 
   (test-case "UUID.validate accepts a valid v7 UUID"
     (call-with-fresh-memory-db (list UserDatabase) (lambda ()
-  (define v7 (thsl-src! "example/user-service-api.tesl" 540 (list) (lambda () "018e7a30-a1b2-7c3d-8e4f-123456789abc")))
-  (check-equal? (raw-value (thsl-src! "example/user-service-api.tesl" 541 (list (cons 'v7 v7)) (lambda () (raw-value (tesl_import_UUID_validate (raw-value v7)))))) v7)
+  (define v7 (thsl-src! "example/user-service-api.tesl" 549 (list) (lambda () "018e7a30-a1b2-7c3d-8e4f-123456789abc")))
+  (check-equal? (raw-value (thsl-src! "example/user-service-api.tesl" 550 (list (cons 'v7 v7)) (lambda () (raw-value (tesl_import_UUID_validate (raw-value v7)))))) v7)
     ))
   )
 
   (test-case "UUID.validate accepts a v4 UUID"
     (call-with-fresh-memory-db (list UserDatabase) (lambda ()
-  (define v4 (thsl-src! "example/user-service-api.tesl" 546 (list) (lambda () "550e8400-e29b-41d4-a716-446655440000")))
-  (define result (thsl-src! "example/user-service-api.tesl" 547 (list (cons 'v4 v4)) (lambda () (raw-value (tesl_import_UUID_validate (raw-value v4))))))
-  (check-equal? (raw-value (thsl-src! "example/user-service-api.tesl" 548 (list (cons 'result result) (cons 'v4 v4)) (lambda () result))) v4)
+  (define v4 (thsl-src! "example/user-service-api.tesl" 555 (list) (lambda () "550e8400-e29b-41d4-a716-446655440000")))
+  (define result (thsl-src! "example/user-service-api.tesl" 556 (list (cons 'v4 v4)) (lambda () (raw-value (tesl_import_UUID_validate (raw-value v4))))))
+  (check-equal? (raw-value (thsl-src! "example/user-service-api.tesl" 557 (list (cons 'result result) (cons 'v4 v4)) (lambda () result))) v4)
     ))
   )
 
   (test-case "UUID.validate accepts a v7 UUID"
     (call-with-fresh-memory-db (list UserDatabase) (lambda ()
-  (define v7 (thsl-src! "example/user-service-api.tesl" 552 (list) (lambda () "018e7a30-a1b2-7c3d-8e4f-123456789abc")))
-  (define result (thsl-src! "example/user-service-api.tesl" 553 (list (cons 'v7 v7)) (lambda () (raw-value (tesl_import_UUID_validate (raw-value v7))))))
-  (check-equal? (raw-value (thsl-src! "example/user-service-api.tesl" 554 (list (cons 'result result) (cons 'v7 v7)) (lambda () result))) v7)
+  (define v7 (thsl-src! "example/user-service-api.tesl" 561 (list) (lambda () "018e7a30-a1b2-7c3d-8e4f-123456789abc")))
+  (define result (thsl-src! "example/user-service-api.tesl" 562 (list (cons 'v7 v7)) (lambda () (raw-value (tesl_import_UUID_validate (raw-value v7))))))
+  (check-equal? (raw-value (thsl-src! "example/user-service-api.tesl" 563 (list (cons 'result result) (cons 'v7 v7)) (lambda () result))) v7)
     ))
   )
 
   (test-case "JwtToken.value retrieves the inner string"
     (call-with-fresh-memory-db (list UserDatabase) (lambda ()
-  (define raw (thsl-src! "example/user-service-api.tesl" 559 (list) (lambda () "eyJhbGciOiJIUzI1NiJ9.payload.sig")))
-  (define token (thsl-src! "example/user-service-api.tesl" 560 (list (cons 'raw raw)) (lambda () (raw-value (JwtToken (raw-value raw))))))
-  (check-equal? (thsl-src! "example/user-service-api.tesl" 561 (list (cons 'token token) (cons 'raw raw)) (lambda () (raw-value (tesl-dot/runtime token 'value)))) raw)
+  (define raw (thsl-src! "example/user-service-api.tesl" 568 (list) (lambda () "eyJhbGciOiJIUzI1NiJ9.payload.sig")))
+  (define token (thsl-src! "example/user-service-api.tesl" 569 (list (cons 'raw raw)) (lambda () (raw-value (JwtToken (raw-value raw))))))
+  (check-equal? (thsl-src! "example/user-service-api.tesl" 570 (list (cons 'token token) (cons 'raw raw)) (lambda () (raw-value (tesl-dot/runtime token 'value)))) raw)
     ))
   )
 
-  (test-case "JwtSecret carries its key faithfully without exposing it"
+  (test-case "a Secret carries its key faithfully without exposing it"
     (call-with-fresh-memory-db (list UserDatabase) (lambda ()
-  (define key (thsl-src! "example/user-service-api.tesl" 569 (list) (lambda () "my-signing-key")))
-  (define a (thsl-src! "example/user-service-api.tesl" 570 (list (cons 'key key)) (lambda () (raw-value (JwtSecret (raw-value key))))))
-  (define b (thsl-src! "example/user-service-api.tesl" 571 (list (cons 'a a) (cons 'key key)) (lambda () (raw-value (JwtSecret (raw-value key))))))
-  (define other (thsl-src! "example/user-service-api.tesl" 572 (list (cons 'b b) (cons 'a a) (cons 'key key)) (lambda () (raw-value (JwtSecret "a-different-key")))))
-  (check-equal? (raw-value (thsl-src! "example/user-service-api.tesl" 573 (list (cons 'other other) (cons 'b b) (cons 'a a) (cons 'key key)) (lambda () a))) b)
-  (check-not-equal? (thsl-src! "example/user-service-api.tesl" 574 (list (cons 'other other) (cons 'b b) (cons 'a a) (cons 'key key)) (lambda () a)) other)
+  (define key (thsl-src! "example/user-service-api.tesl" 578 (list) (lambda () "my-signing-key")))
+  (define a (thsl-src! "example/user-service-api.tesl" 579 (list (cons 'key key)) (lambda () (raw-value (Secret (raw-value key))))))
+  (define b (thsl-src! "example/user-service-api.tesl" 580 (list (cons 'a a) (cons 'key key)) (lambda () (raw-value (Secret (raw-value key))))))
+  (define other (thsl-src! "example/user-service-api.tesl" 581 (list (cons 'b b) (cons 'a a) (cons 'key key)) (lambda () (keyFromRaw "a-different-key"))))
+  (check-equal? (raw-value (thsl-src! "example/user-service-api.tesl" 582 (list (cons 'other other) (cons 'b b) (cons 'a a) (cons 'key key)) (lambda () a))) b)
+  (check-not-equal? (thsl-src! "example/user-service-api.tesl" 583 (list (cons 'other other) (cons 'b b) (cons 'a a) (cons 'key key)) (lambda () a)) other)
     ))
   )
 
   (test-case "JwtToken wrapping preserves the string"
     (call-with-fresh-memory-db (list UserDatabase) (lambda ()
-  (define t1 (thsl-src! "example/user-service-api.tesl" 580 (list) (lambda () (raw-value (JwtToken "a.b.c")))))
-  (define t2 (thsl-src! "example/user-service-api.tesl" 581 (list (cons 't1 t1)) (lambda () (raw-value (JwtToken "x.y.z")))))
-  (check-not-equal? (thsl-src! "example/user-service-api.tesl" 582 (list (cons 't2 t2) (cons 't1 t1)) (lambda () (raw-value (tesl-dot/runtime t1 'value)))) (raw-value (tesl-dot/runtime t2 'value)))
+  (define t1 (thsl-src! "example/user-service-api.tesl" 589 (list) (lambda () (raw-value (JwtToken "a.b.c")))))
+  (define t2 (thsl-src! "example/user-service-api.tesl" 590 (list (cons 't1 t1)) (lambda () (raw-value (JwtToken "x.y.z")))))
+  (check-not-equal? (thsl-src! "example/user-service-api.tesl" 591 (list (cons 't2 t2) (cons 't1 t1)) (lambda () (raw-value (tesl-dot/runtime t1 'value)))) (raw-value (tesl-dot/runtime t2 'value)))
     ))
   )
 
   (test-case "checkEmail accepts a valid email address"
     (call-with-fresh-memory-db (list UserDatabase) (lambda ()
-  (define addr (thsl-src! "example/user-service-api.tesl" 587 (list) (lambda () "alice@example.com")))
+  (define addr (thsl-src! "example/user-service-api.tesl" 596 (list) (lambda () "alice@example.com")))
   (define tesl-checked-9 (checkEmail addr))
   (when (check-fail? tesl-checked-9)
     (raise-user-error 'tesl-test "unexpected failure in let result: ~a" (check-fail-message tesl-checked-9)))
   (define result tesl-checked-9)
-  (check-equal? (raw-value (thsl-src! "example/user-service-api.tesl" 589 (list (cons 'result result) (cons 'addr addr)) (lambda () result))) addr)
+  (check-equal? (raw-value (thsl-src! "example/user-service-api.tesl" 598 (list (cons 'result result) (cons 'addr addr)) (lambda () result))) addr)
     ))
   )
 
   (test-case "checkUsername accepts a 2-character username"
     (call-with-fresh-memory-db (list UserDatabase) (lambda ()
-  (define name (thsl-src! "example/user-service-api.tesl" 593 (list) (lambda () "al")))
+  (define name (thsl-src! "example/user-service-api.tesl" 602 (list) (lambda () "al")))
   (define tesl-checked-10 (checkUsername name))
   (when (check-fail? tesl-checked-10)
     (raise-user-error 'tesl-test "unexpected failure in let result: ~a" (check-fail-message tesl-checked-10)))
   (define result tesl-checked-10)
-  (check-equal? (raw-value (thsl-src! "example/user-service-api.tesl" 595 (list (cons 'result result) (cons 'name name)) (lambda () result))) name)
+  (check-equal? (raw-value (thsl-src! "example/user-service-api.tesl" 604 (list (cons 'result result) (cons 'name name)) (lambda () result))) name)
     ))
   )
 
   (test-case "checkPassword accepts an 8-character password"
     (call-with-fresh-memory-db (list UserDatabase) (lambda ()
-  (define pwd (thsl-src! "example/user-service-api.tesl" 599 (list) (lambda () "secure42")))
+  (define pwd (thsl-src! "example/user-service-api.tesl" 608 (list) (lambda () "secure42")))
   (define tesl-checked-11 (checkPassword pwd))
   (when (check-fail? tesl-checked-11)
     (raise-user-error 'tesl-test "unexpected failure in let result: ~a" (check-fail-message tesl-checked-11)))
   (define result tesl-checked-11)
-  (check-equal? (raw-value (thsl-src! "example/user-service-api.tesl" 601 (list (cons 'result result) (cons 'pwd pwd)) (lambda () result))) pwd)
+  (check-equal? (raw-value (thsl-src! "example/user-service-api.tesl" 610 (list (cons 'result result) (cons 'pwd pwd)) (lambda () result))) pwd)
     ))
   )
 

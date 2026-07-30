@@ -12,12 +12,15 @@
        fail-open.  These types now have a field set of EXACTLY NOTHING, with a
        diagnostic that names the real accessor.
 
-       1b. The same list held `JwtSecret` WITH `"value"` permitted.  A JwtSecret
-       is a secret newtype at runtime — redacted in telemetry, in structured logs
-       and on all three debugger surfaces — so `.value` defeated every one of
+       1b. The same list held the JWT signing-key type WITH `"value"` permitted.
+       A key is a secret newtype at runtime — redacted in telemetry, in structured
+       logs and on all three debugger surfaces — so `.value` defeated every one of
        those in a single call and the type was not actually secret.  `JwtToken`
        KEEPS `.value`: handing a token to a client is the point of having one.
-       That asymmetry is the design, so both halves are pinned here.
+       That asymmetry is the design, so both halves are pinned here.  (The key
+       type was a JWT-only newtype until 2026-07-30; it was deleted and the JWT
+       surface now takes Tesl.Crypto's `Secret`, so the pins below are stated over
+       `Secret`.)
 
     2. `Money n` TYPECHECKED AS `String`.  `known_qualifier_modules` doubled as
        the escape hatch for a BARE application of a qualifier name, and it holds
@@ -242,19 +245,25 @@ let t_http_request_unknown_field_still_rejected () =
        "fn f(req: HttpRequest) -> String =\n  req.bogusField")
 
 (* ══════════════════════════════════════════════════════════════════════════ *)
-(*  1b. JwtSecret loses `.value`; JwtToken keeps it                            *)
+(*  1b. Secret loses `.value`; JwtToken keeps it                               *)
+(*                                                                             *)
+(*  There used to be a SECOND, JWT-only key type carrying the same rule.  It    *)
+(*  was deleted (not aliased) on 2026-07-30 and `JWT.sign`/`JWT.verify` now     *)
+(*  take Tesl.Crypto's `Secret`, so the asymmetry is stated once, here, over    *)
+(*  the one key type there is.                                                  *)
 (* ══════════════════════════════════════════════════════════════════════════ *)
 
 let jwt_imports =
-  "import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.sign, JWT.verify]\n\
+  "import Tesl.JWT exposing [jwt, JwtToken, JWT.sign, JWT.verify]\n\
+   import Tesl.Crypto exposing [Secret]\n\
    import Tesl.Dict exposing [Dict.singleton, Dict.lookup]\n\
    import Tesl.Maybe exposing [Maybe(..)]"
 
 let t_jwt_secret_value_rejected () =
   should_fail ~code:"T001"
-    ~saying:[ "`JwtSecret` has no field `value`"; "redacted"; "JWT.sign" ]
+    ~saying:[ "`Secret` has no field `value`"; "redacted"; "JWT.sign" ]
     (prog ~exposing:"f" ~imports:jwt_imports
-       "fn f(s: JwtSecret) -> String =\n  s.value")
+       "fn f(s: Secret) -> String =\n  s.value")
 
 (** The asymmetry IS the feature: a token is handed to clients on purpose
     (`AuthResponse { token: token.value }` in example/user-service-api.tesl), so
@@ -265,7 +274,7 @@ let t_jwt_token_value_still_works () =
        "fn f(t: JwtToken) -> String =\n  t.value")
 
 (** And the secret is still USABLE without an eliminator — the point of the
-    subtraction is that a JwtSecret goes to JWT.sign, not to a String. *)
+    subtraction is that a Secret goes to JWT.sign, not to a String. *)
 let t_jwt_secret_still_signs () =
   (* `JWT.sign` charges `time` on top of `jwt` (it stamps `exp` from the wall
      clock), so the probe's capability implies both — the point being asserted is
@@ -275,7 +284,7 @@ let t_jwt_secret_still_signs () =
        ~imports:(jwt_imports ^ "\nimport Tesl.Time exposing [time]")
        "capability signCap implies jwt, time\n\
         \n\
-        fn f(userId: String, secret: JwtSecret) -> JwtToken requires [signCap] =\n\
+        fn f(userId: String, secret: Secret) -> JwtToken requires [signCap] =\n\
        \  JWT.sign (Dict.singleton \"sub\" userId) secret")
 
 (* ══════════════════════════════════════════════════════════════════════════ *)
@@ -375,7 +384,7 @@ let t_nested_jwt_verify_rejected () =
     (prog ~exposing:"authCap, f" ~imports:jwt_imports
        "capability authCap implies jwt\n\
         \n\
-        fn f(token: JwtToken, secret: JwtSecret) -> String requires [authCap] =\n\
+        fn f(token: JwtToken, secret: Secret) -> String requires [authCap] =\n\
        \  case Dict.lookup \"sub\" (JWT.verify token secret) of\n\
        \    Nothing -> \"\"\n\
        \    Something userId -> userId")
@@ -413,7 +422,7 @@ let t_check_bound_jwt_verify_still_works () =
     (prog ~exposing:"authCap, f" ~imports:jwt_imports
        "capability authCap implies jwt\n\
         \n\
-        fn f(token: JwtToken, secret: JwtSecret) -> String requires [authCap] =\n\
+        fn f(token: JwtToken, secret: Secret) -> String requires [authCap] =\n\
        \  let claims = check JWT.verify token secret\n\
        \  case Dict.lookup \"sub\" claims of\n\
        \    Nothing -> \"\"\n\
@@ -509,12 +518,12 @@ let () =
       test_case "an unknown HttpRequest field is still rejected" `Quick
         t_http_request_unknown_field_still_rejected;
     ];
-    "jwt-secret-asymmetry", [
-      test_case "JwtSecret.value is rejected (the redaction is defeatable without this)"
+    "secret-key-asymmetry", [
+      test_case "Secret.value is rejected (the redaction is defeatable without this)"
         `Quick t_jwt_secret_value_rejected;
       test_case "JwtToken.value still works (a token is handed out on purpose)"
         `Quick t_jwt_token_value_still_works;
-      test_case "a JwtSecret is still usable — it signs" `Quick
+      test_case "a Secret is still usable — it signs" `Quick
         t_jwt_secret_still_signs;
     ];
     "bare-qualifier-application", [

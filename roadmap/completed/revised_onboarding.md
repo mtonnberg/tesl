@@ -8,7 +8,7 @@
 > | **1** — stop the contradictions | Done. README is a ~119-line router, `TESL.md` folded in and deleted, `GETTING-STARTED.md` rebuilt around `tesl init`, `dev-docs` quick start corrected, and a **doc-integrity script wired into `./ci.sh`** (278 links, 56 anchors, the section map round-tripped both ways). It also pulled `manual/tests` — 194 assertions — into the gate, which it had never been in |
 > | **1** — lesson metadata | Done, with a **deviation**: ordering lives in per-lesson `# lesson:` headers and `manual/lessons.md` is generated from them, so the 75-file rename D5 costed out was **not needed**. `lesson64` was filled by a real lesson rather than renumbered |
 > | **2** — the spine | Done: `manual/first-change.md` (S3), `CONTRIBUTING.md`, `dev-docs/12-your-first-compiler-change.md` |
-> | **3** — the site | **Complete as delivered.** `playground/lessons.html` gives all 77 lessons a stable permalink and publishes to Pages. The docs-site half is deliberately **not** built — the forge already renders and searches `manual/*.md`, and D1 keeps the README the spine. The one genuine remainder (syntax-highlight the lesson source) moved to `roadmap/next/playground_polish_and_adoption.md` |
+> | **3** — the site | **Complete as delivered.** `playground/lessons.html` gives all 77 lessons a stable permalink and publishes to Pages. The docs-site half is deliberately **not** built — the forge already renders and searches `manual/*.md`, and D1 keeps the README the spine. The one genuine remainder (syntax-highlight the lesson source) moved to `roadmap/completed/playground_polish_and_adoption.md` |
 > | **4** — browser checking | Done, and the D7 bet held: 1.07 MB / 351 KB gzipped, 5-65 ms warm, diagnostics byte-identical to `tesl --check-json`. The embedded manual costs nothing — dead-code elimination drops all 2.3 MB |
 > | Human trials | **Scoped out** — run by the maintainer outside the roadmap. The reason they matter is preserved: no CI phase can tell you where a reader stalls |
 > | Lesson splits | **Discarded** — six evidence-backed candidates recorded in `roadmap/discarded/lesson_splits.md` |
@@ -17,7 +17,7 @@
 > in place: the `lesson64` renumber and the 75-file lesson rename. Both were made unnecessary by
 > putting ordering in metadata.
 >
-> Follow-on work lives in `roadmap/next/playground_polish_and_adoption.md`.
+> Follow-on work lives in `roadmap/completed/playground_polish_and_adoption.md`.
 
 ## Background
 

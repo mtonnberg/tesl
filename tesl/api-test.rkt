@@ -33,6 +33,7 @@
  hasField
  fieldAt
  bodyField
+ responseCookie
  jsonContains
  subscribe
  collect
@@ -188,6 +189,33 @@
 
 (define (bodyField field response)
   (fieldAt field (api-test-field-access-ref response 'body)))
+
+;; responseCookie : HttpResponse -> Maybe String
+;;
+;; The session cookie a response set, as a Cookie-header-ready `name=value` pair
+;; — so a round-trip test feeds it straight back:
+;;
+;;   let login = post "/login" { … }
+;;   case responseCookie login of
+;;     Nothing      -> fail 500 "no session cookie"
+;;     Something c  -> get "/me" cookie c    # 200
+;;
+;; `Nothing` when the response set no session cookie (including every error
+;; response — cookies attach to 2xx only).  The ATTRIBUTES are deliberately
+;; stripped here: assert those against the raw `response.headers` entry for
+;; "set-cookie", which is the full line.
+(define (responseCookie response)
+  (define headers (api-test-field-access-ref response 'headers))
+  (define line (and (hash? headers)
+                    (or (hash-ref headers 'set-cookie #f)
+                        (hash-ref headers "set-cookie" #f))))
+  (cond
+    [(not (string? line)) Nothing]
+    [else
+     ;; A Set-Cookie value is `name=value; Attr; Attr…` — the pair is everything
+     ;; up to the first `;`.
+     (define pair (string-trim (car (string-split line ";" #:trim? #f))))
+     (if (string-contains? pair "=") (Something pair) Nothing)]))
 
 (define (jsonContains needle value)
   (define normalized-needle (api-test-normalize-json needle))

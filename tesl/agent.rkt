@@ -103,6 +103,15 @@
 
 (require (only-in "../dsl/capability.rkt" define-capability require-capabilities!
                   call-with-delegated-capabilities)
+         ;; Confused-deputy fix: a tool body runs inside the agent loop, which is
+         ;; itself inside an HTTP request whose response-cookie accumulator is
+         ;; live.  Reset it to #f around every tool dispatch so a tool-invoked
+         ;; `Http.setSessionCookie` cannot append to the OUTER request's cookie
+         ;; (which model output could otherwise use to rewrite the browser's
+         ;; session).  #f makes the write the loud error response-cookies.rkt
+         ;; already promises, which the tool with-handlers turns into a 500
+         ;; tool_result — never a browser Set-Cookie.
+         (only-in "../dsl/response-cookies.rkt" current-response-cookies)
          (only-in "../dsl/private/evidence.rkt" raw-value)
          (only-in "../dsl/types.rkt" tesl-type-codec-decode register-runtime-type/runtime!
                   newtype-value-value posix-millis-newtype? posix-millis-agent-jsexpr
@@ -440,10 +449,15 @@
         ;; Without this, one raising tool body (e.g. a capability trap) killed
         ;; the WHOLE agent loop instead of letting the model see the failure
         ;; and continue.
+        ;; `current-response-cookies` #f: see the require note.  This is the ONE
+        ;; place every tool body runs — both `asTool` fns and `serverTools`
+        ;; endpoint handlers reach here via `tool-spec-dispatch` — so the reset
+        ;; confines the cookie effect for both vectors at a single point.
         (define result
           (with-handlers ([exn:fail? (lambda (e) (cons 'raised (exn-message e)))])
             (cons 'value
-                  (with-tool-db a (lambda () ((tool-spec-dispatch t) (cdr validated)))))))
+                  (parameterize ([current-response-cookies #f])
+                    (with-tool-db a (lambda () ((tool-spec-dispatch t) (cdr validated))))))))
         ;; AGENT-4: a tool body that returns a `check-fail` (a domain validation
         ;; that did not hold — e.g. the `refundOrder confirmed:false` guard) must
         ;; be surfaced to the model as an is_error tool_result, NOT stringified

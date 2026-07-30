@@ -34,12 +34,8 @@ module Lesson06ProofCheckProofAuth exposing [
 import Tesl.Prelude exposing [Int, Fact, String]
 import Tesl.Http exposing [HttpRequest]
 import Tesl.Dict exposing [Dict.lookup]
-import Tesl.Env exposing [requireEnv, envRead]
-import Tesl.Crypto exposing [
-  Secret,
-  Crypto.checkSignature,
-  Crypto.signatureFromHex,
-]
+import Tesl.Env exposing [requireSecret, envRead]
+import Tesl.Crypto exposing [Crypto.checkSignature, Crypto.signatureFromHex]
 
 # ─── CHECK: validates at runtime, fails gracefully with HTTP status ───────────
 #
@@ -93,26 +89,39 @@ establish makeProofTrusted (n: Int) -> Fact (Trusted n) =
 # cookie, so `Cookie: user=admin` walked straight in. The compiler now reports
 # that shape as SEC001 (`tesl help SEC001`).
 #
-# The honest version below reads a SIGNED session: the server minted
-# `session` with `Crypto.signWith key payload` and handed back the tag in
-# `sessionSig`. `Crypto.checkSignature` recomputes the tag over `session` with
-# the server's key, compares it in constant time, and fails 401 unless it
+# The honest version below reads a SIGNED value: the server minted
+# `signedPayload` with `Crypto.signWith key payload` and handed back the tag in
+# `payloadSig`. `Crypto.checkSignature` recomputes the tag over `signedPayload`
+# with the server's key, compares it in constant time, and fails 401 unless it
 # matches — so `ok` is only reachable for a value the server itself issued.
 # Note the shape: a `check` INSIDE the `auth`. The check yields the verified
 # payload (carrying an `Authentic` fact); the `auth` is the one trusted place
 # that converts "the server signed this" into the domain fact `IsAdmin`.
+#
+# THIS IS NOT THE SESSION PATTERN — it is a MAC demonstration.  The subject of
+# this lesson is `Crypto.signWith` / `Crypto.checkSignature` and the check-inside-
+# auth shape, and hand-assembling a two-cookie scheme is how it shows them.  Do
+# not copy the construction. Tesl has exactly one blessed session, it is a signed
+# JWT in one fixed cookie, and it is three imported functions with no options:
+#
+#     lesson57-jwt       — the credential (JWT.sign / JWT.verify)
+#     lesson76-sessions  — the transport  (Http.setSessionCookie / .sessionToken /
+#                                          .clearSessionCookie, and cookieCap)
 
 fact IsAdmin (n: String)
 
 auth adminAuth(request: HttpRequest) -> String ? IsAdmin
   requires [envRead] =
-  case Dict.lookup "session" request.cookies of
-    Nothing -> fail 401 "admin only" # no session cookie → unauthenticated
+  case Dict.lookup "signedPayload" request.cookies of
+    Nothing -> fail 401 "admin only" # nothing signed → unauthenticated
     Something payload -> # cookie present
-      case Dict.lookup "sessionSig" request.cookies of
+      case Dict.lookup "payloadSig" request.cookies of
         Nothing -> fail 401 "admin only" # unsigned → nothing to verify
         Something sigHex ->
-          let key = Secret (requireEnv "ADMIN_SESSION_KEY")
+          # `requireSecret`, not `Secret (requireEnv …)`: it reads the environment
+          # STRAIGHT into a Secret, so no String ever holds key material and the
+          # redaction every rendering sink applies cannot be bypassed.
+          let key = requireSecret "ADMIN_SESSION_KEY"
           # Constant-time; auto-401 on a tag that does not match.
           let adminId = check Crypto.checkSignature key (Crypto.signatureFromHex sigHex) payload
           ok adminId ::: IsAdmin adminId # signature verified → attach IsAdmin proof

@@ -152,7 +152,7 @@ handler postJson(url: String, jsonBody: String, token: String) -> HttpResponse
 #
 # A common pattern is to call an internal microservice with a short-lived JWT:
 #
-#   fn callInternalService(url: String, userJwt: JwtToken, secret: JwtSecret)
+#   fn callInternalService(url: String, userJwt: JwtToken, secret: Secret)
 #     -> HttpResponse
 #     requires [webClient, jwt] =
 #     let header = buildBearerHeader userJwt.value

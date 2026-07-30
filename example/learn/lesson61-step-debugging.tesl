@@ -62,7 +62,7 @@ module Lesson61StepDebugging exposing [describeScore, computeGrade]
 # annotations. A `String ::: IsTrimmed, IsNonEmpty` displays as:
 #   userInput = "hello"  [IsTrimmed, IsNonEmpty]
 #
-# Nominal newtypes (JwtToken, JwtSecret) are unwrapped to their inner value:
+# Nominal newtypes (JwtToken, UserId) are unwrapped to their inner value:
 #   token = "eyJhbGci..."  (JwtToken)
 #
 # ── WHAT PHASE 1 SUPPORTS (current) ──────────────────────────────────────────

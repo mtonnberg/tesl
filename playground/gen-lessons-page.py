@@ -37,17 +37,31 @@ import zlib
 from pathlib import Path
 
 # Mirrors playground/index.html's `encodeShare`:
-#   #z<base64url(raw deflate)>, falling back to #s<base64url(utf-8)>.
+#   #z<base64url(raw deflate)>, falling back to #s<base64url(utf-8)>,
+#   with an OPTIONAL trailing position: `.L42` (caret on line 42) or `.L42-45`
+#   (select lines 42 through 45), 1-based, `.` being impossible inside base64url.
 # Raw deflate (wbits=-15) is what the browser's CompressionStream("deflate-raw")
 # produces and DecompressionStream consumes — a zlib or gzip wrapper would NOT
 # decode. It buys ~4x: the largest lesson is 34 KB, so ~9 KB of fragment.
-def share_fragment(source: str) -> str:
+#
+# This page emits NO position: a lesson link means "open the whole lesson", and
+# an index that guessed at an interesting line would be guessing. The parameter
+# exists so a future caller (a manual cross-reference, a forum answer) can point
+# at a line without a second encoder, and so index.html's decoder and this
+# encoder cannot drift apart about the format.
+def share_fragment(source: str, line: int = None, end_line: int = None) -> str:
     raw = source.encode("utf-8")
     co = zlib.compressobj(9, zlib.DEFLATED, -15)
     packed = co.compress(raw) + co.flush()
     if len(packed) >= len(raw):          # incompressible: don't pay the wrapper
-        return "s" + b64url(raw)
-    return "z" + b64url(packed)
+        frag = "s" + b64url(raw)
+    else:
+        frag = "z" + b64url(packed)
+    if line:
+        frag += ".L%d" % line
+        if end_line and end_line > line:
+            frag += "-%d" % end_line
+    return frag
 
 
 def b64url(data: bytes) -> str:

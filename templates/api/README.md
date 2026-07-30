@@ -38,9 +38,10 @@ curl -i localhost:8086/todos/todo-1
 
 ## Authentication: what the scaffold does and does not ship
 
-`app.tesl` ships the **verify** half of session auth: `JWT.verify` recomputes the
-HMAC-SHA256 signature of the `session` cookie and rejects anything this service
-did not mint. The user id is the `sub` claim, so it lives *inside* the signature —
+`app.tesl` ships the **verify** half of session auth: `Http.sessionToken` reads the
+session cookie — one fixed name, `__Host-session`, held in the runtime so no call
+site re-spells it — and `JWT.verify` recomputes its HMAC-SHA256 signature and
+rejects anything this service did not mint. The user id is the `sub` claim, so it lives *inside* the signature —
 which is what makes the `todo.ownerId != requestUser.id` ownership check in
 `getTodo` mean anything.
 
@@ -58,7 +59,7 @@ no scaffold can guess. Add a login route that signs the claims:
 handler login(credentials: Credentials) -> String requires [appReadCookie, envRead] =
   # ... verify the credentials against your `user` entity, THEN:
   (JWT.sign (Dict.singleton "sub" credentials.user)
-            (JwtSecret (requireEnv "SESSION_JWT_SECRET"))).value
+            (requireSecret "SESSION_JWT_SECRET")).value
 ```
 
 `JWT.sign` sets the expiry itself (one hour, epoch seconds per RFC 7519), so the
@@ -68,7 +69,9 @@ than an override: a caller who can choose an expiry can choose ten years. For a
 credential that must outlive a session, use `Crypto.randomToken` and store only
 its `Crypto.fingerprint`, which you can revoke.
 
-Hand the returned string back as the `session` cookie. In the Tesl repository,
+Set the cookie with `Http.setSessionCookie` (it takes the `JwtToken`, needs
+`cookieCap`, and fixes the name and every attribute). In the Tesl repository,
+`example/learn/lesson76-sessions.tesl` is the login/logout story end to end,
 `example/learn/lesson57-jwt.tesl` walks through signing and verifying, and
 `example/learn/lesson64-password-storage.tesl` covers checking the credentials.
 

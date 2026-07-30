@@ -3,16 +3,22 @@
 #
 #   playground/build.sh [OUTDIR]        # default OUTDIR = playground/dist
 #
-# Output is host-agnostic: two files, no server-side anything, no build-time
-# knowledge of where it will be served from (every path in index.html is
-# relative).  Publishing it is "copy this directory", on any forge or CDN.
+# Output is host-agnostic: three plain files (index.html, tesl_playground.js and
+# the generated lessons.html), no server-side anything, no build-time knowledge of
+# where it will be served from — every path in index.html is relative and there is
+# no CDN, web font or image.  Publishing it is "copy this directory", on any forge
+# or CDN.
+#
+# `scripts/playground-parity.sh` (ci.sh phase 14) checks the built artifact's
+# diagnostics against `tesl --check-json`; run it after changing the driver.
 #
 # Requires js_of_ocaml + js_of_ocaml-compiler.  Both are in the nix dev shell
-# (`nix develop`).  Deliberately NOT wired into ci.sh: the dune stanza is gated
-# on the RELEASE profile, and everything that must keep working without
-# js_of_ocaml (plain `dune build`, `dune test`, ci.sh, the nix derivation) uses
-# the dev profile.  See compiler/playground/dune for why an alias override does
-# not achieve this.
+# (`nix develop`).  The dune stanza is gated on the RELEASE profile, and
+# everything that must keep working without js_of_ocaml (plain `dune build`,
+# `dune test`, the nix derivation) uses the dev profile.  See
+# compiler/playground/dune for why an alias override does not achieve this.
+# ci.sh's parity phase calls this script but SKIPs when js_of_ocaml is absent, so
+# the gate still passes on a machine that cannot build the browser bundle.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

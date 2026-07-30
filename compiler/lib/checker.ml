@@ -1931,24 +1931,23 @@ let no_eliminator_stdlib_types : (string * string) list = [
   "A PasswordHash is opaque on purpose: the only legitimate way to use one is \
    `Crypto.checkPassword`, which is constant-time and returns a proof. Store it \
    in a column directly — the SQL layer takes it as-is.";
+  (* `Secret` is a `secret` newtype at runtime (tesl/crypto.rkt's
+     `define-secret-newtype`), so it is redacted in telemetry, in structured logs
+     and on all three debugger surfaces.  `.value` would defeat every one of
+     those in a single call, which is why it is withheld here.  This is the ONE
+     key-material type: the JWT surface used to have a key newtype of its own,
+     deleted 2026-07-30, so the JWT consumers are named here too. *)
   "Secret",
-  "A Secret cannot become a String — that is the whole guarantee. Hand it to a \
-   function that knows what to do with it (`Crypto.signWith`, \
-   `Crypto.keyFingerprint`), store it in a column, or compare it with `==` \
-   (which is constant-time).";
+  "A Secret cannot become a String — that is the whole guarantee: it is redacted \
+   in telemetry, in logs and on every debugger surface, and `.value` would \
+   defeat all of that in one call. Hand it to a function that knows what to do \
+   with it (`Crypto.signWith`, `Crypto.keyFingerprint`, `JWT.sign`, \
+   `JWT.verify`), mint it from the environment with `Env.requireSecret`, store \
+   it in a column (the SQL layer takes the newtype as-is), or compare it with \
+   `==` (which is constant-time).";
   "Signature",
   "A Signature's only legitimate comparison IS a verification: use \
    `Crypto.checkSignature`. To put one in a header, use `Crypto.signatureHex`.";
-  (* A JwtSecret is a `secret` newtype at runtime (tesl/jwt.rkt's
-     `define-secret-newtype`), so it is redacted in telemetry, in structured
-     logs and on all three debugger surfaces.  `.value` would defeat every one
-     of those in a single call, which is why it is withheld here. *)
-  "JwtSecret",
-  "A JwtSecret is a secret: it is redacted in telemetry, logs and the debugger, \
-   so it cannot become a String without defeating all of that. Hand it to \
-   `JWT.sign` / `JWT.verify`, mint it from the environment with \
-   `Env.requireSecret`, or store it in a column (the SQL layer takes the \
-   newtype as-is).";
   "Int32",
   "An Int32 is a nominal 32-bit integer, not a record. Widen it to an Int with \
    `Int32.toInt` (total), or render it with `Int32.toString`.";
@@ -6516,7 +6515,7 @@ let check_api_decl_types ctx (m : module_form) =
   let check_type_name_in_scope loc name =
     let known = [ "Unit"; "Bool"; "Int"; "Float"; "String"; "List"; "Maybe";
                   "Dict"; "Set"; "PosixMillis"; "HttpRequest"; "HttpResponse";
-                  "JwtToken"; "JwtSecret";
+                  "JwtToken";
                   "Agent"; "LlmProvider"; "AgentReply"; "Tool"; "ToolStep";
                   "Conversation"; "ConversationTurn" ] in
     if not (List.mem name known || List.mem name known_types) then

@@ -2007,8 +2007,16 @@
 ;; token, so this harness mints tokens the way a login endpoint would — which is
 ;; also the only way to still test the 403 path honestly (a NON-admin token,
 ;; rather than a client asking to be a non-admin).
-(require (only-in "../tesl/jwt.rkt" JWT.sign JwtSecret jwt)
+(require (only-in "../tesl/jwt.rkt" JWT.sign jwt)
+         ;; The signing key type is Tesl.Crypto's `Secret` — the one
+         ;; key-material type in the language.  jwt.rkt has no key newtype of its
+         ;; own and does not re-provide this one.
+         (only-in "../tesl/crypto.rkt" Secret)
          (only-in "../tesl/time.rkt" time)
+         ;; The cookie NAME comes from the runtime, not from a literal here:
+         ;; `Http.sessionToken` reads exactly this constant, so the fixture cannot
+         ;; drift from the reader it is meant to exercise.
+         (only-in "../tesl/http.rkt" session-cookie-name)
          (only-in "../dsl/types.rkt" newtype-value? newtype-value-value))
 
 (define ADMIN-TASK-SECRET "test-session-signing-key-not-a-real-secret")
@@ -2022,8 +2030,8 @@
     (if role
         (hash "sub" sub "role" role)
         (hash "sub" sub)))
-  (define token (with-capabilities (jwt time) (JWT.sign claims (JwtSecret ADMIN-TASK-SECRET))))
-  (string-append "session="
+  (define token (with-capabilities (jwt time) (JWT.sign claims (Secret ADMIN-TASK-SECRET))))
+  (string-append session-cookie-name "="
                  (let ([raw token])
                    (if (newtype-value? raw) (newtype-value-value raw) raw))))
 
@@ -2031,8 +2039,8 @@
   (define token
     (with-capabilities (jwt time)
       (JWT.sign (hash "sub" sub "role" role)
-                (JwtSecret ADMIN-TASK-SECRET))))
-  (string-append "session="
+                (Secret ADMIN-TASK-SECRET))))
+  (string-append session-cookie-name "="
                  (let ([raw token])
                    (if (newtype-value? raw) (newtype-value-value raw) raw))))
 

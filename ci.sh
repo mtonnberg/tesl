@@ -38,6 +38,7 @@
 #    5. Format                tesl fmt (in place), bounded xargs -P pool
 #    6. Validate              tesl validate (check+lint+fmt), xargs -P pool
 #    7. Exact-match snaps     byte-exact re-emit vs committed example/learn/*.rkt
+#                             + templates/{api,minimal}/app.rkt (`tesl init` scaffold)
 #    8. Tesl test files       generated Racket test submodules (batch runner)
 #    9. Mutation              tesl --mutate lesson42
 #   10. Integration           httpclient + email alcotest integration exes
@@ -45,6 +46,9 @@
 #                             + AI (Tesl.Agent) mock feature/runtime suites
 #   12. Racket aggregate      tests/all.rkt (shared PostgreSQL when available)
 #   13. Boot smoke            tesl run app.tesl — activation-path banner check
+#   14. Playground parity     scripts/playground-parity.sh — the browser build's
+#                             teslCheck vs `tesl --check-json` over 30 lessons
+#                             (SKIPs when js_of_ocaml or node is unavailable)
 #
 # A per-phase progress line is printed as each phase STARTS and again when it
 # finishes:  [N/T] <phase> … OK/FAIL/SKIP (Xs).  Output stays clean (no colour,
@@ -133,7 +137,7 @@ phase_started_at=$SECONDS
 
 # ── Phase registry / progress bar ────────────────────────────────────────────
 # We know the phase count up front so each phase can print "[N/T] <name>".
-TOTAL_PHASES=18
+TOTAL_PHASES=19
 PHASE_NUM=0
 # Parallel arrays: name / status (OK|FAIL|SKIP) / elapsed seconds.
 PHASE_NAMES=()
@@ -639,7 +643,17 @@ EXAMPLE_FILES=(
 
 mapfile -t TEST_FILES < <(_drop_transient tests/*.tesl)
 
-ALL_FILES=( "${LEARN_FILES[@]}" "${EXAMPLE_FILES[@]}" "${TEST_FILES[@]}" )
+# The `tesl init` scaffold — the FIRST Tesl code a new user ever runs, and until
+# now the one shipped corpus in no phase at all: not validate, not the snapshot
+# diff, not the Tesl-test sweep (templates/ held no .rkt, so detect_tesl_test_files
+# could not see its `test` blocks).  A scaffold that does not boot is the worst
+# first impression there is, and it went unguarded through a change that made the
+# templates depend on libsodium at runtime.  Globbed, like the examples, so a new
+# template subdirectory is covered without an edit here.  templates/docker/ ships
+# only .tmpl files and has no app.tesl, so it drops out of the glob by itself.
+mapfile -t TEMPLATE_FILES < <(_drop_transient templates/*/app.tesl)
+
+ALL_FILES=( "${LEARN_FILES[@]}" "${EXAMPLE_FILES[@]}" "${TEST_FILES[@]}" "${TEMPLATE_FILES[@]}" )
 
 # Kick off the shared PostgreSQL warm-up immediately so the cluster is ready by
 # the time the Tesl-test / aggregate phases need it (async — overlaps the build).
@@ -885,7 +899,8 @@ else
         "  Learn examples (example/learn/):${#LEARN_FILES[@]}" \
         "  Sandbox/example files (example/):${#EXAMPLE_FILES[@]}" \
         "  Test files (tests/):${#TEST_FILES[@]}" \
-        -- "${LEARN_FILES[@]}" "${EXAMPLE_FILES[@]}" "${TEST_FILES[@]}"
+        "  Scaffold templates (templates/*/app.tesl):${#TEMPLATE_FILES[@]}" \
+        -- "${LEARN_FILES[@]}" "${EXAMPLE_FILES[@]}" "${TEST_FILES[@]}" "${TEMPLATE_FILES[@]}"
     if [ "$format_apply_fail" -gt 0 ]; then
         printf "  %s%d file(s) failed to format.%s\n" "$C_RED" "$format_apply_fail" "$C_RESET"
         phase_end FAIL
@@ -913,7 +928,8 @@ else
         "  Learn examples (example/learn/):${#LEARN_FILES[@]}" \
         "  Sandbox/example files (example/):${#EXAMPLE_FILES[@]}" \
         "  Test files (tests/):${#TEST_FILES[@]}" \
-        -- "${LEARN_FILES[@]}" "${EXAMPLE_FILES[@]}" "${TEST_FILES[@]}"
+        "  Scaffold templates (templates/*/app.tesl):${#TEMPLATE_FILES[@]}" \
+        -- "${LEARN_FILES[@]}" "${EXAMPLE_FILES[@]}" "${TEST_FILES[@]}" "${TEMPLATE_FILES[@]}"
     if [ "$compile_fail" -gt 0 ]; then
         printf "  %s%d file(s) failed validation.%s\n" "$C_RED" "$compile_fail" "$C_RESET"
         phase_end FAIL
@@ -930,7 +946,8 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 #  Phase 6 — Exact-match .rkt snapshots
 # ══════════════════════════════════════════════════════════════════════════════
-# Assert byte-exact emit for EVERY committed example/learn/*.rkt snapshot: re-emit
+# Assert byte-exact emit for every committed snapshot under EXACT_DIRS below
+# (example/learn/*.rkt plus the templates/ scaffold): re-emit
 # from the paired .tesl and diff, canonicalising only the baked-in thsl-src! path
 # prefix to its basename (same normalisation test_integration uses).  Any diff is
 # a real emit change, not a stale snapshot.  Needs the built OCaml binary.
@@ -952,9 +969,25 @@ else
     EXACT_FAILS=()
     EXACT_OK=0
     EXACT_SKIPPED=()
-    for rkt_file in "$SCRIPT_DIR/example/learn"/*.rkt; do
+    # Directories held to byte-exact emit HERE.  example/learn is the historical
+    # one; templates/{api,minimal} is the `tesl init` scaffold, whose committed
+    # app.rkt exists FOR this ratchet and is seeded by
+    # scripts/regen-rkt-snapshots.sh (see SEED_DIRS there) — it is not stray
+    # build output.  example/ and tests/ are NOT repeated here: `dune test`
+    # already walks them (test_integration.ml's exact_match_dir), and templates/
+    # is deliberately gated in ci.sh instead so a scaffold emit regression fails
+    # the same gate that validates and test-runs it.
+    EXACT_DIRS="example/learn templates/api templates/minimal"
+    for exact_dir in $EXACT_DIRS; do
+    for rkt_file in "$SCRIPT_DIR/$exact_dir"/*.rkt; do
         [ -f "$rkt_file" ] || continue
-        lesson="$(basename "${rkt_file%.rkt}")"
+        # Lesson basenames are unique, so they stay bare (the historical output
+        # format).  Every template's snapshot is `app.rkt`, so those carry their
+        # directory or a failure line could not say WHICH template broke.
+        case "$exact_dir" in
+            example/learn) lesson="$(basename "${rkt_file%.rkt}")" ;;
+            *)             lesson="$exact_dir/$(basename "${rkt_file%.rkt}")" ;;
+        esac
         tesl_file="${rkt_file%.rkt}.tesl"
         if [ ! -f "$tesl_file" ]; then
             echo "  NO .tesl FOR SNAPSHOT: $lesson (orphan .rkt)"
@@ -973,6 +1006,7 @@ else
             echo "  DIFF ($diff_count lines): $lesson"
             EXACT_FAILS+=("$lesson")
         fi
+    done
     done
     printf "  EXACT MATCH: %d snapshot(s); %d skipped; %d differ\n" \
         "$EXACT_OK" "${#EXACT_SKIPPED[@]}" "${#EXACT_FAILS[@]}"
@@ -1362,6 +1396,11 @@ else
         "tests/web-test.rkt"
         "tests/exists-test.rkt"
         "tests/jwt-test.rkt"
+        # Confused-deputy fix (F1): a tool body cannot write the OUTER request's
+        # session cookie.  Drives the real agent loop with a scripted cookie-
+        # setting tool inside a live response scope; not reachable from the .tesl
+        # api-test path, so it lives here.
+        "tests/session-cookie-tool-confinement-test.rkt"
         "tests/record-test.rkt"
         "tests/dap-conditional-smoke.rkt"
         "tests/otlp-exporter-test.rkt"
@@ -1532,6 +1571,35 @@ else
         fi
     fi
     rm -f "$boot_rkt" "$boot_out" "$boot_err"
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Playground parity (browser teslCheck ≡ tesl --check-json)
+# ══════════════════════════════════════════════════════════════════════════════
+# playground/ ships the compiler compiled to JavaScript, reusing the SAME
+# check_source + lint pair and the SAME diag_to_json serializer as
+# `tesl --check-json`.  The failure mode worth a phase is not "the build broke"
+# (loud) but the browser build silently DIVERGING from the CLI — which is exactly
+# how the linter was once found to be contributing nothing in the browser.  So
+# this phase asserts PARITY over the first 30 lessons, not that it compiles.
+# All the logic lives in the script; this stays thin.
+phase_begin "Playground parity (browser teslCheck ≡ --check-json)"
+if [ ! -f "$SCRIPT_DIR/scripts/playground-parity.sh" ]; then
+    printf "  %s⚠%s  scripts/playground-parity.sh not found — skipping\n" "$C_YELLOW" "$C_RESET"
+    phase_end SKIP
+else
+    _parity_rc=0
+    bash "$SCRIPT_DIR/scripts/playground-parity.sh" || _parity_rc=$?
+    if [ "$_parity_rc" -eq 0 ]; then
+        phase_end OK
+    elif [ "$_parity_rc" -eq 77 ]; then
+        # 77 = js_of_ocaml or node absent, or no corpus/compiler.  An optional
+        # tool that is missing is never a gate failure (same rule as racket/PG).
+        phase_end SKIP
+    else
+        printf "  %s✗%s  the browser checker diverged from the CLI (see above)\n" "$C_RED" "$C_RESET"
+        phase_end FAIL
+    fi
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════

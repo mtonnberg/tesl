@@ -4,7 +4,7 @@
 # Tesl-level tests for the Tesl.JWT stdlib module.
 #
 # Covers:
-#   - JwtToken and JwtSecret nominal newtype construction
+#   - JwtToken nominal newtype construction; Secret (Tesl.Crypto) as the key
 #   - JWT.sign produces a JwtToken and stamps a fixed one-hour `exp` itself
 #   - a caller-supplied `exp` is rejected (expiry is not the caller's to set)
 #   - JWT.verify correct secret returns claims carrying an `Authentic` fact
@@ -12,11 +12,13 @@
 #   - JWT.verify wrong secret returns error
 #   - JWT.decode returns claims without signature check
 #   - Capability enforcement with jwt
-#   - Nominal type safety: JwtToken wraps String, JwtSecret wraps String
+#   - Nominal type safety: JwtToken wraps String, Secret wraps String
 #   - String value retrieval via .value field
 # ─────────────────────────────────────────────────────────────────────────────
 
 module JwtTests exposing [
+  joseHeaderPrefix,
+  joseHeaderLength,
   makeSecret,
   makeToken,
   wrapToken,
@@ -30,17 +32,27 @@ module JwtTests exposing [
 ]
 
 import Tesl.Prelude exposing [Bool(..), Int, String, List, Unit]
-import Tesl.String exposing [String.length, String.startsWith, String.contains]
+import Tesl.String exposing [
+  String.length,
+  String.startsWith,
+  String.contains,
+  String.slice,
+]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Dict exposing [Dict, Dict.singleton, Dict.fromList, Dict.lookup]
 import Tesl.Tuple exposing [Tuple2]
 # `time` is named only in the capability below: JWT.sign reads the clock to stamp
 # the token's expiry.
 import Tesl.Time exposing [time]
+# The signing key is `Secret`, Tesl.Crypto's key-material type — Tesl.JWT has no
+# key type of its own.  There was a separate JWT-only key type until 2026-07-30;
+# it was deleted rather than aliased, because `Env.requireSecret` returns `Secret`
+# and two key types forced every signing program to route the key through a
+# String.
+import Tesl.Crypto exposing [Secret, Crypto.keyFingerprint]
 import Tesl.JWT exposing [
   jwt,
   JwtToken,
-  JwtSecret,
   JWT.sign,
   JWT.verify,
   JWT.decode,
@@ -52,10 +64,30 @@ import Tesl.JWT exposing [
 # `time` as well as `jwt`: JWT.sign stamps the expiry from the wall clock.
 capability jwtCap implies jwt, time
 
+# ── The JOSE header ───────────────────────────────────────────────────────────
+
+# The base64url encoding of `{"alg":"HS256","typ":"JWT","kid":` — the part of the
+# JOSE header that does NOT depend on the key.
+#
+# It used to be the whole header (`eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9` =
+# `{"alg":"HS256","typ":"JWT"}`), which was a constant.  Since 2026-07-30
+# `JWT.sign` stamps `kid` = `Crypto.keyFingerprint key`, so the header is a
+# function OF THE KEY and only this prefix is stable.  The cut is at 33 bytes of
+# JSON, a multiple of 3, so base64 group alignment makes it an exact 44-character
+# prefix of every token — not an approximation.
+joseHeaderPrefix = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6"
+
+# The header segment is always exactly 70 characters: the 33-byte prefix plus
+# `"<16 hex>"}`, and `Crypto.keyFingerprint` is always 16 hex characters.
+joseHeaderLength = 70
+
 # ── Helper functions ──────────────────────────────────────────────────────────
 
-fn makeSecret(s: String) -> JwtSecret =
-  JwtSecret s
+# Every test below goes through this helper rather than writing `Secret "…"`
+# inline: a string LITERAL in a key position is what the SEC003 lint is for, and
+# a test corpus that trips its own security lint trains the reader to ignore it.
+fn makeSecret(s: String) -> Secret =
+  Secret s
 
 fn makeToken(s: String) -> JwtToken =
   JwtToken s
@@ -65,14 +97,14 @@ fn wrapToken(s: String) -> JwtToken =
 
 # Claims are a Dict (the JWT payload is a JSON object); carry the test's string
 # claim in a `sub` field and read it back out, so these helpers keep a String API.
-fn signClaims(claims: String, secret: JwtSecret) requires [jwtCap] -> JwtToken =
+fn signClaims(claims: String, secret: Secret) requires [jwtCap] -> JwtToken =
   JWT.sign (Dict.singleton "sub" claims) secret
 
 # There is NO expiry parameter: JWT.sign stamps `exp` one hour ahead itself. A
 # caller who supplies one is REJECTED rather than silently overridden, which is
 # what this helper exercises — it typechecks (the claims are Dict String String,
 # and "3600" is a String), and fails loudly at run time.
-fn signClaimsWithOwnExp(claims: String, secret: JwtSecret) requires [jwtCap] -> JwtToken =
+fn signClaimsWithOwnExp(claims: String, secret: Secret) requires [jwtCap] -> JwtToken =
   JWT.sign (Dict.fromList [Tuple2 "sub" claims, Tuple2 "exp" "3600"]) secret
 
 # A consumer that DEMANDS the claims were verified. Only `check JWT.verify` can
@@ -85,7 +117,7 @@ fn subjectOfAuthenticClaims(claims: Dict String String ::: Authentic claims) -> 
 # JWT.verify is check-shaped, so its result must be BOUND with `check` before it
 # can be read — nesting it inside Dict.lookup would hand the lookup the raw
 # check-fail on the failure path.
-fn verifyClaims(token: JwtToken, secret: JwtSecret) requires [jwtCap] -> String =
+fn verifyClaims(token: JwtToken, secret: Secret) requires [jwtCap] -> String =
   let claims = check JWT.verify token secret
   case Dict.lookup "sub" claims of
     Nothing -> ""
@@ -104,15 +136,15 @@ fn tokenLength(token: JwtToken) -> Int =
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
-# NOTE on `JwtSecret` and `.value`: JwtSecret is a SECRET newtype, so it has no
+# NOTE on `Secret` and `.value`: Secret is a SECRET newtype, so it has no
 # readable `.value` — reading the key back out as a String would defeat the
 # redaction every rendering sink applies to it. T01/T10/T15/T20 below therefore
 # assert what a secret is FOR (it signs, and signing is deterministic in it)
 # rather than asserting the key round-trips.
-test "T01: a JwtSecret can be constructed and used to sign" requires [jwtCap] {
+test "T01: a Secret can be constructed and used to sign" requires [jwtCap] {
   let s = makeSecret "my-key"
   let token = signClaims "user" s
-  expect String.startsWith token.value "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+  expect String.startsWith token.value joseHeaderPrefix
 }
 
 test "T02: JwtToken constructor wraps a string" {
@@ -141,7 +173,7 @@ test "T05: JWT token has three parts separated by dots" requires [jwtCap] {
 test "T06: JWT.sign token starts with known header" requires [jwtCap] {
   let secret = makeSecret "test-secret"
   let token = signClaims "alice" secret
-  expect String.startsWith token.value "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+  expect String.startsWith token.value joseHeaderPrefix
 }
 
 test "T07: JwtToken .value extracts the underlying string" {
@@ -227,8 +259,8 @@ test "T19: JwtToken wraps any string value" {
   expect String.length t2.value < String.length t3.value
 }
 
-test "T20: JwtSecret and JwtToken are separate types" requires [jwtCap] {
-  # A JwtToken's `.value` is readable; a JwtSecret's is not (it is a secret
+test "T20: Secret and JwtToken are separate types" requires [jwtCap] {
+  # A JwtToken's `.value` is readable; a Secret's is not (it is a secret
   # newtype) — that asymmetry IS the type distinction, and it is enforced at
   # compile time, so all this test can add is that both are constructible and
   # that the token side round-trips.
@@ -242,7 +274,7 @@ test "T21: a signed token verifies and keeps its other claims readable" requires
   let token = signClaims "user-with-expiry" secret
   expect verifyClaims token secret == "user-with-expiry"
   expect decodeClaims token == "user-with-expiry"
-  expect String.startsWith token.value "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+  expect String.startsWith token.value joseHeaderPrefix
 }
 
 # The `Authentic` fact (Crypto Phase 2). The interesting half of this is the
@@ -255,4 +287,43 @@ test "T22: verified claims satisfy a consumer that demands Authentic" requires [
   let token = signClaims "carol" secret
   let claims = check JWT.verify token secret
   expect subjectOfAuthenticClaims claims == "carol"
+}
+
+# ── The `kid` header stamp (2026-07-30) ───────────────────────────────────────
+#
+# `JWT.sign` stamps `kid` = `Crypto.keyFingerprint key` in the JOSE header, its
+# RFC 7515 §4.1.4 home.  It is DERIVED, not chosen — there is no parameter — and
+# it answers "which key signed this" from a log line without exposing the key.
+#
+# The verify side is untouched: it recomputes the HMAC over `header.payload`
+# verbatim and never parses the header, so a token minted before this change and
+# a foreign token with any header at all verify exactly as they did.  That
+# backward compatibility is asserted in tests/jwt-test.rkt, which can forge a
+# header-less token out of band; from Tesl there is no way to mint one.
+
+test "T23: the header carries a kid, so it is no longer the same for every key" requires [jwtCap] {
+  let s1 = makeSecret "kid-key-alpha"
+  let s2 = makeSecret "kid-key-beta"
+  let h1 = String.slice (signClaims "user" s1).value 0 joseHeaderLength
+  let h2 = String.slice (signClaims "user" s2).value 0 joseHeaderLength
+  expect String.startsWith h1 joseHeaderPrefix
+  expect String.startsWith h2 joseHeaderPrefix
+  expect h1 != h2
+}
+
+test "T24: the same key always stamps the same kid" requires [jwtCap] {
+  let s = makeSecret "kid-stable-key"
+  let h1 = String.slice (signClaims "alice" s).value 0 joseHeaderLength
+  let h2 = String.slice (signClaims "bob" s).value 0 joseHeaderLength
+  expect h1 == h2
+}
+
+test "T25: the kid is not the key — the key never appears in the token" requires [jwtCap] {
+  # `Crypto.keyFingerprint` is a domain-separated digest truncated to 16 hex
+  # characters, so it is safe to log; the key itself must not survive anywhere in
+  # the token, header included.
+  let s = makeSecret "kid-not-the-key"
+  let token = signClaims "user" s
+  expect !(String.contains token.value "kid-not-the-key")
+  expect String.length (Crypto.keyFingerprint s) == 16
 }

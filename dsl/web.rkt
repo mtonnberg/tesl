@@ -24,6 +24,13 @@
                   metric-histogram-record!
                   duration-histogram-boundaries)
          (only-in "../tesl/sse.rkt" make-sse-connection-handler)
+         ;; The request-scoped Set-Cookie accumulator.  A deliberately tiny
+         ;; module so that `tesl/http.rkt` (which WRITES it, gated by cookieCap)
+         ;; and this file (which READS it when building a 2xx) need not require
+         ;; each other.
+         (only-in "response-cookies.rkt"
+                  current-response-cookies
+                  response-cookie-headers)
          (only-in "../tesl/queue.rkt"
                   channel-spec?
                   channel-spec-name
@@ -1202,8 +1209,15 @@
 (define (string-segment segment)
   segment)
 
+;; Session cookies attach to 2xx responses ONLY.  `error-response` funnels every
+;; 4xx/5xx through here too, so the status test below is what makes "a handler
+;; that sets a cookie and then `fail`s mints no session" true — and it is true by
+;; construction, at the single point where every `dsl-response` is built, rather
+;; than by remembering to clear the accumulator on each error path.
 (define (json-response body #:status [status 200] #:headers [headers '()])
-  (dsl-response status headers (prepare-json body)))
+  (define cookie-headers
+    (if (and (>= status 200) (< status 300)) (response-cookie-headers) '()))
+  (dsl-response status (append headers cookie-headers) (prepare-json body)))
 
 (define (error-response status message #:details [details '()])
   (json-response (hash 'ok #f
@@ -1812,6 +1826,17 @@
                '()))
          '())))
 
+  ;; Shared server-side failure log, used by both the handler-body arms and the
+  ;; auth-path wrapper below, so an exception renders identically wherever it is
+  ;; thrown.
+  (define (log-route-failure route exn)
+    (fprintf (handler-error-port) "~a\n"
+             (tesl-render-handler-failure
+              (route-spec-operation route)
+              (dsl-request-method req)
+              path-string
+              (exn-message exn))))
+
   (define (invoke-handler route auth-value segment-values)
     (parameterize ([current-capabilities checked-capabilities]
                    [current-telemetry-events '()])
@@ -1875,8 +1900,18 @@
   ;; Sentinel: no route in the table matched method+path.
   ;; Distinct from a handler-level 404 so the SPA fallback only fires for
   ;; genuine "no route" cases, not for handler-produced 404 errors.
+  ;; `current-response-cookies` is scoped ONCE per request, around the whole
+  ;; match/auth/handler sequence.  `Http.setSessionCookie` appends to it from
+  ;; arbitrary depth and `json-response` — reached inside this same extent —
+  ;; reads it back.  Scoping it here rather than inside `invoke-handler` means an
+  ;; `auth` block can also write (its cookie rides the handler's 2xx), and
+  ;; scoping it per request at all is what stops a cookie set by one request from
+  ;; leaking onto the next one served by the same thread.  The `'route-not-found`
+  ;; 404 built below is deliberately OUTSIDE the extent: nothing set a cookie
+  ;; there, and `response-cookie-headers` returns '() with no live scope.
   (define response
-    (parameterize ([current-capabilities checked-capabilities])
+    (parameterize ([current-capabilities checked-capabilities]
+                   [current-response-cookies '()])
       (let loop ([routes (server-spec-routes server)])
         (cond
           [(null? routes)
@@ -1897,13 +1932,36 @@
                     (handler-result->response route segment-values)]
                    [else
                     (set! matched-operation (route-spec-operation route))
-                    (let ([auth-value (and (route-spec-auth route)
-                                          (run-auth (route-spec-auth route) req))])
-                      (cond
-                        [(check-fail? auth-value)
-                         (handler-result->response route auth-value)]
-                        [else
-                         (invoke-handler route auth-value segment-values)]))])))]))))
+                    ;; F2 (2026-07-30): `run-auth` runs OUTSIDE `invoke-handler`'s
+                    ;; `with-handlers`, so an exception thrown in an `auth` block
+                    ;; used to escape to `serve/servlet`'s default responder — a
+                    ;; 500 carrying the message, the full stack trace, and
+                    ;; absolute source paths, contradicting the no-leak policy the
+                    ;; handler body already follows.  Contain it here with the
+                    ;; SAME discipline (full detail logged server-side; only a
+                    ;; sanitized message to the client under TESL_VERBOSE), and
+                    ;; the pool-timeout→503 parity too, since an auth block reads
+                    ;; the DB.
+                    (with-handlers
+                      ([exn:fail:tesl:pool-timeout?
+                        (lambda (exn)
+                          (log-route-failure route exn)
+                          (error-response
+                           503 "Service unavailable: database connection pool exhausted"
+                           #:details (if tesl-verbose? (list (exn-message exn)) '())))]
+                       [exn:fail?
+                        (lambda (exn)
+                          (log-route-failure route exn)
+                          (error-response
+                           500 "Internal server error"
+                           #:details (if tesl-verbose? (list (exn-message exn)) '())))])
+                      (let ([auth-value (and (route-spec-auth route)
+                                            (run-auth (route-spec-auth route) req))])
+                        (cond
+                          [(check-fail? auth-value)
+                           (handler-result->response route auth-value)]
+                          [else
+                           (invoke-handler route auth-value segment-values)])))])))]))))
   (define final-response
     (if (eq? response 'route-not-found)
         (error-response 404 "Route not found")
@@ -1969,7 +2027,15 @@
 (define (resolve-sse-channel ch)
   (if (symbol? ch) (channel-for-name ch) ch))
 
+;; SSE bypasses `dsl-response` entirely (it returns a `response/output` stream),
+;; so it needs its own cookie scope and its own append — otherwise a cookie set
+;; before subscribing would be silently dropped.  The scope wraps the auth call
+;; below, which is the only thing on this path that could write one.
 (define (handle-sse-request route dsl-req)
+  (parameterize ([current-response-cookies '()])
+    (handle-sse-request* route dsl-req)))
+
+(define (handle-sse-request* route dsl-req)
   (define pattern    (first route))
   (define auth-fn    (second route))
   (define channel-s  (resolve-sse-channel (third route)))
@@ -2017,10 +2083,12 @@
    #:code 200
    #:message #"OK"
    #:mime-type #"text/event-stream"
-   #:headers (list (make-header #"Cache-Control" #"no-cache")
-                   (make-header #"Connection"    #"keep-alive")
-                   (make-header #"X-Accel-Buffering" #"no")
-                   (make-header #"Access-Control-Allow-Origin" #"*"))
+   #:headers (append
+              (list (make-header #"Cache-Control" #"no-cache")
+                    (make-header #"Connection"    #"keep-alive")
+                    (make-header #"X-Accel-Buffering" #"no")
+                    (make-header #"Access-Control-Allow-Origin" #"*"))
+              (response-cookie-headers))
    handler))
 
 ;; ── serve ─────────────────────────────────────────────────────────────────────
@@ -2178,6 +2246,30 @@
                 (error-response 404 "Route not found")
                 result))])]))
    #:port port
+   ;; F2 defense-in-depth (2026-07-30): the per-route wrappers in
+   ;; `dispatch-request` contain handler AND auth exceptions, but ANY exception
+   ;; that still escapes the servlet lambda must not fall to the web-server's
+   ;; default `servlet-error-responder`, which answers 500 with the exception
+   ;; message, the full stack trace, and absolute source paths.  Log it
+   ;; server-side and answer a bare sanitized 500 in the same JSON shape as
+   ;; `error-response`; echo the message only under TESL_VERBOSE.
+   #:servlet-responder
+   (lambda (url raised)
+     (when (exn? raised)
+       (fprintf (handler-error-port) "unhandled servlet error: ~a\n"
+                (exn-message raised)))
+     (response/full
+      500 #"Internal Server Error" (current-seconds) APPLICATION/JSON-MIME-TYPE
+      (list (make-header #"X-Content-Type-Options" #"nosniff")
+            (make-header #"Cache-Control" #"no-store"))
+      (list (jsexpr->bytes
+             (hash 'ok #f
+                   'error "Internal server error"
+                   'details (if tesl-verbose?
+                                (list (if (exn? raised)
+                                          (exn-message raised)
+                                          (format "~a" raised)))
+                                '()))))))
    #:command-line? #t
    #:launch-browser? #f
    #:quit? #f

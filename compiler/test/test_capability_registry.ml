@@ -49,6 +49,15 @@ let oracle = [
      in the closure of every JWT-authenticated endpoint. *)
   "JWT.sign", ["jwt"; "time"];
   "JWT.verify", ["jwt"]; "JWT.decode", ["jwt"];
+  (* JWT.renew re-SIGNS (fresh `exp`, original `iat` preserved), so it charges
+     `time` by the same rule as JWT.sign: it reads the wall clock. *)
+  "JWT.renew", ["jwt"; "time"];
+  (* The session cookie (Tesl.Http).  Writing a cookie is an effect ON THE
+     RESPONSE, so both writers charge `cookieCap`.  `Http.sessionToken` appears
+     NOWHERE here on purpose: it reads request data, and reading request data is
+     not an effect — exactly as `request.cookies` needs no capability. *)
+  "Http.setSessionCookie", ["cookieCap"];
+  "Http.clearSessionCookie", ["cookieCap"];
   "HttpClient.get", ["httpClient"]; "HttpClient.post", ["httpClient"];
   "HttpClient.put", ["httpClient"]; "HttpClient.delete", ["httpClient"];
   "UUID.v4", ["uuid"]; "UUID.v7", ["uuid"];
@@ -94,7 +103,7 @@ let () =
   (* 5. every capability the registry mentions is a real capability token. *)
   let known_caps =
     [ "time"; "random"; "envRead"; "jwt"; "httpClient"; "uuid";
-      "aiProvider"; "queueRead"; "queueWrite" ] in
+      "aiProvider"; "queueRead"; "queueWrite"; "cookieCap" ] in
   List.iter (fun (name, caps) ->
     List.iter (fun c ->
       check (Printf.sprintf "%s: `%s` is a known capability token" name c)

@@ -1,0 +1,433 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# session-cookie-tests.tesl
+#
+# The session-cookie transport (Tesl.Http): Http.setSessionCookie,
+# Http.clearSessionCookie, Http.sessionToken and the cookieCap capability.
+#
+# What this file asserts, in the order the roadmap's verification bar asks for:
+#   - the FULL Set-Cookie line an ordinary handler emits having passed nothing:
+#     __Host-session, HttpOnly, Secure, SameSite=Lax, Path=/, Max-Age=3600.
+#     Defaults are asserted, not merely settable — there is nothing to set.
+#   - the round trip: login sets the cookie, responseCookie hands it back,
+#     the `cookie` clause replays it, `check JWT.verify` inside `auth` mints
+#     `Authenticated`, the protected endpoint answers 200.
+#   - a tampered cookie is a 401; a cookie signed with another tenant's key is a
+#     401 — both through JWT.verify's existing constant-time path.
+#   - logout emits Max-Age=0, and a handler that sets a cookie and then `fail`s
+#     emits NO Set-Cookie at all: no session is minted on an error path.
+#
+# The negatives that cannot be written here, because they do not compile, live in
+# compiler/test/test_session_cookie.ml: `Http.setSessionCookie someString` is a
+# type error, and calling either writer without cookieCap in scope is the usual
+# capability error.
+# ─────────────────────────────────────────────────────────────────────────────
+
+module SessionCookieTests exposing [SessionServer]
+
+import Tesl.Prelude exposing [Bool(..), String]
+import Tesl.String exposing [String.contains]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Dict exposing [Dict, Dict.singleton, Dict.lookup]
+import Tesl.Json exposing [stringCodec, boolCodec]
+import Tesl.Time exposing [time]
+import Tesl.Crypto exposing [Secret]
+import Tesl.JWT exposing [jwt, JWT.sign, JWT.verify, JWT.renew]
+import Tesl.ApiTest exposing [statusOk, responseCookie]
+# The three cookie functions and the capability that gates the two writers.
+# Nothing here is ambient: the names arrive through this import, and the right to
+# call the writers arrives through `cookieCap` in a `requires` list.
+import Tesl.Http exposing [
+  HttpRequest,
+  cookieCap,
+  Http.setSessionCookie,
+  Http.clearSessionCookie,
+  Http.sessionToken,
+]
+
+# ── Capability ────────────────────────────────────────────────────────────────
+
+# One user capability wrapping the three stdlib tokens a session needs: `jwt` to
+# sign and verify, `time` because JWT.sign stamps `exp` from the clock, and
+# `cookieCap` to write the cookie.
+capability sessions implies jwt, time, cookieCap
+
+# ── Facts ─────────────────────────────────────────────────────────────────────
+
+fact Authenticated (user: String)
+
+# ── Keys ──────────────────────────────────────────────────────────────────────
+
+# Via a helper rather than `Secret "…"` at each call site: a string LITERAL in a
+# key position is exactly what the SEC003 lint is for, and a test corpus that
+# trips its own security lint teaches the reader to ignore it.
+fn makeSecret(s: String) -> Secret =
+  Secret s
+
+fn tenantAKey() -> Secret =
+  makeSecret "tenant-a-session-key"
+
+fn tenantBKey() -> Secret =
+  makeSecret "tenant-b-session-key"
+
+# ── Types ─────────────────────────────────────────────────────────────────────
+
+record LoginRequest {
+  user: String
+}
+
+codec LoginRequest {
+  toJson_forbidden
+  fromJson [ { user <- "user" with_codec stringCodec } ]
+}
+
+record LoginOk {
+  success: Bool
+}
+
+codec LoginOk {
+  toJson {
+    success -> "success" with_codec boolCodec
+  }
+  fromJson_forbidden
+}
+
+record WhoAmI {
+  userId: String
+}
+
+codec WhoAmI {
+  toJson {
+    userId -> "userId" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+# ── Auth: the reader half ─────────────────────────────────────────────────────
+
+# `Http.sessionToken` is what keeps the fixed cookie name out of user code.  The
+# stringly alternative — `Dict.lookup "__Host-session" request.cookies` — puts a
+# name in every auth block where a typo is a permanent 401.
+#
+# `check JWT.verify` is the ONLY thing between the cookie and the fact: one
+# `establish` beside one real verification.
+# The subject read is a helper so the auth body stays one `case` deep: `sub` is
+# always present (JWT.sign put it there), so a missing one is an empty string
+# rather than a second failure arm.
+fn subjectOf(claims: Dict String String) -> String =
+  case Dict.lookup "sub" claims of
+    Nothing -> ""
+    Something subject -> subject
+
+auth sessionOwner(request: HttpRequest) -> user: String ::: Authenticated user
+  requires [sessions] =
+  case Http.sessionToken request of
+    Nothing -> fail 401 "no session"
+    Something token ->
+      let claims = check JWT.verify token (tenantAKey())
+      let subject = subjectOf claims
+      ok subject ::: Authenticated user
+
+# The SLIDING variant: identical, plus one line that re-issues the cookie on every
+# authenticated request.  This is why the cookie accumulator is scoped around the
+# whole request rather than just the handler — an `auth` block has to be able to
+# write.  `JWT.renew` carries every claim across and preserves the original `iat`,
+# so an active user is never logged out mid-task, an idle one still expires an
+# hour after their last request, and the session still dies 12 hours after login
+# no matter how much it is renewed.
+auth slidingSessionOwner(request: HttpRequest) -> user: String ::: Authenticated user
+  requires [sessions] =
+  case Http.sessionToken request of
+    Nothing -> fail 401 "no session"
+    Something token ->
+      let claims = check JWT.verify token (tenantAKey())
+      let fresh = check JWT.renew token (tenantAKey())
+      let _ = Http.setSessionCookie fresh
+      let subject = subjectOf claims
+      ok subject ::: Authenticated user
+
+# ── Handlers ──────────────────────────────────────────────────────────────────
+
+handler login(body: LoginRequest) -> LoginOk requires [sessions] =
+  let token = JWT.sign (Dict.singleton "sub" body.user) (tenantAKey())
+  let _ = Http.setSessionCookie token
+  LoginOk { success: True }
+
+# Signs with tenant B's key and hands it out as a session anyway.  Tenant A's
+# `auth` must refuse it: the two tenants share this server and the key is what
+# separates them.
+handler loginOtherTenant(body: LoginRequest) -> LoginOk requires [sessions] =
+  let token = JWT.sign (Dict.singleton "sub" body.user) (tenantBKey())
+  let _ = Http.setSessionCookie token
+  LoginOk { success: True }
+
+# Sets the cookie and THEN fails.  Nothing about this handler is special — the
+# 2xx-only rule lives at the single point where every response is built, so the
+# cookie is dropped without the handler having to undo anything.
+handler loginThenFail(body: LoginRequest) -> LoginOk requires [sessions] =
+  let token = JWT.sign (Dict.singleton "sub" body.user) (tenantAKey())
+  let _ = Http.setSessionCookie token
+  fail 403 "second factor required"
+
+handler whoami(user: String ::: Authenticated user) -> WhoAmI =
+  WhoAmI { userId: user }
+
+handler whoamiSliding(user: String ::: Authenticated user) -> WhoAmI =
+  WhoAmI { userId: user }
+
+# Logout needs nothing but the right to write the cookie — no key, no clock.
+handler logout() -> LoginOk requires [cookieCap] =
+  let _ = Http.clearSessionCookie()
+  LoginOk { success: True }
+
+# Sets no cookie at all, and does not even hold cookieCap.  Used to prove the
+# accumulator is scoped PER REQUEST: if it were a plain module-level list, or a
+# parameter with a mutable default, a cookie set by an earlier request served on
+# the same thread would ride out on this response.
+handler ping() -> LoginOk =
+  LoginOk { success: True }
+
+# ── API and server ────────────────────────────────────────────────────────────
+
+api SessionApi {
+  post "/login"
+    body body: LoginRequest
+    -> LoginOk
+
+  post "/login-other-tenant"
+    body body: LoginRequest
+    -> LoginOk
+
+  post "/login-then-fail"
+    body body: LoginRequest
+    -> LoginOk
+
+  get "/whoami"
+    auth user: String ::: Authenticated user via sessionOwner
+    -> WhoAmI
+
+  get "/whoami-sliding"
+    auth user: String ::: Authenticated user via slidingSessionOwner
+    -> WhoAmI
+
+  post "/logout"
+    -> LoginOk
+
+  get "/ping"
+    -> LoginOk
+}
+
+server SessionServer for SessionApi {
+  login = login
+  loginOtherTenant = loginOtherTenant
+  loginThenFail = loginThenFail
+  whoami = whoami
+  whoamiSliding = whoamiSliding
+  logout = logout
+  ping = ping
+}
+
+# ── The full Set-Cookie line ──────────────────────────────────────────────────
+
+api-test "login emits the fixed Set-Cookie line, with no attribute passed in" for SessionServer requires [sessions] {
+  let resp = post "/login" body { "user": "alice" }
+  expect statusOk resp.status
+  case Dict.lookup "set-cookie" resp.headers of
+    Nothing -> expect False
+    Something line ->
+      # `__Host-` is the load-bearing attribute: it makes the BROWSER enforce
+      # Secure + Path=/ + no Domain, so a plaintext deployment visibly fails to
+      # store a session rather than quietly transmitting one in the clear.
+      expect String.contains line "__Host-session="
+      expect String.contains line "Path=/"
+      expect String.contains line "HttpOnly"
+      expect String.contains line "Secure"
+      expect String.contains line "SameSite=Lax"
+      # Max-Age comes from jwt-ttl-seconds, the same constant JWT.sign stamps
+      # `exp` from — one source, so the cookie can never outlive its token.
+      expect String.contains line "Max-Age=3600"
+}
+
+api-test "responseCookie yields a Cookie-header-ready pair" for SessionServer requires [sessions] {
+  let resp = post "/login" body { "user": "alice" }
+  case responseCookie resp of
+    Nothing -> expect False
+    Something pair -> expect String.contains pair "__Host-session="
+}
+
+# ── The round trip ────────────────────────────────────────────────────────────
+
+api-test "the session cookie round-trips: login then a protected endpoint" for SessionServer requires [sessions] {
+  let loginResp = post "/login" body { "user": "alice" }
+  expect statusOk loginResp.status
+  case responseCookie loginResp of
+    Nothing -> expect False
+    Something session ->
+      let me = get "/whoami" cookie session
+      expect statusOk me.status
+      expect me.body.userId == "alice"
+}
+
+api-test "no cookie at all is a 401" for SessionServer requires [sessions] {
+  let me = get "/whoami"
+  expect me.status == 401
+}
+
+api-test "a tampered cookie is a 401" for SessionServer requires [sessions] {
+  # The signature is over header.payload, so flipping the payload breaks it.
+  let me = get "/whoami" cookie "__Host-session=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImRlYWRiZWVmZGVhZGJlZWYifQ.eyJzdWIiOiJhdHRhY2tlciJ9.not-a-valid-signature"
+  expect me.status == 401
+}
+
+api-test "another tenant's key does not verify here" for SessionServer requires [sessions] {
+  let other = post "/login-other-tenant" body { "user": "mallory" }
+  expect statusOk other.status
+  case responseCookie other of
+    Nothing -> expect False
+    Something session ->
+      let me = get "/whoami" cookie session
+      expect me.status == 401
+}
+
+# ── The error path mints nothing ──────────────────────────────────────────────
+
+api-test "a handler that sets a cookie and then fails emits no Set-Cookie" for SessionServer requires [sessions] {
+  let resp = post "/login-then-fail" body { "user": "alice" }
+  expect resp.status == 403
+  case responseCookie resp of
+    Nothing -> expect True
+    Something pair -> expect False
+}
+
+# ── Logout ────────────────────────────────────────────────────────────────────
+
+api-test "logout emits Max-Age=0 for the same cookie" for SessionServer requires [cookieCap] {
+  let resp = post "/logout"
+  expect statusOk resp.status
+  case Dict.lookup "set-cookie" resp.headers of
+    Nothing -> expect False
+    Something line ->
+      expect String.contains line "__Host-session=;"
+      expect String.contains line "Max-Age=0"
+}
+
+# ── The accumulator is scoped per request ─────────────────────────────────────
+
+api-test "a cookie set by one request does not ride out on the next" for SessionServer requires [sessions] {
+  # Two dispatches in one test body, on the same thread. The first mints a
+  # session; the second is a handler that sets nothing and does not even hold
+  # cookieCap. If the Set-Cookie accumulator outlived the request — a plain
+  # module-level list, or a parameter whose default cell is mutable — the second
+  # response would carry the first one's cookie.
+  let first = post "/login" body { "user": "alice" }
+  expect statusOk first.status
+  # Asserted so this test cannot pass vacuously: if the first request stopped
+  # setting a cookie, the second half below would be trivially satisfied.
+  case responseCookie first of
+    Nothing -> expect False
+    Something pair -> expect True
+  let second = get "/ping"
+  expect statusOk second.status
+  case responseCookie second of
+    Nothing -> expect True
+    Something pair -> expect False
+}
+
+# ── Sliding renewal ───────────────────────────────────────────────────────────
+
+api-test "an authenticated request on a sliding route re-issues the cookie" for SessionServer requires [sessions] {
+  let loginResp = post "/login" body { "user": "alice" }
+  expect statusOk loginResp.status
+  case responseCookie loginResp of
+    Nothing -> expect False
+    Something session ->
+      let me = get "/whoami-sliding" cookie session
+      expect statusOk me.status
+      expect me.body.userId == "alice"
+      # The renewed cookie rides out on the SAME response the auth block ran for,
+      # which only works because the cookie scope wraps auth as well as the handler.
+      case responseCookie me of
+        Nothing -> expect False
+        Something renewed -> expect String.contains renewed "__Host-session="
+}
+
+api-test "the renewed cookie is itself a valid session" for SessionServer requires [sessions] {
+  # The point of sliding renewal: the replacement must work, or every renewal
+  # would silently log the user out one request later.
+  let loginResp = post "/login" body { "user": "alice" }
+  case responseCookie loginResp of
+    Nothing -> expect False
+    Something session ->
+      let first = get "/whoami-sliding" cookie session
+      expect statusOk first.status
+      case responseCookie first of
+        Nothing -> expect False
+        Something renewed ->
+          let second = get "/whoami" cookie renewed
+          expect statusOk second.status
+          expect second.body.userId == "alice"
+}
+
+api-test "a non-sliding route does NOT re-issue the cookie" for SessionServer requires [sessions] {
+  # Renewal is opt-in per auth block, not ambient: /whoami uses the plain
+  # sessionOwner, so nothing should be set on its response.
+  let loginResp = post "/login" body { "user": "alice" }
+  case responseCookie loginResp of
+    Nothing -> expect False
+    Something session ->
+      let me = get "/whoami" cookie session
+      expect statusOk me.status
+      case responseCookie me of
+        Nothing -> expect True
+        Something pair -> expect False
+}
+
+api-test "renewal cannot resurrect a cookie the server never signed" for SessionServer requires [sessions] {
+  # `check JWT.renew` routes its refusals to a 401 exactly as `check JWT.verify`
+  # does, so a forged cookie on a sliding route is refused, not renewed.
+  let me = get "/whoami-sliding" cookie "__Host-session=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImRlYWRiZWVmZGVhZGJlZWYifQ.eyJzdWIiOiJhdHRhY2tlciJ9.not-a-valid-signature"
+  expect me.status == 401
+  case responseCookie me of
+    Nothing -> expect True
+    Something pair -> expect False
+}
+
+# ── F2: an exception in an auth block is a sanitized 500, not a leak ───────────
+#
+# `run-auth` executes outside the handler body's exception sanitizer.  Before the
+# 2026-07-30 fix, a raise in an auth block reached the web server's default
+# responder — a 500 carrying the message, the stack trace and absolute source
+# paths.  This exercises the containment: the DELIBERATELY WRONG auth below sets a
+# cookie from an UNVERIFIED token (never do this — verify first), which raises on
+# a malformed cookie; the response must be a generic 500, never the raw error.
+
+auth leakyAuth(request: HttpRequest) -> user: String ::: Authenticated user
+  requires [sessions] =
+  case Http.sessionToken request of
+    Nothing -> fail 401 "no session"
+    Something token ->
+      # MISUSE on purpose: `token` is the raw cookie value, not verified.
+      # `Http.setSessionCookie` raises on a non-JWT value; the point of the test
+      # is that the raise is contained, not that this is good code.
+      let _ = Http.setSessionCookie token
+      ok "nobody" ::: Authenticated user
+
+handler leakyProbe(user: String ::: Authenticated user) -> WhoAmI =
+  WhoAmI { userId: user }
+
+api LeakyApi {
+  get "/leaky"
+    auth user: String ::: Authenticated user via leakyAuth
+    -> WhoAmI
+}
+
+server LeakyServer for LeakyApi {
+  leakyProbe = leakyProbe
+}
+
+api-test "an auth-block exception is a sanitized 500, not a leaked stack trace" for LeakyServer requires [sessions] {
+  # A malformed cookie makes the (misused) auth block raise.  The client must see
+  # a generic 500 with no exception text — not the message, the path, or a trace.
+  let resp = get "/leaky" cookie "__Host-session=notavalidjwt"
+  expect resp.status == 500
+  expect resp.body.error == "Internal server error"
+}

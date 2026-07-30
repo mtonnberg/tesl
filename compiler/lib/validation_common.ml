@@ -1220,11 +1220,24 @@ let stdlib_func_infos : (string * func_info) list =
        bound by the binding the caller writes, not named here. *)
     ("JWT.verify",
      { fi_name = "JWT.verify"; fi_kind = CheckKind;
-       fi_params = [ plain "token" "JwtToken"; plain "secret" "JwtSecret" ];
+       fi_params = [ plain "token" "JwtToken"; plain "secret" "Secret" ];
        fi_return = RetNamedPack {
          ty = tname "Dict";
          entity_proof = Some (PredApp { pred = "Authentic"; args = []; loc = g });
          other_proof = None; loc = g };
+       fi_loc = g });
+    (* JWT.renew: check-shaped, but it returns a plain JwtToken and mints NO
+       fact.  That is deliberate — the value it produces is a fresh credential on
+       its way OUT to the browser, not an inbound claim someone downstream should
+       be able to demand evidence about.  The fact lives on `JWT.verify`'s claims,
+       which is where "this was verified" is the useful thing to prove.  Being
+       CheckKind is what makes `check JWT.renew token key` legal and what routes
+       its three refusals (bad signature / expired / past the absolute lifetime)
+       to a 401 instead of letting a check-fail leak on as a value. *)
+    ("JWT.renew",
+     { fi_name = "JWT.renew"; fi_kind = CheckKind;
+       fi_params = [ plain "token" "JwtToken"; plain "secret" "Secret" ];
+       fi_return = RetPlain { ty = tname "JwtToken"; loc = g };
        fi_loc = g });
     (* String.trim / trimLeft / trimRight: fn returning String ? IsTrimmed *)
     ("String.trim",
@@ -1743,6 +1756,11 @@ let tesl_stdlib_cap_map : (string * (string * string list) list) list = [
      [emailCap]` and `capability X implies emailCap` were both rejected.  With
      this row, emailCap composes exactly like dbRead. *)
   "Tesl.Email",      [("emailCap", [])];
+  (* cookieCap: the right to write the session cookie on the response.  Named
+     after the emailCap precedent, and import-gated the same way — the capability
+     arrives only via `import Tesl.Http exposing [cookieCap]`, never from merely
+     having an `api`/`server` block.  Reading `request.cookies` stays ungated. *)
+  "Tesl.Http",       [("cookieCap", [])];
 ]
 
 (* Issue-#41 companion (cacheCap composability): the implicit capability a

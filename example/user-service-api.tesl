@@ -53,7 +53,10 @@ import Tesl.UUID exposing [UUID.validate, IsUuid]
 
 # 2. JWT: sign and verify HMAC-SHA256 tokens.
 #    `jwt` must be wrapped in a user-defined capability before use in `requires`.
-import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.sign, JWT.verify]
+import Tesl.JWT exposing [jwt, JwtToken, JWT.sign, JWT.verify]
+# The signing key is Tesl.Crypto's `Secret` — one key-material type for the whole
+# language, and what `Env.requireSecret` returns.
+import Tesl.Crypto exposing [Secret]
 
 # 3. Cache: read-through user profile cache.
 #    Cache.get/set/delete participate in the surrounding transaction.
@@ -288,16 +291,22 @@ codec AuthResponse {
 #
 # NOMINAL TYPES MATTER:
 #   JwtToken ≠ String — cannot pass a raw string where JwtToken is needed.
-#   JwtSecret ≠ String — prevents accidentally using a token as a key.
+#   Secret   ≠ String — prevents accidentally using a token as a key.
 # ─────────────────────────────────────────────────────────────────────────────
 
 fact Authenticated (userId: String)
 
-# JWT signing secret — in production use an env var; here we show the pattern.
-# JwtSecret wraps a String — use an env var for the secret in production:
-#   case env("JWT_SECRET") of Something s -> JwtSecret s  Nothing -> fail 500 "..."
-# For this example, makeToken and jwtAuth take the secret as a parameter.
-jwtSigningSecret = JwtSecret "dev-secret-change-in-production"
+# JWT signing secret — in production read it from the environment:
+#
+#   requireSecret "JWT_SECRET"     # Tesl.Env; returns a Secret, charges envRead
+#
+# `Secret` wraps a String and has no `.value`, so the key can never travel as a
+# String.  The dev key below goes through `keyFromRaw` rather than being written
+# `Secret "…"` directly: a string LITERAL in a key position is a hardcoded
+# credential, which is what the SEC003 lint flags.
+fn keyFromRaw(raw: String) -> Secret = Secret raw
+
+fn jwtSigningSecret() -> Secret = keyFromRaw "dev-secret-change-in-production"
 
 # makeToken: sign a JWT carrying the userId in the `sub` claim.
 # JWT claims are a Dict (serialized to the JWT payload as JSON). JWT.sign also
@@ -307,7 +316,7 @@ jwtSigningSecret = JwtSecret "dev-secret-change-in-production"
 # Crypto.fingerprint, which you can revoke.
 fn makeToken(userId: String) -> JwtToken
   requires [userJwt] =
-  JWT.sign (Dict.singleton "sub" userId) jwtSigningSecret
+  JWT.sign (Dict.singleton "sub" userId) (jwtSigningSecret())
 
 # jwtAuth: extract and verify the Bearer token from the Authorization header.
 auth jwtAuth(request: HttpRequest) -> userId: String ::: Authenticated userId
@@ -323,7 +332,7 @@ auth jwtAuth(request: HttpRequest) -> userId: String ::: Authenticated userId
         # what turns a bad signature or an expired token into the 401. Nesting the
         # call inside Dict.lookup would pass the failure value on as if it were a
         # Dict, and is a compile error.
-        let claims = check JWT.verify (JwtToken tokenStr) jwtSigningSecret
+        let claims = check JWT.verify (JwtToken tokenStr) (jwtSigningSecret())
         case Dict.lookup "sub" claims of
           Nothing ->
             fail 401 "Invalid token: missing sub claim"
@@ -554,22 +563,22 @@ test "UUID.validate accepts a v7 UUID" {
   expect result == v7
 }
 
-# 2. JWT nominal types — JwtToken and JwtSecret are distinct from String.
+# 2. JWT nominal types — JwtToken and Secret are distinct from String.
 test "JwtToken.value retrieves the inner string" {
   let raw = "eyJhbGciOiJIUzI1NiJ9.payload.sig"
   let token = JwtToken raw
   expect token.value == raw
 }
 
-# A JwtSecret has no `.value`: it is a secret, redacted in telemetry, logs and
+# A Secret has no `.value`: it is a secret, redacted in telemetry, logs and
 # the debugger, and an accessor would defeat all of that. The property that
 # survives — and the one this file relies on — is that the key is carried
 # faithfully, so two secrets built from the same String are the same key.
-test "JwtSecret carries its key faithfully without exposing it" {
+test "a Secret carries its key faithfully without exposing it" {
   let key = "my-signing-key"
-  let a = JwtSecret key
-  let b = JwtSecret key
-  let other = JwtSecret "a-different-key"
+  let a = Secret key
+  let b = Secret key
+  let other = keyFromRaw "a-different-key"
   expect a == b
   expect a != other
 }

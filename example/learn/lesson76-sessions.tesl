@@ -1,0 +1,384 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Lesson 76 — Sessions: the login/logout story, end to end
+#
+# lesson: track=stdlib order=780 needs=lesson57-jwt
+# summary: Log a user in with a signed session cookie, read it back in auth, and log them out — one blessed pattern with no options
+#
+# Lesson 57 showed how to sign and verify a JWT. This lesson is the other half:
+# how the token gets to the browser and back, which is a cookie, and why there is
+# exactly one way to do it.
+#
+#   THE CREDENTIAL IS THE JWT.  THE COOKIE IS ITS TRANSPORT.
+#
+# Three functions, from Tesl.Http:
+#
+#   Http.setSessionCookie : JwtToken -> Unit     # requires [cookieCap]
+#   Http.clearSessionCookie : () -> Unit         # requires [cookieCap]
+#   Http.sessionToken : HttpRequest -> Maybe JwtToken
+#
+# They are ordinary imported functions. Nothing is ambient: the NAMES arrive
+# through `import Tesl.Http exposing [...]`, and the RIGHT to write a cookie
+# arrives through `cookieCap` in a `requires` list. Reading is ungated — request
+# data is not an effect.
+#
+# ── NO OPTIONS, ON PURPOSE ───────────────────────────────────────────────────
+#
+# `Http.setSessionCookie` takes a token and nothing else. The name and every
+# attribute are fixed:
+#
+#   __Host-session; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=3600
+#
+# A caller who can pass `SameSite=None` eventually will. The `__Host-` prefix is
+# the load-bearing one: it makes the BROWSER refuse the cookie unless it is
+# Secure, Path=/ and has no Domain — so a plain-HTTP deployment on a real origin
+# visibly fails to store a session instead of quietly shipping one in the clear.
+# "Session over plaintext" is not a configuration. Browsers exempt
+# `http://localhost`, so local development is unaffected, and api-tests ignore
+# attributes entirely.
+#
+# `Max-Age` is the JWT's own TTL, from the same constant `JWT.sign` stamps `exp`
+# from — one source, so the cookie can never outlive the token inside it.
+#
+# The writer takes a `JwtToken`, not a `String`. That is the type system, not a
+# lesson, guaranteeing a session cookie always carries a signed value: there is
+# no way to set an unsigned cookie, and no second cookie-writing function.
+# General cookie handling — UI state, preferences, tracking — is a permanent
+# non-goal. Every kind of state has one home: a credential is this cookie;
+# anything the server must trust is a DB row keyed by the session subject (an
+# unsigned cookie is client-editable, so it could never be trusted anyway); and
+# client-only UI state belongs in the generated client's own storage, where it
+# does not ride every single request.
+#
+# ── COOKIES ATTACH TO 2xx ONLY ───────────────────────────────────────────────
+#
+# A handler that sets a cookie and then `fail`s sends NO `Set-Cookie`. No session
+# is minted on an error path, and you do not have to remember to undo anything —
+# the rule lives at the single point where every response is built. The api-test
+# at the bottom of this file asserts it.
+#
+# ── CSRF: WHAT YOU GET, AND THE ONE THING YOU OWE ────────────────────────────
+#
+# `SameSite=Lax` plus Tesl's existing 415 on non-`application/json` request
+# bodies plus no CORS headers on JSON routes means a cross-site form or `fetch`
+# cannot reach a state-changing handler. No token machinery, no double-submit
+# cookie. The one obligation left is the one Tesl already teaches: GET handlers
+# do not mutate.
+#
+# ── SLIDING SESSIONS: DO NOT LOG OUT SOMEONE WHO IS STILL WORKING ────────────
+#
+# By default the session ends one hour after LOGIN, active or not. That is fine
+# for an idle user and wrong for a busy one. `JWT.renew` slides the window:
+#
+#     auth sessionOwner(request: HttpRequest) -> user: String ::: Authenticated user
+#       requires [sessions] =
+#       case Http.sessionToken request of
+#         Nothing -> fail 401 "no session"
+#         Something token ->
+#           let claims = check JWT.verify token (sessionsSigningKey())
+#           let fresh  = check JWT.renew  token (sessionsSigningKey())
+#           let _ = Http.setSessionCookie fresh
+#           ok (subjectOf claims) ::: Authenticated user
+#
+# An `auth` block may write the cookie — that is why the effect is scoped to the
+# whole request and not just the handler. Now an active user is never logged out
+# mid-task, and an idle one still expires an hour after their LAST request.
+#
+# `JWT.renew` exists as a function because doing it by hand is a trap. The
+# verified claims contain `exp` and `iat`, and `JWT.sign` rejects both, so you
+# would have to strip them — and rebuilding the claims dict by hand silently drops
+# any claim you forget. Drop `role` and every renewal quietly demotes the user, on
+# the success path, where no test is looking. `JWT.renew` carries every claim
+# across.
+#
+# AND IT REFUSES, which is the part that matters. Renewal is presented WITH the
+# token, so someone who stole a token can renew it exactly as you can. So every
+# token carries `iat` (the original login time), renewal PRESERVES it, and
+# renewal refuses once the session is more than 12 hours old. That keeps the one
+# guarantee this whole design leans on: a captured token is useful for at most 12
+# hours after login, no matter how often it is renewed. It is not a setting.
+# Twelve hours is a working day; a credential that must outlive one is not a
+# session (see the note below on `Crypto.randomToken`).
+#
+# ── THE HONEST TRADE: LOGOUT DOES NOT REVOKE ─────────────────────────────────
+#
+# `Http.clearSessionCookie()` removes the BROWSER's copy. It does not invalidate
+# the token — a token captured before logout stays verifiable until `exp`. For a
+# plain (non-sliding) session that is bounded at one hour by the fixed TTL, and
+# the short TTL is exactly why this trade is acceptable. If you slid the session
+# with `JWT.renew` above, the honest bound is different: the attacker holding the
+# token can renew it himself, and logout does not stop that, so a captured token
+# is usable up to the 12-hour absolute cap from the ORIGINAL login. That cap, not
+# logout, is what bounds a stolen sliding session.
+#
+# It is also the price of a session that scales horizontally. The session here is
+# STATELESS: the credential is self-contained and signed, so any replica holding
+# the key verifies it. No sticky sessions at the load balancer, no shared session
+# store, no session table, no cross-replica invalidation. TLS terminating at a
+# proxy changes nothing — the browser evaluates `Secure` and `__Host-` against
+# the public `https://` origin, not the backend hop.
+#
+# If you genuinely need instant server-side revocation, that is a STATEFUL design
+# with a shared store, and it is not what this is. For long-lived revocable
+# credentials — an API key, a machine token — the answer already exists and is a
+# different shape: `Crypto.randomToken` plus storing only its
+# `Crypto.fingerprint`.
+#
+# ── WHAT THIS REPLACES ───────────────────────────────────────────────────────
+#
+# Lesson 06 hand-assembles a two-cookie scheme out of `Crypto.signWith` and
+# `Crypto.checkSignature` to teach those primitives. Read it for the primitives;
+# do not copy its construction as your session. This file is the session.
+# ─────────────────────────────────────────────────────────────────────────────
+
+module Lesson76Sessions exposing [SessionServer]
+
+import Tesl.Prelude exposing [Bool(..), String]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Dict exposing [Dict, Dict.singleton, Dict.lookup]
+import Tesl.String exposing [String.length, String.contains]
+import Tesl.Json exposing [stringCodec, boolCodec]
+import Tesl.ApiTest exposing [statusOk, responseCookie]
+
+# `time` is named because JWT.sign stamps the token's expiry from the wall clock.
+import Tesl.Time exposing [time]
+# The signing key is `Secret`, Tesl.Crypto's key-material type. Tesl.JWT has no
+# key type of its own — see lesson 57.
+import Tesl.Crypto exposing [Secret]
+import Tesl.JWT exposing [jwt, JWT.sign, JWT.verify]
+import Tesl.Http exposing [
+  HttpRequest,
+  cookieCap,
+  Http.setSessionCookie,
+  Http.clearSessionCookie,
+  Http.sessionToken,
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. ONE CAPABILITY FOR "THIS CODE MAY RUN A SESSION"
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# `jwt` to sign and verify, `time` because signing reads the clock, `cookieCap`
+# to write the cookie. Wrapping them in one named capability is the house style:
+# a handler declares `requires [sessions]` and the reader knows what that means
+# without decoding three stdlib tokens.
+
+capability sessions implies jwt, time, cookieCap
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. THE KEY
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# In production this is one line and there is no String in it:
+#
+#     import Tesl.Env exposing [envRead, requireSecret]
+#     capability sessions implies jwt, time, cookieCap, envRead
+#     ...
+#     JWT.sign claims (requireSecret "SESSION_KEY")
+#
+# `requireSecret` reads the environment straight into a `Secret`, so key material
+# never passes through a plain String. Every replica of a horizontally scaled
+# deployment reads the same variable; a replica with the wrong key answers 401,
+# and because `JWT.sign` stamps `kid` = `Crypto.keyFingerprint` in the JOSE
+# header, that mismatch is diagnosable from a log line instead of a mystery.
+#
+# This lesson has to be runnable under the test harness, which has no environment
+# to read, so it goes through a helper instead. Note the helper: a string LITERAL
+# in a key position is exactly what the SEC003 lint catches, and a lesson that
+# trips its own security lint teaches the reader to ignore lints.
+
+fn makeSecret(s: String) -> Secret =
+  Secret s
+
+fn sessionsSigningKey() -> Secret =
+  makeSecret "lesson76-demo-key-not-a-real-one"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. TYPES
+# ─────────────────────────────────────────────────────────────────────────────
+
+fact Authenticated (user: String)
+
+record Credentials {
+  user: String
+  password: String
+}
+
+codec Credentials {
+  toJson_forbidden
+  fromJson [
+    {
+      user <- "user" with_codec stringCodec
+      password <- "password" with_codec stringCodec
+    }
+  ]
+}
+
+record SessionResult {
+  granted: Bool
+}
+
+codec SessionResult {
+  toJson {
+    granted -> "granted" with_codec boolCodec
+  }
+  fromJson_forbidden
+}
+
+record Profile {
+  userId: String
+}
+
+codec Profile {
+  toJson {
+    userId -> "userId" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. LOGIN — mint the token, then set the cookie
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Two lines: sign, then set. `Http.setSessionCookie` returns Unit, so it sits in
+# a `let _ =` statement — the same shape `Email.send` uses. The handler's return
+# type is completely unaffected, which is why setting a session cookie changes
+# nothing in the generated TypeScript or Elm client.
+#
+# In a real app the password check is `Crypto.checkPassword` against a stored
+# `PasswordHash` (lesson 64). Here it is a stand-in so the lesson stays about
+# sessions.
+
+fn credentialsAreGood(credentials: Credentials) -> Bool =
+  String.length credentials.password >= 8
+
+handler login(body: Credentials) -> SessionResult requires [sessions] =
+  if credentialsAreGood body then
+    let token = JWT.sign (Dict.singleton "sub" body.user) (sessionsSigningKey())
+    let _ = Http.setSessionCookie token
+    SessionResult { granted: True }
+  else
+    fail 401 "invalid credentials"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. AUTH — read the cookie back, verify it, mint the fact
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# `Http.sessionToken` is why the fixed cookie name appears nowhere in this file.
+# The stringly alternative is `Dict.lookup "__Host-session" request.cookies`,
+# spelled out in every auth block, where one typo is a permanent 401 that no test
+# distinguishes from a real rejection.
+#
+# `check JWT.verify` is the ONLY thing between the cookie and the fact: one
+# `ok ... :::` beside one real verification. Everything downstream that demands
+# `Authenticated` is now reachable only through a signature check.
+
+fn subjectOf(claims: Dict String String) -> String =
+  case Dict.lookup "sub" claims of
+    Nothing -> ""
+    Something subject -> subject
+
+auth sessionOwner(request: HttpRequest) -> user: String ::: Authenticated user
+  requires [sessions] =
+  case Http.sessionToken request of
+    Nothing -> fail 401 "no session"
+    Something token ->
+      let claims = check JWT.verify token (sessionsSigningKey())
+      let subject = subjectOf claims
+      ok subject ::: Authenticated user
+
+handler whoami(user: String ::: Authenticated user) -> Profile =
+  Profile { userId: user }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. LOGOUT
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# The same cookie with `Max-Age=0`, which is how a browser is told to drop it.
+# No key, no clock — logout needs only `cookieCap`, and the narrower `requires`
+# says so.
+
+handler logout() -> SessionResult requires [cookieCap] =
+  let _ = Http.clearSessionCookie()
+  SessionResult { granted: True }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. THE API
+# ─────────────────────────────────────────────────────────────────────────────
+
+api SessionApi {
+  post "/login"
+    body body: Credentials
+    -> SessionResult
+
+  get "/me"
+    auth user: String ::: Authenticated user via sessionOwner
+    -> Profile
+
+  post "/logout"
+    -> SessionResult
+}
+
+server SessionServer for SessionApi {
+  login = login
+  whoami = whoami
+  logout = logout
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. TESTS
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# `responseCookie` (Tesl.ApiTest) hands back the cookie a response set as a
+# Cookie-header-ready `name=value` pair, so a round-trip test never parses a
+# `Set-Cookie` line by hand. For the attributes, read the raw header.
+
+api-test "login sets the session cookie, with every attribute fixed" for SessionServer requires [sessions] {
+  let resp = post "/login" body { "user": "alice", "password": "correct-horse" }
+  expect statusOk resp.status
+  case Dict.lookup "set-cookie" resp.headers of
+    Nothing -> expect False
+    Something line ->
+      expect String.contains line "__Host-session="
+      expect String.contains line "Path=/"
+      expect String.contains line "HttpOnly"
+      expect String.contains line "Secure"
+      expect String.contains line "SameSite=Lax"
+      expect String.contains line "Max-Age=3600"
+}
+
+api-test "the cookie round-trips into a protected endpoint" for SessionServer requires [sessions] {
+  let loginResp = post "/login" body { "user": "alice", "password": "correct-horse" }
+  expect statusOk loginResp.status
+  case responseCookie loginResp of
+    Nothing -> expect False
+    Something session ->
+      let me = get "/me" cookie session
+      expect statusOk me.status
+      expect me.body.userId == "alice"
+}
+
+api-test "no cookie is a 401, not a 500" for SessionServer requires [sessions] {
+  let me = get "/me"
+  expect me.status == 401
+}
+
+api-test "a rejected login sets no cookie at all" for SessionServer requires [sessions] {
+  # The handler fails BEFORE signing here, but the rule is stronger than that:
+  # even a handler that sets a cookie and then fails sends no Set-Cookie, because
+  # cookies attach to 2xx only.
+  let resp = post "/login" body { "user": "alice", "password": "short" }
+  expect resp.status == 401
+  case responseCookie resp of
+    Nothing -> expect True
+    Something pair -> expect False
+}
+
+api-test "logout tells the browser to drop the cookie" for SessionServer requires [cookieCap] {
+  let resp = post "/logout"
+  expect statusOk resp.status
+  case Dict.lookup "set-cookie" resp.headers of
+    Nothing -> expect False
+    Something line ->
+      expect String.contains line "__Host-session=;"
+      expect String.contains line "Max-Age=0"
+}

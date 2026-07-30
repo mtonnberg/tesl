@@ -34,9 +34,10 @@ curl -i localhost:8088/tasks/2
 
 ## Authentication: what the scaffold does and does not ship
 
-`app.tesl` ships the **verify** half of session auth: `JWT.verify` recomputes the
-HMAC-SHA256 signature of the `session` cookie and rejects anything this service
-did not mint. It deliberately does **not** ship the **mint** half, because who is
+`app.tesl` ships the **verify** half of session auth: `Http.sessionToken` reads the
+session cookie — one fixed name, `__Host-session`, held in the runtime so no call
+site re-spells it — and `JWT.verify` recomputes its HMAC-SHA256 signature and
+rejects anything this service did not mint. It deliberately does **not** ship the **mint** half, because who is
 allowed to sign in — and with which role — is the one thing no scaffold can guess.
 
 **A bare `cookies "user"` check is not authentication.** The client chooses its own
@@ -52,7 +53,7 @@ To get a usable session, add a login route that signs the claims:
 handler login(credentials: Credentials) -> String requires [readSessionCookie, envRead] =
   # ... verify the credentials however your app does it, THEN:
   (JWT.sign (Dict.fromList [Tuple2 "sub" credentials.user, Tuple2 "role" "user"])
-            (JwtSecret (requireEnv "SESSION_JWT_SECRET"))).value
+            (requireSecret "SESSION_JWT_SECRET")).value
 ```
 
 `JWT.sign` sets the expiry itself (one hour, epoch seconds per RFC 7519), so the
@@ -60,7 +61,9 @@ capability wrapping `jwt` must also imply `time` — signing reads the clock. Yo
 cannot choose the expiry, and an `exp` of your own in the claims is an error
 rather than an override.
 
-Hand the returned string back as the `session` cookie. `example/learn/lesson57-jwt.tesl`
+Set the cookie with `Http.setSessionCookie` (it takes the `JwtToken`, needs
+`cookieCap`, and fixes the name and every attribute); `example/learn/lesson76-sessions.tesl`
+in the Tesl repository is the login/logout story end to end. `example/learn/lesson57-jwt.tesl`
 in the Tesl repository walks through signing, verifying and the nominal types that
 keep a token and a key apart; `example/learn/lesson64-password-storage.tesl` covers
 checking the credentials themselves.

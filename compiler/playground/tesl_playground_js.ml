@@ -1,8 +1,9 @@
 (** Browser driver for the Tesl playground (js_of_ocaml).
 
-    ONE function is exported to JavaScript:
+    TWO functions are exported to JavaScript:
 
       teslCheck(source : string) : string   // a JSON document
+      teslExplain(code : string) : string   // `tesl explain <CODE>` prose, "" if none
 
     It is the browser equivalent of `tesl --check-json <file>`: it reuses
     {!Compile.check_source} + {!Linter.lint_file} (the same pair
@@ -150,6 +151,29 @@ let check (src : Js.js_string Js.t) : Js.js_string Js.t =
   Js.string json
 
 let () = Js.Unsafe.set Js.Unsafe.global "teslCheck" (Js.wrap_callback check)
+
+(* ── teslExplain: the same prose as `tesl explain <CODE>` ────────────────────
+   Every diagnostic carries a stable code, and {!Error_codes.explain} is the ONE
+   place its explanation lives — the CLI's `tesl explain` / `tesl help <CODE>`
+   render exactly this string.  Exporting it costs nothing: [error_codes.ml] is
+   already linked (the checker calls into it for titles and categories) and holds
+   its prose as plain string literals.
+
+   Called WITHOUT [~manual], deliberately.  The optional argument only swaps the
+   trailing "read more: tesl help manual <anchor>" line for a message-refined
+   anchor; resolving that anchor to actual prose is what would reach for
+   {!Embedded_docs} and triple the artifact (see the note at the bottom of this
+   file).  The default anchor is a literal string, so the line stays a pointer at
+   the CLI rather than becoming an in-page manual.
+
+   Unknown code -> "" (not an exception, not "null"): the page renders the
+   disclosure only when there is prose, and a missing code is not an error. *)
+let explain (code : Js.js_string Js.t) : Js.js_string Js.t =
+  match Error_codes.explain (Js.to_string code) with
+  | Some prose -> Js.string prose
+  | None -> Js.string ""
+
+let () = Js.Unsafe.set Js.Unsafe.global "teslExplain" (Js.wrap_callback explain)
 
 (* Deliberately NOT exported: anything that references [Embedded_docs] pulls the
    entire embedded manual into the bundle.  Measured, with the same docs
