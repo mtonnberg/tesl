@@ -897,3 +897,88 @@
   (check-true (check-fail? again) "past the cap, renewal is refused")
   (check-equal? (check-fail-status again) 401)
   (check-true (string-contains (check-fail-message again) "maximum lifetime")))
+
+;; ── Section 11: the `iat` SHAPE guard (adversarial review F5, 2026-07-30) ────
+;;
+;; `JWT.renew` used to accept any `real?` `iat`, which is exactly wide enough to
+;; break the absolute cap the claim exists to enforce.  Two ways in, and both
+;; survive renewal because `iat` is PRESERVED — one malformed claim yields an
+;; effectively immortal session:
+;;
+;;   * a huge float (`1e300`, `+inf.0`) makes `now - iat` hugely NEGATIVE, so the
+;;     `> … max` cap check passes forever;
+;;   * an `iat` dated in the FUTURE widens the cap by its distance ahead — the
+;;     token's measured age is smaller than its real age for its whole life.
+;;
+;; Neither is reachable while Tesl mints every token (`JWT.sign` stamps `iat`
+;; from the clock; the mint guard is total), which is why this was LOW.  Both
+;; become reachable the moment a Tesl verifier shares its HS256 secret with a
+;; foreign minter — the SSO case — and a fast-clocked replica reaches the second
+;; one under nothing worse than clock skew.  So the guard lands first:
+;; `exact-nonnegative-integer?`, plus a minute of skew tolerance and no more.
+
+(test-case "IAT-SHAPE: a huge float iat cannot be renewed — the immortal-session forge"
+  ;; The direct attack. `(- now 1e300)` is about -1e300, comfortably under the
+  ;; cap, so under the old `real?` test this renewed — and kept renewing, because
+  ;; the renewal preserves the same bogus `iat`.
+  (define token (forge-token (hasheq 'sub "u1" 'iat 1e300 'exp (+ (now-seconds) 600))
+                             "test-secret-key-for-testing"))
+  (check-false (check-fail? (with-jwt (lambda () (JWT.verify token test-secret))))
+               "the forged token must verify, or this test proves nothing")
+  (define result (with-jwt (lambda () (JWT.renew token test-secret))))
+  (check-true (check-fail? result) "a non-integer iat must not be renewable")
+  (check-equal? (check-fail-status result) 401)
+  (check-true (string-contains (check-fail-message result) "issued-at")))
+
+(test-case "IAT-SHAPE: an ordinary float iat is refused too — NumericDate is an integer"
+  ;; Not an attack by itself; it is the shape rule that makes the case above
+  ;; impossible to reach by argument about which floats are safe.
+  (define token (forge-token (hasheq 'sub "u1" 'iat (exact->inexact (- (now-seconds) 10))
+                                     'exp (+ (now-seconds) 600))
+                             "test-secret-key-for-testing"))
+  (define result (with-jwt (lambda () (JWT.renew token test-secret))))
+  (check-true (check-fail? result))
+  (check-equal? (check-fail-status result) 401))
+
+(test-case "IAT-SHAPE: a negative iat is refused"
+  ;; `now - iat` is LARGER than the true age here, so this one fails closed even
+  ;; without the guard — asserted so the shape rule is complete rather than
+  ;; incidentally correct.
+  (define token (forge-token (hasheq 'sub "u1" 'iat -1 'exp (+ (now-seconds) 600))
+                             "test-secret-key-for-testing"))
+  (define result (with-jwt (lambda () (JWT.renew token test-secret))))
+  (check-true (check-fail? result))
+  (check-equal? (check-fail-status result) 401))
+
+(test-case "IAT-SHAPE: an iat in the future cannot be renewed — the cap-widening forge"
+  ;; A day ahead buys a day of extra session on top of the 12h cap. Under the old
+  ;; test this renewed happily, and the future `iat` was carried across.
+  (define token (forge-token (hasheq 'sub "u1"
+                                     'iat (+ (now-seconds) 86400)
+                                     'exp (+ (now-seconds) 600))
+                             "test-secret-key-for-testing"))
+  (define result (with-jwt (lambda () (JWT.renew token test-secret))))
+  (check-true (check-fail? result) "a future-dated iat must not be renewable")
+  (check-equal? (check-fail-status result) 401)
+  (check-true (string-contains (check-fail-message result) "issued-at")))
+
+(test-case "IAT-SHAPE: a minute of clock skew is still tolerated"
+  ;; The bound from the other side. Two replicas behind an NTP-drifted clock must
+  ;; not log users out, so a slightly-ahead `iat` renews — the guard is a shape
+  ;; and skew rule, not a blanket refusal of anything not in the past.
+  (define token (forge-token (hasheq 'sub "u1"
+                                     'iat (+ (now-seconds) 5)
+                                     'exp (+ (now-seconds) 600))
+                             "test-secret-key-for-testing"))
+  (define result (with-jwt (lambda () (JWT.renew token test-secret))))
+  (check-false (check-fail? result) "a few seconds of skew must still renew")
+  (check-equal? (hash-ref (with-jwt (lambda () (JWT.verify result test-secret))) "sub") "u1"))
+
+(test-case "IAT-SHAPE: JWT.sign's own tokens are unaffected — the guard is not a regression"
+  (define t0 (with-jwt (lambda () (JWT.sign (hasheq 'sub "u1" 'role "admin") test-secret))))
+  (define t1 (with-jwt (lambda () (JWT.renew t0 test-secret))))
+  (check-false (check-fail? t1) "a Tesl-minted token must always renew")
+  (define c (with-jwt (lambda () (JWT.verify t1 test-secret))))
+  (check-true (exact-nonnegative-integer? (hash-ref c "iat"))
+              "and the iat Tesl stamps must satisfy the guard by construction")
+  (check-equal? (hash-ref c "role") "admin"))

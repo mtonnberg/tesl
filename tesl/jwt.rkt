@@ -208,6 +208,26 @@
 ;; rotation expressible later without a flag day.  Stamping is the part that is
 ;; expensive to retrofit; there is deliberately no accessor in v1.
 ;;
+;; WHAT `kid` PUBLISHES, STATED EXPLICITLY.  It is a 64-bit function OF THE
+;; SIGNING KEY, printed in every token, so "safe to log" is a trade and not a
+;; free property.  Two consequences, both accepted:
+;;
+;;   * an OFFLINE KEY-GUESS ORACLE that needs no signed payload.  Confirming a
+;;     candidate key costs ONE SHA-256 (cheaper than HMAC's two compressions),
+;;     against 64 bits of target.  It does not weaken a key with real entropy —
+;;     `Crypto.randomToken` gives 256 bits — but a GUESSABLE `SESSION_KEY`
+;;     ("dev", "changeme", a short passphrase) is now cheaper to confirm than it
+;;     was.  The mitigation is the one that already applied: the signing key is
+;;     `Secret`, generated, never typed by hand.
+;;   * KEY-SHARING LINKABILITY.  Two deployments emitting the same `kid`
+;;     demonstrably share a signing key, to anyone holding one token from each.
+;;     That is the same fact the identifier exists to make legible in one's own
+;;     logs; it is simply legible to an outside observer too.
+;;
+;; Both are marginal against the operational answer `kid` gives ("which key is
+;; this replica loaded with"), which is why the stamp stays — but neither is
+;; discovered from the words "safe to log", so they are written down here.
+;;
 ;; SAFE TODAY, IN BOTH DIRECTIONS.  `JWT.verify` never parses the header — it
 ;; recomputes the HMAC over `header.payload` VERBATIM — so a token minted before
 ;; this change (no `kid`), and a foreign token with any header at all, verify
@@ -285,6 +305,33 @@
 ;; PosixMillis, so the ms→s conversion lives here, at the JWT boundary, once.
 (define (jwt-now-seconds)
   (inexact->exact (floor (/ (current-inexact-milliseconds) 1000.0))))
+
+;; The only tolerance granted to an `iat` that is AHEAD of this machine's clock.
+;; One minute — enough for ordinary NTP drift between two replicas, small enough
+;; that it cannot meaningfully extend a session (see `usable-iat?`).
+(define jwt-max-clock-skew-seconds 60)
+
+;; Is a decoded `iat` usable as the anchor of the absolute-lifetime cap?
+;;
+;; Strict on BOTH sides, and both sides are load-bearing:
+;;
+;;   * EXACT NON-NEGATIVE INTEGER, not `real?`.  `iat` is a NumericDate; a float
+;;     is out of shape, and `1e300` (or `+inf.0`) makes `now - iat` hugely
+;;     NEGATIVE, so the cap check passes forever and the value is PRESERVED
+;;     across every renewal — an immortal session from one malformed claim.
+;;     Rejecting the shape is cheaper than reasoning about which floats are safe.
+;;   * NOT IN THE FUTURE beyond a minute of skew.  A future `iat` widens the cap
+;;     by exactly its distance ahead (`now - iat` is smaller than the session's
+;;     true age), so a fast-clocked replica — or a foreign minter sharing the
+;;     HS256 secret — silently buys the token extra lifetime past the 12h stop.
+;;
+;; Neither is attacker-reachable while Tesl mints every token: `JWT.sign` stamps
+;; `iat` from the clock and `reject-caller-supplied-iat!` is total.  Both become
+;; reachable the moment a Tesl verifier shares a signing key with a foreign
+;; minter, which is the point of the SSO work — hence the guard lands first.
+(define (usable-iat? iat now)
+  (and (exact-nonnegative-integer? iat)
+       (<= iat (+ now jwt-max-clock-skew-seconds))))
 
 ;; MINT-SIDE GUARD.  `exp` is set by `JWT.sign` from the clock, so a caller
 ;; supplying one is rejected outright rather than silently overwritten:
@@ -502,11 +549,13 @@
 ;;
 ;;   * the token does not verify, or has already expired — `JWT.verify`'s own
 ;;     rejection, returned unchanged;
-;;   * the token carries no readable `iat`, so its total age cannot be bounded.
-;;     FAIL CLOSED: an unbounded-age token must not be renewable.  This also
-;;     covers foreign tokens (`iat` is OPTIONAL per the RFC) and tokens Tesl
-;;     minted before `iat` was stamped — those simply run out at their own `exp`,
-;;     within the hour, so the case self-heals;
+;;   * the token carries no USABLE `iat` (absent, not an exact non-negative
+;;     integer, or dated in the future beyond a minute of clock skew — see
+;;     `usable-iat?`), so its total age cannot be bounded.  FAIL CLOSED: an
+;;     unbounded-age token must not be renewable.  This also covers foreign
+;;     tokens (`iat` is OPTIONAL per the RFC) and tokens Tesl minted before `iat`
+;;     was stamped — those simply run out at their own `exp`, within the hour, so
+;;     the case self-heals;
 ;;   * `now - iat` exceeds `jwt-absolute-max-seconds` — the session has lived its
 ;;     maximum and the user must authenticate again.
 ;;
@@ -529,8 +578,12 @@
      (define iat (hash-ref verified "iat" #f))
      (define now (jwt-now-seconds))
      (cond
-       [(not (real? iat))
-        (check-fail "Session cannot be renewed: no issued-at claim" 401 '())]
+       [(not (usable-iat? iat now))
+        ;; ONE message for every unusable `iat` — absent, wrong shape, or ahead
+        ;; of this clock.  Distinguishing them would tell a token holder how the
+        ;; claim was rejected without telling the legitimate user anything they
+        ;; can act on: in every case the answer is "log in again".
+        (check-fail "Session cannot be renewed: no usable issued-at claim" 401 '())]
        [(> (- now iat) jwt-absolute-max-seconds)
         (check-fail "Session has reached its maximum lifetime" 401 '())]
        [else

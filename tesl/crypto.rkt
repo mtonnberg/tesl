@@ -472,6 +472,13 @@
 ;; with `Crypto.fingerprint` of the same string, and truncated to 8 bytes so it
 ;; reads as an identifier rather than as something to compare cryptographically.
 ;; It is NOT proof of key possession.
+;;
+;; "Safe to log" is a TRADE, not a free property, and publishing it (Tesl stamps
+;; it as every JWT's `kid`) makes the trade explicit: this is a 64-bit function
+;; of the key, so it is an offline key-guess oracle costing one SHA-256 per
+;; candidate — irrelevant against a generated `Secret`, but it makes a GUESSABLE
+;; key cheaper to confirm — and two systems showing the same fingerprint
+;; demonstrably share a key.  See the `kid` note in `tesl/jwt.rkt`.
 (define key-fingerprint-label #"tesl-key-fingerprint-v1\0")
 
 (define (Crypto.keyFingerprint key)

@@ -76,6 +76,10 @@
  build-server-spec
  serve
  dispatch-request
+ ;; The SSE request path, exported for tests/sse-capabilities-test.rkt (F6/F9):
+ ;; `serve` reaches it through `serve/servlet`, which a unit test cannot drive
+ ;; without opening a port.  Not a Tesl-surface name.
+ handle-sse-request
  make-request
  request-header
  json-response
@@ -2031,8 +2035,23 @@
 ;; so it needs its own cookie scope and its own append — otherwise a cookie set
 ;; before subscribing would be silently dropped.  The scope wraps the auth call
 ;; below, which is the only thing on this path that could write one.
-(define (handle-sse-request route dsl-req)
-  (parameterize ([current-response-cookies '()])
+;;
+;; F6 (2026-07-30): `current-capabilities` is parameterized HERE too, not only in
+;; `dispatch-request`/`invoke-handler`.  Without it the SSE path ran with the
+;; EMPTY ambient set, so an `auth` block or a `capture` check carrying a
+;; `requires` row — the common case, e.g. a session lookup that reads the DB —
+;; failed `call-with-declared-capabilities`'s subset assertion with "Missing
+;; capabilities" and 500'd every subscribe.  It also made the cookie scope above
+;; unreachable, since `Http.setSessionCookie` in an SSE auth could never run.
+;; Fail-closed but wrong: the SSE auth call is the same authority as the HTTP
+;; one, so it gets the same set the HTTP path gets, from the same `serve` grant.
+;;
+;; The extent covers auth, the capture checks and the response construction — not
+;; the streaming loop, which outlives this call by design (the handler thread
+;; needs no Tesl capability; it only writes bytes to an already-open port).
+(define (handle-sse-request route dsl-req #:capabilities [capabilities '()])
+  (parameterize ([current-capabilities (expand-capabilities capabilities)]
+                 [current-response-cookies '()])
     (handle-sse-request* route dsl-req)))
 
 (define (handle-sse-request* route dsl-req)
@@ -2079,6 +2098,16 @@
 
   ;; Return an SSE streaming response via response/output
   (define handler (make-sse-connection-handler channel-s key-str))
+  ;; F9 (2026-07-30): a session cookie and `Access-Control-Allow-Origin: *` do
+  ;; not ship on the same response.  Not exploitable as it stood — a browser
+  ;; rejects a wildcard ACAO for a credentialed request outright, and
+  ;; `SameSite=Lax` withholds the cookie from an EventSource subresource anyway —
+  ;; but "here is your session" beside "any origin may read this" is a
+  ;; contradiction that only a browser's own rules were resolving.  The wildcard
+  ;; is the one that yields: a subscribe that set a cookie is credentialed, so it
+  ;; is same-origin traffic by construction and needs no CORS grant, while the
+  ;; ordinary uncredentialed subscribe keeps the header it always had.
+  (define cookie-headers (response-cookie-headers))
   (response/output
    #:code 200
    #:message #"OK"
@@ -2086,9 +2115,11 @@
    #:headers (append
               (list (make-header #"Cache-Control" #"no-cache")
                     (make-header #"Connection"    #"keep-alive")
-                    (make-header #"X-Accel-Buffering" #"no")
-                    (make-header #"Access-Control-Allow-Origin" #"*"))
-              (response-cookie-headers))
+                    (make-header #"X-Accel-Buffering" #"no"))
+              (if (null? cookie-headers)
+                  (list (make-header #"Access-Control-Allow-Origin" #"*"))
+                  '())
+              cookie-headers)
    handler))
 
 ;; ── serve ─────────────────────────────────────────────────────────────────────
@@ -2206,7 +2237,7 @@
                                        (dsl-response->http-response
                                         (error-response (check-fail-status f)
                                                         (check-fail-message f))))])
-          (handle-sse-request sse-match dsl-req))]
+          (handle-sse-request sse-match dsl-req #:capabilities capabilities))]
 
        ;; 2. Static files (exact match on disk)
        [(try-serve-static dsl-req) => (lambda (r) r)]

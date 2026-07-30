@@ -27,11 +27,18 @@ pkgs.mkShell {
     curl
     jq
     postgresql
+    libsodium   # dlopen()ed by tesl/crypto.rkt — see TESL_LIBSODIUM below
     tesl-cli
     ocamlPackages.ocaml
     ocamlPackages.dune_3
     ocamlPackages.findlib
     ocamlPackages.alcotest
+    # playground/build.sh: compiles the pure-OCaml compiler library to
+    # JavaScript for the browser playground.  ci.sh's playground-parity phase is
+    # soundness-required (a SKIP counts as a FAIL), so the legacy shell needs
+    # them for the same reason `nix develop` does.
+    ocamlPackages.js_of_ocaml
+    ocamlPackages.js_of_ocaml-compiler
     # Integration test mock servers
     mailhog   # SMTP mock for email integration tests (MailHog binary in PATH as MailHog)
     python3   # HTTP mock server for httpclient integration tests
@@ -40,6 +47,17 @@ pkgs.mkShell {
   shellHook = ''
     export TESL_REPO_ROOT="${toString ./.}"
     export TESL_OCAML_COMPILER="$TESL_REPO_ROOT/compiler/_build/default/bin/main.exe"
+
+    # Native library for Tesl.Crypto: `tesl/crypto.rkt` dlopen()s libsodium
+    # through `ffi/unsafe` and prefers this absolute store path, falling back to
+    # a plain `ffi-lib "libsodium"` lookup off the ambient loader path.  The
+    # flake's installed wrappers export it (flake.nix `libsodiumPath`); this dev
+    # shell did NOT, so `./ci.sh` inside it failed every crypto/JWT/session test
+    # with "libsodium is required by Tesl.Crypto and could not be loaded" — the
+    # dev shell could not run the gate the flake-installed CLI passes.  Same
+    # `:-` idiom as the wrappers, so an explicit TESL_LIBSODIUM still wins, and
+    # `extensions.sharedLibrary` covers .so (Linux) and .dylib (Darwin) alike.
+    export TESL_LIBSODIUM="''${TESL_LIBSODIUM:-${pkgs.libsodium}/lib/libsodium${pkgs.stdenv.hostPlatform.extensions.sharedLibrary}}"
 
     if [ -z "''${TESL_SKIP_AUTO_BUILD:-}" ] && [ ! -x "$TESL_OCAML_COMPILER" ]; then
       echo "[tesl] OCaml compiler not built; building compiler/bin/main.exe..."

@@ -990,12 +990,10 @@ function updateRunNote(text) {
 // is left, the client is empty and the tab would be noise.
 function substantive(kind, text) {
   if (!text) return false;
-  let t = text.replace(/\{-[\s\S]*?-\}/g, "")      // elm block comment (banner)
-              .replace(/#\|[\s\S]*?\|#/g, "");     // racket block comment
+  let t = text.replace(/\{-[\s\S]*?-\}/g, "");      // elm block comment (banner)
   const drop = {
     ts:  l => /^\s*(\/\/|\/\*|\*)/.test(l) || /^\s*import\b/.test(l) || /^\s*(export\s+)?type\s*\{/.test(l),
     elm: l => /^\s*--/.test(l) || /^\s*module\b/.test(l) || /^\s*import\b/.test(l),
-    racket: l => /^\s*;/.test(l) || /^\s*#lang\b/.test(l) || /^\s*\(require\b/.test(l)
   }[kind];
   return t.split("\n").some(l => l.trim() !== "" && !drop(l));
 }
@@ -1003,7 +1001,7 @@ function substantive(kind, text) {
 function renderTabs(result) {
   const arts = $("artifacts");
   arts.replaceChildren();
-  const kinds = [["racket", "Racket"], ["ts", "TypeScript"], ["elm", "Elm"]]
+  const kinds = [["ts", "TypeScript(Zod)"], ["elm", "Elm"]]
     .filter(([k]) => substantive(k, result[k]));
   if (!kinds.length) return;
 

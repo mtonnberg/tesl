@@ -1396,6 +1396,11 @@ else
         "tests/web-test.rkt"
         "tests/exists-test.rkt"
         "tests/jwt-test.rkt"
+        # SSE path capability wiring + the credentialed-response CORS rule
+        # (adversarial review F6/F9): an `auth`/`capture` with a `requires` row
+        # runs on a subscribe, and a Set-Cookie response drops the wildcard
+        # ACAO.  Drives handle-sse-request directly (serve needs a real port).
+        "tests/sse-capabilities-test.rkt"
         # Confused-deputy fix (F1): a tool body cannot write the OUTER request's
         # session cookie.  Drives the real agent loop with a scripted cookie-
         # setting tool inside a live response scope; not reachable from the .tesl
