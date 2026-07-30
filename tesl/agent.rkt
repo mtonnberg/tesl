@@ -122,6 +122,7 @@
                   metrics-active?
                   metric-histogram-record!
                   duration-histogram-boundaries)
+         (only-in "../dsl/traces.rkt" with-span span-mark-error!)
          json
          "agent-provider.rkt")
 
@@ -410,7 +411,20 @@
 ;;; Returns a normalized tool-result content block.
 (define (run-tool-call a tc)
   (define metric-start (and (metrics-active?) (current-inexact-milliseconds)))
-  (define block (run-tool-call/unmetered a tc))
+  ;; Traces: one INTERNAL span per tool execution, so an agent turn's trace shows
+  ;; which tool ran, in what order, and what each one cost — including the DB and
+  ;; outbound-HTTP spans the tool body produces, which nest underneath.  Tool ARGS
+  ;; are not attributes: they are model-authored user content.
+  (define block
+    (with-span (tool-span
+                (format "execute_tool ~a" (tool-call-name tc))
+                'internal
+                (list (cons 'gen_ai.operation.name "execute_tool")
+                      (cons 'gen_ai.tool.name (~a (tool-call-name tc)))))
+      (define b (run-tool-call/unmetered a tc))
+      (when (and tool-span (hash-ref b 'is-error #f))
+        (span-mark-error! tool-span "tool returned is_error"))
+      b))
   ;; Metrics: per-tool latency, labeled by tool name (bounded by the agent's
   ;; tool list) and outcome.  Every failure path in run-tool-call/unmetered is
   ;; already normalized to an is-error block, so outcome falls out of the block.

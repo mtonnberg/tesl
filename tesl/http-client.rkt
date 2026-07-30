@@ -19,7 +19,15 @@
                   ;; is taken back out, inside trusted code, on its way to the socket.
                   secret-value? newtype-value? newtype-value-value
                   secret-header-value secret-header-value?
-                  secret-header-value-plaintext)
+                  secret-header-value-plaintext
+                  record-value-fields)
+         ;; W3C trace context propagation + the Traces signal.  dsl/trace-context.rkt
+         ;; requires only racket/*, and dsl/traces.rkt reaches this file by
+         ;; `dynamic-require` (never a static require), so neither edge cycles.
+         (only-in "../dsl/trace-context.rkt"
+                  current-traceparent-header
+                  current-tracestate-header)
+         (only-in "../dsl/traces.rkt" with-span span-add-attributes! span-mark-error!)
          (only-in "../dsl/private/evidence.rkt" raw-value)
          ;; tesl/tuple.rkt requires only dsl/types.rkt + evidence.rkt, so there is
          ;; no cycle; `Tuple2` is the header pair every verb already accepts.
@@ -186,6 +194,51 @@
 (define (HttpClient.bearer secret)
   (make-secret-header 'HttpClient.bearer "Authorization" secret "Bearer "))
 
+;;; ── W3C trace context propagation (outbound) ─────────────────────────────────
+;;;
+;;; Before this, an outbound call sent ONLY caller-supplied headers, so calling
+;;; another service BROKE the trace: the downstream span had no parent and the
+;;; caller's trace showed a hole where our app was.  Every verb now carries
+;;; `traceparent` (and the inbound `tracestate`, unmodified) from the ambient
+;;; context — no new call sites, no signature change.
+;;;
+;;; A CALLER-SUPPLIED `traceparent` WINS and is never overwritten: a caller that
+;;; is deliberately continuing some other trace (a replay tool, a test) means it,
+;;; and silently rewriting a header the user set is the kind of surprise that
+;;; makes propagation untrustworthy.  When the caller supplies one, we add neither
+;;; header — `tracestate` belongs to the `traceparent` it travels with.
+;;;
+;;; The values are hex/ASCII-validated at their source (dsl/trace-context.rkt), and
+;;; `http-header-field-safe?` is applied again here so an injected header can never
+;;; be the thing that smuggles a CR/LF.  A value that fails is DROPPED, not
+;;; sanitized: an unparseable trace context is worse than none.
+(define (header-name-present? req-headers name)
+  (for/or ([h (in-list req-headers)])
+    (with-handlers ([(lambda (_) #t) (lambda (_) #f)])
+      (define-values (n _v) (http-header-pair 'HttpClient h))
+      (string-ci=? n name))))
+
+(define (headers-with-trace-context req-headers)
+  (define tp (current-traceparent-header))
+  (cond
+    [(or (not tp)
+         (not (http-header-field-safe? tp))
+         (header-name-present? req-headers "traceparent"))
+     req-headers]
+    [else
+     (define ts (current-tracestate-header))
+     (append req-headers
+             (list (list "traceparent" tp))
+             (if (and ts (http-header-field-safe? ts))
+                 (list (list "tracestate" ts))
+                 '()))]))
+
+;;; The response status of an HttpResponse record, for span attribution only.
+(define (http-response-status-for-span resp)
+  (with-handlers ([(lambda (_) #t) (lambda (_) #f)])
+    (define s (hash-ref (record-value-fields resp) 'status #f))
+    (and (exact-integer? s) s)))
+
 ;;; Convert raw response headers from http-sendrecv into a list of Tuple2 String String.
 ;;; Each element is a 2-element list matching Tesl's Tuple2 runtime representation.
 (define (parse-response-headers raw-headers)
@@ -333,6 +386,22 @@
 (define (do-http-request method url-str req-headers body-bytes)
   (require-capabilities! (list httpClient))
   (define-values (host port path-str use-ssl?) (parse-url-parts url-str))
+  ;; The CLIENT span brackets the whole call (stub or network), and the trace
+  ;; headers are injected INSIDE it, so the downstream service's span becomes a
+  ;; child of THIS span rather than of the request root.  Span name stays
+  ;; low-cardinality — method + host, never the path, which carries ids.
+  ;;
+  ;; `url.path` is the path WITHOUT the query string: a query can carry a token or
+  ;; an email, and a span is shared into dashboards far more freely than a
+  ;; short-retention log line.
+  (with-span (client-span
+              (format "~a ~a" method host)
+              'client
+              (list (cons 'http.request.method method)
+                    (cons 'server.address host)
+                    (cons 'server.port port)
+                    (cons 'url.path (car (regexp-split #rx"\\?" path-str)))))
+  (define traced-headers (headers-with-trace-context req-headers))
   ;; Convert Tesl header list (2-element lists) to list of byte strings.
   ;; Reject CR/LF in any header name or value: a `\r\n` would split the outbound
   ;; request and inject arbitrary headers / smuggle a second request.
@@ -343,21 +412,31 @@
                         field))
     s)
   (define header-bytes
-    (for/list ([h (in-list req-headers)])
+    (for/list ([h (in-list traced-headers)])
       (define-values (name-str val-str) (http-header-pair 'HttpClient h))
       (string->bytes/utf-8
        (string-append (no-crlf "header name" name-str) ": "
                       (no-crlf "header value" val-str)))))
   (define stub
-    (http-stub-answer 'unary method url-str req-headers
+    (http-stub-answer 'unary method url-str traced-headers
                       (and body-bytes (bytes->string/utf-8 body-bytes #\?))))
-  (cond
-    [stub
-     (HttpResponse #:status  (http-stub-status stub)
-                   #:body    (http-stub-body stub)
-                   #:headers (hash-ref stub 'headers '()))]
-    [else (do-http-request/network method url-str path-str host port use-ssl?
-                                   header-bytes body-bytes)]))
+  (define response
+    (cond
+      [stub
+       (HttpResponse #:status  (http-stub-status stub)
+                     #:body    (http-stub-body stub)
+                     #:headers (hash-ref stub 'headers '()))]
+      [else (do-http-request/network method url-str path-str host port use-ssl?
+                                     header-bytes body-bytes)]))
+  (when client-span
+    (define status (http-response-status-for-span response))
+    (when status
+      (span-add-attributes! client-span (list (cons 'http.response.status_code status)))
+      ;; A 4xx/5xx from the SERVER is an error of the call, per HTTP semconv for
+      ;; client spans (unlike a server span, where 4xx is the client's fault).
+      (when (>= status 400)
+        (span-mark-error! client-span (format "HTTP ~a" status)))))
+  response))
 
 (define (do-http-request/network method url-str path-str host port use-ssl?
                                  header-bytes body-bytes)
@@ -441,9 +520,16 @@
 ;;; unary call, but the response gets an IDLE budget
 ;;; (TESL_HTTP_STREAM_IDLE_TIMEOUT_MS) rather than a total one — a healthy SSE
 ;;; stream is long-lived by design, so only a GAP means the upstream is gone.
-(define (http-post-stream url-str req-headers body-str)
+(define (http-post-stream url-str req-headers-in body-str)
   (require-capabilities! (list httpClient))
   (define-values (host port path-str use-ssl?) (parse-url-parts url-str))
+  ;; Trace context propagates on the streaming path too (a provider call is a
+  ;; real outbound hop).  No CLIENT span here: this function RETURNS a port, so
+  ;; the work it brackets ends long after it returns — a span closed at return
+  ;; would report a duration of "time to first byte" while claiming to be the
+  ;; call.  The provider-level span in tesl/agent-provider.rkt covers the whole
+  ;; exchange instead.
+  (define req-headers (headers-with-trace-context req-headers-in))
   (define (no-crlf field s)
     (unless (http-header-field-safe? s)
       (raise-user-error 'HttpClient

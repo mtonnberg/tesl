@@ -116,8 +116,8 @@
     (cons "Int.lcm"             "fn Int.lcm(a: Int, b: Int) -> Int")
     (cons "Int.digits"          "fn Int.digits(n: Int) -> Int  — number of decimal digits in abs(n)")
     ;; Tesl.Telemetry
-    (cons "telemetry"           "fn telemetry(name: String) -> Unit\n\nSpecial form: `telemetry \"span.name\" { key = value }`. The brace fields become span attributes.")
-    (cons "initTelemetry"       "fn initTelemetry(service: String, endpoint: String, console: Bool) -> Unit\n\nCalled as `initTelemetry service \"my-service\" endpoint \"in-memory\" console True`. `service` and `endpoint` must be strings; `console` must be Bool.")
+    (cons "telemetry"           "fn telemetry(name: String) -> Unit\n\nSpecial form: `telemetry \"event.name\" { key = value }`. The brace fields become event attributes. This is an EVENT (a log record), not a span — inside a trace it is stamped with the enclosing trace.id/span.id automatically.")
+    (cons "initTelemetry"       "fn initTelemetry(service: String, endpoint: String, console: Bool) -> Unit\n\nCalled as `initTelemetry service \"my-service\" endpoint \"in-memory\" console True`. `service` and `endpoint` must be strings; `console` must be Bool.\n\nOptional keywords: `metrics Bool` (default: on with a real endpoint) and `metricsInterval Int` (ms); `traces Bool` (default False — per-request span volume) and `traceRatio Float` (0.0–1.0 head sampling, parent-respecting).")
     ;; Tesl.Float
     (cons "Float.parse"         "fn Float.parse(s: String) -> Maybe Float")
     (cons "Float.toString"      "fn Float.toString(f: Float) -> String")

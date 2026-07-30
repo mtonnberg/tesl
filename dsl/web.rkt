@@ -23,6 +23,17 @@
                   metrics-active?
                   metric-histogram-record!
                   duration-histogram-boundaries)
+         ;; W3C trace context + the Traces signal.  Both require nothing of ours
+         ;; that could cycle back (see their headers).
+         (only-in "trace-context.rkt"
+                  make-root-trace-ctx
+                  call-with-trace-ctx
+                  trace-sample-ratio)
+         (only-in "traces.rkt"
+                  with-server-span
+                  span-set-name!
+                  span-add-attributes!
+                  span-mark-error!)
          (only-in "../tesl/sse.rkt" make-sse-connection-handler)
          ;; The request-scoped Set-Cookie accumulator.  A deliberately tiny
          ;; module so that `tesl/http.rkt` (which WRITES it, gated by cookieCap)
@@ -1815,185 +1826,252 @@
   ;; new time series per request).
   (define matched-operation #f)
 
-  (define (route-context route auth-value)
-    (append
-     (list (cons 'request.id request-id)
-           (cons 'http.method (dsl-request-method req))
-           (cons 'http.path path-string)
-           (cons 'operation (route-spec-operation route)))
-     (if (and auth-value
-              (named-value? auth-value)
-              (hash? (named-value-value auth-value)))
-         (let ([user-id (hash-ref (named-value-value auth-value) 'id #f)])
-           (if user-id
-               (list (cons 'user.id user-id))
-               '()))
-         '())))
+  ;; ── W3C trace context (roadmap/completed/otel_trace_support.md, Phase A) ────
+  ;;
+  ;; An inbound `traceparent` is the caller's trace, and dropping it is what makes
+  ;; our app a HOLE in someone else's trace.  Parse it here — header names are
+  ;; already lowercased by `dsl-request-headers` — and carry it as the ambient
+  ;; context for the whole request, so every log record gains
+  ;; trace.id/span.id/trace.sampled (dsl/otel.rkt appends them on emit) and every
+  ;; outbound HTTP call continues the chain, with ZERO new call sites.
+  ;;
+  ;; `request.id` above is untouched: it appears in user-facing error output, it
+  ;; is not 16 hex bytes, and redefining it is an explicit non-goal.  A trace id
+  ;; is the machine join key; request.id stays the human handle.
+  (define trace-root
+    (make-root-trace-ctx #:traceparent (request-header req "traceparent")
+                         #:tracestate (request-header req "tracestate")
+                         #:ratio (trace-sample-ratio)))
 
-  ;; Shared server-side failure log, used by both the handler-body arms and the
-  ;; auth-path wrapper below, so an exception renders identically wherever it is
-  ;; thrown.
-  (define (log-route-failure route exn)
-    (fprintf (handler-error-port) "~a\n"
-             (tesl-render-handler-failure
-              (route-spec-operation route)
-              (dsl-request-method req)
-              path-string
-              (exn-message exn))))
+  (define (dispatch-body)
 
-  (define (invoke-handler route auth-value segment-values)
-    (parameterize ([current-capabilities checked-capabilities]
-                   [current-telemetry-events '()])
-      (call-with-telemetry-context
-       (route-context route auth-value)
-       (lambda ()
-         (with-handlers ([exn:fail:tesl:pool-timeout?
-                          (lambda (exn)
-                            ;; issue #31: a pool-lease timeout means the server is
-                            ;; SATURATED, not broken — every pooled DB connection
-                            ;; stayed busy for the whole bounded wait.  503 tells
-                            ;; clients and load balancers "retry later", unlike the
-                            ;; generic 500 below.  Same logging discipline: full
-                            ;; message server-side, echoed to the client only under
-                            ;; TESL_VERBOSE.
-                            (fprintf (handler-error-port) "~a\n"
-                                     (tesl-render-handler-failure
-                                      (route-spec-operation route)
-                                      (dsl-request-method req)
-                                      (string-append "/" (string-join (dsl-request-path req) "/"))
-                                      (exn-message exn)))
-                            (error-response 503
-                                            "Service unavailable: database connection pool exhausted"
-                                            #:details (if tesl-verbose?
-                                                          (list (exn-message exn))
-                                                          '())))]
-                         [exn:fail? (lambda (exn)
-                                      ;; A2: render the failure at the originating Tesl
-                                      ;; construct (the handler/operation), classified by
-                                      ;; category, instead of an opaque "handler error".
-                                      ;; Additive: the 500 response is unchanged; only the
-                                      ;; logged diagnostic is upgraded (richer under
-                                      ;; TESL_VERBOSE).
-                                      (fprintf (handler-error-port) "~a\n"
-                                               (tesl-render-handler-failure
-                                                (route-spec-operation route)
-                                                (dsl-request-method req)
-                                                (string-append "/" (string-join (dsl-request-path req) "/"))
-                                                (exn-message exn)))
-                                      ;; Do NOT leak the internal exception text to
-                                      ;; the client by default — it can expose DB/SQL
-                                      ;; fragments, file paths, internal identifiers.
-                                      ;; The full message is always logged server-side
-                                      ;; above; only echo it in the response under
-                                      ;; TESL_VERBOSE (a dev aid).
-                                      (error-response 500
-                                                      "Internal server error"
-                                                      #:details (if tesl-verbose?
-                                                                    (list (exn-message exn))
-                                                                    '())))])
-           (handler-result->response
-           route
-           (validate-handler-return
+    (define (route-context route auth-value)
+      (append
+       (list (cons 'request.id request-id)
+             (cons 'http.method (dsl-request-method req))
+             (cons 'http.path path-string)
+             (cons 'operation (route-spec-operation route)))
+       (if (and auth-value
+                (named-value? auth-value)
+                (hash? (named-value-value auth-value)))
+           (let ([user-id (hash-ref (named-value-value auth-value) 'id #f)])
+             (if user-id
+                 (list (cons 'user.id user-id))
+                 '()))
+           '())))
+
+    ;; Shared server-side failure log, used by both the handler-body arms and the
+    ;; auth-path wrapper below, so an exception renders identically wherever it is
+    ;; thrown.
+    (define (log-route-failure route exn)
+      (fprintf (handler-error-port) "~a\n"
+               (tesl-render-handler-failure
+                (route-spec-operation route)
+                (dsl-request-method req)
+                path-string
+                (exn-message exn))))
+
+    (define (invoke-handler route auth-value segment-values)
+      (parameterize ([current-capabilities checked-capabilities]
+                     [current-telemetry-events '()])
+        (call-with-telemetry-context
+         (route-context route auth-value)
+         (lambda ()
+           (with-handlers ([exn:fail:tesl:pool-timeout?
+                            (lambda (exn)
+                              ;; issue #31: a pool-lease timeout means the server is
+                              ;; SATURATED, not broken — every pooled DB connection
+                              ;; stayed busy for the whole bounded wait.  503 tells
+                              ;; clients and load balancers "retry later", unlike the
+                              ;; generic 500 below.  Same logging discipline: full
+                              ;; message server-side, echoed to the client only under
+                              ;; TESL_VERBOSE.
+                              (fprintf (handler-error-port) "~a\n"
+                                       (tesl-render-handler-failure
+                                        (route-spec-operation route)
+                                        (dsl-request-method req)
+                                        (string-append "/" (string-join (dsl-request-path req) "/"))
+                                        (exn-message exn)))
+                              (error-response 503
+                                              "Service unavailable: database connection pool exhausted"
+                                              #:details (if tesl-verbose?
+                                                            (list (exn-message exn))
+                                                            '())))]
+                           [exn:fail? (lambda (exn)
+                                        ;; A2: render the failure at the originating Tesl
+                                        ;; construct (the handler/operation), classified by
+                                        ;; category, instead of an opaque "handler error".
+                                        ;; Additive: the 500 response is unchanged; only the
+                                        ;; logged diagnostic is upgraded (richer under
+                                        ;; TESL_VERBOSE).
+                                        (fprintf (handler-error-port) "~a\n"
+                                                 (tesl-render-handler-failure
+                                                  (route-spec-operation route)
+                                                  (dsl-request-method req)
+                                                  (string-append "/" (string-join (dsl-request-path req) "/"))
+                                                  (exn-message exn)))
+                                        ;; Do NOT leak the internal exception text to
+                                        ;; the client by default — it can expose DB/SQL
+                                        ;; fragments, file paths, internal identifiers.
+                                        ;; The full message is always logged server-side
+                                        ;; above; only echo it in the response under
+                                        ;; TESL_VERBOSE (a dev aid).
+                                        (error-response 500
+                                                        "Internal server error"
+                                                        #:details (if tesl-verbose?
+                                                                      (list (exn-message exn))
+                                                                      '())))])
+             (handler-result->response
              route
-             auth-value
-             segment-values
-             (apply (route-spec-handler route)
-                    (append (if auth-value (list auth-value) '())
-                            segment-values)))))))))
+             (validate-handler-return
+               route
+               auth-value
+               segment-values
+               (apply (route-spec-handler route)
+                      (append (if auth-value (list auth-value) '())
+                              segment-values)))))))))
 
-  ;; Sentinel: no route in the table matched method+path.
-  ;; Distinct from a handler-level 404 so the SPA fallback only fires for
-  ;; genuine "no route" cases, not for handler-produced 404 errors.
-  ;; `current-response-cookies` is scoped ONCE per request, around the whole
-  ;; match/auth/handler sequence.  `Http.setSessionCookie` appends to it from
-  ;; arbitrary depth and `json-response` — reached inside this same extent —
-  ;; reads it back.  Scoping it here rather than inside `invoke-handler` means an
-  ;; `auth` block can also write (its cookie rides the handler's 2xx), and
-  ;; scoping it per request at all is what stops a cookie set by one request from
-  ;; leaking onto the next one served by the same thread.  The `'route-not-found`
-  ;; 404 built below is deliberately OUTSIDE the extent: nothing set a cookie
-  ;; there, and `response-cookie-headers` returns '() with no live scope.
-  (define response
-    (parameterize ([current-capabilities checked-capabilities]
-                   [current-response-cookies '()])
-      (let loop ([routes (server-spec-routes server)])
-        (cond
-          [(null? routes)
-           'route-not-found]
-          [else
-           (define route (car routes))
-           (if (not (string=? (normalize-method (route-spec-method route))
-                              (dsl-request-method req)))
-               (loop (cdr routes))
-               ;; Check path segments BEFORE running auth so a non-matching
-               ;; path does not consume the request with a premature auth failure.
-               (let ([segment-values (resolve-segments (route-spec-segments route) req)])
-                 (cond
-                   [(eq? segment-values no-match)
-                    (loop (cdr routes))]
-                   [(check-fail? segment-values)
-                    (set! matched-operation (route-spec-operation route))
-                    (handler-result->response route segment-values)]
-                   [else
-                    (set! matched-operation (route-spec-operation route))
-                    ;; F2 (2026-07-30): `run-auth` runs OUTSIDE `invoke-handler`'s
-                    ;; `with-handlers`, so an exception thrown in an `auth` block
-                    ;; used to escape to `serve/servlet`'s default responder — a
-                    ;; 500 carrying the message, the full stack trace, and
-                    ;; absolute source paths, contradicting the no-leak policy the
-                    ;; handler body already follows.  Contain it here with the
-                    ;; SAME discipline (full detail logged server-side; only a
-                    ;; sanitized message to the client under TESL_VERBOSE), and
-                    ;; the pool-timeout→503 parity too, since an auth block reads
-                    ;; the DB.
-                    (with-handlers
-                      ([exn:fail:tesl:pool-timeout?
-                        (lambda (exn)
-                          (log-route-failure route exn)
-                          (error-response
-                           503 "Service unavailable: database connection pool exhausted"
-                           #:details (if tesl-verbose? (list (exn-message exn)) '())))]
-                       [exn:fail?
-                        (lambda (exn)
-                          (log-route-failure route exn)
-                          (error-response
-                           500 "Internal server error"
-                           #:details (if tesl-verbose? (list (exn-message exn)) '())))])
-                      (let ([auth-value (and (route-spec-auth route)
-                                            (run-auth (route-spec-auth route) req))])
-                        (cond
-                          [(check-fail? auth-value)
-                           (handler-result->response route auth-value)]
-                          [else
-                           (invoke-handler route auth-value segment-values)])))])))]))))
-  (define final-response
-    (if (eq? response 'route-not-found)
-        (error-response 404 "Route not found")
-        response))
-  (when (tesl-log-active?)
-    (define elapsed-ms
-      (inexact->exact (round (- (current-inexact-milliseconds) start-ms))))
-    (tesl-log-http-response! (dsl-request-method req) path-string
-                               (dsl-response-status final-response) elapsed-ms))
-  ;; Metrics: matched requests only.  The 'route-not-found sentinel must NOT be
-  ;; recorded here as a 404 — `serve` may resolve it to a 200 SPA index-html
-  ;; fallback (the invariant documented below), and recording early would show
-  ;; a permanent 404 storm for every healthy SPA page load.  serve records the
-  ;; sentinel's RESOLVED outcome itself.
-  (when (and (metrics-active?) start-ms (not (eq? response 'route-not-found)))
-    (metric-histogram-record!
-     "http.server.request.duration"
-     (/ (- (current-inexact-milliseconds) start-ms) 1000.0)
-     (list (cons "http.request.method" (dsl-request-method req))
-           (cons "http.response.status_code"
-                 (number->string (dsl-response-status final-response)))
-           (cons "tesl.operation" (or matched-operation "unmatched")))
-     #:unit "s"
-     #:boundaries duration-histogram-boundaries))
-  ;; Return the sentinel as-is so `serve` can distinguish "no route" from
-  ;; a handler-level 404 (e.g. "user not found").  serve converts it to a
-  ;; real response or the SPA fallback.
-  response)
+    ;; Sentinel: no route in the table matched method+path.
+    ;; Distinct from a handler-level 404 so the SPA fallback only fires for
+    ;; genuine "no route" cases, not for handler-produced 404 errors.
+    ;; `current-response-cookies` is scoped ONCE per request, around the whole
+    ;; match/auth/handler sequence.  `Http.setSessionCookie` appends to it from
+    ;; arbitrary depth and `json-response` — reached inside this same extent —
+    ;; reads it back.  Scoping it here rather than inside `invoke-handler` means an
+    ;; `auth` block can also write (its cookie rides the handler's 2xx), and
+    ;; scoping it per request at all is what stops a cookie set by one request from
+    ;; leaking onto the next one served by the same thread.  The `'route-not-found`
+    ;; 404 built below is deliberately OUTSIDE the extent: nothing set a cookie
+    ;; there, and `response-cookie-headers` returns '() with no live scope.
+    ;;
+    ;; The SERVER span (Phase B).  It brackets exactly what the request-duration
+    ;; histogram times, so every child span — one per SQL statement, per outbound
+    ;; call, per LLM call, per agent tool — hangs off it and the N+1 question
+    ;; (which of the 40 queries in this slow request, and what called it) becomes
+    ;; readable.  With `traces False` (the default) the macro reads one flag and
+    ;; evaluates neither the name nor the attributes.
+    ;;
+    ;; The span NAME must stay low-cardinality (it is a grouping key in every
+    ;; trace UI), so it starts as the bare method and is refined to
+    ;; "METHOD operation" once the match loop knows the operation — never the raw
+    ;; path, which carries ids.  The raw path goes on an ATTRIBUTE, where high
+    ;; cardinality is free.
+    (define response
+      (with-server-span (server-span
+                         (dsl-request-method req)
+                         'server
+                         (list (cons 'http.request.method (dsl-request-method req))
+                               (cons 'url.path path-string)
+                               (cons 'tesl.request.id request-id)))
+        (define response-value
+          (parameterize ([current-capabilities checked-capabilities]
+                         [current-response-cookies '()])
+            (let loop ([routes (server-spec-routes server)])
+              (cond
+                [(null? routes)
+                 'route-not-found]
+                [else
+                 (define route (car routes))
+                 (if (not (string=? (normalize-method (route-spec-method route))
+                                    (dsl-request-method req)))
+                     (loop (cdr routes))
+                     ;; Check path segments BEFORE running auth so a non-matching
+                     ;; path does not consume the request with a premature auth failure.
+                     (let ([segment-values (resolve-segments (route-spec-segments route) req)])
+                       (cond
+                         [(eq? segment-values no-match)
+                          (loop (cdr routes))]
+                         [(check-fail? segment-values)
+                          (set! matched-operation (route-spec-operation route))
+                          (handler-result->response route segment-values)]
+                         [else
+                          (set! matched-operation (route-spec-operation route))
+                          ;; F2 (2026-07-30): `run-auth` runs OUTSIDE `invoke-handler`'s
+                          ;; `with-handlers`, so an exception thrown in an `auth` block
+                          ;; used to escape to `serve/servlet`'s default responder — a
+                          ;; 500 carrying the message, the full stack trace, and
+                          ;; absolute source paths, contradicting the no-leak policy the
+                          ;; handler body already follows.  Contain it here with the
+                          ;; SAME discipline (full detail logged server-side; only a
+                          ;; sanitized message to the client under TESL_VERBOSE), and
+                          ;; the pool-timeout→503 parity too, since an auth block reads
+                          ;; the DB.
+                          (with-handlers
+                            ([exn:fail:tesl:pool-timeout?
+                              (lambda (exn)
+                                (log-route-failure route exn)
+                                (error-response
+                                 503 "Service unavailable: database connection pool exhausted"
+                                 #:details (if tesl-verbose? (list (exn-message exn)) '())))]
+                             [exn:fail?
+                              (lambda (exn)
+                                (log-route-failure route exn)
+                                (error-response
+                                 500 "Internal server error"
+                                 #:details (if tesl-verbose? (list (exn-message exn)) '())))])
+                            (let ([auth-value (and (route-spec-auth route)
+                                                  (run-auth (route-spec-auth route) req))])
+                              (cond
+                                [(check-fail? auth-value)
+                                 (handler-result->response route auth-value)]
+                                [else
+                                 (invoke-handler route auth-value segment-values)])))])))]))))
+      ;; Refine the span now that the match loop has run.  A 5xx marks the span
+      ;; ERROR — the handler boundary already turned the exception into a
+      ;; response, so this is the only place the failure is still visible.
+      (when server-span
+        (span-set-name! server-span
+                        (if matched-operation
+                            (format "~a ~a" (dsl-request-method req) matched-operation)
+                            (dsl-request-method req)))
+        (span-add-attributes!
+         server-span
+         (append (list (cons 'tesl.operation
+                             (if matched-operation (~a matched-operation) "unmatched")))
+                 (if (dsl-response? response-value)
+                     (list (cons 'http.response.status_code
+                                 (dsl-response-status response-value)))
+                     '())))
+        (when (and (dsl-response? response-value)
+                   (>= (dsl-response-status response-value) 500))
+          (span-mark-error! server-span
+                            (format "HTTP ~a" (dsl-response-status response-value)))))
+      response-value))
+    (define final-response
+      (if (eq? response 'route-not-found)
+          (error-response 404 "Route not found")
+          response))
+    (when (tesl-log-active?)
+      (define elapsed-ms
+        (inexact->exact (round (- (current-inexact-milliseconds) start-ms))))
+      (tesl-log-http-response! (dsl-request-method req) path-string
+                                 (dsl-response-status final-response) elapsed-ms))
+    ;; Metrics: matched requests only.  The 'route-not-found sentinel must NOT be
+    ;; recorded here as a 404 — `serve` may resolve it to a 200 SPA index-html
+    ;; fallback (the invariant documented below), and recording early would show
+    ;; a permanent 404 storm for every healthy SPA page load.  serve records the
+    ;; sentinel's RESOLVED outcome itself.
+    (when (and (metrics-active?) start-ms (not (eq? response 'route-not-found)))
+      (metric-histogram-record!
+       "http.server.request.duration"
+       (/ (- (current-inexact-milliseconds) start-ms) 1000.0)
+       (list (cons "http.request.method" (dsl-request-method req))
+             (cons "http.response.status_code"
+                   (number->string (dsl-response-status final-response)))
+             (cons "tesl.operation" (or matched-operation "unmatched")))
+       #:unit "s"
+       #:boundaries duration-histogram-boundaries))
+    ;; Return the sentinel as-is so `serve` can distinguish "no route" from
+    ;; a handler-level 404 (e.g. "user not found").  serve converts it to a
+    ;; real response or the SPA fallback.
+    response)
+
+  ;; The whole request — match, auth, handler, response log, metrics — runs under
+  ;; the ambient trace context.  `parameterize` (never an imperative set) is what
+  ;; keeps a keep-alive connection thread from carrying one request's trace into
+  ;; the next, and what makes the context inherited by any thread the handler
+  ;; spawns.
+  (call-with-trace-ctx trace-root dispatch-body))
 
 ;; ── SSE route matching ───────────────────────────────────────────────────────
 ;;

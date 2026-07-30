@@ -3067,7 +3067,8 @@ let rec infer_expr ctx (e : expr) : ty =
            clear message instead of letting the generated module fail with an
            opaque keyword-arity error at startup. *)
         let is_init_telemetry_kw = function
-          | "service" | "endpoint" | "console" | "metrics" | "metricsInterval" -> true
+          | "service" | "endpoint" | "console" | "metrics" | "metricsInterval"
+          | "traces" | "traceRatio" -> true
           | _ -> false
         in
         (* Mirror the emitter's re-fold (emit_racket.ml, bug #19): the keyword
@@ -3095,8 +3096,8 @@ let rec infer_expr ctx (e : expr) : ty =
                  (Printf.sprintf
                     "initTelemetry keyword `%s` has no value. If a binding named \
                      like an initTelemetry keyword (service/endpoint/console/\
-                     metrics/metricsInterval) is being passed as a value, rename \
-                     the binding." kw)
+                     metrics/metricsInterval/traces/traceRatio) is being passed \
+                     as a value, rename the binding." kw)
              | fn_tok :: arg_toks ->
                let value =
                  List.fold_left
@@ -3105,7 +3106,9 @@ let rec infer_expr ctx (e : expr) : ty =
                in
                let expected_ty = match kw with
                  | "service" | "endpoint" -> t_string
-                 | "console" | "metrics" -> t_bool
+                 | "console" | "metrics" | "traces" -> t_bool
+                 (* head-sampling ratio: 0.0–1.0 *)
+                 | "traceRatio" -> t_float
                  | _ -> t_int
                in
                let value_ty = infer_expr ctx value in
@@ -3116,7 +3119,8 @@ let rec infer_expr ctx (e : expr) : ty =
           | value :: _ ->
             add_error ctx (expr_loc value)
               "initTelemetry expects keyword/value pairs: each of \
-               service/endpoint/console/metrics/metricsInterval followed by its value"
+               service/endpoint/console/metrics/metricsInterval/traces/traceRatio \
+               followed by its value"
         in
         infer_kw_args args;
         t_unit

@@ -750,6 +750,14 @@ fn completeSignup(plan: String) -> String requires [] =
   "welcome"
 ```
 
+Traces need even less from you: an inbound `traceparent` header is picked up with no configuration,
+so every log line is joinable to the caller's trace and every outbound call continues it. Add
+`traces True` (plus an optional `traceRatio`) to `initTelemetry` and you also get a per-request span
+tree — one span per SQL statement, outbound call, queue job, LLM call and agent tool — which is the
+one thing logs and metrics cannot answer: *which* of the 40 queries in this slow request, and what
+called it. It defaults off because that volume is per-request. There is no `span` statement to learn
+(`example/learn/lesson77-traces.tesl`).
+
 ---
 
 ## Runtime cost

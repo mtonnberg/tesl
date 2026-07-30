@@ -39,6 +39,7 @@
          (only-in "../dsl/metrics.rkt"
                   metrics-active?
                   metric-counter-add!)
+         (only-in "../dsl/traces.rkt" with-span span-add-attributes!)
          (only-in "../dsl/private/domain-registry.rkt"
                   domain-registry-add!
                   domain-registry-of-kind
@@ -212,12 +213,24 @@
   (start-cache-sweeper!)   ; idempotent — guarded by sweeper-started? flag
   (define raw-key (if (named-value? key) (named-value-value key) key))
   (define str-key (~a raw-key))
+  ;; Traces: a cache lookup is a real latency contributor (a PG-backed cache is a
+  ;; round trip), and hit/miss on the span is what explains why one request in the
+  ;; trace was slow and its neighbour was not.  The KEY is never an attribute — it
+  ;; is caller data and often an id.
   (define result
-    (cond
-      [(pg-active?)
-       (pg-get! (pg-conn) (pg-schema) str-key (cache-spec-codec cache-s))]
-      [else
-       (mem-get! (cache-spec-store cache-s) str-key (cache-spec-codec cache-s))]))
+    (with-span (cache-span
+                (format "cache get ~a" (cache-spec-name cache-s))
+                'internal
+                (list (cons 'tesl.cache (~a (cache-spec-name cache-s)))))
+      (define r
+        (cond
+          [(pg-active?)
+           (pg-get! (pg-conn) (pg-schema) str-key (cache-spec-codec cache-s))]
+          [else
+           (mem-get! (cache-spec-store cache-s) str-key (cache-spec-codec cache-s))]))
+      (span-add-attributes! cache-span
+                            (list (cons 'tesl.result (if (Nothing? r) "miss" "hit"))))
+      r))
   ;; Metrics: hit/miss falls out of the Maybe — Nothing covers absent, expired
   ;; AND undeserializable entries, which is exactly what "miss" should mean for
   ;; a hit-rate.  Labeled by cache name (bounded by define-cache decls), never
@@ -233,11 +246,15 @@
   (define raw-key (if (named-value? key) (named-value-value key) key))
   (define str-key (~a raw-key))
   (define effective-ttl (or ttl (cache-spec-default-ttl cache-s)))
-  (cond
-    [(pg-active?)
-     (pg-set! (pg-conn) (pg-schema) str-key value effective-ttl)]
-    [else
-     (mem-set! (cache-spec-store cache-s) str-key value effective-ttl)]))
+  (with-span (cache-span
+              (format "cache set ~a" (cache-spec-name cache-s))
+              'internal
+              (list (cons 'tesl.cache (~a (cache-spec-name cache-s)))))
+    (cond
+      [(pg-active?)
+       (pg-set! (pg-conn) (pg-schema) str-key value effective-ttl)]
+      [else
+       (mem-set! (cache-spec-store cache-s) str-key value effective-ttl)])))
 
 (define (cache-delete! cache-s key)
   (cache-check-capability! cache-s)

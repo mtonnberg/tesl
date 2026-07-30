@@ -13,13 +13,22 @@
                   set-metrics-enabled! reset-metrics!
                   start-metrics-exporter! stop-metrics-exporter!
                   metrics-active? metric-counter-add!)
-         ;; `secret` redaction.  dsl/types.rkt sits BELOW this module (it requires
-         ;; only dsl/private/*), so this edge introduces no cycle either.
-         ;; Telemetry is a RENDERING sink: a secret must never reach a collector.
-         (only-in "types.rkt"
-                  secret-value? secret-header-value? secret-redaction-text
-                  current-redact-secrets? runtime-value->jsexpr
-                  record-value? adt-value? newtype-value?)
+         ;; Traces signal (roadmap/completed/otel_trace_support.md).  Phase A —
+         ;; trace-context.rkt — is what stamps trace.id/span.id onto every event
+         ;; below; Phase B — traces.rkt — is span export, off unless asked for.
+         ;; Neither requires anything of ours that could cycle back.
+         (only-in "trace-context.rkt"
+                  trace-context-attributes set-trace-sample-ratio! current-trace-ctx)
+         (only-in "traces.rkt"
+                  set-traces-enabled! reset-traces!
+                  start-traces-exporter! stop-traces-exporter!)
+         ;; The ONE OTLP attribute-value renderer (redaction included), shared
+         ;; with dsl/traces.rkt so spans cannot become a sink that skips it.
+         (only-in "otlp-value.rkt"
+                  telemetry-key->json-key
+                  telemetry-value->jsexpr
+                  telemetry-value->otlp-any-value
+                  attributes->otlp-key-values)
          (for-syntax racket/base syntax/parse))
 
 (provide
@@ -54,47 +63,10 @@
 (define current-telemetry-consumers (make-parameter '()))
 (define global-telemetry-log (box '()))
 
-(define (telemetry-key->json-key key)
-  (cond
-    [(symbol? key) key]
-    [(keyword? key) (string->symbol (keyword->string key))]
-    [(bytes? key) (string->symbol (bytes->string/utf-8 key))]
-    [(string? key) (string->symbol key)]
-    [else (string->symbol (~a key))]))
-
-(define (telemetry-value->jsexpr value)
-  (cond
-    ;; ── Redaction, FIRST ──────────────────────────────────────────────────
-    ;; Telemetry is a rendering sink, and this walk is structural (hash / list /
-    ;; vector recurse through this same function), so asking the question here —
-    ;; at every node — is what makes a secret nested in a record inside a List
-    ;; inside a Maybe redact while its siblings render normally.
-    [(secret-value? value) secret-redaction-text]
-    [(secret-header-value? value) secret-redaction-text]
-    [(hash? value)
-     (for/hash ([(key item) (in-hash value)])
-       (values (telemetry-key->json-key key)
-               (telemetry-value->jsexpr item)))]
-    [(list? value)
-     (map telemetry-value->jsexpr value)]
-    [(vector? value)
-     (list->vector (map telemetry-value->jsexpr (vector->list value)))]
-    [(symbol? value)
-     (symbol->string value)]
-    [(keyword? value)
-     (keyword->string value)]
-    [(bytes? value)
-     (bytes->string/utf-8 value)]
-    ;; Tesl VALUE STRUCTS (record / ADT / newtype, and everything reachable from
-    ;; them) had no arm here and fell through `[else value]`, so a record-valued
-    ;; telemetry attribute produced a raw struct — not a jsexpr at all.  Delegate
-    ;; to the ONE total structural walk, with redaction switched ON for this
-    ;; sink; the parameterize covers every node it reaches, including the
-    ;; siblings of a redacted secret, which still render normally.
-    [(or (record-value? value) (adt-value? value) (newtype-value? value))
-     (parameterize ([current-redact-secrets? #t])
-       (runtime-value->jsexpr value))]
-    [else value]))
+;; telemetry-key->json-key / telemetry-value->jsexpr / the OTLP AnyValue mapping
+;; now live in dsl/otlp-value.rkt — ONE renderer for all three signals, so the
+;; Traces sink cannot skip the `secret` redaction this walk performs.  They are
+;; re-provided from here under their historical names.
 
 (define (telemetry-event->jsexpr event)
   (hash 'service (telemetry-event-service-name event)
@@ -114,9 +86,11 @@
 ;; ── OTLP/HTTP+JSON Logs exporter ──────────────────────────────────────────────
 ;;
 ;; A real telemetry exporter that ships events to a configured collector over
-;; OTLP/HTTP+JSON, Logs signal only.  Spans/metrics/gRPC/protobuf are non-goals
-;; for this cut (the flat event model has no start/end pair, so Logs is the
-;; natural mapping — see the otlp_exporter roadmap item).
+;; OTLP/HTTP+JSON.  THIS exporter is the Logs signal only — the flat event model
+;; has no start/end pair, so Logs is its natural mapping (see the otlp_exporter
+;; roadmap item).  The sibling signals live beside it: dsl/metrics.rkt
+;; (/v1/metrics) and dsl/traces.rkt (/v1/traces, spans, off by default).
+;; gRPC/protobuf remains a non-goal.
 ;;
 ;; SINGLE POST PATH.  The POST goes through tesl/http-client.rkt's `HttpClient.post`
 ;; — the same client every other outbound HTTP call uses — via `dynamic-require`
@@ -141,36 +115,6 @@
 ;; dsl/, http-client.rkt in the sibling tesl/), matching tesl/agent-provider.rkt.
 (define-runtime-path otlp-http-client-source "../tesl/http-client.rkt")
 
-;; Convert one Tesl attribute value to an OTLP AnyValue jsexpr.  OTLP KeyValue
-;; values are tagged unions: booleans → boolValue, exact integers → intValue
-;; (as a STRING per the OTLP/JSON int64 convention), other reals → doubleValue,
-;; everything else → stringValue (reusing telemetry-value->jsexpr's coercion for
-;; symbols/keywords/bytes, then stringifying).  Bool is checked before number
-;; because in Racket booleans are not numbers, but we make the ordering explicit.
-(define (telemetry-value->otlp-any-value value)
-  (cond
-    ;; Its OWN guard, not just the shared coercion's: the string?/boolean?/
-    ;; integer? arms below short-circuit before delegating, so a redaction check
-    ;; that lived only in telemetry-value->jsexpr would be bypassed here.
-    [(or (secret-value? value) (secret-header-value? value))
-     (hash 'stringValue secret-redaction-text)]
-    [(boolean? value) (hash 'boolValue value)]
-    [(exact-integer? value) (hash 'intValue (number->string value))]
-    [(and (real? value) (rational? value)) (hash 'doubleValue (exact->inexact value))]
-    [(string? value) (hash 'stringValue value)]
-    [else
-     ;; Reuse the console serializer's coercion (symbol/keyword/bytes/list/hash),
-     ;; then render any non-string result as a JSON string so the AnyValue stays
-     ;; well-formed regardless of the attribute's runtime shape.
-     (define coerced (telemetry-value->jsexpr value))
-     (hash 'stringValue (if (string? coerced) coerced (jsexpr->string coerced)))]))
-
-;; Build the OTLP KeyValue list for one event's attributes.
-(define (telemetry-attributes->otlp-key-values attributes)
-  (for/list ([entry (in-list attributes)])
-    (hash 'key (symbol->string (telemetry-key->json-key (car entry)))
-          'value (telemetry-value->otlp-any-value (cdr entry)))))
-
 ;; Pure, unit-testable mapping: a list of telemetry-event → one OTLP/HTTP+JSON
 ;; ExportLogsServiceRequest jsexpr.  The `service.name` resource attribute is
 ;; taken from the FIRST event's service-name (all events in a batch share the
@@ -178,7 +122,18 @@
 ;;   timeUnixNano : (timestampMs * 1e6) as a decimal STRING (OTLP int64 rule)
 ;;   body         : { stringValue: message }
 ;;   attributes   : OTLP KeyValue list
+;;   traceId/spanId/flags : LIFTED from the trace.id / span.id / trace.sampled
+;;     attributes when the event was emitted inside a trace context.  These are
+;;     first-class LogRecord FIELDS in OTLP, and they are what a collector uses to
+;;     join a log line to a trace — an attribute of the same name would show up in
+;;     the UI but would not correlate.  The attributes are kept as well, because
+;;     they are what the console consumer prints and what a log-only backend can
+;;     filter on.
 ;; An empty event list yields an empty resourceLogs array.
+(define (attr-ref attributes key)
+  (let ([hit (assq key attributes)])
+    (and hit (cdr hit))))
+
 (define (telemetry-events->otlp-logs-jsexpr events #:service-name [service-name #f])
   (cond
     [(null? events) (hash 'resourceLogs '())]
@@ -188,10 +143,20 @@
        (for/list ([event (in-list events)])
          (define ts-ms (telemetry-event-timestamp-ms event))
          (define ts-nano (inexact->exact (round (* ts-ms 1000000.0))))
-         (hash 'timeUnixNano (number->string ts-nano)
-               'body (hash 'stringValue (telemetry-event-message event))
-               'attributes (telemetry-attributes->otlp-key-values
-                            (telemetry-event-attributes event)))))
+         (define attrs (telemetry-event-attributes event))
+         (define trace-id (attr-ref attrs 'trace.id))
+         (define span-id (attr-ref attrs 'span.id))
+         (define base
+           (hash 'timeUnixNano (number->string ts-nano)
+                 'body (hash 'stringValue (telemetry-event-message event))
+                 'attributes (attributes->otlp-key-values attrs)))
+         (cond
+           [(and (string? trace-id) (string? span-id))
+            (hash-set* base
+                       'traceId trace-id
+                       'spanId span-id
+                       'flags (if (eq? (attr-ref attrs 'trace.sampled) #t) 1 0))]
+           [else base])))
      (hash 'resourceLogs
            (list (hash 'resource
                        (hash 'attributes
@@ -231,7 +196,11 @@
     ;; Grant the httpClient capability ambiently for this POST only.  We set the
     ;; parameter directly (rather than the `with-capabilities` macro) so this is a
     ;; plain runtime call independent of how capability.rkt was loaded.
-    (parameterize ([cap-current (expand-caps (cons http-cap (cap-current)))])
+    ;; …and with NO ambient trace context: the exporter's own POST must not be
+    ;; instrumented as an outbound CLIENT span (see dsl/traces.rkt's
+    ;; otlp-post-spans! for the loop that guards against).
+    (parameterize ([cap-current (expand-caps (cons http-cap (cap-current)))]
+                   [current-trace-ctx #f])
       (post url header-list body))
     (void)))
 
@@ -340,7 +309,10 @@
                              #:otlp-batch-size [otlp-batch-size 100]
                              #:otlp-flush-interval-ms [otlp-flush-interval-ms 2000]
                              #:metrics? [metrics? 'auto]
-                             #:metrics-interval-ms [metrics-interval-ms 60000])
+                             #:metrics-interval-ms [metrics-interval-ms 60000]
+                             #:traces? [traces? #f]
+                             #:trace-ratio [trace-ratio 1.0]
+                             #:traces-interval-ms [traces-interval-ms 2000])
   (current-telemetry-service-name service-name)
   (current-telemetry-endpoint endpoint)
   (current-telemetry-context '())
@@ -398,6 +370,27 @@
                                #:service-name-thunk
                                (lambda () (current-telemetry-service-name)))
       (stop-metrics-exporter!))
+  ;; ── Traces signal ──
+  ;; DEFAULT OFF, unlike metrics: spans are per-request and unaggregated, so the
+  ;; volume and the (ambient, SEC-TELEMETRY) egress are orders of magnitude above
+  ;; logs+metrics.  `#:traces? #t` records spans; with a real endpoint they are
+  ;; also exported to <endpoint>/v1/traces, and with "in-memory" they stay in the
+  ;; ring buffer (tests, local dev).
+  ;;
+  ;; Trace CONTEXT (Phase A — inbound traceparent parsing, log correlation,
+  ;; outbound injection) is NOT gated on this: it costs nothing, exports nothing,
+  ;; and its whole value is that it works in the default configuration.
+  (set-trace-sample-ratio! trace-ratio)
+  (define traces-on? (and traces? #t))
+  (reset-traces!)
+  (set-traces-enabled! traces-on?)
+  (if (and traces-on? real-endpoint?)
+      (start-traces-exporter! #:endpoint endpoint
+                              #:headers effective-otlp-headers
+                              #:interval-ms traces-interval-ms
+                              #:service-name-thunk
+                              (lambda () (current-telemetry-service-name)))
+      (stop-traces-exporter!))
   (void))
 
 (define (call-with-telemetry-context additions thunk)
@@ -410,7 +403,18 @@
     (telemetry-event (current-telemetry-service-name)
                      (current-telemetry-endpoint)
                      message
-                     (append (current-telemetry-context) attributes)
+                     ;; Trace correlation (Phase A) is appended HERE, not baked
+                     ;; into dispatch-request's route-context, for two reasons:
+                     ;; the innermost ACTIVE span must win (a log emitted inside a
+                     ;; db span belongs to that span, and route-context is built
+                     ;; once per request), and an entry point that is not an HTTP
+                     ;; request — a queue worker, an agent run — gets the same
+                     ;; correlation with no second call site.  With no ambient
+                     ;; trace context this appends '(), so a process that never
+                     ;; sees a request emits byte-identical telemetry to before.
+                     (append (current-telemetry-context)
+                             attributes
+                             (trace-context-attributes))
                      (current-inexact-milliseconds)))
   (current-telemetry-events (cons event (current-telemetry-events)))
   (set-box! global-telemetry-log (cons event (unbox global-telemetry-log)))

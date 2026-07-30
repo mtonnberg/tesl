@@ -40,6 +40,15 @@
                   metric-counter-add!
                   metric-histogram-record!
                   duration-histogram-boundaries)
+         ;; Trace propagation across the queue boundary: the enqueuer's
+         ;; `traceparent` rides the job row, and the worker rebuilds a root
+         ;; context from it (see call-with-job-trace).
+         (only-in "../dsl/trace-context.rkt"
+                  current-traceparent-header
+                  make-root-trace-ctx
+                  call-with-trace-ctx
+                  trace-sample-ratio)
+         (only-in "../dsl/traces.rkt" with-server-span)
          (only-in "../dsl/capability.rkt"
                   define-capability
                   require-capabilities!
@@ -277,22 +286,45 @@
 
 ;; ── Payload serialization (PostgreSQL) ──────────────────────────────────────
 
-(define (serialize-job-payload value)
+;; Trace propagation rides the payload ENVELOPE, next to `__type`, so a job's
+;; work joins the trace of the request that enqueued it.  Deliberately NOT a new
+;; column on `tesl_jobs`: the payload is already a jsexpr with a reserved
+;; `__type` sidecar, so this needs no migration and works on a deployment whose
+;; queue table predates traces (roadmap open question 2).  It works across
+;; replicas and restarts for the same reason the payload does — it is in the row.
+(define (serialize-job-payload value [traceparent #f])
   (define raw (raw-value value))
   (define jsexpr (runtime-value->jsexpr raw))
-  (if (and (record-value? raw) (hash? jsexpr))
-      (hash-set jsexpr '__type (symbol->string (record-value-type raw)))
-      jsexpr))
+  (define typed
+    (if (and (record-value? raw) (hash? jsexpr))
+        (hash-set jsexpr '__type (symbol->string (record-value-type raw)))
+        jsexpr))
+  (if (and (string? traceparent) (hash? typed))
+      (hash-set typed '__traceparent traceparent)
+      typed))
+
+;; The enqueuer's `traceparent`, or #f.  Never raises, and a payload written
+;; before this existed simply has no key.
+(define (job-payload-traceparent jsexpr)
+  (and (hash? jsexpr)
+       (let ([tp (hash-ref jsexpr '__traceparent #f)])
+         (and (string? tp) tp))))
 
 (define (deserialize-job-payload jsexpr)
-  (define type-str (and (hash? jsexpr) (hash-ref jsexpr '__type #f)))
+  ;; Strip the envelope key BEFORE typing: `jsexpr->typed-value` validates the
+  ;; hash against the record's fields, so leaving `__traceparent` in would make
+  ;; every traced job fail to decode.
+  (define carried (if (hash? jsexpr) (hash-remove jsexpr '__traceparent) jsexpr))
+  (define type-str (and (hash? carried) (hash-ref carried '__type #f)))
   (if type-str
       (let ([type-sym (string->symbol type-str)]
-            [clean    (hash-remove jsexpr '__type)])
+            [clean    (hash-remove carried '__type)])
         (if (lookup-record-spec type-sym #f)
             (jsexpr->typed-value type-sym clean 'queue)
-            jsexpr))
-      jsexpr))
+            ;; Unknown record type: the historical behaviour is to hand back the
+            ;; envelope as-is (`__type` included), unchanged here.
+            carried))
+      carried))
 
 ;; ── In-memory job store helpers ──────────────────────────────────────────────
 
@@ -314,8 +346,9 @@
         (add1 n)
         (loop))))
 
-(define (job-entry payload [status 'pending] [attempts 0])
-  (hash 'payload payload 'status status 'attempts attempts 'seq (next-job-seq!)))
+(define (job-entry payload [status 'pending] [attempts 0] #:traceparent [traceparent #f])
+  (hash 'payload payload 'status status 'attempts attempts 'seq (next-job-seq!)
+        'traceparent traceparent))
 
 (define (job-entry-seq entry)
   (hash-ref entry 'seq 0))
@@ -822,7 +855,9 @@
     [(pg-active?)
      (define schema (pg-schema))
      (define job-id (make-job-id))
-     (define jsexpr (serialize-job-payload raw-payload))
+     ;; The enqueuer's ambient span becomes the job's parent (see
+     ;; serialize-job-payload).  #f outside a trace, which writes nothing.
+     (define jsexpr (serialize-job-payload raw-payload (current-traceparent-header)))
      (query-exec (pg-conn)
        (format "insert into ~a (id, queue_name, payload) values ($1, $2, $3)"
                (pg-table schema "tesl_jobs"))
@@ -845,7 +880,8 @@
      job-id]
     [else
      (define job-id (make-job-id))
-     (hash-set! (queue-spec-store queue-s) job-id (job-entry raw-payload))
+     (hash-set! (queue-spec-store queue-s) job-id
+                (job-entry raw-payload #:traceparent (current-traceparent-header)))
      (semaphore-post (queue-spec-semaphore queue-s))
      (when (tesl-log-active?) (tesl-log-enqueue! job-type-name job-id))
      (when (metrics-active?)
@@ -885,7 +921,10 @@
                 [jsexpr      (string->jsexpr payload-str)]
                 [raw-payload (deserialize-job-payload jsexpr)]
                 [named-job   (attach-queue-proofs job-id raw-payload)])
-           (list job-id named-job attempts)))]
+           ;; 4th element: the enqueuer's traceparent (or #f) — carried in DATA,
+           ;; never by ambient context, because the worker runs in a different
+           ;; thread (often a different process) than the enqueue.
+           (list job-id named-job attempts (job-payload-traceparent jsexpr))))]
     [else
      (define pending (pending-jobs (queue-spec-store queue-s)))
      (if (null? pending)
@@ -898,7 +937,7 @@
                 [named    (attach-queue-proofs job-id payload)])
            (hash-set! (queue-spec-store queue-s) job-id
                       (hash-set job-data 'status 'processing))
-           (list job-id named attempts)))]))
+           (list job-id named attempts (hash-ref job-data 'traceparent #f))))]))
 
 ;; ── complete-job! ────────────────────────────────────────────────────────────
 
@@ -984,13 +1023,37 @@
      #:unit "s"
      #:boundaries duration-histogram-boundaries)))
 
+;; Traces: run one job attempt under its own root trace context, rebuilt from the
+;; `traceparent` the ENQUEUER stored in the job row, and bracket the handler in a
+;; CONSUMER span.
+;;
+;; The context is rebuilt from DATA, never inherited ambiently: a worker thread
+;; outlives any request that enqueued to it, and letting a stale ambient parent
+;; leak in is exactly how a worker's span ends up attached to an unrelated request
+;; (roadmap risk 3).  With no stored traceparent the job starts its own trace, so
+;; a job's logs are still correlated with each other.
+(define (call-with-job-trace queue-s job-id traceparent thunk)
+  (call-with-trace-ctx
+   (make-root-trace-ctx #:traceparent traceparent
+                        #:ratio (trace-sample-ratio))
+   (lambda ()
+     (with-server-span (job-span
+                        (format "~a process" (queue-spec-name queue-s))
+                        'consumer
+                        (list (cons 'messaging.operation "process")
+                              (cons 'messaging.system "tesl")
+                              (cons 'tesl.queue (~a (queue-spec-name queue-s)))
+                              (cons 'messaging.message.id (~a job-id))))
+       (thunk)))))
+
 (define (process-next-job! queue-s handler-fn)
   (define result (dequeue-next! queue-s))
   (if (not result)
       #f
-      (let ([job-id    (first result)]
-            [named-job (second result)]
-            [attempts  (third result)])
+      (let ([job-id      (first result)]
+            [named-job   (second result)]
+            [attempts    (third result)]
+            [traceparent (and (> (length result) 3) (fourth result))])
         (define current-attempt (add1 attempts))
         (define job-type-name
           (and (tesl-log-active?)
@@ -1009,7 +1072,9 @@
                                                                 (queue-spec-max-attempts queue-s)
                                                                 (exn-message e)))
                                      #f)])
-          (define handler-result (handler-fn named-job))
+          (define handler-result
+            (call-with-job-trace queue-s job-id traceparent
+                                 (lambda () (handler-fn named-job))))
           (if (check-fail? handler-result)
               (begin
                 (record-job-duration-metric! queue-s metric-start "check-fail")
@@ -1030,9 +1095,10 @@
   (define result (dequeue-next! queue-s))
   (if (not result)
       #f
-      (let ([job-id    (first result)]
-            [named-job (second result)]
-            [attempts  (third result)])
+      (let ([job-id      (first result)]
+            [named-job   (second result)]
+            [attempts    (third result)]
+            [traceparent (and (> (length result) 3) (fourth result))])
         (define current-attempt (add1 attempts))
         (define job-type-name
           (and (tesl-log-active?)
@@ -1051,7 +1117,9 @@
                                                                 (queue-spec-max-attempts queue-s)
                                                                 (exn-message e)))
                                      (job-failed-result named-job (exn-message e) 500))])
-          (define handler-result (handler-fn named-job))
+          (define handler-result
+            (call-with-job-trace queue-s job-id traceparent
+                                 (lambda () (handler-fn named-job))))
           (if (check-fail? handler-result)
               (begin
                 (record-job-duration-metric! queue-s metric-start "check-fail")

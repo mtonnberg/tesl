@@ -1,6 +1,130 @@
 # OpenTelemetry traces — context propagation first, span export second, a user span API never
 
-**Status: PLANNED (drafted 2026-07-30, expanded from a three-line ask)**
+**Status: IMPLEMENTED 2026-07-30 (drafted the same day, expanded from a three-line ask).
+Phase A and Phase B both shipped; Phase C rejected as planned.**
+
+## What landed
+
+Phase A and Phase B were implemented together because Phase A alone leaves the
+original ask ("support traces") unmet — nothing is exported — while Phase B costs
+nothing when off, which is its default.
+
+**New modules**
+
+- `dsl/trace-context.rkt` — the Phase-A core. Crypto-random 16/8-byte ids
+  (`crypto-random-bytes`, all-zero regenerated), a `traceparent` parser that is
+  TOTAL over arbitrary strings (malformed ⇒ `#f` ⇒ start a fresh trace, never a
+  raise on a request path), W3C version rules (`ff` rejected, version 00 exactly
+  four fields, unknown future versions accepted with extra fields ignored),
+  `tracestate` pass-through behind a printable-ASCII/512-char shape gate, the
+  ambient `current-trace-ctx` parameter, and parent-respecting head sampling.
+- `dsl/traces.rkt` — the Phase-B span recorder + `/v1/traces` OTLP/HTTP+JSON
+  exporter, with the never-raise / never-block / bounded-buffer (drop-oldest,
+  2048) discipline of the other two signals and the same cooperative
+  exporter-generation shutdown as `dsl/metrics.rkt`. Buffering runs in ATOMIC
+  MODE, not under a semaphore, for the kill-safety reason `dsl/metrics.rkt`
+  documents.
+- `dsl/otlp-value.rkt` — extracted from `dsl/otel.rkt`: the ONE OTLP
+  attribute-value renderer, now shared by Logs and Traces. This is the structural
+  answer to risk 2 below — a signal that renders its own values is a `secret`
+  redaction hole waiting to be added; `dsl/otel.rkt` re-provides the two
+  historical names so `tests/secret-runtime-tests.rkt` still measures them.
+
+**Wiring (no new call sites anywhere)**
+
+- `dsl/web.rkt` `dispatch-request` — parses inbound `traceparent`/`tracestate`,
+  runs the whole request under the ambient context (`parameterize`, never an
+  imperative set, so a keep-alive thread cannot carry one request's trace into
+  the next), and brackets it in a SERVER span whose name is refined to
+  `METHOD operation` after the match loop (never the raw path). `request.id` is
+  untouched.
+- `dsl/otel.rkt` `emit-telemetry-event!` — appends `trace.id`/`span.id`/
+  `trace.sampled` to EVERY event, rather than baking them into `route-context`:
+  the innermost active span wins, and a non-HTTP entry point (queue worker, agent
+  run) gets the same correlation with no second call site. The OTLP log record
+  additionally LIFTS them into the first-class `traceId`/`spanId`/`flags` fields,
+  which is what a collector actually joins on.
+- `tesl/http-client.rkt` — `traceparent` (+ inbound `tracestate`) injected on
+  every outbound call, inside the CLIENT span so the downstream service parents on
+  it; a caller-supplied `traceparent` wins and is never overwritten; values
+  re-checked through `http-header-field-safe?`.
+- `dsl/sql.rkt` — one CLIENT span per statement from `with-sql-capture` (the same
+  seam the duration histogram uses), plus a `db.pool.lease` INTERNAL span for the
+  connection WAIT. `count-of` is called once and shared with the existing capture.
+- `tesl/queue.rkt`, `tesl/agent-provider.rkt`, `tesl/agent.rkt`, `tesl/cache.rkt`
+  — CONSUMER span per job attempt, CLIENT span per LLM call (with token usage),
+  INTERNAL span per agent tool execution, INTERNAL spans for cache get/set.
+- `compiler/lib/checker.ml` + `compiler/lib/emit_racket.ml` — `traces Bool` and
+  `traceRatio Float` on `initTelemetry`; the valueless-keyword hard error from the
+  metrics review covers the new names automatically.
+- All three exporters POST with `current-trace-ctx` parameterized to `#f`: without
+  it, exporting a span is itself an instrumented outbound call, which buffers a
+  span, which the next flush exports — a self-feeding loop.
+
+**Tests**
+
+- `tests/trace-context-test.rkt` — parse/format totality over hostile input, ids,
+  parent-respecting sampling, log correlation (attributes AND the lifted OTLP
+  `traceId`/`spanId`/`flags` fields), outbound injection incl. "a caller-supplied
+  `traceparent` wins".
+- `tests/otlp-traces-test.rkt` — recording gates, the parent/child tree, the
+  exactly-once body contract, the ring buffer's drop-oldest bound, the pure OTLP
+  mapping, an end-to-end `dispatch-request` tree (SERVER + outbound CLIENT child),
+  the queue link, the db span (including "40 sibling spans" and "no bound
+  parameter, secret or not, ever reaches the collector"), a localhost-collector
+  integration tier, closed-port resilience, and the `traces False` /
+  `traces True` + in-memory gates.
+- `tests/trace-propagation-tests.tesl` — the Tesl-side property: propagation is
+  INVISIBLE. A well-formed, absent, malformed or hostile inbound `traceparent`
+  changes nothing about an endpoint's behaviour, and injection does not disturb
+  the outbound-HTTP stub surface or its call count.
+- `example/learn/lesson77-traces.tesl` (+ committed `.rkt`, `test` and `api-test`
+  blocks). Both Racket suites are registered in `ci.sh`'s Racket-suite phase.
+
+`with-sql-capture` is now exported from `dsl/sql.rkt` so the db span's attribute
+discipline is testable without a live PostgreSQL — that discipline is a security
+property (a `secret` column's bound parameter really is the secret), so it should
+not be reachable only through an optional-dependency phase.
+
+## Decisions taken on the open questions
+
+1. **Ship Phase A alone?** No — both shipped. Phase A is what makes the logs
+   joinable, but "support traces" is not true until spans exist, and `traces False`
+   makes Phase B free until asked for.
+2. **Queue propagation — job-row column or skipped?** NEITHER: the `traceparent`
+   rides the payload jsonb ENVELOPE beside the reserved `__type` key, so there is
+   NO migration and a deployment whose `tesl_jobs` predates traces works unchanged.
+   It still crosses replicas and restarts, because it is in the row. Risk 4 is
+   therefore closed rather than accepted.
+3. **Does OneUptime accept OTLP/HTTP+JSON traces?** Unverified (no network here) —
+   the transport is byte-identical in shape to the `/v1/logs` and `/v1/metrics`
+   paths already in production, and the endpoint is the standard `/v1/traces`.
+4. **Does `db.statement` cross a line the log sink does not?** YES, treated as
+   such: db spans carry operation + table + row count by default, and the
+   parameterized statement only under `TESL_TRACE_DB_STATEMENT=1`. Bound PARAMS
+   never reach a span at all.
+
+Risk 3 (cross-thread context) is handled by carrying the queue link in DATA and
+rebuilding a root context in the worker; SSE deliberately produces no spans (it is
+matched before `dispatch-request` and its stream outlives the request extent).
+
+## Two decisions the plan did not anticipate
+
+1. **The propagated `sampled` bit is independent of `traces`.** Step 4 said
+   "`traceRatio` default 1.0 in Phase A because nothing is exported yet"; the
+   reason that matters is sharper than "nothing is exported". If span export off
+   meant `sampled = 0` on every outbound header, a Tesl app would silence the
+   tracing of every parent-respecting service DOWNSTREAM merely by sitting in the
+   request path — the opposite of the citizenship goal that justified Phase A. So
+   the ratio alone decides the bit, and "do WE record" is a separate question
+   asked against `traces-active?`.
+2. **The span bracket must guard setup but NOT the body.** A single
+   `with-handlers` around both (the first implementation) catches the body's own
+   exception, and its "instrumentation must degrade to no span" recovery then runs
+   the body A SECOND TIME — a duplicate outbound POST or a duplicate INSERT on any
+   failing traced call. Setup and body are now separately bracketed, and
+   `tests/otlp-traces-test.rkt` pins "the body runs exactly once" on both the
+   success and failure paths, for both brackets.
 
 ## Original ask
 

@@ -1411,6 +1411,19 @@ else
         "tests/otlp-exporter-test.rkt"
         # OTel Metrics signal: registry + OTLP mapping + /v1/metrics exporter
         "tests/otlp-metrics-test.rkt"
+        # W3C trace context (Phase A of the traces item).  Here because the
+        # parser's contract is TOTALITY over attacker-controlled header input —
+        # every malformed `traceparent` must answer "start a fresh trace" rather
+        # than raise on a request path — and because log correlation and outbound
+        # propagation are properties of the WIRE (an OTLP log record's traceId
+        # field, an injected request header), neither of which a .tesl api-test
+        # can observe.
+        "tests/trace-context-test.rkt"
+        # OTel Traces signal: span recorder + parent/child shape + OTLP mapping +
+        # /v1/traces exporter + the `traces False` zero-cost gate + the
+        # secret-in-a-span-attribute regression (a span is a rendering sink, and
+        # it is the newest one).
+        "tests/otlp-traces-test.rkt"
         "editor/tesl-mcp/tests/protocol-smoke.rkt"
         # The LSP server's own in-module suite (hover/completion/code-action/
         # semantic-token rendering, incl. quick-fix ACTION TITLES).  It was not

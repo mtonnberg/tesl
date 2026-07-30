@@ -41,7 +41,8 @@
                   metrics-active?
                   metric-counter-add!
                   metric-histogram-record!
-                  duration-histogram-boundaries))
+                  duration-histogram-boundaries)
+         (only-in "../dsl/traces.rkt" with-span span-add-attributes!))
 
 ;; Resolve http-client.rkt relative to THIS source file (it sits beside us in
 ;; tesl/), not via the `tesl` collection or the CWD — so the dynamic-require
@@ -531,9 +532,38 @@
 ;;; call-provider : provider request -> llm-response
 ;;; The agent core never invokes a provider procedure directly; everything goes
 ;;; through here, giving later waves one place for retries / telemetry / cost.
+;; Provider identity for span naming/attribution.  Same (provider-name . model)
+;; metadata the metrics path uses, so a span and a metric point about the same
+;; call agree — and both stay low-cardinality.
+(define (provider-identity provider)
+  (define meta (hash-ref provider-metadata provider #f))
+  (values (if meta (car meta) "unknown") (if meta (cdr meta) "unknown")))
+
 (define (call-provider provider request)
   (define metric-start (and (metrics-active?) (current-inexact-milliseconds)))
-  (define resp (provider request))
+  ;; Traces: the LLM call is usually the dominant span in an agent request, and
+  ;; the only one whose duration a user cannot predict.  gen_ai semconv names the
+  ;; span "chat {model}"; prompts and completions are deliberately NOT attributes
+  ;; (they are user content, often the most sensitive payload in the system).
+  (define resp
+    (with-span (provider-span
+                (let-values ([(_pname model) (provider-identity provider)])
+                  (format "chat ~a" model))
+                'client
+                (let-values ([(pname model) (provider-identity provider)])
+                  (list (cons 'gen_ai.operation.name "chat")
+                        (cons 'gen_ai.provider.name pname)
+                        (cons 'gen_ai.request.model model))))
+      (define r (provider request))
+      (when (and provider-span (llm-response? r))
+        (define usage (llm-response-usage r))
+        (when (hash? usage)
+          (span-add-attributes!
+           provider-span
+           (for/list ([(token-type count) (in-hash usage)]
+                      #:when (and (number? count) (positive? count)))
+             (cons (string->symbol (format "gen_ai.usage.~a_tokens" token-type)) count)))))
+      r))
   (unless (llm-response? resp)
     (raise-user-error 'agent
                       "provider returned ~e, expected an llm-response" resp))

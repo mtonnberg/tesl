@@ -32,7 +32,10 @@
          ;; dsl/private/*, so this keeps the "requires nothing of ours that could
          ;; cycle back" property stated above.
          (only-in "types.rkt"
-                  secret-value? secret-header-value? secret-redaction-text))
+                  secret-value? secret-header-value? secret-redaction-text)
+         ;; Only to suppress the exporter's own outbound span (see
+         ;; otlp-post-metrics!).  dsl/trace-context.rkt requires only racket/*.
+         (only-in "trace-context.rkt" current-trace-ctx))
 
 (provide metrics-active?
          set-metrics-enabled!
@@ -316,7 +319,11 @@
     (define header-list
       (cons (list "content-type" "application/json")
             (for/list ([h (in-list headers)]) (list (car h) (cdr h)))))
-    (parameterize ([cap-current (expand-caps (cons http-cap (cap-current)))])
+    ;; …and with NO ambient trace context, so the exporter's own POST is not
+    ;; instrumented as an outbound CLIENT span (dsl/traces.rkt otlp-post-spans!
+    ;; documents the self-feeding loop this prevents).
+    (parameterize ([cap-current (expand-caps (cons http-cap (cap-current)))]
+                   [current-trace-ctx #f])
       (post (otlp-metrics-url endpoint) header-list (jsexpr->string jsexpr)))
     (void)))
 

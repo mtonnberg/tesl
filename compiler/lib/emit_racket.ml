@@ -2216,7 +2216,8 @@ let rec emit_expr ctx e =
          tokens up to the next known keyword and re-fold them into an application,
          so `ep ()` becomes the call `(ep)` and `f x y` becomes `(f x y)`. *)
       let known_kw = function
-        | "service" | "endpoint" | "console" | "metrics" | "metricsInterval" -> true
+        | "service" | "endpoint" | "console" | "metrics" | "metricsInterval"
+        | "traces" | "traceRatio" -> true
         | _ -> false in
       let rec emit_kw_args = function
         | [] -> ()
@@ -2233,6 +2234,11 @@ let rec emit_expr ctx e =
             | "console" -> "console?"
             | "metrics" -> "metrics?"
             | "metricsInterval" -> "metrics-interval-ms"
+            (* Traces signal (roadmap/completed/otel_trace_support.md).  Default
+               #f in init-opentelemetry!, unlike metrics: spans are per-request
+               and unaggregated, so the volume and egress are opt-in. *)
+            | "traces" -> "traces?"
+            | "traceRatio" -> "trace-ratio"
             | other -> other
           in
           emit ctx (Printf.sprintf " #:%s " racket_kw);
@@ -2249,8 +2255,8 @@ let rec emit_expr ctx e =
              failwith (Printf.sprintf
                "initTelemetry keyword `%s` has no value. If a binding named \
                 like an initTelemetry keyword (service/endpoint/console/\
-                metrics/metricsInterval) is being passed as a value, rename \
-                the binding." kw)
+                metrics/metricsInterval/traces/traceRatio) is being passed as a \
+                value, rename the binding." kw)
            | [ ELit { lit = LBool true; _ } ] -> emit ctx "#t"
            | [ ELit { lit = LBool false; _ } ] -> emit ctx "#f"
            | [ single ] -> emit_expr_simple ctx single

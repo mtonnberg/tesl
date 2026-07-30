@@ -1,0 +1,147 @@
+module Lesson77Traces exposing [describeTrace]
+
+# lesson: track=stdlib order=790 needs=lesson73-metrics
+# summary: Join your logs to a caller's trace for free, and turn on per-request span trees with one keyword
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# There is nothing to write.  That is the feature.
+#
+# PART 1 — free, always on.  If a caller sends the standard header
+#
+#   traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
+#
+# then every log record your app emits gains `trace.id`, `span.id` and
+# `trace.sampled`, and every outbound `httpGet` / `httpPost` carries the header
+# onward.  Paste the trace id into your trace UI and the caller's trace and your
+# logs are one timeline.  No inbound header?  A fresh trace id is minted, so the
+# fields are always there.
+#
+# PART 2 — one keyword, for the one question logs and metrics cannot answer:
+#
+#   traces True          # default False
+#   traceRatio 0.05      # head sampling, 0.0–1.0 (default 1.0)
+#
+# Then you look at your collector, never at Tesl code:
+#
+#   SERVER  GET getNote                     142ms
+#   ├─ CLIENT  db.query notes (select-one)    3ms
+#   ├─ CLIENT  db.query tags (select-many)    2ms
+#   ├─ CLIENT  db.query tags (select-many)    2ms   ← 38 more of these
+#   └─ CLIENT  GET billing.internal          61ms
+#
+# That tree IS the N+1 diagnosis.  Metrics aggregate it away by construction and
+# logs have no parent/child structure.
+#
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# WHY `traces False` BY DEFAULT: spans are per-request and unaggregated, so the
+# volume and the outbound egress are orders of magnitude above logs and metrics.
+# Metrics answer "is it healthy / how slow is it" far more cheaply.  Turn traces
+# on when you have a specific question, and use `traceRatio` to pay for a sample
+# of traffic rather than all of it.
+#
+# BUILT-IN SPANS: as with metrics, you get the tree without writing anything.
+#
+#   SERVER    one per HTTP request                method + operation, status
+#   CLIENT    one per SQL statement               operation kind + table + rows
+#   INTERNAL  db.pool.lease                       time spent WAITING for a slot
+#   CLIENT    one per outbound HTTP call          method + host + path
+#   CONSUMER  one per queue job attempt          queue + job id
+#   CLIENT    one per LLM call                    provider + model + token usage
+#   INTERNAL  one per agent tool execution        tool name
+#   INTERNAL  cache get / cache set               cache name + hit/miss
+#
+# SAMPLING IS PARENT-RESPECTING: an inbound `traceparent` decision is never
+# second-guessed — `traceRatio` only decides for traces that START in your app.
+# That is what keeps a distributed trace whole instead of full of holes.  Note
+# that the propagated decision does NOT depend on `traces`: with span export off
+# you still tell downstream services "record this", because doing otherwise would
+# silence another team's tracing just because your app is in the path.  Lowering
+# `traceRatio` does suppress it downstream too — that is the point of a ratio.
+#
+# QUEUES: `enqueue` stores the enqueuing request's `traceparent` with the job, so
+# a job processed minutes later — in another replica — still hangs off the request
+# that created it.  A worker never inherits a trace ambiently; the link travels in
+# the job row, which is why it survives a restart.
+#
+# THERE IS NO `span` STATEMENT, and there will not be one.  The spans worth having
+# are framework spans, and the framework already brackets them.  For an inner
+# boundary of your own, use `telemetry` — Part 1 stamps those events with
+# `trace.id`/`span.id`, so they land inside the enclosing span in the trace UI.
+# (A `telemetry` block is an EVENT, not a span; it has no duration.)
+#
+# WHAT IS DELIBERATELY NOT TRACED: an `sse` subscription.  Its stream is
+# long-lived by design and outlives the request that opened it, so a span would
+# report a duration of "however long the client stayed connected" — SSE is
+# observable through its own metrics instead (tesl.sse.connections.active,
+# tesl.sse.events.sent/.dropped).
+#
+# WHAT IS DELIBERATELY NOT ON A SPAN: bound SQL parameters, request/response
+# bodies, LLM prompts and completions, tool arguments, and query strings.  A span
+# travels further than a log line — dashboards, shared links, longer retention —
+# so it carries shape, not payload.  The parameterized SQL statement is available
+# behind `TESL_TRACE_DB_STATEMENT=1` if you want it.  A `secret` value used as an
+# attribute renders as `[redacted]`, like everywhere else.
+#
+# CONFIG: spans are POSTed to `<endpoint>/v1/traces` over OTLP/HTTP+JSON, the same
+# transport as logs (`/v1/logs`) and metrics (`/v1/metrics`), authenticated with
+# `OTEL_EXPORTER_OTLP_HEADERS` if your backend needs a token.
+
+import Tesl.Prelude exposing [Bool(..), String]
+import Tesl.ApiTest exposing [statusOk]
+import Tesl.Float exposing [Float]
+import Tesl.Telemetry exposing [initTelemetry, telemetry]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.App exposing [App]
+
+# An ordinary function.  Nothing here mentions traces — and that is the point:
+# with `traces True` this call already appears in the request's span tree, and its
+# `telemetry` event lands inside that span.
+fn describeTrace(note: String) -> String requires [] =
+  let _ = telemetry "note described" { note = note }
+  "described ${note}"
+
+handler getNote() -> String requires [] =
+  describeTrace "n-1"
+
+api TracesApi {
+  get "/note" -> String
+}
+
+server TracesServer for TracesApi {
+  endpoint_0 = getNote
+}
+
+database TracesDb = Database {
+  entities: []
+  backend: Memory
+}
+
+main() -> App requires [] =
+  # In production: endpoint env "OTEL_ENDPOINT" with traces True and a ratio you
+  # can afford.  Here: in-memory, so the lesson runs without a collector — spans
+  # are recorded and dropped rather than exported.
+  let _ = initTelemetry service "lesson77-traces" endpoint "in-memory" console False metrics True traces True traceRatio 1.0
+  App {
+    database: TracesDb
+    api: TracesServer
+    port: 8091
+  }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tests — tracing is invisible to program semantics.  A traced function returns
+# exactly what an untraced one returns, and a traced endpoint responds exactly
+# as it did before; that is what makes it safe to leave on.
+# ─────────────────────────────────────────────────────────────────────────────
+
+test "tracing never changes a function's result" {
+  expect describeTrace "n-1" == "described n-1"
+}
+
+api-test "a traced endpoint responds normally" for TracesServer {
+  let r = get "/note"
+  expect statusOk r.status
+  expect r.body == "described n-1"
+}

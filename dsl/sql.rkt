@@ -24,6 +24,10 @@
                   metric-histogram-record!
                   metric-gauge-set!
                   duration-histogram-boundaries)
+         ;; Traces signal: one CLIENT span per statement, from the same seam the
+         ;; duration histogram uses.  dsl/traces.rkt requires nothing of ours that
+         ;; could cycle back (see its header).
+         (only-in "traces.rkt" with-span span-add-attributes!)
          ;; Grouped aggregates (GitHub #29): rows are Tuple2 values, and the
          ;; Memory backend buckets through the SAME calendar engine the emitted
          ;; PostgreSQL expressions are tested against.
@@ -57,7 +61,13 @@
                      syntax/parse
                      "types.rkt"))
 
-(provide define-entity
+(provide ;; The single seam every postgres-* execution flows through (SQL capture +
+         ;; the duration histogram + the db CLIENT span).  Exported for the traces
+         ;; regression suite: the span's attribute discipline — operation + table +
+         ;; row count, and NEVER the bound parameters, one of which may be a
+         ;; `secret` — is otherwise only reachable through a live PostgreSQL.
+         with-sql-capture
+         define-entity
          define-database
          connect-database
          disconnect-database
@@ -2086,6 +2096,16 @@
      (raise-user-error 'ensure-database-ready! "unsupported database backend ~a" other)])
   runtime)
 
+;; Opt-in: put the PARAMETERIZED statement on the db span.  Off by default
+;; because a span travels further than a log line (dashboards, shared links,
+;; longer retention) and a statement identifies schema and query shape; the
+;; operation + table name answer the N+1 question without it.  Read fresh per
+;; call so an operator can flip it without a restart, matching the outbound-HTTP
+;; timeout knobs.
+(define (trace-db-statement?)
+  (let ([v (getenv "TESL_TRACE_DB_STATEMENT")])
+    (and v (not (string=? v "")) #t)))
+
 ;; ── SQL transparency capture (task #43) ────────────────────────────────────────
 ;;
 ;; Each postgres-* operation records the EXACT parameterized statement + ordered
@@ -2113,7 +2133,37 @@
   ;; whole SQL surface with no per-call-site changes.  Attrs stay low-cardinality
   ;; (operation kind + table name — never statement text or params).
   (define metric-start (and (metrics-active?) (current-inexact-milliseconds)))
-  (define result (run))
+  ;; Traces: the SAME seam, and the reason the trace answers the N+1 question —
+  ;; one CLIENT span per statement, parented by whatever span is ambient, so 40
+  ;; identical child spans under one request span ARE the diagnosis.
+  ;;
+  ;; PARAMS NEVER GO ON A SPAN.  A `secret` column's bound parameter really is
+  ;; the secret (storage is not rendering), and a span is shared into dashboards
+  ;; far more freely than a short-retention log line.  The parameterized
+  ;; STATEMENT carries no values, and even that is opt-in via
+  ;; TESL_TRACE_DB_STATEMENT=1 — off, a span says only which operation touched
+  ;; which table.
+  ;; `count-of` is called ONCE, inside the span body, and the answer is shared
+  ;; with sql-capture-executed! below — it can be `length` over a large result, so
+  ;; adding a second call for the span attribute would make instrumentation cost
+  ;; scale with the row count.
+  (define row-count (box #f))
+  (define result
+    (with-span (db-span
+                (format "db.query ~a" (or table "unknown"))
+                'client
+                (append (list (cons 'db.operation.name (~a op))
+                              (cons 'tesl.table (or table "unknown"))
+                              (cons 'db.param_count (length params)))
+                        (if (trace-db-statement?)
+                            (list (cons 'db.statement
+                                        (regexp-replace* #px"\\s+" (string-trim sql) " ")))
+                            '())))
+      (define r (run))
+      (set-box! row-count (count-of r))
+      (span-add-attributes! db-span
+                            (list (cons 'db.response.returned_rows (or (unbox row-count) 0))))
+      r))
   (when metric-start
     (metric-histogram-record!
      "db.client.operation.duration"
@@ -2122,7 +2172,7 @@
            (cons "tesl.table" (or table "unknown")))
      #:unit "s"
      #:boundaries duration-histogram-boundaries))
-  (sql-capture-executed! (count-of result))
+  (sql-capture-executed! (unbox row-count))
   result)
 
 (define (postgres-select-many runtime entity predicates [order #f] [lim #f] [off #f] [grp #f] [joins '()])
@@ -2913,7 +2963,17 @@
          (list (cons "tesl.database" (~a db-name)))
          #:unit "s"
          #:boundaries duration-histogram-boundaries)))
+    ;; Traces: the span covers the WAIT, not the lease's lifetime (the lease is
+    ;; held until the thread dies, which is long after this returns).  A visible
+    ;; "waiting for a connection" span is how a request that was slow because the
+    ;; pool was saturated tells itself apart from one that was slow because a
+    ;; query was slow — the two look identical in a duration histogram.
     (define conn
+      (with-span (lease-span
+                  "db.pool.lease"
+                  'internal
+                  (list (cons 'tesl.database (~a db-name))
+                        (cons 'db.client.connection.pool.timeout_ms timeout-ms)))
       (connection-pool-lease
        pool
        (thread-dead-evt (current-thread))
@@ -2925,7 +2985,7 @@
                 (raise (exn:fail:tesl:pool-timeout
                         (format "database '~a': connection pool lease timed out after ~ams — every pooled connection stayed busy; raise `poolSize` in PostgresConfig (default 10) or investigate long-running queries"
                                 db-name timeout-ms)
-                        (current-continuation-marks))))))
+                        (current-continuation-marks)))))))
     (record-wait!)
     conn))
 

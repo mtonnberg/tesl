@@ -1,0 +1,123 @@
+module TracePropagationTests exposing [TracePropServer]
+
+# W3C trace-context propagation, from the TESL side of the boundary
+# (roadmap/completed/otel_trace_support.md).
+#
+# The wire-level assertions — that a `traceparent` reaches the log attributes,
+# that an outbound call carries one, that a caller-supplied header wins — live in
+# tests/trace-context-test.rkt, because a `.tesl` api-test can observe neither an
+# OTLP log record's fields nor an outbound header list.
+#
+# What THIS suite pins is the property a Tesl user actually depends on, and the
+# one an implementation bug would break first: propagation is INVISIBLE. An
+# inbound `traceparent` — well-formed, malformed, hostile, or absent — must change
+# nothing about how an endpoint behaves, and header injection must not disturb the
+# outbound-HTTP surface (the stub table, the call count, the body).
+#
+# A malformed header is the interesting case: it is attacker-controlled input on
+# the request path, and the parser's contract is to answer "start a fresh trace"
+# rather than raise. A 500 here would mean anyone could take an endpoint down with
+# one bad header.
+
+import Tesl.Prelude exposing [Bool(..), String]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.HttpClient exposing [httpClient, HttpResponse, HttpClient.get]
+import Tesl.ApiTest exposing [statusOk, stubHttp, httpCalled, httpCallCount]
+
+capability billingClient implies httpClient
+
+# ── Code under test: an endpoint that also makes an outbound call ─────────────
+
+fn callBilling() -> HttpResponse requires [billingClient] =
+  HttpClient.get "https://billing.internal/invoice/42" []
+
+handler chargeNote() -> String requires [billingClient] =
+  let resp = callBilling()
+  if resp.status == 200 then
+    "charged"
+  else
+    "declined"
+
+api TracePropApi {
+  post "/charge" -> String
+}
+
+server TracePropServer for TracePropApi {
+  endpoint_0 = chargeNote
+}
+
+database TracePropDb = Database {
+  entities: []
+  backend: Memory
+}
+
+# ── An inbound traceparent changes nothing the caller can see ─────────────────
+
+api-test "TP-01: a well-formed inbound traceparent leaves the response unchanged" for TracePropServer requires [billingClient] {
+  stubHttp "GET" "https://billing.internal/*" 200 "billed"
+  let r = post "/charge" headers { traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01" }
+  expect statusOk r.status
+  expect r.body == "charged"
+}
+
+api-test "TP-02: no inbound traceparent behaves identically" for TracePropServer requires [billingClient] {
+  stubHttp "GET" "https://billing.internal/*" 200 "billed"
+  let r = post "/charge"
+  expect statusOk r.status
+  expect r.body == "charged"
+}
+
+api-test "TP-03: a MALFORMED traceparent is not an error — a fresh trace starts" for TracePropServer requires [billingClient] {
+  stubHttp "GET" "https://billing.internal/*" 200 "billed"
+  let r = post "/charge" headers { traceparent = "total-nonsense" }
+  expect statusOk r.status
+  expect r.body == "charged"
+}
+
+api-test "TP-04: a hostile traceparent (all-zero ids, CRLF, absurd length) is inert" for TracePropServer requires [billingClient] {
+  stubHttp "GET" "https://billing.internal/*" 200 "billed"
+  let zeros = post "/charge" headers { traceparent = "00-00000000000000000000000000000000-0000000000000000-01" }
+  expect statusOk zeros.status
+  let crlf = post "/charge" headers { traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\r\nX-Injected: 1" }
+  expect statusOk crlf.status
+  expect crlf.body == "charged"
+}
+
+api-test "TP-05: an inbound tracestate rides along without disturbing anything" for TracePropServer requires [billingClient] {
+  stubHttp "GET" "https://billing.internal/*" 200 "billed"
+  let r = post "/charge" headers {
+    traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+    tracestate = "congo=t61rcWkgMzE"
+  }
+  expect statusOk r.status
+  expect r.body == "charged"
+}
+
+# ── Injection does not disturb the outbound surface ───────────────────────────
+
+api-test "TP-06: the injected header does not change stub matching or the call count" for TracePropServer requires [billingClient] {
+  stubHttp "GET" "https://billing.internal/invoice/42" 200 "billed"
+  let r = post "/charge" headers { traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01" }
+  expect statusOk r.status
+  expect httpCalled "GET" "https://billing.internal/invoice/42"
+  # EXACTLY once: an instrumentation wrapper that recovered by re-running its body
+  # would show 2 here, which is a duplicate real-world side effect.
+  expect httpCallCount "GET" "https://billing.internal/invoice/42" == 1
+}
+
+api-test "TP-07: an outbound failure still surfaces as itself, not as a trace error" for TracePropServer requires [billingClient] {
+  stubHttp "GET" "https://billing.internal/*" 503 "unavailable"
+  let r = post "/charge" headers { traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01" }
+  expect statusOk r.status
+  expect r.body == "declined"
+  expect httpCallCount "GET" "https://billing.internal/invoice/42" == 1
+}
+
+# ── The same properties hold outside a request, in a plain test block ─────────
+
+test "TP-08: an outbound call from a plain test (no request, no trace) works" requires [billingClient] {
+  stubHttp "GET" "https://billing.internal/invoice/42" 200 "billed"
+  let r = callBilling()
+  expect r.status == 200
+  expect httpCallCount "GET" "https://billing.internal/invoice/42" == 1
+}
