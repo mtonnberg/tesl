@@ -31,7 +31,24 @@ derivation was never stated to be injective — now length-prefixed or hashed, c
 two fail-closed rules would have broken real deployments into disabling them (`Host` validation vs.
 health probes, `Sec-Fetch-Site` vs. non-browser clients) — both get stated, tested exceptions. See
 **§Login methods** (re-shaped again), **§Item A**, **§Where the flow's own state lives**, **§Typed
-identity**, **§The platform baseline**, Risks 56–62, and Open Question 18. Rate
+identity**, **§The platform baseline**, Risks 56–62, and Open Question 18. **Sixth review folded in
+2026-07-30**, checking the fifth review's own enforcement boundary against the tree. Its findings: the
+`loginMethods` allowlist classified `auth` blocks, but `auth` blocks *verify* sessions — the
+session-minting chokepoint in the tree is `Http.setSessionCookie` behind `cookieCap`, called from
+plain handlers (lesson76's own login is one), so a magic-link handler — the fifth review's own listed
+example — still compiled under `loginMethods [Sso]`; the allowlist now classifies the cookie-writing
+sites, keeping the `auth`-block rule for per-request minting. Two gates were *recognisable* rather
+than *unforgeable* — Item A's dataflow discharge and the `Bool`-returning password gate — and both
+become runtime-minted witnesses on the `PasswordHash`/proof-kernel precedent, which deletes the
+planned checker dataflow analysis instead of hardening it. And the frozen auth-event `client IP`
+field records the proxy's socket address until a trusted-proxy declaration exists. See **§Login
+methods** (re-shaped a third time), **§Item A**, Open Questions 15 and 18 (revised), Risks 63–65, and
+the exit criteria, which now require an external pass over the new checker rules themselves. The
+sixth review also moves **per-user session revocation** off the exclusion list: the request-path
+store stays declined, but a fail-closed check consulted only when a session **renews** bounds
+revocation latency to the renewable TTL with the verify path untouched — see **§Revocation at the
+renewal boundary**, item 38, Risk 66, Open Question 19; the platform claim's named exclusions drop
+to two (rate limiting, app-frontend XSS). Rate
 limiting remains explicitly **DEFERRED** — see Risk 19 and **§How rate limiting slots in later** —
 but its *scope* is corrected: it now covers the password endpoint, which is a worse thing to leave
 unmetered than the two SSO routes.)
@@ -158,7 +175,9 @@ unmetered than the two SSO routes.)
     `auth` blocks are the enumerable sanctioned minting sites, so the allowlist form is checkable
     today: under a `loginMethods` declaration, an `auth` block not attributable to a declared method
     does not compile. The password-call rejection stays as a backstop one level down. §Login methods,
-    Risk 56, Open Question 18.
+    Risk 56, Open Question 18. **Corrected in part by the sixth review (item 35, Risk 63): `auth`
+    blocks verify sessions rather than create them, so the primary allowlist boundary is the
+    cookie-writing sites; this rule is kept for the per-request minting it does govern.**
 30. **Item A's binding-secret discharge is defined by dataflow, not by shape.** A discharge
     recognisable by spelling is dischargeable by `secret == secret`. It holds only when a
     config-originated `Secret` is compared against a value read from `request.headers` and the mint
@@ -180,6 +199,34 @@ unmetered than the two SSO routes.)
     methods' runtime-mediated password gate is exactly the dispatch-level chokepoint that item
     requires; its first work is gate-local — a per-identifier throttle plus a process-wide Argon2id
     concurrency cap. §How rate limiting slots in later.
+35. **`loginMethods` classifies the cookie-writing sites; `auth` blocks were the wrong boundary.** The
+    fifth review's allowlist was over `auth` blocks, but those *verify* sessions — lesson76's own login
+    is a plain handler calling `JWT.sign` + `Http.setSessionCookie`
+    (`example/learn/lesson76-sessions.tesl:256`), so a magic-link handler — the fifth review's own
+    listed example — compiled under `loginMethods [Sso]`, caught by neither the allowlist nor the
+    password-call backstop. The true chokepoint is unique and already capability-gated
+    (`Http.setSessionCookie` behind `cookieCap` is the only cookie-writing function, by lesson76's own
+    guarantee): under a `loginMethods` declaration every reachable call site of it must be attributable
+    to a declared method. The `auth`-block rule stays for per-request minting. §Login methods, Risk 63.
+36. **Discharges are runtime-minted witnesses, not recognised code shapes.** Item A's binding-secret
+    discharge was a dataflow pattern for the checker to recognise, and the password gate returned a
+    `Bool` a caller can discard and mint anyway. Both become runtime functions minting evidence only
+    the kernel can mint (`Proxy.verifyBinding`; a witness-returning password gate) on the
+    `PasswordHash`/fact precedent — the forged shapes become unrepresentable instead of detected, and
+    the planned checker dataflow analysis is deleted rather than built. §Item A, §Login methods,
+    Risk 64, Open Question 15.
+37. **The auth event's client-address field is named for what it records.** Behind every real
+    deployment the socket peer is the proxy, and the trusted-proxy declaration is deferred with rate
+    limiting — so the field ships as `peerAddress` (or with socket-peer semantics documented on it),
+    and `clientIP` appears only when a trusted-proxy declaration can make it true. Risk 65.
+38. **Per-user revocation moves from standing gap to renewal-boundary check.** The non-goal's argument
+    covers a store *on the request path*; a check at **renewal** costs one read per session per TTL,
+    keeps verify stateless, and bounds revocation latency to the renewable window (≤1h
+    `StandardSession`, ≤15min `ShortSession`) — the same semantics as the access/refresh-token
+    architecture, where the refresh boundary is the control point. Optional fail-closed hook over the
+    app's own schema; absent hook is today's behaviour. It does **not** shorten the
+    IdP-deprovisioning window by itself — that is stated, not implied. §Revocation at the renewal
+    boundary, Risk 66, Open Question 19.
 
 ## The answer to "it is not clear if it works": it does not
 
@@ -286,6 +333,19 @@ therefore name the concrete binding, not just the principle:
   connection value), (2) the other operand is read from `request.headers`, and (3) the fact-mint is
   control-dependent on the comparison succeeding — a false branch that still mints does not
   discharge. Phase −2 carries the forged shapes as compile-time negatives (Risk 57).
+- **Revised by the sixth review: the discharge is a runtime-minted witness, and the dataflow analysis
+  is deleted rather than built (Risk 64).** Risk 57's rule is right about what must hold and expensive
+  about how: it puts a control-dependence analysis into the checker — the component the 2026-07-05
+  reviews identified as this codebase's historically fail-open one — to *recognise* a pattern the
+  runtime could simply *own*. Instead, one stdlib function performs the comparison and mints evidence
+  only the kernel can mint: `Proxy.verifyBinding : Secret -> HttpRequest -> …`, producing a
+  `ProxyBound`-style fact on success and failing closed otherwise, on the `PasswordHash`/fact
+  precedent this document already leans on twice. The forged shapes (`secret == secret`,
+  header-vs-header, a literal compare, a false branch that still mints) stop being negatives the
+  checker must catch and become unrepresentable — none of them produces the witness, and the mint
+  requires the witness. Control-dependence comes free: the witness does not exist unless the check
+  succeeded. Phase −2 keeps the forged shapes as tests, now asserting unconstructibility rather than
+  checker vigilance.
 - Whichever it is, the lesson must state the interface question explicitly and show the check
   (`ss -ltnp`, or the equivalent) as part of the pattern, because "it works" and "it is bound only to
   the proxy" look identical from the browser.
@@ -884,9 +944,68 @@ server AppServer for AppApi {
 - **Both keys are `Secret`**, and the absent-previous case is the default, so nothing changes for
   existing programs.
 
-Per-user revocation stays a non-goal — but it is now named as the standing gap in §The platform
-baseline rather than left to be discovered, and the two blunt levers (rotate the key, lower the policy)
-are documented as what exists instead.
+**Superseded by the sixth review: per-user revocation is no longer a non-goal** — see §Revocation at
+the renewal boundary, which lands it without touching the request path. The two blunt levers (rotate
+the key, lower the policy) remain as the *zero-latency* incident responses; the renewal check is the
+targeted one.
+
+### Revocation at the renewal boundary
+
+The non-goal this document inherited (LANGUAGE-SPEC §21.8) is a session **store on the request
+path** — a per-request read is the stateless-scaling trade the language deliberately declined, and it
+stays declined. But "no store on the request path" had been silently widened into "no per-user
+revocation at all", and the two are not the same, because the session design already has a second,
+rare, runtime-owned event: **renewal**. A token is verified on every request but *renewed* once per
+TTL, and the renewal clamp already runs in one place (`tesl/jwt.rkt:596-607`). Consulting a
+revocation check there — and only there — costs one read per session per renewable window and changes
+nothing about verify:
+
+```tesl
+server AppServer for AppApi {
+  sessionPolicy   ShortSession
+  sessionRevoked  revoked          # OPTIONAL — the renewal-boundary check
+}
+
+fn revoked(subject: String, issuedAt: PosixMillis) -> Bool requires [dbRead] =
+  -- the app's own schema: a disabled flag, or a per-user
+  -- "revoke every session issued before T" timestamp
+  ...
+```
+
+Rules, each where the naive version goes wrong:
+
+- **Consulted at renewal only, never at verify.** The request path stays byte-identical stateless; a
+  test asserts no read happens on ordinary verify with the hook declared. This keeps the original
+  non-goal's *reason* intact while deleting its overreach.
+- **Latency is the remaining renewable window, and the spec says the number.** A revoked user's live
+  token stays valid until its own `exp`: ≤1 hour under `StandardSession`, ≤15 minutes under
+  `ShortSession`. That is the bound the access/refresh-token architecture already ships everywhere —
+  access tokens are not revocable mid-lifetime either; the refresh boundary is the control point, and
+  Entra's own default access-token lifetime is longer than `ShortSession`'s window. "Per-user
+  revocation with latency bounded by the renewable TTL" is the sentence an enterprise reviewer
+  accepts; "instant revocation" is the overclaim Risk 66 exists to prevent.
+- **Fail-closed.** The hook raising, or its `dbRead` failing, denies the renewal — the user
+  re-authenticates. For an SSO user that is one silent redirect (the IdP session persists), and it
+  re-applies the IdP's own policy at that moment, which is a feature.
+- **The signature carries `issuedAt`** so "log this user out everywhere" is expressible as app data:
+  write a per-user timestamp, deny renewal of anything issued before it. Subject alone cannot express
+  that.
+- **A denied renewal is an expired session** — 401, cookie cleared, re-login — the path that already
+  exists; no new failure mode.
+- **Absent hook = today's behaviour**, and the store is the app's own schema, so Tesl still owns no
+  session store and nothing changes for existing programs.
+- **What this does *not* do, stated:** it does not shorten the IdP-deprovisioning window by itself —
+  the hook reads the app's table, not the IdP, so a user disabled *only* at the IdP still renews
+  until the absolute cap unless the app mirrors deprovisioning into its own data (SCIM stays a
+  non-goal). And it is not instant: the two blunt levers remain the zero-latency responses.
+
+With this, §The platform baseline's item 3 comes off the exclusion list the same way mixed-mode login
+did — by becoming a runtime-owned mechanism rather than prose — and the platform claim's named
+exclusions drop to **two**: rate limiting and app-frontend XSS.
+
+Tests: renewal of a revoked subject denied with the cookie cleared; a revoke-before-`issuedAt`
+timestamp denying an older token while a newer one renews; the hook raising ⇒ denial; ordinary verify
+performing **no** read with the hook declared; absent hook ⇒ byte-identical behaviour to today.
 
 ### Where the flow's own state lives
 
@@ -1022,6 +1141,40 @@ already has the facts: **`auth` blocks are the enumerable sanctioned session-min
   mean — *this program has no session-minting site other than the SSO callback* — rather than "this
   program does not call two particular functions".
 
+**Re-shaped a third time by the sixth review: the allowlist must cover the sites that *create*
+sessions, and `auth` blocks are not those sites (Risk 63).** The fifth review's premise — "`auth`
+blocks are the enumerable sanctioned session-minting sites" — is not what the tree says. An `auth`
+block mints the per-request `Authenticated` fact from evidence it reads; the *session* is created
+elsewhere, by an ordinary handler: lesson76's own login is a plain POST handler calling `JWT.sign`
+then `Http.setSessionCookie` (`example/learn/lesson76-sessions.tesl:256`), and its `auth` block
+(`sessionOwner`, `:280`) verifies whatever session exists, method-blind. So under
+`loginMethods [Sso]` the magic-link flow — the fifth review's own listed example — still compiled: a
+handler validates the emailed token against the DB and sets the cookie; it contains no password call
+(the backstop misses it) and no `auth` block (the allowlist misses it). The fourth door was still
+open, one level below the fix built to close it. The correct chokepoint already exists, is unique,
+and is already capability-gated — lesson76's own guarantee is "no way to set an unsigned cookie, and
+no second cookie-writing function":
+
+- **Under a `loginMethods` declaration, every reachable `Http.setSessionCookie` call site must be
+  attributable to exactly one declared method.** The runtime's SSO callback is `Sso` by construction;
+  a site gated by the password witness (below) is `Password`; any other site — a magic-link handler,
+  a signup auto-login, anything holding `cookieCap` — carries the Open Question 18 attribution or
+  does not compile. Enumeration rides the existing capability system (`cookieCap` already names every
+  holder) rather than a parallel registry.
+- **The `auth`-block classification stays**, for the minting it does govern: per-request fact-minting
+  with no session (API keys, the Item A header path). Both classifications are fail-closed;
+  unattributable is refused in each.
+- **The password gate returns a witness, not a `Bool` (Risk 64).** `Auth.passwordLogin : … -> Bool`
+  is forgeable by discarding the result — call it, ignore the `Bool`, set the cookie anyway — and an
+  attribution meaning "wired through the gate" would bless exactly that bypass. The gate returns
+  kernel-minted evidence (spelling with Open Question 15), and a `Password`-attributed cookie site
+  requires it: the same construction-not-analysis move as §Item A's `Proxy.verifyBinding`, for the
+  same reason — the witness cannot exist unless the check succeeded, so control-dependence needs no
+  checker analysis.
+- Consequence, corrected: `loginMethods [Sso]` now delivers the sentence the fifth review only
+  promised — *no code path in this program can produce a session cookie except the SSO callback* —
+  because the rule sits on the one function that produces session cookies.
+
 **Cost, honestly.** More than the warning the third review budgeted: a `loginMethods` server clause
 (thin — a list plus one optional function reference, the same AST shape as `sso` itself), one checker
 rule keyed on the declaration, and a runtime-mediated password path. It is worth it because the
@@ -1127,12 +1280,14 @@ cookie carries the property. In scope:
   ambient cookie to protect, so fail-closed here would break every API client while defending
   nothing. The braces (`SameSite` + 415 + no-CORS) carry the property; this header is the belt.
 
-**3. Per-user session revocation remains a non-goal, now stated as the standing gap.** §Session key
-rotation gives two blunt levers (rotate the key; lower the `SessionPolicy`), both global. "Log this one
-user out now" does not exist, and for an enterprise SSO integration that is usually a harder question
-than ID-token signatures. It is not in this item — it needs a store on the request path, which is the
-stateless-scaling trade the language deliberately declined — but it must appear in the LANGUAGE-SPEC
-section next to the revocation-window paragraph rather than being left for a reviewer to find.
+**3. Per-user session revocation — IN SCOPE via the renewal boundary (sixth review).** The earlier
+framing — "it needs a store on the request path" — was the non-goal's reason widened past its
+argument: renewal, not verify, is where the check belongs, and renewal already runs in one place.
+§Revocation at the renewal boundary lands an optional fail-closed hook consulted only there, with
+revocation latency bounded by the renewable TTL and the verify path untouched. The two blunt levers
+(§Session key rotation) remain the zero-latency incident responses; "log this one user out now" gets
+the targeted answer an enterprise reviewer asks for. Off the exclusion list, the way mixed-mode login
+came off it — with its own overclaims named (Risk 66).
 
 **4. Rate limiting stays deferred** — see below, and Risk 19, whose *scope* the fourth review corrects:
 it is not only the two SSO routes.
@@ -1153,11 +1308,13 @@ CSP reduces rather than eliminates XSS, and script on the app's origin defeats t
 using the cookie rather than reading it. This is the third thing the platform claim does not cover, and it
 was previously an unstated precondition of it.
 
-With 1, 2, 5 and Phases −1…5 in, the honest platform claim is: **gold standard except per-user session
-revocation, rate limiting, and cross-site scripting in the app's own frontend — all three named in the
-spec with their deployment-level answers.** That sentence, and not "gold standard", is what may ship
-until those land. Note that mixed-mode login is **no longer** on this list: §Login methods moved it from
-a documented trap to a checked declaration, which is what the other three would each need to come off it.
+With 1, 2, 3, 5 and Phases −1…5 in, the honest platform claim is: **gold standard except rate limiting
+and cross-site scripting in the app's own frontend — both named in the spec with their
+deployment-level answers.** That sentence, and not "gold standard", is what may ship until those land.
+Note that mixed-mode login and per-user revocation are **no longer** on this list: §Login methods
+moved the first from a documented trap to a checked declaration, and §Revocation at the renewal
+boundary moved the second to a runtime-owned check — which is what the remaining two would each need
+to come off it.
 
 ### How rate limiting slots in later
 
@@ -1310,6 +1467,10 @@ everything from Phase 1 on is the feature.
   here;
   (d) the `Sec-Fetch-Site` refusal fires only on the literal `cross-site` — an absent header allows
   (Risk 61).
+  Added by the sixth review, same phase:
+  (a⁗) the binding-secret discharge is a **runtime-minted witness** — `Proxy.verifyBinding`, §Item A,
+  Risk 64 — superseding (a″)'s dataflow analysis; the forged shapes stay as tests, now asserting that
+  none of them can construct the witness rather than that the checker recognises each.
   Tests: the compile-time negative for a header-trusting `auth` block, in all three discharge shapes; a
   byte-identical-output header test; a ratchet test that no response path skips the header set, **naming
   the static and SPA-fallback paths explicitly** since those are the two that skip it today; HSTS present
@@ -1445,7 +1606,11 @@ everything from Phase 1 on is the feature.
   function on both verify and set. Re-shaped by the fifth review (Risk 56): the enforcement is the
   **allowlist over `auth` blocks** — under a `loginMethods` declaration every `auth` block must be
   attributable to a declared method, and an unattributable block does not compile — with the
-  password-call rejection kept as the backstop one level down. **The runtime-enforced `allowedEmailDomains` / `allowedHostedDomains`
+  password-call rejection kept as the backstop one level down. Re-shaped a third time by the sixth
+  review (Risk 63): the allowlist additionally — and primarily — classifies every reachable
+  `Http.setSessionCookie` call site (enumerable via `cookieCap`), since sessions are created by
+  handlers rather than by `auth` blocks; and the runtime-mediated password path returns a
+  kernel-minted witness rather than `Bool` (Risk 64, Open Question 15). **The runtime-enforced `allowedEmailDomains` / `allowedHostedDomains`
   checks land with it** — before `onIdentity` is called, and satisfiable only by `VerifiedEmail`
   (§Domain restriction, Risk 53). The denial semantics in §What `onIdentity` does when
   it says no are asserted here. **`SessionPolicy` lands here too** — the `sessionPolicy` server setting
@@ -1455,7 +1620,10 @@ everything from Phase 1 on is the feature.
   policy. **`ssoPreviousKey` lands here too** (§Session key rotation): the optional second verify slot,
   sign-with-current, renewal re-signing under the current key, `kid` staying advisory as
   `tesl/jwt.rkt:233-238` already argues. Its runtime half is likewise independent of SSO and may land
-  earlier, with the tests named in that section.
+  earlier, with the tests named in that section. **The `sessionRevoked` renewal-boundary hook lands
+  here too** (§Revocation at the renewal boundary): the optional server clause and the consult wired
+  into the renewal clamp (`tesl/jwt.rkt:596-607`), fail-closed, verify path untouched; its runtime
+  half is likewise independent of SSO, with the tests named in that section.
 - **Phase 4 — surface polish.** Template with a working three-button login,
   `example/learn/lessonXX-sso.tesl`, LANGUAGE-SPEC section carrying **both** trust arguments
   (signature verification + validated claims for OIDC; PKCE + `state` + single-use code + server-side
@@ -1469,8 +1637,8 @@ everything from Phase 1 on is the feature.
   §Session policy — including the rolling-deploy semantics), and the deferred rate limiting (Risk 19).
   Added by the third review, all spec text rather than code: the **mixed-mode bypass rule** and the
   one-enforcement-function pattern (§Login methods); **key rotation as the only kill switch**, with the
-  procedure and its bluntness (§Session key rotation); **per-user revocation as the standing gap**, next
-  to the revocation-window paragraph; the **`client_secret` half of Risk 11 that Phase 2.5 does not
+  procedure and its bluntness (§Session key rotation); **per-user revocation at the renewal boundary — its latency bound
+  and its two overclaims (Risk 66)** — next to the revocation-window paragraph; the **`client_secret` half of Risk 11 that Phase 2.5 does not
   close**, with rotation as the answer; why **`at_hash`/`c_hash` are correctly absent**; and the
   identity-key rule (`(issuer, subject)`, synthesised issuer for plain OAuth2, segment is not identity).
   Added by the fourth review, also spec text: **what single-use `state` does and does not guarantee**
@@ -1611,6 +1779,19 @@ everything from Phase 1 on is the feature.
     - **Operational exceptions, both directions:** a probe-path request with `Host: <ip>` accepted
       while any other path with a mismatched `Host` is refused; a state-changing request with **no**
       `Sec-Fetch-Site` header accepted while `cross-site` is refused.
+  Added by the sixth 2026-07-30 review:
+    - **Cookie-writing allowlist:** a magic-link flow — a plain handler that validates an emailed
+      token and calls `JWT.sign` + `Http.setSessionCookie`, with no password call and no `auth`
+      block — must not compile under `loginMethods [Sso]`; the same handler carrying an Open
+      Question 18 attribution to a declared method must.
+    - **Witness forgery:** a `Password`-attributed cookie site that calls the password gate and
+      discards its result must not compile (the witness is required, not the call); each of Risk 57's
+      forged shapes must be unable to construct a `ProxyBound` witness; and a hand-built value of
+      either witness type must be impossible on the Tesl surface (no constructor), in the mould of
+      the existing fail-closed characterization tests.
+    - **Event-log field:** the auth event emitted behind a proxy carries the socket peer under the
+      corrected name; no field named `clientIP` ships while it would carry the proxy's address
+      (Risk 65).
 
 *Exit for the whole item:* two end-to-end api-tests — one OIDC (stubbed discovery → JWKS → token →
 callback) and one plain OAuth2 (stubbed token → userinfo → callback) — each driving login → session
@@ -1644,12 +1825,21 @@ cookie is simply not stored, or the policy simply blocks the app's own script, a
 assertion still passes. One headless-browser run through login → session → protected endpoint → logout,
 against the containerised IdP, catches that class. Nothing else on this list can (Risk 55).
 
+**Added by the sixth review — an external pass over the new checker rules themselves.** Five
+successive reviews each found real holes in the previous round's fixes, and the sixth found one in the
+fifth's (Risk 63). Every guarantee this item adds rides on new compile-time rules in the component the
+2026-07-05 reviews identified as this codebase's historically fail-open one, so "gold standard"
+additionally waits on one independent review scoped to exactly those rules — the `loginMethods`
+attributions (cookie-writing sites and `auth` blocks), the two witness requirements, and the Phase −2
+discharges — held to the same adversarial standard Phase 5 applies to the flow.
+
 And the claim itself: **until §The platform baseline items 1, 2 and 5 land, the item may be described as a
 gold-standard SSO *flow*, not as a gold-standard *platform*** — the two sentences are different, and the
-second is the one the original ask is about. Its named, spec-stated exclusions are **three**: per-user
-session revocation, rate limiting (at the scope corrected below — including the password endpoint), and
-cross-site scripting in the app's own frontend. Mixed-mode login was a fourth until §Login methods made it
-a checked declaration; that is the standard the other three are measured against.
+second is the one the original ask is about. Its named, spec-stated exclusions are **two**: rate
+limiting (at the scope corrected below — including the password endpoint) and cross-site scripting in
+the app's own frontend. Mixed-mode login and per-user revocation were the third and fourth until
+§Login methods made the one a checked declaration and §Revocation at the renewal boundary made the
+other a runtime-owned check; that is the standard the remaining two are measured against.
 
 ## Non-goals
 
@@ -1712,7 +1902,10 @@ a checked declaration; that is the standard the other three are measured against
   a login mechanism only, a user disabled or deprovisioned at the IdP keeps access to the app until
   their session JWT expires — up to 1 hour, and up to the 12-hour absolute cap if it renews, under the
   default `StandardSession` policy; `ShortSession` narrows that to 15 minutes / 8 hours, and choosing
-  the policy is the **only** control over this window (§Session policy). Logging
+  the policy is the **only** control over this window (§Session policy). **The renewal-boundary hook
+  does not change this window by itself** — it consults the app's own data, not the IdP, so an
+  IdP-only disable runs to the absolute cap unless the app mirrors deprovisioning into its data
+  (SCIM stays out; §Revocation at the renewal boundary, Risk 66). Logging
   out of the app clears only the app's cookie; the provider's session persists, so on a shared machine
   "log out, log in" is an instant silent re-login. Both are acceptable for v1 and both are the first
   questions an enterprise security reviewer asks about an SSO integration, so they belong in the
@@ -1720,10 +1913,11 @@ a checked declaration; that is the standard the other three are measured against
   `Http.redirect` — the separate item.)
 - IdP-initiated login; implicit and hybrid flows.
 - `Http.redirect` and any general redirect surface — **separate item**.
-- **Per-user server-side session revocation** (unchanged non-goal, LANGUAGE-SPEC §21.8) — but no longer
-  left implicit. It is the standing gap in §The platform baseline; what exists instead is two blunt
-  global levers (rotate the signing key, lower the `SessionPolicy`), both documented in §Session key
-  rotation, and an enterprise reviewer will ask about this before asking about signatures.
+- **Per-user revocation on the *request path*** (LANGUAGE-SPEC §21.8) — narrowed by the sixth review
+  to what its argument actually covers. A per-request store stays out; per-user revocation itself is
+  **in scope** at the renewal boundary (§Revocation at the renewal boundary), with latency bounded by
+  the renewable TTL, the two blunt levers (§Session key rotation) as the zero-latency responses, and
+  the overclaims named in Risk 66.
 - **Forced reauthentication and step-up:** `max_age`, `prompt=login`, `prompt=consent` and the
   `auth_time` claim are not passed and not checked, so an app cannot demand a fresh authentication for a
   sensitive action, and cannot tell how long ago the IdP actually authenticated the user. `ShortSession`
@@ -2161,6 +2355,47 @@ own root-cause diagnosis (decide-by-spelling; fail-open by enumeration):
     sides (case-insensitive over A-labels), config at compile/boot, claims at check time, tested in
     Phase 5. §Domain restriction.
 
+Added by the sixth 2026-07-30 review, which checked the fifth review's enforcement boundary against
+the tree:
+
+63. **The `loginMethods` allowlist guarded the verifiers, not the minting sites.** "`auth` blocks are
+    the enumerable sanctioned session-minting sites" is false in the tree: an `auth` block mints the
+    per-request `Authenticated` fact; the *session* is created by whatever handler calls `JWT.sign` +
+    `Http.setSessionCookie` — lesson76's login is a plain POST handler doing exactly that
+    (`example/learn/lesson76-sessions.tesl:256`), and its `auth` block verifies sessions method-blind.
+    A magic-link handler therefore compiled under `loginMethods [Sso]` — no password call for the
+    backstop, no `auth` block for the allowlist — one level below the fix built to close it. Contain:
+    the allowlist classifies every reachable `Http.setSessionCookie` site, enumerable via `cookieCap`
+    (the existing gate; lesson76 already guarantees there is no second cookie-writing function), with
+    the `auth`-block classification retained for per-request minting. Phase 5 carries the magic-link
+    negative. §Login methods.
+64. **Two gates were recognisable rather than unforgeable.** Item A's discharge asked the checker —
+    the component the 2026-07-05 reviews identified as historically fail-open — to run a
+    control-dependence analysis recognising a comparison pattern, and the password gate returned a
+    `Bool` whose caller can ignore it and mint anyway (the exact false-branch shape Risk 57 lists, one
+    gate over). Contain: both become runtime functions minting kernel evidence —
+    `Proxy.verifyBinding` producing a `ProxyBound`-style fact, a witness-returning password gate — so
+    the forged shapes are unrepresentable by construction and control-dependence is free (no witness
+    unless the check succeeded). The proof kernel is the mechanism this codebase already trusts for
+    exactly this job. §Item A, §Login methods, Open Questions 15 and 18.
+65. **The frozen auth-event field `client IP` records the proxy.** Risk 21 froze the event's fields so
+    the future rate limiter needs no second emit site — but client-IP determination explicitly waits
+    for the trusted-proxy declaration deferred with rate limiting, so until then the value is the
+    socket peer: the proxy's address, behind every deployment Item A blesses. An operator reading it,
+    or a limiter later keying on it, gets the wrong answer with a right-sounding name. Contain: ship
+    the field as `peerAddress` (or document socket-peer semantics on the field itself); introduce
+    `clientIP` only when the trusted-proxy declaration lands and can make it true. Risk 21, §How rate
+    limiting slots in later.
+66. **Revocation-at-renewal invites two overclaims, and has one regression to guard.** "Per-user
+    revocation" reads as instant, and as covering the IdP: neither is true — a revoked user's live
+    token stays valid until its own `exp` (the renewable window), and the hook reads the app's data,
+    so an IdP-only disable still runs to the absolute cap unless the app mirrors it. The regression:
+    the check must never migrate to the verify path, or the stateless-scaling trade has been silently
+    re-traded under a feature's name. Contain: both bounds stated in the spec next to the
+    revocation-window paragraph; the two blunt levers documented as the zero-latency responses; and a
+    test asserting ordinary verify performs no read with the hook declared. §Revocation at the
+    renewal boundary.
+
 ## Open questions
 
 1. **Is `sso` a clause on `server`, or a top-level declaration referenced by name from the server?**
@@ -2275,7 +2510,10 @@ Added by the fourth 2026-07-30 review:
    compiling untouched, the gated path is the one with the better name, and "the un-gated function does not
    compile next to SSO" is a clearer rule than "the function behaves differently depending on a clause
    elsewhere". Also decide the set-side spelling (reset/signup/admin-set) at the same time, since it must be
-   gated identically.
+   gated identically. **Revised by the sixth review (Risk 64): whatever the spelling, the gate returns
+   kernel-minted evidence rather than `Bool` — a `Bool` is forgeable by discarding it — and the
+   set-side functions are witness-gated identically. The `Password` attribution then means "this
+   cookie site requires the witness", not "this site calls the function".**
 16. **Is the `__Host-oauth` payload MAC'd or AEAD'd?** (Risk 43.) A MAC over a readable payload keeps the
    value debuggable in a browser dev-tools session; AEAD hides `nonce` and the verifier from anything that
    captures the cookie without the key. RECOMMENDATION: AEAD — the payload is a bearer secret in its own
@@ -2304,4 +2542,17 @@ Added by the fifth 2026-07-30 review:
    block references. RECOMMENDATION: the annotation on the block — it is local, it reads in review at
    the site that mints, and it matches the Item A acknowledgement precedent ("the escape exists but is
    visible in the program"). The fail-closed rule is independent of the spelling: no attribution, no
-   compile.
+   compile. **Extended by the sixth review (Risk 63): the same attribution spelling covers
+   `Http.setSessionCookie` call sites, which are the primary boundary — one mechanism for both site
+   kinds, and a handler-level cookie site with no attribution does not compile under a `loginMethods`
+   declaration.**
+19. **What is the spelling and signature of the renewal-boundary hook?** (§Revocation at the renewal
+   boundary.) Candidates: `sessionRevoked(subject, issuedAt) -> Bool` (deny renewal on `True`, deny
+   on error) or the positive `sessionActive`. RECOMMENDATION: `sessionRevoked`, with `issuedAt` in
+   the signature — the negative name makes the fail-closed direction read naturally ("an error means
+   assume revoked"), and `issuedAt` is what makes "log this user out everywhere" expressible as one
+   app-data timestamp. Decide together with Open Question 13's renames so the session-setting
+   spellings ship once. Also settle and write down: a `Bool` is acceptable *here*, unlike Risk 64's
+   gates — the runtime is both caller and consumer, so there is no app-side mint for a discarded
+   result to forge; state that distinction so a future review does not "fix" it into a witness
+   nobody needs.

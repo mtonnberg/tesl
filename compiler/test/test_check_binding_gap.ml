@@ -411,6 +411,242 @@ fn f(token: JwtToken) -> Bool requires [jwt] =
      if e.fix <> None then
        Alcotest.fail "no source snapshot must mean no fix (fail-closed)")
 
+(* ── 5. The remaining six escape routes ──────────────────────────────────
+   roadmap/next/check_result_escapes_beyond_bindings.md: the same defect,
+   found while closing the `let`-RHS gap above but deliberately left out of
+   that change's scope — a case scrutinee, a record field, a list element, a
+   binop operand (the `if` condition is the same defect through the operand
+   it is built from), and a string interpolation hole. *)
+
+let value_position_errors src =
+  List.filter (fun (d : Compile.diagnostic) ->
+      contains "cannot be used directly as" d.message)
+    (errors_of src)
+
+let expect_value_position_error name src ~callee ~position =
+  match value_position_errors src with
+  | [] ->
+    Alcotest.failf "%s: expected the check-result-escape error naming `%s`, got:\n%s"
+      name callee
+      (String.concat "\n"
+         (List.map (fun (d : Compile.diagnostic) -> d.message) (errors_of src)))
+  | [ d ] ->
+    if not (contains callee d.message) then
+      Alcotest.failf "%s: the error must name `%s`, got:\n%s" name callee d.message;
+    if not (contains position d.message) then
+      Alcotest.failf "%s: the error must name the position `%s`, got:\n%s"
+        name position d.message;
+    d
+  | many ->
+    (* One escaping call site, one diagnostic — a duplicate would mean the
+       same expression is judged by more than one checker arm. *)
+    Alcotest.failf "%s: expected exactly 1 check-result-escape error, got %d:\n%s" name
+      (List.length many)
+      (String.concat "\n"
+         (List.map (fun (d : Compile.diagnostic) -> d.message) many))
+
+let expect_no_value_position_error name src =
+  match value_position_errors src with
+  | [] -> ()
+  | ds ->
+    Alcotest.failf "%s: the check-result-escape rule must not fire here, got:\n%s" name
+      (String.concat "\n"
+         (List.map (fun (d : Compile.diagnostic) -> d.message) ds))
+
+let int_module body =
+  Printf.sprintf
+    "module M exposing [f]\n\
+     import Tesl.Prelude exposing [Int, Bool(..), String, List]\n\
+     import Tesl.Int exposing [Int.nonZero]\n\
+     %s"
+    body
+
+(* ── 5a. The six shapes are refused ──────────────────────────────────────── *)
+
+let test_case_scrutinee_is_refused () =
+  let src =
+    int_module
+      {|
+fn f(b: Int) -> String =
+  case Int.nonZero b of
+    _ -> "x"
+|}
+  in
+  ignore (expect_value_position_error "case_scrutinee" src
+            ~callee:"Int.nonZero" ~position:"a case scrutinee")
+
+let test_record_field_is_refused () =
+  let src =
+    int_module
+      {|
+record R { n: Int }
+
+fn f(b: Int) -> Int =
+  let r = R { n: Int.nonZero b }
+  r.n
+|}
+  in
+  ignore (expect_value_position_error "record_field" src
+            ~callee:"Int.nonZero" ~position:"a record field")
+
+let test_list_element_is_refused () =
+  let src =
+    int_module
+      {|
+fn f(b: Int) -> List Int =
+  [Int.nonZero b]
+|}
+  in
+  ignore (expect_value_position_error "list_element" src
+            ~callee:"Int.nonZero" ~position:"a list element")
+
+let test_binop_operand_is_refused () =
+  let src =
+    int_module
+      {|
+fn f(b: Int) -> Int =
+  1 + Int.nonZero b
+|}
+  in
+  ignore (expect_value_position_error "binop_operand" src
+            ~callee:"Int.nonZero" ~position:"a binary operator operand")
+
+(* The `if` condition is the same defect through the binop operand it is
+   built from — no arm of its own in the checker, so no separate wording
+   either; the error still names the operand position. *)
+let test_if_condition_is_refused () =
+  let src =
+    int_module
+      {|
+fn f(b: Int) -> String =
+  if Int.nonZero b > 0 then
+    "pos"
+  else
+    "non-pos"
+|}
+  in
+  ignore (expect_value_position_error "if_condition" src
+            ~callee:"Int.nonZero" ~position:"a binary operator operand")
+
+let test_string_interpolation_is_refused () =
+  let src =
+    int_module
+      {|
+fn f(b: Int) -> String =
+  "v=${Int.nonZero b}"
+|}
+  in
+  ignore (expect_value_position_error "string_interpolation" src
+            ~callee:"Int.nonZero" ~position:"a string interpolation hole")
+
+(* ── 5b. What must keep compiling ────────────────────────────────────────── *)
+
+(* The `check`-insertion fix produces exactly this spelling, so it has to stay
+   legal in every one of the six positions — a case scrutinee here, and the
+   other five below. *)
+let test_checked_case_scrutinee_compiles () =
+  let src =
+    int_module
+      {|
+fn f(b: Int) -> String =
+  case check Int.nonZero b of
+    _ -> "x"
+|}
+  in
+  expect_no_value_position_error "checked_case_scrutinee" src;
+  ignore (compile_ok "checked_case_scrutinee" src)
+
+let test_checked_record_field_compiles () =
+  let src =
+    int_module
+      {|
+record R { n: Int }
+
+fn f(b: Int) -> Int =
+  let r = R { n: check Int.nonZero b }
+  r.n
+|}
+  in
+  expect_no_value_position_error "checked_record_field" src;
+  ignore (compile_ok "checked_record_field" src)
+
+let test_checked_list_element_compiles () =
+  let src =
+    int_module
+      {|
+fn f(b: Int) -> List Int =
+  [check Int.nonZero b]
+|}
+  in
+  expect_no_value_position_error "checked_list_element" src;
+  ignore (compile_ok "checked_list_element" src)
+
+let test_checked_binop_operand_compiles () =
+  let src =
+    int_module
+      {|
+fn f(b: Int) -> Int =
+  1 + check Int.nonZero b
+|}
+  in
+  expect_no_value_position_error "checked_binop_operand" src;
+  ignore (compile_ok "checked_binop_operand" src)
+
+let test_checked_string_interpolation_compiles () =
+  let src =
+    int_module
+      {|
+fn f(b: Int) -> String =
+  "v=${check Int.nonZero b}"
+|}
+  in
+  expect_no_value_position_error "checked_string_interpolation" src;
+  ignore (compile_ok "checked_string_interpolation" src)
+
+(* A partial application hands over a check FUNCTION in these positions too —
+   the same line [call_head_check_shaped_expr] already draws for the `let`
+   rule, reused rather than redrawn. *)
+let test_partial_application_as_list_element_compiles () =
+  let src =
+    "module M exposing [f]\n\
+     import Tesl.Prelude exposing [String, List]\n\
+     import Tesl.Dict exposing [Dict, Dict.requireKey]\n\
+     \n\
+     fn f() -> List (Dict String String -> Dict String String) =\n\
+    \  [Dict.requireKey \"sub\"]\n"
+  in
+  expect_no_value_position_error "partial_application_list_element" src;
+  ignore (compile_ok "partial_application_list_element" src)
+
+(* A bare reference to a user check function is a check FUNCTION too, same as
+   `check f a b`'s own head — not a call, so not this rule's business. *)
+let test_bare_reference_as_list_element_compiles () =
+  let src =
+    check_fn_module
+      {|
+fn f() -> List (Int -> Int) =
+  [checkPositive]
+|}
+  in
+  expect_no_value_position_error "bare_reference_list_element" src;
+  ignore (compile_ok "bare_reference_list_element" src)
+
+(* A check function's own tail verdict — the composing case the rule must
+   leave alone — still compiles from inside a case arm's body, which is a
+   tail position of the arm, not a value position this rule touches. *)
+let test_check_tail_inside_case_arm_compiles () =
+  let src =
+    check_fn_module
+      {|
+fn f(n: Int) -> Int =
+  case n > 0 of
+    True -> check checkPositive n
+    False -> check checkPositive 1
+|}
+  in
+  expect_no_value_position_error "check_tail_inside_case_arm" src;
+  ignore (compile_ok "check_tail_inside_case_arm" src)
+
 let () =
   Alcotest.run "check-binding gap"
     [
@@ -457,5 +693,39 @@ let () =
             test_fix_inserts_check_at_the_callee;
           Alcotest.test_case "no snapshot, no fix" `Quick
             test_no_source_snapshot_no_fix;
+        ] );
+      ( "six more escape routes: refusals",
+        [
+          Alcotest.test_case "case scrutinee" `Quick
+            test_case_scrutinee_is_refused;
+          Alcotest.test_case "record field" `Quick
+            test_record_field_is_refused;
+          Alcotest.test_case "list element" `Quick
+            test_list_element_is_refused;
+          Alcotest.test_case "binop operand" `Quick
+            test_binop_operand_is_refused;
+          Alcotest.test_case "if condition" `Quick
+            test_if_condition_is_refused;
+          Alcotest.test_case "string interpolation" `Quick
+            test_string_interpolation_is_refused;
+        ] );
+      ( "six more escape routes: no false positives",
+        [
+          Alcotest.test_case "checked case scrutinee compiles" `Quick
+            test_checked_case_scrutinee_compiles;
+          Alcotest.test_case "checked record field compiles" `Quick
+            test_checked_record_field_compiles;
+          Alcotest.test_case "checked list element compiles" `Quick
+            test_checked_list_element_compiles;
+          Alcotest.test_case "checked binop operand compiles" `Quick
+            test_checked_binop_operand_compiles;
+          Alcotest.test_case "checked string interpolation compiles" `Quick
+            test_checked_string_interpolation_compiles;
+          Alcotest.test_case "partial application as list element" `Quick
+            test_partial_application_as_list_element_compiles;
+          Alcotest.test_case "bare reference as list element" `Quick
+            test_bare_reference_as_list_element_compiles;
+          Alcotest.test_case "check tail inside case arm" `Quick
+            test_check_tail_inside_case_arm_compiles;
         ] );
     ]

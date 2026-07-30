@@ -1,7 +1,24 @@
 # An unwrapped check result still escapes through six value positions
 
-> **Status:** Next · **Effort:** M. Same class as `roadmap/completed/check_binding_gap.md` —
-> found while closing it, deliberately left out of that change's scope.
+> **Status: IMPLEMENTED 2026-07-30.** Landed as `Checker.reject_check_result_in_value_position`
+> (`compiler/lib/checker.ml`), sharing `call_head_check_shaped_expr` with the `let`-binding
+> rule so "saturating call" is decided in one place across all positions. Wired into every
+> value-consuming site: `ECase` scrutinee (`infer_expr` + `check_expr`), record field value
+> (the typed-literal arm, the `TypeName { .. }` constructor arm, both branches of the
+> ADT-inline-record arm, and the `{ p | f = v }` record-update arm — a field turned out to be
+> checked from four separate call sites, not one), `EList` element (`infer_expr` + `check_expr`),
+> both `EBinop` operands (the general path only — the SQL `where`-clause path is untouched,
+> out of scope here), and a string-interpolation hole. The `if`-condition shape needed no arm
+> of its own: it is caught transitively through the binop operand it is built from, as the
+> design tension section anticipated. Ships the same machine-applicable `check `-insertion fix
+> as the binding rule.
+>
+> Tests: `compiler/test/test_check_binding_gap.ml`, new "six more escape routes" groups (14
+> new cases: 6 refusals + 8 non-regressions covering the checked form, partial application,
+> bare reference, and a composed check in a case arm's tail). `./ci.sh` green modulo
+> pre-existing, unrelated environment gaps in this sandbox (libsodium not installed, so
+> Crypto/JWT/session-cookie native tests fail; `js_of_ocaml` missing, so playground-parity
+> is skipped) — none touch the checker paths this change edited.
 
 ## The gap
 

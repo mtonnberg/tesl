@@ -1632,6 +1632,35 @@ let reject_unchecked_check_binding ?proof_name ctx (name : string) (value : expr
       (Diag_fix.verified_insert_before ~source_lines:ctx.source_lines
          ~at:insert_loc.start ~expect:callee ~text:"check ")
 
+(* The last six escape routes for an unwrapped check result: a case
+   scrutinee, a record field value, a list element, a binop operand, and a
+   string interpolation hole (the `if` condition is the same defect through
+   the binop operand it is built from, so it needs no arm of its own).  Same
+   class and same fix as [reject_unchecked_check_binding] — the callee
+   returns a check result that only `check` unwraps — but there is no name
+   being bound, so [position] names the syntactic slot instead ("a case
+   scrutinee", "a record field", …) and the message reads accordingly.
+
+   Deliberately NOT called on a fn/check/auth body's TAIL expression — that
+   is the composing case ([reject_nested_check_calls] and
+   [reject_unchecked_check_binding] leave it alone too) — nor on the head of
+   a `check f a b` call, which [call_head_check_shaped_expr] already excludes
+   by construction. *)
+let reject_check_result_in_value_position ctx ~position (value : expr) =
+  match call_head_check_shaped_expr ctx value with
+  | None -> ()
+  | Some (callee, head) ->
+    let insert_loc = check_head_insert_loc head in
+    add_error_fix ctx insert_loc
+      (Printf.sprintf
+         "check function `%s` cannot be used directly as %s: it returns a \
+          check result that only `check` unwraps, so on the failure path the \
+          raw check-fail value would be used here as if it were the payload. \
+          Write `check %s ...` to unwrap it first."
+         callee position callee)
+      (Diag_fix.verified_insert_before ~source_lines:ctx.source_lines
+         ~at:insert_loc.start ~expect:callee ~text:"check ")
+
 let is_composed_check_function_expr ctx e =
   let check_fns = flatten_check_chain_expr [] e in
   List.length check_fns >= 2
@@ -2460,6 +2489,7 @@ let rec infer_expr ctx (e : expr) : ty =
     List.iter (function
       | ILiteral _ -> ()
       | IExpr e ->
+        reject_check_result_in_value_position ctx ~position:"a string interpolation hole" e;
         let ty = infer_expr ctx e in
         let ty' = apply !(ctx.subst) ty in
         (match ty' with
@@ -2874,6 +2904,7 @@ let rec infer_expr ctx (e : expr) : ty =
        in
        List.iter (fun (field_name, value_expr) ->
          if field_name <> "__base__" then begin
+           reject_check_result_in_value_position ctx ~position:"a record field" value_expr;
            let value_ty = infer_expr ctx value_expr in
            match lookup_field ctx resolved_base field_name with
            | Some field_ty -> unify_at ctx (expr_loc value_expr) value_ty field_ty
@@ -2902,6 +2933,7 @@ let rec infer_expr ctx (e : expr) : ty =
     ) rd.rd_fields;
     (* Type-check provided fields *)
     List.iter (fun (field_name, value_expr) ->
+      reject_check_result_in_value_position ctx ~position:"a record field" value_expr;
       match List.assoc_opt field_name rd.rd_fields with
       | Some field_ty ->
         let actual = infer_expr ctx value_expr in
@@ -2936,6 +2968,7 @@ let rec infer_expr ctx (e : expr) : ty =
       if named_field_tys = [] then
         (* No ADT metadata: fall back to applying values in source order. *)
         List.fold_left (fun cur_ty value_expr ->
+          reject_check_result_in_value_position ctx ~position:"a record field" value_expr;
           let arg_ty = infer_expr ctx value_expr in
           let next_ty = fresh () in
           unify_at ctx loc cur_ty (TFun (arg_ty, next_ty));
@@ -2963,6 +2996,7 @@ let rec infer_expr ctx (e : expr) : ty =
           let next_ty = fresh () in
           (match List.assoc_opt fname fields with
            | Some value_expr ->
+             reject_check_result_in_value_position ctx ~position:"a record field" value_expr;
              let arg_ty = infer_expr ctx value_expr in
              unify_at ctx loc cur_ty (TFun (arg_ty, next_ty))
            | None ->
@@ -3282,6 +3316,11 @@ let rec infer_expr ctx (e : expr) : ty =
     match classify_lowered_query ctx binop with
      | Some ty -> record_sql_operand_field_accesses ctx binop; ty
      | None ->
+       (match binop with
+        | EBinop { left; right; _ } ->
+          reject_check_result_in_value_position ctx ~position:"a binary operator operand" left;
+          reject_check_result_in_value_position ctx ~position:"a binary operator operand" right
+        | _ -> ());
        let rec infer_check_chain_value = function
          | EBinop { op = BAnd; left; right; loc; _ } ->
             (match infer_check_chain_value left, infer_check_chain_value right with
@@ -3418,6 +3457,7 @@ let rec infer_expr ctx (e : expr) : ty =
           end
         end
     in
+    reject_check_result_in_value_position ctx ~position:"a case scrutinee" scrut;
     let scrut_ty = infer_expr ctx scrut in
     (* When the scrutinee is a named variable carrying a proof (e.g. from a
        RetMaybeAttached or RetAttached return), propagate that proof into the
@@ -3528,6 +3568,7 @@ let rec infer_expr ctx (e : expr) : ty =
           ) rd.rd_fields;
           (* Type-check provided fields and catch unknown fields *)
           List.iter (fun (field_name, value_expr) ->
+            reject_check_result_in_value_position ctx ~position:"a record field" value_expr;
             match List.assoc_opt field_name rd.rd_fields with
             | Some field_ty -> ignore (infer_expr ctx value_expr |> fun actual ->
                 unify_at ctx (expr_loc value_expr) actual field_ty; actual)
@@ -3539,7 +3580,9 @@ let rec infer_expr ctx (e : expr) : ty =
           TCon type_name
         | None ->
           (* type_hint set but not a known record — infer fields and return opaque *)
-          List.iter (fun (_, e) -> ignore (infer_expr ctx e)) fields;
+          List.iter (fun (_, e) ->
+            reject_check_result_in_value_position ctx ~position:"a record field" e;
+            ignore (infer_expr ctx e)) fields;
           TCon type_name)
      | None ->
        (* Bare record literal without type name: error unless in record-update context *)
@@ -3549,7 +3592,9 @@ let rec infer_expr ctx (e : expr) : ty =
          "bare record literal: every record must be prefixed with its type name.\n\
           \  Use: TypeName { field: value, ... }\n\
           \  Example: Point { x: 0, y: 0 }";
-       List.iter (fun (_, e) -> ignore (infer_expr ctx e)) fields;
+       List.iter (fun (_, e) ->
+         reject_check_result_in_value_position ctx ~position:"a record field" e;
+         ignore (infer_expr ctx e)) fields;
        fresh ())
 
   | EList { elems; loc } ->
@@ -3558,6 +3603,7 @@ let rec infer_expr ctx (e : expr) : ty =
      | _ ->
         let elem_ty = fresh () in
         List.iter (fun e ->
+          reject_check_result_in_value_position ctx ~position:"a list element" e;
           let t = infer_expr ctx e in
           unify_at ctx loc elem_ty t
         ) elems;
@@ -4553,6 +4599,7 @@ and check_expr ctx (e : expr) (expected : expectation) : ty =
     ignore (check_expr ctx else_ expected);
     apply !(ctx.subst) expected_ty
   | ECase { scrut; arms; _ } ->
+    reject_check_result_in_value_position ctx ~position:"a case scrutinee" scrut;
     let scrut_ty = infer_expr ctx scrut in
     let scrut_name_opt = match scrut with EVar { name; _ } -> Some name | _ -> None in
     let scrut_proof_opt = match scrut_name_opt with
@@ -4610,6 +4657,7 @@ and check_expr ctx (e : expr) (expected : expectation) : ty =
         | Some rd ->
           ctx.bare_record_hints := (loc, type_name) :: !(ctx.bare_record_hints);
           List.iter (fun (field_name, value_expr) ->
+            reject_check_result_in_value_position ctx ~position:"a record field" value_expr;
             match List.assoc_opt field_name rd.rd_fields with
             | Some field_ty ->
               ignore (check_expr ctx value_expr
@@ -4640,6 +4688,7 @@ and check_expr ctx (e : expr) (expected : expectation) : ty =
     let ret_ty =
       if named_field_tys = [] then
         List.fold_left (fun cur_ty value_expr ->
+          reject_check_result_in_value_position ctx ~position:"a record field" value_expr;
           let arg_ty = infer_expr ctx value_expr in
           let next_ty = fresh () in
           unify_at ctx loc cur_ty (TFun (arg_ty, next_ty));
@@ -4663,6 +4712,7 @@ and check_expr ctx (e : expr) (expected : expectation) : ty =
           let next_ty = fresh () in
           (match List.assoc_opt fname fields with
            | Some value_expr ->
+             reject_check_result_in_value_position ctx ~position:"a record field" value_expr;
              let arg_ty = infer_expr ctx value_expr in
              unify_at ctx loc cur_ty (TFun (arg_ty, next_ty))
            | None ->
@@ -4689,6 +4739,7 @@ and check_expr ctx (e : expr) (expected : expectation) : ty =
           (Printf.sprintf "record `%s` is missing required field `%s`" rname def_name)
     ) rd.rd_fields;
     List.iter (fun (field_name, value_expr) ->
+      reject_check_result_in_value_position ctx ~position:"a record field" value_expr;
       match List.assoc_opt field_name rd.rd_fields with
       | Some field_ty ->
         ignore (check_expr ctx value_expr
@@ -4708,6 +4759,7 @@ and check_expr ctx (e : expr) (expected : expectation) : ty =
     (match resolved_expected, elems with
      | TApp (TCon "List", elem_ty), _ ->
        List.iter (fun elem ->
+         reject_check_result_in_value_position ctx ~position:"a list element" elem;
          ignore (check_expr ctx elem
            (push_expectation ~origin:loc ~role:ListElement
              ~reason:(list_element_reason elem_ty) elem_ty expected))
