@@ -833,6 +833,7 @@ api-test "GET /todos/:id returns specific todo" for TodoServer {
 
 **Key patterns:**
 - The request path is any `String` expression — a literal, an interpolation (`get "/todos/{id}"`), a `let`-bound string, or a concatenation (`get ("/todos/" ++ id)`). That is what makes a create-then-read flow testable when the id is server-generated: read it off the create response and splice it into the follow-up path. A `?query=…` in a computed path is parsed exactly as in a literal one.
+- Inside an `api-test`, bare `{…}` is an interpolation slot **only when the whole brace content is a single expression** (`{id}`, `{created.body.id}`). Anything else — `"{}"`, `"{\"id\": 1}"`, an unbalanced quote — is ordinary text, so a JSON literal in a path, a stub body, or an `expect` needs no escaping. Tesl's own `${…}` string interpolation works in an api-test too and is unaffected by this rule.
 - Use `api-test` with a server name (e.g., `for TodoServer`)
 - The server must be defined in your code with `server TodoServer for TodoApi` (the port is set on the `App` record, not on the `server`)
 - Test the full HTTP cycle: request → handler → response

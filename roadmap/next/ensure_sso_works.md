@@ -19,7 +19,19 @@ the SPA fallback and the static file responder, which are also the two that serv
 HTML; SSRF containment was hostname-shaped where the threat is resolution-shaped; and the mixed-mode
 bypass was contained by a warning this document itself predicts will be ignored. See **§Where the
 flow's own state lives**, **§Login methods and the mixed-mode bypass** (now a checked declaration,
-not a warning), **§The platform baseline this claim rests on**, **Phase −2**, and Risks 42–55. Rate
+not a warning), **§The platform baseline this claim rests on**, **Phase −2**, and Risks 42–55.
+**Fifth review folded in 2026-07-30**, checking the *new checks themselves* against the codebase's
+own diagnosed root failure mode (decide-by-spelling, fail-open-by-enumeration). Its findings: the
+`loginMethods` compile check was a password-call denylist that misses every hand-rolled or future
+login path — now an allowlist over `auth` blocks, the enumerable minting sites; Item A's
+binding-secret discharge had no semantic definition and was dischargeable by `secret == secret` —
+now defined by dataflow, with the forged shapes as compile-time negatives; the session signing key
+was about to be reused raw across two algorithms — now purpose-derived subkeys; `SsoSubjectKey`'s
+derivation was never stated to be injective — now length-prefixed or hashed, collision-tested; and
+two fail-closed rules would have broken real deployments into disabling them (`Host` validation vs.
+health probes, `Sec-Fetch-Site` vs. non-browser clients) — both get stated, tested exceptions. See
+**§Login methods** (re-shaped again), **§Item A**, **§Where the flow's own state lives**, **§Typed
+identity**, **§The platform baseline**, Risks 56–62, and Open Question 18. Rate
 limiting remains explicitly **DEFERRED** — see Risk 19 and **§How rate limiting slots in later** —
 but its *scope* is corrected: it now covers the password endpoint, which is a worse thing to leave
 unmetered than the two SSO routes.)
@@ -140,6 +152,34 @@ unmetered than the two SSO routes.)
 28. **Exit adds one real browser.** Every listed test asserts server-side bytes, but `__Host-`
     acceptance, `SameSite` behaviour on the callback navigation and `HttpOnly` are browser behaviours
     whose failure mode is silent non-storage. Risk 55.
+29. **`loginMethods` classifies every `auth` block, not just password calls.** The fourth review's
+    check — find `Crypto.checkPassword`/`hashPassword` — was denylist-shaped and misses every login
+    path not spelled with those names (magic links, API keys, hand-rolled compares, future WebAuthn).
+    `auth` blocks are the enumerable sanctioned minting sites, so the allowlist form is checkable
+    today: under a `loginMethods` declaration, an `auth` block not attributable to a declared method
+    does not compile. The password-call rejection stays as a backstop one level down. §Login methods,
+    Risk 56, Open Question 18.
+30. **Item A's binding-secret discharge is defined by dataflow, not by shape.** A discharge
+    recognisable by spelling is dischargeable by `secret == secret`. It holds only when a
+    config-originated `Secret` is compared against a value read from `request.headers` and the mint
+    is control-dependent on that comparison succeeding — with the forged shapes as compile-time
+    negatives. §Item A, Risk 57.
+31. **One key is never used for two purposes.** The `__Host-oauth` MAC/AEAD key is derived from the
+    session signing key with domain separation (libsodium `crypto_kdf`, distinct contexts), never
+    the raw key that HMACs the session JWT; rotation carries through because subkeys rotate with
+    their parent. §Where the flow's own state lives, Risk 58.
+32. **`SsoSubjectKey` derivation is injective.** Naive concatenation lets `("https://a",
+    "x|https://b")` collide across issuers; the derivation is length-prefixed or a domain-separated
+    hash, and Phase 5 carries a cross-issuer collision test. §Typed identity, Risk 59.
+33. **Two fail-closed rules get stated exceptions so they survive contact with production.** `Host`
+    validation exempts a declared probe path (Kubernetes/LB health checks send `Host: <ip>`, and a
+    restart-looping pod ends with the check disabled); the `Sec-Fetch-Site` refusal fires only on the
+    literal `cross-site` value, an absent header allows (non-browser clients never send it). §The
+    platform baseline, Risks 60–61.
+34. **Rate limiting stays deferred, but the future item's landing spot is now named.** §Login
+    methods' runtime-mediated password gate is exactly the dispatch-level chokepoint that item
+    requires; its first work is gate-local — a per-identifier throttle plus a process-wide Argon2id
+    concurrency cap. §How rate limiting slots in later.
 
 ## The answer to "it is not clear if it works": it does not
 
@@ -237,6 +277,15 @@ therefore name the concrete binding, not just the principle:
   verified binding-secret comparison in the block's own evidence, or the explicit written
   acknowledgement. The acknowledgement stays as the last resort (mTLS terminated at the proxy is a real
   answer the compiler cannot see), but it should no longer be the only reachable one.
+- **Added by the fifth review: the binding-secret discharge is defined by dataflow, not recognised by
+  shape.** "A verified binding-secret comparison in the block's own evidence" must not be a syntactic
+  pattern — otherwise `secret == secret`, a constant-time compare of two header values, or a compare
+  against a literal each discharge the rule, and the check joins the decide-by-spelling class the
+  2026-07-05 forgery reviews reopened. The discharge holds only when all three facts are established
+  on the dataflow: (1) one operand is a `Secret` originating in configuration (`requireSecret` or a
+  connection value), (2) the other operand is read from `request.headers`, and (3) the fact-mint is
+  control-dependent on the comparison succeeding — a false branch that still mints does not
+  discharge. Phase −2 carries the forged shapes as compile-time negatives (Risk 57).
 - Whichever it is, the lesson must state the interface question explicitly and show the check
   (`ss -ltnp`, or the equivalent) as part of the pattern, because "it works" and "it is bound only to
   the proxy" look identical from the browser.
@@ -262,7 +311,8 @@ one 401), the binding-interface guidance, and the warnings above. ~1–2 days, *
 which is now a prerequisite rather than an option — plus compile-time tests over all three discharges: a
 header-trusting `auth` block must compile with a loopback `listenAddress`, with a verified binding-secret
 comparison in its own evidence, or with the acknowledgement clause, and must **fail** to compile with
-none of the three.
+none of the three — and with each of Risk 57's forged discharge shapes, which look like the binding
+check and are not.
 
 **Item A and Item B may coexist in one program** (a proxy-fronted enterprise deployment that also
 offers "log in with Google" to self-serve users), and nothing about that is special: both paths end at
@@ -504,6 +554,11 @@ fail-closed:
   already distinguishes them is what the check reads. A consequence worth stating in the template:
   **`allowedEmailDomains` is unusable with Entra**, which emits no `email_verified`; Entra restricts by
   `allowedTenants`, which is the correct mechanism for it anyway.
+- **Matching is normalised, on both sides (fifth review, Risk 62).** The comparison is case-insensitive
+  over IDNA/punycode (A-label) normalised domains — config values normalised at compile/boot, the
+  claim's domain at check time — so `ACME.COM` and `acme.com` are one domain, a Unicode spelling and
+  its punycode form are one domain, and a homoglyph domain is a *different* domain rather than a fuzzy
+  match. An unnormalised comparison is a restriction walked past with a capital letter.
 - **The check runs before `onIdentity` is called at all**, so a refusal takes the denial path in §What
   `onIdentity` does when it says no and no app code ever sees the identity.
 - **`onIdentity` may still add its own policy** (per-user provisioning, local disable). The connection
@@ -602,12 +657,17 @@ server AppServer for AppApi {
                                                          # through one runtime-enforced gate
 }
 
-fn githubConn(request: HttpRequest) -> Maybe SsoConnection requires [envRead] =
+fn githubConn(login: SsoConnectionRequest) -> Maybe SsoConnection requires [envRead] =
   Something (Sso.defaults GitHub (env "GITHUB_CLIENT_ID") (requireSecret "GITHUB_CLIENT_SECRET"))
 
-fn corporateConn(request: HttpRequest) -> Maybe SsoConnection requires [envRead] =
+fn corporateConn(login: SsoConnectionRequest) -> Maybe SsoConnection requires [envRead] =
   Something (OidcIssuer { issuer: env "OIDC_ISSUER", … })
 ```
+
+**The hook's argument is the narrow, runtime-constructed `SsoConnectionRequest`** — the route segment
+plus a runtime-extracted tenant hint — never the raw `HttpRequest`. Open Question 5 recommended this
+and the fifth review settled it: the earlier version of this very example showed `HttpRequest` while
+the question argued against it, and the example is what gets copied.
 
 The literal segment mints `/auth/github/login` and `/auth/github/callback`. **The path cannot be
 derived from the provider any more** — the provider is a runtime value now — and that is a net
@@ -701,6 +761,15 @@ construction rather than by convention. `email`, `name` and `claims` remain avai
 an app that *wants* email-based linking while already authenticated (the legitimate "link my accounts"
 flow in Risk 2) still writes it by hand, from an authenticated session, which is the case where it is
 sound.
+
+**Added by the fifth review: the derivation is injective, by construction.** `(issuer, subject)` is
+two strings, and naive concatenation makes `("https://a", "x|https://b")` and `("https://a|x",
+"https://b")` one key — a cross-issuer collision, which in a multi-provider program is the takeover
+shape, and subjects are not always un-influenceable (self-hosted IdPs with username-as-`sub`
+configurations exist). The derivation length-prefixes each component or hashes them with domain
+separation; Phase 5 carries the collision test. The existing "one provider asserting another
+provider's `subject`" test does not cover this — that is about claims, this is about encoding
+(Risk 59).
 
 **The key is `(issuer, subject)`, not `(provider, issuer, subject)`** — a correction to the earlier
 draft. `provider` is now the route segment, a user-chosen deployment label: renaming `sso "github"` to
@@ -851,9 +920,12 @@ verifier and start time were. Phase 2.5's `iat` sanity check ("not older than th
 start time, which the `__Host-oauth` cookie dates") is worth nothing if the client picks that date.
 Rules:
 
-- **The payload is authenticated under the session signing key** (MAC or AEAD — Open Question 16),
-  verified against `[current, previous]` exactly as §Session key rotation does, so a key rotation does
-  not break logins that are in flight.
+- **The payload is authenticated under a purpose-derived subkey of the session signing key** (MAC or
+  AEAD — Open Question 16), never the raw key: one key must not serve two algorithms (the JWT HMAC
+  and the cookie MAC/AEAD), so the cookie key is derived with domain separation — libsodium
+  `crypto_kdf` with a distinct context — and verification runs against subkeys derived from
+  `[current, previous]` exactly as §Session key rotation does, so a key rotation still does not break
+  logins that are in flight (Risk 58).
 - **It carries the route segment**, so a cookie minted at one `sso` clause cannot be presented at
   another's callback.
 - **A failed MAC is a failed flow** — the fixed error page from §What `onIdentity` does when it says no,
@@ -926,6 +998,30 @@ fn ssoRequired(identifier: String) -> Bool requires [dbRead] = ...
 - **`ssoRequired` fails closed.** Raising, or a failing `dbRead`, denies the password login; it does not
   fall through to "not mandated".
 
+**Re-shaped by the fifth review: an allowlist over minting sites, not a search for password calls
+(Risk 56).** The rule as written above — reject `Crypto.checkPassword`/`hashPassword` — is
+denylist-shaped, and it misses every login path that is not spelled with those two names: a generic
+hash compared with `==`, a magic-link flow, an `auth` block reading an API key, a future WebAuthn
+handler. Each mints a session; none contains a "password call"; so the program reads
+`loginMethods [Sso]` while a fourth door stands open. That is decide-by-spelling — the failure mode
+this codebase has already diagnosed as the root generator of its soundness bugs — inside the very
+check built to end prose containment. The checkable invariant sits one level up, and the checker
+already has the facts: **`auth` blocks are the enumerable sanctioned session-minting sites, so
+`loginMethods` classifies all of them.**
+
+- **Under a `loginMethods` declaration, every `auth` block must be attributable to exactly one
+  declared method.** The `sso` clause's `onIdentity` is `Sso` by construction; a header-trusting
+  block discharged under Phase −2 is `Proxy` — which must then appear in the list; a block wired
+  through the runtime-mediated password path is `Password`. A block the checker cannot attribute —
+  whatever evidence it reads — is a **compile error**. Unattributable is refused, never defaulted.
+- **The password-call rejection stays, as a backstop one level down** — it catches misuse *inside* a
+  classified block — but it is no longer the enforcement boundary.
+- **The attribution's spelling is Open Question 18** (an annotation on the `auth` declaration, or a
+  named list entry); the fail-closed rule does not depend on the answer: no attribution, no compile.
+- Consequence worth stating: `loginMethods [Sso]` now means what an enterprise reviewer reads it to
+  mean — *this program has no session-minting site other than the SSO callback* — rather than "this
+  program does not call two particular functions".
+
 **Cost, honestly.** More than the warning the third review budgeted: a `loginMethods` server clause
 (thin — a list plus one optional function reference, the same AST shape as `sso` itself), one checker
 rule keyed on the declaration, and a runtime-mediated password path. It is worth it because the
@@ -936,7 +1032,10 @@ which the fourth review settles the other way.
 
 Phase 5 tests the bypass in every direction: password login and password reset against an SSO-mandated
 address, the same on the Item A header path, a bare `Crypto.checkPassword` beside an `sso` clause
-(must not compile), and a `loginMethods [Sso]` program containing a password call (must not compile).
+(must not compile), and a `loginMethods [Sso]` program containing a password call (must not compile) —
+plus the fifth review's allowlist negatives: an API-key `auth` block and a hand-rolled password compare
+(generic hash + `==`) under `loginMethods [Sso]`, each refused as an unattributable minting site rather
+than by the password-call backstop.
 
 ### The platform baseline this claim rests on
 
@@ -953,9 +1052,12 @@ plaintext**, and an SSO login *is* a top-level navigation. The earlier draft put
 `Referrer-Policy: no-referrer` on the callback only — the right control at too narrow a scope, since
 session-bearing pages leak referrers too. So:
 
-- `Strict-Transport-Security` with a stated `max-age` and a stated position on `includeSubDomains` and
-  preload. **Emitted on the basis of `publicOrigin`'s scheme, never the request's** — see the fourth
-  review's correction below. Suppressed when `publicOrigin` is the loopback dev value.
+- `Strict-Transport-Security` — and the fifth review states the values instead of promising them:
+  `max-age=31536000` (one year); **no `includeSubDomains` by default** — Tesl cannot see the subdomain
+  topology, and a wrong guess bricks a sibling site for a year; **no `preload` by default, ever** — it
+  is effectively irreversible and must be the operator's explicit act. **Emitted on the basis of
+  `publicOrigin`'s scheme, never the request's** — see the fourth review's correction below.
+  Suppressed when `publicOrigin` is the loopback dev value.
 - `Referrer-Policy: no-referrer` as the **default for every response**, not just the callback.
 - Frame denial on runtime-owned responses.
 - A conservative CSP on the pages the *runtime* owns (the callback error page, the default error
@@ -1019,7 +1121,11 @@ cookie carries the property. In scope:
   inside a GET route. Both facts are already visible to the checker.
 - **Refuse a state-changing request whose `Sec-Fetch-Site` is `cross-site`.** Zero occurrences in the
   tree today; every current browser sends it. It is belt over the existing braces, and unlike the 415
-  argument it covers the routes that are *not* JSON — SSE, static, and whatever ships next.
+  argument it covers the routes that are *not* JSON — SSE, static, and whatever ships next. **The
+  refusal fires only on the literal `cross-site`; an absent header allows** (fifth review, Risk 61) —
+  non-browser clients (curl, SDKs, server-to-server callers) never send the header and also carry no
+  ambient cookie to protect, so fail-closed here would break every API client while defending
+  nothing. The braces (`SameSite` + 415 + no-CORS) carry the property; this header is the belt.
 
 **3. Per-user session revocation remains a non-goal, now stated as the standing gap.** §Session key
 rotation gives two blunt levers (rotate the key; lower the `SessionPolicy`), both global. "Log this one
@@ -1034,7 +1140,12 @@ it is not only the two SSO routes.
 **5. Inbound `Host` validation — IN SCOPE, and nearly free.** `publicOrigin` is a configured statement of
 where the app lives, so a request whose `Host` disagrees with it can be refused outright. That closes
 cache-poisoning and absolute-URL-confusion classes, and it removes the temptation to ever answer "which
-origin am I?" from a header. Same setting, same phase, one comparison.
+origin am I?" from a header. Same setting, same phase, one comparison. **One exception, added by the
+fifth review (Risk 60): a declared probe path.** Kubernetes liveness/readiness probes and load-balancer
+target checks hit the app by IP with `Host: <ip>`; a bare refusal restart-loops the pod until someone
+disables the whole check, and a disabled control is worse than an absent one. The comparison exempts
+exactly one declared health path (shape decided in Phase −2 with the rest of the header work) and
+nothing else; the dev-gate loopback value is exempt as everywhere else.
 
 **6. Cross-site scripting in the app's own frontend — NAMED EXCLUSION.** Established by Correction 2
 above: Tesl serves the app's HTML and JS from the static directory, so the CSP default is in scope, but
@@ -1072,6 +1183,13 @@ future item is a shape it can drop into without reopening SSO. Four requirements
 - **The in-scope compensating controls stay in scope regardless**, so the limiter is defence in depth
   rather than the first line: every outbound leg size- and time-capped, bounded discovery and negative
   caches, a minimum-interval-limited JWKS refetch on unknown `kid`, single-use `state`.
+- **Added by the fifth review: the Phase 3 password gate is the chokepoint, and the future item must
+  land *at* it.** §Login methods routes every password verify and every password set through one
+  runtime-mediated call; that is precisely the dispatch-level position the first bullet demands, and
+  it will already exist. The rate-limiting item's first work is therefore gate-local: a per-identifier
+  throttle at the mediated password path, and a process-wide Argon2id concurrency cap (one semaphore) —
+  the KDF is expensive by design, so unmetered parallelism is the resource-exhaustion primitive Risk 54
+  names. Named here so that item lands at the gate instead of re-plumbing beside it.
 
 Until it lands, the deployment-level answer (a rate limiter in front of the app) is what the spec says,
 and the residual exposure is stated rather than implied.
@@ -1183,6 +1301,15 @@ everything from Phase 1 on is the feature.
   (`dsl/web.rkt:2348`)**, which pass `'()` headers today, plus an overridable **CSP default on served
   HTML** — Tesl serves the app's HTML, so the app cannot do this itself (Risk 45, Open Question 17);
   (c) **inbound `Host` validated against `publicOrigin`** (§The platform baseline item 5).
+  Added by the fifth review, same phase:
+  (a″) the binding-secret discharge is recognised by **dataflow, not shape** (§Item A, Risk 57): a
+  config-originated `Secret` compared against a `request.headers` value, with the mint
+  control-dependent on success — and the forged shapes (`secret == secret`, header-vs-header, a
+  compare against a literal, a false branch that still mints) are compile-time negatives;
+  (c′) `Host` validation exempts exactly one declared probe path (Risk 60), whose spelling is decided
+  here;
+  (d) the `Sec-Fetch-Site` refusal fires only on the literal `cross-site` — an absent header allows
+  (Risk 61).
   Tests: the compile-time negative for a header-trusting `auth` block, in all three discharge shapes; a
   byte-identical-output header test; a ratchet test that no response path skips the header set, **naming
   the static and SPA-fallback paths explicitly** since those are the two that skip it today; HSTS present
@@ -1221,8 +1348,10 @@ everything from Phase 1 on is the feature.
       bounded, TTL'd spent-`state` set makes a second presentation fail within a process; across
       processes the guarantee is the provider's single-use `code` plus PKCE binding, and the spec says
       so rather than claiming a cluster-wide property that cookie-only storage cannot provide.
-    - **The `__Host-oauth` payload is authenticated under the session key** (MAC/AEAD, verified against
-      `[current, previous]`) and carries the route segment; nothing inside it — including its own
+    - **The `__Host-oauth` payload is authenticated under a purpose-derived subkey of the session key**
+      (MAC/AEAD over a `crypto_kdf`-derived key with a distinct context — never the raw key that HMACs
+      the session JWT, Risk 58 — verified against subkeys derived from `[current, previous]`) and
+      carries the route segment; nothing inside it — including its own
       timestamp — is trusted before the MAC verifies, and a failed MAC is a failed flow, not a fresh
       login (§Where the flow's own state lives, Risk 43).
     - **PKCE is `S256` and never `plain`, and a provider that does not advertise `S256` in
@@ -1280,12 +1409,14 @@ everything from Phase 1 on is the feature.
   tables-only stdlib rows. Same runtime, same `SsoIdentity`. **The §Typed identity types land here
   too** — `EmailClaim` as a baked ADT and `SsoSubjectKey` as an opaque type in the mould of
   `PasswordHash`, plus `Sso.keyText` and the plain-OAuth2 synthesised issuer (scheme+host of
-  `userinfoUrl`). **Fail-closed rule lands here:** an absent, missing or non-boolean
+  `userinfoUrl`). **The `SsoSubjectKey` derivation is injective** — length-prefixed components or a
+  domain-separated hash of `(issuer, subject)`, never naive concatenation (Risk 59). **Fail-closed rule lands here:** an absent, missing or non-boolean
   `emailVerifiedField` yields `UnverifiedEmail`, never `VerifiedEmail` — i.e. the runtime has exactly
   one code path that constructs `VerifiedEmail`, and it requires a positive verification signal.
   Tests: each blessed descriptor's verified/unverified outcome; a hand-written descriptor with a
-  misspelled `emailVerifiedField`; and a `userinfoUrl` whose path changes but whose host does not,
-  asserting the identity key is unchanged.
+  misspelled `emailVerifiedField`; a `userinfoUrl` whose path changes but whose host does not,
+  asserting the identity key is unchanged; and an encoding-collision pair — two distinct
+  `(issuer, subject)` pairs that concatenate identically — asserting distinct keys.
 - **Phase 2.5 — ID-token signature verification (RS256/ES256 + JWKS). Required for the gold-standard
   claim; see §The trust argument, honestly.** A verify-only asymmetric path in `tesl/jwt.rkt` over
   `openssl/libcrypto` (already required at `:88`; bind lazily so a missing library does not break the
@@ -1311,7 +1442,10 @@ everything from Phase 1 on is the feature.
   **`loginMethods` lands here too** (§Login methods, Risk 46): the clause, the compile error for a
   password call under `loginMethods [Sso]` or for a bare `Crypto.checkPassword`/`hashPassword` in any
   program with an `sso` clause, and the runtime-mediated password path that consults the declared policy
-  function on both verify and set. **The runtime-enforced `allowedEmailDomains` / `allowedHostedDomains`
+  function on both verify and set. Re-shaped by the fifth review (Risk 56): the enforcement is the
+  **allowlist over `auth` blocks** — under a `loginMethods` declaration every `auth` block must be
+  attributable to a declared method, and an unattributable block does not compile — with the
+  password-call rejection kept as the backstop one level down. **The runtime-enforced `allowedEmailDomains` / `allowedHostedDomains`
   checks land with it** — before `onIdentity` is called, and satisfiable only by `VerifiedEmail`
   (§Domain restriction, Risk 53). The denial semantics in §What `onIdentity` does when
   it says no are asserted here. **`SessionPolicy` lands here too** — the `sessionPolicy` server setting
@@ -1459,6 +1593,24 @@ everything from Phase 1 on is the feature.
       session-bearing response must each carry the server-wide header set (§The platform baseline).
     - **`listenAddress` enforcement:** a header-trusting `auth` block must fail to compile without
       either a loopback/unix `listenAddress` or the explicit acknowledgement clause (Phase −2).
+  Added by the fifth 2026-07-30 review:
+    - **Minting-site allowlist:** an `auth` block reading an API key (no password call anywhere in the
+      program) under `loginMethods [Sso]` must not compile; a hand-rolled password compare (generic
+      hash + `==` inside an `auth` block) must not compile either — both refused as unattributable
+      minting sites, not caught by the password-call backstop.
+    - **Forged Item A discharges:** `secret == secret`, a constant-time compare of two header values,
+      a compare against a literal, and a comparison whose false branch still mints — each must fail
+      Phase −2's discharge rule.
+    - **Key separation:** an `__Host-oauth` payload authenticated under the *raw* session key must not
+      verify (the subkey is not its parent); a payload under the previous key's subkey must still
+      verify during rotation overlap.
+    - **`SsoSubjectKey` collision:** two distinct `(issuer, subject)` pairs constructed to concatenate
+      identically must produce distinct keys.
+    - **Domain normalisation:** `ACME.COM` and `acme.com` accepted as one `allowedEmailDomains` entry;
+      a Unicode label and its punycode form as one; a homoglyph domain refused as a different domain.
+    - **Operational exceptions, both directions:** a probe-path request with `Host: <ip>` accepted
+      while any other path with a mismatched `Host` is refused; a state-changing request with **no**
+      `Sec-Fetch-Site` header accepted while `cross-site` is refused.
 
 *Exit for the whole item:* two end-to-end api-tests — one OIDC (stubbed discovery → JWKS → token →
 callback) and one plain OAuth2 (stubbed token → userinfo → callback) — each driving login → session
@@ -1963,6 +2115,52 @@ against the plan:
     login → session → protected endpoint → logout against the containerised IdP, added to the exit
     criteria beside the conformance run.
 
+Added by the fifth 2026-07-30 review, which checked the new checks themselves against the codebase's
+own root-cause diagnosis (decide-by-spelling; fail-open by enumeration):
+
+56. **`loginMethods` enforcement was denylist-shaped.** "Find `Crypto.checkPassword`/`hashPassword`"
+    misses every minting path not spelled with those names — a generic hash compared with `==`, a
+    magic-link flow, an API-key `auth` block, a future WebAuthn handler — so a program could read
+    `loginMethods [Sso]` with a fourth door open. That is the decide-by-spelling failure mode inside
+    the very check built to end prose containment. Contain: the allowlist over `auth` blocks — the
+    checker already enumerates the sanctioned minting sites, so under a `loginMethods` declaration an
+    `auth` block not attributable to a declared method does not compile; the password-call rejection
+    stays as a backstop. §Login methods, Open Question 18.
+57. **Item A's binding-secret discharge had no semantic definition.** A discharge recognised by shape
+    is dischargeable by `secret == secret`, by a compare of two header values, or by a comparison
+    whose false branch still mints — accidental forgeries, in the same class the 2026-07-05 reviews
+    reopened. Contain: the discharge is established on the dataflow — a config-originated `Secret`
+    compared against a `request.headers` read, with the mint control-dependent on success — and
+    Phase −2 carries the forged shapes as compile-time negatives. §Item A.
+58. **The session signing key was about to serve two algorithms raw.** The `__Host-oauth` MAC/AEAD
+    "under the session signing key" reuses the key that HMACs the session JWT; two algorithms over
+    one raw key is not gold standard — an oracle or flaw in one use reaches the other. Contain:
+    purpose-derived subkeys (libsodium `crypto_kdf`, distinct contexts), rotation carried through by
+    deriving from `[current, previous]`. One line in Phase 1. §Where the flow's own state lives,
+    Open Question 16.
+59. **`SsoSubjectKey`'s derivation was not stated to be injective.** Naive concatenation makes
+    `("https://a", "x|https://b")` and `("https://a|x", "https://b")` one key — a cross-issuer
+    collision, the takeover shape in a multi-provider program, and `sub` is not always
+    un-influenceable (self-hosted IdPs with username-as-`sub` exist). The Phase 5 "one provider
+    asserting another provider's subject" test is about claims and does not cover encoding. Contain:
+    length-prefixed components or a domain-separated hash, plus the collision test. §Typed identity.
+60. **`Host` validation as scoped would be disabled in the field.** Kubernetes/LB health probes hit
+    the app by IP with `Host: <ip>`; a bare refusal restart-loops the pod, and the operator's fix is
+    to turn the check off — a disabled control is worse than an absent one. Contain: exactly one
+    declared probe path is exempt, nothing else; its spelling decided in Phase −2 with the rest of
+    the header work. §The platform baseline item 5.
+61. **`Sec-Fetch-Site` fail-closed would break every non-browser client.** curl, SDKs and
+    server-to-server callers never send the header — and carry no ambient cookie to protect — so
+    refusing on absence defends nothing and breaks all of them; the reflexive fail-closed instinct is
+    wrong here and must be written down as wrong. Contain: refuse only the literal `cross-site`;
+    absent allows; the `SameSite` + 415 + no-CORS trio remains the load-bearing defence. §The
+    platform baseline item 2.
+62. **`allowedEmailDomains` matching was unnormalised.** A case-sensitive or non-IDNA compare is
+    walked past with `ACME.COM` or a Unicode spelling of the same label — a restriction bypassed by a
+    capital letter — while a homoglyph domain must stay a *different* domain. Contain: normalise both
+    sides (case-insensitive over A-labels), config at compile/boot, claims at check time, tested in
+    Phase 5. §Domain restriction.
+
 ## Open questions
 
 1. **Is `sso` a clause on `server`, or a top-level declaration referenced by name from the server?**
@@ -1990,7 +2188,9 @@ against the plan:
    segment and a runtime-extracted tenant hint (from `state`, not from headers) — so the signature is
    future-proof without the header surface. If `HttpRequest` is chosen anyway for shape reasons, the
    spec must state that nothing trust-bearing may be derived from it, and the linter should flag
-   `Host`/`X-Forwarded-*` reads inside a `connection` hook.
+   `Host`/`X-Forwarded-*` reads inside a `connection` hook. **SETTLED by the fifth review: the narrow
+   `SsoConnectionRequest`.** §Shape's example showed `HttpRequest` while this question recommended
+   against it, and the example is what gets copied; the example now shows the narrow type.
 6. **Should `Sso.defaults` be capability-free?** It only builds a record — but the `env`/`requireSecret`
    calls the user feeds it already carry `envRead`, so the function itself needs nothing.
    RECOMMENDATION: pure, no capability row.
@@ -2081,7 +2281,9 @@ Added by the fourth 2026-07-30 review:
    captures the cookie without the key. RECOMMENDATION: AEAD — the payload is a bearer secret in its own
    right (the PKCE verifier is in there), nobody needs to read it, and libsodium already provides the
    primitive. Both variants must verify against `[current, previous]` so key rotation does not kill
-   in-flight logins.
+   in-flight logins. Added by the fifth review (Risk 58): whichever is chosen, the key is a
+   purpose-derived subkey (`crypto_kdf`, distinct context), never the raw session key — and
+   verification runs against subkeys derived from `[current, previous]`.
 17. **What shape is the CSP default on served HTML?** (Risk 45.) Tesl serves the app's `index.html` and
    assets, so a policy has to exist, but a real SPA declares its own script/style/connect sources — an
    unconfigurable default either breaks apps or is set so loose it means nothing. Options: a
@@ -2091,3 +2293,15 @@ Added by the fourth 2026-07-30 review:
    program rather than achieved by omission — the Item A acknowledgement is the precedent for "the escape
    exists but is visible in review". Decide before Phase −2 ships the spelling; it is a server setting and
    renaming one later is breaking.
+
+Added by the fifth 2026-07-30 review:
+
+18. **What is the spelling of the `auth`-block method attribution?** (Risk 56, §Login methods.) The
+   allowlist rule needs every `auth` block attributable to a declared login method. Structural
+   attribution covers the built-ins (`onIdentity` is `Sso`; a Phase −2 header-trust discharge is
+   `Proxy`; the runtime-mediated password path is `Password`); a hand-rolled method needs a written
+   attribution — an annotation on the `auth` declaration, or a named entry in `loginMethods` that the
+   block references. RECOMMENDATION: the annotation on the block — it is local, it reads in review at
+   the site that mints, and it matches the Item A acknowledgement precedent ("the escape exists but is
+   visible in the program"). The fail-closed rule is independent of the spelling: no attribution, no
+   compile.

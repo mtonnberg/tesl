@@ -1,0 +1,155 @@
+module ApiTestTemplateTests exposing [TemplateServer]
+
+# Brace handling inside an `api-test` block.
+#
+# An api-test path or string may carry an INTERPOLATION SLOT: `get "/things/{id}"`
+# (manual/best-practices.md, "Integration / API tests"). That slot is spelled with
+# BARE braces — it is an api-test-only extension, distinct from Tesl's ordinary
+# `${...}` string interpolation, which the parser has already resolved into a
+# concatenation long before the api-test emitter sees the string.
+#
+# Which means every brace an api-test string contains for any OTHER reason — and
+# the commonest reason is JSON — went through the slot scanner too. Three shapes
+# were mishandled, all of them from ordinary tests that merely mention JSON:
+#
+#   "{}"           an EMPTY slot: the scanner produced a slot with no expression
+#                  and the emitter wrote a fragment-helper call with no argument.
+#                  The compiler reported SUCCESS and the generated module died at
+#                  test time with `api-test-string-fragment: arity mismatch`.
+#   "{\"id\": 1}"  content that only STARTS with an expression: the `"id"` prefix
+#                  was parsed as the slot and the rest was silently discarded, so
+#                  the assertion compared against `"id"`. A silent wrong value is
+#                  worse than the crash above.
+#   "{\"}"         an unbalanced quote: the lexer raised `Failure` from inside the
+#                  emitter, i.e. a compiler crash with no diagnostic at all.
+#
+# The rule now: `{…}` is a slot only when the ENTIRE brace content is one
+# expression. Anything else is text, which is exactly what a JSON literal needs.
+# The suite pins both directions — braces-as-text AND the slot still working —
+# because a fix that only stopped the crash could have done it by dropping
+# interpolation.
+
+import Tesl.Prelude exposing [Bool(..), String]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.Json exposing [stringCodec]
+import Tesl.ApiTest exposing [statusOk]
+
+# ── Code under test: handlers whose RESULTS contain braces ───────────────────
+
+handler emptyObject() -> String requires [] =
+  "{}"
+
+handler jsonObject() -> String requires [] =
+  "{\"id\": 1}"
+
+handler unbalancedQuote() -> String requires [] =
+  "{\"}"
+
+handler unclosedBrace() -> String requires [] =
+  "a { b"
+
+handler nestedBraces() -> String requires [] =
+  "{\"a\": {\"b\": 2}}"
+
+capturer idCapture: id: String using stringCodec
+
+handler echoThing(id: String) -> String requires [] =
+  "thing-" ++ id
+
+api TemplateApi {
+  get "/empty" -> String
+
+  get "/json" -> String
+
+  get "/quote" -> String
+
+  get "/unclosed" -> String
+
+  get "/nested" -> String
+
+  get "/things/:id"
+    capture id: String via idCapture
+    -> String
+}
+
+server TemplateServer for TemplateApi {
+  endpoint_0 = emptyObject
+  endpoint_1 = jsonObject
+  endpoint_2 = unbalancedQuote
+  endpoint_3 = unclosedBrace
+  endpoint_4 = nestedBraces
+  endpoint_5 = echoThing
+}
+
+database TemplateDb = Database {
+  entities: []
+  backend: Memory
+}
+
+# ── Braces that are not a slot are TEXT ──────────────────────────────────────
+
+api-test "TPL-01: an empty pair of braces is the literal `{}`" for TemplateServer requires [] {
+  let r = get "/empty"
+  expect statusOk r.status
+  expect r.body == "{}"
+}
+
+api-test "TPL-02: a JSON object literal survives whole, not truncated to its first token" for TemplateServer requires [] {
+  let r = get "/json"
+  expect statusOk r.status
+  expect r.body == "{\"id\": 1}"
+}
+
+api-test "TPL-03: an unbalanced quote inside braces compiles and compares as text" for TemplateServer requires [] {
+  let r = get "/quote"
+  expect statusOk r.status
+  expect r.body == "{\"}"
+}
+
+api-test "TPL-04: an unclosed brace is text" for TemplateServer requires [] {
+  let r = get "/unclosed"
+  expect statusOk r.status
+  expect r.body == "a { b"
+}
+
+api-test "TPL-05: nested braces survive whole" for TemplateServer requires [] {
+  let r = get "/nested"
+  expect statusOk r.status
+  expect r.body == "{\"a\": {\"b\": 2}}"
+}
+
+api-test "TPL-06: braces mixed with surrounding text keep both parts" for TemplateServer requires [] {
+  let r = get "/empty"
+  expect statusOk r.status
+  expect ("payload: " ++ r.body) == "payload: {}"
+}
+
+# ── …and the slot still interpolates ─────────────────────────────────────────
+
+api-test "TPL-07: a bare-brace slot in a PATH still interpolates" for TemplateServer requires [] {
+  let id = "9"
+  let r = get "/things/{id}"
+  expect statusOk r.status
+  expect r.body == "thing-9"
+}
+
+api-test "TPL-08: a bare-brace slot in an expected STRING still interpolates" for TemplateServer requires [] {
+  let id = "9"
+  let r = get "/things/{id}"
+  expect r.body == "thing-{id}"
+}
+
+api-test "TPL-09: a dotted slot (a field of an earlier response) still interpolates" for TemplateServer requires [] {
+  let first = get "/things/7"
+  expect first.body == "thing-7"
+  let r = get "/things/{first.body}"
+  expect statusOk r.status
+  expect r.body == "thing-thing-7"
+}
+
+api-test "TPL-10: Tesl's own dollar-brace interpolation is unaffected" for TemplateServer requires [] {
+  let id = "5"
+  let r = get "/things/${id}"
+  expect statusOk r.status
+  expect r.body == "thing-5"
+}

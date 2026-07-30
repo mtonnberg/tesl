@@ -6988,13 +6988,52 @@ type api_test_template_part =
   | ApiTestTemplateLiteral of string
   | ApiTestTemplateExpr of expr
 
+(* `{…}` inside an api-test path or string is an INTERPOLATION SLOT — but only
+   when the ENTIRE brace content is one expression.  Returns None otherwise, and
+   the caller then treats the braces as ordinary text.
+
+   Three shapes were wrong before, all of them reachable from an ordinary
+   api-test that mentions JSON:
+
+     "{}"            an empty slot: `parse_expr` failed, the Err fallback built
+                     `EVar ""`, and the emitter produced a fragment helper call
+                     with NO argument — an opaque `arity mismatch` at test RUN
+                     time, from a compiler that reported success.
+     "{\"id\": 1}"   content that merely STARTS with an expression: `parse_expr`
+                     consumed the `"id"` prefix and the remaining tokens were
+                     silently DISCARDED, so the test compared against `"id"`
+                     instead of the JSON the source clearly asks for.  Silently
+                     wrong beats loudly broken only in the wrong direction.
+     "{\"}"          unbalanced quote: `Lexer.tokenize` raises `Failure`
+                     ("unterminated string literal at EOF"), which escaped as a
+                     compiler crash rather than any diagnostic.
+
+   A JSON literal in an api-test is the common case, so braces that are not a
+   whole expression are text.  A typo'd interpolation (`{user..id}`) therefore
+   reaches the assertion as literal text and fails the test with the literal
+   visible in the message — a worse diagnostic than a compile error, but never a
+   wrong PASS and never a crash. *)
 let parse_api_test_template_expr expr_text =
   let text = String.trim expr_text in
-  let tokens = Lexer.tokenize "<api-test-template>" text in
-  let stream = Parser.make_stream "<api-test-template>" tokens in
-  match Parser.parse_expr stream with
-  | Ok e -> e
-  | Err _ -> EVar { name = text; loc = Location.dummy_loc "<api-test-template>" }
+  if text = "" then None
+  else
+    match Lexer.tokenize "<api-test-template>" text with
+    | exception _ -> None
+    | tokens ->
+      let stream = Parser.make_stream "<api-test-template>" tokens in
+      (match Parser.parse_expr stream with
+       | Ok e ->
+         (* Whatever is left must be layout only: `tokenize` appends NEWLINE +
+            EOF to every non-empty line, so those do not mean "unconsumed". *)
+         let rec layout_only () =
+           match Parser.peek stream with
+           | Token.EOF -> true
+           | Token.NEWLINE | Token.INDENT | Token.DEDENT ->
+             Parser.advance stream; layout_only ()
+           | _ -> false
+         in
+         if layout_only () then Some e else None
+       | Err _ -> None)
 
 let parse_api_test_template_content content =
   let len = String.length content in
@@ -7015,7 +7054,15 @@ let parse_api_test_template_content content =
          cursor := len
        | Some close_brace ->
          let expr_text = String.sub content (open_brace + 1) (close_brace - open_brace - 1) in
-         parts := ApiTestTemplateExpr (parse_api_test_template_expr expr_text) :: !parts;
+         (match parse_api_test_template_expr expr_text with
+          | Some e ->
+            parts := ApiTestTemplateExpr e :: !parts
+          | None ->
+            (* Not an interpolation: keep the braces and their content verbatim,
+               so `"{}"` and `"{\"id\": 1}"` are the literals they look like. *)
+            parts := ApiTestTemplateLiteral
+                       (String.sub content open_brace (close_brace - open_brace + 1))
+                     :: !parts);
          cursor := close_brace + 1)
   done;
   List.rev !parts
