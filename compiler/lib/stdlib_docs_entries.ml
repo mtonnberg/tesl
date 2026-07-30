@@ -696,7 +696,7 @@ let crypto : entry list = [
     ~doc:"A stored password hash (libsodium crypto_pwhash / Argon2id, PHC string format). Opaque on purpose: it has no constructor, so a plaintext cannot be blessed as a hash, and no ==, because its only legitimate comparison is Crypto.checkPassword. Secret: redacted in telemetry, logs and the debugger. Store it in a column directly.";
   e "Signature" ~m:"Tesl.Crypto"
     ~kind:(KType "type Signature   # opaque: no .value, no ==; use Crypto.signatureHex to transport")
-    ~doc:"An HMAC-SHA256 message authentication tag. Public data (publishing it is the point), so it is NOT redacted — but it has no ==, because comparing tags by hand is not constant-time. Use Crypto.checkSignature to verify and Crypto.signatureHex / Crypto.signatureFromHex to transport.";
+    ~doc:"An HMAC-SHA256 message authentication tag. Public data (publishing it is the point), so it is NOT redacted — but it has no ==, because comparing tags by hand is not constant-time. Use Crypto.checkSignature to verify and Crypto.signatureHex/signatureBase64 (and the From* parsers) to transport.";
   e "Secret" ~m:"Tesl.Crypto"
     ~kind:(KType "secret type Secret = String   # constant-time ==, redacted everywhere, no .value")
     ~doc:"Key material. A Secret cannot become a String in Tesl code: no interpolation, no concatenation, no .value. Hand it to a function that knows what to do with it, store it in a column, or compare it with == (which lowers to libsodium's sodium_memcmp).";
@@ -706,6 +706,11 @@ let crypto : entry list = [
     ~doc:"A submitted password was checked against this stored hash; minted only by Crypto.checkPassword. Reaching Authenticated still needs an explicit establish — this fact makes that step small and reviewable, it does not remove it.";
   e "Authentic" ~m:"Tesl.Crypto" ~kind:(KFact "fact Authentic (payload: String)")
     ~doc:"This value's message authentication tag verified; minted by Crypto.checkSignature (about a payload String) and by JWT.verify (about the claims Dict) — one predicate, two subject types, so a parameter demanding one shape cannot be handed the other. Require it and \"forgot to check the signature before trusting the value\" stops compiling. Also exposed from Tesl.JWT.";
+
+  e "ProxyBound" ~m:"Tesl.Proxy" ~kind:(KFact "fact ProxyBound (presented: String)")
+    ~doc:"A request's proxy-binding header was verified against the configured shared secret; minted ONLY by `check Proxy.verifyBinding` (constant-time). Because it is obtainable only through that verification, an `auth` block that trusts a header reaches its decision by a real check against STORED MATERIAL — not a bare header assertion, which would instead need a network-topology claim (a loopback `listenAddress`).";
+  f "Proxy.verifyBinding" [ "config"; "presented" ] ~m:"Tesl.Proxy"
+    ~doc:"Verifies a request-supplied proxy-binding header value against a configured shared Secret, constant-time, and mints `ProxyBound` on a match. Use with `check`; the failure is a 401. This is the authenticating-proxy pattern's compile-time evidence: a value verified against stored material needs no topology claim (unlike a bare X-Auth-User header, which does).";
 
   f "Crypto.hashPassword" [ "plaintext" ] ~m:"Tesl.Crypto"
     ~doc:"Hashes a password for storage. libsodium crypto_pwhash_str — Argon2id, libsodium's INTERACTIVE parameters (currently m=64 MiB, t=2, p=1), read from the library at call time so a libsodium upgrade strengthens every new hash with no code change. Draws a random salt. Rejects input over 1024 bytes: an unbounded memory-hard hash on an unauthenticated endpoint is a denial-of-service amplifier.";
@@ -723,6 +728,10 @@ let crypto : entry list = [
     ~doc:"The transport form of a signature you produced, for putting in a header or a body. A tag is public data, so this is not an unwrap of a secret — but comparing two of these is a timing-unsafe MAC comparison, which is what the SEC004 diagnostic is for.";
   f "Crypto.signatureFromHex" [ "hex" ] ~m:"Tesl.Crypto"
     ~doc:"Parses an inbound hex signature — a webhook's X-Signature header (Stripe, GitHub) — so Crypto.checkSignature can verify it. Malformed input fails the verification cleanly; it never raises.";
+  f "Crypto.signatureBase64" [ "sig" ] ~m:"Tesl.Crypto"
+    ~doc:"The base64 transport form of a signature you produced — the encoding Standard Webhooks uses (webhook-signature: v1,<base64>). Same status as signatureHex: a tag is public data, and comparing two of these by hand is the SEC004 timing-unsafe MAC comparison.";
+  f "Crypto.signatureFromBase64" [ "b64" ] ~m:"Tesl.Crypto"
+    ~doc:"Parses an inbound base64 signature — a Standard Webhooks webhook-signature header — so Crypto.checkSignature can verify it. Malformed input fails the verification cleanly; it never raises.";
 
   f "Crypto.fingerprint" [ "content" ] ~m:"Tesl.Crypto"
     ~aliases:["Crypto.sha256"]
@@ -782,7 +791,7 @@ let http_client : entry list = [
 
 let http : entry list = [
   e "HttpRequest" ~m:"Tesl.Http"
-    ~kind:(KType "type HttpRequest   # fields: method, path, headers, cookies, queryParameters, body")
+    ~kind:(KType "type HttpRequest   # fields: method, path, headers, cookies, queryParameters, clientAddress, body")
     ~doc:"The incoming request, as bound by an `auth` block or a handler that declares it.";
   f "Http.setSessionCookie" [ "token" ] ~m:"Tesl.Http"
     ~doc:"Sets the session cookie on the response: `__Host-session`, HttpOnly, Secure, SameSite=Lax, Path=/, Max-Age = the JWT TTL. Every attribute and the name are fixed — there are no options. It takes a JwtToken, so a session cookie always carries a signed value, and it attaches to 2xx responses only: a handler that sets a cookie and then `fail`s mints no session.";
@@ -873,9 +882,47 @@ let telemetry : entry list = [
     ~doc:"Sets a gauge metric to the given value; attrs are [Tuple2 \"key\" value] pairs.";
 ]
 
+(* ── Tesl.Sso (Phase 3 tables-only foundation) ─────────────────────────────── *)
+let sso : entry list = [
+  e "SsoConnection" ~m:"Tesl.Sso"
+    ~kind:(KType "type SsoConnection   # opaque; built by Sso.defaults")
+    ~doc:"An opaque, blessed provider connection (endpoints, scopes, client id/secret). Built by Sso.defaults; consumed by the `sso` server clause. Opaque on the Tesl surface — there is no constructor, so it cannot be forged field-by-field.";
+  e "SsoSubjectKey" ~m:"Tesl.Sso"
+    ~kind:(KType "type SsoSubjectKey   # opaque, storable identity key")
+    ~doc:"The opaque, email-free identity key for an SSO user, derived injectively from (issuer, subject) like PasswordHash is opaque. Store `Sso.keyText key` in a column; never key a user table on an email address.";
+  e "SsoProvider" ~m:"Tesl.Sso"
+    ~kind:(KType "type SsoProvider = Github | Google")
+    ~doc:"The blessed set of SSO providers, a closed ADT. Each constructor lowers to the runtime provider id, so a typo is a compile error and completion lists every provider (the Utc/Currency baked-ADT pattern). Pass one as the first argument to Sso.defaults; for any other OpenID Connect issuer use Sso.oidc.";
+  v "Github" ~m:"Tesl.Sso" ~doc:"The GitHub SSO provider (plain OAuth2 + server-side userinfo). A value of type SsoProvider for Sso.defaults.";
+  v "Google" ~m:"Tesl.Sso" ~doc:"The Google SSO provider (OIDC). A value of type SsoProvider for Sso.defaults.";
+  f "Sso.defaults" [ "provider"; "clientId"; "clientSecret" ] ~m:"Tesl.Sso"
+    ~doc:"Builds a blessed provider SsoConnection with minimal scopes and the right endpoints/field mapping. `provider` is an SsoProvider (Github/Google). The client secret is a Tesl.Crypto Secret, so it is redacted at every rendering sink.";
+  f "Sso.oidc" [ "issuer"; "clientId"; "clientSecret" ] ~m:"Tesl.Sso"
+    ~doc:"Builds a generic OpenID Connect SsoConnection from an ISSUER URL (self-hosted Keycloak/dex, Okta, Auth0, single-tenant Entra). Endpoints are discovered from the issuer's /.well-known/openid-configuration; the same signature+claims trust argument as the blessed OIDC providers applies, and the issuer passes the SSRF preflight.";
+  f "Sso.allowedEmailDomains" [ "connection"; "domains" ] ~m:"Tesl.Sso"
+    ~doc:"Restricts a connection to identities whose email domain is in the list. Enforced by the runtime at the callback BEFORE onIdentity, and satisfiable ONLY by a VerifiedEmail — an unverified or absent address is refused (restricting by an address the provider never verified is the Risk 2 takeover in disguise). Case- and FQDN-root-insensitive.";
+  f "Sso.allowedHostedDomains" [ "connection"; "domains" ] ~m:"Tesl.Sso"
+    ~doc:"Restricts a connection to a Google Workspace / hosted-domain (`hd`) claim in the list. An absent `hd` claim is a refusal, not a pass. Checked at the callback before onIdentity.";
+  f "Sso.allowedTenants" [ "connection"; "tenants" ] ~m:"Tesl.Sso"
+    ~doc:"Restricts an OIDC connection to the listed tenant ids (Entra `tid`). Checked at the callback before onIdentity.";
+  f "Sso.keyText" [ "key" ] ~m:"Tesl.Sso"
+    ~doc:"Renders an opaque SsoSubjectKey as the String to store in a database column. The inverse (constructing a key) is the runtime's job at the SSO callback, never the app's.";
+  e "SsoIdentity" ~m:"Tesl.Sso"
+    ~kind:(KType "type SsoIdentity   # opaque; handed to an `sso` clause's onIdentity")
+    ~doc:"The verified third-party identity the SSO runtime hands to a server clause's `onIdentity` function at the callback. Opaque; read the stable session subject with Sso.subject.";
+  f "Sso.subject" [ "identity" ] ~m:"Tesl.Sso"
+    ~doc:"The stable subject string of an SsoIdentity (issuer-scoped), for use as the session subject an onIdentity function returns.";
+  f "Sso.email" [ "identity" ] ~m:"Tesl.Sso"
+    ~doc:"The identity's VERIFIED email as a Maybe String — Something only when the provider verified the address, Nothing otherwise. There is deliberately no way to read an UNVERIFIED email, so an app cannot trust one for identity decisions (the Risk 2 takeover). Domain restriction on the connection is the enforced form; this is for display/linking.";
+  f "Sso.tenant" [ "identity" ] ~m:"Tesl.Sso"
+    ~doc:"The identity's tenant as a Maybe String — the OIDC `tid` / Google Workspace `hd` when present, Nothing otherwise. Use it to scope a multi-tenant app; pair with Sso.allowedTenants to restrict at the connection.";
+  f "Sso.claim" [ "identity"; "name" ] ~m:"Tesl.Sso"
+    ~doc:"Reads a single string claim from the verified token by name, as a Maybe String (Nothing if absent or not a string). For arbitrary claims beyond subject/email/tenant.";
+]
+
 let entries : entry list =
   ambient @ prelude @ email @ maybe_result @ time
   @ int32 @ db @ either @ string_ @ regex @ list_ @ list_prim @ int_ @ float_
   @ dict @ set_ @ tuple @ money @ random_uuid_id_env @ json_codecs
   @ api_test @ jwt @ crypto @ cache @ database @ http @ http_client @ agent @ queue
-  @ telemetry
+  @ telemetry @ sso

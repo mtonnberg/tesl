@@ -62,7 +62,7 @@ Documentation:
 Help:
   tesl help                    show this help message
   tesl help manual             show the complete manual index
-  tesl help manual <section>   show a specific manual section (overview, language-spec, examples, best-practices, faq, dev)
+  tesl help manual <section>   show a specific manual section (overview, language-spec, examples, best-practices, sso, faq, dev)
   tesl help manual <section>#<anchor>  jump to a sub-section (e.g. best-practices#proof-management)
   tesl help manual full        show all documentation concatenated (for LLMs with large context windows)
   tesl help full               same as 'tesl help manual full'
@@ -234,6 +234,7 @@ let section_to_embedded_key name =
   (* dev docs live at the repo root in dev-docs/, embedded under "dev-docs/…" *)
   | "dev"                                  -> "dev-docs/README.md"
   | "faq"                                  -> "manual/FAQ.md"
+  | "sso" | "auth"                         -> "manual/sso.md"
   (* D17: the prose "TLDR of the whole language" newcomer track. *)
   | "intro"                                -> "example/intro/README.md"
   (* D12/D13: the guided feature tour + the rehomed user-facing deploy/manifest docs. *)

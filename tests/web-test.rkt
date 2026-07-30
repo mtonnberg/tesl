@@ -644,6 +644,58 @@
   (check-equal? (hash-ref (dsl-response-body response) 'status) "draft")
   (check-false (hash-has-key? (dsl-response-body response) 'meta))
   (check-false (hash-has-key? (dsl-response-body response) 'audit)))
+
+;; Risk 49/61: `Sec-Fetch-Site: cross-site` refuses a state-changing request.
+(let ([response (dispatch-request CodecServer
+                                  (make-request 'POST '("tasks")
+                                                #:headers (hash "content-type" "application/json"
+                                                                "sec-fetch-site" "cross-site")
+                                                #:body (jsexpr->bytes (hash 'title "x")))
+                                  #:capabilities '())])
+  (check-equal? (dsl-response-status response) 403))
+;; `same-origin` (like `same-site`/`none`/absent) passes — only literal cross-site is refused.
+(let ([response (dispatch-request CodecServer
+                                  (make-request 'POST '("tasks")
+                                                #:headers (hash "content-type" "application/json"
+                                                                "sec-fetch-site" "same-origin")
+                                                #:body (jsexpr->bytes (hash 'title "x")))
+                                  #:capabilities '())])
+  (check-equal? (dsl-response-status response) 200))
+;; a SAFE method labelled cross-site is NOT refused (a GET changes nothing).
+(let ([response (dispatch-request registered-capture-server
+                                  (make-request 'GET '("tasks" "5")
+                                                #:headers (hash "sec-fetch-site" "cross-site"))
+                                  #:capabilities '())])
+  (check-not-equal? (dsl-response-status response) 403))
+
+;; Risk 50/60: Host validation against a declared publicOrigin, one probe path exempt.
+(parameterize ([current-public-origin "https://app.example.com"])
+  ;; a Host that names the configured origin passes (not 421)
+  (let ([r (dispatch-request registered-capture-server
+             (make-request 'GET '("tasks" "5") #:headers (hash "host" "app.example.com"))
+             #:capabilities '())])
+    (check-not-equal? (dsl-response-status r) 421))
+  ;; a mismatched Host is refused
+  (let ([r (dispatch-request registered-capture-server
+             (make-request 'GET '("tasks" "5") #:headers (hash "host" "evil.example"))
+             #:capabilities '())])
+    (check-equal? (dsl-response-status r) 421))
+  ;; an absent Host is refused
+  (let ([r (dispatch-request registered-capture-server
+             (make-request 'GET '("tasks" "5"))
+             #:capabilities '())])
+    (check-equal? (dsl-response-status r) 421))
+  ;; the one declared health-probe path is exempt even with a bad Host
+  (parameterize ([current-health-probe-path "/tasks/5"])
+    (let ([r (dispatch-request registered-capture-server
+               (make-request 'GET '("tasks" "5") #:headers (hash "host" "evil.example"))
+               #:capabilities '())])
+      (check-not-equal? (dsl-response-status r) 421))))
+;; with NO declared publicOrigin, Host is not validated (existing behaviour)
+(let ([r (dispatch-request registered-capture-server
+           (make-request 'GET '("tasks" "5") #:headers (hash "host" "evil.example"))
+           #:capabilities '())])
+  (check-not-equal? (dsl-response-status r) 421))
 (let ([response (dispatch-request CodecServer
                                   (make-request 'POST '("tasks")
                                                 #:headers (hash "content-type" "application/json")

@@ -66,6 +66,7 @@
          ;; message authentication
          Crypto.signWith Crypto.checkSignature
          Crypto.signatureHex Crypto.signatureFromHex
+         Crypto.signatureBase64 Crypto.signatureFromBase64
          ;; digests
          Crypto.fingerprint Crypto.keyFingerprint
          ;; tokens
@@ -73,7 +74,17 @@
          ;; expert aliases
          Crypto.hmacSha256 Crypto.sha256 Crypto.sha512
          ;; internal, for the seam tests and the constant-time == lowering
-         crypto-constant-time-equal? crypto-max-password-bytes)
+         crypto-constant-time-equal? crypto-max-password-bytes
+         ;; internal, for tesl/proxy.rkt: generic proof-attach + constant-time
+         ;; byte compare (Item A ProxyBound minting reuses the exact machinery).
+         attach-proof-to constant-time-bytes=?
+         ;; internal, for dsl/sso.rkt (Stage 2): raw digest/MAC/base64url helpers
+         ;; used to build PKCE S256 challenges and the domain-separated
+         ;; __Host-oauth cookie MAC.  NOT Tesl-surface names.
+         sha256-bytes hmac-sha256-bytes base64url-encode
+         ;; internal, for the SSO server clause's __Host-oauth MAC key: a Secret's
+         ;; raw UTF-8 bytes.  NOT a Tesl-surface name.
+         secret->bytes)
 
 ;; ════════════════════════════════════════════════════════════════════════════
 ;;  Lazy libsodium resolution
@@ -205,6 +216,8 @@
 (define (raw-str s)
   (define v (raw-value s))
   (if (newtype-value? v) (newtype-value-value v) v))
+
+(define (secret->bytes s) (string->bytes/utf-8 (raw-str s)))
 
 (define (attach-proof-to pred-name value)
   (define nv (ensure-named pred-name value))
@@ -449,6 +462,24 @@
 ;; still only be consumed by a verification.
 (define (Crypto.signatureFromHex hex)
   (Signature (raw-str hex)))
+
+;; Crypto.signatureBase64 : Signature -> String
+;;
+;; The base64 transport form.  Standard Webhooks (Svix and, by convention, a
+;; growing set of senders) puts the tag in `webhook-signature: v1,<base64>`, so
+;; a Tesl app talking to such a receiver needs base64, not hex.  Same status as
+;; `signatureHex`: a tag is public data, not a secret, and comparing two of
+;; these by hand is the SEC004 timing bug — verify with `checkSignature`.
+(define (Crypto.signatureBase64 sig)
+  (bytes->string/utf-8 (base64-encode (hex-string->bytes (raw-str sig)) #"")))
+
+;; Crypto.signatureFromBase64 : String -> Signature
+;;
+;; The inbound half for a base64 tag (Standard Webhooks).  Parsing an untrusted
+;; tag is safe — a Signature still cannot be compared and can only be consumed
+;; by a verification; malformed input fails the verification cleanly.
+(define (Crypto.signatureFromBase64 b64)
+  (Signature (bytes->hex-string (base64-decode (string->bytes/utf-8 (raw-str b64))))))
 
 ;; ════════════════════════════════════════════════════════════════════════════
 ;;  Digests

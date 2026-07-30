@@ -326,7 +326,13 @@ let pre_refactor_literal =
     "asTool"; "serverTools"; "humanActions";
     "cache"; "Cache.get"; "Cache.set"; "Cache.delete"; "Cache.invalidate";
     "Email.send"; "startEmailWorker";
-    "Utc"; "FixedOffset" ]
+    "Utc"; "FixedOffset";
+    (* Phase 3 (roadmap/next/ensure_sso_works.md): the Tesl.Sso opaque identity
+       types are require-suppressed like PasswordHash/Secret — they carry no
+       runtime constructor row, so no import binding is emitted for them. *)
+    "SsoConnection"; "SsoSubjectKey"; "SsoIdentity";
+    (* Phase 4: the SsoProvider type + its inline-lowered value constructors. *)
+    "SsoProvider"; "Github"; "Google" ]
   @ Tz_zones.ctor_names
   @ Currencies.ctor_names
   @ List.map fst Units_catalog.aliases

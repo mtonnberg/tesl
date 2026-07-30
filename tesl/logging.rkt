@@ -35,7 +35,8 @@
  tesl-log-worker-done!
  tesl-log-worker-fail!
  tesl-log-publish!
- tesl-log-deliver!)
+ tesl-log-deliver!
+ tesl-log-auth-event!)
 
 ;; ── Enabled flag ─────────────────────────────────────────────────────────────
 ;;
@@ -91,6 +92,32 @@
                     (cons 'http.path path)
                     (cons 'http.status status)
                     (cons 'http.duration_ms elapsed-ms))))
+
+;; ── SSO / auth events (Risk 21/65) ───────────────────────────────────────────
+;;
+;; A structured record of every session-establishment attempt — success AND
+;; every denial — for the audit trail.  It carries the PROVENANCE (provider
+;; segment, issuer, subject, tenant, outcome) and the peer's client address, and
+;; NEVER a token, authorization code, state or PKCE verifier: those ARE the
+;; credential, and logging them would defeat the point.  `client-address` is the
+;; #51 request.clientAddress (socket peer, or the trusted rightmost XFF hop).
+(define (tesl-log-auth-event! #:outcome outcome
+                              #:provider provider
+                              #:client-address [client-address ""]
+                              #:issuer [issuer ""]
+                              #:subject [subject ""]
+                              #:tenant [tenant ""]
+                              #:reason [reason ""])
+  (tesl-emit! "AUTH"
+              (format "~a sso/~a~a" outcome provider
+                      (if (string=? reason "") "" (format " (~a)" reason)))
+              (list (cons 'auth.outcome outcome)
+                    (cons 'auth.provider provider)
+                    (cons 'auth.issuer issuer)
+                    (cons 'auth.subject subject)
+                    (cons 'auth.tenant tenant)
+                    (cons 'auth.client_address client-address)
+                    (cons 'auth.reason reason))))
 
 ;; ── SQL queries ──────────────────────────────────────────────────────────────
 ;;

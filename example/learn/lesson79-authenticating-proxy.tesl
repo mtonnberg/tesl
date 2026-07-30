@@ -1,0 +1,52 @@
+module Lesson79AuthenticatingProxy exposing [authorizeInternal]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lesson 79 — Authenticating proxy: trust a request only when it came through
+#             your reverse proxy
+#
+# lesson: track=stdlib order=810 needs=lesson78-sso
+# summary: Turn a reverse-proxy binding header into a ProxyBound proof the compiler demands, so a request that never passed through your proxy is a compile error rather than a runtime gap
+#
+# Lesson 78 put the whole SSO flow behind one server clause. This lesson is the
+# next production question: your app runs BEHIND a reverse proxy (the documented
+# nginx cluster), and some internal routes should be reachable ONLY through it.
+#
+#   THERE ARE TWO WAYS TO TRUST THE EDGE, AND THEY ARE NOT THE SAME.
+#
+#   1. TOPOLOGY.  `listenAddress Loopback` binds 127.0.0.1, so the app is never
+#      directly reachable — every request provably arrives through the proxy.
+#      That is a claim about the NETWORK, enforced at boot.
+#
+#   2. A VERIFIED BINDING.  The proxy sets a binding header equal to a shared
+#      secret; the app verifies it.  That is a claim about a VALUE, and it holds
+#      on any interface — nobody without the secret can forge it.
+#
+# `Proxy.verifyBinding` is the second one, made unforgeable. It constant-time
+# compares the presented binding against the app's configured `Secret` and mints
+# a `ProxyBound` fact ONLY on a match. Because no hand-written function may
+# declare `ProxyBound` (it is owned by Tesl.Proxy, minted only by this check), a
+# function that DEMANDS `ProxyBound` can be reached only by a value that was
+# actually verified.
+#
+#   THE #50.2 DISCRIMINATOR.  A header that IS the assertion (`X-Auth-User: alice`)
+#   is only as trustworthy as the topology — it needs `listenAddress Loopback`.
+#   A header VERIFIED against stored material (this lesson) needs NO topology
+#   claim: it is the same posture as a session cookie. Prefer this form.
+
+import Tesl.Prelude exposing [String]
+import Tesl.Crypto exposing [Secret]
+import Tesl.Proxy exposing [ProxyBound, Proxy.verifyBinding]
+
+# `internalOnly` DEMANDS `ProxyBound` on its argument. There is no way to call it
+# with a binding that was not verified — a request that skipped the proxy does
+# not typecheck, so the gap is closed at COMPILE time, not with a runtime 403.
+fn internalOnly(bound: String ::: ProxyBound bound) -> String =
+  "internal data for a proxy-bound request: " ++ bound
+
+# The edge check. `proxySecret` is the app's configured shared secret; the proxy
+# puts the same value in the binding header, which arrives as `presentedBinding`.
+# `check` runs the verification and, on success, yields a value carrying
+# `ProxyBound` — exactly what `internalOnly` requires.
+fn authorizeInternal(proxySecret: Secret, presentedBinding: String) -> String =
+  let bound = check Proxy.verifyBinding proxySecret presentedBinding
+  internalOnly bound

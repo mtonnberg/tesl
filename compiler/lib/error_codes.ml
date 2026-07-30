@@ -442,6 +442,22 @@ let registry : entry list = [
        This is why `Signature` has no `==` of its own: the only legitimate \
        comparison of two tags IS a verification.";
     manual = Some "best-practices#security" };
+
+  { code = "SEC005"; category = Security;
+    title = "state-changing capability in a GET route";
+    explanation =
+      "A handler bound to a GET endpoint (transitively) requires a \
+       state-changing capability — `dbWrite` or `queueWrite`. A GET must \
+       be SAFE and idempotent: HTTP caches, prefetchers, link crawlers and \
+       `<img>`/`<link>` tags all issue GETs without user intent, so a write \
+       behind one runs on traffic the user never authorised.\n\n\
+       It is also the one method the `Sec-Fetch-Site: cross-site` refusal \
+       does NOT guard (only POST/PUT/PATCH/DELETE are checked), so a write \
+       reachable through a GET is reachable cross-site with no CSRF token \
+       in the way.\n\n\
+       Move the mutation to a POST/PUT/PATCH/DELETE endpoint, or take the \
+       write capability out of the GET handler.";
+    manual = Some "best-practices#security" };
 ]
 
 (* ── Lookup helpers ───────────────────────────────────────────────────────── *)

@@ -2002,6 +2002,7 @@ let local_let_reason name expected_ty =
 
 let opaque_special_fields =
   [ "value"; "cookies"; "headers"; "queryParameters";
+    "clientAddress";  (* #51: the derived trusted client address *)
     "body"; "path"; "method_"; "method"; "status" ]
 
 let opaque_special_field_types =

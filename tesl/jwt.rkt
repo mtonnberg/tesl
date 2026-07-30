@@ -94,6 +94,9 @@
          json)
 
 (provide jwt JwtToken JWT.sign JWT.verify JWT.renew JWT.decode
+         ;; SSO server clause: mint a session cookie value (raw JWT) for a
+         ;; subject, self-granting jwt+time.  NOT a Tesl-surface name.
+         sso-session-cookie-value
          ;; re-exported from crypto.rkt — see the require note above
          Authentic
          ;; internal: `tesl/http.rkt` derives the session cookie's Max-Age from
@@ -104,7 +107,15 @@
          ;; internal: the hard stop on a renewed session's total lifetime.
          ;; Exported for the test suite, which asserts the bound rather than
          ;; restating the number.  Also NOT Tesl-importable.
-         jwt-absolute-max-seconds)
+         jwt-absolute-max-seconds
+         ;; ── Session-policy / key-rotation / revocation runtime half (Stage 2,
+         ;; ensure_sso_works.md).  Exported for the runtime-half test suite and
+         ;; the Phase-3 server-clause wiring; NONE is a Tesl-surface name.
+         (struct-out session-policy)
+         standard-session short-session
+         current-session-policy policy-ttl-seconds policy-absolute-max-seconds
+         current-previous-session-key
+         current-session-revoked-hook)
 
 ;; ── Capability ───────────────────────────────────────────────────────────────
 
@@ -301,6 +312,57 @@
 ;; reason `exp` is not: a caller who can choose it will choose "never".
 (define jwt-absolute-max-seconds (* 12 jwt-ttl-seconds))
 
+;; ── Session policy (runtime half — roadmap/next/ensure_sso_works.md, Stage 2) ──
+;;
+;; The renewable TTL and the absolute cap are no longer two hardcoded constants:
+;; they come from the ACTIVE `SessionPolicy`, a closed set of safe values (not a
+;; free `Duration` a caller could set to 30 days).  The default is
+;; `StandardSession` — 1h renewable / 12h absolute, today's EXACT behaviour, so
+;; nothing changes for an existing program.  The absolute cap is named PER POLICY
+;; rather than derived as `(* 12 ttl)`: applying the old multiplier to a 15-minute
+;; TTL would silently yield a 3-hour cap (forced mid-workday reauth), which is a
+;; bug, so `ShortSession` pairs 15min renewable with an 8h (workday) cap
+;; deliberately.  Server-wide, not SSO-specific.  The active policy is read at
+;; VERIFY/RENEW time, so lowering it shortens live sessions immediately (usable as
+;; incident response); raising it never extends a session past its own iat+cap.
+(struct session-policy (name ttl-seconds absolute-max-seconds) #:transparent)
+(define standard-session
+  (session-policy 'StandardSession jwt-ttl-seconds jwt-absolute-max-seconds)) ; 1h / 12h
+(define short-session
+  (session-policy 'ShortSession 900 (* 8 3600)))                              ; 15min / 8h
+(define current-session-policy (make-parameter standard-session))
+(define (policy-ttl-seconds) (session-policy-ttl-seconds (current-session-policy)))
+(define (policy-absolute-max-seconds)
+  (session-policy-absolute-max-seconds (current-session-policy)))
+
+;; ── Session-key rotation (runtime half) ───────────────────────────────────────
+;;
+;; The optional PREVIOUS signing key.  `JWT.verify` accepts a token signed by
+;; either the current key (its `secret` argument) or this one; `JWT.sign` /
+;; renewal always use the current key, so the previous slot drains on its own
+;; after one absolute cap.  This is the rotation overlap that lets a leaked
+;; `SESSION_KEY` be rotated WITHOUT logging every user out, and emptying this slot
+;; while rotating the current key is the global kill switch.  Default `#f` — no
+;; previous key — so existing programs are unchanged.  A `Secret` or `#f`.
+(define current-previous-session-key (make-parameter #f))
+
+;; ── Revocation at the renewal boundary (runtime half) ─────────────────────────
+;;
+;; An OPTIONAL fail-closed check consulted ONLY when a session RENEWS — never on
+;; the verify path, which stays byte-identical stateless.  It bounds revocation
+;; latency to the renewable window (<=1h Standard, <=15min Short) at the cost of
+;; one read per session per TTL.  The hook is `(subject iat-seconds) -> Bool`
+;; (#t ⇒ revoked); a raising hook also denies (fail closed).  Default `#f` ⇒
+;; today's behaviour.  (The Phase-3 server clause adapts the app's
+;; `(String, PosixMillis) -> Bool` to this; iat is seconds at this layer.)
+(define current-session-revoked-hook (make-parameter #f))
+(define (session-revoked? subject iat)
+  (define hook (current-session-revoked-hook))
+  (and hook
+       ;; Any error from the hook (a failing dbRead, a raise) denies the renewal.
+       (with-handlers ([(lambda (_) #t) (lambda (_) #t)])
+         (and (hook (or subject "") iat) #t))))
+
 ;; NOW in epoch SECONDS (RFC 7519 NumericDate).  Tesl's own clock type is
 ;; PosixMillis, so the ms→s conversion lives here, at the JWT boundary, once.
 (define (jwt-now-seconds)
@@ -393,6 +455,47 @@
         (values (if (symbol? k) (symbol->string k) k) v))
       claims))
 
+;; Phase 0 (roadmap/next/ensure_sso_works.md, blocker 6): JWT.decode is typed
+;; `Dict String String`, but a JWT payload is arbitrary JSON.  `aud`, `amr`,
+;; `roles` and `groups` are frequently ARRAYS and `exp`/`iat`/`nbf` are NUMBERS,
+;; so `string->jsexpr` returns Racket lists/numbers/booleans and the runtime
+;; would hand the Tesl surface a value that is not a String -- the declared type
+;; a lie, and (for an array) exactly the substring-matchable shape Risk 18 warns
+;; about.  Rather than widen JWT.decode's type here, pin a DETERMINISTIC rule so
+;; the type is honest: every claim value is rendered to its string form --
+;;   * a JSON string   -> itself
+;;   * a number/bool    -> its JSON text ("123", "true")
+;;   * null             -> "null"
+;;   * an array/object  -> its COMPACT JSON text (`["a","b"]`, `{"k":1}`)
+;;
+;; NOTE for authorization: a decoded array claim is JSON TEXT, which IS
+;; substring-matchable -- do NOT branch on `String.contains` over it.  The typed,
+;; per-claim `Dict String Json` that authorization should read is the SSO path's
+;; `SsoIdentity.claims` (§Typed identity), not this general-purpose decoder.
+;;
+;; This coercion is applied ONLY at the JWT.decode surface boundary.  The
+;; verify/renew path keeps raw jsexpr values on purpose: JWT.renew does integer
+;; arithmetic on a numeric `iat` (`usable-iat?`, `iat + max`), which a stringified
+;; claim would break.
+(define (jwt-claim-value->string v)
+  (cond
+    [(string? v) v]
+    [(boolean? v) (if v "true" "false")]
+    [(eq? v 'null) "null"]
+    [(number? v) (number->string v)]
+    [else
+     ;; array / object / anything else that came from string->jsexpr.
+     (with-handlers ([exn:fail? (lambda (_) (format "~a" v))])
+       (jsexpr->string v))]))
+
+;; Render a decoded, string-keyed claims hash as an honest `Dict String String`.
+(define (jwt-claims->tesl-dict claims)
+  (unless (hash? claims)
+    (raise-user-error 'JWT.decode
+                      "malformed JWT payload: the claims must be a JSON object"))
+  (for/hash ([(k v) (in-hash claims)])
+    (values k (jwt-claim-value->string v))))
+
 ;; ── Public API ───────────────────────────────────────────────────────────────
 
 ;; Serialize an already-normalized, already-guarded jsexpr claims hash and HMAC it.
@@ -429,7 +532,7 @@
   ;; `JWT.renew` reads to cap the total lifetime of a renewed session.  Both are
   ;; epoch SECONDS (RFC 7519).
   (sign-claims-hash
-   (hash-set (hash-set h 'iat now) 'exp (+ now jwt-ttl-seconds))
+   (hash-set (hash-set h 'iat now) 'exp (+ now (policy-ttl-seconds)))
    secret))
 
 ;; JWT.verify : JwtToken → Secret → Dict String String
@@ -463,22 +566,30 @@
              [sig-b64     (list-ref parts 2)]
              ;; Re-derive signature
              [signing-input (string-append header-b64 "." payload-b64)]
-             [secret-bytes (string->bytes/utf-8 secret-str)]
-             [expected-sig (compute-signature secret-bytes signing-input)]
-             ;; Likewise for a signature segment that is not valid base64url:
-             ;; fall through to the constant-time compare with an empty tag,
-             ;; which fails, rather than raising out of the handler.
+             ;; A signature segment that is not valid base64url falls through to
+             ;; the constant-time compare with an empty tag (which fails) rather
+             ;; than raising out of the handler.
              [actual-sig
               (with-handlers ([exn:fail? (lambda (_) #"")])
                 (base64url-decode sig-b64))]
-             ;; Constant-time comparison (byte-by-byte, always process all
-             ;; bytes).  XOR every pair of bytes and OR them together; 0 means
-             ;; equal.
+             ;; Session-key rotation: accept the CURRENT key (this `secret`) or the
+             ;; OPTIONAL previous key, so a rotation does not invalidate in-flight
+             ;; sessions.  Each candidate gets its own constant-time comparison
+             ;; (byte-by-byte, all bytes processed); the count of keys (1 or 2) is
+             ;; not secret.  `kid` stays advisory.
+             [candidate-secrets
+              (filter values
+                      (list secret-str
+                            (let ([prev (current-previous-session-key)])
+                              (and prev (jwt-raw-string prev)))))]
              [sig-ok?
-              (and (= (bytes-length expected-sig) (bytes-length actual-sig))
-                   (= 0 (for/fold ([acc 0]) ([eb (in-bytes expected-sig)]
-                                             [ab (in-bytes actual-sig)])
-                          (bitwise-ior acc (bitwise-xor eb ab)))))])
+              (for/or ([cand (in-list candidate-secrets)])
+                (define expected
+                  (compute-signature (string->bytes/utf-8 cand) signing-input))
+                (and (= (bytes-length expected) (bytes-length actual-sig))
+                     (= 0 (for/fold ([acc 0]) ([eb (in-bytes expected)]
+                                               [ab (in-bytes actual-sig)])
+                            (bitwise-ior acc (bitwise-xor eb ab))))))])
         (if (not sig-ok?)
             (check-fail "Invalid JWT signature" 401 '())
             ;; Decode payload
@@ -584,8 +695,13 @@
         ;; claim was rejected without telling the legitimate user anything they
         ;; can act on: in every case the answer is "log in again".
         (check-fail "Session cannot be renewed: no usable issued-at claim" 401 '())]
-       [(> (- now iat) jwt-absolute-max-seconds)
+       [(> (- now iat) (policy-absolute-max-seconds))
         (check-fail "Session has reached its maximum lifetime" 401 '())]
+       [(session-revoked? (hash-ref verified "sub" #f) iat)
+        ;; Revocation at the renewal boundary: fail-closed, verify path untouched.
+        ;; For an SSO user a denial is one silent redirect that re-applies the
+        ;; IdP's own policy; the app owns the store, Tesl owns no session state.
+        (check-fail "Session cannot be renewed: session revoked" 401 '())]
        [else
         ;; Carry EVERY claim across, replacing only `exp` and keeping `iat` as it
         ;; was.  Re-key to symbols, which is what the signing path serializes.
@@ -602,9 +718,9 @@
         ;; renewed window therefore shrinks to zero rather than overshooting; a
         ;; fresh token (iat ≈ now) is unaffected, since `iat + max` is far past
         ;; `now + ttl`.
-        (define deadline (+ iat jwt-absolute-max-seconds))
+        (define deadline (+ iat (policy-absolute-max-seconds)))
         (sign-claims-hash
-         (hash-set renewed 'exp (min (+ now jwt-ttl-seconds) deadline))
+         (hash-set renewed 'exp (min (+ now (policy-ttl-seconds)) deadline))
          secret)])]))
 
 ;; JWT.decode : JwtToken → Dict String String
@@ -625,5 +741,14 @@
   (define payload-bytes (base64url-decode payload-b64))
   (with-handlers ([exn:fail? (lambda (_)
                                (raise-user-error 'JWT.decode "malformed JWT payload"))])
-    (jwt-claims->string-keyed
-     (string->jsexpr (bytes->string/utf-8 payload-bytes)))))
+    (jwt-claims->tesl-dict
+     (jwt-claims->string-keyed
+      (string->jsexpr (bytes->string/utf-8 payload-bytes))))))
+
+;;; ── SSO session minting (Phase 3, roadmap/next/ensure_sso_works.md) ───────────
+;; The `sso` server clause's callback exchanges the provider identity for one of
+;; THESE — Tesl's own session JWT — exactly like every other login.  Self-grants
+;; jwt+time so the runtime-owned callback (dsl/web.rkt) need not thread caps.
+(define (sso-session-cookie-value secret subject)
+  (with-capabilities (jwt time)
+    (jwt-raw-string (JWT.sign (hash "sub" subject) secret))))

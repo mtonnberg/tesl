@@ -296,6 +296,22 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
        | DFunc fd -> Some (fd.name, (fd.capabilities, fd.loc)) | _ -> None) decls in
      let servers = List.filter_map (function
        | DServer s -> Some (s.name, List.map snd s.bindings) | _ -> None) decls in
+     (* SSO clauses reference functions the RUNTIME calls (not app code): the
+        `connection` + `onIdentity` fns and the `sessionRevoked` hook.  They run
+        under the server's granted capabilities exactly like handlers, so their
+        required caps must be covered by main's grant.  (Servers have no own
+        capability declaration — they inherit main's grant via `serve
+        #:capabilities` — so this is the handler `⊆ main` shape, not the queue
+        `⊆ queue ⊆ main` shape.) *)
+     let server_sso_fns = List.filter_map (function
+       | DServer (s : server_form) ->
+         let conn_id =
+           List.concat_map (fun (_, conn, idf) ->
+             [ (conn, "SSO connection"); (idf, "SSO onIdentity") ]) s.sso_clauses in
+         let rev = match s.session_revoked with
+           | Some f -> [ (f, "SSO sessionRevoked") ] | None -> [] in
+         Some (s.name, conn_id @ rev)
+       | _ -> None) decls in
      (* Worker reachability is derived from the SURFACE queue `jobs` (regular +
         dead-letter handlers) via the same folding desugar uses.  The parser NEVER
         emits `DWorkers` — those are synthesized in desugar, which runs AFTER this
@@ -353,6 +369,24 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
      in
      List.iter (fun h -> match List.assoc_opt h fn_info with
        | Some (reqs, loc) -> report "handler" h reqs loc | None -> ()) handler_fns;
+     (* Same coverage check for the SSO-referenced fns of every wired server. *)
+     let sso_reachable =
+       List.concat_map (fun sn ->
+         match List.assoc_opt sn server_sso_fns with Some fs -> fs | None -> [])
+         api_servers
+       |> List.sort_uniq compare in
+     List.iter (fun (fn, kind) -> match List.assoc_opt fn fn_info with
+       | Some (reqs, loc) -> report kind fn reqs loc | None -> ()) sso_reachable;
+     (* The SSO flow itself does network I/O (discovery, token exchange,
+        userinfo, JWKS) through the runtime, so a wired `sso` server needs main
+        to grant `httpClient` — otherwise the callback 500s with "Missing
+        capabilities" at the first fetch. *)
+     let sso_servers_with_loc = List.filter_map (function
+       | DServer (s : server_form) when s.sso_clauses <> [] -> Some (s.name, s.loc)
+       | _ -> None) decls in
+     List.iter (fun sn -> match List.assoc_opt sn sso_servers_with_loc with
+       | Some loc -> report "SSO flow" sn ["httpClient"] loc | None -> ())
+       api_servers;
      (* Each worker runs under its QUEUE's capabilities (the runtime ambient set by
         `start-workers!`), so `worker.requires` must be ⊆ `queue.requires` — the exact
         runtime condition.  Combined with the queue ⊆ main check below, this gives

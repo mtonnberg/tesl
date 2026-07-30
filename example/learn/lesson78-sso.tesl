@@ -1,0 +1,172 @@
+module Lesson78Sso exposing []
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lesson 78 — SSO: "Log in with GitHub", the whole flow owned by Tesl
+#
+# lesson: track=stdlib order=800 needs=lesson76-sessions
+# summary: Add third-party login in one server clause — the OAuth2/OIDC dance, PKCE, state and the session cookie are all the runtime's job; you map the identity and gate a route on it
+#
+# Lesson 76 showed the session cookie: the credential is a signed JWT, and there
+# is exactly one way to set it. This lesson is where that cookie COMES FROM when
+# the identity lives at a third party — GitHub, Google, or a customer's Entra ID.
+#
+#   THE PROVIDER IS A VALUE.  THE FLOW IS THE RUNTIME'S.  YOU MAP THE IDENTITY.
+#
+# You never write the redirect, the `state` nonce, the PKCE challenge, the code
+# exchange, the token-signature check, or the Set-Cookie line. You declare a
+# connection, say what a verified identity means (onIdentity), and read the
+# session back in an `auth` block — ordinary session auth, exactly like lesson 76.
+
+import Tesl.Prelude exposing [String, Bool(..)]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Dict exposing [Dict, Dict.lookup]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Sso exposing [
+  SsoConnection,
+  SsoIdentity,
+  Github,
+  Sso.defaults,
+  Sso.subject,
+]
+import Tesl.Env exposing [envRead, requireEnv, requireSecret]
+import Tesl.HttpClient exposing [httpClient]
+import Tesl.DB exposing [dbRead]
+import Tesl.Time exposing [time, PosixMillis]
+import Tesl.Crypto exposing [Secret]
+import Tesl.JWT exposing [jwt, JWT.verify]
+import Tesl.Http exposing [HttpRequest, Http.sessionToken]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.App exposing [App]
+
+# The app's session principal — a record YOU own. The SSO subject is only its id;
+# a real app would carry roles/email here, looked up from its own DB (never
+# trusted from the token). This is the value that flows into the guarded route.
+record User {
+  id: String
+}
+
+# The proof a guarded route demands: "this request carries a verified session".
+# Owned by THIS module, so it can only be minted here — by `sessionOwner` below.
+fact Authenticated (user: User)
+
+record Profile {
+  userId: String
+}
+
+codec Profile {
+  toJson {
+    userId -> "userId" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+# One named capability for "this code runs a session": verify a JWT (`jwt`), read
+# the clock its `exp` is checked against (`time`), and read the signing key from
+# the environment (`envRead`). Every capability is explicit and flows up to
+# `main` — see the bottom of the file.
+capability sessions implies jwt, time, envRead
+
+# The session-signing key: the SAME secret the `sessionKey "SESSION_KEY"`
+# clause names, so `JWT.verify` here checks tokens the SSO runtime signed.
+fn sessionKey() -> Secret requires [envRead] =
+  requireSecret "SESSION_KEY"
+
+# ─────────────────────────────────────────────
+# PART 1 — the connection is an ordinary value
+# ─────────────────────────────────────────────
+# `Sso.defaults` bakes the blessed endpoints, scopes and checks for a provider.
+# The provider is the `SsoProvider` ADT (`Github`/`Google`/`Entra`), not a
+# string, so a typo is a compile error. Credentials come from the environment,
+# hence `requires [envRead]` — which `main` must grant.
+fn githubConn() -> SsoConnection requires [envRead] =
+  Sso.defaults Github (requireEnv "GH_CLIENT_ID") (requireSecret "GH_CLIENT_SECRET")
+
+# ─────────────────────────────────────────────
+# PART 2 — onIdentity: map a verified identity to the durable SUBJECT
+# ─────────────────────────────────────────────
+# The runtime calls this only AFTER verifying the token signature and every
+# claim. `SsoIdentity` is opaque — you cannot read `identity.email` and key on it
+# (the nOAuth takeover). `Sso.subject` is the injective `(issuer, subject)` key
+# (the raw provider `sub` is unique only WITHIN one issuer). The String it
+# returns becomes the session JWT's `sub`; it is NOT the User — the User is built
+# from it on the way back in (PART 4).
+fn linkUser(identity: SsoIdentity) -> String =
+  Sso.subject identity
+
+# ─────────────────────────────────────────────
+# PART 3 — sessionRevoked: deny a renewal, fail-closed
+# ─────────────────────────────────────────────
+# Consulted ONLY when a session RENEWS, never on the stateless verify path. A
+# real app checks its own revocation store — hence `requires [dbRead]`, which
+# (like every capability here) must be granted by `main`.
+fn revoked(_subject: String, _issuedAt: PosixMillis) -> Bool requires [dbRead] =
+  False
+
+# ─────────────────────────────────────────────
+# PART 4 — AUTH: read the session back and BUILD the User
+# ─────────────────────────────────────────────
+# There is nothing SSO-specific here: the callback minted an ordinary signed
+# session cookie, and this reads it exactly like lesson 76. The subject we get
+# back in `sub` is the very String `linkUser` returned; we wrap it into our own
+# `User` record. (A richer app would `dbRead` roles/email by this id here.)
+fn subjectOf(claims: Dict String String) -> String =
+  case Dict.lookup "sub" claims of
+    Nothing -> ""
+    Something subject -> subject
+
+auth sessionOwner(request: HttpRequest) -> user: User ::: Authenticated user
+  requires [sessions] =
+  case Http.sessionToken request of
+    Nothing -> fail 401 "no session"
+    Something token ->
+      let claims = check JWT.verify token (sessionKey())
+      let subject = subjectOf claims
+      ok (User { id: subject }) ::: Authenticated user
+
+# The protected endpoint: reachable ONLY through `sessionOwner`, so `user` is a
+# verified `User`. No SSO session, no page.
+handler me(user: User ::: Authenticated user) -> Profile =
+  Profile { userId: user.id }
+
+api AppApi {
+  get "/me"
+    auth user: User ::: Authenticated user via sessionOwner
+    -> Profile
+}
+
+# ─────────────────────────────────────────────
+# PART 5 — the server block: declare, don't implement
+# ─────────────────────────────────────────────
+# The `sso` clause mints /auth/github/login (303 to GitHub) and
+# /auth/github/callback (exchange, verify, run onIdentity, set __Host-session,
+# 303 to afterLogin). The other clauses are the security envelope; `loginMethods
+# [Sso]` is the CHECKED promise that no code path here mints a session cookie
+# except the SSO callback.
+server AppServer for AppApi {
+  endpoint_0 = me
+  sso "github" connection githubConn onIdentity linkUser
+  publicOrigin "https://app.example.com"
+  sessionKey "SESSION_KEY"
+  afterLogin "/me"
+  sessionPolicy ShortSession
+  sessionRevoked revoked
+  listenAddress Loopback
+  loginMethods [Sso]
+}
+
+database AppDb = Database {
+  entities: []
+  backend: Memory
+}
+
+# Every capability the wired functions need is declared HERE and nowhere else:
+# `sessions` (jwt+time+envRead) for the connection and the session auth, `dbRead`
+# for the revocation check, and `httpClient` for the runtime SSO flow's network
+# calls. If any were missing the compiler rejects the program rather than 500 at
+# runtime.
+main() -> App requires [sessions, dbRead, httpClient] =
+  App {
+    database: AppDb
+    api: AppServer
+    port: 8080
+  }

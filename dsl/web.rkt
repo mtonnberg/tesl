@@ -18,7 +18,8 @@
                   tesl-verbose?
                   tesl-log-active?
                   tesl-log-http-request!
-                  tesl-log-http-response!)
+                  tesl-log-http-response!
+                  tesl-log-auth-event!)
          (only-in "metrics.rkt"
                   metrics-active?
                   metric-histogram-record!
@@ -101,6 +102,29 @@
  ;; Security: static-file path-traversal segment guard (exported for the suite)
  static-path-segments-safe?
  static-path-segment-safe?
+ ;; Security: Phase -2 response security headers (exported for the regression
+ ;; suite tests/response-security-headers-test.rkt).
+ add-security-headers
+ security-response-headers
+ hsts-header-value
+ origin-loopback?
+ html-csp-value
+ current-content-security-policy
+ ;; Phase 3: the publicOrigin server clause sets this at boot.
+ current-public-origin
+ ;; Phase 3 (OQ11): `publicOrigin fromEnv "VAR"` reads + validates at boot.
+ public-origin-from-env valid-public-origin?
+ ;; Risk 50/60: the healthProbePath server clause sets this at boot.
+ current-health-probe-path host-of
+ ;; #51: client address + the trustedProxies edge declaration.
+ current-trusted-proxies client-address-of
+ ;; Phase 3: runtime-owned SSO routes (exported for the regression suite + the
+ ;; emitted server's #:sso-routes).
+ (struct-out sso-route) make-sso-route register-sso-routes!
+ ;; Phase 3: the listenAddress server clause sets the bind interface at boot.
+ register-listen-address!
+ find-sso-match handle-sso-request
+ sso-redirect-response sso-cookie-line sso-failure-response
  (struct-out dsl-request)
  (struct-out dsl-response)
  current-handler-error-port
@@ -1293,6 +1317,176 @@
     (dsl-response-headers response))
    (list (jsexpr->bytes (prepare-json (dsl-response-body response))))))
 
+;; ── Phase -2 (roadmap/next/ensure_sso_works.md): server-wide response security
+;; headers.  The tree emitted only `X-Content-Type-Options: nosniff`, and the
+;; two response paths that serve the app's OWN HTML -- the static-file responder
+;; and the SPA fallback -- passed `'()` headers, so a page load carried none.
+;; `harden-servlet` (below) applies this set to EVERY response.
+;;
+;;   * Referrer-Policy: no-referrer   -- on every response; a session-bearing
+;;     page (and the SSO callback's `code`) leaks onward without it.
+;;   * X-Frame-Options: DENY          -- clickjacking floor.
+;;   * X-Content-Type-Options: nosniff-- kept.
+;;   * Strict-Transport-Security      -- ONLY when the configured public origin
+;;     is https, NEVER derived from the request (which is untrusted and absent
+;;     behind a proxy, Risk 44); max-age one year, no includeSubDomains and no
+;;     preload by default (both near-irreversible, and Tesl cannot see the
+;;     subdomain topology).  Suppressed for a loopback dev origin.
+;;
+;; The public origin's runtime source is `TESL_PUBLIC_ORIGIN` until the
+;; `publicOrigin` server clause lands (compiler surface, Stage 2), at which point
+;; the clause feeds this same value, compile-time validated.
+;;
+;; A Content-Security-Policy is added to responses Tesl serves as HTML (the SPA
+;; fallback and static HTML), because the app cannot set a CSP on HTML the
+;; runtime serves (Risk 45).  The DEFAULT is `frame-ancestors 'none'` -- a real
+;; but non-breaking reduction (it constrains framing, not script/style sources,
+;; so it cannot break an SPA); a full policy is opt-in via `TESL_CSP`, and the
+;; final default value is Open Question 17, settled when the config surface
+;; lands.  JSON responses get no CSP (meaningless for a non-document).
+;; Phase 3: the `publicOrigin` server clause sets this parameter at boot; it
+;; takes precedence over the TESL_PUBLIC_ORIGIN env var.  Either way the value is
+;; the configured public origin — NEVER derived from a request (Risk 44).
+(define current-public-origin (make-parameter #f))
+(define (public-origin-value)
+  (define (clean v)
+    (and (string? v) (let ([t (string-trim v)]) (and (not (string=? t "")) t))))
+  (or (clean (current-public-origin))
+      (clean (getenv "TESL_PUBLIC_ORIGIN"))))
+
+;; OQ11: the runtime rule for a public origin, mirroring the compiler's
+;; `valid_public_origin` (validation_structural.ml) so the inline literal and
+;; the `fromEnv` env read are validated identically: an absolute origin, scheme
+;; `https` (or `http` only for a loopback host), with no path beyond an optional
+;; trailing `/`, no query and no fragment.
+(define (valid-public-origin? s)
+  (and (string? s)
+       (not (regexp-match? #rx"[?#]" s))
+       (let ()
+         (define (host+rest-ok? rest)
+           (define slash
+             (for/first ([c (in-string rest)] [i (in-naturals)] #:when (char=? c #\/)) i))
+           (cond [(not slash) (> (string-length rest) 0)]
+                 [else (and (> slash 0) (string=? (substring rest slash) "/"))]))
+         (cond
+           [(regexp-match? #rx"^https://" s) (host+rest-ok? (substring s 8))]
+           [(regexp-match? #rx"^http://" s)
+            (define rest (substring s 7))
+            (define slash
+              (for/first ([c (in-string rest)] [i (in-naturals)] #:when (char=? c #\/)) i))
+            (define host (if slash (substring rest 0 slash) rest))
+            (define host-noport (car (string-split (string-downcase host) ":")))
+            (define loopback?
+              (or (string=? host-noport "localhost")
+                  (string=? host-noport "::1")
+                  (regexp-match? #rx"^127[.]" host-noport)))
+            (and loopback? (host+rest-ok? rest))]
+           [else #f]))))
+
+;; OQ11: read the public origin from an env var ONCE at boot, validate it with
+;; the shared rule, and error fast (fail-closed) if it is missing or invalid.
+;; Only the `publicOrigin fromEnv` clause calls this — NEVER a request path.
+(define (public-origin-from-env var)
+  (define raw (getenv var))
+  (define v (and (string? raw) (let ([t (string-trim raw)]) (and (not (string=? t "")) t))))
+  (unless v
+    (error 'publicOrigin (format "environment variable ~a is not set" var)))
+  (unless (valid-public-origin? v)
+    (error 'publicOrigin
+           (format "environment variable ~a = ~s is not an absolute https origin with no path/query/fragment" var v)))
+  v)
+
+;; Risk 50/60: the ONE health-probe path exempt from Host validation (a load
+;; balancer probes without the app's Host).  #f = no exemption; set by the
+;; `healthProbePath` server clause at boot.
+(define current-health-probe-path (make-parameter #f))
+
+;; The bare host of an origin or a `Host` header value: drop scheme://, path,
+;; and :port (keeping a bracketed IPv6 literal), lower-cased.  Used only for
+;; the Host-vs-publicOrigin domain comparison.
+(define (host-of s0)
+  (define s (regexp-replace #rx"^[a-zA-Z][a-zA-Z0-9+.-]*://" (or s0 "") ""))
+  (define no-path (car (regexp-split #rx"/" s)))
+  (define host
+    (cond
+      [(regexp-match #rx"^(\\[[^]]*\\])" no-path) => cadr]  ; [IPv6]
+      [else (car (regexp-split #rx":" no-path))]))
+  (string-downcase host))
+
+(define (origin-loopback? origin)
+  ;; host of scheme://host[:port]/... — loopback ⇒ suppress HSTS.  The host may
+  ;; be a bracketed IPv6 literal (`[::1]`), so capture that shape too.
+  (define m (regexp-match #px"^[a-zA-Z][a-zA-Z0-9+.-]*://(\\[[^]]+\\]|[^/:]+)" origin))
+  (and m
+       (let ([host (string-downcase (regexp-replace* #rx"[][]" (cadr m) ""))])
+         (or (string=? host "localhost")
+             (string=? host "::1")
+             (regexp-match? #rx"^127[.][0-9.]+$" host)))))
+
+(define (hsts-header-value)
+  (define o (public-origin-value))
+  (and o
+       (regexp-match? #rx"^https://" (string-downcase o))
+       (not (origin-loopback? o))
+       #"max-age=31536000"))
+
+;; OQ17 (#50.1): the CSP for HTML responses.  Precedence: the program's
+;; `contentSecurityPolicy` server clause (typed, visible to a reviewer) >
+;; the TESL_CSP env override > the safe non-breaking default
+;; `frame-ancestors 'none'` (it constrains framing, not script/style sources,
+;; so it cannot break an SPA).  A handler may still override PER RESPONSE by
+;; setting its own Content-Security-Policy header (add-security-headers keeps
+;; a producer-set value) — that is the per-route form.
+(define current-content-security-policy (make-parameter #f))
+(define (html-csp-value)
+  (define clause (current-content-security-policy))
+  (define env (getenv "TESL_CSP"))
+  (cond
+    [(and (string? clause) (not (string=? (string-trim clause) "")))
+     (string->bytes/utf-8 (string-trim clause))]
+    [(and env (not (string=? (string-trim env) ""))) (string->bytes/utf-8 (string-trim env))]
+    [else #"frame-ancestors 'none'"]))
+
+(define (security-response-headers html?)
+  (append
+   (list (make-header #"X-Content-Type-Options" #"nosniff")
+         (make-header #"Referrer-Policy" #"no-referrer")
+         (make-header #"X-Frame-Options" #"DENY"))
+   (let ([hsts (hsts-header-value)])
+     (if hsts (list (make-header #"Strict-Transport-Security" hsts)) '()))
+   (if html?
+       (list (make-header #"Content-Security-Policy" (html-csp-value)))
+       '())))
+
+;; Add the security header set to a response, without overriding any header the
+;; producer already set (so a handler that chose its own Referrer-Policy or CSP
+;; wins).  Non-response values pass through untouched.
+(define (add-security-headers resp)
+  (cond
+    [(response? resp)
+     (define existing
+       (map (lambda (h) (string-downcase (bytes->string/utf-8 (header-field h))))
+            (response-headers resp)))
+     (define html?
+       (let ([m (response-mime resp)])
+         (and m (regexp-match? #rx"(?i:text/html)" (bytes->string/utf-8 m)))))
+     (define to-add
+       (for/list ([h (in-list (security-response-headers html?))]
+                  #:unless (member (string-downcase (bytes->string/utf-8 (header-field h)))
+                                   existing))
+         h))
+     (if (null? to-add)
+         resp
+         (struct-copy response resp
+                      [headers (append to-add (response-headers resp))]))]
+    [else resp]))
+
+;; Wrap a servlet handler so every response it returns carries the security
+;; header set -- including the static-file and SPA-fallback paths that build
+;; their responses directly and would otherwise skip it.
+(define (harden-servlet handler)
+  (lambda (req) (add-security-headers (handler req))))
+
 ;; Request body size cap (DoS): the whole body is read into memory and parsed by
 ;; `bytes->jsexpr`; an unbounded body lets a client exhaust memory / CPU.  Reject
 ;; oversized bodies with 413 before parsing.  Configurable via TESL_MAX_BODY_BYTES
@@ -2066,12 +2260,41 @@
     ;; real response or the SPA fallback.
     response)
 
+  ;; Risk 49/61: refuse a STATE-CHANGING request the browser labels an explicit
+  ;; cross-site fetch (`Sec-Fetch-Site: cross-site`).  A token-free, per-route-free
+  ;; CSRF defence: an ABSENT header allows (old browsers / non-browser clients),
+  ;; and only the literal `cross-site` is refused — `same-origin`/`same-site`/`none`
+  ;; all pass.  Safe (GET/HEAD/OPTIONS) methods are never refused.
+  (define (sec-fetch-cross-site-refusal)
+    (define method (string-upcase (dsl-request-method req)))
+    (and (member method '("POST" "PUT" "DELETE" "PATCH"))
+         (let ([sfs (request-header req "sec-fetch-site")])
+           (and sfs (string=? (string-downcase (string-trim sfs)) "cross-site")))
+         (error-response 403 "cross-site request refused")))
   ;; The whole request — match, auth, handler, response log, metrics — runs under
   ;; the ambient trace context.  `parameterize` (never an imperative set) is what
   ;; keeps a keep-alive connection thread from carrying one request's trace into
   ;; the next, and what makes the context inherited by any thread the handler
   ;; spawns.
-  (call-with-trace-ctx trace-root dispatch-body))
+  ;; Risk 50/60: when a publicOrigin is declared, the request `Host` must name
+  ;; that origin's host — otherwise a Host-header attack could make the app
+  ;; mint links/cookies for another origin.  Gated on publicOrigin being set
+  ;; (clause or TESL_PUBLIC_ORIGIN), so a server without one is unaffected.
+  ;; Exactly one declared health-probe path is exempt (LBs probe host-blind).
+  (define (host-mismatch-refusal)
+    (define origin (public-origin-value))
+    (cond
+      [(not origin) #f]
+      [(and (current-health-probe-path)
+            (string=? path-string (current-health-probe-path))) #f]
+      [else
+       (define got (host-of (or (request-header req "host") "")))
+       (if (and (not (string=? got "")) (string=? got (host-of origin)))
+           #f
+           (error-response 421 "Host does not match the configured public origin"))]))
+  (or (sec-fetch-cross-site-refusal)
+      (host-mismatch-refusal)
+      (call-with-trace-ctx trace-root dispatch-body)))
 
 ;; ── SSE route matching ───────────────────────────────────────────────────────
 ;;
@@ -2215,10 +2438,198 @@
 (define (static-path-segments-safe? parts)
   (for/and ([p (in-list parts)]) (static-path-segment-safe? p)))
 
+
+;;; ── SSO runtime-owned routes (roadmap/next/ensure_sso_works.md, Phase 3) ──────
+;;; The `sso "<seg>" …` server clause mints /auth/<seg>/login and
+;;; /auth/<seg>/callback.  These are RUNTIME-owned: they do what a Tesl handler
+;;; cannot — a 303 redirect (blocker 1) and a Set-Cookie on a non-2xx response
+;;; (blocker 2) — so the session/proof surface never has to grow those holes.
+;;; Session minting stays OUT of this module: the route carries a `mint-session`
+;;; closure (emitted under the app's jwt/time capabilities) that turns a subject
+;;; into a signed JwtToken string, so web.rkt touches neither JWT nor capabilities.
+(require (only-in net/base64 base64-encode)
+         (only-in racket/random crypto-random-bytes)
+         racket/runtime-path)
+;; dsl/sso.rkt and tesl/jwt.rkt are loaded LAZILY: a static require would cycle
+;; (web -> sso/crypto -> http-client -> traces -> web).  dynamic-require defers
+;; them to the first SSO request, long after every module has instantiated.
+(define-runtime-path sso-module-path "sso.rkt")
+(define-runtime-path jwt-module-path "../tesl/jwt.rkt")
+(define dyn-fn-cache (make-hash))
+(define (dyn-fn mod name)
+  (hash-ref! dyn-fn-cache (cons mod name) (lambda () (dynamic-require mod name))))
+(define (sso-fn name) (dyn-fn sso-module-path name))
+;; base64url (no padding, url-safe) — local, so web.rkt need not statically
+;; require crypto (which cycles back through http-client -> traces -> web).
+(define (sso-b64url bstr)
+  (regexp-replace* #rx"=+$"
+   (string-replace (string-replace (bytes->string/utf-8 (base64-encode bstr #"")) "+" "-") "/" "_")
+   ""))
+
+;; A route: segment + a connection thunk (-> SsoConnection hash) + the app's
+;; identity->subject mapping + a subject->JwtToken minter + the __Host-oauth MAC
+;; key (bytes) + the public origin + the post-login landing path.
+(struct sso-route (segment connection on-identity mint-session session-key-bytes
+                   public-origin after-login) #:transparent)
+
+(define (sso-route-key-bytes route)
+  (let ([k (sso-route-session-key-bytes route)]) (if (procedure? k) (k) k)))
+
+(define sso-routes-registry (make-hash))
+;; The registry is keyed by server name.  The EMIT registers under a string
+;; ("AppServer"), but `build-server-spec` stores the name as a SYMBOL ('AppServer)
+;; and `serve` looks it up via `(server-spec-name server)` — so normalise both
+;; sides to a string, or the lookup silently misses and no SSO routes mount.
+(define (sso-registry-key n) (if (symbol? n) (symbol->string n) n))
+(define (register-sso-routes! name routes)
+  (hash-set! sso-routes-registry (sso-registry-key name) routes))
+
+;; Phase 3: the `listenAddress` server clause — the interface `serve` binds to.
+;; #f = all interfaces (the default); "127.0.0.1" = loopback only (bind behind a
+;; reverse proxy so the app is never directly reachable).  Registered as a
+;; top-level side effect (like the SSO routes) so a server WITHOUT the clause
+;; emits byte-identically; `serve` reads it by server name.
+(define listen-address-registry (make-hash))
+(define (register-listen-address! name ip) (hash-set! listen-address-registry (sso-registry-key name) ip))
+
+(define (make-sso-route #:segment segment #:connection connection
+                        #:on-identity on-identity #:mint-session mint-session
+                        #:session-key-bytes session-key-bytes
+                        #:public-origin public-origin #:after-login [after-login "/"])
+  (sso-route segment connection on-identity mint-session session-key-bytes
+             public-origin after-login))
+
+(define (sso-rand-token) (sso-b64url (crypto-random-bytes 32)))
+(define sso-oauth-cookie-max-age 600)
+
+;; A __Host- cookie line: Path=/ + Secure + HttpOnly + SameSite=Lax (Lax, not
+;; Strict, so the top-level callback navigation keeps the cookie).  No Domain —
+;; the __Host- prefix forbids it, which is the point.
+(define (sso-cookie-line name value #:max-age [max-age #f] #:same-site [same-site "Lax"])
+  (string-append name "=" value "; Path=/; HttpOnly; Secure; SameSite=" same-site
+                 (if max-age (format "; Max-Age=~a" max-age) "")))
+
+;; The redirect the Tesl surface cannot build: 303 + Location + no-store + any
+;; number of Set-Cookie lines.  harden-servlet layers Referrer-Policy:no-referrer.
+(define (sso-redirect-response location cookie-lines)
+  (response/full
+   303 #"See Other" (current-seconds) #"text/plain; charset=utf-8"
+   (append
+    (list (make-header #"Location" (string->bytes/utf-8 location))
+          (make-header #"Cache-Control" #"no-store"))
+    (for/list ([c (in-list cookie-lines)])
+      (make-header #"Set-Cookie" (string->bytes/utf-8 c))))
+   (list #"")))
+
+;; A failed flow renders a FIXED page and clears __Host-oauth — never a JSON
+;; error body, never a fallthrough, never the provider's text (§What onIdentity
+;; does when it says no).
+(define (sso-failure-response)
+  (response/full
+   401 #"Unauthorized" (current-seconds) #"text/html; charset=utf-8"
+   (list (make-header #"Cache-Control" #"no-store")
+         (make-header #"Set-Cookie"
+                      (string->bytes/utf-8
+                       "__Host-oauth=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0")))
+   (list #"<!doctype html><meta charset=\"utf-8\"><title>Sign-in failed</title><p>Sign-in could not be completed. Please try again.")))
+
+;; /auth/<seg>/login|callback matcher -> (route . 'login|'callback) or #f.
+(define (find-sso-match sso-routes dsl-req)
+  (define path (dsl-request-path dsl-req))
+  (and (= (length path) 3)
+       (equal? (car path) "auth")
+       (let ([kind (caddr path)])
+         (and (or (equal? kind "login") (equal? kind "callback"))
+              (for/or ([r (in-list sso-routes)])
+                (and (equal? (sso-route-segment r) (cadr path))
+                     (cons r (if (equal? kind "login") 'login 'callback))))))))
+
+(define (handle-sso-request m dsl-req #:capabilities [capabilities '()])
+  ;; The SSO callback path calls app code the RUNTIME owns the call to: the
+  ;; connection thunk (envRead), onIdentity (whatever the app declared), and the
+  ;; session minter.  Run them under the server's granted capability ambient,
+  ;; exactly as `dispatch-request` does for ordinary handlers — the compile-time
+  ;; check (validation_capabilities) guarantees these caps ⊆ main's grant.
+  (parameterize ([current-capabilities (expand-capabilities capabilities)])
+    (case (cdr m)
+      [(login)    (handle-sso-login (car m) dsl-req)]
+      [(callback) (handle-sso-callback (car m) dsl-req)]
+      [else (sso-failure-response)])))
+
+(define (handle-sso-login route dsl-req)
+  (define seg (sso-route-segment route))
+  (define conn ((sso-route-connection route)))
+  (define redirect-uri
+    (string-append (sso-route-public-origin route) "/auth/" seg "/callback"))
+  (define-values (authorize-url cookie)
+    ((sso-fn 'sso-begin-login*) conn seg redirect-uri (sso-route-key-bytes route)
+                                (sso-rand-token) (sso-rand-token)
+                                (sso-rand-token) (current-seconds)))
+  (sso-redirect-response
+   authorize-url
+   (list (sso-cookie-line "__Host-oauth" cookie #:max-age sso-oauth-cookie-max-age))))
+
+(define (handle-sso-callback route dsl-req)
+  (define seg (sso-route-segment route))
+  (define q (dsl-request-query dsl-req))
+  (define code            (and (hash? q) (hash-ref q "code" #f)))
+  (define presented-state (and (hash? q) (hash-ref q "state" #f)))
+  (define cookies (dsl-request-cookies dsl-req))
+  (define oauth-cookie (and (hash? cookies) (hash-ref cookies "__Host-oauth" #f)))
+  (cond
+    [(or (not (string? code)) (not (string? oauth-cookie)))
+     (when (tesl-log-active?)
+       (tesl-log-auth-event! #:outcome "denied" #:provider seg
+                             #:client-address (client-address-of dsl-req)
+                             #:reason "missing authorization code or __Host-oauth cookie"))
+     (sso-failure-response)]
+    [else
+     (define conn ((sso-route-connection route)))
+     (define redirect-uri
+       (string-append (sso-route-public-origin route) "/auth/" seg "/callback"))
+     (define result
+       ;; Fail-closed to the FIXED client page, but log the reason server-side —
+       ;; a silently-swallowed callback failure is undebuggable in production.
+       (with-handlers ([exn:fail? (lambda (e)
+                                    (fprintf (handler-error-port)
+                                             "sso callback failed: ~a\n" (exn-message e))
+                                    (hasheq 'ok #f))])
+         ((sso-fn 'sso-handle-callback*) conn seg code oauth-cookie redirect-uri
+                                         (list (sso-route-key-bytes route) #f)
+                                         (current-seconds) presented-state)))
+     (cond
+       [(not (hash-ref result 'ok #f))
+        (fprintf (handler-error-port) "sso callback rejected: ~a\n"
+                 (hash-ref result 'reason "unknown"))
+        (when (tesl-log-active?)
+          (tesl-log-auth-event! #:outcome "denied" #:provider seg
+                                #:client-address (client-address-of dsl-req)
+                                #:reason (format "~a" (hash-ref result 'reason "unknown"))))
+        (sso-failure-response)]
+       [else
+        (define identity (hash-ref result 'identity))
+        (define subject ((sso-route-on-identity route) identity))
+        (define token-value ((sso-route-mint-session route) subject))
+        (when (tesl-log-active?)
+          (define (str v) (if (string? v) v ""))
+          (tesl-log-auth-event! #:outcome "success" #:provider seg
+                                #:client-address (client-address-of dsl-req)
+                                #:issuer (str (and (hash? identity) (hash-ref identity 'issuer #f)))
+                                #:subject (str (and (hash? identity) (hash-ref identity 'subject #f)))
+                                #:tenant (str (and (hash? identity) (hash-ref identity 'tenant #f)))))
+        ;; The session cookie REPLACES any pre-existing one (session fixation);
+        ;; __Host-session is HttpOnly/Secure/Path=/;SameSite=Lax, Max-Age bounded
+        ;; by the active policy's renewable TTL.
+        (sso-redirect-response
+         (sso-route-after-login route)
+         (list (sso-cookie-line "__Host-session" token-value
+                                #:max-age ((dyn-fn jwt-module-path (quote policy-ttl-seconds))))))])]))
+
 (define (serve server
                #:port         [port 8080]
                #:capabilities [capabilities '()]
                #:sse-routes   [sse-routes '()]
+               #:sso-routes   [sso-routes '()]
                #:static-dir   [static-dir #f])
   ;; Auto-start pub/sub LISTEN for SSE channels when PostgreSQL is active.
   ;; This replaces the old startWebSocket ... on PORT call.
@@ -2287,7 +2698,8 @@
                                       (list (file->bytes file-path)))))))))
 
   (serve/servlet
-   (lambda (req)
+   (harden-servlet
+    (lambda (req)
      (define dsl-req (request->dsl-request req))
 
      ;; 1. SSE routes (long-lived streaming responses)
@@ -2309,7 +2721,15 @@
      ;; counts too — by design: stream connects are connection-lifecycle
      ;; events, visible in the gauge, not request-shaped work.
      (define sse-match (find-sse-match sse-routes dsl-req))
+     (define sso-match
+       (find-sso-match
+        (if (pair? sso-routes) sso-routes
+            (hash-ref sso-routes-registry (sso-registry-key (server-spec-name server)) '()))
+        dsl-req))
      (cond
+       ;; 0. Runtime-owned SSO routes (/auth/<seg>/login|callback).  Runs the
+       ;;    connection/onIdentity/mint-session app code under the server's caps.
+       [sso-match (handle-sso-request sso-match dsl-req #:capabilities capabilities)]
        [sse-match
         (with-handlers ([check-fail? (lambda (f)
                                        (dsl-response->http-response
@@ -2354,6 +2774,7 @@
             (if (eq? result 'route-not-found)
                 (error-response 404 "Route not found")
                 result))])]))
+    )
    #:port port
    ;; F2 defense-in-depth (2026-07-30): the per-route wrappers in
    ;; `dispatch-request` contain handler AND auth exceptions, but ANY exception
@@ -2383,7 +2804,9 @@
    #:launch-browser? #f
    #:quit? #f
    #:banner? #t
-   #:listen-ip #f
+   ;; Phase 3: bind to the interface the `listenAddress` clause registered for
+   ;; this server (default #f = all interfaces, unchanged from before).
+   #:listen-ip (hash-ref listen-address-registry (sso-registry-key (server-spec-name server)) #f)
    #:stateless? #t
    #:servlet-path "/"
    #:servlet-regexp #rx""
@@ -2394,11 +2817,55 @@
 ;;   request.cookies  → pre-parsed Dict of cookie key→value pairs
 ;;   request.headers  → Dict of header name→value (names lowercased)
 ;; (request.queryParameters is not yet exposed — see roadmap/next.)
+;;; ── #51: client address + the trusted-proxy edge declaration ─────────────────
+;;;
+;;; `HttpRequest` cannot see who its client is when a reverse proxy (the
+;;; documented nginx cluster) sits in front — the socket peer is the proxy.  The
+;;; edge is DECLARED (`trustedProxies [...]`), never guessed, so the trust
+;;; assumption is visible and an app that never declared one cannot consume a
+;;; spoofable header.
+;;;
+;;;   • no declaration  ⇒ the socket peer (unspoofable; X-Forwarded-For ignored)
+;;;   • declaration     ⇒ the RIGHTMOST-UNTRUSTED hop of [XFF…, socket-peer]:
+;;;     walk from the right, skip declared proxies, stop at the first address
+;;;     that is not one.  A prepended (spoofed) XFF entry sits to the LEFT of the
+;;;     real chain and is never reached.
+(define current-trusted-proxies (make-parameter '()))
+
+(define (parse-forwarded-for raw)
+  (if (or (not raw) (string=? (string-trim raw) ""))
+      '()
+      (filter (lambda (s) (not (string=? s "")))
+              (map string-trim (string-split raw ",")))))
+
+(define (trusted-proxy? addr trusted) (and (member (string-trim addr) trusted) #t))
+
+(define (dsl-request-socket-peer req)
+  (define raw (dsl-request-raw-request req))
+  (and raw (with-handlers ([exn:fail? (lambda (_e) #f)]) (request-client-ip raw))))
+
+;; The trustworthy client address, computed fail-closed (see the note above).
+(define (client-address-of req)
+  (define trusted (current-trusted-proxies))
+  (define peer (dsl-request-socket-peer req))
+  (cond
+    [(null? trusted) (or peer "")]
+    [else
+     (define chain (append (parse-forwarded-for (request-header req "x-forwarded-for" ""))
+                           (if peer (list peer) '())))
+     (let loop ([rev (reverse chain)])
+       (cond
+         [(null? rev)
+          (error 'clientAddress "trustedProxies declared but the forwarded chain has no untrusted hop")]
+         [(trusted-proxy? (car rev) trusted) (loop (cdr rev))]
+         [else (string-trim (car rev))]))]))
+
 (register-runtime-type/runtime! 'HttpRequest dsl-request?)
 (register-field-access! 'HttpRequest
-                        '(cookies headers queryParameters)
+                        '(cookies headers queryParameters clientAddress)
                         (lambda (value field-name)
                           (case field-name
                             [(headers) (dsl-request-headers value)]
                             [(queryParameters) (dsl-request-query value)]
+                            [(clientAddress) (client-address-of value)]
                             [else      (dsl-request-cookies value)])))

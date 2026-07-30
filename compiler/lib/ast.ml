@@ -553,10 +553,70 @@ type api_form = {
 
 (* ─── Server form ────────────────────────────────────────────────────────── *)
 
+(* Phase 3 (OQ11): the source of the server's public origin.  Either an inline
+   string literal or an env-var read (12-factor deploys).  Both resolve to the
+   SAME validated origin at boot (absolute https — or http only for a loopback
+   host — with no path beyond `/`, no query, no fragment); the env form is read
+   ONCE at boot, NEVER from a request. *)
+type public_origin_src =
+  | POLiteral of string  (** [publicOrigin "https://app.example.com"] *)
+  | POEnv of string      (** [publicOrigin fromEnv "PUBLIC_ORIGIN"] — the env var name *)
+
 type server_form = {
   name     : string;
   api_name : string;
   bindings : (string * string) list;  (** (endpoint_name, handler_fn) *)
+  (* Phase 3 (roadmap/next/ensure_sso_works.md): the `sessionPolicy` server
+     clause — a closed keyword set ("StandardSession" | "ShortSession"), not a
+     free value, so it cannot be turned the unsafe way.  Sets the runtime's
+     `current-session-policy` at boot; server-wide, not SSO-specific. *)
+  session_policy : string option;
+  (* Phase 3: the `publicOrigin` clause — the app's verified public origin (the
+     redirect_uri base, and the HSTS origin).  An inline literal OR a `fromEnv`
+     env-var read (OQ11); NEVER derived from a request header. *)
+  public_origin : public_origin_src option;
+  (* Phase 3: repeatable `sso "<seg>" connection <fn> onIdentity <fn>` clauses.
+     Each mints /auth/<seg>/login and /auth/<seg>/callback (runtime-owned).
+     Tuple: (route_segment, connection_fn, on_identity_fn). *)
+  sso_clauses : (string * string * string) list;
+  (* Phase 3: `sessionKey "ENV_VAR"` (the session-signing Secret's env var)
+     and `afterLogin "/path"` (the post-login landing).  String literals. *)
+  sso_session_key_env : string option;
+  (* Phase 3: `sessionPreviousKey "ENV_VAR"` — the OPTIONAL previous session-signing
+     key (rotation overlap).  Sets `current-previous-session-key` at boot so
+     JWT.verify accepts tokens signed by either key; emptying it is the global
+     kill switch.  A string literal naming the env var (a Secret). *)
+  sso_previous_key_env : string option;
+  after_login : string option;
+  (* Phase 3: `sessionRevoked <fn>` — the app's revocation predicate, consulted
+     ONLY at session renewal (fail-closed).  Stores the function name; the
+     emitted adapter converts the runtime's epoch-seconds iat to the Tesl fn's
+     `(String, PosixMillis) -> Bool` contract. *)
+  session_revoked : string option;
+  (* Phase 3: `listenAddress Loopback | AllInterfaces` — a CLOSED keyword set for
+     the interface the server binds to.  `Loopback` binds 127.0.0.1 only (behind
+     a reverse proxy); `AllInterfaces` is the default.  Sets serve's #:listen-ip
+     at boot via the runtime registry. *)
+  listen_address : string option;
+  (* Phase 3: `loginMethods [Sso] | [Sso, Password via <fn>] | [Sso, Proxy]` — the
+     fail-closed allowlist of session-establishment methods.  A CLOSED keyword set
+     (Sso | Password | Proxy).  Under a `loginMethods` declaration WITHOUT
+     `Password`, no app code may mint a session (`Http.setSessionCookie`) or run a
+     password call (`Crypto.checkPassword`/`hashPassword`) — the only minting site
+     is the runtime-owned SSO callback.  The `Password via <fn>` policy-fn name is
+     carried separately. *)
+  login_methods : string list option;
+  password_policy_fn : string option;
+  (* #51: the `trustedProxies [ "10.0.0.1", ... ]` edge declaration — the
+     trusted proxy addresses in front of the app.  Empty = no declaration
+     (⇒ `request.clientAddress` is the unspoofable socket peer). *)
+  trusted_proxies : string list;
+  (* Risk 50/60: `healthProbePath "/healthz"` — the ONE path exempt from Host
+     validation (a load balancer probes host-blind). *)
+  health_probe_path : string option;
+  (* OQ17/#50.1: `contentSecurityPolicy "<policy>"` — the server default CSP for
+     HTML responses (a handler may still override per response). *)
+  content_security_policy : string option;
   loc      : loc;
 }
 

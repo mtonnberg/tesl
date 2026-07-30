@@ -32,7 +32,18 @@
          ;; tesl/tuple.rkt requires only dsl/types.rkt + evidence.rkt, so there is
          ;; no cycle; `Tuple2` is the header pair every verb already accepts.
          (only-in "tuple.rkt" Tuple2)
-         (only-in "private/http-stub.rkt" current-outbound-http-hook))
+         (only-in "private/http-stub.rkt" current-outbound-http-hook)
+         ;; Phase -1 (roadmap/next/ensure_sso_works.md): a VERIFYING TLS client
+         ;; context.  Racket's default `#:ssl? #t` authenticates NOTHING -- no
+         ;; certificate chain and no hostname -- so every outbound HTTPS call was
+         ;; MITM-able.  `ssl-secure-client-context` verifies both.
+         (only-in openssl ssl-secure-client-context
+                  ports->ssl-ports ssl-abandon-port)
+         ;; #48 (issue): SSRF egress containment lives on the CLIENT so every
+         ;; outbound call is contained, not just SSO.  The classifier judges a
+         ;; RESOLVED address; the pin below connects and judges the peer we
+         ;; actually reached, before any TLS handshake or request byte.
+         (only-in "../dsl/private/ssrf-guard.rkt" ip-forbidden-reason))
 
 (provide httpClient
          HttpResponse
@@ -49,6 +60,14 @@
          http-post-stream
          ;; Security: outbound header CRLF guard (exported for the regression suite)
          http-header-field-safe?
+         ;; Security: the single TLS development escape + loopback test, exported
+         ;; for the Phase -1 regression suite.
+         tls-insecure-dev-escape?
+         host-loopback?
+         ;; #48: SSRF egress decision (exported for the containment regression suite)
+         ssrf-egress-refusal
+         ssrf-allow-loopback?
+         ssrf-pinned-http-conn-open
          ;; Timeout knobs (exported for the regression suite — see the block below)
          http-connect-timeout-ms
          http-read-timeout-ms
@@ -59,6 +78,135 @@
 ;;; predicate, exported for the security regression suite.
 (define (http-header-field-safe? s)
   (not (regexp-match? #rx"[\r\n]" s)))
+
+;;; ── Phase -1: TLS peer authentication ────────────────────────────────────────
+;;;
+;;; Every outbound HTTPS call authenticates its peer's certificate chain AND
+;;; hostname through a VERIFYING client context.  This closes a live defect: the
+;;; previous bare `#:ssl? #t` used Racket's default client context, which checks
+;;; neither, so any on-path attacker could impersonate any HTTPS host to a Tesl
+;;; webhook, a payment call, an agent provider, or (later) an SSO exchange.
+;;;
+;;; This makes TLS *correct*, not *sufficient*: a host that trusts an
+;;; interception middlebox's CA still validates that middlebox happily.  That is
+;;; why SSO ID-token signatures are verified separately -- see
+;;; roadmap/next/ensure_sso_works.md §The trust argument, honestly.
+;;;
+;;; `ssl-secure-client-context` loads the system trust store, so it is built once
+;;; and shared; the context is immutable and safe to reuse across calls.
+(define secure-client-context
+  (let ([cached #f])
+    (lambda ()
+      (unless cached (set! cached (ssl-secure-client-context)))
+      cached)))
+
+;;; A host is loopback iff it can only be reached from this machine.  Used ONLY
+;;; to bound the development escape below; the default secure path ignores it.
+(define (host-loopback? host)
+  (and (string? host)
+       (let ([h (string-downcase host)])
+         (or (string=? h "localhost")
+             (string=? h "::1")
+             (string=? h "[::1]")
+             (regexp-match? #rx"^127[.][0-9.]+$" h)))))
+
+;;; ── The SINGLE TLS development escape ─────────────────────────────────────────
+;;;
+;;; There is exactly ONE way to disable certificate verification, it is
+;;; environment-level (never a per-call flag), and it engages ONLY for a loopback
+;;; host -- so a developer can talk to a local service presenting a self-signed
+;;; cert, and nothing else.  A ratchet test asserts no bare `#:ssl? #t` literal
+;;; reappears in the tree, i.e. that no second opt-out is ever added.
+;;;
+;;; It refuses to engage for any routable host, and refuses in a deployed build
+;;; (`TESL_DEPLOYED`); the build-artifact signal folds into this one development
+;;; gate once the deploy target lands (ensure_sso_works.md, Phase -2/3).
+(define tls-dev-active-warned? (box #f))
+(define tls-dev-refused-warned? (box #f))
+(define (tls-insecure-dev-requested?)
+  (and (not (getenv "TESL_DEPLOYED"))
+       (let ([v (getenv "TESL_HTTP_TLS_INSECURE_DEV")])
+         (and v (and (member (string-downcase (string-trim v))
+                             '("1" "true" "yes" "on"))
+                     #t)))))
+(define (tls-insecure-dev-escape? host)
+  (cond
+    [(not (tls-insecure-dev-requested?)) #f]
+    [(host-loopback? host)
+     (unless (unbox tls-dev-active-warned?)
+       (set-box! tls-dev-active-warned? #t)
+       (eprintf (string-append
+                 "WARNING: TESL_HTTP_TLS_INSECURE_DEV active -- HTTPS certificate "
+                 "verification is DISABLED for loopback hosts only. "
+                 "Never enable this in production.\n")))
+     #t]
+    [else
+     (unless (unbox tls-dev-refused-warned?)
+       (set-box! tls-dev-refused-warned? #t)
+       (eprintf (string-append
+                 "WARNING: TESL_HTTP_TLS_INSECURE_DEV is set but host ~s is not "
+                 "loopback -- TLS verification stays ON.\n")
+                host))
+     #f]))
+
+
+;;; ── #48: SSRF egress containment (resolve + connect-pinned) ──────────────────
+;;;
+;;; The dangerous SSRF targets — cloud metadata (169.254.169.254), RFC1918,
+;;; CGNAT, unique-local, link-local, 0.0.0.0/8 — are refused for EVERY outbound
+;;; call by default, judged by the address we actually connected to (so a DNS
+;;; record that resolves a public name to an internal address is caught).  There
+;;; is exactly one resolution (tcp-connect), so there is no check->connect rebind
+;;; gap, and the judgement happens before any TLS handshake or request byte.
+;;;
+;;; Loopback is the one range local development legitimately uses, so it is
+;;; ALLOWED in a non-deployed build and DENIED in a deployed build
+;;; (`TESL_DEPLOYED`) unless `TESL_HTTP_ALLOW_LOOPBACK_EGRESS` opts back in.
+(define (ssrf-allow-loopback?)
+  (cond
+    [(not (getenv "TESL_DEPLOYED")) #t]
+    [else (let ([v (getenv "TESL_HTTP_ALLOW_LOOPBACK_EGRESS")])
+            (and v (and (member (string-downcase (string-trim v)) '("1" "true" "yes" "on")) #t)))]))
+
+;; Refusal reason for a resolved/connected peer IP, or #f to allow.  Public
+;; addresses are always allowed; loopback is allowed per `ssrf-allow-loopback?`;
+;; every other private range is always refused.  Exported for the unit suite.
+(define (ssrf-egress-refusal peer-ip)
+  (define reason (ip-forbidden-reason peer-ip))
+  (cond
+    [(not reason) #f]
+    [(and (host-loopback? peer-ip) (ssrf-allow-loopback?)) #f]
+    [else reason]))
+
+;; Resolve+connect atomically, judge the peer, then (for https) TLS-wrap with the
+;; SAME verifying context + hostname as the direct path (so #47 is preserved) and
+;; drive HTTP over the pinned ports via net/http-client's tunnel form.
+(define (ssrf-pinned-http-conn-open host port use-ssl?)
+  (define-values (raw-from raw-to) (tcp-connect host port))
+  (with-handlers ([(lambda (_e) #t)
+                   (lambda (e)
+                     (when (input-port? raw-from) (close-input-port raw-from))
+                     (when (output-port? raw-to) (close-output-port raw-to))
+                     (raise e))])
+    (define-values (_lh _lp peer-ip _rp) (tcp-addresses raw-to #t))
+    (define reason (ssrf-egress-refusal peer-ip))
+    (when reason
+      (raise-user-error 'HttpClient
+                        "SSRF: refused egress to ~a — it resolves to ~a, which is ~a"
+                        host peer-ip reason))
+    (define hc (http-conn))
+    (cond
+      [use-ssl?
+       (define-values (sf st)
+         (if (tls-insecure-dev-escape? host)
+             (ports->ssl-ports raw-from raw-to #:mode 'connect #:close-original? #t)
+             (ports->ssl-ports raw-from raw-to #:mode 'connect
+                               #:context (secure-client-context)
+                               #:hostname host #:close-original? #t)))
+       (http-conn-open! hc host #:ssl? (list #t sf st ssl-abandon-port) #:port port)]
+      [else
+       (http-conn-open! hc host #:ssl? (list #f raw-from raw-to tcp-abandon-port) #:port port)])
+    hc))
 
 ;;; The httpClient capability — required by all outgoing HTTP functions.
 ;;; Named httpClient (camelCase) so it is a valid Tesl identifier.
@@ -471,7 +619,7 @@
         (define hc
           (call-with-http-deadline
            cust connect-ms (format "connect to ~a" url-str)
-           (lambda () (http-conn-open host #:ssl? use-ssl? #:port port))))
+           (lambda () (ssrf-pinned-http-conn-open host port use-ssl?))))
         (call-with-http-deadline
          cust read-ms (format "HTTP ~a to ~a" method url-str)
          (lambda ()
@@ -578,7 +726,7 @@
          (define hc
            (call-with-http-deadline
             cust connect-ms (format "connect to ~a" url-str)
-            (lambda () (http-conn-open host #:ssl? use-ssl? #:port port))))
+            (lambda () (ssrf-pinned-http-conn-open host port use-ssl?))))
          ;; The status line + headers must arrive within one idle budget; after
          ;; that the per-read idle timeout on the body port takes over.
          (call-with-http-deadline

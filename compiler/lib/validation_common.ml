@@ -1137,6 +1137,21 @@ let stdlib_func_infos : (string * func_info) list =
                                                  args = ["payload"]; loc = g });
                      loc = g };
          loc = g }; fi_loc = g });
+    (* Item A (#50.2): `Proxy.verifyBinding config presented` — a check-shaped
+       constant-time comparison of a request-supplied proxy-binding header
+       value against a configured shared Secret.  Mints `ProxyBound presented`
+       ONLY on a match, so a header-trusting `auth` block reaches the trust
+       decision by way of a real verification (against stored material), NOT a
+       bare header assertion.  Minted ONLY here (not in stdlib_auto_preds). *)
+    ("Proxy.verifyBinding",
+     { fi_name = "Proxy.verifyBinding"; fi_kind = CheckKind;
+       fi_params = [ plain "config" "Secret"; plain "presented" "String" ];
+       fi_return = RetAttached {
+         binding = { name = "presented"; type_expr = tname "String";
+                     proof_ann = Some (PredApp { pred = "ProxyBound";
+                                                 args = ["presented"]; loc = g });
+                     loc = g };
+         loc = g }; fi_loc = g });
     (* ── Money (First-Class Units): same-currency safety is proof-layer.
        Currency is a runtime qualifier (not in the static type, like a
        PosixMillis's zone), so `usd + eur` is caught HERE: Money.add/subtract/

@@ -102,17 +102,32 @@ let lowered_forms : string list =
     (the runtime provides them — issue #42). *)
 let erased_type_aliases : string list = List.map fst Units_catalog.aliases
 
+(* Tesl.Sso (Phase 3): opaque TYPE names — valid in type positions, erased at
+   runtime (no `require` binding), so require-suppressed like the Units aliases
+   but NOT rejected in type position. *)
+let sso_opaque_types : string list = [ "SsoConnection"; "SsoSubjectKey"; "SsoIdentity" ]
+
+(* Tesl.Sso (Phase 4): the SsoProvider TYPE (erased at runtime, no binding —
+   require-suppressed like the opaque types, but valid in type positions) and its
+   value CONSTRUCTORS (`Github`/`Google`/`Entra` — values, never types — lowered
+   inline to the provider string, so require-suppressed AND rejected in type
+   position, exactly like the timezone/currency ctors). *)
+let sso_provider_type : string list = [ "SsoProvider" ]
+let sso_provider_ctors : string list = [ "Github"; "Google" ]
+
 (** Names the checker rejects in TYPE positions when they are not locally
     bound (a local `type Email = String` / `record Fixed { … }` / non-Tesl
     module import shadows and wins). *)
 let rejected_in_type_position : string list =
   config_block_types @ config_adts_and_ctors @ timezone_ctors @ currency_ctors
+  @ sso_provider_ctors
 
 (** Everything above: the import names that must never emit a `require`
     binding.  This is {!Emit_racket.config_only_import_names}. *)
 let require_suppressed : string list =
   config_block_types @ config_adts_and_ctors @ lowered_forms
-  @ timezone_ctors @ currency_ctors @ erased_type_aliases
+  @ timezone_ctors @ currency_ctors @ erased_type_aliases @ sso_opaque_types
+  @ sso_provider_type @ sso_provider_ctors
 
 module SS = Set.Make (String)
 

@@ -1,0 +1,59 @@
+module SsoDemo exposing []
+
+# End-to-end SSO example (roadmap/next/ensure_sso_works.md, Phase 3).
+# A `server` block with an `sso` clause mints two runtime-owned routes —
+# /auth/github/login (303 to GitHub) and /auth/github/callback (exchange the
+# code, run onIdentity, set the __Host-session cookie, 303 to afterLogin).
+# The provider is a VALUE from an ordinary function; the runtime owns the flow.
+
+import Tesl.Prelude exposing [String, Bool(..)]
+import Tesl.Sso exposing [SsoConnection, SsoIdentity, Github, Sso.defaults, Sso.subject]
+import Tesl.Env exposing [envRead, requireEnv, requireSecret]
+import Tesl.HttpClient exposing [httpClient]
+import Tesl.Time exposing [PosixMillis]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.App exposing [App]
+
+# The connection: blessed GitHub defaults, credentials from the environment.
+fn githubConn() -> SsoConnection requires [envRead] =
+  Sso.defaults Github (requireEnv "GH_CLIENT_ID") (requireSecret "GH_CLIENT_SECRET")
+
+# onIdentity: map the verified third-party identity to this app's session subject.
+# (A real app would upsert a user row here under its own proofs.)
+fn linkUser(identity: SsoIdentity) -> String =
+  Sso.subject identity
+
+# sessionRevoked: consulted ONLY at session renewal (fail-closed).  A real app
+# would check a revocation store under its own proofs; here it never revokes.
+fn revoked(_subject: String, _issuedAt: PosixMillis) -> Bool = False
+
+handler healthCheck() -> String requires [] = "ok"
+
+api DemoApi {
+  get "/health" -> String
+}
+
+server DemoServer for DemoApi {
+  endpoint_0 = healthCheck
+  sso "github" connection githubConn onIdentity linkUser
+  publicOrigin "https://demo.example.com"
+  sessionKey "SESSION_KEY"
+  sessionPreviousKey "PREVIOUS_SESSION_KEY"
+  afterLogin "/"
+  sessionPolicy ShortSession
+  sessionRevoked revoked
+  listenAddress Loopback
+  loginMethods [Sso]
+}
+
+database DemoDb = Database {
+  entities: []
+  backend: Memory
+}
+
+main() -> App requires [envRead, httpClient] =
+  App {
+    database: DemoDb
+    api: DemoServer
+    port: 8080
+  }

@@ -30,6 +30,7 @@ Hand-maintained index of the top-level sections. Section **numbers** (e.g. `§7.
 - [20. Email Support](#20-email-support)
 - [21. Standard Library Extensions](#21-standard-library-extensions)
 - [22. Step Debugger](#22-step-debugger)
+- [23. Single sign-on (SSO)](#23-single-sign-on-sso-and-third-party-auth)
 - [Appendix A. Current implementation divergences](#appendix-a-current-implementation-divergences)
 
 ## 1. Purpose and scope
@@ -637,7 +638,7 @@ The current frontend gives special treatment to these module names:
 - `Tesl.Tuple` — tuple constructors and accessors (`Tuple2`, `Tuple3`, `Tuple2.first`, `Tuple2.second`, `Tuple3.first`, `Tuple3.second`, `Tuple3.third`).
 - `Tesl.Env` — environment variable access (`env`, `envInt`)
 - `Tesl.DB` — database capabilities (`dbRead`, `dbWrite`)
-- `Tesl.Http` — HTTP request type (`HttpRequest`). Dot-access fields, each a `Dict String String`: `request.cookies`, `request.headers` (names lowercased), `request.queryParameters` (URL-query values are form-url-decoded; repeated keys are last-wins; keys are case-sensitive). An api-test supplies query parameters inline in the path, e.g. `get "/search?q=hello%20world"`. Also the **session cookie**: `Http.setSessionCookie`, `Http.clearSessionCookie`, `Http.sessionToken` and the `cookieCap` capability. See §21.8.
+- `Tesl.Http` — HTTP request type (`HttpRequest`). Dot-access fields, each a `Dict String String`: `request.cookies`, `request.headers` (names lowercased), `request.queryParameters` (URL-query values are form-url-decoded; repeated keys are last-wins; keys are case-sensitive). Also `request.clientAddress` (a `String`, not a `Dict`): the trustworthy client IP — with no `trustedProxies` declaration (§23) it is the socket peer; with one it is the rightmost untrusted `X-Forwarded-For` hop, and a disagreeing chain is refused. An api-test supplies query parameters inline in the path, e.g. `get "/search?q=hello%20world"`. Also the **session cookie**: `Http.setSessionCookie`, `Http.clearSessionCookie`, `Http.sessionToken` and the `cookieCap` capability. See §21.8.
 - `Tesl.Telemetry` — telemetry sentinel bindings (`telemetry`, `initTelemetry`) and the ambient metric instruments (`counter`, `histogram`, `gauge`). See §5.2.
 - `Tesl.Queue` — queue capabilities (`queueRead`, `queueWrite`, `pubsub`), proof predicates (`FromQueue`, `FromDeadQueue`)
 - `Tesl.Crypto` — password storage, message authentication, digests and secrets (`PasswordHash`, `Signature`, `Secret`; facts `HashFor`, `PasswordVerified`, `Authentic`). Every primitive is libsodium. Reuses `random` for the two operations that draw randomness; introduces no capability of its own. See §21.7.
@@ -4211,7 +4212,7 @@ import Tesl.Crypto exposing [
 |---|---|---|---|---|---|
 | `PasswordHash` | yes | **no** | no | **no** | **none** |
 | `Secret` | yes | yes, **constant-time** | no | **no** | `Secret "…"` |
-| `Signature` | no | **no** | no | **no** | via `Crypto.signatureFromHex` |
+| `Signature` | no | **no** | no | **no** | via `Crypto.signatureFromHex` / `Crypto.signatureFromBase64` |
 
 - `PasswordHash` has **no caller-callable constructor**, so `PasswordHash "hunter2"` is a `T001` unknown-constructor error: a plaintext cannot be blessed as a hash.
 - `PasswordHash` and `Signature` have **no `Eq` at all** — not for timing, but because a hand comparison would route around `Crypto.checkPassword` / `Crypto.checkSignature` and quietly defeat the design. Their only legitimate comparison *is* a verification.
@@ -4240,6 +4241,8 @@ All three are minted **only** by those functions. A hand-written `fn f(p) -> Pas
 | `Crypto.checkSignature` | `(key: Secret) (sig: Signature) (payload: String) -> ok payload ::: Authentic payload \| fail 401` | Constant-time. This is why there is no `constantTimeEquals` on the surface — the compare lives where it cannot be got wrong. |
 | `Crypto.signatureHex` | `(sig: Signature) -> String` | Transport out, for a header or body. |
 | `Crypto.signatureFromHex` | `(hex: String) -> Signature` | Transport in — a webhook's signature header (Stripe, GitHub). Malformed input fails the verification cleanly; it never raises. |
+| `Crypto.signatureBase64` | `(sig: Signature) -> String` | Transport out, base64 — the encoding Standard Webhooks uses (`webhook-signature: v1,<base64>`). |
+| `Crypto.signatureFromBase64` | `(b64: String) -> Signature` | Transport in — a Standard Webhooks `webhook-signature` header. Malformed input fails the verification cleanly; it never raises. |
 | `Crypto.fingerprint` | `(content: String) -> String` | SHA-256, hex. For ETags, cache keys, dedup, idempotency keys. Expert alias `Crypto.sha256`; `Crypto.sha512` also exists. **Not for passwords.** |
 | `Crypto.keyFingerprint` | `(key: Secret) -> String` | "Did I load the right key?" — a domain-separated SHA-256 truncated to 16 hex characters, safe to log. Not proof of key possession. |
 | `Crypto.randomToken` | `() -> String` | 256 bits from the OS CSPRNG, base64url (43 URL-safe characters). No length parameter, on purpose. Requires `random`. |
@@ -4401,6 +4404,221 @@ runs only. An abandoned pause can be bounded with
 `TESL_DEBUG_PAUSE_TIMEOUT_MS` (auto-resume). The wrapper keeps debug and
 release bytecode separate (a mode marker under `.tesl-stuff/build/` drops
 stale `compiled/` dirs when the mode flips).
+
+---
+
+## 23. Single sign-on (SSO) and third-party auth
+**Implemented (Phase 3).**
+
+Tesl adds "Log in with GitHub / Google / your customer's Entra ID" as a **server
+clause**, not a library the application drives. The design principle is the same
+one that governs the session cookie (§20-adjacent, and lesson 76): *the dangerous
+state must be unrepresentable*. Here that means the application never writes the
+OAuth2 redirect, the `state` nonce, the PKCE challenge, the authorization-code
+exchange, the ID-token signature check, or the `Set-Cookie` line. It declares a
+**connection** (an ordinary value) and an **`onIdentity`** function that maps a
+*verified* third-party identity to the app's own session subject. Everything
+between the login button and the session cookie is runtime code the application
+cannot get wrong because it does not write it.
+
+```tesl
+server AppServer for AppApi {
+  sso "github" connection githubConn onIdentity linkUser
+  publicOrigin "https://app.example.com"
+  sessionKey "SESSION_KEY"
+  loginMethods [Sso]
+}
+```
+
+A worked, compiling example is `example/learn/lesson78-sso.tesl`; the flagship
+end-to-end program is `example/sso-demo.tesl`.
+
+The provider passed to `Sso.defaults` is the closed **`SsoProvider`** ADT
+(`Github` | `Google`), not a string, so a mistyped provider is a compile error;
+any other OpenID Connect issuer (a self-hosted Keycloak/dex, Okta, Auth0, or
+single-tenant Entra) is reached with **`Sso.oidc "<issuer-url>" clientId secret`**,
+which discovers the endpoints from the issuer and applies the same
+signature+claims trust argument. And because the `connection`, `onIdentity`, and `sessionRevoked`
+functions run under the server's granted capabilities, their `requires` must be
+covered by `main`'s grant — the compiler rejects a program whose `main` does not
+grant them (and an `sso` server additionally forces `main` to grant `httpClient`
+for the flow's network calls) rather than failing at runtime. This is the same
+capability-flows-to-`main` rule handlers and queue workers already obey.
+
+### 23.1 Two trust arguments, written separately
+
+An SSO login ends by minting a session for a subject the app did not choose. The
+argument that this subject is *the right one* is **different for OIDC and for
+plain OAuth2**, and Tesl keeps them separate because conflating them is how one
+of the two stops being checked.
+
+**OpenID Connect — the identity is a signed token, and the runtime verifies it.**
+For an OIDC connection the provider returns an **ID token** (a JWS). The runtime
+verifies the token's signature against the provider's published JWKS with the
+algorithm **pinned** to the discovery document's advertised set (RS256/ES256
+only; `alg: none`, symmetric `alg`, and an attacker-supplied `jwk`/`jku`/`x5u`/
+`x5c`/`crit` header are all refused), then validates every claim it will rely
+on: `iss` exactly equals the discovered issuer, `aud` contains this client, `exp`
+is in the future and `iat` is not, and — when a `nonce` was sent — it matches.
+Only after all of that runs is `onIdentity` called. Reading a claim off an
+unverified token is not expressible: `SsoIdentity` is opaque.
+
+**Plain OAuth2 — there is no identity token, so the argument is procedural.**
+A bare OAuth2 provider (GitHub is the canonical case) returns only an access
+token, which is a bearer credential, not a statement about *who* logged in. There
+is nothing to verify a signature on. The trust argument is instead the shape of
+the flow: a per-login **PKCE** challenge binds the authorization code to the
+process that started the flow; a single-use, cookie-bound **`state`** value ties
+the callback to that same browser; the authorization **code is redeemed exactly
+once**, server-to-server, with the client secret sent only in the HTTP Basic
+header (never in a URL or body); and the user's identity is then read by a
+**server-side call to the provider's userinfo endpoint** using that access token
+— never from anything the browser could have touched. These are two different
+arguments and are documented, tested, and reasoned about as two different
+arguments.
+
+### 23.2 The account-linking rule
+
+The identity the app stores must be **stable and injective**, or two different
+people can collide onto one account (or one person can silently acquire two).
+Tesl's identity key is the pair **`(issuer, subject)`**, exposed through
+`Sso.subject`:
+
+- For OIDC the `issuer` is the verified `iss` claim and the `subject` is the
+  verified `sub`.
+- For plain OAuth2 there is no issuer claim, so the runtime **synthesises a
+  stable issuer** from the provider configuration; the `subject` is the
+  provider's immutable user id from userinfo (never the email, which is
+  reassignable).
+- The **route segment is not identity.** `sso "github"` names a route
+  (`/auth/github/login`), not a trust domain; renaming the segment must not
+  re-key existing users, and it does not.
+
+Email is deliberately **not** an identity key. An email address is reassignable
+and, at some providers, not even verified — see §23.4.
+
+### 23.3 Why TLS alone was not accepted (the §3.1.3.7 history)
+
+An early and recurring objection is that TLS to the provider already
+authenticates the token, so signature verification is redundant. OpenID Connect
+Core §3.1.3.7 requires ID-token signature validation anyway, and Tesl follows it
+for a concrete reason: **the transport and the token have different trust
+boundaries.** A corporate TLS-terminating middlebox, a mis-issued certificate, a
+compromised CDN edge, or any proxy the deployment cannot see all sit *inside* the
+TLS boundary but *outside* the signing boundary. The signature is verified with a
+key the provider published and rotates; a party that can observe or rewrite the
+TLS stream still cannot forge it. TLS protects the *fetch*; the signature
+protects the *claim*. Tesl still requires TLS for every discovery/JWKS/token
+fetch (a plain-`http://` issuer or an SSRF-reachable JWKS host is refused), but it
+is the floor, not the argument.
+
+### 23.4 Multi-tenant issuers and the Entra reference path
+
+Microsoft Entra ID is the tested enterprise reference, and it is where the
+identity rules earn their keep.
+
+- **Entra is configured via `Sso.oidc`** with the single-tenant issuer
+  `https://login.microsoftonline.com/<tenant>/v2.0` — a concrete issuer, never
+  the multi-tenant `common` authority.
+- **The issuer is checked exactly, per tenant.** Entra's multi-tenant issuer is
+  templated (`…/{tenantid}/v2.0`), so the runtime checks the concrete issuer
+  against the connection's declared tenant(s); an empty tenant list, a `tid`
+  outside the allowed set, or an `iss`↔`tid` disagreement is refused. A wildcard
+  "any Microsoft tenant" configuration cannot be expressed by accident.
+- **No email linking with Entra — this is the nOAuth defense.** Entra does not
+  emit `email_verified`, so an email claim there is an *unverified* attacker-
+  controllable string. Linking an account by email against Entra is the published
+  **nOAuth** account-takeover: the attacker sets their unverified email to the
+  victim's and is linked to the victim's account. The account-linking rule
+  (§23.2) already forbids email as an identity key; the Entra path is where that
+  rule is not optional. `allowedEmailDomains` is therefore **unusable with
+  Entra**; the correct Entra mechanism is tenant restriction (`allowedTenants`).
+- **Domain restriction is a *claim* check, not an authorize-param hint.**
+  Provider authorize parameters such as Google's `hd` are hints to the login UI
+  and are not trustworthy on their own. The enforced restriction is a check on
+  the *verified* claim (a hosted-domain / verified-email claim), applied before
+  `onIdentity`, and satisfiable only by a verified value.
+
+`claims` are **not** an authorization input — they describe who the user is, not
+what they may do; the app's own proofs decide authorization. The `tenant`, by
+contrast, **is** an authorization-relevant input and is checked as one.
+
+### 23.5 Session control, key rotation, and revocation
+
+The session that SSO mints is an ordinary Tesl session (a signed JWT in a
+`__Host-session` cookie), so it inherits the whole session-control surface:
+
+- **`sessionPolicy StandardSession | ShortSession`** sets the renewable TTL and
+  the absolute maximum lifetime (1h/12h vs 15min/8h). The absolute cap is
+  decoupled from the TTL, so a short renewal window does not imply a short
+  maximum session.
+- **`sessionPreviousKey` is the rotation overlap and the only kill switch.** With a
+  previous key configured, `JWT.verify` accepts a token signed by *either* the
+  current or the previous key, so the signing key can be rotated without logging
+  every user out; signing always uses the current key, so the previous slot
+  drains on its own within one absolute cap. Emptying the slot while rotating the
+  current key is a **global** logout — blunt by design, and the only revocation
+  primitive that needs no per-session state.
+- **`sessionRevoked` is a per-user check at the renewal boundary**, consulted
+  *only* when a session renews and never on the stateless verify path. It is
+  fail-closed (a raise or a failing read denies the renewal). Its two honest
+  overclaims: it bounds revocation latency to the *renewal* interval (a live
+  session is not killed mid-window), and it trusts the app's store to answer.
+
+### 23.6 `loginMethods` — proving that only SSO can log in
+
+The question an enterprise reviewer actually asks is "can you prove that a
+password path cannot be used on an SSO-mandated account?" `loginMethods` is the
+checked answer.
+
+```tesl
+server AppServer for AppApi {
+  loginMethods [Sso]                            # SSO only
+  # ── or ──
+  loginMethods [Sso, Password via ssoRequired]  # mixed, one policy function
+}
+```
+
+Under a `loginMethods` declaration **without `Password`**, the compiler refuses
+any application call to the unique session-minting chokepoint
+(`Http.setSessionCookie`) and any `Crypto.checkPassword` / `Crypto.hashPassword`
+call, because the only sanctioned minting site is the runtime-owned SSO callback,
+which is not application code. This is an **allowlist over the minting site**, not
+a search for password-shaped code: a magic-link handler, a signup auto-login, or a
+hand-rolled hash compare are all refused for the same reason, because each would
+reach `Http.setSessionCookie`. The guarantee `loginMethods [Sso]` delivers is the
+sentence the reviewer wants: *no code path in this program can produce a session
+cookie except the SSO callback.*
+
+Mixed mode (`[Sso, Password via <fn>]`) names one policy function that the
+runtime consults on the password path; the per-site witness that lets a password
+handler mint a session under this declaration is a design area (§16) and is not
+yet enforced — a mixed-mode server currently requires only that the policy
+function exists.
+
+### 23.7 Server-clause grammar
+
+```text
+<sso-clause>        ::= "sso" <string> "connection" <ident> "onIdentity" <ident>
+<public-origin>     ::= "publicOrigin" ( <string> | "fromEnv" <string> )  # absolute https (or http loopback), no path/query/fragment; fromEnv reads an env var at boot
+<session-key>       ::= "sessionKey" <string>         # env var → Secret
+<previous-key>      ::= "sessionPreviousKey" <string>        # env var → Secret (rotation)
+<after-login>       ::= "afterLogin" <string>            # relative path
+<session-policy>    ::= "sessionPolicy" ( "StandardSession" | "ShortSession" )
+<session-revoked>   ::= "sessionRevoked" <ident>         # (String, PosixMillis) -> Bool
+<listen-address>    ::= "listenAddress" ( "Loopback" | "AllInterfaces" )
+<trusted-proxies>   ::= "trustedProxies" "[" <string> ("," <string>)* "]"  # edge declaration → request.clientAddress
+<health-probe-path> ::= "healthProbePath" <string>       # the one path exempt from Host validation
+<content-security-policy> ::= "contentSecurityPolicy" <string>  # server default CSP for HTML; per-response override wins
+<login-methods>     ::= "loginMethods" "[" <method> ("," <method>)* "]"
+<method>            ::= "Sso" | ( "Password" "via" <ident> ) | "Proxy" | "Machine"
+```
+
+All of these are validated at compile time, fail-closed: a server with an `sso`
+clause must declare `publicOrigin` and `sessionKey`; `afterLogin` must be
+relative; unknown connection/`onIdentity`/policy functions, duplicate route
+segments, an `sessionPreviousKey` without an `sessionKey`, and unknown
+`loginMethods` keywords are each a compile error.
 
 ---
 

@@ -1,0 +1,24 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Tesl SSO sandbox</title>
+<style>body{font:16px system-ui;margin:3rem auto;max-width:32rem}a.btn{display:inline-block;padding:.6rem 1rem;border:1px solid #333;border-radius:.4rem;text-decoration:none;color:#111}#who{margin-top:1rem;font-family:monospace}</style>
+<h1>Tesl SSO sandbox</h1>
+<p>Log in through the local dex OpenID Connect provider. The whole OAuth2/OIDC
+dance, the token-signature check, and the session cookie are the Tesl runtime's
+job.</p>
+<p><a class="btn" id="login" href="/auth/dex/login">Log in with dex</a></p>
+<div id="who">checking session…</div>
+<script>
+  // Show the logged-in subject if a session exists (same-origin fetch carries
+  // the __Host-session cookie).
+  fetch('/me', { credentials: 'same-origin' })
+    .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+    .then(function (p) {
+      document.getElementById('who').textContent = 'logged in as: ' + p.userId;
+      document.getElementById('who').setAttribute('data-user', p.userId);
+    })
+    .catch(function () {
+      document.getElementById('who').textContent = 'not logged in';
+      document.getElementById('who').setAttribute('data-user', '');
+    });
+</script>

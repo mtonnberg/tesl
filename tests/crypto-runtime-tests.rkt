@@ -481,6 +481,20 @@
   (define reparsed (Crypto.signatureFromHex (Crypto.signatureHex sig)))
   (check-true (check-ok? (Crypto.checkSignature k reparsed payload))))
 
+(test-case "a signature round-trips through base64 and verifies (Standard Webhooks, #49)"
+  (define k (Secret "shared-webhook-secret"))
+  (define payload "{\"id\":\"evt_1\",\"amount\":4200}")
+  (define sig (Crypto.signWith k payload))
+  ;; the inbound path: base64 out of a `webhook-signature` header, back into a Signature
+  (define b64 (Crypto.signatureBase64 sig))
+  (define reparsed (Crypto.signatureFromBase64 b64))
+  (check-true (check-ok? (Crypto.checkSignature k reparsed payload)))
+  ;; it IS the standard base64 of the SAME MAC bytes as the hex transport
+  (check-equal? (bytes->hex-string (base64-decode (string->bytes/utf-8 b64)))
+                (Crypto.signatureHex sig))
+  ;; a 32-byte HMAC-SHA256 tag is 44 base64 characters (one `=` pad)
+  (check-equal? (string-length b64) 44))
+
 (test-case "checkSignature mints an Authentic fact naming the payload"
   (define k (Secret "k"))
   (define ok (Crypto.checkSignature k (Crypto.signWith k "p") "p"))

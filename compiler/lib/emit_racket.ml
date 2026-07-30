@@ -118,6 +118,8 @@ let module_path_table : (string, string) Hashtbl.t =
   add "Tesl.App"       "tesl/prelude.rkt";
   add "Tesl.Logging"   "tesl/logging.rkt";
   add "Tesl.JWT"        "tesl/jwt.rkt";
+  add "Tesl.Sso"        "tesl/sso.rkt";  (* Phase 3: SSO stdlib surface *)
+  add "Tesl.Proxy"      "tesl/proxy.rkt";  (* Item A: authenticating-proxy binding *)
   add "Tesl.Crypto"     "tesl/crypto.rkt";
   add "Tesl.HttpClient" "tesl/http-client.rkt";
   add "Tesl.UUID"       "tesl/uuid.rkt";  (* canonical uppercase alias *)
@@ -133,6 +135,18 @@ let module_path_table : (string, string) Hashtbl.t =
    import Tesl.Money may use for its own ADTs.  Set per compile from the
    module's imports in [compile_to_string]. *)
 let currency_ctors_active : bool ref = ref false
+
+(* Tesl.Sso (Phase 4): SsoProvider constructor lowering is IMPORT-gated like
+   Currency — `Github`/`Google`/`Entra` lower inline to the runtime provider
+   string, but a module that does not import Tesl.Sso keeps those names for its
+   own ADTs.  Set per compile from the module's imports in [compile_to_string]. *)
+let sso_provider_ctors_active : bool ref = ref false
+
+(* SsoProvider constructor → runtime provider string (the id dsl/sso.rkt expects). *)
+let sso_provider_string = function
+  | "Github" -> Some "github"
+  | "Google" -> Some "google"
+  | _        -> None
 
 (** Mapping from qualified import names to renamed Racket identifiers.
     E.g. Dict.lookup → tesl_import_Dict_lookup *)
@@ -2094,6 +2108,14 @@ let rec emit_expr ctx e =
     (match Currencies.iso_of_ctor name with
      | Some iso -> emit ctx (Printf.sprintf "(__tmoney_tesl-currency-of %S)" iso)
      | None -> failwith "emit_racket: currency ctor guard invariant — please report this bug")
+  (* SsoProvider ADT (fixed set): `Github`/`Google`/`Entra` lower inline to the
+     runtime provider string (dsl/sso.rkt keys off it).  IMPORT-gated on
+     Tesl.Sso so the brand names remain usable as a non-SSO module's own ADT. *)
+  | EConstructor { name; args = []; _ }
+    when !sso_provider_ctors_active && sso_provider_string name <> None ->
+    (match sso_provider_string name with
+     | Some provider -> emit ctx (Printf.sprintf "%S" provider)
+     | None -> failwith "emit_racket: sso provider ctor guard invariant — please report this bug")
   (* Agent { provider, systemPrompt, maxTokens, tools } — the agent constructor,
      usable as a top-level `agent X = Agent { … }` block AND as a plain expression
      (e.g. a per-request BYOK agent). Lowers to the runtime defineAgent + withTools
@@ -4577,6 +4599,33 @@ let emit_requires ctx (m : module_form) =
   in
   if uses_timezone then
     emit_line ctx "  (prefix-in __ttz_ (only-in tesl/tesl/time tesl-tz-utc tesl-tz-fixed tesl-tz-named))";
+  (* Phase 3: a `sessionPolicy` server clause sets the runtime session policy at
+     boot, so pull in jwt.rkt's policy parameter + the two closed values. *)
+  let uses_sso_clause = List.exists (function
+                  | Ast.DServer sv -> sv.sso_clauses <> []
+                  | _ -> false) m.decls in
+  let uses_session_revoked = List.exists (function
+                  | Ast.DServer sv -> sv.session_revoked <> None
+                  | _ -> false) m.decls in
+  let uses_sso_previous_key = List.exists (function
+                  | Ast.DServer sv -> sv.sso_previous_key_env <> None
+                  | _ -> false) m.decls in
+  if List.exists (function
+                  | Ast.DServer sv -> sv.session_policy <> None
+                  | _ -> false) m.decls || uses_sso_clause || uses_session_revoked
+     || uses_sso_previous_key then
+    emit_line ctx "  (prefix-in __tjwt_ (only-in tesl/tesl/jwt current-session-policy standard-session short-session sso-session-cookie-value current-session-revoked-hook current-previous-session-key))";
+  if uses_session_revoked then
+    emit_line ctx "  (prefix-in __ttime_ (only-in tesl/tesl/time Time.secondsToPosix))";
+  (* `sessionKey`/`sessionPreviousKey` read a Secret from the environment; the
+     previous-key set happens at module load, so it needs the bootstrap-trust
+     marker (the sanctioned one-time provider read). *)
+  if uses_sso_clause || uses_sso_previous_key then
+    emit_line ctx "  (prefix-in __tenv_ (only-in tesl/tesl/env requireSecret))";
+  if uses_sso_previous_key then
+    emit_line ctx "  (only-in tesl/tesl/env with-env-bootstrap)";
+  if uses_sso_clause then
+    emit_line ctx "  (prefix-in __tcrypto_ (only-in tesl/tesl/crypto secret->bytes))";
   (* Currency constructors and money-rate operators lower to __tmoney_
      runtime helpers — emitted whenever the module imports Tesl.Money (the
      same import gate as the lowering arms; an unused only-in is harmless). *)
@@ -6525,6 +6574,86 @@ let emit_server ctx (sv : server_form) =
     emit_line ctx (Printf.sprintf "  [%s %s]" ep handler)
   ) sv.bindings;
   emit_line ctx ")";
+  (* Phase 3: set the closed session policy at module load, before serve. *)
+  (match sv.session_policy with
+   | Some "StandardSession" ->
+     emit_line ctx "(void (__tjwt_current-session-policy __tjwt_standard-session))"
+   | Some "ShortSession" ->
+     emit_line ctx "(void (__tjwt_current-session-policy __tjwt_short-session))"
+   | _ -> ());
+  (* Phase 3: `sessionRevoked <fn>` installs the renewal revocation hook at boot.
+     The runtime calls the hook with (subject, iat-seconds); adapt the seconds to
+     the app fn's `(String, PosixMillis) -> Bool` contract via Time.secondsToPosix.
+     The fn reference is a plain closure value here (no eval, no caps/env at load). *)
+  (match sv.session_revoked with
+   | Some fn ->
+     emit_line ctx (Printf.sprintf
+       "(void (__tjwt_current-session-revoked-hook (lambda (subj iat) (%s subj (__ttime_Time.secondsToPosix iat)))))" fn)
+   | None -> ());
+  (* Phase 3: `sessionPreviousKey "ENV_VAR"` sets the previous session-signing key at
+     boot so JWT.verify accepts tokens signed by either key (rotation overlap).
+     The Secret is read from the environment at module load, so wrap it in the
+     bootstrap-trust marker (the sanctioned one-time provider read). *)
+  (match sv.sso_previous_key_env with
+   | Some env_var ->
+     emit_line ctx (Printf.sprintf
+       "(void (with-env-bootstrap (__tjwt_current-previous-session-key (__tenv_requireSecret %S))))" env_var)
+   | None -> ());
+  (* Phase 3: `listenAddress Loopback | AllInterfaces` registers the bind
+     interface for this server at boot (serve reads the registry by name).
+     Loopback → 127.0.0.1 (behind a proxy); AllInterfaces → #f (the default).
+     Emitted only when the clause is present, so non-listenAddress servers stay
+     byte-identical. *)
+  (match sv.listen_address with
+   | Some "Loopback" ->
+     emit_line ctx (Printf.sprintf "(register-listen-address! %S \"127.0.0.1\")" sv.name)
+   | Some "AllInterfaces" ->
+     emit_line ctx (Printf.sprintf "(register-listen-address! %S #f)" sv.name)
+   | _ -> ());
+  (* Phase 3: set the configured public origin at boot (current-public-origin is
+     provided by dsl/web.rkt, required whole in the preamble). *)
+  (* #51: the trustedProxies edge declaration — set the runtime's trusted
+     proxy set at boot so `request.clientAddress` can read XFF safely. *)
+  (match sv.trusted_proxies with
+   | [] -> ()
+   | ps -> emit_line ctx (Printf.sprintf "(void (current-trusted-proxies (list %s)))"
+             (String.concat " " (List.map (fun p -> Printf.sprintf "%S" p) ps))));
+  (* Risk 50/60: the healthProbePath exemption for Host validation. *)
+  (match sv.health_probe_path with
+   | Some p -> emit_line ctx (Printf.sprintf "(void (current-health-probe-path %S))" p)
+   | None -> ());
+  (* OQ17/#50.1: the server default Content-Security-Policy for HTML responses. *)
+  (match sv.content_security_policy with
+   | Some p -> emit_line ctx (Printf.sprintf "(void (current-content-security-policy %S))" p)
+   | None -> ());
+  (match sv.public_origin with
+   | Some (POLiteral url) -> emit_line ctx (Printf.sprintf "(void (current-public-origin %S))" url)
+   (* OQ11: the env form is read + validated ONCE at boot by the runtime
+      (public-origin-from-env errors fast if missing/invalid); NEVER per-request. *)
+   | Some (POEnv var) -> emit_line ctx (Printf.sprintf "(void (current-public-origin (public-origin-from-env %S)))" var)
+   | None -> ());
+  (* Phase 3: emit runtime-owned SSO routes for this server.  Missing publicOrigin
+     or sessionKey is validated as an error; fall back to an empty list here so
+     the emitter remains total on invalid inputs. *)
+  (* Runtime-owned SSO routes are REGISTERED (a top-level side effect) rather
+     than threaded through the serve call, so a server WITHOUT an `sso` clause
+     emits byte-identically (no snapshot churn); `serve` reads the registry. *)
+  (match sv.sso_clauses, sv.public_origin, sv.sso_session_key_env with
+   | [], _, _ -> ()
+   | clauses, Some po, Some key_env ->
+     (* A literal emits its quoted string (byte-identical to before); the env
+        form reads the parameter set just above from public-origin-from-env. *)
+     let origin_expr = match po with
+       | POLiteral url -> Printf.sprintf "%S" url
+       | POEnv _ -> "(current-public-origin)" in
+     emit ctx (Printf.sprintf "(register-sso-routes! %S (list" sv.name);
+     List.iter (fun (seg, conn_fn, id_fn) ->
+       emit ctx (Printf.sprintf
+         " (make-sso-route #:segment %S #:connection (lambda () (%s)) #:on-identity %s #:mint-session (lambda (subj) (__tjwt_sso-session-cookie-value (__tenv_requireSecret %S) subj)) #:session-key-bytes (lambda () (__tcrypto_secret->bytes (__tenv_requireSecret %S))) #:public-origin %s #:after-login %S)"
+         seg conn_fn id_fn key_env key_env origin_expr (Option.value ~default:"/" sv.after_login))
+     ) clauses;
+     emit_line ctx "))"
+   | _ -> ());
   emit_nl ctx
 
 (* ── Declarative agent block ────────────────────────────────────────────────
@@ -8373,6 +8502,9 @@ let compile_to_string ?(root_path=default_root_path ()) ?(cyclic_local_import_pa
   Hashtbl.clear cyclic_local_import_table;
   currency_ctors_active :=
     List.exists (fun (i : Ast.import_decl) -> i.module_name = "Tesl.Money")
+      m.imports;
+  sso_provider_ctors_active :=
+    List.exists (fun (i : Ast.import_decl) -> i.module_name = "Tesl.Sso")
       m.imports;
   List.iter (fun path ->
     Hashtbl.replace cyclic_local_import_table (canonical_import_path path) ()

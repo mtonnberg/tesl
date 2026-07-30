@@ -4224,11 +4224,150 @@ let parse_server_form s =
   let* _ = expect s LBRACE in
   skip_layout s;
   let bindings = ref [] in
+  let session_policy = ref None in
+  let public_origin = ref None in
+  let sso_clauses = ref [] in
+  let sso_session_key_env = ref None in
+  let sso_previous_key_env = ref None in
+  let after_login = ref None in
+  let session_revoked = ref None in
+  let listen_address = ref None in
+  let login_methods = ref None in
+  let password_policy_fn = ref None in
+  let trusted_proxies = ref [] in
+  let health_probe_path = ref None in
+  let content_security_policy = ref None in
   while peek s <> RBRACE && peek s <> EOF do
     skip_layout s;
     if peek s = RBRACE then ()
     else begin
       match expect_ident s with
+      (* Phase 3: `sessionPolicy StandardSession | ShortSession` — a closed
+         keyword set, so an unsafe duration cannot be expressed.  Sets the
+         runtime session policy at boot; server-wide. *)
+      | Ok "sessionPolicy" ->
+        (match peek s with
+         | UIDENT (("StandardSession" | "ShortSession") as pol) ->
+           advance s; session_policy := Some pol; skip_layout s
+         | _ ->
+           (* Unknown/absent policy name: skip the offending token so the block
+              still closes; the clause simply does not take effect. *)
+           (match peek s with UIDENT _ -> advance s | _ -> ());
+           skip_layout s)
+      (* Phase 3: `publicOrigin "https://app.example.com"` (inline literal) OR
+         `publicOrigin fromEnv "PUBLIC_ORIGIN"` (env-var read at boot, OQ11). *)
+      | Ok "publicOrigin" ->
+        (match peek s with
+         | IDENT "fromEnv" ->
+           advance s;
+           (match peek s with
+            | STRING var -> advance s; public_origin := Some (POEnv var); skip_layout s
+            | _ -> skip_layout s)
+         | STRING url -> advance s; public_origin := Some (POLiteral url); skip_layout s
+         | _ -> skip_layout s)
+      (* Phase 3: `sessionKey "ENV_VAR"` and `afterLogin "/path"` — strings. *)
+      | Ok "sessionKey" ->
+        (match peek s with
+         | STRING v -> advance s; sso_session_key_env := Some v; skip_layout s
+         | _ -> skip_layout s)
+      (* Phase 3: `sessionPreviousKey "ENV_VAR"` — the previous session key (rotation). *)
+      | Ok "sessionPreviousKey" ->
+        (match peek s with
+         | STRING v -> advance s; sso_previous_key_env := Some v; skip_layout s
+         | _ -> skip_layout s)
+      | Ok "afterLogin" ->
+        (match peek s with
+         | STRING v -> advance s; after_login := Some v; skip_layout s
+         | _ -> skip_layout s)
+      (* Phase 3: `sessionRevoked <fn>` — a bare function identifier (the app's
+         revocation predicate).  Set at boot as the renewal revocation hook. *)
+      | Ok "sessionRevoked" ->
+        (match expect_ident s with
+         | Ok f -> session_revoked := Some f; skip_layout s
+         | Err _ -> skip_layout s)
+      (* Phase 3: `listenAddress Loopback | AllInterfaces` — a closed keyword set
+         (like sessionPolicy), so an arbitrary bind address cannot be expressed. *)
+      | Ok "listenAddress" ->
+        (match peek s with
+         | UIDENT (("Loopback" | "AllInterfaces") as la) ->
+           advance s; listen_address := Some la; skip_layout s
+         | _ ->
+           (match peek s with UIDENT _ -> advance s | _ -> ());
+           skip_layout s)
+      (* Phase 3: `loginMethods [Sso, Password via <fn>, Proxy]` — a bracketed,
+         comma-separated CLOSED keyword set.  `Password` may be followed by
+         `via <fn>` (the policy function). *)
+      | Ok "loginMethods" ->
+        (match peek s with
+         | LBRACKET ->
+           advance s; skip_layout s;
+           let methods = ref [] in
+           while peek s <> RBRACKET && peek s <> EOF do
+             skip_layout s;
+             (match peek s with
+              | UIDENT m ->
+                advance s;
+                methods := m :: !methods;
+                skip_layout s;
+                (* `Password via <fn>` — capture the policy function. *)
+                if m = "Password" && peek s = VIA then begin
+                  advance s;
+                  (match expect_ident s with
+                   | Ok f -> password_policy_fn := Some f
+                   | Err _ -> ());
+                  skip_layout s
+                end;
+                if peek s = COMMA then (advance s; skip_layout s)
+              | _ -> advance s; skip_layout s)
+           done;
+           (match peek s with RBRACKET -> advance s | _ -> ());
+           login_methods := Some (List.rev !methods);
+           skip_layout s
+         | _ -> skip_layout s)
+      (* #51: `trustedProxies [ "10.0.0.1", "10.0.0.2" ]` — the edge declaration.
+         A bracketed, comma-separated list of trusted proxy addresses; enables a
+         trustworthy `request.clientAddress` (the rightmost untrusted XFF hop). *)
+      (* OQ17/#50.1: `contentSecurityPolicy "<policy>"` — the server default CSP. *)
+      | Ok "contentSecurityPolicy" ->
+        (match peek s with
+         | STRING p -> advance s; content_security_policy := Some p; skip_layout s
+         | _ -> skip_layout s)
+      (* Risk 50/60: `healthProbePath "/healthz"` — the one Host-validation-exempt path. *)
+      | Ok "healthProbePath" ->
+        (match peek s with
+         | STRING p -> advance s; health_probe_path := Some p; skip_layout s
+         | _ -> skip_layout s)
+      | Ok "trustedProxies" ->
+        (match peek s with
+         | LBRACKET ->
+           advance s; skip_layout s;
+           while peek s <> RBRACKET && peek s <> EOF do
+             skip_layout s;
+             (match peek s with
+              | STRING a -> advance s; trusted_proxies := a :: !trusted_proxies; skip_layout s
+              | _ -> advance s; skip_layout s);
+             (if peek s = COMMA then (advance s; skip_layout s))
+           done;
+           (match peek s with RBRACKET -> advance s | _ -> ());
+           skip_layout s
+         | _ -> skip_layout s)
+      (* Phase 3: `sso "<seg>" connection <fn> onIdentity <fn>` — the flagship
+         SSO clause.  `connection` and `onIdentity` are contextual keywords. *)
+      | Ok "sso" ->
+        (match peek s with
+         | STRING seg ->
+           advance s;
+           let grab_after kw =
+             (match peek s with
+              | IDENT k when k = kw -> advance s;
+                (match expect_ident s with Ok f -> f | Err _ -> "")
+              | _ -> "")
+           in
+           let conn = grab_after "connection" in
+           let idf  = grab_after "onIdentity" in
+           sso_clauses := (seg, conn, idf) :: !sso_clauses;
+           skip_layout s
+         | _ -> skip_layout s)
       | Ok ep_name ->
         (match expect s EQ with
          | Ok () ->
@@ -4243,7 +4382,19 @@ let parse_server_form s =
   done;
   let* _ = expect s RBRACE in
   let loc = span loc0 (current_loc s) in
-  return { name; api_name; bindings = List.rev !bindings; loc }
+  return { name; api_name; bindings = List.rev !bindings;
+           session_policy = !session_policy; public_origin = !public_origin;
+           sso_clauses = List.rev !sso_clauses;
+           sso_session_key_env = !sso_session_key_env;
+           sso_previous_key_env = !sso_previous_key_env;
+           after_login = !after_login;
+           session_revoked = !session_revoked;
+           listen_address = !listen_address;
+           login_methods = !login_methods;
+           password_policy_fn = !password_policy_fn;
+           trusted_proxies = List.rev !trusted_proxies;
+           health_probe_path = !health_probe_path;
+           content_security_policy = !content_security_policy; loc }
 
 (** Parse workers block. *)
 (** Parse a test body: sequence of let/expect/expectFail statements. *)

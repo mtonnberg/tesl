@@ -24,6 +24,7 @@ Everything else in this manual is reference you reach *after* that:
 | See working code | `tesl help manual examples` | [examples.md](examples.md) |
 | Write idiomatic Tesl | `tesl help manual best-practices` | [best-practices.md](best-practices.md) |
 | Look up exact syntax | `tesl help manual language-spec` | [LANGUAGE-SPEC.md](../LANGUAGE-SPEC.md) |
+| Add third-party login (SSO) | `tesl help manual sso` | [sso.md](sso.md) |
 | Get unstuck | `tesl explain <CODE>`, then `tesl help manual faq` | [FAQ.md](FAQ.md) |
 | Drive Tesl from an AI coding agent | — | [AGENTS.md](../AGENTS.md) |
 

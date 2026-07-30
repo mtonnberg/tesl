@@ -1,0 +1,94 @@
+module Backend exposing []
+
+# Minimal Tesl backend for the SSO end-to-end test (roadmap Phase 5): "Log in
+# with dex" via the generic OpenID Connect connection `Sso.oidc`, a session
+# cookie, and a protected /me. Driven by a real headless browser against a real
+# dex IdP (see e2e/sso/run.sh).
+
+import Tesl.Prelude exposing [String, Bool(..)]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Dict exposing [Dict, Dict.lookup]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Sso exposing [SsoConnection, SsoIdentity, Sso.oidc, Sso.subject]
+import Tesl.Env exposing [envRead, requireEnv, requireSecret]
+import Tesl.HttpClient exposing [httpClient]
+import Tesl.Time exposing [time]
+import Tesl.Crypto exposing [Secret]
+import Tesl.JWT exposing [jwt, JWT.verify]
+import Tesl.Http exposing [HttpRequest, Http.sessionToken]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.App exposing [App]
+
+record User {
+  id: String
+}
+
+fact Authenticated (user: User)
+
+record Profile {
+  userId: String
+}
+
+codec Profile {
+  toJson {
+    userId -> "userId" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+capability sessions implies jwt, time, envRead
+
+fn sessionKey() -> Secret requires [envRead] =
+  requireSecret "SESSION_KEY"
+
+# The connection: a generic OIDC issuer (our local dex), discovered at runtime.
+fn dexConn() -> SsoConnection requires [envRead] =
+  Sso.oidc (requireEnv "DEX_ISSUER") (requireEnv "DEX_CLIENT_ID") (requireSecret "DEX_CLIENT_SECRET")
+
+fn linkUser(identity: SsoIdentity) -> String =
+  Sso.subject identity
+
+fn subjectOf(claims: Dict String String) -> String =
+  case Dict.lookup "sub" claims of
+    Nothing -> ""
+    Something subject -> subject
+
+auth sessionOwner(request: HttpRequest) -> user: User ::: Authenticated user
+  requires [sessions] =
+  case Http.sessionToken request of
+    Nothing -> fail 401 "no session"
+    Something token ->
+      let claims = check JWT.verify token (sessionKey())
+      let subject = subjectOf claims
+      ok (User { id: subject }) ::: Authenticated user
+
+handler me(user: User ::: Authenticated user) -> Profile =
+  Profile { userId: user.id }
+
+api AppApi {
+  get "/me"
+    auth user: User ::: Authenticated user via sessionOwner
+    -> Profile
+}
+
+server AppServer for AppApi {
+  endpoint_0 = me
+  sso "dex" connection dexConn onIdentity linkUser
+  publicOrigin "http://localhost:8080"
+  sessionKey "SESSION_KEY"
+  afterLogin "/"
+  loginMethods [Sso]
+}
+
+database AppDb = Database {
+  entities: []
+  backend: Memory
+}
+
+main() -> App requires [sessions, httpClient] =
+  App {
+    database: AppDb
+    api: AppServer
+    port: 8080
+    static: "e2e/sso/public"
+  }

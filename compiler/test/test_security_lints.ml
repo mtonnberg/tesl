@@ -85,7 +85,7 @@ let test_category_is_in_the_help_index () =
     (fun code ->
        check bool (Printf.sprintf "%s appears in the index" code) true
          (contains index code))
-    [ "SEC001"; "SEC003"; "SEC004" ]
+    [ "SEC001"; "SEC003"; "SEC004"; "SEC005" ]
 
 let test_every_sec_code_explains_and_deep_links () =
   let secs =
@@ -330,6 +330,56 @@ let test_sec004 () =
   expect_silent ~msg:"checkSignature, plus signatureHex used for transport"
     sec004_negative
 
+(* ── SEC005 — a state-changing capability in a GET route ─────────────────── *)
+
+let sec005_prog method_kw ~writes =
+  Printf.sprintf
+    {|module M exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.Database exposing [Database, DatabaseBackend, Memory]
+import Tesl.App exposing [App]
+
+record Doc {
+  id: String
+}
+
+handler act() -> String requires [%s] =
+%s
+
+api ActApi {
+  %s "/act" -> String
+}
+
+server ActServer for ActApi {
+  endpoint_0 = act
+}
+
+database ProbeDb = Database {
+  entities: [Doc]
+  backend: Memory
+}
+
+main() -> App requires [] =
+  App {
+    database: ProbeDb
+    api: ActServer
+    port: 8086
+  }
+|}
+    (if writes then "dbWrite" else "")
+    (if writes then "  let saved = insert Doc { id: \"x\" }\n  \"ok\"" else "  \"ok\"")
+    method_kw
+
+let test_sec005 () =
+  (* a real DB WRITE reachable through a GET must fire; the analysis keys on
+     the body's actual write operation, not on the declared capability. *)
+  expect_codes ~msg:"a DB insert behind a GET route"
+    [ "SEC005" ] (sec005_prog "get" ~writes:true);
+  (* the honest versions are silent: the same write on a POST, and a GET that
+     performs no write. *)
+  expect_silent ~msg:"the same write on a POST route" (sec005_prog "post" ~writes:true);
+  expect_silent ~msg:"a read-only GET route" (sec005_prog "get" ~writes:false)
+
 (* ── The precision claim, over the whole shipped corpus ──────────────────── *)
 
 (* Walk up from the test's cwd to the repository root (the directory that has
@@ -396,7 +446,8 @@ let () =
       ( "checks",
         [ test_case "SEC001 auth literal comparison" `Quick test_sec001;
           test_case "SEC003 hardcoded key material" `Quick test_sec003;
-          test_case "SEC004 timing-unsafe MAC comparison" `Quick test_sec004 ] );
+          test_case "SEC004 timing-unsafe MAC comparison" `Quick test_sec004;
+          test_case "SEC005 state-changing capability in a GET route" `Quick test_sec005 ] );
       ( "precision",
         [ test_case "shipped corpus is completely silent" `Quick
             test_corpus_is_completely_silent ] ) ]

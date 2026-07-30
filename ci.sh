@@ -137,7 +137,7 @@ phase_started_at=$SECONDS
 
 # ── Phase registry / progress bar ────────────────────────────────────────────
 # We know the phase count up front so each phase can print "[N/T] <name>".
-TOTAL_PHASES=19
+TOTAL_PHASES=20
 PHASE_NUM=0
 # Parallel arrays: name / status (OK|FAIL|SKIP) / elapsed seconds.
 PHASE_NAMES=()
@@ -1392,10 +1392,69 @@ else
         # filters a connect to a dead port), plus the outbound wire-shape
         # regressions the deadline work uncovered (Tuple2 headers, ?query URLs)
         "tests/http-timeout-tests.rkt"
+        # Phase -1 (roadmap/next/ensure_sso_works.md): outbound HTTPS must
+        # authenticate its TLS peer.  A self-signed loopback server is refused by
+        # the verifying context; the single loopback-only dev escape is gated on
+        # env + host; and a ratchet forbids any bare `#:ssl? #t` from returning.
+        "tests/http-tls-tests.rkt"
+        # #48 (issue): SSRF egress containment on Tesl.HttpClient — cloud
+        # metadata / RFC1918 / CGNAT / ULA / link-local / 0.0.0.0/8 refused for
+        # every outbound call by resolved-address judgement + connect-pinning;
+        # loopback is deploy-gated with an opt-in dev escape.
+        "tests/http-ssrf-tests.rkt"
+        # #51 (issue): request.clientAddress + the trustedProxies edge
+        # declaration — socket peer with no declaration; rightmost untrusted
+        # X-Forwarded-For hop when declared; refuse on disagreement.
+        "tests/http-client-address-test.rkt"
         "tests/timezone-zones-test.rkt"
         "tests/web-test.rkt"
+        # Phase -2 (roadmap/next/ensure_sso_works.md): the server-wide response
+        # security-header baseline (nosniff/Referrer-Policy/X-Frame-Options,
+        # HSTS from publicOrigin scheme, CSP on served HTML), incl. the two paths
+        # that skipped all headers today (static file + SPA fallback).
+        "tests/response-security-headers-test.rkt"
         "tests/exists-test.rkt"
         "tests/jwt-test.rkt"
+        # Stage 2 runtime halves (roadmap/next/ensure_sso_works.md): SessionPolicy
+        # (TTL/absolute-cap decoupling), session-key rotation ([current,previous]),
+        # and revocation at the renewal boundary — all SSO-independent, in jwt.rkt.
+        "tests/jwt-session-policy-test.rkt"
+        # Phase 1 down-payment: SSRF containment classifier (Risk 47) — the
+        # metadata endpoint, loopback, RFC1918/CGNAT/link-local and their
+        # IPv4-mapped spellings are refused; fail-closed on unparseable input.
+        "tests/ssrf-guard-test.rkt"
+        # Phase 1 & 2: dsl/sso.rkt OIDC + plain-OAuth2 runtime.  Pure security
+        # layer (PKCE S256, injective SsoSubjectKey, EmailClaim rule, OIDC claim
+        # + Entra multi-tenant validation, integrity-protected __Host-oauth
+        # cookie, provider defaults) and the orchestration driven through the
+        # outbound-HTTP stub (discovery -> token -> id_token/userinfo -> identity).
+        "tests/sso-runtime-test.rkt"
+        # Item A (#50.2): Tesl.Proxy runtime — ProxyBound minted only by a
+        # constant-time Proxy.verifyBinding match.
+        "tests/proxy-runtime-test.rkt"
+        "tests/sso-flow-test.rkt"
+        # Phase 2.5: RS256/ES256 ID-token signature verification + JWKS over
+        # openssl/libcrypto (verify-only).  Valid RS256/ES256 fixtures plus the
+        # adversarial refusals: alg:none, HMAC-on-ID-token, alg-not-pinned,
+        # header key nomination (jwk/jku/x5u/x5c/crit), JWE, wrong kid, <2048-bit
+        # modulus, tampered payload.
+        "tests/jws-verify-test.rkt"
+        # Phase 5 adversarial review pass over the SSO runtime: the spec's own
+        # attack list (secret-in-URL, provider-error reflection, broken signature,
+        # PKCE downgrade, http/SSRF transport, state cross-swap, unverified-email
+        # takeover, absent hd, subject/clock shapes, flattened-claims, Entra
+        # multi-tenant trap, extraAuthorizeParams smuggling, key stability).
+        "tests/sso-adversarial-test.rkt"
+        # Phase 3: the Tesl.Sso stdlib runtime (tesl/sso.rkt) that the
+        # Sso.defaults / Sso.keyText type rows resolve to.
+        "tests/sso-stdlib-test.rkt"
+        # Systemic: every opaque/nominal stdlib type usable in a checked position
+        # must resolve a runtime predicate (fail-closed define/pow return check) —
+        # closes the class the SSO e2e surfaced (non-newtype opaque types).
+        "tests/opaque-type-registration-test.rkt"
+        # Phase 3: the runtime-owned SSO routes in dsl/web.rkt (303 redirect +
+        # Set-Cookie on a redirect, route matching, full login->callback->session).
+        "tests/sso-web-test.rkt"
         # SSE path capability wiring + the credentialed-response CORS rule
         # (adversarial review F6/F9): an `auth`/`capture` with a `requires` row
         # runs on a subscribe, and a Set-Cookie response drops the wildcard
@@ -1616,6 +1675,38 @@ else
         phase_end SKIP
     else
         printf "  %s✗%s  the browser checker diverged from the CLI (see above)\n" "$C_RED" "$C_RESET"
+        phase_end FAIL
+    fi
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Phase 20 — SSO browser end-to-end (real dex IdP + headless Chromium)
+# ══════════════════════════════════════════════════════════════════════════════
+# The one gate that runs a COMPILED Tesl program through the real serve/handler
+# path against a real IdP — a headless browser logs in via a local dex over the
+# generic `Sso.oidc` connection and reads back the session (see e2e/sso/). It is
+# what catches the "never executed end-to-end" class of bug. Needs `nix` (it
+# realizes dex + playwright + the browser bundle) and `racket`; skipped in the
+# fast inner loop (RKT_SUITES_SKIP) or explicitly (SSO_E2E_SKIP). Timeout-bounded.
+phase_begin "SSO browser e2e (dex + Playwright, headless)"
+if is_truthy "${SSO_E2E_SKIP:-0}" || is_truthy "${RKT_SUITES_SKIP:-0}"; then
+    printf "  %s⚠%s  SSO_E2E_SKIP / RKT_SUITES_SKIP set — skipping\n" "$C_YELLOW" "$C_RESET"
+    phase_end SKIP
+elif ! command -v nix >/dev/null 2>&1 || ! command -v racket >/dev/null 2>&1; then
+    printf "  %s⚠%s  nix or racket not on PATH — skipping\n" "$C_YELLOW" "$C_RESET"
+    phase_end SKIP
+else
+    _e2e_rc=0
+    _e2e_timeout="${SSO_E2E_TIMEOUT:-600}"
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$_e2e_timeout" bash "$SCRIPT_DIR/e2e/sso/run.sh" || _e2e_rc=$?
+    else
+        bash "$SCRIPT_DIR/e2e/sso/run.sh" || _e2e_rc=$?
+    fi
+    if [ "$_e2e_rc" -eq 0 ]; then
+        phase_end OK
+    else
+        printf "  %s\xe2\x9c\x97%s  SSO browser e2e failed (rc=%s) — see output above\n" "$C_RED" "$C_RESET" "$_e2e_rc"
         phase_end FAIL
     fi
 fi

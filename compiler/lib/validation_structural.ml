@@ -2,6 +2,30 @@ open Ast
 open Location
 open Validation_common
 
+(* OQ11: the single compile-time rule for a `publicOrigin` LITERAL — an
+   absolute origin, scheme `https` (or `http` only for a loopback host), with no
+   path beyond an optional trailing `/`, no query and no fragment.  The runtime
+   `valid-public-origin?` (dsl/web.rkt) mirrors this rule for the `fromEnv` form,
+   so both sources are validated identically. *)
+let valid_public_origin (s : string) : bool =
+  if String.contains s '?' || String.contains s '#' then false
+  else
+    let starts pfx = String.length s >= String.length pfx && String.sub s 0 (String.length pfx) = pfx in
+    let host_rest_ok rest =
+      match String.index_opt rest '/' with
+      | None -> String.length rest > 0
+      | Some i -> i > 0 && String.sub rest i (String.length rest - i) = "/"
+    in
+    if starts "https://" then host_rest_ok (String.sub s 8 (String.length s - 8))
+    else if starts "http://" then begin
+      let rest = String.sub s 7 (String.length s - 7) in
+      let host = match String.index_opt rest '/' with None -> rest | Some i -> String.sub rest 0 i in
+      let host_noport = match String.index_opt host ':' with None -> host | Some i -> String.sub host 0 i in
+      let h = String.lowercase_ascii host_noport in
+      let loopback = h = "localhost" || h = "::1" || (String.length h >= 4 && String.sub h 0 4 = "127.") in
+      loopback && host_rest_ok rest
+    end else false
+
 (* build_field_proof_map now lives in Validation_common (shared via module_facts). *)
 
 let rec carried_proofs_of_expr
@@ -1723,9 +1747,188 @@ let check_server_completeness ?(extra_funcs = []) (decls : top_decl list) : vali
         then Some (name, pred_names_of_return_spec info.fi_return) else None
       ) extra_funcs
   in
+  (* Phase 3 (loginMethods): a module-wide scan for the sanctioned session-minting
+     chokepoint (`Http.setSessionCookie`) and password calls
+     (`Crypto.checkPassword`/`hashPassword`).  Over-approximates ("any occurrence
+     anywhere in the module") rather than doing call-graph reachability: a
+     security allowlist errs toward rejecting, never toward missing a site.  Both
+     the `EVar "Mod.fn"` and the `EField (EConstructor Mod).fn` spellings are
+     matched, since qualified stdlib calls appear as either in the AST. *)
+  (* Phase 3 (loginMethods): a module-wide scan for the sanctioned session-minting
+     chokepoint (`Http.setSessionCookie`) and password calls
+     (`Crypto.checkPassword`/`hashPassword`).  Over-approximates ("any occurrence
+     anywhere in the module") rather than doing call-graph reachability: a
+     security allowlist errs toward rejecting, never toward missing a site.  Both
+     the `EVar "Mod.fn"` and the `EField (EConstructor Mod).fn` spellings are
+     matched, since qualified stdlib calls appear as either in the AST. *)
+  let session_minting_sites : (string * loc) list =
+    let hits = ref [] in
+    let matched (e : Ast.expr) : (string * loc) option =
+      match e with
+      | Ast.EVar { name; loc } when
+          name = "Http.setSessionCookie" || name = "Crypto.checkPassword"
+          || name = "Crypto.hashPassword" -> Some (name, loc)
+      | Ast.EField { obj = Ast.EConstructor { name = m; _ }; field; loc } when
+          (m = "Http" && field = "setSessionCookie")
+          || (m = "Crypto" && (field = "checkPassword" || field = "hashPassword")) ->
+        Some (m ^ "." ^ field, loc)
+      | _ -> None
+    in
+    let rec walk (e : Ast.expr) : unit =
+      (match matched e with Some hit -> hits := hit :: !hits | None -> ());
+      ignore (Ast_visitor.fold_children (fun () c -> walk c; ()) () e)
+    in
+    List.iter (function
+      | DFunc (fd : func_decl) -> walk fd.body
+      | DConst (c : const_form) -> walk c.value
+      | DTest (tf : test_form) ->
+        List.iter (fun st -> List.iter walk (Ast.test_stmt_exprs st)) tf.stmts
+      | _ -> ()) decls;
+    List.rev !hits
+  in
   let errors = ref [] in
   List.iter (function
     | DServer sv ->
+      (* Phase 3: validate the `sso` clauses — fail-closed.  The referenced
+         connection/onIdentity functions must exist, and each route segment must
+         be non-empty and unique within the server (so route minting cannot
+         collide). *)
+      (let defined_fns =
+         List.filter_map (function DFunc fd -> Some fd.name | _ -> None) decls
+         @ List.map fst extra_funcs in
+       if sv.sso_clauses <> [] && sv.public_origin = None then
+         errors := make_error sv.loc
+           "a server with `sso` clauses must declare a `publicOrigin` (https://your.app)"
+           :: !errors;
+       (match sv.public_origin with
+        | Some (POLiteral url) when not (valid_public_origin url) ->
+          errors := make_error sv.loc
+            ~hint:"`publicOrigin` must be an absolute https origin with no path, query or fragment, e.g. `https://app.example.com` (http is allowed only for a loopback host)"
+            (Printf.sprintf "server '%s' has an invalid `publicOrigin` %S" sv.name url)
+            :: !errors
+        | _ -> ());
+       if sv.sso_clauses <> [] && sv.sso_session_key_env = None then
+         errors := make_error sv.loc
+           "a server with `sso` clauses must declare an `sessionKey` (the signing-key env var)"
+           :: !errors;
+       (match sv.after_login with
+        | Some p when not (String.length p > 0 && p.[0] = '/' && not (String.contains p ':')) ->
+          errors := make_error sv.loc "afterLogin must be a relative path such as `/` or `/dashboard`" :: !errors
+        | _ -> ());
+       (* Phase 3: `sessionPreviousKey` is the ROTATION overlap for the session
+          signing key, so it is only meaningful alongside a current key
+          (`sessionKey`).  A previous key with no current key is a
+          misconfiguration — reject it fail-closed. *)
+       (match sv.sso_previous_key_env, sv.sso_session_key_env with
+        | Some _, None ->
+          errors := make_error sv.loc
+            ~hint:"declare `sessionKey \"ENV\"` (the current key) alongside `sessionPreviousKey`"
+            (Printf.sprintf "server '%s' declares `sessionPreviousKey` without an `sessionKey` (the current signing key)" sv.name)
+            :: !errors
+        | _ -> ());
+       (* Phase 3: `sessionRevoked <fn>` must name a function defined in the
+          module (fail-closed: an unknown hook would silently never deny). *)
+       (* Risk 50/60: the health-probe path must be an absolute path. *)
+       (match sv.health_probe_path with
+        | Some p when not (String.length p > 0 && p.[0] = '/') ->
+          errors := make_error sv.loc
+            "healthProbePath must be an absolute path such as `/healthz`" :: !errors
+        | _ -> ());
+       (* #51: each declared trusted proxy must be a non-empty address. *)
+       (if List.exists (fun p -> String.trim p = "") sv.trusted_proxies then
+          errors := make_error sv.loc
+            "each `trustedProxies` entry must be a non-empty address (an IP the reverse proxy connects from)"
+            :: !errors);
+       (match sv.session_revoked with
+        | Some fn when not (List.mem fn defined_fns) ->
+          errors := make_error sv.loc
+            ~hint:"`sessionRevoked` names a function `(subject: String, issuedAt: PosixMillis) -> Bool`"
+            (Printf.sprintf "server '%s' has `sessionRevoked %s` but no such function is defined" sv.name fn)
+            :: !errors
+        | _ -> ());
+       (* Phase 3: `loginMethods` — the fail-closed session-establishment
+          allowlist.  A CLOSED keyword set; WITHOUT `Password` no app code may
+          reach the session-minting chokepoint or a password call.  The
+          witness-gated per-site `Password` attribution (Open Questions 15/18) is
+          deferred — mixed mode currently requires only that the policy function
+          exists. *)
+       (match sv.login_methods with
+        | None -> ()
+        | Some methods ->
+          let known = ["Sso"; "Password"; "Proxy"; "Machine"] in
+          List.iter (fun m ->
+            if not (List.mem m known) then
+              errors := make_error sv.loc
+                ~hint:"loginMethods entries are Sso, Password (via <fn>), Proxy, or Machine"
+                (Printf.sprintf "server '%s' has an unknown loginMethods entry '%s'" sv.name m)
+                :: !errors) methods;
+          if methods = [] then
+            errors := make_error sv.loc
+              "loginMethods must list at least one method, e.g. `loginMethods [Sso]`"
+              :: !errors;
+          if methods <> [] && not (List.mem "Sso" methods) then
+            errors := make_error sv.loc
+              ~hint:"loginMethods is the SSO-era declaration; include Sso"
+              (Printf.sprintf "server '%s' declares `loginMethods` without `Sso`" sv.name)
+              :: !errors;
+          let has_password = List.mem "Password" methods in
+          (* #50.2: a per-installation MACHINE credential (a bearer token the app
+             verifies against stored material) mints sessions like Password does.
+             It licenses the app-side minting chokepoint the same way; the deeper
+             kernel-evidence discriminator (proving the mint is control-dependent
+             on the token check) is the deferred Item A / OQ15/18 work. *)
+          let has_machine = List.mem "Machine" methods in
+          let licenses_minting = has_password || has_machine in
+          (if has_password then
+             (match sv.password_policy_fn with
+              | None ->
+                errors := make_error sv.loc
+                  ~hint:"write `Password via <fn>` where <fn> is `(String) -> Bool requires [dbRead]`"
+                  (Printf.sprintf "server '%s' declares `Password` in loginMethods without `via <fn>`" sv.name)
+                  :: !errors
+              | Some fn when not (List.mem fn defined_fns) ->
+                errors := make_error sv.loc
+                  (Printf.sprintf "server '%s' loginMethods `Password via %s` refers to an unknown function '%s'" sv.name fn fn)
+                  :: !errors
+              | Some _ -> ()));
+          (* Fail-closed allowlist: with no `Password`, the ONLY sanctioned
+             session-minting site is the runtime-owned SSO callback, so any app
+             `Http.setSessionCookie` (or password call) is refused. *)
+          if not licenses_minting then begin
+            let list_str = "[" ^ String.concat ", " methods ^ "]" in
+            List.iter (fun (name, loc) ->
+              let what = if name = "Http.setSessionCookie"
+                         then "mints a session" else "performs a password check" in
+              errors := make_error loc
+                ~hint:(Printf.sprintf "server '%s' declares `loginMethods %s` (no Password); the only sanctioned session-minting site is the SSO callback \226\128\148 remove this call or add `Password via <fn>` / `Machine`" sv.name list_str)
+                (Printf.sprintf "`%s` %s, which no method in this server's `loginMethods` allows" name what)
+                :: !errors)
+              session_minting_sites
+          end);
+       let seen = Hashtbl.create 8 in
+       List.iter (fun (seg, conn_fn, id_fn) ->
+         if String.trim seg = "" then
+           errors := make_error sv.loc
+             (Printf.sprintf "server '%s' has an `sso` clause with an empty route segment" sv.name)
+             :: !errors;
+         if Hashtbl.mem seen seg then
+           errors := make_error sv.loc
+             (Printf.sprintf "server '%s' has two `sso` clauses for segment \"%s\"" sv.name seg)
+             :: !errors;
+         Hashtbl.replace seen seg ();
+         if conn_fn = "" || not (List.mem conn_fn defined_fns) then
+           errors := make_error sv.loc
+             ~hint:"an `sso` clause reads `sso \"seg\" connection <fn> onIdentity <fn>`"
+             (Printf.sprintf "`sso \"%s\"` in server '%s' refers to an unknown connection function '%s'"
+                seg sv.name conn_fn)
+             :: !errors;
+         if id_fn = "" || not (List.mem id_fn defined_fns) then
+           errors := make_error sv.loc
+             ~hint:"an `sso` clause reads `sso \"seg\" connection <fn> onIdentity <fn>`"
+             (Printf.sprintf "`sso \"%s\"` in server '%s' refers to an unknown onIdentity function '%s'"
+                seg sv.name id_fn)
+             :: !errors)
+         sv.sso_clauses);
       (match List.assoc_opt sv.api_name apis with
        | None ->
          errors := make_error sv.loc

@@ -1,0 +1,30 @@
+# Authenticating-proxy edge binding (roadmap/next/ensure_sso_works.md, Item A / #50.2).
+#
+# When a Tesl app runs behind a trusted reverse proxy, the proxy can prove a
+# request came through it by setting a binding header equal to a shared secret.
+# `Proxy.verifyBinding` verifies that header against the app's configured Secret
+# in CONSTANT TIME and mints a `ProxyBound` fact ONLY on a match.
+#
+# Because `ProxyBound` can be obtained no other way (no hand-written function may
+# declare it), a helper that demands `ProxyBound` can be reached ONLY by a value
+# that was actually verified — a request that did not pass through the proxy is a
+# COMPILE error, not a runtime 403 gap.  This is the #50.2 discriminator in code:
+# the binding is verified against STORED MATERIAL, so it needs no network-topology
+# claim (unlike a bare `X-Auth-User` header, which would).
+module ProxyBindingDemo exposing [authorizeInternal]
+
+import Tesl.Prelude exposing [String]
+import Tesl.Crypto exposing [Secret]
+import Tesl.Proxy exposing [ProxyBound, Proxy.verifyBinding]
+
+# Internal-only work: the parameter DEMANDS ProxyBound, so this function cannot
+# be called with an unverified binding.
+fn internalOnly(bound: String ::: ProxyBound bound) -> String =
+  "internal data released to a proxy-bound request: " ++ bound
+
+# The edge check: `proxySecret` is the app's configured shared secret (from the
+# environment); `presentedBinding` is the value the proxy put in the binding
+# header.  On a match, `check` yields a value carrying `ProxyBound`.
+fn authorizeInternal(proxySecret: Secret, presentedBinding: String) -> String =
+  let bound = check Proxy.verifyBinding proxySecret presentedBinding
+  internalOnly bound

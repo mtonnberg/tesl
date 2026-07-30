@@ -205,6 +205,45 @@
   (check-exn exn:fail?
     (lambda () (with-jwt (lambda () (JWT.decode bad-token))))))
 
+;; ── Phase 0 (ensure_sso_works.md, blocker 6): JWT.decode is an honest
+;; `Dict String String` even when the payload carries ARRAY and NUMBER claims,
+;; which real OIDC ID tokens do (`aud`, `amr` arrays; `exp`/`iat` numbers).
+(test-case "decode coerces array/number/bool claims to their JSON string form"
+  ;; JWT.decode does not verify the signature, so a forged token with an
+  ;; array-valued `aud` and numeric `exp` is a faithful stand-in for a real
+  ;; ID token.
+  ;; Build the token by hand (decode ignores the signature), which also avoids
+  ;; depending on `forge-token`'s later module position.
+  (define payload
+    (hasheq 'sub "user123"
+            'aud (list "client-a" "client-b")
+            'exp 1785355686
+            'email_verified #t
+            'roles (list "admin" "reader")))
+  (define header-b64 (t-b64url (string->bytes/utf-8 "{\"alg\":\"HS256\",\"typ\":\"JWT\"}")))
+  (define payload-b64 (t-b64url (string->bytes/utf-8 (jsexpr->string payload))))
+  (define token (JwtToken (string-append header-b64 "." payload-b64 "." "unchecked-sig")))
+  (define result (with-jwt (lambda () (JWT.decode token))))
+  (check-true (hash? result))
+  ;; Every value is a String — the declared type is now literally true.
+  (for ([(k v) (in-hash result)])
+    (check-true (string? v) (format "claim ~a must decode to a String, got ~a" k v)))
+  (check-equal? (hash-ref result "sub") "user123")
+  (check-equal? (hash-ref result "exp") "1785355686")
+  (check-equal? (hash-ref result "email_verified") "true")
+  ;; An array claim becomes compact JSON TEXT (not a Racket list, not a
+  ;; space-flattened blob) — see the Risk 18 note in tesl/jwt.rkt.
+  (check-equal? (hash-ref result "aud") "[\"client-a\",\"client-b\"]")
+  (check-equal? (hash-ref result "roles") "[\"admin\",\"reader\"]"))
+
+(test-case "decode rejects a payload that is not a JSON object"
+  ;; A JWT whose payload is a bare JSON array is malformed for `Dict String String`.
+  (define header-b64 (t-b64url (string->bytes/utf-8 "{\"alg\":\"HS256\",\"typ\":\"JWT\"}")))
+  (define payload-b64 (t-b64url (string->bytes/utf-8 "[1,2,3]")))
+  (define token (JwtToken (string-append header-b64 "." payload-b64 "." "sig")))
+  (check-exn exn:fail?
+    (lambda () (with-jwt (lambda () (JWT.decode token))))))
+
 ;; ── 4. Nominal type safety ────────────────────────────────────────────────────
 
 (test-case "JwtToken is a newtype-value with JwtToken type"

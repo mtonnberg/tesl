@@ -58,6 +58,15 @@ let t_http_request = TCon "HttpRequest"
 let t_password_hash = TCon "PasswordHash"
 let t_signature     = TCon "Signature"
 let t_secret        = TCon "Secret"
+(* Tesl.Sso (roadmap/next/ensure_sso_works.md, Phase 3).  Both OPAQUE nominal
+   types, like Secret/PasswordHash: no constructor row in stdlib_env, so
+   `SsoConnection x` / `SsoSubjectKey x` are unknown-constructor errors.  An
+   SsoConnection is built by `Sso.defaults`; an SsoSubjectKey (the storable,
+   email-free identity key) is read out with `Sso.keyText`. *)
+let t_sso_connection  = TCon "SsoConnection"
+let t_sso_subject_key = TCon "SsoSubjectKey"
+let t_sso_identity    = TCon "SsoIdentity"
+let t_sso_provider    = TCon "SsoProvider"
 (* First-Class Units: Money is nominal like PosixMillis; its currency is a
    runtime qualifier (a `Currency` value, like TimeZone), NOT an SI dimension. *)
 let t_money         = TCon "Money"
@@ -870,6 +879,42 @@ let stdlib_env : (string * scheme) list = [
   "JWT.renew",  mono (t_fun [t_jwt_token; t_secret] t_jwt_token);
   "JWT.decode", mono (t_fun [t_jwt_token] (t_dict t_string t_string));
 
+  (* ── Tesl.Sso (Phase 3 tables-only foundation) ───────────────────────────
+     `Sso.defaults provider clientId clientSecret` builds a blessed provider
+     connection.  The provider is the baked `SsoProvider` ADT (`Github`/`Google`)
+     — a closed set of nullary constructors that lower inline to the runtime
+     provider string, so a typo is a compile error and completion lists every
+     provider (the `Utc`/`Currency` baked-ADT pattern).  `Sso.oidc issuer …` is
+     the generic OpenID Connect connection by ISSUER URL (self-hosted
+     Keycloak/dex, Okta, Auth0, single-tenant Entra).  `Sso.keyText` renders the
+     opaque identity key for a DB column.  The runtime is tesl/sso.rkt, wrapping
+     dsl/sso.rkt. *)
+  "Sso.defaults", mono (t_fun [t_sso_provider; t_string; t_secret] t_sso_connection);
+  "Sso.oidc",     mono (t_fun [t_string; t_string; t_secret] t_sso_connection);
+  (* Domain-restriction builders (Risk 17/53): set the runtime-enforced allow-
+     lists on a connection.  Checked at the callback BEFORE onIdentity, and
+     satisfiable only by a VerifiedEmail — a returned record-update. *)
+  "Sso.allowedEmailDomains",  mono (t_fun [t_sso_connection; t_list t_string] t_sso_connection);
+  "Sso.allowedHostedDomains", mono (t_fun [t_sso_connection; t_list t_string] t_sso_connection);
+  "Sso.allowedTenants",       mono (t_fun [t_sso_connection; t_list t_string] t_sso_connection);
+  (* Item A (#50.2): a check-shaped verification of a proxy-binding header
+     value against a configured Secret; mints `ProxyBound` (proof-layer). *)
+  "Proxy.verifyBinding", mono (t_fun [t_secret; t_string] t_string);
+  (* SsoProvider constructors (fixed set): nullary values of type SsoProvider,
+     lowered inline in emit_racket to the runtime provider string. *)
+  "Github", mono t_sso_provider;
+  "Google", mono t_sso_provider;
+  "Sso.keyText",  mono (t_fun [t_sso_subject_key] t_string);
+  (* the SSO identity handed to `onIdentity`; opaque, read via Sso.subject *)
+  "Sso.subject",  mono (t_fun [t_sso_identity] t_string);
+  (* Typed-identity accessors (Risk 2/3/18/32, OQ12): the VERIFIED email only
+     (as Maybe — an app cannot obtain an unverified address, so it cannot trust
+     one), the tenant, and any single claim by name.  The full 3-way EmailClaim
+     ADT + `claims: Dict String Json` are a deferred richer surface. *)
+  "Sso.email",   mono (t_fun [t_sso_identity] (t_maybe t_string));
+  "Sso.tenant",  mono (t_fun [t_sso_identity] (t_maybe t_string));
+  "Sso.claim",   mono (t_fun [t_sso_identity; t_string] (t_maybe t_string));
+
   (* ── Http: the session cookie ──────────────────────────────────────────────
      The transport for the credential above.  Three ordinary imported functions,
      no new syntax and nothing ambient: the NAMES arrive via `import Tesl.Http
@@ -937,6 +982,8 @@ let stdlib_env : (string * scheme) list = [
      unwrap of a secret. *)
   "Crypto.signatureHex",     mono (t_fun [t_signature] t_string);
   "Crypto.signatureFromHex", mono (t_fun [t_string] t_signature);
+  "Crypto.signatureBase64",     mono (t_fun [t_signature] t_string);
+  "Crypto.signatureFromBase64", mono (t_fun [t_string] t_signature);
 
   "Crypto.fingerprint",    mono (t_fun [t_string] t_string);
   "Crypto.keyFingerprint", mono (t_fun [t_secret] t_string);
@@ -1410,6 +1457,18 @@ let tesl_module_exports : (string * string list) list = [
        binding-existence seam test exists to prevent. *)
     [ "jwt"; "JwtToken"; "JWT.sign";
       "JWT.verify"; "JWT.renew"; "JWT.decode"; "Authentic" ] );
+  ( "Tesl.Sso",
+    (* SsoConnection / SsoSubjectKey are TYPES only (no ctor row → opaque, like
+       PasswordHash).  Phase 3 tables-only foundation for the `sso` clause. *)
+    [ "SsoConnection"; "SsoSubjectKey"; "SsoIdentity";
+      "SsoProvider"; "Github"; "Google";
+      "Sso.defaults"; "Sso.oidc"; "Sso.keyText"; "Sso.subject";
+      "Sso.email"; "Sso.tenant"; "Sso.claim";
+      "Sso.allowedEmailDomains"; "Sso.allowedHostedDomains"; "Sso.allowedTenants" ] );
+  ( "Tesl.Proxy",
+    (* Item A: authenticating-proxy edge binding.  `ProxyBound` is the fact
+       minted only by the check-shaped `Proxy.verifyBinding`. *)
+    [ "ProxyBound"; "Proxy.verifyBinding" ] );
   ( "Tesl.Crypto",
     (* Password storage, message authentication, digests and secrets.
        `PasswordHash` and `Signature` appear here as TYPES only — there is no
@@ -1420,6 +1479,7 @@ let tesl_module_exports : (string * string list) list = [
       "Crypto.hashPassword"; "Crypto.checkPassword"; "Crypto.needsRehash";
       "Crypto.signWith"; "Crypto.checkSignature";
       "Crypto.signatureHex"; "Crypto.signatureFromHex";
+      "Crypto.signatureBase64"; "Crypto.signatureFromBase64";
       "Crypto.fingerprint"; "Crypto.keyFingerprint"; "Crypto.randomToken";
       "Crypto.hmacSha256"; "Crypto.sha256"; "Crypto.sha512" ] );
   ( "Tesl.Cache",
@@ -1686,6 +1746,11 @@ let tesl_known_module_names : string list = [
   "Tesl.Telemetry"; "Tesl.ApiTest"; "Tesl.Tuple"; "Tesl.Id";
   "Tesl.Queue"; "Tesl.Sse"; "Tesl.Logging";
   "Tesl.JWT"; "Tesl.Cache"; "Tesl.Email"; "Tesl.Database"; "Tesl.SSE"; "Tesl.App"; "Tesl.Agent";
+  (* Tesl.Sso: SSO / third-party-auth surface (roadmap/next/ensure_sso_works.md,
+     Phase 3), backed by tesl/sso.rkt. *)
+  "Tesl.Sso";
+  (* Tesl.Proxy: authenticating-proxy edge binding (Item A, #50.2). *)
+  "Tesl.Proxy";
   "Tesl.Money"; "Tesl.Units";
   (* Tesl.Crypto: REINSTATED with a real tesl/crypto.rkt behind it (password
      storage, message authentication, digests, secrets).  It was removed

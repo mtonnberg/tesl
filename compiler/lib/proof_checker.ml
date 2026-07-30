@@ -1148,7 +1148,10 @@ let stdlib_predicates : string list =
        Type_system.framework_proof_predicates (that set is the reserved,
        never-user-mintable one); these are ordinary stdlib predicates whose only
        producing sites are the three rows in Validation_common.stdlib_func_infos. *)
-    ; "HashFor"; "PasswordVerified"; "Authentic" ]
+    ; "HashFor"; "PasswordVerified"; "Authentic"
+    (* Proxy edge-binding predicate, owned by Tesl.Proxy; minted ONLY by
+       Proxy.verifyBinding (Validation_common.stdlib_func_infos). *)
+    ; "ProxyBound" ]
 
 (** Collect predicate names produced by check/auth/establish functions in imported modules. *)
 let load_imported_predicates (m : module_form) : string list =

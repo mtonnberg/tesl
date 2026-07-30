@@ -13,7 +13,7 @@ and every one is also a regression test — each has a committed byte-exact
 tesl help manual <lesson-name>      # e.g. tesl help manual lesson05-intro-to-proofs
 ```
 
-There are **79** lessons. That number is generated; it cannot drift.
+There are **81** lessons. That number is generated; it cannot drift.
 
 ## In a hurry? Start with these
 
@@ -148,6 +148,8 @@ exactly what you are missing.
 | 770 | [`lesson72-units`](../example/learn/lesson72-units.tesl) | Give physical quantities compile-time dimensions, checked when you multiply and erased at runtime | — |
 | 780 | [`lesson76-sessions`](../example/learn/lesson76-sessions.tesl) | Log a user in with a signed session cookie, read it back in auth, and log them out — one blessed pattern with no options | [`lesson57-jwt`](../example/learn/lesson57-jwt.tesl) — Sign and verify JSON Web Tokens for stateless auth, with the token nominal and the key a Tesl.Crypto Secret |
 | 790 | [`lesson77-traces`](../example/learn/lesson77-traces.tesl) | Join your logs to a caller's trace for free, and turn on per-request span trees with one keyword | [`lesson73-metrics`](../example/learn/lesson73-metrics.tesl) — Record counters, histograms and gauges as ambient OpenTelemetry metrics |
+| 800 | [`lesson78-sso`](../example/learn/lesson78-sso.tesl) | Add third-party login in one server clause — the OAuth2/OIDC dance, PKCE, state and the session cookie are all the runtime's job; you map the identity and gate a route on it | [`lesson76-sessions`](../example/learn/lesson76-sessions.tesl) — Log a user in with a signed session cookie, read it back in auth, and log them out — one blessed pattern with no options |
+| 810 | [`lesson79-authenticating-proxy`](../example/learn/lesson79-authenticating-proxy.tesl) | Turn a reverse-proxy binding header into a ProxyBound proof the compiler demands, so a request that never passed through your proxy is a compile error rather than a runtime gap | [`lesson78-sso`](../example/learn/lesson78-sso.tesl) — Add third-party login in one server clause — the OAuth2/OIDC dance, PKCE, state and the session cookie are all the runtime's job; you map the identity and gate a route on it |
 
 ### AI-era surfaces
 
