@@ -29,7 +29,7 @@
 (define-checker
   (checkInRange [n : Integer])
   #:returns [n : Integer ::: (InRange n)]
-  (thsl-src! "example/learn/lesson06-proof-check-proof-auth.tesl" 52 (list (cons 'n *n)) (lambda () (if (and (>= *n 0) (<= *n 100)) (accept (InRange n) #:value *n) (reject "must be between 0 and 100" #:http-code 422)))))
+  (thsl-src! "example/learn/lesson06-proof-check-proof-auth.tesl" 52 (list (cons 'n *n)) (lambda () (if (and (tesl-ge? *n 0) (tesl-le? *n 100)) (accept (InRange n) #:value *n) (reject "must be between 0 and 100" #:http-code 422)))))
 
 (define-trusted
   (makeProofTrusted [n : Integer])

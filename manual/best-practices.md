@@ -357,7 +357,7 @@ Three shapes are honest, in rough order of how much machinery they need:
 | Shape | Verify with | Notes |
 |---|---|---|
 | Signed session value | `check Crypto.checkSignature key sig payload` → `Authentic payload` | Stateless; the payload is readable by the client but not writable |
-| Signed token (JWT) | `JWT.verify token secret` | Checks the HMAC **and** the `exp` claim, auto-401s; claims travel inside the signature |
+| Signed token (JWT) | `check JWT.verify token secret` | Checks the HMAC **and** the `exp` claim, auto-401s, and mints `Authentic` on the claims so a consumer can *demand* verification. Claims travel inside the signature. `JWT.sign` stamps a fixed one-hour `exp` (epoch seconds, RFC 7519) — the expiry is not a parameter, so signing also needs `time`. See LANGUAGE-SPEC.md §21.2 |
 | Opaque session id | your own session table lookup | `Crypto.randomToken` to mint; revocable, but needs storage |
 
 Comparing an **already-verified** value against a literal is correct and does not fire — the
@@ -376,7 +376,9 @@ case Dict.lookup "role" request.cookies of
   Something role -> ok AdminUser { id: userId, role: role } ::: Authenticated requestUser
 
 -- ✅ the role is a claim inside the signed token, so editing the cookie invalidates it
-let claims = JWT.verify (JwtToken raw) (JwtSecret (requireEnv "SESSION_JWT_SECRET"))
+--    `check` is required: JWT.verify is check-shaped, and binding it is what makes
+--    the 401 propagate instead of handing the failure value on as if it were a Dict.
+let claims = check JWT.verify (JwtToken raw) (JwtSecret (requireEnv "SESSION_JWT_SECRET"))
 case Dict.lookup "role" claims of
   Something role -> ok AdminUser { id: userId, role: role } ::: Authenticated requestUser
 ```
@@ -650,7 +652,7 @@ The load-bearing distinction across the whole table is **data boundary vs. host-
 
 Reach for the webhook only when the work runs long enough (minutes and up) that holding an outbound connection is untenable. Note what happens when you do: it stops being interop machinery and becomes an ordinary integration — an authenticated Tesl endpoint, with the existing `auth` machinery applying unchanged and nothing interop-specific about it.
 
-**❌ Don't** ignore what the default costs. A blocked outbound call pins one of the queue's `numberOfWorkers` threads for its whole duration, and Tesl's HTTP client does not yet take a timeout, so a hung upstream will starve the queue: with `numberOfWorkers: 4`, four wedged calls stop *all* background work, including job types that have nothing to do with the foreign service. Until outbound timeouts land (`roadmap/next/primitive_gaps_and_outbound_hardening.md`), give a flaky upstream headroom — a larger `numberOfWorkers`, or its own queue so it cannot starve unrelated jobs.
+**❌ Don't** ignore what the default costs. A blocked outbound call pins one of the queue's `numberOfWorkers` threads for its whole duration, so a slow upstream still occupies a worker for the duration of the call: with `numberOfWorkers: 4`, four simultaneously-slow calls stall *all* background work, including job types that have nothing to do with the foreign service. Outbound calls now carry connect, read and SSE-idle deadlines with conservative defaults (`TESL_HTTP_CONNECT_TIMEOUT_MS`, `TESL_HTTP_TIMEOUT_MS`, `TESL_HTTP_STREAM_IDLE_TIMEOUT_MS`), so a *hung* upstream fails the job instead of wedging the thread forever — and a failed job goes through retry, backoff and dead-lettering as normal. That bounds the damage; it does not remove it. Give a flaky upstream headroom anyway — a larger `numberOfWorkers`, or its own queue so it cannot starve unrelated jobs.
 
 ### The foreign-work recipe
 

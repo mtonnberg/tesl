@@ -61,11 +61,30 @@ mkdir -p "$out"
 install -m 644 "$artifact" "$out/tesl_playground.js"
 install -m 644 "$here/index.html" "$out/index.html"
 
+# ── The lesson index ────────────────────────────────────────────────────────
+# One page linking every example/learn lesson into the checker, with its source
+# in the share fragment. Generated from the `# lesson:` / `# summary:` headers —
+# the same single source manual/lessons.md comes from — so the two catalogs
+# cannot disagree, and adding a lesson needs no edit here.
+#
+# Deliberately a SEPARATE page rather than a picker inside index.html: the corpus
+# is 750 KB raw / 190 KB gzipped, comparable to the whole compiler bundle, and
+# every lesson gets a stable permalink this way. See the script's header.
+if command -v python3 >/dev/null 2>&1; then
+  echo "==> generating the lesson index"
+  python3 "$here/gen-lessons-page.py" "$repo" "$out/lessons.html" "index.html"
+else
+  echo "warning: python3 not found — skipping lessons.html" >&2
+fi
+
 raw=$(wc -c < "$out/tesl_playground.js")
 gz=$(gzip -9c "$out/tesl_playground.js" | wc -c)
 echo "==> $out"
 echo "    tesl_playground.js  $raw bytes raw, $gz bytes gzipped"
 echo "    index.html          $(wc -c < "$out/index.html") bytes"
+if [ -f "$out/lessons.html" ]; then
+  echo "    lessons.html        $(wc -c < "$out/lessons.html") bytes"
+fi
 echo
 echo "Serve it with any static file server, e.g.:"
 echo "    python3 -m http.server -d $out 8000"

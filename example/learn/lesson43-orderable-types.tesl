@@ -124,7 +124,7 @@ fn isAffordable(price: Float, budget: Float) -> Bool =
 # Check whether t1 was created strictly before t2.
 # PosixMillis supports < directly.
 fn createdBefore(t1: PosixMillis, t2: PosixMillis) -> Bool =
-  t1.value < t2.value
+  t1 < t2
 
 # ─────────────────────────────────────────────
 # UNDERSTANDING — why it works this way

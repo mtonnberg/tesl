@@ -640,7 +640,7 @@ The current frontend gives special treatment to these module names:
 - `Tesl.Queue` — queue capabilities (`queueRead`, `queueWrite`, `pubsub`), proof predicates (`FromQueue`, `FromDeadQueue`)
 - `Tesl.Crypto` — password storage, message authentication, digests and secrets (`PasswordHash`, `Signature`, `Secret`; facts `HashFor`, `PasswordVerified`, `Authentic`). Every primitive is libsodium. Reuses `random` for the two operations that draw randomness; introduces no capability of its own. See §21.7.
 - `Tesl.UUID` — UUID generation and validation: `UUID.v4`, `UUID.v7`, `UUID.validate`, `IsUuid` proof predicate, `uuidV4Codec`, `uuidV7Codec`. The `uuid` capability gates generation; `UUID.validate` requires no capability. See §21.1.
-- `Tesl.JWT` — JSON Web Token support: `JWT.sign`, `JWT.verify`, `JWT.decode`, nominal newtypes `JwtToken` and `JwtSecret`. The `jwt` capability gates all operations. Algorithm: HS256. See §21.2.
+- `Tesl.JWT` — JSON Web Token support: `JWT.sign`, `JWT.verify`, `JWT.decode`, nominal newtypes `JwtToken` and `JwtSecret`. The `jwt` capability gates all operations; `JWT.sign` also requires `time`. Algorithm: HS256. Tokens are **session** tokens: `JWT.sign` stamps a fixed one-hour `exp` in epoch **seconds** (RFC 7519) and the expiry is not a parameter. `JWT.verify` mints `Authentic` on the claims. See §21.2.
 - `Tesl.HttpClient` — outgoing HTTP requests: `HttpClient.get`, `HttpClient.post`, `HttpClient.put`, `HttpClient.delete`, the `HttpResponse` record, and the `httpClient` capability. See §21.3.
 
 **String and number utilities**
@@ -3683,46 +3683,82 @@ fn requiresValidId(id: String ::: IsUuid id) -> String = id
 Provides JSON Web Token signing, verification, and decoding using HMAC-SHA256 (HS256). Import:
 
 ```tesl
-import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.sign, JWT.verify, JWT.decode]
+import Tesl.JWT exposing [jwt, JwtToken, JwtSecret,
+                          JWT.sign, JWT.verify, JWT.decode, Authentic]
 ```
 
-**Capability:** `jwt` — required by all three operations.
+**Capabilities:** `jwt` — required by all three operations. `JWT.sign` additionally requires `time`, because it stamps the token's expiry from the wall clock, and a capability marks an effect.
 
 **Nominal newtypes:**
 
 - `JwtToken` — wraps `String`. Represents a signed JWT (`header.payload.signature`). Not interchangeable with `String` — the type system prevents passing a raw string where a `JwtToken` is expected, and vice versa.
-- `JwtSecret` — wraps `String`. Represents the HMAC signing key. Nominal separation ensures that secrets cannot be accidentally swapped with tokens or plain strings.
+- `JwtSecret` — wraps `String`. Represents the HMAC signing key. Nominal separation ensures that secrets cannot be accidentally swapped with tokens or plain strings. It is a **secret newtype**: it has no readable `.value`, because handing the key back as a `String` would defeat the redaction every rendering sink applies to it.
 
 **Functions:**
 
 | Function | Signature | Notes |
 |---|---|---|
-| `JWT.sign` | `(claims: a) (secret: JwtSecret) -> JwtToken` | Signs an arbitrary record as claims. Requires `jwt`. |
-| `JWT.verify` | `(token: JwtToken) (secret: JwtSecret) -> a` | Verifies signature and expiry. Fails 401 on bad signature or expired token. Requires `jwt`. |
-| `JWT.decode` | `(token: JwtToken) -> a` | Decodes payload without verifying signature. Use only for non-security-critical inspection. Requires `jwt`. |
+| `JWT.sign` | `(claims: Dict String String) (secret: JwtSecret) -> JwtToken` | Signs a claims dict into a **session** token, stamping `exp` one hour ahead. There is no expiry parameter. Requires `jwt` and `time`. |
+| `JWT.verify` | `(token: JwtToken) (secret: JwtSecret) -> Dict String String ::: Authentic claims` | Verifies signature and expiry; returns the claims carrying an `Authentic` fact. Fails 401 on a bad signature or an expired token. Check-shaped: bind with `check`. Requires `jwt`. |
+| `JWT.decode` | `(token: JwtToken) -> Dict String String` | Decodes the payload **without** verifying the signature, and mints no fact. Use only for non-security-critical inspection. Requires `jwt`. |
 
-`JWT.sign` accepts any Tesl record as the claims payload. `JWT.verify` and `JWT.decode` return the same record type — the compiler infers the type from context.
+Claims are a `Dict String String`, not a record: the payload is a JSON object, `JWT.verify`/`JWT.decode` return it string-keyed, and every consumer reads it with `Dict.lookup`. The result type is deliberately **concrete** rather than a free type variable — a free variable could be typed as anything at the call site, which let a verified payload be laundered into whatever shape the caller claimed.
 
 **Algorithm:** HS256 (HMAC-SHA256). The header is always `{"alg":"HS256","typ":"JWT"}`.
+
+#### The expiry is fixed at one hour, and is not yours to set
+
+`JWT.sign` sets `exp` itself — **3600 seconds** ahead — and there is no parameter for it, no way to lengthen it, and no way to opt out. This follows the same rule as the rest of the cryptographic surface (§21.7): no mechanism reaches the application author, because every knob is a place where a non-expert makes a wrong call and gets a plausible-looking result. A caller who can pass an expiry can pass ten years.
+
+One hour is the *session-token* number, and a JWT in Tesl is a session token. Renewing a session means signing a new token, which is one call. If you need a credential that outlives a session — an API key, a machine token — a JWT is the wrong tool: mint a `Crypto.randomToken`, store only its `Crypto.fingerprint`, and you can revoke it. An unexpiring bearer token cannot be revoked without rotating the signing key for everybody.
+
+Putting an `exp` in the claims dict yourself is an **error**, not an override. Silently overwriting it would mean the code says one expiry while the token carries another; rejecting it says so at the mint site. (In practice the type also stops you: claims are `Dict String String`, so the only `exp` a Tesl program can write there is a string.)
+
+#### The `exp` claim is epoch SECONDS
+
+`exp` is a *NumericDate* exactly as RFC 7519 §4.1.4 defines it: **seconds** since the Unix epoch. Both `JWT.sign` and `JWT.verify` use that unit, and so does every other JWT library, so a Tesl-minted token interoperates and a foreign token verifies.
+
+Two details worth knowing:
+
+- **An unreadable `exp` counts as expired.** If `exp` is present but not a number, `JWT.verify` rejects the token with 401 rather than skipping the check. Skipping would be fail-open: a token whose expiry cannot be read would be accepted forever. A missing `exp` is a different case and *is* accepted — the RFC makes `exp` optional, and Tesl itself never mints a token without one, so this only admits foreign tokens.
+- **Tesl's own clock type is milliseconds.** `PosixMillis`, `nowMillis()` and `addMs` are all milliseconds (§14b.2). The seconds conversion happens once, inside `Tesl.JWT`, rather than introducing a second time unit into `Tesl.Time`.
+
+> **Changed 2026-07-29 (breaking).** `exp` was epoch *milliseconds* until this date — 1000× too large. A foreign verifier read a Tesl token as valid for roughly fifty thousand years (fail-open), and every foreign token looked long expired to Tesl (fail-closed). The unit was hard-fixed on both sides with **no dual-unit tolerance and no migration window**: a heuristic that guesses which unit a number is in is exactly the kind of hedge that outlives its reason. Tokens minted before the change carry a far-future `exp` and keep verifying until they are re-signed; there is nothing to migrate.
+
+#### Demanding that verification happened
+
+`JWT.verify` returns the claims carrying the `Authentic` fact, so a consumer can require verification rather than trust that it was done:
+
+```tesl
+fn subjectOf(claims: Dict String String ::: Authentic claims) -> String = ...
+```
+
+Only `check JWT.verify` can satisfy that parameter. `JWT.decode` reads the payload without checking the signature and mints nothing, so it cannot reach such a function, and neither can a claims dict the program simply built. This is the difference between "we verify tokens" as a habit and as a compile-time guarantee.
+
+`Authentic` is `Tesl.Crypto`'s fact (§21.7) and is minted in two places: by `Crypto.checkSignature`, about a payload `String`, and by `JWT.verify`, about a claims `Dict String String`. It means the same thing in both — *this value's message authentication tag verified* — and the two cannot launder into each other, because a parameter demanding one subject type cannot be passed the other. It is re-exposed from `Tesl.JWT` so a program that only uses JWTs does not have to import `Tesl.Crypto` to name it.
 
 **Example:**
 
 ```tesl
-import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.sign, JWT.verify]
+import Tesl.Dict exposing [Dict, Dict.singleton, Dict.lookup]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Time exposing [time]
+import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.sign, JWT.verify, Authentic]
 
-capability authService implies jwt
+capability authService implies jwt, time
 
-record TokenClaims {
-  sub: String
-  exp: Int
-}
+fn issueToken(userId: String, secret: JwtSecret) -> JwtToken requires [authService] =
+  JWT.sign (Dict.singleton "sub" userId) secret
 
-fn issueToken(userId: String, secret: JwtSecret) -> JwtToken requires [jwt] =
-  let claims = TokenClaims { sub: userId, exp: nowMillis() + 3600000 }
-  JWT.sign claims secret
+fn authenticate(token: JwtToken, secret: JwtSecret) -> String requires [authService] =
+  let claims = check JWT.verify token secret
+  subjectOf claims
 
-fn authenticate(token: JwtToken, secret: JwtSecret) -> TokenClaims requires [jwt] =
-  JWT.verify token secret
+# Only verified claims can reach here.
+fn subjectOf(claims: Dict String String ::: Authentic claims) -> String =
+  case Dict.lookup "sub" claims of
+    Nothing -> ""
+    Something userId -> userId
 ```
 
 ### 21.3 `Tesl.HttpClient`

@@ -837,7 +837,15 @@ let stdlib_env : (string * scheme) list = [
      jwt-claims->string-keyed) always returns a string-keyed hash, and every
      consumer reads it via Dict.lookup. Pin to a CONCRETE Dict String String so
      a free result var can no longer be silently typed as Int/String/etc.
-     (security hole). Round-trips with sign. t_dict = Dict String String. *)
+     (security hole). Round-trips with sign. t_dict = Dict String String.
+
+     There is deliberately NO expiry parameter: `JWT.sign` stamps `exp` itself,
+     one hour ahead (epoch seconds, RFC 7519 — LANGUAGE-SPEC.md §21.2), and a
+     caller-supplied `exp` in the claims is a runtime error.  Tesl.Crypto's
+     design rule applies — no mechanism reaches the application author, because
+     every knob is a place where a non-expert makes a wrong call and gets a
+     plausible-looking result; a caller who can pass an expiry can pass ten
+     years.  Because it reads the clock it charges `time` as well as `jwt`. *)
   "JWT.sign",   mono (t_fun [t_dict t_string t_string; t_jwt_secret] t_jwt_token);
   "JWT.verify", mono (t_fun [t_jwt_token; t_jwt_secret] (t_dict t_string t_string));
   "JWT.decode", mono (t_fun [t_jwt_token] (t_dict t_string t_string));
@@ -995,7 +1003,6 @@ let stdlib_env : (string * scheme) list = [
   "check",   { vars = _r1_a; mono = t_fun [t_fun [_a] _a; _a] _a };
   "identity",{ vars = _r1_a; mono = t_fun [_a] _a };
   "const",   { vars = _r2_ab; mono = t_fun [_a; _b] _a };
-  "print",   { vars = _r1_a; mono = t_fun [_a] t_unit };
 ]
 (* the 312 baked IANA zone constructors, each : TimeZone *)
 @ List.map (fun c -> (c, mono t_timezone)) Tz_zones.ctor_names
@@ -1017,7 +1024,7 @@ let stdlib_env : (string * scheme) list = [
 
 (** Build an initial type environment from the stdlib list. *)
 (* ── Secret-accepting parameters ────────────────────────────────────────────
-   THE RULE, from roadmap/next/tesl_crypto.md, which subsumes the whole
+   THE RULE, from roadmap/completed/tesl_crypto.md, which subsumes the whole
    secret-accepting-sinks table:
 
      a `secret T` may be passed where a parameter explicitly marked
@@ -1322,7 +1329,14 @@ let tesl_module_exports : (string * string list) list = [
       "stubHttp"; "stubHttpFailure"; "stubHttpTimeout";
       "httpCalled"; "httpCallCount"; "httpLastBody" ] );
   ( "Tesl.JWT",
-    [ "jwt"; "JwtToken"; "JwtSecret"; "JWT.sign"; "JWT.verify"; "JWT.decode" ] );
+    (* `Authentic` is Tesl.Crypto's fact, re-exposed here because JWT.verify
+       mints it (Crypto Phase 2): a program that verifies a session token and
+       wants to DEMAND verification downstream should not have to import
+       Tesl.Crypto to name the fact.  Same predicate, two minting sites, two
+       subject types — see the note on the JWT.verify row in
+       validation_common.ml's stdlib_func_infos. *)
+    [ "jwt"; "JwtToken"; "JwtSecret"; "JWT.sign";
+      "JWT.verify"; "JWT.decode"; "Authentic" ] );
   ( "Tesl.Crypto",
     (* Password storage, message authentication, digests and secrets.
        `PasswordHash` and `Signature` appear here as TYPES only — there is no
@@ -1400,7 +1414,15 @@ let always_available_stdlib_names : string list = [
   "&&"; "||"; "!"; "not";
   (* Prelude values that need no import *)
   "True"; "False"; "Unit";
-  "check"; "identity"; "const"; "print";
+  (* `print` was REMOVED from the surface language 2026-07-29. It was ambient,
+     needed no import, and was typed `t_fun [_a] t_unit` — a bare type variable
+     that unifies with anything, INCLUDING a `secret`. So `print mySecret`
+     typechecked and wrote the plaintext to stdout, defeating the whole `secret`
+     guarantee through a name nothing in the corpus used (zero call sites) and
+     that W090 already told authors not to use. `print x` is now an unknown-name
+     error, which is a better diagnostic than a warning was. Observable output
+     goes through `telemetry`. *)
+  "check"; "identity"; "const";
   (* GDP / proof utilities (Tesl.Prelude exports, emitted with the always-on
      Prelude require) *)
   "forgetFact"; "detachFact"; "attachFact"; "andLeft"; "andRight"; "introAnd";
@@ -1524,16 +1546,25 @@ let stdlib_capabilities : (string * string list) list = [
   "requireSecret", ["envRead"];
   (* Queue infrastructure *)
   "deadJobs", ["queueRead"]; "requeue", ["queueWrite"];
-  (* JWT *)
-  "JWT.sign", ["jwt"]; "JWT.verify", ["jwt"]; "JWT.decode", ["jwt"];
+  (* JWT.  `JWT.sign` charges `time` on top of `jwt`: it stamps the `exp` claim
+     from the wall clock, and a capability marks an EFFECT (same reason
+     `nowMillis` charges it).  `JWT.verify` also reads the clock to compare
+     `exp` — see the drift note below; it is recorded, not yet propagated. *)
+  "JWT.sign", ["jwt"; "time"];
+  "JWT.verify", ["jwt"]; "JWT.decode", ["jwt"];
   (* Crypto — ONLY the two that draw randomness.  A capability marks an effect;
      sensitivity is carried by the types and the facts, which track the VALUE
      rather than the function.  So signWith/checkSignature/checkPassword/
      needsRehash/fingerprint are ungated: they are as privileged as
-     String.length.  (`jwt` above is inconsistent with that rule — JWT.sign is a
-     pure HMAC and is gated — but removing a capability would break every
+     String.length.  (`jwt` above is inconsistent with that rule — the HMAC
+     itself is pure and is gated — but removing a capability would break every
      `requires [jwt]` in the wild, so it stays as recorded debt rather than
-     being propagated here.) *)
+     being propagated here.  `JWT.sign`'s `time` is NOT that kind of debt: it
+     genuinely reads the clock.  RECORDED DRIFT, 2026-07-29: `JWT.verify` reads
+     the clock too — it compares `exp` against now — and so should charge `time`
+     by the same rule.  Adding it would put `time` in the capability closure of
+     every JWT-authenticated endpoint in the corpus, which is a bigger change
+     than the one authorised here, so it is written down rather than done.) *)
   "Crypto.hashPassword", ["random"]; "Crypto.randomToken", ["random"];
   (* HttpClient *)
   "HttpClient.get", ["httpClient"]; "HttpClient.post", ["httpClient"];

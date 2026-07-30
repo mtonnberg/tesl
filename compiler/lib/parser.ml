@@ -2943,6 +2943,29 @@ let parse_func_body s =
       let loc = expr_loc first in
       let* rest = parse_stmt_seq s in
       return (ELet { name = "_"; declared_type = None; declared_proof = None; value = first; body = rest; loc })
+    (* A TOP-LEVEL declaration ends the body; it is not another statement.
+       `secret` and `agent` are contextual keywords — ordinary IDENTs — so
+       without this arm a single-line function body swallows the declaration
+       that follows it:
+
+         fn label(city: String) -> String = city
+
+         secret ApiKey = String        -- `unknown name: secret`
+         agent A requires [bot] = …    -- `unknown name: agent`
+
+       The error names the keyword rather than the missing terminator, which
+       sends the reader looking for a typo. `record`/`type`/`fact`/`entity`/
+       `capability` are real lexer keywords and already stop here, so these two
+       were the only affected forms (verified by probing all seven).
+
+       The `peek2 = UIDENT` guard is what keeps `secret` usable as a variable:
+       `tests/jwt-tests.tesl` passes a parameter named `secret` to
+       `JWT.sign claims secret`, and that must keep parsing as an argument. Note
+       that adding these names to `is_statement_starter_ident` instead would
+       break exactly that call — the guard has to be here, where a declaration
+       and an argument are distinguishable. *)
+    | IDENT ("secret" | "agent")
+      when (match peek2 s with UIDENT _ -> true | _ -> false) -> return first
     | IDENT _ | UIDENT _ | STRING _ | INTERP _ | INT _ | BIGINT _ | FLOAT _
     | NOTHING | SOMETHING | LPAREN | LBRACE | LBRACKET | TRUE | FALSE
     | MINUS ->

@@ -18,7 +18,8 @@
          tesl-generate-prefixed-id
          tesl-test-make-proof
          tesl-test-proof-field
-         tesl-equal?)
+         tesl-equal?
+         tesl-lt? tesl-le? tesl-gt? tesl-ge?)
 
 ;; tesl-equal? — the fail-closed backstop for the `==`/`!=` operators (Eq/Ord
 ;; Stage-2 runtime guard).  A well-typed program never reaches here with a
@@ -141,3 +142,42 @@
   (define instantiated-fact
     (instantiate-proof-template/runtime proof-datum (hash field-name subj)))
   (attach named (list (detached-proof instantiated-fact (hash subj (named-value-value named))))))
+
+;; ── Ordered comparison: <  <=  >  >= ────────────────────────────────────────
+;;
+;; THE BUG THIS FIXES.  `Checker.ty_is_ord` admits `TCon ("Int"|"Float"|
+;; "PosixMillis")` and every dimensioned quantity, but generated code used to
+;; emit a BARE Racket `<`.  A `PosixMillis` is a `newtype-value` at runtime
+;; (`tesl/time.rkt` wraps it — both `nowMillis` and `secondsToPosix` do), and
+;; `raw-value` deliberately does NOT strip a newtype wrapper (the SQL layer
+;; depends on that).  So `t1 < t2` on two timestamps typechecked and then died
+;; with `<: contract violation; expected: real?  given: (newtype-value … )`.
+;;
+;; The language therefore advertised an ordering it could not perform. This is
+;; issue #28's class at a second site: that issue fixed `>=`/`<=` on a newtype
+;; column inside a SQL where-clause (`unwrap-non-null` in dsl/sql.rkt did not
+;; strip `newtype-value` while `==` did) — the identical gap existed on the plain
+;; expression path and was never closed, because `==` routes through
+;; `tesl-equal?` (which unwraps) while the ordered operators did not route
+;; anywhere at all.
+;;
+;; Fail-closed like `tesl-equal?`: a non-real operand raises a named error rather
+;; than reaching Racket's contract check, so a future checker bug is a legible
+;; message instead of a bare contract violation.
+(define (tesl-ord-operand who v)
+  (define u (if (newtype-value? v) (newtype-value-value v) v))
+  (unless (real? u)
+    (raise-user-error
+     who
+     (string-append
+      "ordered comparison needs a number, got ~e. This is a compiler bug: the "
+      "checker only admits Int, Float, PosixMillis and dimensioned quantities "
+      "here, so reaching this point means an unordered type slipped through "
+      "`ty_is_ord`. Please report it.")
+     u))
+  u)
+
+(define (tesl-lt? a b) (< (tesl-ord-operand 'tesl-lt? a) (tesl-ord-operand 'tesl-lt? b)))
+(define (tesl-le? a b) (<= (tesl-ord-operand 'tesl-le? a) (tesl-ord-operand 'tesl-le? b)))
+(define (tesl-gt? a b) (> (tesl-ord-operand 'tesl-gt? a) (tesl-ord-operand 'tesl-gt? b)))
+(define (tesl-ge? a b) (>= (tesl-ord-operand 'tesl-ge? a) (tesl-ord-operand 'tesl-ge? b)))

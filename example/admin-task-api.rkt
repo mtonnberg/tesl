@@ -62,7 +62,7 @@
 (define-checker
   (isPositive [taskId : Integer])
   #:returns [taskId : Integer ::: (Positive taskId)]
-  (thsl-src! "example/admin-task-api.tesl" 48 (list (cons 'taskId *taskId)) (lambda () (if (> *taskId 0) (accept (Positive taskId) #:value *taskId) (reject "Task id must be positive" #:http-code 400)))))
+  (thsl-src! "example/admin-task-api.tesl" 48 (list (cons 'taskId *taskId)) (lambda () (if (tesl-gt? *taskId 0) (accept (Positive taskId) #:value *taskId) (reject "Task id must be positive" #:http-code 400)))))
 
 (define-auther
   (cookieUserAuth [request : HttpRequest])

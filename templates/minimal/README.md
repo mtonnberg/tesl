@@ -55,6 +55,11 @@ handler login(credentials: Credentials) -> String requires [readSessionCookie, e
             (JwtSecret (requireEnv "SESSION_JWT_SECRET"))).value
 ```
 
+`JWT.sign` sets the expiry itself (one hour, epoch seconds per RFC 7519), so the
+capability wrapping `jwt` must also imply `time` — signing reads the clock. You
+cannot choose the expiry, and an `exp` of your own in the claims is an error
+rather than an override.
+
 Hand the returned string back as the `session` cookie. `example/learn/lesson57-jwt.tesl`
 in the Tesl repository walks through signing, verifying and the nominal types that
 keep a token and a key apart; `example/learn/lesson64-password-storage.tesl` covers

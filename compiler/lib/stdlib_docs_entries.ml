@@ -62,7 +62,6 @@ let ambient : entry list = [
     ~doc:"Applies a check function to a value, yielding the proof-carrying result.";
   f "identity" [ "x" ] ~m:"" ~doc:"Returns its argument unchanged.";
   f "const" [ "x"; "ignored" ] ~m:"" ~doc:"Returns its first argument, ignoring the second.";
-  f "print" [ "value" ] ~m:"" ~doc:"Prints a value to stdout (debugging aid).";
   f "forgetFact" [ "proven" ] ~m:"" ~doc:"Drops the proof from a proven value, keeping the raw value.";
   f "detachFact" [ "proven" ] ~m:"" ~doc:"Extracts the Fact from a proven value (value stays usable).";
   f "attachFact" [ "value"; "fact" ] ~m:"" ~doc:"Re-attaches a detached Fact to a value of the right type.";
@@ -675,9 +674,9 @@ let api_test : entry list = [
 let jwt : entry list = [
   f "JwtToken" [ "raw" ] ~m:"Tesl.JWT" ~doc:"Newtype constructor wrapping a raw JWT string.";
   f "JwtSecret" [ "raw" ] ~m:"Tesl.JWT" ~doc:"Newtype constructor wrapping a signing secret.";
-  f "JWT.sign" [ "claims"; "secret" ] ~m:"Tesl.JWT" ~doc:"Signs a string-keyed claims dict into a JwtToken.";
-  f "JWT.verify" [ "token"; "secret" ] ~m:"Tesl.JWT" ~doc:"Verifies the signature and returns the claims (fails on tampered/expired tokens).";
-  f "JWT.decode" [ "token" ] ~m:"Tesl.JWT" ~doc:"Decodes the claims WITHOUT verifying the signature — never use for auth decisions.";
+  f "JWT.sign" [ "claims"; "secret" ] ~m:"Tesl.JWT" ~doc:"Signs a string-keyed claims dict into a session JwtToken, stamping `exp` ONE HOUR ahead in epoch seconds (RFC 7519 NumericDate). The expiry is not a parameter and cannot be opted out of: a caller who can choose an expiry can choose ten years, and a JWT here is a session token — for a long-lived credential use Crypto.randomToken and store only its Crypto.fingerprint, which is revocable. An `exp` in the claims dict is an error, not an override. Requires `time` as well as `jwt` because it reads the clock. See LANGUAGE-SPEC §21.2.";
+  f "JWT.verify" [ "token"; "secret" ] ~m:"Tesl.JWT" ~doc:"Verifies the signature and returns the claims carrying an `Authentic` fact; 401 on a tampered token, or an `exp` (epoch SECONDS, RFC 7519) in the past or unreadable. Check-shaped: bind it with `check`, then read claims with Dict.lookup. Demand `Authentic` on a downstream parameter and \"trusted the cookie without verifying it\" stops compiling.";
+  f "JWT.decode" [ "token" ] ~m:"Tesl.JWT" ~doc:"Decodes the claims WITHOUT verifying the signature — never use for auth decisions. Mints no Authentic fact, which is the point.";
 ]
 
 (* ── Tesl.Crypto ─────────────────────────────────────────────────────────────
@@ -702,7 +701,7 @@ let crypto : entry list = [
   e "PasswordVerified" ~m:"Tesl.Crypto" ~kind:(KFact "fact PasswordVerified (stored: Maybe PasswordHash)")
     ~doc:"A submitted password was checked against this stored hash; minted only by Crypto.checkPassword. Reaching Authenticated still needs an explicit establish — this fact makes that step small and reviewable, it does not remove it.";
   e "Authentic" ~m:"Tesl.Crypto" ~kind:(KFact "fact Authentic (payload: String)")
-    ~doc:"This payload's message authentication tag verified; minted only by Crypto.checkSignature. Require it and \"forgot to check the signature before trusting the value\" stops compiling.";
+    ~doc:"This value's message authentication tag verified; minted by Crypto.checkSignature (about a payload String) and by JWT.verify (about the claims Dict) — one predicate, two subject types, so a parameter demanding one shape cannot be handed the other. Require it and \"forgot to check the signature before trusting the value\" stops compiling. Also exposed from Tesl.JWT.";
 
   f "Crypto.hashPassword" [ "plaintext" ] ~m:"Tesl.Crypto"
     ~doc:"Hashes a password for storage. libsodium crypto_pwhash_str — Argon2id, libsodium's INTERACTIVE parameters (currently m=64 MiB, t=2, p=1), read from the library at call time so a libsodium upgrade strengthens every new hash with no code change. Draws a random salt. Rejects input over 1024 bytes: an unbounded memory-hard hash on an unauthenticated endpoint is a denial-of-service amplifier.";

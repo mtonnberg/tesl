@@ -1,7 +1,14 @@
 # Primitive gaps + outbound-call hardening
 
-> **Status:** Next · **Effort:** S — **items 1, 2 and 4 are DONE** (2026-07-29). What remains is
-> item 3 (`Tesl.Crypto`, split out to its own file) and item 5 (`Bytes`, decided: deferred).
+> **Status:** COMPLETE (2026-07-29). Every item is resolved:
+> **1** (outbound HTTP timeout), **2** (outbound HTTP testability) and **4** (regex on `String`)
+> shipped; **3** (`Tesl.Crypto`) shipped as its own item — see
+> `roadmap/completed/tesl_crypto.md` and `roadmap/completed/tesl_crypto_phases_1_to_4.md`;
+> **5** (`Bytes`) resolved by **deciding not to do it** — the crypto surface returns hex/`String`,
+> so nothing needs a real binary type, and `Bytes` stays inert.
+>
+> Item 5 is the only one closed by a decision rather than by code, which is why this item is
+> *completed* rather than split: there is nothing left to do under it.
 
 Carved out of `roadmap/discarded/using_queues_for_ffi.md` (discarded 2026-07-29). That item
 declined FFI; these are the items from its "Phase B" that stand entirely on their own merit.

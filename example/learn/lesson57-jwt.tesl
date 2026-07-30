@@ -1,6 +1,7 @@
 module Lesson57Jwt exposing [
   makeLoginToken,
   getUserFromToken,
+  subjectOfVerifiedClaims,
   decodeToken,
   wrapAndVerify,
 ]
@@ -38,7 +39,8 @@ module Lesson57Jwt exposing [
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # Step 1 (login handler): claims are a Dict (the JWT payload is a JSON object).
-#   let token = JWT.sign (Dict.fromList [["sub", userId], ["role", "user"]]) appSecret
+# A Dict literal is a list of Tuple2 pairs, not a list of lists.
+#   let token = JWT.sign (Dict.fromList [Tuple2 "sub" userId, Tuple2 "role" "user"]) appSecret
 #   # Return token.value as the session token in a cookie or JSON response
 #
 # Step 2 (auth function for protected endpoints):
@@ -47,8 +49,10 @@ module Lesson57Jwt exposing [
 #       Nothing -> fail 401 "missing Authorization header"
 #       Something raw ->
 #         let token  = JwtToken (String.dropPrefix "Bearer " raw)
-#         # JWT.verify returns the claims Dict; read the subject back out.
-#         case Dict.lookup "sub" (JWT.verify token appSecret) of
+#         # JWT.verify returns the claims Dict — but only via `check`, which is
+#         # what turns a bad token into the 401 (see Step 3 below).
+#         let claims = check JWT.verify token appSecret
+#         case Dict.lookup "sub" claims of
 #           Nothing  -> fail 401 "token missing sub claim"
 #           Something user -> ok user ::: Authenticated user
 #
@@ -66,43 +70,87 @@ import Tesl.JWT exposing [
   JWT.sign,
   JWT.verify,
   JWT.decode,
+  Authentic,
 ]
 import Tesl.String exposing [String.length]
-import Tesl.Dict exposing [Dict.singleton, Dict.lookup]
+import Tesl.Dict exposing [Dict, Dict.singleton, Dict.lookup]
+# `time` is imported only to be named in `authCap implies jwt, time` below —
+# JWT.sign reads the clock to stamp the expiry, so the capability has to say so.
+import Tesl.Time exposing [time]
 
 # ── Step 1: Declare a capability that implies `jwt` ───────────────────────────
 #
 # `jwt` is a primitive stdlib capability. You must declare your own capability
 # that implies it, then list it in `requires [...]`.
+#
+# `time` comes along because JWT.sign stamps the expiry from the wall clock, and
+# a capability marks an effect: reading the clock is one.
 
-capability authCap implies jwt
+capability authCap implies jwt, time
 
 # ── Step 2: Sign a JWT at login time ─────────────────────────────────────────
 #
 # JWT.sign takes a claims Dict (String keys) and a JwtSecret. The claims are
 # JSON-serialized into the JWT payload; build them with Dict.singleton/fromList.
 #
-# Best practice: always include an `exp` field (expiry as posix milliseconds).
-# Without `exp`, the token never expires and cannot be revoked without changing
-# the secret.
+# YOU DO NOT SET THE EXPIRY. JWT.sign stamps `exp` one hour ahead, in epoch
+# seconds (RFC 7519), and there is no parameter for it — a caller who can choose
+# an expiry can choose ten years, and that choice is exactly the one a
+# non-expert gets wrong while the result still looks fine. Putting an `exp` in
+# the claims dict yourself is an error, not an override.
 #
-# JWT.sign is deterministic: the same claims + secret always produce the same
-# token (no random nonce). This means tokens are idempotent to generate.
+# If you need a credential that outlives a session, a JWT is the wrong tool:
+# mint a `Crypto.randomToken`, store only its `Crypto.fingerprint`, and you can
+# revoke it. An unexpiring bearer token you cannot revoke is the thing to avoid.
+# Renewing a session is just another JWT.sign.
 
 fn makeLoginToken(userId: String, secret: JwtSecret) -> JwtToken requires [authCap] =
   JWT.sign (Dict.singleton "sub" userId) secret
 
 # ── Step 3: Verify the JWT on protected endpoints ─────────────────────────────
 #
-# JWT.verify validates BOTH the HMAC-SHA256 signature AND the token expiry (exp).
-# On success: returns the claims value.
-# On failure (bad signature, expired): automatically returns check-fail 401.
+# JWT.verify validates BOTH the HMAC-SHA256 signature AND the token expiry
+# (`exp`, epoch seconds per RFC 7519 — the same unit every other JWT library
+# uses, so a Tesl token interoperates).
+# On success: returns the claims value, carrying an `Authentic` fact.
+# On failure (bad signature, expired): produces a check-fail 401.
 #
-# You do NOT need to check the return value for errors — JWT.verify propagates
-# failure as a 401 response if the token is invalid. The happy path continues.
+# An `exp` that cannot be read as a number counts as EXPIRED, not as absent.
+# Skipping the check on an unreadable expiry would accept the token forever.
+#
+# JWT.verify is therefore a CHECK-SHAPED function, and its result must be BOUND
+# with `check` before you can use it:
+#
+#     let claims = check JWT.verify token secret     # ✓ 401 propagates
+#     Dict.lookup "sub" (JWT.verify token secret)    # ✗ compile error
+#
+# The second form would hand Dict.lookup the check-fail value itself on the
+# failure path, so the 401 never happens and a bad token becomes a lookup in a
+# non-Dict. `check` is what makes the propagation real; the compiler now rejects
+# the nested form rather than letting it look like it works.
 
 fn getUserFromToken(token: JwtToken, secret: JwtSecret) -> String requires [authCap] =
-  case Dict.lookup "sub" (JWT.verify token secret) of
+  let claims = check JWT.verify token secret
+  case Dict.lookup "sub" claims of
+    Nothing -> ""
+    Something userId -> userId
+
+# ── Step 3b: DEMAND that verification happened ────────────────────────────────
+#
+# JWT.verify returns the claims carrying an `Authentic` fact. A function that
+# consumes claims can require that fact on its parameter, and then it is
+# impossible to call with claims that were never verified:
+#
+#     let claims = check JWT.verify token secret   # ✓ carries Authentic
+#     let claims = JWT.decode token                # ✗ no fact — decode does not
+#                                                  #   check the signature
+#
+# This is the difference between "we verify tokens" as a habit and as a
+# compile-time guarantee. The habit survives until someone refactors an auth
+# helper; the guarantee does not need to.
+
+fn subjectOfVerifiedClaims(claims: Dict String String ::: Authentic claims) -> String =
+  case Dict.lookup "sub" claims of
     Nothing -> ""
     Something userId -> userId
 
@@ -128,12 +176,18 @@ fn decodeToken(token: JwtToken) -> String requires [authCap] =
 # JwtToken rawStr  → creates a JwtToken wrapping rawStr
 # JwtSecret rawStr → creates a JwtSecret wrapping rawStr
 #
-# Accessing the inner string: token.value, secret.value
+# The two directions are NOT symmetric. `token.value` reads the inner string of
+# a JwtToken, because handing a token to a client is the point of having one.
+# `secret.value` does not exist: a JwtSecret is a secret, redacted in telemetry,
+# in logs and in the debugger, and an accessor would defeat all of that in one
+# call. Pass the JwtSecret itself to JWT.sign / JWT.verify, or mint it from the
+# environment with Env.requireSecret.
 
 fn wrapAndVerify(rawToken: String, rawSecret: String) -> String requires [authCap] =
   let token = JwtToken rawToken
   let secret = JwtSecret rawSecret
-  case Dict.lookup "sub" (JWT.verify token secret) of
+  let claims = check JWT.verify token secret
+  case Dict.lookup "sub" claims of
     Nothing -> ""
     Something userId -> userId
 
@@ -190,10 +244,18 @@ test "JwtToken.value retrieves the inner string" {
   expect token.value == raw
 }
 
-test "JwtSecret.value retrieves the inner key" {
+# A JwtSecret has NO `.value` — see Step 5. What survives, and is the property
+# that actually matters, is that the key is carried faithfully without ever being
+# readable: two secrets built from the same String are the same key (they sign
+# identically), and the compiler is what stops you reading either one back out.
+test "JwtSecret carries its key faithfully without exposing it" requires [authCap] {
   let key = "my-signing-key-2025"
-  let secret = JwtSecret key
-  expect secret.value == key
+  let a = JwtSecret key
+  let b = JwtSecret key
+  expect a == b
+  let ta = makeLoginToken "user" a
+  let tb = makeLoginToken "user" b
+  expect ta.value == tb.value
 }
 
 test "different secrets produce different tokens" requires [authCap] {
@@ -233,9 +295,13 @@ test "decodeToken extracts payload without verification" requires [authCap] {
 }
 
 test "wrapAndVerify: wrap raw strings and verify" requires [authCap] {
-  let secret = JwtSecret "wrap-test-key"
+  # The raw key has to come from where a real program's does — the environment,
+  # a config value, a literal here — not out of the JwtSecret. `secret.value`
+  # does not exist.
+  let rawSecret = "wrap-test-key"
+  let secret = JwtSecret rawSecret
   let token = makeLoginToken "wrapped-user" secret
-  let result = wrapAndVerify token.value secret.value
+  let result = wrapAndVerify token.value rawSecret
   expect String.length result > 0
 }
 

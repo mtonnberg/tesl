@@ -29,7 +29,9 @@ let jwt_imports =
   "import Tesl.Prelude exposing [Int, String, Bool, List, Unit]\n\
    import Tesl.Maybe exposing [Maybe(..)]\n\
    import Tesl.Dict exposing [Dict, Dict.singleton, Dict.lookup]\n\
-   import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.sign, JWT.verify, JWT.decode]\n"
+   import Tesl.Time exposing [time]\n\
+   import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.sign, JWT.verify, JWT.decode, Authentic]\n"
+
 
 let module_ ?(name="M") ?(exports="") ?(extra="") body =
   Printf.sprintf "module %s exposing [%s]\n%s%s\n%s"
@@ -81,7 +83,7 @@ let check_err_contains name src substr =
 let test_parse_jwt_import () =
   (* Tesl.JWT is recognized as a known module *)
   let src = module_ ~exports:"makeToken" {|
-capability myAuth implies jwt
+capability myAuth implies jwt, time
 
 fn makeToken(userId: String, secret: JwtSecret) requires [myAuth] -> JwtToken =
   JWT.sign (Dict.singleton "sub" userId) secret
@@ -90,7 +92,7 @@ fn makeToken(userId: String, secret: JwtSecret) requires [myAuth] -> JwtToken =
 
 let test_parse_jwt_sign () =
   let src = module_ ~exports:"sign" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 fn sign(claims: Dict String String, secret: JwtSecret) requires [myJwt] -> JwtToken =
   JWT.sign claims secret
@@ -99,10 +101,11 @@ fn sign(claims: Dict String String, secret: JwtSecret) requires [myJwt] -> JwtTo
 
 let test_parse_jwt_verify () =
   let src = module_ ~exports:"verify" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 fn verify(token: JwtToken, secret: JwtSecret) requires [myJwt] -> String =
-  case Dict.lookup "sub" (JWT.verify token secret) of
+  let verified = check JWT.verify token secret
+  case Dict.lookup "sub" verified of
     Nothing -> ""
     Something s -> s
 |} in
@@ -110,7 +113,7 @@ fn verify(token: JwtToken, secret: JwtSecret) requires [myJwt] -> String =
 
 let test_parse_jwt_decode () =
   let src = module_ ~exports:"decode" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 fn decode(token: JwtToken) requires [myJwt] -> String =
   case Dict.lookup "sub" (JWT.decode token) of
@@ -135,10 +138,11 @@ fn wrapToken(s: String) -> JwtToken =
 
 let test_parse_jwt_token_type_annotation () =
   let src = module_ ~exports:"process" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 fn process(t: JwtToken, s: JwtSecret) requires [myJwt] -> String =
-  case Dict.lookup "sub" (JWT.verify t s) of
+  let verified = check JWT.verify t s
+  case Dict.lookup "sub" verified of
     Nothing -> ""
     Something u -> u
 |} in
@@ -147,20 +151,21 @@ fn process(t: JwtToken, s: JwtSecret) requires [myJwt] -> String =
 
 let test_parse_jwt_capability_declare () =
   let src = module_ ~exports:"" {|
-capability myAuth implies jwt
+capability myAuth implies jwt, time
 |} in
   let _ = compile_ok "parse_jwt_cap_declare" src in
   ()
 
 let test_parse_jwt_multiple_functions () =
   let src = module_ ~exports:"sign, verify" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 fn sign(claims: Dict String String, secret: JwtSecret) requires [myJwt] -> JwtToken =
   JWT.sign claims secret
 
 fn verify(token: JwtToken, secret: JwtSecret) requires [myJwt] -> String =
-  case Dict.lookup "sub" (JWT.verify token secret) of
+  let verified = check JWT.verify token secret
+  case Dict.lookup "sub" verified of
     Nothing -> ""
     Something s -> s
 |} in
@@ -181,7 +186,7 @@ let test_parse_jwt_import_exposing () =
 let test_types_sign_returns_jwttoken () =
   (* JWT.sign must return JwtToken, not String *)
   let src = module_ ~exports:"getToken" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 fn getToken(secret: JwtSecret) requires [myJwt] -> JwtToken =
   JWT.sign (Dict.singleton "sub" "user:123") secret
@@ -191,7 +196,7 @@ fn getToken(secret: JwtSecret) requires [myJwt] -> JwtToken =
 let test_types_jwttoken_not_string () =
   (* JwtToken should not be assignable to String directly *)
   let src = module_ ~exports:"bad" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 fn bad(token: JwtToken, secret: JwtSecret) requires [myJwt] -> Int =
   String.length token
@@ -215,7 +220,7 @@ let test_types_sign_requires_dict_claims () =
   (* A8: JWT.sign's claims arg is pinned to Dict String String; a bare Int is
      now rejected (was accepted as a free var — the sign-side of the hole). *)
   let src = module_ ~exports:"signWithInt" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 fn signWithInt(n: Int, secret: JwtSecret) requires [myJwt] -> JwtToken =
   JWT.sign n secret
@@ -227,7 +232,7 @@ let test_types_verify_result_is_dict () =
      return as a bare String and returning the raw claims is now rejected
      (was accepted as a free var — the security hole). *)
   let src = module_ ~exports:"verifyToString" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 fn verifyToString(token: JwtToken, secret: JwtSecret) requires [myJwt] -> String =
   JWT.verify token secret
@@ -237,7 +242,7 @@ fn verifyToString(token: JwtToken, secret: JwtSecret) requires [myJwt] -> String
 let test_types_decode_result_is_dict () =
   (* A8: JWT.decode's result is likewise pinned to Dict String String. *)
   let src = module_ ~exports:"decodeToString" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 fn decodeToString(token: JwtToken) requires [myJwt] -> String =
   JWT.decode token
@@ -248,10 +253,11 @@ let test_types_verify_result_via_lookup () =
   (* A8 positive: the sound corpus consumption — read a claim via Dict.lookup —
      still compiles under the pinned Dict String String result. *)
   let src = module_ ~exports:"getSub" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 fn getSub(token: JwtToken, secret: JwtSecret) requires [myJwt] -> String =
-  case Dict.lookup "sub" (JWT.verify token secret) of
+  let verified = check JWT.verify token secret
+  case Dict.lookup "sub" verified of
     Nothing -> ""
     Something u -> u
 |} in
@@ -262,7 +268,7 @@ let test_types_sign_non_dict_rejected () =
   (* A8 cross-seam: JWT.sign requires Dict String String; a bare String claims
      arg is rejected (String vs Dict String String). *)
   let src = module_ ~exports:"s" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 fn s(u: String, sec: JwtSecret) requires [myJwt] -> JwtToken =
   JWT.sign u sec
@@ -273,11 +279,12 @@ let test_types_sign_dict_roundtrip () =
   (* A8 cross-seam positive: Dict.singleton "sub" x round-trips through
      sign → verify → Dict.lookup "sub". *)
   let src = module_ ~exports:"roundtrip" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 fn roundtrip(u: String, sec: JwtSecret) requires [myJwt] -> String =
   let token = JWT.sign (Dict.singleton "sub" u) sec
-  case Dict.lookup "sub" (JWT.verify token sec) of
+  let verified = check JWT.verify token sec
+  case Dict.lookup "sub" verified of
     Nothing -> ""
     Something s -> s
 |} in
@@ -301,10 +308,11 @@ fn mk(s: String) -> JwtSecret =
 
 let test_types_verify_uses_token_arg () =
   let src = module_ ~exports:"v" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 fn v(t: JwtToken, s: JwtSecret) requires [myJwt] -> String =
-  case Dict.lookup "sub" (JWT.verify t s) of
+  let verified = check JWT.verify t s
+  case Dict.lookup "sub" verified of
     Nothing -> ""
     Something u -> u
 |} in
@@ -314,11 +322,12 @@ fn v(t: JwtToken, s: JwtSecret) requires [myJwt] -> String =
 
 let test_types_chain_sign_and_verify () =
   let src = module_ ~exports:"roundtrip" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 fn roundtrip(claims: Dict String String, secret: JwtSecret) requires [myJwt] -> String =
   let token = JWT.sign claims secret
-  case Dict.lookup "sub" (JWT.verify token secret) of
+  let verified = check JWT.verify token secret
+  case Dict.lookup "sub" verified of
     Nothing -> ""
     Something u -> u
 |} in
@@ -328,7 +337,7 @@ fn roundtrip(claims: Dict String String, secret: JwtSecret) requires [myJwt] -> 
 let test_types_decode_no_secret_needed () =
   (* JWT.decode only takes a token, not a secret *)
   let src = module_ ~exports:"d" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 fn d(t: JwtToken) requires [myJwt] -> String =
   case Dict.lookup "sub" (JWT.decode t) of
@@ -360,7 +369,7 @@ record Config {
 
 let test_types_jwt_capability_in_list () =
   let src = module_ ~exports:"sign" {|
-capability authCap implies jwt
+capability authCap implies jwt, time
 
 fn sign(claims: Dict String String, s: JwtSecret) requires [authCap] -> JwtToken =
   JWT.sign claims s
@@ -370,7 +379,7 @@ fn sign(claims: Dict String String, s: JwtSecret) requires [authCap] -> JwtToken
 
 let test_types_multiple_jwt_ops_in_fn () =
   let src = module_ ~exports:"signAndDecode" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 fn signAndDecode(claims: Dict String String, secret: JwtSecret) requires [myJwt] -> String =
   let token = JWT.sign claims secret
@@ -391,7 +400,7 @@ fn makeSecret(prefix: String, key: String) -> JwtSecret =
 
 let test_types_verify_result_in_let () =
   let src = module_ ~exports:"getUser" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 fn getUser(token: JwtToken, secret: JwtSecret) requires [myJwt] -> String =
   let claims = JWT.verify token secret
@@ -402,7 +411,193 @@ fn getUser(token: JwtToken, secret: JwtSecret) requires [myJwt] -> String =
   let _ = compile_ok "types_verify_in_let" src in
   ()
 
+(* ── 2b. The `exp` contract: a fixed TTL, and no knob to get it wrong ─────────
+
+   `JWT.sign` stamps `exp` itself — one hour ahead, in epoch SECONDS (RFC 7519) —
+   and there is deliberately no parameter for it.  The history is worth keeping:
+   for a while there was a `JWT.signWithExpiry claims expiresAt secret`, added
+   because `Dict String String` claims could not express a numeric `exp` at all.
+   It was removed once the unit was hard-fixed, because an expiry PARAMETER
+   violates the rule the whole crypto surface is built on — no mechanism reaches
+   the application author, since every knob is a place where a non-expert makes a
+   wrong call and gets a plausible-looking result.  A caller who can pass an
+   expiry can pass ten years.  These tests pin that the knob is gone and stays
+   gone. *)
+
+let test_types_sign_exp_as_int_rejected () =
+  (* NEGATIVE: the shape a program reaches for first — a numeric `exp` in the
+     claims dict — does not typecheck, because the dict's values are String.  So
+     the only `exp` a Tesl program can even write is a String, and that is
+     rejected at run time by JWT.sign's guard. *)
+  let src = module_ ~exports:"mk" {|
+capability myJwt implies jwt, time
+
+fn mk(secret: JwtSecret) requires [myJwt] -> JwtToken =
+  JWT.sign (Dict.singleton "exp" 1234) secret
+|} in
+  check_err_contains "types_sign_exp_as_int" src "String"
+
+let test_types_sign_with_expiry_is_gone () =
+  (* The knob must stay removed: importing it is an unknown export.  This is the
+     regression guard against someone "helpfully" reintroducing a way to choose
+     an expiry. *)
+  let src = "module M exposing []\n\
+             import Tesl.JWT exposing [jwt, JWT.signWithExpiry]\n\
+             import Tesl.Prelude exposing [String]\n" in
+  check_err_contains "types_sign_with_expiry_gone" src "JWT.signWithExpiry"
+
+let test_types_sign_no_exp_is_the_only_shape () =
+  (* POSITIVE: claims without `exp` — the only shape there is, and the one the
+     whole corpus uses.  The expiry arrives without the caller doing anything. *)
+  let src = module_ ~exports:"mk" {|
+capability myJwt implies jwt, time
+
+fn mk(userId: String, secret: JwtSecret) requires [myJwt] -> JwtToken =
+  JWT.sign (Dict.singleton "sub" userId) secret
+|} in
+  let _ = compile_ok "types_sign_no_exp" src in
+  ()
+
+let test_types_sign_roundtrip_through_verify () =
+  let src = module_ ~exports:"roundtrip" {|
+capability myJwt implies jwt, time
+
+fn roundtrip(u: String, sec: JwtSecret) requires [myJwt] -> String =
+  let token = JWT.sign (Dict.singleton "sub" u) sec
+  let claims = check JWT.verify token sec
+  case Dict.lookup "sub" claims of
+    Nothing -> ""
+    Something s -> s
+|} in
+  let _ = compile_ok "types_sign_roundtrip" src in
+  ()
+
+(* ── 2c. The `Authentic` fact on JWT.verify (Crypto Phase 2) ──────────────────
+
+   `JWT.verify` returns the claims Dict carrying `Authentic`, so a consumer can
+   DEMAND that verification happened.  The negative below is the point of the
+   whole exercise: `JWT.decode` reads the payload without checking the signature,
+   mints no fact, and therefore cannot reach a function that requires one. *)
+
+let test_proof_verify_mints_authentic () =
+  let src = module_ ~exports:"readSub, gate" {|
+capability myJwt implies jwt, time
+
+fn readSub(claims: Dict String String ::: Authentic claims) -> String =
+  case Dict.lookup "sub" claims of
+    Nothing -> ""
+    Something s -> s
+
+fn gate(token: JwtToken, secret: JwtSecret) requires [myJwt] -> String =
+  let claims = check JWT.verify token secret
+  readSub claims
+|} in
+  let _ = compile_ok "proof_verify_mints_authentic" src in
+  ()
+
+let test_proof_decode_mints_no_authentic () =
+  (* NEGATIVE: decode does not verify, so its claims cannot satisfy Authentic. *)
+  let src = module_ ~exports:"readSub, gate" {|
+capability myJwt implies jwt, time
+
+fn readSub(claims: Dict String String ::: Authentic claims) -> String =
+  case Dict.lookup "sub" claims of
+    Nothing -> ""
+    Something s -> s
+
+fn gate(token: JwtToken) requires [myJwt] -> String =
+  let claims = JWT.decode token
+  readSub claims
+|} in
+  check_err_contains "proof_decode_mints_no_authentic" src "Authentic"
+
+let test_proof_unverified_dict_rejected () =
+  (* NEGATIVE: a claims dict the program simply built cannot satisfy Authentic
+     either — this is the "trusted the cookie without verifying it" shape. *)
+  let src = module_ ~exports:"readSub, gate" {|
+capability myJwt implies jwt, time
+
+fn readSub(claims: Dict String String ::: Authentic claims) -> String =
+  case Dict.lookup "sub" claims of
+    Nothing -> ""
+    Something s -> s
+
+fn gate(raw: String) -> String =
+  let claims = Dict.singleton "sub" raw
+  readSub claims
+|} in
+  check_err_contains "proof_unverified_dict_rejected" src "Authentic"
+
+let test_proof_authentic_exposed_from_jwt () =
+  (* A JWT program must not have to import Tesl.Crypto to name the fact its own
+     verifier mints. *)
+  let src = "module M exposing []\n\
+             import Tesl.JWT exposing [jwt, JWT.verify, Authentic]\n\
+             import Tesl.Prelude exposing [String]\n" in
+  let _ = compile_ok "proof_authentic_exposed_from_jwt" src in
+  ()
+
+let test_proof_authentic_subject_types_do_not_collide () =
+  (* Crypto.checkSignature mints `Authentic` about a payload String; JWT.verify
+     mints it about a claims Dict.  Feeding one to a consumer expecting the other
+     is a TYPE error, so the shared predicate cannot launder between them. *)
+  let src = "module M exposing [trustPayload, bothMint]\n\
+             import Tesl.Prelude exposing [String]\n\
+             import Tesl.Dict exposing [Dict, Dict.lookup]\n\
+             import Tesl.Maybe exposing [Maybe(..)]\n\
+             import Tesl.Time exposing [time]\n\
+             import Tesl.Crypto exposing [Authentic]\n\
+             import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.verify]\n\
+             \n\
+             capability myJwt implies jwt, time\n\
+             \n\
+             fn trustPayload(payload: String ::: Authentic payload) -> String =\n\
+             \032 payload\n\
+             \n\
+             fn bothMint(token: JwtToken, secret: JwtSecret) requires [myJwt] -> String =\n\
+             \032 let claims = check JWT.verify token secret\n\
+             \032 trustPayload claims\n" in
+  check_err_contains "proof_authentic_no_collide" src "cannot unify"
+
 (* ── 3. Capability tests ─────────────────────────────────────────────────── *)
+
+let test_cap_sign_requires_time () =
+  (* JWT.sign stamps `exp` from the wall clock, so it charges `time` on top of
+     `jwt` — a capability marks an EFFECT, and reading the clock is one.  A
+     capability that implies only `jwt` is no longer enough. *)
+  let src = module_ ~exports:"mk" {|
+capability jwtOnly implies jwt
+
+fn mk(userId: String, secret: JwtSecret) requires [jwtOnly] -> JwtToken =
+  JWT.sign (Dict.singleton "sub" userId) secret
+|} in
+  check_err_contains "cap_sign_requires_time" src "time"
+
+let test_cap_sign_requires_jwt_not_just_time () =
+  let src = module_ ~exports:"mk" {|
+capability clockOnly implies time
+
+fn mk(userId: String, secret: JwtSecret) requires [clockOnly] -> JwtToken =
+  JWT.sign (Dict.singleton "sub" userId) secret
+|} in
+  check_err_contains "cap_sign_requires_jwt_not_time" src "jwt"
+
+let test_cap_verify_does_not_need_time () =
+  (* Recorded drift, pinned so a change is deliberate: JWT.verify also reads the
+     clock (it compares `exp` against now) but is NOT charged `time` today —
+     propagating that would put `time` in the closure of every JWT-authenticated
+     endpoint.  See the note in type_system.ml's stdlib_capabilities. *)
+  let src = module_ ~exports:"v" {|
+capability jwtOnly implies jwt
+
+fn v(t: JwtToken, s: JwtSecret) requires [jwtOnly] -> String =
+  let claims = check JWT.verify t s
+  case Dict.lookup "sub" claims of
+    Nothing -> ""
+    Something u -> u
+|} in
+  let _ = compile_ok "cap_verify_no_time" src in
+  ()
 
 let test_cap_sign_requires_jwt () =
   let src = module_ ~exports:"badSign" {|
@@ -414,7 +609,8 @@ fn badSign(claims: Dict String String, secret: JwtSecret) -> JwtToken =
 let test_cap_verify_requires_jwt () =
   let src = module_ ~exports:"badVerify" {|
 fn badVerify(token: JwtToken, secret: JwtSecret) -> String =
-  case Dict.lookup "sub" (JWT.verify token secret) of
+  let verified = check JWT.verify token secret
+  case Dict.lookup "sub" verified of
     Nothing -> ""
     Something u -> u
 |} in
@@ -431,7 +627,7 @@ fn badDecode(token: JwtToken) -> String =
 
 let test_cap_sign_ok_with_jwt () =
   let src = module_ ~exports:"goodSign" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 fn goodSign(claims: Dict String String, secret: JwtSecret) requires [myJwt] -> JwtToken =
   JWT.sign claims secret
@@ -441,10 +637,11 @@ fn goodSign(claims: Dict String String, secret: JwtSecret) requires [myJwt] -> J
 
 let test_cap_verify_ok_with_jwt () =
   let src = module_ ~exports:"goodVerify" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 fn goodVerify(token: JwtToken, secret: JwtSecret) requires [myJwt] -> String =
-  case Dict.lookup "sub" (JWT.verify token secret) of
+  let verified = check JWT.verify token secret
+  case Dict.lookup "sub" verified of
     Nothing -> ""
     Something u -> u
 |} in
@@ -453,7 +650,7 @@ fn goodVerify(token: JwtToken, secret: JwtSecret) requires [myJwt] -> String =
 
 let test_cap_decode_ok_with_jwt () =
   let src = module_ ~exports:"goodDecode" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 fn goodDecode(token: JwtToken) requires [myJwt] -> String =
   case Dict.lookup "sub" (JWT.decode token) of
@@ -465,7 +662,7 @@ fn goodDecode(token: JwtToken) requires [myJwt] -> String =
 
 let test_cap_direct_jwt_cap () =
   let src = module_ ~exports:"sign" {|
-fn sign(claims: Dict String String, s: JwtSecret) requires [jwt] -> JwtToken =
+fn sign(claims: Dict String String, s: JwtSecret) requires [jwt, time] -> JwtToken =
   JWT.sign claims s
 |} in
   let _ = compile_ok "cap_direct_jwt" src in
@@ -474,7 +671,7 @@ fn sign(claims: Dict String String, s: JwtSecret) requires [jwt] -> JwtToken =
 let test_cap_implies_chain () =
   (* A capability implying another which implies jwt *)
   let src = module_ ~exports:"sign" {|
-capability cryptoCap implies jwt
+capability cryptoCap implies jwt, time
 capability authCap implies cryptoCap
 
 fn sign(claims: Dict String String, s: JwtSecret) requires [authCap] -> JwtToken =
@@ -485,7 +682,7 @@ fn sign(claims: Dict String String, s: JwtSecret) requires [authCap] -> JwtToken
 
 let test_cap_handler_requires_jwt () =
   let src = module_ ~exports:"tokenHandler" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 handler tokenHandler(secret: String) -> String
   requires [myJwt] =
@@ -508,7 +705,7 @@ handler tokenHandler(secret: String) -> String
 
 let test_cap_worker_requires_jwt () =
   let src = module_ ~exports:"" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 worker tokenRefresh(secret: JwtSecret) requires [myJwt] -> String =
   let t = JWT.sign (Dict.singleton "sub" "refresh:user") secret
@@ -519,7 +716,7 @@ worker tokenRefresh(secret: JwtSecret) requires [myJwt] -> String =
 
 let test_cap_fn_requires_jwt () =
   let src = module_ ~exports:"makeToken" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 fn makeToken(userId: String, secret: JwtSecret) requires [myJwt] -> JwtToken =
   JWT.sign (Dict.singleton "sub" userId) secret
@@ -565,7 +762,7 @@ fn mk(s: String) -> JwtSecret =
 
 let test_module_jwt_racket_output () =
   let src = module_ ~exports:"sign" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 fn sign(claims: Dict String String, s: JwtSecret) requires [myJwt] -> JwtToken =
   JWT.sign claims s
@@ -577,13 +774,14 @@ fn sign(claims: Dict String String, s: JwtSecret) requires [myJwt] -> JwtToken =
 
 let test_module_jwt_all_exports_usable () =
   let src = module_ ~exports:"sign, verify, decode, mkSecret, mkToken" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 fn sign(claims: Dict String String, s: JwtSecret) requires [myJwt] -> JwtToken =
   JWT.sign claims s
 
 fn verify(t: JwtToken, s: JwtSecret) requires [myJwt] -> String =
-  case Dict.lookup "sub" (JWT.verify t s) of
+  let verified = check JWT.verify t s
+  case Dict.lookup "sub" verified of
     Nothing -> ""
     Something u -> u
 
@@ -605,7 +803,7 @@ fn mkToken(s: String) -> JwtToken =
 
 let test_emit_jwt_sign_output () =
   let src = module_ ~exports:"sign" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 fn sign(claims: Dict String String, s: JwtSecret) requires [myJwt] -> JwtToken =
   JWT.sign claims s
@@ -614,10 +812,11 @@ fn sign(claims: Dict String String, s: JwtSecret) requires [myJwt] -> JwtToken =
 
 let test_emit_jwt_verify_output () =
   let src = module_ ~exports:"verify" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 fn verify(t: JwtToken, s: JwtSecret) requires [myJwt] -> String =
-  case Dict.lookup "sub" (JWT.verify t s) of
+  let verified = check JWT.verify t s
+  case Dict.lookup "sub" verified of
     Nothing -> ""
     Something u -> u
 |} in
@@ -625,7 +824,7 @@ fn verify(t: JwtToken, s: JwtSecret) requires [myJwt] -> String =
 
 let test_emit_jwt_decode_output () =
   let src = module_ ~exports:"decode" {|
-capability myJwt implies jwt
+capability myJwt implies jwt, time
 
 fn decode(t: JwtToken) requires [myJwt] -> String =
   case Dict.lookup "sub" (JWT.decode t) of
@@ -684,6 +883,17 @@ let () =
       Alcotest.test_case "multiple jwt ops in fn" `Quick test_types_multiple_jwt_ops_in_fn;
       Alcotest.test_case "jwt with string concat" `Quick test_types_jwt_with_string_concat;
       Alcotest.test_case "verify result in let" `Quick test_types_verify_result_in_let;
+      Alcotest.test_case "numeric exp in the claims dict is rejected" `Quick test_types_sign_exp_as_int_rejected;
+      Alcotest.test_case "the signWithExpiry knob stays removed" `Quick test_types_sign_with_expiry_is_gone;
+      Alcotest.test_case "claims with no exp are the only shape" `Quick test_types_sign_no_exp_is_the_only_shape;
+      Alcotest.test_case "sign round-trips through verify" `Quick test_types_sign_roundtrip_through_verify;
+    ];
+    "proofs", [
+      Alcotest.test_case "verify mints Authentic" `Quick test_proof_verify_mints_authentic;
+      Alcotest.test_case "decode mints no Authentic" `Quick test_proof_decode_mints_no_authentic;
+      Alcotest.test_case "a hand-built claims dict cannot satisfy Authentic" `Quick test_proof_unverified_dict_rejected;
+      Alcotest.test_case "Authentic is exposed from Tesl.JWT" `Quick test_proof_authentic_exposed_from_jwt;
+      Alcotest.test_case "Authentic subject types do not collide with Crypto's" `Quick test_proof_authentic_subject_types_do_not_collide;
     ];
     "capabilities", [
       Alcotest.test_case "sign requires jwt" `Quick test_cap_sign_requires_jwt;
@@ -700,10 +910,14 @@ let () =
       Alcotest.test_case "fn requires jwt" `Quick test_cap_fn_requires_jwt;
       Alcotest.test_case "fn missing jwt" `Quick test_cap_fn_missing_jwt;
       Alcotest.test_case "fn callee missing jwt" `Quick test_cap_missing_in_fn_callee;
+      Alcotest.test_case "sign requires time (it stamps the expiry)" `Quick test_cap_sign_requires_time;
+      Alcotest.test_case "sign requires jwt, not just time" `Quick test_cap_sign_requires_jwt_not_just_time;
+      Alcotest.test_case "verify does not need time (recorded drift)" `Quick test_cap_verify_does_not_need_time;
     ];
     "module", [
       Alcotest.test_case "Tesl.JWT is known module" `Quick test_module_jwt_is_known;
       Alcotest.test_case "unknown export errors" `Quick test_module_jwt_unknown_export_errors;
+
       Alcotest.test_case "emits jwt.rkt require" `Quick test_module_jwt_emits_require;
       Alcotest.test_case "Racket output correct" `Quick test_module_jwt_racket_output;
       Alcotest.test_case "all exports usable" `Quick test_module_jwt_all_exports_usable;

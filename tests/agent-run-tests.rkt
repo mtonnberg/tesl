@@ -102,30 +102,30 @@
 (define/pow
   (validateEcho [argsJson : String])
   #:returns EchoArgs
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 138 (list (cons 'argsJson *argsJson)) (lambda () (raw-value (decodeAs "EchoArgs" *argsJson)))))
+  (thsl-src! "tests/agent-run-tests.tesl" 138 (list (cons 'argsJson *argsJson)) (lambda () (raw-value (decodeAs "EchoArgs" *argsJson)))))
 
 (define/pow
   (dispatchEcho [args : EchoArgs])
   #:returns String
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 141 (list (cons 'args *args)) (lambda () (raw-value (tesl_import_String_concat "echo: " (tesl-dot/runtime args 'text 'EchoArgs))))))
+  (thsl-src! "tests/agent-run-tests.tesl" 141 (list (cons 'args *args)) (lambda () (raw-value (tesl_import_String_concat "echo: " (tesl-dot/runtime args 'text 'EchoArgs))))))
 
 (define/pow
   (publishStep [event : String])
   #:capabilities [runPubSub]
   #:returns Unit
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 147 (list (cons 'event *event)) (lambda () (publish-event! RunSteps (format "~a" "run-1") (Step event)))))
+  (thsl-src! "tests/agent-run-tests.tesl" 147 (list (cons 'event *event)) (lambda () (publish-event! RunSteps (format "~a" "run-1") (Step event)))))
 
 (define-handler
   (startRun [req : RunJob])
   #:capabilities [runWrite runQueue]
   #:returns (Exists [logId : String] (? RunLog _entity ::: (FromDb (Id == logId) _entity)))
-  (let ([logId (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 153 (list (cons 'req *req)) (lambda () "run-1"))]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 154 (list (cons 'logId *logId) (cons 'req *req)) (lambda () (call-with-queue-transaction (lambda () (begin (enqueue! RunQueue (RunJob #:prompt (raw-value req.prompt))) (pack ([logId]) (insert-one! RunLog (tesl-hash 'id logId))))))))))
+  (let ([logId (thsl-src! "tests/agent-run-tests.tesl" 153 (list (cons 'req *req)) (lambda () "run-1"))]) (thsl-src! "tests/agent-run-tests.tesl" 154 (list (cons 'logId *logId) (cons 'req *req)) (lambda () (call-with-queue-transaction (lambda () (begin (enqueue! RunQueue (RunJob #:prompt (raw-value req.prompt))) (pack ([logId]) (insert-one! RunLog (tesl-hash 'id logId))))))))))
 
 (define/pow
   (runWorkerHandler [job : RunJob ::: (FromQueue (Id == jobId) job)])
   #:capabilities [runWorker]
   #:returns RunJob
-  (let ([echoTool (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 164 (list (cons 'job *job)) (lambda () (raw-value (tool "echo" "Echo back some text" "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}},\"required\":[\"text\"]}" validateEcho dispatchEcho))))]) (let ([steps (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 165 (list (cons 'echoTool *echoTool) (cons 'job *job)) (lambda () (list (raw-value (toolUseStep "echo" "call_1" "{\"text\":\"hi\"}")) (raw-value (textStep "All done.")))))]) (let ([agent (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 166 (list (cons 'steps *steps) (cons 'echoTool *echoTool) (cons 'job *job)) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockToolProvider (raw-value steps))) (raw-value "You are a runner.") (raw-value 256)) (list *echoTool))))]) (let ([reply (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 167 (list (cons 'agent *agent) (cons 'steps *steps) (cons 'echoTool *echoTool) (cons 'job *job)) (lambda () (raw-value (agentRun (raw-value agent) (raw-value job.prompt) publishStep))))]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 168 (list (cons 'reply *reply) (cons 'agent *agent) (cons 'steps *steps) (cons 'echoTool *echoTool) (cons 'job *job)) (lambda () *job)))))))
+  (let ([echoTool (thsl-src! "tests/agent-run-tests.tesl" 164 (list (cons 'job *job)) (lambda () (raw-value (tool "echo" "Echo back some text" "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}},\"required\":[\"text\"]}" validateEcho dispatchEcho))))]) (let ([steps (thsl-src! "tests/agent-run-tests.tesl" 165 (list (cons 'echoTool *echoTool) (cons 'job *job)) (lambda () (list (raw-value (toolUseStep "echo" "call_1" "{\"text\":\"hi\"}")) (raw-value (textStep "All done.")))))]) (let ([agent (thsl-src! "tests/agent-run-tests.tesl" 166 (list (cons 'steps *steps) (cons 'echoTool *echoTool) (cons 'job *job)) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockToolProvider (raw-value steps))) (raw-value "You are a runner.") (raw-value 256)) (list *echoTool))))]) (let ([reply (thsl-src! "tests/agent-run-tests.tesl" 167 (list (cons 'agent *agent) (cons 'steps *steps) (cons 'echoTool *echoTool) (cons 'job *job)) (lambda () (raw-value (agentRun (raw-value agent) (raw-value job.prompt) publishStep))))]) (thsl-src! "tests/agent-run-tests.tesl" 168 (list (cons 'reply *reply) (cons 'agent *agent) (cons 'steps *steps) (cons 'echoTool *echoTool) (cons 'job *job)) (lambda () *job)))))))
 
 (define AgentRunServer-sse-routes
   (list (list (list "events" "runs" #f) #f RunSteps 2 (list (cons 2 (sse-key-capture __inline_capturer_runId_1))))))
@@ -150,24 +150,24 @@
         (call-with-api-test-subscriptions
           (lambda ()
             (with-capabilities (runRead runWrite runPubSub runQueue runWorker)
-              (define stream (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 190 (list) (lambda () (subscribe AgentRunServer-sse-routes (list "events" "runs" "run-1") #:headers (tesl-hash) #:name "/events/runs/run-1"))))
-              (define posted (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 192 (list (cons 'stream stream)) (lambda () (dispatch-api-test-request AgentRunServer 'post (list "runs") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "prompt") "please echo") #:capabilities (list runRead runWrite runPubSub runQueue runWorker)))))
-              (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 193 (list (cons 'posted posted) (cons 'stream stream)) (lambda () (statusOk (raw-value (api-test-field-access-ref posted 'status)))))))
-              (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 194 (list (cons 'posted posted) (cons 'stream stream)) (lambda () (pendingJobCount RunQueue)))) 1)
-              (define done (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 197 (list (cons 'posted posted) (cons 'stream stream)) (lambda () (processNextJob RunQueue))))
-              (define job (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 198 (list (cons 'done done) (cons 'posted posted) (cons 'stream stream)) (lambda () (expectJobOk (raw-value done)))))
-              (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 199 (list (cons 'job job) (cons 'done done) (cons 'posted posted) (cons 'stream stream)) (lambda () (api-test-field-access-ref job 'prompt)))) "please echo")
-              (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 200 (list (cons 'job job) (cons 'done done) (cons 'posted posted) (cons 'stream stream)) (lambda () (pendingJobCount RunQueue)))) 0)
-              (define events (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 203 (list (cons 'job job) (cons 'done done) (cons 'posted posted) (cons 'stream stream)) (lambda () (collect (raw-value stream) #:count 2 #:timeout-ms 2000))))
-              (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 204 (list (cons 'events events) (cons 'job job) (cons 'done done) (cons 'posted posted) (cons 'stream stream)) (lambda () (hasLength 2 (raw-value events))))))
-              (define first (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 208 (list (cons 'events events) (cons 'job job) (cons 'done done) (cons 'posted posted) (cons 'stream stream)) (lambda () (arrayAt 0 (raw-value events)))))
-              (define second (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 209 (list (cons 'first first) (cons 'events events) (cons 'job job) (cons 'done done) (cons 'posted posted) (cons 'stream stream)) (lambda () (arrayAt 1 (raw-value events)))))
-              (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 210 (list (cons 'second second) (cons 'first first) (cons 'events events) (cons 'job job) (cons 'done done) (cons 'posted posted) (cons 'stream stream)) (lambda () (fieldAt "tag" (raw-value first))))) "Step")
-              (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 211 (list (cons 'second second) (cons 'first first) (cons 'events events) (cons 'job job) (cons 'done done) (cons 'posted posted) (cons 'stream stream)) (lambda () (fieldAt "tag" (raw-value second))))) "Step")
-              (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 212 (list (cons 'second second) (cons 'first first) (cons 'events events) (cons 'job job) (cons 'done done) (cons 'posted posted) (cons 'stream stream)) (lambda () (api-test-field-access-ref (api-test-field-access-ref first 'fields) 'content)))) "tool: echo")
-              (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 213 (list (cons 'second second) (cons 'first first) (cons 'events events) (cons 'job job) (cons 'done done) (cons 'posted posted) (cons 'stream stream)) (lambda () (api-test-field-access-ref (api-test-field-access-ref second 'fields) 'content)))) "text: All done.")
-              (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 214 (list (cons 'second second) (cons 'first first) (cons 'events events) (cons 'job job) (cons 'done done) (cons 'posted posted) (cons 'stream stream)) (lambda () (includesWhere (tesl-hash 'tag "Step" 'fields (tesl-hash 'content "tool: echo")) (raw-value events))))))
-              (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-run-tests.tesl" 215 (list (cons 'second second) (cons 'first first) (cons 'events events) (cons 'job job) (cons 'done done) (cons 'posted posted) (cons 'stream stream)) (lambda () (includesWhere (tesl-hash 'tag "Step" 'fields (tesl-hash 'content "text: All done.")) (raw-value events))))))
+              (define stream (thsl-src! "tests/agent-run-tests.tesl" 190 (list) (lambda () (subscribe AgentRunServer-sse-routes (list "events" "runs" "run-1") #:headers (tesl-hash) #:name "/events/runs/run-1"))))
+              (define posted (thsl-src! "tests/agent-run-tests.tesl" 192 (list (cons 'stream stream)) (lambda () (dispatch-api-test-request AgentRunServer 'post (list "runs") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "prompt") "please echo") #:capabilities (list runRead runWrite runPubSub runQueue runWorker)))))
+              (check-true (raw-value (thsl-src! "tests/agent-run-tests.tesl" 193 (list (cons 'posted posted) (cons 'stream stream)) (lambda () (statusOk (raw-value (api-test-field-access-ref posted 'status)))))))
+              (check-equal? (raw-value (thsl-src! "tests/agent-run-tests.tesl" 194 (list (cons 'posted posted) (cons 'stream stream)) (lambda () (pendingJobCount RunQueue)))) 1)
+              (define done (thsl-src! "tests/agent-run-tests.tesl" 197 (list (cons 'posted posted) (cons 'stream stream)) (lambda () (processNextJob RunQueue))))
+              (define job (thsl-src! "tests/agent-run-tests.tesl" 198 (list (cons 'done done) (cons 'posted posted) (cons 'stream stream)) (lambda () (expectJobOk (raw-value done)))))
+              (check-equal? (raw-value (thsl-src! "tests/agent-run-tests.tesl" 199 (list (cons 'job job) (cons 'done done) (cons 'posted posted) (cons 'stream stream)) (lambda () (api-test-field-access-ref job 'prompt)))) "please echo")
+              (check-equal? (raw-value (thsl-src! "tests/agent-run-tests.tesl" 200 (list (cons 'job job) (cons 'done done) (cons 'posted posted) (cons 'stream stream)) (lambda () (pendingJobCount RunQueue)))) 0)
+              (define events (thsl-src! "tests/agent-run-tests.tesl" 203 (list (cons 'job job) (cons 'done done) (cons 'posted posted) (cons 'stream stream)) (lambda () (collect (raw-value stream) #:count 2 #:timeout-ms 2000))))
+              (check-true (raw-value (thsl-src! "tests/agent-run-tests.tesl" 204 (list (cons 'events events) (cons 'job job) (cons 'done done) (cons 'posted posted) (cons 'stream stream)) (lambda () (hasLength 2 (raw-value events))))))
+              (define first (thsl-src! "tests/agent-run-tests.tesl" 208 (list (cons 'events events) (cons 'job job) (cons 'done done) (cons 'posted posted) (cons 'stream stream)) (lambda () (arrayAt 0 (raw-value events)))))
+              (define second (thsl-src! "tests/agent-run-tests.tesl" 209 (list (cons 'first first) (cons 'events events) (cons 'job job) (cons 'done done) (cons 'posted posted) (cons 'stream stream)) (lambda () (arrayAt 1 (raw-value events)))))
+              (check-equal? (raw-value (thsl-src! "tests/agent-run-tests.tesl" 210 (list (cons 'second second) (cons 'first first) (cons 'events events) (cons 'job job) (cons 'done done) (cons 'posted posted) (cons 'stream stream)) (lambda () (fieldAt "tag" (raw-value first))))) "Step")
+              (check-equal? (raw-value (thsl-src! "tests/agent-run-tests.tesl" 211 (list (cons 'second second) (cons 'first first) (cons 'events events) (cons 'job job) (cons 'done done) (cons 'posted posted) (cons 'stream stream)) (lambda () (fieldAt "tag" (raw-value second))))) "Step")
+              (check-equal? (raw-value (thsl-src! "tests/agent-run-tests.tesl" 212 (list (cons 'second second) (cons 'first first) (cons 'events events) (cons 'job job) (cons 'done done) (cons 'posted posted) (cons 'stream stream)) (lambda () (api-test-field-access-ref (api-test-field-access-ref first 'fields) 'content)))) "tool: echo")
+              (check-equal? (raw-value (thsl-src! "tests/agent-run-tests.tesl" 213 (list (cons 'second second) (cons 'first first) (cons 'events events) (cons 'job job) (cons 'done done) (cons 'posted posted) (cons 'stream stream)) (lambda () (api-test-field-access-ref (api-test-field-access-ref second 'fields) 'content)))) "text: All done.")
+              (check-true (raw-value (thsl-src! "tests/agent-run-tests.tesl" 214 (list (cons 'second second) (cons 'first first) (cons 'events events) (cons 'job job) (cons 'done done) (cons 'posted posted) (cons 'stream stream)) (lambda () (includesWhere (tesl-hash 'tag "Step" 'fields (tesl-hash 'content "tool: echo")) (raw-value events))))))
+              (check-true (raw-value (thsl-src! "tests/agent-run-tests.tesl" 215 (list (cons 'second second) (cons 'first first) (cons 'events events) (cons 'job job) (cons 'done done) (cons 'posted posted) (cons 'stream stream)) (lambda () (includesWhere (tesl-hash 'tag "Step" 'fields (tesl-hash 'content "text: All done.")) (raw-value events))))))
             )
           ))
       ))

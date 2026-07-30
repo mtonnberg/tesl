@@ -32,42 +32,42 @@
 (define-checker
   (checkPositive [n : Integer])
   #:returns [n : Integer ::: (Positive n)]
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 30 (list (cons 'n *n)) (lambda () (if (> *n 0) (accept (Positive n) #:value *n) (reject "must be positive" #:http-code 400)))))
+  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 30 (list (cons 'n *n)) (lambda () (if (tesl-gt? *n 0) (accept (Positive n) #:value *n) (reject "must be positive" #:http-code 400)))))
 
 (define-checker
   (checkSmall [n : Integer])
   #:returns [n : Integer ::: (Small n)]
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 36 (list (cons 'n *n)) (lambda () (if (< *n 100) (accept (Small n) #:value *n) (reject "must be < 100" #:http-code 400)))))
+  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 36 (list (cons 'n *n)) (lambda () (if (tesl-lt? *n 100) (accept (Small n) #:value *n) (reject "must be < 100" #:http-code 400)))))
 
 (define-checker
   (checkPosAndSmall [n : Integer])
   #:returns [n : Integer ::: ((Positive n) && (Small n))]
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 42 (list (cons 'n *n)) (lambda () ((check-and checkPositive checkSmall) n))))
+  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 42 (list (cons 'n *n)) (lambda () ((check-and checkPositive checkSmall) n))))
 
 (define-checker
   (checkIsAdmin [userId : String])
   #:returns [userId : String ::: (IsAdmin userId)]
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 45 (list (cons 'userId *userId)) (lambda () (if (tesl_import_String_startsWith *userId "admin") (accept (IsAdmin userId) #:value *userId) (reject "not admin" #:http-code 403)))))
+  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 45 (list (cons 'userId *userId)) (lambda () (if (tesl_import_String_startsWith *userId "admin") (accept (IsAdmin userId) #:value *userId) (reject "not admin" #:http-code 403)))))
 
 (define-auther
   (simpleAuth [request : HttpRequest])
   #:returns [user : String ::: (Authenticated user)]
-  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 56 (list (cons 'request *request)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 57 (list) (lambda () (reject "not authenticated" #:http-code 401)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 58 (list (cons 'userId userId)) (lambda () (accept (Authenticated userId) #:value *userId))))])))))
+  (thsl-src-control! "tests/critical-review-48-auth-api-tests.tesl" 56 (list (cons 'request *request)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 57 (list) (lambda () (reject "not authenticated" #:http-code 401)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 58 (list (cons 'userId userId)) (lambda () (accept (Authenticated userId) #:value *userId))))])))))
 
 (define-auther
   (checkedAuth [request : HttpRequest])
   #:returns [user : String ::: (Authenticated user)]
-  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 62 (list (cons 'request *request)) (lambda () (let ([tesl-case-1 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Nothing)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 63 (list) (lambda () (reject "not authenticated" #:http-code 401)))] [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-1) 'value)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 65 (list (cons 'userId userId)) (lambda () (let/check ([tesl-checked-2 (tesl_import_String_requireNonEmpty userId)]) (let ([validId tesl-checked-2]) (accept (Authenticated validId) #:value *validId))))))])))))
+  (thsl-src-control! "tests/critical-review-48-auth-api-tests.tesl" 62 (list (cons 'request *request)) (lambda () (let ([tesl-case-1 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Nothing)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 63 (list) (lambda () (reject "not authenticated" #:http-code 401)))] [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-1) 'value)]) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 65 (list (cons 'userId userId)) (lambda () (let/check ([tesl-checked-2 (tesl_import_String_requireNonEmpty userId)]) (let ([validId tesl-checked-2]) (accept (Authenticated validId) #:value *validId))))))])))))
 
 (define-auther
   (adminAuth [request : HttpRequest])
   #:returns [user : String ::: ((IsAdmin user) && (Authenticated user))]
-  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 70 (list (cons 'request *request)) (lambda () (let ([tesl-case-3 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Nothing)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 71 (list) (lambda () (reject "not authenticated" #:http-code 401)))] [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-3) 'value)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 73 (list (cons 'userId userId)) (lambda () (let ([tesl-proof-binding-4 (checkIsAdmin userId)]) (let ([admin (forget-proof tesl-proof-binding-4)] [p (detach-all-proof tesl-proof-binding-4)]) (accept (p && (Authenticated admin)) #:value *admin))))))])))))
+  (thsl-src-control! "tests/critical-review-48-auth-api-tests.tesl" 70 (list (cons 'request *request)) (lambda () (let ([tesl-case-3 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Nothing)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 71 (list) (lambda () (reject "not authenticated" #:http-code 401)))] [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-3) 'value)]) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 73 (list (cons 'userId userId)) (lambda () (let ([tesl-proof-binding-4 (checkIsAdmin userId)]) (let ([admin (forget-proof tesl-proof-binding-4)] [p (detach-all-proof tesl-proof-binding-4)]) (accept (p && (Authenticated admin)) #:value *admin))))))])))))
 
 (define-auther
   (conjunctionAuth [request : HttpRequest])
   #:returns [user : String ::: ((Authenticated user) && (HasValidSession user))]
-  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 79 (list (cons 'request *request)) (lambda () (let ([tesl-case-5 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Nothing)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 80 (list) (lambda () (reject "not authenticated" #:http-code 401)))] [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-5) 'value)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 82 (list (cons 'userId userId)) (lambda () (let ([tesl-case-6 (raw-value (tesl_import_Dict_lookup "session" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'Nothing)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 83 (list) (lambda () (reject "no session" #:http-code 401)))] [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'Something)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 85 (list) (lambda () (accept ((Authenticated userId) && (HasValidSession userId)) #:value *userId)))])))))])))))
+  (thsl-src-control! "tests/critical-review-48-auth-api-tests.tesl" 79 (list (cons 'request *request)) (lambda () (let ([tesl-case-5 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Nothing)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 80 (list) (lambda () (reject "not authenticated" #:http-code 401)))] [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-5) 'value)]) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 82 (list (cons 'userId userId)) (lambda () (let ([tesl-case-6 (raw-value (tesl_import_Dict_lookup "session" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'Nothing)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 83 (list) (lambda () (reject "no session" #:http-code 401)))] [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'Something)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 85 (list) (lambda () (accept ((Authenticated userId) && (HasValidSession userId)) #:value *userId)))])))))])))))
 
 (define-record ValueRequest
   [value : Integer]
@@ -130,32 +130,32 @@
 (define-handler
   (doublePositive [user : String ::: (Authenticated user)] [req : ValueRequest])
   #:returns ValueResponse
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 145 (list (cons 'user *user) (cons 'req *req)) (lambda () (let/check ([tesl-checked-7 (checkPositive (raw-value req.value))]) (let ([v tesl-checked-7]) (ValueResponse #:result (* (raw-value v) 2) #:label "doubled"))))))
+  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 145 (list (cons 'user *user) (cons 'req *req)) (lambda () (let/check ([tesl-checked-7 (checkPositive (raw-value req.value))]) (let ([v tesl-checked-7]) (ValueResponse #:result (* (raw-value v) 2) #:label "doubled"))))))
 
 (define-handler
   (tripleConj [user : String ::: (Authenticated user)] [req : ValueRequest])
   #:returns ConjResponse
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 150 (list (cons 'user *user) (cons 'req *req)) (lambda () (let/check ([tesl-checked-8 (checkPosAndSmall (raw-value req.value))]) (let ([v tesl-checked-8]) (ConjResponse #:tripled (* (raw-value v) 3)))))))
+  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 150 (list (cons 'user *user) (cons 'req *req)) (lambda () (let/check ([tesl-checked-8 (checkPosAndSmall (raw-value req.value))]) (let ([v tesl-checked-8]) (ConjResponse #:tripled (* (raw-value v) 3)))))))
 
 (define-handler
   (inlineConj [user : String ::: (Authenticated user)] [req : ValueRequest])
   #:returns ConjResponse
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 155 (list (cons 'user *user) (cons 'req *req)) (lambda () (let/check ([tesl-checked-9 ((check-and checkPositive checkSmall) (raw-value req.value))]) (let ([v tesl-checked-9]) (ConjResponse #:tripled (* (raw-value v) 3)))))))
+  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 155 (list (cons 'user *user) (cons 'req *req)) (lambda () (let/check ([tesl-checked-9 ((check-and checkPositive checkSmall) (raw-value req.value))]) (let ([v tesl-checked-9]) (ConjResponse #:tripled (* (raw-value v) 3)))))))
 
 (define-handler
   (whoami [user : String ::: (Authenticated user)])
   #:returns AuthInfoResponse
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 159 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
+  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 159 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
 
 (define-handler
   (whoamiAdmin [user : String ::: ((IsAdmin user) && (Authenticated user))])
   #:returns AuthInfoResponse
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 162 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
+  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 162 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
 
 (define-handler
   (conjAuthWhoami [user : String ::: ((Authenticated user) && (HasValidSession user))])
   #:returns AuthInfoResponse
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 166 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
+  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 166 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
 
 (define R48AuthServer-sse-routes '())
 (define-api R48AuthApi
@@ -219,8 +219,8 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 220 (list) (lambda () (dispatch-api-test-request R48AuthServer 'post (list "double") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "value") 5) #:capabilities '()))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 221 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 401)
+            (define resp (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 220 (list) (lambda () (dispatch-api-test-request R48AuthServer 'post (list "double") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "value") 5) #:capabilities '()))))
+            (check-equal? (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 221 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 401)
           ))
       ))
   )
@@ -233,9 +233,9 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 225 (list) (lambda () (dispatch-api-test-request R48AuthServer 'post (list "double") #:cookie "user=alice" #:headers (tesl-hash) #:body (tesl-hash (string->symbol "value") 5) #:capabilities '()))))
-            (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 226 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 227 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'result)))) 10)
+            (define resp (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 225 (list) (lambda () (dispatch-api-test-request R48AuthServer 'post (list "double") #:cookie "user=alice" #:headers (tesl-hash) #:body (tesl-hash (string->symbol "value") 5) #:capabilities '()))))
+            (check-true (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 226 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
+            (check-equal? (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 227 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'result)))) 10)
           ))
       ))
   )
@@ -248,8 +248,8 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 231 (list) (lambda () (dispatch-api-test-request R48AuthServer 'post (list "double") #:cookie "user=alice" #:headers (tesl-hash) #:body (tesl-hash (string->symbol "value") 0) #:capabilities '()))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 232 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 400)
+            (define resp (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 231 (list) (lambda () (dispatch-api-test-request R48AuthServer 'post (list "double") #:cookie "user=alice" #:headers (tesl-hash) #:body (tesl-hash (string->symbol "value") 0) #:capabilities '()))))
+            (check-equal? (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 232 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 400)
           ))
       ))
   )
@@ -262,8 +262,8 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 236 (list) (lambda () (dispatch-api-test-request R48AuthServer 'post (list "double") #:cookie "user=alice" #:headers (tesl-hash) #:body (tesl-hash (string->symbol "value") -5) #:capabilities '()))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 237 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 400)
+            (define resp (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 236 (list) (lambda () (dispatch-api-test-request R48AuthServer 'post (list "double") #:cookie "user=alice" #:headers (tesl-hash) #:body (tesl-hash (string->symbol "value") -5) #:capabilities '()))))
+            (check-equal? (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 237 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 400)
           ))
       ))
   )
@@ -276,9 +276,9 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 245 (list) (lambda () (dispatch-api-test-request R48AuthServer 'post (list "triple-conj") #:cookie "user=alice" #:headers (tesl-hash) #:body (tesl-hash (string->symbol "value") 50) #:capabilities '()))))
-            (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 246 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 247 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'tripled)))) 150)
+            (define resp (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 245 (list) (lambda () (dispatch-api-test-request R48AuthServer 'post (list "triple-conj") #:cookie "user=alice" #:headers (tesl-hash) #:body (tesl-hash (string->symbol "value") 50) #:capabilities '()))))
+            (check-true (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 246 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
+            (check-equal? (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 247 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'tripled)))) 150)
           ))
       ))
   )
@@ -291,9 +291,9 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 251 (list) (lambda () (dispatch-api-test-request R48AuthServer 'post (list "triple-conj") #:cookie "user=alice" #:headers (tesl-hash) #:body (tesl-hash (string->symbol "value") 1) #:capabilities '()))))
-            (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 252 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 253 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'tripled)))) 3)
+            (define resp (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 251 (list) (lambda () (dispatch-api-test-request R48AuthServer 'post (list "triple-conj") #:cookie "user=alice" #:headers (tesl-hash) #:body (tesl-hash (string->symbol "value") 1) #:capabilities '()))))
+            (check-true (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 252 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
+            (check-equal? (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 253 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'tripled)))) 3)
           ))
       ))
   )
@@ -306,9 +306,9 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 257 (list) (lambda () (dispatch-api-test-request R48AuthServer 'post (list "triple-conj") #:cookie "user=alice" #:headers (tesl-hash) #:body (tesl-hash (string->symbol "value") 99) #:capabilities '()))))
-            (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 258 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 259 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'tripled)))) 297)
+            (define resp (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 257 (list) (lambda () (dispatch-api-test-request R48AuthServer 'post (list "triple-conj") #:cookie "user=alice" #:headers (tesl-hash) #:body (tesl-hash (string->symbol "value") 99) #:capabilities '()))))
+            (check-true (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 258 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
+            (check-equal? (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 259 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'tripled)))) 297)
           ))
       ))
   )
@@ -321,8 +321,8 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 263 (list) (lambda () (dispatch-api-test-request R48AuthServer 'post (list "triple-conj") #:cookie "user=alice" #:headers (tesl-hash) #:body (tesl-hash (string->symbol "value") 0) #:capabilities '()))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 264 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 400)
+            (define resp (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 263 (list) (lambda () (dispatch-api-test-request R48AuthServer 'post (list "triple-conj") #:cookie "user=alice" #:headers (tesl-hash) #:body (tesl-hash (string->symbol "value") 0) #:capabilities '()))))
+            (check-equal? (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 264 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 400)
           ))
       ))
   )
@@ -335,8 +335,8 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 268 (list) (lambda () (dispatch-api-test-request R48AuthServer 'post (list "triple-conj") #:cookie "user=alice" #:headers (tesl-hash) #:body (tesl-hash (string->symbol "value") 100) #:capabilities '()))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 269 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 400)
+            (define resp (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 268 (list) (lambda () (dispatch-api-test-request R48AuthServer 'post (list "triple-conj") #:cookie "user=alice" #:headers (tesl-hash) #:body (tesl-hash (string->symbol "value") 100) #:capabilities '()))))
+            (check-equal? (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 269 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 400)
           ))
       ))
   )
@@ -349,9 +349,9 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 273 (list) (lambda () (dispatch-api-test-request R48AuthServer 'post (list "inline-conj") #:cookie "user=bob" #:headers (tesl-hash) #:body (tesl-hash (string->symbol "value") 50) #:capabilities '()))))
-            (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 274 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 275 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'tripled)))) 150)
+            (define resp (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 273 (list) (lambda () (dispatch-api-test-request R48AuthServer 'post (list "inline-conj") #:cookie "user=bob" #:headers (tesl-hash) #:body (tesl-hash (string->symbol "value") 50) #:capabilities '()))))
+            (check-true (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 274 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
+            (check-equal? (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 275 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'tripled)))) 150)
           ))
       ))
   )
@@ -364,8 +364,8 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 279 (list) (lambda () (dispatch-api-test-request R48AuthServer 'post (list "inline-conj") #:cookie "user=bob" #:headers (tesl-hash) #:body (tesl-hash (string->symbol "value") 0) #:capabilities '()))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 280 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 400)
+            (define resp (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 279 (list) (lambda () (dispatch-api-test-request R48AuthServer 'post (list "inline-conj") #:cookie "user=bob" #:headers (tesl-hash) #:body (tesl-hash (string->symbol "value") 0) #:capabilities '()))))
+            (check-equal? (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 280 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 400)
           ))
       ))
   )
@@ -378,9 +378,9 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 288 (list) (lambda () (dispatch-api-test-request R48AuthServer 'get (list "whoami-checked") #:cookie "user=alice" #:headers (tesl-hash) #:capabilities '()))))
-            (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 289 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 290 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'userId)))) "alice")
+            (define resp (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 288 (list) (lambda () (dispatch-api-test-request R48AuthServer 'get (list "whoami-checked") #:cookie "user=alice" #:headers (tesl-hash) #:capabilities '()))))
+            (check-true (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 289 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
+            (check-equal? (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 290 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'userId)))) "alice")
           ))
       ))
   )
@@ -393,8 +393,8 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 294 (list) (lambda () (dispatch-api-test-request R48AuthServer 'get (list "whoami-checked") #:cookie "user=" #:headers (tesl-hash) #:capabilities '()))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 295 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 400)
+            (define resp (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 294 (list) (lambda () (dispatch-api-test-request R48AuthServer 'get (list "whoami-checked") #:cookie "user=" #:headers (tesl-hash) #:capabilities '()))))
+            (check-equal? (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 295 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 400)
           ))
       ))
   )
@@ -407,8 +407,8 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 299 (list) (lambda () (dispatch-api-test-request R48AuthServer 'get (list "whoami-checked") #:headers (tesl-hash) #:capabilities '()))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 300 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 401)
+            (define resp (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 299 (list) (lambda () (dispatch-api-test-request R48AuthServer 'get (list "whoami-checked") #:headers (tesl-hash) #:capabilities '()))))
+            (check-equal? (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 300 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 401)
           ))
       ))
   )
@@ -421,9 +421,9 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 304 (list) (lambda () (dispatch-api-test-request R48AuthServer 'get (list "whoami-admin") #:cookie "user=admin_alice" #:headers (tesl-hash) #:capabilities '()))))
-            (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 305 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 306 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'userId)))) "admin_alice")
+            (define resp (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 304 (list) (lambda () (dispatch-api-test-request R48AuthServer 'get (list "whoami-admin") #:cookie "user=admin_alice" #:headers (tesl-hash) #:capabilities '()))))
+            (check-true (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 305 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
+            (check-equal? (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 306 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'userId)))) "admin_alice")
           ))
       ))
   )
@@ -436,8 +436,8 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 310 (list) (lambda () (dispatch-api-test-request R48AuthServer 'get (list "whoami-admin") #:cookie "user=alice" #:headers (tesl-hash) #:capabilities '()))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 311 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 403)
+            (define resp (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 310 (list) (lambda () (dispatch-api-test-request R48AuthServer 'get (list "whoami-admin") #:cookie "user=alice" #:headers (tesl-hash) #:capabilities '()))))
+            (check-equal? (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 311 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 403)
           ))
       ))
   )
@@ -450,8 +450,8 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 315 (list) (lambda () (dispatch-api-test-request R48AuthServer 'get (list "whoami-admin") #:headers (tesl-hash) #:capabilities '()))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 316 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 401)
+            (define resp (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 315 (list) (lambda () (dispatch-api-test-request R48AuthServer 'get (list "whoami-admin") #:headers (tesl-hash) #:capabilities '()))))
+            (check-equal? (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 316 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 401)
           ))
       ))
   )
@@ -464,9 +464,9 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 324 (list) (lambda () (dispatch-api-test-request R48ConjAuthServer 'get (list "conj-whoami") #:cookie "user=alice; session=abc123" #:headers (tesl-hash) #:capabilities '()))))
-            (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 325 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 326 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'userId)))) "alice")
+            (define resp (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 324 (list) (lambda () (dispatch-api-test-request R48ConjAuthServer 'get (list "conj-whoami") #:cookie "user=alice; session=abc123" #:headers (tesl-hash) #:capabilities '()))))
+            (check-true (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 325 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
+            (check-equal? (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 326 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'userId)))) "alice")
           ))
       ))
   )
@@ -479,8 +479,8 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 330 (list) (lambda () (dispatch-api-test-request R48ConjAuthServer 'get (list "conj-whoami") #:cookie "user=alice" #:headers (tesl-hash) #:capabilities '()))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 331 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 401)
+            (define resp (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 330 (list) (lambda () (dispatch-api-test-request R48ConjAuthServer 'get (list "conj-whoami") #:cookie "user=alice" #:headers (tesl-hash) #:capabilities '()))))
+            (check-equal? (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 331 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 401)
           ))
       ))
   )
@@ -493,8 +493,8 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 335 (list) (lambda () (dispatch-api-test-request R48ConjAuthServer 'get (list "conj-whoami") #:headers (tesl-hash) #:capabilities '()))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 336 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 401)
+            (define resp (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 335 (list) (lambda () (dispatch-api-test-request R48ConjAuthServer 'get (list "conj-whoami") #:headers (tesl-hash) #:capabilities '()))))
+            (check-equal? (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 336 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 401)
           ))
       ))
   )
@@ -503,22 +503,22 @@
 (define-auther
   (conjManualAuth [request : HttpRequest])
   #:returns [user : String ::: ((Authenticated user) && (HasValidSession user))]
-  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 345 (list (cons 'request *request)) (lambda () (let ([tesl-case-10 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-10) (eq? (adt-value-variant *tesl-case-10) 'Nothing)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 346 (list) (lambda () (reject "no cookie" #:http-code 401)))] [(and (adt-value? *tesl-case-10) (eq? (adt-value-variant *tesl-case-10) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-10) 'value)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 348 (list (cons 'userId userId)) (lambda () (let ([tesl-case-11 (raw-value (tesl_import_Dict_lookup "session" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-11) (eq? (adt-value-variant *tesl-case-11) 'Nothing)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 349 (list) (lambda () (reject "no session" #:http-code 401)))] [(and (adt-value? *tesl-case-11) (eq? (adt-value-variant *tesl-case-11) 'Something)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 351 (list) (lambda () (accept ((Authenticated userId) && (HasValidSession userId)) #:value *userId)))])))))])))))
+  (thsl-src-control! "tests/critical-review-48-auth-api-tests.tesl" 345 (list (cons 'request *request)) (lambda () (let ([tesl-case-10 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-10) (eq? (adt-value-variant *tesl-case-10) 'Nothing)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 346 (list) (lambda () (reject "no cookie" #:http-code 401)))] [(and (adt-value? *tesl-case-10) (eq? (adt-value-variant *tesl-case-10) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-10) 'value)]) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 348 (list (cons 'userId userId)) (lambda () (let ([tesl-case-11 (raw-value (tesl_import_Dict_lookup "session" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-11) (eq? (adt-value-variant *tesl-case-11) 'Nothing)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 349 (list) (lambda () (reject "no session" #:http-code 401)))] [(and (adt-value? *tesl-case-11) (eq? (adt-value-variant *tesl-case-11) 'Something)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 351 (list) (lambda () (accept ((Authenticated userId) && (HasValidSession userId)) #:value *userId)))])))))])))))
 
 (define-auther
   (conjCheckAuth [request : HttpRequest])
   #:returns [user : String ::: ((Authenticated user) && (IsAdmin user))]
-  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 355 (list (cons 'request *request)) (lambda () (let ([tesl-case-12 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-12) (eq? (adt-value-variant *tesl-case-12) 'Nothing)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 356 (list) (lambda () (reject "no cookie" #:http-code 401)))] [(and (adt-value? *tesl-case-12) (eq? (adt-value-variant *tesl-case-12) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-12) 'value)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 358 (list (cons 'userId userId)) (lambda () (let/check ([tesl-checked-13 (checkIsAdmin userId)]) (let ([admin tesl-checked-13]) (accept ((Authenticated admin) && (IsAdmin admin)) #:value *admin))))))])))))
+  (thsl-src-control! "tests/critical-review-48-auth-api-tests.tesl" 355 (list (cons 'request *request)) (lambda () (let ([tesl-case-12 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-12) (eq? (adt-value-variant *tesl-case-12) 'Nothing)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 356 (list) (lambda () (reject "no cookie" #:http-code 401)))] [(and (adt-value? *tesl-case-12) (eq? (adt-value-variant *tesl-case-12) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-12) 'value)]) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 358 (list (cons 'userId userId)) (lambda () (let/check ([tesl-checked-13 (checkIsAdmin userId)]) (let ([admin tesl-checked-13]) (accept ((Authenticated admin) && (IsAdmin admin)) #:value *admin))))))])))))
 
 (define-handler
   (conjManualWhoami [user : String ::: ((Authenticated user) && (HasValidSession user))])
   #:returns AuthInfoResponse
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 363 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
+  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 363 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
 
 (define-handler
   (conjCheckWhoami [user : String ::: ((Authenticated user) && (IsAdmin user))])
   #:returns AuthInfoResponse
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 367 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
+  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 367 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
 
 (define R48ConjInAuthServer-sse-routes '())
 (define-api R48ConjInAuthApi
@@ -547,9 +547,9 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 385 (list) (lambda () (dispatch-api-test-request R48ConjInAuthServer 'get (list "conj-manual") #:cookie "user=alice; session=abc" #:headers (tesl-hash) #:capabilities '()))))
-            (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 386 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 387 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'userId)))) "alice")
+            (define resp (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 385 (list) (lambda () (dispatch-api-test-request R48ConjInAuthServer 'get (list "conj-manual") #:cookie "user=alice; session=abc" #:headers (tesl-hash) #:capabilities '()))))
+            (check-true (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 386 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
+            (check-equal? (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 387 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'userId)))) "alice")
           ))
       ))
   )
@@ -562,8 +562,8 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 391 (list) (lambda () (dispatch-api-test-request R48ConjInAuthServer 'get (list "conj-manual") #:cookie "user=alice" #:headers (tesl-hash) #:capabilities '()))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 392 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 401)
+            (define resp (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 391 (list) (lambda () (dispatch-api-test-request R48ConjInAuthServer 'get (list "conj-manual") #:cookie "user=alice" #:headers (tesl-hash) #:capabilities '()))))
+            (check-equal? (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 392 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 401)
           ))
       ))
   )
@@ -576,8 +576,8 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 396 (list) (lambda () (dispatch-api-test-request R48ConjInAuthServer 'get (list "conj-manual") #:headers (tesl-hash) #:capabilities '()))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 397 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 401)
+            (define resp (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 396 (list) (lambda () (dispatch-api-test-request R48ConjInAuthServer 'get (list "conj-manual") #:headers (tesl-hash) #:capabilities '()))))
+            (check-equal? (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 397 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 401)
           ))
       ))
   )
@@ -590,9 +590,9 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 401 (list) (lambda () (dispatch-api-test-request R48ConjInAuthServer 'get (list "conj-check") #:cookie "user=admin_bob" #:headers (tesl-hash) #:capabilities '()))))
-            (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 402 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 403 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'userId)))) "admin_bob")
+            (define resp (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 401 (list) (lambda () (dispatch-api-test-request R48ConjInAuthServer 'get (list "conj-check") #:cookie "user=admin_bob" #:headers (tesl-hash) #:capabilities '()))))
+            (check-true (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 402 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
+            (check-equal? (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 403 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'userId)))) "admin_bob")
           ))
       ))
   )
@@ -605,8 +605,8 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 407 (list) (lambda () (dispatch-api-test-request R48ConjInAuthServer 'get (list "conj-check") #:cookie "user=bob" #:headers (tesl-hash) #:capabilities '()))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 408 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 403)
+            (define resp (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 407 (list) (lambda () (dispatch-api-test-request R48ConjInAuthServer 'get (list "conj-check") #:cookie "user=bob" #:headers (tesl-hash) #:capabilities '()))))
+            (check-equal? (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 408 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 403)
           ))
       ))
   )
@@ -619,8 +619,8 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 412 (list) (lambda () (dispatch-api-test-request R48ConjInAuthServer 'get (list "conj-check") #:headers (tesl-hash) #:capabilities '()))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-48-auth-api-tests.tesl" 413 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 401)
+            (define resp (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 412 (list) (lambda () (dispatch-api-test-request R48ConjInAuthServer 'get (list "conj-check") #:headers (tesl-hash) #:capabilities '()))))
+            (check-equal? (raw-value (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 413 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'status)))) 401)
           ))
       ))
   )

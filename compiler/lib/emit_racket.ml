@@ -3432,7 +3432,14 @@ and emit_binop ctx ~loc op left right =
     | BMod -> "remainder"
     | BConcat -> "string-append"  (* handled specially below — needs emit_val_arg *)
     | BAnd -> "and" | BOr -> "or" | BEq -> "equal?" | BNeq -> "not equal?"
-    | BLt -> "<" | BLe -> "<=" | BGt -> ">" | BGe -> ">="
+    (* Ordered comparison routes through the runtime helpers, which STRIP a
+       newtype wrapper before comparing.  A bare Racket `<` here typechecked and
+       then died on `PosixMillis` — `ty_is_ord` admits it, `tesl/time.rkt` wraps
+       it, and `raw-value` deliberately does not unwrap a newtype (the SQL layer
+       relies on that).  See tesl/private/runtime.rkt: this is issue #28's class
+       at the expression path, where `==` was already safe via `tesl-equal?` and
+       the ordered operators were not routed anywhere. *)
+    | BLt -> "tesl-lt?" | BLe -> "tesl-le?" | BGt -> "tesl-gt?" | BGe -> "tesl-ge?"
   in
   (* For comparison/arithmetic, bare EVar needs raw-value unwrapping,
      and GDP-returning stdlib calls also need raw-value in this context *)

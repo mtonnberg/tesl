@@ -1,7 +1,13 @@
 # `Tesl.Crypto` — hashing, message authentication, password storage, secrets
 
-> **Status:** Phases 0-4 LANDED 2026-07-29 · Phase 5 extracted to
+> **Status:** COMPLETE — Phases 0-4 landed 2026-07-29 · Phase 5 extracted to
 > `roadmap/next/response_metadata_and_cookies.md` (blocked, and not on crypto).
+>
+> Phase 2's last piece — **retrofitting the `Authentic` fact onto `JWT.verify`** — was initially
+> missed and reported as landed when it was not; it is now implemented additively (a `RetNamedPack`
+> row, so no call site changed). Verified that `Authentic` does **not** launder between
+> `Crypto.checkSignature`'s `String` payload subject and `JWT.verify`'s `Dict` claims subject: the
+> mismatch is a *type* error raised before the proof layer is consulted.
 > **Effort:** a six-phase ladder, each phase independently shippable.
 >
 > **What landed, and where to read about it:**

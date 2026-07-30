@@ -38,12 +38,26 @@ let () =
   (* Find the repo root by walking up from the executable location until we find
      a directory that contains both "manual/" and "example/".  This is robust to
      whether the generator is invoked from dune (inside _build/) or directly. *)
+  (* FAIL LOUDLY when the root cannot be found.  This used to return [dir]
+     unchanged after 8 levels, and that fail-open default cost real damage:
+     a `dune build --build-dir` pointing OUTSIDE the repo makes the walk start in
+     /tmp, find nothing, and return a directory with no manual/ — every [emit]
+     call then silently skips its missing file (emit is deliberately fail-open for
+     individual files), so the generator produces `let files = []`.  And because
+     compiler/lib/dune's embedded-docs rule is `(mode promote)`, dune writes that
+     EMPTY document list straight back into the source tree.  The entire manual
+     disappears from the binary, nothing errors, and the truncation is committable.
+     Observed 2026-07-29.
+
+     A missing root is never a legitimate state — this generator only runs from
+     dune inside the repo — so the only safe answer is to abort before writing
+     anything. `exit 2` (not 1) so the message is distinguishable in a build log. *)
   let find_repo_root start =
     let rec up dir count =
-      if count > 8 then dir  (* safety limit *)
+      if count > 8 then None  (* exhausted: NOT a usable root *)
       else if Sys.file_exists (Filename.concat dir "manual")
            && Sys.file_exists (Filename.concat dir "example")
-      then dir
+      then Some dir
       else up (Filename.dirname dir) (count + 1)
     in
     (* Resolve any symlinks so dirname works correctly *)
@@ -55,7 +69,20 @@ let () =
        && Sys.file_exists (Filename.concat Sys.argv.(1) "manual") then
       Sys.argv.(1)
     else
-      find_repo_root Sys.argv.(0)
+      match find_repo_root Sys.argv.(0) with
+      | Some root -> root
+      | None ->
+        Printf.eprintf
+          "gen_docs: could not locate the repo root by walking up from %s.\n\
+           Refusing to emit an empty document list: this rule is `(mode promote)`,\n\
+           so an empty result would be written back into\n\
+           compiler/lib/embedded_docs.ml and silently delete the whole manual from\n\
+           the binary.\n\
+           The usual cause is a --build-dir outside the repository. Build with the\n\
+           default build directory (or one inside the checkout), or pass the repo\n\
+           root as argv[1].\n"
+          Sys.argv.(0);
+        exit 2
   in
 
   let oc = stdout in

@@ -36,127 +36,127 @@
 (define-checker
   (checkPos [n : Integer])
   #:returns [n : Integer ::: (IsPositive n)]
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 32 (list (cons 'n *n)) (lambda () (if (> *n 0) (accept (IsPositive n) #:value *n) (reject "not positive" #:http-code 400)))))
+  (thsl-src! "tests/critical-review-55-tests.tesl" 32 (list (cons 'n *n)) (lambda () (if (tesl-gt? *n 0) (accept (IsPositive n) #:value *n) (reject "not positive" #:http-code 400)))))
 
 (define-checker
   (checkSmall [n : Integer])
   #:returns [n : Integer ::: (IsSmall n)]
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 38 (list (cons 'n *n)) (lambda () (if (< *n 1000) (accept (IsSmall n) #:value *n) (reject "too large" #:http-code 400)))))
+  (thsl-src! "tests/critical-review-55-tests.tesl" 38 (list (cons 'n *n)) (lambda () (if (tesl-lt? *n 1000) (accept (IsSmall n) #:value *n) (reject "too large" #:http-code 400)))))
 
 (define-checker
   (checkEven [n : Integer])
   #:returns [n : Integer ::: (IsEven n)]
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 44 (list (cons 'n *n)) (lambda () (if (tesl-equal? (remainder *n 2) 0) (accept (IsEven n) #:value *n) (reject "not even" #:http-code 400)))))
+  (thsl-src! "tests/critical-review-55-tests.tesl" 44 (list (cons 'n *n)) (lambda () (if (tesl-equal? (remainder *n 2) 0) (accept (IsEven n) #:value *n) (reject "not even" #:http-code 400)))))
 
 (define/pow
   (needPos [n : Integer ::: (IsPositive n)])
   #:returns Integer
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 49 (list (cons 'n *n)) (lambda () *n)))
+  (thsl-src! "tests/critical-review-55-tests.tesl" 49 (list (cons 'n *n)) (lambda () *n)))
 
 (define/pow
   (needSmall [n : Integer ::: (IsSmall n)])
   #:returns Integer
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 50 (list (cons 'n *n)) (lambda () *n)))
+  (thsl-src! "tests/critical-review-55-tests.tesl" 50 (list (cons 'n *n)) (lambda () *n)))
 
 (define/pow
   (needBoth [n : Integer ::: ((IsPositive n) && (IsSmall n))])
   #:returns Integer
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 51 (list (cons 'n *n)) (lambda () *n)))
+  (thsl-src! "tests/critical-review-55-tests.tesl" 51 (list (cons 'n *n)) (lambda () *n)))
 
 (define/pow
   (needAll3 [n : Integer ::: ((IsPositive n) && ((IsSmall n) && (IsEven n)))])
   #:returns Integer
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 52 (list (cons 'n *n)) (lambda () *n)))
+  (thsl-src! "tests/critical-review-55-tests.tesl" 52 (list (cons 'n *n)) (lambda () *n)))
 
 (define/pow
   (r55_la01_map_with_paren_lambda [xs : (List Integer)])
   #:returns Integer
-  (let ([doubled (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 57 (list (cons 'xs *xs)) (lambda () (tesl_import_List_map (let () (define/pow (tesl-lambda-0 [n : Integer]) #:returns Integer (+ *n *n)) tesl-lambda-0) *xs)))]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 58 (list (cons 'doubled *doubled) (cons 'xs *xs)) (lambda () (raw-value (tesl_import_List_length (raw-value doubled)))))))
+  (let ([doubled (thsl-src! "tests/critical-review-55-tests.tesl" 57 (list (cons 'xs *xs)) (lambda () (tesl_import_List_map (let () (define/pow (tesl-lambda-0 [n : Integer]) #:returns Integer (+ *n *n)) tesl-lambda-0) *xs)))]) (thsl-src! "tests/critical-review-55-tests.tesl" 58 (list (cons 'doubled *doubled) (cons 'xs *xs)) (lambda () (raw-value (tesl_import_List_length (raw-value doubled)))))))
 
 (define/pow
   (r55_la02_filter_with_paren_lambda [xs : (List Integer)])
   #:returns (List Integer)
-  (let ([positives (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 61 (list (cons 'xs *xs)) (lambda () (tesl_import_List_filterCheck checkPos *xs)))]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 62 (list (cons 'positives *positives) (cons 'xs *xs)) (lambda () (raw-value (tesl_import_List_map (let () (define/pow (tesl-lambda-1 [n : Integer]) #:returns Integer (+ *n 1)) tesl-lambda-1) (raw-value positives)))))))
+  (let ([positives (thsl-src! "tests/critical-review-55-tests.tesl" 61 (list (cons 'xs *xs)) (lambda () (tesl_import_List_filterCheck checkPos *xs)))]) (thsl-src! "tests/critical-review-55-tests.tesl" 62 (list (cons 'positives *positives) (cons 'xs *xs)) (lambda () (raw-value (tesl_import_List_map (let () (define/pow (tesl-lambda-1 [n : Integer]) #:returns Integer (+ *n 1)) tesl-lambda-1) (raw-value positives)))))))
 
 (define/pow
   (r55_tu01_tuple_proof_via_var [raw : Integer])
   #:returns Integer
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 75 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-2 (checkPos raw)]) (let ([pos tesl-checked-2]) (let ([_pair (raw-value (Tuple2 pos 0))]) (raw-value (needPos pos))))))))
+  (thsl-src! "tests/critical-review-55-tests.tesl" 75 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-2 (checkPos raw)]) (let ([pos tesl-checked-2]) (let ([_pair (raw-value (Tuple2 pos 0))]) (raw-value (needPos pos))))))))
 
 (define/pow
   (r55_tu02_tuple_first_raw [raw : Integer])
   #:returns Integer
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 80 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-3 (checkPos raw)]) (let ([pos tesl-checked-3]) (let ([pair (raw-value (Tuple2 pos 5))]) (+ (raw-value (tesl_import_Tuple2_first (raw-value pair))) (raw-value (tesl_import_Tuple2_second (raw-value pair))))))))))
+  (thsl-src! "tests/critical-review-55-tests.tesl" 80 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-3 (checkPos raw)]) (let ([pos tesl-checked-3]) (let ([pair (raw-value (Tuple2 pos 5))]) (+ (raw-value (tesl_import_Tuple2_first (raw-value pair))) (raw-value (tesl_import_Tuple2_second (raw-value pair))))))))))
 
 (define/pow
   (r55_fm01_forall_via_filtercheck [xs : (List Integer)])
   #:returns Integer
-  (let ([positives (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 94 (list (cons 'xs *xs)) (lambda () (tesl_import_List_filterCheck checkPos *xs)))]) (let ([needPosAll (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 95 (list (cons 'positives *positives) (cons 'xs *xs)) (lambda () (let () (define/pow (tesl-lambda-4 [ns : (List Integer)]) #:returns Integer (raw-value (tesl_import_List_length *ns))) tesl-lambda-4)))]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 96 (list (cons 'needPosAll *needPosAll) (cons 'positives *positives) (cons 'xs *xs)) (lambda () (raw-value (needPosAll positives)))))))
+  (let ([positives (thsl-src! "tests/critical-review-55-tests.tesl" 94 (list (cons 'xs *xs)) (lambda () (tesl_import_List_filterCheck checkPos *xs)))]) (let ([needPosAll (thsl-src! "tests/critical-review-55-tests.tesl" 95 (list (cons 'positives *positives) (cons 'xs *xs)) (lambda () (let () (define/pow (tesl-lambda-4 [ns : (List Integer)]) #:returns Integer (raw-value (tesl_import_List_length *ns))) tesl-lambda-4)))]) (thsl-src! "tests/critical-review-55-tests.tesl" 96 (list (cons 'needPosAll *needPosAll) (cons 'positives *positives) (cons 'xs *xs)) (lambda () (raw-value (needPosAll positives)))))))
 
 (define/pow
   (r55_fm02_forall_lost_through_map_runtime [xs : (List Integer)])
   #:returns Integer
-  (let ([positives (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 99 (list (cons 'xs *xs)) (lambda () (tesl_import_List_filterCheck checkPos *xs)))]) (let ([doubled (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 100 (list (cons 'positives *positives) (cons 'xs *xs)) (lambda () (tesl_import_List_map (let () (define/pow (tesl-lambda-5 [n : Integer]) #:returns Integer (+ *n *n)) tesl-lambda-5) (raw-value positives))))]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 101 (list (cons 'doubled *doubled) (cons 'positives *positives) (cons 'xs *xs)) (lambda () (raw-value (tesl_import_List_length (raw-value doubled))))))))
+  (let ([positives (thsl-src! "tests/critical-review-55-tests.tesl" 99 (list (cons 'xs *xs)) (lambda () (tesl_import_List_filterCheck checkPos *xs)))]) (let ([doubled (thsl-src! "tests/critical-review-55-tests.tesl" 100 (list (cons 'positives *positives) (cons 'xs *xs)) (lambda () (tesl_import_List_map (let () (define/pow (tesl-lambda-5 [n : Integer]) #:returns Integer (+ *n *n)) tesl-lambda-5) (raw-value positives))))]) (thsl-src! "tests/critical-review-55-tests.tesl" 101 (list (cons 'doubled *doubled) (cons 'positives *positives) (cons 'xs *xs)) (lambda () (raw-value (tesl_import_List_length (raw-value doubled))))))))
 
 (define/pow
   (r55_ch01_combined_check [raw : Integer])
   #:returns Integer
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 113 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-6 ((check-and checkPos checkSmall) raw)]) (let ([result tesl-checked-6]) (raw-value (needBoth result)))))))
+  (thsl-src! "tests/critical-review-55-tests.tesl" 113 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-6 ((check-and checkPos checkSmall) raw)]) (let ([result tesl-checked-6]) (raw-value (needBoth result)))))))
 
 (define/pow
   (r55_ch02_combined_in_filtercheck [xs : (List Integer)])
   #:returns Integer
-  (let ([result (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 117 (list (cons 'xs *xs)) (lambda () (tesl_import_List_filterCheck (check-and checkPos checkSmall) *xs)))]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 118 (list (cons 'result *result) (cons 'xs *xs)) (lambda () (raw-value (tesl_import_List_length (raw-value result)))))))
+  (let ([result (thsl-src! "tests/critical-review-55-tests.tesl" 117 (list (cons 'xs *xs)) (lambda () (tesl_import_List_filterCheck (check-and checkPos checkSmall) *xs)))]) (thsl-src! "tests/critical-review-55-tests.tesl" 118 (list (cons 'result *result) (cons 'xs *xs)) (lambda () (raw-value (tesl_import_List_length (raw-value result)))))))
 
 (define-checker
   (checkA [n : Integer])
   #:returns [n : Integer ::: (A n)]
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 138 (list (cons 'n *n)) (lambda () (if (> *n 0) (accept (A n) #:value *n) (reject "bad" #:http-code 400)))))
+  (thsl-src! "tests/critical-review-55-tests.tesl" 138 (list (cons 'n *n)) (lambda () (if (tesl-gt? *n 0) (accept (A n) #:value *n) (reject "bad" #:http-code 400)))))
 
 (define-checker
   (checkB [n : Integer])
   #:returns [n : Integer ::: (B n)]
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 144 (list (cons 'n *n)) (lambda () (if (< *n 1000) (accept (B n) #:value *n) (reject "bad" #:http-code 400)))))
+  (thsl-src! "tests/critical-review-55-tests.tesl" 144 (list (cons 'n *n)) (lambda () (if (tesl-lt? *n 1000) (accept (B n) #:value *n) (reject "bad" #:http-code 400)))))
 
 (define-checker
   (checkC [n : Integer])
   #:returns [n : Integer ::: (C n)]
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 150 (list (cons 'n *n)) (lambda () (if (tesl-equal? (remainder *n 2) 0) (accept (C n) #:value *n) (reject "bad" #:http-code 400)))))
+  (thsl-src! "tests/critical-review-55-tests.tesl" 150 (list (cons 'n *n)) (lambda () (if (tesl-equal? (remainder *n 2) 0) (accept (C n) #:value *n) (reject "bad" #:http-code 400)))))
 
 (define-checker
   (checkD [n : Integer])
   #:returns [n : Integer ::: (D n)]
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 156 (list (cons 'n *n)) (lambda () (if (tesl-equal? (remainder *n 3) 0) (accept (D n) #:value *n) (reject "bad" #:http-code 400)))))
+  (thsl-src! "tests/critical-review-55-tests.tesl" 156 (list (cons 'n *n)) (lambda () (if (tesl-equal? (remainder *n 3) 0) (accept (D n) #:value *n) (reject "bad" #:http-code 400)))))
 
 (define-checker
   (checkE [n : Integer])
   #:returns [n : Integer ::: (E n)]
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 162 (list (cons 'n *n)) (lambda () (if (tesl-equal? (remainder *n 5) 0) (accept (E n) #:value *n) (reject "bad" #:http-code 400)))))
+  (thsl-src! "tests/critical-review-55-tests.tesl" 162 (list (cons 'n *n)) (lambda () (if (tesl-equal? (remainder *n 5) 0) (accept (E n) #:value *n) (reject "bad" #:http-code 400)))))
 
 (define/pow
   (needAll5 [n : Integer ::: ((A n) && ((B n) && ((C n) && ((D n) && (E n)))))])
   #:returns Integer
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 167 (list (cons 'n *n)) (lambda () *n)))
+  (thsl-src! "tests/critical-review-55-tests.tesl" 167 (list (cons 'n *n)) (lambda () *n)))
 
 (define/pow
   (needAE [n : Integer ::: ((A n) && (E n))])
   #:returns Integer
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 168 (list (cons 'n *n)) (lambda () *n)))
+  (thsl-src! "tests/critical-review-55-tests.tesl" 168 (list (cons 'n *n)) (lambda () *n)))
 
 (define/pow
   (r55_mp01_five_step [raw : Integer])
   #:returns Integer
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 171 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-7 (checkA raw)]) (let ([a tesl-checked-7]) (let/check ([tesl-checked-8 (checkB a)]) (let ([b tesl-checked-8]) (let/check ([tesl-checked-9 (checkC b)]) (let ([c tesl-checked-9]) (let/check ([tesl-checked-10 (checkD c)]) (let ([d tesl-checked-10]) (let/check ([tesl-checked-11 (checkE d)]) (let ([e tesl-checked-11]) (raw-value (needAll5 e)))))))))))))))
+  (thsl-src! "tests/critical-review-55-tests.tesl" 171 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-7 (checkA raw)]) (let ([a tesl-checked-7]) (let/check ([tesl-checked-8 (checkB a)]) (let ([b tesl-checked-8]) (let/check ([tesl-checked-9 (checkC b)]) (let ([c tesl-checked-9]) (let/check ([tesl-checked-10 (checkD c)]) (let ([d tesl-checked-10]) (let/check ([tesl-checked-11 (checkE d)]) (let ([e tesl-checked-11]) (raw-value (needAll5 e)))))))))))))))
 
 (define/pow
   (r55_mp02_five_conjunct_selective [raw : Integer])
   #:returns Integer
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 179 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-12 (checkA raw)]) (let ([a tesl-checked-12]) (let/check ([tesl-checked-13 (checkB a)]) (let ([b tesl-checked-13]) (let/check ([tesl-checked-14 (checkC b)]) (let ([c tesl-checked-14]) (let/check ([tesl-checked-15 (checkD c)]) (let ([d tesl-checked-15]) (let/check ([tesl-checked-16 (checkE d)]) (let ([e tesl-checked-16]) (let ([tesl-proof-binding-17 e]) (let ([v (forget-proof tesl-proof-binding-17)] [pa (detach-all-proof tesl-proof-binding-17)]) (let ([tesl-proof-binding-18 e]) (let ([_ (forget-proof tesl-proof-binding-18)] [pe (detach-all-proof tesl-proof-binding-18)]) (raw-value (needAE (attach-proof v (list pa pe)))))))))))))))))))))
+  (thsl-src! "tests/critical-review-55-tests.tesl" 179 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-12 (checkA raw)]) (let ([a tesl-checked-12]) (let/check ([tesl-checked-13 (checkB a)]) (let ([b tesl-checked-13]) (let/check ([tesl-checked-14 (checkC b)]) (let ([c tesl-checked-14]) (let/check ([tesl-checked-15 (checkD c)]) (let ([d tesl-checked-15]) (let/check ([tesl-checked-16 (checkE d)]) (let ([e tesl-checked-16]) (let ([tesl-proof-binding-17 e]) (let ([v (forget-proof tesl-proof-binding-17)] [pa (detach-all-proof tesl-proof-binding-17)]) (let ([tesl-proof-binding-18 e]) (let ([_ (forget-proof tesl-proof-binding-18)] [pe (detach-all-proof tesl-proof-binding-18)]) (raw-value (needAE (attach-proof v (list pa pe)))))))))))))))))))))
 
 (define-trusted
   (proveRange [lo : Integer] [hi : Integer])
   #:returns (Fact (IsValidRange lo hi))
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 202 (list (cons 'lo *lo) (cons 'hi *hi)) (lambda () (trusted-proof (IsValidRange lo hi)))))
+  (thsl-src! "tests/critical-review-55-tests.tesl" 202 (list (cons 'lo *lo) (cons 'hi *hi)) (lambda () (trusted-proof (IsValidRange lo hi)))))
 
 (define-record BoundedInt
   [value : Integer ::: (IsPositive value)]
@@ -165,37 +165,37 @@
 (define/pow
   (makeBoundedInt [lo : Integer] [hi : Integer] [value : Integer ::: (IsPositive value)])
   #:returns BoundedInt
-  (let ([rangeProof (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 209 (list (cons 'lo *lo) (cons 'hi *hi) (cons 'value *value)) (lambda () (proveRange lo hi)))]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 210 (list (cons 'rangeProof *rangeProof) (cons 'lo *lo) (cons 'hi *hi) (cons 'value *value)) (lambda () (BoundedInt #:value value)))))
+  (let ([rangeProof (thsl-src! "tests/critical-review-55-tests.tesl" 209 (list (cons 'lo *lo) (cons 'hi *hi) (cons 'value *value)) (lambda () (proveRange lo hi)))]) (thsl-src! "tests/critical-review-55-tests.tesl" 210 (list (cons 'rangeProof *rangeProof) (cons 'lo *lo) (cons 'hi *hi) (cons 'value *value)) (lambda () (BoundedInt #:value value)))))
 
 (define-checker
   (checkInRange [lo : Integer] [hi : Integer] [n : Integer])
   #:returns [n : Integer ::: (InRange lo hi n)]
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 226 (list (cons 'lo *lo) (cons 'hi *hi) (cons 'n *n)) (lambda () (if (and (<= *lo *n) (<= *n *hi)) (accept (InRange lo hi n) #:value *n) (reject "out of range" #:http-code 400)))))
+  (thsl-src! "tests/critical-review-55-tests.tesl" 226 (list (cons 'lo *lo) (cons 'hi *hi) (cons 'n *n)) (lambda () (if (and (tesl-le? *lo *n) (tesl-le? *n *hi)) (accept (InRange lo hi n) #:value *n) (reject "out of range" #:http-code 400)))))
 
 (define/pow
   (needInRange [lo : Integer] [hi : Integer] [n : Integer ::: (InRange lo hi n)])
   #:returns Integer
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 231 (list (cons 'lo *lo) (cons 'hi *hi) (cons 'n *n)) (lambda () *n)))
+  (thsl-src! "tests/critical-review-55-tests.tesl" 231 (list (cons 'lo *lo) (cons 'hi *hi) (cons 'n *n)) (lambda () *n)))
 
 (define/pow
   (r55_li01_named_bounds [raw : Integer])
   #:returns Integer
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 234 (list (cons 'raw *raw)) (lambda () (let ([lo 1]) (let ([hi 100]) (let/check ([tesl-checked-19 (checkInRange lo hi raw)]) (let ([v tesl-checked-19]) (raw-value (needInRange lo hi v)))))))))
+  (thsl-src! "tests/critical-review-55-tests.tesl" 234 (list (cons 'raw *raw)) (lambda () (let ([lo 1]) (let ([hi 100]) (let/check ([tesl-checked-19 (checkInRange lo hi raw)]) (let ([v tesl-checked-19]) (raw-value (needInRange lo hi v)))))))))
 
 (define/pow
   (r55_sp01_trim_produces_istrimmed [raw : String])
   #:returns (? String _entity ::: (IsTrimmed _entity))
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 250 (list (cons 'raw *raw)) (lambda () (tesl_import_String_trim *raw))))
+  (thsl-src! "tests/critical-review-55-tests.tesl" 250 (list (cons 'raw *raw)) (lambda () (tesl_import_String_trim *raw))))
 
 (define/pow
   (r55_sp02_sort_produces_issorted [xs : (List Integer)])
   #:returns (? (List Integer) _entity ::: (IsSorted _entity))
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 253 (list (cons 'xs *xs)) (lambda () (tesl_import_List_sort *xs))))
+  (thsl-src! "tests/critical-review-55-tests.tesl" 253 (list (cons 'xs *xs)) (lambda () (tesl_import_List_sort *xs))))
 
 (define/pow
   (r55_sp03_use_trimmed [raw : String])
   #:returns Integer
-  (let ([trimmed (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 256 (list (cons 'raw *raw)) (lambda () (r55_sp01_trim_produces_istrimmed raw)))]) (let ([needTrimmed (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 257 (list (cons 'trimmed *trimmed) (cons 'raw *raw)) (lambda () (let () (define/pow (tesl-lambda-20 [s : String]) #:returns Integer (let ([s (tesl-establish-param-proof s *s `(IsTrimmed ,s))]) (tesl_import_String_length *s))) tesl-lambda-20)))]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 258 (list (cons 'needTrimmed *needTrimmed) (cons 'trimmed *trimmed) (cons 'raw *raw)) (lambda () (raw-value (needTrimmed trimmed)))))))
+  (let ([trimmed (thsl-src! "tests/critical-review-55-tests.tesl" 256 (list (cons 'raw *raw)) (lambda () (r55_sp01_trim_produces_istrimmed raw)))]) (let ([needTrimmed (thsl-src! "tests/critical-review-55-tests.tesl" 257 (list (cons 'trimmed *trimmed) (cons 'raw *raw)) (lambda () (let () (define/pow (tesl-lambda-20 [s : String]) #:returns Integer (let ([s (tesl-establish-param-proof s *s `(IsTrimmed ,s))]) (tesl_import_String_length *s))) tesl-lambda-20)))]) (thsl-src! "tests/critical-review-55-tests.tesl" 258 (list (cons 'needTrimmed *needTrimmed) (cons 'trimmed *trimmed) (cons 'raw *raw)) (lambda () (raw-value (needTrimmed trimmed)))))))
 
 (define-adt TrafficLight
   [TrafficRed]
@@ -206,12 +206,12 @@
 (define/pow
   (r55_dc01_unique_ctors [t : TrafficLight])
   #:returns String
-  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 273 (list (cons 't *t)) (lambda () (let ([tesl-case-21 *t]) (cond [(and (adt-value? *tesl-case-21) (eq? (adt-value-variant *tesl-case-21) 'TrafficRed)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 274 (list) (lambda () (raw-value "stop")))] [(and (adt-value? *tesl-case-21) (eq? (adt-value-variant *tesl-case-21) 'TrafficYellow)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 275 (list) (lambda () (raw-value "caution")))] [(and (adt-value? *tesl-case-21) (eq? (adt-value-variant *tesl-case-21) 'TrafficGreen)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 276 (list) (lambda () (raw-value "go")))])))))
+  (thsl-src-control! "tests/critical-review-55-tests.tesl" 273 (list (cons 't *t)) (lambda () (let ([tesl-case-21 *t]) (cond [(and (adt-value? *tesl-case-21) (eq? (adt-value-variant *tesl-case-21) 'TrafficRed)) (thsl-src! "tests/critical-review-55-tests.tesl" 274 (list) (lambda () (raw-value "stop")))] [(and (adt-value? *tesl-case-21) (eq? (adt-value-variant *tesl-case-21) 'TrafficYellow)) (thsl-src! "tests/critical-review-55-tests.tesl" 275 (list) (lambda () (raw-value "caution")))] [(and (adt-value? *tesl-case-21) (eq? (adt-value-variant *tesl-case-21) 'TrafficGreen)) (thsl-src! "tests/critical-review-55-tests.tesl" 276 (list) (lambda () (raw-value "go")))])))))
 
 (define/pow
   (r55_mc01_literal_and_ctor [m : (Maybe Integer)])
   #:returns String
-  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 287 (list (cons 'm *m)) (lambda () (let ([tesl-case-22 *m]) (cond [(and (adt-value? *tesl-case-22) (eq? (adt-value-variant *tesl-case-22) 'Nothing)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 288 (list) (lambda () (raw-value "nothing")))] [(and (and (adt-value? *tesl-case-22) (eq? (adt-value-variant *tesl-case-22) 'Something)) (let ([tesl-case-22_f0 (raw-value (hash-ref (adt-value-fields *tesl-case-22) 'value))]) (= *tesl-case-22_f0 0))) (let ([tesl-case-22_f0 (raw-value (hash-ref (adt-value-fields *tesl-case-22) 'value))]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 289 (list) (lambda () (raw-value "zero"))))] [(and (and (adt-value? *tesl-case-22) (eq? (adt-value-variant *tesl-case-22) 'Something)) (let ([tesl-case-22_f0 (raw-value (hash-ref (adt-value-fields *tesl-case-22) 'value))]) (= *tesl-case-22_f0 1))) (let ([tesl-case-22_f0 (raw-value (hash-ref (adt-value-fields *tesl-case-22) 'value))]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 290 (list) (lambda () (raw-value "one"))))] [(and (adt-value? *tesl-case-22) (eq? (adt-value-variant *tesl-case-22) 'Something)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 291 (list) (lambda () (raw-value "other")))])))))
+  (thsl-src-control! "tests/critical-review-55-tests.tesl" 287 (list (cons 'm *m)) (lambda () (let ([tesl-case-22 *m]) (cond [(and (adt-value? *tesl-case-22) (eq? (adt-value-variant *tesl-case-22) 'Nothing)) (thsl-src! "tests/critical-review-55-tests.tesl" 288 (list) (lambda () (raw-value "nothing")))] [(and (and (adt-value? *tesl-case-22) (eq? (adt-value-variant *tesl-case-22) 'Something)) (let ([tesl-case-22_f0 (raw-value (hash-ref (adt-value-fields *tesl-case-22) 'value))]) (= *tesl-case-22_f0 0))) (let ([tesl-case-22_f0 (raw-value (hash-ref (adt-value-fields *tesl-case-22) 'value))]) (thsl-src! "tests/critical-review-55-tests.tesl" 289 (list) (lambda () (raw-value "zero"))))] [(and (and (adt-value? *tesl-case-22) (eq? (adt-value-variant *tesl-case-22) 'Something)) (let ([tesl-case-22_f0 (raw-value (hash-ref (adt-value-fields *tesl-case-22) 'value))]) (= *tesl-case-22_f0 1))) (let ([tesl-case-22_f0 (raw-value (hash-ref (adt-value-fields *tesl-case-22) 'value))]) (thsl-src! "tests/critical-review-55-tests.tesl" 290 (list) (lambda () (raw-value "one"))))] [(and (adt-value? *tesl-case-22) (eq? (adt-value-variant *tesl-case-22) 'Something)) (thsl-src! "tests/critical-review-55-tests.tesl" 291 (list) (lambda () (raw-value "other")))])))))
 
 (define-adt Status2
   [Status2Active]
@@ -222,98 +222,98 @@
 (define/pow
   (r55_mc02_fallthrough_arms [s : Status2])
   #:returns String
-  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 299 (list (cons 's *s)) (lambda () (let ([tesl-case-23 *s]) (cond [(and (adt-value? *tesl-case-23) (eq? (adt-value-variant *tesl-case-23) 'Status2Active)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 302 (list) (lambda () (raw-value "completed")))] [(and (adt-value? *tesl-case-23) (eq? (adt-value-variant *tesl-case-23) 'Status2Done)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 302 (list) (lambda () (raw-value "completed")))] [(and (adt-value? *tesl-case-23) (eq? (adt-value-variant *tesl-case-23) 'Status2Cancelled)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 304 (list) (lambda () (raw-value "cancelled")))])))))
+  (thsl-src-control! "tests/critical-review-55-tests.tesl" 299 (list (cons 's *s)) (lambda () (let ([tesl-case-23 *s]) (cond [(and (adt-value? *tesl-case-23) (eq? (adt-value-variant *tesl-case-23) 'Status2Active)) (thsl-src! "tests/critical-review-55-tests.tesl" 302 (list) (lambda () (raw-value "completed")))] [(and (adt-value? *tesl-case-23) (eq? (adt-value-variant *tesl-case-23) 'Status2Done)) (thsl-src! "tests/critical-review-55-tests.tesl" 302 (list) (lambda () (raw-value "completed")))] [(and (adt-value? *tesl-case-23) (eq? (adt-value-variant *tesl-case-23) 'Status2Cancelled)) (thsl-src! "tests/critical-review-55-tests.tesl" 304 (list) (lambda () (raw-value "cancelled")))])))))
 
 (module+ test
   (require rackunit)
   (test-case "R55_LA: parenthesized lambda in application position"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 65 (list) (lambda () (r55_la01_map_with_paren_lambda (list 1 2 3))))) 3)
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 66 (list) (lambda () (r55_la01_map_with_paren_lambda (list))))) 0)
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 68 (list) (lambda () (r55_la02_filter_with_paren_lambda (list 1 2 -3))))) (list 2 3))
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 69 (list) (lambda () (r55_la02_filter_with_paren_lambda (list -1 -2))))) (list))
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 65 (list) (lambda () (r55_la01_map_with_paren_lambda (list 1 2 3))))) 3)
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 66 (list) (lambda () (r55_la01_map_with_paren_lambda (list))))) 0)
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 68 (list) (lambda () (r55_la02_filter_with_paren_lambda (list 1 2 -3))))) (list 2 3))
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 69 (list) (lambda () (r55_la02_filter_with_paren_lambda (list -1 -2))))) (list))
     ))
   )
 
   (test-case "R55_TU: Tuple access and proof via variable"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 85 (list) (lambda () (r55_tu01_tuple_proof_via_var 5)))) 5)
-  (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 86 (list) (lambda ()
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 85 (list) (lambda () (r55_tu01_tuple_proof_via_var 5)))) 5)
+  (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-55-tests.tesl" 86 (list) (lambda ()
                           (r55_tu01_tuple_proof_via_var -1))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: r55_tu01_tuple_proof_via_var -1"))
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 88 (list) (lambda () (r55_tu02_tuple_first_raw 3)))) 8)
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 88 (list) (lambda () (r55_tu02_tuple_first_raw 3)))) 8)
     ))
   )
 
   (test-case "R55_FM: ForAll proof correctness"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 104 (list) (lambda () (r55_fm01_forall_via_filtercheck (list 1 2 -3 4))))) 3)
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 105 (list) (lambda () (r55_fm01_forall_via_filtercheck (list -1 -2))))) 0)
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 107 (list) (lambda () (r55_fm02_forall_lost_through_map_runtime (list 1 2 3))))) 3)
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 104 (list) (lambda () (r55_fm01_forall_via_filtercheck (list 1 2 -3 4))))) 3)
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 105 (list) (lambda () (r55_fm01_forall_via_filtercheck (list -1 -2))))) 0)
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 107 (list) (lambda () (r55_fm02_forall_lost_through_map_runtime (list 1 2 3))))) 3)
     ))
   )
 
   (test-case "R55_CH: combined check && operator"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 121 (list) (lambda () (r55_ch01_combined_check 5)))) 5)
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 122 (list) (lambda () (r55_ch01_combined_check 999)))) 999)
-  (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 123 (list) (lambda ()
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 121 (list) (lambda () (r55_ch01_combined_check 5)))) 5)
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 122 (list) (lambda () (r55_ch01_combined_check 999)))) 999)
+  (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-55-tests.tesl" 123 (list) (lambda ()
                           (r55_ch01_combined_check -1))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: r55_ch01_combined_check -1"))
-  (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 124 (list) (lambda ()
+  (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-55-tests.tesl" 124 (list) (lambda ()
                           (r55_ch01_combined_check 1001))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: r55_ch01_combined_check 1001"))
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 126 (list) (lambda () (r55_ch02_combined_in_filtercheck (list 1 2 -3 1500))))) 2)
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 126 (list) (lambda () (r55_ch02_combined_in_filtercheck (list 1 2 -3 1500))))) 2)
     ))
   )
 
   (test-case "R55_MP: 5-step proof chains"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 188 (list) (lambda () (r55_mp01_five_step 30)))) 30)
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 189 (list) (lambda () (r55_mp01_five_step 60)))) 60)
-  (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 190 (list) (lambda ()
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 188 (list) (lambda () (r55_mp01_five_step 30)))) 30)
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 189 (list) (lambda () (r55_mp01_five_step 60)))) 60)
+  (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-55-tests.tesl" 190 (list) (lambda ()
                           (r55_mp01_five_step -1))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: r55_mp01_five_step -1"))
-  (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 191 (list) (lambda ()
+  (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-55-tests.tesl" 191 (list) (lambda ()
                           (r55_mp01_five_step 5))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: r55_mp01_five_step 5"))
-  (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 192 (list) (lambda ()
+  (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-55-tests.tesl" 192 (list) (lambda ()
                           (r55_mp01_five_step 7))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: r55_mp01_five_step 7"))
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 194 (list) (lambda () (r55_mp02_five_conjunct_selective 30)))) 30)
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 194 (list) (lambda () (r55_mp02_five_conjunct_selective 30)))) 30)
     ))
   )
 
   (test-case "R55_GW: ghost witness correct usage"
     (call-with-fresh-memory-db '() (lambda ()
-  (define lo (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 213 (list) (lambda () 1)))
-  (define hi (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 214 (list (cons 'lo lo)) (lambda () 100)))
-  (define rawVal (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 215 (list (cons 'hi hi) (cons 'lo lo)) (lambda () 50)))
+  (define lo (thsl-src! "tests/critical-review-55-tests.tesl" 213 (list) (lambda () 1)))
+  (define hi (thsl-src! "tests/critical-review-55-tests.tesl" 214 (list (cons 'lo lo)) (lambda () 100)))
+  (define rawVal (thsl-src! "tests/critical-review-55-tests.tesl" 215 (list (cons 'hi hi) (cons 'lo lo)) (lambda () 50)))
   (define tesl-checked-24 (checkPos rawVal))
   (when (check-fail? tesl-checked-24)
     (raise-user-error 'tesl-test "unexpected failure in let posVal: ~a" (check-fail-message tesl-checked-24)))
   (define posVal tesl-checked-24)
-  (define bounded (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 217 (list (cons 'posVal posVal) (cons 'rawVal rawVal) (cons 'hi hi) (cons 'lo lo)) (lambda () (makeBoundedInt lo hi posVal))))
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 218 (list (cons 'bounded bounded) (cons 'posVal posVal) (cons 'rawVal rawVal) (cons 'hi hi) (cons 'lo lo)) (lambda () (raw-value (tesl-dot/runtime bounded 'value 'BoundedInt)))) 50)
+  (define bounded (thsl-src! "tests/critical-review-55-tests.tesl" 217 (list (cons 'posVal posVal) (cons 'rawVal rawVal) (cons 'hi hi) (cons 'lo lo)) (lambda () (makeBoundedInt lo hi posVal))))
+  (check-equal? (thsl-src! "tests/critical-review-55-tests.tesl" 218 (list (cons 'bounded bounded) (cons 'posVal posVal) (cons 'rawVal rawVal) (cons 'hi hi) (cons 'lo lo)) (lambda () (raw-value (tesl-dot/runtime bounded 'value 'BoundedInt)))) 50)
     ))
   )
 
   (test-case "R55_LI: named variable bounds for multi-param proofs"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 240 (list) (lambda () (r55_li01_named_bounds 50)))) 50)
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 241 (list) (lambda () (r55_li01_named_bounds 1)))) 1)
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 242 (list) (lambda () (r55_li01_named_bounds 100)))) 100)
-  (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 243 (list) (lambda ()
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 240 (list) (lambda () (r55_li01_named_bounds 50)))) 50)
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 241 (list) (lambda () (r55_li01_named_bounds 1)))) 1)
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 242 (list) (lambda () (r55_li01_named_bounds 100)))) 100)
+  (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-55-tests.tesl" 243 (list) (lambda ()
                           (r55_li01_named_bounds 0))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: r55_li01_named_bounds 0"))
-  (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 244 (list) (lambda ()
+  (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-55-tests.tesl" 244 (list) (lambda ()
                           (r55_li01_named_bounds 101))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: r55_li01_named_bounds 101"))
@@ -322,28 +322,28 @@
 
   (test-case "R55_SP: stdlib proof propagation"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 261 (list) (lambda () (r55_sp03_use_trimmed "  hello  ")))) 5)
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 262 (list) (lambda () (r55_sp03_use_trimmed "hello")))) 5)
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 261 (list) (lambda () (r55_sp03_use_trimmed "  hello  ")))) 5)
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 262 (list) (lambda () (r55_sp03_use_trimmed "hello")))) 5)
     ))
   )
 
   (test-case "R55_DC: unique constructor names"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 279 (list) (lambda () (r55_dc01_unique_ctors TrafficRed)))) "stop")
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 280 (list) (lambda () (r55_dc01_unique_ctors TrafficYellow)))) "caution")
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 281 (list) (lambda () (r55_dc01_unique_ctors TrafficGreen)))) "go")
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 279 (list) (lambda () (r55_dc01_unique_ctors TrafficRed)))) "stop")
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 280 (list) (lambda () (r55_dc01_unique_ctors TrafficYellow)))) "caution")
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 281 (list) (lambda () (r55_dc01_unique_ctors TrafficGreen)))) "go")
     ))
   )
 
   (test-case "R55_MC: mixed patterns and fall-through"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 307 (list) (lambda () (r55_mc01_literal_and_ctor Nothing)))) "nothing")
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 308 (list) (lambda () (r55_mc01_literal_and_ctor (raw-value (Something 0)))))) "zero")
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 309 (list) (lambda () (r55_mc01_literal_and_ctor (raw-value (Something 1)))))) "one")
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 310 (list) (lambda () (r55_mc01_literal_and_ctor (raw-value (Something 42)))))) "other")
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 312 (list) (lambda () (r55_mc02_fallthrough_arms Status2Active)))) "completed")
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 313 (list) (lambda () (r55_mc02_fallthrough_arms Status2Done)))) "completed")
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review-55-tests.tesl" 314 (list) (lambda () (r55_mc02_fallthrough_arms Status2Cancelled)))) "cancelled")
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 307 (list) (lambda () (r55_mc01_literal_and_ctor Nothing)))) "nothing")
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 308 (list) (lambda () (r55_mc01_literal_and_ctor (raw-value (Something 0)))))) "zero")
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 309 (list) (lambda () (r55_mc01_literal_and_ctor (raw-value (Something 1)))))) "one")
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 310 (list) (lambda () (r55_mc01_literal_and_ctor (raw-value (Something 42)))))) "other")
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 312 (list) (lambda () (r55_mc02_fallthrough_arms Status2Active)))) "completed")
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 313 (list) (lambda () (r55_mc02_fallthrough_arms Status2Done)))) "completed")
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 314 (list) (lambda () (r55_mc02_fallthrough_arms Status2Cancelled)))) "cancelled")
     ))
   )
 

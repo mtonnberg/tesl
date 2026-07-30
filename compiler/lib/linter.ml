@@ -28,7 +28,6 @@
       W064  discarded `check`/`auth` validation result (proof footgun)
       W070  email declared but not activated in main's App { email: [...] }
       W080  exported function references unexported type or proof predicate
-      W090  bare `print` call bypasses telemetry capability
 *)
 
 (* A lint diagnostic uses the same type as Compile.diagnostic so it can
@@ -1078,6 +1077,31 @@ let lint_unused_locals_and_dead_code filename (source : string) (out : lint_diag
         let names_in_return_spec = collect_return_spec_names [] fd.return_spec in
         let all_used_names = names_in_body @ names_in_param_proofs @ names_in_return_spec in
         List.iter (fun (param : Ast.binding) ->
+          (* DO NOT exempt proof-carrying parameters here. That was tried on
+             2026-07-29 and reverted; the investigation is worth keeping so it is
+             not re-attempted.
+
+             The tempting case is Tesl.Crypto's
+
+               fn storeNewPassword(newPassword: String,
+                                   hash: PasswordHash ::: HashFor newPassword) = …
+
+             where W061 fires on `hash` and it feels wrong to be told to rename
+             the parameter that makes the code safe. But the warning was RIGHT:
+             the draft it fired on accepted a hash and never stored it. Using the
+             hash — which is what the function is for — silenced it with no
+             linter change.
+
+             Measured before reverting: with the exemption disabled, W061 fires on
+             ZERO files across example/, example/learn/, example/chat/,
+             example/kanel/, templates/ and tests/. So the exemption had no
+             beneficial instance, and it did silence a real smell — demanding a
+             proof-carrying value and then discarding it.
+
+             The legitimate witness-only pattern ("any authenticated user may do
+             this; I do not need to know who") is already expressible: `_user`
+             compiles, satisfies the route wiring in an `api` block, and silences
+             W061 through the documented mechanism. Verified end to end. *)
           if param.name <> "_"
              && not (String.length param.name > 0 && param.name.[0] = '_')
              && not (List.mem param.name all_used_names) then
@@ -1255,72 +1279,8 @@ let lint_unexported_signature_names filename (source : string) (out : lint_diag 
       | _ -> ()
     ) m.decls
 
-(** W090 — bare `print` call bypasses the telemetry capability.
 
-    `print` is available via Racket interop and returns Unit, but it is an
-    uncontrolled side effect that bypasses Tesl's `telemetry` capability guard.
-    Use `telemetry` events instead, or add `telemetry` to the function's
-    `requires [...]` clause and wrap the call appropriately.
 
-    This fires when `print` appears as a function call in any function body. *)
-let rec collect_print_calls (acc : Location.loc list) (e : Ast.expr) : Location.loc list =
-  match e with
-  | Ast.EApp { fn = Ast.EVar { name = "print"; loc; _ }; arg; _ } ->
-    let acc = loc :: acc in
-    collect_print_calls acc arg
-  | Ast.EApp { fn; arg; _ } ->
-    collect_print_calls (collect_print_calls acc fn) arg
-  | Ast.ELet { value; body; _ } | Ast.ELetProof { value; body; _ } ->
-    collect_print_calls (collect_print_calls acc value) body
-  | Ast.EIf { cond; then_; else_; _ } ->
-    collect_print_calls (collect_print_calls (collect_print_calls acc cond) then_) else_
-  | Ast.ECase { scrut; arms; _ } ->
-    let acc = collect_print_calls acc scrut in
-    List.fold_left (fun a (arm : Ast.case_arm) -> collect_print_calls a arm.body) acc arms
-  | Ast.EBinop { left; right; _ } ->
-    collect_print_calls (collect_print_calls acc left) right
-  | Ast.EUnop { arg; _ } | Ast.EField { obj = arg; _ } ->
-    collect_print_calls acc arg
-  | Ast.EList { elems; _ } -> List.fold_left collect_print_calls acc elems
-  | Ast.EOk { value; _ } -> collect_print_calls acc value
-  | Ast.ERecord { fields; _ } ->
-    List.fold_left (fun a (_, v) -> collect_print_calls a v) acc fields
-  | Ast.ELambda { body; _ }
-  | Ast.EWithDatabase { body; _ } | Ast.EWithCapabilities { body; _ }
-  | Ast.EWithTransaction { body; _ } -> collect_print_calls acc body
-  | Ast.EConstructor { args; _ } -> List.fold_left collect_print_calls acc args
-  | Ast.EFail _ | Ast.EVar _ | Ast.ELit _ | Ast.EServe _ | Ast.EStartWorkers _
-  | Ast.ETelemetry _ | Ast.EEnqueue _ | Ast.EPublish _ | Ast.ECacheGet _
-  | Ast.ECacheSet _ | Ast.ECacheDelete _ | Ast.ECacheInvalidate _
-  | Ast.ESendEmail _ | Ast.EStartEmailWorker _ | Ast.ERuntimeCall _ -> acc
-
-let lint_bare_print filename (source : string) (out : lint_diag list ref) =
-  match Parser.parse_module filename source with
-  | Err _ -> ()
-  | Ok m ->
-    List.iter (function
-      | Ast.DFunc fd ->
-        let locs = collect_print_calls [] fd.body in
-        List.iter (fun (loc : Location.loc) ->
-          out := {
-            file     = filename;
-            line     = loc.start.line;
-            col      = loc.start.col;
-            severity = "warning";
-            code     = "W090";
-            message  =
-              "bare `print` call bypasses Tesl's telemetry capability — \
-               use `telemetry` events for observable output, or remove for production";
-            fix = None;
-          } :: !out
-        ) locs
-      | _ -> ()
-    ) m.decls
-
-(** W091 (NT-07) — `Int` at a wire/serialized boundary can lose precision on a JS
-    client (JS Number is exact only to 2^53). Advisory warning at API request
-    bodies, captures, return types, and codec-encoded record fields; steer to
-    `Int32` (JS-safe) or a string/BigNumber codec. Internal `Int` use is untouched. *)
 let rec type_expr_int_loc (te : Ast.type_expr) : Location.loc option =
   match te with
   | Ast.TName { name = "Int"; loc } -> Some loc
@@ -1681,7 +1641,6 @@ let lint_file (filename : string) : Compile.diagnostic list =
     lint_unused_locals_and_dead_code filename src out;
     lint_missing_email_worker    filename src out;
     lint_unexported_signature_names filename src out;
-    lint_bare_print                 filename src out;
     lint_int_at_wire                filename src out
    with Failure _ -> ());
   (* Sort by line then col *)

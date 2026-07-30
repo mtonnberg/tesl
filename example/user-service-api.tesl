@@ -87,7 +87,9 @@ capability userRandom implies random
 # jwt and httpClient must be referenced via a user-defined wrapper capability
 # (they cannot appear directly in `requires` — only in a user capability's `implies`).
 # See: lesson57-jwt.tesl (`authCap implies jwt`), lesson58-httpclient.tesl (`webClient implies httpClient`).
-capability userJwt implies jwt
+# `userJwt` implies `time` as well: JWT.sign stamps the token's expiry from the
+# wall clock, and a capability marks an effect — reading the clock is one.
+capability userJwt implies jwt, time
 capability userHttp implies httpClient
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -298,8 +300,11 @@ fact Authenticated (userId: String)
 jwtSigningSecret = JwtSecret "dev-secret-change-in-production"
 
 # makeToken: sign a JWT carrying the userId in the `sub` claim.
-# JWT claims are a Dict (serialized to the JWT payload as JSON); JWT.sign is
-# deterministic: same claims + secret always produce the same token.
+# JWT claims are a Dict (serialized to the JWT payload as JSON). JWT.sign also
+# stamps `exp` one hour ahead (epoch seconds, RFC 7519) — you do not choose the
+# expiry and cannot skip it, which is why this is a SESSION token. For a
+# long-lived credential use Crypto.randomToken and store only its
+# Crypto.fingerprint, which you can revoke.
 fn makeToken(userId: String) -> JwtToken
   requires [userJwt] =
   JWT.sign (Dict.singleton "sub" userId) jwtSigningSecret
@@ -314,8 +319,12 @@ auth jwtAuth(request: HttpRequest) -> userId: String ::: Authenticated userId
       if String.startsWith rawHeader "Bearer " then
         let tokenStr = String.dropPrefix rawHeader "Bearer "
         # JWT.verify returns the claims Dict we signed; read the userId from `sub`.
-        # On bad signature or expiry it automatically produces a 401 response.
-        case Dict.lookup "sub" (JWT.verify (JwtToken tokenStr) jwtSigningSecret) of
+        # It is CHECK-SHAPED, so its result must be bound with `check` — that is
+        # what turns a bad signature or an expired token into the 401. Nesting the
+        # call inside Dict.lookup would pass the failure value on as if it were a
+        # Dict, and is a compile error.
+        let claims = check JWT.verify (JwtToken tokenStr) jwtSigningSecret
+        case Dict.lookup "sub" claims of
           Nothing ->
             fail 401 "Invalid token: missing sub claim"
           Something verifiedUserId ->
@@ -552,10 +561,17 @@ test "JwtToken.value retrieves the inner string" {
   expect token.value == raw
 }
 
-test "JwtSecret.value retrieves the inner key" {
+# A JwtSecret has no `.value`: it is a secret, redacted in telemetry, logs and
+# the debugger, and an accessor would defeat all of that. The property that
+# survives — and the one this file relies on — is that the key is carried
+# faithfully, so two secrets built from the same String are the same key.
+test "JwtSecret carries its key faithfully without exposing it" {
   let key = "my-signing-key"
-  let secret = JwtSecret key
-  expect secret.value == key
+  let a = JwtSecret key
+  let b = JwtSecret key
+  let other = JwtSecret "a-different-key"
+  expect a == b
+  expect a != other
 }
 
 # JWT.sign needs userJwt capability — tested via api-test round-trips.

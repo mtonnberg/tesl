@@ -32,179 +32,179 @@
 (define/pow
   (area [r : Rectangle])
   #:returns Integer
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 46 (list (cons 'r *r)) (lambda () (* (tesl-dot/runtime r 'width 'Rectangle) (tesl-dot/runtime r 'height 'Rectangle)))))
+  (thsl-src! "example/learn/lesson03-records.tesl" 46 (list (cons 'r *r)) (lambda () (* (tesl-dot/runtime r 'width 'Rectangle) (tesl-dot/runtime r 'height 'Rectangle)))))
 
 (define/pow
   (perimeter [r : Rectangle])
   #:returns Integer
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 50 (list (cons 'r *r)) (lambda () (* 2 (+ (tesl-dot/runtime r 'width 'Rectangle) (tesl-dot/runtime r 'height 'Rectangle))))))
+  (thsl-src! "example/learn/lesson03-records.tesl" 50 (list (cons 'r *r)) (lambda () (* 2 (+ (tesl-dot/runtime r 'width 'Rectangle) (tesl-dot/runtime r 'height 'Rectangle))))))
 
 (define/pow
   (translate [p : Point] [dx : Integer] [dy : Integer])
   #:returns Point
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 54 (list (cons 'p *p) (cons 'dx *dx) (cons 'dy *dy)) (lambda () (Point #:x (+ (tesl-dot/runtime p 'x 'Point) *dx) #:y (+ (tesl-dot/runtime p 'y 'Point) *dy)))))
+  (thsl-src! "example/learn/lesson03-records.tesl" 54 (list (cons 'p *p) (cons 'dx *dx) (cons 'dy *dy)) (lambda () (Point #:x (+ (tesl-dot/runtime p 'x 'Point) *dx) #:y (+ (tesl-dot/runtime p 'y 'Point) *dy)))))
 
 (define/pow
   (scale [r : Rectangle] [factor : Integer])
   #:returns Rectangle
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 58 (list (cons 'r *r) (cons 'factor *factor)) (lambda () (tesl-record-update *r (tesl-hash 'width (raw-value (* (tesl-dot/runtime r 'width 'Rectangle) *factor)) 'height (raw-value (* (tesl-dot/runtime r 'height 'Rectangle) *factor)))))))
+  (thsl-src! "example/learn/lesson03-records.tesl" 58 (list (cons 'r *r) (cons 'factor *factor)) (lambda () (tesl-record-update *r (tesl-hash 'width (raw-value (* (tesl-dot/runtime r 'width 'Rectangle) *factor)) 'height (raw-value (* (tesl-dot/runtime r 'height 'Rectangle) *factor)))))))
 
 (define/pow
   (origin)
   #:returns Point
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 63 (list) (lambda () (Point #:x 0 #:y 0))))
+  (thsl-src! "example/learn/lesson03-records.tesl" 63 (list) (lambda () (Point #:x 0 #:y 0))))
 
 (define/pow
   (setX [p : Point] [newX : Integer])
   #:returns Point
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 70 (list (cons 'p *p) (cons 'newX *newX)) (lambda () (tesl-record-update *p (tesl-hash 'x *newX)))))
+  (thsl-src! "example/learn/lesson03-records.tesl" 70 (list (cons 'p *p) (cons 'newX *newX)) (lambda () (tesl-record-update *p (tesl-hash 'x *newX)))))
 
 (define/pow
   (moveOrigin [r : Rectangle] [dx : Integer] [dy : Integer])
   #:returns Rectangle
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 74 (list (cons 'r *r) (cons 'dx *dx) (cons 'dy *dy)) (lambda () (tesl-record-update *r (tesl-hash 'origin (raw-value (translate (tesl-dot/runtime r 'origin 'Rectangle) dx dy)))))))
+  (thsl-src! "example/learn/lesson03-records.tesl" 74 (list (cons 'r *r) (cons 'dx *dx) (cons 'dy *dy)) (lambda () (tesl-record-update *r (tesl-hash 'origin (raw-value (translate (tesl-dot/runtime r 'origin 'Rectangle) dx dy)))))))
 
 (define/pow
   (resetOrigin [r : Rectangle])
   #:returns Rectangle
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 78 (list (cons 'r *r)) (lambda () (tesl-record-update *r (tesl-hash 'origin (raw-value (Point #:x 0 #:y 0)))))))
+  (thsl-src! "example/learn/lesson03-records.tesl" 78 (list (cons 'r *r)) (lambda () (tesl-record-update *r (tesl-hash 'origin (raw-value (Point #:x 0 #:y 0)))))))
 
 (define/pow
   (flipDimensions [r : Rectangle])
   #:returns Rectangle
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 82 (list (cons 'r *r)) (lambda () (tesl-record-update *r (tesl-hash 'width (tesl-dot/runtime r 'height 'Rectangle) 'height (tesl-dot/runtime r 'width 'Rectangle))))))
+  (thsl-src! "example/learn/lesson03-records.tesl" 82 (list (cons 'r *r)) (lambda () (tesl-record-update *r (tesl-hash 'width (tesl-dot/runtime r 'height 'Rectangle) 'height (tesl-dot/runtime r 'width 'Rectangle))))))
 
 (module+ test
   (require rackunit)
   (test-case "area"
     (call-with-fresh-memory-db '() (lambda ()
-  (define rect (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 85 (list) (lambda () (Rectangle #:origin (Point #:x 0 #:y 0) #:width 4 #:height 3))))
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 86 (list (cons 'rect rect)) (lambda () (area rect)))) 12)
-  (define unit (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 87 (list (cons 'rect rect)) (lambda () (Rectangle #:origin (Point #:x 0 #:y 0) #:width 1 #:height 1))))
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 88 (list (cons 'unit unit) (cons 'rect rect)) (lambda () (area unit)))) 1)
+  (define rect (thsl-src! "example/learn/lesson03-records.tesl" 85 (list) (lambda () (Rectangle #:origin (Point #:x 0 #:y 0) #:width 4 #:height 3))))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson03-records.tesl" 86 (list (cons 'rect rect)) (lambda () (area rect)))) 12)
+  (define unit (thsl-src! "example/learn/lesson03-records.tesl" 87 (list (cons 'rect rect)) (lambda () (Rectangle #:origin (Point #:x 0 #:y 0) #:width 1 #:height 1))))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson03-records.tesl" 88 (list (cons 'unit unit) (cons 'rect rect)) (lambda () (area unit)))) 1)
     ))
   )
 
   (test-case "perimeter"
     (call-with-fresh-memory-db '() (lambda ()
-  (define rect (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 92 (list) (lambda () (Rectangle #:origin (Point #:x 0 #:y 0) #:width 4 #:height 3))))
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 93 (list (cons 'rect rect)) (lambda () (perimeter rect)))) 14)
+  (define rect (thsl-src! "example/learn/lesson03-records.tesl" 92 (list) (lambda () (Rectangle #:origin (Point #:x 0 #:y 0) #:width 4 #:height 3))))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson03-records.tesl" 93 (list (cons 'rect rect)) (lambda () (perimeter rect)))) 14)
     ))
   )
 
   (test-case "translate"
     (call-with-fresh-memory-db '() (lambda ()
-  (define p (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 97 (list) (lambda () (Point #:x 1 #:y 2))))
-  (define moved (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 98 (list (cons 'p p)) (lambda () (translate p 3 4))))
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 99 (list (cons 'moved moved) (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime moved 'x 'Point)))) 4)
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 100 (list (cons 'moved moved) (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime moved 'y 'Point)))) 6)
+  (define p (thsl-src! "example/learn/lesson03-records.tesl" 97 (list) (lambda () (Point #:x 1 #:y 2))))
+  (define moved (thsl-src! "example/learn/lesson03-records.tesl" 98 (list (cons 'p p)) (lambda () (translate p 3 4))))
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 99 (list (cons 'moved moved) (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime moved 'x 'Point)))) 4)
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 100 (list (cons 'moved moved) (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime moved 'y 'Point)))) 6)
     ))
   )
 
   (test-case "scale"
     (call-with-fresh-memory-db '() (lambda ()
-  (define rect (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 104 (list) (lambda () (Rectangle #:origin (Point #:x 0 #:y 0) #:width 3 #:height 2))))
-  (define big (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 105 (list (cons 'rect rect)) (lambda () (scale rect 4))))
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 106 (list (cons 'big big) (cons 'rect rect)) (lambda () (raw-value (tesl-dot/runtime big 'width 'Rectangle)))) 12)
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 107 (list (cons 'big big) (cons 'rect rect)) (lambda () (raw-value (tesl-dot/runtime big 'height 'Rectangle)))) 8)
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 108 (list (cons 'big big) (cons 'rect rect)) (lambda () (raw-value (tesl-dot/runtime (tesl-dot/runtime big 'origin 'Rectangle) 'x 'Point)))) 0)
+  (define rect (thsl-src! "example/learn/lesson03-records.tesl" 104 (list) (lambda () (Rectangle #:origin (Point #:x 0 #:y 0) #:width 3 #:height 2))))
+  (define big (thsl-src! "example/learn/lesson03-records.tesl" 105 (list (cons 'rect rect)) (lambda () (scale rect 4))))
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 106 (list (cons 'big big) (cons 'rect rect)) (lambda () (raw-value (tesl-dot/runtime big 'width 'Rectangle)))) 12)
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 107 (list (cons 'big big) (cons 'rect rect)) (lambda () (raw-value (tesl-dot/runtime big 'height 'Rectangle)))) 8)
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 108 (list (cons 'big big) (cons 'rect rect)) (lambda () (raw-value (tesl-dot/runtime (tesl-dot/runtime big 'origin 'Rectangle) 'x 'Point)))) 0)
     ))
   )
 
   (test-case "origin returns zero point"
     (call-with-fresh-memory-db '() (lambda ()
-  (define o (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 112 (list) (lambda () (origin))))
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 113 (list (cons 'o o)) (lambda () (raw-value (tesl-dot/runtime o 'x 'Point)))) 0)
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 114 (list (cons 'o o)) (lambda () (raw-value (tesl-dot/runtime o 'y 'Point)))) 0)
+  (define o (thsl-src! "example/learn/lesson03-records.tesl" 112 (list) (lambda () (origin))))
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 113 (list (cons 'o o)) (lambda () (raw-value (tesl-dot/runtime o 'x 'Point)))) 0)
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 114 (list (cons 'o o)) (lambda () (raw-value (tesl-dot/runtime o 'y 'Point)))) 0)
     ))
   )
 
   (test-case "setX changes only x"
     (call-with-fresh-memory-db '() (lambda ()
-  (define p (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 120 (list) (lambda () (Point #:x 3 #:y 7))))
-  (define p2 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 121 (list (cons 'p p)) (lambda () (setX p 99))))
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 122 (list (cons 'p2 p2) (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime p2 'x 'Point)))) 99)
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 123 (list (cons 'p2 p2) (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime p2 'y 'Point)))) 7)
+  (define p (thsl-src! "example/learn/lesson03-records.tesl" 120 (list) (lambda () (Point #:x 3 #:y 7))))
+  (define p2 (thsl-src! "example/learn/lesson03-records.tesl" 121 (list (cons 'p p)) (lambda () (setX p 99))))
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 122 (list (cons 'p2 p2) (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime p2 'x 'Point)))) 99)
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 123 (list (cons 'p2 p2) (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime p2 'y 'Point)))) 7)
     ))
   )
 
   (test-case "single field update leaves others intact"
     (call-with-fresh-memory-db '() (lambda ()
-  (define p (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 127 (list) (lambda () (Point #:x 10 #:y 20))))
-  (define p2 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 128 (list (cons 'p p)) (lambda () (tesl-record-update (raw-value p) (tesl-hash 'y (raw-value 50))))))
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 129 (list (cons 'p2 p2) (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime p2 'x 'Point)))) 10)
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 130 (list (cons 'p2 p2) (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime p2 'y 'Point)))) 50)
+  (define p (thsl-src! "example/learn/lesson03-records.tesl" 127 (list) (lambda () (Point #:x 10 #:y 20))))
+  (define p2 (thsl-src! "example/learn/lesson03-records.tesl" 128 (list (cons 'p p)) (lambda () (tesl-record-update (raw-value p) (tesl-hash 'y (raw-value 50))))))
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 129 (list (cons 'p2 p2) (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime p2 'x 'Point)))) 10)
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 130 (list (cons 'p2 p2) (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime p2 'y 'Point)))) 50)
     ))
   )
 
   (test-case "update is non-destructive \226\128\148 original unchanged"
     (call-with-fresh-memory-db '() (lambda ()
-  (define p (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 134 (list) (lambda () (Point #:x 1 #:y 2))))
-  (define _p2 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 135 (list (cons 'p p)) (lambda () (tesl-record-update (raw-value p) (tesl-hash 'x (raw-value 99))))))
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 136 (list (cons '_p2 _p2) (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime p 'x 'Point)))) 1)
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 137 (list (cons '_p2 _p2) (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime p 'y 'Point)))) 2)
+  (define p (thsl-src! "example/learn/lesson03-records.tesl" 134 (list) (lambda () (Point #:x 1 #:y 2))))
+  (define _p2 (thsl-src! "example/learn/lesson03-records.tesl" 135 (list (cons 'p p)) (lambda () (tesl-record-update (raw-value p) (tesl-hash 'x (raw-value 99))))))
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 136 (list (cons '_p2 _p2) (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime p 'x 'Point)))) 1)
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 137 (list (cons '_p2 _p2) (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime p 'y 'Point)))) 2)
     ))
   )
 
   (test-case "multi-field update"
     (call-with-fresh-memory-db '() (lambda ()
-  (define r (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 141 (list) (lambda () (Rectangle #:origin (Point #:x 0 #:y 0) #:width 10 #:height 5))))
-  (define r2 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 142 (list (cons 'r r)) (lambda () (tesl-record-update (raw-value r) (tesl-hash 'width (raw-value 20) 'height (raw-value 8))))))
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 143 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime r2 'width 'Rectangle)))) 20)
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 144 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime r2 'height 'Rectangle)))) 8)
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 145 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime (tesl-dot/runtime r2 'origin 'Rectangle) 'x 'Point)))) 0)
+  (define r (thsl-src! "example/learn/lesson03-records.tesl" 141 (list) (lambda () (Rectangle #:origin (Point #:x 0 #:y 0) #:width 10 #:height 5))))
+  (define r2 (thsl-src! "example/learn/lesson03-records.tesl" 142 (list (cons 'r r)) (lambda () (tesl-record-update (raw-value r) (tesl-hash 'width (raw-value 20) 'height (raw-value 8))))))
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 143 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime r2 'width 'Rectangle)))) 20)
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 144 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime r2 'height 'Rectangle)))) 8)
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 145 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime (tesl-dot/runtime r2 'origin 'Rectangle) 'x 'Point)))) 0)
     ))
   )
 
   (test-case "chained updates"
     (call-with-fresh-memory-db '() (lambda ()
-  (define p (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 149 (list) (lambda () (Point #:x 0 #:y 0))))
-  (define p1 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 150 (list (cons 'p p)) (lambda () (tesl-record-update (raw-value p) (tesl-hash 'x (raw-value 5))))))
-  (define p2 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 151 (list (cons 'p1 p1) (cons 'p p)) (lambda () (tesl-record-update (raw-value p1) (tesl-hash 'y (raw-value 3))))))
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 152 (list (cons 'p2 p2) (cons 'p1 p1) (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime p2 'x 'Point)))) 5)
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 153 (list (cons 'p2 p2) (cons 'p1 p1) (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime p2 'y 'Point)))) 3)
+  (define p (thsl-src! "example/learn/lesson03-records.tesl" 149 (list) (lambda () (Point #:x 0 #:y 0))))
+  (define p1 (thsl-src! "example/learn/lesson03-records.tesl" 150 (list (cons 'p p)) (lambda () (tesl-record-update (raw-value p) (tesl-hash 'x (raw-value 5))))))
+  (define p2 (thsl-src! "example/learn/lesson03-records.tesl" 151 (list (cons 'p1 p1) (cons 'p p)) (lambda () (tesl-record-update (raw-value p1) (tesl-hash 'y (raw-value 3))))))
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 152 (list (cons 'p2 p2) (cons 'p1 p1) (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime p2 'x 'Point)))) 5)
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 153 (list (cons 'p2 p2) (cons 'p1 p1) (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime p2 'y 'Point)))) 3)
     ))
   )
 
   (test-case "moveOrigin"
     (call-with-fresh-memory-db '() (lambda ()
-  (define r (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 157 (list) (lambda () (Rectangle #:origin (Point #:x 2 #:y 3) #:width 10 #:height 5))))
-  (define r2 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 158 (list (cons 'r r)) (lambda () (moveOrigin r 10 20))))
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 159 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime (tesl-dot/runtime r2 'origin 'Rectangle) 'x 'Point)))) 12)
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 160 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime (tesl-dot/runtime r2 'origin 'Rectangle) 'y 'Point)))) 23)
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 161 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime r2 'width 'Rectangle)))) 10)
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 162 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime r2 'height 'Rectangle)))) 5)
+  (define r (thsl-src! "example/learn/lesson03-records.tesl" 157 (list) (lambda () (Rectangle #:origin (Point #:x 2 #:y 3) #:width 10 #:height 5))))
+  (define r2 (thsl-src! "example/learn/lesson03-records.tesl" 158 (list (cons 'r r)) (lambda () (moveOrigin r 10 20))))
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 159 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime (tesl-dot/runtime r2 'origin 'Rectangle) 'x 'Point)))) 12)
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 160 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime (tesl-dot/runtime r2 'origin 'Rectangle) 'y 'Point)))) 23)
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 161 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime r2 'width 'Rectangle)))) 10)
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 162 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime r2 'height 'Rectangle)))) 5)
     ))
   )
 
   (test-case "resetOrigin"
     (call-with-fresh-memory-db '() (lambda ()
-  (define r (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 166 (list) (lambda () (Rectangle #:origin (Point #:x 7 #:y 9) #:width 4 #:height 4))))
-  (define r2 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 167 (list (cons 'r r)) (lambda () (resetOrigin r))))
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 168 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime (tesl-dot/runtime r2 'origin 'Rectangle) 'x 'Point)))) 0)
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 169 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime (tesl-dot/runtime r2 'origin 'Rectangle) 'y 'Point)))) 0)
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 170 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime r2 'width 'Rectangle)))) 4)
+  (define r (thsl-src! "example/learn/lesson03-records.tesl" 166 (list) (lambda () (Rectangle #:origin (Point #:x 7 #:y 9) #:width 4 #:height 4))))
+  (define r2 (thsl-src! "example/learn/lesson03-records.tesl" 167 (list (cons 'r r)) (lambda () (resetOrigin r))))
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 168 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime (tesl-dot/runtime r2 'origin 'Rectangle) 'x 'Point)))) 0)
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 169 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime (tesl-dot/runtime r2 'origin 'Rectangle) 'y 'Point)))) 0)
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 170 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime r2 'width 'Rectangle)))) 4)
     ))
   )
 
   (test-case "flipDimensions"
     (call-with-fresh-memory-db '() (lambda ()
-  (define r (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 174 (list) (lambda () (Rectangle #:origin (Point #:x 0 #:y 0) #:width 16 #:height 9))))
-  (define r2 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 175 (list (cons 'r r)) (lambda () (flipDimensions r))))
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 176 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime r2 'width 'Rectangle)))) 9)
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 177 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime r2 'height 'Rectangle)))) 16)
-  (define r3 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 178 (list (cons 'r2 r2) (cons 'r r)) (lambda () (flipDimensions r2))))
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 179 (list (cons 'r3 r3) (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime r3 'width 'Rectangle)))) 16)
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 180 (list (cons 'r3 r3) (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime r3 'height 'Rectangle)))) 9)
+  (define r (thsl-src! "example/learn/lesson03-records.tesl" 174 (list) (lambda () (Rectangle #:origin (Point #:x 0 #:y 0) #:width 16 #:height 9))))
+  (define r2 (thsl-src! "example/learn/lesson03-records.tesl" 175 (list (cons 'r r)) (lambda () (flipDimensions r))))
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 176 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime r2 'width 'Rectangle)))) 9)
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 177 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime r2 'height 'Rectangle)))) 16)
+  (define r3 (thsl-src! "example/learn/lesson03-records.tesl" 178 (list (cons 'r2 r2) (cons 'r r)) (lambda () (flipDimensions r2))))
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 179 (list (cons 'r3 r3) (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime r3 'width 'Rectangle)))) 16)
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 180 (list (cons 'r3 r3) (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime r3 'height 'Rectangle)))) 9)
     ))
   )
 
   (test-case "update then access nested field"
     (call-with-fresh-memory-db '() (lambda ()
-  (define r (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 184 (list) (lambda () (Rectangle #:origin (Point #:x 0 #:y 0) #:width 5 #:height 3))))
-  (define r2 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 185 (list (cons 'r r)) (lambda () (tesl-record-update (raw-value r) (tesl-hash 'origin (raw-value (Point #:x 10 #:y 20)))))))
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 186 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime (tesl-dot/runtime r2 'origin 'Rectangle) 'x 'Point)))) 10)
-  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson03-records.tesl" 187 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime (tesl-dot/runtime r2 'origin 'Rectangle) 'y 'Point)))) 20)
+  (define r (thsl-src! "example/learn/lesson03-records.tesl" 184 (list) (lambda () (Rectangle #:origin (Point #:x 0 #:y 0) #:width 5 #:height 3))))
+  (define r2 (thsl-src! "example/learn/lesson03-records.tesl" 185 (list (cons 'r r)) (lambda () (tesl-record-update (raw-value r) (tesl-hash 'origin (raw-value (Point #:x 10 #:y 20)))))))
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 186 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime (tesl-dot/runtime r2 'origin 'Rectangle) 'x 'Point)))) 10)
+  (check-equal? (thsl-src! "example/learn/lesson03-records.tesl" 187 (list (cons 'r2 r2) (cons 'r r)) (lambda () (raw-value (tesl-dot/runtime (tesl-dot/runtime r2 'origin 'Rectangle) 'y 'Point)))) 20)
     ))
   )
 

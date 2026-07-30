@@ -63,7 +63,7 @@
 (define/pow
   (parseUserId [id : String])
   #:returns String
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson33-sse-and-queue-tests.tesl" 85 (list (cons 'id *id)) (lambda () *id)))
+  (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 85 (list (cons 'id *id)) (lambda () *id)))
 
 (define-capture userIdCapture
   [userIdCapture : String]
@@ -82,13 +82,13 @@
   (handleNotice [job : NotifyJob ::: (FromQueue (Id == jobId) job)])
   #:capabilities [queueRead pubsub]
   #:returns NotifyJob
-  (let ([_ (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson33-sse-and-queue-tests.tesl" 106 (list (cons 'job *job)) (lambda () (publish-event! Lesson33Events (format "~a" (raw-value job.userId)) (NoticeSent (raw-value job.message)))))]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson33-sse-and-queue-tests.tesl" 107 (list (cons 'job *job)) (lambda () *job))))
+  (let ([_ (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 106 (list (cons 'job *job)) (lambda () (publish-event! Lesson33Events (format "~a" (raw-value job.userId)) (NoticeSent (raw-value job.message)))))]) (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 107 (list (cons 'job *job)) (lambda () *job))))
 
 (define-handler
   (sendNotice [req : SendNoticeRequest])
   #:capabilities [queueWrite]
   #:returns String
-  (let ([_ (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson33-sse-and-queue-tests.tesl" 111 (list (cons 'req *req)) (lambda () (enqueue! Lesson33Queue (NotifyJob #:userId (raw-value req.userId) #:message (raw-value req.message)))))]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson33-sse-and-queue-tests.tesl" 112 (list (cons 'req *req)) (lambda () "queued"))))
+  (let ([_ (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 111 (list (cons 'req *req)) (lambda () (enqueue! Lesson33Queue (NotifyJob #:userId (raw-value req.userId) #:message (raw-value req.message)))))]) (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 112 (list (cons 'req *req)) (lambda () "queued"))))
 
 (define Lesson33Server-sse-routes
   (list (list (list "events" #f) #f Lesson33Events 1 (list (cons 1 (sse-key-capture userIdCapture))))))
@@ -113,17 +113,17 @@
         (call-with-api-test-subscriptions
           (lambda ()
             (with-capabilities (queueRead queueWrite pubsub)
-              (define stream (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson33-sse-and-queue-tests.tesl" 129 (list) (lambda () (subscribe Lesson33Server-sse-routes (list "events" "user-1") #:headers (tesl-hash) #:name "/events/user-1"))))
-              (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson33-sse-and-queue-tests.tesl" 130 (list (cons 'stream stream)) (lambda () (dispatch-api-test-request Lesson33Server 'post (list "send") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "userId") "user-1" (string->symbol "message") "Hello from lesson33") #:capabilities (list queueRead queueWrite pubsub)))))
-              (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson33-sse-and-queue-tests.tesl" 131 (list (cons 'resp resp) (cons 'stream stream)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
-              (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson33-sse-and-queue-tests.tesl" 133 (list (cons 'resp resp) (cons 'stream stream)) (lambda () (pendingJobCount Lesson33Queue)))) 1)
-              (define result (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson33-sse-and-queue-tests.tesl" 135 (list (cons 'resp resp) (cons 'stream stream)) (lambda () (processNextJob Lesson33Queue))))
-              (define job (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson33-sse-and-queue-tests.tesl" 136 (list (cons 'result result) (cons 'resp resp) (cons 'stream stream)) (lambda () (expectJobOk (raw-value result)))))
-              (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson33-sse-and-queue-tests.tesl" 137 (list (cons 'job job) (cons 'result result) (cons 'resp resp) (cons 'stream stream)) (lambda () (api-test-field-access-ref job 'userId)))) "user-1")
-              (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson33-sse-and-queue-tests.tesl" 138 (list (cons 'job job) (cons 'result result) (cons 'resp resp) (cons 'stream stream)) (lambda () (pendingJobCount Lesson33Queue)))) 0)
-              (define events (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson33-sse-and-queue-tests.tesl" 140 (list (cons 'job job) (cons 'result result) (cons 'resp resp) (cons 'stream stream)) (lambda () (collect (raw-value stream) #:count 1 #:timeout-ms 1500))))
-              (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson33-sse-and-queue-tests.tesl" 141 (list (cons 'events events) (cons 'job job) (cons 'result result) (cons 'resp resp) (cons 'stream stream)) (lambda () (isNotEmpty (raw-value events))))))
-              (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson33-sse-and-queue-tests.tesl" 142 (list (cons 'events events) (cons 'job job) (cons 'result result) (cons 'resp resp) (cons 'stream stream)) (lambda () (includesWhere (tesl-hash 'tag "NoticeSent" 'fields (tesl-hash 'message "Hello from lesson33")) (raw-value events))))))
+              (define stream (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 129 (list) (lambda () (subscribe Lesson33Server-sse-routes (list "events" "user-1") #:headers (tesl-hash) #:name "/events/user-1"))))
+              (define resp (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 130 (list (cons 'stream stream)) (lambda () (dispatch-api-test-request Lesson33Server 'post (list "send") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "userId") "user-1" (string->symbol "message") "Hello from lesson33") #:capabilities (list queueRead queueWrite pubsub)))))
+              (check-true (raw-value (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 131 (list (cons 'resp resp) (cons 'stream stream)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
+              (check-equal? (raw-value (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 133 (list (cons 'resp resp) (cons 'stream stream)) (lambda () (pendingJobCount Lesson33Queue)))) 1)
+              (define result (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 135 (list (cons 'resp resp) (cons 'stream stream)) (lambda () (processNextJob Lesson33Queue))))
+              (define job (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 136 (list (cons 'result result) (cons 'resp resp) (cons 'stream stream)) (lambda () (expectJobOk (raw-value result)))))
+              (check-equal? (raw-value (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 137 (list (cons 'job job) (cons 'result result) (cons 'resp resp) (cons 'stream stream)) (lambda () (api-test-field-access-ref job 'userId)))) "user-1")
+              (check-equal? (raw-value (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 138 (list (cons 'job job) (cons 'result result) (cons 'resp resp) (cons 'stream stream)) (lambda () (pendingJobCount Lesson33Queue)))) 0)
+              (define events (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 140 (list (cons 'job job) (cons 'result result) (cons 'resp resp) (cons 'stream stream)) (lambda () (collect (raw-value stream) #:count 1 #:timeout-ms 1500))))
+              (check-true (raw-value (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 141 (list (cons 'events events) (cons 'job job) (cons 'result result) (cons 'resp resp) (cons 'stream stream)) (lambda () (isNotEmpty (raw-value events))))))
+              (check-true (raw-value (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 142 (list (cons 'events events) (cons 'job job) (cons 'result result) (cons 'resp resp) (cons 'stream stream)) (lambda () (includesWhere (tesl-hash 'tag "NoticeSent" 'fields (tesl-hash 'message "Hello from lesson33")) (raw-value events))))))
             )
           ))
       ))

@@ -43,69 +43,69 @@
   (getCachedProfile [userId : String])
   #:capabilities [cacheCap_UserProfileCache]
   #:returns (Maybe String)
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 103 (list (cons 'userId *userId)) (lambda () (cache-get! UserProfileCache (string-append "profile:" *userId)))))
+  (thsl-src! "example/learn/lesson59-cache.tesl" 103 (list (cons 'userId *userId)) (lambda () (cache-get! UserProfileCache (string-append "profile:" *userId)))))
 
 (define/pow
   (setCachedProfile [userId : String] [profile : String])
   #:capabilities [cacheCap_UserProfileCache]
   #:returns Unit
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 108 (list (cons 'userId *userId) (cons 'profile *profile)) (lambda () (cache-set! UserProfileCache (string-append "profile:" *userId) profile))))
+  (thsl-src! "example/learn/lesson59-cache.tesl" 108 (list (cons 'userId *userId) (cons 'profile *profile)) (lambda () (cache-set! UserProfileCache (string-append "profile:" *userId) profile))))
 
 (define/pow
   (deleteProfileCache [userId : String])
   #:capabilities [cacheCap_UserProfileCache]
   #:returns Unit
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 113 (list (cons 'userId *userId)) (lambda () (cache-delete! UserProfileCache (string-append "profile:" *userId)))))
+  (thsl-src! "example/learn/lesson59-cache.tesl" 113 (list (cons 'userId *userId)) (lambda () (cache-delete! UserProfileCache (string-append "profile:" *userId)))))
 
 (define/pow
   (invalidateUserCache [prefix : String])
   #:capabilities [cacheCap_UserProfileCache]
   #:returns Unit
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 119 (list (cons 'prefix *prefix)) (lambda () (cache-invalidate-prefix! UserProfileCache prefix))))
+  (thsl-src! "example/learn/lesson59-cache.tesl" 119 (list (cons 'prefix *prefix)) (lambda () (cache-invalidate-prefix! UserProfileCache prefix))))
 
 (define/pow
   (getProfileOrDefault [userId : String] [defaultProfile : String])
   #:capabilities [cacheCap_UserProfileCache]
   #:returns String
-  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 125 (list (cons 'userId *userId) (cons 'defaultProfile *defaultProfile)) (lambda () (let ([tesl-case-0 (raw-value (cache-get! UserProfileCache (string-append "profile:" *userId)))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([profile (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 126 (list (cons 'profile profile)) (lambda () *profile)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 127 (list) (lambda () *defaultProfile))])))))
+  (thsl-src-control! "example/learn/lesson59-cache.tesl" 125 (list (cons 'userId *userId) (cons 'defaultProfile *defaultProfile)) (lambda () (let ([tesl-case-0 (raw-value (cache-get! UserProfileCache (string-append "profile:" *userId)))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([profile (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/learn/lesson59-cache.tesl" 126 (list (cons 'profile profile)) (lambda () *profile)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/learn/lesson59-cache.tesl" 127 (list) (lambda () *defaultProfile))])))))
 
 (define/pow
   (getCachedCounter [name : String])
   #:capabilities [cacheCap_CounterCache]
   #:returns (Maybe Integer)
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 132 (list (cons 'name *name)) (lambda () (cache-get! CounterCache name))))
+  (thsl-src! "example/learn/lesson59-cache.tesl" 132 (list (cons 'name *name)) (lambda () (cache-get! CounterCache name))))
 
 (define/pow
   (setCachedCounter [name : String] [value : Integer])
   #:capabilities [cacheCap_CounterCache]
   #:returns Unit
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 136 (list (cons 'name *name) (cons 'value *value)) (lambda () (cache-set! CounterCache name value))))
+  (thsl-src! "example/learn/lesson59-cache.tesl" 136 (list (cons 'name *name) (cons 'value *value)) (lambda () (cache-set! CounterCache name value))))
 
 (define/pow
   (storeSession [sessionId : String] [userId : String])
   #:capabilities [cacheCap_SessionCache]
   #:returns Unit
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 141 (list (cons 'sessionId *sessionId) (cons 'userId *userId)) (lambda () (cache-set! SessionCache (string-append "session:" *sessionId) userId 86400))))
+  (thsl-src! "example/learn/lesson59-cache.tesl" 141 (list (cons 'sessionId *sessionId) (cons 'userId *userId)) (lambda () (cache-set! SessionCache (string-append "session:" *sessionId) userId 86400))))
 
 (define/pow
   (lookupSession [sessionId : String])
   #:capabilities [cacheCap_SessionCache]
   #:returns (Maybe String)
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 145 (list (cons 'sessionId *sessionId)) (lambda () (cache-get! SessionCache (string-append "session:" *sessionId)))))
+  (thsl-src! "example/learn/lesson59-cache.tesl" 145 (list (cons 'sessionId *sessionId)) (lambda () (cache-get! SessionCache (string-append "session:" *sessionId)))))
 
 (define/pow
   (invalidateUserSessions [userId : String])
   #:capabilities [cacheCap_SessionCache]
   #:returns Unit
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 149 (list (cons 'userId *userId)) (lambda () (cache-invalidate-prefix! SessionCache (string-append "session:" *userId)))))
+  (thsl-src! "example/learn/lesson59-cache.tesl" 149 (list (cons 'userId *userId)) (lambda () (cache-invalidate-prefix! SessionCache (string-append "session:" *userId)))))
 
 (module+ test
   (require rackunit)
   (test-case "cache miss returns Nothing"
     (call-with-fresh-memory-db (list MainDB) (lambda ()
     (with-capabilities (cacheCap_UserProfileCache)
-    (define result (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 215 (list) (lambda () (getCachedProfile "unknown-user-xyz-never-set"))))
-    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 216 (list (cons 'result result)) (lambda () result))) Nothing)
+    (define result (thsl-src! "example/learn/lesson59-cache.tesl" 215 (list) (lambda () (getCachedProfile "unknown-user-xyz-never-set"))))
+    (check-equal? (raw-value (thsl-src! "example/learn/lesson59-cache.tesl" 216 (list (cons 'result result)) (lambda () result))) Nothing)
     )
     ))
   )
@@ -113,9 +113,9 @@
   (test-case "set and get profile round-trip"
     (call-with-fresh-memory-db (list MainDB) (lambda ()
     (with-capabilities (cacheCap_UserProfileCache)
-    (define tesl-ignored-1 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 220 (list) (lambda () (setCachedProfile "user1" "{\"name\":\"Alice\"}"))))
-    (define result (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 221 (list) (lambda () (getCachedProfile "user1"))))
-    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 222 (list (cons 'result result)) (lambda () result))) (raw-value (Something "{\"name\":\"Alice\"}")))
+    (define tesl-ignored-1 (thsl-src! "example/learn/lesson59-cache.tesl" 220 (list) (lambda () (setCachedProfile "user1" "{\"name\":\"Alice\"}"))))
+    (define result (thsl-src! "example/learn/lesson59-cache.tesl" 221 (list) (lambda () (getCachedProfile "user1"))))
+    (check-equal? (raw-value (thsl-src! "example/learn/lesson59-cache.tesl" 222 (list (cons 'result result)) (lambda () result))) (raw-value (Something "{\"name\":\"Alice\"}")))
     )
     ))
   )
@@ -123,10 +123,10 @@
   (test-case "delete removes cached entry"
     (call-with-fresh-memory-db (list MainDB) (lambda ()
     (with-capabilities (cacheCap_UserProfileCache)
-    (define tesl-ignored-2 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 226 (list) (lambda () (setCachedProfile "del-user" "data"))))
-    (define tesl-ignored-3 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 227 (list) (lambda () (deleteProfileCache "del-user"))))
-    (define result (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 228 (list) (lambda () (getCachedProfile "del-user"))))
-    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 229 (list (cons 'result result)) (lambda () result))) Nothing)
+    (define tesl-ignored-2 (thsl-src! "example/learn/lesson59-cache.tesl" 226 (list) (lambda () (setCachedProfile "del-user" "data"))))
+    (define tesl-ignored-3 (thsl-src! "example/learn/lesson59-cache.tesl" 227 (list) (lambda () (deleteProfileCache "del-user"))))
+    (define result (thsl-src! "example/learn/lesson59-cache.tesl" 228 (list) (lambda () (getCachedProfile "del-user"))))
+    (check-equal? (raw-value (thsl-src! "example/learn/lesson59-cache.tesl" 229 (list (cons 'result result)) (lambda () result))) Nothing)
     )
     ))
   )
@@ -134,8 +134,8 @@
   (test-case "getProfileOrDefault returns default on cache miss"
     (call-with-fresh-memory-db (list MainDB) (lambda ()
     (with-capabilities (cacheCap_UserProfileCache)
-    (define result (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 233 (list) (lambda () (getProfileOrDefault "nonexistent-user-abc" "default-profile"))))
-    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 234 (list (cons 'result result)) (lambda () result))) "default-profile")
+    (define result (thsl-src! "example/learn/lesson59-cache.tesl" 233 (list) (lambda () (getProfileOrDefault "nonexistent-user-abc" "default-profile"))))
+    (check-equal? (raw-value (thsl-src! "example/learn/lesson59-cache.tesl" 234 (list (cons 'result result)) (lambda () result))) "default-profile")
     )
     ))
   )
@@ -143,9 +143,9 @@
   (test-case "getProfileOrDefault returns cached value on hit"
     (call-with-fresh-memory-db (list MainDB) (lambda ()
     (with-capabilities (cacheCap_UserProfileCache)
-    (define tesl-ignored-4 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 238 (list) (lambda () (setCachedProfile "user2" "profile-data"))))
-    (define result (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 239 (list) (lambda () (getProfileOrDefault "user2" "default"))))
-    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 240 (list (cons 'result result)) (lambda () result))) "profile-data")
+    (define tesl-ignored-4 (thsl-src! "example/learn/lesson59-cache.tesl" 238 (list) (lambda () (setCachedProfile "user2" "profile-data"))))
+    (define result (thsl-src! "example/learn/lesson59-cache.tesl" 239 (list) (lambda () (getProfileOrDefault "user2" "default"))))
+    (check-equal? (raw-value (thsl-src! "example/learn/lesson59-cache.tesl" 240 (list (cons 'result result)) (lambda () result))) "profile-data")
     )
     ))
   )
@@ -153,9 +153,9 @@
   (test-case "counter cache get and set"
     (call-with-fresh-memory-db (list MainDB) (lambda ()
     (with-capabilities (cacheCap_CounterCache)
-    (define tesl-ignored-5 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 244 (list) (lambda () (setCachedCounter "visits" 42))))
-    (define result (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 245 (list) (lambda () (getCachedCounter "visits"))))
-    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 246 (list (cons 'result result)) (lambda () result))) (raw-value (Something 42)))
+    (define tesl-ignored-5 (thsl-src! "example/learn/lesson59-cache.tesl" 244 (list) (lambda () (setCachedCounter "visits" 42))))
+    (define result (thsl-src! "example/learn/lesson59-cache.tesl" 245 (list) (lambda () (getCachedCounter "visits"))))
+    (check-equal? (raw-value (thsl-src! "example/learn/lesson59-cache.tesl" 246 (list (cons 'result result)) (lambda () result))) (raw-value (Something 42)))
     )
     ))
   )
@@ -163,10 +163,10 @@
   (test-case "overwriting a cache entry stores the new value"
     (call-with-fresh-memory-db (list MainDB) (lambda ()
     (with-capabilities (cacheCap_UserProfileCache)
-    (define tesl-ignored-6 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 250 (list) (lambda () (setCachedProfile "user3" "old-data"))))
-    (define tesl-ignored-7 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 251 (list) (lambda () (setCachedProfile "user3" "new-data"))))
-    (define result (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 252 (list) (lambda () (getCachedProfile "user3"))))
-    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 253 (list (cons 'result result)) (lambda () result))) (raw-value (Something "new-data")))
+    (define tesl-ignored-6 (thsl-src! "example/learn/lesson59-cache.tesl" 250 (list) (lambda () (setCachedProfile "user3" "old-data"))))
+    (define tesl-ignored-7 (thsl-src! "example/learn/lesson59-cache.tesl" 251 (list) (lambda () (setCachedProfile "user3" "new-data"))))
+    (define result (thsl-src! "example/learn/lesson59-cache.tesl" 252 (list) (lambda () (getCachedProfile "user3"))))
+    (check-equal? (raw-value (thsl-src! "example/learn/lesson59-cache.tesl" 253 (list (cons 'result result)) (lambda () result))) (raw-value (Something "new-data")))
     )
     ))
   )
@@ -174,9 +174,9 @@
   (test-case "session cache round-trip"
     (call-with-fresh-memory-db (list MainDB) (lambda ()
     (with-capabilities (cacheCap_SessionCache)
-    (define tesl-ignored-8 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 257 (list) (lambda () (storeSession "sess123" "user42"))))
-    (define result (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 258 (list) (lambda () (lookupSession "sess123"))))
-    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 259 (list (cons 'result result)) (lambda () result))) (raw-value (Something "user42")))
+    (define tesl-ignored-8 (thsl-src! "example/learn/lesson59-cache.tesl" 257 (list) (lambda () (storeSession "sess123" "user42"))))
+    (define result (thsl-src! "example/learn/lesson59-cache.tesl" 258 (list) (lambda () (lookupSession "sess123"))))
+    (check-equal? (raw-value (thsl-src! "example/learn/lesson59-cache.tesl" 259 (list (cons 'result result)) (lambda () result))) (raw-value (Something "user42")))
     )
     ))
   )
@@ -184,12 +184,12 @@
   (test-case "multiple caches are independent (same key, different caches)"
     (call-with-fresh-memory-db (list MainDB) (lambda ()
     (with-capabilities (cacheCap_UserProfileCache cacheCap_CounterCache)
-    (define tesl-ignored-9 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 263 (list) (lambda () (setCachedProfile "key" "string-val"))))
-    (define tesl-ignored-10 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 264 (list) (lambda () (setCachedCounter "key" 100))))
-    (define r1 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 265 (list) (lambda () (getCachedProfile "key"))))
-    (define r2 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 266 (list (cons 'r1 r1)) (lambda () (getCachedCounter "key"))))
-    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 267 (list (cons 'r2 r2) (cons 'r1 r1)) (lambda () r1))) (raw-value (Something "string-val")))
-    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 268 (list (cons 'r2 r2) (cons 'r1 r1)) (lambda () r2))) (raw-value (Something 100)))
+    (define tesl-ignored-9 (thsl-src! "example/learn/lesson59-cache.tesl" 263 (list) (lambda () (setCachedProfile "key" "string-val"))))
+    (define tesl-ignored-10 (thsl-src! "example/learn/lesson59-cache.tesl" 264 (list) (lambda () (setCachedCounter "key" 100))))
+    (define r1 (thsl-src! "example/learn/lesson59-cache.tesl" 265 (list) (lambda () (getCachedProfile "key"))))
+    (define r2 (thsl-src! "example/learn/lesson59-cache.tesl" 266 (list (cons 'r1 r1)) (lambda () (getCachedCounter "key"))))
+    (check-equal? (raw-value (thsl-src! "example/learn/lesson59-cache.tesl" 267 (list (cons 'r2 r2) (cons 'r1 r1)) (lambda () r1))) (raw-value (Something "string-val")))
+    (check-equal? (raw-value (thsl-src! "example/learn/lesson59-cache.tesl" 268 (list (cons 'r2 r2) (cons 'r1 r1)) (lambda () r2))) (raw-value (Something 100)))
     )
     ))
   )
@@ -197,13 +197,13 @@
   (test-case "invalidate by prefix clears matching entries"
     (call-with-fresh-memory-db (list MainDB) (lambda ()
     (with-capabilities (cacheCap_UserProfileCache)
-    (define tesl-ignored-11 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 272 (list) (lambda () (setCachedProfile "alice" "alice-data"))))
-    (define tesl-ignored-12 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 273 (list) (lambda () (setCachedProfile "alicia" "alicia-data"))))
-    (define tesl-ignored-13 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 274 (list) (lambda () (invalidateUserCache "profile:al"))))
-    (define r1 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 275 (list) (lambda () (getCachedProfile "alice"))))
-    (define r2 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 276 (list (cons 'r1 r1)) (lambda () (getCachedProfile "alicia"))))
-    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 277 (list (cons 'r2 r2) (cons 'r1 r1)) (lambda () r1))) Nothing)
-    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson59-cache.tesl" 278 (list (cons 'r2 r2) (cons 'r1 r1)) (lambda () r2))) Nothing)
+    (define tesl-ignored-11 (thsl-src! "example/learn/lesson59-cache.tesl" 272 (list) (lambda () (setCachedProfile "alice" "alice-data"))))
+    (define tesl-ignored-12 (thsl-src! "example/learn/lesson59-cache.tesl" 273 (list) (lambda () (setCachedProfile "alicia" "alicia-data"))))
+    (define tesl-ignored-13 (thsl-src! "example/learn/lesson59-cache.tesl" 274 (list) (lambda () (invalidateUserCache "profile:al"))))
+    (define r1 (thsl-src! "example/learn/lesson59-cache.tesl" 275 (list) (lambda () (getCachedProfile "alice"))))
+    (define r2 (thsl-src! "example/learn/lesson59-cache.tesl" 276 (list (cons 'r1 r1)) (lambda () (getCachedProfile "alicia"))))
+    (check-equal? (raw-value (thsl-src! "example/learn/lesson59-cache.tesl" 277 (list (cons 'r2 r2) (cons 'r1 r1)) (lambda () r1))) Nothing)
+    (check-equal? (raw-value (thsl-src! "example/learn/lesson59-cache.tesl" 278 (list (cons 'r2 r2) (cons 'r1 r1)) (lambda () r2))) Nothing)
     )
     ))
   )

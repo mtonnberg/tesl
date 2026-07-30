@@ -5,7 +5,9 @@
 #
 # Covers:
 #   - JwtToken and JwtSecret nominal newtype construction
-#   - JWT.sign produces a JwtToken
+#   - JWT.sign produces a JwtToken and stamps a fixed one-hour `exp` itself
+#   - a caller-supplied `exp` is rejected (expiry is not the caller's to set)
+#   - JWT.verify correct secret returns claims carrying an `Authentic` fact
 #   - JWT.verify correct secret returns claims
 #   - JWT.verify wrong secret returns error
 #   - JWT.decode returns claims without signature check
@@ -19,6 +21,8 @@ module JwtTests exposing [
   makeToken,
   wrapToken,
   signClaims,
+  signClaimsWithOwnExp,
+  subjectOfAuthenticClaims,
   verifyClaims,
   decodeClaims,
   checkTokenStr,
@@ -26,9 +30,13 @@ module JwtTests exposing [
 ]
 
 import Tesl.Prelude exposing [Bool(..), Int, String, List, Unit]
-import Tesl.String exposing [String.length, String.startsWith]
+import Tesl.String exposing [String.length, String.startsWith, String.contains]
 import Tesl.Maybe exposing [Maybe(..)]
-import Tesl.Dict exposing [Dict.singleton, Dict.lookup]
+import Tesl.Dict exposing [Dict, Dict.singleton, Dict.fromList, Dict.lookup]
+import Tesl.Tuple exposing [Tuple2]
+# `time` is named only in the capability below: JWT.sign reads the clock to stamp
+# the token's expiry.
+import Tesl.Time exposing [time]
 import Tesl.JWT exposing [
   jwt,
   JwtToken,
@@ -36,11 +44,13 @@ import Tesl.JWT exposing [
   JWT.sign,
   JWT.verify,
   JWT.decode,
+  Authentic,
 ]
 
 # ── Capability ────────────────────────────────────────────────────────────────
 
-capability jwtCap implies jwt
+# `time` as well as `jwt`: JWT.sign stamps the expiry from the wall clock.
+capability jwtCap implies jwt, time
 
 # ── Helper functions ──────────────────────────────────────────────────────────
 
@@ -58,8 +68,26 @@ fn wrapToken(s: String) -> JwtToken =
 fn signClaims(claims: String, secret: JwtSecret) requires [jwtCap] -> JwtToken =
   JWT.sign (Dict.singleton "sub" claims) secret
 
+# There is NO expiry parameter: JWT.sign stamps `exp` one hour ahead itself. A
+# caller who supplies one is REJECTED rather than silently overridden, which is
+# what this helper exercises — it typechecks (the claims are Dict String String,
+# and "3600" is a String), and fails loudly at run time.
+fn signClaimsWithOwnExp(claims: String, secret: JwtSecret) requires [jwtCap] -> JwtToken =
+  JWT.sign (Dict.fromList [Tuple2 "sub" claims, Tuple2 "exp" "3600"]) secret
+
+# A consumer that DEMANDS the claims were verified. Only `check JWT.verify` can
+# satisfy this; JWT.decode mints no fact, so it cannot be used to reach here.
+fn subjectOfAuthenticClaims(claims: Dict String String ::: Authentic claims) -> String =
+  case Dict.lookup "sub" claims of
+    Nothing -> ""
+    Something s -> s
+
+# JWT.verify is check-shaped, so its result must be BOUND with `check` before it
+# can be read — nesting it inside Dict.lookup would hand the lookup the raw
+# check-fail on the failure path.
 fn verifyClaims(token: JwtToken, secret: JwtSecret) requires [jwtCap] -> String =
-  case Dict.lookup "sub" (JWT.verify token secret) of
+  let claims = check JWT.verify token secret
+  case Dict.lookup "sub" claims of
     Nothing -> ""
     Something s -> s
 
@@ -76,9 +104,15 @@ fn tokenLength(token: JwtToken) -> Int =
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
-test "T01: JwtSecret constructor wraps a string" {
+# NOTE on `JwtSecret` and `.value`: JwtSecret is a SECRET newtype, so it has no
+# readable `.value` — reading the key back out as a String would defeat the
+# redaction every rendering sink applies to it. T01/T10/T15/T20 below therefore
+# assert what a secret is FOR (it signs, and signing is deterministic in it)
+# rather than asserting the key round-trips.
+test "T01: a JwtSecret can be constructed and used to sign" requires [jwtCap] {
   let s = makeSecret "my-key"
-  expect s.value == "my-key"
+  let token = signClaims "user" s
+  expect String.startsWith token.value "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
 }
 
 test "T02: JwtToken constructor wraps a string" {
@@ -126,9 +160,10 @@ test "T09: checkTokenStr returns the inner string" {
   expect checkTokenStr t == "x.y.z"
 }
 
-test "T10: makeSecret produces JwtSecret with correct value" {
-  let s = makeSecret "super-secret"
-  expect s.value == "super-secret"
+test "T10: makeSecret is deterministic — the same key string signs identically" requires [jwtCap] {
+  let s1 = makeSecret "super-secret"
+  let s2 = makeSecret "super-secret"
+  expect (signClaims "user" s1).value == (signClaims "user" s2).value
 }
 
 test "T11: JWT.sign with long claims still produces token" requires [jwtCap] {
@@ -158,9 +193,10 @@ test "T14: JwtToken value is a non-empty string" {
   expect String.length t.value > 0
 }
 
-test "T15: JwtSecret value is a non-empty string" {
+test "T15: the secret does not leak into the token it signs" requires [jwtCap] {
   let s = makeSecret "not-empty-secret"
-  expect String.length s.value > 0
+  let token = signClaims "user" s
+  expect !(String.contains token.value "not-empty-secret")
 }
 
 test "T16: signClaims token is not the same as the claims string" requires [jwtCap] {
@@ -191,8 +227,32 @@ test "T19: JwtToken wraps any string value" {
   expect String.length t2.value < String.length t3.value
 }
 
-test "T20: JwtSecret and JwtToken are separate types (runtime check)" {
+test "T20: JwtSecret and JwtToken are separate types" requires [jwtCap] {
+  # A JwtToken's `.value` is readable; a JwtSecret's is not (it is a secret
+  # newtype) — that asymmetry IS the type distinction, and it is enforced at
+  # compile time, so all this test can add is that both are constructible and
+  # that the token side round-trips.
   let s = makeSecret "my-secret"
-  let t = makeToken "my-token"
-  expect s.value != t.value || True == True
+  let t = signClaims "my-user" s
+  expect String.length t.value > 0
+}
+
+test "T21: a signed token verifies and keeps its other claims readable" requires [jwtCap] {
+  let secret = makeSecret "expiry-key"
+  let token = signClaims "user-with-expiry" secret
+  expect verifyClaims token secret == "user-with-expiry"
+  expect decodeClaims token == "user-with-expiry"
+  expect String.startsWith token.value "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+}
+
+# The `Authentic` fact (Crypto Phase 2). The interesting half of this is the
+# NEGATIVE, which cannot be written here at all: swapping `check JWT.verify` for
+# `JWT.decode` below does not compile, because decode mints no fact. That
+# negative lives in compiler/test/test_jwt.ml, where a failed compile is the
+# assertion.
+test "T22: verified claims satisfy a consumer that demands Authentic" requires [jwtCap] {
+  let secret = makeSecret "authentic-key"
+  let token = signClaims "carol" secret
+  let claims = check JWT.verify token secret
+  expect subjectOfAuthenticClaims claims == "carol"
 }

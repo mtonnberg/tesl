@@ -26,7 +26,7 @@
 (define-auther
   (queryAuth [req : HttpRequest])
   #:returns [q : String ::: (QueryAuthed q)]
-  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/tests/query-parameters-tests.tesl" 13 (list (cons 'req *req)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Dict_lookup "q" (raw-value req.queryParameters)))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/query-parameters-tests.tesl" 14 (list) (lambda () (reject "missing q query parameter" #:http-code 400)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([v (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/query-parameters-tests.tesl" 15 (list (cons 'v v)) (lambda () (accept (QueryAuthed v) #:value *v))))])))))
+  (thsl-src-control! "tests/query-parameters-tests.tesl" 13 (list (cons 'req *req)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Dict_lookup "q" (raw-value req.queryParameters)))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "tests/query-parameters-tests.tesl" 14 (list) (lambda () (reject "missing q query parameter" #:http-code 400)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([v (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "tests/query-parameters-tests.tesl" 15 (list (cons 'v v)) (lambda () (accept (QueryAuthed v) #:value *v))))])))))
 
 (define SearchServer-sse-routes '())
 (define-api SearchApi
@@ -40,7 +40,7 @@
 (define-handler
   (search [q : String ::: (QueryAuthed q)])
   #:returns String
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/query-parameters-tests.tesl" 23 (list (cons 'q *q)) (lambda () q)))
+  (thsl-src! "tests/query-parameters-tests.tesl" 23 (list (cons 'q *q)) (lambda () q)))
 
 (define-server SearchServer
   #:api SearchApi
@@ -54,9 +54,9 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/query-parameters-tests.tesl" 29 (list) (lambda () (dispatch-api-test-request SearchServer 'get (list "search") #:query "q=hello" #:headers (tesl-hash) #:capabilities '()))))
-            (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/query-parameters-tests.tesl" 30 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/query-parameters-tests.tesl" 31 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'body)))) "hello")
+            (define resp (thsl-src! "tests/query-parameters-tests.tesl" 29 (list) (lambda () (dispatch-api-test-request SearchServer 'get (list "search") #:query "q=hello" #:headers (tesl-hash) #:capabilities '()))))
+            (check-true (raw-value (thsl-src! "tests/query-parameters-tests.tesl" 30 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
+            (check-equal? (raw-value (thsl-src! "tests/query-parameters-tests.tesl" 31 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'body)))) "hello")
           ))
       ))
   )
@@ -69,8 +69,8 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/query-parameters-tests.tesl" 35 (list) (lambda () (dispatch-api-test-request SearchServer 'get (list "search") #:query "q=hello%20world" #:headers (tesl-hash) #:capabilities '()))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/query-parameters-tests.tesl" 36 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'body)))) "hello world")
+            (define resp (thsl-src! "tests/query-parameters-tests.tesl" 35 (list) (lambda () (dispatch-api-test-request SearchServer 'get (list "search") #:query "q=hello%20world" #:headers (tesl-hash) #:capabilities '()))))
+            (check-equal? (raw-value (thsl-src! "tests/query-parameters-tests.tesl" 36 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'body)))) "hello world")
           ))
       ))
   )
@@ -83,8 +83,8 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/query-parameters-tests.tesl" 40 (list) (lambda () (dispatch-api-test-request SearchServer 'get (list "search") #:query "q=first&q=second" #:headers (tesl-hash) #:capabilities '()))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/query-parameters-tests.tesl" 41 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'body)))) "second")
+            (define resp (thsl-src! "tests/query-parameters-tests.tesl" 40 (list) (lambda () (dispatch-api-test-request SearchServer 'get (list "search") #:query "q=first&q=second" #:headers (tesl-hash) #:capabilities '()))))
+            (check-equal? (raw-value (thsl-src! "tests/query-parameters-tests.tesl" 41 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'body)))) "second")
           ))
       ))
   )
@@ -97,8 +97,8 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/query-parameters-tests.tesl" 45 (list) (lambda () (dispatch-api-test-request SearchServer 'get (list "search") #:query "other=beta&q=alpha" #:headers (tesl-hash) #:capabilities '()))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/query-parameters-tests.tesl" 46 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'body)))) "alpha")
+            (define resp (thsl-src! "tests/query-parameters-tests.tesl" 45 (list) (lambda () (dispatch-api-test-request SearchServer 'get (list "search") #:query "other=beta&q=alpha" #:headers (tesl-hash) #:capabilities '()))))
+            (check-equal? (raw-value (thsl-src! "tests/query-parameters-tests.tesl" 46 (list (cons 'resp resp)) (lambda () (api-test-field-access-ref resp 'body)))) "alpha")
           ))
       ))
   )
@@ -111,8 +111,8 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/query-parameters-tests.tesl" 51 (list) (lambda () (dispatch-api-test-request SearchServer 'get (list "search") #:headers (tesl-hash) #:capabilities '()))))
-            (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/query-parameters-tests.tesl" 52 (list (cons 'resp resp)) (lambda () (statusClientError (raw-value (api-test-field-access-ref resp 'status)))))))
+            (define resp (thsl-src! "tests/query-parameters-tests.tesl" 51 (list) (lambda () (dispatch-api-test-request SearchServer 'get (list "search") #:headers (tesl-hash) #:capabilities '()))))
+            (check-true (raw-value (thsl-src! "tests/query-parameters-tests.tesl" 52 (list (cons 'resp resp)) (lambda () (statusClientError (raw-value (api-test-field-access-ref resp 'status)))))))
           ))
       ))
   )
@@ -125,8 +125,8 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/query-parameters-tests.tesl" 56 (list) (lambda () (dispatch-api-test-request SearchServer 'get (list "search") #:query "notq=x" #:headers (tesl-hash) #:capabilities '()))))
-            (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/query-parameters-tests.tesl" 57 (list (cons 'resp resp)) (lambda () (statusClientError (raw-value (api-test-field-access-ref resp 'status)))))))
+            (define resp (thsl-src! "tests/query-parameters-tests.tesl" 56 (list) (lambda () (dispatch-api-test-request SearchServer 'get (list "search") #:query "notq=x" #:headers (tesl-hash) #:capabilities '()))))
+            (check-true (raw-value (thsl-src! "tests/query-parameters-tests.tesl" 57 (list (cons 'resp resp)) (lambda () (statusClientError (raw-value (api-test-field-access-ref resp 'status)))))))
           ))
       ))
   )

@@ -1199,6 +1199,33 @@ let stdlib_func_infos : (string * func_info) list =
      { fi_name = "Units.requireNonZero"; fi_kind = CheckKind;
        fi_params = [ plain "q" "a" ];
        fi_return = ret_attached "q" "a" "FloatNonZero"; fi_loc = g });
+    (* JWT.verify: check-shaped, returning the claims Dict ? Authentic
+       (Crypto Phase 2 — roadmap/next/tesl_crypto.md).  Before this row the
+       function returned a bare claims Dict, so a consumer could not DEMAND that
+       verification had happened; now `fn f(claims: Dict String String :::
+       Authentic claims)` is expressible and "trusted a cookie without verifying
+       it" stops compiling.  Additive: the returned value is still the claims
+       Dict, so every existing call site is unaffected.
+
+       NO COLLISION with Crypto.checkSignature, which mints the same predicate.
+       Both mint `Authentic` about DIFFERENT subject types — a claims
+       `Dict String String` here, a payload `String` there — and a parameter
+       annotated `payload: String ::: Authentic payload` cannot be passed a Dict,
+       so the type system separates them before the proof layer is consulted.
+       The predicate means the same thing in both places ("this value's MAC
+       verified"), which is why sharing it is right rather than merely harmless.
+
+       `args = []` is the RetNamedPack convention (see String.trim / IsTrimmed
+       just below): the proof is about the RETURNED value, and the subject is
+       bound by the binding the caller writes, not named here. *)
+    ("JWT.verify",
+     { fi_name = "JWT.verify"; fi_kind = CheckKind;
+       fi_params = [ plain "token" "JwtToken"; plain "secret" "JwtSecret" ];
+       fi_return = RetNamedPack {
+         ty = tname "Dict";
+         entity_proof = Some (PredApp { pred = "Authentic"; args = []; loc = g });
+         other_proof = None; loc = g };
+       fi_loc = g });
     (* String.trim / trimLeft / trimRight: fn returning String ? IsTrimmed *)
     ("String.trim",
      { fi_name = "String.trim"; fi_kind = FnKind;

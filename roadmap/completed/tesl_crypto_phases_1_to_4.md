@@ -1,6 +1,6 @@
 # `Tesl.Crypto` — Phases 1-4 (2026-07-29)
 
-Implements `roadmap/next/tesl_crypto.md` Phases 1-4. Phase 0 has its own write-up
+Implements `roadmap/completed/tesl_crypto.md` Phases 1-4. Phase 0 has its own write-up
 (`crypto_phase0_security_lints.md`); Phase 5 was **extracted rather than dropped**, to
 `roadmap/next/response_metadata_and_cookies.md`, because it is blocked on a response-metadata
 language feature and not on crypto.

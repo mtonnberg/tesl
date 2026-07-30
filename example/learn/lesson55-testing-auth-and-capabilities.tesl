@@ -17,6 +17,9 @@ import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.ApiTest exposing [statusOk, statusClientError]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.sign, JWT.verify]
+# `time` is named only in the capability below: JWT.sign stamps the session's
+# expiry from the wall clock, so the capability has to admit the clock read.
+import Tesl.Time exposing [time]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DOMAIN: A simple authenticated API
@@ -28,7 +31,7 @@ import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.sign, JWT.verify]
 # gets in — and test 3 below proves it, because a forged cookie now fails.
 # ─────────────────────────────────────────────────────────────────────────────
 
-capability sessionAuthCap implies jwt
+capability sessionAuthCap implies jwt, time
 
 fact Authenticated (user: String)
 

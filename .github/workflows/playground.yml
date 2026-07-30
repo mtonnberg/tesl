@@ -1,0 +1,154 @@
+# Build and publish the browser playground to GitHub Pages.
+#
+# The playground is the Tesl compiler compiled to JavaScript (js_of_ocaml): it
+# CHECKS Tesl — parser, type checker, proof checker, capability and validation
+# passes, linter, and the Racket/TypeScript/Elm emitters — and shows diagnostics
+# with their stable codes, precise spans and machine-applicable fixes. It cannot
+# RUN a program (no HTTP, no database, no SSE); see playground/README.md.
+#
+# ── Why this workflow is a THIN CALLER and not the build ─────────────────────
+# roadmap/completed/revised_onboarding.md requires the output stay host-agnostic:
+# "no GitHub-specific plugins, no Actions-only build logic, no Pages-specific
+# path assumptions", so that a forge move is a CI-config change rather than a
+# rewrite. So the entire build lives in `playground/build.sh`, which any
+# developer runs identically on their own machine, and this file only:
+#
+#   1. enters the flake dev shell (which ships js_of_ocaml + js_of_ocaml-compiler)
+#   2. runs that script
+#   3. sanity-checks the artifact
+#   4. hands the directory to Pages
+#
+# Moving forge means replacing steps 4 and the `on:` block. Nothing else.
+#
+# ── The published URL is deliberately NOT the canonical link ─────────────────
+# Same document, D1 and Phase 3: the README stays the one link. A `*.github.io`
+# address is a URL that has to be abandoned at the forge move, so nothing in the
+# repo cites it. This deploys a nicer way to read/try the same content; it does
+# not become the entry point.
+
+name: Playground
+
+on:
+  push:
+    branches: [main]
+  # Manual re-publish, e.g. after a Pages settings change.
+  workflow_dispatch:
+
+# Least privilege: read the repo, write a Pages deployment, and mint the OIDC
+# token `deploy-pages` uses. No `contents: write` — this never pushes.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Pages allows one deployment at a time. Do NOT cancel in progress: a cancelled
+# deploy can leave the site mid-swap, and the run is cheap enough to let finish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build (js_of_ocaml)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix (flakes enabled)
+        uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+
+      - name: Enable Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      # One script, the same one a developer runs. It reports the artifact size.
+      - name: Build the playground
+        run: |
+          nix develop --command bash -lc '
+            set -euo pipefail
+            export TESL_REPO_ROOT="$PWD"
+            playground/build.sh "$PWD/playground/dist"
+          '
+
+      # Cheap, dependency-free assertions on the artifact. Deliberately not
+      # "does the file exist" — these two catch the regressions that would
+      # actually ship a broken or bloated page.
+      - name: Sanity-check the artifact
+        run: |
+          set -euo pipefail
+          dist="playground/dist"
+          test -f "$dist/index.html"   || { echo "::error::index.html missing"; exit 1; }
+          test -f "$dist/tesl_playground.js" || { echo "::error::tesl_playground.js missing"; exit 1; }
+          # lessons.html is generated from every lesson's `# lesson:` header. It is
+          # REQUIRED here, not optional: build.sh only warns if python3 is absent,
+          # and a published site silently missing its lesson index is the kind of
+          # regression nobody notices for weeks.
+          test -f "$dist/lessons.html" || { echo "::error::lessons.html missing — did gen-lessons-page.py fail?"; exit 1; }
+
+          # Every lesson must be reachable. The count comes from the corpus, so
+          # this also catches a lesson that lost its metadata header (which
+          # gen-lessons-page.py refuses to omit silently).
+          want=$(ls example/learn/*.tesl | wc -l | tr -d ' ')
+          got=$(grep -c 'class=lesson href=' "$dist/lessons.html" || true)
+          test "$got" -eq "$want" \
+            || { echo "::error::lessons.html links $got lessons but the corpus has $want"; exit 1; }
+          echo "lessons.html: $got lessons linked"
+
+          # 1. The one exported entry point must be present. If the driver stops
+          #    exporting it, the page loads and every check silently does nothing.
+          grep -q 'teslCheck' "$dist/tesl_playground.js" \
+            || { echo "::error::tesl_playground.js does not export teslCheck"; exit 1; }
+
+          bytes=$(wc -c < "$dist/tesl_playground.js")
+          gz=$(gzip -9c "$dist/tesl_playground.js" | wc -c)
+          echo "tesl_playground.js: $bytes bytes raw, $gz gzipped"
+
+          # 2. A SIZE BAND, and the upper bound is the meaningful half.
+          #
+          #    compiler/lib/embedded_docs.ml is ~2.3 MB of string literals that
+          #    js_of_ocaml drops entirely, because the driver never references it — the
+          #    manual is free. One stray reference (e.g. wiring up an in-page `tesl help`)
+          #    TRIPLES the artifact. Measured on the spike: 1 127 187 B shipped versus
+          #    3 424 269 B with Embedded_docs referenced, so a 2 MB ceiling separates the
+          #    two cases by a wide margin and cannot be tripped by ordinary growth.
+          #
+          #    If the manual is ever genuinely wanted in the page, fetch it as a separate
+          #    lazily-loaded file rather than linking it in, and revisit this number.
+          #
+          #    The lower bound is only a guard against a catastrophically truncated build.
+          test "$bytes" -gt 200000 \
+            || { echo "::error::artifact implausibly small ($bytes bytes) — truncated build?"; exit 1; }
+          test "$bytes" -lt 2000000 \
+            || { echo "::error::artifact is $bytes bytes (>2 MB). Something now references Embedded_docs, or another large module was linked in. See playground/README.md."; exit 1; }
+
+      # GitHub serves the artifact as-is; `.nojekyll` stops any underscore-prefixed
+      # path being swallowed by the legacy Jekyll pipeline. It lives HERE and not in
+      # build.sh because it is a GitHub-specific file and build.sh must stay
+      # host-agnostic.
+      - name: Add .nojekyll
+        run: touch playground/dist/.nojekyll
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: playground/dist
+
+  deploy:
+    name: Deploy to Pages
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

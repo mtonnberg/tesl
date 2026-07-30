@@ -146,21 +146,19 @@
      ;; example/todo-api.tesl no longer trusts a bare `user=<name>` cookie — that
      ;; cookie is chosen by the client, so `Cookie: user=anna` impersonated anna.
      ;; It now reads a SIGNED session token, so this harness has to mint one the
-     ;; same way a real login endpoint would: JWT.sign over {sub, exp} with the
+     ;; same way a real login endpoint would: JWT.sign over {sub} with the
      ;; key the app reads from SESSION_JWT_SECRET.  Signing here (rather than
      ;; hardcoding a token string) keeps the fixture valid when the token format
      ;; or the expiry rule changes.
      (define session-cookie
        (let* ([secret (getenv "SESSION_JWT_SECRET")]
-              [exp (+ (inexact->exact (floor (current-inexact-milliseconds)))
-                      3600000)]
-              ;; `exp` must be NUMERIC: JWT.verify compares it against the
-              ;; clock. (JWT.sign's typed surface says `Dict String String`,
-              ;; which cannot express that — a real mismatch, recorded in the
-              ;; implementation log. A string here now yields a clean 401 rather
-              ;; than the 500 it used to.)
+              ;; No expiry argument: JWT.sign stamps `exp` itself, one hour ahead
+              ;; in epoch seconds (RFC 7519).  That is the whole point — the
+              ;; fixture cannot get the expiry or its unit wrong, because it does
+              ;; not supply either.  Signing reads the clock, so the capability
+              ;; the app hands us has to cover `time` as well as `jwt`.
               [token (with-capabilities (todo-web-service)
-                       (JWT.sign (hash "sub" "mikael" "exp" exp)
+                       (JWT.sign (hash "sub" "mikael")
                                  (JwtSecret secret)))])
          (string-append "session="
                         (let ([raw (raw-value token)])

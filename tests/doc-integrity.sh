@@ -392,6 +392,15 @@ printf '%s\n' "$COUNT_PATTERNS" | while IFS= read -r pat; do
   # shellcheck disable=SC2046
   grep -nE "$pat" $(cat "$DOCS") >> "$count_hits" 2>/dev/null
 done
+# Dated IMPLEMENTATION-LOG-*.md files are exempt, for the same reason roadmap/ is
+# excluded from the whole scan: they are a RECORD of what was measured on a given
+# day, not documentation that teaches. "77 lessons, metadata valid" is the finding
+# — a record that may not state a measured number is useless. Their links and
+# anchors are still checked above, which is the part that can rot.
+if [ -s "$count_hits" ]; then
+  grep -v '^IMPLEMENTATION-LOG-[^:]*\.md:' "$count_hits" > "$count_hits.f" || true
+  mv "$count_hits.f" "$count_hits"
+fi
 sort -u -o "$count_hits" "$count_hits"
 if [ -s "$count_hits" ]; then
   fail "$(grep -c . "$count_hits") hand-typed corpus count(s) — generate it or drop the number"

@@ -5,21 +5,69 @@
 ;;; Provides nominal newtypes JwtToken (a signed JWT string) and JwtSecret
 ;;; (a signing secret string), plus JWT.sign, JWT.verify, and JWT.decode.
 ;;;
-;;; The `jwt` capability gates all JWT operations. Handlers that call
-;;; JWT.sign or JWT.verify must declare `requires [jwt]`.
+;;; The `jwt` capability gates all JWT operations; `JWT.sign` additionally needs
+;;; `time`, because it stamps the expiry from the wall clock.
 ;;;
 ;;; Usage:
-;;;   import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.sign, JWT.verify, JWT.decode]
+;;;   import Tesl.JWT exposing [jwt, JwtToken, JwtSecret,
+;;;                             JWT.sign, JWT.verify, JWT.decode, Authentic]
 ;;;
-;;;   capability myAuth implies jwt
+;;;   capability myAuth implies jwt, time
 ;;;
-;;;   fn makeToken(userId: String, secret: JwtSecret) requires [jwt] -> JwtToken =
-;;;     JWT.sign { sub: userId, exp: (nowMillis + 3600000) } secret
+;;;   fn makeSession(userId: String, secret: JwtSecret) requires [myAuth] -> JwtToken =
+;;;     JWT.sign (Dict.singleton "sub" userId) secret
+;;;
+;;; ── EXPIRY IS NOT THE CALLER'S TO SET ────────────────────────────────────────
+;;;
+;;; `JWT.sign` stamps `exp` itself, one hour ahead, and there is no parameter for
+;;; it.  That is deliberate and follows Tesl.Crypto's design rule: no mechanism
+;;; reaches the application author, because every knob is a place where a
+;;; non-expert makes a wrong call and gets a plausible-looking result.  A caller
+;;; who can pass an expiry can pass ten years.
+;;;
+;;; One hour is the session-token number.  A JWT here IS a session token; for a
+;;; long-lived credential (an API key, a machine token) the documented answer is
+;;; `Crypto.randomToken` plus storing only its `Crypto.fingerprint`, which is
+;;; revocable — an unexpiring bearer token is not.  Renewing a session means
+;;; signing a new token, which is one call.
+;;;
+;;; A caller-supplied `exp` in the claims dict is an ERROR, not something to
+;;; overwrite: silently winning an argument with the caller about which expiry
+;;; applies is how a token ends up living longer than the code says it does.
+;;;
+;;; ── UNIT: `exp` IS EPOCH SECONDS (RFC 7519) ──────────────────────────────────
+;;;
+;;; `exp` is a NumericDate as RFC 7519 §4.1.4 defines it: seconds since the Unix
+;;; epoch.  Both the mint side (JWT.sign) and the verify side agree, and both
+;;; agree with every other JWT library, so a Tesl token interoperates.
+;;;
+;;; It was MILLISECONDS until 2026-07-29 — 1000x too large, which a foreign
+;;; verifier would have read as valid for ~50,000 years (fail-open), and which
+;;; made every foreign token look long expired to Tesl (fail-closed).  The fix is
+;;; a clean break with no dual-unit tolerance: a heuristic that guesses the unit
+;;; is exactly the kind of hedge that outlives its reason.  Tokens minted before
+;;; the break have a far-future `exp` and will still verify until they are
+;;; re-signed; tokens minted by a Tesl older than the break, against a newer
+;;; verifier, are unaffected for the same reason.
+;;;
+;;; Note the internal asymmetry this leaves: Tesl's own clock type,
+;;; `PosixMillis`, is milliseconds, so the conversion happens HERE (once, at the
+;;; JWT boundary) rather than leaking a second time unit into Tesl.Time.
+;;;
+;;; See LANGUAGE-SPEC.md §21.2.
 
 (require "../dsl/capability.rkt"
          "../dsl/check.rkt"
          "../dsl/types.rkt"
          "private/runtime.rkt"
+         (only-in "time.rkt" time)
+         ;; `Authentic` is Tesl.Crypto's proof predicate, RE-EXPORTED here rather
+         ;; than redefined: JWT.verify mints it, so `import Tesl.JWT exposing
+         ;; [Authentic]` has to resolve to a real provide (the stdlib
+         ;; binding-existence seam test enforces that).  Re-exporting keeps ONE
+         ;; binding, so a program that reaches the name through both modules sees
+         ;; the same identifier instead of a require conflict.
+         (only-in "crypto.rkt" Authentic)
          (only-in "../dsl/private/evidence.rkt" check-fail)
          openssl/libcrypto
          ffi/unsafe
@@ -29,7 +77,9 @@
          racket/string
          json)
 
-(provide jwt JwtToken JwtSecret JWT.sign JWT.verify JWT.decode)
+(provide jwt JwtToken JwtSecret JWT.sign JWT.verify JWT.decode
+         ;; re-exported from crypto.rkt — see the require note above
+         Authentic)
 
 ;; ── Capability ───────────────────────────────────────────────────────────────
 
@@ -48,6 +98,26 @@
 ;; runtime — identical representation, identical SQL round-trip, `.value` still
 ;; works — so no emitted code changes.
 (define-secret-newtype JwtSecret String)
+
+;; ── Argument normalisation: raw-value FIRST, then strip the newtype ──────────
+;;
+;; A stdlib function does not necessarily receive its argument as the value. The
+;; GDP machinery may hand over the SUBJECT NAME (a bare symbol), which
+;; `raw-value` resolves through `current-evidence-env`, and the argument may also
+;; arrive wrapped in a `named-value` or a `check-ok`.
+;;
+;; The order matters and used to be wrong here: `(raw-value (if (newtype-value? x)
+;; (newtype-value-value x) x))` tests for the wrapper BEFORE resolving, so a
+;; named-value wrapping a JwtToken fell through the `if`, `raw-value` unwrapped
+;; the named-value, and the result was still a `newtype-value` — which then hit
+;; `string-split` as a contract violation. It stayed latent until `JWT.verify`
+;; became check-shaped (the `Authentic` retrofit), because that changed how call
+;; sites pass the argument. Identical to the bug fixed in `tesl/crypto.rkt`'s
+;; `checkPassword`; `tesl/string.rkt`'s `raw-str` is the house idiom.
+(define (jwt-raw-string v)
+  (define r (raw-value v))
+  (if (newtype-value? r) (newtype-value-value r) r))
+
 
 ;; ── HMAC-SHA256 via FFI (OpenSSL libcrypto) ──────────────────────────────────
 
@@ -106,9 +176,14 @@
   (base64url-encode
    (string->bytes/utf-8 "{\"alg\":\"HS256\",\"typ\":\"JWT\"}")))
 
-(define (claims->json-bytes claims)
-  ;; `claims` is a Racket hash (or a Tesl record/dict value).
-  ;; We convert it to a JSON byte string.
+;; Normalize an arbitrary Tesl claims value into a SYMBOL-KEYED jsexpr hash —
+;; the shape `jsexpr->string` wants, and the shape the `exp` guard below
+;; inspects.  Note what is deliberately NOT done here: a newtype-value claim is
+;; left wrapped, so `jsexpr->string` raises on it.  Unwrapping would be more
+;; forgiving but would silently serialize a `JwtSecret` (or any other
+;; `define-secret-newtype`) into the payload in plaintext if one were ever
+;; misplaced into the claims dict.  Fail loud instead.
+(define (claims->jsexpr-hash who claims)
   (define raw (raw-value claims))
   (define h
     (cond
@@ -118,13 +193,53 @@
        (for/hash ([pair (in-list raw)])
          (values (car pair) (raw-value (cdr pair))))]
       [else
-       (raise-user-error 'JWT "JWT claims must be a hash/dict, got ~a" raw)]))
-  ;; Convert to a jsexpr: JSON object keys must be SYMBOLS for `jsexpr->string`,
-  ;; but Tesl Dict keys are STRINGS — coerce them. Unwrap any GDP-named values.
-  (define plain-h
-    (for/hash ([(k v) (in-hash h)])
-      (values (if (string? k) (string->symbol k) k) (raw-value v))))
-  (string->bytes/utf-8 (jsexpr->string plain-h)))
+       (raise-user-error who "JWT claims must be a hash/dict, got ~a" raw)]))
+  ;; JSON object keys must be SYMBOLS for `jsexpr->string`, but Tesl Dict keys
+  ;; are STRINGS — coerce them.  Unwrap any GDP-named values.
+  (for/hash ([(k v) (in-hash h)])
+    (values (if (string? k) (string->symbol k) k) (raw-value v))))
+
+;; ── Expiry ───────────────────────────────────────────────────────────────────
+
+;; The fixed session TTL, in SECONDS.  One hour.  Not a parameter, not
+;; configurable, and not read from the environment — see the header note: every
+;; knob here is a place where a non-expert makes a wrong call and gets a
+;; plausible-looking result.  Renewing a session is one more `JWT.sign`.
+(define jwt-ttl-seconds 3600)
+
+;; NOW in epoch SECONDS (RFC 7519 NumericDate).  Tesl's own clock type is
+;; PosixMillis, so the ms→s conversion lives here, at the JWT boundary, once.
+(define (jwt-now-seconds)
+  (inexact->exact (floor (/ (current-inexact-milliseconds) 1000.0))))
+
+;; MINT-SIDE GUARD.  `exp` is set by `JWT.sign` from the clock, so a caller
+;; supplying one is rejected outright rather than silently overwritten:
+;; overwriting would mean the code says one expiry and the token carries another,
+;; and accepting it would hand the caller the knob the design deliberately
+;; withholds.
+;;
+;; This RAISES rather than returning a check-fail.  A check-fail is the shape for
+;; ATTACKER-supplied input (a token off the wire); the claims dict is the
+;; program's OWN data on the way out, so it is a program bug, and the only place
+;; it can be diagnosed at the right site is here — the dict may be assembled
+;; dynamically, so no type catches every case.
+(define (reject-caller-supplied-exp! who h)
+  (when (hash-has-key? h 'exp)
+    (raise-user-error
+     who
+     (string-append
+      "expiry is not yours to set: the claims dict carries an `exp` (~s).\n"
+      "  JWT.sign stamps `exp` itself, ~a seconds ahead, and there is no\n"
+      "  parameter for it — a caller who can choose an expiry can choose ten\n"
+      "  years.  Remove `exp` from the claims.\n"
+      "  If you need a credential that outlives a session, a JWT is the wrong\n"
+      "  tool: use `Crypto.randomToken` and store only its `Crypto.fingerprint`,\n"
+      "  which you can revoke.")
+     (hash-ref h 'exp)
+     jwt-ttl-seconds)))
+
+(define (jsexpr-hash->json-bytes h)
+  (string->bytes/utf-8 (jsexpr->string h)))
 
 (define (compute-signature secret-bytes signing-input)
   (hmac-sha256-bytes secret-bytes (string->bytes/utf-8 signing-input)))
@@ -140,21 +255,12 @@
 
 ;; ── Public API ───────────────────────────────────────────────────────────────
 
-;; JWT.sign : ∀a. a → JwtSecret → JwtToken
-;;
-;; Creates a signed JWT from an arbitrary claims value (hash/dict).
-;; The claims value should contain at least { sub: ..., exp: <posix-ms> }.
-;;
-;; Example:
-;;   JWT.sign { sub: userId, exp: (nowMillis + 3600000) } secret
-(define (JWT.sign claims secret)
-  (require-capabilities! (list jwt))
-  (define secret-str (raw-value (if (newtype-value? secret)
-                                    (newtype-value-value secret)
-                                    secret)))
+;; Serialize an already-normalized, already-guarded jsexpr claims hash and HMAC it.
+(define (sign-claims-hash h secret)
+  (define secret-str (jwt-raw-string secret))
   (define secret-bytes (string->bytes/utf-8 secret-str))
   (define payload-b64
-    (base64url-encode (claims->json-bytes claims)))
+    (base64url-encode (jsexpr-hash->json-bytes h)))
   (define signing-input
     (string-append jwt-header-b64 "." payload-b64))
   (define sig-bytes
@@ -162,21 +268,41 @@
   (define sig-b64 (base64url-encode sig-bytes))
   (JwtToken (string-append signing-input "." sig-b64)))
 
-;; JWT.verify : ∀a. JwtToken → JwtSecret → a
+;; JWT.sign : Dict String String → JwtSecret → JwtToken
 ;;
-;; Verifies the JWT signature and checks expiry (exp claim, in posix milliseconds).
-;; Returns the claims hash on success, or raises a check-fail with HTTP 401.
+;; Creates a signed session JWT from a string-keyed, string-valued claims dict,
+;; and stamps `exp` one hour ahead (epoch SECONDS, RFC 7519).  There is no way to
+;; choose the expiry, and no way to opt out of having one — see the header.
+;;
+;; Requires `time` as well as `jwt`: it reads the wall clock, and a capability
+;; marks an effect.
+;;
+;; Example:
+;;   JWT.sign (Dict.singleton "sub" userId) secret
+(define (JWT.sign claims secret)
+  (require-capabilities! (list jwt time))
+  (define h (claims->jsexpr-hash 'JWT.sign claims))
+  (reject-caller-supplied-exp! 'JWT.sign h)
+  (sign-claims-hash
+   (hash-set h 'exp (+ (jwt-now-seconds) jwt-ttl-seconds))
+   secret))
+
+;; JWT.verify : JwtToken → JwtSecret → Dict String String
+;;
+;; Verifies the JWT signature and checks expiry (`exp` claim, in epoch SECONDS
+;; per RFC 7519 §4.1.4 — see the unit note in the module header).
+;; Returns the claims hash on success, or a check-fail with HTTP 401.
+;;
+;; On success the claims carry an `Authentic` fact (Crypto Phase 2), so a
+;; consumer can demand `Dict String String ::: Authentic claims` on a parameter
+;; and "trusted a cookie without verifying it" stops compiling.
 ;;
 ;; Example:
 ;;   JWT.verify token secret
 (define (JWT.verify token secret)
   (require-capabilities! (list jwt))
-  (define token-str (raw-value (if (newtype-value? token)
-                                   (newtype-value-value token)
-                                   token)))
-  (define secret-str (raw-value (if (newtype-value? secret)
-                                    (newtype-value-value secret)
-                                    secret)))
+  (define token-str (jwt-raw-string token))
+  (define secret-str (jwt-raw-string secret))
   (define parts (string-split token-str "."))
   ;; A STRUCTURALLY malformed token is a 401, not a raise.  The token comes off
   ;; the wire, so `Cookie: session=garbage` used to escape as an uncaught
@@ -219,9 +345,16 @@
                       (string->jsexpr (bytes->string/utf-8 payload-bytes)))])
               (if (not claims)
                   (check-fail "Malformed JWT payload" 401 '())
-                  ;; Check expiry if present (exp is in ms since the epoch).
+                  ;; Check expiry.  `exp` is epoch SECONDS (RFC 7519 §4.1.4), the
+                  ;; same unit every other JWT library uses and the same unit
+                  ;; JWT.sign writes.
                   ;;
-                  ;; A NON-NUMERIC `exp` is treated as expired, not as absent.
+                  ;; A MISSING `exp` is accepted (no expiry claim, no expiry
+                  ;; check).  Tesl cannot mint such a token — JWT.sign always
+                  ;; stamps one — so this only admits a foreign token that omits
+                  ;; `exp`, which is legal per the RFC (`exp` is OPTIONAL).
+                  ;;
+                  ;; A NON-NUMERIC `exp` is treated as EXPIRED, not as absent.
                   ;; Two reasons, and the second is the important one:
                   ;;   * `(< "1785355686959" now)` is a contract violation, which
                   ;;     escapes as an uncaught exception and becomes a 500 —
@@ -231,12 +364,11 @@
                   ;;   * skipping the check on an unparseable `exp` would be
                   ;;     FAIL-OPEN: a token whose expiry cannot be read would be
                   ;;     accepted forever.  Unreadable expiry must mean expired.
-                  ;; (`JWT.sign`'s typed surface is `Dict String String`, so a
-                  ;; Tesl program CAN put a string there and then have its own
-                  ;; tokens rejected by its own verifier — better a clean 401
-                  ;; than a 500, and better than accepting them.)
+                  ;; Tesl can no longer mint one either — JWT.sign sets `exp`
+                  ;; itself from the clock — so this branch now fires only on a
+                  ;; foreign or hand-forged token.
                   (let* ([exp (and (hash? claims) (hash-ref claims 'exp #f))]
-                         [now (inexact->exact (floor (current-inexact-milliseconds)))]
+                         [now (jwt-now-seconds)]
                          [expired?
                           (cond
                             [(eq? exp #f) #f]           ; no exp claim: no expiry
@@ -246,7 +378,7 @@
                         (check-fail "JWT token has expired" 401 '())
                         (jwt-claims->string-keyed claims)))))))))
 
-;; JWT.decode : ∀a. JwtToken → a
+;; JWT.decode : JwtToken → Dict String String
 ;;
 ;; Decodes the JWT payload WITHOUT verifying the signature.
 ;; Use this only when you have already verified the token or trust the source.
@@ -255,9 +387,7 @@
 ;;   JWT.decode token
 (define (JWT.decode token)
   (require-capabilities! (list jwt))
-  (define token-str (raw-value (if (newtype-value? token)
-                                   (newtype-value-value token)
-                                   token)))
+  (define token-str (jwt-raw-string token))
   (define parts (string-split token-str "."))
   (when (< (length parts) 2)
     (raise-user-error 'JWT.decode

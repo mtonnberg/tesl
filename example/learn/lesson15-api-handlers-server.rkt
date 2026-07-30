@@ -66,12 +66,12 @@
 (define-checker
   (validatePriority [p : Integer])
   #:returns [p : Integer ::: (ValidPriority p)]
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson15-api-handlers-server.tesl" 77 (list (cons 'p *p)) (lambda () (if (and (>= *p 1) (<= *p 5)) (accept (ValidPriority p) #:value *p) (reject "priority must be 1-5" #:http-code 400)))))
+  (thsl-src! "example/learn/lesson15-api-handlers-server.tesl" 77 (list (cons 'p *p)) (lambda () (if (and (tesl-ge? *p 1) (tesl-le? *p 5)) (accept (ValidPriority p) #:value *p) (reject "priority must be 1-5" #:http-code 400)))))
 
 (define-auther
   (cookieAuth [request : HttpRequest])
   #:returns [user : String ::: (Authenticated user)]
-  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson15-api-handlers-server.tesl" 90 (list (cons 'request *request)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson15-api-handlers-server.tesl" 91 (list) (lambda () (reject "not authenticated" #:http-code 401)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson15-api-handlers-server.tesl" 92 (list (cons 'userId userId)) (lambda () (accept (Authenticated userId) #:value *userId))))])))))
+  (thsl-src-control! "example/learn/lesson15-api-handlers-server.tesl" 90 (list (cons 'request *request)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/learn/lesson15-api-handlers-server.tesl" 91 (list) (lambda () (reject "not authenticated" #:http-code 401)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/learn/lesson15-api-handlers-server.tesl" 92 (list (cons 'userId userId)) (lambda () (accept (Authenticated userId) #:value *userId))))])))))
 
 (define-capture taskIdCapture
   [id : String]
@@ -81,13 +81,13 @@
   (createTask [user : String ::: (Authenticated user)] [body : NewTask])
   #:capabilities [taskDbWrite]
   #:returns Task
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson15-api-handlers-server.tesl" 108 (list (cons 'user *user) (cons 'body *body)) (lambda () (Task #:id "task-1" #:title (raw-value body.title) #:priority (raw-value body.priority) #:done #f))))
+  (thsl-src! "example/learn/lesson15-api-handlers-server.tesl" 108 (list (cons 'user *user) (cons 'body *body)) (lambda () (Task #:id "task-1" #:title (raw-value body.title) #:priority (raw-value body.priority) #:done #f))))
 
 (define-handler
   (getTask [user : String ::: (Authenticated user)] [id : String])
   #:capabilities [taskDbRead]
   #:returns (Maybe Task)
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson15-api-handlers-server.tesl" 116 (list (cons 'user *user) (cons 'id *id)) (lambda () (raw-value (Something (Task #:id *id #:title "example task" #:priority 3 #:done #f))))))
+  (thsl-src! "example/learn/lesson15-api-handlers-server.tesl" 116 (list (cons 'user *user) (cons 'id *id)) (lambda () (raw-value (Something (Task #:id *id #:title "example task" #:priority 3 #:done #f))))))
 
 (define TaskServer-sse-routes '())
 (define-api TaskApi

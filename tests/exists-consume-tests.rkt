@@ -26,7 +26,7 @@
 (define-checker
   (checkTokenId [s : String])
   #:returns [s : String ::: (IsTokenId s)]
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/exists-consume-tests.tesl" 22 (list (cons 's *s)) (lambda () (if (> (raw-value (tesl_import_String_length *s)) 3) (accept (IsTokenId s) #:value *s) (reject "bad token" #:http-code 400)))))
+  (thsl-src! "tests/exists-consume-tests.tesl" 22 (list (cons 's *s)) (lambda () (if (tesl-gt? (raw-value (tesl_import_String_length *s)) 3) (accept (IsTokenId s) #:value *s) (reject "bad token" #:http-code 400)))))
 
 (define-capability idGen (implies random))
 
@@ -34,17 +34,17 @@
   (generateToken)
   #:capabilities [idGen]
   #:returns (Exists [tokenId : String] [tokenId : String ::: (IsTokenId tokenId)])
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/exists-consume-tests.tesl" 31 (list) (lambda () (let ([tokenId (generatePrefixedId "tok")]) (let/check ([tesl-checked-0 (checkTokenId tokenId)]) (let ([validated tesl-checked-0]) (pack ([tokenId]) validated)))))))
+  (thsl-src! "tests/exists-consume-tests.tesl" 31 (list) (lambda () (let ([tokenId (generatePrefixedId "tok")]) (let/check ([tesl-checked-0 (checkTokenId tokenId)]) (let ([validated tesl-checked-0]) (pack ([tokenId]) validated)))))))
 
 (module+ test
   (require rackunit)
   (test-case "exists result consumed as its underlying String type"
     (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (idGen)
-    (define tok (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/exists-consume-tests.tesl" 37 (list) (lambda () (generateToken))))
-    (check-true (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/exists-consume-tests.tesl" 38 (list (cons 'tok tok)) (lambda () (> (raw-value (tesl_import_String_length (raw-value tok))) 3))))
-    (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/exists-consume-tests.tesl" 39 (list (cons 'tok tok)) (lambda () (tesl_import_String_startsWith (raw-value tok) "tok")))))
-    (check-not-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/exists-consume-tests.tesl" 40 (list (cons 'tok tok)) (lambda () (format "wrapped:~a" (tesl-display-val tok)))) "wrapped:")
+    (define tok (thsl-src! "tests/exists-consume-tests.tesl" 37 (list) (lambda () (generateToken))))
+    (check-true (thsl-src! "tests/exists-consume-tests.tesl" 38 (list (cons 'tok tok)) (lambda () (tesl-gt? (raw-value (tesl_import_String_length (raw-value tok))) 3))))
+    (check-true (raw-value (thsl-src! "tests/exists-consume-tests.tesl" 39 (list (cons 'tok tok)) (lambda () (tesl_import_String_startsWith (raw-value tok) "tok")))))
+    (check-not-equal? (thsl-src! "tests/exists-consume-tests.tesl" 40 (list (cons 'tok tok)) (lambda () (format "wrapped:~a" (tesl-display-val tok)))) "wrapped:")
     )
     ))
   )

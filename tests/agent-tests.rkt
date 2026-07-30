@@ -26,16 +26,16 @@
   (askMock [prompt : String])
   #:capabilities [supportBot]
   #:returns String
-  (let ([agent (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-tests.tesl" 31 (list (cons 'prompt *prompt)) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "hello from mock"))) (raw-value "You are a test bot.") (raw-value 100)) (list))))]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-tests.tesl" 32 (list (cons 'agent *agent) (cons 'prompt *prompt)) (lambda () (raw-value (ask (raw-value agent) *prompt))))))
+  (let ([agent (thsl-src! "tests/agent-tests.tesl" 31 (list (cons 'prompt *prompt)) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "hello from mock"))) (raw-value "You are a test bot.") (raw-value 100)) (list))))]) (thsl-src! "tests/agent-tests.tesl" 32 (list (cons 'agent *agent) (cons 'prompt *prompt)) (lambda () (raw-value (ask (raw-value agent) *prompt))))))
 
 (module+ test
   (require rackunit)
   (test-case "ask returns the mock provider's scripted reply"
     (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
-    (define agent (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-tests.tesl" 39 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "hello from mock"))) (raw-value "x") (raw-value 100)) (list)))))
-    (define reply (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-tests.tesl" 40 (list (cons 'agent agent)) (lambda () (raw-value (ask (raw-value agent) "hi")))))
-    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-tests.tesl" 41 (list (cons 'reply reply) (cons 'agent agent)) (lambda () reply))) "hello from mock")
+    (define agent (thsl-src! "tests/agent-tests.tesl" 39 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "hello from mock"))) (raw-value "x") (raw-value 100)) (list)))))
+    (define reply (thsl-src! "tests/agent-tests.tesl" 40 (list (cons 'agent agent)) (lambda () (raw-value (ask (raw-value agent) "hi")))))
+    (check-equal? (raw-value (thsl-src! "tests/agent-tests.tesl" 41 (list (cons 'reply reply) (cons 'agent agent)) (lambda () reply))) "hello from mock")
     )
     ))
   )
@@ -43,7 +43,7 @@
   (test-case "ask through a wrapper handler returns the scripted reply"
     (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
-    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-tests.tesl" 45 (list) (lambda () (askMock "anything")))) "hello from mock")
+    (check-equal? (raw-value (thsl-src! "tests/agent-tests.tesl" 45 (list) (lambda () (askMock "anything")))) "hello from mock")
     )
     ))
   )
@@ -51,11 +51,11 @@
   (test-case "successive asks walk the mock script by call index"
     (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
-    (define agent (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-tests.tesl" 49 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "first" "second"))) (raw-value "x") (raw-value 50)) (list)))))
-    (define r1 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-tests.tesl" 50 (list (cons 'agent agent)) (lambda () (raw-value (ask (raw-value agent) "a")))))
-    (define r2 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-tests.tesl" 51 (list (cons 'r1 r1) (cons 'agent agent)) (lambda () (raw-value (ask (raw-value agent) "b")))))
-    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-tests.tesl" 52 (list (cons 'r2 r2) (cons 'r1 r1) (cons 'agent agent)) (lambda () r1))) "first")
-    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/agent-tests.tesl" 53 (list (cons 'r2 r2) (cons 'r1 r1) (cons 'agent agent)) (lambda () r2))) "second")
+    (define agent (thsl-src! "tests/agent-tests.tesl" 49 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "first" "second"))) (raw-value "x") (raw-value 50)) (list)))))
+    (define r1 (thsl-src! "tests/agent-tests.tesl" 50 (list (cons 'agent agent)) (lambda () (raw-value (ask (raw-value agent) "a")))))
+    (define r2 (thsl-src! "tests/agent-tests.tesl" 51 (list (cons 'r1 r1) (cons 'agent agent)) (lambda () (raw-value (ask (raw-value agent) "b")))))
+    (check-equal? (raw-value (thsl-src! "tests/agent-tests.tesl" 52 (list (cons 'r2 r2) (cons 'r1 r1) (cons 'agent agent)) (lambda () r1))) "first")
+    (check-equal? (raw-value (thsl-src! "tests/agent-tests.tesl" 53 (list (cons 'r2 r2) (cons 'r1 r1) (cons 'agent agent)) (lambda () r2))) "second")
     )
     ))
   )

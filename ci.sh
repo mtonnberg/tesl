@@ -1297,7 +1297,7 @@ else
         # edge, pow bounds the exponent before expt, NaN/inf convert cleanly —
         # plus issue #45's api-test path normalization (literal ≡ computed)
         "tests/int32-runtime-tests.rkt"
-        # `secret X = T` runtime half (roadmap/next/tesl_crypto.md phases 3+4).
+        # `secret X = T` runtime half (roadmap/completed/tesl_crypto.md phases 3+4).
         # Here because the enforcement is spread across SIX independent sinks
         # (telemetry jsexpr + OTLP AnyValue, metric attributes, safe-display, the
         # value-tree display/children pair, dap-server's Copy Value text, the SQL

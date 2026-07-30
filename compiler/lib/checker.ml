@@ -1462,6 +1462,13 @@ let stdlib_check_function_names = [
      Validation_common.stdlib_func_infos drives the proof shape. *)
   "Crypto.checkPassword";
   "Crypto.checkSignature";
+  (* JWT.verify is check-SHAPED without being check-NAMED: on success it returns
+     the claims dict, and on any rejection (bad signature, expired, malformed)
+     it returns a `check-fail … 401` struct.  So `Dict.lookup "sub" (JWT.verify
+     t s)` hands Dict.lookup that struct on the failure path — the bug this list
+     entry exists to make unrepresentable.  `let claims = check JWT.verify t s`
+     lowers to `let/check`, which propagates the 401 instead. *)
+  "JWT.verify";
 ]
 
 let is_check_function_name ctx name =
@@ -1469,6 +1476,95 @@ let is_check_function_name ctx name =
   || match List.assoc_opt name ctx.function_kinds with
      | Some CheckKind -> true
      | _ -> false
+
+(* Every stdlib name whose result is a check result.  TWO registries record
+   that fact and neither is a superset of the other — [stdlib_check_function_names]
+   above drives the `check f x` FORM, Validation_common's CheckKind rows drive
+   the proof shape — so "check-shaped" is their union. *)
+let stdlib_check_shaped_names =
+  stdlib_check_function_names
+  @ List.filter_map
+      (fun (name, (fi : Validation_common.func_info)) ->
+         if fi.fi_kind = CheckKind then Some name else None)
+      Validation_common.stdlib_func_infos
+
+let is_check_shaped_name ctx name =
+  List.mem name stdlib_check_shaped_names || is_check_function_name ctx name
+
+let rec arrow_arity = function
+  | TFun (_, ret) -> 1 + arrow_arity ret
+  | _ -> 0
+
+(* Declared arity of a check-shaped callee, if it can be resolved here.  Used
+   ONLY to tell a saturating call from a PARTIAL application: `List.filterCheck
+   (checkInRange 0 100) xs` hands filterCheck a check FUNCTION, not a check
+   RESULT, and that is the whole point of filterCheck / allCheck. *)
+let check_shaped_arity ctx name =
+  match lookup_name ctx name with
+  | Some ty -> Some (arrow_arity (apply !(ctx.subst) ty))
+  | None ->
+    (match env_lookup name (make_stdlib_env ()) with
+     | Some sch -> Some (arrow_arity (instantiate sch))
+     | None -> None)
+
+(* [Some (name, loc)] when [e] is a SATURATING CALL whose callee is check-shaped
+   — an `EVar` head (`checkScore n`) or a qualified `EField` head (`JWT.verify t
+   s`, `Money.requireSameCurrency a b`).  Two shapes are deliberately not calls:
+   a bare reference with no arguments (that is `check f a b`, whose `f` arrives
+   as a bare head, and `List.filterCheck checkFn xs`), and an under-saturated
+   application (`checkInRange 0 100`, a partially applied check function). *)
+let call_head_check_shaped ctx (e : expr) : (string * Location.loc) option =
+  match e with
+  | EApp _ ->
+    let (head, head_args) = flatten_app_expr [] e in
+    let saturating name =
+      match check_shaped_arity ctx name with
+      | Some arity -> List.length head_args >= arity
+      | None -> true   (* unresolvable arity: judge it a call (fail closed) *)
+    in
+    (match head with
+     | EVar { name; loc } when is_check_shaped_name ctx name && saturating name ->
+       Some (name, loc)
+     | EField { obj = (EConstructor { name = m; args = []; _ } | EVar { name = m; _ });
+                field; loc }
+       when is_check_shaped_name ctx (m ^ "." ^ field)
+            && saturating (m ^ "." ^ field) ->
+       Some (m ^ "." ^ field, loc)
+     | _ -> None)
+  | _ -> None
+
+(* A check-shaped call in a NESTED ARGUMENT position.
+   A check-shaped callee returns a check result, and only `check` (which lowers
+   to `let/check`) unwraps it and propagates the failure.  Passed straight into
+   another call, the FAILURE value — a `check-fail` struct — becomes that call's
+   argument: `Dict.lookup "sub" (JWT.verify t s)` looks a key up in a struct.  It
+   typechecks (the callee's return type says nothing about the check wrapper) and
+   then misbehaves at runtime, ON THE ERROR PATH ONLY, which is why the shape
+   survives a test suite that always passes valid input.
+
+   Deliberately narrow: argument positions of an ordinary application only.
+   `check f a b` is exempt because its `f` arrives as a bare head, not a call; a
+   check call in TAIL position (a check/auth body returning its own verdict) is
+   untouched; and `let x = check f a` reaches here as the same exempt `check`
+   form.  Called from BOTH application paths — [infer_expr]'s generic `EApp` arm
+   and [check_expr]'s generic call-checking arm — because a fn body's tail
+   expression only ever reaches the latter. *)
+let reject_nested_check_calls ctx base_fn args =
+  match base_fn with
+  | EVar { name = "check"; _ } -> ()
+  | _ ->
+    List.iter (fun arg ->
+      match call_head_check_shaped ctx arg with
+      | None -> ()
+      | Some (name, loc) ->
+        add_error ctx loc (Printf.sprintf
+          "check function `%s` cannot be called in an argument position: it \
+           returns a check result that only `check` unwraps, so on the failure \
+           path the raw check-fail value would be passed on as if it were a \
+           value. Bind it first — `let result = check %s ...` — and pass \
+           `result` here."
+          name name)
+    ) args
 
 let is_composed_check_function_expr ctx e =
   let check_fns = flatten_check_chain_expr [] e in
@@ -1791,6 +1887,130 @@ let select_aggregate_field_type ctx args =
 let local_let_reason name expected_ty =
   Printf.sprintf "let binding `%s` must have declared type %s" name (pp_ty expected_ty)
 
+(* ── Opaque stdlib nominal types: the field surface ────────────────────────
+   Consumed by the EField fallback in [infer_expr], where the object's type is
+   a TCon the checker could not resolve to a record, a newtype, a primitive or
+   a user ADT.  There are exactly three tiers, and the DEFAULT one is the
+   permissive one, so a type that belongs in a tighter tier and is not listed
+   here is a fail-open hole (`x.nonsense : anything`), not a missing feature:
+
+   1. [opaque_special_field_types] — the types whose fields the EMITTER
+      special-cases (`req.headers`, `resp.status`, `token.value`).  Fixed field
+      set: [opaque_special_fields]; any other field is an error.
+   2. [no_eliminator_hint] — types whose field set is EXACTLY NOTHING.  The
+      diagnostic names the real accessor, because "has no field" alone leaves
+      the author guessing at a surface that does exist under another spelling.
+   3. everything else — an imported entity/record (`KanelUser`) or a qualified
+      cross-module record (`Sandbox3.ARecord2`) whose fields cannot be resolved
+      here.  Stays permissive rather than risk a false "no field" on a real
+      record field. *)
+
+let opaque_special_fields =
+  [ "value"; "cookies"; "headers"; "queryParameters";
+    "body"; "path"; "method_"; "method"; "status" ]
+
+let opaque_special_field_types =
+  [ "HttpRequest"; "HttpResponse";
+    (* A JwtToken KEEPS `.value`: a token is handed to a client on purpose
+       (`AuthResponse { token: token.value }`).  Its SECRET does not — see
+       [no_eliminator_hint]. *)
+    "JwtToken";
+    "Agent"; "AgentReply"; "LlmProvider";
+    "Conversation"; "ConversationTurn";
+    "Tool"; "ToolStep" ]
+
+(* Tier 2.  There is NO runtime representation difference behind most of these
+   (an Int32 is a bare integer, a PosixMillis is a bare integer, a quantity is a
+   bare Float), so the checker is the whole enforcement and this table IS the
+   guarantee.  For the crypto/secret types the stake is containment; for the
+   nominal-numeric types it is that `x.value` used to typecheck as ANYTHING and
+   then fail at runtime, which is worse than either accepting or rejecting it
+   consistently. *)
+let no_eliminator_stdlib_types : (string * string) list = [
+  "PasswordHash",
+  "A PasswordHash is opaque on purpose: the only legitimate way to use one is \
+   `Crypto.checkPassword`, which is constant-time and returns a proof. Store it \
+   in a column directly — the SQL layer takes it as-is.";
+  "Secret",
+  "A Secret cannot become a String — that is the whole guarantee. Hand it to a \
+   function that knows what to do with it (`Crypto.signWith`, \
+   `Crypto.keyFingerprint`), store it in a column, or compare it with `==` \
+   (which is constant-time).";
+  "Signature",
+  "A Signature's only legitimate comparison IS a verification: use \
+   `Crypto.checkSignature`. To put one in a header, use `Crypto.signatureHex`.";
+  (* A JwtSecret is a `secret` newtype at runtime (tesl/jwt.rkt's
+     `define-secret-newtype`), so it is redacted in telemetry, in structured
+     logs and on all three debugger surfaces.  `.value` would defeat every one
+     of those in a single call, which is why it is withheld here. *)
+  "JwtSecret",
+  "A JwtSecret is a secret: it is redacted in telemetry, logs and the debugger, \
+   so it cannot become a String without defeating all of that. Hand it to \
+   `JWT.sign` / `JWT.verify`, mint it from the environment with \
+   `Env.requireSecret`, or store it in a column (the SQL layer takes the \
+   newtype as-is).";
+  "Int32",
+  "An Int32 is a nominal 32-bit integer, not a record. Widen it to an Int with \
+   `Int32.toInt` (total), or render it with `Int32.toString`.";
+  "Money",
+  "Money is an exact minor-unit amount with an intrinsic currency, not a \
+   record. Read the amount with `Money.minorUnits`, the currency with \
+   `Money.currency`, or format it with `Money.display`.";
+  "Currency",
+  "A Currency is an ISO 4217 code, not a record. Read it with `Currency.code`, \
+   or its minor-unit exponent with `Currency.minorDigits`.";
+  "ExchangeRate",
+  "An ExchangeRate is not a record. Read it with `ExchangeRate.rate`, \
+   `ExchangeRate.fromCurrency`, `ExchangeRate.toCurrency` or \
+   `ExchangeRate.asOf`.";
+  "PosixMillis",
+  "A PosixMillis is a nominal instant, not a record. Convert it with \
+   `Time.posixToSeconds`, measure between two of them with `diffMs`, or render \
+   it with `formatTime`.";
+  "TimeZone",
+  "A TimeZone is a fixed ADT (`Utc`, `FixedOffset minutes`, or one of the baked \
+   IANA zone constructors like `EuropeStockholm`) — match on it, or read its \
+   DST-correct offset at an instant with `Time.offsetAt`.";
+]
+
+(* First-Class Units.  The canonical TCon of a quantity (`§Q[...]`) and of a
+   money rate (`§MR[...]`) encodes the dimension, so these cannot be matched by
+   spelling; and the canonical name must NEVER leak into a diagnostic, hence
+   [opaque_display_name] below. *)
+let quantity_accessor_example (d : Units_catalog.dim) : string option =
+  List.find_map
+    (fun (m, f, d') -> if d' = d then Some (m ^ "." ^ f) else None)
+    Units_catalog.accessors
+
+let no_eliminator_hint (type_name : string) : string option =
+  match List.assoc_opt type_name no_eliminator_stdlib_types with
+  | Some hint -> Some hint
+  | None ->
+    if Units_catalog.is_money_rate_name type_name then
+      Some "A rate is Money per unit of a dimension, not a record. Multiply it \
+            by a quantity with `Units.mul` to get a Money, read its currency \
+            with `MoneyRate.currency`, or format it with `MoneyRate.display`."
+    else
+      match Units_catalog.dim_of_name type_name with
+      | Some d ->
+        Some (Printf.sprintf
+                "A quantity carries its dimension in its type and has no raw \
+                 number to read: project it into a NAMED unit with an \
+                 accessor%s."
+                (match quantity_accessor_example d with
+                 | Some a -> Printf.sprintf " (`%s`, …)" a
+                 | None -> ""))
+      | None -> None
+
+(* What a diagnostic may print for one of these type names. *)
+let opaque_display_name (type_name : string) : string =
+  match Units_catalog.display_of_name type_name with
+  | Some d -> d
+  | None ->
+    (match Units_catalog.money_rate_display_of_name type_name with
+     | Some d -> d
+     | None -> type_name)
+
 let known_qualifier_modules =
   [ "List"; "ListPrim"; "Dict"; "String"; "Regex"; "Int"; "Float"; "Set"; "Maybe";
     "Either"; "Result"; "Time"; "Random"; "Uuid"; "UUID"; "Env";
@@ -1798,6 +2018,31 @@ let known_qualifier_modules =
     (* First-Class Units *)
     "Money"; "Currency"; "ExchangeRate"; "MoneyRate" ]
   @ Units_catalog.quantity_modules
+
+(* Qualifier names that are NOT constructors of anything.  [known_qualifier_modules]
+   is right for judging a DOTTED name (`Money.usd`, `MoneyRate.perHour`) as one
+   unit, but it doubled as the escape hatch that let a BARE application of the
+   same spelling — `Money n` — resolve to a fresh type variable, i.e. to
+   `anything`.  `Money n` then typechecked as a String and failed at runtime.
+
+   These four are qualifiers only: `Money`/`Currency`/`ExchangeRate` are also
+   stdlib TYPE names (never value constructors — you build them with
+   `Money.usd`, `Currency.fromCode`, `ExchangeRate.make`), and `MoneyRate` is a
+   pure qualifier with no same-named type at all.  So a bare application of any
+   of them is a plain T001, exactly as `Int32 n` already was.
+
+   NOT included: [Units_catalog.quantity_modules] (`Length`, `Duration`, …).
+   Those 13 spellings ARE alias type names, so `Length 5` has the same
+   fail-open shape — but they are import-gated and hijack-checked
+   (`Units_catalog.active_aliases`), and tightening them is a separate change
+   with its own corpus surface.  Recorded, not fixed here. *)
+let qualifier_modules_that_are_not_constructors =
+  [ "Money"; "Currency"; "ExchangeRate"; "MoneyRate" ]
+
+let bare_constructor_escape_modules =
+  List.filter
+    (fun m -> not (List.mem m qualifier_modules_that_are_not_constructors))
+    known_qualifier_modules
 
 type constructor_resolution =
   | KnownConstructor of ty
@@ -1813,7 +2058,14 @@ let resolve_constructor_type ctx name loc =
        (match env_lookup name (make_stdlib_env ()) with
         | Some sch -> KnownConstructor (instantiate sch)
         | None ->
-          if not (List.mem name known_qualifier_modules) && not ctx.in_establish then
+          (* KNOWN WIDENING: `ctx.in_establish` suppresses the error entirely.
+             That is deliberate — `establish` is the documented trust escape
+             hatch, where an arbitrary uppercase name is a proof PREDICATE being
+             asserted rather than a constructor being applied — but it does mean
+             every unknown-constructor tightening above stops at an `establish`
+             body.  See roadmap/completed/close_fail_open.md. *)
+          if not (List.mem name bare_constructor_escape_modules)
+             && not ctx.in_establish then
             add_unknown_name_error ctx loc ~what:"constructor" name;
           if ctx.in_establish then ProofPredicateConstructor
           else KnownConstructor (fresh ())))
@@ -2512,75 +2764,21 @@ let rec infer_expr ctx (e : expr) : ty =
                          field (pp_ty obj_ty_resolved));
                        fresh ()
                      end else begin
-                       (* Only the KNOWN opaque stdlib types have a fixed,
-                          checker-side field set (the emitter's special fields).
-                          For those, error on any other field (review 2.4 — this
-                          closes the `HttpResponse.bogusField` T_ANY hole).  For
-                          ANY OTHER unresolved type — an imported entity/record
-                          (`KanelUser`, `OrgMembership`) or a qualified cross-module
-                          record (`Sandbox3.ARecord2`) whose fields we cannot
-                          resolve here — keep the permissive fallback rather than
-                          risk a false "no field" on a real record field. *)
-                       let is_known_opaque = match type_name with
-                         | "HttpRequest" | "HttpResponse"
-                         | "JwtToken" | "JwtSecret"
-                         | "Agent" | "AgentReply" | "LlmProvider"
-                         | "Conversation" | "ConversationTurn"
-                         | "Tool" | "ToolStep" -> true
-                         (* Tesl.Crypto: opaque with a field set of EXACTLY
-                            NOTHING — see no_eliminator_types below. *)
-                         | "PasswordHash" | "Signature" | "Secret" -> true
-                         | _ -> false
-                       in
-                       (* Types with NO eliminator at all.  `.value` on these is
-                          the single largest hole in the `secret` design: a
-                          `PasswordHash`/`Secret` whose inner String can be got
-                          back out is not opaque and not secret, it is just a
-                          String with a longer name.  There is no runtime
-                          representation difference — the checker is the whole
-                          enforcement — so this list IS the guarantee.
-
-                          `Signature` is here too, for a different reason: it is
-                          public data, but `.value` on it would hand back a hex
-                          tag that invites `==` comparison, routing around
-                          Crypto.checkSignature and its constant-time compare.
-                          `Crypto.signatureHex` is the sanctioned, lintable way
-                          out. *)
-                       let no_eliminator = match type_name with
-                         | "PasswordHash" | "Signature" | "Secret" -> true
-                         | _ -> false
-                       in
-                       if not is_known_opaque then fresh ()
-                       else if no_eliminator then begin
+                       (* Three tiers, all declared next to
+                          [no_eliminator_stdlib_types] above; the DEFAULT is the
+                          permissive one, so a type that should be opaque and is
+                          not listed there types every field as ANYTHING. *)
+                       match no_eliminator_hint type_name with
+                       | Some hint ->
                          add_error ctx loc (Printf.sprintf
                            "`%s` has no field `%s`. %s"
-                           type_name field
-                           (match type_name with
-                            | "PasswordHash" ->
-                              "A PasswordHash is opaque on purpose: the only \
-                               legitimate way to use one is \
-                               `Crypto.checkPassword`, which is \
-                               constant-time and returns a proof. Store it in a \
-                               column directly — the SQL layer takes it as-is."
-                            | "Secret" ->
-                              "A Secret cannot become a String — that is the \
-                               whole guarantee. Hand it to a function that \
-                               knows what to do with it (`Crypto.signWith`, \
-                               `Crypto.keyFingerprint`), store it in a column, \
-                               or compare it with `==` (which is \
-                               constant-time)."
-                            | _ ->
-                              "A Signature's only legitimate comparison IS a \
-                               verification: use `Crypto.checkSignature`. To put \
-                               one in a header, use `Crypto.signatureHex`."));
+                           (opaque_display_name type_name) field hint);
                          fresh ()
-                       end
-                       else
-                         (match field with
-                          | "value" | "cookies" | "headers" | "queryParameters"
-                          | "body" | "path" | "method_" | "method" | "status" ->
-                            fresh ()
-                          | _ -> no_such_field ())
+                       | None ->
+                         if not (List.mem type_name opaque_special_field_types)
+                         then fresh ()
+                         else if List.mem field opaque_special_fields then fresh ()
+                         else no_such_field ()
                      end))
             | _ ->
               add_error ctx loc (Printf.sprintf
@@ -2725,6 +2923,7 @@ let rec infer_expr ctx (e : expr) : ty =
 
   | EApp _ as app ->
     let (base_fn, args) = flatten_app_expr [] app in
+    reject_nested_check_calls ctx base_fn args;
     let infer_direct_call fn_expr call_args =
       let fn_ty = infer_expr ctx fn_expr in
       let arg_tys_rev = ref [] in
@@ -4463,6 +4662,9 @@ use the `Tuple3 a b c` constructor instead";
     fallback ()
   | EApp _ as app ->
     let base_fn, args = flatten_app_expr [] app in
+    (* A fn body's TAIL expression only ever reaches this path, so the nested
+       check-call rule has to run here too — [infer_expr]'s copy never sees it. *)
+    reject_nested_check_calls ctx base_fn args;
     (match base_fn with
      | EVar { name = "initTelemetry" | "check" | "make-witness" | "selectOne" | "select" | "selectCount" | "selectSum" | "selectMax" | "selectMin" | "selectCountBy" | "selectSumBy" | "insert" | "insertMany" | "upsert" | "update" | "updateAndReturnOne" | "returning" | "where" | "set" | "onConflict" | "doUpdate" | "delete" | "deleteAndReturnResult" | "one" | "#record-update#"; _ } ->
        fallback ()

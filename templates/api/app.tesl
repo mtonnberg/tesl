@@ -92,6 +92,11 @@ fn generateTodoId() -> String
 #
 #   JWT.sign (Dict.singleton "sub" userId) secret
 #
+# JWT.sign stamps the expiry itself — one hour, epoch seconds (RFC 7519) — so
+# the token is a SESSION token and the capability that wraps `jwt` must also
+# imply `time`, because signing reads the clock. There is no expiry parameter:
+# a caller who can choose one can choose ten years.
+#
 # and set SESSION_JWT_SECRET in the environment ([env] in tesl.toml).
 # Never take a `role` (or any other privilege) from a cookie: put it in the
 # signed claims, or look it up server-side from the verified user id.

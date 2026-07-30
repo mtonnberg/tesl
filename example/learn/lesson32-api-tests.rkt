@@ -23,7 +23,7 @@
 ;; Debugger: the lines whose statement is a READ-ONLY query.  The pause on
 ;; those happens AFTER the statement, so the SQL lens can show the exact
 ;; statement that ran (erased with the checkpoints in a release build).
-(register-sql-read-lines! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson32-api-tests.tesl" '(63))
+(register-sql-read-lines! "example/learn/lesson32-api-tests.tesl" '(63))
 (define-record EchoRequest
   [message : String]
 )
@@ -63,13 +63,13 @@
 (define-handler
   (echo [req : EchoRequest])
   #:returns EchoRequest
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson32-api-tests.tesl" 59 (list (cons 'req *req)) (lambda () req)))
+  (thsl-src! "example/learn/lesson32-api-tests.tesl" 59 (list (cons 'req *req)) (lambda () req)))
 
 (define-handler
   (getSeededNote)
   #:capabilities [dbRead]
   #:returns Note
-  (let ([found (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson32-api-tests.tesl" 63 (list) (lambda () (let ([tesl_match (select-one (from Note) (where (==. (entity-field-ref Note 'id) "note-1")))]) (if tesl_match (Something tesl_match) Nothing))) 'found)]) (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson32-api-tests.tesl" 64 (list (cons 'found *found)) (lambda () (let ([tesl-case-0 (raw-value found)]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson32-api-tests.tesl" 66 (list) (lambda () (reject "note not found" #:http-code 404)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([n (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson32-api-tests.tesl" 68 (list (cons 'n n)) (lambda () *n)))]))))))
+  (let ([found (thsl-src! "example/learn/lesson32-api-tests.tesl" 63 (list) (lambda () (let ([tesl_match (select-one (from Note) (where (==. (entity-field-ref Note 'id) "note-1")))]) (if tesl_match (Something tesl_match) Nothing))) 'found)]) (thsl-src-control! "example/learn/lesson32-api-tests.tesl" 64 (list (cons 'found *found)) (lambda () (let ([tesl-case-0 (raw-value found)]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/learn/lesson32-api-tests.tesl" 66 (list) (lambda () (reject "note not found" #:http-code 404)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([n (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/learn/lesson32-api-tests.tesl" 68 (list (cons 'n n)) (lambda () *n)))]))))))
 
 (define Lesson32Server-sse-routes '())
 (define-api Lesson32Api
@@ -97,10 +97,10 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define echoResp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson32-api-tests.tesl" 85 (list) (lambda () (dispatch-api-test-request Lesson32Server 'post (list "echo") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "message") "hello from api-test") #:capabilities '()))))
-            (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson32-api-tests.tesl" 86 (list (cons 'echoResp echoResp)) (lambda () (statusOk (raw-value (api-test-field-access-ref echoResp 'status)))))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson32-api-tests.tesl" 87 (list (cons 'echoResp echoResp)) (lambda () (api-test-field-access-ref (api-test-field-access-ref echoResp 'body) 'message)))) "hello from api-test")
-            (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson32-api-tests.tesl" 88 (list (cons 'echoResp echoResp)) (lambda () (isNull (raw-value (api-test-field-access-ref (api-test-field-access-ref echoResp 'body) 'missing)))))))
+            (define echoResp (thsl-src! "example/learn/lesson32-api-tests.tesl" 85 (list) (lambda () (dispatch-api-test-request Lesson32Server 'post (list "echo") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "message") "hello from api-test") #:capabilities '()))))
+            (check-true (raw-value (thsl-src! "example/learn/lesson32-api-tests.tesl" 86 (list (cons 'echoResp echoResp)) (lambda () (statusOk (raw-value (api-test-field-access-ref echoResp 'status)))))))
+            (check-equal? (raw-value (thsl-src! "example/learn/lesson32-api-tests.tesl" 87 (list (cons 'echoResp echoResp)) (lambda () (api-test-field-access-ref (api-test-field-access-ref echoResp 'body) 'message)))) "hello from api-test")
+            (check-true (raw-value (thsl-src! "example/learn/lesson32-api-tests.tesl" 88 (list (cons 'echoResp echoResp)) (lambda () (isNull (raw-value (api-test-field-access-ref (api-test-field-access-ref echoResp 'body) 'missing)))))))
           ))
       ))
   )
@@ -115,9 +115,9 @@
           (lambda ()
             (with-capabilities (dbRead dbWrite)
               (insert-one! Note (tesl-hash 'id "note-1" 'title "Seeded from setup"))
-              (define seeded (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson32-api-tests.tesl" 96 (list) (lambda () (dispatch-api-test-request Lesson32Server 'get (list "seeded-note") #:headers (tesl-hash) #:capabilities (list dbRead dbWrite)))))
-              (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson32-api-tests.tesl" 97 (list (cons 'seeded seeded)) (lambda () (statusOk (raw-value (api-test-field-access-ref seeded 'status)))))))
-              (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson32-api-tests.tesl" 98 (list (cons 'seeded seeded)) (lambda () (api-test-field-access-ref (api-test-field-access-ref seeded 'body) 'title)))) "Seeded from setup")
+              (define seeded (thsl-src! "example/learn/lesson32-api-tests.tesl" 96 (list) (lambda () (dispatch-api-test-request Lesson32Server 'get (list "seeded-note") #:headers (tesl-hash) #:capabilities (list dbRead dbWrite)))))
+              (check-true (raw-value (thsl-src! "example/learn/lesson32-api-tests.tesl" 97 (list (cons 'seeded seeded)) (lambda () (statusOk (raw-value (api-test-field-access-ref seeded 'status)))))))
+              (check-equal? (raw-value (thsl-src! "example/learn/lesson32-api-tests.tesl" 98 (list (cons 'seeded seeded)) (lambda () (api-test-field-access-ref (api-test-field-access-ref seeded 'body) 'title)))) "Seeded from setup")
             )
           ))
       ))
@@ -132,8 +132,8 @@
         (call-with-api-test-subscriptions
           (lambda ()
             (with-capabilities (dbRead)
-              (define seeded (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson32-api-tests.tesl" 102 (list) (lambda () (dispatch-api-test-request Lesson32Server 'get (list "seeded-note") #:headers (tesl-hash) #:capabilities (list dbRead)))))
-              (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson32-api-tests.tesl" 103 (list (cons 'seeded seeded)) (lambda () (api-test-field-access-ref seeded 'status)))) 404)
+              (define seeded (thsl-src! "example/learn/lesson32-api-tests.tesl" 102 (list) (lambda () (dispatch-api-test-request Lesson32Server 'get (list "seeded-note") #:headers (tesl-hash) #:capabilities (list dbRead)))))
+              (check-equal? (raw-value (thsl-src! "example/learn/lesson32-api-tests.tesl" 103 (list (cons 'seeded seeded)) (lambda () (api-test-field-access-ref seeded 'status)))) 404)
             )
           ))
       ))

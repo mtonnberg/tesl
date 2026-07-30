@@ -2008,26 +2008,29 @@
 ;; also the only way to still test the 403 path honestly (a NON-admin token,
 ;; rather than a client asking to be a non-admin).
 (require (only-in "../tesl/jwt.rkt" JWT.sign JwtSecret jwt)
+         (only-in "../tesl/time.rkt" time)
          (only-in "../dsl/types.rkt" newtype-value? newtype-value-value))
 
 (define ADMIN-TASK-SECRET "test-session-signing-key-not-a-real-secret")
 
+;; No `exp` in the claims: JWT.sign stamps it itself, one hour ahead in epoch
+;; seconds (RFC 7519).  Supplying one is an error, not an override — the fixture
+;; therefore cannot get the expiry or its unit wrong, because it supplies neither.
+;; Signing reads the clock, so `time` joins `jwt` in the ambient capability set.
 (define (signed-session-cookie #:sub sub #:role [role #f])
-  (define exp (+ (inexact->exact (floor (current-inexact-milliseconds))) 3600000))
   (define claims
     (if role
-        (hash "sub" sub "role" role "exp" exp)
-        (hash "sub" sub "exp" exp)))
-  (define token (with-capabilities (jwt) (JWT.sign claims (JwtSecret ADMIN-TASK-SECRET))))
+        (hash "sub" sub "role" role)
+        (hash "sub" sub)))
+  (define token (with-capabilities (jwt time) (JWT.sign claims (JwtSecret ADMIN-TASK-SECRET))))
   (string-append "session="
                  (let ([raw token])
                    (if (newtype-value? raw) (newtype-value-value raw) raw))))
 
 (define (admin-session-cookie #:sub [sub "anna"] #:role [role "admin"])
-  (define exp (+ (inexact->exact (floor (current-inexact-milliseconds))) 3600000))
   (define token
-    (with-capabilities (jwt)
-      (JWT.sign (hash "sub" sub "role" role "exp" exp)
+    (with-capabilities (jwt time)
+      (JWT.sign (hash "sub" sub "role" role)
                 (JwtSecret ADMIN-TASK-SECRET))))
   (string-append "session="
                  (let ([raw token])

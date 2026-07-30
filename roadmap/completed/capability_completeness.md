@@ -35,3 +35,33 @@ CAP-COMPOSE is **done** (whole-program grant coverage) — see
 
 ## Tests
 Negative for each; positive controls (correctly-declared programs still compile+run).
+
+---
+
+## Known debt: `jwt` gates a pure function (recorded 2026-07-29, NOT to be "fixed")
+
+**The ruling, established when `Tesl.Crypto` landed:** *a capability marks an **effect**.
+Sensitivity is carried by types and proofs, which track the **value** rather than the function.*
+
+`Tesl.Crypto` follows it exactly — only `hashPassword` (draws a salt) and `randomToken` are gated,
+both on the existing `random`, and `signWith` / `checkSignature` / `checkPassword` / `needsRehash` /
+`fingerprint` / `keyFingerprint` are ungated because they are pure. They consume key material, and
+that sensitivity lives in `Secret` and in the facts.
+
+**`Tesl.JWT` contradicts the rule.** `JWT.sign` is a pure HMAC over a claims dict and `JWT.verify`
+is a pure HMAC comparison, yet both require the `jwt` capability. By the rule they should require
+nothing.
+
+**This is deliberately left alone.** Removing a capability is a **breaking change to every
+`requires [jwt]` in the wild** — a declaration that becomes unnecessary is a compile error under the
+unused-capability checks, so every existing JWT program would need editing for zero safety gain.
+The cost is real and the benefit is aesthetic.
+
+So the position is: **`jwt` is grandfathered, and the rule is not to be inferred from it.** Anyone
+adding a stdlib surface should follow `Tesl.Crypto`'s pattern, not `Tesl.JWT`'s. `Type_system`'s
+`stdlib_capabilities` and `compiler/test/test_capability_registry.ml`'s oracle both carry a comment
+saying so, and the oracle fails if a pure Crypto function is ever gated — which is the actual
+enforcement.
+
+If `jwt` is ever removed, do it at a major version with a release note, and expect it to touch every
+JWT example and lesson.

@@ -195,12 +195,17 @@ let test_S13_unit_return_compiles () =
   (* A `-> Unit` function returns a runtime (void)/side-effect value, never the
      'Unit symbol.  With Unit registered as always-true it fails OPEN by intent;
      the naive flip (no registration) would have rejected this. *)
+  (* The body used to be `print msg`. `print` was REMOVED from the surface
+     language 2026-07-29 — it was ambient and typed `a -> Unit`, so that bare type
+     variable also accepted a `secret` and wrote the plaintext to stdout. The
+     fixture only ever needed *a Unit-valued body*, so it uses the `Unit` value
+     directly and no longer depends on a name that should not exist. *)
   should_check_and_emit "#:returns Unit" {|
 module DesignS13Unit exposing [logIt]
 import Tesl.Prelude exposing [String, Unit]
 
-fn logIt(msg: String) -> Unit =
-  print msg
+fn logIt(_msg: String) -> Unit =
+  Unit
 |}
 
 (* ── Polymorphic return: type-variable stays green under the flip ──────────── *)

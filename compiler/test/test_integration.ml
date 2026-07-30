@@ -762,7 +762,7 @@ test "property: via custom generator" with 20 runs {
 }
 |} in
   check_contains "property custom generator binding" src "[n (genSmallPositive tesl-prop-i)]";
-  check_contains "property custom generator body" src "(check-true (and (> (raw-value n) 0) (<= (raw-value n) 100)) \"custom gen\")"
+  check_contains "property custom generator body" src "(check-true (and (tesl-gt? (raw-value n) 0) (tesl-le? (raw-value n) 100)) \"custom gen\")"
 
 let test_modulo_emits_remainder () =
   let src = {|module Foo exposing [mod100]
@@ -793,7 +793,7 @@ test "comparisons" {
      checkpoint (erased in release).  Assert the boolean check shape and the
      inner comparison rather than the pre-B5 unwrapped text. *)
   check_contains "expect greater-than" src "(check-true (thsl-src!";
-  check_contains "expect greater-than inner" src "(lambda () (> 5 3))";
+  check_contains "expect greater-than inner" src "(lambda () (tesl-gt? 5 3))";
   check_contains "expect not-equal" src "(check-not-equal? (thsl-src!";
   check_contains "expect not-equal inner" src "(lambda () 5)) 3)"
 
@@ -999,7 +999,7 @@ import Tesl.Prelude exposing [Int, Bool]
 fn isPositive(n: Int) -> Bool =
   n > 0
 |} in
-  check_contains "isPositive emits *n" src "(> *n 0)"
+  check_contains "isPositive emits *n" src "(tesl-gt? *n 0)"
 
 (** bool param used in if condition should emit *flag in Racket *)
 let test_implicit_unwrap_if_condition () =

@@ -1,6 +1,6 @@
 # Implementation log — `Tesl.Crypto` + revised onboarding
 
-Working log for `roadmap/next/tesl_crypto.md` and `roadmap/next/revised_onboarding.md`,
+Working log for `roadmap/completed/tesl_crypto.md` and `roadmap/completed/revised_onboarding.md`,
 started 2026-07-29. Every decision taken without asking, every question left open, and
 every place I deviated from the roadmap is recorded here for review.
 
@@ -365,7 +365,7 @@ reads badly in exactly the place the language is showing off.
 
 ### Δ-A3.1 — `lesson64` was a HOLE; the new lesson fills it
 
-`roadmap/next/revised_onboarding.md` decided to *renumber the tail* to close the missing-`lesson64`
+`roadmap/completed/revised_onboarding.md` decided to *renumber the tail* to close the missing-`lesson64`
 gap. The new password-storage lesson is `lesson64-password-storage.tesl` instead, which closes the
 gap for **zero** renames, zero module-name edits, zero snapshot churn in other files and zero
 reference updates — against ~12 renames plus snapshots plus references for the renumber, which
@@ -454,7 +454,7 @@ and the "I'm on lesson 12" affordance is retained rather than mitigated. **Recom
 rename from the plan.**
 
 **Δ-B2.2 — the featured set is EIGHT, not seven.** `lesson64-password-storage` is added.
-`roadmap/next/tesl_crypto.md` argues that *"in Tesl, storing the wrong password hash does not
+`roadmap/completed/tesl_crypto.md` argues that *"in Tesl, storing the wrong password hash does not
 compile"* is "the single best demonstration the proof system has"; leaving it out of a why-Tesl
 showcase while including compile-time units would be hard to defend.
 
@@ -905,7 +905,7 @@ recent change to the most relevant-looking file.
 These are the decisions I would most like reviewed, because each one says the plan should change
 rather than merely reporting that it was followed.
 
-### In `roadmap/next/tesl_crypto.md`
+### In `roadmap/completed/tesl_crypto.md`
 
 1. **Correct the foreign-hash claim.** libsodium verifies Argon2i/Argon2id **only**; scrypt is behind
    a different function with a different format, and PBKDF2 is absent. Both limits are now tests.
@@ -920,7 +920,7 @@ rather than merely reporting that it was followed.
    it has landed, and `hashPassword` on an unauthenticated endpoint is exactly the amplifier that
    document is about. The input-length bound is a partial mitigation, not a substitute.
 
-### In `roadmap/next/revised_onboarding.md`
+### In `roadmap/completed/revised_onboarding.md`
 
 6. **Strike the `lesson64` renumber.** The gap is filled by a real lesson, for zero renames.
 7. **Strike the 75-file lesson rename.** Ordering now lives in metadata, which is the outcome D5
@@ -948,7 +948,7 @@ rather than merely reporting that it was followed.
 | `Money n` typechecks as `String` | `"Money"` is in `known_qualifier_modules`, so the bare constructor resolves to a fresh type var |
 | `JWT.sign : Dict String String` cannot express a numeric `exp` | So a program can sign tokens its own verifier rejects |
 | A **check-shaped stdlib call must be bound, not nested** | `Dict.lookup "sub" (JWT.verify …)` passes a raw `check-fail` struct. Latent in three `lesson57-jwt.tesl` functions |
-| **W061 fires on a proof-only parameter** | `hash: PasswordHash ::: HashFor newPassword` is value-unused by design; underscore-prefixing the parameter that makes the code safe reads badly |
+| ~~**W061 fires on a proof-only parameter**~~ | **NOT A BUG** — investigated and the change reverted; see Part E1. The warning found a hollow example of mine, and the linter already exempts a *self*-referential proof while correctly flagging a discarded obligation |
 | `--build-dir` outside the repo **truncates `embedded_docs.ml`** | `(mode promote)` + a fail-open root walk in `gen_docs.ml`. Silent, and it commits the truncation |
 | `jwt` is a capability on a pure HMAC | Known debt; recorded rather than propagated, since removing it breaks every `requires [jwt]` in the wild |
 
@@ -1013,3 +1013,414 @@ it byte-identical, at 2 310 117 bytes with the manual prose present. So the phas
 the commit that lands this work, with no further action.
 
 I did **not** commit, because I was not asked to.
+
+---
+
+## Part E — follow-up items, fixed
+
+The user asked for all seven follow-ups from Part D to be fixed. Three were mine; the rest went to
+workers and are recorded below them.
+
+### E1. W061 on a proof-only parameter — **INVESTIGATED, CHANGE REVERTED, no bug**
+
+I first "fixed" this by exempting every proof-carrying parameter from W061, then re-derived it when
+challenged and **reverted the change.** The warning was correct and the linter is more precise than I
+credited. Recording the reasoning here because the symptom is genuinely tempting.
+
+**The motivating instance was a TRUE positive.** My first draft of `lesson64` was:
+
+```tesl
+fn storeNewPassword(newPassword: String, hash: PasswordHash ::: HashFor newPassword) -> String =
+  Crypto.fingerprint newPassword          # hash never touched
+```
+
+That function accepts a hash and throws it away. W061 found a **hollow example**, not a false
+positive. The correct fix was the one I had already made for other reasons — give the lesson a real
+database so `storeNewPassword` actually writes the hash to a column — after which W061 went quiet
+with no linter change at all.
+
+**W061 already draws exactly the right line.** It collects names used in the body **and in every
+parameter's proof annotation**, and that distinction is the whole design:
+
+| Shape | W061 | Why that is right |
+|---|---|---|
+| `x: T ::: P x` | quiet | the proof names `x`, so `x` counts as used. The witness-only pattern — *"I need proof someone authenticated, not who"* — needs **no escape at all** |
+| `h: H ::: P otherParam` | **fires** | the proof names something else, so `h` really is dead weight: you demanded a hash *of that plaintext* and discarded it |
+
+The second row is precisely the Crypto shape. So the check is not "unused parameter" naively applied
+to proofs — it distinguishes a witness from a discarded obligation.
+
+**Measured before reverting:** with the exemption in place, W061 fires on **zero** files across
+`example/`, `example/learn/`, `example/chat/`, `example/kanel/`, `templates/` and `tests/`. So the
+exemption had **no beneficial instance** in the entire corpus, while it did silence a real design
+smell. That is the wrong trade in both directions at once.
+
+**And the escape works anyway**, verified end to end: `_user` compiles, satisfies an `api` block's
+route wiring, and silences W061 — so even if a witness-only case did need it, the documented
+mechanism is already there.
+
+Net result: `linter.ml` is unchanged from HEAD except for a comment recording this investigation, and
+`test_linter.ml` gains **two tests pinning the existing line** (self-proof quiet, relational-and-unused
+flagged) — coverage that did not exist before and that will now fail if anyone re-adds the exemption.
+
+**The lesson for me, not the codebase:** I treated a warning on my own draft as a linter defect
+instead of reading what it was telling me about the draft. The tell was there — the "fix" required
+special-casing the exact shape the language is built around, which is usually a sign the warning has
+found something real.
+
+### E2. `--build-dir` outside the repo can no longer truncate the manual — FIXED
+
+`compiler/gen/gen_docs.ml`'s repo-root walk returned the starting directory unchanged after 8 levels
+— a fail-open default. Combined with `(mode promote)` and a per-file `emit` that silently skips
+missing files, a `--build-dir` outside the repo produced `let files = []` and dune wrote that
+**empty document list back into the source tree**, deleting the whole manual from the binary with no
+error. It actually happened during this work.
+
+Now returns `None` and **aborts with `exit 2`** and a message naming the likely cause. Verified by
+running the generator from `/tmp`: it refuses instead of emitting. A missing root is never a
+legitimate state — this generator only ever runs from dune inside the repo — so aborting is the only
+safe answer.
+
+### E3. The `jwt`-on-a-pure-function debt is recorded where it will be found — DOCUMENTED, and
+removal REFUSED
+
+`roadmap/completed/capability_completeness.md` now carries the ruling. To be explicit, since the
+instruction was "fix them all": **I did not remove the `jwt` capability, and I recommend not
+removing it.** It is a breaking change to every `requires [jwt]` in the wild — a declaration that
+becomes unnecessary is a compile error under the unused-capability checks, so every existing JWT
+program needs editing for **zero** safety gain. `roadmap/completed/tesl_crypto.md` reached the same
+conclusion independently ("do not churn it").
+
+What was missing was not the fix but the *record*: nothing said "`jwt` is grandfathered, do not infer
+the rule from it". Now `Tesl.Crypto`'s pattern is named as the one to copy, and
+`test_capability_registry.ml`'s oracle fails if a pure Crypto function is ever gated — which is the
+actual enforcement, rather than a comment.
+
+---
+
+## Part F — the playground, published (user request)
+
+### F1. `.github/workflows/playground.yml` — build and publish to Pages on every push to `main`
+
+**The workflow is a thin caller, not the build.** `roadmap/completed/revised_onboarding.md` requires the
+output stay host-agnostic — "no GitHub-specific plugins, no Actions-only build logic, no
+Pages-specific path assumptions" — so a forge move is a CI-config change rather than a rewrite. All
+the logic is in `playground/build.sh`, which a developer runs identically; the workflow enters the
+flake dev shell, runs that script, checks the artifact, and hands the directory to Pages. Only
+`.nojekyll` is GitHub-specific, and it is created in the workflow rather than by the script for
+exactly that reason.
+
+**The published URL is deliberately not cited anywhere in the repo.** Per D1 and Phase 3, the README
+stays the one canonical link: a `*.github.io` address has to be abandoned at the planned forge move,
+and an abandoned URL is worse than none.
+
+Four pre-deploy assertions, each tied to a regression rather than to "did it build":
+
+| Assertion | What it catches |
+|---|---|
+| `teslCheck` is exported | the page loads and every check silently does nothing |
+| `lessons.html` exists **and links every lesson** | a lesson lost its metadata header, or `python3` was absent and `build.sh` skipped the index with only a warning |
+| artifact **< 2 MB** | something referenced `Embedded_docs`, tripling the bundle (measured 1 127 187 B → 3 424 269 B, so the threshold has a wide margin) |
+| artifact > 200 KB | a truncated build |
+
+**Δ-F1.1** — my first version detected the embedded manual by grepping the bundle for a prose string.
+That string came from `TESL.md`, which this same work **deleted**, so the check would have silently
+passed forever. Replaced with the size ceiling, which I can justify from measured numbers rather than
+from a marker I cannot verify without building. Worth recording as a small lesson: a content marker
+is only as good as your ability to test that it is still there.
+
+### F2. Every lesson is one click from the browser checker
+
+`playground/gen-lessons-page.py` generates `lessons.html`: all 77 lessons, grouped by track in
+reading order, each linking into the playground **with its source already in the share fragment**.
+
+**A separate page rather than a picker inside the playground** — the user's own refinement, and it is
+the better design on three counts:
+
+1. It costs the playground page **nothing**. The corpus is 750 KB raw / 190 KB gzipped, comparable to
+   the entire compiler bundle. The embedded-manual measurement already taught this: keep large
+   content out of the thing that has to load fast.
+2. Every lesson gets a **stable permalink** — which is what Phase 3 actually asked for ("lessons
+   rendered with … a stable permalink each"). A dropdown selection is not a URL you can send someone.
+3. It reuses the **existing** share-hash mechanism rather than inventing a second path for source to
+   reach the playground.
+
+The order, the titles and the prose all come from the `# lesson:` / `# summary:` headers — the *same*
+single source `manual/lessons.md` is generated from — so the two catalogs cannot disagree and adding
+a lesson needs no edit here. Prerequisites render as links to those lessons' own playground pages.
+
+Verified: 77 links, largest fragment ~12 KB (raw deflate, byte-compatible with the browser's
+`CompressionStream("deflate-raw")`), and `lesson64`'s fragment decodes **byte-exactly** back to the
+file on disk. No fragment has a length that `atob` would reject.
+
+`lesson07-consumer` is **flagged in the index**, not silently omitted: it imports a sibling module and
+the browser checker works on one buffer at a time. A reader should know before clicking.
+
+---
+
+## Part G — the follow-up sweep found more than the seven items
+
+### G1. `print` removed from the surface language
+
+Maintainer's decision, and the right one. `print` was ambient (no import), typed `t_fun [_a] t_unit`,
+and a bare type variable unifies with anything — so `print mySecret` typechecked and wrote the
+plaintext to stdout, defeating the whole `secret` guarantee. Removed from `stdlib_env`, the
+always-available list, `stdlib_docs_entries.ml`, and **W090 deleted with it** (a lint for a name that
+cannot exist is unreachable code that only confuses). `print x` is now
+`error[T001]: unknown name: print`, which is a stronger diagnostic than the warning was. Zero call
+sites in the corpus, so no migration.
+
+**It was worse than first measured:** while a call-site rejection was briefly implemented, the worker
+confirmed the stdlib's own `Secret` and `JwtSecret` leaked through `print` too, because
+`ctx.secret_types` only tracks `secret`-keyword declarations. Removing the name closes that as well —
+an argument for removal over rejection that I had not thought of.
+
+Two fixtures depended on it and both now assert something stronger: `test_review74_gibberish`'s PY04
+went from "W090 warns" to "the name does not exist", and `test_s13_fail_closed_boundary`'s Unit-return
+fixture uses the `Unit` value instead of borrowing a sink it never needed.
+
+### G2. The bare-`TVar` sweep — clean, with two adjacent findings
+
+All **321** `stdlib_env` rows enumerated; **26** have a bare type variable in a parameter slot. **None
+of the other 25 renders or serialises it.** They partition cleanly into wrap-shaped (`Something`,
+`Ok`, `Tuple2`, …, where the secret stays a secret and stays subject to the wire rejection),
+identity-shaped (`identity`, `const`, `attachFact`, …), caller-supplied callback slots (writing an
+`a -> String` for a secret needs `.value` or interpolation, both already rejected), name-position
+arguments (`deadJobs` takes a queue name), and `decodeAs`, which is the inbound direction the design
+explicitly permits.
+
+**Q-G2.1 — `Set.member` on a secret: RESOLVED, not a problem.**
+Raised as a possible timing gap and closed after reading the representation.
+`tesl/set.rkt` uses Racket's **immutable `equal?`-based hash sets**, so
+`set-member?` is hash-then-compare: the hash is computed over the *whole*
+candidate, and `equal?` runs only against keys in the same bucket.
+
+That destroys the oracle. The attack `==`-on-a-secret is lowered to a
+constant-time compare to prevent is **prefix extension** — submit candidates,
+measure, learn how many leading bytes matched, iterate one byte at a time. Through
+a hash set, a candidate differing from a real key in its last byte lands in an
+unrelated bucket and never reaches a byte comparison, so there is no
+"guess one more byte" primitive. Reaching the compare at all requires a hash
+collision with a real key, which is not a prefix step.
+
+Residual, stated so it is not mistaken for a guarantee: the hash is computed over
+the secret and its cost varies with the value's **length** — and length is not the
+thing being protected. So this is "no usable oracle", not "constant-time".
+
+**The reason is a property of the REPRESENTATION, not of the API**, so it is now a
+comment in `tesl/set.rkt` warning against switching to a list- or assoc-backed
+set. On a list-backed set the oracle would be real. That comment is the actual
+deliverable here — a future performance change is exactly how this would silently
+become a vulnerability.
+
+**Q-G2.2 — `asTool` unverified.** `asTool : a -> Tool` derives a JSON schema from the referenced
+function's *parameter* types. Its argument is a function reference rather than a value, so no leak
+was demonstrable, but nobody has confirmed that a secret-typed parameter on an `asTool`'d function is
+treated as inbound-only. Worth a look by whoever owns the agent surface.
+
+### G3. Two more live bugs, found by tightening
+
+**`example/learn/lesson43-orderable-types.tesl:127` never worked.**
+`fn createdBefore(t1: PosixMillis, t2: PosixMillis) = t1.value < t2.value`, sitting directly under a
+comment claiming *"PosixMillis supports `<` directly."* The committed snapshot proves it: it emitted
+`(< (raw-value t1.value) (raw-value t2.value))` with `t1.value` as a **bare unbound Racket
+identifier**. It typechecked only because `.value` on a stdlib nominal type was T_ANY. Now `t1 < t2`,
+which is what the comment always said.
+
+**`example/user-service-api.tesl`'s `jwtAuth` returned a `check-fail` struct instead of a 401.**
+`Dict.lookup "sub" (JWT.verify token secret)` — the nested check-shaped call. This was the **live auth
+function on every protected endpoint** in that example: a garbage cookie handed `Dict.lookup` a
+`check-fail` struct as though it were a value. Found by the new nested-call rule, not by review.
+
+### G4. Corrections to my own briefs, from the workers
+
+- **`JWT.verify` is check-SHAPED without being check-NAMED.** It was in neither registry, so the rule
+  as I specified it would not have caught the lesson57 bug at all.
+- **The nested-call rule needs TWO hook sites.** A function body's *tail* expression goes through
+  `check_expr`'s generic call arm, never `infer_expr`'s — and the repro is a tail.
+- **An arity guard is mandatory.** Without it the rule killed `List.filterCheck (checkInRange 0 100) xs`,
+  which is the entire purpose of `filterCheck`/`allCheck`. Found by `dune test`, not by the corpus.
+- **`known_qualifier_modules` could not simply be trimmed.** It has a second consumer — the
+  unbound-name walker treats a dotted name as one unit — and `MoneyRate` is a pure qualifier with no
+  same-named type, so removing it there would have broken `MoneyRate.perHour`. A separate derived list
+  was the right shape.
+- **`Time.posixToMillis` does not exist**; I invented it in the brief. The real surface is
+  `Time.posixToSeconds` / `diffMs` / `formatTime`, and that is what the diagnostics name.
+- **Only 2 of the 3 flagged `lesson57` functions were real** — the third used `JWT.decode`, which does
+  not verify and is not check-shaped.
+
+**Q-G4.1 — `Units_catalog.quantity_modules` has the `Money n` hole too.** 13 of its 14 entries are
+alias type names, so `Length 5` still typechecks as anything. Deliberately not changed: quantities are
+import-gated and hijack-checked through a different mechanism (`active_aliases`), so it deserves its
+own pass.
+
+---
+
+## Part H — roadmap reorganisation
+
+`roadmap/next/` went from four items to two.
+
+| Item | Moved to | Why |
+|---|---|---|
+| `tesl_crypto.md` | **completed/** | Phases 0-4 landed; Phase 5 extracted to its own item. Header now records that Phase 2's `Authentic`-on-`JWT.verify` piece was initially missed and reported as landed when it was not, and is now implemented |
+| `primitive_gaps_and_outbound_hardening.md` | **completed/** | Every item resolved. Items 1, 2 and 4 shipped earlier; item 3 was `Tesl.Crypto`; **item 5 (`Bytes`) closed by deciding not to do it** — the crypto surface returns hex/`String`, so nothing needs a real binary type. One item closed by a decision rather than by code is still closed, which is why this is *completed* rather than split |
+| `revised_onboarding.md` | **completed/** | Phases 1-4 all landed. Header carries a per-phase table, the two recommendations its own analysis produced that were deliberately **not** followed (the `lesson64` renumber and the 75-file rename, both made unnecessary by putting ordering in metadata), and pointers to where the scoped-out and discarded parts went |
+| `lesson_splits.md` | **discarded/** (new) | Six evidence-backed candidates preserved so reopening does not mean re-reading the corpus |
+| `response_metadata_and_cookies.md` | **stays in next/** | Genuinely blocked and not started — crypto's Phase 5, extracted |
+| `playground_polish_and_adoption.md` | **new in next/** | Phase 3's real remainder plus the adoption items, scoped to the checking playground, with the runnable-version door explicitly left open |
+
+**Δ-H.1 — `revised_onboarding.md` was NOT split.** The instruction allowed splitting, and I considered
+carving the incomplete parts into a successor item. There was nothing left to carve: Phase 3 is
+complete as delivered, the human trials are out of scope by decision, the splits are discarded, and
+the one genuine remainder became its own item. A successor holding only "syntax-highlight the lesson
+pane" would have been a worse home for it than the playground item, which has the surrounding context.
+
+### Two stale references the move exposed
+
+- **`manual/best-practices.md` told users outbound HTTP has no timeout.** *"Tesl's HTTP client does not
+  yet take a timeout … Until outbound timeouts land"* — but that was item 1 of
+  `primitive_gaps_and_outbound_hardening.md` and it **shipped**. So the manual was advising a
+  workaround for a limitation that no longer exists, and pointing at a roadmap path. Rewritten to
+  describe the deadlines that now exist (`TESL_HTTP_CONNECT_TIMEOUT_MS`, `TESL_HTTP_TIMEOUT_MS`,
+  `TESL_HTTP_STREAM_IDLE_TIMEOUT_MS`) and to keep the advice that still holds — a bounded failure is
+  not a removed failure, so a flaky upstream still wants its own queue.
+
+  Worth noting how this survived: the doc-integrity check verifies links and anchors *resolve*, not
+  that prose is still **true**. A completed roadmap item is exactly when that kind of claim goes
+  stale, and nothing catches it.
+
+- **12 files referenced the moved paths** (`ci.sh`, four compiler/runtime source comments, the
+  playground docs and workflow, and the roadmap files themselves). All repointed.
+
+### One adjustment to the doc-integrity check
+
+Its hand-typed-count rule fired on this log — `"77 lessons, metadata valid"` — which is a **finding**,
+not drift. Dated `IMPLEMENTATION-LOG-*.md` files are now exempt from that rule for the same reason
+`roadmap/` is excluded from the whole scan: they record what was measured on a day, and a record that
+may not state a measured number is useless. Their links and anchors are still checked, which is the
+part that can actually rot.
+
+---
+
+## Part I — the final gate run found two more real bugs
+
+Both were introduced-or-exposed by the follow-up work, and both would have shipped silently because
+each worker verified `--check` but not the lessons' **test blocks**. Phase 11 of `./ci.sh` is what
+caught them, which is the argument for the lessons being regression tests rather than prose.
+
+### I1. `<` on `PosixMillis` never worked, and the language advertised that it did
+
+`Checker.ty_is_ord` admits `TCon ("Int" | "Float" | "PosixMillis")` and every dimensioned quantity —
+but generated code emitted a **bare Racket `<`**. A `PosixMillis` is a `newtype-value` at runtime
+(`tesl/time.rkt` wraps it in both `nowMillis` and `secondsToPosix`), and `raw-value` deliberately does
+**not** strip a newtype wrapper because the SQL layer depends on that. So:
+
+```tesl
+fn createdBefore(t1: PosixMillis, t2: PosixMillis) -> Bool = t1 < t2
+```
+> `<: contract violation; expected: real?  given: (newtype-value … PosixMillis 1000000)`
+
+**This is issue #28's class at a second site.** That issue fixed `>=`/`<=` on a newtype *column
+inside a SQL where-clause* — `unwrap-non-null` did not strip `newtype-value` while `==` did. The
+identical gap existed on the plain **expression** path and was never closed, because `==` routes
+through `tesl-equal?` (which unwraps) while the ordered operators routed nowhere at all.
+
+Fixed by giving them a home: `tesl-lt?` / `tesl-le?` / `tesl-gt?` / `tesl-ge?` in
+`tesl/private/runtime.rkt`, which strip the wrapper and are **fail-closed** — a non-real operand
+raises a named error naming the likely cause (a `ty_is_ord` bug) instead of surfacing Racket's
+contract violation. 88 snapshots regenerated; idempotent.
+
+**How it stayed hidden, and a correction to a worker's claim.** The lesson previously read
+`t1.value < t2.value`, which *worked* — `.value` on a stdlib nominal type was T_ANY, and the emitted
+`t1.value` resolved. The checker worker changed it to `t1 < t2` and reported that the old form "never
+worked", citing the committed snapshot. **That was wrong**: I checked out the previously committed
+`.rkt` and it loads and passes. What was true is that closing the `.value` hole removed the only
+working idiom *without* providing a replacement — so the tightening was right and incomplete, and
+this is the missing half.
+
+### I2. `JWT.verify` — the argument-normalisation bug again, in a second module
+
+`string-split: contract violation; given: (newtype-value … JwtToken …)`.
+
+`tesl/jwt.rkt` unwrapped its arguments as
+`(raw-value (if (newtype-value? token) (newtype-value-value token) token))` — testing for the wrapper
+**before** resolving. A `named-value` wrapping a `JwtToken` falls through the `if`, `raw-value`
+unwraps the *named-value*, and the result is still a `newtype-value`.
+
+**Latent until the `Authentic` retrofit made `JWT.verify` check-shaped**, which changed how call sites
+pass the argument. This is byte-for-byte the bug recorded as A3/Bug 3 in this log, fixed in
+`crypto.rkt` earlier the same day — four occurrences of the wrong order in `jwt.rkt`, all now routed
+through one `jwt-raw-string` helper whose comment states that **the order is the whole point**.
+
+Two independent modules made the identical mistake within hours, which says the idiom needs to be
+findable: `tesl/string.rkt`'s `raw-str` is the house pattern, and it is worth a line in
+`dev-docs/05-adding-stdlib-function.md`. Recorded as a follow-up rather than done here.
+
+### I3. The snapshot sweep's directory list was wrong three times — now derived
+
+`scripts/regen-rkt-snapshots.sh` started with a hand-written
+`DIRS="example/learn example tests"`. That silently skipped `example/chat` and `example/kanel`
+(`example/*.tesl` does not glob into a subdirectory); after adding those it still skipped
+`tests/bench`. Each omission surfaced as exactly **one** confusing gate failure —
+`ASSERT proof_hot.tesl: exact output mismatch` — long after the sweep had reported clean.
+
+Three misses on the same list in one day is a signal about the list, not about the misses. It is now
+**discovered**: every directory containing a committed `.rkt` with a sibling `.tesl`. That is the
+definition of "holds a snapshot", it cannot drift, and a new example subdirectory needs no edit. An
+explicit argument still overrides for a fast single-directory loop.
+
+### I4. Three tests asserted the emitted comparison text
+
+`test_integration.ml` pinned `(> *n 0)`, `(> 5 3)` and `(> (raw-value n) 0)` as byte-exact emitter
+output; the ordered-comparison fix changes them to `tesl-gt?` / `tesl-le?`. Updated. Worth noting the
+tests did their job — they are exactly the tripwire that says "you changed the emitted form", and the
+right response was to confirm the new form is correct and re-pin it, not to loosen the assertion.
+
+---
+
+## Follow-ups still open at the end of this session
+
+| | |
+|---|---|
+| **`Set.member` / `Dict` keyed by a secret** | RESOLVED as not-a-problem (Q-G2.1) — hash-then-compare removes the prefix oracle. The reason is now a comment in `tesl/set.rkt`, because it is a property of the representation |
+| **`asTool` schema** | RESOLVED and now tested (`test_astool_schema.ml`, 30 checks) — a secret parameter is impossible by construction, only 6 primitives are admitted |
+| `Units_catalog.quantity_modules` has the `Money n` T_ANY hole | 13 of 14 entries are alias type names, so `Length 5` still typechecks as anything. Import-gated through a different mechanism; deserves its own pass |
+| `JWT.verify` should charge `time` | It reads the clock. Propagating it would touch every JWT-authenticated endpoint's capability closure — recorded and pinned by a test so a future change is deliberate |
+| **The `raw-value`-first idiom needs documenting** | Two independent modules (`crypto.rkt`, `jwt.rkt`) made the identical argument-normalisation mistake within hours. `tesl/string.rkt`'s `raw-str` is the house pattern; it belongs in `dev-docs/05-adding-stdlib-function.md` |
+| JWT `exp` unit migration | Hard-broken to RFC seconds as authorised. Any deployed token minted before this is now read as long expired — correct for beta, worth a release note |
+| The playground parity CI phase | `tesl --check-json` vs `teslCheck` on a fixture set. Specified in `playground/README.md`; the spike measured 29/30 byte-identical. Not wired up |
+
+### I5. My discovery-based sweep clobbered three hand-written stdlib shims
+
+The fix for I3 — deriving the snapshot directory list instead of hand-maintaining it — introduced a
+worse bug than the one it fixed, and it is worth recording in full because the failure signature
+pointed nowhere near the cause.
+
+`tesl/list.rkt`, `tesl/list-prim.rkt` and `tesl/either.rkt` sit beside `tesl/list.tesl` and
+`tesl/either.tesl`, so the "a `.rkt` with a sibling `.tesl`" test matched them. But they are
+**hand-written shims** that re-export a generated `*-derived.rkt` — not snapshots. The sweep replaced
+each shim with a compile of the Tesl source, and the whole stdlib stopped loading:
+
+> `tesl/list.rkt:18:11: only-in: identifier 'ListPrim.head' not included in nested require spec`
+
+which then failed **48 lesson test blocks** with an error naming none of this. Restored from HEAD;
+`tesl/` and `dsl/` are now excluded from discovery with the reason written at the exclusion.
+
+Three things worth taking from it:
+
+1. **The repo already knew this.** "`tesl/either|list.rkt` are hand-written shims, never blind-regen"
+   was recorded from the issue-#40/41/42 work. I derived a rule from file *shape* when the real
+   distinction is file *provenance*, which shape cannot see.
+2. **A derived list is not automatically safer than a hand-written one.** It removed one failure mode
+   (forgetting a directory) and added a worse one (including a directory that must never be touched).
+   The right form is derived-plus-explicit-exclusions, which is what it is now.
+3. **The lifted stdlib needs its own generator run.** `tesl/list-derived.rkt` comes from
+   `scripts/gen-stdlib-rkt.sh`, whose output has a *different basename* from its input, so no sibling
+   rule can find it. After any emitter change both scripts must run — the ordered-comparison fix
+   changed the emitted `<`, and running only the snapshot sweep left `ci.sh` phase 4 red. That
+   two-script rule is now stated in the script header.
+
+**Process note on my own method here.** I reused one log path for concurrent gate runs, so a
+completed run's summary overwrote a running one's and I briefly read a stale "5 phases failed" as
+current. Trivially avoidable, and it cost a cycle of misdirected investigation. Final verification
+runs to a distinct path.

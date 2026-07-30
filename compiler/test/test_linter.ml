@@ -257,6 +257,47 @@ fn f(s: String) -> String = s
 |} in
   assert_has diags "W050"
 
+(* ── W061 and proof-carrying parameters: where the line already is ──────────
+   An exemption for ALL proof-carrying parameters was added and reverted on
+   2026-07-29. These cases pin the existing behaviour, which is more precise than
+   the exemption would have been, so nobody re-adds it after hitting the same
+   tempting symptom.
+
+   W061 collects names used in the body AND in every parameter's proof
+   annotation. That distinction is the whole design:
+
+     x: T ::: P x            — the proof names x, so x counts as used. The
+                               witness-only pattern ("I need proof someone
+                               authenticated, not who") needs no escape at all.
+     h: H ::: P otherParam   — the proof names something ELSE, so h really is
+                               dead weight, and W061 says so.
+
+   The second shape is exactly Tesl.Crypto's
+   `storeNewPassword(newPassword, hash ::: HashFor newPassword)`. It drew a W061,
+   and being told to rename the parameter that makes the code safe felt wrong —
+   but the draft it fired on accepted a hash and never stored it. The warning
+   found a hollow function; using the hash silenced it with no linter change.
+   Measured before reverting: with the exemption on, W061 fired on ZERO corpus
+   files, so it had no beneficial instance while it DID silence "demand a
+   proof-carrying value, then discard it". *)
+let test_w061_self_proof_param_is_quiet () =
+  let src = preamble ^ {|
+fn witnessOnly(score: Int ::: ValidScore score, other: Int) -> String =
+  "value is ${other}"
+|} in
+  let diags = lint_src src in
+  assert_absent diags "W061"
+
+let test_w061_relational_proof_param_is_flagged () =
+  let src = preamble ^ {|
+fn hollow(a: Int ::: ValidScore a, b: Int ::: ValidScore a) -> String =
+  "value is ${a}"
+|} in
+  let diags = lint_src src in
+  let d = find diags "W061" in
+  if not (str_contains d.message "b") then
+    Alcotest.fail ("W061 should name the discarded parameter `b`, got: " ^ d.message)
+
 let () =
   Alcotest.run "Linter" [
     "W050-config-usage-credited", [
@@ -272,6 +313,12 @@ let () =
         test_w060_decompose_value_half_still_flagged;
       Alcotest.test_case "plain unused let still flagged" `Quick
         test_w060_plain_unused_let_still_flagged;
+    ];
+    "W061-proof-carrying-param", [
+      Alcotest.test_case "self-proof param is quiet (no escape needed)" `Quick
+        test_w061_self_proof_param_is_quiet;
+      Alcotest.test_case "proof about ANOTHER param, unused: flagged" `Quick
+        test_w061_relational_proof_param_is_flagged;
     ];
     "W063-redundant-recheck", [
       Alcotest.test_case "fires on same-checker re-check" `Quick

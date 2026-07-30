@@ -33,7 +33,7 @@
          HttpClient.post
          HttpClient.put
          HttpClient.delete
-         ;; Secret-accepting outbound header sinks (roadmap/next/tesl_crypto.md's
+         ;; Secret-accepting outbound header sinks (roadmap/completed/tesl_crypto.md's
          ;; secret-accepting-sinks table).
          HttpClient.bearer
          HttpClient.secretHeader

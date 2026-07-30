@@ -22,60 +22,60 @@
 (define/pow
   (double [n : Integer])
   #:returns Integer
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson01-basic-types-and-functions.tesl" 37 (list (cons 'n *n)) (lambda () (* *n 2))))
+  (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 37 (list (cons 'n *n)) (lambda () (* *n 2))))
 
 (define/pow
   (negate [n : Integer])
   #:returns Integer
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson01-basic-types-and-functions.tesl" 44 (list (cons 'n *n)) (lambda () (- 0 *n))))
+  (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 44 (list (cons 'n *n)) (lambda () (- 0 *n))))
 
 (define/pow
   (isEmpty [xs : (List a)])
   #:returns Boolean
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson01-basic-types-and-functions.tesl" 47 (list (cons 'xs *xs)) (lambda () (raw-value (tesl_import_List_isEmpty *xs)))))
+  (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 47 (list (cons 'xs *xs)) (lambda () (raw-value (tesl_import_List_isEmpty *xs)))))
 
 (define/pow
   (clamp [lo : Integer] [hi : Integer] [n : Integer])
   #:returns Integer
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson01-basic-types-and-functions.tesl" 57 (list (cons 'lo *lo) (cons 'hi *hi) (cons 'n *n)) (lambda () (if (< *n *lo) *lo (if (> *n *hi) *hi *n)))))
+  (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 57 (list (cons 'lo *lo) (cons 'hi *hi) (cons 'n *n)) (lambda () (if (tesl-lt? *n *lo) *lo (if (tesl-gt? *n *hi) *hi *n)))))
 
 (define/pow
   (greetAge [name : String] [age : Integer])
   #:returns String
-  (let ([greeting (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson01-basic-types-and-functions.tesl" 66 (list (cons 'name *name) (cons 'age *age)) (lambda () (format "Hello, ~a!" (tesl-display-val *name))))]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson01-basic-types-and-functions.tesl" 67 (list (cons 'greeting *greeting) (cons 'name *name) (cons 'age *age)) (lambda () (if (>= *age 18) (raw-value (format "~a You are an adult." (tesl-display-val *greeting))) (raw-value (format "~a You are a minor." (tesl-display-val *greeting))))))))
+  (let ([greeting (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 66 (list (cons 'name *name) (cons 'age *age)) (lambda () (format "Hello, ~a!" (tesl-display-val *name))))]) (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 67 (list (cons 'greeting *greeting) (cons 'name *name) (cons 'age *age)) (lambda () (if (tesl-ge? *age 18) (raw-value (format "~a You are an adult." (tesl-display-val *greeting))) (raw-value (format "~a You are a minor." (tesl-display-val *greeting))))))))
 
 (module+ test
   (require rackunit)
   (test-case "double"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson01-basic-types-and-functions.tesl" 73 (list) (lambda () (double 0)))) 0)
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson01-basic-types-and-functions.tesl" 74 (list) (lambda () (double 5)))) 10)
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson01-basic-types-and-functions.tesl" 75 (list) (lambda () (double -2)))) -4)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 73 (list) (lambda () (double 0)))) 0)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 74 (list) (lambda () (double 5)))) 10)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 75 (list) (lambda () (double -2)))) -4)
     ))
   )
 
   (test-case "negate"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson01-basic-types-and-functions.tesl" 79 (list) (lambda () (negate 5)))) -5)
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson01-basic-types-and-functions.tesl" 80 (list) (lambda () (negate 0)))) 0)
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson01-basic-types-and-functions.tesl" 81 (list) (lambda () (negate -3)))) 3)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 79 (list) (lambda () (negate 5)))) -5)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 80 (list) (lambda () (negate 0)))) 0)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 81 (list) (lambda () (negate -3)))) 3)
     ))
   )
 
   (test-case "clamp"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson01-basic-types-and-functions.tesl" 85 (list) (lambda () (clamp 0 10 5)))) 5)
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson01-basic-types-and-functions.tesl" 86 (list) (lambda () (clamp 0 10 -3)))) 0)
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson01-basic-types-and-functions.tesl" 87 (list) (lambda () (clamp 0 10 99)))) 10)
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson01-basic-types-and-functions.tesl" 88 (list) (lambda () (clamp 0 10 0)))) 0)
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson01-basic-types-and-functions.tesl" 89 (list) (lambda () (clamp 0 10 10)))) 10)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 85 (list) (lambda () (clamp 0 10 5)))) 5)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 86 (list) (lambda () (clamp 0 10 -3)))) 0)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 87 (list) (lambda () (clamp 0 10 99)))) 10)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 88 (list) (lambda () (clamp 0 10 0)))) 0)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 89 (list) (lambda () (clamp 0 10 10)))) 10)
     ))
   )
 
   (test-case "greetAge"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson01-basic-types-and-functions.tesl" 93 (list) (lambda () (greetAge "Alice" 20)))) "Hello, Alice! You are an adult.")
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson01-basic-types-and-functions.tesl" 94 (list) (lambda () (greetAge "Bob" 17)))) "Hello, Bob! You are a minor.")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 93 (list) (lambda () (greetAge "Alice" 20)))) "Hello, Alice! You are an adult.")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 94 (list) (lambda () (greetAge "Bob" 17)))) "Hello, Bob! You are a minor.")
     ))
   )
 
@@ -84,30 +84,30 @@
   ; property: result is always in range
   (for ([tesl-prop-i (in-range 200)])
     (let ([lo (- (tesl-prop-random 2000001) 1000000)] [hi (- (tesl-prop-random 2000001) 1000000)] [n (- (tesl-prop-random 2000001) 1000000)])
-      (when (<= (raw-value lo) (raw-value hi)) (check-true (and (>= (raw-value (clamp lo hi n)) (raw-value lo)) (<= (raw-value (clamp lo hi n)) (raw-value hi))) "result is always in range"))
+      (when (tesl-le? (raw-value lo) (raw-value hi)) (check-true (and (tesl-ge? (raw-value (clamp lo hi n)) (raw-value lo)) (tesl-le? (raw-value (clamp lo hi n)) (raw-value hi))) "result is always in range"))
     ))
     ))
   )
 
   (test-case "doctest: double"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson01-basic-types-and-functions.tesl" 1 (list) (lambda () (double 0)))) 0)
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson01-basic-types-and-functions.tesl" 1 (list) (lambda () (double 5)))) 10)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 1 (list) (lambda () (double 0)))) 0)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 1 (list) (lambda () (double 5)))) 10)
     ))
   )
 
   (test-case "doctest: negate"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson01-basic-types-and-functions.tesl" 1 (list) (lambda () (negate 3)))) -3)
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson01-basic-types-and-functions.tesl" 1 (list) (lambda () (negate 0)))) 0)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 1 (list) (lambda () (negate 3)))) -3)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 1 (list) (lambda () (negate 0)))) 0)
     ))
   )
 
   (test-case "doctest: clamp"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson01-basic-types-and-functions.tesl" 1 (list) (lambda () (clamp 0 10 5)))) 5)
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson01-basic-types-and-functions.tesl" 1 (list) (lambda () (clamp 0 10 -3)))) 0)
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson01-basic-types-and-functions.tesl" 1 (list) (lambda () (clamp 0 10 99)))) 10)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 1 (list) (lambda () (clamp 0 10 5)))) 5)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 1 (list) (lambda () (clamp 0 10 -3)))) 0)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 1 (list) (lambda () (clamp 0 10 99)))) 10)
     ))
   )
 

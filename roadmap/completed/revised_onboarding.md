@@ -1,8 +1,23 @@
 # Revised onboarding
 
-> **Status:** Next · **Effort:** M for the docs spine and the maintainer ramp (Phases 1–2), L if
-> the browser playground (Phase 4) is taken on. Phases 1–2 need no new infrastructure and no
-> hosting decision; Phase 3 adds one published site, as a pure build artifact.
+> **Status:** COMPLETE (2026-07-29). Phases 1, 2, 3 and 4 all landed; the two things this item
+> stopped short of were each closed by a decision rather than left open.
+>
+> | Phase | Outcome |
+> |---|---|
+> | **1** — stop the contradictions | Done. README is a ~119-line router, `TESL.md` folded in and deleted, `GETTING-STARTED.md` rebuilt around `tesl init`, `dev-docs` quick start corrected, and a **doc-integrity script wired into `./ci.sh`** (278 links, 56 anchors, the section map round-tripped both ways). It also pulled `manual/tests` — 194 assertions — into the gate, which it had never been in |
+> | **1** — lesson metadata | Done, with a **deviation**: ordering lives in per-lesson `# lesson:` headers and `manual/lessons.md` is generated from them, so the 75-file rename D5 costed out was **not needed**. `lesson64` was filled by a real lesson rather than renumbered |
+> | **2** — the spine | Done: `manual/first-change.md` (S3), `CONTRIBUTING.md`, `dev-docs/12-your-first-compiler-change.md` |
+> | **3** — the site | **Complete as delivered.** `playground/lessons.html` gives all 77 lessons a stable permalink and publishes to Pages. The docs-site half is deliberately **not** built — the forge already renders and searches `manual/*.md`, and D1 keeps the README the spine. The one genuine remainder (syntax-highlight the lesson source) moved to `roadmap/next/playground_polish_and_adoption.md` |
+> | **4** — browser checking | Done, and the D7 bet held: 1.07 MB / 351 KB gzipped, 5-65 ms warm, diagnostics byte-identical to `tesl --check-json`. The embedded manual costs nothing — dead-code elimination drops all 2.3 MB |
+> | Human trials | **Scoped out** — run by the maintainer outside the roadmap. The reason they matter is preserved: no CI phase can tell you where a reader stalls |
+> | Lesson splits | **Discarded** — six evidence-backed candidates recorded in `roadmap/discarded/lesson_splits.md` |
+>
+> Two recommendations this item's own analysis produced and that were **not** followed, with reasons
+> in place: the `lesson64` renumber and the 75-file lesson rename. Both were made unnecessary by
+> putting ordering in metadata.
+>
+> Follow-on work lives in `roadmap/next/playground_polish_and_adoption.md`.
 
 ## Background
 
@@ -442,7 +457,14 @@ The bleeding first. Nothing here needs a decision.
   purpose, read it, fix it. The single highest-value new document in the plan.
 - **The maintainer ramp (D6)**: `CONTRIBUTING.md` + "your first compiler change".
 - Curated lesson tracks and the featured seven, generated from the metadata (D5).
-- **Targeted lesson splits** where the reorder or the trial showed a lesson doing two jobs.
+- ~~**Targeted lesson splits** where the reorder or the trial showed a lesson doing two jobs.~~
+  **DISCARDED 2026-07-29.** The ordering pass identified six candidates with evidence
+  (`lesson21-sql-reference`, `lesson06-proof-check-proof-auth`, `lesson63-ai-structured-output`,
+  `lesson25-standard-library-strings-lists-ints`, `lesson66-query-parameters`, and — weakest —
+  `lesson12-records-with-proofs`), and each split would add a lesson, a snapshot and test blocks
+  for an editorial gain that is real but small next to the reorder itself. Not doing them.
+  The candidate list is preserved in `roadmap/discarded/lesson_splits.md` so the evidence is not
+  lost if the case is ever reopened.
 - Route the AI-agent path explicitly from the spine.
 
 ### Phase 3 — The site (M, in scope, no new runtime)
@@ -541,14 +563,16 @@ about the rest.
   If the documented maintainer path is not executable in CI, it will rot exactly the way the
   user path did.
 
-**Human (not automatable, do it anyway):**
+**Human — OUT OF SCOPE for this item (2026-07-29).**
 
-- **Three newcomers, one link, no help, screen-shared.** Record where each stalls and how long
-  S0→S3 takes. Three people is enough to find the top two blockers, and the result is the only
-  honest measure of whether this item worked. Re-run after Phase 2.
-- **One of the three runs S5, not S3** — a prospective maintainer, from `CONTRIBUTING.md` to a
-  merged one-line change. Bus factor is the risk this half of the item exists to reduce, and it
-  is not measurable any other way.
+The newcomer trials (three people, one link, no help, screen-shared; one of them running the
+maintainer ramp instead) remain **the only honest measure of whether this item worked** — an
+automated gate can prove the docs are internally consistent, never that they teach. But they are
+run by the maintainer outside the roadmap, so they are not a deliverable here and their absence
+does not block this item from closing.
+
+Recorded rather than deleted, because the *reason* they matter is still true: no CI phase can tell
+you where a reader stalls.
 
 ---
 
@@ -565,7 +589,7 @@ about the rest.
 | Maintainer ramp location | **`CONTRIBUTING.md` at the repo root**, as a router; `dev-docs/` holds the content |
 | The worked maintainer change | **`W020`, module name not UpperCamelCase** — five graded real defects in fifteen lines; start with the missing machine-applicable fix |
 | Lesson curation | **Keep all 75** (they are regression tests too); **feature seven** — `lesson00`, `05`, `12`, `14`, `18`, `68`, `72` — as the impatient reader's why-Tesl showcase |
-| The lesson sequence | **Reading order is value order.** Reorder the whole corpus by importance so the first hour covers what matters most; split lessons that do two jobs. Mechanical reorder in one commit; splits driven by evidence, not speculation |
+| The lesson sequence | **Reading order is value order** — DONE, and it lives in per-lesson metadata rather than in filenames, so a future reorder is a metadata edit and the 75-file rename was **not** needed (see `roadmap/completed/`). Splits: **discarded**, candidates recorded in `roadmap/discarded/lesson_splits.md` |
 | Standing alone | **Generated cold-entry blocks**, built from the D5 prerequisite metadata — no hand-duplicated context, nothing to keep in sync, and it works for every lesson rather than only the seven |
 | Doc-integrity check | **Its own script, invoked by a `./ci.sh` phase** — standalone for fast feedback, in the gate so it cannot be skipped |
 | Site hosting | **The forge's own static pages, no domain.** Keep the generator host-agnostic and keep the README as the canonical link, so the planned forge move costs a CI-config change and no abandoned URL |
@@ -579,8 +603,9 @@ about the rest.
 2. **What is the new order?** The reorder is mechanical; deciding the sequence is editorial and
    needs one opinionated pass. Do it as a list first, review the list, *then* run the script —
    not the other way round.
-3. **Which lessons get split?** Driven by the human trial and by whoever does the ordering pass,
-   not decided up front. Each split adds a lesson and a snapshot.
+3. ~~**Which lessons get split?**~~ **Answered by discarding it** — see Phase 2 and
+   `roadmap/discarded/lesson_splits.md`. Six candidates were identified with evidence; none is
+   being split.
 
 ---
 

@@ -23,7 +23,7 @@
 ;; Debugger: the lines whose statement is a READ-ONLY query.  The pause on
 ;; those happens AFTER the statement, so the SQL lens can show the exact
 ;; statement that ran (erased with the checkpoints in a release build).
-(register-sql-read-lines! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson67-newtype-columns.tesl" '(49 50 58 59))
+(register-sql-read-lines! "example/learn/lesson67-newtype-columns.tesl" '(49 50 58 59))
 (define-newtype Sku String)
 
 (define-entity Product
@@ -43,21 +43,21 @@
   (findBySku [rawSku : String])
   #:capabilities [dbRead]
   #:returns (List Product)
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson67-newtype-columns.tesl" 49 (list (cons 'rawSku *rawSku)) (lambda () (call-with-database Warehouse (lambda () (select-many (from Product) (where (==. (entity-field-ref Product 'sku) (raw-value (Sku *rawSku))))))))))
+  (thsl-src! "example/learn/lesson67-newtype-columns.tesl" 49 (list (cons 'rawSku *rawSku)) (lambda () (call-with-database Warehouse (lambda () (select-many (from Product) (where (==. (entity-field-ref Product 'sku) (raw-value (Sku *rawSku))))))))))
 
 (define/pow
   (quantityForSku [rawSku : String])
   #:capabilities [dbRead]
   #:returns Integer
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson67-newtype-columns.tesl" 58 (list (cons 'rawSku *rawSku)) (lambda () (call-with-database Warehouse (lambda () (let ([found (let ([tesl_match (select-one (from Product) (where (==. (entity-field-ref Product 'sku) (raw-value (Sku *rawSku)))))]) (if tesl_match (Something tesl_match) Nothing))]) (let ([tesl-case-0 (raw-value found)]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson67-newtype-columns.tesl" 61 (list) (lambda () (raw-value 0)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([p (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson67-newtype-columns.tesl" 62 (list (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime p 'quantity 'Product)))))]))))))))
+  (thsl-src! "example/learn/lesson67-newtype-columns.tesl" 58 (list (cons 'rawSku *rawSku)) (lambda () (call-with-database Warehouse (lambda () (let ([found (let ([tesl_match (select-one (from Product) (where (==. (entity-field-ref Product 'sku) (raw-value (Sku *rawSku)))))]) (if tesl_match (Something tesl_match) Nothing))]) (let ([tesl-case-0 (raw-value found)]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/learn/lesson67-newtype-columns.tesl" 61 (list) (lambda () (raw-value 0)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([p (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/learn/lesson67-newtype-columns.tesl" 62 (list (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime p 'quantity 'Product)))))]))))))))
 
 (module+ test
   (require rackunit)
   (test-case "insert constructs the newtype column and query finds it"
     (call-with-fresh-memory-db (list Warehouse) (lambda ()
     (with-capabilities (dbRead dbWrite)
-    (define tesl-ignored-1 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson67-newtype-columns.tesl" 69 (list) (lambda () (insert-one! Product (tesl-hash 'id "p1" 'sku (raw-value (Sku "WIDGET-1")) 'quantity 10)))))
-    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson67-newtype-columns.tesl" 71 (list) (lambda () (quantityForSku "WIDGET-1")))) 10)
+    (define tesl-ignored-1 (thsl-src! "example/learn/lesson67-newtype-columns.tesl" 69 (list) (lambda () (insert-one! Product (tesl-hash 'id "p1" 'sku (raw-value (Sku "WIDGET-1")) 'quantity 10)))))
+    (check-equal? (raw-value (thsl-src! "example/learn/lesson67-newtype-columns.tesl" 71 (list) (lambda () (quantityForSku "WIDGET-1")))) 10)
     )
     ))
   )
@@ -65,8 +65,8 @@
   (test-case "query by a non-existent Sku returns empty"
     (call-with-fresh-memory-db (list Warehouse) (lambda ()
     (with-capabilities (dbRead dbWrite)
-    (define tesl-ignored-2 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson67-newtype-columns.tesl" 76 (list) (lambda () (insert-one! Product (tesl-hash 'id "p2" 'sku (raw-value (Sku "WIDGET-2")) 'quantity 5)))))
-    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson67-newtype-columns.tesl" 78 (list) (lambda () (findBySku "NO-SUCH-SKU")))) (list))
+    (define tesl-ignored-2 (thsl-src! "example/learn/lesson67-newtype-columns.tesl" 76 (list) (lambda () (insert-one! Product (tesl-hash 'id "p2" 'sku (raw-value (Sku "WIDGET-2")) 'quantity 5)))))
+    (check-equal? (raw-value (thsl-src! "example/learn/lesson67-newtype-columns.tesl" 78 (list) (lambda () (findBySku "NO-SUCH-SKU")))) (list))
     )
     ))
   )
@@ -74,10 +74,10 @@
   (test-case "update ... set writes the newtype column, then query finds the new value"
     (call-with-fresh-memory-db (list Warehouse) (lambda ()
     (with-capabilities (dbRead dbWrite)
-    (define tesl-ignored-3 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson67-newtype-columns.tesl" 83 (list) (lambda () (insert-one! Product (tesl-hash 'id "p3" 'sku (raw-value (Sku "OLD-SKU")) 'quantity 7)))))
+    (define tesl-ignored-3 (thsl-src! "example/learn/lesson67-newtype-columns.tesl" 83 (list) (lambda () (insert-one! Product (tesl-hash 'id "p3" 'sku (raw-value (Sku "OLD-SKU")) 'quantity 7)))))
     (void (update-many! (from Product) (tesl-hash (entity-field-ref Product 'sku) (raw-value (Sku "NEW-SKU")) (entity-field-ref Product 'quantity) 99) (where (==. (entity-field-ref Product 'id) "p3"))))
-    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson67-newtype-columns.tesl" 91 (list) (lambda () (quantityForSku "NEW-SKU")))) 99)
-    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson67-newtype-columns.tesl" 92 (list) (lambda () (findBySku "OLD-SKU")))) (list))
+    (check-equal? (raw-value (thsl-src! "example/learn/lesson67-newtype-columns.tesl" 91 (list) (lambda () (quantityForSku "NEW-SKU")))) 99)
+    (check-equal? (raw-value (thsl-src! "example/learn/lesson67-newtype-columns.tesl" 92 (list) (lambda () (findBySku "OLD-SKU")))) (list))
     )
     ))
   )

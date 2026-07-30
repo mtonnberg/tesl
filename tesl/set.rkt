@@ -40,6 +40,28 @@
 
 ;; Note: we use Racket's immutable setequalv? sets (equal?-based hashing)
 ;; so that string keys and integers work naturally.
+;;
+;; THE HASH REPRESENTATION IS LOAD-BEARING FOR SECRETS — do not switch this to a
+;; list- or assoc-backed set without re-reading this.
+;;
+;; `Set.member` on a `secret`-typed element (e.g. `Set.member submittedKey
+;; validApiKeys`) reaches Racket's `equal?`, which short-circuits at the first
+;; differing byte. On a LIST-backed set that would be a genuine timing oracle:
+;; an attacker submitting candidates would learn how many leading bytes matched a
+;; stored key, one byte at a time — exactly the attack that `==` on a secret is
+;; lowered to a constant-time compare to prevent.
+;;
+;; It is NOT an oracle here, because a hash set compares only within a bucket and
+;; the hash is computed over the WHOLE candidate. A candidate differing from a
+;; real key in its last byte lands in an unrelated bucket and never reaches a
+;; byte-by-byte comparison at all, so there is no "guess one more byte" primitive
+;; to iterate. Reaching the compare requires a hash collision with a real key,
+;; which is not a prefix-extension step.
+;;
+;; Residual, stated so it is not mistaken for a guarantee: the hash is computed
+;; over the secret, and its cost varies with the value's LENGTH. Length is not
+;; the thing being protected, so that is acceptable — but it is the reason this is
+;; "no usable oracle" rather than "constant-time".
 
 (define (make-set-from xs)
   (list->set xs))

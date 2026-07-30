@@ -66,6 +66,10 @@ check isPositive(taskId: Int) -> taskId: Int ::: Positive taskId =
 #   JWT.sign (Dict.fromList [Tuple2 "sub" userId, Tuple2 "role" "user"]) secret
 #   (needs `import Tesl.Tuple exposing [Tuple2]` and `Dict.fromList`)
 #
+# JWT.sign stamps the expiry itself — one hour, epoch seconds (RFC 7519) — so a
+# capability that wraps `jwt` must also imply `time`. Do NOT put an `exp` of
+# your own in the claims: it is an error, not an override.
+#
 # Set SESSION_JWT_SECRET in the environment ([env] in tesl.toml).
 fact Authenticated (req: SessionUser)
 

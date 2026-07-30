@@ -1,6 +1,6 @@
 # Crypto Phase 0 — the `Security` diagnostic category, the Tier-1 lints, and the insecure examples
 
-**Landed 2026-07-29.** Implements `roadmap/next/tesl_crypto.md` § *Phase 0 — Stop the bleeding*
+**Landed 2026-07-29.** Implements `roadmap/completed/tesl_crypto.md` § *Phase 0 — Stop the bleeding*
 and § *Security lints* (Tier 1). No language surface added; one new diagnostic category, three
 lints, eight corrected `.tesl` files, one one-line runtime change.
 
@@ -10,7 +10,7 @@ The dangerous half of L2 was the **guidance**, not the missing primitive: the pl
 guessable session cookie (`cookies "user" == "admin"`) had propagated into the corpus people copy
 from, including both `tesl init` scaffolds. That half is now closed. The remaining half — setting
 an `HttpOnly` / `Secure` / `SameSite` response cookie — is blocked on a response-metadata language
-feature and is tracked separately (see `roadmap/next/tesl_crypto.md` § Phase 5).
+feature and is tracked separately (see `roadmap/completed/tesl_crypto.md` § Phase 5).
 
 ---
 

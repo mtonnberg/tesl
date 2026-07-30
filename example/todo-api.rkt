@@ -105,12 +105,12 @@
 (define-checker
   (isValidPort [port : Integer])
   #:returns [port : Integer ::: (ValidPort port)]
-  (thsl-src! "example/todo-api.tesl" 92 (list (cons 'port *port)) (lambda () (if (and (<= 1 *port) (<= *port 65535)) (accept (ValidPort port) #:value *port) (reject "Port must be between 1 and 65535" #:http-code 400)))))
+  (thsl-src! "example/todo-api.tesl" 92 (list (cons 'port *port)) (lambda () (if (and (tesl-le? 1 *port) (tesl-le? *port 65535)) (accept (ValidPort port) #:value *port) (reject "Port must be between 1 and 65535" #:http-code 400)))))
 
 (define-trusted
   (validPort [port : Integer])
   #:returns (Maybe (Fact (ValidPort port)))
-  (thsl-src! "example/todo-api.tesl" 98 (list (cons 'port *port)) (lambda () (if (and (<= 1 *port) (<= *port 65535)) (Something (trusted-proof (ValidPort port))) Nothing))))
+  (thsl-src! "example/todo-api.tesl" 98 (list (cons 'port *port)) (lambda () (if (and (tesl-le? 1 *port) (tesl-le? *port 65535)) (Something (trusted-proof (ValidPort port))) Nothing))))
 
 (define/pow
   (parsePortString [rawPort : String] [source : String])
@@ -131,12 +131,12 @@
 (define-checker
   (isSafeTitle [title : String])
   #:returns [title : String ::: (TitleSafe title)]
-  (thsl-src! "example/todo-api.tesl" 136 (list (cons 'title *title)) (lambda () (if (and (<= 4 (raw-value (tesl_import_String_length *title))) (<= (raw-value (tesl_import_String_length *title)) 120)) (accept (TitleSafe title) #:value *title) (reject "Title must be between 3 and 120 characters" #:http-code 400)))))
+  (thsl-src! "example/todo-api.tesl" 136 (list (cons 'title *title)) (lambda () (if (and (tesl-le? 4 (raw-value (tesl_import_String_length *title))) (tesl-le? (raw-value (tesl_import_String_length *title)) 120)) (accept (TitleSafe title) #:value *title) (reject "Title must be between 3 and 120 characters" #:http-code 400)))))
 
 (define-checker
   (lengthLessThan30 [title : String])
   #:returns [title : String ::: (LengthLessThan30 title)]
-  (thsl-src! "example/todo-api.tesl" 144 (list (cons 'title *title)) (lambda () (if (< (raw-value (tesl_import_String_length *title)) 30) (accept (LengthLessThan30 title) #:value *title) (reject "Title must be be less than 30 characters" #:http-code 400)))))
+  (thsl-src! "example/todo-api.tesl" 144 (list (cons 'title *title)) (lambda () (if (tesl-lt? (raw-value (tesl_import_String_length *title)) 30) (accept (LengthLessThan30 title) #:value *title) (reject "Title must be be less than 30 characters" #:http-code 400)))))
 
 (define-checker
   (containsAnA [title : String])
@@ -165,7 +165,7 @@
 (define-checker
   (isTodoId [todoId : String])
   #:returns [todoId : String ::: (TodoId todoId)]
-  (thsl-src! "example/todo-api.tesl" 173 (list (cons 'todoId *todoId)) (lambda () (if (and (raw-value (tesl_import_String_startsWith *todoId "todo-")) (> (raw-value (tesl_import_String_length *todoId)) 5)) (accept (TodoId todoId) #:value *todoId) (reject "Malformed todo id" #:http-code 400)))))
+  (thsl-src! "example/todo-api.tesl" 173 (list (cons 'todoId *todoId)) (lambda () (if (and (raw-value (tesl_import_String_startsWith *todoId "todo-")) (tesl-gt? (raw-value (tesl_import_String_length *todoId)) 5)) (accept (TodoId todoId) #:value *todoId) (reject "Malformed todo id" #:http-code 400)))))
 
 (define-capture todoIdCapture
   [todoId : String ::: (TodoId todoId)]

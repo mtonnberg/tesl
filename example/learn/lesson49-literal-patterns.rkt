@@ -22,22 +22,22 @@
 (define/pow
   (describeInt [n : Integer])
   #:returns String
-  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 40 (list (cons 'n *n)) (lambda () (let ([tesl-case-0 *n]) (cond [(= *tesl-case-0 0) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 41 (list) (lambda () (raw-value "zero")))] [(= *tesl-case-0 1) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 42 (list) (lambda () (raw-value "one")))] [(= *tesl-case-0 2) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 43 (list) (lambda () (raw-value "two")))] [#t (let ([other *tesl-case-0]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 44 (list (cons 'other other)) (lambda () (raw-value (format "many (~a)" (tesl-display-val (tesl_import_String_fromInt *other)))))))])))))
+  (thsl-src-control! "example/learn/lesson49-literal-patterns.tesl" 40 (list (cons 'n *n)) (lambda () (let ([tesl-case-0 *n]) (cond [(= *tesl-case-0 0) (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 41 (list) (lambda () (raw-value "zero")))] [(= *tesl-case-0 1) (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 42 (list) (lambda () (raw-value "one")))] [(= *tesl-case-0 2) (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 43 (list) (lambda () (raw-value "two")))] [#t (let ([other *tesl-case-0]) (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 44 (list (cons 'other other)) (lambda () (raw-value (format "many (~a)" (tesl-display-val (tesl_import_String_fromInt *other)))))))])))))
 
 (define/pow
   (httpStatusText [code : Integer])
   #:returns String
-  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 48 (list (cons 'code *code)) (lambda () (let ([tesl-case-1 *code]) (cond [(= *tesl-case-1 200) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 49 (list) (lambda () (raw-value "OK")))] [(= *tesl-case-1 201) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 50 (list) (lambda () (raw-value "Created")))] [(= *tesl-case-1 204) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 51 (list) (lambda () (raw-value "No Content")))] [(= *tesl-case-1 400) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 52 (list) (lambda () (raw-value "Bad Request")))] [(= *tesl-case-1 401) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 53 (list) (lambda () (raw-value "Unauthorized")))] [(= *tesl-case-1 403) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 54 (list) (lambda () (raw-value "Forbidden")))] [(= *tesl-case-1 404) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 55 (list) (lambda () (raw-value "Not Found")))] [(= *tesl-case-1 500) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 56 (list) (lambda () (raw-value "Internal Server Error")))] [#t (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 57 (list) (lambda () (raw-value "Unknown")))])))))
+  (thsl-src-control! "example/learn/lesson49-literal-patterns.tesl" 48 (list (cons 'code *code)) (lambda () (let ([tesl-case-1 *code]) (cond [(= *tesl-case-1 200) (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 49 (list) (lambda () (raw-value "OK")))] [(= *tesl-case-1 201) (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 50 (list) (lambda () (raw-value "Created")))] [(= *tesl-case-1 204) (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 51 (list) (lambda () (raw-value "No Content")))] [(= *tesl-case-1 400) (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 52 (list) (lambda () (raw-value "Bad Request")))] [(= *tesl-case-1 401) (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 53 (list) (lambda () (raw-value "Unauthorized")))] [(= *tesl-case-1 403) (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 54 (list) (lambda () (raw-value "Forbidden")))] [(= *tesl-case-1 404) (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 55 (list) (lambda () (raw-value "Not Found")))] [(= *tesl-case-1 500) (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 56 (list) (lambda () (raw-value "Internal Server Error")))] [#t (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 57 (list) (lambda () (raw-value "Unknown")))])))))
 
 (define/pow
   (parseCommand [cmd : String])
   #:returns String
-  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 65 (list (cons 'cmd *cmd)) (lambda () (let ([tesl-case-2 *cmd]) (cond [(equal? *tesl-case-2 "help") (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 66 (list) (lambda () (raw-value "show help")))] [(equal? *tesl-case-2 "version") (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 67 (list) (lambda () (raw-value "show version")))] [(equal? *tesl-case-2 "exit") (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 68 (list) (lambda () (raw-value "exit application")))] [#t (let ([other *tesl-case-2]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 69 (list (cons 'other other)) (lambda () (raw-value (format "unknown command: ~a" (tesl-display-val *other))))))])))))
+  (thsl-src-control! "example/learn/lesson49-literal-patterns.tesl" 65 (list (cons 'cmd *cmd)) (lambda () (let ([tesl-case-2 *cmd]) (cond [(equal? *tesl-case-2 "help") (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 66 (list) (lambda () (raw-value "show help")))] [(equal? *tesl-case-2 "version") (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 67 (list) (lambda () (raw-value "show version")))] [(equal? *tesl-case-2 "exit") (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 68 (list) (lambda () (raw-value "exit application")))] [#t (let ([other *tesl-case-2]) (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 69 (list (cons 'other other)) (lambda () (raw-value (format "unknown command: ~a" (tesl-display-val *other))))))])))))
 
 (define/pow
   (classifyChar [c : String])
   #:returns String
-  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 73 (list (cons 'c *c)) (lambda () (let ([tesl-case-3 *c]) (cond [(equal? *tesl-case-3 "a") (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 74 (list) (lambda () (raw-value "vowel")))] [(equal? *tesl-case-3 "e") (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 75 (list) (lambda () (raw-value "vowel")))] [(equal? *tesl-case-3 "i") (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 76 (list) (lambda () (raw-value "vowel")))] [(equal? *tesl-case-3 "o") (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 77 (list) (lambda () (raw-value "vowel")))] [(equal? *tesl-case-3 "u") (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 78 (list) (lambda () (raw-value "vowel")))] [#t (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 79 (list) (lambda () (raw-value "consonant or other")))])))))
+  (thsl-src-control! "example/learn/lesson49-literal-patterns.tesl" 73 (list (cons 'c *c)) (lambda () (let ([tesl-case-3 *c]) (cond [(equal? *tesl-case-3 "a") (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 74 (list) (lambda () (raw-value "vowel")))] [(equal? *tesl-case-3 "e") (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 75 (list) (lambda () (raw-value "vowel")))] [(equal? *tesl-case-3 "i") (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 76 (list) (lambda () (raw-value "vowel")))] [(equal? *tesl-case-3 "o") (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 77 (list) (lambda () (raw-value "vowel")))] [(equal? *tesl-case-3 "u") (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 78 (list) (lambda () (raw-value "vowel")))] [#t (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 79 (list) (lambda () (raw-value "consonant or other")))])))))
 
 (define-adt Tier
   [Free]
@@ -49,50 +49,50 @@
 (define/pow
   (discountForTier [tier : Tier] [promoCode : String])
   #:returns Integer
-  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 93 (list (cons 'tier *tier) (cons 'promoCode *promoCode)) (lambda () (let ([tesl-case-4 *tier]) (cond [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Enterprise)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 94 (list) (lambda () (raw-value 40)))] [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Gold)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 95 (list) (lambda () (raw-value 25)))] [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Silver)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 96 (list) (lambda () (raw-value 10)))] [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Free)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 98 (list) (lambda () (let ([tesl-case-5 *promoCode]) (cond [(equal? *tesl-case-5 "WELCOME10") (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 99 (list) (lambda () (raw-value 10)))] [(equal? *tesl-case-5 "SUMMER20") (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 100 (list) (lambda () (raw-value 20)))] [#t (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 101 (list) (lambda () (raw-value 0)))]))))])))))
+  (thsl-src-control! "example/learn/lesson49-literal-patterns.tesl" 93 (list (cons 'tier *tier) (cons 'promoCode *promoCode)) (lambda () (let ([tesl-case-4 *tier]) (cond [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Enterprise)) (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 94 (list) (lambda () (raw-value 40)))] [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Gold)) (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 95 (list) (lambda () (raw-value 25)))] [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Silver)) (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 96 (list) (lambda () (raw-value 10)))] [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Free)) (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 98 (list) (lambda () (let ([tesl-case-5 *promoCode]) (cond [(equal? *tesl-case-5 "WELCOME10") (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 99 (list) (lambda () (raw-value 10)))] [(equal? *tesl-case-5 "SUMMER20") (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 100 (list) (lambda () (raw-value 20)))] [#t (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 101 (list) (lambda () (raw-value 0)))]))))])))))
 
 (module+ test
   (require rackunit)
   (test-case "describeInt"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 126 (list) (lambda () (describeInt 0)))) "zero")
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 127 (list) (lambda () (describeInt 1)))) "one")
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 128 (list) (lambda () (describeInt 2)))) "two")
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 129 (list) (lambda () (describeInt 99)))) "many (99)")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 126 (list) (lambda () (describeInt 0)))) "zero")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 127 (list) (lambda () (describeInt 1)))) "one")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 128 (list) (lambda () (describeInt 2)))) "two")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 129 (list) (lambda () (describeInt 99)))) "many (99)")
     ))
   )
 
   (test-case "httpStatusText"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 133 (list) (lambda () (httpStatusText 200)))) "OK")
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 134 (list) (lambda () (httpStatusText 404)))) "Not Found")
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 135 (list) (lambda () (httpStatusText 999)))) "Unknown")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 133 (list) (lambda () (httpStatusText 200)))) "OK")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 134 (list) (lambda () (httpStatusText 404)))) "Not Found")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 135 (list) (lambda () (httpStatusText 999)))) "Unknown")
     ))
   )
 
   (test-case "parseCommand"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 139 (list) (lambda () (parseCommand "help")))) "show help")
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 140 (list) (lambda () (parseCommand "version")))) "show version")
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 141 (list) (lambda () (parseCommand "deploy")))) "unknown command: deploy")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 139 (list) (lambda () (parseCommand "help")))) "show help")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 140 (list) (lambda () (parseCommand "version")))) "show version")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 141 (list) (lambda () (parseCommand "deploy")))) "unknown command: deploy")
     ))
   )
 
   (test-case "classifyChar"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 145 (list) (lambda () (classifyChar "a")))) "vowel")
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 146 (list) (lambda () (classifyChar "b")))) "consonant or other")
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 147 (list) (lambda () (classifyChar "i")))) "vowel")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 145 (list) (lambda () (classifyChar "a")))) "vowel")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 146 (list) (lambda () (classifyChar "b")))) "consonant or other")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 147 (list) (lambda () (classifyChar "i")))) "vowel")
     ))
   )
 
   (test-case "discountForTier"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 151 (list) (lambda () (discountForTier Enterprise "any")))) 40)
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 152 (list) (lambda () (discountForTier Gold "any")))) 25)
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 153 (list) (lambda () (discountForTier Free "WELCOME10")))) 10)
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 154 (list) (lambda () (discountForTier Free "SUMMER20")))) 20)
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson49-literal-patterns.tesl" 155 (list) (lambda () (discountForTier Free "INVALID")))) 0)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 151 (list) (lambda () (discountForTier Enterprise "any")))) 40)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 152 (list) (lambda () (discountForTier Gold "any")))) 25)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 153 (list) (lambda () (discountForTier Free "WELCOME10")))) 10)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 154 (list) (lambda () (discountForTier Free "SUMMER20")))) 20)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 155 (list) (lambda () (discountForTier Free "INVALID")))) 0)
     ))
   )
 

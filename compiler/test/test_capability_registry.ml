@@ -34,14 +34,21 @@ let oracle = [
   "generateId", ["random"]; "generatePrefixedId", ["random"];
   "env", ["envRead"]; "envInt", ["envRead"];
   "envString", ["envRead"]; "requireEnv", ["envRead"];
-  (* `secret` (roadmap/next/tesl_crypto.md): requireSecret is an env READ like
+  (* `secret` (roadmap/completed/tesl_crypto.md): requireSecret is an env READ like
      requireEnv — it just lands in a `Secret` instead of a String, so it charges
      the same capability and no new one.  HttpClient.bearer /
      HttpClient.secretHeader deliberately appear NOWHERE here: they build a
      header pair and perform no I/O, and a capability marks an effect. *)
   "requireSecret", ["envRead"];
   "deadJobs", ["queueRead"]; "requeue", ["queueWrite"];
-  "JWT.sign", ["jwt"]; "JWT.verify", ["jwt"]; "JWT.decode", ["jwt"];
+  (* JWT.sign charges `time` on top of `jwt`: it stamps the `exp` claim from the
+     wall clock (a fixed one-hour TTL it chooses itself — there is no expiry
+     parameter), and a capability marks an EFFECT.  JWT.verify reads the clock
+     too and SHOULD charge `time` by the same rule; that drift is recorded in
+     type_system.ml rather than fixed, because propagating it would put `time`
+     in the closure of every JWT-authenticated endpoint. *)
+  "JWT.sign", ["jwt"; "time"];
+  "JWT.verify", ["jwt"]; "JWT.decode", ["jwt"];
   "HttpClient.get", ["httpClient"]; "HttpClient.post", ["httpClient"];
   "HttpClient.put", ["httpClient"]; "HttpClient.delete", ["httpClient"];
   "UUID.v4", ["uuid"]; "UUID.v7", ["uuid"];

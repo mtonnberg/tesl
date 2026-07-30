@@ -23,7 +23,7 @@
 (define-checker
   (checkBound [n : Integer])
   #:returns [n : Integer ::: (Bounded n)]
-  (thsl-src! "tests/bench/proof_hot.tesl" 22 (list (cons 'n *n)) (lambda () (if (and (>= *n 0) (<= *n 1000000)) (accept (Bounded n) #:value *n) (reject "out of bounds" #:http-code 400)))))
+  (thsl-src! "tests/bench/proof_hot.tesl" 22 (list (cons 'n *n)) (lambda () (if (and (tesl-ge? *n 0) (tesl-le? *n 1000000)) (accept (Bounded n) #:value *n) (reject "out of bounds" #:http-code 400)))))
 
 (define/pow
   (hotPath [a : Integer ::: (Bounded a)] [b : Integer ::: (Bounded b)] [c : Integer ::: (Bounded c)])

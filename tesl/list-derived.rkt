@@ -104,12 +104,12 @@
 (define/pow
   (maximum [xs : (List a)])
   #:returns (Maybe a)
-  (thsl-src-control! "tesl/list.tesl" 202 (list (cons 'xs *xs)) (lambda () (let ([tesl-case-23 (raw-value (tesl_import_ListPrim_head *xs))]) (cond [(and (adt-value? *tesl-case-23) (eq? (adt-value-variant *tesl-case-23) 'Nothing)) (thsl-src! "tesl/list.tesl" 203 (list) (lambda () (raw-value Nothing)))] [(and (adt-value? *tesl-case-23) (eq? (adt-value-variant *tesl-case-23) 'Something)) (let ([first (hash-ref (adt-value-fields *tesl-case-23) 'value)]) (thsl-src! "tesl/list.tesl" 205 (list (cons 'first first)) (lambda () (let ([tesl-case-24 (raw-value (tesl_import_ListPrim_tail *xs))]) (cond [(and (adt-value? *tesl-case-24) (eq? (adt-value-variant *tesl-case-24) 'Nothing)) (thsl-src! "tesl/list.tesl" 206 (list) (lambda () (raw-value (raw-value (Something *first)))))] [(and (adt-value? *tesl-case-24) (eq? (adt-value-variant *tesl-case-24) 'Something)) (let ([rest (hash-ref (adt-value-fields *tesl-case-24) 'value)]) (thsl-src! "tesl/list.tesl" 208 (list (cons 'rest rest)) (lambda () (let ([tesl-case-25 (raw-value (maximum *rest))]) (cond [(and (adt-value? *tesl-case-25) (eq? (adt-value-variant *tesl-case-25) 'Nothing)) (thsl-src! "tesl/list.tesl" 209 (list) (lambda () (raw-value (raw-value (Something *first)))))] [(and (adt-value? *tesl-case-25) (eq? (adt-value-variant *tesl-case-25) 'Something)) (let ([m (hash-ref (adt-value-fields *tesl-case-25) 'value)]) (thsl-src! "tesl/list.tesl" 211 (list (cons 'm m)) (lambda () (if (> *first *m) (raw-value (raw-value (Something *first))) (raw-value (raw-value (Something *m)))))))])))))])))))])))))
+  (thsl-src-control! "tesl/list.tesl" 202 (list (cons 'xs *xs)) (lambda () (let ([tesl-case-23 (raw-value (tesl_import_ListPrim_head *xs))]) (cond [(and (adt-value? *tesl-case-23) (eq? (adt-value-variant *tesl-case-23) 'Nothing)) (thsl-src! "tesl/list.tesl" 203 (list) (lambda () (raw-value Nothing)))] [(and (adt-value? *tesl-case-23) (eq? (adt-value-variant *tesl-case-23) 'Something)) (let ([first (hash-ref (adt-value-fields *tesl-case-23) 'value)]) (thsl-src! "tesl/list.tesl" 205 (list (cons 'first first)) (lambda () (let ([tesl-case-24 (raw-value (tesl_import_ListPrim_tail *xs))]) (cond [(and (adt-value? *tesl-case-24) (eq? (adt-value-variant *tesl-case-24) 'Nothing)) (thsl-src! "tesl/list.tesl" 206 (list) (lambda () (raw-value (raw-value (Something *first)))))] [(and (adt-value? *tesl-case-24) (eq? (adt-value-variant *tesl-case-24) 'Something)) (let ([rest (hash-ref (adt-value-fields *tesl-case-24) 'value)]) (thsl-src! "tesl/list.tesl" 208 (list (cons 'rest rest)) (lambda () (let ([tesl-case-25 (raw-value (maximum *rest))]) (cond [(and (adt-value? *tesl-case-25) (eq? (adt-value-variant *tesl-case-25) 'Nothing)) (thsl-src! "tesl/list.tesl" 209 (list) (lambda () (raw-value (raw-value (Something *first)))))] [(and (adt-value? *tesl-case-25) (eq? (adt-value-variant *tesl-case-25) 'Something)) (let ([m (hash-ref (adt-value-fields *tesl-case-25) 'value)]) (thsl-src! "tesl/list.tesl" 211 (list (cons 'm m)) (lambda () (if (tesl-gt? *first *m) (raw-value (raw-value (Something *first))) (raw-value (raw-value (Something *m)))))))])))))])))))])))))
 
 (define/pow
   (minimum [xs : (List a)])
   #:returns (Maybe a)
-  (thsl-src-control! "tesl/list.tesl" 217 (list (cons 'xs *xs)) (lambda () (let ([tesl-case-26 (raw-value (tesl_import_ListPrim_head *xs))]) (cond [(and (adt-value? *tesl-case-26) (eq? (adt-value-variant *tesl-case-26) 'Nothing)) (thsl-src! "tesl/list.tesl" 218 (list) (lambda () (raw-value Nothing)))] [(and (adt-value? *tesl-case-26) (eq? (adt-value-variant *tesl-case-26) 'Something)) (let ([first (hash-ref (adt-value-fields *tesl-case-26) 'value)]) (thsl-src! "tesl/list.tesl" 220 (list (cons 'first first)) (lambda () (let ([tesl-case-27 (raw-value (tesl_import_ListPrim_tail *xs))]) (cond [(and (adt-value? *tesl-case-27) (eq? (adt-value-variant *tesl-case-27) 'Nothing)) (thsl-src! "tesl/list.tesl" 221 (list) (lambda () (raw-value (raw-value (Something *first)))))] [(and (adt-value? *tesl-case-27) (eq? (adt-value-variant *tesl-case-27) 'Something)) (let ([rest (hash-ref (adt-value-fields *tesl-case-27) 'value)]) (thsl-src! "tesl/list.tesl" 223 (list (cons 'rest rest)) (lambda () (let ([tesl-case-28 (raw-value (minimum *rest))]) (cond [(and (adt-value? *tesl-case-28) (eq? (adt-value-variant *tesl-case-28) 'Nothing)) (thsl-src! "tesl/list.tesl" 224 (list) (lambda () (raw-value (raw-value (Something *first)))))] [(and (adt-value? *tesl-case-28) (eq? (adt-value-variant *tesl-case-28) 'Something)) (let ([m (hash-ref (adt-value-fields *tesl-case-28) 'value)]) (thsl-src! "tesl/list.tesl" 226 (list (cons 'm m)) (lambda () (if (< *first *m) (raw-value (raw-value (Something *first))) (raw-value (raw-value (Something *m)))))))])))))])))))])))))
+  (thsl-src-control! "tesl/list.tesl" 217 (list (cons 'xs *xs)) (lambda () (let ([tesl-case-26 (raw-value (tesl_import_ListPrim_head *xs))]) (cond [(and (adt-value? *tesl-case-26) (eq? (adt-value-variant *tesl-case-26) 'Nothing)) (thsl-src! "tesl/list.tesl" 218 (list) (lambda () (raw-value Nothing)))] [(and (adt-value? *tesl-case-26) (eq? (adt-value-variant *tesl-case-26) 'Something)) (let ([first (hash-ref (adt-value-fields *tesl-case-26) 'value)]) (thsl-src! "tesl/list.tesl" 220 (list (cons 'first first)) (lambda () (let ([tesl-case-27 (raw-value (tesl_import_ListPrim_tail *xs))]) (cond [(and (adt-value? *tesl-case-27) (eq? (adt-value-variant *tesl-case-27) 'Nothing)) (thsl-src! "tesl/list.tesl" 221 (list) (lambda () (raw-value (raw-value (Something *first)))))] [(and (adt-value? *tesl-case-27) (eq? (adt-value-variant *tesl-case-27) 'Something)) (let ([rest (hash-ref (adt-value-fields *tesl-case-27) 'value)]) (thsl-src! "tesl/list.tesl" 223 (list (cons 'rest rest)) (lambda () (let ([tesl-case-28 (raw-value (minimum *rest))]) (cond [(and (adt-value? *tesl-case-28) (eq? (adt-value-variant *tesl-case-28) 'Nothing)) (thsl-src! "tesl/list.tesl" 224 (list) (lambda () (raw-value (raw-value (Something *first)))))] [(and (adt-value? *tesl-case-28) (eq? (adt-value-variant *tesl-case-28) 'Something)) (let ([m (hash-ref (adt-value-fields *tesl-case-28) 'value)]) (thsl-src! "tesl/list.tesl" 226 (list (cons 'm m)) (lambda () (if (tesl-lt? *first *m) (raw-value (raw-value (Something *first))) (raw-value (raw-value (Something *m)))))))])))))])))))])))))
 
 (define/pow
   (append [xs : (List a)] [ys : (List a)])
@@ -124,12 +124,12 @@
 (define/pow
   (range [start : Integer] [end : Integer])
   #:returns (List Integer)
-  (thsl-src! "tesl/list.tesl" 245 (list (cons 'start *start) (cons 'end *end)) (lambda () (if (< *start *end) (raw-value (list *start)) (raw-value (list))))))
+  (thsl-src! "tesl/list.tesl" 245 (list (cons 'start *start) (cons 'end *end)) (lambda () (if (tesl-lt? *start *end) (raw-value (list *start)) (raw-value (list))))))
 
 (define/pow
   (repeat [x : a] [n : Integer])
   #:returns (List a)
-  (thsl-src! "tesl/list.tesl" 251 (list (cons 'x *x) (cons 'n *n)) (lambda () (if (> *n 0) (raw-value (list *x)) (raw-value (list))))))
+  (thsl-src! "tesl/list.tesl" 251 (list (cons 'x *x) (cons 'n *n)) (lambda () (if (tesl-gt? *n 0) (raw-value (list *x)) (raw-value (list))))))
 
 (define/pow
   (foldl [f : (-> b (-> a b))] [acc : b] [xs : (List a)])
@@ -144,9 +144,9 @@
 (define/pow
   (take [n : Integer] [xs : (List a)])
   #:returns (List a)
-  (thsl-src! "tesl/list.tesl" 277 (list (cons 'n *n) (cons 'xs *xs)) (lambda () (if (> *n 0) *xs (raw-value (list))))))
+  (thsl-src! "tesl/list.tesl" 277 (list (cons 'n *n) (cons 'xs *xs)) (lambda () (if (tesl-gt? *n 0) *xs (raw-value (list))))))
 
 (define/pow
   (drop [n : Integer] [xs : (List a)])
   #:returns (List a)
-  (thsl-src! "tesl/list.tesl" 283 (list (cons 'n *n) (cons 'xs *xs)) (lambda () (if (> *n 0) *xs *xs))))
+  (thsl-src! "tesl/list.tesl" 283 (list (cons 'n *n) (cons 'xs *xs)) (lambda () (if (tesl-gt? *n 0) *xs *xs))))

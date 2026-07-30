@@ -84,14 +84,6 @@ let should_pass src =
     let code, out = run_compiler ["--check"; path] in
     if code <> 0 then failf "expected clean compile, got:\n%s" out)
 
-let should_lint_warn pat src =
-  with_temp_file src (fun path ->
-    let exit_code, out = run_compiler ["--lint"; path] in
-    let re = Str.regexp_case_fold pat in
-    try ignore (Str.search_forward re out 0)
-    with Not_found -> failf "expected lint warning matching %S, got (exit %d):\n%s" pat exit_code out)
-
-(* ── Shared preamble for most tests ─────────────────────────────────────── *)
 
 let preamble = {|module GibTest exposing []
 import Tesl.Prelude exposing [Int, String, Bool(..)]
@@ -222,12 +214,17 @@ fn f(n: Int) -> String = "ok"
 
 (* PY04: Python-style print call *)
 let test_PY04_print_statement () =
-  (* `print` is in the Tesl stdlib (type: a -> Unit) via Racket interop.
-     It compiles successfully — `print "hello"` returns Unit which is
-     silently discarded in the statement sequence. This bypasses Tesl's
-     `telemetry` capability, so the fix is lint warning W090, not a type error.
-     The linter must emit W090 for any bare `print` call in a function body. *)
-  should_lint_warn "W090\\|print.*telemetry\\|telemetry.*print" (preamble_with {|
+  (* `print` USED to be an ambient stdlib name typed `a -> Unit`, so
+     `print("hello")` compiled and the only objection was lint warning W090
+     ("bypasses the telemetry capability").
+     
+     It was REMOVED from the surface language 2026-07-29, because that bare type
+     variable also unified with a `secret`: `print mySecret` typechecked and wrote
+     the plaintext to stdout, defeating the `secret` guarantee through a name with
+     zero call sites in the corpus. So this fixture now asserts the STRONGER
+     outcome — `print` is not a name at all, which is a rejection rather than a
+     warning. Observable output goes through `telemetry`. *)
+  should_reject (preamble_with {|
 fn f() -> Int =
   print("hello")
   42

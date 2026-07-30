@@ -25,12 +25,12 @@
 (define/pow
   (recordSignup [plan : String])
   #:returns String
-  (let ([_ (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson73-metrics.tesl" 73 (list (cons 'plan *plan)) (lambda () (raw-value (counter "signup.completed" 1 (list (Tuple2 "plan" plan))))))]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson73-metrics.tesl" 74 (list (cons '_ *_) (cons 'plan *plan)) (lambda () (format "welcome to ~a" (tesl-display-val *plan))))))
+  (let ([_ (thsl-src! "example/learn/lesson73-metrics.tesl" 73 (list (cons 'plan *plan)) (lambda () (raw-value (counter "signup.completed" 1 (list (Tuple2 "plan" plan))))))]) (thsl-src! "example/learn/lesson73-metrics.tesl" 74 (list (cons '_ *_) (cons 'plan *plan)) (lambda () (format "welcome to ~a" (tesl-display-val *plan))))))
 
 (define-handler
   (runBatch)
   #:returns String
-  (let ([_ (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson73-metrics.tesl" 79 (list) (lambda () (raw-value (histogram "batch.item.duration" 0.125 (list (Tuple2 "kind" "resize"))))))]) (let ([_ (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson73-metrics.tesl" 80 (list (cons '_ *_)) (lambda () (raw-value (gauge "batch.backlog" 42. (list)))))]) (let ([_ (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson73-metrics.tesl" 81 (list (cons '_ *_) (cons '_ *_)) (lambda () (telemetry-event! "batch.finished" #:attributes (["items" 1]))))]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson73-metrics.tesl" 82 (list (cons '_ *_) (cons '_ *_)) (lambda () (recordSignup "pro")))))))
+  (let ([_ (thsl-src! "example/learn/lesson73-metrics.tesl" 79 (list) (lambda () (raw-value (histogram "batch.item.duration" 0.125 (list (Tuple2 "kind" "resize"))))))]) (let ([_ (thsl-src! "example/learn/lesson73-metrics.tesl" 80 (list (cons '_ *_)) (lambda () (raw-value (gauge "batch.backlog" 42. (list)))))]) (let ([_ (thsl-src! "example/learn/lesson73-metrics.tesl" 81 (list (cons '_ *_) (cons '_ *_)) (lambda () (telemetry-event! "batch.finished" #:attributes (["items" 1]))))]) (thsl-src! "example/learn/lesson73-metrics.tesl" 82 (list (cons '_ *_) (cons '_ *_)) (lambda () (recordSignup "pro")))))))
 
 (define MetricsServer-sse-routes '())
 (define-api MetricsApi
@@ -50,7 +50,7 @@
   #:entities )
 
 (module+ main
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson73-metrics.tesl" 97 (list) (lambda () (with-capabilities () (call-with-database MetricsDb (lambda () (let ([_ (init-opentelemetry! #:service-name "lesson73-metrics" #:endpoint "in-memory" #:console? #f #:metrics? #t #:metrics-interval-ms 30000)]) (serve MetricsServer #:port 8087 #:capabilities (list) #:sse-routes MetricsServer-sse-routes))))))))
+  (thsl-src! "example/learn/lesson73-metrics.tesl" 97 (list) (lambda () (with-capabilities () (call-with-database MetricsDb (lambda () (let ([_ (init-opentelemetry! #:service-name "lesson73-metrics" #:endpoint "in-memory" #:console? #f #:metrics? #t #:metrics-interval-ms 30000)]) (serve MetricsServer #:port 8087 #:capabilities (list) #:sse-routes MetricsServer-sse-routes))))))))
 
 (module+ test
   (require rackunit)
@@ -59,9 +59,9 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define r (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson73-metrics.tesl" 122 (list) (lambda () (dispatch-api-test-request MetricsServer 'get (list "run") #:headers (tesl-hash) #:capabilities '()))))
-            (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson73-metrics.tesl" 123 (list (cons 'r r)) (lambda () (statusOk (raw-value (api-test-field-access-ref r 'status)))))))
-            (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson73-metrics.tesl" 124 (list (cons 'r r)) (lambda () (api-test-field-access-ref r 'body)))) "welcome to pro")
+            (define r (thsl-src! "example/learn/lesson73-metrics.tesl" 122 (list) (lambda () (dispatch-api-test-request MetricsServer 'get (list "run") #:headers (tesl-hash) #:capabilities '()))))
+            (check-true (raw-value (thsl-src! "example/learn/lesson73-metrics.tesl" 123 (list (cons 'r r)) (lambda () (statusOk (raw-value (api-test-field-access-ref r 'status)))))))
+            (check-equal? (raw-value (thsl-src! "example/learn/lesson73-metrics.tesl" 124 (list (cons 'r r)) (lambda () (api-test-field-access-ref r 'body)))) "welcome to pro")
           ))
       ))
   )
@@ -71,8 +71,8 @@
   (require rackunit)
   (test-case "a counter records without disturbing the function's result"
     (call-with-fresh-memory-db (list MetricsDb) (lambda ()
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson73-metrics.tesl" 117 (list) (lambda () (recordSignup "pro")))) "welcome to pro")
-  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson73-metrics.tesl" 118 (list) (lambda () (recordSignup "free")))) "welcome to free")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson73-metrics.tesl" 117 (list) (lambda () (recordSignup "pro")))) "welcome to pro")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson73-metrics.tesl" 118 (list) (lambda () (recordSignup "free")))) "welcome to free")
     ))
   )
 

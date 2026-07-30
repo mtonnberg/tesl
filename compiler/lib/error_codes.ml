@@ -364,11 +364,6 @@ let registry : entry list = [
        predicate that is not itself exported, so callers cannot name it. Export \
        the referenced name too.";
     manual = Some "best-practices#api-design" };
-  { code = "W090"; category = Lint;
-    title = "bare `print` bypasses telemetry capability";
-    explanation = "A bare `print` skips the telemetry capability. Route logging \
-       through the telemetry API so effects stay explicit.";
-    manual = Some "best-practices" };
   { code = "W091"; category = Lint;
     title = "`Int` at a wire/serialized boundary may lose precision on JS clients";
     explanation = "JavaScript numbers are exact only up to 2^53, so a large `Int` \

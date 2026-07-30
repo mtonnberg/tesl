@@ -39,28 +39,6 @@ nix run github:mtonnberg/tesl -- check path/to/my-api.tesl
 
 ---
 
-## Optional: Use Cachix binary cache
-
-To avoid long compilation times (especially for Racket dependencies), you can use the Tesl Cachix cache.
-This is optional but recommended for faster installs.
-
-First, install Cachix:
-
-```bash
-nix profile install nixpkgs/cachix
-```
-
-Then use the Tesl cache:
-
-```bash
-cachix use tesl
-```
-
-Once configured, subsequent installs will pull pre-built binaries from the cache.
-
----
-
-
 ## Persistent install
 
 ### `nix profile` (recommended for individuals)
@@ -181,8 +159,5 @@ TESL_POSTGRES_PASSWORD  (optional)
 |---|---|
 | Standalone binary (no Nix) | Roadmap — not done |
 | `brew install tesl` / `apt install tesl` | Roadmap — not done |
-| VS Code Marketplace | Roadmap — not done |
 | Native Windows (no WSL2) | Not planned for beta |
-| Docker image (via `tesl build --container`) | Available — see [dev-docs/deploy.md](dev-docs/deploy.md) |
 
-See `roadmap/discarded/language_distribution.md` for the plan.

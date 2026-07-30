@@ -1,12 +1,12 @@
 # Response metadata — headers, cookies, and the signed-session primitive they unblock
 
 > **Status:** Next · **Effort:** M for the language feature, S for the crypto on top of it.
-> Carved out of `roadmap/next/tesl_crypto.md` (2026-07-29) when its Phase 5 turned out to be
+> Carved out of `roadmap/completed/tesl_crypto.md` (2026-07-29) when its Phase 5 turned out to be
 > blocked on something that is **not crypto**.
 
 ## Why this exists
 
-`roadmap/next/tesl_crypto.md` Phase 5 was "signed sessions and secure cookies". Phases 0-4 of that
+`roadmap/completed/tesl_crypto.md` Phase 5 was "signed sessions and secure cookies". Phases 0-4 of that
 item have landed; Phase 5 has not, and the reason is worth stating precisely because it is easy to
 misfile as a crypto gap.
 
@@ -58,7 +58,7 @@ shape in the language. Prefer a design where the common case — return a value,
 body — is **unchanged**, and metadata is opt-in and additive.
 
 **2. A crypto function never reads its key from ambient config.** From
-`roadmap/next/tesl_crypto.md`:
+`roadmap/completed/tesl_crypto.md`:
 
 > **A crypto function never reads its key from ambient config. The key is always an explicit
 > parameter.**
@@ -127,7 +127,7 @@ options, correct cookie defaults, and a replacement `auth` lesson. That closes L
 
 ## Related
 
-- `roadmap/next/tesl_crypto.md` — Phases 0-4 landed; this item is its Phase 5, extracted. Read its
+- `roadmap/completed/tesl_crypto.md` — Phases 0-4 landed; this item is its Phase 5, extracted. Read its
   "Capabilities are effects", "Upgrades, rolling deploys, and multi-tenant keys" and `secret`
   sections before designing
 - `roadmap/discarded/security_hardening_audit.md` — **L2** (the crypto-free auth root; its
