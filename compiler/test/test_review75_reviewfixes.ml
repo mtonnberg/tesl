@@ -273,6 +273,55 @@ let test_R75_CAPC_ungranted_handler_cap_rejected () =
 let test_R75_CAPC_granted_handler_cap_accepted () =
   should_pass (capcompose_app "baseCap, adminOnly")
 
+(* ── Issue #62: a queue's `requires` must grant `queueRead` ──────────────── *)
+(* tesl/queue.rkt's dequeue-next! unconditionally needs `queueRead` at runtime
+   (every worker thread runs under exactly the queue's granted capabilities,
+   never the worker function's own `requires`). A queue whose `requires`
+   grants neither `queueRead` nor anything implying it (`queueWrite` does)
+   compiled clean and then never dequeued a single job — the row sat
+   `pending` forever with no error anywhere. *)
+let issue62_queue_app queue_grant =
+  {|
+module Issue62 exposing [main]
+import Tesl.Prelude exposing [Bool(..), String]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Queue exposing [queueRead, queueWrite, Queue, Job, FromQueue]
+import Tesl.Database exposing [Database, DatabaseBackend, Memory]
+import Tesl.App exposing [App]
+
+record Ping { note: String }
+
+worker doPing(job: Ping ::: FromQueue (Id == jobId) job)
+  requires [] =
+  job
+
+queue PingQueue requires [|} ^ queue_grant ^ {|] = Queue {
+  database: D
+  jobs: [Job Ping doPing Nothing]
+}
+
+database D = Database {
+  entities: []
+  backend: Memory
+}
+
+api A {}
+server Srv for A {}
+
+main() -> App requires [dbRead, dbWrite, queueWrite] =
+  App { database: D api: Srv port: 8098 queues: [PingQueue] }
+|}
+
+let test_R75_ISSUE62_queue_missing_queueread_rejected () =
+  should_fail "queueRead" (issue62_queue_app "dbRead, dbWrite")
+
+let test_R75_ISSUE62_queue_with_queuewrite_accepted () =
+  (* queueWrite implies queueRead — sufficient for the runtime dequeue loop. *)
+  should_pass (issue62_queue_app "queueWrite")
+
+let test_R75_ISSUE62_queue_with_queueread_accepted () =
+  should_pass (issue62_queue_app "queueRead")
+
 (* ── PFC-2b: ADT field proofs enforced at construction ──────────────────── *)
 
 let adt_field_proof src = {|
@@ -596,6 +645,11 @@ let () =
     "cap-compose", [
       test_case "R75_CAPC ungranted wired-handler cap rejected" `Quick test_R75_CAPC_ungranted_handler_cap_rejected;
       test_case "R75_CAPC granted wired-handler cap accepted" `Quick test_R75_CAPC_granted_handler_cap_accepted;
+    ];
+    "issue-62-queue-queueread", [
+      test_case "R75_ISSUE62 queue missing queueRead rejected" `Quick test_R75_ISSUE62_queue_missing_queueread_rejected;
+      test_case "R75_ISSUE62 queue with queueWrite accepted" `Quick test_R75_ISSUE62_queue_with_queuewrite_accepted;
+      test_case "R75_ISSUE62 queue with queueRead accepted" `Quick test_R75_ISSUE62_queue_with_queueread_accepted;
     ];
     "fromdb-provenance", [
       test_case "R75_F1 named-pack insert id forgery rejected" `Quick test_R75_F1_named_pack_insert_id_forgery_rejected;

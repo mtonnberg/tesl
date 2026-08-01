@@ -901,7 +901,7 @@ let app_prelude = {|
 module R67App exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
-import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential, Job]
+import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential, Job, queueRead]
 import Tesl.App exposing [App]
 import Tesl.Env exposing [env, envInt, envRead]
 capability emailCap
@@ -916,7 +916,7 @@ database DemoDb = Database {
 }
 api DemoApi { get "/" -> String }
 server DemoServer for DemoApi { endpoint_0 = handleRoot }
-queue EmailQueue requires [emailCap, pubsub] = Queue {
+queue EmailQueue requires [emailCap, pubsub, queueRead] = Queue {
   database: DemoDb
   jobs: [ Job EmailJob processEmail (Something handleDeadEmail) ]
   retry: { maxAttempts: 3 backoff: Exponential initialDelay: 10 }
@@ -929,7 +929,7 @@ let test_R67_APP01_folded_queue_and_main_app_accepted () =
      it must declare `envRead` — the env-honesty rule (Fix C), uniform across all
      declarative config blocks. *)
   should_pass (app_prelude ^ {|
-main() -> App requires [emailCap, pubsub, envRead] =
+main() -> App requires [emailCap, pubsub, queueRead, envRead] =
   let port = envInt "PORT" 8086
   App { database: DemoDb  queues: [EmailQueue]  email: []  sseChannels: []  api: DemoServer  port: port }
 |})

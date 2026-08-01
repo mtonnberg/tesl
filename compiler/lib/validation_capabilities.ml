@@ -418,7 +418,31 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
            | None -> ()) ws
        | _ -> ()) app_queues;
      List.iter (fun qn -> match List.assoc_opt qn queue_caps with
-       | Some (caps, loc) -> report "queue" qn caps loc | None -> ()) app_queues
+       | Some (caps, loc) -> report "queue" qn caps loc | None -> ()) app_queues;
+     (* The runtime dequeue loop (tesl/queue.rkt's dequeue-next!, called by every
+        SKIP-LOCKED worker thread under the queue's granted capabilities — never
+        the worker function's own `requires`) unconditionally needs `queueRead`,
+        even when no Tesl-level worker body ever touches a queueRead-gated
+        builtin like `deadJobs`. A queue whose `requires` grants neither
+        `queueRead` nor anything implying it (`queueWrite` implies `queueRead`)
+        compiles clean but never dequeues a single job: enqueue succeeds, the
+        row sits `pending` forever, `attempts` never increments, and the
+        worker thread's exception is invisible past its own top-level catch
+        (issue #62). *)
+     List.iter (fun qn -> match List.assoc_opt qn queue_caps with
+       | Some (caps, loc) when not (List.mem "queueRead" (expand_declared caps)) ->
+         errors := make_error loc
+           ~hint:(Printf.sprintf
+             "add a capability implying `queueRead` (e.g. one implying `queueWrite`, \
+              which already implies `queueRead`) to queue `%s`'s `requires`"
+             qn)
+           (Printf.sprintf
+             "queue `%s` requires [%s], which does not grant `queueRead`; every worker \
+              thread dequeues jobs under exactly this capability set, so without it every \
+              enqueued job silently sits `pending` forever with no error"
+             qn (String.concat ", " caps))
+           :: !errors
+       | _ -> ()) app_queues
    | _ -> ());
   List.rev !errors
 

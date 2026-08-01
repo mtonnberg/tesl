@@ -34,6 +34,7 @@
  tesl-log-dequeue!
  tesl-log-worker-done!
  tesl-log-worker-fail!
+ tesl-log-worker-error!
  tesl-log-publish!
  tesl-log-deliver!
  tesl-log-auth-event!)
@@ -176,6 +177,21 @@
                     (cons 'messaging.attempt attempt)
                     (cons 'messaging.max_attempts max-attempts)
                     (cons 'error.message (~a error-msg)))))
+
+;; A worker-thread crash BEFORE a job is dequeued (e.g. a missing capability,
+;; or a lost DB connection) is otherwise invisible: the thread's outer catch
+;; swallows it and loops back to sleep, so jobs pile up `pending` forever with
+;; no signal anywhere (#62). Unlike the other queue log points this one is
+;; NOT gated on tesl-verbose? — an operator without TESL_VERBOSE set still
+;; needs to see it, the same discipline dsl/web.rkt uses for handler 500s.
+(define (tesl-log-worker-error! queue-name error-msg)
+  (eprintf "[TESL][QUEUE] worker error on ~a: ~a\n" queue-name error-msg)
+  (define sink (unbox telemetry-sink-box))
+  (when sink
+    (with-handlers ([exn:fail? (lambda (_e) (void))])
+      (sink "QUEUE" (format "worker error on ~a: ~a" queue-name error-msg)
+            (list (cons 'tesl.queue (~a queue-name))
+                  (cons 'error.message (~a error-msg)))))))
 
 ;; ── Pub/sub events ───────────────────────────────────────────────────────────
 

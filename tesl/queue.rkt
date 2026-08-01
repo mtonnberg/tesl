@@ -33,6 +33,7 @@
                   tesl-log-dequeue!
                   tesl-log-worker-done!
                   tesl-log-worker-fail!
+                  tesl-log-worker-error!
                   tesl-log-publish!
                   tesl-log-deliver!)
          (only-in "../dsl/metrics.rkt"
@@ -743,7 +744,9 @@
        (thread (lambda ()
                  (let loop ()
                    (sleep 10)
-                   (with-handlers ([exn:fail? void])
+                   (with-handlers ([exn:fail? (lambda (e)
+                                                 (tesl-log-worker-error!
+                                                  (queue-spec-name queue-s) (exn-message e)))])
                      (parameterize ([current-capabilities  capabilities]
                                     [current-database-runtime db-runtime])
                        (let drain ()
@@ -1230,7 +1233,10 @@
                          (drain)))
                      (let work ()
                        (define ok?
-                         (with-handlers ([exn:fail? (lambda (_) #f)])
+                         (with-handlers ([exn:fail? (lambda (e)
+                                                       (tesl-log-worker-error!
+                                                        (queue-spec-name queue-s) (exn-message e))
+                                                       #f)])
                            (parameterize ([current-capabilities  capabilities]
                                           [current-database-runtime db-runtime])
                              (process-next-job! queue-s handler-fn))))

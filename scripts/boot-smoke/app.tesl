@@ -8,7 +8,7 @@ import Tesl.Prelude exposing [String, Int, Bool(..)]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Database exposing [Database, Memory]
 import Tesl.Env exposing [envInt, envRead]
-import Tesl.Queue exposing [Queue, Job, FromQueue, FromDeadQueue]
+import Tesl.Queue exposing [Queue, Job, FromQueue, FromDeadQueue, queueRead]
 import Tesl.App exposing [App]
 
 database DB = Database { schema: "app" entities: [] backend: Memory }
@@ -18,13 +18,13 @@ worker w(job: J ::: FromQueue (Id == jobId) job) requires [] =
   job
 deadWorker d(job: J ::: FromDeadQueue (Id == jobId) job) requires [] =
   job
-queue Q = Queue { database: DB  jobs: [Job J w (Something d)]  numberOfWorkers: 4 }
+queue Q requires [queueRead] = Queue { database: DB  jobs: [Job J w (Something d)]  numberOfWorkers: 4 }
 
 handler health() -> Int requires [] =
   1
 api A { get "/health" -> Int }
 server S for A { health = health }
 
-main() -> App requires [envRead] =
+main() -> App requires [queueRead, envRead] =
   let port = envInt "PORT" 8199
   App { database: DB  api: S  port: port  queues: [Q] }
