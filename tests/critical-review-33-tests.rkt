@@ -278,7 +278,7 @@
 (define/pow
   (doubleWrapped33 [w : WrappedInt33])
   #:returns WrappedInt33
-  (thsl-src! "tests/critical-review-33-tests.tesl" 639 (list (cons 'w *w)) (lambda () (raw-value (WrappedInt33 (* (raw-value w.value) 2))))))
+  (thsl-src! "tests/critical-review-33-tests.tesl" 639 (list (cons 'w *w)) (lambda () (raw-value (WrappedInt33 (* (raw-value (raw-value w.value)) 2))))))
 
 (define/pow
   (lookupWithProof33 [key : String] [dict : (Dict String Integer)])

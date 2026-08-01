@@ -50,7 +50,7 @@
 (define-handler
   (listNotes [u : User ::: (Authenticated u)])
   #:returns String
-  (thsl-src! "example/learn/lesson69-agent-human-handoff.tesl" 98 (list (cons 'u *u)) (lambda () (raw-value (tesl_import_String_concat (raw-value u.id) "'s notes: milk, eggs")))))
+  (thsl-src! "example/learn/lesson69-agent-human-handoff.tesl" 98 (list (cons 'u *u)) (lambda () (raw-value (tesl_import_String_concat (tesl-dot/runtime u 'id 'User) "'s notes: milk, eggs")))))
 
 (define-handler
   (wipeNotes [u : User ::: ((Authenticated u) && (Admin u))])

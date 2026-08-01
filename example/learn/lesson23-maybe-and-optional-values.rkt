@@ -41,7 +41,7 @@
 (define/pow
   (hasId [targetId : Integer] [u : User])
   #:returns Boolean
-  (thsl-src! "example/learn/lesson23-maybe-and-optional-values.tesl" 52 (list (cons 'targetId *targetId) (cons 'u *u)) (lambda () (tesl-equal? (tesl-dot/runtime u 'id 'User) *targetId))))
+  (thsl-src! "example/learn/lesson23-maybe-and-optional-values.tesl" 52 (list (cons 'targetId *targetId) (cons 'u *u)) (lambda () (tesl-equal? (raw-value (tesl-dot/runtime u 'id 'User)) *targetId))))
 
 (define/pow
   (findUser [users : (List User)] [userId : Integer])

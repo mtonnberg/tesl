@@ -156,7 +156,7 @@
   ; property:  add is commutative
   (for ([tesl-prop-i (in-range 100)])
     (let ([n (AnIntRecord #:someProp (- (tesl-prop-random 2000001) 1000000))])
-      (when (and (tesl-gt? (raw-value (tesl-dot/runtime n 'someProp 'AnIntRecord)) 0) (tesl-lt? (raw-value (tesl-dot/runtime n 'someProp 'AnIntRecord)) 10000)) (check-true (tesl-gt? (raw-value (tesl-dot/runtime n 'someProp 'AnIntRecord)) 0) " add is commutative"))
+      (when (and (tesl-gt? (raw-value (raw-value (tesl-dot/runtime n 'someProp 'AnIntRecord))) 0) (tesl-lt? (raw-value (raw-value (tesl-dot/runtime n 'someProp 'AnIntRecord))) 10000)) (check-true (tesl-gt? (raw-value (raw-value (tesl-dot/runtime n 'someProp 'AnIntRecord))) 0) " add is commutative"))
     ))
     ))
   )
@@ -184,7 +184,7 @@
         (void) ; skip this iteration after too many retries
         (with-handlers ([exn:fail? (lambda (e) (tesl-retry (+ tesl-attempts 1)))])
           (let ([n (let ([tesl_gen_someProp (+ 1 (tesl-prop-random 1000000))] [tesl_gen_someProp2 (+ 1 (tesl-prop-random 1000000))]) (AnIntRecordWithProof #:someProp (tesl-test-proof-field 'someProp tesl_gen_someProp (list 'IsPositive 'someProp)) #:someProp2 (tesl-test-proof-field 'someProp2 tesl_gen_someProp2 (list 'IsPositive 'someProp2))))])
-            (when (tesl-lt? (raw-value (tesl-dot/runtime n 'someProp 'AnIntRecordWithProof)) 10000) (check-true (tesl-gt? (raw-value (tesl-dot/runtime n 'someProp 'AnIntRecordWithProof)) 0) " add is commutative"))
+            (when (tesl-lt? (raw-value (raw-value (tesl-dot/runtime n 'someProp 'AnIntRecordWithProof))) 10000) (check-true (tesl-gt? (raw-value (raw-value (tesl-dot/runtime n 'someProp 'AnIntRecordWithProof))) 0) " add is commutative"))
           )))))
     ))
   )
@@ -198,7 +198,7 @@
         (void) ; skip this iteration after too many retries
         (with-handlers ([exn:fail? (lambda (e) (tesl-retry (+ tesl-attempts 1)))])
           (let ([n (let ([tesl_gen_some2Prop (+ 1 (tesl-prop-random 1000000))] [tesl_gen_some2Prop2 (+ 1 (tesl-prop-random 1000000))]) (AnIntRecordWithCombinedProof #:some2Prop (tesl-test-proof-field 'some2Prop tesl_gen_some2Prop (list 'IsPositive 'some2Prop)) #:some2Prop2 (tesl-test-proof-field 'some2Prop2 tesl_gen_some2Prop2 (list 'IsPositive 'some2Prop2))))])
-            (check-true (tesl-gt? (raw-value (tesl-dot/runtime n 'some2Prop 'AnIntRecordWithCombinedProof)) (raw-value (tesl-dot/runtime n 'some2Prop2 'AnIntRecordWithCombinedProof))) " x should be larger than y")
+            (check-true (tesl-gt? (raw-value (raw-value (tesl-dot/runtime n 'some2Prop 'AnIntRecordWithCombinedProof))) (raw-value (raw-value (tesl-dot/runtime n 'some2Prop2 'AnIntRecordWithCombinedProof)))) " x should be larger than y")
           )))))
     ))
   )

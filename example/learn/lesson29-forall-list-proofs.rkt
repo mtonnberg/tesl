@@ -104,12 +104,12 @@
 (define-checker
   (checkActive [note : Note])
   #:returns [note : Note ::: (IsActive note)]
-  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 177 (list (cons 'note *note)) (lambda () (if (tesl-equal? (raw-value note.active) "yes") (accept (IsActive note) #:value *note) (reject "note is not active" #:http-code 422)))))
+  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 177 (list (cons 'note *note)) (lambda () (if (tesl-equal? (raw-value (tesl-dot/runtime note 'active 'Note)) "yes") (accept (IsActive note) #:value *note) (reject "note is not active" #:http-code 422)))))
 
 (define-checker
   (checkPinned [note : Note])
   #:returns [note : Note ::: (IsPinned note)]
-  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 185 (list (cons 'note *note)) (lambda () (if (tesl-equal? (raw-value note.pinned) "yes") (accept (IsPinned note) #:value *note) (reject "note is not pinned" #:http-code 422)))))
+  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 185 (list (cons 'note *note)) (lambda () (if (tesl-equal? (raw-value (tesl-dot/runtime note 'pinned 'Note)) "yes") (accept (IsPinned note) #:value *note) (reject "note is not pinned" #:http-code 422)))))
 
 (define-auther
   (cookieAuth [request : HttpRequest])
@@ -164,7 +164,7 @@
   (createNote [user : String ::: (Authenticated user)] [body : NewNote])
   #:capabilities [noteDbRead noteDbWrite random]
   #:returns (Exists [noteId : String] (? Note _entity ::: (FromDb (Id == noteId) _entity)))
-  (let ([noteId (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 289 (list (cons 'user *user) (cons 'body *body)) (lambda () (generatePrefixedId "note")))]) (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 290 (list (cons 'noteId *noteId) (cons 'user *user) (cons 'body *body)) (lambda () (pack ([noteId]) (insert-one! Note (tesl-hash 'id noteId 'title (raw-value body.title) 'content (raw-value body.content) 'authorId user 'active "yes" 'pinned "no")))))))
+  (let ([noteId (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 289 (list (cons 'user *user) (cons 'body *body)) (lambda () (generatePrefixedId "note")))]) (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 290 (list (cons 'noteId *noteId) (cons 'user *user) (cons 'body *body)) (lambda () (pack ([noteId]) (insert-one! Note (tesl-hash 'id noteId 'title (tesl-dot/runtime body 'title 'NewNote) 'content (tesl-dot/runtime body 'content 'NewNote) 'authorId user 'active "yes" 'pinned "no")))))))
 
 (define NoteServer-sse-routes '())
 (define-api NoteApi

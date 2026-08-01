@@ -57,7 +57,7 @@
 (define-auther
   (parseQuery [req : HttpRequest])
   #:returns [q : String ::: (ValidQuery q)]
-  (thsl-src-control! "tests/api-test-computed-path-tests.tesl" 71 (list (cons 'req *req)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Dict_lookup "q" (raw-value req.queryParameters)))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "tests/api-test-computed-path-tests.tesl" 72 (list) (lambda () (reject "missing required query parameter: q" #:http-code 400)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([found (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "tests/api-test-computed-path-tests.tesl" 73 (list (cons 'found found)) (lambda () (accept (ValidQuery found) #:value *found))))])))))
+  (thsl-src-control! "tests/api-test-computed-path-tests.tesl" 71 (list (cons 'req *req)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Dict_lookup "q" (tesl-dot/runtime req 'queryParameters)))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "tests/api-test-computed-path-tests.tesl" 72 (list) (lambda () (reject "missing required query parameter: q" #:http-code 400)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([found (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "tests/api-test-computed-path-tests.tesl" 73 (list (cons 'found found)) (lambda () (accept (ValidQuery found) #:value *found))))])))))
 
 (define-capture idCapture
   [id : String]

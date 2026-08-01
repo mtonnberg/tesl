@@ -372,6 +372,125 @@ server S for A {
       assert_contains ~what:"endpoint rejection" "cannot cross the HTTP boundary" out
     | _ -> assert false)
 
+(* GitHub #60: `JsonValue` (Tesl.ApiTest) was only ever built to inspect a
+   response body inside `api-test` assertions — it has no runtime predicate/
+   decoder for production use, so it type-checked cleanly as a handler body/
+   return type and then 400'd on every real request. The checker now rejects
+   it in every production type position (handler param/return, endpoint
+   body/return) while still allowing it inside `api-test` blocks, which are a
+   different decl kind this check never walks. *)
+let jsonvalue_production_positions_rejected () =
+  let src = {|module Main exposing []
+import Tesl.Prelude exposing [String, Bool(..)]
+import Tesl.ApiTest exposing [statusOk, JsonValue]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.App exposing [App]
+
+handler echoJson(body: JsonValue) -> JsonValue = body
+
+api EchoApi { post "/echo" body payload: JsonValue -> JsonValue }
+
+server EchoServer for EchoApi { echoJson = echoJson }
+
+database EchoDb = Database { entities: [] backend: Memory }
+
+main() -> App = App { database: EchoDb api: EchoServer port: 8099 }
+|} in
+  with_files [ ("main.tesl", src) ] (function
+    | [main_p] ->
+      let out = check_fails "JsonValue production positions" main_p in
+      assert_contains ~what:"JsonValue rejection" "is test-only" out
+    | _ -> assert false)
+
+(* The api-test-only escape hatch: JsonValue must stay usable to inspect a
+   response body inside `api-test`, since `check_type_names_in_scope` never
+   walks DApiTest decls at all — this asserts the rejection above is scoped,
+   not a blanket ban on the name. *)
+let jsonvalue_allowed_inside_api_test () =
+  let src = {|module Main exposing []
+import Tesl.Prelude exposing [String, Bool(..)]
+import Tesl.ApiTest exposing [statusOk]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.App exposing [App]
+
+record Echo { message: String }
+codec Echo { toJson { message -> "message" with_codec stringCodec } fromJson_forbidden }
+
+handler echo(message: String) -> Echo = Echo { message: message }
+
+api EchoApi { post "/echo" body message: String -> Echo }
+
+server EchoServer for EchoApi { echo = echo }
+
+database EchoDb = Database { entities: [] backend: Memory }
+
+main() -> App = App { database: EchoDb api: EchoServer port: 8099 }
+
+api-test "raw JSON body round-trips" for EchoServer {
+  let r = post "/echo" body "hi"
+  expect statusOk r.status
+  expect r.body.message == "hi"
+}
+|} in
+  with_files [ ("main.tesl", src) ] (function
+    | [main_p] -> check_ok "JsonValue inside api-test" main_p
+    | _ -> assert false)
+
+(* GitHub #60 (second bug): `with_codec dictCodec`/`listCodec`/`setCodec`
+   decoded through a non-recursive passthrough (`tesl-decode-prim-dict` et al
+   in dsl/types.rkt) that only checked the JSON shape (hash?/list?) — it never
+   converted a Dict's symbol-keyed JSON into the declared `String` key type,
+   and never decoded nested values by the field's actual value type, so any
+   real request 400'd ("Invalid request payload") even though `tesl check`
+   passed clean (the compile-time check only compares the codec's head name
+   ("Dict"=="Dict"), never the key/value type arguments). Fixed: when the
+   codec is a container codec AND the field's declared type is the real
+   `Dict K V`/`List V`/`Set V` (not just the codec name), emit a call through
+   the generic, type-argument-aware `jsexpr->typed-value` path instead — the
+   same one already used for a plain (non-codec) Dict/List/Set field. *)
+let dict_list_set_codec_decode_recurses () =
+  let src = {|module Main exposing []
+import Tesl.Prelude exposing [String, List]
+import Tesl.Json exposing [dictCodec, listCodec, setCodec]
+import Tesl.Dict exposing [Dict]
+import Tesl.Set exposing [Set]
+
+record PayloadBody {
+  payload: Dict String String
+  tags: List String
+  uniqueTags: Set String
+}
+codec PayloadBody {
+  toJson_forbidden
+  fromJson [
+    {
+      payload <- "payload" with_codec dictCodec
+      tags <- "tags" with_codec listCodec
+      uniqueTags <- "uniqueTags" with_codec setCodec
+    }
+  ]
+}
+|} in
+  with_files [ ("main.tesl", src) ] (function
+    | [main_p] ->
+      let out = emit_ok "dictCodec/listCodec/setCodec decode" main_p in
+      assert_contains ~what:"dictCodec decode recurses through the generic Dict path"
+        "(jsexpr->typed-value '(Dict String String)" out;
+      assert_contains ~what:"listCodec decode recurses through the generic List path"
+        "(jsexpr->typed-value '(List String)" out;
+      assert_contains ~what:"setCodec decode recurses through the generic Set path"
+        "(jsexpr->typed-value '(Set String)" out;
+      (* the pre-fix naive passthrough helpers must no longer be the decoder
+         for these three fields *)
+      assert_not_contains ~what:"payload no longer uses the naive Dict passthrough"
+        "tesl-decode-prim-field _j \"payload\" tesl-decode-prim-dict" out;
+      assert_not_contains ~what:"tags no longer uses the naive List passthrough"
+        "tesl-decode-prim-field _j \"tags\" tesl-decode-prim-list" out;
+      assert_not_contains ~what:"uniqueTags no longer uses the naive Set passthrough"
+        "tesl-decode-prim-field _j \"uniqueTags\" tesl-decode-prim-set" out
+    | _ -> assert false)
+
 (* Item 10 (review 2026-07-09): the name-level endpoint rejection missed
    NESTED exposure — a wire-positioned record whose field (transitively)
    carries EmailBody passed check and serialized garbage at runtime.  Three
@@ -1299,6 +1418,9 @@ let tests = [
   test_case "exhaustive EmailBody case accepted + list-shape lowering" `Quick emailbody_exhaustive_case_accepted;
   test_case "EmailBody case missing arm rejected" `Quick emailbody_missing_arm_rejected;
   test_case "EmailBody endpoint body/return rejected at check time" `Quick emailbody_endpoint_positions_rejected;
+  test_case "JsonValue rejected in production handler/endpoint positions (#60)" `Quick jsonvalue_production_positions_rejected;
+  test_case "JsonValue still allowed inside api-test (#60)" `Quick jsonvalue_allowed_inside_api_test;
+  test_case "dictCodec/listCodec/setCodec decode recurses (#60)" `Quick dict_list_set_codec_decode_recurses;
   test_case "nested EmailBody record rejected in endpoint positions (item 10)" `Quick emailbody_nested_record_endpoint_rejected;
   test_case "EmailBody sseChannel payload rejected (item 10)" `Quick emailbody_sse_payload_rejected;
   test_case "EmailBody queue-job record rejected (item 10)" `Quick emailbody_job_record_rejected;

@@ -136,6 +136,40 @@ fn sumWide(pr: Proj) -> Int requires [dbRead] =
   assert_contains ~name:"column side unaffected"
     out "(entity-field-ref Org 'name)"
 
+(* GitHub #61: the handler-context sibling of #26/#27. The EField emit arm had
+   a SEPARATE branch that forced bare, unhinted dot notation for EVERY field
+   read (not just the intended HttpRequest/HttpResponse-shaped special fields
+   like body/cookies/status) whenever func_kind was Handler/Worker/DeadWorker/
+   Check/Auth/Establish — bypassing emit_field_dot (and so the checker's
+   field_access_type_tbl hint) entirely for those five function kinds, even
+   though the checker resolves the concrete type just as precisely there as
+   in a plain fn (case-narrowed `Something w` from another fn's `-> Maybe
+   Widget` return type included). A handler reading a shared field name then
+   hit "ambiguous dot access" at runtime. *)
+let test_issue61_handler_field_read_typed_dot_hint () =
+  let src = {|module HandlerDot exposing []
+import Tesl.Prelude exposing [Bool(..), Int, List, String]
+import Tesl.DB exposing [dbRead]
+import Tesl.Maybe exposing [Maybe(..)]
+entity Thing table "things" primaryKey id { id: String  name: String }
+entity Widget table "widgets" primaryKey id { id: String  ownerId: String  name: String }
+fn findWidget(name: String) -> Maybe Widget requires [dbRead] =
+  selectOne w from Widget where w.name == name
+handler getWidgetId(name: String) -> String requires [dbRead] =
+  case findWidget name of
+    Nothing -> "none"
+    Something w -> w.id
+|} in
+  let out = compile_ok src "issue-61 handler typed dot" in
+  assert_contains ~name:"case-bound w.id carries the 'Widget type hint through a handler"
+    out "(tesl-dot/runtime w 'id 'Widget)";
+  (* the untyped 2-arg form (the pre-fix ambiguous emit) and the bare dotted
+     identifier (what the OLD is_handler_ctx branch emitted) must both be gone *)
+  assert_not_contains ~name:"no bare untyped dot for w.id"
+    out "(tesl-dot/runtime w 'id)";
+  assert_not_contains ~name:"no raw dotted identifier w.id"
+    out "w.id"
+
 (* ── Require block tests ─────────────────────────────────────────────────── *)
 
 let test_require_block () =
@@ -650,7 +684,12 @@ deadWorker handleDeadNotify(job: NotifyJob) -> NotifyJob
   job
 |} in
   let racket = compile_ok src "publish_channel_key_field_access_uses_runtime_field_value" in
-  assert_contains ~name:"publish key keeps handler field access semantics" racket "(publish-event! RoomMessages (format \"~a\" (raw-value job.roomName))";
+  (* issue #61: a deadWorker body now goes through the SAME hinted dot-access
+     path as an ordinary fn (emit_field_dot), instead of the bare, unhinted
+     dotted identifier `job.roomName` that used to bypass the checker's
+     resolved-type hint and could hit "ambiguous dot access" at runtime when
+     another record/entity shared the field name. *)
+  assert_contains ~name:"publish key keeps handler field access semantics" racket "(publish-event! RoomMessages (format \"~a\" (tesl-dot/runtime job 'roomName 'NotifyJob))";
   assert_not_contains ~name:"publish key does not use raw field-access-ref on named value" racket "(publish-event! RoomMessages (format \"~a\" (field-access-ref job 'roomName))"
 
 (* ── Full module round-trip tests ────────────────────────────────────────── *)
@@ -1251,5 +1290,6 @@ let () =
       Alcotest.test_case "field read on select-bound entity emits typed dot hint" `Quick test_issue26_field_read_typed_dot_hint;
       Alcotest.test_case "interpolated shared field read emits typed dot hint (#27)" `Quick test_issue27_interpolated_field_read_typed_dot_hint;
       Alcotest.test_case "where-clause value operand emits typed dot hint (#27 root)" `Quick test_where_clause_operand_typed_dot_hint;
+      Alcotest.test_case "handler-context field read emits typed dot hint (#61)" `Quick test_issue61_handler_field_read_typed_dot_hint;
     ];
   ]

@@ -40,7 +40,7 @@
 (define/pow
   (averageSpeed [t : Trip])
   #:returns Real
-  (thsl-src! "example/learn/lesson72-units.tesl" 167 (list (cons 't *t)) (lambda () (let/check ([tesl-checked-0 (tesl_import_Units_requireNonZero (tesl-dot/runtime t 'duration 'Trip))]) (let ([safeDur tesl-checked-0]) (/ (tesl-dot/runtime t 'distance 'Trip) (raw-value safeDur)))))))
+  (thsl-src! "example/learn/lesson72-units.tesl" 167 (list (cons 't *t)) (lambda () (let/check ([tesl-checked-0 (tesl_import_Units_requireNonZero (tesl-dot/runtime t 'duration 'Trip))]) (let ([safeDur tesl-checked-0]) (/ (raw-value (tesl-dot/runtime t 'distance 'Trip)) (raw-value safeDur)))))))
 
 (define-adt Segment
   [Drive [dist : Real] [speed : Real]]

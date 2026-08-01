@@ -57,7 +57,7 @@
 (define-handler
   (register [body : RegisterBody])
   #:returns RegisterOut
-  (let ([secretPassword (thsl-src! "tests/secret-proof-composition-tests.tesl" 70 (list (cons 'body *body)) (lambda () (raw-value body.password)))]) (let ([out (thsl-src! "tests/secret-proof-composition-tests.tesl" 71 (list (cons 'secretPassword *secretPassword) (cons 'body *body)) (lambda () (RegisterOut #:registered (tesl-equal? (raw-value secretPassword) (raw-value (Password "unused-comparison"))))))]) (thsl-src! "tests/secret-proof-composition-tests.tesl" 72 (list (cons 'out *out) (cons 'secretPassword *secretPassword) (cons 'body *body)) (lambda () (raw-value out))))))
+  (let ([secretPassword (thsl-src! "tests/secret-proof-composition-tests.tesl" 70 (list (cons 'body *body)) (lambda () (tesl-dot/runtime body 'password 'RegisterBody)))]) (let ([out (thsl-src! "tests/secret-proof-composition-tests.tesl" 71 (list (cons 'secretPassword *secretPassword) (cons 'body *body)) (lambda () (RegisterOut #:registered (tesl-equal? (raw-value secretPassword) (raw-value (Password "unused-comparison"))))))]) (thsl-src! "tests/secret-proof-composition-tests.tesl" 72 (list (cons 'out *out) (cons 'secretPassword *secretPassword) (cons 'body *body)) (lambda () (raw-value out))))))
 
 (define RegisterServer-sse-routes '())
 (define-api RegisterApi

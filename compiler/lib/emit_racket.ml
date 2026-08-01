@@ -578,6 +578,33 @@ let rec emit_type_name ctx ty =
     List.iter (fun t -> emit_type_name ctx t; emit ctx " ") elems;
     emit ctx ")"
 
+(** [emit_type_name] rendered to a bare string instead of the ctx buffer —
+    used to build a quoted runtime type-datum (e.g. ["(Dict String Foo)"])
+    for call sites that need the type as data, not as emitted source. *)
+let type_name_str ctx ty =
+  let buf = Buffer.create 32 in
+  emit_type_name { ctx with buf } ty;
+  Buffer.contents buf
+
+(** For a `with_codec dictCodec/listCodec/setCodec` field whose declared type
+    is the real `Dict K V` / `List V` / `Set V` (not just the codec name),
+    decode through the generic, type-argument-aware [jsexpr->typed-value]
+    path instead of the codec's non-recursive prim decoder — the prim decoder
+    only checks the JSON shape (hash?/list?) and passes keys/values through
+    unconverted, so a Dict's symbol-keyed JSON never matches the declared
+    String-keyed type, and nested values are never decoded at all (issue
+    #60). Returns None when the field's type isn't actually a container
+    application, falling back to the old naive decode (still correct for
+    every other prim codec). *)
+let generic_container_codec_decode ctx codec json_key field_type =
+  match codec, field_type with
+  | ("dictCodec" | "listCodec" | "setCodec"), Some (Ast.TApp _ as te) ->
+    let type_datum = type_name_str ctx te in
+    Some (Printf.sprintf
+      "(tesl-decode-prim-field _j %S (lambda (_v) (jsexpr->typed-value '%s _v)))"
+      json_key type_datum)
+  | _ -> None
+
 (* ── Expression emission ─────────────────────────────────────────────────── *)
 
 (** Mapping from imported Tesl qualified names.  Populated during require generation. *)
@@ -1862,22 +1889,30 @@ let rec emit_expr ctx e =
      | Some renamed -> emit ctx renamed
      | None ->
        (* Field access strategy:
-          - EVar with special fields (value/cookies/headers/body/path/method/status): dot notation
-          - EVar in handler context: dot notation for all fields
-          - All other cases: field-access-ref *)
-       (* Use dot notation in all function contexts except plain fn (define/pow) *)
-       let is_handler_ctx = match ctx.func_kind with
-         | Some HandlerKind | Some WorkerKind | Some DeadWorkerKind
-         | Some CheckKind | Some AuthKind | Some EstablishKind -> true
-         | _ -> false
-       in
+          - EVar with special fields (value/cookies/headers/body/path/method/status): dot
+            notation — these are opaque HttpRequest/HttpResponse-like structs with no
+            field_access_registry entry, so the hinted path below has nothing to look up.
+          - All other cases: field-access-ref (hinted when the checker resolved a
+            concrete record/entity type at this call site — see emit_field_dot).
+          issue #61: this arm used to ALSO force bare dot notation for every field
+          (not just the special ones) whenever func_kind was Handler/Worker/
+          DeadWorker/Check/Auth/Establish. That bypassed the checker's
+          field_access_type_tbl hint entirely, so `w.id` on a Widget-typed case-arm
+          binding emitted an UNHINTED `w.id` — Racket's own dotted-identifier
+          macro-expansion (dsl/web.rkt) then fell back to a runtime search across
+          every record/entity with an `id` field, raising "ambiguous dot access"
+          whenever more than one matched (Thing/Widget both having id/name/
+          createdAt), even though the checker knew the static type. The checker's
+          hint population (checker.ml's EField/ECase/bind_pattern_vars) was never
+          the gap — it already threads the type through a cross-function-call,
+          Maybe-narrowed scrutinee correctly; only THIS branch discarded it. *)
        let is_special_field = match field with
          | "value" | "cookies" | "headers" | "body" | "path" | "method_" | "status" -> true
          | _ -> false
        in
        let in_func_context = ctx.func_kind <> None in
        (match obj with
-        | EVar _ when in_func_context && (is_special_field || is_handler_ctx) ->
+        | EVar _ when in_func_context && is_special_field ->
           (* In function context with special fields: use dot notation *)
           emit ctx "(raw-value ";
           emit_field_inner ctx obj;
@@ -3516,6 +3551,19 @@ and emit_binop ctx ~loc op left right =
         emit ctx ")"
       end else
         emit_expr ctx e
+    | EField _ ->
+      (* A field read may resolve to a proof-annotated (named-value-wrapped)
+         value — emit_field_dot never unwraps that itself (dsl/sql.rkt-style
+         callers rely on the wrapper surviving), so a raw Racket operator
+         (string-append, +, equal?, …) reached a `named-value` struct instead
+         of a plain value here. Was masked for handler/worker/check/auth/
+         establish bodies only by the pre-issue-#61 emit that forced every
+         field read in those five contexts through an explicit `raw-value`
+         wrapper; removing that (the #61 fix) exposed this in the one case
+         that never went through emit_expr's own EField arm at all. *)
+      emit ctx "(raw-value ";
+      emit_expr ctx e;
+      emit ctx ")"
     | _ -> emit_expr ctx e
   in
   (match op with
@@ -6023,8 +6071,12 @@ let emit_codec ctx (cf : codec_form) =
             type; keep the shared missing-field error. *)
          Printf.sprintf "(%s (jsexpr-required-field _j %S))" codec json_key)
     | None ->
-      let plain = codec_decode_field_call codec json_key in
-      (match List.assoc_opt field_name codec_field_types with
+      let field_type = List.assoc_opt field_name codec_field_types in
+      let plain = match generic_container_codec_decode ctx codec json_key field_type with
+        | Some call -> call
+        | None -> codec_decode_field_call codec json_key
+      in
+      (match field_type with
        | Some (Ast.TName { name = ft_name; _ }) ->
          (match Hashtbl.find_opt ctx.newtype_bases ft_name,
                 base_of_prim_codec codec with
@@ -6057,8 +6109,12 @@ let emit_codec ctx (cf : codec_form) =
          (Printf.sprintf "(jsexpr-required-field _j %S)" json_key,
           Some (fun v -> Printf.sprintf "(%s %s)" codec v)))
     | None ->
-      let plain = codec_decode_field_call codec json_key in
-      (match List.assoc_opt field_name codec_field_types with
+      let field_type = List.assoc_opt field_name codec_field_types in
+      let plain = match generic_container_codec_decode ctx codec json_key field_type with
+        | Some call -> call
+        | None -> codec_decode_field_call codec json_key
+      in
+      (match field_type with
        | Some (Ast.TName { name = ft_name; _ }) ->
          (match Hashtbl.find_opt ctx.newtype_bases ft_name,
                 base_of_prim_codec codec with

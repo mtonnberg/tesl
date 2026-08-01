@@ -32,7 +32,7 @@
   (chargeNote)
   #:capabilities [billingClient]
   #:returns String
-  (let ([resp (thsl-src! "tests/trace-propagation-tests.tesl" 35 (list) (lambda () (callBilling)))]) (thsl-src! "tests/trace-propagation-tests.tesl" 36 (list (cons 'resp *resp)) (lambda () (if (tesl-equal? (raw-value resp.status) 200) "charged" "declined")))))
+  (let ([resp (thsl-src! "tests/trace-propagation-tests.tesl" 35 (list) (lambda () (callBilling)))]) (thsl-src! "tests/trace-propagation-tests.tesl" 36 (list (cons 'resp *resp)) (lambda () (if (tesl-equal? (raw-value (raw-value resp.status)) 200) "charged" "declined")))))
 
 (define TracePropServer-sse-routes '())
 (define-api TracePropApi

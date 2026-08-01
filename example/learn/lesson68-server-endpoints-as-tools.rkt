@@ -74,12 +74,12 @@
 (define-handler
   (greet [u : User ::: (Authenticated u)])
   #:returns String
-  (thsl-src! "example/learn/lesson68-server-endpoints-as-tools.tesl" 141 (list (cons 'u *u)) (lambda () (raw-value (tesl_import_String_concat "hello " (raw-value u.id))))))
+  (thsl-src! "example/learn/lesson68-server-endpoints-as-tools.tesl" 141 (list (cons 'u *u)) (lambda () (raw-value (tesl_import_String_concat "hello " (tesl-dot/runtime u 'id 'User))))))
 
 (define-handler
   (createNote [u : User ::: (Authenticated u)] [note : NewNote])
   #:returns String
-  (thsl-src! "example/learn/lesson68-server-endpoints-as-tools.tesl" 145 (list (cons 'u *u) (cons 'note *note)) (lambda () (raw-value (tesl_import_String_concat (raw-value (tesl_import_String_concat (raw-value u.id) " noted: ")) (raw-value note.text))))))
+  (thsl-src! "example/learn/lesson68-server-endpoints-as-tools.tesl" 145 (list (cons 'u *u) (cons 'note *note)) (lambda () (raw-value (tesl_import_String_concat (raw-value (tesl_import_String_concat (tesl-dot/runtime u 'id 'User) " noted: ")) (tesl-dot/runtime note 'text 'NewNote))))))
 
 (define-handler
   (wipeNotes [u : User ::: ((Authenticated u) && (Admin u))])

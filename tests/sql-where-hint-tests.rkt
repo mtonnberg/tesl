@@ -60,7 +60,7 @@
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-0 (thsl-src! "tests/sql-where-hint-tests.tesl" 33 (list) (lambda () (insert-one! OrgW (tesl-hash 'id "o1" 'name "acme")))))
     (define pr (thsl-src! "tests/sql-where-hint-tests.tesl" 34 (list) (lambda () (tesl-hash 'id "p1" 'name "acme"))))
-    (check-true (raw-value (thsl-src! "tests/sql-where-hint-tests.tesl" 35 (list (cons 'pr pr)) (lambda () (let ([*tesl-case-1 (raw-value (findOrg pr))]) (cond [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Something)) (let ([o (hash-ref (adt-value-fields *tesl-case-1) 'value)]) (thsl-src! "tests/sql-where-hint-tests.tesl" 36 (list (cons 'o o)) (lambda () (tesl-equal? (raw-value (tesl-dot/runtime o 'id 'OrgW)) "o1"))))] [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Nothing)) (thsl-src! "tests/sql-where-hint-tests.tesl" 37 (list) (lambda () #f))]))))))
+    (check-true (raw-value (thsl-src! "tests/sql-where-hint-tests.tesl" 35 (list (cons 'pr pr)) (lambda () (let ([*tesl-case-1 (raw-value (findOrg pr))]) (cond [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Something)) (let ([o (hash-ref (adt-value-fields *tesl-case-1) 'value)]) (thsl-src! "tests/sql-where-hint-tests.tesl" 36 (list (cons 'o o)) (lambda () (tesl-equal? (raw-value (raw-value (tesl-dot/runtime o 'id 'OrgW))) "o1"))))] [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Nothing)) (thsl-src! "tests/sql-where-hint-tests.tesl" 37 (list) (lambda () #f))]))))))
     )
     ))
   )

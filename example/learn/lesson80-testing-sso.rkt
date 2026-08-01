@@ -111,7 +111,7 @@
 (define-handler
   (me [user : User ::: (Authenticated user)])
   #:returns Profile
-  (thsl-src! "example/learn/lesson80-testing-sso.tesl" 156 (list (cons 'user *user)) (lambda () (Profile #:userId (raw-value user.id)))))
+  (thsl-src! "example/learn/lesson80-testing-sso.tesl" 156 (list (cons 'user *user)) (lambda () (Profile #:userId (tesl-dot/runtime user 'id 'User)))))
 
 (define AppServer-sse-routes '())
 (define-api AppApi

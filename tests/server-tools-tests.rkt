@@ -84,12 +84,12 @@
 (define-handler
   (greet [u : User ::: (Authenticated u)])
   #:returns String
-  (thsl-src! "tests/server-tools-tests.tesl" 93 (list (cons 'u *u)) (lambda () (raw-value (tesl_import_String_concat "hello " (raw-value u.id))))))
+  (thsl-src! "tests/server-tools-tests.tesl" 93 (list (cons 'u *u)) (lambda () (raw-value (tesl_import_String_concat "hello " (tesl-dot/runtime u 'id 'User))))))
 
 (define-handler
   (createNote [u : User ::: (Authenticated u)] [note : NewNote])
   #:returns String
-  (thsl-src! "tests/server-tools-tests.tesl" 97 (list (cons 'u *u) (cons 'note *note)) (lambda () (raw-value (tesl_import_String_concat (raw-value (tesl_import_String_concat (raw-value u.id) ":")) (raw-value note.text))))))
+  (thsl-src! "tests/server-tools-tests.tesl" 97 (list (cons 'u *u) (cons 'note *note)) (lambda () (raw-value (tesl_import_String_concat (raw-value (tesl_import_String_concat (tesl-dot/runtime u 'id 'User) ":")) (tesl-dot/runtime note 'text 'NewNote))))))
 
 (define-handler
   (getNote [u : User ::: (Authenticated u)] [noteId : String ::: (NoteId noteId)])
@@ -99,7 +99,7 @@
 (define-handler
   (guarded [u : User ::: (Authenticated u)])
   #:returns String
-  (thsl-src! "tests/server-tools-tests.tesl" 105 (list (cons 'u *u)) (lambda () (if (tesl-equal? (raw-value u.id) "blocked") (reject "blocked user" #:http-code 403) "ok"))))
+  (thsl-src! "tests/server-tools-tests.tesl" 105 (list (cons 'u *u)) (lambda () (if (tesl-equal? (raw-value (tesl-dot/runtime u 'id 'User)) "blocked") (reject "blocked user" #:http-code 403) "ok"))))
 
 (define-handler
   (adminWipe [u : User ::: ((Authenticated u) && (Admin u))])

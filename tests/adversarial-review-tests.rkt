@@ -159,12 +159,12 @@
 (define/pow
   (requiresUserId [uid : UserId])
   #:returns String
-  (thsl-src! "tests/adversarial-review-tests.tesl" 402 (list (cons 'uid *uid)) (lambda () (string-append (raw-value uid.value) "-user"))))
+  (thsl-src! "tests/adversarial-review-tests.tesl" 402 (list (cons 'uid *uid)) (lambda () (string-append (raw-value (raw-value uid.value)) "-user"))))
 
 (define/pow
   (requiresProjectId [pid : ProjectId])
   #:returns String
-  (thsl-src! "tests/adversarial-review-tests.tesl" 405 (list (cons 'pid *pid)) (lambda () (string-append (raw-value pid.value) "-project"))))
+  (thsl-src! "tests/adversarial-review-tests.tesl" 405 (list (cons 'pid *pid)) (lambda () (string-append (raw-value (raw-value pid.value)) "-project"))))
 
 (define-checker
   (checkNonNegative [n : Integer])

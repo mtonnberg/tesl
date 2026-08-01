@@ -32,22 +32,22 @@
 (define/pow
   (area [r : Rectangle])
   #:returns Integer
-  (thsl-src! "example/learn/lesson03-records.tesl" 46 (list (cons 'r *r)) (lambda () (* (tesl-dot/runtime r 'width 'Rectangle) (tesl-dot/runtime r 'height 'Rectangle)))))
+  (thsl-src! "example/learn/lesson03-records.tesl" 46 (list (cons 'r *r)) (lambda () (* (raw-value (tesl-dot/runtime r 'width 'Rectangle)) (raw-value (tesl-dot/runtime r 'height 'Rectangle))))))
 
 (define/pow
   (perimeter [r : Rectangle])
   #:returns Integer
-  (thsl-src! "example/learn/lesson03-records.tesl" 50 (list (cons 'r *r)) (lambda () (* 2 (+ (tesl-dot/runtime r 'width 'Rectangle) (tesl-dot/runtime r 'height 'Rectangle))))))
+  (thsl-src! "example/learn/lesson03-records.tesl" 50 (list (cons 'r *r)) (lambda () (* 2 (+ (raw-value (tesl-dot/runtime r 'width 'Rectangle)) (raw-value (tesl-dot/runtime r 'height 'Rectangle)))))))
 
 (define/pow
   (translate [p : Point] [dx : Integer] [dy : Integer])
   #:returns Point
-  (thsl-src! "example/learn/lesson03-records.tesl" 54 (list (cons 'p *p) (cons 'dx *dx) (cons 'dy *dy)) (lambda () (Point #:x (+ (tesl-dot/runtime p 'x 'Point) *dx) #:y (+ (tesl-dot/runtime p 'y 'Point) *dy)))))
+  (thsl-src! "example/learn/lesson03-records.tesl" 54 (list (cons 'p *p) (cons 'dx *dx) (cons 'dy *dy)) (lambda () (Point #:x (+ (raw-value (tesl-dot/runtime p 'x 'Point)) *dx) #:y (+ (raw-value (tesl-dot/runtime p 'y 'Point)) *dy)))))
 
 (define/pow
   (scale [r : Rectangle] [factor : Integer])
   #:returns Rectangle
-  (thsl-src! "example/learn/lesson03-records.tesl" 58 (list (cons 'r *r) (cons 'factor *factor)) (lambda () (tesl-record-update *r (tesl-hash 'width (raw-value (* (tesl-dot/runtime r 'width 'Rectangle) *factor)) 'height (raw-value (* (tesl-dot/runtime r 'height 'Rectangle) *factor)))))))
+  (thsl-src! "example/learn/lesson03-records.tesl" 58 (list (cons 'r *r) (cons 'factor *factor)) (lambda () (tesl-record-update *r (tesl-hash 'width (raw-value (* (raw-value (tesl-dot/runtime r 'width 'Rectangle)) *factor)) 'height (raw-value (* (raw-value (tesl-dot/runtime r 'height 'Rectangle)) *factor)))))))
 
 (define/pow
   (origin)

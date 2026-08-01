@@ -81,7 +81,7 @@
   (startSync [req : SyncRequest])
   #:capabilities [queueWrite]
   #:returns String
-  (let ([_ (thsl-src! "tests/http-stub-tests.tesl" 252 (list (cons 'req *req)) (lambda () (enqueue! SyncQueue (SyncJob #:tag (raw-value req.tag)))))]) (thsl-src! "tests/http-stub-tests.tesl" 253 (list (cons 'req *req)) (lambda () "queued"))))
+  (let ([_ (thsl-src! "tests/http-stub-tests.tesl" 252 (list (cons 'req *req)) (lambda () (enqueue! SyncQueue (SyncJob #:tag (tesl-dot/runtime req 'tag 'SyncRequest)))))]) (thsl-src! "tests/http-stub-tests.tesl" 253 (list (cons 'req *req)) (lambda () "queued"))))
 
 (define SyncServer-sse-routes '())
 (define-api SyncApi

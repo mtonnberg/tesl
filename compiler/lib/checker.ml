@@ -5624,6 +5624,21 @@ let check_type_names_in_scope ~(suggest : string -> Import_suggest.suggestion op
       then
         Some (config_only_type_position_error
                 ~replacement_in_scope:(fun r -> List.mem r in_scope) name loc)
+      (* JsonValue (Tesl.ApiTest, issue #60) was only ever built to inspect a
+         response body inside `api-test` assertions — it has no runtime
+         predicate/decoder for production use (that gap is the issue's root
+         cause: it type-checked as a handler body/return type and 400'd on
+         every real request). `api-test`/`load-test` blocks are a different
+         decl kind, never walked by this function, so JsonValue stays usable
+         there unconditionally; every OTHER type position (handler params/
+         return, record/entity/ADT fields, endpoint body/return/captures,
+         newtype/alias bases) rejects it here instead, unless locally shadowed. *)
+      else if name = "JsonValue" && not (List.mem name locally_bound) then
+        Some { loc; fix = None; message =
+          "`JsonValue` is test-only: it inspects HTTP response bodies inside \
+           `api-test` assertions and has no production JSON decoder — it will \
+           reject every request at runtime with a 400. Decode a typed \
+           record/ADT with a codec instead." }
       else None
     else
       let hint, fix = match suggest name with

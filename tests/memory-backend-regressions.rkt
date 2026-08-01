@@ -171,7 +171,7 @@
   (send [req : TriggerRequest])
   #:capabilities [queueWrite]
   #:returns String
-  (let ([_ (thsl-src! "tests/memory-backend-regressions.tesl" 216 (list (cons 'req *req)) (lambda () (enqueue! RegQueue (SeqJob #:tag (raw-value req.tag)))))]) (thsl-src! "tests/memory-backend-regressions.tesl" 217 (list (cons 'req *req)) (lambda () "queued"))))
+  (let ([_ (thsl-src! "tests/memory-backend-regressions.tesl" 216 (list (cons 'req *req)) (lambda () (enqueue! RegQueue (SeqJob #:tag (tesl-dot/runtime req 'tag 'TriggerRequest)))))]) (thsl-src! "tests/memory-backend-regressions.tesl" 217 (list (cons 'req *req)) (lambda () "queued"))))
 
 (define RegServer-sse-routes '())
 (define-api RegApi

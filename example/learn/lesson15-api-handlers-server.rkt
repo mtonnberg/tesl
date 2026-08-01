@@ -81,7 +81,7 @@
   (createTask [user : String ::: (Authenticated user)] [body : NewTask])
   #:capabilities [taskDbWrite]
   #:returns Task
-  (thsl-src! "example/learn/lesson15-api-handlers-server.tesl" 108 (list (cons 'user *user) (cons 'body *body)) (lambda () (Task #:id "task-1" #:title (raw-value body.title) #:priority (raw-value body.priority) #:done #f))))
+  (thsl-src! "example/learn/lesson15-api-handlers-server.tesl" 108 (list (cons 'user *user) (cons 'body *body)) (lambda () (Task #:id "task-1" #:title (tesl-dot/runtime body 'title 'NewTask) #:priority (tesl-dot/runtime body 'priority 'NewTask) #:done #f))))
 
 (define-handler
   (getTask [user : String ::: (Authenticated user)] [id : String])

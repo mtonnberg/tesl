@@ -88,12 +88,12 @@
   (importDocument [body : NewDocument])
   #:capabilities [documentStore]
   #:returns (Exists [docId : String] (? Document _entity ::: (FromDb (Id == docId) _entity)))
-  (let ([docId (thsl-src! "example/learn/lesson74-interop-patterns.tesl" 131 (list (cons 'body *body)) (lambda () (generatePrefixedId "doc")))]) (thsl-src! "example/learn/lesson74-interop-patterns.tesl" 132 (list (cons 'docId *docId) (cons 'body *body)) (lambda () (pack ([docId]) (insert-one! Document (tesl-hash 'id docId 'ownerId "demo-user" 'name (raw-value body.name) 'body (raw-value body.body) 'createdAt (raw-value (nowMillis)))))))))
+  (let ([docId (thsl-src! "example/learn/lesson74-interop-patterns.tesl" 131 (list (cons 'body *body)) (lambda () (generatePrefixedId "doc")))]) (thsl-src! "example/learn/lesson74-interop-patterns.tesl" 132 (list (cons 'docId *docId) (cons 'body *body)) (lambda () (pack ([docId]) (insert-one! Document (tesl-hash 'id docId 'ownerId "demo-user" 'name (tesl-dot/runtime body 'name 'NewDocument) 'body (raw-value body.body) 'createdAt (raw-value (nowMillis)))))))))
 
 (define/pow
   (documentToCsvRow [doc : Document])
   #:returns String
-  (thsl-src! "example/learn/lesson74-interop-patterns.tesl" 147 (list (cons 'doc *doc)) (lambda () (string-append (string-append (tesl-dot/runtime doc 'id 'Document) ",") (tesl-dot/runtime doc 'name 'Document)))))
+  (thsl-src! "example/learn/lesson74-interop-patterns.tesl" 147 (list (cons 'doc *doc)) (lambda () (string-append (string-append (raw-value (tesl-dot/runtime doc 'id 'Document)) ",") (raw-value (tesl-dot/runtime doc 'name 'Document))))))
 
 (define-handler
   (exportDocuments)
@@ -116,13 +116,13 @@
   (summariseDocument [job : SummariseDocument ::: (FromQueue (Id == jobId) job)])
   #:capabilities [documentStore queueRead]
   #:returns SummariseDocument
-  (let ([existing (thsl-src! "example/learn/lesson74-interop-patterns.tesl" 189 (list (cons 'job *job)) (lambda () (let ([tesl_match (select-one (from Document) (where (==. (entity-field-ref Document 'id) (raw-value job.docId))))]) (if tesl_match (Something tesl_match) Nothing))) 'existing)]) (thsl-src-control! "example/learn/lesson74-interop-patterns.tesl" 190 (list (cons 'existing *existing) (cons 'job *job)) (lambda () (let ([tesl-case-1 (raw-value existing)]) (cond [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Nothing)) (thsl-src! "example/learn/lesson74-interop-patterns.tesl" 191 (list) (lambda () job))] [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Something)) (let ([doc (hash-ref (adt-value-fields *tesl-case-1) 'value)]) (thsl-src! "example/learn/lesson74-interop-patterns.tesl" 193 (list (cons 'doc doc)) (lambda () (let ([_ (storeSummary (raw-value job.docId) (string-append "summary: " (raw-value doc.name)))]) job))))]))))))
+  (let ([existing (thsl-src! "example/learn/lesson74-interop-patterns.tesl" 189 (list (cons 'job *job)) (lambda () (let ([tesl_match (select-one (from Document) (where (==. (entity-field-ref Document 'id) (tesl-dot/runtime job 'docId 'SummariseDocument))))]) (if tesl_match (Something tesl_match) Nothing))) 'existing)]) (thsl-src-control! "example/learn/lesson74-interop-patterns.tesl" 190 (list (cons 'existing *existing) (cons 'job *job)) (lambda () (let ([tesl-case-1 (raw-value existing)]) (cond [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Nothing)) (thsl-src! "example/learn/lesson74-interop-patterns.tesl" 191 (list) (lambda () job))] [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Something)) (let ([doc (hash-ref (adt-value-fields *tesl-case-1) 'value)]) (thsl-src! "example/learn/lesson74-interop-patterns.tesl" 193 (list (cons 'doc doc)) (lambda () (let ([_ (storeSummary (tesl-dot/runtime job 'docId 'SummariseDocument) (string-append "summary: " (raw-value (tesl-dot/runtime doc 'name 'Document))))]) job))))]))))))
 
 (define-handler
   (requestSummary [body : NewDocument])
   #:capabilities [documentStore queueWrite]
   #:returns String
-  (let ([docId (thsl-src! "example/learn/lesson74-interop-patterns.tesl" 201 (list (cons 'body *body)) (lambda () (generatePrefixedId "doc")))]) (let ([_stored (thsl-src! "example/learn/lesson74-interop-patterns.tesl" 202 (list (cons 'docId *docId) (cons 'body *body)) (lambda () (insert-one! Document (tesl-hash 'id docId 'ownerId "demo-user" 'name (raw-value body.name) 'body (raw-value body.body) 'createdAt (raw-value (nowMillis))))))]) (let ([_ (thsl-src! "example/learn/lesson74-interop-patterns.tesl" 209 (list (cons '_stored *_stored) (cons 'docId *docId) (cons 'body *body)) (lambda () (enqueue! Lesson74Queue (SummariseDocument #:docId *docId #:ownerId "demo-user"))))]) (thsl-src! "example/learn/lesson74-interop-patterns.tesl" 210 (list (cons '_stored *_stored) (cons 'docId *docId) (cons 'body *body)) (lambda () "queued"))))))
+  (let ([docId (thsl-src! "example/learn/lesson74-interop-patterns.tesl" 201 (list (cons 'body *body)) (lambda () (generatePrefixedId "doc")))]) (let ([_stored (thsl-src! "example/learn/lesson74-interop-patterns.tesl" 202 (list (cons 'docId *docId) (cons 'body *body)) (lambda () (insert-one! Document (tesl-hash 'id docId 'ownerId "demo-user" 'name (tesl-dot/runtime body 'name 'NewDocument) 'body (raw-value body.body) 'createdAt (raw-value (nowMillis))))))]) (let ([_ (thsl-src! "example/learn/lesson74-interop-patterns.tesl" 209 (list (cons '_stored *_stored) (cons 'docId *docId) (cons 'body *body)) (lambda () (enqueue! Lesson74Queue (SummariseDocument #:docId *docId #:ownerId "demo-user"))))]) (thsl-src! "example/learn/lesson74-interop-patterns.tesl" 210 (list (cons '_stored *_stored) (cons 'docId *docId) (cons 'body *body)) (lambda () "queued"))))))
 
 (define-capability thumbnailer (implies httpClient))
 
@@ -140,7 +140,7 @@
   (thumbnailWorker [job : ThumbnailJob ::: (FromQueue (Id == jobId) job)])
   #:capabilities [thumbnailer envRead queueRead]
   #:returns ThumbnailJob
-  (let ([bucket (thsl-src! "example/learn/lesson74-interop-patterns.tesl" 252 (list (cons 'job *job)) (lambda () (resolveUploadBucket)))]) (let ([response (thsl-src! "example/learn/lesson74-interop-patterns.tesl" 253 (list (cons 'bucket *bucket) (cons 'job *job)) (lambda () (renderThumbnail bucket (raw-value job.docId))))]) (thsl-src! "example/learn/lesson74-interop-patterns.tesl" 258 (list (cons 'response *response) (cons 'bucket *bucket) (cons 'job *job)) (lambda () (if (tesl-equal? (raw-value response.status) 200) *job (reject "thumbnail service returned an error" #:http-code 502)))))))
+  (let ([bucket (thsl-src! "example/learn/lesson74-interop-patterns.tesl" 252 (list (cons 'job *job)) (lambda () (resolveUploadBucket)))]) (let ([response (thsl-src! "example/learn/lesson74-interop-patterns.tesl" 253 (list (cons 'bucket *bucket) (cons 'job *job)) (lambda () (renderThumbnail bucket (tesl-dot/runtime job 'docId 'ThumbnailJob))))]) (thsl-src! "example/learn/lesson74-interop-patterns.tesl" 258 (list (cons 'response *response) (cons 'bucket *bucket) (cons 'job *job)) (lambda () (if (tesl-equal? (raw-value (raw-value response.status)) 200) *job (reject "thumbnail service returned an error" #:http-code 502)))))))
 
 (define-queue Lesson74Queue
   #:database Lesson74Database

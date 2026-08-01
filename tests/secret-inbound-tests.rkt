@@ -33,7 +33,7 @@
 (define-handler
   (login [body : LoginBody])
   #:returns LoginOut
-  (let ([expected (thsl-src! "tests/secret-inbound-tests.tesl" 46 (list (cons 'body *body)) (lambda () (raw-value (Password "hunter2"))))]) (let ([out (thsl-src! "tests/secret-inbound-tests.tesl" 47 (list (cons 'expected *expected) (cons 'body *body)) (lambda () (LoginOut #:matched (tesl-equal? (raw-value body.password) (raw-value expected)))))]) (thsl-src! "tests/secret-inbound-tests.tesl" 48 (list (cons 'out *out) (cons 'expected *expected) (cons 'body *body)) (lambda () (raw-value out))))))
+  (let ([expected (thsl-src! "tests/secret-inbound-tests.tesl" 46 (list (cons 'body *body)) (lambda () (raw-value (Password "hunter2"))))]) (let ([out (thsl-src! "tests/secret-inbound-tests.tesl" 47 (list (cons 'expected *expected) (cons 'body *body)) (lambda () (LoginOut #:matched (tesl-equal? (raw-value (tesl-dot/runtime body 'password 'LoginBody)) (raw-value expected)))))]) (thsl-src! "tests/secret-inbound-tests.tesl" 48 (list (cons 'out *out) (cons 'expected *expected) (cons 'body *body)) (lambda () (raw-value out))))))
 
 (define InboundServer-sse-routes '())
 (define-api InboundApi

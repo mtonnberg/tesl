@@ -107,19 +107,19 @@
   (login [body : LoginRequest])
   #:capabilities [sessions]
   #:returns LoginOk
-  (let ([token (thsl-src! "tests/session-cookie-tests.tesl" 151 (list (cons 'body *body)) (lambda () (raw-value (tesl_import_JWT_sign (raw-value (tesl_import_Dict_singleton "sub" (raw-value body.user))) (raw-value (tenantAKey))))))]) (let ([_ (thsl-src! "tests/session-cookie-tests.tesl" 152 (list (cons 'token *token) (cons 'body *body)) (lambda () (raw-value (tesl_import_Http_setSessionCookie (raw-value token)))))]) (thsl-src! "tests/session-cookie-tests.tesl" 153 (list (cons '_ *_) (cons 'token *token) (cons 'body *body)) (lambda () (LoginOk #:success #t))))))
+  (let ([token (thsl-src! "tests/session-cookie-tests.tesl" 151 (list (cons 'body *body)) (lambda () (raw-value (tesl_import_JWT_sign (raw-value (tesl_import_Dict_singleton "sub" (tesl-dot/runtime body 'user 'LoginRequest))) (raw-value (tenantAKey))))))]) (let ([_ (thsl-src! "tests/session-cookie-tests.tesl" 152 (list (cons 'token *token) (cons 'body *body)) (lambda () (raw-value (tesl_import_Http_setSessionCookie (raw-value token)))))]) (thsl-src! "tests/session-cookie-tests.tesl" 153 (list (cons '_ *_) (cons 'token *token) (cons 'body *body)) (lambda () (LoginOk #:success #t))))))
 
 (define-handler
   (loginOtherTenant [body : LoginRequest])
   #:capabilities [sessions]
   #:returns LoginOk
-  (let ([token (thsl-src! "tests/session-cookie-tests.tesl" 159 (list (cons 'body *body)) (lambda () (raw-value (tesl_import_JWT_sign (raw-value (tesl_import_Dict_singleton "sub" (raw-value body.user))) (raw-value (tenantBKey))))))]) (let ([_ (thsl-src! "tests/session-cookie-tests.tesl" 160 (list (cons 'token *token) (cons 'body *body)) (lambda () (raw-value (tesl_import_Http_setSessionCookie (raw-value token)))))]) (thsl-src! "tests/session-cookie-tests.tesl" 161 (list (cons '_ *_) (cons 'token *token) (cons 'body *body)) (lambda () (LoginOk #:success #t))))))
+  (let ([token (thsl-src! "tests/session-cookie-tests.tesl" 159 (list (cons 'body *body)) (lambda () (raw-value (tesl_import_JWT_sign (raw-value (tesl_import_Dict_singleton "sub" (tesl-dot/runtime body 'user 'LoginRequest))) (raw-value (tenantBKey))))))]) (let ([_ (thsl-src! "tests/session-cookie-tests.tesl" 160 (list (cons 'token *token) (cons 'body *body)) (lambda () (raw-value (tesl_import_Http_setSessionCookie (raw-value token)))))]) (thsl-src! "tests/session-cookie-tests.tesl" 161 (list (cons '_ *_) (cons 'token *token) (cons 'body *body)) (lambda () (LoginOk #:success #t))))))
 
 (define-handler
   (loginThenFail [body : LoginRequest])
   #:capabilities [sessions]
   #:returns LoginOk
-  (let ([token (thsl-src! "tests/session-cookie-tests.tesl" 167 (list (cons 'body *body)) (lambda () (raw-value (tesl_import_JWT_sign (raw-value (tesl_import_Dict_singleton "sub" (raw-value body.user))) (raw-value (tenantAKey))))))]) (let ([_ (thsl-src! "tests/session-cookie-tests.tesl" 168 (list (cons 'token *token) (cons 'body *body)) (lambda () (raw-value (tesl_import_Http_setSessionCookie (raw-value token)))))]) (thsl-src! "tests/session-cookie-tests.tesl" 169 (list (cons '_ *_) (cons 'token *token) (cons 'body *body)) (lambda () (reject "second factor required" #:http-code 403))))))
+  (let ([token (thsl-src! "tests/session-cookie-tests.tesl" 167 (list (cons 'body *body)) (lambda () (raw-value (tesl_import_JWT_sign (raw-value (tesl_import_Dict_singleton "sub" (tesl-dot/runtime body 'user 'LoginRequest))) (raw-value (tenantAKey))))))]) (let ([_ (thsl-src! "tests/session-cookie-tests.tesl" 168 (list (cons 'token *token) (cons 'body *body)) (lambda () (raw-value (tesl_import_Http_setSessionCookie (raw-value token)))))]) (thsl-src! "tests/session-cookie-tests.tesl" 169 (list (cons '_ *_) (cons 'token *token) (cons 'body *body)) (lambda () (reject "second factor required" #:http-code 403))))))
 
 (define-handler
   (whoami [user : String ::: (Authenticated user)])

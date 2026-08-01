@@ -57,7 +57,7 @@
 (define-handler
   (register [body : RegisterBody])
   #:returns RegisterOut
-  (let ([out (thsl-src! "tests/secret-field-proof-tests.tesl" 72 (list (cons 'body *body)) (lambda () (RegisterOut #:registered (tesl-equal? (raw-value body.password) (raw-value (Password "unused-comparison"))))))]) (thsl-src! "tests/secret-field-proof-tests.tesl" 73 (list (cons 'out *out) (cons 'body *body)) (lambda () (raw-value out)))))
+  (let ([out (thsl-src! "tests/secret-field-proof-tests.tesl" 72 (list (cons 'body *body)) (lambda () (RegisterOut #:registered (tesl-equal? (raw-value (tesl-dot/runtime body 'password 'RegisterBody)) (raw-value (Password "unused-comparison"))))))]) (thsl-src! "tests/secret-field-proof-tests.tesl" 73 (list (cons 'out *out) (cons 'body *body)) (lambda () (raw-value out)))))
 
 (define RegisterServer-sse-routes '())
 (define-api RegisterApi

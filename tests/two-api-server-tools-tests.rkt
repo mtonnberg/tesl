@@ -42,17 +42,17 @@
 (define-handler
   (greet [u : User ::: (Authenticated u)])
   #:returns String
-  (thsl-src! "tests/two-api-server-tools-tests.tesl" 62 (list (cons 'u *u)) (lambda () (raw-value (tesl_import_String_concat "hello " (raw-value u.id))))))
+  (thsl-src! "tests/two-api-server-tools-tests.tesl" 62 (list (cons 'u *u)) (lambda () (raw-value (tesl_import_String_concat "hello " (tesl-dot/runtime u 'id 'User))))))
 
 (define-handler
   (accountSummary [u : User ::: (Authenticated u)])
   #:returns String
-  (thsl-src! "tests/two-api-server-tools-tests.tesl" 66 (list (cons 'u *u)) (lambda () (raw-value (tesl_import_String_concat "summary for " (raw-value u.id))))))
+  (thsl-src! "tests/two-api-server-tools-tests.tesl" 66 (list (cons 'u *u)) (lambda () (raw-value (tesl_import_String_concat "summary for " (tesl-dot/runtime u 'id 'User))))))
 
 (define-handler
   (deleteAccount [u : User ::: (Authenticated u)])
   #:returns String
-  (thsl-src! "tests/two-api-server-tools-tests.tesl" 70 (list (cons 'u *u)) (lambda () (raw-value (tesl_import_String_concat "deleted " (raw-value u.id))))))
+  (thsl-src! "tests/two-api-server-tools-tests.tesl" 70 (list (cons 'u *u)) (lambda () (raw-value (tesl_import_String_concat "deleted " (tesl-dot/runtime u 'id 'User))))))
 
 (define UserFacingServer-sse-routes '())
 (define-api UserFacingApi

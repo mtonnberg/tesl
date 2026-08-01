@@ -66,7 +66,7 @@
 (define-handler
   (greet [g : Greeting])
   #:returns Greeting
-  (thsl-src! "example/learn/lesson41-load-tests.tesl" 69 (list (cons 'g *g)) (lambda () (Greeting #:name (raw-value g.name) #:message (format "Hello, ~a!" (tesl-display-val (raw-value g.name)))))))
+  (thsl-src! "example/learn/lesson41-load-tests.tesl" 69 (list (cons 'g *g)) (lambda () (Greeting #:name (tesl-dot/runtime g 'name 'Greeting) #:message (format "Hello, ~a!" (tesl-display-val (tesl-dot/runtime g 'name 'Greeting)))))))
 
 (define-handler
   (listBooks)

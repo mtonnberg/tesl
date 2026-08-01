@@ -28,7 +28,7 @@
 (define/pow
   (isSuccess [resp : HttpResponse])
   #:returns Boolean
-  (thsl-src! "tests/httpclient-tests.tesl" 45 (list (cons 'resp *resp)) (lambda () (and (tesl-ge? (raw-value resp.status) 200) (tesl-lt? (raw-value resp.status) 300)))))
+  (thsl-src! "tests/httpclient-tests.tesl" 45 (list (cons 'resp *resp)) (lambda () (and (tesl-ge? (raw-value (raw-value resp.status)) 200) (tesl-lt? (raw-value (raw-value resp.status)) 300)))))
 
 (define/pow
   (getStatusClass [status : Integer])
@@ -48,7 +48,7 @@
 (define/pow
   (isOkStatus [resp : HttpResponse])
   #:returns Boolean
-  (thsl-src! "tests/httpclient-tests.tesl" 68 (list (cons 'resp *resp)) (lambda () (tesl-equal? (raw-value resp.status) 200))))
+  (thsl-src! "tests/httpclient-tests.tesl" 68 (list (cons 'resp *resp)) (lambda () (tesl-equal? (raw-value (raw-value resp.status)) 200))))
 
 (define/pow
   (classifyStatus [resp : HttpResponse])

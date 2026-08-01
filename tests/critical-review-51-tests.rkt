@@ -155,7 +155,7 @@
 (define/pow
   (n05_record_update_known [p : Point] [dx : Integer])
   #:returns Point
-  (thsl-src! "tests/critical-review-51-tests.tesl" 186 (list (cons 'p *p) (cons 'dx *dx)) (lambda () (tesl-record-update *p (tesl-hash 'x (raw-value (+ (tesl-dot/runtime p 'x 'Point) *dx)))))))
+  (thsl-src! "tests/critical-review-51-tests.tesl" 186 (list (cons 'p *p) (cons 'dx *dx)) (lambda () (tesl-record-update *p (tesl-hash 'x (raw-value (+ (raw-value (tesl-dot/runtime p 'x 'Point)) *dx)))))))
 
 (define/pow
   (simpleAdd [a : Integer] [b : Integer])

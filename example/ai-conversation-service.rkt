@@ -121,7 +121,7 @@
   (agentFor [c : Consumer])
   #:capabilities [convAi convRead]
   #:returns Agent
-  (thsl-src! "example/ai-conversation-service.tesl" 203 (list (cons 'c *c)) (lambda () (if (tesl-equal? (tesl-dot/runtime c 'provider 'Consumer) "mistral") (raw-value MistralAgent) (raw-value (claudeAgentFor c))))))
+  (thsl-src! "example/ai-conversation-service.tesl" 203 (list (cons 'c *c)) (lambda () (if (tesl-equal? (raw-value (tesl-dot/runtime c 'provider 'Consumer)) "mistral") (raw-value MistralAgent) (raw-value (claudeAgentFor c))))))
 
 (define/pow
   (loadConversation [agent : Agent] [requestUser : Consumer] [conversationId : String])
@@ -183,7 +183,7 @@
   (sendMessage [requestUser : Consumer ::: (Authenticated requestUser)] [conversationId : String] [req : MessageRequest])
   #:capabilities [convService]
   #:returns String
-  (thsl-src! "example/ai-conversation-service.tesl" 287 (list (cons 'requestUser *requestUser) (cons 'conversationId *conversationId) (cons 'req *req)) (lambda () (replyTurn (agentFor requestUser) requestUser conversationId (raw-value req.message)))))
+  (thsl-src! "example/ai-conversation-service.tesl" 287 (list (cons 'requestUser *requestUser) (cons 'conversationId *conversationId) (cons 'req *req)) (lambda () (replyTurn (agentFor requestUser) requestUser conversationId (tesl-dot/runtime req 'message 'MessageRequest)))))
 
 (define ChatServer-sse-routes
   (list (list (list "chat" #f "events") consumerAuth ChatStream 1 (list (cons 1 (sse-key-capture conversationIdCapture))))))

@@ -111,7 +111,7 @@
   (createNote [user : String ::: (Authenticated user)] [body : NewNote])
   #:capabilities [noteDbWrite time]
   #:returns Note
-  (let ([noteId (thsl-src! "example/learn/lesson16-complete-notes-api.tesl" 131 (list (cons 'user *user) (cons 'body *body)) (lambda () (raw-value (NoteId "note-1"))))]) (thsl-src! "example/learn/lesson16-complete-notes-api.tesl" 132 (list (cons 'noteId *noteId) (cons 'user *user) (cons 'body *body)) (lambda () (Note #:id *noteId #:title (raw-value body.title) #:content (raw-value body.content) #:authorId *user #:createdAt (raw-value (nowMillis)))))))
+  (let ([noteId (thsl-src! "example/learn/lesson16-complete-notes-api.tesl" 131 (list (cons 'user *user) (cons 'body *body)) (lambda () (raw-value (NoteId "note-1"))))]) (thsl-src! "example/learn/lesson16-complete-notes-api.tesl" 132 (list (cons 'noteId *noteId) (cons 'user *user) (cons 'body *body)) (lambda () (Note #:id *noteId #:title (tesl-dot/runtime body 'title 'NewNote) #:content (tesl-dot/runtime body 'content 'NewNote) #:authorId *user #:createdAt (raw-value (nowMillis)))))))
 
 (define-handler
   (getNote [user : String ::: (Authenticated user)] [noteId : String])

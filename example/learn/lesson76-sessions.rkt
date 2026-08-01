@@ -92,7 +92,7 @@
   (login [body : Credentials])
   #:capabilities [sessions]
   #:returns SessionResult
-  (thsl-src! "example/learn/lesson76-sessions.tesl" 255 (list (cons 'body *body)) (lambda () (if (credentialsAreGood body) (let ([token (raw-value (tesl_import_JWT_sign (raw-value (tesl_import_Dict_singleton "sub" (raw-value body.user))) (raw-value (sessionsSigningKey))))]) (let ([_ (raw-value (tesl_import_Http_setSessionCookie (raw-value token)))]) (SessionResult #:granted #t))) (reject "invalid credentials" #:http-code 401)))))
+  (thsl-src! "example/learn/lesson76-sessions.tesl" 255 (list (cons 'body *body)) (lambda () (if (credentialsAreGood body) (let ([token (raw-value (tesl_import_JWT_sign (raw-value (tesl_import_Dict_singleton "sub" (tesl-dot/runtime body 'user 'Credentials))) (raw-value (sessionsSigningKey))))]) (let ([_ (raw-value (tesl_import_Http_setSessionCookie (raw-value token)))]) (SessionResult #:granted #t))) (reject "invalid credentials" #:http-code 401)))))
 
 (define/pow
   (subjectOf [claims : (Dict String String)])

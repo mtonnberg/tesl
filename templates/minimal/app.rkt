@@ -58,7 +58,7 @@
 (define-handler
   (getTask [requestUser : SessionUser ::: (Authenticated requestUser)] [taskId : Integer ::: (Positive taskId)])
   #:returns (? Integer _entity ::: (Positive _entity))
-  (let ([_ (thsl-src! "templates/minimal/app.tesl" 104 (list (cons 'requestUser *requestUser) (cons 'taskId *taskId)) (lambda () (telemetry-event! "task.fetch" #:attributes (["user.id" (raw-value requestUser.id)] ["task.id" *taskId]))))]) (thsl-src! "templates/minimal/app.tesl" 107 (list (cons 'requestUser *requestUser) (cons 'taskId *taskId)) (lambda () taskId))))
+  (let ([_ (thsl-src! "templates/minimal/app.tesl" 104 (list (cons 'requestUser *requestUser) (cons 'taskId *taskId)) (lambda () (telemetry-event! "task.fetch" #:attributes (["user.id" (tesl-dot/runtime requestUser 'id 'SessionUser)] ["task.id" *taskId]))))]) (thsl-src! "templates/minimal/app.tesl" 107 (list (cons 'requestUser *requestUser) (cons 'taskId *taskId)) (lambda () taskId))))
 
 (define AppServer-sse-routes '())
 (define-api AppApi
