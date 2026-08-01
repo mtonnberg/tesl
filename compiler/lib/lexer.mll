@@ -100,28 +100,17 @@ let lookup_ident s =
 (* String scanning buffer *)
 let string_buf : Buffer.t = Buffer.create 64
 
+(* `raw` has already been fully escape-decoded by `scan_string` (each
+   `\n`/`\t`/`\r`/`\\`/`\"` was resolved to its real character there) — this
+   only needs to pick STRING vs INTERP.  A second decode pass here used to
+   re-scan `raw` for escape sequences, which double-decoded any REAL
+   backslash that `scan_string` had just produced from a `\\`: a decoded
+   `\` immediately followed by a decoded `"` (from adjacent `\\` and `\"` in
+   the source) was reinterpreted as a fresh `\"` escape and collapsed to a
+   lone `"`, silently dropping the backslash (issue #64). *)
 let process_string_content raw =
   if String.contains raw '$' then INTERP raw
-  else begin
-    let buf = Buffer.create (String.length raw) in
-    let i = ref 0 in
-    while !i < String.length raw do
-      if raw.[!i] = '\\' && !i + 1 < String.length raw then begin
-        (match raw.[!i + 1] with
-        | 'n'  -> Buffer.add_char buf '\n'
-        | 't'  -> Buffer.add_char buf '\t'
-        | 'r'  -> Buffer.add_char buf '\r'
-        | '\\' -> Buffer.add_char buf '\\'
-        | '"'  -> Buffer.add_char buf '"'
-        | c    -> Buffer.add_char buf '\\'; Buffer.add_char buf c);
-        i := !i + 2
-      end else begin
-        Buffer.add_char buf raw.[!i];
-        i := !i + 1
-      end
-    done;
-    STRING (Buffer.contents buf)
-  end
+  else STRING raw
 
 let get_pos lexbuf =
   let p = Lexing.lexeme_start_p lexbuf in

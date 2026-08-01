@@ -386,6 +386,13 @@ type ctx = {
         base codec (`capturer uid: UserId using stringCodec` — the exact shape
         the validator endorses) previously handed the handler the RAW base
         value, so the first `.value` / newtype-typed contract trapped. *)
+  raw_needing_lets : (string, unit) Hashtbl.t;
+    (** plain `let`-bound locals whose value is a call NOT auto-unwrapped at
+        its own binding site (a user function, or a capability-consuming
+        stdlib call like `generatePrefixedId` — see [value_needs_raw_tracking]).
+        A later BARE reference to one of these inside a dumb ADT constructor
+        (one that stores its args verbatim, e.g. `Tuple2`) needs an explicit
+        `(raw-value name)` — see issue #63. *)
 }
 
 let default_root_path () =
@@ -426,6 +433,7 @@ let mk_ctx ?(root_path=default_root_path ()) ?(record_fields=[]) ?(record_meta=[
     proof_aware_locals = Hashtbl.create 8;
     proof_annotated_ctor_fields = Hashtbl.create 8;
     newtype_bases = Hashtbl.create 8;
+    raw_needing_lets = Hashtbl.create 8;
     auth_return_binding = None }
 
 let emit ctx s = Buffer.add_string ctx.buf s
@@ -1615,6 +1623,50 @@ let app_is_proof_carrier ctx (value : Ast.expr) : bool =
      | None -> false)
   | _ -> false
 
+(* Is [value] a call whose result is NOT auto-normalized to a raw plain value
+   at THIS let's own emission?  This mirrors [wraps_in_raw_value] at the main
+   stdlib call-site (`not (Hashtbl.mem gdp_returning_stdlib fn_racket_name)`):
+   a stdlib call NOT in [gdp_returning_stdlib] gets wrapped in `(raw-value …)`
+   right here as part of emitting the let's value, so a later bare reference
+   to the let-bound name is already safe (e.g. `String.dropPrefix`).  But a
+   stdlib call THAT IS in [gdp_returning_stdlib] (e.g. `generatePrefixedId`,
+   explicitly marked "GDP-aware" — its result is deliberately left as a
+   GDP-named value, not raw, at its own binding site), or a call to a user
+   function, or to any import not recognized by `is_stdlib_fn` at all, leaves
+   the name holding whatever opaque representation that call produces.  A
+   later BARE reference to such a name directly inside a dumb ADT constructor
+   that stores its args verbatim (e.g. `Tuple2`, as opposed to a newtype,
+   already handled by the newtype_bases path) needs an explicit
+   `(raw-value name)` at the point of use — the shared predicate behind
+   [raw_needing_lets], fixing issue #63 without touching already-correct
+   call shapes. *)
+let value_needs_raw_tracking (value : Ast.expr) : bool =
+  let rec head = function EApp { fn; _ } -> head fn | e -> e in
+  match value with
+  | EApp _ ->
+    let h = head value in
+    let is_ctor_head = match h with
+      | EConstructor _ -> true
+      | EVar { name; _ } -> String.length name > 0 && name.[0] >= 'A' && name.[0] <= 'Z'
+      | _ -> false
+    in
+    if is_ctor_head then false
+    else if is_stdlib_fn h then begin
+      let fn_racket_name = match h with
+        | EField { obj = EConstructor { name = modname; _ }; field; _ } ->
+          let full = modname ^ "." ^ field in
+          (match Hashtbl.find_opt qualified_imports full with
+           | Some r -> r | None -> import_rename full)
+        | EVar { name; _ } ->
+          (match Hashtbl.find_opt qualified_imports name with
+           | Some r -> r | None -> name)
+        | _ -> ""
+      in
+      Hashtbl.mem gdp_returning_stdlib fn_racket_name
+    end
+    else true
+  | _ -> false
+
 let rec emit_expr ctx e =
   let sql_op_name = function
     | BEq -> "==." | BNeq -> "!=" ^ "." | BLt -> "<." | BLe -> "<=."
@@ -2710,12 +2762,15 @@ let rec emit_expr ctx e =
     if is_fact_value then Hashtbl.replace ctx.fact_locals name ();
     let is_proof_carrier_value = app_is_proof_carrier ctx value in
     if is_proof_carrier_value then Hashtbl.replace ctx.proof_carrier_lets name ();
+    let needs_raw_value = value_needs_raw_tracking value in
+    if needs_raw_value then Hashtbl.replace ctx.raw_needing_lets name ();
     emit ctx (Printf.sprintf "(let ([%s " name);
     emit_expr ctx value;
     emit ctx "]) ";
     emit_expr ctx body;
     if is_fact_value then Hashtbl.remove ctx.fact_locals name;
     if is_proof_carrier_value then Hashtbl.remove ctx.proof_carrier_lets name;
+    if needs_raw_value then Hashtbl.remove ctx.raw_needing_lets name;
     emit ctx ")"
   | ELetProof { value_name; proof_name; value; body; _ } ->
     (* Proof decompose: let (x ::: p) = y →
@@ -3412,11 +3467,34 @@ and emit_expr_simple ctx e =
             else emit ctx (Printf.sprintf "(raw-value %s)" (resolve_name name))
           | _ -> emit_expr_simple ctx arg
         in
+        (* issue #63: a bare EVar arg to ANY constructor (not just a newtype)
+           needs the same raw-value substitution when it names a plain
+           `let`-bound local tracked in [raw_needing_lets] — i.e. one whose
+           value is a user function call or a capability-consuming stdlib
+           call (see [value_needs_raw_tracking]), which is NOT auto-unwrapped
+           at its own let-binding site.  Referencing such a name bare inside a
+           dumb ADT constructor that stores its args verbatim (e.g. `Tuple2`)
+           leaks its opaque internal representation instead of the value.
+           This is scoped to exactly that tracked case so every other
+           already-correct path (a pure stdlib call's result, a proof-aware
+           parameter, etc.) keeps falling through to the unchanged
+           `emit_expr_simple` — e.g. `Err (Forbidden requestingUser)` where
+           `requestingUser` is a proof-aware parameter must keep emitting
+           bare, not `*requestingUser`; `JwtToken tokenStr` where `tokenStr`
+           is bound to a pure `String.dropPrefix` result must keep emitting
+           bare too, since that call is already raw-value-unwrapped at its
+           own let-binding site. *)
+        let emit_generic_ctor_arg arg = match arg with
+          | EVar { name; _ } when Hashtbl.mem ctx.raw_needing_lets name ->
+            emit ctx (Printf.sprintf "(raw-value %s)" name)
+          | _ -> emit_expr_simple ctx arg
+        in
         emit ctx "(";
         emit_expr ctx fn;
         List.iter (fun arg ->
           emit ctx " ";
           if head_is_newtype then emit_newtype_ctor_arg arg
+          else if is_ctor then emit_generic_ctor_arg arg
           else emit_expr_simple ctx arg) args;
         emit ctx ")"
       end
@@ -5319,12 +5397,15 @@ let emit_func ctx (fd : func_decl) =
          so case arms on this variable propagate proof to their sub-variables. *)
       let is_proof_carrier_here = app_is_proof_carrier ctx value in
       if is_proof_carrier_here then Hashtbl.replace ctx.proof_carrier_lets name ();
+      let needs_raw_here = value_needs_raw_tracking value in
+      if needs_raw_here then Hashtbl.replace ctx.raw_needing_lets name ();
       emit ctx (Printf.sprintf "(let ([%s " name);
       emit_expr ctx value;
       emit ctx "]) ";
       emit_with_raw_tail body;
       if is_fact_here then Hashtbl.remove ctx.fact_locals name;
       if is_proof_carrier_here then Hashtbl.remove ctx.proof_carrier_lets name;
+      if needs_raw_here then Hashtbl.remove ctx.raw_needing_lets name;
       emit ctx ")"
     | ELetProof { value_name; proof_name; value; body; _ } ->
       let tmp = Printf.sprintf "tesl-proof-binding-%d" ctx.case_counter in
@@ -5743,6 +5824,8 @@ let emit_func ctx (fd : func_decl) =
       if is_fact_here then Hashtbl.replace ctx.fact_locals name ();
       let is_proof_carrier_here = app_is_proof_carrier ctx value in
       if is_proof_carrier_here then Hashtbl.replace ctx.proof_carrier_lets name ();
+      let needs_raw_here = value_needs_raw_tracking value in
+      if needs_raw_here then Hashtbl.replace ctx.raw_needing_lets name ();
       let val_loc = Checker.expr_loc value in
       emit ctx (Printf.sprintf "(let ([%s (thsl-src! %S %d " name
         val_loc.Location.file (val_loc.Location.start.line + 1));
@@ -5758,6 +5841,7 @@ let emit_func ctx (fd : func_decl) =
       emit_debug_stmts ~locals:((name, star name) :: locals) body;
       if is_fact_here then Hashtbl.remove ctx.fact_locals name;
       if is_proof_carrier_here then Hashtbl.remove ctx.proof_carrier_lets name;
+      if needs_raw_here then Hashtbl.remove ctx.raw_needing_lets name;
       emit ctx ")"
     | ELetProof { value_name; proof_name; value; body; _ } ->
       let val_loc = Checker.expr_loc value in
