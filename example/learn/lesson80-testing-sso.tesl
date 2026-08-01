@@ -1,0 +1,310 @@
+module Lesson80TestingSso exposing []
+
+# lesson: track=testing order=820 needs=lesson78-sso,lesson32-api-tests
+# summary: Test an SSO-protected route without a live IdP, and drive a full login through api-test with stubHttp
+# ─────────────────────────────────────────────────────────────────────────────
+# Lesson 80 — Testing SSO with api-test
+#
+# Lesson 78 wired up "Log in with GitHub" and a generic OpenID Connect issuer;
+# lesson 32 taught api-test. This lesson combines them: how do you test a route
+# that sits behind `sso`, without a live IdP running in CI?
+#
+#   THREE TECHNIQUES, IN ORDER OF HOW OFTEN YOU NEED THEM
+#
+# 1. MINT THE SESSION DIRECTLY. The SSO callback's only durable output is an
+#    ordinary signed session cookie — the SAME mechanism lesson 76 tests. Most
+#    of what you actually want to test (route auth, response shape) never needs
+#    the IdP at all.
+# 2. STUB THE LOGIN REDIRECT. `/auth/<seg>/login` is a pure 303 builder. For a
+#    named provider (`Sso.defaults`) it needs no network; for a generic issuer
+#    (`Sso.oidc`) it makes exactly one call — OIDC discovery — which stubHttp
+#    answers.
+# 3. STUB THE WHOLE CALLBACK. For a plain-OAuth2 provider (GitHub, Discord) the
+#    callback is code -> access_token -> userinfo, no cryptographic signature to
+#    fake, so stubHttp can drive it end-to-end and you get back a REAL session
+#    cookie. A full OIDC exchange verifies an `id_token` signature against a
+#    nonce the login route mints randomly inside a sealed cookie — there is no
+#    plaintext hook to read that nonce back out from a test, so that last mile
+#    is what e2e/sso (a real IdP, see e2e/sso/README.md) is for, not api-test.
+#
+# RUNNING THIS LESSON: the `sessionKey` clause reads an environment variable
+# (there is deliberately no literal-secret form), so set it — any value — first:
+#
+#   LESSON80_SESSION_KEY=anything tesl test example/learn/lesson80-testing-sso.tesl
+
+import Tesl.Prelude exposing [String, Bool(..)]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Dict exposing [Dict, Dict.lookup, Dict.singleton]
+import Tesl.String exposing [
+  String.length,
+  String.contains,
+  String.indexOf,
+  String.slice,
+]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Sso exposing [
+  SsoConnection,
+  SsoIdentity,
+  Github,
+  Sso.defaults,
+  Sso.oidc,
+  Sso.subject,
+]
+import Tesl.ApiTest exposing [statusOk, responseCookie, stubHttp, httpCalled]
+import Tesl.HttpClient exposing [httpClient]
+import Tesl.Time exposing [time, PosixMillis]
+import Tesl.Env exposing [envRead, requireSecret]
+import Tesl.Crypto exposing [Secret]
+import Tesl.JWT exposing [jwt, JWT.sign, JWT.verify]
+import Tesl.Http exposing [HttpRequest, Http.sessionToken]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.App exposing [App]
+
+# ─────────────────────────────────────────────
+# A tiny test-only helper: pull one query-parameter value back out of a URL
+# string. `api-test` sees `location` as an ordinary String (Tesl.Http's request
+# query parsing is for INCOMING requests, not for a Location header your own
+# test is reading), so a login redirect's `state` is extracted the same way any
+# other substring would be.
+# ─────────────────────────────────────────────
+fn extractQueryValue(url: String, key: String) -> String =
+  let marker = key ++ "="
+  case String.indexOf url marker of
+    Nothing -> ""
+    Something markerIdx ->
+      let start = markerIdx + String.length marker
+      let rest = String.slice url start (String.length url)
+      case String.indexOf rest "&" of
+        Nothing -> rest
+        Something ampIdx -> String.slice rest 0 ampIdx
+
+# ─────────────────────────────────────────────
+# The app: the SAME shape as lesson 78, plus a SECOND `sso` clause for a
+# generic issuer — one named provider, one bring-your-own-IdP. `SsoConnection`
+# is a plain value either way.
+# ─────────────────────────────────────────────
+
+record User {
+  id: String
+}
+
+fact Authenticated (user: User)
+
+record Profile {
+  userId: String
+}
+
+codec Profile {
+  toJson {
+    userId -> "userId" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+capability sessions implies jwt, time, envRead
+
+# The session-signing key MUST come from `Tesl.Env` — not a hardcoded literal
+# like lesson 55's — because the `sessionKey "LESSON80_SESSION_KEY"` server
+# clause below compiles to this SAME env-var read: every `sso` route (login
+# included, not only the callback) seals or verifies against it, so this
+# function and that clause have to name the identical variable or a real
+# session the runtime mints would fail `sessionOwner`'s own verify.
+fn sessionKey() -> Secret requires [envRead] =
+  requireSecret "LESSON80_SESSION_KEY"
+
+# The SSO *client* secret has no such constraint — `Sso.defaults`/`Sso.oidc`
+# just take whatever `Secret` value a connection function builds. Hardcoded
+# here only so this lesson's api-tests need no environment beyond the one
+# variable above; a real app reads it the same way lesson 78 does.
+fn secretFromRaw(raw: String) -> Secret = Secret raw
+
+fn demoClientSecret() -> Secret = secretFromRaw "lesson80-demo-client-secret-not-for-production"
+
+# PART 1 — a named provider, baked endpoints, no discovery call ever.
+fn githubConn() -> SsoConnection =
+  Sso.defaults Github "demo-github-client-id" (demoClientSecret())
+
+# PART 2 — a generic OpenID Connect issuer: a self-hosted Keycloak/dex/Zitadel,
+# Okta, Auth0, or a customer's own Entra tenant. `Sso.oidc` takes the issuer as
+# a plain String — there is no closed provider list to be missing an entry
+# from. Endpoints are discovered from `<issuer>/.well-known/openid-configuration`
+# at login time (see the api-test for it below).
+fn idpConn() -> SsoConnection =
+  Sso.oidc "https://idp.example.test" "demo-idp-client-id" (demoClientSecret())
+
+fn linkUser(identity: SsoIdentity) -> String =
+  Sso.subject identity
+
+fn revoked(_subject: String, _issuedAt: PosixMillis) -> Bool =
+  False
+
+fn subjectOf(claims: Dict String String) -> String =
+  case Dict.lookup "sub" claims of
+    Nothing -> ""
+    Something subject -> subject
+
+auth sessionOwner(request: HttpRequest) -> user: User ::: Authenticated user
+  requires [sessions] =
+  case Http.sessionToken request of
+    Nothing -> fail 401 "no session"
+    Something token ->
+      let claims = check JWT.verify token (sessionKey())
+      let subject = subjectOf claims
+      ok (User { id: subject }) ::: Authenticated user
+
+handler me(user: User ::: Authenticated user) -> Profile =
+  Profile { userId: user.id }
+
+api AppApi {
+  get "/me"
+    auth user: User ::: Authenticated user via sessionOwner
+    -> Profile
+}
+
+server AppServer for AppApi {
+  endpoint_0 = me
+  sso "github" connection githubConn onIdentity linkUser
+  sso "idp" connection idpConn onIdentity linkUser
+  publicOrigin "https://app.example.com"
+  sessionKey "LESSON80_SESSION_KEY"
+  afterLogin "/me"
+  sessionRevoked revoked
+  listenAddress Loopback
+  loginMethods [Sso]
+}
+
+database AppDb = Database {
+  entities: []
+  backend: Memory
+}
+
+main() -> App requires [sessions, httpClient] =
+  App {
+    database: AppDb
+    api: AppServer
+    port: 8080
+  }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TESTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+# What a login handler would hand back — the same session cookie shape the SSO
+# callback mints, signed with the SAME key `sessionOwner` verifies against.
+fn mintSession(user: String) -> String requires [sessions] =
+  (JWT.sign (Dict.singleton "sub" user) (sessionKey())).value
+
+# `publicOrigin` turns on a Host-header check server-wide (Risk 50/60: without
+# it, a forged Host could make the app mint links/cookies for another origin).
+# api-test's simulated request sends no Host header by default, so every call
+# below has to carry one that matches — this is not an SSO-specific quirk, any
+# publicOrigin-declaring server's api-tests need it.
+fn onHost() -> Dict String String =
+  Dict.singleton "Host" "app.example.com"
+
+# ── Technique 1: mint the session directly — no IdP, no network, no stub ────
+
+api-test "no session cookie is a 401, not a 500" for AppServer requires [sessions] {
+  let resp = get "/me" headers (onHost())
+  expect resp.status == 401
+}
+
+api-test "a session minted with the app's own key reaches the protected route" for AppServer requires [sessions] {
+  let resp = get "/me" cookie { "__Host-session": mintSession "u-42" } headers (onHost())
+  expect statusOk resp.status
+  expect resp.body.userId == "u-42"
+}
+
+# ── Technique 2: stub the login redirect ────────────────────────────────────
+
+api-test "GitHub login redirects straight to GitHub — no network call needed" for AppServer requires [sessions] {
+  let resp = get "/auth/github/login" headers (onHost())
+  expect resp.status == 303
+  case Dict.lookup "location" resp.headers of
+    Nothing -> expect False
+    Something location ->
+      expect String.contains location "https://github.com/login/oauth/authorize"
+      expect String.contains location "code_challenge_method=S256"
+}
+
+api-test "a generic OIDC issuer is discovered, then redirected to" for AppServer requires [httpClient, sessions] {
+  stubHttp "GET" "https://idp.example.test/.well-known/openid-configuration" 200
+    "{\"issuer\": \"https://idp.example.test\", \"authorization_endpoint\": \"https://idp.example.test/authorize\", \"token_endpoint\": \"https://idp.example.test/token\", \"jwks_uri\": \"https://idp.example.test/jwks\", \"code_challenge_methods_supported\": [\"S256\"]}"
+
+  let resp = get "/auth/idp/login" headers (onHost())
+  expect resp.status == 303
+  expect httpCalled "GET" "https://idp.example.test/.well-known/openid-configuration"
+  case Dict.lookup "location" resp.headers of
+    Nothing -> expect False
+    Something location ->
+      expect String.contains location "https://idp.example.test/authorize"
+}
+
+# ── Technique 3: stub the whole callback (plain-OAuth2 providers only) ──────
+
+api-test "GitHub login all the way through: redirect, code exchange, real session" for AppServer requires [httpClient, sessions] {
+  let loginResp = get "/auth/github/login" headers (onHost())
+  let location = case Dict.lookup "location" loginResp.headers of
+    Nothing -> ""
+    Something loc -> loc
+  let state = extractQueryValue location "state"
+  expect String.length state > 0
+
+  let oauthCookie = case responseCookie loginResp of
+    Nothing -> ""
+    Something pair -> pair
+  expect String.contains oauthCookie "__Host-oauth="
+
+  stubHttp "POST" "https://github.com/login/oauth/access_token" 200
+    "{\"access_token\": \"gh-test-token-1\"}"
+  stubHttp "GET" "https://api.github.com/user" 200
+    "{\"id\": 12345, \"name\": \"Ada Lovelace\"}"
+  stubHttp "GET" "https://api.github.com/user/emails" 200
+    "[{\"email\": \"ada@example.com\", \"primary\": true, \"verified\": true}]"
+
+  let callbackPath = "/auth/github/callback?code=test-code-1&state=" ++ state
+  let cb = get callbackPath cookie oauthCookie headers (onHost())
+  expect cb.status == 303
+
+  case responseCookie cb of
+    Nothing -> expect False
+    Something sessionCookie ->
+      let profileResp = get "/me" cookie sessionCookie headers (onHost())
+      expect statusOk profileResp.status
+      expect profileResp.body.userId == "12345"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UNDERSTANDING
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# WHY TECHNIQUE 1 COVERS MOST OF WHAT YOU WANT TO TEST
+#
+# The `sso` clause's only durable output is the `__Host-session` cookie, minted
+# from whatever String `onIdentity` returned. Everything your OWN code decides
+# — what the protected route returns, what a missing/forged cookie does, what
+# `sessionRevoked` blocks — is testable by minting that same cookie directly,
+# exactly like lesson 76's plain session tests. You are not testing less by
+# skipping the IdP; the OAuth2/OIDC dance is the RUNTIME's job, not yours.
+#
+# WHY THE FULL CALLBACK ONLY GOT STUBBED FOR GITHUB
+#
+# GitHub (like Discord) is a plain-OAuth2 connection: code -> access_token ->
+# userinfo, no `id_token`, so nothing here depends on a value the test cannot
+# see. A real OIDC exchange (Google, or a generic `Sso.oidc` issuer) verifies
+# a signed `id_token`'s `nonce` claim against a nonce the login route mints
+# with a random token and seals — opaquely, MAC-protected — into the
+# `__Host-oauth` cookie. There is no plaintext hook to read that nonce back out
+# of a test, by design (a forgeable state/nonce is a takeover primitive, not a
+# testing inconvenience). Driving a full OIDC exchange for real needs a real
+# participant on the other end, which is exactly what `e2e/sso` is: a real
+# local `dex` IdP, a real browser, see `e2e/sso/README.md`.
+#
+# WHY THIS LESSON EXISTS
+#
+# `Sso.oidc` — any spec-compliant issuer by its issuer URL, no baked provider
+# list to be missing an entry from — has been there since lesson 78 landed, but
+# no lesson exercised it and no api-test drove an `sso` clause at all. If you
+# went looking for "how do I point Tesl at my own IdP" and only found
+# `Sso.defaults Github`/`Google`, this lesson (and `manual/sso.md`'s "a generic
+# OIDC issuer" section) is where that answer actually lives.

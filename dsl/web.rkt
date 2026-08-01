@@ -120,7 +120,7 @@
  current-trusted-proxies client-address-of
  ;; Phase 3: runtime-owned SSO routes (exported for the regression suite + the
  ;; emitted server's #:sso-routes).
- (struct-out sso-route) make-sso-route register-sso-routes!
+ (struct-out sso-route) make-sso-route register-sso-routes! sso-routes-for-server
  ;; Phase 3: the listenAddress server clause sets the bind interface at boot.
  register-listen-address!
  find-sso-match handle-sso-request
@@ -2488,6 +2488,14 @@
 (define (sso-registry-key n) (if (symbol? n) (symbol->string n) n))
 (define (register-sso-routes! name routes)
   (hash-set! sso-routes-registry (sso-registry-key name) routes))
+
+;; Read accessor for dsl/test-support.rkt's api-test dispatcher: the routes
+;; registered for a server by name, or '() if it declares no `sso` clause. Keeps
+;; the registry itself private; api-test matches against the SAME table `serve`
+;; matches against, so /auth/<seg>/login|callback is reachable from an api-test
+;; exactly like a real request reaches it.
+(define (sso-routes-for-server name)
+  (hash-ref sso-routes-registry (sso-registry-key name) '()))
 
 ;; Phase 3: the `listenAddress` server clause — the interface `serve` binds to.
 ;; #f = all interfaces (the default); "127.0.0.1" = loopback only (bind behind a

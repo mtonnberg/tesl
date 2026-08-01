@@ -549,6 +549,14 @@ run_tesl_batch_runner() {
     local output_log batch_exit=0 summary_line="" parsed_pass=0 parsed_fail=0
     output_log="$(mktemp "${TMPDIR:-/tmp}/tesl-example-batch.XXXXXX")"
 
+    # lesson80-testing-sso.tesl's `sessionKey "LESSON80_SESSION_KEY"` clause
+    # compiles to an unconditional Env.requireSecret read (every `sso` route,
+    # not only the callback, seals its state cookie with it) — there is no
+    # literal-secret form of `sessionKey` in the grammar. The whole learn corpus
+    # runs as ONE racket process here, so one fixed, obviously-dev-only value
+    # covers it without per-lesson env plumbing.
+    export LESSON80_SESSION_KEY="lesson80-signing-key-not-for-production"
+
     if is_truthy "${TESL_TEST_BUFFERED_OUTPUT:-0}"; then
         local batch_output=""
         if batch_output=$(run_with_optional_nix_shell racket tests/example-test-batch.rkt "$@" 2>&1); then

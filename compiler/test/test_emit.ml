@@ -547,6 +547,38 @@ api-test "request templates" for ChatServer {
   assert_contains ~name:"string fragment helper" racket "api-test-string-fragment";
   assert_contains ~name:"string append helper" racket "string-append"
 
+(* `case <expr> of ...` used as a VALUE (a `let`'s right-hand side) inside an
+   api-test body — as opposed to a bare `case ... of` STATEMENT, which
+   `emit_api_test_stmt`'s `TsCase` arm already handled correctly. Without a
+   dedicated `ECase` arm in `emit_api_test_expr`, this shape fell through to
+   the generic `emit_expr`/`emit_raw_value` path, which resolves a nested
+   `.field` access via the compile-time `field_access_type_tbl` hint — a hint
+   the checker never populates inside api-test bodies (they get a scope walk,
+   not a type-inference pass), so a dot access on an opaque stdlib type like
+   HttpResponse emitted the hint-dependent, opaque-type-hostile
+   `(tesl-dot/runtime resp 'headers)` instead of the permissive
+   `api-test-field-access-ref` every other HttpResponse field access uses —
+   and crashed at runtime with "dot access is only supported on declared
+   record/entity values" for any api-test whose response came from
+   `dispatch-api-test-request`'s plain hash (not a checker-known record). *)
+let test_api_test_let_bound_case_field_access_emission () =
+  let src = {|module Foo exposing []
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Dict exposing [Dict.lookup]
+api-test "let-bound case over a response field" for ChatServer {
+  let resp = get "/rooms"
+  let location = case Dict.lookup "location" resp.headers of
+    Nothing -> ""
+    Something loc -> loc
+  expect location == location
+}
+|} in
+  let racket = compile_ok src "api_test_let_bound_case_field_access" in
+  assert_contains ~name:"headers access uses the permissive api-test accessor"
+    racket "(api-test-field-access-ref resp 'headers)";
+  assert_not_contains ~name:"headers access does not fall back to the hint-dependent generic dot"
+    racket "(tesl-dot/runtime resp 'headers)"
+
 (* ── Server emission tests ───────────────────────────────────────────────── *)
 
 let test_server_emission () =
@@ -1156,6 +1188,7 @@ let () =
       Alcotest.test_case "if branch lets" `Quick test_if_branch_let_emission;
       Alcotest.test_case "test raw arithmetic" `Quick test_test_raw_arithmetic_emission;
       Alcotest.test_case "api-test templates" `Quick test_api_test_template_emission;
+      Alcotest.test_case "api-test let-bound case field access" `Quick test_api_test_let_bound_case_field_access_emission;
     ];
     "server", [
       Alcotest.test_case "server emission" `Quick test_server_emission;

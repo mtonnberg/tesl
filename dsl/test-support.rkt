@@ -443,6 +443,19 @@
         'body    (dsl-response-body response)
         'headers (response-headers->hash (dsl-response-headers response))))
 
+;; The SSO login/callback routes (dsl/web.rkt's handle-sso-request) answer with
+;; a plain web-server `response/full` (a 303 redirect or the fixed failure
+;; page) — a DIFFERENT shape from every ordinary handler's `dsl-response`,
+;; since they are built before any user codec/route exists to construct one.
+;; `resp.body` on one of these is the raw text (never JSON — an SSO redirect's
+;; body is empty, the failure page's is HTML), which is fine: a test reads
+;; `.status`/`.headers`/`responseCookie` off these, never `.body.<field>`.
+(define (api-test-response-from-raw response)
+  (define body-bytes (call-with-output-bytes (lambda (out) ((response-output response) out))))
+  (hash 'status  (response-code response)
+        'body    (bytes->string/utf-8 body-bytes #\?)
+        'headers (response-headers->hash (response-headers response))))
+
 (define (dispatch-api-test-request server method path
                                    #:cookie [cookie #f]
                                    #:headers [headers (hash)]
@@ -464,22 +477,33 @@
   (define normalized (api-test-path->segments+query 'dispatch-api-test-request path))
   (define path-segments (car normalized))
   (define final-query (if (equal? query "") (cdr normalized) query))
+  (define dsl-req
+    (make-request method path-segments
+                 #:headers final-headers #:body request-body #:query final-query))
+  ;; Runtime-owned SSO routes (/auth/<seg>/login|callback) live OUTSIDE
+  ;; dispatch-request's own route table — `serve`'s request handler matches
+  ;; them first, before ever calling dispatch-request (dsl/web.rkt).  Mirror
+  ;; that same match-first order here, or an `sso` clause's routes are simply
+  ;; unreachable from api-test (a 404, since dispatch-request's table has never
+  ;; heard of them).
+  (define sso-match
+    (find-sso-match (sso-routes-for-server (server-spec-name server)) dsl-req))
   ;; `dispatch-request` deliberately returns the 'route-not-found SENTINEL (so
   ;; `serve` can choose between a 404 and the SPA index fallback).  An api-test
   ;; has no static fallback, so resolve it the way serve's non-static branch
   ;; does — a real 404 response.  Passing the sentinel to api-test-response
   ;; raised `dsl-response-status: contract violation`, i.e. a request to a path
   ;; the server does not serve blew up the test body instead of reporting 404.
-  (define result
-    (dispatch-request
-     server
-     (make-request method path-segments
-                   #:headers final-headers #:body request-body #:query final-query)
-     #:capabilities capabilities))
-  (api-test-response
-   (if (eq? result 'route-not-found)
-       (error-response 404 "Route not found")
-       result)))
+  (cond
+    [sso-match
+     (api-test-response-from-raw
+      (handle-sso-request sso-match dsl-req #:capabilities capabilities))]
+    [else
+     (define result (dispatch-request server dsl-req #:capabilities capabilities))
+     (api-test-response
+      (if (eq? result 'route-not-found)
+          (error-response 404 "Route not found")
+          result))]))
 
 (define (register-api-test-worker-entries! registry entries)
   (define grouped (make-hasheq))

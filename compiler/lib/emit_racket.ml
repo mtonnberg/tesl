@@ -137,9 +137,11 @@ let module_path_table : (string, string) Hashtbl.t =
 let currency_ctors_active : bool ref = ref false
 
 (* Tesl.Sso (Phase 4): SsoProvider constructor lowering is IMPORT-gated like
-   Currency — `Github`/`Google`/`Entra` lower inline to the runtime provider
-   string, but a module that does not import Tesl.Sso keeps those names for its
-   own ADTs.  Set per compile from the module's imports in [compile_to_string]. *)
+   Currency — `Github`/`Google` lower inline to the runtime provider string,
+   but a module that does not import Tesl.Sso keeps those names for its own
+   ADTs.  Set per compile from the module's imports in [compile_to_string].
+   Any other OIDC issuer (Entra included) goes through `Sso.oidc`, not a
+   baked ctor here. *)
 let sso_provider_ctors_active : bool ref = ref false
 
 (* SsoProvider constructor → runtime provider string (the id dsl/sso.rkt expects). *)
@@ -2108,9 +2110,10 @@ let rec emit_expr ctx e =
     (match Currencies.iso_of_ctor name with
      | Some iso -> emit ctx (Printf.sprintf "(__tmoney_tesl-currency-of %S)" iso)
      | None -> failwith "emit_racket: currency ctor guard invariant — please report this bug")
-  (* SsoProvider ADT (fixed set): `Github`/`Google`/`Entra` lower inline to the
+  (* SsoProvider ADT (fixed set): `Github`/`Google` lower inline to the
      runtime provider string (dsl/sso.rkt keys off it).  IMPORT-gated on
-     Tesl.Sso so the brand names remain usable as a non-SSO module's own ADT. *)
+     Tesl.Sso so the brand names remain usable as a non-SSO module's own ADT.
+     Any other OIDC issuer (Entra included) goes through `Sso.oidc`. *)
   | EConstructor { name; args = []; _ }
     when !sso_provider_ctors_active && sso_provider_string name <> None ->
     (match sso_provider_string name with
@@ -3755,7 +3758,7 @@ and emit_named_pack_spec ctx ty entity_proof other_proof =
     emit ctx ")"
   end
 
-and emit_case_arm ctx scrut_var arm =
+and emit_case_arm ?(emit_body = emit_expr) ctx scrut_var arm =
   let rec collect_bound_names = function
     | PVar n -> if n = "_" then [] else [n]
     | PWild | PLit _ | PNullary _ -> []
@@ -3783,7 +3786,7 @@ and emit_case_arm ctx scrut_var arm =
     | Some guard_expr ->
       let guard_buf = Buffer.create 64 in
       let guard_ctx = { ctx with buf = guard_buf } in
-      emit_expr guard_ctx guard_expr;
+      emit_body guard_ctx guard_expr;
       let guard_racket = Buffer.contents guard_buf in
       if binding_code = [] then
         Printf.sprintf "(and %s %s)" pattern_guard guard_racket
@@ -3813,7 +3816,7 @@ and emit_case_arm ctx scrut_var arm =
        emit ctx ")"
      end);
     emit ctx " (lambda () ";
-    emit_expr ctx arm.body;
+    emit_body ctx arm.body;
     emit ctx "))"
   in
   (match binding_code with
@@ -7433,6 +7436,29 @@ and emit_api_test_expr ctx ~server_name ~capabilities e =
         | _ -> emit_api_test_expr ctx ~server_name ~capabilities head);
        List.iter (fun arg -> emit ctx " "; emit_api_test_arg ctx ~server_name ~capabilities arg) args;
        emit ctx ")")
+  (* `case ... of` used as a VALUE (e.g. a `let`'s right-hand side), not as its
+     own statement (`TsCase` above already handles that shape). Without this
+     arm, such a case fell through to the generic `emit_expr`/`emit_raw_value`
+     path, which resolves a nested `.field` access (`resp.headers`) via the
+     compile-time `field_access_type_tbl` hint — a hint the checker never
+     populates for opaque stdlib types (HttpResponse), since api-test bodies
+     get no type-inference pass at all (`check_api_test_scope` is a scope walk,
+     not `infer_expr`). The scrutinee and every arm therefore have to recurse
+     through `emit_api_test_expr`/`emit_case_arm`'s api-test-aware body emitter,
+     the SAME way TsCase's statement form does, so a nested `.headers`/`.status`
+     goes through the permissive, hint-independent `api-test-field-access-ref`
+     instead of the hint-dependent `tesl-dot/runtime`. *)
+  | ECase { scrut; arms; _ } ->
+    let var = fresh_case ctx in
+    let bind_var = "*" ^ var in
+    emit ctx (Printf.sprintf "(let ([%s (raw-value " bind_var);
+    emit_api_test_expr ctx ~server_name ~capabilities scrut;
+    emit ctx ")]) (cond ";
+    List.iteri (fun i arm ->
+      if i > 0 then emit ctx " ";
+      emit_case_arm ~emit_body:(emit_api_test_expr ~server_name ~capabilities) ctx bind_var arm
+    ) arms;
+    emit ctx "))"
   | _ -> emit_expr ctx e
 
 (* Names bound by an api-test statement, threaded as checkpoint locals for the

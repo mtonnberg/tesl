@@ -109,9 +109,10 @@ let sso_opaque_types : string list = [ "SsoConnection"; "SsoSubjectKey"; "SsoIde
 
 (* Tesl.Sso (Phase 4): the SsoProvider TYPE (erased at runtime, no binding —
    require-suppressed like the opaque types, but valid in type positions) and its
-   value CONSTRUCTORS (`Github`/`Google`/`Entra` — values, never types — lowered
-   inline to the provider string, so require-suppressed AND rejected in type
-   position, exactly like the timezone/currency ctors). *)
+   value CONSTRUCTORS (`Github`/`Google` — values, never types — lowered inline
+   to the provider string, so require-suppressed AND rejected in type position,
+   exactly like the timezone/currency ctors). Any other OIDC issuer (Entra
+   included — it has no baked ctor) goes through `Sso.oidc`, not this ADT. *)
 let sso_provider_type : string list = [ "SsoProvider" ]
 let sso_provider_ctors : string list = [ "Github"; "Google" ]
 

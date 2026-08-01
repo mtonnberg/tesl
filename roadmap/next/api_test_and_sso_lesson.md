@@ -1,1 +1,0 @@
-We should have a lesson that shows how to combine api-testing when you use SSO

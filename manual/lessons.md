@@ -13,7 +13,7 @@ and every one is also a regression test — each has a committed byte-exact
 tesl help manual <lesson-name>      # e.g. tesl help manual lesson05-intro-to-proofs
 ```
 
-There are **81** lessons. That number is generated; it cannot drift.
+There are **82** lessons. That number is generated; it cannot drift.
 
 ## In a hurry? Start with these
 
@@ -125,6 +125,7 @@ exactly what you are missing.
 | 420 | [`lesson33-sse-and-queue-tests`](../example/learn/lesson33-sse-and-queue-tests.tesl) | Drive SSE streams and background workers deterministically from an api-test | [`lesson32-api-tests`](../example/learn/lesson32-api-tests.tesl) — Test a whole HTTP endpoint from Tesl: seeded state, request bodies and JSON response assertions<br>[`lesson28-dead-letter-queue`](../example/learn/lesson28-dead-letter-queue.tesl) — Give a queue a dead-letter worker, so jobs that exhaust their retries get compensated instead of lost |
 | 650 | [`lesson42-mutation-testing`](../example/learn/lesson42-mutation-testing.tesl) | Ask whether your tests would catch a plausible logic error injected into a check or auth | [`lesson14-test-blocks`](../example/learn/lesson14-test-blocks.tesl) — Write tests inside the language with test blocks, including randomized property runs<br>[`lesson06-proof-check-proof-auth`](../example/learn/lesson06-proof-check-proof-auth.tesl) — The three proof-producing function kinds: check validates at runtime, establish asserts a trust boundary, auth proves identity |
 | 660 | [`lesson41-load-tests`](../example/learn/lesson41-load-tests.tesl) | Assert on latency percentiles, throughput and error rates with a load-test block | [`lesson32-api-tests`](../example/learn/lesson32-api-tests.tesl) — Test a whole HTTP endpoint from Tesl: seeded state, request bodies and JSON response assertions |
+| 820 | [`lesson80-testing-sso`](../example/learn/lesson80-testing-sso.tesl) | Test an SSO-protected route without a live IdP, and drive a full login through api-test with stubHttp | [`lesson78-sso`](../example/learn/lesson78-sso.tesl) — Add third-party login in one server clause — the OAuth2/OIDC dance, PKCE, state and the session cookie are all the runtime's job; you map the identity and gate a route on it<br>[`lesson32-api-tests`](../example/learn/lesson32-api-tests.tesl) — Test a whole HTTP endpoint from Tesl: seeded state, request bodies and JSON response assertions |
 
 ### Standard library
 
