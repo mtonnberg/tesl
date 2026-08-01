@@ -377,9 +377,7 @@
         (call-with-api-test-subscriptions
           (lambda ()
             (with-capabilities (chatRead chatWrite)
-              (insert-one! ChatUser (tesl-hash 'id "usr-seeded" 'username "seeded-alice"))
-              (insert-one! Room (tesl-hash 'id "room-seeded" 'name "Seeded room" 'createdAt 0))
-              (insert-one! Message (tesl-hash 'id "msg-seeded" 'roomId "room-seeded" 'userId "usr-seeded" 'username "seeded-alice" 'content "hello from seed" 'createdAt 0))
+              (let ([_ (insert-one! ChatUser (tesl-hash 'id "usr-seeded" 'username "seeded-alice"))]) (let ([_ (insert-one! Room (tesl-hash 'id "room-seeded" 'name "Seeded room" 'createdAt 0))]) (insert-one! Message (tesl-hash 'id "msg-seeded" 'roomId "room-seeded" 'userId "usr-seeded" 'username "seeded-alice" 'content "hello from seed" 'createdAt 0))))
               (define userId (thsl-src! "example/chat/chat-backend.tesl" 450 (list) (lambda () "usr-seeded")))
               (define roomId (thsl-src! "example/chat/chat-backend.tesl" 451 (list (cons 'userId userId)) (lambda () "room-seeded")))
               (define rooms (thsl-src! "example/chat/chat-backend.tesl" 453 (list (cons 'roomId roomId) (cons 'userId userId)) (lambda () (dispatch-api-test-request ChatServer 'get (list "rooms") #:cookie (string-append "chatUserId=" (api-test-string-fragment (raw-value userId))) #:headers (tesl-hash) #:capabilities (list chatRead chatWrite)))))
@@ -407,9 +405,7 @@
         (call-with-api-test-subscriptions
           (lambda ()
             (with-capabilities (chatRead chatWrite chatPubSub chatQueue notifyCap)
-              (insert-one! ChatUser (tesl-hash 'id "usr-alice" 'username "alice"))
-              (insert-one! ChatUser (tesl-hash 'id "usr-bob" 'username "bob"))
-              (insert-one! Room (tesl-hash 'id "room-live" 'name "Live room" 'createdAt 0))
+              (let ([_ (insert-one! ChatUser (tesl-hash 'id "usr-alice" 'username "alice"))]) (let ([_ (insert-one! ChatUser (tesl-hash 'id "usr-bob" 'username "bob"))]) (insert-one! Room (tesl-hash 'id "room-live" 'name "Live room" 'createdAt 0))))
               (define roomId (thsl-src! "example/chat/chat-backend.tesl" 474 (list) (lambda () "room-live")))
               (define aliceId (thsl-src! "example/chat/chat-backend.tesl" 475 (list (cons 'roomId roomId)) (lambda () "usr-alice")))
               (define bobId (thsl-src! "example/chat/chat-backend.tesl" 476 (list (cons 'aliceId aliceId) (cons 'roomId roomId)) (lambda () "usr-bob")))
@@ -440,8 +436,7 @@
         (call-with-api-test-subscriptions
           (lambda ()
             (with-capabilities (chatRead chatWrite chatPubSub chatQueue notifyCap deadLetterCap)
-              (insert-one! ChatUser (tesl-hash 'id "usr-anna" 'username "anna"))
-              (insert-one! Room (tesl-hash 'id "room-failure" 'name "Failure room" 'createdAt 0))
+              (let ([_ (insert-one! ChatUser (tesl-hash 'id "usr-anna" 'username "anna"))]) (insert-one! Room (tesl-hash 'id "room-failure" 'name "Failure room" 'createdAt 0)))
               (define roomId (thsl-src! "example/chat/chat-backend.tesl" 503 (list) (lambda () "room-failure")))
               (define annaId (thsl-src! "example/chat/chat-backend.tesl" 504 (list (cons 'roomId roomId)) (lambda () "usr-anna")))
               (define stream (thsl-src! "example/chat/chat-backend.tesl" 506 (list (cons 'annaId annaId) (cons 'roomId roomId)) (lambda () (subscribe ChatServer-sse-routes (list "events" "rooms" (api-test-path-fragment (raw-value roomId))) #:cookie (string-append "chatUserId=" (api-test-string-fragment (raw-value annaId))) #:headers (tesl-hash) #:name "/events/rooms/{roomId}"))))

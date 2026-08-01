@@ -146,6 +146,9 @@ let rec zod_of_ir_type (fact_schemas : (string, unit) Hashtbl.t) (ty : Ir.ir_typ
      the whole generated module failed tsc.  Mirror Elm's tolerance — accept any
      JSON, produce void. *)
   | Ir.IRNamed "Unit" -> "z.unknown().transform(() => undefined as void)"
+  (* Opaque stdlib secret/hash newtypes (Tesl.Crypto) have no client-side
+     accessor; they erase to a bare string, same as their wire representation. *)
+  | Ir.IRNamed ("PasswordHash" | "Secret" | "Signature" | "JwtToken") -> "z.string()"
   | Ir.IRNamed name ->
     if Hashtbl.mem fact_schemas name then name ^ "Schema"
     else name ^ "Schema"
@@ -193,6 +196,7 @@ let rec ts_type_of_ir_type (ty : Ir.ir_type) =
   | Ir.IRMoneyRate -> money_rate_ts_type
   (* Unit: no generated `Unit` type exists — `Promise<Unit>` failed tsc (#11). *)
   | Ir.IRNamed "Unit" -> "void"
+  | Ir.IRNamed ("PasswordHash" | "Secret" | "Signature" | "JwtToken") -> "string"
   | Ir.IRNamed name -> name
   | Ir.IRVar name -> name
   | Ir.IRList arg ->
@@ -234,6 +238,7 @@ let base_zod_schema_for_type name =
   | "PosixMillis" ->
     "z.union([z.number().int(), z.object({ epochMillis: z.number().int() }).transform((v) => v.epochMillis)])"
   | "Money" -> money_zod_schema
+  | "PasswordHash" | "Secret" | "Signature" | "JwtToken" -> "z.string()"
   | name when Ir.is_money_rate_type_name name -> money_rate_zod_schema
   (* Dimensioned quantities (Length, Speed, … / canonical "§Q[…]") are a bare
      number on the wire. *)

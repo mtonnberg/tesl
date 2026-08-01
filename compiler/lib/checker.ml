@@ -5674,7 +5674,13 @@ let check_type_names_in_scope ~(suggest : string -> Import_suggest.suggestion op
      transitively imported closure, collected by the SAME walk as
      [wire_field_table] so the two cannot disagree about which modules were
      visited. *)
-  let wire_secret_names : string list ref = ref [] in
+  (* "PasswordHash" and "Secret" are stdlib `define-secret-newtype`s (tesl/crypto.rkt)
+     — redacted in telemetry/logs/debugger surfaces at runtime — so they must never
+     reach a response/SSE wire position, same as a user-declared `secret` newtype.
+     "JwtToken"/"Signature" are deliberately excluded: a JwtToken is handed to a
+     client on purpose (opaque_special_field_types above) and a Signature's wire
+     form (`Crypto.signatureHex`) is not runtime-redacted. *)
+  let wire_secret_names : string list ref = ref [ "PasswordHash"; "Secret" ] in
   let wire_field_table : (string * (string * type_expr) list) list Lazy.t =
     lazy begin
       let is_tesl_module name =

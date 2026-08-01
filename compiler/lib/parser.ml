@@ -1624,6 +1624,21 @@ and parse_let s =
       | _ -> "_"
     end
   in
+  (* `ok`/`fail` are reserved for check/auth results (`ok value ::: Proof`,
+     `fail status msg`) and can never be read back as a plain variable, so a
+     `let ok = ...`/`let fail = ...` binding would silently shadow nothing and
+     leave every later reference to the name misparsed as the start of an
+     `ok`/`fail` construct.  Reject right here, at the true site, instead of
+     letting the binder-name fallback swallow the token and produce a
+     confusing error several lines later at whatever token the parser's
+     confused state finally chokes on. *)
+  let* () =
+    if peek s = OK || peek s = FAIL then
+      err s (Printf.sprintf
+        "'%s' is a reserved word (used in `ok value ::: Proof` / `fail status msg`) and cannot be used as a let-bound name"
+        (tok_to_string (peek s)))
+    else return ()
+  in
   let* declared_type, declared_proof =
     if peek s = COLON then begin
       advance s;
@@ -2833,6 +2848,16 @@ and parse_let_in_seq s =
       | SMTP  -> advance s; "smtp"
       | _ -> "_"
   in
+  (* Same reservation as parse_let: `ok`/`fail` can never be read back as a
+     plain variable, so reject at the true binding site instead of letting a
+     confusing error surface far later. *)
+  let* () =
+    if peek s = OK || peek s = FAIL then
+      err s (Printf.sprintf
+        "'%s' is a reserved word (used in `ok value ::: Proof` / `fail status msg`) and cannot be used as a let-bound name"
+        (tok_to_string (peek s)))
+    else return ()
+  in
   let* declared_type, declared_proof =
     if peek s = COLON then begin
       advance s;
@@ -2858,13 +2883,20 @@ and parse_let_in_seq s =
   let value = consume_sql_modifiers value s in
   skip_newlines s;
   let loc = span loc0 (current_loc s) in
-  (* The body is the rest of the sequence — if empty (DEDENT/EOF), preserve the let
-     for named bindings so annotations are still enforced. *)
+  (* The body is the rest of the sequence — if empty (DEDENT/EOF), the body is a
+     reference back to the bound name (Racket's `let` accepts `_` as a plain
+     identifier, not a wildcard, so this works for discarded bindings too).
+     MUST reference, not re-embed, `value`: re-embedding the same expression
+     node as both the let's value and its body emits it TWICE in the generated
+     Racket, so a trailing `let _ = someEffectfulCall()` at the end of a
+     sequence would run its side effect twice (issue #59 — a `fn`'s `insert`
+     called this way inserted its row twice and crashed on the duplicate
+     primary key, instead of the reported "row never persists" — either way,
+     not the single insert the source asked for). *)
   let* body =
     match peek s with
-    | DEDENT | EOF | RBRACE when binding_name <> "_" ->
+    | DEDENT | EOF | RBRACE ->
       return (EVar { name = binding_name; loc = current_loc s })
-    | DEDENT | EOF | RBRACE -> return value
     | INDENT ->
       (* SQL update/delete continuations (where, set) may appear in a deeper-indented
          block. Consume INDENT, parse the block as the let body, then consume DEDENT. *)
@@ -4505,6 +4537,15 @@ and parse_test_stmt_items s =
     end else
     let name_result = match peek s with
       | UNDERSCORE -> advance s; Ok "_"
+      (* Unlike a function/lambda parameter name (where `expect_ident` legitimately
+         allows `ok`/`fail`, never read back as a bare variable), a `let`-bound name
+         in a test body IS read back as a plain expression later. `ok`/`fail` can
+         never parse back as EVar, so accepting them here just defers the failure to
+         a later, unrelated line. Reject at the true site. *)
+      | (OK | FAIL) as t ->
+        err s (Printf.sprintf
+          "'%s' is a reserved word (used in `ok value ::: Proof` / `fail status msg`) and cannot be used as a let-bound name"
+          (tok_to_string t))
       | _ -> expect_ident s
     in
     (match name_result with
@@ -4537,7 +4578,7 @@ and parse_test_stmt_items s =
              }]
            | Err _ -> return [])
         | Err _ -> return [])
-     | Err _ -> return [])
+     | Err e -> Err e)
   | EXPECT | IDENT "expect" ->
     advance s;
     (match parse_test_expect_left s with
@@ -4757,6 +4798,13 @@ and parse_test_stmt_items s =
 and parse_test_body_until_with_skip s skip_ws is_stop =
   let stmts = ref [] in
   let continue_ = ref true in
+  (* A genuine Err from parse_test_stmt_items (as opposed to its own `Ok []`
+     "nothing recognized, stop gracefully" signal) is a real parse failure —
+     e.g. a reserved word used as a let-bound name.  Silently discarding it
+     here used to let the loop stop wherever the cursor happened to land,
+     surfacing a confusing, mislocated error later at `expect s RBRACE`
+     instead. Propagate it. *)
+  let error_ = ref None in
   while !continue_ && not (is_stop (peek s)) do
     skip_ws s;
     if is_stop (peek s) || peek s = EOF then continue_ := false
@@ -4768,11 +4816,13 @@ and parse_test_body_until_with_skip s skip_ws is_stop =
          (* Nothing was parsed and no tokens were consumed — stop to
             avoid an infinite loop on an unrecognised token. *)
          if s.pos = pos_before then continue_ := false
-       | Err _ -> continue_ := false);
+       | Err e -> error_ := Some e; continue_ := false);
       skip_ws s
     end
   done;
-  return (List.rev !stmts)
+  match !error_ with
+  | Some e -> Err e
+  | None -> return (List.rev !stmts)
 
 and parse_test_body s =
   parse_test_body_until_with_skip s skip_layout (fun tok -> tok = RBRACE || tok = EOF)
@@ -4824,29 +4874,37 @@ let parse_api_test_form s =
   let* caps = parse_requires s in
   let* _ = expect s LBRACE in
   skip_layout s;
-  (* optional seed block *)
-  let seed_stmts = ref [] in
-  (if peek s = SEED then begin
-    advance s;
-    if peek s = LBRACE then advance s;
-    skip_layout s;
-    while peek s <> RBRACE && peek s <> EOF do
+  (* optional seed block.  Parsed with [parse_stmt_seq] — the SAME
+     statement-sequence grammar `fn`/`handler` bodies use — rather than one
+     bare `parse_expr` per line: a `let _ = someFn(...)` seed statement has no
+     "next expression" to serve as its trailing body under `parse_expr`
+     (`parse_let` requires one in the same call), so it used to fail to parse
+     and the loop's `Err _ -> advance s` silently discarded the whole
+     statement with no diagnostic — the fn call, and whatever it inserted,
+     just vanished. `parse_stmt_seq`/`parse_let_in_seq` correctly treat a
+     trailing `let _ = value` ending at `}` as `value` itself (issue #59). *)
+  let* seed_stmts =
+    if peek s = SEED then begin
+      advance s;
+      if peek s = LBRACE then advance s;
       skip_layout s;
-      if peek s = RBRACE then ()
-      else begin
-        match parse_expr s with
-        | Ok e -> seed_stmts := e :: !seed_stmts
-        | Err _ -> advance s
-      end;
-      skip_layout s
-    done;
-    if peek s = RBRACE then advance s
-  end);
+      let* seed_body =
+        if peek s = RBRACE then return None
+        else
+          let* e = parse_stmt_seq s in
+          return (Some e)
+      in
+      skip_layout s;
+      if peek s = RBRACE then advance s;
+      return (Option.to_list seed_body)
+    end else
+      return []
+  in
   skip_layout s;
   let* stmts = parse_test_body s in
   let* _ = expect s RBRACE in
   let loc = span loc0 (current_loc s) in
-  return { description = desc; server_name; seed_stmts = List.rev !seed_stmts;
+  return { description = desc; server_name; seed_stmts;
            stmts; capabilities = caps; loc }
 
 (** Parse a load-test block.  Syntax:
@@ -4900,24 +4958,27 @@ let parse_load_test_form s =
   let* caps = parse_requires s in
   let* _ = expect s LBRACE in
   skip_layout s;
-  (* optional seed block *)
-  let seed_stmts = ref [] in
-  (if peek s = SEED then begin
-    advance s;
-    if peek s = LBRACE then advance s;
-    skip_layout s;
-    while peek s <> RBRACE && peek s <> EOF do
+  (* optional seed block — see the identical comment in parse_api_test_form
+     (issue #59): parsed via [parse_stmt_seq] so a trailing `let _ = fn(...)`
+     is handled the same way a fn/handler body handles it, instead of being
+     silently dropped by a bare `parse_expr`-per-line loop. *)
+  let* seed_stmts =
+    if peek s = SEED then begin
+      advance s;
+      if peek s = LBRACE then advance s;
       skip_layout s;
-      if peek s = RBRACE then ()
-      else begin
-        match parse_expr s with
-        | Ok e -> seed_stmts := e :: !seed_stmts
-        | Err _ -> advance s
-      end;
-      skip_layout s
-    done;
-    if peek s = RBRACE then advance s
-  end);
+      let* seed_body =
+        if peek s = RBRACE then return None
+        else
+          let* e = parse_stmt_seq s in
+          return (Some e)
+      in
+      skip_layout s;
+      if peek s = RBRACE then advance s;
+      return (Option.to_list seed_body)
+    end else
+      return []
+  in
   skip_layout s;
   (* Parse request statements (test stmts until assert or }) *)
   let* request_stmts = parse_test_body_until_with_skip s skip_layout
@@ -4999,7 +5060,7 @@ let parse_load_test_form s =
   let* _ = expect s RBRACE in
   let loc = span loc0 (current_loc s) in
   return { description = desc; server_name; rate = !rate; duration = !duration;
-           baseline = !baseline; seed_stmts = List.rev !seed_stmts; request_stmts;
+           baseline = !baseline; seed_stmts; request_stmts;
            assertions = List.rev !assertions; capabilities = caps; loc }
 
 (** Parse a const declaration. *)

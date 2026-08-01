@@ -650,6 +650,7 @@ let collect_decl_names acc (d : Ast.top_decl) =
     List.fold_left collect_test_stmt_names acc tf.stmts
   | DApiTest atf ->
     let acc = List.fold_left (fun a c -> c :: a) acc atf.capabilities in
+    let acc = List.fold_left (fun a e -> collect_expr_names a e) acc atf.seed_stmts in
     List.fold_left collect_test_stmt_names acc atf.stmts
   | DLoadTest ltf ->
     let acc = List.fold_left (fun a c -> c :: a) acc ltf.capabilities in

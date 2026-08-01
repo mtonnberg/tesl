@@ -86,6 +86,9 @@ let rec elm_type_of_type_expr te =
   (* NT-07: an Int32 is a bare integer on the wire; Elm's Int covers the range. *)
   | TName { name = "Int32"; _ } -> "Int"
   | TName { name = "PosixMillis"; _ } -> "Int"
+  (* Opaque stdlib secret newtypes (Tesl.Crypto) have no client-side accessor;
+     they erase to a bare String, same as their wire representation. *)
+  | TName { name = "PasswordHash" | "Secret" | "Signature" | "JwtToken"; _ } -> "String"
   | TName { name = "Unit"; _ } -> "()"
   | TName { name = "Set"; _ } -> "List value"
   (* Dimensioned quantities (Length, Speed, … / canonical "§Q[…]") erase to a
@@ -297,6 +300,7 @@ let rec decode_expr_of_type te =
      breaks on whichever shape a payload carries. *)
   | TName { name = "PosixMillis"; _ } ->
     {|(D.oneOf [ D.int, D.field "epochMillis" D.int ])|}
+  | TName { name = "PasswordHash" | "Secret" | "Signature" | "JwtToken"; _ } -> "D.string"
   | TName { name = "Unit"; _ } -> "(D.succeed ())"
   (* Quantities are a bare number on the wire. *)
   | TName { name; _ } when Ir.is_money_rate_type_name name -> "moneyRateDecoder"
@@ -326,6 +330,7 @@ let rec encode_expr_of_type te value_expr =
   | TName { name = "Bool"; _ } -> "E.bool " ^ value_expr
   | TName { name = "Int32"; _ } -> "E.int " ^ value_expr
   | TName { name = "PosixMillis"; _ } -> "E.int " ^ value_expr
+  | TName { name = "PasswordHash" | "Secret" | "Signature" | "JwtToken"; _ } -> "E.string " ^ value_expr
   | TName { name = "Unit"; _ } -> "E.null"
   | TName { name; _ } when Ir.is_money_rate_type_name name -> "moneyRateEncoder " ^ value_expr
   | TName { name; _ } when Ir.is_quantity_type_name name -> "E.float " ^ value_expr
@@ -348,6 +353,7 @@ and encode_fn_of_type te =
   | TName { name = "Bool"; _ } -> "E.bool"
   | TName { name = "Int32"; _ } -> "E.int"
   | TName { name = "PosixMillis"; _ } -> "E.int"
+  | TName { name = "PasswordHash" | "Secret" | "Signature" | "JwtToken"; _ } -> "E.string"
   | TName { name = "Unit"; _ } -> "(\\_ -> E.null)"
   | TName { name; _ } when Ir.is_money_rate_type_name name -> "moneyRateEncoder"
   | TName { name; _ } when Ir.is_quantity_type_name name -> "E.float"
@@ -379,6 +385,9 @@ let rec elm_type_of_ir_type (ty : Ir.ir_type) =
   (* Emitted once per module — ONE alias for every rate denominator (#38). *)
   | Ir.IRMoneyRate -> "MoneyRate"
   | Ir.IRNamed "Unit" -> "()"
+  (* Opaque stdlib secret/hash newtypes (Tesl.Crypto) have no client-side
+     accessor; they erase to a bare String, same as their wire representation. *)
+  | Ir.IRNamed ("PasswordHash" | "Secret" | "Signature" | "JwtToken") -> "String"
   | Ir.IRNamed name -> name
   | Ir.IRVar name -> name
   | Ir.IRList arg -> elm_type_application "List" (elm_type_text_arg (elm_type_of_ir_type arg))
@@ -448,6 +457,7 @@ let rec decode_expr_of_ir_type (ty : Ir.ir_type) =
   (* Field-based decoding ignores the agent boundary's extra "display". *)
   | Ir.IRMoneyRate -> "moneyRateDecoder"
   | Ir.IRNamed "Unit" -> "(D.succeed ())"
+  | Ir.IRNamed ("PasswordHash" | "Secret" | "Signature" | "JwtToken") -> "D.string"
   | Ir.IRNamed name -> decoder_fn_name name
   | Ir.IRVar _ -> "D.value"
   | Ir.IRList arg -> "(D.list " ^ wrap_decoder_arg (decode_expr_of_ir_type arg) ^ ")"
@@ -475,6 +485,7 @@ let rec encode_expr_of_ir_type ty value_expr =
   | Ir.IRMoney -> "moneyEncoder " ^ value_expr
   | Ir.IRMoneyRate -> "moneyRateEncoder " ^ value_expr
   | Ir.IRNamed "Unit" -> "E.null"
+  | Ir.IRNamed ("PasswordHash" | "Secret" | "Signature" | "JwtToken") -> "E.string " ^ value_expr
   | Ir.IRNamed name -> encoder_fn_name name ^ " " ^ value_expr
   | Ir.IRList arg
   | Ir.IRSet arg -> "(E.list " ^ encode_fn_of_ir_type arg ^ ") " ^ value_expr
@@ -529,6 +540,7 @@ and encode_fn_of_ir_type ty =
   | Ir.IRPosixMillis -> "E.int"
   | Ir.IRMoney -> "moneyEncoder"
   | Ir.IRNamed "Unit" -> "(\\_ -> E.null)"
+  | Ir.IRNamed ("PasswordHash" | "Secret" | "Signature" | "JwtToken") -> "E.string"
   | Ir.IRNamed name -> encoder_fn_name name
   | _ -> "(\\value -> " ^ (encode_expr_of_ir_type ty "value") ^ ")"
 

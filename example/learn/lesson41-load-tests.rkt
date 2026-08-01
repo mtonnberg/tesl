@@ -119,8 +119,7 @@
         (call-with-api-test-subscriptions
           (lambda ()
             (with-capabilities (dbRead dbWrite)
-              (insert-one! Book (tesl-hash 'id "book-1" 'title "The Art of Tesl" 'pages 320))
-              (insert-one! Book (tesl-hash 'id "book-2" 'title "Proofs in Practice" 'pages 210))
+              (let ([_ (insert-one! Book (tesl-hash 'id "book-1" 'title "The Art of Tesl" 'pages 320))]) (insert-one! Book (tesl-hash 'id "book-2" 'title "Proofs in Practice" 'pages 210)))
               (run-load-test Lesson41Server 30 2
                 (lambda ()
                   (dispatch-api-test-request Lesson41Server 'get (list "books") #:headers (tesl-hash) #:capabilities (list dbRead dbWrite))
