@@ -461,6 +461,157 @@ api TodoApi {
       {|url = "/" ++ "todos" ++ "/" ++ exorcise todoId|}
   )
 
+(* Issue #52: a collection route and an item route sharing a path stem
+   (GET /runs, GET /runs/:runId) both dropped the captured segment and
+   emitted the same "getRuns" function name — duplicate top-level
+   definition, module doesn't compile. Captured param names must fold
+   into the disambiguated name for every endpoint in the colliding group. *)
+let elm_stem_collision_disambiguates_with_captured_param () =
+  let src = {|module Api exposing [RunApi]
+import Tesl.Prelude exposing [String, List]
+import Tesl.Json exposing [stringCodec]
+
+record Run {
+  id: String
+}
+codec Run {
+  toJson_forbidden
+  fromJson_forbidden
+}
+
+fact RunIdShape (runId: String)
+
+check runIdCheck(runId: String) -> runId: String ::: RunIdShape runId =
+  ok runId ::: RunIdShape runId
+
+capturer runIdCapture: String ::: RunIdShape runId using stringCodec via runIdCheck
+
+api RunApi {
+  get "/runs" -> List Run
+  get "/runs/:runId" capture runId: String ::: RunIdShape runId via runIdCapture -> Run
+}
+|} in
+  with_temp_file "tesl-r52-elm-stem-collision-" ".tesl" src (fun path ->
+    let out = generate_elm path in
+    assert_contains ~label:"collection route keeps plain name" out
+      {|getRuns : (Result Http.Error (List Run) -> msg) -> Cmd msg|};
+    assert_contains ~label:"item route folds captured param into name" out
+      {|getRunsByRunId : Proven String RunIdShape -> (Result Http.Error Run -> msg) -> Cmd msg|};
+    assert_not_contains ~label:"no duplicate getRuns definition" out
+      {|getRuns : Proven String RunIdShape -> (Result Http.Error Run -> msg) -> Cmd msg|}
+  )
+
+let ts_stem_collision_disambiguates_with_captured_param () =
+  let src = {|module Api exposing [RunApi]
+import Tesl.Prelude exposing [String, List]
+import Tesl.Json exposing [stringCodec]
+
+record Run {
+  id: String
+}
+codec Run {
+  toJson_forbidden
+  fromJson_forbidden
+}
+
+fact RunIdShape (runId: String)
+
+check runIdCheck(runId: String) -> runId: String ::: RunIdShape runId =
+  ok runId ::: RunIdShape runId
+
+capturer runIdCapture: String ::: RunIdShape runId using stringCodec via runIdCheck
+
+api RunApi {
+  get "/runs" -> List Run
+  get "/runs/:runId" capture runId: String ::: RunIdShape runId via runIdCapture -> Run
+}
+|} in
+  with_temp_file "tesl-r52-ts-stem-collision-" ".tesl" src (fun path ->
+    let out = generate_ts path in
+    assert_contains ~label:"collection route keeps plain name" out
+      "export async function getRuns(): Promise<Array<Run>>";
+    assert_contains ~label:"item route folds captured param into name" out
+      "export async function getRunsByRunId(";
+    assert_not_contains ~label:"no duplicate getRuns definition" out
+      "export async function getRuns(runId:"
+  )
+
+(* Issue #53: the runtime's generic value serializer (runtime-value->jsexpr
+   in dsl/types.rkt) puts a non-empty ADT variant's fields under a nested
+   `fields` object keyed by field name — e.g.
+   {"tag": "WorkItemRef", "fields": {"value": "github:1"}} — but the
+   generated Elm/TS decoders read a flat top-level `value` key holding only
+   the variant's first field, so a generated client fails to decode any
+   response containing the ADT field (and drops all but the first field for
+   multi-field variants). *)
+let elm_adt_decoder_matches_fields_nested_wire_format () =
+  let src = {|module Api exposing [RunApi]
+import Tesl.Prelude exposing [String, Int]
+
+type Status =
+  | Pending
+  | Running progress: Int label: String
+  | Done
+
+record Run {
+  id: String
+  status: Status
+}
+codec Run {
+  toJson_forbidden
+  fromJson_forbidden
+}
+
+api RunApi {
+  get "/runs" -> Run
+}
+|} in
+  with_temp_file "tesl-r53-elm-adt-fields-" ".tesl" src (fun path ->
+    let out = generate_elm path in
+    assert_contains ~label:"zero-field variant decodes from tag alone" out
+      {|"Pending" ->
+                        D.succeed Pending|};
+    assert_contains ~label:"multi-field variant decodes all fields under nested \"fields\"" out
+      {|"Running" ->
+                        D.field "fields" (D.map2 Running (D.field "progress" D.int) (D.field "label" D.string))|};
+    assert_not_contains ~label:"decoder no longer reads a flat top-level value key" out
+      {|D.field "value"|};
+    assert_contains ~label:"multi-field variant encodes all fields under nested \"fields\"" out
+      {|E.object [ ( "tag", E.string "Running" ), ( "fields", E.object [ ( "progress", E.int f0 ), ( "label", E.string f1 ) ] ) ]|};
+    assert_contains ~label:"zero-field variant encodes from tag alone, no fields key" out
+      {|E.object [ ( "tag", E.string "Pending" ) ]|}
+  )
+
+let ts_adt_schema_matches_fields_nested_wire_format () =
+  let src = {|module Api exposing [RunApi]
+import Tesl.Prelude exposing [String, Int]
+
+type Status =
+  | Pending
+  | Running progress: Int label: String
+  | Done
+
+record Run {
+  id: String
+  status: Status
+}
+codec Run {
+  toJson_forbidden
+  fromJson_forbidden
+}
+
+api RunApi {
+  get "/runs" -> Run
+}
+|} in
+  with_temp_file "tesl-r53-ts-adt-fields-" ".tesl" src (fun path ->
+    let out = generate_ts path in
+    assert_contains ~label:"zero-field variant schema has no fields key" out
+      {|const _Status_PendingSchema = z.object({ tag: z.literal("Pending") });|};
+    assert_contains ~label:"multi-field variant schema nests fields under \"fields\"" out
+      {|const _Status_RunningSchema = z.object({ tag: z.literal("Running"), fields: z.object({ progress: z.number().int(), label: z.string() }) });|}
+  )
+
 let elm_exports_proof_types_without_exporting_proof_constructors () =
   with_proof_api (fun path ->
     let out = generate_elm path in
@@ -536,5 +687,13 @@ let () =
          test_case "Elm strips FromDb from client proof surfaces" `Quick elm_client_surface_strips_fromdb_proofs;
          test_case "Elm FromDb filtering preserves remaining conjunctions" `Quick elm_fromdb_filtering_preserves_remaining_conjunctions;
          test_case "Elm capture collisions rename only when needed" `Quick elm_capture_collision_renames_only_when_needed;
+         test_case "Elm stem collision disambiguates with captured param (#52)" `Quick elm_stem_collision_disambiguates_with_captured_param;
+       ]);
+      ("ts-fn-name-collision", [
+         test_case "TS stem collision disambiguates with captured param (#52)" `Quick ts_stem_collision_disambiguates_with_captured_param;
+       ]);
+      ("adt-wire-format", [
+         test_case "Elm ADT decoder/encoder matches fields-nested wire format (#53)" `Quick elm_adt_decoder_matches_fields_nested_wire_format;
+         test_case "TS ADT schema matches fields-nested wire format (#53)" `Quick ts_adt_schema_matches_fields_nested_wire_format;
        ]);
     ]

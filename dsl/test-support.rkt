@@ -549,12 +549,17 @@
   ;; mirroring resolve-sse-channel in dsl/web.rkt.
   (define channel-s (let ([ch (third route)])
                       (if (symbol? ch) (channel-for-name ch) ch)))
-  ;; Issue #17: 4th element is the key-index, 5th the list of (index . validator)
+  ;; Issue #17 / #54: 4th element is the key SLOT — an integer index, a fixed
+  ;; string literal (a broadcast-style channel, e.g. `subscribe
+  ;; RunEvents("all")`), or #f (no key) — 5th the list of (index . validator)
   ;; for every declared capture check — see emit_sse_route / handle-sse-request.
   ;; Enforce them here too so the api-test path matches the production path.
-  (define key-index (and (>= (length route) 4) (fourth route)))
+  (define key-slot  (and (>= (length route) 4) (fourth route)))
   (define captures  (if (>= (length route) 5) (fifth route) '()))
-  (define key-str   (and key-index (list-ref path key-index)))
+  (define key-str
+    (cond [(not key-slot) #f]
+          [(string? key-slot) key-slot]
+          [else (list-ref path key-slot)]))
   (define req       (make-request "GET" path #:headers final-headers))
   (when auth-fn
     (define auth-result (auth-fn req))

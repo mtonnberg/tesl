@@ -44,13 +44,45 @@ let method_lower = function
   | GET -> "get" | POST -> "post" | PUT -> "put" | DELETE -> "delete"
   | PATCH -> "patch" | SSE -> "sse"
 
-(** Derive the client function name from HTTP method + path.
-    E.g. GET /todos/:todoId → "getTodos" *)
-let fn_name_of_endpoint meth path =
+(** Base client function name from HTTP method + static path segments;
+    captured (":param") segments are dropped. E.g. GET /todos/:todoId →
+    "getTodos". *)
+let base_fn_name meth path =
   let segs = List.filter (fun s -> s <> "" && (String.length s = 0 || s.[0] <> ':'))
                (String.split_on_char '/' path) in
   let capitalized = List.map capitalize_segment segs in
   method_lower meth ^ String.concat "" capitalized
+
+(** Disambiguated client function name: captured (":param") segments fold
+    into the name as "By<Param>". E.g. GET /todos/:todoId →
+    "getTodosByTodoId". *)
+let full_fn_name meth path =
+  let segs = List.filter (fun s -> s <> "") (String.split_on_char '/' path) in
+  let named = List.map (fun s ->
+    if String.length s > 0 && s.[0] = ':' then
+      "By" ^ capitalize_segment (String.sub s 1 (String.length s - 1))
+    else capitalize_segment s
+  ) segs in
+  method_lower meth ^ String.concat "" named
+
+(** Derive client function names for a set of endpoints, keyed by
+    (method, path). Two+ endpoints sharing a base name (e.g. GET /runs and
+    GET /runs/:runId both -> "getRuns") collide once emitted as top-level
+    functions, so captured param names fold into the name for every
+    endpoint in the colliding group, disambiguating them (issue #52).
+    Endpoints with a unique base name keep the plain, shorter name. *)
+let fn_names_of_endpoints (endpoints : (http_method * string) list) : (http_method * string, string) Hashtbl.t =
+  let base_names = List.map (fun (meth, path) -> (meth, path, base_fn_name meth path)) endpoints in
+  let counts = Hashtbl.create 16 in
+  List.iter (fun (_, _, base) ->
+    Hashtbl.replace counts base (1 + (try Hashtbl.find counts base with Not_found -> 0))
+  ) base_names;
+  let table = Hashtbl.create 16 in
+  List.iter (fun (meth, path, base) ->
+    let name = if Hashtbl.find counts base > 1 then full_fn_name meth path else base in
+    Hashtbl.replace table (meth, path) name
+  ) base_names;
+  table
 
 (** Replace :param placeholders in path with ${param} template literals. *)
 let path_to_template path =
@@ -548,14 +580,19 @@ let emit_ts (m : module_form) : string =
   if adts <> [] then begin
     add "// --- ADTs ---\n\n";
     List.iter (fun (name, variants) ->
+      (* The runtime's generic value serializer (`runtime-value->jsexpr` in
+         dsl/types.rkt) puts a non-empty variant's fields under a nested
+         `fields` object keyed by field name — e.g.
+         `{"tag": "WorkItemRef", "fields": {"value": "github:1"}}` — not
+         flat top-level keys (issue #53). *)
       List.iter (fun (v : adt_variant) ->
         let fields_str =
           if v.fields = [] then ""
           else
             let field_parts = List.map (fun (f : field_def) ->
-              Printf.sprintf ", %s: %s" f.name (zod_of_type_expr all_schema_set f.type_expr)
+              Printf.sprintf "%s: %s" f.name (zod_of_type_expr all_schema_set f.type_expr)
             ) v.fields in
-            String.concat "" field_parts
+            Printf.sprintf ", fields: z.object({ %s })" (String.concat ", " field_parts)
         in
         addf "const _%s_%sSchema = z.object({ tag: z.literal(%S)%s });\n"
           name v.ctor v.ctor fields_str
@@ -649,8 +686,9 @@ let emit_ts (m : module_form) : string =
     add "// --- API client ---\n\n";
     add "let _teslBase = \"\";\n";
     add "export function configure(base: string): void { _teslBase = base; }\n\n";
+    let endpoint_fn_names = fn_names_of_endpoints (List.map (fun (ep : Ir.ir_endpoint) -> (ep.ire_method, ep.ire_path)) endpoints) in
     List.iter (fun (ep : Ir.ir_endpoint) ->
-      let fn_name = fn_name_of_endpoint ep.ire_method ep.ire_path in
+      let fn_name = Hashtbl.find endpoint_fn_names (ep.ire_method, ep.ire_path) in
       let tmpl_path = path_to_template ep.ire_path in
       let use_template = String.contains tmpl_path '$' in
 

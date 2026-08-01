@@ -4149,7 +4149,19 @@ let parse_api_form s =
                       (match peek s with
                        | IDENT arg | UIDENT arg ->
                          advance s;
-                         if !subscribe_key = None then subscribe_key := Some arg;
+                         if !subscribe_key = None then subscribe_key := Some (SubscribeKeyParam arg);
+                         (match peek s with RPAREN -> advance s | _ -> ())
+                       (* A fixed string literal keys every connection on that
+                          constant, for a broadcast-style channel with no
+                          per-request key (e.g. `subscribe RunEvents("all")`) —
+                          issue #54: previously silently dropped (neither this
+                          arm nor the identifier arm matched it), so the
+                          connect side registered under key #f while a publish
+                          computed the real literal key, and every event was
+                          silently swallowed by the mismatch. *)
+                       | STRING arg ->
+                         advance s;
+                         if !subscribe_key = None then subscribe_key := Some (SubscribeKeyLiteral arg);
                          (match peek s with RPAREN -> advance s | _ -> ())
                        | RPAREN -> advance s
                        | _ -> ())

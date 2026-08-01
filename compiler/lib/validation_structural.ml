@@ -609,14 +609,18 @@ let check_api_endpoint_structure ?facts ?(extra_funcs=[]) (decls : top_decl list
                   separate `sse` endpoints"
                  ep_id (List.length (ep_subscribes ep)))
            | _ -> ());
-          (* Issue #17: the `subscribe Ch(arg)` argument keys the stream on a
+          (* Issue #17: a `subscribe Ch(arg)` PARAM argument keys the stream on a
              path segment, so `arg` MUST name a `:param` of the path.  If it does
              not, the emitter cannot locate the key segment (key-index #f) and the
              stream silently keys on nothing — the bug this issue reports at the
              wrong-segment end.  A missing argument is allowed only when the path
-             has exactly one `:param` (unambiguous). *)
+             has exactly one `:param` (unambiguous).
+             Issue #54: a LITERAL argument (`subscribe Ch("all")`) keys every
+             connection on that fixed constant instead — it needs no path
+             `:param` at all (a broadcast-style channel), so it is exempt from
+             both checks below. *)
           (match ep_subscribe_key ep with
-           | Some k when not (List.mem k path_params) ->
+           | Some (SubscribeKeyParam k) when not (List.mem k path_params) ->
              add_hint
                (Printf.sprintf
                  "the `subscribe` argument must be a path parameter; add `:%s` to \

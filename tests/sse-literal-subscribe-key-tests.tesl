@@ -1,0 +1,78 @@
+module Main exposing [MainServer]
+
+# Regression (GitHub #54): `sse "/path" subscribe Channel("literal")` — a
+# broadcast-style channel keyed on a fixed string with NO `:param` capture in
+# the path at all. The parser previously recognized only a bare identifier as
+# the subscribe argument; a string literal matched neither that arm nor the
+# empty-parens arm, so it was silently dropped and the route's key slot fell
+# back to `#f` (as if the channel had no key). The connect side then
+# registered its listener under key `#f`, while `publish Channel("literal")
+# ...` computed the real string key at runtime, so every event silently
+# failed to match and was dropped — a published event never reached any
+# subscriber. The route's key slot now carries the literal string itself.
+
+import Tesl.Prelude exposing [String, Unit]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Queue exposing [pubsub]
+import Tesl.ApiTest exposing [
+  statusOk,
+  isNotEmpty,
+  includesWhere,
+  subscribe,
+  collect,
+]
+import Tesl.Database exposing [Database, DatabaseBackend, Memory]
+import Tesl.SSE exposing [SseChannel]
+
+database MainDb = Database {
+  schema: "sse_literal_subscribe_key"
+  entities: []
+  backend: Memory
+}
+
+record RunQueued {
+  runId: String
+}
+
+codec RunQueued {
+  toJson {
+    runId -> "runId" with_codec stringCodec
+  }
+  fromJson [
+    {
+      runId <- "runId" with_codec stringCodec
+    }
+  ]
+}
+
+sseChannel RunEvents(scope: String) = SseChannel {
+  database: MainDb
+  payload: RunQueued
+}
+
+handler triggerRun(runId: String) -> String
+  requires [pubsub] =
+  publish RunEvents("all") RunQueued { runId: runId }
+  "ok"
+
+api MainApi {
+  post "/trigger"
+    body runId: String
+    -> String
+
+  sse "/runs/stream"
+    subscribe RunEvents("all")
+}
+
+server MainServer for MainApi {
+  triggerRun = triggerRun
+}
+
+api-test "publish on a literal-keyed broadcast channel reaches the subscriber" for MainServer requires [pubsub] {
+  let stream = subscribe "/runs/stream"
+  let resp = post "/trigger" body "run-abc123"
+  expect statusOk resp.status
+  let events = collect stream count 1 timeout 1500ms
+  expect isNotEmpty events
+  expect includesWhere { "runId": "run-abc123" } events
+}

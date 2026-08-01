@@ -2359,13 +2359,18 @@
   (define pattern    (first route))
   (define auth-fn    (second route))
   (define channel-s  (resolve-sse-channel (third route)))
-  ;; Issue #17: 4th element is the key-index (which path segment carries the
-  ;; channel key, or #f = auth-only no-key channel); 5th is the list of
-  ;; (index . validator) for EVERY declared `:param` capture check.
-  (define key-index  (and (>= (length route) 4) (fourth route)))
+  ;; Issue #17 / #54: 4th element is the key SLOT — an integer index (which
+  ;; path segment carries the channel key), a string (a fixed literal every
+  ;; connection keys on, e.g. `subscribe RunEvents("all")`), or #f (auth-only
+  ;; no-key channel).  5th is the list of (index . validator) for EVERY
+  ;; declared `:param` capture check.
+  (define key-slot   (and (>= (length route) 4) (fourth route)))
   (define captures   (if (>= (length route) 5) (fifth route) '()))
   (define path       (dsl-request-path dsl-req))
-  (define key-str    (and key-index (list-ref path key-index)))
+  (define key-str
+    (cond [(not key-slot) #f]
+          [(string? key-slot) key-slot]
+          [else (list-ref path key-slot)]))
 
   ;; Run auth if present — reject 401 if it fails
   (when auth-fn

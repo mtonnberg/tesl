@@ -489,17 +489,25 @@ type http_clause = {
   has_clause_after_return : bool; (** true iff an endpoint clause appears after `->` *)
 }
 
+(** The channel-key argument of a `subscribe Ch(arg)` clause: either a bare
+    identifier naming a `:param` of the path (the common, per-request-scoped
+    case, e.g. `conversationId` in `subscribe ChatStream(conversationId)`), or
+    a fixed string literal for a broadcast-style channel with no per-request
+    key (e.g. `subscribe RunEvents("all")`). *)
+type subscribe_key_arg =
+  | SubscribeKeyParam of string
+  | SubscribeKeyLiteral of string
+
 type sse_clause = {
   subscribes : string list;       (** the channel(s) an SSE endpoint streams *)
-  (** The channel-key argument of the `subscribe Ch(arg)` clause — the path
-      parameter the stream keys on (e.g. `conversationId` in
-      `subscribe ChatStream(conversationId)`).  [None] when the subscribe has no
-      argument (a channel with no key parameter).  The emitter uses this to pick
-      WHICH `:param` segment carries the channel key; before it was recorded the
-      key was assumed to be the segment right after the literal prefix, so a key
-      that was not the last segment (e.g. `/rooms/:roomId/events`) keyed on the
-      wrong segment. *)
-  subscribe_key : string option;
+  (** [None] when the subscribe has no argument (a channel with no key
+      parameter).  The emitter uses a param argument to pick WHICH `:param`
+      segment carries the channel key; before it was recorded the key was
+      assumed to be the segment right after the literal prefix, so a key that
+      was not the last segment (e.g. `/rooms/:roomId/events`) keyed on the
+      wrong segment.  A literal argument keys every connection on that fixed
+      string regardless of path. *)
+  subscribe_key : subscribe_key_arg option;
   (** S6a: an SSE endpoint may NOT declare body/response/return clauses. The parser
       records which such clauses were WRITTEN (breadcrumbs only — never the body/
       response VALUES, so emit still cannot use them) so validation rejects them

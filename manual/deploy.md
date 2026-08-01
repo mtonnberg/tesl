@@ -105,6 +105,30 @@ Copy it to your project's `.github/workflows/deploy.yml` and set `APP_NAME`.
   PaaS-specific adapters are **not** part of this; add them per platform if you
   need them.
 
+### Building on Apple Silicon / arm64
+
+The default base image, `racket/racket:9.2-full`, publishes only a
+`linux/amd64` manifest. `tesl build --container` still succeeds on an arm64
+host — Docker transparently pulls the amd64 layers — but the resulting
+image runs Racket under emulation, which can abort at boot (`Error: error
+reading from ~a ("petite")`) depending on your Docker Desktop/QEMU version.
+`docker build --platform linux/arm64 ...` on the staged context does not fix
+this: it just falls back to the same amd64 base with an
+`InvalidBaseImagePlatform` warning, since no arm64 manifest exists to select.
+
+`tesl build` warns at build time when it detects this mismatch (host is
+arm64 and the base image's manifest is amd64-only), so the amd64 fallback is
+never silent. If you have a Racket base image with a native arm64 manifest
+(self-built or from another registry), point `TESL_RACKET_BASE` at it:
+
+```bash
+TESL_RACKET_BASE=ghcr.io/you/racket:9.2-full-arm64 tesl build --container
+```
+
+There is currently no first-party native-arm64 base image; producing one
+(e.g. from the Nix flake's `aarch64-linux` package via `dockerTools`) is
+tracked as future work, not shipped today.
+
 ## See also
 
 - [`tesl.toml` project manifest](tesl-manifest.md) — the manifest `tesl build` reads

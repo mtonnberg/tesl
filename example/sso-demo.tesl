@@ -7,7 +7,13 @@ module SsoDemo exposing []
 # The provider is a VALUE from an ordinary function; the runtime owns the flow.
 
 import Tesl.Prelude exposing [String, Bool(..)]
-import Tesl.Sso exposing [SsoConnection, SsoIdentity, Github, Sso.defaults, Sso.subject]
+import Tesl.Sso exposing [
+  SsoConnection,
+  SsoIdentity,
+  Github,
+  Sso.defaults,
+  Sso.subject,
+]
 import Tesl.Env exposing [envRead, requireEnv, requireSecret]
 import Tesl.HttpClient exposing [httpClient]
 import Tesl.Time exposing [PosixMillis]

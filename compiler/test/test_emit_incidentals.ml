@@ -1214,6 +1214,83 @@ let astool_shadow_emits_plain_call () =
          "(double (asTool 20))" out
      | _ -> assert false)
 
+(* Issue #54: `sse "/path" subscribe Channel("literal")` — a broadcast-style
+   channel keyed on a fixed string with NO `:param` in the path at all. The
+   parser previously recognized only a bare identifier as the subscribe
+   argument; a string literal matched neither that arm nor the empty-parens
+   arm, so it was silently dropped and the emitted route's key slot fell back
+   to `#f` (as if the channel had no key). The connect side then registered
+   its listener under key `#f`, while `publish Channel("literal") ...` in a
+   handler computed the real string key at runtime — every event silently
+   failed to match and was dropped. The route's key slot must now carry the
+   literal string itself, matching what `publish` computes. *)
+let sse_literal_key_src = {|module Main exposing [MainServer]
+import Tesl.Prelude exposing [String, Unit]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Queue exposing [pubsub]
+import Tesl.Database exposing [Database, DatabaseBackend, Memory]
+import Tesl.SSE exposing [SseChannel]
+
+database MainDb = Database {
+  schema: "emit_incidentals_sse_literal"
+  entities: []
+  backend: Memory
+}
+
+record RunQueued {
+  runId: String
+}
+
+codec RunQueued {
+  toJson {
+    runId -> "runId" with_codec stringCodec
+  }
+  fromJson [
+    {
+      runId <- "runId" with_codec stringCodec
+    }
+  ]
+}
+
+sseChannel RunEvents(scope: String) = SseChannel {
+  database: MainDb
+  payload: RunQueued
+}
+
+handler triggerRun(runId: String) -> String
+  requires [pubsub] =
+  publish RunEvents("all") RunQueued { runId: runId }
+  "ok"
+
+api MainApi {
+  post "/trigger"
+    body runId: String
+    -> String
+
+  sse "/runs/stream"
+    subscribe RunEvents("all")
+}
+
+server MainServer for MainApi {
+  triggerRun = triggerRun
+}
+|}
+
+let sse_subscribe_literal_key_emits_matching_literal () =
+  with_files
+    [ ("main.tesl", sse_literal_key_src) ]
+    (function
+     | [main_p] ->
+       check_ok "sse literal subscribe key" main_p;
+       let out = emit_ok "sse literal subscribe key" main_p in
+       (* Route tuple's key slot is the literal string "all", not #f — it must
+          match the key `publish RunEvents("all") ...` computes at runtime. *)
+       assert_contains ~what:"sse route key slot carries the literal"
+         "(list (list \"runs\" \"stream\") #f RunEvents \"all\" (list))" out;
+       assert_not_contains ~what:"sse route no longer keys on #f"
+         "(list (list \"runs\" \"stream\") #f RunEvents #f (list))" out
+     | _ -> assert false)
+
 let tests = [
   test_case "publish record payload emits keyword ctor (same-module)" `Quick publish_record_payload_same_module;
   test_case "publish record payload emits keyword ctor (cross-module)" `Quick publish_record_payload_cross_module;
@@ -1243,6 +1320,7 @@ let tests = [
   test_case "qualified partial application in argument position eta-expands" `Quick qualified_partial_application_eta_expands;
   test_case "Money/PosixMillis newtype field decode wraps" `Quick money_posix_newtype_decode_wraps;
   test_case "user-shadowed asTool emits an ordinary call" `Quick astool_shadow_emits_plain_call;
+  test_case "sse subscribe literal key emits matching literal (#54)" `Quick sse_subscribe_literal_key_emits_matching_literal;
 ]
 
 let () =

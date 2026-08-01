@@ -972,6 +972,36 @@ _tesl_init() {
   echo "Learn more: tesl help manual   |   agent guide: AGENTS.md"
 }
 
+# Issue #54: `racket/racket:9.2-full` (the default container base) publishes
+# only a linux/amd64 manifest. On an arm64 host `docker build` still succeeds
+# — Docker transparently pulls the amd64 layers — but the resulting image
+# runs Racket under emulation, which aborted at boot for the reporter
+# ("Error: error reading from ~a (\"petite\")"). Best-effort and
+# NON-BLOCKING: skips silently if `uname`/`docker` are missing, the host
+# isn't arm64, or `docker manifest inspect` fails (offline, no experimental
+# manifest support, private registry auth) — a failed check must never block
+# a build that might otherwise have worked.
+_tesl_warn_arch_mismatch() {
+  local racket_base="$1"
+  command -v docker >/dev/null 2>&1 || return 0
+  local host_arch; host_arch="$(uname -m 2>/dev/null || true)"
+  case "$host_arch" in
+    arm64|aarch64) ;;
+    *) return 0 ;;
+  esac
+  local manifest
+  manifest="$(docker manifest inspect "$racket_base" 2>/dev/null)" || return 0
+  [ -n "$manifest" ] || return 0
+  if ! printf '%s' "$manifest" | grep -q '"architecture"[[:space:]]*:[[:space:]]*"arm64"'; then
+    echo "tesl build: warning — base image '$racket_base' has no linux/arm64 manifest;" >&2
+    echo "  this host is $host_arch, so the image will run Racket under amd64 emulation" >&2
+    echo "  (this has been reported to abort at container boot). Set TESL_RACKET_BASE to" >&2
+    echo "  an arm64-capable Racket image to build a native image instead — see" >&2
+    echo "  'tesl help manual deploy#building-on-apple-silicon-arm64'." >&2
+  fi
+  return 0
+}
+
 # ── tesl build ───────────────────────────────────────────────────────────
 # The MODE comes from [deploy].target in tesl.toml (#46 — `tesl build` used to
 # stage a Dockerfile and shell out to `docker` even for target = "local", whose
@@ -1062,6 +1092,7 @@ _tesl_build() {
   [ -z "$TAG" ] && TAG="$NAME"
 
   local RACKET_BASE="${TESL_RACKET_BASE:-racket/racket:9.2-full}"
+  _tesl_warn_arch_mismatch "$RACKET_BASE"
   local APP_RKT="app.rkt"
 
   local CTX

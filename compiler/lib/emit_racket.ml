@@ -6354,20 +6354,25 @@ let emit_sse_route ctx (ep : api_endpoint) =
      else emit ctx (Printf.sprintf "'%s" channel_name)
    | [] -> emit ctx "#f");
   emit ctx " ";
-  (* key-index: which `:param` segment carries the channel key.  Prefer the
-     explicit `subscribe Ch(arg)` argument; fall back to the sole param if there
-     is exactly one; else #f. *)
+  (* Key slot: which `:param` segment carries the channel key, OR a fixed
+     literal every connection keys on (issue #54, broadcast-style channels
+     with no path capture).  Prefer the explicit `subscribe Ch(arg)` argument;
+     fall back to the sole param if there is exactly one; else #f (no key). *)
   let param_index name =
     List.find_map (fun (i, s) -> if is_param s && param_name s = name then Some i else None) indexed in
-  let key_index =
+  let key_slot =
     match ep_subscribe_key ep with
-    | Some k -> param_index k
+    | Some (SubscribeKeyParam k) -> (match param_index k with Some i -> `Index i | None -> `None)
+    | Some (SubscribeKeyLiteral lit) -> `Literal lit
     | None ->
       (match List.filter (fun (_, s) -> is_param s) indexed with
-       | [ (i, _) ] -> Some i
-       | _ -> None)
+       | [ (i, _) ] -> `Index i
+       | _ -> `None)
   in
-  (match key_index with Some i -> emit ctx (string_of_int i) | None -> emit ctx "#f");
+  (match key_slot with
+   | `Index i -> emit ctx (string_of_int i)
+   | `Literal lit -> emit ctx (Printf.sprintf "%S" lit)
+   | `None -> emit ctx "#f");
   emit ctx " (list";
   List.iter (fun (i, s) ->
     if is_param s then

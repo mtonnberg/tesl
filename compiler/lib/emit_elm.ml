@@ -33,13 +33,45 @@ let method_lower = function
   | GET -> "get" | POST -> "post" | PUT -> "put"
   | DELETE -> "delete" | PATCH -> "patch" | SSE -> "sse"
 
-(** Derive the client function name from HTTP method + path.
-    E.g. GET /todos/:todoId → "getTodos" *)
-let fn_name_of_endpoint meth path =
+(** Base client function name from HTTP method + static path segments;
+    captured (":param") segments are dropped. E.g. GET /todos/:todoId →
+    "getTodos". *)
+let base_fn_name meth path =
   let segs = List.filter (fun s -> s <> "" && (String.length s = 0 || s.[0] <> ':'))
                (String.split_on_char '/' path) in
   let capitalized = List.map capitalize_segment segs in
   method_lower meth ^ String.concat "" capitalized
+
+(** Disambiguated client function name: captured (":param") segments fold
+    into the name as "By<Param>". E.g. GET /todos/:todoId →
+    "getTodosByTodoId". *)
+let full_fn_name meth path =
+  let segs = List.filter (fun s -> s <> "") (String.split_on_char '/' path) in
+  let named = List.map (fun s ->
+    if String.length s > 0 && s.[0] = ':' then
+      "By" ^ capitalize_segment (String.sub s 1 (String.length s - 1))
+    else capitalize_segment s
+  ) segs in
+  method_lower meth ^ String.concat "" named
+
+(** Derive client function names for a set of endpoints, keyed by
+    (method, path). Two+ endpoints sharing a base name (e.g. GET /runs and
+    GET /runs/:runId both -> "getRuns") collide once emitted as top-level
+    Elm/TS bindings, so captured param names fold into the name for every
+    endpoint in the colliding group, disambiguating them (issue #52).
+    Endpoints with a unique base name keep the plain, shorter name. *)
+let fn_names_of_endpoints (endpoints : (http_method * string) list) : (http_method * string, string) Hashtbl.t =
+  let base_names = List.map (fun (meth, path) -> (meth, path, base_fn_name meth path)) endpoints in
+  let counts = Hashtbl.create 16 in
+  List.iter (fun (_, _, base) ->
+    Hashtbl.replace counts base (1 + (try Hashtbl.find counts base with Not_found -> 0))
+  ) base_names;
+  let table = Hashtbl.create 16 in
+  List.iter (fun (meth, path, base) ->
+    let name = if Hashtbl.find counts base > 1 then full_fn_name meth path else base in
+    Hashtbl.replace table (meth, path) name
+  ) base_names;
+  table
 
 (* ── Type helpers ────────────────────────────────────────────────────────── *)
 
@@ -829,6 +861,37 @@ let decoder_for_fields ~fact_kind_of ~has_fact_decoder type_name (fields : field
     ) fields in
     Printf.sprintf "D.succeed %s\n%s" type_name (String.concat "\n" steps)
 
+(** Decoder for one ADT variant's payload. The runtime's generic value
+    serializer (`runtime-value->jsexpr` in dsl/types.rkt) puts a non-empty
+    variant's fields under a `fields` object keyed by field name — e.g.
+    `{"tag": "WorkItemRef", "fields": {"value": "github:1"}}` — not a flat
+    top-level `value` key holding only the first field (issue #53). *)
+let decode_adt_variant_payload ~fact_kind_of ~has_fact_decoder (v : adt_variant) : string =
+  match v.fields with
+  | [] -> Printf.sprintf "D.succeed %s" v.ctor
+  | fields ->
+    let n = List.length fields in
+    let field_decoders = List.map (fun (f : field_def) ->
+      Printf.sprintf "(D.field %S %s)" f.name
+        (decode_expr_of_annotated_type ~fact_kind_of ~has_fact_decoder f.type_expr f.proof_ann)
+    ) fields in
+    let inner =
+      if n = 1 then Printf.sprintf "D.map %s %s" v.ctor (List.hd field_decoders)
+      else if n <= 8 then Printf.sprintf "D.map%d %s %s" n v.ctor (String.concat " " field_decoders)
+      else
+        let steps = List.map (fun d -> Printf.sprintf "|> D.map2 (|>) %s" d) field_decoders in
+        Printf.sprintf "D.succeed %s %s" v.ctor (String.concat " " steps)
+    in
+    Printf.sprintf "D.field \"fields\" (%s)" inner
+
+(** Encoder for one ADT variant's fields, keyed by field name and nested
+    under `fields` to mirror `decode_adt_variant_payload` above. *)
+let encode_adt_variant_fields (fields : field_def list) (arg_names : string list) : string =
+  String.concat ", "
+    (List.map2 (fun (f : field_def) arg ->
+       Printf.sprintf "( %S, %s )" f.name (encode_expr_of_annotated_type f.type_expr f.proof_ann arg)
+     ) fields arg_names)
+
 (* ── Return type helpers ─────────────────────────────────────────────────── *)
 
 let combine_proofs left right =
@@ -1270,7 +1333,8 @@ let emit_elm ?module_name_override (m : module_form) : string =
     | DEntity e -> Some [e.name; decoder_fn_name e.name]
     | _ -> None
   ) m.decls |> List.concat in
-  let endpoint_exports = List.map (fun (ep : Ir.ir_endpoint) -> fn_name_of_endpoint ep.ire_method ep.ire_path) ir_module.Ir.irm_endpoints in
+  let endpoint_fn_names = fn_names_of_endpoints (List.map (fun (ep : Ir.ir_endpoint) -> (ep.ire_method, ep.ire_path)) ir_module.Ir.irm_endpoints) in
+  let endpoint_exports = List.map (fun (ep : Ir.ir_endpoint) -> Hashtbl.find endpoint_fn_names (ep.ire_method, ep.ire_path)) ir_module.Ir.irm_endpoints in
   let reserved_param_names = builtin_proof_exports @ builtin_money_exports @ newtype_exports @ fact_exports @ record_exports @ entity_exports @ endpoint_exports @ human_action_exports in
   let elm_module_name = match module_name_override with Some name -> name | None -> m.module_name in
   addf "module %s exposing%s
@@ -1511,13 +1575,7 @@ let emit_elm ?module_name_override (m : module_form) : string =
       add "                case tag of\n";
       List.iter (fun (v : adt_variant) ->
         addf "                    %S ->\n" v.ctor;
-        if v.fields = [] then
-          addf "                        D.succeed %s\n\n" v.ctor
-        else begin
-          let field = List.hd v.fields in
-          addf "                        D.map %s (D.field \"value\" %s)\n\n"
-            v.ctor (decode_expr_of_annotated_type ~fact_kind_of ~has_fact_decoder field.type_expr field.proof_ann)
-        end
+        addf "                        %s\n\n" (decode_adt_variant_payload ~fact_kind_of ~has_fact_decoder v)
       ) variants;
       add "                    _ ->\n";
       addf "                        D.fail (\"Unknown %s tag: \" ++ tag)\n" name;
@@ -1532,10 +1590,10 @@ let emit_elm ?module_name_override (m : module_form) : string =
           addf "        %s ->\n" v.ctor;
           addf "            E.object [ ( \"tag\", E.string %S ) ]\n" v.ctor
         end else begin
-          let field = List.hd v.fields in
-          addf "        %s f0 ->\n" v.ctor;
-          addf "            E.object [ ( \"tag\", E.string %S ), ( \"value\", %s ) ]\n"
-            v.ctor (encode_expr_of_annotated_type field.type_expr field.proof_ann "f0")
+          let arg_names = List.mapi (fun i _ -> Printf.sprintf "f%d" i) v.fields in
+          addf "        %s %s ->\n" v.ctor (String.concat " " arg_names);
+          addf "            E.object [ ( \"tag\", E.string %S ), ( \"fields\", E.object [ %s ] ) ]\n"
+            v.ctor (encode_adt_variant_fields v.fields arg_names)
         end
       ) variants;
       add "\n"
@@ -1662,7 +1720,7 @@ let emit_elm ?module_name_override (m : module_form) : string =
     add "-- API\n";
     add "-- ---------------------------------------------------------------------------\n\n";
     List.iter (fun (ep : Ir.ir_endpoint) ->
-      let fn_name = fn_name_of_endpoint ep.ire_method ep.ire_path in
+      let fn_name = Hashtbl.find endpoint_fn_names (ep.ire_method, ep.ire_path) in
       let fresh_param_name =
         let used = ref [] in
         fun base ->
