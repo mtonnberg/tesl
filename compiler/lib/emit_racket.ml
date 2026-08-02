@@ -3484,8 +3484,38 @@ and emit_expr_simple ctx e =
            is bound to a pure `String.dropPrefix` result must keep emitting
            bare too, since that call is already raw-value-unwrapped at its
            own let-binding site. *)
+        (* issue #69: the SAME leak for ANY plain `let`-bound local, not only the
+           [raw_needing_lets] subset.  Under the runtime safety net a plain let
+           binds the bare name to a GDP gensym SYMBOL (the value lives in
+           current-evidence-env) — `let m = selectOne … ;  Something (Tuple2 m
+           "s")` stored the symbol `m1234` in the tuple's `first` slot, so once
+           the function returned and the evidence env unwound, the declared
+           return type rejected it and every downstream `case` over that slot saw
+           a symbol instead of the `Maybe`.  The TOP-LEVEL constructor path
+           already emits `(raw-value name)` for exactly these locals (see
+           [emit_ctor_arg]); only this nested/argument-position twin did not, so
+           `Tuple2 …` nested inside `Something …` missed it while a bare
+           `Tuple2 …` was fine.  Params, raw_locals, proof_locals and
+           proof_aware_locals are EXCLUDED so the paths the #63 comment above
+           calls out keep their existing emission: `Err (Forbidden
+           requestingUser)` on a proof-aware parameter must stay bare (not
+           `*requestingUser`), and a proof-carrying let must not be stripped. *)
+        let is_plain_let_local name =
+          ctx.func_kind <> None &&
+          not (Hashtbl.mem ctx.param_names name) &&
+          not (Hashtbl.mem ctx.raw_locals name) &&
+          not (Hashtbl.mem ctx.proof_locals name) &&
+          not (Hashtbl.mem ctx.proof_aware_locals name) &&
+          not (Hashtbl.mem ctx.proof_carrier_lets name) &&
+          not (Hashtbl.mem ctx.fn_names name) &&
+          not (Hashtbl.mem stdlib_name_map name) &&
+          not (Hashtbl.mem qualified_imports name) &&
+          not (Hashtbl.mem stdlib_plain_imports name)
+        in
         let emit_generic_ctor_arg arg = match arg with
           | EVar { name; _ } when Hashtbl.mem ctx.raw_needing_lets name ->
+            emit ctx (Printf.sprintf "(raw-value %s)" name)
+          | EVar { name; _ } when is_plain_let_local name ->
             emit ctx (Printf.sprintf "(raw-value %s)" name)
           | _ -> emit_expr_simple ctx arg
         in
@@ -7964,24 +7994,38 @@ let top_decl_loc_label (d : top_decl) : Location.loc * string =
   | DApiTest t    -> t.loc, Printf.sprintf "api test %S" t.description
   | DLoadTest t   -> t.loc, Printf.sprintf "load test %S" t.description
 
+(** Known stdlib ADT constructor → field labels, IN CONSTRUCTOR ORDER.
+
+    These are not in user-imports (stdlib is always skipped) but pattern matching
+    against them needs the correct field keys (e.g. Ok n → field key is 'value,
+    not 'n).  [pattern_to_racket] indexes into each label list POSITIONALLY, so
+    both the labels and their order are load-bearing.
+
+    A constructor MISSING here does not fail loudly: the lowering falls back to
+    the pattern's own variable names as hash keys, which type-checks, compiles,
+    and even survives the byte-exact .rkt snapshot diff — then dies at runtime
+    with "hash-ref: no value found for key".  `Tuple3` was absent exactly this
+    way (GitHub #69), undetected because the corpus only ever used the
+    `Tuple3.first/.second/.third` accessors and never destructured a Tuple3.
+    test_stdlib_ctor_labels.ml now pins this table against the real runtime in
+    both directions, so neither a wrong label nor an omission can recur. *)
+let stdlib_ctor_fields : (string * string list) list = [
+  ("Ok",         ["value"]);
+  ("Err",        ["error"]);
+  ("Something",  ["value"]);
+  ("Left",       ["value"]);
+  ("Right",      ["value"]);
+  ("RowsDeleted",["count"]);
+  ("JobOk",      ["job"]);
+  ("JobFailed",  ["job"; "error"]);
+  ("Tuple2",     ["first"; "second"]);
+  ("Tuple3",     ["first"; "second"; "third"]);
+]
+
 let emit_module ctx (m : module_form) =
-  (* Pre-populate known stdlib ADT constructor → field labels.
-     These are not in user-imports (stdlib is always skipped) but pattern matching
-     against them needs the correct field keys (e.g. Ok n → field key is 'value, not 'n). *)
-  let stdlib_ctors = [
-    ("Ok",         ["value"]);
-    ("Err",        ["error"]);
-    ("Something",  ["value"]);
-    ("Left",       ["value"]);
-    ("Right",      ["value"]);
-    ("RowsDeleted",["count"]);
-    ("JobOk",      ["job"]);
-    ("JobFailed",  ["job"; "error"]);
-    ("Tuple2",     ["first"; "second"]);
-  ] in
   List.iter (fun (ctor, labels) ->
     Hashtbl.replace ctx.ctor_fields ctor labels
-  ) stdlib_ctors;
+  ) stdlib_ctor_fields;
   (* Populate ADT constructor → field labels mapping for case pattern resolution,
      and proof_annotated_ctor_fields for proof-annotated fields that must preserve named-values. *)
   List.iter (function

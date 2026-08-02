@@ -1,0 +1,239 @@
+module Sql_maybe_in_tuple_tests exposing []
+
+# Regression for GitHub #69: a `Maybe X` produced by `selectOne` and stored one
+# level deep inside a `Tuple2` was unreadable on the way back out — every
+# downstream `case` behaved as if the value were malformed, and the enclosing
+# function's declared return type rejected it
+# ("returned a value that does not satisfy declared return type").
+#
+# Root cause: under the GDP runtime a plain `let` binds the BARE name to a
+# gensym SYMBOL (the value lives in current-evidence-env), and the emitter's
+# nested/argument-position constructor path passed that bare name straight into
+# `Tuple2`, which stores its args verbatim.  The symbol was therefore frozen
+# into the tuple slot; once the function returned and the evidence env unwound,
+# nothing could resolve it.  The TOP-LEVEL constructor path already emitted
+# `(raw-value name)` for such locals — only the nested twin did not, which is
+# why a bare `Tuple2 …` worked but `Something (Tuple2 …)` did not, and why the
+# same shape built from a record field was fine.
+#
+# The bug is NOT specific to a "miss": it reproduced for a present row too.
+
+import Tesl.Prelude exposing [Bool(..), Int, List, String]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Tuple exposing [Tuple2, Tuple3]
+import Tesl.List exposing [List.length]
+
+entity Inst table "inst_tuple69" primaryKey id { id: String active: Bool }
+
+# A USER-DEFINED ADT stores its args verbatim exactly like `Tuple2` does — the
+# defect was never tuple-specific, so the generalisation is covered here too.
+type Box
+  = BoxOf inner: (Maybe Inst)
+  | BoxEmpty
+
+record TokenLookup {
+  installation: Maybe Inst
+  secretPart: String
+}
+
+# ── The shape from the report: selectOne's Maybe as slot 1 of a Tuple2 ────────
+
+fn probeBaselineSelectOne(id: String) -> Bool requires [dbRead] =
+  let maybeInst = selectOne inst from Inst where inst.id == id
+  case maybeInst of
+    Something inst -> True
+    Nothing -> False
+
+fn tuple2NestedMaybe(id: String) -> Maybe (Tuple2 (Maybe Inst) String)
+  requires [dbRead] =
+  let maybeInst = selectOne inst from Inst where inst.id == id
+  Something (Tuple2 maybeInst "secret")
+
+fn innerIsSomething(pair: Tuple2 (Maybe Inst) String) -> Bool =
+  case pair of
+    Tuple2 maybeInstVal secretPart ->
+      case maybeInstVal of
+        Something inst -> True
+        Nothing -> False
+
+fn outerUnwraps(m: Maybe (Tuple2 (Maybe Inst) String)) -> Bool =
+  case m of
+    Nothing -> False
+    Something pair -> innerIsSomething pair
+
+fn secondSlotSurvives(m: Maybe (Tuple2 (Maybe Inst) String)) -> String =
+  case m of
+    Nothing -> "none"
+    Something pair ->
+      case pair of
+        Tuple2 maybeInstVal secretPart -> secretPart
+
+# The tuple is the DIRECT return, with no `Something` wrapping it — this shape
+# already worked and must keep working.
+fn bareTuple2(id: String) -> Tuple2 (Maybe Inst) String requires [dbRead] =
+  let maybeInst = selectOne inst from Inst where inst.id == id
+  Tuple2 maybeInst "secret"
+
+# selectOne's Maybe in the SECOND slot, not the first.
+fn maybeInSecondSlot(id: String) -> Maybe (Tuple2 String (Maybe Inst))
+  requires [dbRead] =
+  let maybeInst = selectOne inst from Inst where inst.id == id
+  Something (Tuple2 "secret" maybeInst)
+
+fn secondSlotIsSomething(m: Maybe (Tuple2 String (Maybe Inst))) -> Bool =
+  case m of
+    Nothing -> False
+    Something pair ->
+      case pair of
+        Tuple2 secretPart maybeInstVal ->
+          case maybeInstVal of
+            Something inst -> True
+            Nothing -> False
+
+# Tuple3 stores its args verbatim the same way.
+fn tuple3NestedMaybe(id: String) -> Maybe (Tuple3 (Maybe Inst) String Int)
+  requires [dbRead] =
+  let maybeInst = selectOne inst from Inst where inst.id == id
+  Something (Tuple3 maybeInst "secret" 7)
+
+fn tuple3InnerIsSomething(m: Maybe (Tuple3 (Maybe Inst) String Int)) -> Bool =
+  case m of
+    Nothing -> False
+    Something triple ->
+      case triple of
+        Tuple3 maybeInstVal secretPart n ->
+          case maybeInstVal of
+            Something inst -> True
+            Nothing -> False
+
+# The record workaround from the report — must stay correct.
+fn recordNestedMaybe(id: String) -> Maybe TokenLookup requires [dbRead] =
+  let maybeInst = selectOne inst from Inst where inst.id == id
+  Something (TokenLookup { installation: maybeInst, secretPart: "secret" })
+
+fn recordInnerIsSomething(m: Maybe TokenLookup) -> Bool =
+  case m of
+    Nothing -> False
+    Something lookup ->
+      case lookup.installation of
+        Something inst -> True
+        Nothing -> False
+
+# A hand-built Maybe (no selectOne) nested the same way — the report's control
+# case, which already round-tripped correctly.
+fn handBuiltMaybe(present: Bool) -> Maybe String =
+  if present then
+    Something "hi"
+  else
+    Nothing
+
+fn handBuiltWrapped(present: Bool) -> Maybe (Tuple2 (Maybe String) String) =
+  Something (Tuple2 (handBuiltMaybe present) "secret")
+
+fn handBuiltInnerIsSomething(m: Maybe (Tuple2 (Maybe String) String)) -> Bool =
+  case m of
+    Nothing -> False
+    Something pair ->
+      case pair of
+        Tuple2 inner secretPart ->
+          case inner of
+            Something s -> True
+            Nothing -> False
+
+# A user-defined ADT constructor nested inside `Something`, same shape.
+fn boxNested(id: String) -> Maybe Box requires [dbRead] =
+  let maybeInst = selectOne inst from Inst where inst.id == id
+  Something (BoxOf maybeInst)
+
+fn boxInnerIsSomething(m: Maybe Box) -> Bool =
+  case m of
+    Nothing -> False
+    Something b -> boxHasRow b
+
+fn boxHasRow(b: Box) -> Bool =
+  case b of
+    BoxEmpty -> False
+    BoxOf inner -> maybeHasRow inner
+
+fn maybeHasRow(inner: Maybe Inst) -> Bool =
+  case inner of
+    Something i -> True
+    Nothing -> False
+
+# A list literal also stores its elements verbatim.  Returning it at all
+# exercises the declared-return-type contract, which is what rejected the
+# leaked gensym in the original report.
+fn listNested(id: String) -> Maybe (List (Maybe Inst)) requires [dbRead] =
+  let maybeInst = selectOne inst from Inst where inst.id == id
+  Something [maybeInst]
+
+fn listNestedCount(m: Maybe (List (Maybe Inst))) -> Int =
+  case m of
+    Nothing -> 0
+    Something xs -> List.length xs
+
+# ── Tests ─────────────────────────────────────────────────────────────────────
+
+test "#69 baseline: a plain selectOne Maybe reads back (control)" requires [dbRead, dbWrite] {
+  let _ = insert Inst { id: "i-1", active: True }
+  expect probeBaselineSelectOne "i-1" == True
+  expect probeBaselineSelectOne "missing" == False
+}
+
+test "#69 selectOne Maybe nested in a Tuple2 reads back for a PRESENT row" requires [dbRead, dbWrite] {
+  let _ = insert Inst { id: "i-2", active: True }
+  expect outerUnwraps (tuple2NestedMaybe "i-2") == True
+}
+
+test "#69 selectOne Maybe nested in a Tuple2 reads back for a MISSING row" requires [dbRead, dbWrite] {
+  let _ = insert Inst { id: "i-3", active: True }
+  expect outerUnwraps (tuple2NestedMaybe "missing") == False
+}
+
+test "#69 the tuple's other slot is unaffected" requires [dbRead, dbWrite] {
+  let _ = insert Inst { id: "i-4", active: True }
+  expect secondSlotSurvives (tuple2NestedMaybe "i-4") == "secret"
+  expect secondSlotSurvives (tuple2NestedMaybe "missing") == "secret"
+}
+
+test "#69 an unwrapped Tuple2 return still works" requires [dbRead, dbWrite] {
+  let _ = insert Inst { id: "i-5", active: True }
+  expect innerIsSomething (bareTuple2 "i-5") == True
+  expect innerIsSomething (bareTuple2 "missing") == False
+}
+
+test "#69 selectOne Maybe in the SECOND tuple slot reads back" requires [dbRead, dbWrite] {
+  let _ = insert Inst { id: "i-6", active: True }
+  expect secondSlotIsSomething (maybeInSecondSlot "i-6") == True
+  expect secondSlotIsSomething (maybeInSecondSlot "missing") == False
+}
+
+test "#69 selectOne Maybe nested in a Tuple3 reads back" requires [dbRead, dbWrite] {
+  let _ = insert Inst { id: "i-7", active: True }
+  expect tuple3InnerIsSomething (tuple3NestedMaybe "i-7") == True
+  expect tuple3InnerIsSomething (tuple3NestedMaybe "missing") == False
+}
+
+test "#69 the record workaround stays correct" requires [dbRead, dbWrite] {
+  let _ = insert Inst { id: "i-8", active: True }
+  expect recordInnerIsSomething (recordNestedMaybe "i-8") == True
+  expect recordInnerIsSomething (recordNestedMaybe "missing") == False
+}
+
+test "#69 generalises: a USER-DEFINED ADT ctor nested in Something" requires [dbRead, dbWrite] {
+  let _ = insert Inst { id: "i-9", active: True }
+  expect boxInnerIsSomething (boxNested "i-9") == True
+  expect boxInnerIsSomething (boxNested "missing") == False
+}
+
+test "#69 generalises: a list literal nested in Something" requires [dbRead, dbWrite] {
+  let _ = insert Inst { id: "i-10", active: True }
+  expect listNestedCount (listNested "i-10") == 1
+  expect listNestedCount (listNested "missing") == 1
+}
+
+test "#69 a hand-built Maybe nested the same way stays correct (control)" {
+  expect handBuiltInnerIsSomething (handBuiltWrapped True) == True
+  expect handBuiltInnerIsSomething (handBuiltWrapped False) == False
+}

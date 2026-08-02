@@ -191,3 +191,17 @@
  (names test_stdlib_runtime_binding)
  (modules test_stdlib_runtime_binding)
  (libraries tesl_compiler_lib alcotest str unix))
+
+; Stdlib constructor field-LABEL seam test (GitHub #69's drift class closer):
+; Emit_racket.stdlib_ctor_fields tells pattern_to_racket which hash key each
+; POSITIONAL sub-pattern binds, and a missing row silently lowers
+; `case t of Tuple3 a b c` to (hash-ref … 'a) — green through the whole gate,
+; dead at runtime.  This pins the table against the RUNTIME in both directions
+; (rows match real ordered labels; no field-carrying ctor lacks a row), with the
+; labels recovered by applying each constructor to sentinels.  Self-skips loudly
+; without racket:
+;   dune exec test/test_stdlib_ctor_labels.exe
+(tests
+ (names test_stdlib_ctor_labels)
+ (modules test_stdlib_ctor_labels)
+ (libraries tesl_compiler_lib alcotest str unix))
