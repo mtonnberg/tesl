@@ -9,11 +9,12 @@
          json
          racket/string
          (only-in "../tesl/crypto.rkt" base64url-encode)
+         (only-in net/uri-codec uri-encode)
          (only-in "../dsl/capability.rkt" with-capabilities)
          (only-in "../tesl/http-client.rkt" httpClient)
          (only-in "../tesl/private/http-stub.rkt" current-outbound-http-hook)
          "../dsl/sso.rkt"
-         (only-in "../tesl/sso.rkt" Sso.allowedEmailDomains))
+         (only-in "../tesl/sso.rkt" Sso.allowedEmailDomains Sso.logoutUrl))
 
 (define KEY #"session-key-current-0000000000000000")
 (define now 1000000)
@@ -237,3 +238,45 @@
       (define r2 (sso-handle-callback no-conn "gh" "c" c2 REDIRECT (list KEY #f) #:now now))
       (check-false (hash-ref r2 'ok) "the verified primary is not in a different allow-list")
       (check-regexp-match #rx"domain" (hash-ref r2 'reason)))))
+
+;;; ── RP-initiated logout (issue #67) ──────────────────────────────────────────
+;; The discovery document's own end_session_endpoint is captured and turned
+;; into the full logout redirect, with client_id/post_logout_redirect_uri
+;; percent-encoded onto it.  A provider that omits the field (or a
+;; plain-OAuth2 connection, which has no discovery step at all) refuses
+;; loudly rather than silently building a URL nobody can use.
+
+(define oidc-discovery-with-logout
+  (jsexpr->string
+   (hasheq 'issuer "https://issuer.example"
+           'authorization_endpoint "https://issuer.example/authorize"
+           'token_endpoint "https://issuer.example/token"
+           'jwks_uri "https://issuer.example/jwks"
+           'end_session_endpoint "https://issuer.example/logout"
+           'id_token_signing_alg_values_supported '("RS256")
+           'code_challenge_methods_supported '("S256"))))
+
+(define (logout-discovery-dispatch doc)
+  (lambda (method url body)
+    (cond
+      [(regexp-match? #rx"well-known" url) (json-answer doc)]
+      [else #f])))
+
+(test-case "Sso.logoutUrl builds the RP-initiated logout redirect from discovery"
+  (with-hook (logout-discovery-dispatch oidc-discovery-with-logout)
+    (lambda ()
+      (define url (Sso.logoutUrl oidc-conn "https://app.example/goodbye"))
+      (check-true (regexp-match? #rx"^https://issuer[.]example/logout[?]" url))
+      (check-true (regexp-match? #rx"client_id=client-1" url))
+      (check-true (regexp-match?
+                   (regexp (string-append "post_logout_redirect_uri="
+                                          (uri-encode "https://app.example/goodbye")))
+                   url)))))
+
+(test-case "Sso.logoutUrl raises when the provider does not advertise end_session_endpoint"
+  (with-hook (logout-discovery-dispatch oidc-discovery)  ; no end_session_endpoint field
+    (lambda ()
+      (check-exn exn:fail? (lambda () (Sso.logoutUrl oidc-conn "https://app.example/goodbye"))))))
+
+(test-case "Sso.logoutUrl raises for a plain-OAuth2 connection (no discovery, no logout endpoint)"
+  (check-exn exn:fail? (lambda () (Sso.logoutUrl gh-emails-conn "https://app.example/goodbye"))))

@@ -6,7 +6,7 @@
 ;;; server clause (route minting, onIdentity) is the remaining compiler-surface
 ;;; work; these are the "provider is a value" foundation it builds on.
 
-(require (only-in "../dsl/sso.rkt" sso-defaults sso-oidc)
+(require (only-in "../dsl/sso.rkt" sso-defaults sso-oidc sso-logout-url)
          (only-in "../dsl/types.rkt" register-runtime-type/runtime! Something Nothing))
 
 ;; Register runtime predicates for the opaque SSO types so a Tesl fn declaring
@@ -21,7 +21,8 @@
 
 (provide Sso.defaults Sso.oidc Sso.keyText Sso.subject
          Sso.email Sso.tenant Sso.claim
-         Sso.allowedEmailDomains Sso.allowedHostedDomains Sso.allowedTenants)
+         Sso.allowedEmailDomains Sso.allowedHostedDomains Sso.allowedTenants
+         Sso.logoutUrl)
 
 ;; Sso.defaults : String -> String -> Secret -> SsoConnection
 ;; v1 takes the provider as a String name; the baked `SsoProvider` ADT lands with
@@ -74,3 +75,14 @@
   (hash-set connection 'allowed-hosted-domains domains))
 (define (Sso.allowedTenants connection tenants)
   (hash-set connection 'allowed-tenants tenants))
+
+;; Sso.logoutUrl : SsoConnection -> String -> String (issue #67)
+;; RP-initiated logout (OIDC RP-Initiated Logout 1.0): re-discovers the
+;; connection's end_session_endpoint and builds the full redirect URL, so an
+;; app's own /logout handler can end the IdP's browser session too, not just
+;; its own. Raises if the provider doesn't advertise end_session_endpoint
+;; (plain OAuth2 providers such as GitHub/Discord never do).
+(define (Sso.logoutUrl connection post-logout-redirect-uri)
+  (or (sso-logout-url connection post-logout-redirect-uri)
+      (raise-user-error 'Sso.logoutUrl
+                        "provider does not advertise an end_session_endpoint (RP-initiated logout is not supported)")))

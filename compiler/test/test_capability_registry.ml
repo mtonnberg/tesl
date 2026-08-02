@@ -60,6 +60,9 @@ let oracle = [
   "Http.clearSessionCookie", ["cookieCap"];
   "HttpClient.get", ["httpClient"]; "HttpClient.post", ["httpClient"];
   "HttpClient.put", ["httpClient"]; "HttpClient.delete", ["httpClient"];
+  (* Sso.logoutUrl (#67) performs a live OIDC discovery fetch to find the
+     provider's end_session_endpoint — the same effect HttpClient.get charges. *)
+  "Sso.logoutUrl", ["httpClient"];
   "UUID.v4", ["uuid"]; "UUID.v7", ["uuid"];
   "ask", ["aiProvider"]; "askReply", ["aiProvider"]; "askWith", ["aiProvider"];
   "askFor", ["aiProvider"]; "converse", ["aiProvider"];

@@ -299,6 +299,15 @@
   ;; …and the parameter is genuinely scoped: back to round-trip afterwards.
   (check-equal? (runtime-value->jsexpr pw) "hunter2"))
 
+;; issue #66: a `handler -> Unit` type-checked fine but crashed the HTTP
+;; response path with `jsexpr->bytes: expected argument of type <legal JSON
+;; value>; given: #<void>` — Unit's runtime shape IS Racket's (void), and this
+;; walk had no clause for it. Now it renders as the empty JSON object, so a
+;; side-effect-only handler's response body serializes instead of 500ing.
+(test-case "runtime-value->jsexpr renders Unit's (void) as a legal JSON value"
+  (check-equal? (runtime-value->jsexpr (void)) (hasheq))
+  (check-equal? (bytes->string/utf-8 (jsexpr->bytes (runtime-value->jsexpr (void)))) "{}"))
+
 ;; ── 4. `==` stays, and is constant-time ──────────────────────────────────────
 
 (test-case "tesl-equal? on secrets: correct answers"

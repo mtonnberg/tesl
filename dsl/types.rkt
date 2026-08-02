@@ -935,6 +935,12 @@
      (list->vector (map runtime-value->jsexpr (vector->list value)))]
     [(symbol? value)
      (symbol->string value)]
+    ;; Unit's runtime representation is Racket's (void) — not a legal JSON value
+    ;; on its own (issue #66: a `handler -> Unit` crashed jsexpr->bytes with a
+    ;; raw #<void>). Render it as the empty object, so a side-effect-only
+    ;; handler's response body serializes instead of 500ing after the fact.
+    [(void? value)
+     (hasheq)]
     [else value]))
 
 (define (jsexpr-object-ref object key [default #f])

@@ -51,7 +51,7 @@
          ;; JWKS cache + rotation refetch (Risk 27) — reset + accessor for tests
          jwks-cache-reset! jwks-for
          ;; orchestration (Layer 2)
-         sso-begin-login sso-handle-callback
+         sso-begin-login sso-handle-callback sso-logout-url
          ;; positional wrappers so dsl/web.rkt can dynamic-require them without
          ;; keyword-apply (and without a compile-time require cycle through
          ;; http-client -> traces -> web).
@@ -426,9 +426,10 @@
   (unless (and (list? methods) (member "S256" methods))
     (error 'sso-discovery "provider does not advertise PKCE S256"))
   (hasheq 'kind 'oidc 'issuer issuer
-          'authorize-url (hash-ref doc 'authorization_endpoint)
-          'token-url     (hash-ref doc 'token_endpoint)
-          'jwks-url      (hash-ref doc 'jwks_uri #f)
+          'authorize-url    (hash-ref doc 'authorization_endpoint)
+          'token-url        (hash-ref doc 'token_endpoint)
+          'jwks-url         (hash-ref doc 'jwks_uri #f)
+          'end-session-url  (hash-ref doc 'end_session_endpoint #f)
           'signing-algs  (let ([a (hash-ref doc 'id_token_signing_alg_values_supported '())])
                            (if (list? a) a '()))))
 
@@ -463,6 +464,22 @@
                   (hasheq 'seg segment 'state state 'nonce nonce 'v verifier 'ts now)
                   session-key-bytes))
   (values authorize-url cookie))
+
+;; RP-initiated logout (OIDC RP-Initiated Logout 1.0, issue #67).  Re-discovers
+;; the issuer's endpoints, exactly like sso-begin-login/sso-handle-callback —
+;; the connection carries no cached endpoint state, so a rotated
+;; end_session_endpoint is always honored.  Returns #f if the provider does not
+;; advertise one (plain OAuth2 connections have no discovery step at all; an
+;; OIDC provider may simply omit the field) — the caller decides the fallback.
+(define (sso-logout-url conn post-logout-redirect-uri #:id-token-hint [id-token-hint #f])
+  (define ep (resolve-endpoints conn))
+  (define end-session-url (hash-ref ep 'end-session-url #f))
+  (and end-session-url
+       (let ([params (append
+                      (list (cons "client_id" (hash-ref conn 'client-id))
+                            (cons "post_logout_redirect_uri" post-logout-redirect-uri))
+                      (if id-token-hint (list (cons "id_token_hint" id-token-hint)) '()))])
+         (build-authorize-url end-session-url params '()))))
 
 ;; Handle the callback.  Returns (hash 'ok #t 'identity <SsoIdentity>) or
 ;; (hash 'ok #f 'reason <fixed string>).  `session-keys` is (list current-bytes

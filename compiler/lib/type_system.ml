@@ -897,6 +897,12 @@ let stdlib_env : (string * scheme) list = [
   "Sso.allowedEmailDomains",  mono (t_fun [t_sso_connection; t_list t_string] t_sso_connection);
   "Sso.allowedHostedDomains", mono (t_fun [t_sso_connection; t_list t_string] t_sso_connection);
   "Sso.allowedTenants",       mono (t_fun [t_sso_connection; t_list t_string] t_sso_connection);
+  (* RP-initiated logout (issue #67): re-discovers the connection's
+     end_session_endpoint and builds the full redirect URL, so an app's own
+     /logout handler can end the IdP's browser session too. Charges
+     `httpClient` — it performs a live discovery fetch, same as the
+     login/callback orchestration does. *)
+  "Sso.logoutUrl", mono (t_fun [t_sso_connection; t_string] t_string);
   (* Item A (#50.2): a check-shaped verification of a proxy-binding header
      value against a configured Secret; mints `ProxyBound` (proof-layer). *)
   "Proxy.verifyBinding", mono (t_fun [t_secret; t_string] t_string);
@@ -1464,7 +1470,8 @@ let tesl_module_exports : (string * string list) list = [
       "SsoProvider"; "Github"; "Google";
       "Sso.defaults"; "Sso.oidc"; "Sso.keyText"; "Sso.subject";
       "Sso.email"; "Sso.tenant"; "Sso.claim";
-      "Sso.allowedEmailDomains"; "Sso.allowedHostedDomains"; "Sso.allowedTenants" ] );
+      "Sso.allowedEmailDomains"; "Sso.allowedHostedDomains"; "Sso.allowedTenants";
+      "Sso.logoutUrl" ] );
   ( "Tesl.Proxy",
     (* Item A: authenticating-proxy edge binding.  `ProxyBound` is the fact
        minted only by the check-shaped `Proxy.verifyBinding`. *)
@@ -1723,6 +1730,10 @@ let stdlib_capabilities : (string * string list) list = [
   (* HttpClient.bearer / .secretHeader build a header PAIR and perform no I/O:
      a capability marks an effect, and these have none.  The verb that actually
      sends still requires `httpClient`. *)
+  (* Sso.logoutUrl (#67) does a live OIDC discovery fetch, same as the
+     login/callback orchestration path — charges `httpClient` for the same
+     reason HttpClient.get does. *)
+  "Sso.logoutUrl", ["httpClient"];
   (* UUID generation (A2-3 drift fix: these were MISSING from var_caps). *)
   "UUID.v4", ["uuid"]; "UUID.v7", ["uuid"];
   (* Tesl.Agent inference entry points — every call that contacts a provider. *)

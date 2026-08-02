@@ -918,6 +918,8 @@ let sso : entry list = [
     ~doc:"The identity's tenant as a Maybe String — the OIDC `tid` / Google Workspace `hd` when present, Nothing otherwise. Use it to scope a multi-tenant app; pair with Sso.allowedTenants to restrict at the connection.";
   f "Sso.claim" [ "identity"; "name" ] ~m:"Tesl.Sso"
     ~doc:"Reads a single string claim from the verified token by name, as a Maybe String (Nothing if absent or not a string). For arbitrary claims beyond subject/email/tenant.";
+  f "Sso.logoutUrl" [ "connection"; "postLogoutRedirectUri" ] ~m:"Tesl.Sso"
+    ~doc:"Builds the RP-initiated logout URL (OIDC RP-Initiated Logout 1.0) that ends the IdP's own browser session, not just the app's. Re-discovers the connection's `end_session_endpoint` on every call, so a rotated endpoint is always honored; requires `httpClient` since discovery is a live fetch. Raises if the provider does not advertise `end_session_endpoint` (plain OAuth2 providers such as GitHub/Discord never do). A `handler` typically returns this String and the frontend navigates to it after clearing its own session cookie.";
 ]
 
 let entries : entry list =
