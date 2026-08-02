@@ -1,0 +1,179 @@
+module AdtIndexedFactTests exposing [PermissionServer]
+
+# GitHub issue #70 — a `fact` INDEXED BY AN ADT CONSTRUCTOR.
+#
+# `fact MayUse (c: Caller) (p: Permission)` demanded as `MayUse c WriteCostRates`
+# passed `tesl check` and then trapped at Racket codegen:
+#
+#   define-checker: unbound GDP name in return annotation: (WriteCostRates)
+#
+# The Racket GDP kernel read EVERY symbol in proof-argument position as a GDP
+# name, while the frontend has always read an uppercase-initial argument as a
+# CONSTANT (a value name cannot start uppercase — that is a lexer error).  This
+# file is the runtime half of the fix: the proof templates below only expand if
+# the kernel agrees with the frontend, so a regression fails here rather than in
+# a user's project.
+#
+# The compile-time half — a misspelled or wrong-ADT constructor rejected at
+# check time, and two constructors staying non-interchangeable — lives in
+# compiler/test/test_issues_70_71.ml.
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List]
+import Tesl.List exposing [List.member, List.length]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Json exposing [stringCodec]
+import Tesl.ApiTest exposing [statusOk]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Maybe exposing [Maybe(..)]
+
+type Permission
+  = WriteCostRates
+  | ReadProjects
+  | ManageUsers
+
+record Caller {
+  name: String
+  granted: List Permission
+}
+
+fact MayUse (c: Caller) (p: Permission)
+
+# One check per capability, each minting a proof indexed by its own constructor.
+check mayWriteCostRates(c: Caller) -> c: Caller ::: MayUse c WriteCostRates =
+  if List.member WriteCostRates c.granted then
+    ok c ::: MayUse c WriteCostRates
+  else
+    fail 403 "missing permission write:cost-rates"
+
+check mayReadProjects(c: Caller) -> c: Caller ::: MayUse c ReadProjects =
+  if List.member ReadProjects c.granted then
+    ok c ::: MayUse c ReadProjects
+  else
+    fail 403 "missing permission read:projects"
+
+check mayManageUsers(c: Caller) -> c: Caller ::: MayUse c ManageUsers =
+  if List.member ManageUsers c.granted then
+    ok c ::: MayUse c ManageUsers
+  else
+    fail 403 "missing permission manage:users"
+
+# Each core function demands its own constructor-indexed proof.  A caller with
+# only WriteCostRates cannot reach readProjectsCore — that rejection is a
+# compile-time property, pinned in the OCaml suite.
+fn writeCostRatesCore(c: Caller ::: MayUse c WriteCostRates) -> String =
+  "wrote cost rates"
+
+fn readProjectsCore(c: Caller ::: MayUse c ReadProjects) -> String =
+  "read projects"
+
+fn manageUsersCore(c: Caller ::: MayUse c ManageUsers) -> String =
+  "managed users"
+
+# A second fact over the same ADT, to pin that the constructor argument is not
+# special-cased to one fact's shape.
+fact Grants (c: Caller) (p: Permission)
+
+check grantsReadProjects(c: Caller) -> c: Caller ::: Grants c ReadProjects =
+  if List.member ReadProjects c.granted then
+    ok c ::: Grants c ReadProjects
+  else
+    fail 403 "not granted read:projects"
+
+fn describeGrant(c: Caller ::: Grants c ReadProjects) -> String =
+  c.name ++ " may read projects"
+
+fn mkCaller(name: String, granted: List Permission) -> Caller =
+  Caller { name: name, granted: granted }
+
+fn grantedCount(c: Caller) -> Int =
+  List.length c.granted
+
+# ═══════════════════════════════════════════════════════════════════════════
+# The same constructor-indexed proof through the api/auth/handler path — the
+# handler's declared proof, the auth clause's copy of it, and the reject arm.
+# ═══════════════════════════════════════════════════════════════════════════
+
+fact Authenticated (c: Caller)
+
+record CapabilityReport {
+  outcome: String
+}
+
+codec CapabilityReport {
+  toJson {
+    outcome -> "outcome" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+fn permissionsFor(claim: String) -> List Permission =
+  if claim == "write" then
+    [WriteCostRates]
+  else
+    [ReadProjects]
+
+auth resolveCaller(request: HttpRequest) -> c: Caller ::: Authenticated c =
+  case Dict.lookup "perm" request.cookies of
+    Nothing -> fail 401 "no caller"
+    Something claim ->
+      let c = mkCaller "cookie-caller" (permissionsFor claim)
+      ok c ::: Authenticated c
+
+handler writeCostRates(c: Caller ::: Authenticated c) -> CapabilityReport =
+  let allowed = check mayWriteCostRates c
+  CapabilityReport { outcome: writeCostRatesCore allowed }
+
+api PermissionApi {
+  get "/cost-rates"
+    auth c: Caller ::: Authenticated c via resolveCaller
+    -> CapabilityReport
+}
+
+server PermissionServer for PermissionApi {
+  writeCostRates = writeCostRates
+}
+
+api-test "a granted caller reaches the constructor-indexed core" for PermissionServer {
+  let resp = get "/cost-rates" cookie "perm=write"
+  expect statusOk resp.status
+  expect resp.body.outcome == "wrote cost rates"
+}
+
+api-test "a caller without the permission is rejected by the check" for PermissionServer {
+  let resp = get "/cost-rates" cookie "perm=read"
+  expect resp.status == 403
+}
+
+api-test "no caller cookie is a 401" for PermissionServer {
+  let resp = get "/cost-rates"
+  expect resp.status == 401
+}
+
+test "a caller granted WriteCostRates passes its own check" {
+  let c = mkCaller "alice" [WriteCostRates]
+  let proven = check mayWriteCostRates c
+  expect (writeCostRatesCore proven) == "wrote cost rates"
+}
+
+test "a caller granted ReadProjects passes its own check" {
+  let c = mkCaller "bob" [ReadProjects]
+  let proven = check mayReadProjects c
+  expect (readProjectsCore proven) == "read projects"
+}
+
+test "one caller can mint every constructor-indexed proof it holds" {
+  let c = mkCaller "root" [WriteCostRates, ReadProjects, ManageUsers]
+  expect (grantedCount c) == 3
+  let w = check mayWriteCostRates c
+  expect (writeCostRatesCore w) == "wrote cost rates"
+  let r = check mayReadProjects c
+  expect (readProjectsCore r) == "read projects"
+  let m = check mayManageUsers c
+  expect (manageUsersCore m) == "managed users"
+}
+
+test "a second fact over the same ADT works the same way" {
+  let c = mkCaller "dave" [ReadProjects]
+  let proven = check grantsReadProjects c
+  expect (describeGrant proven) == "dave may read projects"
+}

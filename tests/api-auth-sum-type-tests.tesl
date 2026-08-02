@@ -1,0 +1,137 @@
+module ApiAuthSumTypeTests exposing [CallerServer]
+
+# GitHub issue #71 — a MULTI-VARIANT SUM TYPE as an api `auth` binding type,
+# declared in the SAME module as the `api`/`server` blocks.
+#
+#   error[T001]: unknown type: Simple
+#     --> mini2.tesl:22:13        # the api block's `auth` clause
+#
+# The identical `c: Caller ::: Authenticated c` annotation checked fine on the
+# `auth` function's own signature, on the handler parameter, and on the fact's
+# parameter — only the `api` block's copy was rejected, and moving the type into
+# an imported module made the same spelling compile and serve.
+#
+# `Checker.check_api_decl_types` built its known-type list from records +
+# CONSTRUCTORS + env + imports, never from the ADT/alias tables.  A newtype
+# (`type UserId = String`) passed only by the name coincidence ctor≡type — and an
+# ADT can never have that coincidence, because a constructor sharing its type's
+# name is itself a V001 error.  So NO sum type was ever accepted here.  Both
+# shapes are exercised below, in one module with the api.
+#
+# The negative direction — an api type naming nothing must still be
+# `unknown type` — is pinned in compiler/test/test_issues_70_71.ml.
+
+import Tesl.Prelude exposing [Bool(..), String]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Json exposing [stringCodec]
+import Tesl.ApiTest exposing [statusOk]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Maybe exposing [Maybe(..)]
+
+# The closed sum the issue's design wanted: one universal `auth` binding type
+# across routes, with a variant per kind of actor.
+type Caller
+  = HumanActs String
+  | AppActs String
+  | SystemActs
+
+# A newtype in the same module, to pin that the spelling that used to pass only
+# by the accidental ctor≡type coincidence still passes now that the ADT and alias
+# tables are the authority.
+type TenantId = String
+
+fact Authenticated (c: Caller)
+fact TenantScoped (t: TenantId)
+
+record WhoAmI {
+  actor: String
+}
+
+codec WhoAmI {
+  toJson {
+    actor -> "actor" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+fn describe(c: Caller) -> String =
+  case c of
+    HumanActs name -> "human:" ++ name
+    AppActs name -> "app:" ++ name
+    SystemActs -> "system"
+
+fn callerFor(claim: String) -> Caller =
+  if claim == "system" then
+    SystemActs
+  else
+    if claim == "app" then
+      AppActs "deploy-bot"
+    else
+      HumanActs claim
+
+auth resolveCaller(request: HttpRequest) -> c: Caller ::: Authenticated c =
+  case Dict.lookup "actor" request.cookies of
+    Nothing -> fail 401 "not authenticated"
+    Something claim ->
+      let c = callerFor claim
+      ok c ::: Authenticated c
+
+handler whoami(c: Caller ::: Authenticated c) -> WhoAmI =
+  WhoAmI { actor: describe c }
+
+api CallerApi {
+  get "/whoami"
+    auth c: Caller ::: Authenticated c via resolveCaller
+    -> WhoAmI
+}
+
+server CallerServer for CallerApi {
+  whoami = whoami
+}
+
+# The newtype spelling, in the same module, exercised as ordinary proof-carrying
+# code so a regression in the type table shows up here too rather than only in
+# the api block.
+check checkTenant(t: TenantId) -> t: TenantId ::: TenantScoped t =
+  if t.value == "" then
+    fail 400 "tenant required"
+  else
+    ok t ::: TenantScoped t
+
+fn tenantLabel(t: TenantId ::: TenantScoped t) -> String =
+  "tenant:" ++ t.value
+
+api-test "a human caller is served" for CallerServer {
+  let resp = get "/whoami" cookie "actor=alice"
+  expect statusOk resp.status
+  expect resp.body.actor == "human:alice"
+}
+
+api-test "an app caller is served" for CallerServer {
+  let resp = get "/whoami" cookie "actor=app"
+  expect statusOk resp.status
+  expect resp.body.actor == "app:deploy-bot"
+}
+
+api-test "a nullary variant is served" for CallerServer {
+  let resp = get "/whoami" cookie "actor=system"
+  expect statusOk resp.status
+  expect resp.body.actor == "system"
+}
+
+api-test "no actor cookie is a 401" for CallerServer {
+  let resp = get "/whoami"
+  expect resp.status == 401
+}
+
+test "the sum type describes each variant" {
+  expect (describe (HumanActs "bob")) == "human:bob"
+  expect (describe (AppActs "ci")) == "app:ci"
+  expect (describe SystemActs) == "system"
+}
+
+test "a same-module newtype still carries a proof" {
+  let t = TenantId "acme"
+  let scoped = check checkTenant t
+  expect (tenantLabel scoped) == "tenant:acme"
+}

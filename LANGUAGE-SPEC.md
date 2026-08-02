@@ -297,6 +297,8 @@ A detached proof may be physically attached to another named value, but that doe
 
 Proof annotations and proof templates must only refer to names that are in scope under the relevant proof-binding rules.
 
+A GDP **name** is always a value binding, and a value binding cannot start with an uppercase letter. So an uppercase-initial argument in a proof template is not a name at all — it is a **constant**, most usefully an ADT constructor. A fact may therefore be *indexed* by a constructor: given `fact MayUse (c: Caller) (p: Permission)`, the templates `MayUse c WriteCostRates` and `MayUse c ReadProjects` are distinct, non-interchangeable proofs about the same subject `c`, so one `check` per constructor replaces one fact per capability. A constructor argument must name a constructor of the ADT the fact declares at that position; a misspelled or wrong-ADT constructor is a compile error.
+
 ### 7.9 Existential witnesses may not escape
 **Accepted design, Implemented**
 

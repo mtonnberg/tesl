@@ -433,10 +433,51 @@
     (values (string-downcase (api-test-string-fragment key))
             (api-test-string-fragment value))))
 
+;; A response's headers are a LIST that may repeat a field name, but `resp.headers`
+;; is a `Dict String String`, so folding the list into a hash is inherently lossy:
+;; `for/hash` keeps whichever binding it saw LAST.  For almost every header that
+;; is a protocol oddity, and last-wins is left alone.
+;;
+;; `Set-Cookie` is the exception: HTTP repeats it BY DESIGN, one line per cookie,
+;; and a response that both sets and clears a cookie is completely ordinary.  The
+;; SSO callback is exactly that — it emits
+;;
+;;   Set-Cookie: __Host-session=<token>; …          ← the session it just minted
+;;   Set-Cookie: __Host-oauth=; Max-Age=0           ← the spent oauth state
+;;
+;; so last-wins made `resp.headers`'s "set-cookie" (and therefore `responseCookie`,
+;; which reads it) the CLEARED cookie.  Feeding that back into `cookie` carries no
+;; session, so the very next request 401s — a wrong-but-plausible value, not an
+;; error, which is why it read as "the login flow is broken" instead of "the test
+;; harness dropped a header".
+;;
+;; So for set-cookie the surviving line is chosen, not accidental: the first line
+;; that actually SETS something (a non-empty cookie value).  A `Max-Age=0` clear
+;; sets no cookie, so it can never shadow a real one.  With only clears present the
+;; last one still wins, preserving the old behaviour for that case.  `responseCookie`
+;; needs no rule of its own — one place decides, so the two agree, as its docs
+;; promise ("assert the attributes against response.headers's set-cookie entry").
+(define (cookie-line-sets-a-value? line)
+  (define pair (string-trim (car (string-split line ";" #:trim? #f))))
+  (define eq-index (for/first ([c (in-string pair)] [i (in-naturals)] #:when (char=? c #\=)) i))
+  (and eq-index (> (string-length pair) (add1 eq-index))))
+
 (define (response-headers->hash headers)
-  (for/hash ([h (in-list headers)])
-    (values (string-downcase (bytes->string/utf-8 (header-field h)))
+  (define pairs
+    (for/list ([h (in-list headers)])
+      (cons (string-downcase (bytes->string/utf-8 (header-field h)))
             (bytes->string/utf-8 (header-value h)))))
+  (define last-wins
+    (for/hash ([p (in-list pairs)]) (values (car p) (cdr p))))
+  (define set-cookie-lines
+    (for/list ([p (in-list pairs)] #:when (string=? (car p) "set-cookie")) (cdr p)))
+  (define chosen-set-cookie
+    (for/first ([line (in-list set-cookie-lines)]
+                #:when (cookie-line-sets-a-value? line))
+      line))
+  (if chosen-set-cookie
+      (hash-set last-wins "set-cookie" chosen-set-cookie)
+      last-wins))
 
 (define (api-test-response response)
   (hash 'status  (dsl-response-status response)

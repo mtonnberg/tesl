@@ -2072,10 +2072,32 @@
               (char=? (string-ref s 0) #\*)
               (member (string->symbol (substring s 1)) bound)))))
 
+;; A GDP name is always a Tesl VALUE binding, and the Tesl lexer forbids an
+;; uppercase-initial value name (`fn double(N: Int ...)` is a parse error).  So an
+;; uppercase-initial symbol in proof-argument position can never be a GDP name —
+;; it is a CONSTANT reference: an ADT constructor value (`MayUse c WriteCostRates`
+;; for `fact MayUse (c: Caller) (p: Permission)`), a column/type name, or another
+;; capitalised literal.  The frontend uses exactly this rule to decide what is a
+;; proof subject (`Proof_checker.proof_subjects` / `Validation_common.proof_subjects`
+;; filter args to lowercase-initial), and `Validation_capabilities.check_fact_arg_types`
+;; owns validating that such a constructor really exists and belongs to the ADT the
+;; fact declares at that position.  Reporting these as "unbound GDP name" here was
+;; kernel-vs-frontend drift: `tesl check` passed and codegen trapped (issue #70).
+;; ASCII A-Z, not char-upper-case?, so this predicate is character-for-character
+;; the frontend's rule (`s.[0] >= 'A' && s.[0] <= 'Z'`) — a divergence here would
+;; be the same kernel-vs-frontend drift in a narrower form.
+(define (constant-reference-symbol? datum)
+  (and (symbol? datum)
+       (let ([s (symbol->string datum)])
+         (and (> (string-length s) 0)
+              (char<=? #\A (string-ref s 0) #\Z)))))
+
 (define (proof-arg-unbound-names datum bound)
   (cond
     [(symbol? datum)
-     (if (or (member datum bound) (raw-value-var-of-bound? datum bound))
+     (if (or (member datum bound)
+             (raw-value-var-of-bound? datum bound)
+             (constant-reference-symbol? datum))
          '()
          (list datum))]
     [(gdp-atom? datum) '()]

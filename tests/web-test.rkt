@@ -11,12 +11,14 @@
          (only-in "../tesl/queue.rkt"
                   channel-spec channel-spec-listeners publish-event! pubsub)
          (only-in "../tesl/sse.rkt" make-sse-connection-handler)
+         (only-in web-server/http/request-structs header)
          "../example/document-api.rkt")
 
 (define-runtime-path check-rkt "../dsl/check.rkt")
 (define-runtime-path trusted-rkt "../dsl/trusted.rkt")
 (define-runtime-path web-rkt "../dsl/web.rkt")
 (define-runtime-path document-api-path "../example/document-api.rkt")
+(define-runtime-path test-support-rkt "../dsl/test-support.rkt")
 
 (define (module-private-value module-path symbol-name)
   (dynamic-require `(file ,(path->string module-path)) #f)
@@ -974,3 +976,48 @@
   (check-true (sse32-poll-until (lambda () (= 0 (sse32-listener-count ch "live-1"))))
               "issue #32c: live subscriber cleanly unregistered on disconnect")
   (kill-thread drain))
+
+;; ── api-test response headers: `Set-Cookie` repeats BY DESIGN ────────────────
+;;
+;; `resp.headers` is a `Dict String String`, so folding a response's header LIST
+;; into a hash has to pick one value per field name.  For nearly every header a
+;; repeat is a protocol oddity and last-wins is fine.  `Set-Cookie` is different:
+;; HTTP repeats it once per cookie, and a response that sets one cookie while
+;; clearing another is completely ordinary — the SSO callback is exactly that.
+;;
+;; Last-wins made the CLEARED cookie the one `resp.headers`'s "set-cookie" (and
+;; therefore `responseCookie`, which reads it) reported.  Feeding that back into a
+;; request's `cookie` clause carries no session, so the next call 401s.  The
+;; failure surfaced as "the SSO login flow is broken" — a wrong-but-plausible
+;; value, never an error — when the harness had simply dropped a header.
+;;
+;; The surviving set-cookie line is therefore CHOSEN: the first line that actually
+;; sets a value.  A `Max-Age=0` clear sets nothing, so it can never shadow a real
+;; cookie, in either order.
+(let ([response-headers->hash
+       (module-private-value test-support-rkt 'response-headers->hash)])
+  (define (hdr name value)
+    (header (string->bytes/utf-8 name) (string->bytes/utf-8 value)))
+  (define session-line "__Host-session=tok-1; Path=/; Max-Age=3600")
+  (define clear-line   "__Host-oauth=; Path=/; Max-Age=0")
+
+  ;; The SSO callback's exact shape: mint the session, clear the spent oauth state.
+  (define sso-shape
+    (response-headers->hash
+     (list (hdr "Location" "/me") (hdr "Set-Cookie" session-line) (hdr "Set-Cookie" clear-line))))
+  (check-equal? (hash-ref sso-shape "set-cookie") session-line
+                "a Max-Age=0 clear must not shadow the session cookie beside it")
+  (check-equal? (hash-ref sso-shape "location") "/me"
+                "single-valued headers are untouched")
+
+  ;; Order-independent — the clear may be emitted first.
+  (define clear-first
+    (response-headers->hash
+     (list (hdr "Set-Cookie" clear-line) (hdr "Set-Cookie" session-line))))
+  (check-equal? (hash-ref clear-first "set-cookie") session-line
+                "the setting cookie wins regardless of emission order")
+
+  ;; Nothing but clears: the clear is still what the response said.
+  (define only-clear (response-headers->hash (list (hdr "Set-Cookie" clear-line))))
+  (check-equal? (hash-ref only-clear "set-cookie") clear-line
+                "a response that only clears still reports the clear"))

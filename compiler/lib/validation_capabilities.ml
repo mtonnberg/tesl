@@ -1507,8 +1507,19 @@ let check_capability_cycles (decls : top_decl list) : validation_error list =
     parameter types in `fact` declarations.
     E.g. `fact IsPositive (n: Int)` with `ok s ::: IsPositive s` where `s: String`
     is a type mismatch and should be a compile error.
-    Only simple variable-name arguments are checked; complex expressions are skipped. *)
-let check_fact_arg_types (decls : top_decl list) : validation_error list =
+    Only simple variable-name arguments are checked; complex expressions are skipped.
+
+    A lowercase-initial argument is a GDP subject (a variable); an uppercase-initial
+    one is a CONSTANT reference — for an ADT-typed fact parameter, a constructor of
+    that ADT (`fact MayUse (c: Caller) (p: Permission)` demanded as
+    `MayUse c WriteCostRates`).  Issue #70: such a constructor argument used to be
+    unvalidated at check time and was caught only accidentally, by the Racket GDP
+    kernel's unbound-name guard, i.e. at codegen — and once that kernel learned the
+    frontend's uppercase-is-a-constant rule, nothing checked it at all.  This pass
+    owns it: [type_decls] supplies the ADT variant table (local decls plus imported
+    type-like decls) so a misspelled or wrong-ADT constructor is a check-time error. *)
+let check_fact_arg_types ?(type_decls : top_decl list option) (decls : top_decl list)
+  : validation_error list =
   (* Build map: fact_name → declared param bindings *)
   let fact_map : (string * binding list) list =
     List.filter_map (function
@@ -1519,6 +1530,19 @@ let check_fact_arg_types (decls : top_decl list) : validation_error list =
   if fact_map = [] then []
   else begin
     let errors = ref [] in
+    (* ADT type name → its constructor names.  Consulted only for an
+       uppercase-initial (constant) proof argument whose fact parameter declares
+       exactly this ADT, so nothing else in the corpus can be affected. *)
+    let adt_variants : (string * string list) list =
+      List.filter_map (function
+        | DType (TypeAdt { name; variants; _ }) ->
+          Some (name, List.map (fun (v : adt_variant) -> v.ctor) variants)
+        | _ -> None
+      ) (match type_decls with Some ds -> ds | None -> decls)
+    in
+    let is_constant_ref (arg : string) : bool =
+      String.length arg > 0 && arg.[0] >= 'A' && arg.[0] <= 'Z'
+    in
     (* Check one proof expression given a local var→type_key env *)
     (* ~entity:true = this proof is in entity-proof position (e.g. Int ? BoundedBy limit)
        where the entity variable is auto-appended as the last argument, so
@@ -1561,7 +1585,32 @@ let check_fact_arg_types (decls : top_decl list) : validation_error list =
                     || String.contains arg_name '*' then ()
                  else
                    match List.assoc_opt arg_name local_env with
-                   | None -> ()  (* Variable not in scope map — skip *)
+                   | None ->
+                     (* Not a variable in scope.  If it is an uppercase-initial
+                        CONSTANT reference and the fact declares an ADT at this
+                        position, it must name one of that ADT's constructors —
+                        otherwise the proof is indexed by a name that denotes
+                        nothing (issue #70).  [is_simple_proof_subject] keeps this
+                        to bare identifiers: a compound argument (`Id == todoId`)
+                        also starts uppercase but is not a constructor reference. *)
+                     if is_constant_ref arg_name && is_simple_proof_subject arg_name then
+                       (match List.assoc_opt decl_key adt_variants with
+                        | None -> ()  (* declared type is not a known ADT — skip *)
+                        | Some ctors ->
+                          if not (List.mem arg_name ctors) then
+                            let use_loc =
+                              if ploc.start.col > 0 || ploc.start.line > 0 then ploc else loc
+                            in
+                            errors := make_error use_loc
+                              ~hint:(Printf.sprintf
+                                "fact `%s` declares parameter `%s: %s`; write one of its \
+constructors here: %s"
+                                pred param.name decl_key (String.concat ", " ctors))
+                              (Printf.sprintf
+                                "proof `%s %s`: argument `%s` is not a constructor of `%s`"
+                                pred (String.concat " " args) arg_name decl_key)
+                            :: !errors)
+                     else ()  (* Variable not in scope map — skip *)
                    | Some actual_key ->
                      if actual_key <> decl_key then
                        let use_loc = if ploc.start.col > 0 || ploc.start.line > 0 then ploc else loc in

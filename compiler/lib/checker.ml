@@ -187,6 +187,26 @@ let make_ctx ?(source_lines = [||]) ~filename ~env () = {
   source_lines;
 }
 
+(** Every TYPE name the module's own declarations introduce.
+
+    Single source for "is this type name declared here?".  It is DERIVED from the
+    three tables that {!collect_type_defs} writes — the one place where a declaration
+    becomes a type — rather than from a hand-picked subset of them:
+
+      [DRecord] / [DEntity]           → [records]
+      [DType (TypeAdt …)]             → [adts]
+      [DType (TypeNewtype …)]         → [type_aliases] (+ [secret_types])
+      [DType (TypeAlias …)]           → [type_aliases]
+
+    That derivation is the point.  Issue #71 was a consumer
+    ({!check_api_decl_types}) rebuilding this list from [records] + [ctors] and
+    forgetting [adts]/[type_aliases], so a type the checker knew perfectly well
+    was "unknown type" in an api type position.  Reading the tables the
+    registration writes means a future type-declaring form is visible to every
+    scope check the moment it registers, with nothing to remember to update. *)
+let ctx_type_names ctx =
+  List.map fst ctx.records @ List.map fst ctx.adts @ List.map fst ctx.type_aliases
+
 let add_error ctx loc msg =
   ctx.errors := { loc; message = msg; fix = None } :: !(ctx.errors)
 
@@ -6661,8 +6681,23 @@ let check_api_decl_types ctx (m : module_form) =
     if n > 4 && String.sub s (n - 4) 4 = "(..)" then String.sub s 0 (n - 4)
     else s
   in
-  (* Collect all known type names *)
-  let record_names  = List.map fst ctx.records in
+  (* Collect all known type names.
+
+     Issue #71: the locally declared types come from {!ctx_type_names} — the
+     single derived list — NOT from a subset of the ctx tables picked by hand.
+     This pass used to read [records] + [ctors] only.  [ctors] holds CONSTRUCTOR
+     names, so a newtype (`type UserId = String`) was accepted purely by the name
+     coincidence ctor≡type — a coincidence an ADT can never have, since a
+     constructor sharing its type's name is itself a V001 error.  So NO sum type
+     was accepted here: `type Simple = VariantA | VariantB` was "unknown type" in
+     an api `auth`/`capture`/body position even though the very same annotation
+     checks fine on the `auth` function and the handler parameter, and even though
+     moving the type to another module made the identical spelling compile and
+     serve.
+
+     [ctors] stays in the list on its own account: a constructor name is a legal
+     spelling for the newtype/opaque types whose ctor IS the type. *)
+  let local_type_names = ctx_type_names ctx in
   let ctor_names    = List.map fst ctx.ctors in
   let env_names     = List.map fst ctx.env in
   let tesl_stdlib_imported =
@@ -6687,7 +6722,7 @@ let check_api_decl_types ctx (m : module_form) =
     ) m.imports
   in
   let known_types =
-    record_names @ ctor_names @ env_names
+    local_type_names @ ctor_names @ env_names
     @ tesl_stdlib_imported @ local_imported_names
   in
   let check_type_name_in_scope loc name =

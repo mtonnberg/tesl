@@ -89,7 +89,7 @@ let check_module (m : module_form) : validation_error list =
   @ (TProof @: check_ghost_witness_predicates ~facts decls_with_imported_types)
   @ (TProof @: check_filter_check_args ~facts decls)
   @ (TProof @: check_forall_consistency ~facts decls)
-  @ (TProof @: check_fact_arg_types decls)
+  @ (TProof @: check_fact_arg_types ~type_decls:decls_with_imported_types decls)
   @ (TProof @: check_exists_bindings decls)
   (* review 2.1: now given imported_funcs so an existential pack of an IMPORTED
      proof-returning function (e.g. `insertCommentBody … ? FromDb`) is recognised

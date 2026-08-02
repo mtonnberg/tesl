@@ -12,6 +12,7 @@
 (define-runtime-path check-rkt "../dsl/check.rkt")
 (define-runtime-path web-rkt "../dsl/web.rkt")
 (define-runtime-path private-trusted-rkt "../dsl/private/trusted.rkt")
+(define-runtime-path types-rkt "../dsl/types.rkt")
 
 (define (run-temp-module source [provided #f])
   (define temp-path (make-temporary-file "tesl-body-proof-test-~a.rkt"))
@@ -67,6 +68,47 @@
 (provide result)
 "
           (path->string check-rkt)))
+
+;; Issue #70 — a fact INDEXED BY AN ADT CONSTRUCTOR
+;; (`fact MayUse (c: Caller) (p: Permission)` demanded as
+;; `MayUse c WriteCostRates`).  An uppercase-initial proof argument is a CONSTANT
+;; reference, never a GDP name: the Tesl lexer rejects an uppercase-initial value
+;; name, and the frontend's proof-subject filters keep only lowercase-initial
+;; args.  The kernel used to read every symbol as a GDP name, so `tesl check`
+;; passed and this expansion died with "unbound GDP name in return annotation".
+(define adt-constructor-proof-arg-module
+  (format "#lang racket
+(require (file ~s) (file ~s))
+(define MayUse 'MayUse)
+(define-adt Permission
+  [WriteCostRates]
+  [ReadProjects])
+(define-checker
+  (may-write [c : Integer])
+  #:returns [c : Integer ::: (MayUse c WriteCostRates)]
+  (accept (MayUse c WriteCostRates) #:value *c))
+(define result (may-write 5))
+(provide result)
+"
+          (path->string check-rkt)
+          (path->string types-rkt)))
+
+;; The rule is narrow: a LOWERCASE unbound name in the very same argument slot is
+;; still an unbound GDP name.
+(define invalid-lowercase-second-arg-module
+  (format "#lang racket
+(require (file ~s) (file ~s))
+(define MayUse 'MayUse)
+(define-adt Permission
+  [WriteCostRates]
+  [ReadProjects])
+(define-checker
+  (may-write [c : Integer])
+  #:returns [c : Integer ::: (MayUse c writeCostRates)]
+  (accept (MayUse c writeCostRates) #:value *c))
+"
+          (path->string check-rkt)
+          (path->string types-rkt)))
 
 (define invalid-accept-unbound-module
   (format "#lang racket
@@ -195,6 +237,19 @@
         (check-equal? (hash-ref bindings subject) 7)]
        [other
         (error 'test "unexpected local checker proof shape: ~a" other)]))
+   (test-case "an ADT constructor may index a fact in a proof template (issue #70)"
+     (define result (run-temp-module adt-constructor-proof-arg-module 'result))
+     (check-true (check-ok? result))
+     (check-equal? (check-ok-value result) 5)
+     (define fact (detached-proof-fact (detach-proof result)))
+     (match fact
+       [`(MayUse ,subject WriteCostRates)
+        (check-true (symbol? subject))]
+       [other
+        (error 'test "unexpected constructor-indexed proof shape: ~a" other)]))
+   (test-case "a lowercase unbound name in the same slot is still rejected"
+     (check-exn (exn-message-matches? #rx"unbound GDP name")
+                (lambda () (run-temp-module invalid-lowercase-second-arg-module))))
    (test-case "accept rejects unbound proof names in checker bodies"
      (check-exn (exn-message-matches? #rx"unbound GDP name.*proof template")
                 (lambda () (run-temp-module invalid-accept-unbound-module))))
