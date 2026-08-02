@@ -75,6 +75,18 @@ let fn_names_of_endpoints (endpoints : (http_method * string) list) : (http_meth
 
 (* ── Type helpers ────────────────────────────────────────────────────────── *)
 
+(* Elm type application binds tighter than anything else, so ANY rendered type
+   that is itself an application must be parenthesized before it is handed to
+   another type constructor (`Proven`, `List`, `Maybe`, `D.Decoder`, …).
+   Deciding that from the rendered TEXT rather than from the AST node kind is
+   what makes it total: several AST shapes render to a multi-word type without
+   being a `TApp` (a bare `Set` renders as `List value`), and every future
+   rendering rule inherits the rule for free. *)
+let elm_paren_if_applied text =
+  if String.contains text ' ' then "(" ^ text ^ ")" else text
+
+let elm_type_application head arg = head ^ " " ^ elm_paren_if_applied arg
+
 let rec elm_type_of_type_expr te =
   match te with
   | TName { name = "String"; _ } -> "String"
@@ -108,10 +120,55 @@ let rec elm_type_of_type_expr te =
   | TVar { name; _ } -> name
   | _ -> "value"
 
-and elm_type_arg te =
+and elm_type_arg te = elm_paren_if_applied (elm_type_of_type_expr te)
+
+(* Can a HAND-WRITTEN module outside the generated one spell this type without
+   importing the generated module?
+
+   Every nominal type Tesl owns — an ADT, a record, an entity, a newtype, and
+   the `Money` / `MoneyRate` aliases — is DECLARED IN the generated module, so
+   naming it requires importing that module.  That matters for exactly one
+   thing: the `ApiHelpers.<check> : <base> -> Bool` predicate the client asks
+   the user to write.  The generated module imports ApiHelpers, so if
+   ApiHelpers had to import it back, Elm rejects the pair with an IMPORT CYCLE
+   and NEITHER module compiles.
+
+   Only types built from `elm/core` names are safe to put in that signature. *)
+let rec elm_client_nameable_type ~newtype_base te =
   match te with
-  | TApp _ | TFun _ | TTuple _ -> "(" ^ elm_type_of_type_expr te ^ ")"
-  | _ -> elm_type_of_type_expr te
+  | TName { name = "String" | "Int" | "Integer" | "Float" | "Real" | "Bool"
+                 | "Int32" | "PosixMillis" | "Unit"
+            (* Opaque stdlib secrets erase to a bare String. *)
+                 | "PasswordHash" | "Secret" | "Signature" | "JwtToken"; _ } ->
+    Some (elm_type_of_type_expr te)
+  (* A dimensioned quantity erases to Float; Money / MoneyRate do NOT — they
+     become module-local `type alias`es. *)
+  | TName { name; _ } when Ir.is_money_rate_type_name name -> None
+  | TName { name; _ } when Ir.is_quantity_type_name name -> Some "Float"
+  (* A `newtype` emits a TRANSPARENT `type alias` in the generated module, so
+     the outside module can spell the UNDERLYING type instead and Elm unifies
+     the two.  The alias name itself is still off limits — importing it is the
+     cycle. *)
+  | TName { name; _ } ->
+    (match newtype_base name with
+     | Some base -> elm_client_nameable_type ~newtype_base base
+     | None -> None)
+  | TApp { head = TName { name = ("List" | "Maybe") as head_name; _ }; arg; _ } ->
+    (match elm_client_nameable_type ~newtype_base arg with
+     | Some inner -> Some (elm_type_application head_name inner)
+     | None -> None)
+  (* A `Set` renders as `List value` — `value` is the generator's own
+     placeholder, not a type anyone can write. *)
+  | _ -> None
+
+let elm_type_nameable_outside_module ~newtype_base te =
+  elm_client_nameable_type ~newtype_base te <> None
+
+(* The `newtype NAME = <base>` table of the module being emitted. *)
+let newtype_base_of_decls (decls : top_decl list) name =
+  List.find_map (function
+    | DType (TypeNewtype { name = n; base_type; _ }) when n = name -> Some base_type
+    | _ -> None) decls
 
 let dummy_emit_loc = Location.dummy_loc "<emit_elm>"
 
@@ -277,11 +334,7 @@ let elm_type_with_proof te proof_ann =
       (elm_type_arg te)
       (elm_proof_type_annotation proof)
 
-let elm_type_application head arg =
-  if String.contains arg ' ' then head ^ " (" ^ arg ^ ")" else head ^ " " ^ arg
-
-let elm_result_type_arg ty =
-  if String.contains ty ' ' then "(" ^ ty ^ ")" else ty
+let elm_result_type_arg ty = elm_paren_if_applied ty
 
 (* ── Decoder / encoder helpers ───────────────────────────────────────────── *)
 
@@ -368,8 +421,7 @@ let encode_expr_of_annotated_type te proof_ann value_expr =
   | None -> encode_expr_of_type te value_expr
   | Some _ -> encode_expr_of_type te ("(exorcise " ^ value_expr ^ ")")
 
-let elm_type_text_arg text =
-  if String.contains text ' ' then "(" ^ text ^ ")" else text
+let elm_type_text_arg text = elm_paren_if_applied text
 
 let rec elm_type_of_ir_type (ty : Ir.ir_type) =
   match ty with
@@ -612,10 +664,31 @@ type elm_fact_kind =
      helper fn). Rather than SILENTLY dropping the smart constructor (issue #13 —
      which then breaks `elm make` with a confusing "does not expose fooOk"), emit
      the constructor delegating the predicate to a user-managed `ApiHelpers.<check>`
-     Elm function. If the user hasn't written it, `elm make` fails LOUD and clear. *)
+     Elm function. If the user hasn't written it, `elm make` fails LOUD and clear.
+
+     Only reachable when the base type is nameable from OUTSIDE the generated
+     module ([elm_type_nameable_outside_module]).  A base type Tesl owns (an
+     ADT, record, entity, newtype, Money) is declared IN the generated module,
+     so the ApiHelpers signature would have to import it — and since the
+     generated module imports ApiHelpers, Elm rejects the pair as an import
+     cycle and NEITHER module compiles.  Those fall back to [FkServerOnly]. *)
   | FkElmHelper of { checker : string; base_type : type_expr }
   | FkAuth of { checker : string; base_type : type_expr }
+  (* Same situation as [FkElmHelper] — the predicate calls a user `fn` — but the
+     base type is one TESL OWNS, so it is declared in the generated module and
+     an `ApiHelpers.<check> : <base> -> Bool` signature cannot be written
+     without importing that module back (the import cycle).
+
+     The dependency is INVERTED instead of dropped: the generated module does
+     not import anything, and the smart constructor takes the predicate as a
+     parameter.  The user's own module is then free to import the generated one
+     and pass a predicate with full access to the domain type.  Same trust level
+     as ApiHelpers — a client-side predicate the server re-validates — and Elm
+     still forces the caller to supply one, so it cannot be silently skipped. *)
+  | FkElmInjected of { checker : string; base_type : type_expr }
   | FkServerOnly of { checker : string option; base_type : type_expr }
+
+let fk_server_only ~checker base_type = FkServerOnly { checker; base_type }
 
 let fallback_type_expr =
   TName { name = "String"; loc = Location.dummy_loc "<emit_elm>" }
@@ -714,7 +787,7 @@ let classify_fact fact_name
     ~(decls : top_decl list) : elm_fact_kind =
   let base_type = find_fact_base_type fact_name ~fact_decls ~decls in
   if Hashtbl.mem establish_fns fact_name then
-    FkServerOnly { checker = Some (Hashtbl.find establish_fns fact_name); base_type }
+    fk_server_only ~checker:(Some (Hashtbl.find establish_fns fact_name)) base_type
   else begin
     let check_or_auth = List.find_opt (function
       | DFunc func ->
@@ -729,7 +802,7 @@ let classify_fact fact_name
        | AuthKind -> FkAuth { checker = func.name; base_type }
        | CheckKind ->
          if fact_decl_param_count fact_name ~fact_decls <> 1 then
-           FkServerOnly { checker = Some func.name; base_type }
+           fk_server_only ~checker:(Some func.name) base_type
          else
            let base_name = match func.params with
              | p :: _ -> p.name
@@ -743,7 +816,7 @@ let classify_fact fact_name
                   nested guard). Stay server-only — manufacturing a client proof
                   from the partial subset would accept values the full predicate
                   rejects (soundness). *)
-               | None -> FkServerOnly { checker = Some func.name; base_type })
+               | None -> fk_server_only ~checker:(Some func.name) base_type)
             (* No flat constraints extracted. Delegate to `ApiHelpers.<check>` ONLY
                when the predicate CALLS A USER-DEFINED `fn` (the issue #13 scenario:
                a validator factored into a helper). An unconditional check (`ok x`)
@@ -777,12 +850,20 @@ let classify_fact fact_name
                 | EOk { value; _ } -> calls_user_fn value
                 | _ -> false
               in
+              (* …and only when the user can actually WRITE that ApiHelpers
+                 function: its signature names the base type, which for a
+                 Tesl-owned type lives in the generated module and would close
+                 an import cycle. *)
               if calls_user_fn func.body then
-                FkElmHelper { checker = func.name; base_type }
+                if elm_type_nameable_outside_module
+                     ~newtype_base:(newtype_base_of_decls decls) base_type then
+                  FkElmHelper { checker = func.name; base_type }
+                else
+                  FkElmInjected { checker = func.name; base_type }
               else
-                FkServerOnly { checker = Some func.name; base_type })
-       | _ -> FkServerOnly { checker = Some func.name; base_type })
-    | _ -> FkServerOnly { checker = None; base_type }
+                fk_server_only ~checker:(Some func.name) base_type)
+       | _ -> fk_server_only ~checker:(Some func.name) base_type)
+    | _ -> fk_server_only ~checker:None base_type
   end
 
 (* ── Proof-aware decoders ────────────────────────────────────────────────── *)
@@ -1308,7 +1389,8 @@ let emit_elm ?module_name_override (m : module_form) : string =
       let kind = fact_kind_of fd.name in
       let base = [fd.name; fact_decoder_name fd.name] in
       Some (match kind with
-        | FkElmSmart _ | FkElmHelper _ -> base @ [smart_constructor_name fd.name]
+        | FkElmSmart _ | FkElmHelper _ | FkElmInjected _ ->
+          base @ [smart_constructor_name fd.name]
         | FkAuth _ | FkServerOnly _ -> base)
     | _ -> None
   ) m.decls |> List.concat in
@@ -1361,11 +1443,25 @@ let emit_elm ?module_name_override (m : module_form) : string =
      `ApiHelpers.<check>`. Only import ApiHelpers when at least one such check
      exists, so projects with only inlinable checks never have to create the
      module (issue #13). *)
-  let uses_api_helpers =
-    List.exists (function
-      | DFact fd -> (match fact_kind_of fd.name with FkElmHelper _ -> true | _ -> false)
-      | _ -> false) m.decls
+  let api_helper_sigs =
+    let newtype_base = newtype_base_of_decls m.decls in
+    List.fold_left (fun acc decl ->
+      match decl with
+      | DFact fd ->
+        (match fact_kind_of fd.name with
+         | FkElmHelper { checker; base_type } when not (List.mem_assoc checker acc) ->
+           (* Spell the parameter with `elm/core` types.  The base type's own
+              name may be a module-local alias, and importing it back into
+              ApiHelpers is exactly the cycle this signature has to avoid. *)
+           let ty = match elm_client_nameable_type ~newtype_base base_type with
+             | Some t -> t
+             | None -> elm_type_of_type_expr base_type
+           in
+           acc @ [(checker, ty)]
+         | _ -> acc)
+      | _ -> acc) [] m.decls
   in
+  let uses_api_helpers = api_helper_sigs <> [] in
   (* ── Imports ── *)
   add "import Http\n";
   add "import Json.Decode as D\n";
@@ -1376,10 +1472,18 @@ let emit_elm ?module_name_override (m : module_form) : string =
     add "import RefinementProofs.Theory exposing (Proven, axiom, exorcise, And, and)\n";
   if uses_api_helpers then begin
     add "\n";
-    add "{- This client references ApiHelpers.<check> : <base> -> Bool for each `check`\n";
-    add "   whose predicate calls a helper fn (not inlinable). Provide an ApiHelpers.elm\n";
-    add "   module implementing them, kept in sync with the Tesl checks. The server\n";
-    add "   re-validates, so ApiHelpers is a client-side convenience, not a trust point. -}\n";
+    add "{- Each `check` whose predicate calls a helper fn is not inlinable into Elm, so\n";
+    add "   this client delegates it to a hand-written ApiHelpers module. Create\n";
+    add "   ApiHelpers.elm with exactly these definitions, kept in sync with the Tesl\n";
+    add "   checks:\n\n";
+    addf "       module ApiHelpers exposing (%s)\n\n"
+      (String.concat ", " (List.map fst api_helper_sigs));
+    List.iter (fun (fn, ty) -> addf "       %s : %s -> Bool\n" fn ty) api_helper_sigs;
+    add "\n";
+    add "   Do NOT import this module from ApiHelpers: this module imports ApiHelpers,\n";
+    add "   and Elm rejects import cycles. The parameter types above are spelled with\n";
+    add "   `elm/core` types for exactly that reason. The server re-validates, so\n";
+    add "   ApiHelpers is a client-side convenience, not a trust point. -}\n";
     add "import ApiHelpers\n"
   end;
   add "\n\n";
@@ -1486,10 +1590,17 @@ let emit_elm ?module_name_override (m : module_form) : string =
       let base_type = match kind with
         | FkElmSmart { base_type; _ }
         | FkElmHelper { base_type; _ }
+        | FkElmInjected { base_type; _ }
         | FkAuth { base_type; _ }
         | FkServerOnly { base_type; _ } -> base_type
       in
       let elm_base = elm_type_of_type_expr base_type in
+      (* `Proven` takes the base type as a TYPE ARGUMENT, so a compound base
+         (`List Permission`, `Maybe Foo`, …) must be parenthesized or Elm reads
+         `Proven List Permission Fact` as three separate arguments (issue #72).
+         The plain `elm_base` still applies in argument/alias position, where
+         the extra parens would be noise. *)
+      let elm_base_arg = elm_type_arg base_type in
       addf "type %s\n    = %s\n\n" fact_name fact_name;
       (match kind with
        | FkElmSmart { constraints; _ } ->
@@ -1498,7 +1609,7 @@ let emit_elm ?module_name_override (m : module_form) : string =
            | Some xs -> xs
            | None -> []
          in
-         addf "%s : %s -> Maybe (Proven %s %s)\n" smart_name elm_base elm_base fact_name;
+         addf "%s : %s -> Maybe (Proven %s %s)\n" smart_name elm_base elm_base_arg fact_name;
          addf "%s input =\n" smart_name;
          if conditions = [] then
            addf "    Just (axiom %s input)\n\n" fact_name
@@ -1508,7 +1619,7 @@ let emit_elm ?module_name_override (m : module_form) : string =
            add "    else\n";
            add "        Nothing\n\n"
          end;
-         addf "%s : D.Decoder (Proven %s %s)\n" (fact_decoder_name fact_name) elm_base fact_name;
+         addf "%s : D.Decoder (Proven %s %s)\n" (fact_decoder_name fact_name) elm_base_arg fact_name;
          addf "%s =\n" (fact_decoder_name fact_name);
          addf "    %s\n" (decode_expr_of_type base_type);
          add "        |> D.andThen\n";
@@ -1527,13 +1638,13 @@ let emit_elm ?module_name_override (m : module_form) : string =
             Tesl check; the server remains authoritative, so a divergence is only a
             UX issue, never a soundness hole. *)
          let smart_name = smart_constructor_name fact_name in
-         addf "%s : %s -> Maybe (Proven %s %s)\n" smart_name elm_base elm_base fact_name;
+         addf "%s : %s -> Maybe (Proven %s %s)\n" smart_name elm_base elm_base_arg fact_name;
          addf "%s input =\n" smart_name;
          addf "    if ApiHelpers.%s input then\n" checker;
          addf "        Just (axiom %s input)\n" fact_name;
          add "    else\n";
          add "        Nothing\n\n";
-         addf "%s : D.Decoder (Proven %s %s)\n" (fact_decoder_name fact_name) elm_base fact_name;
+         addf "%s : D.Decoder (Proven %s %s)\n" (fact_decoder_name fact_name) elm_base_arg fact_name;
          addf "%s =\n" (fact_decoder_name fact_name);
          addf "    %s\n" (decode_expr_of_type base_type);
          add "        |> D.andThen\n";
@@ -1543,8 +1654,37 @@ let emit_elm ?module_name_override (m : module_form) : string =
          add "                        D.succeed x\n";
          add "                    Nothing ->\n";
          addf "                        D.fail %S\n            )\n\n" ("Failed proof: " ^ fact_name)
+       (* `%s` is a Tesl-owned base type, so no outside module can name it
+          without importing this one — and this module would have to import
+          that one back.  Take the predicate as a PARAMETER instead: with the
+          dependency inverted, the caller's module imports this one freely and
+          its predicate sees the domain type in full. *)
+       | FkElmInjected { checker; _ } ->
+         let smart_name = smart_constructor_name fact_name in
+         addf "{- The base type `%s` names a type declared in THIS module, so an\n" elm_base;
+         addf "   `ApiHelpers.%s : %s -> Bool` would have to import this module while\n"
+           checker elm_base;
+         add "   this module imports ApiHelpers — Elm rejects that pair as an import\n";
+         add "   cycle. The predicate is a parameter instead: YOUR module can import this\n";
+         add "   one and pass a predicate with full access to the type. Mirror the Tesl\n";
+         add "   `check`; the server re-validates, so this is a client-side convenience,\n";
+         add "   not a trust point. -}\n";
+         addf "%s : (%s -> Bool) -> %s -> Maybe (Proven %s %s)\n"
+           smart_name elm_base elm_base elm_base_arg fact_name;
+         addf "%s predicate input =\n" smart_name;
+         add "    if predicate input then\n";
+         addf "        Just (axiom %s input)\n" fact_name;
+         add "    else\n";
+         add "        Nothing\n\n";
+         (* The decoder cannot ask a call site for a predicate without threading
+            one through every record decoder that references it, so it trusts the
+            server-validated response — exactly as a server-only fact does. *)
+         addf "%s : D.Decoder (Proven %s %s)\n" (fact_decoder_name fact_name) elm_base_arg fact_name;
+         addf "%s =\n" (fact_decoder_name fact_name);
+         addf "    %s\n" (decode_expr_of_type base_type);
+         addf "        |> D.map (axiom %s)\n\n" fact_name
        | FkAuth _ | FkServerOnly _ ->
-         addf "%s : D.Decoder (Proven %s %s)\n" (fact_decoder_name fact_name) elm_base fact_name;
+         addf "%s : D.Decoder (Proven %s %s)\n" (fact_decoder_name fact_name) elm_base_arg fact_name;
          addf "%s =\n" (fact_decoder_name fact_name);
          addf "    %s\n" (decode_expr_of_type base_type);
          addf "        |> D.map (axiom %s)\n\n" fact_name)
@@ -1571,7 +1711,7 @@ let emit_elm ?module_name_override (m : module_form) : string =
           let field_types = String.concat " "
             (List.map (fun (f : field_def) ->
                let ty = elm_type_with_proof f.type_expr f.proof_ann in
-               if String.contains ty ' ' then "(" ^ ty ^ ")" else ty
+               elm_paren_if_applied ty
              ) v.fields) in
           addf "%s%s %s\n" prefix v.ctor field_types
         end
