@@ -45,7 +45,7 @@
          ;; provider defaults + issuer synthesis
          sso-defaults sso-oidc synthesize-issuer
          ;; single-use state
-         make-spent-state-set state-spend!
+         make-spent-state-set state-spend! sso-spent-states-reset!
          ;; SSRF preflight
          url-ssrf-violation
          ;; JWKS cache + rotation refetch (Risk 27) — reset + accessor for tests
@@ -337,6 +337,17 @@
      (hash-set! ht state (+ now (spent-set-ttl set))) #t]
     [else (hash-set! ht state (+ now (spent-set-ttl set))) #t]))
 
+;; The process-wide spent-state set `sso-handle-callback` spends against. One
+;; instance for the whole process (not per-connection) — the guarantee is
+;; "this state value was already used in THIS process," which holds regardless
+;; of which SSO connection presented it.
+(define default-spent-states (make-spent-state-set))
+
+;; Test-only escape hatch, same shape as jwks-cache-reset! — a single process
+;; running many independent test cases against the same fixed `state` literals
+;; needs to clear this between cases; a real server never calls it.
+(define (sso-spent-states-reset!) (hash-clear! (spent-set-ht default-spent-states)))
+
 ;;; ── SSRF preflight ────────────────────────────────────────────────────────────
 ;; Returns a reason string if the URL's host is a forbidden literal IP, else #f.
 ;; A hostname is passed through here; the RESOLVE-then-connect-pin step (refuse if
@@ -491,6 +502,13 @@
     [(not st) (fail "invalid or missing login state")]
     [(and presented-state (not (equal? presented-state (hash-ref st 'state #f))))
      (fail "state mismatch")]
+    ;; Single-use `state`, honestly scoped to this process (see spent-set
+    ;; comment above): a second presentation of the same state — e.g. a user
+    ;; double-clicking back/reload on the callback URL, or an attacker replaying
+    ;; a captured callback request — fails here instead of re-running the token
+    ;; exchange a second time.
+    [(let ([s (hash-ref st 'state #f)]) (and s (not (state-spend! default-spent-states s now))))
+     (fail "state already used")]
     [else
      (with-handlers ([exn:fail? (lambda (_e) (fail (format "sso callback failed: ~a" (exn-message _e))))])
        (define nonce (hash-ref st 'nonce #f))

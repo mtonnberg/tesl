@@ -75,4 +75,9 @@ EXPOSE __PORT__
 #   TESL_POSTGRES_PASSWORD   e.g. (secret)
 ENV TESL_POSTGRES_PORT=5432
 
+# Run the network-facing app as an unprivileged user, not root.
+RUN useradd --system --no-create-home tesl \
+ && chown -R tesl:tesl /opt/tesl
+USER tesl
+
 ENTRYPOINT ["racket", "/opt/tesl/app/__APP_RKT__"]

@@ -89,6 +89,7 @@
    (lambda ()
      (define-values (_u cookie)
        (sso-begin-login (mk-conn) "x" REDIRECT KEY #:state "s" #:nonce "N" #:verifier "v" #:now now))
+     (sso-spent-states-reset!)
      (sso-handle-callback (mk-conn) "x" "code" cookie REDIRECT (list KEY #f) #:now now)))
   ;; find the /token request record
   (define tok (findf (lambda (r) (regexp-match? #rx"/token" (car r))) (unbox hdrs)))
@@ -110,6 +111,7 @@
    (lambda ()
      (define-values (_u cookie)
        (sso-begin-login (mk-conn) "x" REDIRECT KEY #:state "s" #:nonce "N" #:verifier "v" #:now now))
+     (sso-spent-states-reset!)
      (define r (sso-handle-callback (mk-conn) "x" "code" cookie REDIRECT (list KEY #f) #:now now))
      (check-false (hash-ref r 'ok))
      (check-false (regexp-match? (regexp (regexp-quote poison)) (hash-ref r 'reason))
@@ -124,6 +126,7 @@
    (lambda ()
      (define-values (_u cookie)
        (sso-begin-login (mk-conn) "x" REDIRECT KEY #:state "s" #:nonce "N" #:verifier "v" #:now now))
+     (sso-spent-states-reset!)
      (define r (sso-handle-callback (mk-conn) "x" "code" cookie REDIRECT (list KEY #f) #:now now))
      (check-false (hash-ref r 'ok))
      (check-regexp-match #rx"signature" (hash-ref r 'reason)))))
@@ -160,6 +163,7 @@
    (lambda ()
      (define-values (_u cookie)
        (sso-begin-login (mk-conn) "x" REDIRECT KEY #:state "s" #:nonce "N" #:verifier "v" #:now now))
+     (sso-spent-states-reset!)
      (define r (sso-handle-callback (mk-conn) "x" "code" cookie REDIRECT (list KEY #f) #:now now))
      (check-false (hash-ref r 'ok)))))
 

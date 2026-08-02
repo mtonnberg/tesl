@@ -24,6 +24,7 @@ PGUSER="${TESL_POSTGRES_USER:-app}"
 PGPASSWORD_VALUE="${TESL_POSTGRES_PASSWORD:-app}"
 PGDATABASE="${TESL_POSTGRES_DATABASE:-app}"
 APP_RKT="${TESL_APP_RKT:-/opt/tesl/app/__APP_RKT__}"
+APP_USER="${TESL_APP_USER:-tesl}"
 
 # Postgres refuses to run as root. The apt package creates a `postgres` user;
 # run all cluster operations through it via `su`/`gosu`-style `su postgres -c`.
@@ -84,7 +85,7 @@ export TESL_POSTGRES_USER="$PGUSER"
 export TESL_POSTGRES_PASSWORD="$PGPASSWORD_VALUE"
 export PORT="${PORT:-__PORT__}"
 
-echo "tesl-entrypoint: launching app: racket $APP_RKT (PORT=$PORT)"
-exec racket "$APP_RKT" &
+echo "tesl-entrypoint: launching app as $APP_USER: racket $APP_RKT (PORT=$PORT)"
+su "$APP_USER" -c "exec racket '$APP_RKT'" &
 APP_PID=$!
 wait "$APP_PID"

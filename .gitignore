@@ -25,3 +25,9 @@ tesl/compiled/
 compiler/baseline*.txt
 tesl-lsp-*.tesl
 **/tesl-lsp-*.tesl
+
+# secrets — never commit these regardless of where they land
+.env
+.env.*
+*.pem
+*.key

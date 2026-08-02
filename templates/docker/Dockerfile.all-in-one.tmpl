@@ -91,4 +91,11 @@ EXPOSE __PORT__
 # Which compiled app the entrypoint launches (so the script stays generic).
 ENV TESL_APP_RKT=/opt/tesl/app/__APP_RKT__
 
+# The entrypoint itself still starts as root (it bootstraps the embedded
+# Postgres cluster as the `postgres` OS user via `su`), but the Tesl app
+# process it execs at the end runs as this unprivileged user, not root.
+RUN useradd --system --no-create-home tesl \
+ && chown -R tesl:tesl /opt/tesl/app ${TESL_COLLECTIONS}
+ENV TESL_APP_USER=tesl
+
 ENTRYPOINT ["/opt/tesl/entrypoint.sh"]

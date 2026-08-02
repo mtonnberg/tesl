@@ -2632,11 +2632,14 @@
                                 #:tenant (str (and (hash? identity) (hash-ref identity 'tenant #f)))))
         ;; The session cookie REPLACES any pre-existing one (session fixation);
         ;; __Host-session is HttpOnly/Secure/Path=/;SameSite=Lax, Max-Age bounded
-        ;; by the active policy's renewable TTL.
+        ;; by the active policy's renewable TTL. __Host-oauth is spent (its
+        ;; sealed verifier/nonce/state has no further use) so it's cleared here
+        ;; exactly as the failure path already clears it.
         (sso-redirect-response
          (sso-route-after-login route)
          (list (sso-cookie-line "__Host-session" token-value
-                                #:max-age ((dyn-fn jwt-module-path (quote policy-ttl-seconds))))))])]))
+                                #:max-age ((dyn-fn jwt-module-path (quote policy-ttl-seconds))))
+               (sso-cookie-line "__Host-oauth" "" #:max-age 0)))])]))
 
 (define (serve server
                #:port         [port 8080]
