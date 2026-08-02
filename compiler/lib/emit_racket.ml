@@ -87,6 +87,8 @@ let module_path_table : (string, string) Hashtbl.t =
   add "Tesl.Prelude"   "tesl/prelude.rkt";
   add "Tesl.String"    "tesl/string.rkt";
   add "Tesl.Regex"     "tesl/regex.rkt";
+  add "Tesl.Url"       "tesl/url.rkt";   (* #68: URL component parsing *)
+  add "Tesl.Net"       "tesl/net.rkt";   (* #68: host classification *)
   add "Tesl.Int"       "tesl/int.rkt";
   add "Tesl.Int32"     "tesl/int32.rkt";
   add "Tesl.Float"     "tesl/float.rkt";
@@ -4315,6 +4317,9 @@ let adt_constructors : (string, string list) Hashtbl.t =
   Hashtbl.replace h "Result"       ["Result"; "Ok"; "Err"];
   Hashtbl.replace h "JobResult"    ["JobResult"; "JobOk"; "JobFailed"];
   Hashtbl.replace h "DeleteResult" ["DeleteResult"; "NoRowDeleted"; "RowsDeleted"];
+  Hashtbl.replace h "HostClass"
+    ["HostClass"; "Loopback"; "PrivateIp"; "LinkLocal"; "Cgnat"; "Multicast";
+     "Unspecified"; "PublicIp"; "DomainName"; "InvalidHost"];
   h
 
 (** Expand an import name (possibly with (..)) to a list of concrete names.

@@ -1,0 +1,188 @@
+module Url_net_tests exposing []
+
+# GitHub #68: URL host parsing + IP-literal classification primitives.
+#
+# The four bypasses below all come from a real outbound-URL SSRF guard that
+# hand-rolled host extraction with String.indexOf / String.slice. None of them
+# needs DNS or attacker infrastructure — the forbidden address is spelled out
+# verbatim in the URL and the string check simply does not recognize the
+# spelling. Each one is a test here.
+#
+# This is the SHALLOW half of outbound-URL safety on purpose. A DomainName can
+# still resolve to 127.0.0.1, and refusing that is Tesl.HttpClient's
+# resolve-then-pin (issue #48), not something a string check can decide.
+
+import Tesl.Prelude exposing [Bool(..), String]
+import Tesl.Maybe exposing [Something, Nothing]
+import Tesl.Url exposing [
+  Url,
+  Url.parse,
+  Url.host,
+  Url.port,
+  Url.scheme,
+  Url.path,
+  Url.effectivePort,
+  Url.userInfo,
+  Url.toString,
+]
+import Tesl.Net exposing [
+  HostClass(..),
+  Net.classifyHost,
+  Net.normalizeHost,
+  Net.isForbiddenHost,
+  Net.isLoopback,
+  Net.isIpv4Mapped,
+  Net.isIpLiteral,
+  Net.isPrivate,
+  Net.isLinkLocal,
+]
+
+# The host of a URL, or "" when the URL does not parse. Fail-closed: an
+# unparseable URL yields a host that matches no allowlist.
+fn hostOf(raw: String) -> String =
+  case Url.parse raw of
+    Nothing -> ""
+    Something u -> Url.host u
+
+# The guard an application actually writes: parse, then classify.
+fn allowed(raw: String) -> Bool =
+  case Url.parse raw of
+    Nothing -> False
+    Something u -> !(Net.isForbiddenHost (Url.host u))
+
+# ─── The four bypasses from the issue ────────────────────────────────────────
+
+test "port smuggling: the port never rides along inside the host" {
+  expect hostOf "https://localhost:6379/hook" == "localhost"
+  expect allowed "https://localhost:6379/hook" == False
+}
+
+test "case: hostnames are case-insensitive" {
+  expect hostOf "https://LOCALHOST/hook" == "localhost"
+  expect allowed "https://LOCALHOST/hook" == False
+}
+
+test "trailing-dot FQDN resolves identically, so it compares identically" {
+  expect hostOf "https://localhost./hook" == "localhost"
+  expect allowed "https://localhost./hook" == False
+}
+
+test "alternate IP-literal encodings are decoded, not passed through" {
+  expect hostOf "https://2130706433/hook" == "127.0.0.1"
+  expect allowed "https://2130706433/hook" == False
+  expect hostOf "https://[::ffff:127.0.0.1]/hook" == "127.0.0.1"
+  expect allowed "https://[::ffff:127.0.0.1]/hook" == False
+  expect Net.isIpv4Mapped "[::ffff:127.0.0.1]" == True
+}
+
+# ─── Userinfo: the fifth member of the family ────────────────────────────────
+
+test "userinfo is parsed out, so a trusted-looking name cannot pose as the host" {
+  expect hostOf "https://trusted.example.com@127.0.0.1/x" == "127.0.0.1"
+  expect allowed "https://trusted.example.com@127.0.0.1/x" == False
+  case Url.parse "https://trusted.example.com@127.0.0.1/x" of
+    Nothing -> expect False == True
+    Something u -> expect Url.userInfo u == Something "trusted.example.com"
+}
+
+# ─── Url component parsing ───────────────────────────────────────────────────
+
+test "components come back canonical and separated" {
+  case Url.parse "HTTPS://Example.COM:8443/a/b?x=1#frag" of
+    Nothing -> expect False == True
+    Something u -> expect Url.scheme u == "https"
+  case Url.parse "HTTPS://Example.COM:8443/a/b?x=1#frag" of
+    Nothing -> expect False == True
+    Something u -> expect Url.host u == "example.com"
+  case Url.parse "HTTPS://Example.COM:8443/a/b?x=1#frag" of
+    Nothing -> expect False == True
+    Something u -> expect Url.port u == Something 8443
+  case Url.parse "HTTPS://Example.COM:8443/a/b?x=1#frag" of
+    Nothing -> expect False == True
+    Something u -> expect Url.path u == "/a/b"
+}
+
+test "a written port wins, otherwise the scheme default" {
+  case Url.parse "https://example.com/x" of
+    Nothing -> expect False == True
+    Something u -> expect Url.port u == Nothing
+  case Url.parse "https://example.com/x" of
+    Nothing -> expect False == True
+    Something u -> expect Url.effectivePort u == Something 443
+}
+
+test "re-serializing yields the string that was checked" {
+  case Url.parse "https://LOCALHOST.:8443/a?q=1" of
+    Nothing -> expect False == True
+    Something u -> expect Url.toString u == "https://localhost:8443/a?q=1"
+}
+
+test "ambiguous or unsafe-to-guess URLs are refused outright" {
+  expect Url.parse "mailto:someone@example.com" == Nothing
+  expect Url.parse "https://exa mple.com/" == Nothing
+  expect Url.parse "https://host:/p" == Nothing
+  expect Url.parse "https://host:70000/" == Nothing
+  expect Url.parse "https://a:1:2/p" == Nothing
+}
+
+# ─── Host classification ─────────────────────────────────────────────────────
+
+# A case over HostClass is exhaustive, so a forgotten range is a compile error
+# rather than one missing `||` in a chain of predicates.
+fn label(host: String) -> String =
+  case Net.classifyHost host of
+    Loopback -> "loopback"
+    PrivateIp -> "private"
+    LinkLocal -> "link-local"
+    Cgnat -> "cgnat"
+    Multicast -> "multicast"
+    Unspecified -> "unspecified"
+    PublicIp -> "public"
+    DomainName -> "name"
+    InvalidHost -> "invalid"
+
+test "every range classifies, in every spelling" {
+  expect label "127.0.0.1" == "loopback"
+  expect label "LOCALHOST." == "loopback"
+  expect label "0177.0.0.1" == "loopback"
+  expect label "[::1]" == "loopback"
+  expect label "10.1.2.3" == "private"
+  expect label "[fd12:3456::1]" == "private"
+  expect label "169.254.169.254" == "link-local"
+  expect label "[::ffff:a9fe:a9fe]" == "link-local"
+  expect label "100.64.0.1" == "cgnat"
+  expect label "224.0.0.1" == "multicast"
+  expect label "0.0.0.0" == "unspecified"
+  expect label "8.8.8.8" == "public"
+  expect label "[2606:4700:4700::1111]" == "public"
+  expect label "example.com" == "name"
+}
+
+test "unvouchable hosts fail closed rather than reading as a name" {
+  expect label "exa mple.com" == "invalid"
+  expect label "999.999.999.999" == "invalid"
+  expect label "" == "invalid"
+  expect Net.isForbiddenHost "999.999.999.999" == True
+  expect Net.normalizeHost "exa mple.com" == Nothing
+}
+
+test "normalizeHost is what you compare and store" {
+  expect Net.normalizeHost "LOCALHOST." == Something "localhost"
+  expect Net.normalizeHost "2130706433" == Something "127.0.0.1"
+  expect Net.normalizeHost "[::FFFF:127.0.0.1]" == Something "127.0.0.1"
+}
+
+test "the predicates agree with the classification" {
+  expect Net.isLoopback "2130706433" == True
+  expect Net.isPrivate "192.168.1.1" == True
+  expect Net.isLinkLocal "169.254.169.254" == True
+  expect Net.isIpLiteral "8.8.8.8" == True
+  expect Net.isIpLiteral "example.com" == False
+  expect Net.isLoopback "localhost" == True
+  expect Net.isIpLiteral "localhost" == False
+}
+
+test "a plain public URL is allowed" {
+  expect allowed "https://api.example.com/webhook" == True
+  expect hostOf "https://api.example.com/webhook" == "api.example.com"
+}

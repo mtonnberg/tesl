@@ -652,6 +652,8 @@ The current frontend gives special treatment to these module names:
 
 - `Tesl.String` — string functions: `String.length`, `String.isEmpty`, `String.trim` (→ `IsTrimmed`), `String.toUpper` (→ `IsUpperCase`), `String.toLower` (→ `IsLowerCase`), `String.startsWith`, `String.endsWith`, `String.contains`, `String.split`, `String.join`, `String.replace`, `String.slice`, `String.padLeft`, `String.padRight`, `String.indexOf`, `String.toInt`, `String.fromInt`, and more. Also exports check function `String.requireNonEmpty` (→ `IsNonEmpty`) and proof predicate name constants `IsTrimmed`, `IsUpperCase`, `IsLowerCase`, `IsNonNegative`, `IsNonEmpty`.
 - `Tesl.Regex` — regular expressions over `String`: `Regex.matches`, `Regex.find`, `Regex.findAll`, `Regex.captures`, `Regex.replace`, `Regex.split`. The pattern is argument 1 of every function and must be a **string literal** — it is parsed and safety-checked at compile time (`VREGEX001`–`VREGEX004`), so there is no dynamic-pattern form. Pure — no capability. See §21.6.
+- `Tesl.Url` — URL component parsing: the opaque `Url` type plus `Url.parse`, `Url.scheme`, `Url.host`, `Url.port`, `Url.effectivePort`, `Url.path`, `Url.query`, `Url.fragment`, `Url.userInfo`, `Url.toString`. `Url.parse` is the only constructor, so `Url.host` is always canonical (lowercased, trailing dot stripped, unbracketed, IP literals folded) and never carries the port. Pure — no capability. See §21.9.
+- `Tesl.Net` — host classification: the `HostClass` ADT (`Loopback`, `PrivateIp`, `LinkLocal`, `Cgnat`, `Multicast`, `Unspecified`, `PublicIp`, `DomainName`, `InvalidHost`) with `Net.classifyHost`, `Net.normalizeHost`, `Net.isForbiddenHost` and the per-range predicates. Every `inet_aton` and IPv4-mapped spelling of an address folds to one canonical form before classification. Pure — no capability. See §21.9.
 - `Tesl.Int` — integer functions: `Int.parse`, `Int.abs`, `Int.min`, `Int.max`, `Int.clamp`, `Int.pow`, `Int.gcd`, `Int.lcm`, `Int.isPositive`, `Int.isNegative`, `Int.isEven`, `Int.isOdd`, `Int.toString`, `Int.sign`, `Int.toFloat`. Also `Int.nonZero` (check function → `IsNonZero`), `Int.nonNegative` (check function → `IsNonNegative`), and `Int.divide` (requires `IsNonZero` on the denominator). Exports `IsNonNegative`, `IsNonZero`.
 - `Tesl.Float` — floating-point functions: `Float.parse`, `Float.abs`, `Float.min`, `Float.max`, `Float.clamp`, `Float.ceil`, `Float.floor`, `Float.round`, `Float.sqrt`, `Float.pow`, `Float.log`, `Float.exp`, `Float.sin`, `Float.cos`, `Float.tan`, `Float.isNaN`, `Float.isInfinite`, and more. Also `Float.requireNonZero` (check function → `FloatNonZero`) and `Float.div` (proof-total, requires `FloatNonZero` on the denominator). Exports `FloatNonZero`.
 
@@ -4309,6 +4311,114 @@ There are no options, on the same rule as `Tesl.Crypto`: a caller who can pass `
 **Not provided, deliberately:** general response-header setting, success statuses other than 200, cookie options of any kind, a second cookie, general cookie handling for UI state or preferences (a permanent non-goal — client-only state belongs in the generated client's own storage, and anything the server must trust belongs in a row keyed by the session subject), a cookie-read capability, and server-side session revocation.
 
 See `example/learn/lesson76-sessions.tesl` and `tests/session-cookie-tests.tesl`.
+
+---
+
+### 21.9 `Tesl.Url` and `Tesl.Net`
+**Implemented.**
+
+Parsing a URL into its components, and classifying a host. Both pure — no
+capability, no I/O, no name resolution.
+
+```tesl
+import Tesl.Url exposing [Url, Url.parse, Url.host, Url.port]
+import Tesl.Net exposing [HostClass(..), Net.classifyHost, Net.isForbiddenHost]
+```
+
+**Why these exist.** An application that validates a user-supplied outbound URL
+before fetching it has to answer *what is the host*, and before these modules
+that was `String.indexOf` and `String.slice` at every call site. Every
+hand-rolled version wrote the same recipe — cut the authority at the first `/`,
+fall back to `:` — and shipped the same four bugs, none of which needs DNS or
+attacker infrastructure, because the forbidden address is spelled out verbatim
+in the URL and the comparison simply does not recognize the spelling:
+
+| URL | Why a hand-written check passes it |
+|---|---|
+| `https://localhost:6379/hook` | the "host" is `localhost:6379`, which equals no entry in a forbidden-host list |
+| `https://LOCALHOST/hook` | hostnames are case-insensitive; `==` is not |
+| `https://localhost./hook` | a root-anchored FQDN resolves identically and compares differently |
+| `https://2130706433/hook` | decimal-encoded `127.0.0.1` |
+| `https://[::ffff:127.0.0.1]/hook` | IPv4-mapped IPv6 spelling of the same address |
+
+#### `Tesl.Url`
+
+`Url` is **opaque**: `Url.parse` is the only way to build one, so everything an
+accessor returns is already canonical. Parsing covers authority-based URLs —
+`scheme://[userinfo@]host[:port][/path][?query][#fragment]`.
+
+| Function | Signature | Meaning |
+|---|---|---|
+| `Url.parse` | `(text: String) -> Maybe Url` | parses, or `Nothing` |
+| `Url.scheme` | `(url: Url) -> String` | lowercased, no colon |
+| `Url.host` | `(url: Url) -> String` | **canonical**: lowercased, trailing dot stripped, IPv6 unbracketed, every IP-literal spelling folded. Never carries the port |
+| `Url.port` | `(url: Url) -> Maybe Int` | the port only when written |
+| `Url.effectivePort` | `(url: Url) -> Maybe Int` | the written port, or the scheme default (`http` 80, `https` 443, `ws` 80, `wss` 443, `ftp` 21) |
+| `Url.path` | `(url: Url) -> String` | `"/"` when the URL had none |
+| `Url.query` | `(url: Url) -> Maybe String` | text after `?`; `Something ""` when written empty |
+| `Url.fragment` | `(url: Url) -> Maybe String` | text after the first `#` |
+| `Url.userInfo` | `(url: Url) -> Maybe String` | everything before the **last** `@` of the authority |
+| `Url.toString` | `(url: Url) -> String` | re-serializes from the canonical parts |
+
+**`Url.parse` fails closed.** Anything two parsers might read differently is
+refused rather than guessed at: an ASCII control character, space or tab
+anywhere; a backslash (browsers read `\` as `/` in an authority, so
+`https://example.com\@localhost/` is a host swap); a URL with no `//` authority
+(`mailto:`); an unbracketed IPv6 literal; an empty, zero or out-of-range port; a
+host with a character outside `[a-z0-9._-]`; and an all-numeric final label that
+is not a valid address literal.
+
+**Userinfo is exposed, not dropped.** `https://trusted.example.com@127.0.0.1/`
+puts a trusted-looking name in the credentials slot, and a check that reads the
+URL as text sees it as the host. Refusing URLs that carry userinfo is one line.
+
+#### `Tesl.Net`
+
+`Net.classifyHost` canonicalizes the host first and then classifies it, so every
+spelling of an address lands in the same class:
+
+```tesl
+type HostClass =
+  | Loopback | PrivateIp | LinkLocal | Cgnat | Multicast
+  | Unspecified | PublicIp | DomainName | InvalidHost
+```
+
+| Constructor | Range |
+|---|---|
+| `Loopback` | `127.0.0.0/8`, `::1`, and the RFC 6761 `localhost` names |
+| `PrivateIp` | `10/8`, `172.16/12`, `192.168/16`, IPv6 ULA `fc00::/7` |
+| `LinkLocal` | `169.254.0.0/16` (cloud instance metadata), `fe80::/10` |
+| `Cgnat` | `100.64.0.0/10` |
+| `Multicast` | `224.0.0.0/4` and above, `ff00::/8` |
+| `Unspecified` | `0.0.0.0/8`, `::` |
+| `PublicIp` | an address literal in none of the above |
+| `DomainName` | a valid DNS name — **not** a safety verdict |
+| `InvalidHost` | not a host the runtime will vouch for. Refuse it |
+
+Classification is an ADT rather than a bag of predicates because a `case` over
+it is exhaustiveness-checked: the bug this closes *is* a forgotten spelling, so
+a forgotten range has to be a compile error rather than one missing `||`.
+The predicates exist for one-line checks: `Net.isLoopback`, `Net.isPrivate`,
+`Net.isLinkLocal`, `Net.isCgnat`, `Net.isMulticast`, `Net.isIpLiteral`,
+`Net.isIpv4Mapped`, and the aggregate `Net.isForbiddenHost` (true for every
+non-public address literal, the `localhost` names, and anything unparseable).
+`Net.normalizeHost : String -> Maybe String` is the canonical spelling to
+compare and store.
+
+Host canonicalization decodes every IPv4 spelling `inet_aton` accepts — the
+32-bit decimal/octal/hex forms, the `a.b` / `a.b.c` short forms, and per-part
+octal and hex — plus the IPv4-mapped and IPv4-compatible IPv6 forms, so all of
+them fold to one dotted quad before any range test runs.
+
+**Scope: this is the shallow half, and deliberately so.** `DomainName` does not
+mean safe — a name still resolves, and it can resolve to `127.0.0.1` or to the
+metadata address. Only *resolve → judge every returned address → connect to the
+address that was judged* closes that, it is not expressible in `.tesl`, and it
+is already always-on for `Tesl.HttpClient`. The two share one range table
+(`dsl/private/host-classify.rkt`), so an application's check and the runtime's
+refusal cannot disagree about what "private" means.
+
+See `tests/url-net-tests.tesl` and `tests/url-net-runtime-tests.rkt`.
 
 ---
 

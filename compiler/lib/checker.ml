@@ -2078,6 +2078,11 @@ let no_eliminator_stdlib_types : (string * string) list = [
   "An ExchangeRate is not a record. Read it with `ExchangeRate.rate`, \
    `ExchangeRate.fromCurrency`, `ExchangeRate.toCurrency` or \
    `ExchangeRate.asOf`.";
+  "Url",
+  "A Url is a parsed URL, not a record. Read its parts with `Url.scheme`, \
+   `Url.host`, `Url.port`, `Url.path`, `Url.query`, `Url.fragment` or \
+   `Url.userInfo` — the host those return is already normalized, which is the \
+   point of parsing instead of slicing the string.";
   "PosixMillis",
   "A PosixMillis is a nominal instant, not a record. Convert it with \
    `Time.posixToSeconds`, measure between two of them with `diffMs`, or render \
@@ -2127,7 +2132,8 @@ let opaque_display_name (type_name : string) : string =
      | None -> type_name)
 
 let known_qualifier_modules =
-  [ "List"; "ListPrim"; "Dict"; "String"; "Regex"; "Int"; "Float"; "Set"; "Maybe";
+  [ "List"; "ListPrim"; "Dict"; "String"; "Regex"; "Url"; "Net";
+    "Int"; "Float"; "Set"; "Maybe";
     "Either"; "Result"; "Time"; "Random"; "Uuid"; "UUID"; "Env";
     "Http"; "HttpClient"; "Json"; "DB"; "Telemetry"; "Tesl"; "JWT"; "Email";
     (* First-Class Units *)
@@ -2152,7 +2158,11 @@ let known_qualifier_modules =
    (`Units_catalog.active_aliases`), and tightening them is a separate change
    with its own corpus surface.  Recorded, not fixed here. *)
 let qualifier_modules_that_are_not_constructors =
-  [ "Money"; "Currency"; "ExchangeRate"; "MoneyRate" ]
+  [ "Money"; "Currency"; "ExchangeRate"; "MoneyRate";
+    (* #68, same rule: `Url` is an opaque stdlib TYPE built only by `Url.parse`,
+       and `Net` is a pure qualifier with no same-named type, so `Url x` /
+       `Net x` are plain T001s rather than escaping to a fresh type variable. *)
+    "Url"; "Net" ]
 
 let bare_constructor_escape_modules =
   List.filter

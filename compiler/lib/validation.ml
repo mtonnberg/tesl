@@ -95,7 +95,8 @@ let check_module (m : module_form) : validation_error list =
      proof-returning function (e.g. `insertCommentBody … ? FromDb`) is recognised
      as proof-carrying rather than falsely rejected. *)
   @ (TProof @: check_existential_proof_enforcement ~extra_funcs:imported_funcs decls)
-  @ (TNaming @: check_case_exhaustiveness ~extra_ctors:(load_imported_ctor_info m) decls)
+  @ (TNaming @: check_case_exhaustiveness ~extra_ctors:(load_imported_ctor_info m)
+       ~extra_funcs:imported_funcs decls)
   @ (TNaming @: check_name_shadowing m)
   (* S5b: the reserved-generated-name check was retired — every emitter temp is now
      minted with a lexer-illegal hyphen (`tesl-case-N`, `tesl-ignored-N`, …), so a

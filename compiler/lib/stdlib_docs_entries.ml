@@ -303,6 +303,62 @@ let regex : entry list = [
     ~doc:"Splits input on every match of the pattern.";
 ]
 
+(* ── Tesl.Url / Tesl.Net (GitHub #68) ──────────────────────────────────────── *)
+(* Application-level URL / host checking.  Both modules are pure — no capability,
+   no I/O, no name resolution.  They close the "the string check itself was
+   wrong" class (port smuggling, case, trailing-dot FQDN, alternate IP-literal
+   encodings); they do NOT replace the runtime's resolve-then-pin egress
+   containment, which is always on in Tesl.HttpClient (issue #48). *)
+
+let url : entry list = [
+  e "Url" ~m:"Tesl.Url"
+    ~kind:(KType "type Url   # opaque; built only by Url.parse")
+    ~doc:"A parsed, normalized URL. Opaque: every component you read back is already canonical, which is the point of parsing instead of slicing the string.";
+  f "Url.parse" [ "text" ] ~m:"Tesl.Url"
+    ~doc:"Parses an authority-based URL (scheme://host[:port][/path][?query][#fragment]). Nothing for anything ambiguous or unsafe to guess at: a control character or space anywhere, a backslash, a URL with no // authority (mailto:), an unbracketed IPv6 literal, an empty or out-of-range port, or a host this runtime will not vouch for.";
+  f "Url.scheme" [ "url" ] ~m:"Tesl.Url" ~doc:"The scheme, lowercased and without the colon.";
+  f "Url.host" [ "url" ] ~m:"Tesl.Url"
+    ~doc:"The host, CANONICAL: lowercased, trailing dot stripped, IPv6 brackets removed, and every IP-literal spelling (decimal/octal/hex IPv4, IPv4-mapped IPv6) folded to one form. Never carries the port.";
+  f "Url.port" [ "url" ] ~m:"Tesl.Url" ~doc:"The port, only when it was written in the URL.";
+  f "Url.effectivePort" [ "url" ] ~m:"Tesl.Url"
+    ~doc:"The written port, or the scheme default (http 80, https 443, ws 80, wss 443, ftp 21); Nothing when the scheme has no default.";
+  f "Url.path" [ "url" ] ~m:"Tesl.Url" ~doc:"The path; \"/\" when the URL had none.";
+  f "Url.query" [ "url" ] ~m:"Tesl.Url" ~doc:"The text after ?, up to any #; Nothing when no ? was written (Something \"\" when it was written empty).";
+  f "Url.fragment" [ "url" ] ~m:"Tesl.Url" ~doc:"The text after the first #; Nothing when no # was written.";
+  f "Url.userInfo" [ "url" ] ~m:"Tesl.Url"
+    ~doc:"Everything before the LAST @ of the authority. Exposed rather than dropped because https://trusted.example.com@127.0.0.1/ puts a trusted-looking name in the credentials slot; refusing URLs that carry userinfo is one line.";
+  f "Url.toString" [ "url" ] ~m:"Tesl.Url"
+    ~doc:"Re-serializes from the canonical parts, so the URL you checked and the URL you fetch are the same string.";
+]
+
+let net : entry list = [
+  e "HostClass" ~m:"Tesl.Net"
+    ~kind:(KType "type HostClass = Loopback | PrivateIp | LinkLocal | Cgnat | Multicast | Unspecified | PublicIp | DomainName | InvalidHost")
+    ~doc:"How a host classifies. Case over it rather than chaining predicates: exhaustiveness is what stops a forgotten range.";
+  v "Loopback" ~m:"Tesl.Net" ~doc:"HostClass: 127.0.0.0/8, ::1, or an RFC 6761 localhost name.";
+  v "PrivateIp" ~m:"Tesl.Net" ~doc:"HostClass: 10/8, 172.16/12, 192.168/16, or IPv6 unique-local fc00::/7.";
+  v "LinkLocal" ~m:"Tesl.Net" ~doc:"HostClass: 169.254.0.0/16 (the cloud instance-metadata endpoint) or fe80::/10.";
+  v "Cgnat" ~m:"Tesl.Net" ~doc:"HostClass: carrier-grade NAT, 100.64.0.0/10.";
+  v "Multicast" ~m:"Tesl.Net" ~doc:"HostClass: 224.0.0.0/4 and above, or IPv6 ff00::/8.";
+  v "Unspecified" ~m:"Tesl.Net" ~doc:"HostClass: 0.0.0.0/8 or the IPv6 unspecified address ::.";
+  v "PublicIp" ~m:"Tesl.Net" ~doc:"HostClass: an address literal in none of the reserved ranges.";
+  v "DomainName" ~m:"Tesl.Net" ~doc:"HostClass: a valid DNS name. NOT a safety verdict — it can still resolve to a forbidden address, which only the HTTP client's resolve-then-pin can judge.";
+  v "InvalidHost" ~m:"Tesl.Net" ~doc:"HostClass: not a host this runtime will vouch for (bad characters, a malformed address literal, an all-numeric final label). Refuse it.";
+  f "Net.classifyHost" [ "host" ] ~m:"Tesl.Net"
+    ~doc:"Classifies a host after canonicalizing it, so LOCALHOST, localhost., 2130706433 and [::ffff:127.0.0.1] all classify as Loopback. The primitive to reach for: a case over the result cannot forget a range.";
+  f "Net.normalizeHost" [ "host" ] ~m:"Tesl.Net"
+    ~doc:"The canonical spelling of a host (lowercased, trailing dot stripped, unbracketed, every IP-literal encoding folded), or Nothing when it is not a host worth vouching for. Compare and store this, never the raw text.";
+  f "Net.isLoopback" [ "host" ] ~m:"Tesl.Net" ~doc:"True for 127.0.0.0/8, ::1 and the localhost names, in any spelling.";
+  f "Net.isPrivate" [ "host" ] ~m:"Tesl.Net" ~doc:"True for RFC1918 and IPv6 unique-local addresses, in any spelling.";
+  f "Net.isLinkLocal" [ "host" ] ~m:"Tesl.Net" ~doc:"True for 169.254.0.0/16 (cloud metadata) and fe80::/10.";
+  f "Net.isCgnat" [ "host" ] ~m:"Tesl.Net" ~doc:"True for 100.64.0.0/10.";
+  f "Net.isMulticast" [ "host" ] ~m:"Tesl.Net" ~doc:"True for 224.0.0.0/4 and above, and IPv6 ff00::/8.";
+  f "Net.isIpLiteral" [ "host" ] ~m:"Tesl.Net" ~doc:"True when the host IS an address in some spelling rather than a DNS name. A localhost name is not a literal, but it is isLoopback.";
+  f "Net.isIpv4Mapped" [ "host" ] ~m:"Tesl.Net" ~doc:"True when the host was written as an IPv4-mapped or IPv4-compatible IPv6 literal ([::ffff:127.0.0.1]) — the spelling hand-written checks miss most often.";
+  f "Net.isForbiddenHost" [ "host" ] ~m:"Tesl.Net"
+    ~doc:"The one-line outbound guard: True for every non-public address literal in any spelling, the localhost names, and anything unparseable (fail-closed). False means only that the string check found nothing wrong — a DomainName still has to resolve somewhere, and judging that is Tesl.HttpClient's resolve-then-pin.";
+]
+
 (* ── Tesl.List / Tesl.ListPrim ─────────────────────────────────────────────── *)
 (* The pure combinators are lifted to tesl/list.tesl (the checker loads their
    types from that source, not stdlib_env), so those rows carry the signature
@@ -924,7 +980,7 @@ let sso : entry list = [
 
 let entries : entry list =
   ambient @ prelude @ email @ maybe_result @ time
-  @ int32 @ db @ either @ string_ @ regex @ list_ @ list_prim @ int_ @ float_
+  @ int32 @ db @ either @ string_ @ regex @ url @ net @ list_ @ list_prim @ int_ @ float_
   @ dict @ set_ @ tuple @ money @ random_uuid_id_env @ json_codecs
   @ api_test @ jwt @ crypto @ cache @ database @ http @ http_client @ agent @ queue
   @ telemetry @ sso

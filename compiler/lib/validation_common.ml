@@ -813,6 +813,25 @@ let builtin_ctor_info : ctor_info = [
   ("TextBody", ([mk_name_type "String"], mk_name_type "EmailBody"));
   ("HtmlBody", ([mk_name_type "String"], mk_name_type "EmailBody"));
   ("RichBody", ([mk_name_type "String"; mk_name_type "String"], mk_name_type "EmailBody"));
+  (* HostClass (Tesl.Net, GitHub #68) — nine nullary variants.  These rows are
+     what make `case Net.classifyHost h of …` exhaustiveness-checked, and that
+     is the entire argument for classifying into an ADT instead of shipping
+     nine `Net.isX` predicates: a forgotten range has to be a compile error,
+     because the bug the issue reports IS a forgotten spelling.
+
+     RECORDED, not fixed here: `DeleteResult` and `JobResult` are stdlib ADTs
+     with no rows in this table either, so a `case` over them is silently
+     unchecked for exhaustiveness — the same shape as the EmailBody gap above,
+     and a wider change than this issue authorises. *)
+  ("Loopback",    ([], mk_name_type "HostClass"));
+  ("PrivateIp",   ([], mk_name_type "HostClass"));
+  ("LinkLocal",   ([], mk_name_type "HostClass"));
+  ("Cgnat",       ([], mk_name_type "HostClass"));
+  ("Multicast",   ([], mk_name_type "HostClass"));
+  ("Unspecified", ([], mk_name_type "HostClass"));
+  ("PublicIp",    ([], mk_name_type "HostClass"));
+  ("DomainName",  ([], mk_name_type "HostClass"));
+  ("InvalidHost", ([], mk_name_type "HostClass"));
 ]
 
 let build_ctor_info (decls : top_decl list) : ctor_info =
@@ -995,6 +1014,23 @@ let stdlib_func_infos : (string * func_info) list =
       loc = g }
   in
   [
+    (* Net.classifyHost (Tesl.Net, GitHub #68).  No proof obligation — this row
+       exists so the VALIDATOR knows the call's result type is `HostClass`, and
+       therefore so `case Net.classifyHost h of …` is exhaustiveness-checked
+       against the nine variants registered in [builtin_ctor_info].  Without it
+       the scrutinee's type is unknown, [ctors_for_type] returns [], and a case
+       missing a range compiles — which would defeat the reason the
+       classification is an ADT at all.
+
+       (The general shape of that gap is wider than this row: the validator's
+       [infer_expr_type] does not consult [Type_system.stdlib_env], so a case
+       over ANY stdlib call's ADT result — `Dict.lookup`, say — is unchecked
+       for exhaustiveness unless the function has a row here. Recorded, not
+       fixed under this issue.) *)
+    ("Net.classifyHost",
+     { fi_name = "Net.classifyHost"; fi_kind = FnKind;
+       fi_params = [ plain "host" "String" ];
+       fi_return = ret "HostClass"; fi_loc = g });
     (* Int.divide: second arg b must carry IsNonZero b *)
     ("Int.divide",
      { fi_name = "Int.divide"; fi_kind = FnKind;

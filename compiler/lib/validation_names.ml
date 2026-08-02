@@ -3,8 +3,16 @@ open Location
 open Validation_common
 open Validation_proof
 
-let check_case_exhaustiveness ?(extra_ctors=[]) (decls : top_decl list) : validation_error list =
-  let funcs = build_func_info decls in
+(* [extra_funcs] is the imported stdlib/local func_info harvest.  It was missing
+   here while every neighbouring pass already received it, so the scrutinee of
+   `case <call to an imported fn> of …` had NO inferred type, [ctors_for_type]
+   returned [], and the case was silently exempt from the exhaustiveness rule
+   that a locally-typed scrutinee gets.  Found while wiring `Tesl.Net`'s
+   `HostClass` (GitHub #68), where "a forgotten range is a compile error" is the
+   whole reason the classification is an ADT. *)
+let check_case_exhaustiveness ?(extra_ctors=[]) ?(extra_funcs=[])
+    (decls : top_decl list) : validation_error list =
+  let funcs = build_func_info decls @ extra_funcs in
   let fields_by_type = build_fields_map decls in
   let ctors = build_ctor_info decls @ extra_ctors in
   let errors = ref [] in
@@ -473,6 +481,10 @@ let stdlib_adt_ctors : (string * (string * string list)) list = [
   ("Tesl.Either",  ("Either",       ["Either"; "Left"; "Right"]));
   ("Tesl.DB",      ("DeleteResult", ["DeleteResult"; "NoRowDeleted"; "RowsDeleted"]));
   ("Tesl.ApiTest", ("JobResult",    ["JobResult"; "JobOk"; "JobFailed"]));
+  ("Tesl.Net",     ("HostClass",    ["HostClass"; "Loopback"; "PrivateIp";
+                                     "LinkLocal"; "Cgnat"; "Multicast";
+                                     "Unspecified"; "PublicIp"; "DomainName";
+                                     "InvalidHost"]));
 ]
 
 let imported_plain_exposed_ctor_entries (m : module_form) : (string * string * string * loc) list =

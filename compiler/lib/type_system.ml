@@ -79,6 +79,15 @@ let t_quantity (d : Units_catalog.dim) = TCon (Units_catalog.dim_name d)
    denominator dimension in the type — `Money / Duration : MoneyPerDuration`,
    `rate * Duration : Money`. *)
 let t_money_rate (d : Units_catalog.dim) = TCon (Units_catalog.money_rate_name d)
+(* Tesl.Url / Tesl.Net (GitHub #68).  `Url` is OPAQUE nominal like Secret /
+   SsoConnection: no constructor row in [stdlib_env], so `Url "…"` is an
+   unknown-constructor error and the ONLY way to get one is `Url.parse`, which
+   is what makes "the host was normalized" a property of the type rather than a
+   convention.  `HostClass` is a real ADT (constructors below) so that `case`
+   over a host's classification is exhaustive — the whole point being that a
+   forgotten range is a compile error rather than one missing `||`. *)
+let t_url        = TCon "Url"
+let t_host_class = TCon "HostClass"
 let t_http_response = TCon "HttpResponse"
 let t_agent       = TCon "Agent"
 let t_llm_provider = TCon "LlmProvider"
@@ -483,6 +492,51 @@ let stdlib_env : (string * scheme) list = [
   "Regex.captures", mono (t_fun [t_string; t_string] (t_maybe (t_list t_string)));
   "Regex.replace",  mono (t_fun [t_string; t_string; t_string] t_string);
   "Regex.split",    mono (t_fun [t_string; t_string] (t_list t_string));
+
+  (* ── Url / Net (GitHub #68) ──────────────────────────────────────────────
+     Application-level URL and host checking, so that "what is the host of this
+     URL, and is it an address I refuse to dial" is never again a hand-rolled
+     `String.indexOf` computation.  `Url.parse` is the only way to build a
+     `Url`; everything it hands back is already canonical (host lowercased,
+     trailing dot stripped, port in its own field, every IP-literal spelling
+     folded to one form).  `Net.classifyHost` classifies that host.
+
+     This is the SHALLOW half of outbound-URL safety and deliberately so: a
+     valid DNS name can still resolve to 127.0.0.1, which only resolve-then-pin
+     closes, and that already ships in Tesl.HttpClient (issue #48).  Pure
+     module: no capability, no I/O, no name resolution. *)
+  "Url.parse",         mono (t_fun [t_string] (t_maybe t_url));
+  "Url.scheme",        mono (t_fun [t_url] t_string);
+  "Url.host",          mono (t_fun [t_url] t_string);
+  "Url.port",          mono (t_fun [t_url] (t_maybe t_int));
+  "Url.effectivePort", mono (t_fun [t_url] (t_maybe t_int));
+  "Url.path",          mono (t_fun [t_url] t_string);
+  "Url.query",         mono (t_fun [t_url] (t_maybe t_string));
+  "Url.fragment",      mono (t_fun [t_url] (t_maybe t_string));
+  "Url.userInfo",      mono (t_fun [t_url] (t_maybe t_string));
+  "Url.toString",      mono (t_fun [t_url] t_string);
+
+  (* HostClass constructors — nullary, like NoRowDeleted. *)
+  "Loopback",    mono t_host_class;
+  "PrivateIp",   mono t_host_class;
+  "LinkLocal",   mono t_host_class;
+  "Cgnat",       mono t_host_class;
+  "Multicast",   mono t_host_class;
+  "Unspecified", mono t_host_class;
+  "PublicIp",    mono t_host_class;
+  "DomainName",  mono t_host_class;
+  "InvalidHost", mono t_host_class;
+
+  "Net.classifyHost",   mono (t_fun [t_string] t_host_class);
+  "Net.normalizeHost",  mono (t_fun [t_string] (t_maybe t_string));
+  "Net.isLoopback",     mono (t_fun [t_string] t_bool);
+  "Net.isPrivate",      mono (t_fun [t_string] t_bool);
+  "Net.isLinkLocal",    mono (t_fun [t_string] t_bool);
+  "Net.isCgnat",        mono (t_fun [t_string] t_bool);
+  "Net.isMulticast",    mono (t_fun [t_string] t_bool);
+  "Net.isIpLiteral",    mono (t_fun [t_string] t_bool);
+  "Net.isIpv4Mapped",   mono (t_fun [t_string] t_bool);
+  "Net.isForbiddenHost", mono (t_fun [t_string] t_bool);
 
   (* ── Int32 (NT-07) ───────────────────────────────────────────────────── *)
   (* A JS-safe nominal boundary integer.  ONE RANGE RULE across the module:
@@ -1341,6 +1395,22 @@ let tesl_module_exports : (string * string list) list = [
        Pure: no capability.  The pattern is argument 1 everywhere. *)
     [ "Regex.matches"; "Regex.find"; "Regex.findAll"; "Regex.captures";
       "Regex.replace"; "Regex.split" ] );
+  ( "Tesl.Url",
+    (* #68.  `Url` is a TYPE only — no constructor row in stdlib_env, so it is
+       opaque and `Url.parse` is the sole way in.  Pure: no capability. *)
+    [ "Url";
+      "Url.parse"; "Url.scheme"; "Url.host"; "Url.port"; "Url.effectivePort";
+      "Url.path"; "Url.query"; "Url.fragment"; "Url.userInfo"; "Url.toString" ] );
+  ( "Tesl.Net",
+    (* #68.  `HostClass` is a real ADT: expose its constructors with
+       `HostClass(..)` to `case` over a classification exhaustively. *)
+    [ "HostClass";
+      "Loopback"; "PrivateIp"; "LinkLocal"; "Cgnat"; "Multicast";
+      "Unspecified"; "PublicIp"; "DomainName"; "InvalidHost";
+      "Net.classifyHost"; "Net.normalizeHost";
+      "Net.isLoopback"; "Net.isPrivate"; "Net.isLinkLocal"; "Net.isCgnat";
+      "Net.isMulticast"; "Net.isIpLiteral"; "Net.isIpv4Mapped";
+      "Net.isForbiddenHost" ] );
   ( "Tesl.List",
     [ "IsSorted";
       "List.isEmpty"; "List.length"; "List.head"; "List.tail"; "List.last"; "List.nth";
@@ -1750,7 +1820,8 @@ let stdlib_capabilities_of (name : string) : string list =
     that have runtime files but no registered export list).
     Used to reject `import Tesl.Unknown` with a compile-time error. *)
 let tesl_known_module_names : string list = [
-  "Tesl.Prelude"; "Tesl.String"; "Tesl.Regex"; "Tesl.Int"; "Tesl.Int32"; "Tesl.Float";
+  "Tesl.Prelude"; "Tesl.String"; "Tesl.Regex"; "Tesl.Url"; "Tesl.Net";
+  "Tesl.Int"; "Tesl.Int32"; "Tesl.Float";
   "Tesl.List"; "Tesl.ListPrim"; "Tesl.Dict"; "Tesl.Maybe"; "Tesl.Either"; "Tesl.EitherPrim"; "Tesl.Result";
   "Tesl.Http"; "Tesl.HttpClient"; "Tesl.Json"; "Tesl.DB"; "Tesl.Time"; "Tesl.Random";
   "Tesl.Uuid"; "Tesl.UUID"; "Tesl.Set"; "Tesl.Env";

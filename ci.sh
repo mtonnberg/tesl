@@ -1431,6 +1431,15 @@ else
         # metadata endpoint, loopback, RFC1918/CGNAT/link-local and their
         # IPv4-mapped spellings are refused; fail-closed on unparseable input.
         "tests/ssrf-guard-test.rkt"
+        # #68 (issue): the Tesl.Url / Tesl.Net application-level primitives.
+        # Here rather than only in tests/url-net-tests.tesl because what needs
+        # pinning is below the surface: the whole inet_aton spelling matrix, RFC
+        # 5952 IPv6 canonicalization, the URL parser differentials that are
+        # refused rather than guessed, CIDR boundaries on both sides of every
+        # reserved block, and — the one that matters most — AGREEMENT with
+        # ssrf-guard.rkt above, so an app's `Net.isForbiddenHost` check and the
+        # HttpClient egress refusal can never disagree about an address.
+        "tests/url-net-runtime-tests.rkt"
         # Phase 1 & 2: dsl/sso.rkt OIDC + plain-OAuth2 runtime.  Pure security
         # layer (PKCE S256, injective SsoSubjectKey, EmailClaim rule, OIDC claim
         # + Entra multi-tenant validation, integrity-protected __Host-oauth
