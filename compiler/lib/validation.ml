@@ -58,6 +58,7 @@ let check_module (m : module_form) : validation_error list =
   @ (TNaming @: check_duplicate_decl_fields decls)
   @ (TCapability @: check_capability_cycles decls)
   @ (TProof @: check_check_fn_has_proof_return decls)
+  @ (TStructural @: check_auth_fn_arity decls)
   @ (TDatabase @: check_entity_structure ~facts decls)
   @ (TCodec @: check_capture_codec_types decls_with_imported_types)
   @ (TProof @: check_capture_proof_via ~facts decls)

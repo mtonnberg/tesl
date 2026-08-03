@@ -438,9 +438,27 @@ let start_mailhog () =
   end;
   (pid, smtp_port, api_port, ui_port)
 
+(* Block until the process is actually reaped (escalating to SIGKILL after a
+   grace period) so its bound ports are released before the caller proceeds —
+   returning right after WNOHANG let the next test's [pick_free_port]/[start_mailhog]
+   race a still-running MailHog process still holding smtp/api/ui ports, which
+   showed up as an intermittent "MailHog failed to start" CI flake. *)
 let stop_mailhog pid =
   (try Unix.kill pid Sys.sigterm with _ -> ());
-  (try ignore (Unix.waitpid [Unix.WNOHANG] pid) with _ -> ())
+  let deadline = Unix.gettimeofday () +. 3.0 in
+  let rec wait_exit () =
+    match (try Unix.waitpid [Unix.WNOHANG] pid with _ -> (pid, Unix.WEXITED 0)) with
+    | (0, _) ->
+      if Unix.gettimeofday () > deadline then begin
+        (try Unix.kill pid Sys.sigkill with _ -> ());
+        (try ignore (Unix.waitpid [] pid) with _ -> ())
+      end else begin
+        Unix.sleepf 0.05;
+        wait_exit ()
+      end
+    | _ -> ()
+  in
+  wait_exit ()
 
 (** Query MailHog message count via its API. *)
 let mailhog_message_count api_port =

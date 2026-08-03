@@ -648,6 +648,28 @@ let check_check_fn_has_proof_return (decls : top_decl list) : validation_error l
     | _ -> None
   ) decls
 
+(** An `auth` function's compiled call site (dsl/web.rkt `run-auth`) invokes it
+    with the request value ALONE — that single-argument invocation is also the
+    documented soundness invariant the auth/capture proof-subject reconciliation
+    relies on (see the comment above `check_auth_proof_via` in
+    validation_structural.ml: "the auther is invoked with the request alone").
+    A declared second parameter (e.g. threading a path capture into the mint)
+    therefore type-checks but traps at runtime with an arity mismatch the
+    moment the route fires — reject it here instead, at the declaration site. *)
+let check_auth_fn_arity (decls : top_decl list) : validation_error list =
+  List.filter_map (function
+    | DFunc fd when fd.kind = AuthKind && List.length fd.params <> 1 ->
+      Some (make_error fd.loc
+        ~hint:"an `auth` function is called with only the request value — \
+               declare exactly one parameter (conventionally `request: HttpRequest`)"
+        (Printf.sprintf
+          "`auth` function `%s` declares %d parameter%s, but the compiled route \
+           calls it with exactly one (the request) — any additional parameter is \
+           silently dropped at compile time and traps with a runtime arity mismatch"
+          fd.name (List.length fd.params)
+          (if List.length fd.params = 1 then "" else "s")))
+    | _ -> None
+  ) decls
 
 (* ── Duplicate top-level names ──────────────────────────────────────────── *)
 
