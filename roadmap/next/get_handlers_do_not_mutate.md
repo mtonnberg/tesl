@@ -28,8 +28,9 @@ item turns the convention into a guarantee.
 ## Goal
 
 A route declared `get "…"` whose handler's **capability closure** contains any write effect —
-`dbWrite`, `queueWrite`, or `pubsub` — is a compile error. Then `SameSite=Lax` is safe by
-construction rather than by discipline, and the CSRF story has no "iff the author remembers" clause.
+`dbWrite`, `queueWrite`, `pubsub`, or `emailCap` — is a compile error. Then `SameSite=Lax` is safe
+by construction rather than by discipline, and the CSRF story has no "iff the author remembers"
+clause.
 
 Read-only GET is not a burden the language invents: it is HTTP's own semantics (GET is "safe" per
 RFC 9110 §9.2.1), so this rule teaches the platform's rule rather than a Tesl-specific one.
@@ -38,11 +39,11 @@ RFC 9110 §9.2.1), so this rule teaches the platform's rule rather than a Tesl-s
 
 - The machinery already exists. The capability system computes, per handler, the transitive
   capability set (`collect_needed_capabilities` in `validation_common.ml`; the `implies` closure).
-  The write capabilities are the three named above (`tesl_stdlib_cap_map`), plus any user capability
+  The write capabilities are the four named above (`tesl_stdlib_cap_map`), plus any user capability
   whose `implies` chain reaches one of them — the closure already resolves that.
 - The route method is known at the api/server checking site (`get`/`post`/… in the `api` block).
   For a `get` route, intersect its handler's resolved capability closure with `{dbWrite; queueWrite;
-  pubsub}`; a non-empty intersection is the error.
+  pubsub; emailCap}`; a non-empty intersection is the error.
 - **Diagnostic quality is the point.** Name the offending capability and where it entered the
   closure ("`get \"/x\"` reaches `dbWrite` via `handler foo` → `fn bar requires [...]`"), and offer
   the two real fixes: make the route `post` (or the appropriate verb), or move the write out of the
@@ -59,16 +60,19 @@ RFC 9110 §9.2.1), so this rule teaches the platform's rule rather than a Tesl-s
   not a `get` handler returning a body — check the SSE surface does not trip this).
 - **Telemetry / logging as "writes".** Telemetry is ungated and ambient by design and is NOT a
   state change a CSRF attacker cares about, so it is correctly out of scope. Email
-  (`emailCap`) IS a side effect a GET should arguably not perform — decide whether `emailCap` joins
-  the forbidden set or stays out (leaning: add it; a GET that sends mail is a spam vector via the
-  same cross-site navigation).
+  (`emailCap`) IS in the forbidden set (decided 2026-08-03): a GET that sends mail is a spam
+  vector via the same cross-site navigation, so it is forbidden alongside the three write
+  capabilities.
+- **Cache is out of scope.** `cacheCap` has no read/write split in the capability map, so
+  forbidding it would also forbid cache *reads* on GET — and populating a cache during a GET is
+  response caching, the canonical benign read-path mutation. Correctly excluded.
 - **Existing corpus.** Sweep `example/` and `tests/` for any `get` route whose handler writes; each
   is either a latent bug this catches (good) or a place the rule is too strict (informs the design).
 
 ## Verification bar
 
 - A `get` route with a `dbWrite` handler fails to compile with the new code; the same handler under
-  `post` compiles.
+  `post` compiles. Same for an `emailCap` handler.
 - The error names the capability and the path by which the GET reaches it.
 - The whole existing corpus still compiles (or each newly-rejected route is triaged and fixed).
 - `./ci.sh` green.

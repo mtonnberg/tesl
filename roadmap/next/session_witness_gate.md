@@ -1,7 +1,9 @@
 # Session witness gate — bind the credential to the subject (Password & Machine `loginMethods`)
 
 ## Status
-DEFERRED / design. Prototyped 2026-07-31 and **rejected as unsound** (see below).
+Next (design reviewed 2026-08-03: do it, ship A+C as one unit — see
+Recommendation and the SSO-interaction section). An earlier prototype
+(2026-07-31) was **rejected as unsound** (see below).
 Companion to `roadmap/next/ensure_sso_works.md` (Open Questions 15/18; Risks
 46/56/63/64) and `roadmap/later/fail_closed_mint_matching_structural.md`. The SSO
 flow, the `loginMethods [Sso]` fail-closed allowlist, and the machine-credential
@@ -11,7 +13,11 @@ subject a real credential check authenticated.
 
 ## Motivation
 Under `loginMethods [Sso, Password …]` the compiler today only checks that the
-policy function exists. The canonical login is unforced:
+policy function exists, plus a **presence allowlist**: the phase-3 scan
+(`validation_structural.ml:1768`) walks the module for `Http.setSessionCookie` /
+`Crypto.checkPassword` occurrences and rejects them under a server whose
+`loginMethods` doesn't declare the matching method. That gates WHERE minting
+happens, and is silent about WHO. The canonical login is unforced:
 ```tesl
 if credentialsAreGood body then
   let token = JWT.sign (Dict.singleton "sub" body.user) (signingKey())
@@ -111,18 +117,23 @@ demand. Escalation blocked by cross-param naming.
   (`checkPassword` vs `checkPasswordFor`) invites picking the unbound one — so the
   unbound `checkPassword` may need to be disallowed at a session mint.
 
-### Proposal C — bind the token too (`SubjectOf token subject`) — DEFENCE IN DEPTH
-Complementary to A or B, not standalone. Make `setSessionCookie` additionally
-demand that the witnessed subject equals the token's `sub` claim:
+### Proposal C — bind the token too (`SubjectOf token subject`) — REQUIRED COMPANION
+Not defence-in-depth: **A (or B) without C is still bypassable**, so A+C ship as
+one unit. Make `setSessionCookie` additionally demand that the witnessed subject
+equals the token's `sub` claim:
 ```tesl
 Http.setSessionCookie : (subject: String ::: LoggedIn subject)
                         (token: JwtToken ::: SubjectOf token subject) -> Unit
 ```
-Prevents minting a cookie whose signed token says X while the login witness is for
-Y (e.g. login as yourself, then set a token minted for someone else). On its own
-it does NOT fix the unbound-subject hole (an attacker forges both to the same
-`"admin"`), so it must be layered on A or B. `SubjectOf` is minted by the
-session-token builder from the same subject it stamps into `sub`.
+Why A alone is insufficient (2026-08-03 analysis): the cookie's effective
+identity is the token's `sub`, not the witness, and `JWT.sign` signs any claims.
+So any user who can legitimately log in as THEMSELVES can sign a token with
+`sub = "admin"` and call `setSessionCookie ownLoggedIn adminToken` — the witness
+gate passes, the session is admin. A alone only proves "someone logged in", not
+"this cookie is that someone". Conversely C on its own does NOT fix the
+unbound-subject hole (an attacker forges both to the same `"admin"`), so neither
+half is standalone. `SubjectOf` is minted by the session-token builder from the
+same subject it stamps into `sub`.
 
 ### Proposal D — whole-module dataflow (WEAKER FALLBACK)
 Under a `loginMethods` server, require the EXACT `subject` value flowing into
@@ -138,13 +149,30 @@ only if a typed credential surface (A/B) is judged too heavy.
   the language grows (the exact failure mode the kernel-witness approach avoids).
 
 ## Recommendation
-Ship **Proposal A** (identity-bearing `Credential`, subject derived from the
-verified credential) as the primary gate — it removes the forgeable free-subject
-argument, which is the root cause, and matches the opaque-type precedent. Layer
-**Proposal C** on top as defence-in-depth so the JWT `sub` and the login witness
-can never diverge. Keep **Proposal B** as the lighter alternative if introducing a
-new opaque `Credential` type is considered too much surface; keep **Proposal D**
+Ship **Proposal A + Proposal C as a single unit** (identity-bearing `Credential`
+with the subject derived from the verified credential, plus the `SubjectOf`
+token binding). A removes the forgeable free-subject argument — the root cause —
+and matches the opaque-type precedent; C closes the token/witness divergence
+that would otherwise leave A bypassable by any legitimately-logged-in user (see
+Proposal C). Neither is optional. Keep **Proposal B** as the lighter alternative
+if introducing a new opaque `Credential` type is considered too much surface —
+but note B carries a decide-by-spelling trap (two ways to check a password;
+picking unbound `checkPassword` fails open), and its mitigation (disallow the
+unbound form at mint sites) makes it nearly as heavy as A. Keep **Proposal D**
 only as a last resort. The SSO callback path is already sound and unchanged.
+
+## SSO interaction (verified in code 2026-08-03)
+- **No breakage risk from the new `setSessionCookie` demand:** the SSO callback
+  mints its session inside the runtime (`dsl/web.rkt` `sso-route` struct,
+  `mint-session`), never through typed app-level `Http.setSessionCookie`, so the
+  proof demand cannot touch the SSO path.
+- **SSO makes this gate MORE urgent, not less:** mixed-mode
+  `[Sso, Password via fn]` is the SSO-era feature, and without the witness gate
+  adding `Password` to an SSO server plants an arbitrary-mint hole next to a
+  sound SSO path. This gate is what makes mixed mode honest.
+- **Corpus churn is confined to the Password path:** `setSessionCookie` appears
+  only in `example/learn/lesson76-sessions.tesl` and
+  `tests/session-cookie-tests.tesl`; the SSO lessons (78/80) never call it.
 
 ## Where it plugs in (any proposal)
 - `compiler/lib/type_system.ml`: new `Tesl.Auth` rows + module-owned row +
@@ -163,6 +191,10 @@ only as a last resort. The SSO callback path is already sound and unchanged.
 ## Gotchas / must-verify
 - The escalation regression is the acceptance test: an attacker verifying their
   OWN credential must NOT be able to mint `LoggedIn` for another subject.
+- Second acceptance test (the A-without-C bypass): a user holding a valid
+  `LoggedIn` for themselves must NOT be able to set a cookie whose token was
+  signed with a different `sub` — `setSessionCookie ownLoggedIn adminToken` must
+  fail the `SubjectOf` demand at compile time.
 - `setSessionCookie` demand placement: put the proof-carrying argument FIRST so a
   partial application cannot silently skip it (a 1-arg call must be a hard type
   error, not a no-op — learned from the prototype).
