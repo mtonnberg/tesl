@@ -84,13 +84,16 @@ let spec_section_numbers spec_text =
 
 (* ── 2. Collect cited §-numbers from compiler sources ─────────────────────── *)
 
-(* Is the '§' at [pos] in [line] an internal-review reference we must skip?
-   Look at the text immediately before it (case-insensitively): review shorthand
-   ends with  fix-<n> | review<n>? | review <n> | critical-review[-<n>]  then
+(* Is the '§' at [pos] in [line] an internal-review reference, or a citation of
+   an EXTERNAL standard (RFC, etc.), that we must skip — neither names a
+   LANGUAGE-SPEC.md section.  Look at the text immediately before it
+   (case-insensitively): review shorthand ends with
+   fix-<n> | review<n>? | review <n> | critical-review[-<n>]; an external
+   citation ends with  rfc[ ]*<n>  (e.g. "RFC 9110 §9.2.1"); either may have
    optional spaces right before the '§'. *)
 let review_prefix_re =
   Str.regexp_case_fold
-    ".*\\(fix-[0-9]+\\|review[ ]*[0-9]*\\|critical-review[-0-9]*\\)[ ]*$"
+    ".*\\(fix-[0-9]+\\|review[ ]*[0-9]*\\|critical-review[-0-9]*\\|rfc[ ]*[0-9]+\\)[ ]*$"
 
 let is_review_ref line pos =
   let prefix = String.sub line 0 pos in
