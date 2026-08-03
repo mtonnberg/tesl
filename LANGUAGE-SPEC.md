@@ -2096,6 +2096,8 @@ let claims = JWT.verify token key            # ERROR: plain `let`, no `check`
 
 The last one is refused with ``"check function `JWT.verify` must be bound with `check`"`` and ships the `check` insertion as a machine-applicable fix. Without it, `claims` would be bound to the check-fail value on the failure path and then read as if the check had succeeded — a defect visible only on the error path. The rule fires on **saturating** calls only: a partial application (`Dict.requireKey "sub"`, `List.filterCheck (checkInBounds 0 100) xs`) hands over a check *function*, not a check *result*, and stays legal.
 
+The symmetric rule holds for the keyword itself: `check` produces a check *result*, so it must be **fully applied**. `List.filterCheck (check checkInBounds 0 100) xs` is refused with ``"`check checkInBounds` is applied to 2 of its 3 arguments"`` — drop the keyword to hand the function over. A partially applied check used as a callback may also close over the fact's non-element subjects, and those must match what the return type declares: filtering with `checkAtMost other` while returning `List Int ::: ForAll (AtMost hi)` is refused.
+
 `let (x ::: p) = y` is proof decomposition. It elaborates to `x = forgetFact(y)` and `p = detachAllProof(y)`. The value `x` preserves the hidden subject identity of `y` but has no attached proofs. The proof `p` is a first-class detached proof carrying all facts that were attached to `y`. This form is only valid when `y` has at least one attached proof.
 
 The proof side supports `&&`-separated patterns with `_` as discard:
@@ -3097,6 +3099,20 @@ f 4                      # 7
 **Accepted design, Implemented.**
 
 Existential packaging uses `exists witness => body` in function bodies. The witness variable is scoped to the body block and cannot escape. Return types use `exists name: T => InnerType` syntax. The compiler enforces that ordinary functions with existential return types actually return a pack, while the runtime/core still enforces witness escape prevention at evaluation time. This surface is settled.
+
+A function may also **forward** an existential instead of introducing one: if every tail of the body is a call to a function whose own return type is the same `exists` type — same binder arity, and a proof that entails the declared one once the callee's binders and parameters are read at the call site — the package the caller receives is the callee's, unchanged. This is what lets several thin handlers share one proof-carrying core:
+
+```tesl
+fn createThing(name: String) -> exists id: String => Thing ? FromDb (Id == id) ... =
+  let id = generatePrefixedId "thing"
+  exists id =>
+    insert Thing { id: id, name: name, createdAt: nowMillis() }
+
+fn viaSession(name: String) -> exists id: String => Thing ? FromDb (Id == id) ... =
+  createThing name          # forwarded, not re-derived
+```
+
+Forwarding mints nothing, so it cannot forge: a callee carrying a different fact, a callee whose return type is not existential, an argument passed into the wrong proof-subject slot, and a fork where any one branch fabricates its value are all rejected.
 
 ### 16.4 The exact public role of `establish`
 **Accepted design, Implemented.**

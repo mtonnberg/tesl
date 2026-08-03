@@ -1,0 +1,67 @@
+module FilterCheckPartialTests exposing []
+
+# Regression (issue #74): `List.filterCheck` with a PARTIALLY APPLIED check
+# function — the manual's own documented idiom for closing over an extra
+# argument (`List.filterCheck (checkInBounds 0 100) xs`).
+#
+# It failed three ways at once:
+#   * bare, it did not compile — T001 demanded the `check` keyword, which only a
+#     SATURATING call needs (a partial application hands over a check FUNCTION,
+#     not a check result);
+#   * with the keyword it compiled clean and then trapped at runtime
+#     ("checkInBounds: arity mismatch; expected: 3 given: 2") — a check-passes /
+#     test-fails trap, now a compile error;
+#   * combined (`checkA a && checkB b`), the emitter did not recognise an
+#     under-applied operand as a function reference, so it fell through to
+#     Racket's boolean `(and proc1 proc2)` — which evaluates to proc2, SILENTLY
+#     DROPPING the first check.  `combinedBounds` below is data-discriminating:
+#     -7 is rejected only by the lower bound, 200 only by the upper.
+#
+# The static side (a forged `ForAll` predicate, a closed-over subject that does
+# not match the declared one) is in compiler/test/test_issue_74.ml.
+
+import Tesl.Prelude exposing [Bool(..), Int, List]
+import Tesl.List exposing [List.filterCheck, List.length]
+
+fact InBounds (lo: Int) (hi: Int) (n: Int)
+fact AtLeast (lo: Int) (n: Int)
+fact AtMost (hi: Int) (n: Int)
+
+check checkInBounds(lo: Int, hi: Int, n: Int) -> n: Int ::: InBounds lo hi n =
+  if lo <= n && n <= hi then
+    ok n ::: InBounds lo hi n
+  else
+    fail 400 "out of bounds"
+
+check checkAtLeast(lo: Int, n: Int) -> n: Int ::: AtLeast lo n =
+  if n >= lo then
+    ok n ::: AtLeast lo n
+  else
+    fail 400 "too small"
+
+check checkAtMost(hi: Int, n: Int) -> n: Int ::: AtMost hi n =
+  if n <= hi then
+    ok n ::: AtMost hi n
+  else
+    fail 400 "too big"
+
+# A partially applied check still establishes its fact for every element.
+fn atMostAll(xs: List Int, hi: Int) -> List Int ::: ForAll (AtMost hi) =
+  List.filterCheck (checkAtMost hi) xs
+
+test "filterCheck with a partially-applied check function" {
+  let xs = [1, 50, 200, 99]
+  let result = List.filterCheck (checkInBounds 0 100) xs
+  expect List.length result == 3
+}
+
+test "both halves of a partially-applied check combination run" {
+  let xs = [-7, 1, 50, 200, 99]
+  let result = List.filterCheck (checkAtLeast 0 && checkAtMost 100) xs
+  expect List.length result == 3
+}
+
+test "ForAll established through a partially-applied check" {
+  let result = atMostAll [1, 500, 7] 100
+  expect List.length result == 2
+}

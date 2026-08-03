@@ -1,0 +1,113 @@
+module ExistsForwardingTests exposing []
+
+# Regression (issue #73): a plain `fn` may FORWARD an already-packed
+# existential from a callee whose return type is the same `exists` type.
+#
+# Before, the only way to satisfy `-> exists w: T => …` was to introduce the
+# pack in that same function body, so three route handlers sharing one
+# "insert and return the proof-carrying row" core had to duplicate the literal
+# `exists id => insert …`.  Worse, the compiler's own successive hints led
+# nowhere: the pack-enforcement hint suggested `value ::: proofVar`, which a
+# plain `fn` may never write (P001).  Forwarding is a zero-cost pass-through —
+# the caller receives the callee's package unchanged, so nothing is minted here
+# and the rule stays fail-closed (see compiler/test/test_exists_forwarding.ml
+# for the rejection side: wrong fact, non-exists callee, fabricated branch).
+#
+# Two emit bugs sat under it, both of which strip a package the runtime then
+# rejects ("returned a value that does not satisfy declared existential
+# return"):
+#   * a pack in an `if`/`case` BRANCH tail was wrapped in `(raw-value …)`;
+#   * the runtime matches witness names NOMINALLY while the checker matches
+#     them POSITIONALLY, so packing a differently-named local (`renamedWitness`
+#     below) was a check-passes / test-fails trap.
+
+import Tesl.Prelude exposing [Bool(..), String]
+import Tesl.String exposing [String.length, String.startsWith]
+import Tesl.Random exposing [random]
+import Tesl.Id exposing [generatePrefixedId]
+
+fact IsTokenId (s: String)
+
+check checkTokenId(s: String) -> s: String ::: IsTokenId s =
+  if String.length s > 3 then
+    ok s ::: IsTokenId s
+  else
+    fail 400 "bad token"
+
+capability idGen implies random
+
+fn generateToken() -> exists tokenId: String => tokenId: String ::: IsTokenId tokenId
+  requires [idGen] =
+  let tokenId = generatePrefixedId "tok"
+  let validated = check checkTokenId tokenId
+  exists tokenId =>
+    validated
+
+# The shape issue #73 reported: same signature, plain tail call.
+fn forwardToken() -> exists tokenId: String => tokenId: String ::: IsTokenId tokenId
+  requires [idGen] =
+  generateToken()
+
+# Same, with the package bound to a local first.
+fn forwardTokenViaLet() -> exists tokenId: String => tokenId: String ::: IsTokenId tokenId
+  requires [idGen] =
+  let packed = generateToken()
+  packed
+
+# Every branch forwards — the rule accepts a fork only when ALL tails do.
+fn forwardTokenBranching(flag: Bool)
+  -> exists tokenId: String => tokenId: String ::: IsTokenId tokenId
+  requires [idGen] =
+  if flag then
+    generateToken()
+  else
+    forwardToken()
+
+# A pack in each `if` branch: must not be raw-valued away.
+fn packInBranch(flag: Bool)
+  -> exists tokenId: String => tokenId: String ::: IsTokenId tokenId
+  requires [idGen] =
+  let tokenId = generatePrefixedId "tok"
+  let validated = check checkTokenId tokenId
+  if flag then
+    exists tokenId =>
+      validated
+  else
+    exists tokenId =>
+      validated
+
+# The implementation packs a local named differently from the declared binder.
+fn renamedWitness() -> exists tokenId: String => tokenId: String ::: IsTokenId tokenId
+  requires [idGen] =
+  let internal = generatePrefixedId "tok"
+  let validated = check checkTokenId internal
+  exists internal =>
+    validated
+
+test "forwarded existential is consumable as its underlying type" requires [idGen] {
+  let tok = forwardToken()
+  expect String.startsWith tok "tok"
+  expect String.length tok > 3
+}
+
+test "existential forwarded through a let binding" requires [idGen] {
+  let tok = forwardTokenViaLet()
+  expect String.startsWith tok "tok"
+}
+
+test "every branch forwarding is accepted and packs survive" requires [idGen] {
+  let a = forwardTokenBranching True
+  let b = forwardTokenBranching False
+  expect String.startsWith a "tok"
+  expect String.startsWith b "tok"
+}
+
+test "a pack in an if-branch keeps its package" requires [idGen] {
+  let tok = packInBranch True
+  expect String.startsWith tok "tok"
+}
+
+test "packing a differently-named local matches the declared binder" requires [idGen] {
+  let tok = renamedWitness()
+  expect String.startsWith tok "tok"
+}

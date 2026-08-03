@@ -3100,8 +3100,22 @@ let rec infer_expr ctx (e : expr) : ty =
        | _ -> ());
       apply !(ctx.subst) final_ret_ty
     in
+    (* Issue #74: only a SATURATING application produces a check RESULT, and only
+       that shape needs the `check` keyword.  An under-applied check function is
+       still a FUNCTION — `List.filterCheck (checkInBounds 0 100) xs` is the
+       manual's own documented idiom for closing over extra arguments — and
+       demanding `check` there was both wrong and a dead end: `check
+       checkInBounds 0 100` typechecks and then arity-traps at runtime.  The
+       arity rule matches [call_head_check_shaped_expr]'s: unresolvable arity is
+       judged a call, so the keyword is still required (fail closed). *)
+    let check_call_saturates name =
+      match check_shaped_arity ctx name with
+      | Some arity -> List.length args >= arity
+      | None -> true
+    in
     (match base_fn with
-     | EVar { name; loc } when is_check_function_name ctx name ->
+     | EVar { name; loc } when is_check_function_name ctx name
+                               && check_call_saturates name ->
         add_error ctx loc
           (Printf.sprintf
              "check function `%s` must be called with the `check` keyword; write `check %s ...`"
@@ -3133,7 +3147,29 @@ let rec infer_expr ctx (e : expr) : ty =
            when List.mem ("Units." ^ field) Units_catalog.units_op_names
                 && lookup_name ctx ("Units." ^ field) = None ->
            infer_units_op ctx (expr_loc app) field check_args
-         | check_fn :: check_args -> infer_direct_call check_fn check_args
+         | check_fn :: check_args ->
+           (* Issue #74: `check checkInBounds 0 100` on a 3-parameter check
+              typechecked (the `check` form's result type is the callee's return
+              type regardless of how many arguments arrived) and then trapped at
+              RUNTIME with "arity mismatch; expected: 3 given: 2" — a
+              check-passes / test-fails trap.  `check` yields a check RESULT, so
+              it must saturate; the partial application people actually want is
+              spelled WITHOUT the keyword. *)
+           (match check_fn with
+            | EVar { name; loc } when is_check_shaped_name ctx name ->
+              (match check_shaped_arity ctx name with
+               | Some arity when List.length check_args < arity ->
+                 add_error ctx loc
+                   (Printf.sprintf
+                      "`check %s` is applied to %d of its %d argument%s: `check` produces a \
+                       check result, so it must be fully applied — a partial application \
+                       would trap at runtime. To hand `%s` over AS a check function (e.g. \
+                       to `List.filterCheck`), drop the `check` keyword: `(%s ...)`."
+                      name (List.length check_args) arity
+                      (if arity = 1 then "" else "s") name name)
+               | _ -> ())
+            | _ -> ());
+           infer_direct_call check_fn check_args
          | [] -> fresh ())
      | EVar { name = "initTelemetry"; _ } ->
         (* The emitter re-folds each keyword's value from the flattened token

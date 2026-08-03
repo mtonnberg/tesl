@@ -1986,8 +1986,26 @@ let rec emit_expr ctx e =
           end))
   | EApp { fn = EVar { name = "make-witness"; _ };
            arg = EApp { fn = EVar { name = witness_name; _ }; arg = body; _ }; _ } ->
-    (* Existential witness: (pack ([witness]) body) *)
-    emit ctx (Printf.sprintf "(pack ([%s]) " witness_name);
+    (* Existential witness: (pack ([witness]) body).
+       The runtime matches a returned package's witness names NOMINALLY against
+       the declared `exists` binder (validate-exists-return, dsl/web.rkt), while
+       the checker deliberately matches them POSITIONALLY — an implementation is
+       free to pack a differently-named local.  That gap was a check-passes /
+       test-fails trap ("returned an existential package missing witness name").
+       Emitting the DECLARED name bound to the body's local closes it, so the
+       positional rule the checker documents is the one that actually runs.
+       Only the single-binder shape is remapped; a nested `exists a => exists b`
+       chain packs nested packages and is left exactly as before. *)
+    let public_name =
+      match ctx.func_return_spec with
+      | Some (RetExists { binding; body = inner; _ })
+        when (match inner with RetExists _ -> false | _ -> true) -> binding.name
+      | _ -> witness_name
+    in
+    if public_name = witness_name then
+      emit ctx (Printf.sprintf "(pack ([%s]) " witness_name)
+    else
+      emit ctx (Printf.sprintf "(pack ([%s %s]) " public_name witness_name);
     emit_expr ctx body;
     emit ctx ")"
   | EApp _ as app when (match extract_select_query app with Some _ -> true | None -> false) ->
@@ -3696,9 +3714,31 @@ and emit_binop ctx ~loc op left right =
      emit ctx ")"
    | BAnd ->
      (* Use check-and when both operands are function references (check functions) *)
+     (* Issue #74: a PARTIALLY APPLIED check (`checkAtLeast 0 && checkAtMost 100`,
+        the shape that closes over an extra argument) is just as much a function
+        reference as a bare name.  It used to fall through to the boolean arm,
+        where Racket's `(and proc1 proc2)` evaluates to proc2 — so the first
+        check was SILENTLY DROPPED and the filter quietly kept elements it
+        should have rejected.  An under-applied call is a function by
+        construction (the eta-expansion in the generic EApp arm emits the
+        lambda), so it belongs with the other function references. *)
+     let is_under_applied_fn e =
+       let rec spine acc = function
+         | EApp { fn; arg; _ } -> spine (arg :: acc) fn
+         | head -> (head, acc)
+       in
+       match spine [] e with
+       | (EVar { name; _ }, (_ :: _ as args)) ->
+         Hashtbl.mem ctx.fn_names name
+         && (match Hashtbl.find_opt ctx.fn_arities name with
+             | Some arity -> List.length args < arity
+             | None -> false)
+       | _ -> false
+     in
      let is_fn_ref e = match e with
        | EVar { name; _ } -> Hashtbl.mem ctx.fn_names name
        | EBinop { op = BAnd; _ } -> true  (* nested check-and *)
+       | EApp _ -> is_under_applied_fn e
        | _ -> false
      in
      let use_check_and = is_fn_ref left && is_fn_ref right in
@@ -5725,7 +5765,16 @@ let emit_func ctx (fd : func_decl) =
      decision).  Used both for the non-peelable whole-body checkpoint and for the
      peeled terminal leaf. *)
   let emit_release_body e =
+    (* An `exists` return IS the pack: `(raw-value (pack …))` unwraps it to the
+       body, so a caller that expects a packed existential receives the bare
+       value instead.  This hit two shapes: a pack in an `if`/`case` BRANCH tail
+       (the branch went through [emit_with_raw_tail], whose leaf arm raw-values),
+       and — since issue #73 made it expressible — forwarding a callee's pack in
+       tail position.  Neither may be raw-tailed; [emit_expr] emits the pack
+       (and the forwarded call) unstripped. *)
+    let returns_exists = match fd.return_spec with RetExists _ -> true | _ -> false in
     match tail with
+    | _ when returns_exists -> emit_expr ctx e
     | EApp _ when (is_user_defined_fn_call tail && not has_forall_return) || is_gdp_stdlib_tail ->
       emit_with_raw_tail e
     | EVar _ when (is_local_var_tail || is_worker_param_tail || is_fn_param_tail) && not has_forall_return ->

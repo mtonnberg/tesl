@@ -175,7 +175,7 @@
 (define/pow
   (n08_existential_with_check [raw : Integer])
   #:returns (Exists [x : Integer] [_entity : Integer ::: (IsPositive x)])
-  (thsl-src! "tests/critical-review-51-tests.tesl" 209 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-19 (isPositive raw)]) (let ([checked tesl-checked-19]) (pack ([checked]) checked))))))
+  (thsl-src! "tests/critical-review-51-tests.tesl" 209 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-19 (isPositive raw)]) (let ([checked tesl-checked-19]) (pack ([x checked]) checked))))))
 
 (define/pow
   (n09_int_case [code : Integer])

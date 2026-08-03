@@ -1757,6 +1757,22 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
        | None -> [])
     | EBinop { op = BAnd; left; right; _ } ->
       List.sort_uniq String.compare (preds_from_check_expr left @ preds_from_check_expr right)
+    (* Issue #74: a PARTIALLY APPLIED check (`checkAtMost hi`) produces exactly
+       the predicates its base function does.  Returning [] here made the
+       "produces X but the return type requires Y" gate below fall into its
+       `produced_preds = []` branch, which accepts — so once partial
+       application became expressible, `List.filterCheck (checkAtMost hi) xs`
+       could be returned as `List Int ::: ForAll Blessed` with the fact never
+       established.  [flatten_check_chain] (the precondition path) already
+       resolved through EApp; this is the same resolution. *)
+    | EApp _ ->
+      let (head, _) = collect_call_head_and_args [] check_expr in
+      (match function_name_of_expr head with
+       | Some name ->
+         (match List.assoc_opt name funcs with
+          | Some info -> pred_names_of_return_spec info.fi_return
+          | None -> [])
+       | None -> [])
     | _ -> []
   in
   let check_call_produced_preds forall_env e =
@@ -1870,6 +1886,90 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
       List.rev !errs
     end
   in
+  (* Issue #74 — subject alignment for a PARTIALLY APPLIED check callback.
+     See the call site for why the name-keyed ForAll matching is not enough once
+     a check can close over its non-element subjects. *)
+  let rec forall_subject_mismatch_errors ~wanted ~check_fn_expr ~loc =
+    (* How a call-site argument spells as a proof SUBJECT.  Anything that is not
+       a name or a literal gets a spelling no proof argument can equal, so the
+       comparison below fails closed rather than matching by accident. *)
+    let subject_of_arg = function
+      | EVar { name; _ } -> name
+      | ELit { lit = LInt n; _ } -> string_of_int n
+      | ELit { lit = LBigInt s; _ } -> s
+      | ELit { lit = LString s; _ } -> "\"" ^ s ^ "\""
+      | ELit { lit = LFloat f; _ } -> Float_fmt.identity_key f
+      | _ -> "#tesl-unmatchable-argument#"
+    in
+    let return_spec_proofs (spec : return_spec) : proof_expr list =
+      match spec with
+      | RetAttached { binding = b; _ } ->
+        (match b.proof_ann with Some p -> [p] | None -> [])
+      | RetNamedPack { entity_proof; other_proof; _ } ->
+        (match entity_proof with Some p -> [p] | None -> [])
+        @ (match other_proof with Some p -> [p] | None -> [])
+      | _ -> []
+    in
+    match check_fn_expr with
+    (* Each half of a `checkA a && checkB b` chain closes over its own subjects. *)
+    | EBinop { op = BAnd; left; right; _ } ->
+      forall_subject_mismatch_errors ~wanted ~check_fn_expr:left ~loc
+      @ forall_subject_mismatch_errors ~wanted ~check_fn_expr:right ~loc
+    | EApp _ ->
+      let (head, call_args) = collect_call_head_and_args [] check_fn_expr in
+      (match function_name_of_expr head with
+       | None -> []
+       | Some name ->
+         (match List.assoc_opt name funcs with
+          | None -> []
+          | Some info ->
+            let param_names = List.map (fun (b : binding) -> b.name) info.fi_params in
+            let closed_count = List.length call_args in
+            if closed_count = 0 || closed_count > List.length param_names then []
+            else begin
+              let closed = List.filteri (fun i _ -> i < closed_count) param_names in
+              let element_params =
+                List.filteri (fun i _ -> i >= closed_count) param_names in
+              let subst = List.map2 (fun p a -> (p, subject_of_arg a)) closed call_args in
+              (* The fact this call actually establishes about an element: the
+                 declared fact with closed-over parameters replaced by what the
+                 call site passed, and the element parameter(s) dropped (the
+                 ForAll binds them). *)
+              let effective =
+                List.concat_map flatten_proof (return_spec_proofs info.fi_return)
+                |> List.filter_map (function
+                  | PredApp { pred; args = pargs; loc = ploc } ->
+                    let mapped =
+                      pargs
+                      |> List.filter (fun a -> not (List.mem a element_params))
+                      |> List.map (fun a ->
+                          match List.assoc_opt a subst with Some s -> s | None -> a)
+                    in
+                    Some (pred, mapped, ploc)
+                  | PredAnd _ -> None)
+              in
+              List.filter_map (function
+                | PredApp { pred; args = dargs; _ } when dargs <> [] ->
+                  (match List.find_opt (fun (p, _, _) -> p = pred) effective with
+                   | Some (_, eargs, _) when eargs <> [] && eargs <> dargs ->
+                     Some (make_error loc
+                             ~hint:(Printf.sprintf
+                                      "pass the same subject the return type names — \
+                                       `%s %s` — or declare `ForAll (%s)`"
+                                      name (String.concat " " dargs)
+                                      (String.concat " " (pred :: eargs)))
+                             (Printf.sprintf
+                                "`%s` establishes `%s` for each element, but the return type \
+                                 declares `ForAll (%s)`; a partially applied check closes over \
+                                 the fact's subjects, so they must be the same"
+                                name
+                                (String.concat " " (pred :: eargs))
+                                (String.concat " " (pred :: dargs))))
+                   | _ -> None)
+                | _ -> None) (flatten_proof wanted)
+            end))
+    | _ -> []
+  in
   let rec walk forall_env expected e =
     match e with
     | EApp _ ->
@@ -1897,6 +1997,9 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
          let check_fn_loc = match args with
            | EVar { loc; _ } :: _ -> loc
            | EBinop { loc; _ } :: _ -> loc
+           (* issue #74: a partial application (`checkAtMost hi`) is a third
+              shape; without this it reported at <validation>:1:1. *)
+           | EApp { loc; _ } :: _ -> loc
            | _ -> gen_loc
          in
          (match args with
@@ -1922,6 +2025,10 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
                 let check_fn_str = match check_fn_expr with
                   | EVar { name; _ } -> name
                   | EBinop _ -> "(check combination)"
+                  | EApp _ ->
+                    (match function_name_of_expr
+                             (fst (collect_call_head_and_args [] check_fn_expr)) with
+                     | Some n -> n | None -> "?")
                   | _ -> "?"
                 in
                 errors := make_error check_fn_loc
@@ -1930,7 +2037,21 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
                      (match function_name_of_expr head with Some n -> n | None -> "filterCheck")
                      check_fn_str produced required missing_s)
                   :: !errors
-              end
+              end;
+              (* Issue #74, subject alignment.  A partial application CLOSES OVER
+                 the fact's non-element subjects, so the ForAll layer's
+                 name-keyed matching (`proof_predicates` returns predicate NAMES)
+                 stopped being complete the moment the shape became expressible:
+                 `List.filterCheck (checkAtMost other) xs` returned as
+                 `List Int ::: ForAll (AtMost hi)` matched on the name `AtMost`
+                 while the elements were only ever checked against `other`.
+                 Compare the ARGUMENTS too — the check's produced fact with its
+                 closed-over parameters replaced by the call-site spellings and
+                 its element parameters dropped, against what the return type
+                 declares.  Only fires when both sides carry arguments, so the
+                 ordinary single-subject `ForAll IsPositive` shape is untouched. *)
+              List.iter (fun err -> errors := err :: !errors)
+                (forall_subject_mismatch_errors ~wanted ~check_fn_expr ~loc:check_fn_loc)
             end else begin
               (* No known predicates — for single EVar, report unknown check fn *)
               match check_fn_expr with
@@ -2235,26 +2356,6 @@ let rec exists_witnesses (e : expr) : string list =
   | ERuntimeCall { segments; _ } ->
     List.concat_map (function RLit _ | RRawVar _ -> [] | RArg e -> exists_witnesses e) segments
 
-let check_exists_bindings (decls : top_decl list) : validation_error list =
-  let errors = ref [] in
-  List.iter (function
-    | DFunc fd ->
-      (match fd.return_spec with
-       | RetExists { binding; _ } ->
-         let witnesses = exists_witnesses fd.body |> List.sort_uniq String.compare in
-         if witnesses = [] then
-           errors := make_error fd.loc
-             ~hint:(Printf.sprintf "use `exists %s => ...` in the function body" binding.name)
-             (Printf.sprintf "function '%s' declares exists return type but body has no exists expression" fd.name)
-             :: !errors
-         (* Note: we do NOT enforce that the witness NAME in the body matches the declared name.
-            The implementation may use a different internal name (e.g. `i`) while the public
-            return spec uses a different name (e.g. `itemId`). The names are matched positionally. *)
-       | _ -> ())
-    | _ -> ()
-  ) decls;
-  List.rev !errors
-
 (* R51_E01 — existential-return proof enforcement.
    A function `... -> exists x: T => T ::: P x` is supposed to guarantee
    that the packed value satisfies `P`. Prior to this check, the compiler
@@ -2274,6 +2375,213 @@ let rec inner_return_proof_spec = function
   | RetNamedPack { entity_proof = Some ep; _ } -> Some ep
   | RetNamedPack { other_proof = Some op; _ } -> Some op
   | _ -> None
+
+(* ── Existential forwarding (issue #73) ──────────────────────────────────────
+   A `fn` whose declared return type is `exists w: T => …` normally has to
+   introduce the pack itself (`exists w => …`).  But a value of that exact type
+   already IS a pack: if the body's tail is a call to a function whose OWN
+   return spec is the same existential (same binder arity, and a proof that
+   entails the declared one after alpha-renaming binders and parameters to the
+   call site), forwarding it is a zero-cost pass-through — the packed value that
+   reaches the caller is bit-for-bit the callee's, so nothing is minted here and
+   no proof is forged.  Before this, the only way to satisfy such a signature was
+   to re-derive the fact with a fresh `insert`/`select` in the SAME function, and
+   the suggested workaround (`value ::: proofVar`) is categorically unavailable
+   in a plain `fn` (P001).
+
+   The check is fail-CLOSED: every tail must be a resolvable forwarding call
+   whose proof provably entails the declared one; anything unresolved is an
+   error, exactly as before. *)
+
+(* All proofs a return spec claims about its value (both `?`-pack slots and the
+   `:::` annotation), across the existential binder chain. *)
+let rec inner_return_proofs (rs : return_spec) : proof_expr list =
+  match rs with
+  | RetExists { body; _ } -> inner_return_proofs body
+  | RetAttached { binding = b; _ } -> (match b.proof_ann with Some p -> [p] | None -> [])
+  | RetNamedPack { entity_proof; other_proof; _ } ->
+    (match entity_proof with Some p -> [p] | None -> [])
+    @ (match other_proof with Some p -> [p] | None -> [])
+  | _ -> []
+
+(* The existential binder names of a return spec, outermost first. *)
+let rec exists_binder_names (rs : return_spec) : string list =
+  match rs with
+  | RetExists { binding; body; _ } -> binding.name :: exists_binder_names body
+  | _ -> []
+
+(* Rename identifiers inside a proof argument.  Parenthesised args (`(Id == id)`)
+   reach us as opaque strings from the parser, so the substitution is token-wise:
+   maximal identifier runs are looked up whole, and a dotted path substitutes on
+   its head segment only (`u.name` with `u -> user` becomes `user.name`). *)
+let rename_in_proof_arg (subst : (string * string) list) (arg : string) : string =
+  let is_word c =
+    (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+    || (c >= '0' && c <= '9') || c = '_' in
+  let buf = Buffer.create (String.length arg) in
+  let n = String.length arg in
+  let i = ref 0 in
+  while !i < n do
+    if is_word arg.[!i] then begin
+      let j = ref !i in
+      while !j < n && is_word arg.[!j] do incr j done;
+      let word = String.sub arg !i (!j - !i) in
+      Buffer.add_string buf
+        (match List.assoc_opt word subst with Some r -> r | None -> word);
+      i := !j
+    end else begin
+      Buffer.add_char buf arg.[!i];
+      incr i
+    end
+  done;
+  Buffer.contents buf
+
+let rec subst_proof_names (subst : (string * string) list) (p : proof_expr) : proof_expr =
+  match p with
+  | PredApp r -> PredApp { r with args = List.map (rename_in_proof_arg subst) r.args }
+  | PredAnd { left; right; loc } ->
+    PredAnd { left = subst_proof_names subst left;
+              right = subst_proof_names subst right; loc }
+
+(* The head name and argument list of an application spine, if it is a direct
+   call to a named function. *)
+let call_spine (e : expr) : (string * expr list) option =
+  let rec go acc = function
+    | EApp { fn; arg; _ } -> go (arg :: acc) fn
+    | EVar { name; _ } -> Some (name, acc)
+    | _ -> None
+  in
+  go [] e
+
+(* Does forwarding [callee], called with [args], satisfy [declared]? *)
+let exists_forward_entails ~(callee : func_info) ~(args : expr list)
+    ~(declared : return_spec) : bool =
+  (* `f()` parses as one empty-list argument — the zero-arg call marker. *)
+  let args = match args, callee.fi_params with
+    | [EList { elems = []; _ }], [] -> []
+    | _ -> args in
+  match declared, callee.fi_return with
+  | RetExists _, RetExists _ ->
+    let declared_binders = exists_binder_names declared in
+    let callee_binders = exists_binder_names callee.fi_return in
+    List.length declared_binders = List.length callee_binders
+    && List.length args = List.length callee.fi_params
+    &&
+    (* Alpha-rename the callee's view of the world into the caller's: witness
+       binders positionally, and each parameter to the identifier passed at the
+       call site.  A non-identifier argument gets a name that cannot occur in a
+       proof, so a proof mentioning that parameter simply fails to match. *)
+    let subst =
+      List.map2 (fun c d -> (c, d)) callee_binders declared_binders
+      @ List.map2 (fun (b : binding) (a : expr) ->
+          match a with
+          | EVar { name; _ } -> (b.name, name)
+          | _ -> (b.name, "#tesl-non-identifier-argument#"))
+          callee.fi_params args
+    in
+    let carried =
+      List.map proof_key
+        (List.concat_map flatten_proof
+           (List.map (subst_proof_names subst) (inner_return_proofs callee.fi_return))) in
+    let required =
+      List.map proof_key (List.concat_map flatten_proof (inner_return_proofs declared)) in
+    List.for_all (fun k -> List.mem k carried) required
+  | _ -> false
+
+(* Tail positions of a body — the expressions that can BE the result — together
+   with the `let` bindings in scope there.  Block wrappers are transparent;
+   `if`/`case` fork into one tail per branch. *)
+let rec exists_tail_exprs (env : (string * expr) list) (e : expr)
+    : (expr * (string * expr) list) list =
+  match e with
+  | ELet { name; value; body; _ } -> exists_tail_exprs ((name, value) :: env) body
+  | ELetProof { value_name; value; body; _ } ->
+    exists_tail_exprs ((value_name, value) :: env) body
+  | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
+  | EWithTransaction { body; _ } -> exists_tail_exprs env body
+  | EIf { then_; else_; _ } -> exists_tail_exprs env then_ @ exists_tail_exprs env else_
+  | ECase { arms; _ } ->
+    List.concat_map (fun (a : case_arm) -> exists_tail_exprs env a.body) arms
+  | e -> [(e, env)]
+
+let check_exists_bindings ?(extra_funcs = []) (decls : top_decl list) : validation_error list =
+  let funcs = build_func_info decls @ extra_funcs in
+  let errors = ref [] in
+  List.iter (function
+    | DFunc fd ->
+      (match fd.return_spec with
+       | RetExists { binding; _ } ->
+         let witnesses = exists_witnesses fd.body |> List.sort_uniq String.compare in
+         if witnesses = [] then begin
+           (* No pack anywhere in the body: the only other legitimate producer is
+              forwarding an already-packed value of the SAME existential type. *)
+           let tails = exists_tail_exprs [] fd.body in
+           (* Resolve a let-bound tail (`let r = core name  r`) to its value. *)
+           let rec resolve env depth e =
+             if depth > 8 then e
+             else match e with
+               | EVar { name; _ } ->
+                 (match List.assoc_opt name env with
+                  | Some v -> resolve env (depth + 1) v
+                  | None -> e)
+               | e -> e
+           in
+           let generic_hint =
+             Printf.sprintf
+               "use `exists %s => ...` in the function body, or return the result of a \
+                function whose return type is the same `exists` type (forwarding an \
+                already-packed value is allowed when the proofs match)"
+               binding.name in
+           let tail_error (tail, env) =
+             match call_spine (resolve env 0 tail) with
+             | Some (callee_name, args) ->
+               (match List.assoc_opt callee_name funcs with
+                | Some callee when exists_forward_entails ~callee ~args ~declared:fd.return_spec ->
+                  None
+                | Some _ ->
+                  Some (make_error fd.loc
+                          ~hint:generic_hint
+                          (Printf.sprintf
+                             "function '%s' returns the result of '%s', but '%s' does not return \
+                              the same `exists` type carrying the declared proof%s — the packed \
+                              value cannot be forwarded"
+                             fd.name callee_name callee_name
+                             (match inner_return_proofs fd.return_spec with
+                              | [] -> ""
+                              | ps -> " `" ^ String.concat " && " (List.map pp_proof ps) ^ "`")))
+                | None ->
+                  Some (make_error fd.loc
+                          ~hint:generic_hint
+                          (Printf.sprintf
+                             "function '%s' declares exists return type but body has no exists expression"
+                             fd.name)))
+             | None ->
+               Some (make_error fd.loc
+                       ~hint:generic_hint
+                       (Printf.sprintf
+                          "function '%s' declares exists return type but body has no exists expression"
+                          fd.name))
+           in
+           match tails with
+           | [] ->
+             errors := make_error fd.loc ~hint:generic_hint
+                 (Printf.sprintf
+                    "function '%s' declares exists return type but body has no exists expression"
+                    fd.name)
+               :: !errors
+           | tails ->
+             (* Fail-closed: EVERY tail must be a valid forwarding site. *)
+             (match List.filter_map tail_error tails with
+              | [] -> ()
+              | e :: _ -> errors := e :: !errors)
+         end
+         (* Note: we do NOT enforce that the witness NAME in the body matches the declared name.
+            The implementation may use a different internal name (e.g. `i`) while the public
+            return spec uses a different name (e.g. `itemId`). The names are matched positionally. *)
+       | _ -> ())
+    | _ -> ()
+  ) decls;
+  List.rev !errors
 
 (* Collect all the packed values from nested `exists` expressions in a body.
    The same function may contain multiple packs via conditionals, so we
@@ -2425,10 +2733,26 @@ let check_existential_proof_enforcement ?(extra_funcs = []) (decls : top_decl li
               | ELambda { loc; _ } -> loc
               | _ -> Location.dummy_loc "existential-pack"
             in
+            (* Issue #73: the old hint ended at "attach an existing proof with
+               `value ::: proofVar`" for EVERY function kind.  In a plain `fn`
+               that reads as a licence to write `value ::: SomeFact arg`, which
+               P001 then rejects outright ("`ok ::: proof` construction is not
+               allowed in `fn`") — a hint chain that dead-ends.  Only a proof
+               VARIABLE may be re-attached outside check/auth, and forwarding an
+               already-packed value is the other way out, so say both. *)
             let hint =
-              "validate the packed value with a `check`/`establish` function (or a \
-               proof-carrying DB read) so it carries the declared proof, or attach an \
-               existing proof with `value ::: proofVar`"
+              match fd.kind with
+              | CheckKind | AuthKind ->
+                "validate the packed value with a `check`/`establish` function (or a \
+                 proof-carrying DB read) so it carries the declared proof, or attach an \
+                 existing proof with `value ::: proofVar`"
+              | _ ->
+                "validate the packed value with a `check`/`establish` function (or a \
+                 proof-carrying DB read) so it carries the declared proof; re-attach an \
+                 existing proof VARIABLE (`value ::: p`, where `p` was bound from a \
+                 `check`/`establish` — writing a fresh `value ::: SomeFact arg` here is \
+                 rejected outside `check`/`auth`); or return an already-packed value \
+                 from a function whose return type is this same `exists` type"
             in
             (* Best-effort, crash-safe predicate resolution for an expression. *)
             let resolved_preds e =
