@@ -23,10 +23,18 @@ type validation_error = {
      overrides per pass.  Resolved to an anchor by [Error_codes.anchor_of_topic]
      at render time — message text never routes the anchor. *)
   topic   : Error_codes.manual_topic;
+  (* get_handlers_do_not_mutate (2026-08-03): a validation error may carry its
+     OWN stable diagnostic code instead of the pass-generic "V001".  Security
+     rules need this: SEC005 ("state-changing capability in a GET route") is a
+     documented code with `tesl explain` prose, and it is enforced as a hard
+     error by a validation pass — not as a lint warning — so the code has to
+     survive to the rendered diagnostic.  Empty means "use the pass default",
+     which is what all ~172 other [make_error] sites get. *)
+  code    : string;
 }
 
-let make_error ?(hint="") ?(topic=Error_codes.TGeneric) loc message =
-  { loc; message; hint; topic }
+let make_error ?(hint="") ?(topic=Error_codes.TGeneric) ?(code="") loc message =
+  { loc; message; hint; topic; code }
 
 (** Re-tag a whole pass's output with its manual topic in one place.  Used by the
     orchestrator ([validation.ml]) so a pass's errors route by the resolved pass,
@@ -1425,6 +1433,67 @@ let load_imported_func_info (m : module_form) : (string * func_info) list =
    can RE-VERIFY an imported function's declared `requires` against its body
    instead of trusting it.  validation_capabilities `open`s this module, so its
    own callers are unaffected. *)
+(* ── Server binding ⇄ api endpoint pairing (ONE copy) ─────────────────────── *)
+
+(** True for a compiler-synthesised endpoint name (`endpoint_0`, `endpoint_12`).
+    [Parser] mints one of these for EVERY api endpoint — there is no surface
+    syntax for naming an endpoint in an `api` block — so this is currently true
+    of every parsed endpoint.  Kept because
+    [Validation_structural.check_server_completeness] branches on it. *)
+let is_synthetic_endpoint_name (name : string) : bool =
+  let prefix = "endpoint_" in
+  let prefix_len = String.length prefix in
+  String.length name > prefix_len
+  && String.sub name 0 prefix_len = prefix
+  && let suffix = String.sub name prefix_len (String.length name - prefix_len) in
+     String.length suffix > 0
+     && String.for_all (fun ch -> ch >= '0' && ch <= '9') suffix
+
+(** Resolve a server's bindings to the api endpoints they implement, as
+    [(endpoint, handler_name)] pairs.
+
+    Pairing is POSITIONAL: binding *i* implements non-SSE endpoint *i*.  The
+    binding KEY is not an identity — it is a label the emitter re-attaches to the
+    endpoint at that index.  Verified against [Emit_racket.emit_api]
+    (`endpoint_names = List.map fst server_bindings`, zipped by index with
+    `http_endpoints`): given
+
+      api  { post "/create"; get "/read" }
+      server { endpoint_1 = mutate; endpoint_0 = readOnly }
+
+    the emitter names the POST endpoint `endpoint_1` and wires `mutate` to it, so
+    `mutate` serves POST /create even though its binding key reads `endpoint_1`.
+    Any by-NAME pairing here would therefore mis-attribute the method — for a
+    method-keyed security rule (SEC005) that means falsely rejecting a safe
+    program.  Get this backwards in either direction and the rule is wrong, which
+    is why the pairing lives in exactly one place with the emitter named as the
+    authority.
+
+    SSE endpoints are filtered out FIRST, so positional indices are computed over
+    the non-SSE list — matching both the emitter and
+    [check_server_completeness].  That also settles the roadmap's open question
+    about `pubsub` in a GET: an SSE `subscribe` route is a separate route shape,
+    never a `get`, so it is out of scope here by construction.
+
+    When the counts differ the emitter ignores the bindings entirely and
+    [check_server_completeness] reports the missing/extra binding, so the module
+    cannot compile; this returns [] rather than guessing a pairing. *)
+let server_endpoint_bindings (decls : top_decl list) (srv : server_form)
+  : (api_endpoint * string) list =
+  let api =
+    List.fold_left (fun acc d ->
+      match d with
+      | DApi (api : api_form) when api.name = srv.api_name -> Some api
+      | _ -> acc) None decls
+  in
+  match api with
+  | None -> []   (* unknown api — check_server_completeness reports it *)
+  | Some api ->
+    let non_sse =
+      List.filter (fun (ep : api_endpoint) -> ep.method_ <> SSE) api.endpoints in
+    if List.length non_sse <> List.length srv.bindings then []
+    else List.map2 (fun (_key, handler) ep -> (ep, handler)) srv.bindings non_sse
+
 let build_func_capability_map (decls : top_decl list) : (string * string list) list =
   (* 2026-07-03 hole #13: a name is a capability-ROW VARIABLE only if it is NOT a
      declared capability.  func_bound_cap_vars already excludes the 13 builtins,

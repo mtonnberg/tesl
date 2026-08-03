@@ -446,6 +446,121 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
    | _ -> ());
   List.rev !errors
 
+(* ── SEC005: a GET route may not reach a state-changing capability ────────── *)
+
+(** The capabilities a GET handler may not reach.
+
+    roadmap/next/get_handlers_do_not_mutate.md.  The session cookie ships
+    `SameSite=Lax`, and a browser DOES send a Lax cookie on a cross-site
+    top-level GET navigation — so a GET that mutates is a CSRF hole an attacker
+    triggers by navigating the victim's browser. Every other CSRF vector is
+    already closed by construction (415 on non-JSON request bodies, no CORS
+    headers on JSON routes, parameterised SQL), which makes the mutating GET the
+    only residual. It is also HTTP's own rule: GET is "safe" per RFC 9110 §9.2.1.
+
+    - `dbWrite`, `queueWrite`, `pubsub` — state changes.
+    - `emailCap` — a GET that sends mail is a cross-site SPAM vector reached by
+      the same navigation (decided 2026-08-03).
+    - `dbRead`/`queueRead` are of course fine; a GET reads.
+    - Telemetry is ambient and ungated by design, and is not a state change a
+      CSRF attacker cares about — out of scope.
+    - `cacheCap` is deliberately NOT here: it has no read/write split, so
+      forbidding it would forbid cache READS in a GET too, and filling a cache
+      during a GET is response caching — the canonical benign read-path
+      mutation. *)
+let get_forbidden_caps : string list =
+  [ "dbWrite"; "queueWrite"; "pubsub"; "emailCap" ]
+
+(** Fail-closed enforcement of "GET handlers do not mutate", as a hard error
+    carrying the documented SEC005 code.
+
+    This REPLACES an earlier lint-warning of the same name (linter.ml
+    `sec005_get_write`). Three reasons it had to move:
+    - a warning left the invariant to author discipline, which is the thing Tesl
+      exists not to do; and the linter does not run during `--check`/build at all,
+      only under `--lint` / `--check-json`, so a plain build never saw it;
+    - it covered only `dbWrite`/`queueWrite`, missing `pubsub` and `emailCap`;
+    - it paired server bindings to endpoints POSITIONALLY in all cases, so on an
+      api with named endpoints it attributed methods to the wrong handlers. That
+      pairing now lives once, in [Validation_common.server_endpoint_bindings].
+
+    PRECISION: key on what a handler's body ACTUALLY needs
+    ([collect_needed_capabilities], the same body analysis the capability checker
+    uses) rather than on what it DECLARES — a handler may legitimately hold a
+    coarse capability that `implies dbWrite` while only reading (a CSV export
+    that selects rows). For a handler defined in an IMPORTED module we have no
+    body here, so we fall back to [imported_func_caps], which
+    [load_imported_func_caps] already computes as the union of the declared row
+    and the body-derived caps (hole #12), i.e. an over-approximation. That
+    direction is deliberate: an imported handler we cannot see the body of is
+    judged by a superset, so the rule cannot be laundered across a module
+    boundary — it can only over-reject, never silently pass. *)
+let check_get_routes_do_not_mutate ?(cap_map=[]) ?(imported_func_caps=[])
+    (decls : top_decl list) : validation_error list =
+  let func_caps = build_func_capability_map decls @ imported_func_caps in
+  let fn_map =
+    List.filter_map (function
+      | DFunc (fd : func_decl) -> Some (fd.name, fd) | _ -> None) decls in
+  (* Transitive `implies` closure, so a user capability that reaches a forbidden
+     primitive is caught too (`capability audit implies dbWrite`). *)
+  let expand declared =
+    let seen = Hashtbl.create 16 in
+    let rec go name =
+      if not (Hashtbl.mem seen name) then begin
+        Hashtbl.replace seen name ();
+        match List.assoc_opt name cap_map with
+        | Some implied -> List.iter go implied
+        | None -> ()
+      end in
+    List.iter go declared;
+    Hashtbl.fold (fun k () acc -> k :: acc) seen [] in
+  let errors = ref [] in
+  List.iter (function
+    | DServer (srv : server_form) ->
+      List.iter (fun ((ep : api_endpoint), handler) ->
+        if ep.method_ = GET then begin
+          let needed, loc, whence =
+            match List.assoc_opt handler fn_map with
+            | Some (fd : func_decl) ->
+              let param_caps = build_param_capability_map fd in
+              (Validation_common.collect_needed_capabilities
+                 ~func_caps ~param_caps
+                 ~bound:(List.map (fun (b : binding) -> b.name) fd.params) fd.body,
+               fd.loc, "")
+            | None ->
+              (* Imported (or unresolvable) handler: judge by the over-approximated
+                 capability row rather than skipping — skipping is the fail-open
+                 direction this rule exists to remove. *)
+              (Option.value ~default:[] (List.assoc_opt handler func_caps),
+               srv.loc,
+               " (declared capabilities of the imported handler)")
+          in
+          let reached =
+            let closure = expand needed in
+            List.sort_uniq String.compare
+              (List.filter (fun c -> List.mem c closure) get_forbidden_caps)
+          in
+          if reached <> [] then
+            errors := make_error ~code:"SEC005" loc
+              ~hint:(Printf.sprintf
+                "change the route to `post`/`put`/`patch`/`delete`, or move the \
+                 %s out of `%s` and leave the GET read-only"
+                (if List.mem "emailCap" reached && List.length reached = 1
+                 then "send" else "write")
+                handler)
+              (Printf.sprintf
+                "`get \"%s\"` reaches state-changing capability [%s] via handler \
+                 `%s`%s. A GET must be safe and idempotent (RFC 9110 §9.2.1), and \
+                 it is the one method a `SameSite=Lax` session cookie is still \
+                 sent on for a cross-site top-level navigation — so a write here \
+                 is a CSRF hole an attacker triggers by navigating the victim's \
+                 browser"
+                ep.path (String.concat ", " reached) handler whence)
+              :: !errors
+        end) (server_endpoint_bindings decls srv)
+    | _ -> ()) decls;
+  List.rev !errors
+
 (** Extract BOTH sides of a `(Col == rhs)` proof argument string.
     E.g. "(Id == todoId)" → Some ("Id", "todoId");
          "(OwnerId == requestUser . id)" → Some ("OwnerId", "requestUser.id").

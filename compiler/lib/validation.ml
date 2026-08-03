@@ -106,6 +106,11 @@ let check_module (m : module_form) : validation_error list =
      user identifier can never collide with one by construction. *)
   @ (TProof @: check_forall_param_subjects decls)
   @ (TCapability @: check_handler_capabilities ~cap_map ~imported_func_caps:(load_imported_func_caps m) decls)
+  (* SEC005 (get_handlers_do_not_mutate): a GET route may not reach dbWrite /
+     queueWrite / pubsub / emailCap.  A hard error in the build path — it was
+     previously a linter warning, and the linter does not run during `--check`. *)
+  @ (TCapability @: check_get_routes_do_not_mutate ~cap_map
+       ~imported_func_caps:(load_imported_func_caps m) decls)
   @ (TDatabase @: check_pk_match decls)
   @ (TDatabase @: check_insert_pk_match decls)
   @ (TDatabase @: check_nonexist_named_pack_insert decls)

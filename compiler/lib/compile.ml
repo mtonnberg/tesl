@@ -126,14 +126,17 @@ let diag_of_validation_error (e : Validation.validation_error) : diagnostic = {
   end_line   = e.loc.stop.line;
   end_col    = e.loc.stop.col;
   severity   = "error";
-  code       = "V001";
+  (* get_handlers_do_not_mutate: a pass may stamp its own stable code (SEC005);
+     everything else keeps the pass-generic V001. *)
+  code       = (if e.code = "" then "V001" else e.code);
   message    = if e.hint = "" then e.message else e.message ^ "\nHint: " ^ e.hint;
   fix        = None;
   source     = "validation";
   (* B5: resolve the deep-link anchor from the STRUCTURED topic the producing
      pass stamped on the error — not from the message text.  main.ml prefers
      this over the (now vestigial) message-based path. *)
-  manual     = Error_codes.manual_for ~topic:e.topic ~code:"V001" ~message:e.message ();
+  manual     = Error_codes.manual_for ~topic:e.topic
+                 ~code:(if e.code = "" then "V001" else e.code) ~message:e.message ();
 }
 
 (* The nested edits of a `multi` fix carry no title of their own — the action is

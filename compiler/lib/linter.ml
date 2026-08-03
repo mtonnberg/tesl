@@ -1601,82 +1601,17 @@ let sec004_timing_unsafe_mac filename (m : Ast.module_form) (out : lint_diag lis
   in
   List.iter (fun d -> scan (sec_decl_exprs d)) m.decls
 
-(* SEC005 — a state-changing capability (`dbWrite` / `queueWrite`) reachable
-   from a handler bound to a GET endpoint.  A GET must be safe/idempotent, and
-   it is the method the `Sec-Fetch-Site` cross-site refusal does not guard, so
-   a write behind a GET is reachable cross-site. *)
-let sec005_get_write filename (m : Ast.module_form) (out : lint_diag list ref) =
-  let write_caps = [ "dbWrite"; "queueWrite" ] in
-  let cap_map =
-    List.filter_map (function
-      | Ast.DCapability (c : Ast.capability_form) -> Some (c.name, c.implies)
-      | _ -> None) m.decls in
-  (* transitive `implies` closure of a set of declared capability names *)
-  let expand declared =
-    let seen = Hashtbl.create 16 in
-    let rec go name =
-      if not (Hashtbl.mem seen name) then begin
-        Hashtbl.replace seen name ();
-        (match List.assoc_opt name cap_map with
-         | Some implied -> List.iter go implied
-         | None -> ())
-      end in
-    List.iter go declared;
-    Hashtbl.fold (fun k () acc -> k :: acc) seen [] in
-  let fn_map =
-    List.filter_map (function
-      | Ast.DFunc (fd : Ast.func_decl) -> Some (fd.name, fd) | _ -> None) m.decls in
-  (* callee -> its declared caps, so a write reached THROUGH a call is seen. *)
-  let func_caps = Validation_common.build_func_capability_map m.decls in
-  (* The non-SSE endpoints of an api, IN ORDER — server bindings pair with
-     these positionally (the same convention the checker uses), because the
-     api endpoint `name` is synthetic and does not match the binding key. *)
-  let non_sse_endpoints api_name =
-    List.fold_left (fun acc d ->
-      match d with
-      | Ast.DApi (api : Ast.api_form) when api.name = api_name ->
-        List.filter (fun (ep : Ast.api_endpoint) -> ep.method_ <> Ast.SSE) api.endpoints
-      | _ -> acc) [] m.decls in
-  let flag_get_write handler =
-    match List.assoc_opt handler fn_map with
-    | Some (fd : Ast.func_decl) ->
-      (* PRECISION: key on what the body ACTUALLY does (a write operation or a
-         call that needs a write cap), NOT on what it DECLARES — a handler may
-         legitimately hold a coarse capability that `implies dbWrite` while only
-         reading (e.g. a CSV export selecting rows).  collect_needed_capabilities
-         is the same body analysis the capability checker uses. *)
-      let param_caps = Validation_common.build_param_capability_map fd in
-      let needed =
-        Validation_common.collect_needed_capabilities
-          ~func_caps ~param_caps
-          ~bound:(List.map (fun (b : Ast.binding) -> b.name) fd.params) fd.body in
-      let prims = expand needed in
-      let writes =
-        List.sort_uniq String.compare
-          (List.filter (fun w -> List.mem w prims) write_caps) in
-      if writes <> [] then
-        out := { file = filename;
-                 line = fd.loc.start.line; col = fd.loc.start.col;
-                 severity = "warning"; code = "SEC005";
-                 message = Printf.sprintf
-                   "handler `%s` is bound to a GET endpoint but requires a \
-                    state-changing capability [%s]. A GET must be safe and \
-                    idempotent (HTTP semantics) and is not covered by the \
-                    `Sec-Fetch-Site: cross-site` refusal, so a write here is \
-                    reachable cross-site. Use POST/PUT/PATCH/DELETE for the \
-                    mutation, or move the write out of the GET handler."
-                   handler (String.concat ", " writes);
-                 fix = None } :: !out
-    | None -> ()
-  in
-  List.iter (function
-    | Ast.DServer (srv : Ast.server_form) ->
-      let eps = non_sse_endpoints srv.api_name in
-      if List.length eps = List.length srv.bindings then
-        List.iter2 (fun (_ep_name, handler) (ep : Ast.api_endpoint) ->
-          if ep.method_ = Ast.GET then flag_get_write handler)
-          srv.bindings eps
-    | _ -> ()) m.decls
+(* SEC005 — a state-changing capability reachable from a GET handler — used to
+   live here as a lint WARNING.  It is now a hard compile error raised by
+   [Validation_capabilities.check_get_routes_do_not_mutate], for three reasons
+   (roadmap/next/get_handlers_do_not_mutate.md): a warning left a CSRF invariant
+   to author discipline; this linter does not run during `--check`/build at all,
+   so a plain build never saw it; and the lint's own analysis was narrower
+   (`dbWrite`/`queueWrite` only, and it paired server bindings to endpoints
+   positionally even when the api used NAMED endpoints, mis-attributing methods).
+   Deliberately NOT reimplemented here: two copies of one security rule is the
+   divergent-copy class.  The SEC005 code, its `tesl explain` prose and its
+   manual deep-link are unchanged — only the severity and the owning pass moved. *)
 
 let lint_security filename (source : string) (out : lint_diag list ref) =
   match Parser.parse_module filename source with
@@ -1684,8 +1619,7 @@ let lint_security filename (source : string) (out : lint_diag list ref) =
   | Ok m ->
     sec001_auth_literal_compare filename m out;
     sec003_hardcoded_secret filename m out;
-    sec004_timing_unsafe_mac filename m out;
-    sec005_get_write filename m out
+    sec004_timing_unsafe_mac filename m out
 
 (* ── Public API ──────────────────────────────────────────────────────────── *)
 

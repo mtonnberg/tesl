@@ -68,23 +68,95 @@ let normalize_conj (p : proof_expr) : string =
 (** Order-insensitive canonical form for a pre-RENDERED proof-conjunction
     STRING.  Used where only the rendered inner text is available (the ForAll
     return check compares `pp_proof`-rendered strings, not [proof_expr]s).
-    Splits on top-level `&&`, trims + strips parens per atom, sorts.  Fixes
-    SC-01 (review 2026-07): `ForAll (B && A)` now matches declared
-    `ForAll (A && B)`, matching the order-insensitivity the plain-conjunction
-    path already has via {!normalize_conj}. *)
+    Splits on TOP-LEVEL `&&` only (paren- and string-depth aware), trims and
+    strips one layer of outer parens per atom, sorts.  Fixes SC-01 (review
+    2026-07): `ForAll (B && A)` now matches declared `ForAll (A && B)`, matching
+    the order-insensitivity the plain-conjunction path already has via
+    {!normalize_conj}.
+
+    fail_closed_mint_matching_structural (2026-08-03): the depth tracking and the
+    paren stripping are new — this function previously scanned for `&&` with NO
+    depth awareness and never stripped parens, so a nested
+    `ForAll (P && (Q && R))` split at the INNER `&&` too and atoms kept
+    inconsistent parenthesisation.  Both were over-reject (safe) directions, but
+    the docstring claimed behaviour the code did not have.  This is now the
+    FALLBACK path only: callers that hold a [proof_expr] compare structurally via
+    {!mint_proof_equal} instead. *)
 let normalize_conj_str (s : string) : string =
   let atoms =
     let parts = ref [] and buf = Buffer.create 16 in
     let n = String.length s and i = ref 0 in
+    let depth = ref 0 and in_str = ref false in
     while !i < n do
-      if !i + 1 < n && s.[!i] = '&' && s.[!i + 1] = '&' then begin
+      let c = s.[!i] in
+      if !in_str then begin
+        (* Inside a string literal: a backslash escapes the next character, so an
+           escaped quote does not close the literal, and a conjunction operator
+           appearing inside the literal is not a split point. *)
+        if c = '\\' && !i + 1 < n then begin
+          Buffer.add_char buf c; Buffer.add_char buf s.[!i + 1]; i := !i + 2
+        end else begin
+          if c = '"' then in_str := false;
+          Buffer.add_char buf c; incr i
+        end
+      end else if c = '"' then begin
+        in_str := true; Buffer.add_char buf c; incr i
+      end else if c = '(' then begin
+        incr depth; Buffer.add_char buf c; incr i
+      end else if c = ')' then begin
+        decr depth; Buffer.add_char buf c; incr i
+      end else if !depth = 0 && !i + 1 < n && c = '&' && s.[!i + 1] = '&' then begin
         parts := Buffer.contents buf :: !parts; Buffer.clear buf; i := !i + 2
-      end else begin Buffer.add_char buf s.[!i]; incr i end
+      end else begin
+        Buffer.add_char buf c; incr i
+      end
     done;
     parts := Buffer.contents buf :: !parts;
-    List.rev_map (fun a -> String.trim a) !parts
+    List.rev_map (fun a -> Validation_common.strip_outer_parens (String.trim a)) !parts
   in
   atoms |> List.sort String.compare |> String.concat " && "
+
+(** Mint-side STRUCTURAL proof equality (roadmap:
+    fail_closed_mint_matching_structural).
+
+    The carry side of discharge matches proofs structurally via the injective
+    {!Validation_common.proof_key}; the mint side used to match by canonical
+    STRING ({!normalize_conj}, i.e. sort atoms by their `pp_proof` rendering).
+    Two matchers for one relation is the divergent-copy class, and the string one
+    is not injective: a space inside an argument merges two argument slots, so
+    the ONE-arg `Tagged "a\" \"b" n` renders byte-identically to the THREE-arg
+    `Tagged "a" "b" n`.  Space-bearing args are constructible two ways — the
+    parser's opaque parenthesised-arg capture and an escaped quote inside a
+    string arg — which is exactly why the carry side moved off strings (B6).
+
+    No forgery was ever demonstrated through the string match, because every such
+    collision changes ARITY and arity is validated independently
+    (validation_capabilities.ml, for user-declared facts) while kernel facts
+    cannot be minted in user code at all (fact-ownership).  That made mint
+    soundness rest on an accidental conjunction of guards in other files.  This
+    function removes the dependency.
+
+    Mint requires proof EQUALITY (minted == declared), NOT the entailment
+    relation {!Validation_common.proof_matches} uses on the carry side — do not
+    substitute one for the other.  Equality is order-insensitive and dedups
+    (`A && A` == `A`), matching the {!normalize_conj} behaviour it replaces. *)
+let mint_proof_key (p : proof_expr) : Validation_common.proof_key_t list =
+  Validation_common.flatten_proof p
+  |> List.map Validation_common.proof_key
+  |> List.sort_uniq compare
+
+let mint_proof_equal (a : proof_expr) (b : proof_expr) : bool =
+  mint_proof_key a = mint_proof_key b
+
+(** Mint equality where one side survives only as a RENDERED string (the
+    ForAll/ForAllValues/ForAllKeys inner).  Re-parses the string to a
+    [proof_expr] and compares structurally; falls back to the (now depth-aware)
+    string comparison only when the text does not parse as a proof conjunction,
+    so an unparseable inner can never be MORE permissive than before. *)
+let mint_proof_equal_rendered (actual_str : string) (expected : proof_expr) : bool =
+  match Parser.parse_proof_snippet "<forall-inner>" actual_str with
+  | Ok actual_proof -> mint_proof_equal actual_proof expected
+  | Err _ -> normalize_conj_str actual_str = normalize_conj_str (pp_proof expected)
 
 (* ── Capability implication expansion ───────────────────────────────────── *)
 
@@ -668,7 +740,8 @@ or change the return spec to `-> %s: <Type> ::: ...`" n b.name b.name b.name b.n
 a constructor application; the ok expression must return the declared binding name or wrap it \
 in a constructor: `ok BindingName ::: ...` or `ok (Ctor arg) ::: Proof bindingName`" } :: !errors
                | _ -> ());
-              (* Proof must match declared (conjunction-normalised: order-insensitive). *)
+              (* Proof must match declared: STRUCTURAL, order-insensitive equality
+                 (mint_proof_equal — was a canonical-string compare). *)
               (match b.proof_ann with
                | None -> ()
                | Some expected ->
@@ -678,7 +751,7 @@ in a constructor: `ok BindingName ::: ...` or `ok (Ctor arg) ::: Proof bindingNa
                    | Some n when n <> b.name -> subst_in_proof n b.name expanded
                    | _ -> expanded
                  in
-                 if normalize_conj normalized <> normalize_conj expected then
+                 if not (mint_proof_equal normalized expected) then
                    errors := { loc; message = Printf.sprintf
                      "ok proof does not match declared return spec: got `%s`, expected `%s`"
                      (pp_proof normalized) (pp_proof expected) } :: !errors)
@@ -709,7 +782,7 @@ use the named constructor instead: `ok %s { ... } ::: ...`" b.name } :: !errors
                    | Some n when n <> b.name -> subst_in_proof n b.name expanded
                    | _ -> expanded
                  in
-                 if normalize_conj normalized <> normalize_conj expected then
+                 if not (mint_proof_equal normalized expected) then
                    errors := { loc; message = Printf.sprintf
                      "ok proof does not match declared return spec: got `%s`, expected `%s`"
                      (pp_proof normalized) (pp_proof expected) } :: !errors)
@@ -758,12 +831,14 @@ use the named constructor instead: `ok %s { ... } ::: ...`" b.name } :: !errors
            (match proof with
             | PredApp { pred = "ForAll"; args = [inner_arg]; _ } ->
               let actual = strip_outer_parens inner_arg in
-              if normalize_conj_str actual <> normalize_conj_str expected_str then
+              if not (mint_proof_equal_rendered actual expected_inner) then
                 errors := { loc; message = Printf.sprintf
                   "ok proof `ForAll (%s)` does not match declared return `ForAll (%s)`"
                   actual expected_str } :: !errors
               else begin
-                (* Bug 2: verify the value binding actually has the claimed proof. *)
+                (* Bug 2: verify the value binding actually has the claimed proof.
+                   Both sides are rendered strings here (binding_env tracks text),
+                   so this stays on the depth-aware string comparison. *)
                 match value_name_of_expr value with
                 | None -> ()
                 | Some val_name ->
@@ -785,7 +860,7 @@ use the named constructor instead: `ok %s { ... } ::: ...`" b.name } :: !errors
            (match proof with
             | PredApp { pred = "ForAllValues"; args = [inner_arg]; _ } ->
               let actual = strip_outer_parens inner_arg in
-              if normalize_conj_str actual <> normalize_conj_str expected_str then
+              if not (mint_proof_equal_rendered actual expected_inner) then
                 errors := { loc; message = Printf.sprintf
                   "ok proof `ForAllValues (%s)` does not match declared return `ForAllValues (%s)`"
                   actual expected_str } :: !errors
@@ -798,7 +873,7 @@ use the named constructor instead: `ok %s { ... } ::: ...`" b.name } :: !errors
            (match proof with
             | PredApp { pred = "ForAllKeys"; args = [inner_arg]; _ } ->
               let actual = strip_outer_parens inner_arg in
-              if normalize_conj_str actual <> normalize_conj_str expected_str then
+              if not (mint_proof_equal_rendered actual expected_inner) then
                 errors := { loc; message = Printf.sprintf
                   "ok proof `ForAllKeys (%s)` does not match declared return `ForAllKeys (%s)`"
                   actual expected_str } :: !errors
@@ -817,7 +892,11 @@ use the named constructor instead: `ok %s { ... } ::: ...`" b.name } :: !errors
                 | Some n when n <> b.name -> subst_in_proof n b.name expanded
                 | _ -> expanded
               in
-              if pp_proof normalized <> pp_proof expected then
+              (* Was order-SENSITIVE `pp_proof` equality — the one mint arm that
+                 did not even reach normalize_conj, so `A && B` vs `B && A`
+                 spuriously mismatched.  Now the same structural relation as the
+                 RetAttached arms. *)
+              if not (mint_proof_equal normalized expected) then
                 errors := { loc; message = Printf.sprintf
                   "ok proof does not match declared Maybe return spec: got `%s`, expected `%s`"
                   (pp_proof normalized) (pp_proof expected) } :: !errors)

@@ -111,7 +111,7 @@ database DB = Database {
 api MainApi {
   get "/box"
     -> Int
-  get "/seed"
+  post "/seed"
     -> Int
 }
 
@@ -526,7 +526,7 @@ handler sendNotice() -> String requires [pubsub] =
   "ok"
 
 api MainApi {
-  get "/send"
+  post "/send"
     -> String
 
   sse "/events/:userId"
@@ -569,7 +569,7 @@ handler h() -> String requires [pubsub] =
   "ok"
 
 api MainApi {
-  get "/x"
+  post "/x"
     -> String
 }
 
@@ -619,7 +619,7 @@ handler h() -> String requires [queueWrite] =
   "ok"
 
 api MainApi {
-  get "/x"
+  post "/x"
     -> String
 }
 

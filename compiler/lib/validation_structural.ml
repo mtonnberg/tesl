@@ -404,14 +404,10 @@ let proofs_of_expr
 
 (* ── 1. Server binding completeness ──────────────────────────────────────── *)
 
-let is_synthetic_endpoint_name (name : string) : bool =
-  let prefix = "endpoint_" in
-  let prefix_len = String.length prefix in
-  String.length name > prefix_len
-  && String.sub name 0 prefix_len = prefix
-  && let suffix = String.sub name prefix_len (String.length name - prefix_len) in
-     String.length suffix > 0
-     && String.for_all (fun ch -> ch >= '0' && ch <= '9') suffix
+(* Single definition now lives in Validation_common alongside
+   [server_endpoint_bindings], which needs the same synthetic/named distinction to
+   decide positional-vs-by-name pairing (get_handlers_do_not_mutate). *)
+let is_synthetic_endpoint_name = Validation_common.is_synthetic_endpoint_name
 
 let take n xs =
   let rec go acc remaining count =

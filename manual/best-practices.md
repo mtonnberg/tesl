@@ -446,6 +446,52 @@ storeNewPassword user np (Crypto.hashPassword np)                 -- compiles
 storeNewPassword user np (Crypto.hashPassword body.oldPassword)   -- rejected
 ```
 
+### A GET may not change state
+
+**❌ Don't:** put a write behind a `get` route.
+
+```tesl
+handler recordView(id: String) -> String requires [dbWrite] =
+  let _ = insert View { docId: id }
+  "ok"
+
+api DocApi {
+  get "/doc/:id/view" -> String     -- ❌ SEC005 — a write reachable through a GET
+}
+```
+
+**✅ Do:** use a method that is allowed to change things, and keep the GET read-only.
+
+```tesl
+api DocApi {
+  post "/doc/:id/view" -> String    -- ✅ the mutation moved to POST
+  get  "/doc/:id"      -> Doc       -- ✅ the GET only reads
+}
+```
+
+`SEC005` is a hard **error**, not a warning: a `get` route whose handler's capability closure
+reaches `dbWrite`, `queueWrite`, `pubsub` or `emailCap` does not compile. Three reasons it is worth
+a build failure:
+
+- **HTTP says so.** GET is *safe* per RFC 9110 §9.2.1. Caches, prefetchers, link crawlers and
+  `<img>`/`<link>` tags all issue GETs with no user intent behind them.
+- **It is the last CSRF gap.** The session cookie is `SameSite=Lax`, and a browser **does** attach a
+  Lax cookie to a cross-site *top-level* GET navigation. So a mutating GET is triggerable by an
+  attacker's page navigating your user's browser to the URL. Every other CSRF vector is already
+  closed by construction — the 415 on non-`application/json` request bodies, no CORS headers on JSON
+  routes, parameterised SQL — which is what makes this one worth enforcing rather than documenting.
+- **`emailCap` counts.** A GET that sends mail is a cross-site spam vector reached exactly the same
+  way.
+
+The rule keys on what the handler's body *actually does* (transitively, through the calls it makes),
+not on what it declares — so a handler holding a coarse capability that `implies dbWrite` while only
+selecting rows stays clean. Reads are fine: `dbRead` and `queueRead` in a GET are the common case.
+Telemetry is ambient and out of scope, and so is `cacheCap` — it has no read/write split, and
+filling a cache during a GET is response caching, the benign case.
+
+If you need a read-audit trail (who viewed what), record it through telemetry, or accept the write
+on a POST.
+
 ### What Tesl deliberately does not check
 
 - **Entropy of string literals.** A lint that guesses whether `"abc123"` is a key fires on test

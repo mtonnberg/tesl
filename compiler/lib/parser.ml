@@ -5352,6 +5352,21 @@ let parse_expr_snippet filename source =
   skip_layout s;
   parse_expr s
 
+(* fail_closed_mint_matching_structural: re-parse a proof-conjunction that only
+   survives as a RENDERED string — the ForAll/ForAllValues/ForAllKeys inner,
+   which [parse_proof_atom]'s LPAREN arm captures verbatim as one opaque
+   space-joined argument.  The mint side needs a [proof_expr] so it can compare
+   structurally (Validation_common.proof_key) instead of by rendering, since two
+   structurally different proofs CAN render alike (a space inside an arg merges
+   two argument slots: `Tagged "a\" \"b" n` renders as `Tagged "a" "b" n`).
+   Returns Error when the text is not a well-formed proof conjunction, so the
+   caller can decide (proof_checker falls back to the string comparison). *)
+let parse_proof_snippet filename source =
+  let tokens = Lexer.tokenize filename source in
+  let s = make_stream filename tokens in
+  skip_layout s;
+  parse_proof_expr s
+
 let extract_doctest_decls filename source =
   let starts_with prefix s =
     let plen = String.length prefix in

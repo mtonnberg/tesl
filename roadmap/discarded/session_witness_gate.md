@@ -174,6 +174,52 @@ only as a last resort. The SSO callback path is already sound and unchanged.
   only in `example/learn/lesson76-sessions.tesl` and
   `tests/session-cookie-tests.tesl`; the SSO lessons (78/80) never call it.
 
+## Implementation findings (probed 2026-08-03, before writing any of it)
+
+These were established empirically against the current compiler and remove the
+main design unknown, but the work itself is NOT started.
+
+- **`LoggedIn` must be minted by an AUTH-shaped row, not a check-shaped one.**
+  Proposal A derives the subject from inside the credential, so the fact lands on
+  a value the combinator PRODUCES rather than on one of its arguments. Every
+  check-shaped stdlib row today attaches its fact to a PARAMETER
+  (`PasswordVerified stored`, `Authentic payload`, `ProxyBound presented`), and a
+  `check` whose return binder is not an input is rejected —
+  `check login(...) -> subject: String ::: LoggedIn subject` fails with
+  `T001: unknown name: subject`. The `auth` form is exactly the one that produces
+  its subject, and the same shape compiles clean as `auth`. So
+  `Auth.passwordLogin` / `Auth.machineLogin` are AuthKind.
+- **That makes them the FIRST AuthKind stdlib rows.** `stdlib_func_infos` contains
+  zero `fi_kind = AuthKind` entries today, so the machinery that consumes auth
+  producers is currently only ever fed USER functions:
+  `collect_auth_predicates`, `check_auth_proof_via`, the auth-drop /
+  positional-slot integrity checks in `check_server_completeness`, and
+  `Checker.stdlib_check_shaped_names` (which filters on CheckKind only). Each is a
+  place a stdlib AuthKind row may need threading, and none of it is exercised
+  today — budget for that rather than assuming the rows just drop in.
+- **`Http.setSessionCookie` goes from arity 1 to arity 2** with a proof demand on
+  each parameter (`type_system.ml:1002`, currently
+  `mono (t_fun [t_jwt_token] t_unit)`). Put the `LoggedIn` subject FIRST so a
+  1-arg call is a hard type error rather than a silent no-op (the prototype
+  lesson, recorded below).
+
+## Blocking decisions (must be settled BEFORE coding)
+
+Both are in Open Questions below and both change a security-critical PUBLIC
+surface, so guessing costs more than asking. The doc's own history is the
+argument: a prototype was built, found forgeable, and reverted — "a sound-looking
+but forgeable witness is worse than the current, honestly-documented gap".
+
+1. **Where the credential store lives.** Proposal A implies a runtime credential
+   TABLE with a fixed shape (`Auth.credentialFor` is keyed by subject and returns
+   an opaque `Credential`). Is that a first-class `Tesl.Auth`-owned table, or does
+   the app keep its own entity and only the subject-bound FACT get standardised
+   (Proposal B)? This decides whether `tesl/auth.rkt` owns a schema, and it is not
+   reversible once apps store credentials in it.
+2. **Set-side gating.** Signup / password-reset must be the only writers of a
+   `Credential`. Does writing one need its own capability + policy (Risk 64)? A
+   verify path gated while the create path is open is a half-closed gate.
+
 ## Where it plugs in (any proposal)
 - `compiler/lib/type_system.ml`: new `Tesl.Auth` rows + module-owned row +
   `tesl_known_module_names`; the `Http.setSessionCookie` demand (arity/proof).

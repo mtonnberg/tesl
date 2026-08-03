@@ -177,6 +177,16 @@ let curl_get ?(timeout_secs=10) url =
   let (out, _, _) = run_cmd ~timeout_secs curl_binary [|"-s"; "-m"; string_of_int timeout_secs; url|] in
   out
 
+(** POST with no request body.  The email-sending endpoints are POST because
+    `emailCap` is forbidden in a GET handler (SEC005, roadmap:
+    get_handlers_do_not_mutate) — a GET that sends mail is a cross-site spam
+    vector.  No body is sent: the routes declare no `body` clause, and Tesl
+    answers a non-`application/json` request body with 415. *)
+let curl_post ?(timeout_secs=10) url =
+  let (out, _, _) = run_cmd ~timeout_secs curl_binary
+    [|"-s"; "-X"; "POST"; "-m"; string_of_int timeout_secs; url|] in
+  out
+
 (* ── Tooling availability ───────────────────────────────────────────────────── *)
 
 let racket_available =
@@ -235,11 +245,20 @@ email EmailTestMail = Email {
 }|} module_name smtp_port
 
 (** Trailing api/server/main for the App tests.  [endpoints] is a list of
-    (endpoint-name, path) and the api lists one `get` route per endpoint. *)
-let app_tail ~endpoints app_port =
+    (endpoint-name, path); the api lists one route per endpoint, using
+    [method_kw].
+
+    Sending endpoints MUST be `post` (SEC005, roadmap:
+    get_handlers_do_not_mutate): `emailCap` is in the forbidden closure for GET
+    handlers, because a GET that sends mail is a cross-site SPAM vector — the
+    browser attaches a `SameSite=Lax` session cookie to a cross-site top-level
+    GET navigation, so an attacker can make the victim's browser fire the send.
+    Read-only endpoints (the health/load probe) stay `get`. *)
+let app_tail ?(method_kw = "get") ~endpoints app_port =
   let api_routes =
     String.concat "\n"
-      (List.map (fun (_, path) -> Printf.sprintf "  get \"%s\" -> String" path) endpoints) in
+      (List.map (fun (_, path) ->
+         Printf.sprintf "  %s \"%s\" -> String" method_kw path) endpoints) in
   let server_bindings =
     String.concat "\n"
       (List.mapi (fun i (name, _) -> Printf.sprintf "  endpoint_%d = %s" i name) endpoints) in
@@ -287,7 +306,7 @@ handler queueEmail() -> String requires [emailCap] =
 %s|}
     (app_prelude ~module_name smtp_port)
     recipient
-    (app_tail ~endpoints:[("queueEmail", "/send")] app_port)
+    (app_tail ~method_kw:"post" ~endpoints:[("queueEmail", "/send")] app_port)
 
 (** App whose endpoint sends an HtmlBody email. *)
 let tesl_email_html_app ~module_name smtp_port app_port =
@@ -302,7 +321,7 @@ handler sendHtml() -> String requires [emailCap] =
   "HTML-EMAIL-QUEUED"
 %s|}
     (app_prelude ~module_name smtp_port)
-    (app_tail ~endpoints:[("sendHtml", "/html")] app_port)
+    (app_tail ~method_kw:"post" ~endpoints:[("sendHtml", "/html")] app_port)
 
 (** App whose endpoint sends a RichBody email. *)
 let tesl_email_rich_app ~module_name smtp_port app_port =
@@ -317,7 +336,7 @@ handler sendRich() -> String requires [emailCap] =
   "RICH-EMAIL-QUEUED"
 %s|}
     (app_prelude ~module_name smtp_port)
-    (app_tail ~endpoints:[("sendRich", "/rich")] app_port)
+    (app_tail ~method_kw:"post" ~endpoints:[("sendRich", "/rich")] app_port)
 
 (** Build module name + source for a Tesl program where a fn calls Email.send
     WITHOUT `requires [emailCap]`.  No main is needed — the point is that the
@@ -489,7 +508,7 @@ let test_email_send_queues () =
   let smtp_port = pick_free_port () in
   let src = tesl_email_send_app ~module_name:mn smtp_port app_port "recipient@example.com" in
   with_email_app ~module_name:mn ~app_port src (fun endpoint_url ->
-    let out = curl_get (endpoint_url "/send") in
+    let out = curl_post (endpoint_url "/send") in
     if not (contains "EMAIL-QUEUED" out) then
       Alcotest.failf "Email.send queue: expected 'EMAIL-QUEUED' in response, got: %S" out
   )
@@ -501,7 +520,7 @@ let test_email_html_body () =
   let smtp_port = pick_free_port () in
   let src = tesl_email_html_app ~module_name:mn smtp_port app_port in
   with_email_app ~module_name:mn ~app_port src (fun endpoint_url ->
-    let out = curl_get (endpoint_url "/html") in
+    let out = curl_post (endpoint_url "/html") in
     if not (contains "HTML-EMAIL-QUEUED" out) then
       Alcotest.failf "HtmlBody: expected 'HTML-EMAIL-QUEUED' in response, got: %S" out
   )
@@ -513,7 +532,7 @@ let test_email_rich_body () =
   let smtp_port = pick_free_port () in
   let src = tesl_email_rich_app ~module_name:mn smtp_port app_port in
   with_email_app ~module_name:mn ~app_port src (fun endpoint_url ->
-    let out = curl_get (endpoint_url "/rich") in
+    let out = curl_post (endpoint_url "/rich") in
     if not (contains "RICH-EMAIL-QUEUED" out) then
       Alcotest.failf "RichBody: expected 'RICH-EMAIL-QUEUED' in response, got: %S" out
   )
@@ -533,9 +552,9 @@ let test_multiple_emails_queued () =
   let smtp_port = pick_free_port () in
   let src = tesl_email_send_app ~module_name:mn smtp_port app_port "user1@example.com" in
   with_email_app ~module_name:mn ~app_port src (fun endpoint_url ->
-    let out1 = curl_get (endpoint_url "/send") in
-    let out2 = curl_get (endpoint_url "/send") in
-    let out3 = curl_get (endpoint_url "/send") in
+    let out1 = curl_post (endpoint_url "/send") in
+    let out2 = curl_post (endpoint_url "/send") in
+    let out3 = curl_post (endpoint_url "/send") in
     if not (contains "EMAIL-QUEUED" out1
             && contains "EMAIL-QUEUED" out2
             && contains "EMAIL-QUEUED" out3) then

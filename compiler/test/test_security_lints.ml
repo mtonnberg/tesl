@@ -330,24 +330,35 @@ let test_sec004 () =
   expect_silent ~msg:"checkSignature, plus signatureHex used for transport"
     sec004_negative
 
-(* ── SEC005 — a state-changing capability in a GET route ─────────────────── *)
+(* ── SEC005 — moved out of the linter ─────────────────────────────────────── *)
 
-let sec005_prog method_kw ~writes =
-  Printf.sprintf
+(* SEC005 ("state-changing capability in a GET route") is no longer a lint
+   WARNING: it is a hard compile error raised by
+   [Validation_capabilities.check_get_routes_do_not_mutate]
+   (roadmap/next/get_handlers_do_not_mutate.md).  Its behaviour is covered by
+   test_get_no_mutate.ml, which drives the real compiler.  What is asserted HERE
+   is only that the linter no longer produces it — two copies of one security
+   rule is the divergent-copy class, and the linter's copy was the weaker one
+   (dbWrite/queueWrite only, and positional endpoint pairing even for named
+   endpoints). *)
+let test_sec005_not_a_lint () =
+  let prog =
     {|module M exposing []
 import Tesl.Prelude exposing [String]
-import Tesl.Database exposing [Database, DatabaseBackend, Memory]
+import Tesl.DB exposing [dbWrite]
+import Tesl.Database exposing [Database, Memory]
 import Tesl.App exposing [App]
 
 record Doc {
   id: String
 }
 
-handler act() -> String requires [%s] =
-%s
+handler act() -> String requires [dbWrite] =
+  let saved = insert Doc { id: "x" }
+  "ok"
 
 api ActApi {
-  %s "/act" -> String
+  get "/act" -> String
 }
 
 server ActServer for ActApi {
@@ -359,26 +370,15 @@ database ProbeDb = Database {
   backend: Memory
 }
 
-main() -> App requires [] =
+main() -> App requires [dbWrite] =
   App {
     database: ProbeDb
     api: ActServer
     port: 8086
   }
 |}
-    (if writes then "dbWrite" else "")
-    (if writes then "  let saved = insert Doc { id: \"x\" }\n  \"ok\"" else "  \"ok\"")
-    method_kw
-
-let test_sec005 () =
-  (* a real DB WRITE reachable through a GET must fire; the analysis keys on
-     the body's actual write operation, not on the declared capability. *)
-  expect_codes ~msg:"a DB insert behind a GET route"
-    [ "SEC005" ] (sec005_prog "get" ~writes:true);
-  (* the honest versions are silent: the same write on a POST, and a GET that
-     performs no write. *)
-  expect_silent ~msg:"the same write on a POST route" (sec005_prog "post" ~writes:true);
-  expect_silent ~msg:"a read-only GET route" (sec005_prog "get" ~writes:false)
+  in
+  expect_silent ~msg:"a mutating GET is an ERROR now, not a lint finding" prog
 
 (* ── The precision claim, over the whole shipped corpus ──────────────────── *)
 
@@ -447,7 +447,8 @@ let () =
         [ test_case "SEC001 auth literal comparison" `Quick test_sec001;
           test_case "SEC003 hardcoded key material" `Quick test_sec003;
           test_case "SEC004 timing-unsafe MAC comparison" `Quick test_sec004;
-          test_case "SEC005 state-changing capability in a GET route" `Quick test_sec005 ] );
+          test_case "SEC005 is no longer a lint (it is a compile error)" `Quick
+            test_sec005_not_a_lint ] );
       ( "precision",
         [ test_case "shipped corpus is completely silent" `Quick
             test_corpus_is_completely_silent ] ) ]

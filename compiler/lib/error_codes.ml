@@ -446,17 +446,29 @@ let registry : entry list = [
   { code = "SEC005"; category = Security;
     title = "state-changing capability in a GET route";
     explanation =
-      "A handler bound to a GET endpoint (transitively) requires a \
-       state-changing capability — `dbWrite` or `queueWrite`. A GET must \
-       be SAFE and idempotent: HTTP caches, prefetchers, link crawlers and \
-       `<img>`/`<link>` tags all issue GETs without user intent, so a write \
-       behind one runs on traffic the user never authorised.\n\n\
-       It is also the one method the `Sec-Fetch-Site: cross-site` refusal \
-       does NOT guard (only POST/PUT/PATCH/DELETE are checked), so a write \
-       reachable through a GET is reachable cross-site with no CSRF token \
-       in the way.\n\n\
+      "A handler bound to a GET endpoint (transitively) reaches a \
+       state-changing capability — `dbWrite`, `queueWrite`, `pubsub` or \
+       `emailCap`. A GET must be SAFE and idempotent: HTTP caches, \
+       prefetchers, link crawlers and `<img>`/`<link>` tags all issue GETs \
+       without user intent, so a write behind one runs on traffic the user \
+       never authorised. This is HTTP's own rule, not a Tesl invention (GET is \
+       \"safe\" per RFC 9110 section 9.2.1).\n\n\
+       It is also the one method a `SameSite=Lax` session cookie is still sent \
+       on: the browser DOES attach a Lax cookie to a cross-site TOP-LEVEL GET \
+       navigation. So a mutating GET is a CSRF hole an attacker triggers just \
+       by navigating the victim's browser to the URL. Every other CSRF vector \
+       is already closed by construction — the 415 on non-`application/json` \
+       request bodies, no CORS headers on JSON routes, parameterised SQL — \
+       which is exactly why this one is enforced.\n\n\
+       `emailCap` is included because a GET that sends mail is a cross-site \
+       SPAM vector reached the same way. Reads are fine (`dbRead`, \
+       `queueRead`): a GET reads. Telemetry is ambient and out of scope. Cache \
+       is out of scope too — `cacheCap` has no read/write split, and filling a \
+       cache during a GET is response caching, the canonical benign read-path \
+       mutation.\n\n\
        Move the mutation to a POST/PUT/PATCH/DELETE endpoint, or take the \
-       write capability out of the GET handler.";
+       write out of the GET handler. If you need a read-audit trail, record it \
+       through telemetry, or accept the write on a POST.";
     manual = Some "best-practices#security" };
 ]
 
