@@ -1790,14 +1790,49 @@ The compiler enforces that:
 <entity-decl> ::= "entity" <identifier>
                   "table" <string>
                   "primaryKey" <identifier>
-                  "{" { <entity-field> } "}"
+                  "{" { <entity-body-entry> } "}"
+
+<entity-body-entry> ::= <entity-field>
+                      | <entity-index>
 
 <entity-field> ::= <identifier> ":" <gdp-expr>
                    [ ":::" <simple-field-fact> ]
                    [ "@db(" <identifier> ")" ]
+
+<entity-index> ::= [ "unique" ] "index"
+                   "[" <identifier> { "," <identifier> } "]"
+                   [ "as" <string> ]
 ```
 
 Entity field proof annotations are intentionally restricted. They must be simple single-field facts of the form `ProofName field`. Entity fields do not currently support `via` checkers.
+
+**Indexes.** An `index` entry declares a secondary index over one or more fields, in the order written; `unique index` additionally declares that the combination is unique. `index` and `unique` are **not** keywords — like every other SQL clause word in Tesl (`where`, `order`, `onConflict`, …) they are ordinary identifiers recognised by position, so a field or variable named `index` keeps working.
+
+```tesl
+entity Issue table "kanel_issues" primaryKey id {
+  id:        String
+  orgId:     String
+  slug:      String
+  createdAt: PosixMillis
+
+  index [orgId, createdAt]
+  unique index [orgId, slug]
+  index [createdAt] as "kanel_issues_recent"
+}
+```
+
+The index name defaults to `<table>_<column>…_idx` over the real column names, truncated to PostgreSQL's 63-byte identifier limit with a deterministic suffix when necessary. The optional `as "..."` override exists mainly to adopt an index a database already has, so `create index if not exists` matches the existing object; explicit names must be plain SQL identifiers of at most 63 bytes and must be unique across **every** entity in the program, because a PostgreSQL index name lives in the schema namespace rather than the table's.
+
+Rejected at compile time: a field the entity does not declare, the same field twice in one index, two identical index declarations, an index over a `Money`/`MoneyRate` field (those store into several derived columns, so a single index over "the field" is not a meaningful object — the same reason they cannot be primary keys), and an index that merely repeats the single-column primary key, which PostgreSQL already indexes.
+
+**How indexes are created.** Declared indexes are created by the ordinary startup migration (§11.9 `auto-migrate?`), with one distinction that matters in production. On a new or empty table every declared index is built inline — instant and lock-free. On a table that already has rows, nothing is built, because a plain `CREATE INDEX` holds a lock that blocks writes for the whole build, and the safe `CONCURRENTLY` form cannot run inside the transaction the migration uses. Instead:
+
+- a missing **plain** index prints a warning containing the exact `CREATE INDEX CONCURRENTLY` statement and the program starts normally — a missing perf index is not a reason for a deploy to take the service down;
+- a missing **unique** index is a startup **error** with the same statement — the program declares an invariant the database is not enforcing, and `upsert … onConflict` (§13) depends on the index existing.
+
+An index already present in the database satisfies the declaration when its **column list and uniqueness** match, regardless of the name it was created under. A unique index satisfies a plain declaration; a plain index does not satisfy a unique one.
+
+On the **Memory** backend a plain index is a no-op (every query is a scan), but a **unique** index is enforced on insert, update and upsert, with PostgreSQL's NULL semantics: a row with a `Nothing` in any indexed column is unconstrained, because two NULLs are not equal. Without that, a program could pass `tesl test` on data PostgreSQL rejects.
 
 **`Maybe T` fields.** An entity field declared as `Maybe T` maps to a **nullable** SQL column whose type is the same column type `T` maps to on its own (so `Maybe <ADT>` is a nullable `JSONB`, exactly like a bare `<ADT>` is a `NOT NULL` `JSONB` — the two differ only in nullability, never in column type). At runtime `Nothing` ↔ SQL `NULL` and `Something v` ↔ the column value. The `@db(...)` annotation applies to the inner type `T` as usual.
 
@@ -2694,6 +2729,8 @@ upsert Session { userId: uid, token: tok, expiresAt: exp }
   onConflict [userId]
   doUpdate   [token, expiresAt]
 ```
+
+The conflict columns must be **either the primary key or a declared `unique index`** (§11.8) on that entity, and this is a compile-time error otherwise. PostgreSQL can only infer a conflict target from a unique index on exactly those columns; without one it fails at runtime with *"there is no unique or exclusion constraint matching the ON CONFLICT specification"*. So the example above requires `unique index [userId]` on `Session` unless `userId` is its primary key.
 
 **`delete` and `deleteAndReturnResult`.**  `delete` removes matching rows and returns `Unit`.  `deleteAndReturnResult` removes matching rows and returns `DeleteResult`, which carries the count of deleted rows.  `DeleteResult` and the constructors `NoRowDeleted` / `RowsDeleted` must be imported from `Tesl.DB`:
 

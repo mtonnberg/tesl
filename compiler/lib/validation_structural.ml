@@ -768,6 +768,206 @@ let check_api_endpoint_structure ?facts ?(extra_funcs=[]) (decls : top_decl list
 
 (* ── Queue / channel / workers / database / api-test structure checks ─────── *)
 
+(* ── Entity index declarations ────────────────────────────────────────────── *)
+
+(** The head type name of a field, with any [Maybe] wrapper stripped.  Used to
+    reject the multi-column Money/MoneyRate fields as index columns. *)
+let rec index_field_head_type (ty : type_expr) : string option =
+  match ty with
+  | TName { name; _ } -> Some name
+  | TApp { head = TName { name = "Maybe"; _ }; arg; _ } -> index_field_head_type arg
+  | _ -> None
+
+let is_valid_index_name (n : string) : bool =
+  n <> ""
+  && (match n.[0] with 'A' .. 'Z' | 'a' .. 'z' | '_' -> true | _ -> false)
+  && String.for_all
+       (function 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '_' -> true | _ -> false) n
+
+let index_label (ix : entity_index) =
+  Printf.sprintf "%sindex [%s]"
+    (if ix.ix_unique then "unique " else "")
+    (String.concat ", " ix.ix_fields)
+
+(** Per-entity index validation.  Every rule here is cheap and structural, so
+    `--check` gets it for free. *)
+let check_entity_indexes (e : entity_form) : validation_error list =
+  let errs = ref [] in
+  let add loc hint msg = errs := make_error loc ~hint msg :: !errs in
+  let field_names = List.map (fun (f : field_def) -> f.name) e.fields in
+  List.iter (fun (ix : entity_index) ->
+      let label = index_label ix in
+      if ix.ix_fields = [] then
+        add ix.ix_loc
+          "name at least one field, e.g. `index [createdAt]`"
+          (Printf.sprintf "index on entity `%s` names no fields" e.name);
+      (* 1. every named field must be declared on this entity *)
+      List.iter (fun fname ->
+          if not (List.mem fname field_names) then
+            add ix.ix_loc
+              (Printf.sprintf "declared fields of `%s`: %s"
+                 e.name (String.concat ", " field_names))
+              (Printf.sprintf "`%s` on entity `%s` names `%s`, which is not a field of `%s`"
+                 label e.name fname e.name))
+        ix.ix_fields;
+      (* 2. no repeated field inside one index *)
+      let seen = Hashtbl.create 8 in
+      List.iter (fun fname ->
+          if Hashtbl.mem seen fname then
+            add ix.ix_loc
+              "remove the duplicate field from the index"
+              (Printf.sprintf "`%s` on entity `%s` names `%s` twice"
+                 label e.name fname)
+          else Hashtbl.add seen fname ()) ix.ix_fields;
+      (* 4. Money / MoneyRate fields store into 2 / 3 derived columns, so a
+         single index over "the field" is not a meaningful object — the same
+         reason they are already refused as primary keys and conflict keys. *)
+      List.iter (fun fname ->
+          match List.find_opt (fun (f : field_def) -> f.name = fname) e.fields with
+          | Some f ->
+            (match index_field_head_type f.type_expr with
+             | Some (("Money" | "MoneyRate") as t) ->
+               add ix.ix_loc
+                 (Printf.sprintf "index a plain column instead; a %s field stores into \
+                                  several derived columns" t)
+                 (Printf.sprintf "`%s` on entity `%s` indexes `%s`, which is a %s field"
+                    label e.name fname t)
+             | _ -> ())
+          | None -> ()) ix.ix_fields;
+      (* 5. an index whose column list is exactly the primary key is redundant *)
+      (match ix.ix_fields with
+       | [ only ] when only = e.primary_key && e.primary_key <> "" ->
+         add ix.ix_loc
+           "remove it — the primary key is already indexed"
+           (Printf.sprintf "`%s` on entity `%s` duplicates the primary-key index"
+              label e.name)
+       | _ -> ());
+      (* 6a. explicit names must be plain SQL identifiers within Postgres's
+         63-byte limit.  Rejecting the rest here is what makes the emitted
+         `"name"` safe and keeps truncation-collision out of the language. *)
+      (match ix.ix_name with
+       | Some n when not (is_valid_index_name n) ->
+         add ix.ix_loc
+           "use letters, digits and underscores, starting with a letter or underscore"
+           (Printf.sprintf "index name `%s` on entity `%s` is not a plain SQL identifier"
+              n e.name)
+       | Some n when String.length n > 63 ->
+         add ix.ix_loc
+           "shorten the name to 63 bytes or fewer"
+           (Printf.sprintf
+              "index name `%s` on entity `%s` is %d bytes; PostgreSQL truncates \
+               identifiers at 63, so two long names can silently collide"
+              n e.name (String.length n))
+       | _ -> ())) e.indexes;
+  (* 3. two indexes on the same entity with the same column list and the same
+     uniqueness are pure write amplification *)
+  let seen_shape = Hashtbl.create 8 in
+  List.iter (fun (ix : entity_index) ->
+      let key = (ix.ix_unique, ix.ix_fields) in
+      if Hashtbl.mem seen_shape key then
+        add ix.ix_loc
+          "remove the duplicate index"
+          (Printf.sprintf "entity `%s` declares `%s` twice" e.name (index_label ix))
+      else Hashtbl.add seen_shape key ()) e.indexes;
+  List.rev !errs
+
+(** Explicit index names must be unique across every entity, not per entity:
+    a PostgreSQL index is a `pg_class` relation, so its name lives in the
+    SCHEMA namespace.  Two entities each declaring `as "created_at_idx"`
+    collide at runtime, where the second `create index if not exists` silently
+    matches the first entity's index. *)
+let check_index_name_collisions (entities : entity_form list) : validation_error list =
+  let seen : (string, string) Hashtbl.t = Hashtbl.create 16 in
+  List.concat_map (fun (e : entity_form) ->
+      List.filter_map (fun (ix : entity_index) ->
+          match ix.ix_name with
+          | None -> None
+          | Some n ->
+            (match Hashtbl.find_opt seen n with
+             | Some owner ->
+               Some (make_error ix.ix_loc
+                       ~hint:"index names are unique per database schema, not per \
+                              table — pick a different name"
+                       (Printf.sprintf
+                          "index name `%s` on entity `%s` is already used by entity `%s`"
+                          n e.name owner))
+             | None -> Hashtbl.add seen n e.name; None))
+        e.indexes) entities
+
+(** `upsert E { … } onConflict [cols] doUpdate [cols]` lowers to PostgreSQL
+    `insert … on conflict (cols) do update …`, and PostgreSQL can only INFER a
+    conflict target from a unique index on exactly those columns.  Without one it
+    raises "there is no unique or exclusion constraint matching the ON CONFLICT
+    specification" — at runtime, in production only: the in-memory backend finds
+    the conflicting row by scanning whatever columns were named, with no
+    uniqueness requirement, so the same program passes `tesl test`.
+
+    So the conflict list must be either the primary key or a declared
+    `unique index`.  This is the reason unique indexes are worth having in the
+    language at all, and it turns a production-only runtime failure into a
+    compile error.
+
+    The upsert shape matched here is deliberately the same one the EMITTER
+    matches (emit_racket.ml `parse_upsert_expr`): what is admitted is what is
+    checked. *)
+let check_upsert_conflict_target ?facts ?(extra_funcs=[]) (decls : top_decl list)
+  : validation_error list =
+  let entities = (facts_or_compute ?facts ~extra_funcs decls).mf_entities in
+  match entities with
+  | [] -> []
+  | _ ->
+    let errors = ref [] in
+    let check_expr (e : expr) =
+      Ast_visitor.iter (fun node ->
+          match collect_call_head_and_args [] node with
+          (* The full spine, exactly as the emitter matches it.  A looser prefix
+             match would also fire on every partial application inside the same
+             spine and report one upsert three times. *)
+          | (head, entity_expr :: ERecord _
+                   :: EVar { name = "onConflict"; _ } :: EList { elems; loc }
+                   :: EVar { name = "doUpdate"; _ } :: EList _ :: [])
+            when function_name_of_expr head = Some "upsert" ->
+            let entity_name = match entity_expr with
+              | EConstructor { name; _ } | EVar { name; _ } -> Some name
+              | _ -> None
+            in
+            let conflict =
+              List.filter_map (function
+                  | EVar { name; _ } -> Some name
+                  | EField { field; _ } -> Some field
+                  | _ -> None) elems
+            in
+            (match entity_name with
+             | None -> ()
+             | Some en ->
+               (match List.find_opt (fun (e : entity_form) -> e.name = en) entities with
+                | None -> ()   (* unknown entity — reported by the entity/name passes *)
+                | Some ent ->
+                  let is_pk = (conflict = [ ent.primary_key ]) in
+                  let matches_unique =
+                    List.exists (fun (ix : entity_index) ->
+                        ix.ix_unique && ix.ix_fields = conflict) ent.indexes
+                  in
+                  if conflict <> [] && not is_pk && not matches_unique then
+                    errors := make_error loc
+                      ~hint:(Printf.sprintf
+                        "add `unique index [%s]` to entity `%s`, or conflict on the \
+                         primary key `%s`"
+                        (String.concat ", " conflict) en ent.primary_key)
+                      (Printf.sprintf
+                        "`upsert %s … onConflict [%s]` needs a unique index on \
+                         (%s): PostgreSQL cannot infer a conflict target without \
+                         one and fails at runtime"
+                        en (String.concat ", " conflict) (String.concat ", " conflict))
+                      :: !errors))
+          | _ -> ()) e
+    in
+    List.iter (function
+      | DFunc fd -> check_expr fd.body
+      | DTest t -> List.iter check_expr (List.concat_map test_stmt_exprs t.stmts)
+      | _ -> ()) decls;
+    List.rev !errors
+
 let check_entity_structure ?facts ?(extra_funcs=[]) (decls : top_decl list) : validation_error list =
   (* Validation-consolidation Phase 1: iterate the entity forms precomputed once
      in [module_facts] (source-order preserved) instead of re-filtering [decls].
@@ -787,8 +987,9 @@ let check_entity_structure ?facts ?(extra_funcs=[]) (decls : top_decl list) : va
           (Printf.sprintf
             "entity `%s` declares `%s` as its primary key but has no field named `%s`"
             e.name e.primary_key e.primary_key);
-      List.rev !errs
+      List.rev !errs @ check_entity_indexes e
   ) entities
+  @ check_index_name_collisions entities
 
 let check_queue_structure (decls : top_decl list) : validation_error list =
   let known_dbs =

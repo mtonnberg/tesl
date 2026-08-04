@@ -19,6 +19,7 @@ module Lesson21SqlReference exposing [
   findInPriceRange,
   findInPriceRangeOrdered,
   upsertProduct,
+  upsertProductByName,
   searchByName,
   searchByNameInsensitive,
   countProducts,
@@ -178,6 +179,22 @@ entity Product table "products" primaryKey id {
   price: Int
   category: String
   inStock: Bool
+
+  # INDEXES — declared next to the fields they cover, created by the startup
+  # migration. Index the shape of the QUERY, not one column at a time: this one
+  # serves "where p.category == c" AND "where p.category == c order p.price",
+  # because a composite index also serves its leading columns.
+  index [category, price]
+
+  # "unique index" declares an invariant, not just a lookup path. PostgreSQL
+  # enforces it, and so does the in-memory backend used by `tesl test`.
+  unique index [name]
+
+  # The name is derived (products_category_price_idx) unless given with `as`,
+  # which exists mainly to match an index a database already has.
+  index [inStock] as "products_in_stock_idx"
+
+  # No index on `id`: the primary key is already indexed.
 }
 
 # A second entity used to demonstrate innerJoin.
@@ -319,8 +336,18 @@ fn findInPriceRangeOrdered(minP: Int, maxP: Int) -> List Product requires [dbRea
 # if a row with the same value in [keyField] already exists, it updates [f1, f2].
 # Maps to INSERT … ON CONFLICT DO UPDATE in PostgreSQL.
 # Use for idempotent writes: webhook handlers, import pipelines, retry-safe endpoints.
+#
+# The conflict columns must be the primaryKey or a declared "unique index" —
+# PostgreSQL can only infer a conflict target from a unique index on exactly
+# those columns, and the compiler rejects the mismatch rather than letting it
+# fail at runtime. Here [id] is the primary key.
 fn upsertProduct(id: String, name: String, price: Int) -> Unit requires [dbWrite] =
   upsert Product { id: id, name: name, price: price, category: "general", inStock: True } onConflict [id] doUpdate [name, price]
+
+# Conflicting on a NON-primary-key column works because Product declares
+# "unique index [name]" above. Without that line this would not compile.
+fn upsertProductByName(id: String, name: String, price: Int) -> Unit requires [dbWrite] =
+  upsert Product { id: id, name: name, price: price, category: "general", inStock: True } onConflict [name] doUpdate [price]
 
 # ─── 14. LIKE / ILIKE — pattern matching ─────────────────────────────────────
 
@@ -639,6 +666,17 @@ test "upsertProduct updates when row already exists" requires [dbRead, dbWrite] 
   expect found.price == 99
 }
 
+test "upsertProductByName conflicts on the unique index, not the primary key" requires [dbRead, dbWrite] {
+  let _ = upsertProductByName "un1" "UniqueName" 10
+  # A DIFFERENT id but the same name: the unique index on [name] is the conflict
+  # target, so this updates the existing row instead of inserting a second one.
+  let _ = upsertProductByName "un2" "UniqueName" 77
+  let found = findById "un1"
+  expect found.price == 77
+  let byOther = select p from Product where p.id == "un2"
+  expect byOther == []
+}
+
 test "searchByName with like pattern matches prefix" requires [dbRead, dbWrite] {
   let _ = createProduct "lk1" "Widget Pro" 50 "tools"
   let _ = createProduct "lk2" "Gadget" 30 "tools"
@@ -675,7 +713,11 @@ test "findInStockCheap filters on multiple conditions" requires [dbRead, dbWrite
 
 test "findProductsWithCategory uses innerJoin to filter" requires [dbRead, dbWrite] {
   let _ = insert Category { id: "tools", label: "Tools", active: True }
-  let _ = createProduct "ij1" "Hammer" 15 "tools"
+  # A distinct name from the "Hammer" inserted above: this file has no
+  # `database` declaration, so every test shares one in-memory store, and
+  # Product declares `unique index [name]` — a second "Hammer" would be
+  # refused exactly as PostgreSQL would refuse it.
+  let _ = createProduct "ij1" "Claw Hammer" 15 "tools"
   # ij2 references a category that does not exist — innerJoin excludes it
   let _ = createProduct "ij2" "Phantom" 10 "nonexistent-cat"
   let results = findProductsWithCategory 1

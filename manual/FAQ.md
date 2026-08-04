@@ -358,6 +358,26 @@ database MyDatabase = Database {
 
 The compiler generates the database schema from your entity declarations.
 
+### How do I add an index?
+
+Declare it in the entity body, over the fields the query actually filters, joins or orders on:
+
+```tesl
+entity User table "users" primaryKey id {
+  id:        String
+  email:     String
+  orgId:     String
+  createdAt: PosixMillis
+
+  index [orgId, createdAt]
+  unique index [email]
+}
+```
+
+The startup migration creates them. The primary key is already indexed, so it does not need a declaration. A `unique index` is also what makes `upsert … onConflict [email]` legal — without it, PostgreSQL cannot infer a conflict target, and the compiler rejects the upsert rather than letting it fail in production.
+
+Adding an index to a table that already has rows is not done automatically (building one blocks writes, and the safe `CONCURRENTLY` form cannot run inside the migration transaction). The program prints the exact `CREATE INDEX CONCURRENTLY` statement to run: a missing plain index warns and starts, a missing `unique index` refuses to start.
+
 ### How do I perform transactions?
 
 Use `transaction` to wrap multiple database operations:

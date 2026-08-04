@@ -1384,6 +1384,12 @@ else
         # resets ALL registered memory databases, not just the emitter's list)
         "tests/memory-db-registry-test.rkt"
         "tests/sql-group-by-pg-test.rkt"
+        # Entity indexes: declaration parsing totality, derived index names +
+        # the 63-byte truncation that stops `if not exists` matching the WRONG
+        # index, the emitted DDL, column-list-not-name presence detection, and
+        # the Memory backend enforcing declared unique indexes (the parity that
+        # keeps `upsert … onConflict` from passing tests and failing on PG)
+        "tests/sql-index-tests.rkt"
         # First-Class Units: Money two-column storage (Memory decision-table +
         # PG parity; the PG suite self-skips without initdb/pg_ctl)
         "tests/sql-money-tests.rkt"

@@ -4967,7 +4967,7 @@
 ; Build minimal field/entity specs for injection testing (without macros)
 (define inj-id-field    (field-spec 'InjItem 'Id    'id    'String #t 'id    'text #f))
 (define inj-name-field  (field-spec 'InjItem 'Name  'name  'String #f 'name  'text #f))
-(define inj-item-entity (entity-spec 'InjItem #f 'id (list inj-id-field inj-name-field) #f #f))
+(define inj-item-entity (entity-spec 'InjItem #f 'id (list inj-id-field inj-name-field) #f #f '()))
 
 ; SQL-INJ-001: identifier-value->string rejects injection in column names
 (check-exn

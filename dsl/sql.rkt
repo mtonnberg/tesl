@@ -161,9 +161,22 @@
          field-column-definitions-sql
          check-money-column-collisions!
          money-db-values->runtime-value
-         money-rate-db-values->runtime-value)
+         money-rate-db-values->runtime-value
+         ;; Index surface, exported so the declaration parser, the derived index
+         ;; name (including the 63-byte truncation) and the emitted DDL are all
+         ;; testable without a live PostgreSQL.
+         (struct-out entity-index)
+         parse-entity-indexes
+         entity-index-column-names
+         entity-index-effective-name
+         truncate-sql-identifier
+         index-create-sql
+         postgres-index-present?)
 
-(struct entity-spec (name source primary-key fields predicate table) #:transparent)
+(struct entity-spec (name source primary-key fields predicate table indexes) #:transparent)
+;; A declared secondary index.  keys are entity field KEYS in index order;
+;; name is an explicit `as "…"` override or #f (derive from table + columns).
+(struct entity-index (unique? keys name) #:transparent)
 ;; nullable? is #t for Maybe-typed fields — these map to NULL in PostgreSQL.
 (struct field-spec (entity proof-name key type primary-key? column db-type nullable?) #:transparent)
 (struct from-clause (entity) #:transparent)
@@ -263,6 +276,90 @@
 (define (field-column-name field)
   (or (field-spec-column field)
       (default-column-name (field-spec-key field))))
+
+;; ── Entity indexes ─────────────────────────────────────────────────────────
+;;
+;; The compiler emits one `(kind (field ...) name-or-#f)` triple per declared
+;; index; this is the ONE place that turns those into structs, and it is total
+;; by construction — an unrecognised kind raises rather than being skipped, so a
+;; future index kind cannot be silently dropped on the floor.
+(define (parse-entity-indexes datum entity-name)
+  (unless (list? datum)
+    (raise-user-error 'define-entity
+                      "entity ~a: #:indexes expects a list, got ~a" entity-name datum))
+  (for/list ([spec (in-list datum)])
+    (match spec
+      [(list kind (? list? keys) name)
+       (define unique?
+         (case kind
+           [(plain) #f]
+           [(unique) #t]
+           [else (raise-user-error 'define-entity
+                                   "entity ~a: unknown index kind ~a" entity-name kind)]))
+       (when (null? keys)
+         (raise-user-error 'define-entity
+                           "entity ~a: index names no fields" entity-name))
+       (unless (andmap symbol? keys)
+         (raise-user-error 'define-entity
+                           "entity ~a: index field keys must be symbols, got ~a"
+                           entity-name keys))
+       (unless (or (not name) (string? name))
+         (raise-user-error 'define-entity
+                           "entity ~a: index name must be a string or #f, got ~a"
+                           entity-name name))
+       (entity-index unique? keys name)]
+      [_ (raise-user-error 'define-entity
+                          "entity ~a: malformed index spec ~a" entity-name spec)])))
+
+;; The field-specs an index covers, in index order.  Fail-closed: the compiler
+;; validates the field names, so an unknown key here is a compiler/emitter bug
+;; and must not degrade into a partial index.
+(define (entity-index-fields entity index who)
+  (for/list ([key (in-list (entity-index-keys index))])
+    (or (for/first ([f (in-list (entity-spec-fields entity))]
+                    #:when (eq? (field-spec-key f) key))
+          f)
+        (raise-user-error who
+                          "entity ~a: index references unknown field ~a"
+                          (entity-spec-name entity) key))))
+
+(define (entity-index-column-names entity index who)
+  (for/list ([f (in-list (entity-index-fields entity index who))])
+    (identifier-value->string (field-column-name f) who)))
+
+;; Deterministic 32-bit FNV-1a.  Used only to disambiguate names that must be
+;; truncated; a stable hand-rolled hash keeps generated index names identical
+;; across Racket versions (equal-hash-code does not promise that).
+(define (fnv1a-32 str)
+  (for/fold ([h #x811c9dc5]) ([b (in-bytes (string->bytes/utf-8 str))])
+    (bitwise-and (* (bitwise-xor h b) 16777619) #xffffffff)))
+
+;; PostgreSQL truncates identifiers at 63 bytes and only emits a NOTICE, so two
+;; generated names sharing a 63-byte prefix would collide and `if not exists`
+;; would then match the WRONG index.  Truncate deterministically with a hash
+;; suffix instead.
+(define postgres-max-identifier-bytes 63)
+
+(define (truncate-sql-identifier name)
+  (define bs (string->bytes/utf-8 name))
+  (cond
+    [(<= (bytes-length bs) postgres-max-identifier-bytes) name]
+    [else
+     (define suffix (format "_~a" (number->string (fnv1a-32 name) 16)))
+     (define keep (- postgres-max-identifier-bytes (string-length suffix)))
+     (string-append (bytes->string/utf-8 (subbytes bs 0 keep) #\?) suffix)]))
+
+;; Explicit `as "…"` name, else `<table>_<col>_…_idx` over the real column
+;; names.  Derivation lives here, not in the emitter, because column naming
+;; (camel->snake, #:column overrides) already lives here.
+(define (entity-index-effective-name entity index who)
+  (or (entity-index-name index)
+      (truncate-sql-identifier
+       (string-append
+        (identifier-value->string (entity-table-name entity) who)
+        "_"
+        (string-join (entity-index-column-names entity index who) "_")
+        "_idx"))))
 
 (define (database-schema-name database)
   (or (database-spec-schema database) "public"))
@@ -1462,6 +1559,36 @@
   (for/or ([join-row (in-list join-rows)])
     (equal? (hash-ref join-row (field-spec-key join-field) #f) main-val)))
 
+;; Declared UNIQUE indexes are enforced on the in-memory backend too.
+;;
+;; A perf index is inherently a no-op here (the store is a hash keyed by primary
+;; key and every query is a linear scan), but a unique index is an INVARIANT, and
+;; the whole point of the Memory backend is that tests fail the way production
+;; fails — the same reason NULL comparisons already follow PostgreSQL 3VL here.
+;; Skipping this would make `tesl test` pass on data PostgreSQL would reject.
+;;
+;; `skip-key` excludes the row being replaced so an update never conflicts with
+;; itself.  A row with a NULL in any indexed column is unconstrained, matching
+;; PostgreSQL: two NULLs are not equal, so they do not violate uniqueness.
+(define (check-in-memory-unique-indexes! entity store row who
+                                         #:skip-key [skip-key (gensym 'no-skip)])
+  (for ([index (in-list (entity-spec-indexes entity))]
+        #:when (entity-index-unique? index))
+    (define fields (entity-index-fields entity index who))
+    (define values-of (lambda (r) (for/list ([f (in-list fields)]) (row-field-ref r f))))
+    (define new-values (values-of row))
+    (unless (ormap sql-null-value? new-values)
+      (for ([(existing-key existing-row) (in-hash store)])
+        (unless (equal? existing-key skip-key)
+          (when (equal? (values-of existing-row) new-values)
+            (raise-user-error
+             who
+             "entity ~a already contains a row with ~a = ~a; the declared unique index on (~a) forbids duplicates"
+             (entity-spec-name entity)
+             (map field-spec-key fields)
+             new-values
+             (string-join (map (lambda (f) (symbol->string (field-spec-key f))) fields) ", "))))))))
+
 (define (in-memory-insert-one! entity value)
   (define-values (row primary-key-name bindings)
     (normalize-entity-row entity value 'insert-one!))
@@ -1472,6 +1599,7 @@
                       "entity ~a already contains a row with primary key ~a"
                       (entity-spec-name entity)
                       primary-key-value))
+  (check-in-memory-unique-indexes! entity store row 'insert-one!)
   (hash-set! store primary-key-value row)
   (attach-insert-proofs entity row primary-key-name bindings))
 
@@ -1502,10 +1630,13 @@
                         ([fspec (in-list update-specs)])
                 (hash-set current (field-spec-key fspec)
                           (hash-ref row (field-spec-key fspec))))])
+        (check-in-memory-unique-indexes! entity store updated-row 'upsert-one!
+                                         #:skip-key existing-key)
         (hash-set! store existing-key updated-row)
         (attach-insert-proofs entity updated-row primary-key-name bindings))
       ;; Insert new row
       (let ([pk-value (entity-primary-key-value entity row 'upsert-one!)])
+        (check-in-memory-unique-indexes! entity store row 'upsert-one!)
         (hash-set! store pk-value row)
         (attach-insert-proofs entity row primary-key-name bindings))))
 
@@ -1519,6 +1650,8 @@
     (define updated-row
       (for/fold ([current row]) ([pair (in-list update-pairs)])
         (hash-set current (field-spec-key (car pair)) (cdr pair))))
+    (check-in-memory-unique-indexes! entity store updated-row 'update-many!
+                                     #:skip-key store-key)
     (hash-set! store store-key updated-row)
     (attach-query-proofs entity updated-row predicates)))
 
@@ -1927,11 +2060,108 @@
                                    (entity-spec-fields entity))
                        ", "))))
 
+;; The indexes PostgreSQL currently has on this entity's table, as a list of
+;; (unique? . (column …)) pairs.  Presence is decided by COLUMN LIST +
+;; UNIQUENESS, never by name: matching on the name would report a permanent
+;; phantom-missing index for every adopted database whose equivalent index
+;; happens to be spelled differently.  Expression indexes have no attnum entry
+;; and are skipped — they can never match a declared column-list index.
+(define (postgres-existing-indexes runtime entity)
+  (define rows
+    (query-rows
+     (database-runtime-connection runtime)
+     "select i.indisunique,
+             (select array_to_string(array_agg(a.attname order by k.ord), ',')
+                from unnest(i.indkey) with ordinality as k(attnum, ord)
+                join pg_attribute a
+                  on a.attrelid = c.oid and a.attnum = k.attnum)
+        from pg_index i
+        join pg_class c on c.oid = i.indrelid
+        join pg_namespace n on n.oid = c.relnamespace
+       where n.nspname = $1 and c.relname = $2"
+     (identifier-value->string (database-schema-name (database-runtime-database runtime)) 'sql)
+     (identifier-value->string (entity-table-name entity) 'sql)))
+  (for/list ([row (in-list rows)]
+             #:when (string? (vector-ref row 1)))
+    (cons (eq? (vector-ref row 0) #t)
+          (string-split (vector-ref row 1) ","))))
+
+(define (postgres-index-present? existing entity index who)
+  (define columns (entity-index-column-names entity index who))
+  (for/or ([have (in-list existing)])
+    (and (equal? (cdr have) columns)
+         ;; A unique declaration needs a unique index; a plain declaration is
+         ;; satisfied by either (a unique index serves the same lookups).
+         (or (not (entity-index-unique? index)) (car have)))))
+
+(define (index-create-sql database entity index #:concurrently? [concurrently? #f])
+  (format "create ~aindex ~aif not exists ~a on ~a (~a)"
+          (if (entity-index-unique? index) "unique " "")
+          (if concurrently? "concurrently " "")
+          (quote-sql-identifier (entity-index-effective-name entity index 'sql) 'sql)
+          (qualified-table-name database entity)
+          (string-join
+           (for/list ([f (in-list (entity-index-fields entity index 'sql))])
+             (quote-sql-identifier (field-column-name f) 'sql))
+           ", ")))
+
+;; Declared indexes, reconciled against what the database already has.
+;;
+;; `fresh?` is #t when the table is brand new or empty.  Building an index on an
+;; empty table is instant and lock-free, so it happens inline.  On a POPULATED
+;; table it is not the runtime's call to make: a plain `CREATE INDEX` holds a
+;; ShareLock that blocks writes for the whole build (an outage on a large
+;; table), and `CONCURRENTLY` — the safe form — is illegal inside the
+;; transaction all of this DDL runs in (`ensure-database-ready!`).  So:
+;;
+;;   - a missing PLAIN index warns and boots.  It is a performance defect, and a
+;;     deploy that merely adds an index declaration must not be able to take the
+;;     service down.
+;;   - a missing UNIQUE index refuses to boot.  That one is a CORRECTNESS
+;;     defect: the program declares an invariant the database is not enforcing,
+;;     and `upsert … onConflict` depends on the index existing to infer its
+;;     conflict target.  Booting anyway would be fail-open.
+;;
+;; Both print the exact CONCURRENTLY statement to run out of band.
+(define (postgres-ensure-entity-indexes! runtime entity #:fresh? fresh?)
+  (define declared (entity-spec-indexes entity))
+  (define database (database-runtime-database runtime))
+  (unless (null? declared)
+    (cond
+      [fresh?
+       (for ([index (in-list declared)])
+         (query-exec (database-runtime-connection runtime)
+                     (index-create-sql database entity index)))]
+      [else
+       (define existing (postgres-existing-indexes runtime entity))
+       (for ([index (in-list declared)])
+         (unless (postgres-index-present? existing entity index 'sql)
+           (define statement (index-create-sql database entity index #:concurrently? #t))
+           (if (entity-index-unique? index)
+               (raise-user-error
+                'sql
+                (string-append
+                 "automatic migration cannot add the declared unique index on ~a (~a) "
+                 "to a table that already has rows: a unique index is an invariant, "
+                 "and building it concurrently is not possible inside the migration "
+                 "transaction.  Run this, then start again:\n  ~a;")
+                (entity-table-name entity)
+                (string-join (entity-index-column-names entity index 'sql) ", ")
+                statement)
+               (eprintf
+                (string-append
+                 "tesl: warning: table ~a is missing the declared index on (~a).  "
+                 "Queries will run unindexed until it is created.  Run:\n  ~a;\n")
+                (entity-table-name entity)
+                (string-join (entity-index-column-names entity index 'sql) ", ")
+                statement))))])))
+
 (define (postgres-ensure-entity! runtime entity)
   (check-money-column-collisions! entity 'sql)
   (cond
     [(not (postgres-table-exists? runtime entity))
-     (postgres-create-table! runtime entity)]
+     (postgres-create-table! runtime entity)
+     (postgres-ensure-entity-indexes! runtime entity #:fresh? #t)]
     [else
      (define columns (postgres-column-metadata runtime entity))
      (define empty-table? (postgres-table-empty? runtime entity))
@@ -2010,7 +2240,8 @@
                          "automatic migration found incompatible primary key for table ~a: expected ~a, found ~a"
                          (entity-table-name entity)
                          expected-primary-key
-                         actual-primary-keys))]))
+                         actual-primary-keys))
+     (postgres-ensure-entity-indexes! runtime entity #:fresh? empty-table?)]))
 
 (define (ensure-queue-tables! conn schema-str)
   ;; tesl_jobs: durable job store for queue workers (FOR UPDATE SKIP LOCKED)
@@ -3103,6 +3334,8 @@
         (~optional (~seq #:table table-name:sql-name)
                    #:defaults ([table-name.value #'#f]))
         #:primary-key primary-key:id
+        (~optional (~seq #:indexes indexes-datum)
+                   #:defaults ([indexes-datum #'()]))
         field:entity-field ...+)
      (define field-key-symbols (map syntax-e (syntax->list #'(field.key ...))))
      (unless (member (syntax-e #'primary-key) field-key-symbols)
@@ -3165,7 +3398,8 @@
                           'primary-key
                           (list field-const-id ...)
                           predicate-id
-                          table-name.value))))]))
+                          table-name.value
+                          (parse-entity-indexes 'indexes-datum 'entity-name)))))]))
 
 (define-syntax (define-database stx)
   (syntax-parse stx

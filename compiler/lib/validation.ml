@@ -60,6 +60,11 @@ let check_module (m : module_form) : validation_error list =
   @ (TProof @: check_check_fn_has_proof_return decls)
   @ (TStructural @: check_auth_fn_arity decls)
   @ (TDatabase @: check_entity_structure ~facts decls)
+  (* Given the imported-type harvest, not [decls]: an upsert on an entity
+     declared in ANOTHER module must be checked against THAT entity's unique
+     indexes, and the harvest carries no walkable bodies so the same code is
+     traversed either way. *)
+  @ (TDatabase @: check_upsert_conflict_target decls_with_imported_types)
   @ (TCodec @: check_capture_codec_types decls_with_imported_types)
   @ (TProof @: check_capture_proof_via ~facts decls)
   @ (TProof @: check_auth_proof_via ~facts decls)

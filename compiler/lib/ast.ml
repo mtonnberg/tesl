@@ -289,11 +289,26 @@ type record_form = {
   loc       : loc;
 }
 
+(** A secondary index declared in an entity body:
+    [index [orgId, createdAt]] / [unique index [orgId, slug] as "my_idx"].
+
+    [ix_fields] names entity FIELDS (not columns) in index order — the
+    field→column mapping is owned by the runtime, which is where column naming
+    already lives.  [ix_name] is the explicit `as` override; when [None] the
+    runtime derives the name from the table and column names. *)
+type entity_index = {
+  ix_unique : bool;
+  ix_fields : string list;
+  ix_name   : string option;
+  ix_loc    : loc;
+}
+
 type entity_form = {
   name        : string;
   table       : string;
   primary_key : string;
   fields      : field_def list;
+  indexes     : entity_index list;
   loc         : loc;
 }
 

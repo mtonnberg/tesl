@@ -3128,14 +3128,58 @@ let parse_fn_decl kind s =
   let* name = expect_ident s in
   parse_fn_decl_named kind name loc0 s
 
-let parse_field_defs s =
+(** Is the token cursor sitting on an entity index entry rather than a field?
+
+    `index` and `unique` are deliberately NOT lexer keywords — every SQL clause
+    word in Tesl (`where`, `order`, `onConflict`, …) is a plain identifier
+    recognised positionally, and promoting `index` to a keyword would break
+    every program using it as a field or variable name.  One token of lookahead
+    separates the two shapes: a field is always `name :`, an index entry is
+    `index [` or `unique index`. *)
+let at_entity_index s =
+  match peek s, peek2 s with
+  | IDENT "index", LBRACKET -> true
+  | IDENT "unique", IDENT "index" -> true
+  | _ -> false
+
+let parse_entity_index s =
+  let loc0 = current_loc s in
+  let ix_unique = (match peek s with IDENT "unique" -> advance s; true | _ -> false) in
+  let* _ = (match peek s with
+            | IDENT "index" -> advance s; return ()
+            | t -> err s (Printf.sprintf "expected `index` but got %s" (tok_to_string t))) in
+  let* ix_fields = parse_bracketed_list expect_ident s in
+  (* optional `as "explicit_index_name"` — `as` is contextual, like `index`. *)
+  let* ix_name =
+    match peek s with
+    | IDENT "as" ->
+      advance s;
+      let* n = expect_string s in
+      return (Some n)
+    | _ -> return None
+  in
+  return { ix_unique; ix_fields; ix_name; ix_loc = span loc0 (current_loc s) }
+
+(** Parse a brace-delimited field block.  [allow_indexes] enables the entity-only
+    `index [...]` entries; a record body leaves it off so an index entry there
+    fails as an ordinary parse error. *)
+let parse_field_defs_ext ~allow_indexes s =
   let* _ = expect s LBRACE in
   skip_layout s;
   let fields = ref [] in
+  let indexes = ref [] in
   let continue_ = ref true in
   while !continue_ && peek s <> RBRACE && peek s <> EOF do
     skip_layout s;
     if peek s = RBRACE then continue_ := false
+    else if allow_indexes && at_entity_index s then begin
+      match parse_entity_index s with
+      | Ok ix ->
+        indexes := ix :: !indexes;
+        skip_layout s;
+        if peek s = COMMA then (advance s; skip_layout s)
+      | Err _ -> continue_ := false
+    end
     else begin
       let loc0 = current_loc s in
       match expect_ident s with
@@ -3180,7 +3224,11 @@ let parse_field_defs s =
   done;
   skip_layout s;
   let* _ = expect s RBRACE in
-  return (List.rev !fields)
+  return (List.rev !fields, List.rev !indexes)
+
+let parse_field_defs s =
+  let* (fields, _) = parse_field_defs_ext ~allow_indexes:false s in
+  return fields
 
 (** Parse a record declaration. *)
 let parse_record_form s =
@@ -3216,9 +3264,9 @@ let parse_entity_form s =
   let* table = expect_string s in
   let* _ = expect s PRIMARY_KEY in
   let* pk = expect_ident s in
-  let* fields = parse_field_defs s in
+  let* (fields, indexes) = parse_field_defs_ext ~allow_indexes:true s in
   let loc = span loc0 (current_loc s) in
-  return { name; table; primary_key = pk; fields; loc }
+  return { name; table; primary_key = pk; fields; indexes; loc }
 
 (** Parse a type declaration: newtype, type alias, or ADT.  [secret] is true when
     the declaration was introduced by the contextual [secret] keyword

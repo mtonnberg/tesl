@@ -1430,10 +1430,38 @@ test "second" { ... }  # depends on data from first — better: each test indepe
 
 ### Database Indexing
 
-Ensure your database has appropriate indexes for common queries:
-```sql
-CREATE INDEX idx_todos_user_id ON todos(user_id);
-CREATE INDEX idx_todos_created_at ON todos(created_at);
+Declare indexes on the entity, next to the fields they cover. They are created by the ordinary startup migration, so a fresh environment comes up indexed instead of quietly running sequential scans:
+
+```tesl
+entity Todo table "todos" primaryKey id {
+  id:        String
+  userId:    String
+  slug:      String
+  createdAt: PosixMillis
+
+  # The shape of the query, not one index per column: an index on
+  # [userId, createdAt] serves `where t.userId == uid order t.createdAt desc`
+  # AND a filter on userId alone, so a separate [userId] index is dead weight.
+  index [userId, createdAt]
+
+  # `unique` declares an invariant, not just a lookup path — and it is what
+  # makes `onConflict [userId, slug]` legal (see below).
+  unique index [userId, slug]
+}
+```
+
+**✅ Do:** index the column combinations your `where`, `order` and `innerJoin` clauses actually use — the leading columns of a composite index serve prefix filters too.
+
+**✅ Do:** use `unique index` when a combination must not repeat. It is enforced by PostgreSQL, and by the Memory backend during tests.
+
+**❌ Don't:** index the primary key (already indexed), or add an index no query uses — every index costs write throughput.
+
+**`upsert` needs one.** `onConflict [cols]` requires the primary key or a `unique index` on exactly those columns; PostgreSQL cannot infer a conflict target otherwise. The compiler rejects the mismatch, so this is caught at build time rather than in production.
+
+**Adding an index to a table that already has rows** is deliberately not automatic: building an index locks out writes for the duration, and the safe `CONCURRENTLY` form cannot run inside the migration's transaction. The program prints the exact statement to run — a missing plain index only warns, while a missing `unique index` refuses to start, because that one is an unenforced invariant:
+
+```sh
+psql -c 'CREATE INDEX CONCURRENTLY IF NOT EXISTS "todos_user_id_created_at_idx" ON "public"."todos" ("user_id", "created_at");'
 ```
 
 ---

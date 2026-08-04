@@ -6025,6 +6025,22 @@ let emit_entity ctx (e : entity_form) =
   emit_line ctx "  #:source (make-hash)";
   emit_line ctx (Printf.sprintf "  #:table %s" e.table);
   emit_line ctx (Printf.sprintf "  #:primary-key %s" e.primary_key);
+  (* Indexes go out as a quoted datum list, one `(kind (field ...) name-or-#f)`
+     triple per index, parsed by a single total runtime function.  Field keys
+     (not column names) are emitted deliberately: the field→column mapping and
+     the default index-name derivation both live in the runtime already, and
+     duplicating camel→snake in the emitter is exactly the drift this codebase
+     keeps paying for. *)
+  if e.indexes <> [] then begin
+    let one (ix : entity_index) =
+      Printf.sprintf "(%s (%s) %s)"
+        (if ix.ix_unique then "unique" else "plain")
+        (String.concat " " ix.ix_fields)
+        (match ix.ix_name with Some n -> Printf.sprintf "\"%s\"" n | None -> "#f")
+    in
+    emit_line ctx (Printf.sprintf "  #:indexes (%s)"
+                     (String.concat " " (List.map one e.indexes)))
+  end;
   List.iter (fun (f : field_def) ->
     (* proof-name: use proof annotation predicate if available, else capitalize field name *)
     let proof_name = match f.proof_ann with
