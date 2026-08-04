@@ -596,12 +596,25 @@ let record_json ~(codec_names : string list) (record : record_form) =
       (if List.mem record.name codec_names then json_string record.name else json_null);
   ]
 
+(* Declared indexes are part of the entity's public shape, so the doc/catalog
+   view must show them or `tesl doc` under-reports the schema.  The derived index
+   NAME is deliberately absent: it is computed by the runtime, which owns column
+   naming, so only an explicit `as` name is known here. *)
+let entity_index_json (index : entity_index) =
+  json_object [
+    json_field "fields" (json_array (List.map json_string index.ix_fields));
+    json_field "unique" (json_bool index.ix_unique);
+    json_field "name"
+      (match index.ix_name with Some n -> json_string n | None -> json_null);
+  ]
+
 let entity_json (entity : entity_form) =
   json_object [
     json_field "name" (json_string entity.name);
     json_field "table" (json_string entity.table);
     json_field "primary_key" (json_string entity.primary_key);
     json_field "fields" (json_array (List.map entity_field_json entity.fields));
+    json_field "indexes" (json_array (List.map entity_index_json entity.indexes));
   ]
 
 let adt_variant_json (variant : adt_variant) =

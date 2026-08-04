@@ -407,7 +407,26 @@
         (with-handlers ([exn:fail? exn-message])
           (connect-database IndexPopulatedUniqueDb)))
       (check-regexp-match #rx"create unique index concurrently if not exists" refusal
-                          "the refusal names the exact statement to run"))
+                          "the refusal names the exact statement to run")
+
+      ;; ── An index that exists but does not do the declared job ─────────────
+      ;;
+      ;; A PARTIAL index covers only the rows matching its predicate, so it can
+      ;; satisfy neither a whole-table lookup declaration nor a whole-table
+      ;; uniqueness one.  Counting it as present would silently leave the
+      ;; declaration unmet.
+      (query-exec direct-conn
+                  "create index indexed_tasks_partial
+                     on index_populated.indexed_tasks (title, owner_id)
+                   where owner_id = 'a'")
+
+      (define warning-with-partial
+        (let ([out (open-output-string)])
+          (parameterize ([current-error-port out])
+            (call-with-database IndexPopulatedPlainDb (lambda () (void))))
+          (get-output-string out)))
+      (check-regexp-match #rx"missing the declared index" warning-with-partial
+                          "a partial index does not satisfy a whole-table declaration"))
     (lambda ()
       (disconnect direct-conn))))
 

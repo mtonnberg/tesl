@@ -2066,6 +2066,17 @@
 ;; phantom-missing index for every adopted database whose equivalent index
 ;; happens to be spelled differently.  Expression indexes have no attnum entry
 ;; and are skipped — they can never match a declared column-list index.
+;;
+;; Two exclusions matter, both of them cases where an index EXISTS but does not
+;; do the declared job:
+;;   * `indisvalid` — a failed `CREATE INDEX CONCURRENTLY` leaves an INVALID
+;;     index behind, which PostgreSQL neither uses nor enforces.  Running that
+;;     statement by hand is exactly the workflow the populated-table path
+;;     recommends, so counting the wreckage as "present" would silently swallow
+;;     the failure the operator needs to see.
+;;   * `indpred is null` — a PARTIAL index covers only the rows matching its
+;;     predicate, so it cannot satisfy a declaration that covers the whole table,
+;;     and cannot enforce uniqueness across it either.
 (define (postgres-existing-indexes runtime entity)
   (define rows
     (query-rows
@@ -2078,7 +2089,9 @@
         from pg_index i
         join pg_class c on c.oid = i.indrelid
         join pg_namespace n on n.oid = c.relnamespace
-       where n.nspname = $1 and c.relname = $2"
+       where n.nspname = $1 and c.relname = $2
+         and i.indisvalid
+         and i.indpred is null"
      (identifier-value->string (database-schema-name (database-runtime-database runtime)) 'sql)
      (identifier-value->string (entity-table-name entity) 'sql)))
   (for/list ([row (in-list rows)]
