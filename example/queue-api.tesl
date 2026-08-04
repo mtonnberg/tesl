@@ -1,4 +1,4 @@
-module QueueApi exposing [EmailQueue, UserEvents]
+module QueueApi exposing [EmailQueue]
 import Tesl.Prelude exposing [Bool(..), List, String, Fact]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Queue exposing [
@@ -25,7 +25,6 @@ import Tesl.Database exposing [
   TcpConnection,
   SocketConnection,
 ]
-import Tesl.SSE exposing [SseChannel]
 import Tesl.App exposing [App]
 
 capability emailWrite implies queueWrite
@@ -51,10 +50,6 @@ record SendEmail {
   body: String
 }
 
-type UserEvent
-  = ProfileUpdated bio: String
-  | AccountDeleted
-
 queue EmailQueue requires [queueRead] = Queue {
   database: MainDatabase
   jobs: [Job SendEmail sendEmailWorker Nothing]
@@ -63,11 +58,6 @@ queue EmailQueue requires [queueRead] = Queue {
     backoff: Exponential
     initialDelay: 60
   }
-}
-
-sseChannel UserEvents(userId: String) = SseChannel {
-  database: MainDatabase
-  payload: UserEvent
 }
 
 worker sendEmailWorker(job: SendEmail ::: FromQueue (Id == jobId) job)

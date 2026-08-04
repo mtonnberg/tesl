@@ -31,6 +31,7 @@
       W091  `Int` at a wire boundary (JS 2^53 precision)
       W092  query constrains columns no declared index can serve
       W093  declared index no query in this file uses
+      W094  queue/sseChannel declared but never activated in main's App
 *)
 
 (* A lint diagnostic uses the same type as Compile.diagnostic so it can
@@ -1176,6 +1177,113 @@ let rec collect_start_email_workers (acc : string list) (e : Ast.expr) : string 
   | Ast.EConstructor _ | Ast.EField _ | Ast.EVar _ | Ast.ELit _
   | Ast.ERuntimeCall _ -> acc
 
+(** The names a module's own `main` activates under one `App` field.
+
+    The `App { … }` record returned by `main` is the ONE activation mechanism:
+    `serve` / `startWorkers` / `startDeadWorkers` / `startEmailWorker` were all
+    removed from the language (LANGUAGE-SPEC §11.12 — "The runtime starts
+    everything … from the returned `App`"), and `check_app_wiring`
+    (validation_structural.ml) requires every activation ref to name a decl in
+    the SAME module, erroring otherwise. Two consequences, both load-bearing for
+    the lints below:
+
+    - a runtime decl this module's `main` does not list can never be started by
+      any other module either, so "not listed here" means "never runs";
+    - a module with no `main` at all cannot activate anything it declares.
+
+    Kept in one function because the App record has two spellings — a record
+    carrying the `App` type hint, and `App` applied to a record — and the
+    validator plus two lint passes all need the same answer. Three copies of one
+    structural rule is how the emit_elm paren bug happened. *)
+let app_activated_names (m : Ast.module_form) (key : string) : string list =
+  let ctor_name = function
+    | Ast.EConstructor { name; _ } -> Some name
+    | Ast.EVar { name; _ } -> Some name
+    | _ -> None in
+  let names_of = function
+    | Ast.EList { elems; _ } -> List.filter_map ctor_name elems
+    (* A single-value field (`api`, `database`) is not a list. *)
+    | e -> (match ctor_name e with Some n -> [ n ] | None -> []) in
+  let rec tail = function
+    | Ast.ELet { body; _ } | Ast.ELetProof { body; _ } -> tail body
+    | e -> e in
+  let fields_of = function
+    | Ast.ERecord { type_hint = Some "App"; fields; _ }
+    | Ast.EApp { fn = Ast.EConstructor { name = "App"; _ };
+                 arg = Ast.ERecord { fields; _ }; _ } -> fields
+    | _ -> [] in
+  List.concat_map (function
+      | Ast.DFunc fd when fd.kind = Ast.MainKind ->
+        (match List.assoc_opt key (fields_of (tail fd.body)) with
+         | Some v -> names_of v
+         | None -> [])
+      | _ -> []) m.decls
+
+(** W094 — a `queue` or `sseChannel` declared but never activated.
+
+    Same shape as W070 for `email`, and sound for the same reason: activation is
+    local by construction (see {!app_activated_names}), so this file has the
+    whole answer. Unlike the index lints there is no cross-module question here
+    at all.
+
+    This is worth warning about because nothing else reports it. An unactivated
+    queue still ACCEPTS work — `enqueue` writes rows to `tesl_jobs` — but no
+    worker ever drains them, so the failure is silent accumulation rather than an
+    error. An unactivated `sseChannel` accepts `publish` calls that reach nobody. *)
+let lint_unactivated_runtime_decls filename (source : string) (out : lint_diag list ref) =
+  match Parser.parse_module filename source with
+  | Err _ -> ()
+  | Ok m ->
+    let declared kind_of =
+      List.filter_map kind_of m.decls in
+    let queues =
+      declared (function Ast.DQueue (q : Ast.queue_form) -> Some (q.name, q.loc) | _ -> None) in
+    let channels =
+      declared (function Ast.DChannel (c : Ast.channel_form) -> Some (c.name, c.loc) | _ -> None) in
+    (* Only judge a module that declares an App — that is the module whose
+       activation list is authoritative for its own decls.
+
+       A module with NO `main` is not evidence of a dead queue, because
+       `test` / `apiTest` blocks drive queues and channels through the test
+       harness rather than through App activation: eight corpus test modules
+       (tests/http-stub-tests.tesl, example/learn/lesson33-sse-and-queue-tests.tesl,
+       …) legitimately declare a queue, exercise it in tests, and have no `main`
+       at all. A library module and a test module are indistinguishable from here,
+       so this says nothing rather than guessing — the same fail-silent rule the
+       index lints follow. *)
+    let has_main =
+      List.exists (function
+          | Ast.DFunc fd -> fd.kind = Ast.MainKind
+          | _ -> false) m.decls in
+    if has_main && (queues <> [] || channels <> []) then begin
+      let warn kind field consequence (name, (loc : Location.loc)) activated =
+        if not (List.mem name activated) then
+          out := {
+            file     = filename;
+            line     = loc.start.line;
+            col      = loc.start.col;
+            severity = "warning";
+            code     = "W094";
+            message  = Printf.sprintf
+              "%s `%s` is declared but never activated — %s; list it in your \
+               `main` function's `App { … %s: [%s] }` record"
+              kind name consequence field name;
+            fix      = None;
+          } :: !out
+      in
+      let active_queues = app_activated_names m "queues" in
+      let active_channels = app_activated_names m "sseChannels" in
+      List.iter (fun q ->
+          warn "queue" "queues"
+            "its workers never start, so enqueued jobs are accepted and then \
+             never processed" q active_queues)
+        queues;
+      List.iter (fun c ->
+          warn "sseChannel" "sseChannels"
+            "published events reach no subscriber" c active_channels)
+        channels
+    end
+
 let lint_missing_email_worker filename (source : string) (out : lint_diag list ref) =
   match Parser.parse_module filename source with
   | Err _ -> ()
@@ -1193,31 +1301,13 @@ let lint_missing_email_worker filename (source : string) (out : lint_diag list r
          App-record detection (validation_structural.ml) so an email activated the
          documented way is not falsely reported as un-started. The legacy
          EStartEmailWorker collection is kept for any stragglers. *)
-      let ctor_name = function
-        | Ast.EConstructor { name; _ } -> Some name
-        | Ast.EVar { name; _ } -> Some name
-        | _ -> None in
-      let names_of = function
-        | Ast.EList { elems; _ } -> List.filter_map ctor_name elems
-        | _ -> [] in
-      let rec tail = function
-        | Ast.ELet { body; _ } | Ast.ELetProof { body; _ } -> tail body
-        | e -> e in
-      let app_email_fields = function
-        | Ast.ERecord { type_hint = Some "App"; fields; _ }
-        | Ast.EApp { fn = Ast.EConstructor { name = "App"; _ };
-                     arg = Ast.ERecord { fields; _ }; _ } ->
-          (match List.assoc_opt "email" fields with Some v -> names_of v | None -> [])
-        | _ -> [] in
-      let activated_names = List.fold_left (fun acc decl ->
-        match decl with
-        | Ast.DFunc fd ->
-          let acc = collect_start_email_workers acc fd.body in
-          (match fd.kind with
-           | Ast.MainKind -> app_email_fields (tail fd.body) @ acc
-           | _ -> acc)
-        | _ -> acc
-      ) [] m.decls in
+      let activated_names =
+        app_activated_names m "email"
+        @ List.fold_left (fun acc decl ->
+              match decl with
+              | Ast.DFunc fd -> collect_start_email_workers acc fd.body
+              | _ -> acc) [] m.decls
+      in
       (* 3. Warn for each email that is never activated. *)
       List.iter (fun (name, (loc : Location.loc)) ->
         if not (List.mem name activated_names) then
@@ -1689,6 +1779,7 @@ let lint_file ?logical_path (filename : string) : Compile.diagnostic list =
     lint_unused_imports          filename src out;
     lint_unused_locals_and_dead_code filename src out;
     lint_missing_email_worker    filename src out;
+    lint_unactivated_runtime_decls filename src out;
     lint_unexported_signature_names filename src out;
     lint_int_at_wire                filename src out;
     lint_database_indexes           filename parse_path src out

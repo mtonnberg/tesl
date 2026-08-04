@@ -383,6 +383,19 @@ let registry : entry list = [
        backends have nothing to index, and `like`/`ilike` columns are excluded \
        because a default-collation B-tree does not serve them.";
     manual = Some "best-practices#database-indexing" };
+  { code = "W094"; category = Lint;
+    title = "queue or sseChannel declared but never activated";
+    explanation = "The `App { … }` record returned by `main` is what starts a \
+       queue's workers and a channel's delivery. A declared but unlisted queue \
+       still ACCEPTS work: `enqueue` writes the job row and no worker ever drains \
+       it, so the failure is silent accumulation rather than an error. An unlisted \
+       `sseChannel` accepts `publish` calls that reach nobody. Add it to \
+       `App { … queues: [Name] }` / `App { … sseChannels: [Name] }`. Activation \
+       refs must name a declaration in the same module, so the module that \
+       declares it is the module that has to activate it. Only reported for a \
+       module that declares a `main` — a test module drives its queues through \
+       `test` / `apiTest` blocks instead.";
+    manual = Some "best-practices" };
   { code = "W093"; category = Lint;
     title = "declared index no query in this file uses";
     explanation = "An index is declared but no query in this file constrains its \

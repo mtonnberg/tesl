@@ -1478,6 +1478,23 @@ psql -c 'CREATE INDEX CONCURRENTLY IF NOT EXISTS "todos_user_id_created_at_idx" 
 
 ## Common Pitfalls and Solutions
 
+### Problem: enqueued jobs are never processed, or published events reach nobody
+
+**Solution:** List the queue or channel in your `main` function's `App` record. That is what starts a queue's workers and a channel's delivery — declaring it is not enough, and an unactivated queue still *accepts* work, so `enqueue` succeeds, the job row is written, and nothing ever drains it. There is no error, only a table that grows.
+
+```tesl
+main() -> App requires [appService] =
+  App {
+    database:    MainDatabase
+    api:         AppServer
+    port:        8086
+    queues:      [EmailQueue]      # ← without this, EmailQueue never runs
+    sseChannels: [UserEvents]      # ← without this, publishes reach no subscriber
+  }
+```
+
+`tesl lint` reports this as **W094**. Activation refs must name a declaration in the same module, so whichever module declares the queue is the module that has to activate it. Test modules are exempt: inside an `api-test` the workers run synchronously (see [Queue Tests](#4-queue-tests)), so a module with no `main` is never reported.
+
 ### Problem: "Proof not found" errors
 
 **Solution:** Ensure you're attaching proofs at the validation boundary:
