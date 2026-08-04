@@ -4,11 +4,12 @@ Declare secondary / composite / unique indexes on an `entity`, create them
 during the existing auto-migration, and use the whole-program query set to
 check them at compile time.
 
-## Status: Phases 1 + 2 IMPLEMENTED 2026-08-04
+## Status: ALL THREE PHASES IMPLEMENTED 2026-08-04
 
-Shipped exactly as designed below, meeting this item's own move-to-completed
-criterion. Phase 3 (the whole-program missing-index lint) was deliberately not
-built and is tracked separately in `roadmap/next/missing_index_lint.md`.
+Shipped exactly as designed below. Phase 3 (the whole-program missing-index
+lint, W092/W093) landed the same day and has its own record in
+`roadmap/completed/missing_index_lint.md` — including the 7 real missing indexes
+it found in the shipped corpus.
 
 What landed:
 

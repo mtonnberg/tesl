@@ -110,6 +110,12 @@ entity User table "users" primaryKey id {
   bio: String @db(text)
   avatarUrl: String @db(text)
   createdAt: PosixMillis
+
+  # `register` rejects a duplicate address with 409, so uniqueness is the
+  # intended invariant — declaring it here is what actually enforces it, and it
+  # closes the race where two concurrent registrations both pass that check.
+  # It also serves the login lookup below.
+  unique index [emailAddress]
 }
 
 database UserDatabase = Database {

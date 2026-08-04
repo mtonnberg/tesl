@@ -1450,6 +1450,16 @@ entity Todo table "todos" primaryKey id {
 }
 ```
 
+**The linter finds these for you.** `tesl lint` compares every query in the file against the declared indexes and reports what is missing (**W092**) and what is unused (**W093**):
+
+```
+warning[W092]: 2 queries on `Todo` constrain `ownerId`, but no index on `Todo` can
+serve it — every matching row is found by scanning the whole table; add
+`index [ownerId]` to the entity
+```
+
+Few other languages can tell you this, because it needs the whole program's query set — which Tesl already has at compile time. The rules are deliberately quiet: they only speak up for entities backed by a Postgres `database` declared in the same file, they skip `test` blocks, they ignore `like`/`ilike` columns (a default-collation B-tree cannot serve those anyway), and an index counts as serving a query whenever its *leading* column is one the query constrains. W093 additionally stays silent in a schema-only module, since the queries needing those indexes may live elsewhere.
+
 **✅ Do:** index the column combinations your `where`, `order` and `innerJoin` clauses actually use — the leading columns of a composite index serve prefix filters too.
 
 **✅ Do:** use `unique index` when a combination must not repeat. It is enforced by PostgreSQL, and by the Memory backend during tests.

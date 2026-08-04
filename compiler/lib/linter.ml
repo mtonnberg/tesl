@@ -28,6 +28,9 @@
       W064  discarded `check`/`auth` validation result (proof footgun)
       W070  email declared but not activated in main's App { email: [...] }
       W080  exported function references unexported type or proof predicate
+      W091  `Int` at a wire boundary (JS 2^53 precision)
+      W092  query constrains columns no declared index can serve
+      W093  declared index no query in this file uses
 *)
 
 (* A lint diagnostic uses the same type as Compile.diagnostic so it can
@@ -1361,6 +1364,21 @@ let lint_int_at_wire filename (source : string) (out : lint_diag list ref) =
    so a FLAT per-declaration set of tainted names is sound and much simpler than
    threading a scope environment. *)
 
+(* W092 / W093 — missing and unused database indexes.  The analysis lives in
+   Index_lint because it reads queries through the EMITTER's own query
+   extractors, which is what keeps the lint reasoning about the SQL the program
+   actually runs. *)
+let lint_database_indexes filename (source : string) (out : lint_diag list ref) =
+  match Parser.parse_module filename source with
+  | Err _ -> ()
+  | Ok m ->
+    List.iter (fun (f : Index_lint.finding) ->
+        out := { file = filename;
+                 line = f.loc.start.line; col = f.loc.start.col;
+                 severity = "warning"; code = f.code;
+                 message = f.message; fix = None } :: !out)
+      (Index_lint.lint_module m)
+
 (* HttpRequest fields that are wholly client-controlled.  `.body` and `.path`
    are deliberately absent: an `auth` comparing `.path` against a literal is
    route logic, and a body is validated by a `check`, not by an `auth`. *)
@@ -1657,7 +1675,8 @@ let lint_file (filename : string) : Compile.diagnostic list =
     lint_unused_locals_and_dead_code filename src out;
     lint_missing_email_worker    filename src out;
     lint_unexported_signature_names filename src out;
-    lint_int_at_wire                filename src out
+    lint_int_at_wire                filename src out;
+    lint_database_indexes           filename src out
    with Failure _ -> ());
   (* Sort by line then col *)
   let sorted = List.sort (fun a b ->

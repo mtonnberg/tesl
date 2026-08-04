@@ -137,6 +137,9 @@ type RoomEvent
 entity ChatUser table "users" primaryKey id {
   id: String
   username: String @db(text)
+
+  # `login` looks a user up by username on every request.
+  index [username]
 }
 
 entity Room table "rooms" primaryKey id {
@@ -152,6 +155,9 @@ entity Message table "messages" primaryKey id {
   username: String @db(text)
   content: String @db(text)
   createdAt: PosixMillis # BIGINT in DB — auto-mapped by PosixMillis
+
+  # History is always read per room.
+  index [roomId]
 }
 
 # ─── Database ────────────────────────────────────────────────────────────────

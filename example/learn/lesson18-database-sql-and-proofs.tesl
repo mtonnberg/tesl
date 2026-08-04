@@ -88,6 +88,10 @@ entity Note table "notes" primaryKey id {
   content: String @db(text)
   authorId: String @db(text)
   createdAt: PosixMillis
+
+  # The listing query filters on authorId; declaring the index means a fresh
+  # database comes up able to serve it without a full table scan.
+  index [authorId]
 }
 
 # ─── Database configuration ───────────────────────────────────────────────────

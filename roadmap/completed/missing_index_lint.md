@@ -4,6 +4,45 @@ Phase 3 of `roadmap/completed/database_indexes.md`, split out because Phases 1
 and 2 (declaration + DDL + the `onConflict` compile check) shipped 2026-08-04
 and this part is independently shippable.
 
+## Status: IMPLEMENTED 2026-08-04
+
+`compiler/lib/index_lint.ml`, called from `Linter.lint_file`; codes registered in
+`error_codes.ml`; 21 cases in `compiler/test/test_index_lint.ml`.
+
+Implementation notes worth keeping:
+
+- **Queries are read through the EMITTER.** `Emit_racket.extract_select_query`
+  and its siblings (`extract_multiline_select_query`, `extract_delete_query`,
+  `extract_delete`, `extract_update`, `parse_upsert_expr`) are the same functions
+  that produce the SQL, so the lint reasons about the query the program actually
+  runs. A private re-parse would drift.
+- **Usages are keyed on query identity** — (function, entity, binder) — **not on
+  a source line.** Two things force it: the nested applications of one query's
+  own spine each match the extractor with a partial clause list, and the
+  multi-line clause form arrives through a rebuild carrying
+  `Location.dummy_loc`. A line-keyed grouping reported that query twice (once at
+  1:1, once with the weaker single-column suggestion). The reported position is
+  the earliest real location for the query, falling back to the function.
+- **One finding per missing index, not per call site.** Three call sites needing
+  the same index produce one W092 saying "3 queries on `X` constrain …". Three
+  copies of the same instruction is how a lint gets ignored wholesale.
+- **`onConflict` columns mark an index used but never demand one** — a missing
+  unique index there is already a hard compile error from Phase 2, so warning
+  would duplicate it.
+
+**It immediately found 7 real missing indexes in the shipped corpus**, all on
+foreign-key-ish columns that every request filters by: `Todo.ownerId`,
+`User.emailAddress`, `ChatUser.username`, `Message.roomId`, `Note.authorId`
+(twice), `Document.ownerId`. All fixed. `user-service-api` got
+`unique index [emailAddress]` rather than a plain one: `register` already
+rejects a duplicate address with 409, so uniqueness was the intended invariant
+and the index both enforces it and closes the race where two concurrent
+registrations pass that check.
+
+Verified load-bearing by mutation, not just by green tests: including `test`
+blocks fails exactly the test-block silence case, and disabling the
+Postgres-backend filter fails exactly the three backend-suppression cases.
+
 ## Why this is the interesting half
 
 Indexes can now be declared, but nothing tells a developer they forgot one.

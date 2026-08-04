@@ -82,6 +82,9 @@ entity Document table "documents" primaryKey id {
   name: String @db(text)
   body: String @db(text)
   createdAt: PosixMillis
+
+  # Documents are listed per owner.
+  index [ownerId]
 }
 
 database Lesson74Database = Database {

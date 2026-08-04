@@ -118,6 +118,10 @@ entity Note table "notes" primaryKey id {
   authorId: String @db(text)
   active: String @db(text)
   pinned: String @db(text)
+
+  # Every query below is author-scoped — the ForAll proofs are all about
+  # `authorId`, so that is also the column the reads filter on.
+  index [authorId]
 }
 
 database NoteDatabase = Database {

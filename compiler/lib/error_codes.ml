@@ -372,6 +372,25 @@ let registry : entry list = [
        values, or a string/BigNumber codec for genuinely large `Int`. Advisory: \
        internal/compute `Int` use is unaffected.";
     manual = Some "best-practices" };
+  { code = "W092"; category = Lint;
+    title = "query constrains columns no declared index can serve";
+    explanation = "A `where` / `order` / `innerJoin` / `groupBy` clause \
+       constrains columns on a PostgreSQL-backed entity, and neither the primary \
+       key nor any declared `index` leads with one of them — so PostgreSQL finds \
+       the matching rows by scanning the whole table, on every call. Declare the \
+       index in the entity body: `index [col, col]`. Only reported for entities \
+       this file declares alongside a Postgres-backed `database`; `Memory` \
+       backends have nothing to index, and `like`/`ilike` columns are excluded \
+       because a default-collation B-tree does not serve them.";
+    manual = Some "best-practices#database-indexing" };
+  { code = "W093"; category = Lint;
+    title = "declared index no query in this file uses";
+    explanation = "An index is declared but no query in this file constrains its \
+       leading column, and every index costs write throughput on each insert and \
+       update. Remove it, or check whether the queries that need it live in \
+       another module — this lint sees one file at a time, so it only fires when \
+       the same file also queries the entity.";
+    manual = Some "best-practices#database-indexing" };
 
   (* ── Linter: security (SEC0xx) ─────────────────────────────────────────────
      Their own category, deliberately, so `tesl help codes` groups them apart

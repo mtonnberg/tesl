@@ -64,6 +64,10 @@ entity Todo table "todos" primaryKey id {
   ownerId: UserId @db(text)
   status: Status
   createdAt: PosixMillis
+
+  # Every list endpoint here is owner-scoped, so this is the access path that
+  # matters: without the index each request scans the whole table.
+  index [ownerId]
 }
 
 database TodoDatabase = Database {
