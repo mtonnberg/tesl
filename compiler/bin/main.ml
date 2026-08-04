@@ -864,7 +864,7 @@ let check_json_diags filename source =
   if List.exists (fun (d : Compile.diagnostic) ->
         d.source = "parser" || d.source = "lexer") diags
   then diags
-  else diags @ Linter.lint_file filename
+  else diags @ Linter.lint_file ~logical_path:(logical_path filename) filename
 
 (** Print a single diagnostic to stderr.
 
@@ -1028,7 +1028,7 @@ let () =
        let lpath = logical_path filename in
        (* Include linter findings so agent-context reports the SAME diagnostic
           set as --check-json (review 2026-07 TOOL-AGENTCTX). *)
-       let lint_diags = Linter.lint_file filename in
+       let lint_diags = Linter.lint_file ~logical_path:lpath filename in
        let json = Compile.agent_context_source ~extra_diags:lint_diags lpath source in
        print_string json;
        print_newline ();
@@ -1169,7 +1169,13 @@ let () =
     exit !ret
 
   | ("--lint" :: filenames) when filenames <> [] ->
-    let all_diags = List.concat_map Linter.lint_file filenames in
+    (* Honour TESL_LOGICAL_PATH here too.  The editor lints through
+       --check-json, not --lint, but a silent divergence between two entry
+       points ("the CLI says nothing, the editor warns") is exactly the kind of
+       mystery that costs an afternoon. *)
+    let all_diags =
+      List.concat_map
+        (fun f -> Linter.lint_file ~logical_path:(logical_path f) f) filenames in
     List.iter print_diagnostic all_diags;
     let has_errors = List.exists (fun (d : Compile.diagnostic) ->
       d.severity = "error") all_diags in

@@ -1367,9 +1367,19 @@ let lint_int_at_wire filename (source : string) (out : lint_diag list ref) =
 (* W092 / W093 — missing and unused database indexes.  The analysis lives in
    Index_lint because it reads queries through the EMITTER's own query
    extractors, which is what keeps the lint reasoning about the SQL the program
-   actually runs. *)
-let lint_database_indexes filename (source : string) (out : lint_diag list ref) =
-  match Parser.parse_module filename source with
+   actually runs.
+
+   W092 resolves entities through this module's imports, so it is the one pass
+   that cares WHERE the buffer lives.  The editor lints an unsaved buffer by
+   writing it to a system temp file, so [parse_path] is the document's real
+   ("logical") path while [source] is the edited content: parsing under the
+   logical path is what makes `resolve_local_import_path` find the sibling
+   modules.  Reported positions stay on [filename] — every W092/W093 finding is
+   located in the file being linted, never in an imported one, so no diagnostic
+   ever has to be re-anchored to another document. *)
+let lint_database_indexes filename parse_path (source : string)
+    (out : lint_diag list ref) =
+  match Parser.parse_module parse_path source with
   | Err _ -> ()
   | Ok m ->
     List.iter (fun (f : Index_lint.finding) ->
@@ -1643,7 +1653,12 @@ let lint_security filename (source : string) (out : lint_diag list ref) =
 
 (** Run all lint checks and return diagnostics as [Compile.diagnostic] values
     so they can be printed by the same [print_diagnostic] in main.ml. *)
-let lint_file (filename : string) : Compile.diagnostic list =
+(** [logical_path] is the path the file's imports should resolve relative to,
+    when it differs from [filename] — the editor lints an unsaved buffer from a
+    system temp copy and passes the document's real path.  Defaults to
+    [filename], so every CLI entry point is unchanged. *)
+let lint_file ?logical_path (filename : string) : Compile.diagnostic list =
+  let parse_path = match logical_path with Some p when p <> "" -> p | _ -> filename in
   let src =
     try In_channel.with_open_text filename In_channel.input_all
     with Sys_error _ -> ""
@@ -1676,7 +1691,7 @@ let lint_file (filename : string) : Compile.diagnostic list =
     lint_missing_email_worker    filename src out;
     lint_unexported_signature_names filename src out;
     lint_int_at_wire                filename src out;
-    lint_database_indexes           filename src out
+    lint_database_indexes           filename parse_path src out
    with Failure _ -> ());
   (* Sort by line then col *)
   let sorted = List.sort (fun a b ->

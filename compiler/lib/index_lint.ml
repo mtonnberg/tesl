@@ -17,17 +17,47 @@
     does not actually run.  Anything those functions decline to parse is simply
     not linted (see under-reporting below).
 
+    {2 W092 is whole-program; W093 is deliberately not}
+
+    A query and the entity it reads are usually in different modules — the entity
+    and its `database` live in a schema module that the querying module imports.
+    W092 therefore resolves entities across that import edge: the entity table is
+    this file's own entities plus the ones its imports bring into scope
+    ({!Validation_common.load_imported_type_decls}, which owns the `exposing`
+    filter), and the Postgres-backed set likewise merges the `database`
+    declarations of directly-imported modules.
+
+    That needs no project scan and no reverse import graph, because the entity is
+    always reachable DOWNWARD from the query: a module cannot query `Issue`
+    without importing it. Two further properties fall out, and they are why this
+    half is cheap:
+
+    - every W092 finding is positioned at the QUERY, which is in the file being
+      linted — so nothing is ever reported against another file, and the batch
+      entry points cannot double-report;
+    - entity names cannot be ambiguous here, because a name exposed by two
+      modules is already a hard error
+      ({!Validation_names.check_imported_exposed_name_conflicts}), and a local
+      declaration shadows an imported one. Local decls are listed first so that
+      order is also what a lookup sees.
+
+    W093 stays FILE-SCOPED on purpose. "No query uses this index" is a negative
+    claim over the whole program, and answering it needs the queries of modules
+    that import this one — an upward edge no import walk reaches. It is only
+    reported for entities this file both declares and queries; a schema-only
+    module says nothing.
+
     {2 Deliberately conservative}
 
     False positives are the whole risk here: a noisy W092 gets suppressed
     wholesale and then the real ones are invisible.  So every uncertainty
     resolves toward saying nothing:
 
-    - {b Only PostgreSQL-backed entities.}  An entity is linted only when this
-      file declares both the entity and a `database` with a Postgres backend
-      listing it.  A `Memory` backend has nothing to index (every query is a
-      scan), and an entity whose database lives in another module cannot be
-      judged from here.
+    - {b Only PostgreSQL-backed entities.}  An entity is linted only when a
+      `database` with a Postgres backend lists it, in this file or in a module
+      this file imports.  A `Memory` backend has nothing to index (every query is
+      a scan), and an entity whose database is declared somewhere neither
+      reachable nor local cannot be judged from here — so it is skipped.
     - {b Only `fn`/`handler` bodies.}  Queries inside `test` blocks are not
       production access paths and must not demand an index.
     - {b `like`/`ilike` columns do not count.}  A default-collation B-tree does
@@ -42,13 +72,12 @@
 
     {2 Known limit: W093 is file-scoped}
 
-    "No query uses this index" is a whole-program question, and the linter runs
-    per file.  W093 therefore only fires when this file both declares the index
-    and contains at least one query on that entity — so the common layout of a
-    `Db.tesl` holding entities with queries living in sibling modules stays
-    silent instead of being told all its indexes are dead.  A file that queries
-    an entity through only some of its indexes can still produce a false
-    positive; it is a warning, and the message says where to look. *)
+    W093 only fires when this file both declares the index and contains at least
+    one query on that entity — so the common layout of a `Db.tesl` holding
+    entities with queries living in sibling modules stays silent instead of being
+    told all its indexes are dead.  A file that queries an entity through only
+    some of its indexes can still produce a false positive; it is a warning, and
+    the message says where to look. *)
 
 open Ast
 
@@ -168,17 +197,56 @@ let usages_of_expr (e : expr) : usage list =
   in
   selects @ deletes @ updates @ upserts
 
-(* ── Entity / database facts from this file ───────────────────────────────── *)
+(* ── Entity / database facts, across the import edge ─────────────────────── *)
 
-(* An entity is linted only when THIS file declares a Postgres-backed database
-   listing it.  `backend = ""` is the default-postgres spelling. *)
+(* The `database` declarations of directly-imported local modules.
+
+   The querying module usually does NOT declare the database — the schema module
+   that declares the entity does.  Without this, the multi-module layout the
+   manual recommends would make the lint silent everywhere, which is the same as
+   not having it.
+
+   Imports resolve exactly as everywhere else, via
+   [Validation_common.resolve_local_import_path]: the importing file's own
+   directory, kebab spelling first.  No `exposing` filter applies — a `database`
+   is not an importable NAME, so this reads a property of the imported module
+   rather than resolving something into scope.  Direct imports are enough: the
+   entity has to be in scope to be queried, so its declaring module is imported
+   here, and the database that lists it is conventionally in that same module. *)
+let imported_databases (m : module_form) : database_form list =
+  let is_tesl_module name =
+    String.length name >= 5 && String.sub name 0 5 = "Tesl." in
+  List.concat_map (fun (imp : import_decl) ->
+      if is_tesl_module imp.module_name then []
+      else
+        let path = Validation_common.resolve_local_import_path m.source_file imp.module_name in
+        if not (Sys.file_exists path) then []
+        else
+          match
+            (try
+               let source = In_channel.with_open_text path In_channel.input_all in
+               (match Parser.parse_module path source with
+                | Parser.Ok imported -> Some imported
+                | Parser.Err _ -> None)
+             with Sys_error _ | Failure _ -> None)
+          with
+          | None -> []
+          | Some imported ->
+            List.filter_map (function DDatabase db -> Some db | _ -> None) imported.decls)
+    m.imports
+
+(* An entity is linted only when a Postgres-backed database lists it, declared
+   here or in a module this file imports.  `backend = ""` is the default-postgres
+   spelling. *)
 let postgres_backed_entities (m : module_form) : string list =
-  List.concat_map (function
-      | DDatabase db ->
+  let of_decl_dbs dbs =
+    List.concat_map (fun db ->
         let db = Desugar.desugar_database_config db in
-        if db.backend = "memory" then [] else db.entities
-      | _ -> []) m.decls
-  |> dedup
+        if db.backend = "memory" then [] else db.entities) dbs
+  in
+  let local =
+    List.filter_map (function DDatabase db -> Some db | _ -> None) m.decls in
+  of_decl_dbs local @ of_decl_dbs (imported_databases m) |> dedup
 
 (* Columns that already have an index leading with them: the primary key plus
    the first column of every declared index. *)
@@ -195,15 +263,28 @@ let index_label (ix : entity_index) =
 (* ── The passes ───────────────────────────────────────────────────────────── *)
 
 let lint_module (m : module_form) : finding list =
-  let entities =
+  (* Entities DECLARED here.  W093 is scoped to these — see the module header. *)
+  let local_entities =
     List.filter_map (function DEntity e -> Some e | _ -> None) m.decls in
-  match entities with
+  (* Entities VISIBLE here: local first (a local declaration shadows an imported
+     one, and `load_imported_type_decls` already drops shadowed names), then the
+     ones imports bring into scope.  W092 resolves against this, because the
+     entity a query reads usually lives in an imported schema module. *)
+  let visible_entities =
+    local_entities
+    @ List.filter_map (function DEntity e -> Some e | _ -> None)
+        (Validation_common.load_imported_type_decls m)
+  in
+  match visible_entities with
   | [] -> []
   | _ ->
     let pg = postgres_backed_entities m in
     let linted name = List.mem name pg in
+    (* First match wins, and local decls come first.  A name exposed by two
+       modules is already a hard error, so this cannot be ambiguous in a program
+       that compiles. *)
     let entity_of name =
-      List.find_opt (fun (e : entity_form) -> e.name = name) entities in
+      List.find_opt (fun (e : entity_form) -> e.name = name) visible_entities in
     (* Only fn/handler bodies: a query in a `test` block is not a production
        access path. *)
     (* Usages are keyed on QUERY IDENTITY — the enclosing function, the entity
@@ -328,6 +409,9 @@ let lint_module (m : module_form) : finding list =
                          update; remove it, or check whether the queries that \
                          need it live in another module"
                         (index_label ix) e.name;
-                    }) e.indexes) entities
+                    }) e.indexes)
+        (* Entities declared HERE only: reporting an imported entity's index as
+           dead would need this module to be the whole world. *)
+        local_entities
     in
     missing @ unused
