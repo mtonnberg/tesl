@@ -543,6 +543,32 @@
 (define decl-pattern
   #rx"^(fn|check|auth|handler|worker|deadWorker|establish|type|record|entity|capability|database|queue|channel|codec)[ \t]+([A-Za-z_][A-Za-z0-9_]*)")
 
+;; ── HTTP-method words on a `handler` ────────────────────────────────────────
+;; `handler get greet(…)` states the method(s) between the keyword and the name.
+;; The verbs are contextual identifiers, NOT keywords (parser.ml
+;; `parse_handler_methods`): a handler may still be NAMED `get`, and `delete` is
+;; also the SQL statement word.  One token of lookahead separates the two shapes
+;; — a method word is followed by another identifier, the name is followed by
+;; `(`.  The optional-and-backtracking verb group below reproduces exactly that:
+;; `handler get(…)` leaves the group empty and takes `get` as the name, while
+;; `handler get post(…)` takes `get` as a method and `post` as the name.
+;; Without this, `decl-pattern` captured the verb as the declaration name, so
+;; hover/goto answered on `get` and never on the real handler name.
+;; Verbs a `handler` may declare; `sse` is endpoint-only (SSE streams a channel
+;; and binds no handler), so it is listed separately.
+(define handler-method-words '("get" "post" "put" "delete" "patch"))
+(define endpoint-method-words (append handler-method-words '("sse")))
+
+(define handler-decl-pattern
+  #px"^handler[ \t]+((?:(?:get|post|put|delete|patch)[ \t]+)*)([A-Za-z_][A-Za-z0-9_]*)[ \t]*(?:\\(|$)")
+
+;; Declared name of a `handler` line, skipping any HTTP-method prefix.
+;; Returns #f when the line is not a recognisable handler declaration (the
+;; caller then keeps `decl-pattern`'s capture, e.g. mid-edit lines).
+(define (handler-decl-name line)
+  (let ([m (regexp-match handler-decl-pattern (string-trim line))])
+    (and m (caddr m))))
+
 (define local-let-pattern
   #rx"^let[ \t]+([A-Za-z_][A-Za-z0-9_]*)")
 
@@ -640,7 +666,9 @@
              [m    (regexp-match decl-pattern line)])
         (when m
           (let* ([kw      (cadr m)]
-                 [name    (caddr m)]
+                 [name    (if (equal? kw "handler")
+                              (or (handler-decl-name line) (caddr m))
+                              (caddr m))]
                  [sig     (strip-decl-trailing line)]
                  [extra   (cond
                             [(member kw func-kinds equal?)
@@ -1240,6 +1268,81 @@
      "*field of `" block "` block" (if req " — required" "") "*"
      (if (and (string? doc) (> (string-length doc) 0))
          (string-append "\n\n" doc) ""))))
+
+;; ── HTTP-method hover ───────────────────────────────────────────────────────
+;; The verbs are contextual identifiers (see `handler-decl-pattern`), so a hover
+;; on one only means "HTTP method" when the caret really sits in a method
+;; position.  Two such positions exist, both recognised the way the parser reads
+;; them: the verb prefix of a `handler` declaration, and the leading word of an
+;; `api` endpoint line.  Everywhere else `get`/`delete`/… keep their ordinary
+;; meanings (a handler NAMED `get`, the SQL `delete` statement), which is why
+;; these predicates test the caret column rather than the word alone.
+
+(define handler-method-prefix-pattern
+  #px"^[ \t]*handler[ \t]+((?:(?:get|post|put|delete|patch)[ \t]+)+)[A-Za-z_][A-Za-z0-9_]*[ \t]*(?:\\(|$)")
+
+(define endpoint-method-pattern
+  #px"^[ \t]*(get|post|put|delete|patch|sse)[ \t]+\"")
+
+(define (span-contains? span col)
+  (and span (>= col (car span)) (< col (cdr span))))
+
+;; Which method position (if any) the caret sits in: 'handler, 'endpoint or #f.
+(define (http-method-position raw-line col)
+  (cond
+    [(span-contains? (let ([m (regexp-match-positions handler-method-prefix-pattern raw-line)])
+                       (and m (cadr m)))
+                     col)
+     'handler]
+    [(span-contains? (let ([m (regexp-match-positions endpoint-method-pattern raw-line)])
+                       (and m (cadr m)))
+                     col)
+     'endpoint]
+    [else #f]))
+
+(define http-method-hover-handler
+  (string-append
+   "```tesl\n"
+   "handler get name(…)\n"
+   "```\n\n"
+   "**HTTP method** this handler serves. Tesl supports exactly five verbs on a "
+   "`handler`:\n\n"
+   "`get` · `post` · `put` · `delete` · `patch`\n\n"
+   "There is no `head`, `options`, `trace` or `connect`. `sse` is not a handler "
+   "verb either — an SSE endpoint streams an `sseChannel` and is declared only in "
+   "the `api` block.\n\n"
+   "The verb is contextual, not a keyword, so a handler may still be *named* "
+   "`get`: `handler get(…)` declares a handler called `get`, while "
+   "`handler get post(…)` declares `post` served over GET. Several verbs may be "
+   "listed to serve one handler from more than one method.\n\n"
+   "Stating it is **required** for a handler bound in a `server` block: bindings "
+   "pair to `api` endpoints by POSITION, so the method is what lets the compiler "
+   "verify this handler sits in the slot you meant — and it is what SEC005 keys "
+   "on (a `get` handler may not reach `dbWrite`, `queueWrite`, `pubsub` or "
+   "`emailCap`)."))
+
+(define http-method-hover-endpoint
+  (string-append
+   "```tesl\n"
+   "get \"/path/:capture\"\n"
+   "```\n\n"
+   "**HTTP method** of an `api` endpoint. Tesl supports:\n\n"
+   "`get` · `post` · `put` · `delete` · `patch` · `sse`\n\n"
+   "There is no `head`, `options`, `trace` or `connect`. `sse` declares a "
+   "server-sent-events stream over an `sseChannel` — it carries no body and no "
+   "response type, and no `handler` is bound to it.\n\n"
+   "The handler serving this endpoint must declare the same verb "
+   "(`handler get …`); the `server` block pairs the two by position."))
+
+(define (http-method-hover-markdown lines line-num col word)
+  (and word
+       (member word endpoint-method-words)
+       (>= line-num 0) (< line-num (length lines))
+       (let ([pos (http-method-position (list-ref lines line-num) col)])
+         (case pos
+           [(handler)  http-method-hover-handler]
+           [(endpoint) http-method-hover-endpoint]
+           [else       #f]))))
 
 ;; LSP completion items for the not-yet-written fields of a config block.
 ;; `insertText` adds the `: ` so accepting a field lands the colon for free.
@@ -2546,28 +2649,34 @@
                               (build-decl-table source-file text)
                               (hash))]
                     [binding-types (hash-ref local-bindings-cache uri '())]
+                    ;; Priority 0: an HTTP-method verb in method position
+                    ;; (`handler get foo`, `get "/path"`). Must come first: the
+                    ;; verbs are ordinary identifiers, so `delete` would
+                    ;; otherwise answer with the SQL `delete` doc.
+                    [method-md (and word (http-method-hover-markdown lines line-num char-num word))]
                     ;; Priority 1: local let in the current top-level block, then local/imported declarations.
-                    [entry  (or (and word text (find-local-binding-entry source-file text line-num word binding-types))
-                                (and word (hash-ref table word #f)))]
+                    [entry  (and (not method-md)
+                                 (or (and word text (find-local-binding-entry source-file text line-num word binding-types))
+                                     (and word (hash-ref table word #f))))]
                     ;; Priority 2: builtin surface — the compiler's Stdlib_docs
                     ;; catalog first (drift-proof: types come from the checker),
                     ;; then the in-file stdlib-sigs hash for keyword/SQL help
                     ;; entries the catalog does not own.
-                    [doc-entry (and (not entry)
+                    [doc-entry (and (not method-md) (not entry)
                                     (or (and qualified (run-doc-json compiler qualified))
                                         (and hyphenated (run-doc-json compiler hyphenated))))]
-                    [stdlib (and (not entry) (not doc-entry)
+                    [stdlib (and (not method-md) (not entry) (not doc-entry)
                                  (or (and qualified (hash-ref stdlib-sigs qualified #f))
                                      (and hyphenated (hash-ref stdlib-sigs hyphenated #f))))]
                     ;; Priority 3: proof-predicate owner (e.g. hover on "ValidPort" →
                     ;;   finds "check isValidPort ... -> ... ValidPort ...")
-                    [owner  (and (not entry) (not doc-entry) (not stdlib) word
+                    [owner  (and (not method-md) (not entry) (not doc-entry) (not stdlib) word
                                  (find-proof-owner table word))]
                     ;; Priority 4: configuration-block field (database/postgres/
                     ;;   queue/retry/channel/cache/email/smtp). When the cursor is
                     ;;   inside a config block and the word is one of its schema
                     ;;   fields, show the field's type + doc from Config_schema.
-                    [cfg-cc (and word text (not entry) (not doc-entry) (not stdlib) (not owner)
+                    [cfg-cc (and word text (not method-md) (not entry) (not doc-entry) (not stdlib) (not owner)
                                  (with-text-tmp text (uri->path uri) compiler
                                    (lambda (tmp) (run-config-context compiler tmp line-num char-num))))]
                     [cfg-field (and cfg-cc (config-field-lookup cfg-cc word))]
@@ -2575,10 +2684,13 @@
                     ;;   (record field access via --field-at-json, otherwise the
                     ;;   expression type via --type-at-json). Covers expressions the
                     ;;   text-based heuristics above cannot resolve.
-                    [compiler-md (and (not entry) (not doc-entry) (not stdlib) (not owner) (not cfg-field) text
+                    [compiler-md (and (not method-md) (not entry) (not doc-entry) (not stdlib) (not owner) (not cfg-field) text
                                       (compiler-hover-markdown compiler (uri->path uri) text line-num char-num))]
                     [result
                      (cond
+                       [method-md (hash 'contents
+                                        (hash 'kind  "markdown"
+                                              'value method-md))]
                        [entry  (hash 'contents
                                      (hash 'kind  "markdown"
                                            'value (format-hover-entry entry)))]
@@ -3301,6 +3413,66 @@
     (check-equal? (vector-ref proof-let-destructured-fact-entry 4) '("fact subjects: pq; quantity"))
     (check-true (regexp-match? #rx"fact subjects: pq; quantity"
                                (format-hover-entry proof-let-destructured-fact-entry))))
+
+  ;; ── HTTP-method words on handlers / api endpoints ──────────────────────────
+  ;; The verbs are contextual identifiers, so both the decl-table name and the
+  ;; hover have to read the position, not the spelling.
+  (let ([src (string-join
+              '("module Main exposing [MainServer]"
+                "import Tesl.Prelude exposing [String]"
+                "api MainApi {"
+                "  get \"/ping\""
+                "    -> String"
+                "}"
+                "handler get ping() -> String ="
+                "  \"pong\""
+                "handler get() -> String ="
+                "  \"named get\""
+                "handler get post search() -> String ="
+                "  \"two verbs\""
+                "handler delete removeThing() -> String ="
+                "  \"delete verb\"")
+              "\n")])
+    (define lines (string-split src "\n"))
+    (define table (build-decl-table "/tmp/methods.tesl" src))
+    ;; the handler name is the word AFTER the verb prefix …
+    (check-not-false (hash-ref table "ping" #f)
+                     "`handler get ping` is indexed under `ping`, not `get`")
+    (check-equal? (vector-ref (hash-ref table "ping") 1) 6)
+    (check-not-false (hash-ref table "search" #f)
+                     "`handler get post search` is indexed under `search`")
+    (check-not-false (hash-ref table "removeThing" #f)
+                     "`handler delete removeThing` is indexed under `removeThing`")
+    ;; … except when the verb IS the name (`handler get(…)`), which the parser
+    ;; accepts and this table must keep resolving.
+    (check-equal? (vector-ref (hash-ref table "get") 1) 8
+                  "`handler get(…)` still resolves the handler NAMED get")
+    ;; hover: verb position on a handler line
+    (check-true (regexp-match? #rx"HTTP method"
+                               (or (http-method-hover-markdown lines 6 8 "get") ""))
+                "hover on the verb of `handler get ping` explains the method")
+    (check-true (regexp-match? #rx"SEC005"
+                               (or (http-method-hover-markdown lines 6 8 "get") ""))
+                "handler-verb hover mentions the GET mutation rule")
+    ;; hover: the handler NAME is not a method, and a handler NAMED get is not either
+    (check-false (http-method-hover-markdown lines 6 12 "ping")
+                 "the handler name is not a method position")
+    (check-false (http-method-hover-markdown lines 8 8 "get")
+                 "`handler get(…)` — the verb IS the name, so no method hover")
+    ;; hover: api endpoint verb, and `sse` is endpoint-only
+    (check-true (regexp-match? #rx"api. endpoint"
+                               (or (http-method-hover-markdown lines 3 2 "get") ""))
+                "hover on an api endpoint verb explains the endpoint method")
+    (check-true (regexp-match? #rx"sse" (or (http-method-hover-markdown lines 3 2 "get") ""))
+                "endpoint hover lists sse")
+    (check-false (regexp-match? #rx"`sse` ·" http-method-hover-handler)
+                 "handler hover does not offer sse as a handler verb")
+    ;; `delete` in a handler verb position must not answer with the SQL doc
+    (check-true (regexp-match? #rx"HTTP method"
+                               (or (http-method-hover-markdown lines 12 8 "delete") ""))
+                "`handler delete removeThing` — verb hover wins over SQL `delete`")
+    (check-false (http-method-hover-markdown '("  delete p from Todo where p.id == x") 0 2 "delete")
+                 "a SQL `delete` statement is not a method position"))
 
   (let* ([uri "file:///tmp/lint-fix.tesl"]
          [text (string-join

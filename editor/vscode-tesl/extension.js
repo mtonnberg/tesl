@@ -72,8 +72,13 @@ function readTeslLspWrapper() {
         : null;
       // Extract the Racket nix store bin directory — flexible regex handles PATH= format.
       const racketBinDirMatch = content.match(/(\/nix\/store\/[^:\s"']*-racket[^:\s"']*\/bin)/);
+      // The raw OCaml compiler the wrapper was built against. This is the
+      // binary that speaks --check-json/--type-at-json; the `tesl` CLI wrapper
+      // does NOT (it rejects unknown verbs), so it is a broken stand-in.
+      const ocamlMatch = content.match(/export TESL_OCAML_COMPILER="([^"]+)"/);
       return {
         racketBin: racketBinDirMatch ? racketBinDirMatch[1] + "/racket" : null,
+        ocamlCompiler: ocamlMatch ? ocamlMatch[1] : null,
         pltcollects,
       };
     } catch (_) {}
@@ -111,19 +116,37 @@ function findRacketBinary() {
  * Find the Tesl compiler binary.
  * Prefer the locally compiled binary (supports --debug) over the nix wrapper.
  */
+/**
+ * The workspace's own freshly built compiler, if this workspace is a Tesl repo
+ * checkout. Kept separate from findTeslCompiler so callers can tell "the user
+ * has a local build" from "we fell back to something installed".
+ */
+function findWorkspaceCompiler(wsPath) {
+  if (!wsPath) return null;
+  const local = path.join(wsPath, "compiler", "_build", "default", "bin", "main.exe");
+  return fs.existsSync(local) ? local : null;
+}
+
 function findTeslCompiler(wsPath) {
   // 1. Locally compiled binary in the workspace repo
-  if (wsPath) {
-    const local = path.join(wsPath, "compiler", "_build", "default", "bin", "main.exe");
-    if (fs.existsSync(local)) return local;
-  }
+  const local = findWorkspaceCompiler(wsPath);
+  if (local) return local;
 
   // 2. TESL_COMPILER env var
   if (process.env.TESL_COMPILER && fs.existsSync(process.env.TESL_COMPILER)) {
     return process.env.TESL_COMPILER;
   }
 
-  // 3. nix profile / PATH
+  // 3. The raw compiler the installed tesl-lsp wrapper was built against.
+  //    Tried BEFORE the `tesl` CLI below: the CLI wrapper dispatches verbs and
+  //    rejects the compiler's own JSON flags, so handing it out as "the
+  //    compiler" makes every compiler-backed feature fail silently.
+  const wrapper = readTeslLspWrapper();
+  if (wrapper && wrapper.ocamlCompiler && fs.existsSync(wrapper.ocamlCompiler)) {
+    return wrapper.ocamlCompiler;
+  }
+
+  // 4. nix profile / PATH
   const nixPaths = [
     path.join(os.homedir(), ".nix-profile", "bin", "tesl"),
     "/nix/var/nix/profiles/default/bin/tesl",
@@ -233,11 +256,25 @@ function activate(context) {
     let serverOptions;
     if (lsp.kind === "binary") {
       outputChannel.appendLine(`[tesl-lsp] using binary: ${lsp.command}`);
+      // A repo checkout's own build wins over the compiler baked into the
+      // installed wrapper: otherwise diagnostics come from whatever revision
+      // the profile was installed at, so a rule added in the working tree
+      // looks like it simply does not exist. The wrapper honours an inherited
+      // TESL_COMPILER (flake.nix, tesl-lsp).
+      const wsCompiler = findWorkspaceCompiler(wsPath);
+      if (wsCompiler) {
+        outputChannel.appendLine(`[tesl-lsp] using workspace compiler: ${wsCompiler}`);
+      }
       serverOptions = {
         command: lsp.command,
         args: [],
         transport: TransportKind.stdio,
-        options: { env: { ...process.env } },
+        options: {
+          env: {
+            ...process.env,
+            ...(wsCompiler ? { TESL_COMPILER: wsCompiler } : {}),
+          },
+        },
       };
     } else {
       outputChannel.appendLine(`[tesl-lsp] using script: ${lsp.script}`);

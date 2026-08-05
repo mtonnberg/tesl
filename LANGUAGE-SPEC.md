@@ -1501,6 +1501,12 @@ The verbs are **contextual keywords**, not reserved words: a handler may still b
 `post` (`handler get post(…)` declares method `get` on a handler named `post`). SSE endpoints take no
 method — they are not paired with handlers.
 
+The same five verbs, and only those five, are accepted here as on an endpoint (§11.11): `sse` is not a
+handler method, and there is no `head`, `options`, `trace` or `connect`. Omitting the prefix on a
+handler bound to a non-SSE endpoint is a `V001` error — *handler 'x' does not declare an HTTP method,
+but serves endpoint 'GET /path'* — carrying the method the slot expects, so the fix is the hint. An
+unbound handler with no prefix still compiles; it is the binding that makes the method verifiable.
+
 Current lowering:
 
 - `check` lowers to `define-checker`;
@@ -1976,7 +1982,7 @@ This creates a reusable capture kind that can later be referenced from API decla
 <api-endpoint> ::= <http-method> <string>
                    { <api-endpoint-line> }
 
-<http-method> ::= "get" | "post" | "put" | "delete"
+<http-method> ::= "get" | "post" | "put" | "delete" | "patch"
 
 <api-endpoint-line> ::= <auth-line>
                       | <body-line>
@@ -1992,6 +1998,8 @@ This creates a reusable capture kind that can later be referenced from API decla
 ```
 
 Endpoint headers use path strings. Capture segments are written in the path with a leading `:` and then described by `capture ... via ...` lines in declaration order.
+
+**The verb set is closed.** `get`, `post`, `put`, `delete` and `patch` are the only HTTP methods an endpoint may declare, plus `sse` for a stream (below); all are lowercase. There is no `head`, `options`, `trace` or `connect`, and the uppercase spellings are not accepted either. Anything else at the start of an endpoint is an `E000` parse error naming the supported set — it is never skipped, because a silently dropped endpoint is a route that does not exist and whose only symptom is an unrelated "server is missing N binding(s)". The handler bound to the endpoint must declare the same verb (§11.5); the `server` block pairs the two by position (§11.12).
 
 SSE (Server-Sent Events) endpoints are declared with `sse` instead of an HTTP method:
 **Accepted design, Implemented.**

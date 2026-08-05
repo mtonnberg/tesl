@@ -1,0 +1,214 @@
+module HttpMethodsTests exposing [WidgetServer]
+
+import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.ApiTest exposing [statusOk, statusClientError]
+import Tesl.Database exposing [Database, Memory]
+
+# End-to-end coverage for every HTTP verb Tesl supports: GET, POST, PUT, DELETE
+# and PATCH.  Before this file the shipped corpus exercised PUT exactly once (an
+# unauthenticated 401 probe in example/user-service-api.tesl) and never issued a
+# DELETE or PATCH request at all — the verbs were declarable, emitted, and
+# entirely unproven at runtime.
+#
+# The tests are written against OBSERVABLE behaviour only: each request is made
+# through `api-test` and judged by its status and body, and the state it left
+# behind is read back with a following GET.  Nothing here names the runtime, the
+# router, or the generated Racket, so the file keeps its meaning if the runtime
+# is replaced wholesale — it fails only if a verb stops being routed, stops
+# being dispatched to its own handler, or stops carrying its body.
+#
+# The discriminator that matters most: PUT, PATCH, DELETE and GET all share the
+# path "/widgets/:widgetId", so a request can only reach the right handler if
+# the METHOD is part of the routing key. Each write stamps `tag` with its own
+# verb, and the GET reads it back — if two verbs collided on one handler, the
+# tag would be wrong rather than the request merely failing.
+
+entity Widget table "widgets" primaryKey id {
+  id: String
+  label: String
+  tag: String
+}
+
+database WidgetDb = Database {
+  schema: "widgets"
+  entities: [Widget]
+  backend: Memory
+}
+
+record WidgetBody {
+  label: String
+}
+
+codec WidgetBody {
+  toJson_forbidden
+  fromJson [
+    {
+      label <- "label" with_codec stringCodec
+    }
+  ]
+}
+
+# ── Handlers — one per verb, each stamping the verb that wrote the row ───────
+
+handler post createWidget(body: WidgetBody) -> String
+  requires [dbRead, dbWrite] =
+  insert Widget { id: "w-new", label: body.label, tag: "post" }
+  "created"
+
+handler get readWidget(widgetId: String) -> String
+  requires [dbRead] =
+  case selectOne w from Widget where w.id == widgetId of
+    Nothing -> fail 404 "no such widget"
+    Something w -> w.label ++ "/" ++ w.tag
+
+handler put replaceWidget(widgetId: String, body: WidgetBody) -> String
+  requires [dbRead, dbWrite] =
+  update w in Widget
+    where w.id == widgetId
+    set w.label = body.label
+  update w in Widget
+    where w.id == widgetId
+    set w.tag = "put"
+  "replaced"
+
+handler patch amendWidget(widgetId: String, body: WidgetBody) -> String
+  requires [dbRead, dbWrite] =
+  update w in Widget
+    where w.id == widgetId
+    set w.label = body.label
+  update w in Widget
+    where w.id == widgetId
+    set w.tag = "patch"
+  "amended"
+
+handler delete removeWidget(widgetId: String) -> String
+  requires [dbRead, dbWrite] =
+  delete w from Widget where w.id == widgetId
+  "removed"
+
+api WidgetApi {
+  post "/widgets"
+    body body: WidgetBody
+    -> String
+
+  get "/widgets/:widgetId"
+    capture widgetId: String using stringCodec
+    -> String
+
+  put "/widgets/:widgetId"
+    capture widgetId: String using stringCodec
+    body body: WidgetBody
+    -> String
+
+  patch "/widgets/:widgetId"
+    capture widgetId: String using stringCodec
+    body body: WidgetBody
+    -> String
+
+  delete "/widgets/:widgetId"
+    capture widgetId: String using stringCodec
+    -> String
+}
+
+# Bindings pair to the api endpoints BY POSITION, in declaration order.
+server WidgetServer for WidgetApi {
+  createWidget
+  readWidget
+  replaceWidget
+  amendWidget
+  removeWidget
+}
+
+# ── One verb at a time ──────────────────────────────────────────────────────
+
+api-test "POST reaches its handler and carries the body" for WidgetServer requires [dbRead, dbWrite] {
+  let created = post "/widgets" body { "label": "first" }
+  expect statusOk created.status
+  expect created.body == "created"
+  let read = get "/widgets/w-new"
+  expect statusOk read.status
+  expect read.body == "first/post"
+}
+
+api-test "GET on a missing row is a client error, not a crash" for WidgetServer requires [dbRead, dbWrite] {
+  let resp = get "/widgets/never-created"
+  expect statusClientError resp.status
+}
+
+api-test "PUT is routed, carries its body, and stamps its own verb" for WidgetServer requires [dbRead, dbWrite] {
+  seed {
+    insert Widget { id: "w-put", label: "before", tag: "seed" }
+  }
+  let replaced = put "/widgets/w-put" body { "label": "after-put" }
+  expect statusOk replaced.status
+  expect replaced.body == "replaced"
+  let read = get "/widgets/w-put"
+  expect read.body == "after-put/put"
+}
+
+api-test "PATCH is routed to its own handler, not to PUT's" for WidgetServer requires [dbRead, dbWrite] {
+  seed {
+    insert Widget { id: "w-patch", label: "before", tag: "seed" }
+  }
+  let amended = patch "/widgets/w-patch" body { "label": "after-patch" }
+  expect statusOk amended.status
+  expect amended.body == "amended"
+  let read = get "/widgets/w-patch"
+  expect read.body == "after-patch/patch"
+}
+
+api-test "DELETE is routed and the row is really gone afterwards" for WidgetServer requires [dbRead, dbWrite] {
+  seed {
+    insert Widget { id: "w-del", label: "doomed", tag: "seed" }
+  }
+  let before = get "/widgets/w-del"
+  expect statusOk before.status
+  let removed = delete "/widgets/w-del"
+  expect statusOk removed.status
+  expect removed.body == "removed"
+  let after = get "/widgets/w-del"
+  expect statusClientError after.status
+}
+
+# ── The verb is part of the routing key ─────────────────────────────────────
+# Same path, four verbs, four handlers. Run them in sequence against ONE row
+# and read the tag back each time: a router that ignored the method (or paired
+# handlers to endpoints by name instead of position) would leave the wrong tag.
+
+api-test "PUT then PATCH on one path land in different handlers" for WidgetServer requires [dbRead, dbWrite] {
+  seed {
+    insert Widget { id: "w-seq", label: "v0", tag: "seed" }
+  }
+  let _ = put "/widgets/w-seq" body { "label": "v1" }
+  let afterPut = get "/widgets/w-seq"
+  expect afterPut.body == "v1/put"
+  let _ = patch "/widgets/w-seq" body { "label": "v2" }
+  let afterPatch = get "/widgets/w-seq"
+  expect afterPatch.body == "v2/patch"
+  let _ = put "/widgets/w-seq" body { "label": "v3" }
+  let afterPut2 = get "/widgets/w-seq"
+  expect afterPut2.body == "v3/put"
+}
+
+# ── A verb the path does not declare is refused ─────────────────────────────
+# "/widgets" declares POST only; "/widgets/:widgetId" declares no POST. Both
+# directions must be rejected rather than falling through to the handler that
+# happens to share the other half of the key.
+
+api-test "DELETE on a path that declares only POST is refused" for WidgetServer requires [dbRead, dbWrite] {
+  let resp = delete "/widgets"
+  expect statusClientError resp.status
+}
+
+api-test "POST on a path that declares no POST is refused" for WidgetServer requires [dbRead, dbWrite] {
+  seed {
+    insert Widget { id: "w-nopost", label: "untouched", tag: "seed" }
+  }
+  let resp = post "/widgets/w-nopost" body { "label": "should not apply" }
+  expect statusClientError resp.status
+  let read = get "/widgets/w-nopost"
+  expect read.body == "untouched/seed"
+}

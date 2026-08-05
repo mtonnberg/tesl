@@ -260,9 +260,13 @@
 
         # ── tesl-lsp wrapper ──────────────────────────────────────────────────
         # Sets TESL_COMPILER so the LSP Racket script finds the binary without
-        # needing TESL_REPO_ROOT.
+        # needing TESL_REPO_ROOT.  An INHERITED TESL_COMPILER wins: the editor
+        # extension points a repo checkout's LSP at that checkout's fresh
+        # compiler/_build binary, and clobbering it here is what silently pinned
+        # every diagnostic to the store compiler of whatever revision the user
+        # last ran `nix profile install` on — new checks looked simply absent.
         tesl-lsp = pkgs.writeShellScriptBin "tesl-lsp" (runtimePreamble + ''
-          export TESL_COMPILER="$TESL_OCAML_COMPILER"
+          export TESL_COMPILER="''${TESL_COMPILER:-$TESL_OCAML_COMPILER}"
           exec racket "${tesl-lsp-script}/share/tesl-lsp/tesl-lsp.rkt" "$@"
         '');
 
@@ -271,7 +275,7 @@
         # etc.). Same compiler discovery as tesl-lsp — sets TESL_COMPILER, so no
         # TESL_REPO_ROOT / repo checkout is needed.
         tesl-mcp = pkgs.writeShellScriptBin "tesl-mcp" (runtimePreamble + ''
-          export TESL_COMPILER="$TESL_OCAML_COMPILER"
+          export TESL_COMPILER="''${TESL_COMPILER:-$TESL_OCAML_COMPILER}"
           exec racket "${tesl-mcp-script}/share/tesl-mcp/tesl-mcp.rkt" "$@"
         '');
 

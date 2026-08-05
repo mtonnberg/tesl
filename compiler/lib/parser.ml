@@ -4117,6 +4117,13 @@ let parse_api_form s =
     if peek s = RBRACE then ()
     else begin
       let ep_loc0 = current_loc s in
+      (* An unrecognised leading word used to be swallowed here (`advance s;
+         None`), so `head "/ping"` produced no endpoint, no error and no
+         warning — the route simply did not exist, and the only downstream
+         symptom was an unrelated "server is missing N binding(s)".  Tesl
+         supports exactly five HTTP verbs plus `sse`, so anything else at the
+         start of an endpoint is a mistake worth naming, fail-closed like the
+         GDP-AUTH-DROP case above. *)
       let method_ = match peek s with
         | IDENT "get"    -> advance s; Some GET
         | IDENT "post"   -> advance s; Some POST
@@ -4124,10 +4131,36 @@ let parse_api_form s =
         | IDENT "delete" -> advance s; Some DELETE
         | IDENT "patch"  -> advance s; Some PATCH
         | IDENT "sse" | SSE -> advance s; Some SSE  (* SSE stream *)
-        | _              -> advance s; None
+        | tok ->
+          advance s;
+          if !ep_parse_err = None then begin
+            let unsupported_verbs =
+              ["head"; "options"; "trace"; "connect";
+               "HEAD"; "GET"; "POST"; "PUT"; "DELETE"; "PATCH"; "OPTIONS"] in
+            let supported = "`get`, `post`, `put`, `delete`, `patch`, or `sse`" in
+            let msg = match token_as_ident tok with
+              | Some w when List.mem w unsupported_verbs ->
+                Printf.sprintf
+                  "`%s` is not an HTTP method Tesl supports; an endpoint starts with \
+                   one of %s (lowercase)"
+                  w supported
+              | Some w ->
+                Printf.sprintf
+                  "expected an HTTP method at the start of an endpoint, but got `%s`; \
+                   write one of %s followed by the path"
+                  w supported
+              | None ->
+                Printf.sprintf
+                  "expected an HTTP method at the start of an endpoint; write one of \
+                   %s followed by the path"
+                  supported
+            in
+            ep_parse_err := Some { msg; loc = ep_loc0; fix = None }
+          end;
+          None
       in
       match method_ with
-      | None -> ()  (* skip unknown *)
+      | None -> ()  (* error already recorded above; stop building this endpoint *)
       | Some method_ ->
         incr ep_counter;
         match expect_string s with
