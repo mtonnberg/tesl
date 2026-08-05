@@ -208,7 +208,7 @@ auth cookieAuth(request: HttpRequest) -> user: String::: Authenticated user =
 let test_handler_with_capabilities () =
   let src = {|module Foo exposing [createTask]
 import Tesl.Prelude exposing [String]
-handler createTask(user: String) -> String
+handler post createTask(user: String) -> String
   requires [taskDbWrite] =
   "ok"
 |} in
@@ -486,8 +486,8 @@ api TaskApi {
 let test_server_declaration () =
   let src = {|module Foo exposing [TaskServer]
 server TaskServer for TaskApi {
-  createTask = createTask
-  getTask = getTask
+  createTask
+  getTask
 }
 |} in
   assert_ok src (fun m ->
@@ -495,9 +495,78 @@ server TaskServer for TaskApi {
     | DServer sv ->
       Alcotest.(check string) "server name" "TaskServer" sv.name;
       Alcotest.(check string) "api name" "TaskApi" sv.api_name;
-      Alcotest.(check int) "two bindings" 2 (List.length sv.bindings)
+      Alcotest.(check int) "two handlers" 2 (List.length sv.handlers)
     | _ -> Alcotest.fail "expected DServer"
   )
+
+(* ── Handler HTTP-method keyword (contextual) ─────────────────────────────── *)
+
+(* The verbs stay ordinary identifiers, so a handler may still be NAMED `get`
+   or `post`.  One token of lookahead separates the shapes: a method word is
+   followed by another identifier, the name is followed by `(`.  These pin every
+   branch of that rule — getting it wrong silently renames a handler. *)
+let handler_methods src =
+  match Parser.parse_module "<test>" src with
+  | Err e -> Alcotest.failf "parse error: %s" e.msg
+  | Ok m ->
+    List.filter_map (function
+      | DFunc (fd : func_decl) when fd.kind = HandlerKind ->
+        Some (fd.name, fd.http_methods)
+      | _ -> None) m.decls
+
+let test_handler_single_method () =
+  let src = {|module Foo exposing []
+handler get greet(name: String) -> String requires [] = name
+|} in
+  match handler_methods src with
+  | [ ("greet", [ GET ]) ] -> ()
+  | other ->
+    Alcotest.failf "expected greet/[GET], got %s"
+      (String.concat ", " (List.map (fun (n, ms) ->
+         Printf.sprintf "%s/%d" n (List.length ms)) other))
+
+let test_handler_multi_method () =
+  let src = {|module Foo exposing []
+handler get post search(q: String) -> String requires [] = q
+|} in
+  match handler_methods src with
+  | [ ("search", [ GET; POST ]) ] -> ()
+  | other ->
+    Alcotest.failf "expected search/[GET;POST], got %s"
+      (String.concat ", " (List.map fst other))
+
+let test_handler_named_get_is_not_a_method () =
+  (* `handler get(x)` — the verb is followed by `(`, so it is the NAME. *)
+  let src = {|module Foo exposing []
+handler get(x: String) -> String requires [] = x
+|} in
+  match handler_methods src with
+  | [ ("get", []) ] -> ()
+  | other ->
+    Alcotest.failf "expected a handler NAMED get with no methods, got %s"
+      (String.concat ", " (List.map (fun (n, ms) ->
+         Printf.sprintf "%s/%d" n (List.length ms)) other))
+
+let test_handler_method_then_verb_name () =
+  (* `handler get post(x)` — `get` is the method, `post` is the name. *)
+  let src = {|module Foo exposing []
+handler get post(x: String) -> String requires [] = x
+|} in
+  match handler_methods src with
+  | [ ("post", [ GET ]) ] -> ()
+  | other ->
+    Alcotest.failf "expected post/[GET], got %s"
+      (String.concat ", " (List.map (fun (n, ms) ->
+         Printf.sprintf "%s/%d" n (List.length ms)) other))
+
+let test_handler_without_method () =
+  let src = {|module Foo exposing []
+handler plain(x: String) -> String requires [] = x
+|} in
+  match handler_methods src with
+  | [ ("plain", []) ] -> ()
+  | other ->
+    Alcotest.failf "expected plain/[], got %s" (String.concat ", " (List.map fst other))
 
 (* ── Test block tests ────────────────────────────────────────────────────── *)
 
@@ -945,6 +1014,13 @@ let () =
     "api-server", [
       Alcotest.test_case "api declaration" `Quick test_api_declaration;
       Alcotest.test_case "server declaration" `Quick test_server_declaration;
+    ];
+    "handler method keyword", [
+      Alcotest.test_case "single method" `Quick test_handler_single_method;
+      Alcotest.test_case "multi method" `Quick test_handler_multi_method;
+      Alcotest.test_case "handler NAMED get" `Quick test_handler_named_get_is_not_a_method;
+      Alcotest.test_case "method then verb-named handler" `Quick test_handler_method_then_verb_name;
+      Alcotest.test_case "no method declared" `Quick test_handler_without_method;
     ];
     "tests", [
       Alcotest.test_case "test block" `Quick test_test_block;

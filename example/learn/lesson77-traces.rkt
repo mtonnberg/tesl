@@ -33,7 +33,7 @@
 
 (define TracesServer-sse-routes '())
 (define-api TracesApi
-  [endpoint_0 :
+  [getNote :
     "note"
     :> (Get JSON String)
     ]
@@ -41,7 +41,7 @@
 
 (define-server TracesServer
   #:api TracesApi
-  [endpoint_0 getNote]
+  [getNote getNote]
 )
 
 (define-database TracesDb

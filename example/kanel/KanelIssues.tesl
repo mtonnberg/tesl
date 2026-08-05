@@ -282,7 +282,7 @@ fn isAssignedTo(assigneeId: Maybe String, userId: String) -> Bool =
 
 # ── Project handlers ─────────────────────────────────────────────────────────
 
-handler createProjectHandler(
+handler post createProjectHandler(
     session: KanelSession ::: Authenticated session,
     orgId: String ::: ValidOrgId orgId,
     req: NewProjectRequest)
@@ -311,7 +311,7 @@ handler createProjectHandler(
       }
   }
 
-handler listProjectsHandler(
+handler get listProjectsHandler(
     session: KanelSession ::: Authenticated session,
     orgId: String ::: ValidOrgId orgId)
   -> List Project
@@ -319,7 +319,7 @@ handler listProjectsHandler(
   let userId = check checkOrgMember session.userId orgId
   select p from Project where p.orgId == orgId && p.archived == False
 
-handler getProjectHandler(
+handler get getProjectHandler(
     session: KanelSession ::: Authenticated session,
     orgId: String ::: ValidOrgId orgId,
     projectId: String ::: ValidProjectId projectId)
@@ -331,7 +331,7 @@ handler getProjectHandler(
     Nothing -> fail 404 "project not found"
     Something p -> p
 
-handler archiveProjectHandler(
+handler put archiveProjectHandler(
     session: KanelSession ::: Authenticated session,
     orgId: String ::: ValidOrgId orgId,
     projectId: String ::: ValidProjectId projectId)
@@ -352,7 +352,7 @@ handler archiveProjectHandler(
 
 # ── Issue CRUD ───────────────────────────────────────────────────────────────
 
-handler createIssueHandler(
+handler post createIssueHandler(
     session: KanelSession ::: Authenticated session,
     orgId: String ::: ValidOrgId orgId,
     projectId: String ::: ValidProjectId projectId,
@@ -387,7 +387,7 @@ handler createIssueHandler(
             updatedAt: nowMillis()
           }
 
-handler listIssuesHandler(
+handler get listIssuesHandler(
     session: KanelSession ::: Authenticated session,
     orgId: String ::: ValidOrgId orgId,
     projectId: String ::: ValidProjectId projectId)
@@ -396,7 +396,7 @@ handler listIssuesHandler(
   let userId = check checkProjMember session.userId projectId orgId
   select i from Issue where i.projectId == projectId
 
-handler getIssueHandler(
+handler get getIssueHandler(
     session: KanelSession ::: Authenticated session,
     orgId: String ::: ValidOrgId orgId,
     issueId: String ::: ValidIssueId issueId)
@@ -408,7 +408,7 @@ handler getIssueHandler(
     Nothing -> fail 404 "issue not found"
     Something i -> i
 
-handler updateIssueHandler(
+handler put updateIssueHandler(
     session: KanelSession ::: Authenticated session,
     orgId: String ::: ValidOrgId orgId,
     issueId: String ::: ValidIssueId issueId,
@@ -437,7 +437,7 @@ handler updateIssueHandler(
 # 2. Transition must be valid
 # 3. If transitioning to Done, user must have CanClose proof
 
-handler updateIssueStatusHandler(
+handler put updateIssueStatusHandler(
     session: KanelSession ::: Authenticated session,
     orgId: String ::: ValidOrgId orgId,
     issueId: String ::: ValidIssueId issueId,
@@ -508,7 +508,7 @@ handler addCommentHandler(
   exists commentId =>
     insertCommentBody commentId userId orgId notDoneId body
 
-handler listCommentsHandler(
+handler get listCommentsHandler(
     session: KanelSession ::: Authenticated session,
     orgId: String ::: ValidOrgId orgId,
     issueId: String ::: ValidIssueId issueId)
@@ -522,7 +522,7 @@ handler listCommentsHandler(
 # A user can only log time on issues assigned to them (or if admin).
 # The issue must not be Done (no adding time to closed work).
 
-handler logTimeHandler(
+handler post logTimeHandler(
     session: KanelSession ::: Authenticated session,
     orgId: String ::: ValidOrgId orgId,
     issueId: String ::: ValidIssueId issueId,
@@ -573,7 +573,7 @@ handler logTimeHandler(
               RoleMember -> fail 403 "only the assignee or an org admin can log time on an issue"
               RoleViewer -> fail 403 "only the assignee or an org admin can log time on an issue"
 
-handler listTimeEntriesHandler(
+handler get listTimeEntriesHandler(
     session: KanelSession ::: Authenticated session,
     orgId: String ::: ValidOrgId orgId,
     issueId: String ::: ValidIssueId issueId)

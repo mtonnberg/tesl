@@ -55,10 +55,10 @@ database Lesson32Database = Database {
   })
 }
 
-handler echo(req: EchoRequest) -> EchoRequest =
+handler post echo(req: EchoRequest) -> EchoRequest =
   req
 
-handler getSeededNote() -> Note
+handler get getSeededNote() -> Note
   requires [dbRead] =
   let found = selectOne n from Note where n.id == "note-1"
   case found of
@@ -77,8 +77,8 @@ api Lesson32Api {
 }
 
 server Lesson32Server for Lesson32Api {
-  echo = echo
-  getSeededNote = getSeededNote
+  echo
+  getSeededNote
 }
 
 api-test "raw JSON body and dynamic response fields" for Lesson32Server {

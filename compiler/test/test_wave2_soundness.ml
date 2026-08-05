@@ -627,45 +627,45 @@ let arity_pat = "supplies .* positionally\\|arity mismatch"
 let test_h_arity_auth_body_correct () =
   should_pass
     (arity_hdr ^ {|
-handler h(u: String ::: Authed u, body: NewT) -> String requires [] = body.title
+handler post h(u: String ::: Authed u, body: NewT) -> String requires [] = body.title
 api A { post "/t" auth u: String ::: Authed u via theAuth body body: NewT -> String }
-server S for A { h = h }
+server S for A { h }
 |})
 
 (* handler drops the body param (1 param, 2 supplied) ⇒ rejected. *)
 let test_h_arity_too_few_rejected () =
   should_fail arity_pat
     (arity_hdr ^ {|
-handler h(u: String ::: Authed u) -> String requires [] = u
+handler post h(u: String ::: Authed u) -> String requires [] = u
 api A { post "/t" auth u: String ::: Authed u via theAuth body body: NewT -> String }
-server S for A { h = h }
+server S for A { h }
 |})
 
 (* handler has an extra param (3 params, 2 supplied) ⇒ rejected. *)
 let test_h_arity_too_many_rejected () =
   should_fail arity_pat
     (arity_hdr ^ {|
-handler h(u: String ::: Authed u, body: NewT, extra: String) -> String requires [] = body.title
+handler post h(u: String ::: Authed u, body: NewT, extra: String) -> String requires [] = body.title
 api A { post "/t" auth u: String ::: Authed u via theAuth body body: NewT -> String }
-server S for A { h = h }
+server S for A { h }
 |})
 
 (* auth + capture ⇒ 2 supplied; handler with 2 params is correct. *)
 let test_h_arity_auth_capture_correct () =
   should_pass
     (arity_hdr ^ {|
-handler h(u: String ::: Authed u, id: String) -> String requires [] = id
+handler get h(u: String ::: Authed u, id: String) -> String requires [] = id
 api A { get "/t/:id" auth u: String ::: Authed u via theAuth capture id: String via tCap -> String }
-server S for A { h = h }
+server S for A { h }
 |})
 
 (* handler drops the capture param (1 param, 2 supplied) ⇒ rejected. *)
 let test_h_arity_capture_missing_rejected () =
   should_fail arity_pat
     (arity_hdr ^ {|
-handler h(u: String ::: Authed u) -> String requires [] = u
+handler get h(u: String ::: Authed u) -> String requires [] = u
 api A { get "/t/:id" auth u: String ::: Authed u via theAuth capture id: String via tCap -> String }
-server S for A { h = h }
+server S for A { h }
 |})
 
 let () =

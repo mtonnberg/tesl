@@ -278,7 +278,7 @@ fn parseConversationId(id: String) -> String =
 
 capturer conversationIdCapture: String using stringCodec via parseConversationId
 
-handler sendMessage(
+handler post sendMessage(
   requestUser: Consumer ::: Authenticated requestUser,
   conversationId: String,
   req: MessageRequest
@@ -300,7 +300,7 @@ api ChatApi {
 }
 
 server ChatServer for ChatApi {
-  sendMessage = sendMessage
+  sendMessage
 }
 
 main() -> App requires [convService, envRead] =

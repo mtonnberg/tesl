@@ -70,7 +70,7 @@ sseChannel Notices(userId: String) = SseChannel {
   payload: Notice
 }
 
-handler sendNotice(req: SendReq) -> String
+handler post sendNotice(req: SendReq) -> String
   requires [pubsub] =
   publish Notices(req.userId) Notice { message: req.message }
   "ok"
@@ -86,7 +86,7 @@ api MainApi {
 }
 
 server MainServer for MainApi {
-  sendNotice = sendNotice
+  sendNotice
 }
 
 api-test "publish with record payload reaches the subscriber" for MainServer requires [pubsub] {

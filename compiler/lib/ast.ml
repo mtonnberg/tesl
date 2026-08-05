@@ -137,7 +137,7 @@ and expr =
   | EWithDatabase of { database_name : string; body : expr; loc : loc }
   | EWithCapabilities of { capabilities : string list; body : expr; loc : loc }
   | EWithTransaction of { body : expr; loc : loc }
-  | EServe of { server_name : string; port : expr; capabilities : string list; static_dir : string option; loc : loc }
+  | EServe of { server_name : string; port : expr; capabilities : string list; static_dir : string option; mount_path : string option; loc : loc }
   | EConstructor of { name : string; args : expr list; loc : loc }
                (** Constructor applied to zero or more args *)
   | ELambda of { params : binding list; body : expr; loc : loc }
@@ -234,6 +234,10 @@ type provenance = {
   desugared_from : loc;   (** the surface loc this node was lowered from *)
 }
 
+(* Declared above [func_decl] because a `handler` states the HTTP method(s) it
+   serves (issue #65 follow-up); the `api` block's endpoints use the same type. *)
+type http_method = GET | POST | PUT | DELETE | PATCH | SSE
+
 type func_decl = {
   kind        : func_kind;
   name        : string;
@@ -249,6 +253,21 @@ type func_decl = {
                 (** The contiguous leading `#` comment block above the declaration,
                     harvested post-parse. Used as the description for a function
                     exposed as an agent/MCP tool. [None] when undocumented. *)
+  http_methods : http_method list;
+                (** The HTTP method(s) this handler serves, from the contextual
+                    keyword(s) after `handler` (`handler get greet(…)`, or
+                    `handler get post search(…)` for one function serving two
+                    slots).  Only ever non-empty for [HandlerKind].
+
+                    Load-bearing, not decoration: the method already determines
+                    what a handler may legally do — SEC005 forbids `dbWrite`,
+                    `queueWrite`, `pubsub` and `emailCap` anywhere in a GET
+                    handler's capability closure.  Declaring it here means that
+                    security rule reads the handler's own text instead of
+                    inferring the method through the server block's POSITIONAL
+                    pairing, and gives that pairing an extra discriminator so a
+                    misordered server block is caught structurally rather than
+                    only warned about (W095). *)
 }
 
 type adt_variant = {
@@ -473,8 +492,6 @@ type capture_form = {
 
 (* ─── API form ───────────────────────────────────────────────────────────── *)
 
-type http_method = GET | POST | PUT | DELETE | PATCH | SSE
-
 type api_auth = {
   binding : binding;
   via_fn  : string;
@@ -588,7 +605,11 @@ type public_origin_src =
 type server_form = {
   name     : string;
   api_name : string;
-  bindings : (string * string) list;  (** (endpoint_name, handler_fn) *)
+  handlers : string list;
+  (** Handler functions, positionally paired with the api's non-SSE endpoints
+      in declaration order (issue #65: the block used to carry a spurious
+      `endpoint_name =` prefix that looked name-keyed but was always matched
+      by position — removed so the syntax stops lying about that). *)
   (* Phase 3 (roadmap/next/ensure_sso_works.md): the `sessionPolicy` server
      clause — a closed keyword set ("StandardSession" | "ShortSession"), not a
      free value, so it cannot be turned the unsafe way.  Sets the runtime's
@@ -823,6 +844,46 @@ type module_form = {
   decls       : top_decl list;
   source_file : string;
 }
+
+(** The trailing `App { … }` record expression of a `main` function's body.
+
+    `main`'s body is normally a chain of startup `let`s (telemetry init, port
+    resolution, seeding) ending in the App record, so the chain is walked to its
+    tail first.  Both spellings are accepted: a record carrying the `App` type
+    hint, and `App` applied to a record. *)
+let app_record_of_main (fd : func_decl) : expr option =
+  if fd.kind <> MainKind then None
+  else
+    let rec tail = function
+      | ELet { body; _ } | ELetProof { body; _ } -> tail body
+      | e -> e in
+    match tail fd.body with
+    | (ERecord { type_hint = Some "App"; _ }
+      | EApp { fn = EConstructor { name = "App"; _ }; arg = ERecord _; _ }) as e -> Some e
+    | _ -> None
+
+(** The literal string value of one field in `main`'s returned `App { … }`
+    record (see [app_record_of_main]; [Linter.app_activated_names] is its twin
+    for reference-list fields like `queues`). [None] when `main` is absent, the
+    field is absent, or the field is not a plain string literal (an
+    `envRead`/computed value is deliberately not resolved here — every caller is
+    a compile-time-only concern: desugar's runtime-call emission and the client
+    generators' request-URL base both need the literal at compile time or not at
+    all). *)
+let main_app_string_field (m : module_form) (key : string) : string option =
+  let fields_of = function
+    | ERecord { fields; _ } -> fields
+    | EApp { arg = ERecord { fields; _ }; _ } -> fields
+    | _ -> [] in
+  List.find_map (function
+    | DFunc fd ->
+      (match app_record_of_main fd with
+       | None -> None
+       | Some app ->
+         (match List.assoc_opt key (fields_of app) with
+          | Some (ELit { lit = LString s; _ }) -> Some s
+          | _ -> None))
+    | _ -> None) m.decls
 
 (* ─── Capability-row helpers ──────────────────────────────────────────────── *)
 

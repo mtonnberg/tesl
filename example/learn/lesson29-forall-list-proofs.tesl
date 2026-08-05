@@ -203,14 +203,14 @@ auth cookieAuth(request: HttpRequest) -> user: String ::: Authenticated user
 
 # ─── EXAMPLE 1: select → ForAll (FromDb ...) [automatic] ─────────────────────
 
-handler listNotes(user: String ::: Authenticated user)
+handler get listNotes(user: String ::: Authenticated user)
   -> List Note ? ForAll (FromDb (AuthorId == user))
   requires [noteDbRead] =
   select note from Note where note.authorId == user
 
 # ─── EXAMPLE 2: filterCheck → ForAll (IsActive) ──────────────────────────────
 
-handler listActiveNotes(user: String ::: Authenticated user)
+handler get listActiveNotes(user: String ::: Authenticated user)
   -> List Note ? ForAll (IsActive)
   requires [noteDbRead] =
   let allNotes = select note from Note where note.authorId == user
@@ -221,7 +221,7 @@ handler listActiveNotes(user: String ::: Authenticated user)
 # After filterCheck(checkActive, ...), the result carries BOTH proofs.
 # Declare the expanded proof in the return type:
 
-handler listActivePinnedNotes(user: String ::: Authenticated user)
+handler get listActivePinnedNotes(user: String ::: Authenticated user)
   -> List Note ? ForAll (IsActive && IsPinned)
   requires [noteDbRead] =
   let allNotes = select note from Note where note.authorId == user
@@ -286,7 +286,7 @@ fn applyCombined(note: Note) -> Note ? (IsActive && IsPinned) requires [] =
 
 # ─── Create endpoint ──────────────────────────────────────────────────────────
 
-handler createNote(user: String ::: Authenticated user, body: NewNote)
+handler post createNote(user: String ::: Authenticated user, body: NewNote)
   -> exists noteId: String =>
       Note ? FromDb (Id == noteId)
   requires [noteDbRead, noteDbWrite, random] =
@@ -324,8 +324,8 @@ api NoteApi {
 }
 
 server NoteServer for NoteApi {
-  listNotes = listNotes
-  listActiveNotes = listActiveNotes
-  listActivePinnedNotes = listActivePinnedNotes
-  createNote = createNote
+  listNotes
+  listActiveNotes
+  listActivePinnedNotes
+  createNote
 }

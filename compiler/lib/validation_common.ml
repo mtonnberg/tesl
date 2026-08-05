@@ -689,6 +689,13 @@ type func_info = {
   fi_params : binding list;
   fi_return : return_spec;
   fi_loc : loc;
+  fi_http_methods : http_method list;
+      (** The HTTP method(s) an imported `handler` declares (see
+          [Ast.func_decl.http_methods]).  Carried across the module boundary so
+          the server-block method cross-check applies to an imported handler
+          too — otherwise binding an imported handler would silently skip the
+          check that catches a misordered server block.  Always [[]] for the
+          stdlib rows below, none of which are handlers. *)
 }
 
 type field_map = (string * field_def list) list
@@ -858,7 +865,7 @@ let build_ctor_info (decls : top_decl list) : ctor_info =
 
 let build_func_info (decls : top_decl list) : (string * func_info) list =
   List.filter_map (function
-    | DFunc fd -> Some (fd.name, { fi_name = fd.name; fi_kind = fd.kind; fi_params = fd.params; fi_return = fd.return_spec; fi_loc = fd.loc })
+    | DFunc fd -> Some (fd.name, { fi_name = fd.name; fi_kind = fd.kind; fi_params = fd.params; fi_return = fd.return_spec; fi_loc = fd.loc; fi_http_methods = fd.http_methods })
     | _ -> None
   ) decls
 
@@ -1038,84 +1045,84 @@ let stdlib_func_infos : (string * func_info) list =
     ("Net.classifyHost",
      { fi_name = "Net.classifyHost"; fi_kind = FnKind;
        fi_params = [ plain "host" "String" ];
-       fi_return = ret "HostClass"; fi_loc = g });
+       fi_return = ret "HostClass"; fi_loc = g; fi_http_methods = [] });
     (* Int.divide: second arg b must carry IsNonZero b *)
     ("Int.divide",
      { fi_name = "Int.divide"; fi_kind = FnKind;
        fi_params = [ plain "a" "Int"; with_proof "b" "Int" "IsNonZero" ];
-       fi_return = ret "Int"; fi_loc = g });
+       fi_return = ret "Int"; fi_loc = g; fi_http_methods = [] });
     (* Int.modulo: second arg b must carry IsNonZero b *)
     ("Int.modulo",
      { fi_name = "Int.modulo"; fi_kind = FnKind;
        fi_params = [ plain "a" "Int"; with_proof "b" "Int" "IsNonZero" ];
-       fi_return = ret "Int"; fi_loc = g });
+       fi_return = ret "Int"; fi_loc = g; fi_http_methods = [] });
     (* Int32.divide / Int32.modulo: same IsNonZero divisor obligation as their
        Int counterparts, over the nominal Int32 type.  `divide` returns
        `Maybe Int32` because -2^31 / -1 is the one quotient out of range. *)
     ("Int32.divide",
      { fi_name = "Int32.divide"; fi_kind = FnKind;
        fi_params = [ plain "a" "Int32"; with_proof "b" "Int32" "IsNonZero" ];
-       fi_return = ret "Maybe"; fi_loc = g });
+       fi_return = ret "Maybe"; fi_loc = g; fi_http_methods = [] });
     ("Int32.modulo",
      { fi_name = "Int32.modulo"; fi_kind = FnKind;
        fi_params = [ plain "a" "Int32"; with_proof "b" "Int32" "IsNonZero" ];
-       fi_return = ret "Int32"; fi_loc = g });
+       fi_return = ret "Int32"; fi_loc = g; fi_http_methods = [] });
     (* Int32.nonZero / Int32.nonNegative: check functions minting the predicate *)
     ("Int32.nonZero",
      { fi_name = "Int32.nonZero"; fi_kind = CheckKind;
        fi_params = [ plain "n" "Int32" ];
-       fi_return = ret_attached "n" "Int32" "IsNonZero"; fi_loc = g });
+       fi_return = ret_attached "n" "Int32" "IsNonZero"; fi_loc = g; fi_http_methods = [] });
     ("Int32.nonNegative",
      { fi_name = "Int32.nonNegative"; fi_kind = CheckKind;
        fi_params = [ plain "n" "Int32" ];
-       fi_return = ret_attached "n" "Int32" "IsNonNegative"; fi_loc = g });
+       fi_return = ret_attached "n" "Int32" "IsNonNegative"; fi_loc = g; fi_http_methods = [] });
     (* Float.div: second arg b must carry FloatNonZero b *)
     ("Float.div",
      { fi_name = "Float.div"; fi_kind = FnKind;
        fi_params = [ plain "a" "Float"; with_proof "b" "Float" "FloatNonZero" ];
-       fi_return = ret "Float"; fi_loc = g });
+       fi_return = ret "Float"; fi_loc = g; fi_http_methods = [] });
     (* Float.requireNonZero: check function returning f ::: FloatNonZero f *)
     ("Float.requireNonZero",
      { fi_name = "Float.requireNonZero"; fi_kind = CheckKind;
        fi_params = [ plain "f" "Float" ];
-       fi_return = ret_attached "f" "Float" "FloatNonZero"; fi_loc = g });
+       fi_return = ret_attached "f" "Float" "FloatNonZero"; fi_loc = g; fi_http_methods = [] });
     (* Int.nonZero: check function returning n ::: IsNonZero n *)
     ("Int.nonZero",
      { fi_name = "Int.nonZero"; fi_kind = CheckKind;
        fi_params = [ plain "n" "Int" ];
-       fi_return = ret_attached "n" "Int" "IsNonZero"; fi_loc = g });
+       fi_return = ret_attached "n" "Int" "IsNonZero"; fi_loc = g; fi_http_methods = [] });
     (* Int.nonNegative: check function returning n ::: IsNonNegative n *)
     ("Int.nonNegative",
      { fi_name = "Int.nonNegative"; fi_kind = CheckKind;
        fi_params = [ plain "n" "Int" ];
-       fi_return = ret_attached "n" "Int" "IsNonNegative"; fi_loc = g });
+       fi_return = ret_attached "n" "Int" "IsNonNegative"; fi_loc = g; fi_http_methods = [] });
     (* List.take: second arg n must carry IsNonNegative n *)
     ("List.take",
      { fi_name = "List.take"; fi_kind = FnKind;
        fi_params = [ with_proof "n" "Int" "IsNonNegative"; plain "xs" "List" ];
-       fi_return = ret "List"; fi_loc = g });
+       fi_return = ret "List"; fi_loc = g; fi_http_methods = [] });
     (* List.drop: second arg n must carry IsNonNegative n *)
     ("List.drop",
      { fi_name = "List.drop"; fi_kind = FnKind;
        fi_params = [ with_proof "n" "Int" "IsNonNegative"; plain "xs" "List" ];
-       fi_return = ret "List"; fi_loc = g });
+       fi_return = ret "List"; fi_loc = g; fi_http_methods = [] });
     (* List.repeat: element x first, count n second (matches Racket List.repeat x n) *)
     ("List.repeat",
      { fi_name = "List.repeat"; fi_kind = FnKind;
        fi_params = [ plain "x" "a"; with_proof "n" "Int" "IsNonNegative" ];
-       fi_return = ret "List"; fi_loc = g });
+       fi_return = ret "List"; fi_loc = g; fi_http_methods = [] });
     (* String.requireNonEmpty: check function returning s ::: IsNonEmpty s *)
     ("String.requireNonEmpty",
      { fi_name = "String.requireNonEmpty"; fi_kind = CheckKind;
        fi_params = [ plain "s" "String" ];
-       fi_return = ret_attached "s" "String" "IsNonEmpty"; fi_loc = g });
+       fi_return = ret_attached "s" "String" "IsNonEmpty"; fi_loc = g; fi_http_methods = [] });
     (* Dict.get: dict must carry HasKey key dict proof (dict has been proven to contain key) *)
     ("Dict.get",
      { fi_name = "Dict.get"; fi_kind = FnKind;
        fi_params = [ plain "key" "a";
                      param "dict" "Dict"
                        (Some (PredApp { pred = "HasKey"; args = ["key"; "dict"]; loc = g })) ];
-       fi_return = ret "b"; fi_loc = g });
+       fi_return = ret "b"; fi_loc = g; fi_http_methods = [] });
     (* Dict.requireKey: check function returning dict ::: HasKey key dict (2-arg proof) *)
     ("Dict.requireKey",
      { fi_name = "Dict.requireKey"; fi_kind = CheckKind;
@@ -1125,7 +1132,7 @@ let stdlib_func_infos : (string * func_info) list =
                      proof_ann = Some (PredApp { pred = "HasKey";
                                                  args = ["key"; "dict"]; loc = g });
                      loc = g };
-         loc = g }; fi_loc = g });
+         loc = g }; fi_loc = g; fi_http_methods = [] });
     (* ── Crypto ────────────────────────────────────────────────────────────
        Three facts, and each one earns its place:
 
@@ -1159,7 +1166,7 @@ let stdlib_func_infos : (string * func_info) list =
                      proof_ann = Some (PredApp { pred = "HashFor";
                                                  args = ["plaintext"]; loc = g });
                      loc = g };
-         loc = g }; fi_loc = g });
+         loc = g }; fi_loc = g; fi_http_methods = [] });
     (* Takes Maybe PasswordHash so a missing user row and a wrong password cost
        the same — see tesl/crypto.rkt's timing equaliser. *)
     ("Crypto.checkPassword",
@@ -1170,7 +1177,7 @@ let stdlib_func_infos : (string * func_info) list =
                      proof_ann = Some (PredApp { pred = "PasswordVerified";
                                                  args = ["stored"]; loc = g });
                      loc = g };
-         loc = g }; fi_loc = g });
+         loc = g }; fi_loc = g; fi_http_methods = [] });
     ("Crypto.checkSignature",
      { fi_name = "Crypto.checkSignature"; fi_kind = CheckKind;
        fi_params = [ plain "key" "Secret"; plain "sig" "Signature";
@@ -1180,7 +1187,7 @@ let stdlib_func_infos : (string * func_info) list =
                      proof_ann = Some (PredApp { pred = "Authentic";
                                                  args = ["payload"]; loc = g });
                      loc = g };
-         loc = g }; fi_loc = g });
+         loc = g }; fi_loc = g; fi_http_methods = [] });
     (* Item A (#50.2): `Proxy.verifyBinding config presented` — a check-shaped
        constant-time comparison of a request-supplied proxy-binding header
        value against a configured shared Secret.  Mints `ProxyBound presented`
@@ -1195,7 +1202,7 @@ let stdlib_func_infos : (string * func_info) list =
                      proof_ann = Some (PredApp { pred = "ProxyBound";
                                                  args = ["presented"]; loc = g });
                      loc = g };
-         loc = g }; fi_loc = g });
+         loc = g }; fi_loc = g; fi_http_methods = [] });
     (* ── Money (First-Class Units): same-currency safety is proof-layer.
        Currency is a runtime qualifier (not in the static type, like a
        PosixMillis's zone), so `usd + eur` is caught HERE: Money.add/subtract/
@@ -1208,19 +1215,19 @@ let stdlib_func_infos : (string * func_info) list =
        fi_params = [ plain "a" "Money";
                      param "b" "Money"
                        (Some (PredApp { pred = "SameCurrency"; args = ["a"; "b"]; loc = g })) ];
-       fi_return = ret "Money"; fi_loc = g });
+       fi_return = ret "Money"; fi_loc = g; fi_http_methods = [] });
     ("Money.subtract",
      { fi_name = "Money.subtract"; fi_kind = FnKind;
        fi_params = [ plain "a" "Money";
                      param "b" "Money"
                        (Some (PredApp { pred = "SameCurrency"; args = ["a"; "b"]; loc = g })) ];
-       fi_return = ret "Money"; fi_loc = g });
+       fi_return = ret "Money"; fi_loc = g; fi_http_methods = [] });
     ("Money.compare",
      { fi_name = "Money.compare"; fi_kind = FnKind;
        fi_params = [ plain "a" "Money";
                      param "b" "Money"
                        (Some (PredApp { pred = "SameCurrency"; args = ["a"; "b"]; loc = g })) ];
-       fi_return = ret "Int"; fi_loc = g });
+       fi_return = ret "Int"; fi_loc = g; fi_http_methods = [] });
     (* Money.requireSameCurrency: check returning b ::: SameCurrency a b
        (2-arg proof, the Dict.requireKey shape) *)
     ("Money.requireSameCurrency",
@@ -1231,11 +1238,11 @@ let stdlib_func_infos : (string * func_info) list =
                      proof_ann = Some (PredApp { pred = "SameCurrency";
                                                  args = ["a"; "b"]; loc = g });
                      loc = g };
-         loc = g }; fi_loc = g });
+         loc = g }; fi_loc = g; fi_http_methods = [] });
     ("Money.requireNonNegative",
      { fi_name = "Money.requireNonNegative"; fi_kind = CheckKind;
        fi_params = [ plain "m" "Money" ];
-       fi_return = ret_attached "m" "Money" "NonNegativeMoney"; fi_loc = g });
+       fi_return = ret_attached "m" "Money" "NonNegativeMoney"; fi_loc = g; fi_http_methods = [] });
     ("Money.requireRateFor",
      { fi_name = "Money.requireRateFor"; fi_kind = CheckKind;
        fi_params = [ plain "r" "ExchangeRate"; plain "m" "Money" ];
@@ -1244,20 +1251,20 @@ let stdlib_func_infos : (string * func_info) list =
                      proof_ann = Some (PredApp { pred = "RateFor";
                                                  args = ["r"; "m"]; loc = g });
                      loc = g };
-         loc = g }; fi_loc = g });
+         loc = g }; fi_loc = g; fi_http_methods = [] });
     ("Money.convertChecked",
      { fi_name = "Money.convertChecked"; fi_kind = FnKind;
        fi_params = [ plain "r" "ExchangeRate";
                      param "m" "Money"
                        (Some (PredApp { pred = "RateFor"; args = ["r"; "m"]; loc = g })) ];
-       fi_return = ret "Money"; fi_loc = g });
+       fi_return = ret "Money"; fi_loc = g; fi_http_methods = [] });
     (* Units.requireNonZero: check returning q ::: FloatNonZero q — quantities
        erase to Float, so the SAME predicate that unlocks `/` for Floats
        unlocks quantity division (`d / Units.requireNonZero-checked t`). *)
     ("Units.requireNonZero",
      { fi_name = "Units.requireNonZero"; fi_kind = CheckKind;
        fi_params = [ plain "q" "a" ];
-       fi_return = ret_attached "q" "a" "FloatNonZero"; fi_loc = g });
+       fi_return = ret_attached "q" "a" "FloatNonZero"; fi_loc = g; fi_http_methods = [] });
     (* JWT.verify: check-shaped, returning the claims Dict ? Authentic
        (Crypto Phase 2 — roadmap/next/tesl_crypto.md).  Before this row the
        function returned a bare claims Dict, so a consumer could not DEMAND that
@@ -1284,7 +1291,7 @@ let stdlib_func_infos : (string * func_info) list =
          ty = tname "Dict";
          entity_proof = Some (PredApp { pred = "Authentic"; args = []; loc = g });
          other_proof = None; loc = g };
-       fi_loc = g });
+       fi_loc = g; fi_http_methods = [] });
     (* JWT.renew: check-shaped, but it returns a plain JwtToken and mints NO
        fact.  That is deliberate — the value it produces is a fresh credential on
        its way OUT to the browser, not an inbound claim someone downstream should
@@ -1297,7 +1304,7 @@ let stdlib_func_infos : (string * func_info) list =
      { fi_name = "JWT.renew"; fi_kind = CheckKind;
        fi_params = [ plain "token" "JwtToken"; plain "secret" "Secret" ];
        fi_return = RetPlain { ty = tname "JwtToken"; loc = g };
-       fi_loc = g });
+       fi_loc = g; fi_http_methods = [] });
     (* String.trim / trimLeft / trimRight: fn returning String ? IsTrimmed *)
     ("String.trim",
      { fi_name = "String.trim"; fi_kind = FnKind;
@@ -1306,7 +1313,7 @@ let stdlib_func_infos : (string * func_info) list =
          ty = tname "String";
          entity_proof = Some (PredApp { pred = "IsTrimmed"; args = []; loc = g });
          other_proof = None; loc = g };
-       fi_loc = g });
+       fi_loc = g; fi_http_methods = [] });
     ("String.trimLeft",
      { fi_name = "String.trimLeft"; fi_kind = FnKind;
        fi_params = [ plain "s" "String" ];
@@ -1314,7 +1321,7 @@ let stdlib_func_infos : (string * func_info) list =
          ty = tname "String";
          entity_proof = Some (PredApp { pred = "IsTrimmed"; args = []; loc = g });
          other_proof = None; loc = g };
-       fi_loc = g });
+       fi_loc = g; fi_http_methods = [] });
     ("String.trimRight",
      { fi_name = "String.trimRight"; fi_kind = FnKind;
        fi_params = [ plain "s" "String" ];
@@ -1322,7 +1329,7 @@ let stdlib_func_infos : (string * func_info) list =
          ty = tname "String";
          entity_proof = Some (PredApp { pred = "IsTrimmed"; args = []; loc = g });
          other_proof = None; loc = g };
-       fi_loc = g });
+       fi_loc = g; fi_http_methods = [] });
     (* String.toUpper / toLower *)
     ("String.toUpper",
      { fi_name = "String.toUpper"; fi_kind = FnKind;
@@ -1331,7 +1338,7 @@ let stdlib_func_infos : (string * func_info) list =
          ty = tname "String";
          entity_proof = Some (PredApp { pred = "IsUpperCase"; args = []; loc = g });
          other_proof = None; loc = g };
-       fi_loc = g });
+       fi_loc = g; fi_http_methods = [] });
     ("String.toLower",
      { fi_name = "String.toLower"; fi_kind = FnKind;
        fi_params = [ plain "s" "String" ];
@@ -1339,7 +1346,7 @@ let stdlib_func_infos : (string * func_info) list =
          ty = tname "String";
          entity_proof = Some (PredApp { pred = "IsLowerCase"; args = []; loc = g });
          other_proof = None; loc = g };
-       fi_loc = g });
+       fi_loc = g; fi_http_methods = [] });
     (* List.sort / sortBy: fn returning List T ? IsSorted *)
     ("List.sort",
      { fi_name = "List.sort"; fi_kind = FnKind;
@@ -1348,7 +1355,7 @@ let stdlib_func_infos : (string * func_info) list =
          ty = tname "List";
          entity_proof = Some (PredApp { pred = "IsSorted"; args = []; loc = g });
          other_proof = None; loc = g };
-       fi_loc = g });
+       fi_loc = g; fi_http_methods = [] });
     ("List.sortBy",
      { fi_name = "List.sortBy"; fi_kind = FnKind;
        fi_params = [ plain "f" "a"; plain "xs" "List" ];
@@ -1356,7 +1363,7 @@ let stdlib_func_infos : (string * func_info) list =
          ty = tname "List";
          entity_proof = Some (PredApp { pred = "IsSorted"; args = []; loc = g });
          other_proof = None; loc = g };
-       fi_loc = g });
+       fi_loc = g; fi_http_methods = [] });
   ]
 
 let split_module_name (full : string) : string * string =
@@ -1401,7 +1408,7 @@ let load_imported_func_info (m : module_form) : (string * func_info) list =
           in
           List.concat_map (function
             | DFunc fd ->
-              let info = { fi_name = fd.name; fi_kind = fd.kind; fi_params = fd.params; fi_return = fd.return_spec; fi_loc = fd.loc } in
+              let info = { fi_name = fd.name; fi_kind = fd.kind; fi_params = fd.params; fi_return = fd.return_spec; fi_loc = fd.loc; fi_http_methods = fd.http_methods } in
               let qualified_name = imp.module_name ^ "." ^ fd.name in
               let include_plain = match requested with
                 | Some names -> List.mem fd.name names
@@ -1435,39 +1442,23 @@ let load_imported_func_info (m : module_form) : (string * func_info) list =
    own callers are unaffected. *)
 (* ── Server binding ⇄ api endpoint pairing (ONE copy) ─────────────────────── *)
 
-(** True for a compiler-synthesised endpoint name (`endpoint_0`, `endpoint_12`).
-    [Parser] mints one of these for EVERY api endpoint — there is no surface
-    syntax for naming an endpoint in an `api` block — so this is currently true
-    of every parsed endpoint.  Kept because
-    [Validation_structural.check_server_completeness] branches on it. *)
-let is_synthetic_endpoint_name (name : string) : bool =
-  let prefix = "endpoint_" in
-  let prefix_len = String.length prefix in
-  String.length name > prefix_len
-  && String.sub name 0 prefix_len = prefix
-  && let suffix = String.sub name prefix_len (String.length name - prefix_len) in
-     String.length suffix > 0
-     && String.for_all (fun ch -> ch >= '0' && ch <= '9') suffix
-
-(** Resolve a server's bindings to the api endpoints they implement, as
+(** Resolve a server's handler list to the api endpoints they implement, as
     [(endpoint, handler_name)] pairs.
 
-    Pairing is POSITIONAL: binding *i* implements non-SSE endpoint *i*.  The
-    binding KEY is not an identity — it is a label the emitter re-attaches to the
-    endpoint at that index.  Verified against [Emit_racket.emit_api]
-    (`endpoint_names = List.map fst server_bindings`, zipped by index with
-    `http_endpoints`): given
+    Pairing is POSITIONAL: handler *i* implements non-SSE endpoint *i* (#65
+    removed the block's old `endpoint_name =` prefix — it looked name-keyed
+    but was always matched by position, so the syntax now says what it does).
+    Verified against [Emit_racket.emit_api] (`endpoint_names = server_bindings`,
+    zipped by index with `http_endpoints`): given
 
       api  { post "/create"; get "/read" }
-      server { endpoint_1 = mutate; endpoint_0 = readOnly }
+      server { mutate; readOnly }
 
-    the emitter names the POST endpoint `endpoint_1` and wires `mutate` to it, so
-    `mutate` serves POST /create even though its binding key reads `endpoint_1`.
-    Any by-NAME pairing here would therefore mis-attribute the method — for a
-    method-keyed security rule (SEC005) that means falsely rejecting a safe
-    program.  Get this backwards in either direction and the rule is wrong, which
-    is why the pairing lives in exactly one place with the emitter named as the
-    authority.
+    the emitter wires `mutate` to POST /create and `readOnly` to GET /read
+    purely by list position. For a method-keyed security rule (SEC005) that
+    means the pairing MUST be computed the same way here as in the emitter, or
+    the rule mis-attributes the method — which is why the pairing lives in
+    exactly one place with the emitter named as the authority.
 
     SSE endpoints are filtered out FIRST, so positional indices are computed over
     the non-SSE list — matching both the emitter and
@@ -1475,8 +1466,8 @@ let is_synthetic_endpoint_name (name : string) : bool =
     about `pubsub` in a GET: an SSE `subscribe` route is a separate route shape,
     never a `get`, so it is out of scope here by construction.
 
-    When the counts differ the emitter ignores the bindings entirely and
-    [check_server_completeness] reports the missing/extra binding, so the module
+    When the counts differ the emitter ignores the handler list entirely and
+    [check_server_completeness] reports the missing/extra handler, so the module
     cannot compile; this returns [] rather than guessing a pairing. *)
 let server_endpoint_bindings (decls : top_decl list) (srv : server_form)
   : (api_endpoint * string) list =
@@ -1491,8 +1482,8 @@ let server_endpoint_bindings (decls : top_decl list) (srv : server_form)
   | Some api ->
     let non_sse =
       List.filter (fun (ep : api_endpoint) -> ep.method_ <> SSE) api.endpoints in
-    if List.length non_sse <> List.length srv.bindings then []
-    else List.map2 (fun (_key, handler) ep -> (ep, handler)) srv.bindings non_sse
+    if List.length non_sse <> List.length srv.handlers then []
+    else List.map2 (fun handler ep -> (ep, handler)) srv.handlers non_sse
 
 let build_func_capability_map (decls : top_decl list) : (string * string list) list =
   (* 2026-07-03 hole #13: a name is a capability-ROW VARIABLE only if it is NOT a

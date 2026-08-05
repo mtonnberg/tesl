@@ -94,12 +94,12 @@ auth adminAuth(request: HttpRequest) -> u: User ::: Authenticated u && Admin u =
     Nothing -> fail 401 "Missing admin cookie"
 
 # Read the authenticated user's notes.  The agent MAY do this for them.
-handler listNotes(u: User ::: Authenticated u) -> String =
+handler get listNotes(u: User ::: Authenticated u) -> String =
   String.concat u.id "'s notes: milk, eggs"
 
 # Delete ALL notes.  Admin only — we do NOT trust the agent to do this
 # autonomously, even for an admin user; a human confirms it in the browser.
-handler wipeNotes(u: User ::: Authenticated u && Admin u) -> String =
+handler post wipeNotes(u: User ::: Authenticated u && Admin u) -> String =
   "all notes wiped"
 
 api NotesApi {
@@ -112,8 +112,8 @@ api NotesApi {
 }
 
 server NotesServer for NotesApi {
-  listNotes = listNotes
-  wipeNotes = wipeNotes
+  listNotes
+  wipeNotes
 }
 
 # Proof minting for the deterministic tests (no HTTP request): the usual

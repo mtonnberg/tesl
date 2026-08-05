@@ -194,9 +194,9 @@ let map_children (f : expr -> expr) (e : expr) : expr =
   | EWithTransaction { body; loc } ->
     let body' = f body in
     EWithTransaction { body = body'; loc }
-  | EServe { server_name; port; capabilities; static_dir; loc } ->
+  | EServe { server_name; port; capabilities; static_dir; mount_path; loc } ->
     let port' = f port in
-    EServe { server_name; port = port'; capabilities; static_dir; loc }
+    EServe { server_name; port = port'; capabilities; static_dir; mount_path; loc }
   | EConstructor { name; args; loc } ->
     let args' = List.map f args in
     EConstructor { name; args = args'; loc }

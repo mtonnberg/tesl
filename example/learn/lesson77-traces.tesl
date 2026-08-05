@@ -103,7 +103,7 @@ fn describeTrace(note: String) -> String requires [] =
   let _ = telemetry "note described" { note = note }
   "described ${note}"
 
-handler getNote() -> String requires [] =
+handler get getNote() -> String requires [] =
   describeTrace "n-1"
 
 api TracesApi {
@@ -111,7 +111,7 @@ api TracesApi {
 }
 
 server TracesServer for TracesApi {
-  endpoint_0 = getNote
+  getNote
 }
 
 database TracesDb = Database {

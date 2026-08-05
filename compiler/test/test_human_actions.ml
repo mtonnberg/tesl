@@ -122,11 +122,11 @@ auth adminAuth(request: HttpRequest) -> u: User ::: Authenticated u && Admin u =
     Nothing -> fail 401 "Missing admin cookie"
 
 # Greet the authenticated user.
-handler greet(u: User ::: Authenticated u) -> String =
+handler get greet(u: User ::: Authenticated u) -> String =
   String.concat "hello " u.id
 
 # Wipe everything. Admin only.
-handler adminWipe(u: User ::: Authenticated u && Admin u) -> String%s =
+handler post adminWipe(u: User ::: Authenticated u && Admin u) -> String%s =
   %s
 
 api HaApi {
@@ -139,8 +139,8 @@ api HaApi {
 }
 
 server HaServer for HaApi {
-  greet = greet
-  adminWipe = adminWipe
+  greet
+  adminWipe
 }
 
 %s

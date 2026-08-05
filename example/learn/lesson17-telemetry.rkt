@@ -41,7 +41,7 @@
 
 (define HealthServer-sse-routes '())
 (define-api HealthApi
-  [endpoint_0 :
+  [healthCheck :
     "health"
     :> (Get JSON String)
     ]
@@ -49,7 +49,7 @@
 
 (define-server HealthServer
   #:api HealthApi
-  [endpoint_0 healthCheck]
+  [healthCheck healthCheck]
 )
 
 (define-database TelemetryDb

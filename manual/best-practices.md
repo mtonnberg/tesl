@@ -46,7 +46,7 @@ The compiler tracks the proof (`:::` annotation) and ensures the value remains v
 
 **✅ Do:**
 ```tesl
-handler getTodo(requestUser: User ::: Authenticated requestUser, todoId: String ::: ValidTodoId todoId)
+handler get getTodo(requestUser: User ::: Authenticated requestUser, todoId: String ::: ValidTodoId todoId)
   -> Todo ? FromDb (Id == todoId)
   requires [dbRead] =
   # Auth is visible in the signature: requestUser carries the Authenticated proof
@@ -158,7 +158,7 @@ block at all:
 # This compiles and serializes as {"id":…, "name":…} with NO codec block:
 record TodoView { id: Int, name: String }
 
-handler getTodo() -> TodoView =
+handler get getTodo() -> TodoView =
   TodoView { id: 1, name: "buy milk" }
 ```
 Write an explicit `codec` only when you need the *decode* side (`fromJson`, to validate
@@ -220,7 +220,7 @@ them and the compiler forces all trust through them.
 
 **✅ Do:** Attach proofs at the validation boundary:
 ```tesl
-handler createTodo(req: NewTodo ::: ValidNewTodo) -> Todo ? FromDb (Id == todo.id)
+handler post createTodo(req: NewTodo ::: ValidNewTodo) -> Todo ? FromDb (Id == todo.id)
   requires [dbWrite] =
   # req carries the ValidNewTodo proof automatically
   insert Todo req
@@ -241,7 +241,7 @@ fn processTodo(todo: Todo ::: TodoExists todo.id) -> Result =
 
 **✅ Do:** Use forall proofs for collections:
 ```tesl
-handler getAllTodos() -> List Todo ? ForAll (FromDb (Id == todo.id))
+handler get getAllTodos() -> List Todo ? ForAll (FromDb (Id == todo.id))
   requires [dbRead] =
   select todo from Todo
 ```
@@ -451,7 +451,7 @@ storeNewPassword user np (Crypto.hashPassword body.oldPassword)   -- rejected
 **❌ Don't:** put a write behind a `get` route.
 
 ```tesl
-handler recordView(id: String) -> String requires [dbWrite] =
+handler get recordView(id: String) -> String requires [dbWrite] =
   let _ = insert View { docId: id }
   "ok"
 
@@ -620,7 +620,7 @@ let user = selectOne user from User where user.email == email
 
 **✅ Do:** Use `transaction` for multi-operation consistency:
 ```tesl
-handler transferAmount(fromId: String, toId: String, amount: Int ::: Positive amount)
+handler post transferAmount(fromId: String, toId: String, amount: Int ::: Positive amount)
   -> TransferResult
   requires [dbRead, dbWrite] =
   transaction {

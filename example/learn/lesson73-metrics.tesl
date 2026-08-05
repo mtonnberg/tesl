@@ -75,7 +75,7 @@ fn recordSignup(plan: String) -> String requires [] =
 
 # Histogram + gauge: measured work and a current level.  Metrics compose with
 # the `telemetry` log statement — same pipeline, different OTel signals.
-handler runBatch() -> String requires [] =
+handler get runBatch() -> String requires [] =
   let _ = histogram "batch.item.duration" 0.125 [Tuple2 "kind" "resize"]
   let _ = gauge "batch.backlog" 42.0 []
   telemetry "batch.finished" { items = 1 }
@@ -86,7 +86,7 @@ api MetricsApi {
 }
 
 server MetricsServer for MetricsApi {
-  endpoint_0 = runBatch
+  runBatch
 }
 
 database MetricsDb = Database {

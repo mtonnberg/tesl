@@ -1094,7 +1094,8 @@ let rec return_info_ir ~fact_kind_of ~has_fact_decoder (rs : Ir.ir_return) : elm
       decoder_text = "(D.list " ^ tuple2_decoder key_decoder value_decoder ^ ")" }
   | Ir.IRRetExists { body; _ } -> return_info_ir ~fact_kind_of ~has_fact_decoder body
 
-let elm_url_expr_ir ?(rename_param = fun name -> name) (ep : Ir.ir_endpoint) : string =
+let elm_url_expr_ir ?(rename_param = fun name -> name) ?(mount_path = None)
+    (ep : Ir.ir_endpoint) : string =
   let capture_exprs = List.map (fun (c : Ir.ir_capture) ->
     let local_name = rename_param c.irc_binding.irb_name in
     let expr = match c.irc_binding.irb_proof with
@@ -1115,7 +1116,15 @@ let elm_url_expr_ir ?(rename_param = fun name -> name) (ep : Ir.ir_endpoint) : s
     else
       "\"" ^ seg ^ "\""
   ) segs in
-  let with_slashes = List.concat_map (fun p -> ["\"/\""; p]) real_parts in
+  (* #75: `mountPath` is a deployment/mounting concern, so it is prepended
+     here at URL-BUILD time only — never folded into [ep.ire_path] itself,
+     which also drives this endpoint's function name (see [fn_names_of_endpoints]). *)
+  let mount_parts = match mount_path with
+    | None | Some "" -> []
+    | Some mp -> List.filter (fun s -> s <> "") (String.split_on_char '/' mp)
+                 |> List.map (fun s -> "\"" ^ s ^ "\"")
+  in
+  let with_slashes = List.concat_map (fun p -> ["\"/\""; p]) (mount_parts @ real_parts) in
   match with_slashes with
   | [] -> "\"/\""
   | _ -> String.concat " ++ " with_slashes
@@ -1774,7 +1783,7 @@ let emit_elm ?module_name_override (m : module_form) : string =
       let rname = human_action_request_name sv.name in
       let dname = human_action_decoder_name sv.name in
       let ctor tool = sv.name ^ cap_first tool in
-      let tools = List.map fst sv.bindings in
+      let tools = sv.handlers in
       (* tag union: one constructor per endpoint tool name *)
       addf "type %s\n" uname;
       List.iteri (fun i tool ->
@@ -1866,6 +1875,7 @@ let emit_elm ?module_name_override (m : module_form) : string =
 
   (* ── API ── *)
   let endpoints = ir_module.Ir.irm_endpoints in
+  let mount_path = Ast.main_app_string_field m "mountPath" in
 
   if endpoints <> [] then begin
     add "-- ---------------------------------------------------------------------------\n";
@@ -1905,7 +1915,7 @@ let emit_elm ?module_name_override (m : module_form) : string =
            | Some (original, local_name, _, _) when original = name -> local_name
            | _ -> name)
       in
-      let url_expr = elm_url_expr_ir ~rename_param ep in
+      let url_expr = elm_url_expr_ir ~rename_param ~mount_path ep in
 
       let param_types = List.map (fun (_, _, ty) -> ty) capture_params
         @ (match body_param with Some (_, _, ty, proof_ann) -> [elm_type_of_ir_binding_surface ty proof_ann] | None -> [])

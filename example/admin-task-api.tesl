@@ -80,7 +80,7 @@ auth cookieUserAuth(request: HttpRequest) -> requestUser: AdminUser ::: Authenti
 
 capturer positiveTaskCapture: Int ::: Positive taskId using intCodec via isPositive
 
-handler getAdminTask(requestUser: AdminUser ::: Authenticated requestUser, taskId: Int ::: Positive taskId) -> AdminTask =
+handler get getAdminTask(requestUser: AdminUser ::: Authenticated requestUser, taskId: Int ::: Positive taskId) -> AdminTask =
   if requestUser.role == "admin" then
     telemetry "task.fetch.admin" { user.id = requestUser.id, task.id = taskId }
     if taskId == 2 then
@@ -98,7 +98,7 @@ api AdminTaskApi {
 }
 
 server AdminTaskServer for AdminTaskApi {
-  getAdminTask = getAdminTask
+  getAdminTask
 }
 
 main() -> App requires [readTaskCookie] =

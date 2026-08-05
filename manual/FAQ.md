@@ -107,7 +107,7 @@ Capabilities in Tesl represent **effects** or **permissions**. They make explici
 Functions and handlers declare their capabilities in their signature:
 
 ```tesl
-handler getTodo(id: String ::: ValidTodoId id) -> Todo ? FromDb (Id == id)
+handler get getTodo(id: String ::: ValidTodoId id) -> Todo ? FromDb (Id == id)
   requires [dbRead] =
   selectOne todo from Todo where todo.id == id
 ```
@@ -149,7 +149,7 @@ check isValidEmail(email: String) -> email: String ::: ValidEmail email =
   else
     fail 400 "Invalid email"
 
-handler createUser(req: CreateUserRequest ::: ValidRequest req) -> User ? FromDb (Id == user.id)
+handler post createUser(req: CreateUserRequest ::: ValidRequest req) -> User ? FromDb (Id == user.id)
   requires [dbWrite] =
   # email is guaranteed to be valid here, no need to re-check
   insert User { email: req.email }
@@ -224,7 +224,7 @@ api TodoApi {
     -> Todo ? FromDb (Id == id)
 }
 
-handler getTodo(id: String ::: ValidTodoId id) -> Todo ? FromDb (Id == id)
+handler get getTodo(id: String ::: ValidTodoId id) -> Todo ? FromDb (Id == id)
   requires [dbRead] =
   let found = selectOne todo from Todo where todo.id == id
   case found of
@@ -232,7 +232,7 @@ handler getTodo(id: String ::: ValidTodoId id) -> Todo ? FromDb (Id == id)
     Something todo -> todo
 
 server TodoServer for TodoApi {
-  getTodo = getTodo
+  getTodo
 }
 ```
 
@@ -288,7 +288,7 @@ codec NewTodo {
   ]
 }
 
-handler createTodo(req: NewTodo ::: ValidNewTodo) -> Todo ? FromDb (Id == todo.id)
+handler post createTodo(req: NewTodo ::: ValidNewTodo) -> Todo ? FromDb (Id == todo.id)
   requires [dbWrite] =
   # req is already parsed and validated
   insert Todo req
@@ -299,7 +299,7 @@ handler createTodo(req: NewTodo ::: ValidNewTodo) -> Todo ? FromDb (Id == todo.i
 In handlers, you can access query parameters through the request. For typed query parameters, define them as handler parameters:
 
 ```tesl
-handler listTodos(page: Int ::: Positive page, limit: Int ::: Positive limit) -> Paginated Todo
+handler get listTodos(page: Int ::: Positive page, limit: Int ::: Positive limit) -> Paginated Todo
   requires [dbRead] =
   let offset = (page - 1) * limit in
   let todos = select todo from Todo limit limit offset offset in
@@ -313,7 +313,7 @@ In the API declaration, use path parameters for URL segments and pass query para
 In most cases, you don't need to! Tesl's design encourages you to declare what you need in the handler signature. However, if you need raw access:
 
 ```tesl
-handler rawRequest(request: HttpRequest) -> Response
+handler get rawRequest(request: HttpRequest) -> Response
   requires [] =
   let headers = request.headers in
   let queryParams = request.query in
@@ -383,7 +383,7 @@ Adding an index to a table that already has rows is not done automatically (buil
 Use `transaction` to wrap multiple database operations:
 
 ```tesl
-handler transferAmount(fromId: String, toId: String, amount: Int ::: Positive amount)
+handler post transferAmount(fromId: String, toId: String, amount: Int ::: Positive amount)
   -> TransferResult
   requires [dbRead, dbWrite] =
   transaction {
@@ -430,7 +430,7 @@ check isValidEmail(email: String) -> email: String ::: ValidEmail email =
 Errors from `check` functions automatically become HTTP error responses. You can also return errors explicitly:
 
 ```tesl
-handler getTodo(id: String ::: ValidTodoId id) -> Todo ? FromDb (Id == id)
+handler get getTodo(id: String ::: ValidTodoId id) -> Todo ? FromDb (Id == id)
   requires [dbRead] =
   let found = selectOne todo from Todo where todo.id == id
   case found of

@@ -164,7 +164,7 @@ automatically, and a function that asks for one it was not given is a compile er
 **Capabilities.** Side effects are declared, not implicit:
 
 ```tesl
-handler getTodo(todoId: String) -> Maybe Todo
+handler get getTodo(todoId: String) -> Maybe Todo
   requires [dbRead] =
   selectOne todo from Todo where todo.id == todoId
 ```

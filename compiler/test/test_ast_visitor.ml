@@ -88,7 +88,7 @@ let sample : expr =
   let e_wcap = EWithCapabilities { capabilities = ["dbRead"]; body = var 75 "b"; loc = loc_at 76 } in
   let e_wtx = EWithTransaction { body = var 77 "b"; loc = loc_at 78 } in
   let e_serve = EServe { server_name = "srv"; port = int_ 79 8080; capabilities = [];
-                         static_dir = None; loc = loc_at 80 } in
+                         static_dir = None; mount_path = None; loc = loc_at 80 } in
   let e_ctor = EConstructor { name = "Ctor"; args = [var 81 "a"; int_ 82 1]; loc = loc_at 83 } in
   let e_lambda = ELambda { params = [dummy_binding "p" 84]; body = var 85 "p"; loc = loc_at 86 } in
   (* Nest them all under a list so a single root holds every variant. *)

@@ -137,15 +137,15 @@ codec NewNote {
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Greet the authenticated user by id.
-handler greet(u: User ::: Authenticated u) -> String =
+handler get greet(u: User ::: Authenticated u) -> String =
   String.concat "hello " u.id
 
 # Store a note for the authenticated user.
-handler createNote(u: User ::: Authenticated u, note: NewNote) -> String =
+handler post createNote(u: User ::: Authenticated u, note: NewNote) -> String =
   String.concat (String.concat u.id " noted: ") note.text
 
 # Delete ALL notes in the service. Admin only.
-handler wipeNotes(u: User ::: Authenticated u && Admin u) -> String =
+handler post wipeNotes(u: User ::: Authenticated u && Admin u) -> String =
   "all notes wiped"
 
 api NotesApi {
@@ -164,9 +164,9 @@ api NotesApi {
 }
 
 server NotesServer for NotesApi {
-  greet = greet
-  createNote = createNote
-  wipeNotes = wipeNotes
+  greet
+  createNote
+  wipeNotes
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

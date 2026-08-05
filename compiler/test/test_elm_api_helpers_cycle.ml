@@ -190,7 +190,7 @@ codec Grant {
   fromJson_forbidden
 }
 
-handler dummy() -> Grant =
+handler get dummy() -> Grant =
   let raw = [ReadProjects]
   let allowed = check mayReadProjects raw
   Grant { granted: allowed }
@@ -200,7 +200,7 @@ api DummyApi {
 }
 
 server DummyServer for DummyApi {
-  dummy = dummy
+  dummy
 }
 |}
 

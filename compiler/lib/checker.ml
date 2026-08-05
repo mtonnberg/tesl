@@ -7078,9 +7078,10 @@ let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_
 
   (* serverTools static env (see the [server_tools_env] doc on [ctx]): for each
      server, the auth user type its api binds and the non-SSE endpoints as
-     (tool name, normalized auth predicates).  Tool names are the server-binding
-     LHS names, paired positionally with the api's non-SSE endpoints exactly as
-     the emitter pairs them (endpoint names in the AST are synthetic). *)
+     (tool name, normalized auth predicates).  Tool names are the bound handler
+     names (#65: server blocks are a bare handler list now), paired positionally
+     with the api's non-SSE endpoints exactly as the emitter pairs them
+     (endpoint names in the AST are synthetic). *)
   let ctx =
     let api_of name = List.find_map (function
       | DApi (a : Ast.api_form) when a.name = name -> Some a
@@ -7093,7 +7094,7 @@ let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_
            let non_sse =
              List.filter (fun (ep : Ast.api_endpoint) -> ep.method_ <> SSE)
                api.endpoints in
-           let binding_names = List.map fst srv.bindings in
+           let binding_names = srv.handlers in
            let paired =
              if List.length binding_names = List.length non_sse then
                List.combine binding_names non_sse

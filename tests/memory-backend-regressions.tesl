@@ -211,7 +211,7 @@ codec TriggerRequest {
   ]
 }
 
-handler send(req: TriggerRequest) -> String
+handler post send(req: TriggerRequest) -> String
   requires [queueWrite] =
   enqueue SeqJob { tag: req.tag }
   "queued"
@@ -223,7 +223,7 @@ api RegApi {
 }
 
 server RegServer for RegApi {
-  send = send
+  send
 }
 
 api-test "in-memory queue dequeues FIFO" for RegServer requires [queueRead, queueWrite] {

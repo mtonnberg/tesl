@@ -122,7 +122,7 @@ deadWorker handleDeadNotif(job: SendNotif ::: FromDeadQueue (Id == jobId) job)
 # This lesson is about queues, but an App needs an api/server to serve.
 # A trivial health-check endpoint keeps the example a runnable App.
 
-handler appRoot() -> String
+handler get appRoot() -> String
   requires [] =
   "ok"
 
@@ -131,7 +131,7 @@ api AppApi {
 }
 
 server AppServer for AppApi {
-  endpoint_0 = appRoot
+  appRoot
 }
 
 # ── Main ──────────────────────────────────────────────────────────────────────

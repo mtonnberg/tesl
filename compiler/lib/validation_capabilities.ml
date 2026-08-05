@@ -145,10 +145,10 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
      everything those handlers may do (V001 with the standard hint). *)
   let server_tools_caps = List.filter_map (function
     | DServer (srv : server_form) ->
-      let caps = List.concat_map (fun (_, handler) ->
+      let caps = List.concat_map (fun handler ->
         match List.assoc_opt handler func_caps with
         | Some cs -> cs
-        | None -> []) srv.bindings in
+        | None -> []) srv.handlers in
       Some (srv.name, List.sort_uniq String.compare caps)
     | _ -> None) decls in
   let config_reads_env = module_config_reads_env decls in
@@ -295,7 +295,7 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
      let fn_info = List.filter_map (function
        | DFunc fd -> Some (fd.name, (fd.capabilities, fd.loc)) | _ -> None) decls in
      let servers = List.filter_map (function
-       | DServer s -> Some (s.name, List.map snd s.bindings) | _ -> None) decls in
+       | DServer s -> Some (s.name, s.handlers) | _ -> None) decls in
      (* SSO clauses reference functions the RUNTIME calls (not app code): the
         `connection` + `onIdentity` fns and the `sessionRevoked` hook.  They run
         under the server's granted capabilities exactly like handlers, so their
@@ -515,48 +515,85 @@ let check_get_routes_do_not_mutate ?(cap_map=[]) ?(imported_func_caps=[])
     List.iter go declared;
     Hashtbl.fold (fun k () acc -> k :: acc) seen [] in
   let errors = ref [] in
+  (* Endpoint path for a handler, when a server pairing can supply one.  Message
+     ENRICHMENT only — the decision below is driven by the handler's own declared
+     method, so it never depends on this. *)
+  let path_of_handler =
+    List.concat_map (function
+      | DServer (srv : server_form) ->
+        List.filter_map (fun ((ep : api_endpoint), handler) ->
+          if ep.method_ = GET then Some (handler, ep.path) else None)
+          (server_endpoint_bindings decls srv)
+      | _ -> []) decls in
+  let reached_forbidden needed =
+    let closure = expand needed in
+    List.sort_uniq String.compare
+      (List.filter (fun c -> List.mem c closure) get_forbidden_caps) in
+  let report ~loc ~handler ~reached ~subject ~whence =
+    errors := make_error ~code:"SEC005" loc
+      ~hint:(Printf.sprintf
+        "declare the handler as `post`/`put`/`patch`/`delete` (and give it that \
+         slot in the server block), or move the %s out of `%s` and leave the GET \
+         read-only"
+        (if List.mem "emailCap" reached && List.length reached = 1
+         then "send" else "write")
+        handler)
+      (Printf.sprintf
+        "%s reaches state-changing capability [%s]%s. A GET must be safe and \
+         idempotent (RFC 9110 §9.2.1), and it is the one method a `SameSite=Lax` \
+         session cookie is still sent on for a cross-site top-level navigation — \
+         so a write here is a CSRF hole an attacker triggers by navigating the \
+         victim's browser"
+        subject (String.concat ", " reached) whence)
+      :: !errors in
+  let reported : (string, unit) Hashtbl.t = Hashtbl.create 8 in
+  (* PRIMARY, declaration-driven: a handler that DECLARES `get` is checked from
+     its own text, with no reference to any server block.  Two things this buys
+     over keying on the pairing:
+
+     - the rule no longer depends on a positional inference.  A security rule
+       resting on "handler i serves endpoint i" was the fragile part;
+     - it closes a fail-open hole.  [server_endpoint_bindings] returns [] when the
+       handler count and endpoint count disagree, so SEC005 previously checked
+       NOTHING for such a server — a count mismatch is itself an error, but it
+       must not also switch off a security rule. A GET handler is now judged
+       whether or not it is bound, and whether or not the block is well-formed. *)
+  List.iter (function
+    | DFunc (fd : func_decl)
+      when fd.kind = HandlerKind && List.mem GET fd.http_methods ->
+      let param_caps = build_param_capability_map fd in
+      let needed =
+        Validation_common.collect_needed_capabilities
+          ~func_caps ~param_caps
+          ~bound:(List.map (fun (b : binding) -> b.name) fd.params) fd.body in
+      let reached = reached_forbidden needed in
+      if reached <> [] then begin
+        Hashtbl.replace reported fd.name ();
+        let subject = match List.assoc_opt fd.name path_of_handler with
+          | Some p -> Printf.sprintf "`get \"%s\"` (handler `%s`)" p fd.name
+          | None -> Printf.sprintf "handler `%s`, declared `get`," fd.name in
+        report ~loc:fd.loc ~handler:fd.name ~reached ~subject ~whence:""
+      end
+    | _ -> ()) decls;
+  (* FALLBACK for a handler this module cannot see the body of: an IMPORTED
+     handler bound to a GET slot.  Its declared method travels with it
+     ([func_info.fi_http_methods]) but its body does not, so it is judged by the
+     over-approximated capability row that [load_imported_func_caps] computes —
+     an over-rejection at worst, never a silent pass. *)
   List.iter (function
     | DServer (srv : server_form) ->
       List.iter (fun ((ep : api_endpoint), handler) ->
-        if ep.method_ = GET then begin
-          let needed, loc, whence =
-            match List.assoc_opt handler fn_map with
-            | Some (fd : func_decl) ->
-              let param_caps = build_param_capability_map fd in
-              (Validation_common.collect_needed_capabilities
-                 ~func_caps ~param_caps
-                 ~bound:(List.map (fun (b : binding) -> b.name) fd.params) fd.body,
-               fd.loc, "")
-            | None ->
-              (* Imported (or unresolvable) handler: judge by the over-approximated
-                 capability row rather than skipping — skipping is the fail-open
-                 direction this rule exists to remove. *)
-              (Option.value ~default:[] (List.assoc_opt handler func_caps),
-               srv.loc,
-               " (declared capabilities of the imported handler)")
-          in
+        if ep.method_ = GET
+           && not (Hashtbl.mem reported handler)
+           && List.assoc_opt handler fn_map = None then begin
           let reached =
-            let closure = expand needed in
-            List.sort_uniq String.compare
-              (List.filter (fun c -> List.mem c closure) get_forbidden_caps)
-          in
-          if reached <> [] then
-            errors := make_error ~code:"SEC005" loc
-              ~hint:(Printf.sprintf
-                "change the route to `post`/`put`/`patch`/`delete`, or move the \
-                 %s out of `%s` and leave the GET read-only"
-                (if List.mem "emailCap" reached && List.length reached = 1
-                 then "send" else "write")
-                handler)
-              (Printf.sprintf
-                "`get \"%s\"` reaches state-changing capability [%s] via handler \
-                 `%s`%s. A GET must be safe and idempotent (RFC 9110 §9.2.1), and \
-                 it is the one method a `SameSite=Lax` session cookie is still \
-                 sent on for a cross-site top-level navigation — so a write here \
-                 is a CSRF hole an attacker triggers by navigating the victim's \
-                 browser"
-                ep.path (String.concat ", " reached) handler whence)
-              :: !errors
+            reached_forbidden (Option.value ~default:[] (List.assoc_opt handler func_caps)) in
+          if reached <> [] then begin
+            Hashtbl.replace reported handler ();
+            report ~loc:srv.loc ~handler ~reached
+              ~subject:(Printf.sprintf "`get \"%s\"` (handler `%s`)" ep.path handler)
+              ~whence:" (declared capabilities of the imported handler)"
+          end
         end) (server_endpoint_bindings decls srv)
     | _ -> ()) decls;
   List.rev !errors

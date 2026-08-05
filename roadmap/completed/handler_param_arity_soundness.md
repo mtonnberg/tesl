@@ -21,7 +21,7 @@ to runtime — the exact "incorrect code through the compiler" class.
 ## Investigate / fix
 - Where the server binds a handler to an endpoint (`define-server` in dsl/web.rkt
   emits the arity check at runtime). The compile-time gap is in the checker /
-  API-validation: it should verify each `server NAME for API { ep = handlerFn }`
+  API-validation: it should verify each `server NAME for API { handlerFn }`
   that `handlerFn`'s parameter list matches the endpoint's contract — the path
   capture params + the `auth ... ::: Fact via ...` proven value(s) — by count,
   order, type, and attached proof. Reject with a clear error otherwise.

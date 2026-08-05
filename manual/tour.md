@@ -127,7 +127,7 @@ source.
 ### 4. Declare what you need — the compiler checks the rest
 
 ```tesl
-handler createTodo(
+handler post createTodo(
   user:    User    ::: Authenticated user,
   newTodo: NewTodo
 ) -> exists todoId: String => Todo ? FromDb (Id == todoId)
@@ -193,7 +193,7 @@ capability todoRead  implies dbRead
 capability todoWrite implies dbWrite
 capability todoService implies todoRead, todoWrite, time, random
 
-handler listTodos(user: User ::: Authenticated user)
+handler get listTodos(user: User ::: Authenticated user)
   -> List Todo
   requires [todoRead] =       # declares: this function reads the DB
   select todo from Todo where todo.ownerId == user.id
@@ -486,7 +486,7 @@ your endpoint handlers; every ownership check in them runs unchanged, and there 
 forwarding or token minting):
 
 ```tesl
-handler assistant(user: User ::: Authenticated user, q: Question) -> String
+handler post assistant(user: User ::: Authenticated user, q: Question) -> String
   requires [todoWebService, supportAi] =
   let agent = Agent {
     provider: anthropic (requireEnv "ANTHROPIC_API_KEY") "claude-opus-4-8"
@@ -573,7 +573,7 @@ type, except here it also preserves the proof.
 
 ```tesl
 # Return type says: every element is owned by this user AND is open
-handler listOpenTodos(user: User ::: Authenticated user)
+handler get listOpenTodos(user: User ::: Authenticated user)
   -> List Todo ::: ForAll (FromDb (OwnerId == user.id) && IsOpen)
   requires [todoRead] =
   let mine = select todo from Todo where todo.ownerId == user.id
@@ -730,7 +730,7 @@ Observability is the one side effect that shouldn't require bureaucracy. Add `te
 anywhere — no capability declaration needed.
 
 ```tesl
-handler listTodos(user: User ::: Authenticated user)
+handler get listTodos(user: User ::: Authenticated user)
   -> List Todo
   requires [todoRead] =
   telemetry "todos.list" { user.id = user.id }   # zero overhead when not sampling

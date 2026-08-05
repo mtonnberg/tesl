@@ -52,7 +52,7 @@ codec AskRequest {
 
 # Calls the REAL model (askReply requires the aiProvider capability) and returns
 # the assistant's text. There is intentionally no mock here — this is the live path.
-handler askClaude(req: AskRequest) -> String
+handler post askClaude(req: AskRequest) -> String
   requires [liveAi] =
   replyText (askReply Assistant req.prompt)
 
@@ -63,7 +63,7 @@ api AiApi {
 }
 
 server AiServer for AiApi {
-  askClaude = askClaude
+  askClaude
 }
 
 # An in-memory database keeps this runnable with only the API key set — no

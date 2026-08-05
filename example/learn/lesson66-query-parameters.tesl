@@ -62,10 +62,10 @@ api SearchApi {
 }
 
 # The handler works purely with the proven, parsed value.
-handler search(params: SearchParams ::: ValidSearch params) -> String requires [] =
+handler get search(params: SearchParams ::: ValidSearch params) -> String requires [] =
   params.q ++ " (order=" ++ params.order ++ ")"
 
-server SearchServer for SearchApi { search = search }
+server SearchServer for SearchApi { search }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Tests — api-tests put the query string inline in the request path.

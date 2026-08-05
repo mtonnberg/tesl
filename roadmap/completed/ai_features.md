@@ -251,7 +251,7 @@ fn providerFor(user: User) -> LlmProvider
     Something k -> LlmProvider { provider: k.provider, apiKey: k.apiKey, model: k.model }
     Nothing     -> LlmProvider { provider: anthropic, apiKey: env("ANTHROPIC_API_KEY"), model: "claude-opus-4-8" }
 
-handler chat(requestUser: User ::: Authenticated requestUser, message: String)
+handler post chat(requestUser: User ::: Authenticated requestUser, message: String)
   -> stream AgentReply
   requires [supportAi, supportDbRead] =
   agentReply SupportAgent
@@ -378,7 +378,7 @@ agent SupportAgent {
   tools:        [lookupOrder, refundOrder]
 }
 
-handler chat(requestUser: User ::: Authenticated requestUser, message: String)
+handler post chat(requestUser: User ::: Authenticated requestUser, message: String)
   -> AgentReply
   requires [supportAi] =
   telemetry "support.chat" { user.id = requestUser.id }
@@ -820,7 +820,7 @@ agent SupportAgent {
 }
 
 -- A streaming, authenticated chat endpoint ---------------------------------
-handler chat(requestUser: User ::: Authenticated requestUser, message: String)
+handler post chat(requestUser: User ::: Authenticated requestUser, message: String)
   -> stream AgentReply
   requires [supportAi] =
   telemetry "support.chat" { user.id = requestUser.id }
@@ -845,7 +845,7 @@ api SupportApi {
 }
 
 server SupportServer for SupportApi {
-  chat = chat
+  chat
   mcp { auth bearerTokenAuth }        -- MCP clients authenticate with a bearer token
 }
 
@@ -885,7 +885,7 @@ fn classify(body: String) -> Triage
 turn is short enough to stream directly from the request thread:
 
 ```tesl
-handler chat(requestUser: User ::: Authenticated requestUser, message: String)
+handler post chat(requestUser: User ::: Authenticated requestUser, message: String)
   -> stream AgentReply                         -- SSE: tokens flush as they arrive
   requires [supportAi] =
   agentReply SupportAgent for requestUser message
@@ -953,7 +953,7 @@ fn lookupOrder(orderId: String ::: ValidOrderId orderId) -> Maybe Order
   selectOne order from Order where order.id == orderId
 
 server SupportServer for SupportApi {
-  chat = chat
+  chat
   mcp { auth bearerTokenAuth }   -- inbound MCP tool calls authenticate like the API,
                                  -- then run lookupOrder synchronously, same as HTTP
 }

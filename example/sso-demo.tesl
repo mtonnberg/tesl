@@ -33,14 +33,14 @@ fn linkUser(identity: SsoIdentity) -> String =
 # would check a revocation store under its own proofs; here it never revokes.
 fn revoked(_subject: String, _issuedAt: PosixMillis) -> Bool = False
 
-handler healthCheck() -> String requires [] = "ok"
+handler get healthCheck() -> String requires [] = "ok"
 
 api DemoApi {
   get "/health" -> String
 }
 
 server DemoServer for DemoApi {
-  endpoint_0 = healthCheck
+  healthCheck
   sso "github" connection githubConn onIdentity linkUser
   publicOrigin "https://demo.example.com"
   sessionKey "SESSION_KEY"

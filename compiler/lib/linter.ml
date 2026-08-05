@@ -32,6 +32,8 @@
       W092  query constrains columns no declared index can serve
       W093  declared index no query in this file uses
       W094  queue/sseChannel declared but never activated in main's App
+      W095  two api endpoints share one handler signature (positional-bind ambiguity)
+      W096  route string already carries the App's mountPath prefix (applied twice)
 *)
 
 (* A lint diagnostic uses the same type as Compile.diagnostic so it can
@@ -681,7 +683,7 @@ let collect_decl_names acc (d : Ast.top_decl) =
     let acc = cf.parser :: acc in
     collect_binding_names acc cf.binding
   | DServer sf ->
-    List.fold_left (fun a (_, handler) -> handler :: a) acc sf.bindings
+    List.fold_left (fun a handler -> handler :: a) acc sf.handlers
   | DDatabase df ->
     (* Entity names listed in `entities [...]` are references to imported types. *)
     let acc = List.fold_left (fun a e -> e :: a) acc df.entities in
@@ -1284,6 +1286,178 @@ let lint_unactivated_runtime_decls filename (source : string) (out : lint_diag l
         channels
     end
 
+(** W095 — two (or more) endpoints in one `api` block would compile down to
+    the exact same handler signature (same positional parameter types, same
+    return type). Server blocks (#65) bind handlers to endpoints purely by
+    POSITION, so two endpoints this shape-identical are exactly the case where
+    a handler-order mix-up compiles clean and silently misroutes — nothing
+    about the types can catch it, because nothing about the types differs.
+    Not fired against a `server`, deliberately: it is a property of the `api`
+    declaration itself (any server for it inherits the same ambiguity), and
+    checking it there means it survives an api with no server yet. *)
+(** W096 — a route string that already carries the App's `mountPath` prefix.
+
+    `mountPath: "/api"` makes the runtime serve every api-block route under
+    `/api`, so a route ALSO written as `get "/api/widgets"` is served at
+    `/api/api/widgets`. Nobody wants that, and it is the natural mistake when
+    adding `mountPath` to a service whose routes were hand-prefixed before the
+    field existed (which is exactly the migration issue #75 describes).
+
+    Segment-aware on purpose: `mountPath: "/api"` must not fire on a route
+    beginning `/apiary`. Reported at the endpoint, since that is the line to
+    edit — the `mountPath` declaration is the correct half. *)
+let lint_mount_path_double_prefix filename (source : string) (out : lint_diag list ref) =
+  match Parser.parse_module filename source with
+  | Err _ -> ()
+  | Ok m ->
+    (match Ast.main_app_string_field m "mountPath" with
+     | None -> ()
+     | Some mp ->
+       let segs p = List.filter (fun s -> s <> "") (String.split_on_char '/' p) in
+       let mount_segs = segs mp in
+       if mount_segs <> [] then begin
+         let rec starts_with prefix l = match prefix, l with
+           | [], _ -> true
+           | _, [] -> false
+           | p :: ps, x :: xs -> p = x && starts_with ps xs
+         in
+         List.iter (function
+           | Ast.DApi (api : Ast.api_form) ->
+             List.iter (fun (ep : Ast.api_endpoint) ->
+               if starts_with mount_segs (segs ep.path) then
+                 let stripped =
+                   let rest = segs ep.path in
+                   let rec drop n l = if n <= 0 then l else
+                     match l with [] -> [] | _ :: t -> drop (n - 1) t in
+                   "/" ^ String.concat "/" (drop (List.length mount_segs) rest)
+                 in
+                 out := {
+                   file     = filename;
+                   line     = ep.loc.start.line;
+                   col      = ep.loc.start.col;
+                   severity = "warning";
+                   code     = "W096";
+                   message  = Printf.sprintf
+                     "route `%s` already starts with this App's `mountPath: %S`, so it \
+                      is served at `%s%s` — the prefix is applied twice. Drop it from \
+                      the route string and write `%S`; `mountPath` adds it to every \
+                      api-block route for you."
+                     ep.path mp mp ep.path stripped;
+                   fix = None;
+                 } :: !out
+             ) api.endpoints
+           | _ -> ()) m.decls
+       end)
+
+let lint_ambiguous_handler_signatures filename (source : string) (out : lint_diag list ref) =
+  match Parser.parse_module filename source with
+  | Err _ -> ()
+  | Ok m ->
+    let method_str = function
+      | Ast.GET -> "GET" | Ast.POST -> "POST" | Ast.PUT -> "PUT"
+      | Ast.DELETE -> "DELETE" | Ast.PATCH -> "PATCH" | Ast.SSE -> "SSE" in
+    (* A parameter's contribution to the key is its type AND its proof
+       obligation.  Proofs must be in the key: two endpoints differing only in a
+       proof are NOT interchangeable, because a handler's parameter carries that
+       obligation and the auth-wiring check already rejects the mismatch — so
+       warning about them would claim "nothing catches it" when something does.
+       (`GET /greet` needing `Authenticated u` and `POST /admin/wipe` needing
+       `Authenticated u && Admin u` were exactly this false positive.) *)
+    let param_key (b : Ast.binding) =
+      let ty = pp_type_expr b.type_expr in
+      match b.proof_ann with
+      | None -> ty
+      | Some p ->
+        let preds = List.sort_uniq String.compare (proof_predicates p) in
+        Printf.sprintf "%s ::: %s" ty (String.concat " && " preds)
+    in
+    let params_of (ep : Ast.api_endpoint) =
+      let auth_ty = match ep.auth with
+        | Some (a : Ast.api_auth) -> [ param_key a.binding ]
+        | None -> [] in
+      let cap_tys = List.map (fun (c : Ast.api_capture) -> param_key c.binding) ep.captures in
+      let body_ty = match Ast.ep_body ep with
+        | Some (b : Ast.binding) -> [ param_key b ]
+        | None -> [] in
+      auth_ty @ cap_tys @ body_ty
+    in
+    let signature_of (ep : Ast.api_endpoint) =
+      let spec = Ast.ep_return_spec ep in
+      let ret =
+        let ty = match return_value_type spec with
+          | Some t -> pp_type_expr t
+          | None -> "Unit" in
+        (* The RESPONSE proof belongs in the key for the same reason a
+           parameter's does: the server-block check requires a handler's return
+           to establish everything the endpoint advertises, so two endpoints
+           differing in return proof are not interchangeable and there is
+           nothing to warn about. *)
+        match List.sort_uniq String.compare
+                (pred_names_of_return_spec spec @ forall_preds_of_return_spec spec) with
+        | [] -> ty
+        | preds -> Printf.sprintf "%s ? %s" ty (String.concat " && " preds)
+      in
+      (* The METHOD is part of the key too: a handler declares the method(s) it
+         serves, and the server-block cross-check rejects a handler landing in a
+         slot whose method it did not declare.  So endpoints differing in method
+         are structurally distinguishable and there is nothing to warn about. *)
+      Printf.sprintf "%s (%s) -> %s"
+        (method_str ep.method_) (String.concat ", " (params_of ep)) ret
+    in
+    List.iter (function
+      | Ast.DApi (api : Ast.api_form) ->
+        (* A param-less endpoint (`() -> X`) has nothing a newtype could
+           disambiguate, and health-check-shaped routes collide on it
+           constantly — skip those rather than warn with no actionable fix. *)
+        let non_sse =
+          List.filter (fun (ep : Ast.api_endpoint) ->
+            ep.method_ <> Ast.SSE && params_of ep <> []) api.endpoints in
+        (* ONE finding per collision GROUP, not per pair.  Pairwise reporting
+           turns N indistinguishable endpoints into N(N-1)/2 warnings — six for
+           four routes — and a lint that noisy stops being read. *)
+        let groups : (string, Ast.api_endpoint list ref) Hashtbl.t = Hashtbl.create 8 in
+        let order = ref [] in
+        List.iter (fun (ep : Ast.api_endpoint) ->
+          let k = signature_of ep in
+          match Hashtbl.find_opt groups k with
+          | Some acc -> acc := ep :: !acc
+          | None -> Hashtbl.replace groups k (ref [ ep ]); order := k :: !order
+        ) non_sse;
+        List.iter (fun k ->
+          match Hashtbl.find_opt groups k with
+          | None -> ()
+          | Some acc ->
+            let members = List.rev !acc in
+            if List.length members > 1 then begin
+              let label (ep : Ast.api_endpoint) =
+                Printf.sprintf "`%s %s`" (method_str ep.method_) ep.path in
+              let names = List.map label members in
+              (* Report at the SECOND member: the first is not the problem, and
+                 an editor squiggle on the later duplicate is where the reader
+                 is most likely to be looking when they added it. *)
+              let anchor = List.nth members 1 in
+              out := {
+                file     = filename;
+                line     = anchor.loc.start.line;
+                col      = anchor.loc.start.col;
+                severity = "warning";
+                code     = "W095";
+                message  = Printf.sprintf
+                  "%s in api `%s` share one handler signature `%s`. Handlers are \
+                   paired to endpoints by POSITION, and these are the endpoints \
+                   the compiler cannot tell apart if their handlers are ever \
+                   reordered — everything else about the pairing (method, \
+                   parameter types, proofs, return type) it already verifies. \
+                   Giving a parameter its own type — `type ProjectId = Int` \
+                   rather than a bare `Int` — makes the pairing checkable, and \
+                   usually pays for itself elsewhere too."
+                  (String.concat " and " names) api.name k;
+                fix = None;
+              } :: !out
+            end
+        ) (List.rev !order)
+      | _ -> ()) m.decls
+
 let lint_missing_email_worker filename (source : string) (out : lint_diag list ref) =
   match Parser.parse_module filename source with
   | Err _ -> ()
@@ -1780,6 +1954,8 @@ let lint_file ?logical_path (filename : string) : Compile.diagnostic list =
     lint_unused_locals_and_dead_code filename src out;
     lint_missing_email_worker    filename src out;
     lint_unactivated_runtime_decls filename src out;
+    lint_ambiguous_handler_signatures filename src out;
+    lint_mount_path_double_prefix    filename src out;
     lint_unexported_signature_names filename src out;
     lint_int_at_wire                filename src out;
     lint_database_indexes           filename parse_path src out

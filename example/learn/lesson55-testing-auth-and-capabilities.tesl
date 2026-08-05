@@ -92,14 +92,14 @@ api AuthApi {
     -> String
 }
 
-handler health() -> String requires [] = "ok"
+handler get health() -> String requires [] = "ok"
 
-handler profile(user: String ::: Authenticated user) -> String requires [] =
+handler get profile(user: String ::: Authenticated user) -> String requires [] =
   "profile of ${user}"
 
 server AuthServer for AuthApi {
-  health = health
-  profile = profile
+  health
+  profile
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

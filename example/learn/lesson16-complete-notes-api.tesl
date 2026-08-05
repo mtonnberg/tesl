@@ -124,7 +124,7 @@ capturer noteIdCapture: noteId: String using stringCodec
 #   HTTP request → userAuth stamps user as Authenticated
 #               → NewNote decoder runs checkSafeTitle and checkSafeContent
 #               → handler receives user (Authenticated) + body (validated NewNote)
-handler createNote(user: String ::: Authenticated user, body: NewNote) -> Note
+handler post createNote(user: String ::: Authenticated user, body: NewNote) -> Note
   requires [noteDbWrite, time] =
   # Inside here: user is authenticated, body.title has SafeTitle, body.content has SafeContent.
   # All proven before we even start executing.
@@ -132,7 +132,7 @@ handler createNote(user: String ::: Authenticated user, body: NewNote) -> Note
   Note { id: noteId, title: body.title, content: body.content, authorId: user, createdAt: nowMillis() }
 
 # getNote: authenticated user + note ID → returns Maybe Note.
-handler getNote(user: String ::: Authenticated user, noteId: String) -> Maybe Note
+handler get getNote(user: String ::: Authenticated user, noteId: String) -> Maybe Note
   requires [noteDbRead] =
   # noteId is the parsed URL capture, plain String (no extra establish from capture here).
   # user is authenticated.
@@ -156,8 +156,8 @@ api NotesApi {
 # ─── Server ────────────────────────────────────────────────────────────────────
 
 server NotesServer for NotesApi {
-  createNote = createNote
-  getNote = getNote
+  createNote
+  getNote
 }
 
 # ─────────────────────────────────────────────

@@ -88,9 +88,9 @@ let server_prog clause =
      import Tesl.Prelude exposing [String]\n\
      import Tesl.Database exposing [Database, DatabaseBackend, Memory]\n\
      import Tesl.App exposing [App]\n\
-     handler healthCheck() -> String requires [] = \"ok\"\n\
+     handler get healthCheck() -> String requires [] = \"ok\"\n\
      api HealthApi {\n  get \"/health\" -> String\n}\n\
-     server HealthServer for HealthApi {\n  endpoint_0 = healthCheck\n  %s\n}\n\
+     server HealthServer for HealthApi {\n  healthCheck\n  %s\n}\n\
      database ProbeDb = Database {\n  entities: []\n  backend: Memory\n}\n\
      main() -> App requires [] =\n\
      \  App {\n    database: ProbeDb\n    api: HealthServer\n    port: 8086\n  }\n"
@@ -157,11 +157,11 @@ let t_sso_flow_requires_httpclient () =
        import Tesl.Prelude exposing [String]\n\
        import Tesl.Database exposing [Database, DatabaseBackend, Memory]\n\
        import Tesl.App exposing [App]\n\
-       handler healthCheck() -> String requires [] = \"ok\"\n\
+       handler get healthCheck() -> String requires [] = \"ok\"\n\
        fn githubConn() -> String requires [] = \"c\"\n\
        fn linkUser() -> String requires [] = \"u\"\n\
        api HealthApi {\n  get \"/health\" -> String\n}\n\
-       server HealthServer for HealthApi {\n  endpoint_0 = healthCheck\n  \
+       server HealthServer for HealthApi {\n  healthCheck\n  \
        sso \"github\" connection githubConn onIdentity linkUser\n  \
        publicOrigin \"https://app.example.com\"\n  sessionKey \"K\"\n}\n\
        database ProbeDb = Database {\n  entities: []\n  backend: Memory\n}\n\
@@ -248,10 +248,10 @@ let sso_server_prog defs clause =
      import Tesl.HttpClient exposing [httpClient]\n\
      import Tesl.Database exposing [Database, DatabaseBackend, Memory]\n\
      import Tesl.App exposing [App]\n\
-     handler healthCheck() -> String requires [] = \"ok\"\n\
+     handler get healthCheck() -> String requires [] = \"ok\"\n\
      %s\n\
      api HealthApi {\n  get \"/health\" -> String\n}\n\
-     server HealthServer for HealthApi {\n  endpoint_0 = healthCheck\n  %s\n}\n\
+     server HealthServer for HealthApi {\n  healthCheck\n  %s\n}\n\
      database ProbeDb = Database {\n  entities: []\n  backend: Memory\n}\n\
      main() -> App requires [httpClient] =\n  App {\n    database: ProbeDb\n    api: HealthServer\n    port: 8086\n  }\n"
     defs clause
@@ -305,10 +305,10 @@ let revoked_prog defs clause =
      import Tesl.Time exposing [PosixMillis]\n\
      import Tesl.Database exposing [Database, DatabaseBackend, Memory]\n\
      import Tesl.App exposing [App]\n\
-     handler healthCheck() -> String requires [] = \"ok\"\n\
+     handler get healthCheck() -> String requires [] = \"ok\"\n\
      %s\n\
      api HealthApi {\n  get \"/health\" -> String\n}\n\
-     server HealthServer for HealthApi {\n  endpoint_0 = healthCheck\n  %s\n}\n\
+     server HealthServer for HealthApi {\n  healthCheck\n  %s\n}\n\
      database ProbeDb = Database {\n  entities: []\n  backend: Memory\n}\n\
      main() -> App requires [] =\n  App {\n    database: ProbeDb\n    api: HealthServer\n    port: 8086\n  }\n"
     defs clause
@@ -373,11 +373,11 @@ let minting_server_prog defs clause =
      import Tesl.Http exposing [Http.setSessionCookie, cookieCap]\n\
      import Tesl.Database exposing [Database, DatabaseBackend, Memory]\n\
      import Tesl.App exposing [App]\n\
-     handler healthCheck() -> String requires [] = \"ok\"\n\
+     handler get healthCheck() -> String requires [] = \"ok\"\n\
      fn mint(t: JwtToken) -> Unit requires [cookieCap] = Http.setSessionCookie t\n\
      %s\n\
      api HealthApi {\n  get \"/health\" -> String\n}\n\
-     server HealthServer for HealthApi {\n  endpoint_0 = healthCheck\n  %s\n}\n\
+     server HealthServer for HealthApi {\n  healthCheck\n  %s\n}\n\
      database ProbeDb = Database {\n  entities: []\n  backend: Memory\n}\n\
      main() -> App requires [] =\n  App {\n    database: ProbeDb\n    api: HealthServer\n    port: 8086\n  }\n"
     defs clause

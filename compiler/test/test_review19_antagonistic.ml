@@ -86,7 +86,7 @@ codec Body {
   fromJson [{ name <- "name" with_codec stringCodec }]
 }
 
-handler createItem(session: String ::: Authenticated session, item: Body)
+handler post createItem(session: String ::: Authenticated session, item: Body)
   -> String requires [] =
   item.name
 
@@ -97,7 +97,7 @@ api TestApi {
 }
 
 server TestServer for TestApi {
-  createItem = createItem
+  createItem
 }
 |} in
   (* Handler has auth-proof param but endpoint declares no auth — must be caught *)
@@ -122,7 +122,7 @@ codec Body {
   fromJson [{ name <- "name" with_codec stringCodec }]
 }
 
-handler createItemNoAuth(item: Body)
+handler post createItemNoAuth(item: Body)
   -> String requires [] =
   item.name
 
@@ -134,7 +134,7 @@ api TestApi2 {
 }
 
 server TestServer2 for TestApi2 {
-  createItem = createItemNoAuth
+  createItemNoAuth
 }
 |} in
   (* Endpoint requires auth, handler has no auth-proof parameter — must be caught *)

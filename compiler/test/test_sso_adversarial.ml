@@ -76,10 +76,10 @@ let sso_prog ?(imports = "") ?(defs = "") ~server_extra ~caps () =
      import Tesl.App exposing [App]\n\
      fn githubConn() -> SsoConnection requires [envRead] = Sso.defaults Github (requireEnv \"I\") (requireSecret \"S\")\n\
      fn linkUser(identity: SsoIdentity) -> String = Sso.subject identity\n\
-     handler healthCheck() -> String requires [] = \"ok\"\n\
+     handler get healthCheck() -> String requires [] = \"ok\"\n\
      %s\n\
      api AppApi {\n  get \"/health\" -> String\n}\n\
-     server AppServer for AppApi {\n  endpoint_0 = healthCheck\n  \
+     server AppServer for AppApi {\n  healthCheck\n  \
      sso \"github\" connection githubConn onIdentity linkUser\n  \
      publicOrigin \"https://app.example.com\"\n  sessionKey \"SESSION_KEY\"\n  %s\n}\n\
      database ProbeDb = Database {\n  entities: []\n  backend: Memory\n}\n\

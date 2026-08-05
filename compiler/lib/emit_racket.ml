@@ -1554,9 +1554,9 @@ let server_tools_endpoint_schema (codecs : Ast.codec_form list) (ep : Ast.api_en
     (String.concat "," (List.map (fun (n, _) -> Printf.sprintf "%S" n) all))
 
 (* server → per-endpoint (tool name, description, schema); tool name = the
-   server-binding LHS (paired positionally with the api's non-SSE endpoints,
-   exactly as [emit_api] pairs them); description = the bound handler's
-   doc-comment, else "METHOD /path". *)
+   bound handler's own name (#65: server blocks are a bare handler list now),
+   paired positionally with the api's non-SSE endpoints, exactly as [emit_api]
+   pairs them; description = the handler's doc-comment, else "METHOD /path". *)
 let build_server_tools_meta (decls : Ast.top_decl list) (srv : Ast.server_form)
   : (string * string * string) list =
   let api_opt = List.find_map (function
@@ -1570,7 +1570,7 @@ let build_server_tools_meta (decls : Ast.top_decl list) (srv : Ast.server_form)
       | _ -> None) decls in
     let non_sse = List.filter (fun (ep : Ast.api_endpoint) -> ep.method_ <> SSE)
         api.endpoints in
-    let bnames = List.map fst srv.bindings in
+    let bnames = srv.handlers in
     let paired =
       if List.length bnames = List.length non_sse
       then List.combine bnames non_sse
@@ -1580,16 +1580,13 @@ let build_server_tools_meta (decls : Ast.top_decl list) (srv : Ast.server_form)
       | Ast.DELETE -> "DELETE" | Ast.PATCH -> "PATCH" | Ast.SSE -> "SSE" in
     List.map (fun (bname, (ep : Ast.api_endpoint)) ->
       let desc =
-        match List.assoc_opt bname srv.bindings with
-        | Some handler_name ->
-          (match List.find_map (function
-             | Ast.DFunc (fd : Ast.func_decl) when fd.name = handler_name -> Some fd
-             | _ -> None) decls with
-           | Some fd ->
-             (match fd.doc with
-              | Some d when String.trim d <> "" -> d
-              | _ -> Printf.sprintf "%s %s" (method_str ep.method_) ep.path)
-           | None -> Printf.sprintf "%s %s" (method_str ep.method_) ep.path)
+        match List.find_map (function
+          | Ast.DFunc (fd : Ast.func_decl) when fd.name = bname -> Some fd
+          | _ -> None) decls with
+        | Some fd ->
+          (match fd.doc with
+           | Some d when String.trim d <> "" -> d
+           | _ -> Printf.sprintf "%s %s" (method_str ep.method_) ep.path)
         | None -> Printf.sprintf "%s %s" (method_str ep.method_) ep.path
       in
       (bname, desc, server_tools_endpoint_schema codecs ep)
@@ -6642,7 +6639,7 @@ let rec emit_api ctx ?(server_name="") ?(server_bindings=[]) (api : api_form) =
   emit_line ctx (Printf.sprintf "(define-api %s" api.name);
   let endpoint_names =
     if List.length server_bindings = List.length http_endpoints then
-      List.map fst server_bindings
+      server_bindings
     else
       List.mapi (fun i _ -> Printf.sprintf "endpoint%d" (i + 1)) http_endpoints
   in
@@ -6818,9 +6815,9 @@ and emit_return_spec_type ctx = function
 let emit_server ctx (sv : server_form) =
   emit_line ctx (Printf.sprintf "(define-server %s" sv.name);
   emit_line ctx (Printf.sprintf "  #:api %s" sv.api_name);
-  List.iter (fun (ep, handler) ->
-    emit_line ctx (Printf.sprintf "  [%s %s]" ep handler)
-  ) sv.bindings;
+  List.iter (fun handler ->
+    emit_line ctx (Printf.sprintf "  [%s %s]" handler handler)
+  ) sv.handlers;
   emit_line ctx ")";
   (* Phase 3: set the closed session policy at module load, before serve. *)
   (match sv.session_policy with
@@ -8586,7 +8583,7 @@ let emit_module ctx (m : module_form) =
       in
       (* Get server bindings for this API *)
       let server_bindings = List.find_map (function
-        | DServer sv when sv.api_name = api.name -> Some sv.bindings
+        | DServer sv when sv.api_name = api.name -> Some sv.handlers
         | _ -> None
       ) m.decls |> Option.value ~default:[] in
       emit_api ctx ~server_name ~server_bindings api

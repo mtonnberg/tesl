@@ -36,24 +36,24 @@ import Tesl.ApiTest exposing [statusOk]
 
 # ── Code under test: handlers whose RESULTS contain braces ───────────────────
 
-handler emptyObject() -> String requires [] =
+handler get emptyObject() -> String requires [] =
   "{}"
 
-handler jsonObject() -> String requires [] =
+handler get jsonObject() -> String requires [] =
   "{\"id\": 1}"
 
-handler unbalancedQuote() -> String requires [] =
+handler get unbalancedQuote() -> String requires [] =
   "{\"}"
 
-handler unclosedBrace() -> String requires [] =
+handler get unclosedBrace() -> String requires [] =
   "a { b"
 
-handler nestedBraces() -> String requires [] =
+handler get nestedBraces() -> String requires [] =
   "{\"a\": {\"b\": 2}}"
 
 capturer idCapture: id: String using stringCodec
 
-handler echoThing(id: String) -> String requires [] =
+handler get echoThing(id: String) -> String requires [] =
   "thing-" ++ id
 
 api TemplateApi {
@@ -73,12 +73,12 @@ api TemplateApi {
 }
 
 server TemplateServer for TemplateApi {
-  endpoint_0 = emptyObject
-  endpoint_1 = jsonObject
-  endpoint_2 = unbalancedQuote
-  endpoint_3 = unclosedBrace
-  endpoint_4 = nestedBraces
-  endpoint_5 = echoThing
+  emptyObject
+  jsonObject
+  unbalancedQuote
+  unclosedBrace
+  nestedBraces
+  echoThing
 }
 
 database TemplateDb = Database {

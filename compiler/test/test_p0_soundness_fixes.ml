@@ -194,14 +194,14 @@ let auth_header =
 let test_p0_3_auth_over_declared_rejected () =
   should_fail "not established by\\|privilege-escalation\\|unproven"
     (auth_header ^
-     "handler getAdminTask(requestUser: AdminUser ::: IsAdmin requestUser) -> AdminTask =\n\
+     "handler get getAdminTask(requestUser: AdminUser ::: IsAdmin requestUser) -> AdminTask =\n\
       \  AdminTask { id: 2, title: \"x\", ownerId: \"anna\" }\n\
       api TheApi {\n\
       \  get \"/tasks/admin\"\n\
       \    auth requestUser: AdminUser ::: IsAdmin requestUser via cookieUserAuth\n\
       \    -> AdminTask\n\
       }\n\
-      server TheServer for TheApi { getAdminTask = getAdminTask }\n\
+      server TheServer for TheApi { getAdminTask }\n\
       main() -> App requires [readTaskCookie] =\n\
       \  App { database: TheDb  api: TheServer  port: defaultExamplePort }\n")
 
@@ -209,14 +209,14 @@ let test_p0_3_auth_over_declared_rejected () =
 let test_p0_3_auth_subset_accepted () =
   should_pass
     (auth_header ^
-     "handler getAdminTask(requestUser: AdminUser ::: Authenticated requestUser) -> AdminTask =\n\
+     "handler get getAdminTask(requestUser: AdminUser ::: Authenticated requestUser) -> AdminTask =\n\
       \  AdminTask { id: 2, title: \"x\", ownerId: \"anna\" }\n\
       api TheApi {\n\
       \  get \"/tasks/admin\"\n\
       \    auth requestUser: AdminUser ::: Authenticated requestUser via cookieUserAuth\n\
       \    -> AdminTask\n\
       }\n\
-      server TheServer for TheApi { getAdminTask = getAdminTask }\n\
+      server TheServer for TheApi { getAdminTask }\n\
       main() -> App requires [readTaskCookie] =\n\
       \  App { database: TheDb  api: TheServer  port: defaultExamplePort }\n")
 
@@ -250,7 +250,7 @@ let test_p0_3_auth_named_pack_drop_rejected () =
       \  case Dict.lookup \"user\" request.cookies of\n\
       \    Nothing -> fail 401 \"not logged in\"\n\
       \    Something userId -> ok userId ::: Authenticated userId\n\
-      handler getAdminTask() -> AdminTask\n\
+      handler get getAdminTask() -> AdminTask\n\
       \  requires [] =\n\
       \  AdminTask { id: 2, title: \"x\", ownerId: \"anna\" }\n\
       api TheApi {\n\
@@ -258,7 +258,7 @@ let test_p0_3_auth_named_pack_drop_rejected () =
       \    auth user: String ::: Authenticated user via cookieAuth\n\
       \    -> AdminTask\n\
       }\n\
-      server TheServer for TheApi { getAdminTask = getAdminTask }\n\
+      server TheServer for TheApi { getAdminTask }\n\
       main() -> App requires [readTaskCookie] =\n\
       \  App { database: TheDb  api: TheServer  port: defaultExamplePort }\n")
 

@@ -3017,7 +3017,7 @@ let parse_func_body s =
   end
 
 (** Parse [fn name(params) -> RetSpec = body]. *)
-let parse_fn_decl_named kind name loc0 s =
+let parse_fn_decl_named ?(http_methods = []) kind name loc0 s =
   let* params = parse_params s in
   (* optional 'requires [...]' — for handlers, before or after return type *)
   let* caps_before = parse_requires s in
@@ -3118,15 +3118,44 @@ let parse_fn_decl_named kind name loc0 s =
   if (consumed_decl_indent || indent_before_return) && peek s = DEDENT then advance s;
   let loc = span loc0 (current_loc s) in
   return { kind; name; params; return_spec; capabilities; body = body'; loc;
-           desugared_from = None; doc = None }
+           desugared_from = None; doc = None; http_methods }
 
 (* Read the function name, then parse the rest of the declaration. The decl's
    loc must start at the name (callers consumed the keyword), matching the
    pre-refactor behaviour relied on by go-to-definition / occurrences. *)
-let parse_fn_decl kind s =
+let parse_fn_decl ?(http_methods = []) kind s =
   let loc0 = current_loc s in
   let* name = expect_ident s in
-  parse_fn_decl_named kind name loc0 s
+  parse_fn_decl_named ~http_methods kind name loc0 s
+
+(** The HTTP method word(s) a `handler` declares before its name
+    (`handler get greet(…)`, `handler get post search(…)`).
+
+    Contextual, exactly like `index` / `unique index` on entities (see
+    [at_entity_index]): the verbs stay ordinary identifiers, so a handler may
+    still be NAMED `get` or `post`.  One token of lookahead separates the two
+    shapes — a method word is always followed by another identifier (the next
+    verb, or the name), whereas the name itself is followed by `(`:
+
+      handler get greet(…)   →  `get` has IDENT after it   ⇒ method
+      handler get(…)         →  `get` has LPAREN after it  ⇒ the name
+      handler get post(…)    →  `get` is a method, `post` is the name
+
+    Returns the methods in declaration order; [[]] when none are stated. *)
+let parse_handler_methods s =
+  let method_of = function
+    | "get" -> Some GET | "post" -> Some POST | "put" -> Some PUT
+    | "delete" -> Some DELETE | "patch" -> Some PATCH | _ -> None in
+  let acc = ref [] in
+  let continue_ = ref true in
+  while !continue_ do
+    match peek s, peek2 s with
+    | IDENT v, IDENT _ when method_of v <> None ->
+      advance s;
+      acc := Option.get (method_of v) :: !acc
+    | _ -> continue_ := false
+  done;
+  List.rev !acc
 
 (** Is the token cursor sitting on an entity index entry rather than a field?
 
@@ -4315,7 +4344,8 @@ let parse_server_form s =
   let* api_name = expect_uident s in
   let* _ = expect s LBRACE in
   skip_layout s;
-  let bindings = ref [] in
+  let handlers = ref [] in
+  let handler_parse_err : parse_error option ref = ref None in
   let session_policy = ref None in
   let public_origin = ref None in
   let sso_clauses = ref [] in
@@ -4460,21 +4490,42 @@ let parse_server_form s =
            sso_clauses := (seg, conn, idf) :: !sso_clauses;
            skip_layout s
          | _ -> skip_layout s)
-      | Ok ep_name ->
-        (match expect s EQ with
-         | Ok () ->
+      | Ok ident ->
+        let ident_loc = last_consumed_loc s in
+        (match peek s with
+         | EQ ->
+           (* Removed by #65: server blocks bind endpoints by POSITION, so a
+              `name =` prefix here only ever looked name-keyed. *)
+           advance s; skip_layout s;
+           let handler_loc = current_loc s in
            (match expect_ident s with
             | Ok handler_fn ->
-              bindings := (ep_name, handler_fn) :: !bindings;
+              if !handler_parse_err = None then
+                handler_parse_err := Some {
+                  msg = Printf.sprintf
+                    "server blocks list handlers by position now, not `name = handler` \
+                     — that prefix was always matched positionally, never by name. \
+                     Write just `%s`." handler_fn;
+                  loc = ident_loc;
+                  fix = Some (Diag_fix.Replace_range {
+                    start_line = ident_loc.start.line; start_col = ident_loc.start.col;
+                    end_line = handler_loc.start.line; end_col = handler_loc.start.col;
+                    replacement = "" }) };
+              handlers := handler_fn :: !handlers;
               skip_layout s
             | Err _ -> ())
-         | Err _ -> ())
+         | _ ->
+           handlers := ident :: !handlers;
+           skip_layout s)
       | Err _ -> advance s
     end
   done;
+  (match !handler_parse_err with
+   | Some e -> Err e
+   | None ->
   let* _ = expect s RBRACE in
   let loc = span loc0 (current_loc s) in
-  return { name; api_name; bindings = List.rev !bindings;
+  return { name; api_name; handlers = List.rev !handlers;
            session_policy = !session_policy; public_origin = !public_origin;
            sso_clauses = List.rev !sso_clauses;
            sso_session_key_env = !sso_session_key_env;
@@ -4486,7 +4537,7 @@ let parse_server_form s =
            password_policy_fn = !password_policy_fn;
            trusted_proxies = List.rev !trusted_proxies;
            health_probe_path = !health_probe_path;
-           content_security_policy = !content_security_policy; loc }
+           content_security_policy = !content_security_policy; loc })
 
 (** Parse workers block. *)
 (** Parse a test body: sequence of let/expect/expectFail statements. *)
@@ -5235,7 +5286,10 @@ and parse_top_decl s =
     return (DFunc fd)
   | HANDLER ->
     advance s;
-    let* fd = parse_fn_decl HandlerKind s in
+    (* `handler get greet(…)` — the method word(s) come between the keyword and
+       the name; contextual, so a handler may still be named `get`. *)
+    let http_methods = parse_handler_methods s in
+    let* fd = parse_fn_decl ~http_methods HandlerKind s in
     return (DFunc fd)
   | CHECK ->
     advance s;

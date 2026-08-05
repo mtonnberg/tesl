@@ -404,6 +404,31 @@ let registry : entry list = [
        another module — this lint sees one file at a time, so it only fires when \
        the same file also queries the entity.";
     manual = Some "best-practices#database-indexing" };
+  { code = "W095"; category = Lint;
+    title = "two api endpoints share one handler signature";
+    explanation = "A `server` block binds handlers to `api` endpoints by \
+       POSITION (#65), never by name — so two endpoints with the exact same \
+       handler signature (same parameter types in order, same return type) \
+       are ones the checker cannot tell apart if their handlers are ever \
+       reordered: the mix-up compiles clean and silently misroutes at \
+       runtime. Reported against the `api` block itself, not a `server`, \
+       since the ambiguity is a property of the endpoint shapes and holds \
+       for any server built against them. Giving each parameter its own type \
+       (`type ProjectId = Int` instead of a bare `Int`) usually removes the \
+       collision and often pays off elsewhere too. Param-less endpoints \
+       (`() -> X`) are not reported — there is no type to narrow.";
+    manual = Some "best-practices" };
+  { code = "W096"; category = Lint;
+    title = "route already carries the App's mountPath prefix";
+    explanation = "`App { … mountPath: \"/api\" }` makes the runtime serve every \
+       route the `api` block declares under that prefix, so a route also \
+       written as `get \"/api/widgets\"` is served at `/api/api/widgets` — the \
+       prefix is applied twice. Drop the prefix from the route string; that is \
+       the point of the field. This is the natural mistake when adding \
+       `mountPath` to a service whose routes were hand-prefixed before, which \
+       is the migration the field exists to remove. Matched by path SEGMENT, so \
+       `mountPath: \"/api\"` does not fire on a route beginning `/apiary`.";
+    manual = Some "language-spec" };
 
   (* ── Linter: security (SEC0xx) ─────────────────────────────────────────────
      Their own category, deliberately, so `tesl help codes` groups them apart
@@ -478,7 +503,7 @@ let registry : entry list = [
   { code = "SEC005"; category = Security;
     title = "state-changing capability in a GET route";
     explanation =
-      "A handler bound to a GET endpoint (transitively) reaches a \
+      "A handler declaring `get` (transitively) reaches a \
        state-changing capability — `dbWrite`, `queueWrite`, `pubsub` or \
        `emailCap`. A GET must be SAFE and idempotent: HTTP caches, \
        prefetchers, link crawlers and `<img>`/`<link>` tags all issue GETs \

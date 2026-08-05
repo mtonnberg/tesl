@@ -258,9 +258,9 @@ import Tesl.App exposing [App]
 capability adminOnly
 capability baseCap
 database MyDb = Database { entities: [] backend: Memory }
-handler getThing() -> String requires [adminOnly] = "thing"
+handler get getThing() -> String requires [adminOnly] = "thing"
 api MyApi { get "/thing" -> String }
-server MyServer for MyApi { getThing = getThing }
+server MyServer for MyApi { getThing }
 main() -> App requires [|} ^ grant ^ {|] =
   App { database: MyDb api: MyServer port: 8086 }
 |}

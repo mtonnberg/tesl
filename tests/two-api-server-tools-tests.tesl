@@ -58,15 +58,15 @@ auth cookieAuth(request: HttpRequest) -> u: User ::: Authenticated u =
 # ── The SHARED handlers — bound by BOTH servers ─────────────────────────────
 
 # Greet the authenticated user.
-handler greet(u: User ::: Authenticated u) -> String =
+handler get greet(u: User ::: Authenticated u) -> String =
   String.concat "hello " u.id
 
 # Summarize the user's account.
-handler accountSummary(u: User ::: Authenticated u) -> String =
+handler get accountSummary(u: User ::: Authenticated u) -> String =
   String.concat "summary for " u.id
 
 # Delete the user's account — deliberately NOT exposed to the agent.
-handler deleteAccount(u: User ::: Authenticated u) -> String =
+handler post deleteAccount(u: User ::: Authenticated u) -> String =
   String.concat "deleted " u.id
 
 api UserFacingApi {
@@ -96,14 +96,14 @@ api AgentFacingApi {
 }
 
 server UserFacingServer for UserFacingApi {
-  greet = greet
-  accountSummary = accountSummary
-  deleteAccount = deleteAccount
+  greet
+  accountSummary
+  deleteAccount
 }
 
 server AgentFacingServer for AgentFacingApi {
-  greet = greet
-  accountSummary = accountSummary
+  greet
+  accountSummary
 }
 
 check mkUser(u: User) -> u: User ::: Authenticated u =

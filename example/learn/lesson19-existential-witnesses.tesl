@@ -160,7 +160,7 @@ check checkSessionCreated(session: Session, sessionId: String, user: String ::: 
   else
     fail 500 "session id does not match the witness"
 
-handler createSession(user: String ::: Authenticated user)
+handler post createSession(user: String ::: Authenticated user)
   -> exists sessionId: String =>
         session: Session ::: IsCreatedSession (Id == sessionId) user
   requires [sessionCapability] =
@@ -220,7 +220,7 @@ api SessionApi {
 }
 
 server SessionServer for SessionApi {
-  createSession = createSession
+  createSession
 }
 
 # ═══════════════════════════════════════════

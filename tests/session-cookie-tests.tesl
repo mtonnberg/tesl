@@ -147,7 +147,7 @@ auth slidingSessionOwner(request: HttpRequest) -> user: String ::: Authenticated
 
 # ── Handlers ──────────────────────────────────────────────────────────────────
 
-handler login(body: LoginRequest) -> LoginOk requires [sessions] =
+handler post login(body: LoginRequest) -> LoginOk requires [sessions] =
   let token = JWT.sign (Dict.singleton "sub" body.user) (tenantAKey())
   let _ = Http.setSessionCookie token
   LoginOk { success: True }
@@ -155,7 +155,7 @@ handler login(body: LoginRequest) -> LoginOk requires [sessions] =
 # Signs with tenant B's key and hands it out as a session anyway.  Tenant A's
 # `auth` must refuse it: the two tenants share this server and the key is what
 # separates them.
-handler loginOtherTenant(body: LoginRequest) -> LoginOk requires [sessions] =
+handler post loginOtherTenant(body: LoginRequest) -> LoginOk requires [sessions] =
   let token = JWT.sign (Dict.singleton "sub" body.user) (tenantBKey())
   let _ = Http.setSessionCookie token
   LoginOk { success: True }
@@ -163,19 +163,19 @@ handler loginOtherTenant(body: LoginRequest) -> LoginOk requires [sessions] =
 # Sets the cookie and THEN fails.  Nothing about this handler is special — the
 # 2xx-only rule lives at the single point where every response is built, so the
 # cookie is dropped without the handler having to undo anything.
-handler loginThenFail(body: LoginRequest) -> LoginOk requires [sessions] =
+handler post loginThenFail(body: LoginRequest) -> LoginOk requires [sessions] =
   let token = JWT.sign (Dict.singleton "sub" body.user) (tenantAKey())
   let _ = Http.setSessionCookie token
   fail 403 "second factor required"
 
-handler whoami(user: String ::: Authenticated user) -> WhoAmI =
+handler get whoami(user: String ::: Authenticated user) -> WhoAmI =
   WhoAmI { userId: user }
 
-handler whoamiSliding(user: String ::: Authenticated user) -> WhoAmI =
+handler get whoamiSliding(user: String ::: Authenticated user) -> WhoAmI =
   WhoAmI { userId: user }
 
 # Logout needs nothing but the right to write the cookie — no key, no clock.
-handler logout() -> LoginOk requires [cookieCap] =
+handler post logout() -> LoginOk requires [cookieCap] =
   let _ = Http.clearSessionCookie()
   LoginOk { success: True }
 
@@ -183,7 +183,7 @@ handler logout() -> LoginOk requires [cookieCap] =
 # accumulator is scoped PER REQUEST: if it were a plain module-level list, or a
 # parameter with a mutable default, a cookie set by an earlier request served on
 # the same thread would ride out on this response.
-handler ping() -> LoginOk =
+handler get ping() -> LoginOk =
   LoginOk { success: True }
 
 # ── API and server ────────────────────────────────────────────────────────────
@@ -217,13 +217,13 @@ api SessionApi {
 }
 
 server SessionServer for SessionApi {
-  login = login
-  loginOtherTenant = loginOtherTenant
-  loginThenFail = loginThenFail
-  whoami = whoami
-  whoamiSliding = whoamiSliding
-  logout = logout
-  ping = ping
+  login
+  loginOtherTenant
+  loginThenFail
+  whoami
+  whoamiSliding
+  logout
+  ping
 }
 
 # ── The full Set-Cookie line ──────────────────────────────────────────────────
@@ -411,7 +411,7 @@ auth leakyAuth(request: HttpRequest) -> user: String ::: Authenticated user
       let _ = Http.setSessionCookie token
       ok "nobody" ::: Authenticated user
 
-handler leakyProbe(user: String ::: Authenticated user) -> WhoAmI =
+handler get leakyProbe(user: String ::: Authenticated user) -> WhoAmI =
   WhoAmI { userId: user }
 
 api LeakyApi {
@@ -421,7 +421,7 @@ api LeakyApi {
 }
 
 server LeakyServer for LeakyApi {
-  leakyProbe = leakyProbe
+  leakyProbe
 }
 
 api-test "an auth-block exception is a sanitized 500, not a leaked stack trace" for LeakyServer requires [sessions] {

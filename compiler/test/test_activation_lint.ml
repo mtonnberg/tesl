@@ -108,10 +108,10 @@ api AppApi {
 }
 
 server AppServer for AppApi {
-  endpoint_0 = root
+  root
 }
 
-handler root() -> String =
+handler get root() -> String =
   "ok"
 
 main() -> App requires [appService, queueRead] =
@@ -202,10 +202,10 @@ api AppApi {
 }
 
 server AppServer for AppApi {
-  endpoint_0 = root
+  root
 }
 
-handler root() -> String =
+handler get root() -> String =
   "ok"
 
 main() -> App requires [appService, queueRead] =

@@ -115,7 +115,7 @@
 
 (define AppServer-sse-routes '())
 (define-api AppApi
-  [endpoint_0 :
+  [me :
     (Auth [user : User ::: (Authenticated user)] #:via sessionOwner)
     :> "me"
     :> (Get JSON Profile)
@@ -124,7 +124,7 @@
 
 (define-server AppServer
   #:api AppApi
-  [endpoint_0 me]
+  [me me]
 )
 (void (__tjwt_current-session-revoked-hook (lambda (subj iat) (revoked subj (__ttime_Time.secondsToPosix iat)))))
 (register-listen-address! "AppServer" "127.0.0.1")

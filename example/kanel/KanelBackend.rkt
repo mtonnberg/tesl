@@ -247,7 +247,7 @@
     :> (ReqBody JSON [req : UpdateStatusRequest])
     :> (Put JSON Issue)
     ]
-  [addCommentHandler :
+  [addCommentAndNotifyHandler :
     (Auth [session : KanelSession ::: (Authenticated session)] #:via cookieAuth)
     :> "orgs"
     :> (Capture orgCapture [orgId : String ::: (ValidOrgId orgId)])
@@ -363,7 +363,7 @@
   [getIssueHandler getIssueHandler]
   [updateIssueHandler updateIssueHandler]
   [updateIssueStatusHandler updateIssueStatusHandler]
-  [addCommentHandler addCommentAndNotifyHandler]
+  [addCommentAndNotifyHandler addCommentAndNotifyHandler]
   [listCommentsHandler listCommentsHandler]
   [logTimeHandler logTimeHandler]
   [listTimeEntriesHandler listTimeEntriesHandler]

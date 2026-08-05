@@ -247,7 +247,7 @@ codec SyncRequest {
   ]
 }
 
-handler startSync(req: SyncRequest) -> String
+handler post startSync(req: SyncRequest) -> String
   requires [queueWrite] =
   enqueue SyncJob { tag: req.tag }
   "queued"
@@ -259,7 +259,7 @@ api SyncApi {
 }
 
 server SyncServer for SyncApi {
-  startSync = startSync
+  startSync
 }
 
 api-test "STUB-15: upstream timeout in a worker fails the job then dead-letters" for SyncServer requires [queueRead, queueWrite, webClient] {

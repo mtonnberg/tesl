@@ -233,7 +233,7 @@ capturer roomIdCapture: String ::: ValidRoomId roomId using stringCodec via chec
 
 # ─── Handlers ────────────────────────────────────────────────────────────────
 
-handler login(req: LoginRequest) -> ChatUser
+handler post login(req: LoginRequest) -> ChatUser
   requires [chatRead] =
   let existing = selectOne u from ChatUser where u.username == req.username
   case existing of
@@ -242,33 +242,33 @@ handler login(req: LoginRequest) -> ChatUser
     Something u ->
       u
 
-handler seedUser(req: LoginRequest)
+handler post seedUser(req: LoginRequest)
   -> exists userId: String => ChatUser ? FromDb (Id == userId)
   requires [chatWrite] =
   let userId = generatePrefixedId "usr"
   exists userId =>
     insert ChatUser { id: userId, username: req.username }
 
-handler listRooms(session: SessionUser ::: Authenticated session) -> List Room
+handler get listRooms(session: SessionUser ::: Authenticated session) -> List Room
   requires [chatRead] =
   telemetry "rooms.list" { user.id = session.id }
   select r from Room
 
-handler createRoom(session: SessionUser ::: Authenticated session, req: CreateRoomRequest)
+handler post createRoom(session: SessionUser ::: Authenticated session, req: CreateRoomRequest)
   -> exists roomId: String => Room ? FromDb (Id == roomId)
   requires [chatWrite] =
   let roomId = generatePrefixedId "room"
   exists roomId =>
     insert Room { id: roomId, name: req.name, createdAt: nowMillis() }
 
-handler getMessages(session: SessionUser ::: Authenticated session,
+handler get getMessages(session: SessionUser ::: Authenticated session,
                     roomId: String ::: ValidRoomId roomId)
   -> List Message ? ForAll (FromDb (RoomId == roomId))
   requires [chatRead] =
   telemetry "messages.get" { room.id = roomId, user.id = session.id }
   select m from Message where m.roomId == roomId
 
-handler postMessage(session: SessionUser ::: Authenticated session,
+handler post postMessage(session: SessionUser ::: Authenticated session,
                     roomId: String ::: ValidRoomId roomId,
                     req: PostMessageRequest)
   -> exists msgId: String => Message ? FromDb (Id == msgId)
@@ -377,12 +377,12 @@ api ChatApi {
 }
 
 server ChatServer for ChatApi {
-  seedUser = seedUser
-  login = login
-  listRooms = listRooms
-  createRoom = createRoom
-  getMessages = getMessages
-  postMessage = postMessage
+  seedUser
+  login
+  listRooms
+  createRoom
+  getMessages
+  postMessage
 }
 
 api-test "rooms require authentication" for ChatServer requires [chatRead] {

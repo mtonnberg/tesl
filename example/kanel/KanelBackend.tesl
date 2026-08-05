@@ -394,7 +394,7 @@ api KanelApi {
     -> Invoice
 }
 
-handler addCommentAndNotifyHandler(
+handler post addCommentAndNotifyHandler(
     session: KanelSession ::: Authenticated session,
     orgId: String ::: ValidOrgId orgId,
     issueId: String ::: ValidIssueId issueId,
@@ -420,34 +420,34 @@ handler addCommentAndNotifyHandler(
           }
 
 server KanelServer for KanelApi {
-  registerHandler = registerHandler
-  loginHandler = loginHandler
-  createOrgHandler = createOrgHandler
-  listMyOrgsHandler = listMyOrgsHandler
-  getOrgHandler = getOrgHandler
-  listOrgMembersHandler = listOrgMembersHandler
-  inviteMemberHandler = inviteMemberHandler
-  changeMemberRoleHandler = changeMemberRoleHandler
-  removeMemberHandler = removeMemberHandler
-  createProjectHandler = createProjectHandler
-  listProjectsHandler = listProjectsHandler
-  getProjectHandler = getProjectHandler
-  archiveProjectHandler = archiveProjectHandler
-  createIssueHandler = createIssueHandler
-  listIssuesHandler = listIssuesHandler
-  getIssueHandler = getIssueHandler
-  updateIssueHandler = updateIssueHandler
-  updateIssueStatusHandler = updateIssueStatusHandler
-  addCommentHandler = addCommentAndNotifyHandler
-  listCommentsHandler = listCommentsHandler
-  logTimeHandler = logTimeHandler
-  listTimeEntriesHandler = listTimeEntriesHandler
-  createInvoiceHandler = createInvoiceHandler
-  listInvoicesHandler = listInvoicesHandler
-  getInvoiceHandler = getInvoiceHandler
-  approveInvoiceHandler = approveInvoiceHandler
-  markSentHandler = markSentHandler
-  markPaidHandler = markPaidHandler
+  registerHandler
+  loginHandler
+  createOrgHandler
+  listMyOrgsHandler
+  getOrgHandler
+  listOrgMembersHandler
+  inviteMemberHandler
+  changeMemberRoleHandler
+  removeMemberHandler
+  createProjectHandler
+  listProjectsHandler
+  getProjectHandler
+  archiveProjectHandler
+  createIssueHandler
+  listIssuesHandler
+  getIssueHandler
+  updateIssueHandler
+  updateIssueStatusHandler
+  addCommentAndNotifyHandler
+  listCommentsHandler
+  logTimeHandler
+  listTimeEntriesHandler
+  createInvoiceHandler
+  listInvoicesHandler
+  getInvoiceHandler
+  approveInvoiceHandler
+  markSentHandler
+  markPaidHandler
 }
 
 api-test "organizations require authentication" for KanelServer requires [kanelDbRead] {

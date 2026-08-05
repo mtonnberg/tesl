@@ -243,7 +243,7 @@ database D = Database {
   backend: Memory
 }
 
-handler ping() -> String =
+handler get ping() -> String =
   "ok"
 
 api A {
@@ -252,7 +252,7 @@ api A {
 }
 
 server S for A {
-  ping = ping
+  ping
 }
 
 api-test "config ctor in api-test body" for S {

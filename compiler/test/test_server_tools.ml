@@ -133,11 +133,11 @@ auth adminAuth(request: HttpRequest) -> u: User ::: Authenticated u && Admin u =
     Nothing -> fail 401 "Missing admin cookie"
 
 # Greet the authenticated user.
-handler greet(u: User ::: Authenticated u) -> String%s =
+handler get greet(u: User ::: Authenticated u) -> String%s =
   String.concat "hello " u.id
 
 # Wipe everything. Admin only.
-handler adminWipe(u: User ::: Authenticated u && Admin u) -> String =
+handler post adminWipe(u: User ::: Authenticated u && Admin u) -> String =
   "wiped"
 
 api StApi {
@@ -150,8 +150,8 @@ api StApi {
 }
 
 server StServer for StApi {
-  greet = greet
-  adminWipe = adminWipe
+  greet
+  adminWipe
 }
 
 %s
@@ -270,10 +270,10 @@ auth robotAuth(request: HttpRequest) -> r: Robot ::: RobotAuth r =
     Something serial -> ok (Robot { serial: serial }) ::: RobotAuth r
     Nothing -> fail 401 "Missing robot cookie"
 
-handler forUsers(u: User ::: Authenticated u) -> String =
+handler get forUsers(u: User ::: Authenticated u) -> String =
   "user"
 
-handler forRobots(r: Robot ::: RobotAuth r) -> String =
+handler get forRobots(r: Robot ::: RobotAuth r) -> String =
   "robot"
 
 api MixedApi {
@@ -286,8 +286,8 @@ api MixedApi {
 }
 
 server MixedServer for MixedApi {
-  forUsers = forUsers
-  forRobots = forRobots
+  forUsers
+  forRobots
 }
 
 fn bad(u: User ::: Authenticated u) -> List Tool =

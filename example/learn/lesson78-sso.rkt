@@ -96,7 +96,7 @@
 
 (define AppServer-sse-routes '())
 (define-api AppApi
-  [endpoint_0 :
+  [me :
     (Auth [user : User ::: (Authenticated user)] #:via sessionOwner)
     :> "me"
     :> (Get JSON Profile)
@@ -105,7 +105,7 @@
 
 (define-server AppServer
   #:api AppApi
-  [endpoint_0 me]
+  [me me]
 )
 (void (__tjwt_current-session-policy __tjwt_short-session))
 (void (__tjwt_current-session-revoked-hook (lambda (subj iat) (revoked subj (__ttime_Time.secondsToPosix iat)))))

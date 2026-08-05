@@ -256,7 +256,7 @@ auth resolveCaller(request: HttpRequest) -> c: %s ::: Authenticated c
   let c = VariantA
   ok c ::: Authenticated c
 
-handler whoami(c: %s ::: Authenticated c) -> String
+handler get whoami(c: %s ::: Authenticated c) -> String
   requires [] =
   "ok"
 
@@ -267,7 +267,7 @@ api MiniApi {
 }
 
 server MiniServer for MiniApi {
-  whoami = whoami
+  whoami
 }
 |} type_decl auth_type auth_type auth_type auth_type
 
@@ -320,7 +320,7 @@ let cross_module_api_app = {|module App exposing []
 import Tesl.Prelude exposing [String, Bool(..)]
 import Callers exposing [Simple(..), Authenticated, resolveCaller]
 
-handler whoami(c: Simple ::: Authenticated c) -> String
+handler get whoami(c: Simple ::: Authenticated c) -> String
   requires [] =
   "ok"
 
@@ -331,7 +331,7 @@ api MiniApi {
 }
 
 server MiniServer for MiniApi {
-  whoami = whoami
+  whoami
 }
 |}
 
@@ -361,7 +361,7 @@ auth resolveCaller(request: HttpRequest) -> c: Simple ::: Authenticated c
   let c = VariantA
   ok c ::: Authenticated c
 
-handler whoami(c: Simple ::: Authenticated c) -> String
+handler get whoami(c: Simple ::: Authenticated c) -> String
   requires [] =
   "ok"
 
@@ -372,7 +372,7 @@ api MiniApi {
 }
 
 server MiniServer for MiniApi {
-  whoami = whoami
+  whoami
 }
 
 type Simple
@@ -579,7 +579,7 @@ auth resolveCaller(request: HttpRequest) -> c: %s ::: Authenticated c
   let c = %s
   ok c ::: Authenticated c
 
-handler whoami(c: %s ::: Authenticated c) -> String
+handler get whoami(c: %s ::: Authenticated c) -> String
   requires [] =
   "ok"
 
@@ -590,7 +590,7 @@ api MiniApi {
 }
 
 server MiniServer for MiniApi {
-  whoami = whoami
+  whoami
 }
 |} extra_decls ty ty (match ty with
      | "RecordShape" -> "RecordShape { id: \"x\" }"

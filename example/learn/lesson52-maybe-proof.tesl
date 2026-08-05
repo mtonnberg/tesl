@@ -188,39 +188,39 @@ fn exampleTree() -> PositiveTree =
   let t3 = insertRaw t2 5
   insertRaw t3 2
 
-handler getSize() -> Int requires [] = treeSize (exampleTree())
+handler get getSize() -> Int requires [] = treeSize (exampleTree())
 
-handler getMin() -> Int requires [] =
+handler get getMin() -> Int requires [] =
   let m = findMin (exampleTree())
   case m of
     Left _ -> 0
     Right v -> needPositive v
 
-handler getMinAlt() -> Int requires [] =
+handler get getMinAlt() -> Int requires [] =
   let m = findMinAlt (exampleTree())
   case m of
     CustomLeft _ -> 0
     CustomRight v -> needPositive v
 
-handler getMax() -> Int requires [] =
+handler get getMax() -> Int requires [] =
   let m = findMax (exampleTree())
   case m of
     Nothing -> 0
     Something v -> needPositive v
 
-handler getSum() -> Int requires [] = treeSum (exampleTree())
+handler get getSum() -> Int requires [] = treeSum (exampleTree())
 
-handler insertValue(req: InsertRequest) -> Int requires [] =
+handler post insertValue(req: InsertRequest) -> Int requires [] =
   let t = insertRaw (exampleTree()) req.value
   treeSize t
 
 server PositiveTreeServer for PositiveTreeApi {
-  getSize = getSize
-  getMin = getMin
-  getMinAlt = getMinAlt
-  getMax = getMax
-  getSum = getSum
-  insertValue = insertValue
+  getSize
+  getMin
+  getMinAlt
+  getMax
+  getSum
+  insertValue
 }
 
 # ─── Tests ───────────────────────────────────────────────────────────────────

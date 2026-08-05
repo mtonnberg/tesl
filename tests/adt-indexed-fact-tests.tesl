@@ -119,7 +119,7 @@ auth resolveCaller(request: HttpRequest) -> c: Caller ::: Authenticated c =
       let c = mkCaller "cookie-caller" (permissionsFor claim)
       ok c ::: Authenticated c
 
-handler writeCostRates(c: Caller ::: Authenticated c) -> CapabilityReport =
+handler get writeCostRates(c: Caller ::: Authenticated c) -> CapabilityReport =
   let allowed = check mayWriteCostRates c
   CapabilityReport { outcome: writeCostRatesCore allowed }
 
@@ -130,7 +130,7 @@ api PermissionApi {
 }
 
 server PermissionServer for PermissionApi {
-  writeCostRates = writeCostRates
+  writeCostRates
 }
 
 api-test "a granted caller reaches the constructor-indexed core" for PermissionServer {

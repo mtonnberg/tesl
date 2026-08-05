@@ -63,7 +63,7 @@ fn addMinutes(acc: Int, entry: TimeEntry) -> Int =
 
 # ── Invoice CRUD ─────────────────────────────────────────────────────────────
 
-handler createInvoiceHandler(
+handler post createInvoiceHandler(
     session: KanelSession ::: Authenticated session,
     orgId: String ::: ValidOrgId orgId,
     req: NewInvoiceRequest)
@@ -94,7 +94,7 @@ handler createInvoiceHandler(
         }
     }
 
-handler getInvoiceHandler(
+handler get getInvoiceHandler(
     session: KanelSession ::: Authenticated session,
     orgId: String ::: ValidOrgId orgId,
     invoiceId: String ::: ValidInvoiceId invoiceId)
@@ -106,7 +106,7 @@ handler getInvoiceHandler(
     Nothing -> fail 404 "invoice not found"
     Something inv -> inv
 
-handler listInvoicesHandler(
+handler get listInvoicesHandler(
     session: KanelSession ::: Authenticated session,
     orgId: String ::: ValidOrgId orgId)
   -> List Invoice
@@ -114,7 +114,7 @@ handler listInvoicesHandler(
   let _adminUserId = check checkOrgAdmin session.userId orgId
   select inv from Invoice where inv.orgId == orgId
 
-handler approveInvoiceHandler(
+handler put approveInvoiceHandler(
     session: KanelSession ::: Authenticated session,
     orgId: String ::: ValidOrgId orgId,
     invoiceId: String ::: ValidInvoiceId invoiceId)
@@ -128,7 +128,7 @@ handler approveInvoiceHandler(
     set inv.approvedAt = nowMillis()
     returning one
 
-handler markSentHandler(
+handler put markSentHandler(
     session: KanelSession ::: Authenticated session,
     orgId: String ::: ValidOrgId orgId,
     invoiceId: String ::: ValidInvoiceId invoiceId)
@@ -150,7 +150,7 @@ handler markSentHandler(
         Paid -> fail 422 "invoice already paid"
         Overdue -> fail 422 "invoice is overdue"
 
-handler markPaidHandler(
+handler put markPaidHandler(
     session: KanelSession ::: Authenticated session,
     orgId: String ::: ValidOrgId orgId,
     invoiceId: String ::: ValidInvoiceId invoiceId)

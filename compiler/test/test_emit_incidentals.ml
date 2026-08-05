@@ -141,7 +141,7 @@ sseChannel Notices(userId: String) = SseChannel {
   payload: Notice
 }
 
-handler sendNotice(msg: String) -> String
+handler post sendNotice(msg: String) -> String
   requires [pubsub] =
   publish Notices("u1") Notice { message: msg }
   "ok"
@@ -157,7 +157,7 @@ api MainApi {
 }
 
 server MainServer for MainApi {
-  sendNotice = sendNotice
+  sendNotice
 }
 |}
 
@@ -215,7 +215,7 @@ sseChannel ItemEvents(userId: String) = SseChannel {
   payload: ItemEvent
 }
 
-handler createItem(name: String) -> String
+handler post createItem(name: String) -> String
   requires [pubsub] =
   publish ItemEvents("u1") ItemCreated { name: name }
   "ok"
@@ -231,7 +231,7 @@ api MainApi {
 }
 
 server MainServer for MainApi {
-  createItem = createItem
+  createItem
 }
 |} in
   with_files [ ("main.tesl", src) ] (function
@@ -273,7 +273,7 @@ sseChannel ItemEvents(userId: String) = SseChannel {
   payload: ItemEvent
 }
 
-handler ping() -> String =
+handler get ping() -> String =
   "pong"
 
 api MainApi {
@@ -286,7 +286,7 @@ api MainApi {
 }
 
 server MainServer for MainApi {
-  ping = ping
+  ping
 }
 |} in
   with_files [ ("main.tesl", src) ] (function
@@ -346,10 +346,10 @@ let emailbody_endpoint_positions_rejected () =
 import Tesl.Prelude exposing [String, Unit]
 import Tesl.Email exposing [EmailBody, TextBody, HtmlBody, RichBody]
 
-handler echoBody(b: EmailBody) -> EmailBody =
+handler post echoBody(b: EmailBody) -> EmailBody =
   b
 
-handler giveBody() -> EmailBody =
+handler get giveBody() -> EmailBody =
   TextBody "hi"
 
 api A {
@@ -362,8 +362,8 @@ api A {
 }
 
 server S for A {
-  echoBody = echoBody
-  giveBody = giveBody
+  echoBody
+  giveBody
 }
 |} in
   with_files [ ("main.tesl", src) ] (function
@@ -386,11 +386,11 @@ import Tesl.ApiTest exposing [statusOk, JsonValue]
 import Tesl.Database exposing [Database, Memory]
 import Tesl.App exposing [App]
 
-handler echoJson(body: JsonValue) -> JsonValue = body
+handler post echoJson(body: JsonValue) -> JsonValue = body
 
 api EchoApi { post "/echo" body payload: JsonValue -> JsonValue }
 
-server EchoServer for EchoApi { echoJson = echoJson }
+server EchoServer for EchoApi { echoJson }
 
 database EchoDb = Database { entities: [] backend: Memory }
 
@@ -417,11 +417,11 @@ import Tesl.App exposing [App]
 record Echo { message: String }
 codec Echo { toJson { message -> "message" with_codec stringCodec } fromJson_forbidden }
 
-handler echo(message: String) -> Echo = Echo { message: message }
+handler post echo(message: String) -> Echo = Echo { message: message }
 
 api EchoApi { post "/echo" body message: String -> Echo }
 
-server EchoServer for EchoApi { echo = echo }
+server EchoServer for EchoApi { echo }
 
 database EchoDb = Database { entities: [] backend: Memory }
 
@@ -510,10 +510,10 @@ record Outer {
   inner: Wrapped
 }
 
-handler wrapped() -> Wrapped =
+handler get wrapped() -> Wrapped =
   Wrapped { note: "n", payload: TextBody "hello" }
 
-handler outer() -> Outer =
+handler get outer() -> Outer =
   Outer { inner: Wrapped { note: "n", payload: TextBody "hello" } }
 
 api A {
@@ -524,8 +524,8 @@ api A {
 }
 
 server S for A {
-  wrapped = wrapped
-  outer = outer
+  wrapped
+  outer
 }
 |} in
   with_files [ ("main.tesl", src) ] (function
@@ -1376,7 +1376,7 @@ sseChannel RunEvents(scope: String) = SseChannel {
   payload: RunQueued
 }
 
-handler triggerRun(runId: String) -> String
+handler post triggerRun(runId: String) -> String
   requires [pubsub] =
   publish RunEvents("all") RunQueued { runId: runId }
   "ok"
@@ -1391,7 +1391,7 @@ api MainApi {
 }
 
 server MainServer for MainApi {
-  triggerRun = triggerRun
+  triggerRun
 }
 |}
 

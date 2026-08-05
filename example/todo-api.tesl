@@ -203,12 +203,12 @@ fn seedExampleData() -> Int
   # post "/list-test"
   #   auth requestUser: User::: Authenticated requestUser via cookieAuth
   #   body newTodos: List String
-handler listTest(requestUser: User ::: Authenticated requestUser, newTodos: List String ::: ForAll TodoId newTodos)
+handler post listTest(requestUser: User ::: Authenticated requestUser, newTodos: List String ::: ForAll TodoId newTodos)
   -> String
   requires [todoDbRead, todoDbWrite, time, random] =
   "hej"
 
-handler createTodo(requestUser: User ::: Authenticated requestUser, newTodo: NewTodo)
+handler post createTodo(requestUser: User ::: Authenticated requestUser, newTodo: NewTodo)
   -> exists todoId: String =>
         Todo ? FromDb (Id == todoId)
   requires [todoDbRead, todoDbWrite, time, random] =
@@ -222,7 +222,7 @@ handler createTodo(requestUser: User ::: Authenticated requestUser, newTodo: New
       createdAt: nowMillis()
     }
 
-handler listMyTodos(requestUser: User ::: Authenticated requestUser)
+handler get listMyTodos(requestUser: User ::: Authenticated requestUser)
   -> List Todo ? ForAll (FromDb (OwnerId == requestUser.id))
   requires [todoDbRead] =
   telemetry "todo.list" { user.id = requestUser.id }
@@ -230,13 +230,13 @@ handler listMyTodos(requestUser: User ::: Authenticated requestUser)
 
 # ForAll proof expansion: the select gives ForAll (FromDb (OwnerId == requestUser.id)).
 # filterCheck(checkOpen, ...) expands it to ForAll (FromDb (OwnerId == requestUser.id) && IsOpen).
-handler listOpenTodos(requestUser: User ::: Authenticated requestUser)
+handler get listOpenTodos(requestUser: User ::: Authenticated requestUser)
   -> List Todo ? ForAll (FromDb (OwnerId == requestUser.id) && IsOpen)
   requires [todoDbRead] =
   let myTodos = select todo from Todo where todo.ownerId == requestUser.id
   List.filterCheck checkOpen myTodos
 
-handler getTodo(requestUser: User ::: Authenticated requestUser, todoId: String ::: TodoId todoId)
+handler get getTodo(requestUser: User ::: Authenticated requestUser, todoId: String ::: TodoId todoId)
   -> Todo ? FromDb (Id == todoId)
   requires [todoDbRead] =
   let existing = selectOne todo from Todo where todo.id == todoId
@@ -248,7 +248,7 @@ handler getTodo(requestUser: User ::: Authenticated requestUser, todoId: String 
     Something todo ->
       todo
 
-handler completeTodo(requestUser: User ::: Authenticated requestUser, todoId: String ::: TodoId todoId)
+handler put completeTodo(requestUser: User ::: Authenticated requestUser, todoId: String ::: TodoId todoId)
   -> Todo ? FromDb (Id == todoId)
   requires [todoDbRead, todoDbWrite] =
   let existing = selectOne todo from Todo where todo.id == todoId
@@ -294,12 +294,12 @@ api TodoApi {
 }
 
 server TodoServer for TodoApi {
-  listTest = listTest
-  createTodo = createTodo
-  listMyTodos = listMyTodos
-  listOpenTodos = listOpenTodos
-  getTodo = getTodo
-  completeTodo = completeTodo
+  listTest
+  createTodo
+  listMyTodos
+  listOpenTodos
+  getTodo
+  completeTodo
 }
 
 main() -> App requires [todoWebService] =

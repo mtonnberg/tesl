@@ -167,14 +167,14 @@ record Quote {
   tiers: List MoneyPerMass
 }
 type ContractRate = MoneyPerDuration
-handler quote() -> Quote =
+handler get quote() -> Quote =
   Quote { base: MoneyRate.perHour (Money.sek 95000),
           discount: Nothing,
           tiers: [] }
 api QuoteApi {
   get "/quote" -> Quote
 }
-server QuoteServer for QuoteApi { quote = quote }
+server QuoteServer for QuoteApi { quote }
 |}
 
 (* ── tests ────────────────────────────────────────────────────────────────── *)
@@ -308,11 +308,11 @@ api MainApi {
     -> String
 }
 
-handler createThing(newThing: NewThing) -> String =
+handler post createThing(newThing: NewThing) -> String =
   newThing.name
 
 server MainServer for MainApi {
-  createThing = createThing
+  createThing
 }
 |}
 
@@ -348,6 +348,82 @@ let ts_imported_types_emitted () =
     if not (contains "NameSafeSchema" out) then
       failf "imported fact NameSafe schema missing from TS client (#36):\n%s" out)
 
+(* ── mountPath reaches the request URL but never the generated names (#75) ──
+   `mountPath` is a deployment concern.  The generators derive function and type
+   names from the route's own path and inject the prefix only where the request
+   URL is built, so `get "/widgets"` stays `getWidgets` while calling
+   `/api/widgets`.  Folding the prefix into `ire_path` instead would rename every
+   generated function — the exact complaint issue #75 opens with
+   (`getApiWidgets`). *)
+
+let mount_client ~mount = Printf.sprintf {|module MountClient exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.App exposing [App]
+
+database Db = Database {
+  entities: []
+  backend: Memory
+}
+
+handler get widgets() -> String requires [] =
+  "w"
+
+api MountApi {
+  get "/widgets" -> String
+}
+
+server MountServer for MountApi {
+  widgets
+}
+
+main() -> App requires [] =
+  App {
+    database: Db
+    api: MountServer
+    port: 8080%s
+  }
+|} mount
+
+let with_mount    = mount_client ~mount:"\n    mountPath: \"/api\""
+let without_mount = mount_client ~mount:""
+
+let ts_mount_path_in_base_not_names () =
+  with_src with_mount (fun p ->
+    let code, out = run_cc ["--generate-ts"; p] in
+    if code <> 0 then failf "generate-ts failed:\n%s" out;
+    if not (contains "let _teslBase = \"/api\"" out) then
+      failf "TS client should seed _teslBase with the mountPath:\n%s" out;
+    if not (contains "export async function getWidgets" out) then
+      failf "the generated name must stay prefix-free (getWidgets):\n%s" out;
+    if contains "getApiWidgets" out then
+      failf "the mount prefix leaked into the generated FUNCTION NAME:\n%s" out)
+
+let ts_no_mount_path_empty_base () =
+  with_src without_mount (fun p ->
+    let code, out = run_cc ["--generate-ts"; p] in
+    if code <> 0 then failf "generate-ts failed:\n%s" out;
+    if not (contains "let _teslBase = \"\"" out) then
+      failf "with no mountPath the TS base must stay empty:\n%s" out)
+
+let elm_mount_path_in_url_not_names () =
+  with_src with_mount (fun p ->
+    let code, out = run_cc ["--generate-elm"; p] in
+    if code <> 0 then failf "generate-elm failed:\n%s" out;
+    if not (contains "\"/\" ++ \"api\"" out) then
+      failf "Elm URL builder should prepend the mount segment:\n%s" out;
+    if not (contains "getWidgets :" out) then
+      failf "the generated Elm name must stay prefix-free (getWidgets):\n%s" out;
+    if contains "getApiWidgets" out then
+      failf "the mount prefix leaked into the generated Elm FUNCTION NAME:\n%s" out)
+
+let elm_no_mount_path_bare_url () =
+  with_src without_mount (fun p ->
+    let code, out = run_cc ["--generate-elm"; p] in
+    if code <> 0 then failf "generate-elm failed:\n%s" out;
+    if contains "\"/\" ++ \"api\"" out then
+      failf "no mountPath was declared, so no prefix segment may appear:\n%s" out)
+
 let () =
   run "B1-Client-Generation" [
     "checker bypass (a)", [
@@ -381,6 +457,16 @@ let () =
         elm_imported_types_emitted;
       test_case "ts client defines imported record + fact" `Quick
         ts_imported_types_emitted;
+    ];
+    "mountPath: URL base, not generated names (GitHub #75)", [
+      test_case "ts: _teslBase seeded, name stays getWidgets" `Quick
+        ts_mount_path_in_base_not_names;
+      test_case "ts: no mountPath leaves the base empty" `Quick
+        ts_no_mount_path_empty_base;
+      test_case "elm: url gains the mount segment, name stays getWidgets" `Quick
+        elm_mount_path_in_url_not_names;
+      test_case "elm: no mountPath adds no segment" `Quick
+        elm_no_mount_path_bare_url;
     ];
     "money rates emitted at every position (GitHub #38)", [
       test_case "elm: record/newtype/Maybe/List rate fields use the ONE defined MoneyRate" `Quick

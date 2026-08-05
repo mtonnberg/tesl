@@ -338,13 +338,13 @@ record Counts {
   label: String
 }
 
-handler counts() -> Counts =
+handler get counts() -> Counts =
   Counts { total: Int32.fromIntClamped 5, label: "hi" }
 
-handler versions() -> List Int32 =
+handler get versions() -> List Int32 =
   [Int32.fromIntClamped 1]
 
-handler maybeCount() -> Maybe Int32 =
+handler get maybeCount() -> Maybe Int32 =
   Something (Int32.fromIntClamped 3)
 
 api CountApi {
@@ -357,9 +357,9 @@ api CountApi {
 }
 
 server CountServer for CountApi {
-  counts = counts
-  versions = versions
-  maybeCount = maybeCount
+  counts
+  versions
+  maybeCount
 }
 |}
 

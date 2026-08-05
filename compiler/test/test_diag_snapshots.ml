@@ -161,12 +161,12 @@ api TaskApi {
     -> String
 }
 server S for TaskApi {
-  createTask = nonExistentHandler
+  nonExistentHandler
 }
 |}
 let validation_expected =
   "[V001] error @ validation 6:7-8:2\n\
-  \  server 'S': handler 'nonExistentHandler' for endpoint 'createTask' is not declared\n\
+  \  server 'S': handler 'nonExistentHandler' for endpoint 'POST /tasks' is not declared\n\
    Hint: declare `handler nonExistentHandler(...)` in this module or import it explicitly"
 
 (* ── Capability denial: effect used without declared capability (V001) ──────── *)

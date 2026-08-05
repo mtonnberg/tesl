@@ -319,7 +319,7 @@ auth cookieAuth(request: HttpRequest) -> session: SessionUser::: Authenticated s
 let test_handler_emit () =
   let src = {|module Foo exposing [createTask]
 import Tesl.Prelude exposing [String]
-handler createTask(user: String) -> String
+handler post createTask(user: String) -> String
   requires [taskDbWrite] =
   "ok"
 |} in
@@ -618,8 +618,8 @@ api-test "let-bound case over a response field" for ChatServer {
 let test_server_emission () =
   let src = {|module Foo exposing [TaskServer]
 server TaskServer for TaskApi {
-  createTask = createTask
-  getTask = getTask
+  createTask
+  getTask
 }
 |} in
   let racket = compile_ok src "server_emit" in

@@ -335,7 +335,7 @@ The `:::` operator in expression context outside `establish`, `check`, and `auth
 
 ```tesl
 # function declaration (new canonical infix syntax)
-handler getTodo(...) -> Todo ? FromDb (Id == todoId) requires [...] = ...
+handler get getTodo(...) -> Todo ? FromDb (Id == todoId) requires [...] = ...
 
 # callsite: the let binder `todo` becomes the GDP name
 let todo = getTodo(requestUser, todoId)
@@ -692,7 +692,7 @@ entity Post table "posts" primaryKey id {
   publishedAt: PosixMillis    # BIGINT — no @db annotation needed
 }
 
-handler createPost(...) requires [dbWrite, time] =
+handler post createPost(...) requires [dbWrite, time] =
   insert Post { id: newId, publishedAt: nowMillis() }
 ```
 
@@ -1222,7 +1222,7 @@ No session forwarding or token minting is involved; the proof system makes "on b
 the user" a static requirement.
 
 ```tesl
-handler assistant(user: User ::: Authenticated user, q: Question) -> String
+handler post assistant(user: User ::: Authenticated user, q: Question) -> String
   requires [todoWebService, supportAi] =
   let agent = Agent {
     provider: anthropic (requireEnv "ANTHROPIC_API_KEY") "claude-opus-4-8"
@@ -1264,7 +1264,7 @@ allowlist: the user-facing server keeps the full HTTP surface, the agent-facing 
 Tool derivation is per server — two `serverTools` call sites in one module do not
 interact.
 
-Each tool's name is the server-binding name, its description is the bound handler's
+Each tool's name is the bound handler's own name, its description is that handler's
 doc-comment (falling back to `"METHOD /path"`), and its input schema has one required
 property per capture plus one for the `body` binder (an object derived from the body
 record's `fromJson` codec). At runtime the tool reuses the endpoint's own boundary
@@ -1292,7 +1292,7 @@ decided from the *declared* proof, you make an action "human-only" by giving the
 `humanActions`.
 
 ```tesl
-handler assistant(user: User ::: Authenticated user, q: Ask) -> String requires [notesAi] =
+handler post assistant(user: User ::: Authenticated user, q: Ask) -> String requires [notesAi] =
   let agent = Agent {
     provider:     anthropic (requireEnv "ANTHROPIC_API_KEY") "claude-opus-4-8"
     systemPrompt: "Manage the user's notes. Admin-only actions must be asked of the human."
@@ -1459,15 +1459,47 @@ Passing `raw` (without the proof) directly to `processInRange` is a compile-time
 **Accepted design, Implemented with some current syntax limits.**
 
 ```text
-<function-decl> ::= <function-kind> <identifier> "(" [ <binding> { "," <binding> } ] ")"
+<function-decl> ::= <function-kind> [ <http-method> { <http-method> } ]
+                    <identifier> "(" [ <binding> { "," <binding> } ] ")"
                     "->" <return-spec>
                     [ "requires" <capability-list> ]
                     "="
                     <body>
 
 <function-kind> ::= "check" | "establish" | "fn" | "auth" | "handler"
+<http-method>  ::= "get" | "post" | "put" | "delete" | "patch"
 <capability-list> ::= "[" [ <identifier> { "," <identifier> } ] "]"
 ```
+
+The `<http-method>` prefix applies to **`handler` only**, where it is required, and states the HTTP
+method(s) that handler serves:
+
+```tesl
+handler get getTodo(requestUser: User ::: Authenticated requestUser, todoId: String ::: TodoId todoId)
+  -> Todo ? FromDb (Id == todoId)
+  requires [appDbRead] = …
+
+handler get post search(q: String) -> List Result requires [appDbRead] = …   # one handler, two slots
+```
+
+It is load-bearing rather than documentation, for two reasons:
+
+- **It is what SEC005 keys on.** A `get` handler may not reach `dbWrite`, `queueWrite`, `pubsub` or
+  `emailCap` anywhere in its capability closure (a GET must be safe and idempotent, and it is the one
+  method a `SameSite=Lax` session cookie is still sent on for a cross-site top-level navigation).
+  Declaring the method on the handler means that rule reads the handler's own text, so it applies
+  whether or not the handler is bound to a server, and cannot be switched off by a malformed server
+  block.
+- **It makes the server block's positional pairing verifiable** (§11.12), turning a misordered
+  binding into a compile error.
+
+For a handler serving several slots, the check is satisfied if the slot's method appears in the
+declared set, and the *most restrictive* method governs — a `get post` handler is still held to the
+GET no-mutation rule.
+
+The verbs are **contextual keywords**, not reserved words: a handler may still be named `get` or
+`post` (`handler get post(…)` declares method `get` on a handler named `post`). SSE endpoints take no
+method — they are not paired with handlers.
 
 Current lowering:
 
@@ -1516,7 +1548,7 @@ For returning proof-carrying values where the proof was produced inside the func
 **Named-pack return (`?` operator).** When a function or handler returns a value with a GDP proof, the `?` return spec automatically assigns the value's GDP subject from the caller's `let` binder (see section 7.13). This is the idiomatic return form for SQL-layer functions and proof-annotated value returns:
 
 ```tesl
-handler getTodo(requestUser: User ::: Authenticated requestUser, todoId: String ::: TodoId todoId)
+handler get getTodo(requestUser: User ::: Authenticated requestUser, todoId: String ::: TodoId todoId)
   -> Todo ? FromDb (Id == todoId)
   requires [dbRead] =
   ...
@@ -2002,9 +2034,32 @@ evts.onmessage = (e) => {
 **Accepted design, Implemented.**
 
 ```text
-<server-decl> ::= "server" <identifier> "for" <identifier> "{" { <server-binding> } "}"
-<server-binding> ::= <identifier> "=" <identifier>
+<server-decl> ::= "server" <identifier> "for" <identifier> "{" { <identifier> } "}"
 ```
+
+Handlers are listed **by position**, not by name: handler *i* implements the `api`'s *i*-th non-SSE
+endpoint (declaration order), matching how routes are declared in the `api` block. There is no
+`<endpointName> = <handlerFn>` binding syntax — an earlier version of the grammar had one, but it
+was always matched by position underneath, so the `=` only looked name-keyed while silently ignoring
+whatever name you gave it. Listing bare handlers removes that gap: what you write is what runs.
+
+**Positional binding is verified, not trusted.** Because the pairing is positional, a `handler`
+declares the HTTP method(s) it serves (§11.16) and the compiler checks that declaration against the
+slot the handler actually landed in. Together with the parameter, proof and return-type checks that
+already ran, a misordered server block is a compile error rather than a silent misroute:
+
+```text
+error[V001]: handler 'hb' declares `post` but is bound to endpoint 'GET /a'
+Hint: either change the handler to `handler get hb(…)`, or move it to the slot matching
+      the endpoint it should serve — handlers are paired to endpoints by POSITION in the
+      server block, in api declaration order
+```
+
+Four properties of a slot are cross-checked: the **method**, the positional **parameter types**
+(auth value, then captures, then body), each parameter's **proof obligation**, and the response's
+**type and proof**. Two endpoints identical in all four are genuinely indistinguishable — reordering
+their handlers cannot be detected — and that residue is reported as `W095` (`tesl explain W095`), whose fix
+is to give a parameter its own type so the pairing becomes checkable.
 
 ### 11.13 Main / the `App` entry point
 **Accepted design, Implemented.**
@@ -2026,6 +2081,7 @@ The body is an ordinary function body that may run startup `let` bindings (telem
                    [ "email"       ":" "[" [ <identifier> { "," <identifier> } ] "]" ]
                    [ "sseChannels" ":" "[" [ <identifier> { "," <identifier> } ] "]" ]
                    [ "static"      ":" <string> ]
+                   [ "mountPath"   ":" <string> ]
                  "}"
 ```
 
@@ -2039,10 +2095,53 @@ main() -> App requires [appService, smtpSend] =
     queues: [EmailQueue]          # activates each queue's workers (normal + dead-letter)
     email: [AppEmail]             # activates each email block's delivery worker
     sseChannels: [UserEvents]     # activates each SSE channel's outbox delivery
+    mountPath: "/api"             # every route answers under this prefix — see below
   }
 ```
 
 **Capabilities are granted at the App root**, derived from `main`'s `requires` list. There is no runtime cap-granting block; every capability referenced anywhere in the activated declarations flows from each declaration's own `requires`, and `main.requires` must cover them. A missing capability is a compile error.
+
+#### `mountPath` — serving the API under a path prefix
+
+`mountPath` serves every route the `api` block declares under a shared prefix, so a backend can share one origin with a single-page app (or another API surface) and be told apart by path alone. The prefix is a **deployment** concern, so it is declared once at the App root and never written into a route:
+
+```tesl
+api MyApi {
+  get "/widgets" -> List Widget          # note: NOT "/api/widgets"
+}
+
+main() -> App requires [appService] =
+  App {
+    database: MainDatabase
+    api: MyServer
+    port: 8080
+    mountPath: "/api"                    # GET /api/widgets reaches the route
+  }
+```
+
+Two properties this buys, both of which the manual alternative (writing `/api/…` into every route string) fails to give you:
+
+- **A new route cannot forget the prefix**, because the prefix appears nowhere in any route string.
+- **Generated client names stay clean.** The Elm/TS generators derive function and type names from the route's own path, and inject the prefix only when building the request URL — so `get "/widgets"` still emits `getWidgets`, and that function calls `/api/widgets`.
+
+**What is mounted, and what is not.** This distinction matters when configuring a proxy or a load balancer, so it is worth stating exactly:
+
+| Surface | Mounted? | Why |
+| --- | --- | --- |
+| `api` block routes | **yes** | this is the surface `mountPath` names |
+| SSE routes (`sse "/…"`) | **yes** | declared in the `api` block like any other route |
+| static files + the SPA fallback (`static:`) | no | the SPA is the *other* thing sharing this origin that the prefix exists to separate the API from; mounting it would make `mountPath` and `static` mutually exclusive |
+| SSO endpoints (`/auth/<seg>/login`, `/auth/<seg>/callback`) | no | keeps the IdP-registered `redirect_uri` (`publicOrigin ++ "/auth/<seg>/callback"`) decoupled from a deployment knob — otherwise changing `mountPath` would silently invalidate your OAuth client registration and break login in production. `publicOrigin` cannot carry a path, so a prefixed callback is not expressible anyway |
+
+So a reverse proxy fronting a mounted app must forward **`/auth/*` as well as the mount prefix**, and if the app serves its own SPA via `static:`, `/` too.
+
+**`healthProbePath` is api-relative.** It names one of the `api` block's own routes, so it moves under the mount with everything else: `mountPath: "/api"` plus `healthProbePath "/healthz"` means the probe lives at `/api/healthz` — point liveness/readiness checks there. Its Host-validation exemption (load balancers probe host-blind) continues to apply, while ordinary routes still refuse a mismatched `Host` with 421.
+
+**A route only answers under the mount.** With `mountPath: "/api"`, `GET /api/widgets` dispatches and `GET /widgets` does not — a route answering at both paths would defeat the point of declaring a mount. A request outside the mount is simply "not an API call": it falls through to static files and the SPA fallback, and 404s only if those miss too.
+
+`tesl run` goes through the same dispatch code as a production deploy, so local and deployed routing agree. `api-test` and `load-test` blocks address the route table directly and therefore use **unprefixed** paths — they exercise routes, not the mount.
+
+**Validation.** Must be a string literal starting with `/` and not ending with `/` (the bare root `"/"` is accepted and is a no-op). `tesl check` rejects any other shape with the corrected string in the message, so there is never a question of which end the slash belongs on. Writing the prefix into a route string *as well* is reported as `W096` (`tesl explain W096`) — that combination serves the route at `/api/api/widgets`.
 
 **Activation by listing, not by start calls.** Listing a queue in `App.queues` activates its `numberOfWorkers` normal workers plus, if any job has a dead slot, the single dead-letter worker. Listing an email block in `App.email` activates its delivery worker. Listing an SSE channel in `App.sseChannels` activates its outbox delivery. The SSE pub/sub LISTEN connection starts automatically when SSE endpoints are present — there is no `startWebSocket` call.
 
@@ -2938,7 +3037,7 @@ The `(Id == sessionId)` sub-expression inside the proof fact is the structural b
 **Using `?` with existential returns.** For database entities, the `?` pack operator can be used inside an existential return to avoid naming the inner binder explicitly:
 
 ```tesl
-handler createTodo(requestUser: User ::: Authenticated requestUser, newTodo: NewTodo)
+handler post createTodo(requestUser: User ::: Authenticated requestUser, newTodo: NewTodo)
   -> exists todoId: String =>
        ?Todo ::: FromDb (Id == todoId)
   requires [dbRead, dbWrite, time] =
@@ -3507,7 +3606,7 @@ capability appService implies cacheCap UserProfileCache
 A handler that reads or writes `UserProfileCache` must declare `cacheCap UserProfileCache` in its `requires` list (directly or transitively via `implies`):
 
 ```tesl
-handler getProfile(id: String) -> UserProfile
+handler get getProfile(id: String) -> UserProfile
   requires [dbRead, cacheCap UserProfileCache] =
   ...
 ```
@@ -3535,7 +3634,7 @@ If a stored value cannot be deserialized (for example because the application wa
 `Cache.set`, `Cache.delete`, and `Cache.invalidate` inside a `transaction` block participate in the surrounding PostgreSQL transaction atomically. This eliminates the dual-write problem that arises when a separate Redis cache is used alongside PostgreSQL: if the transaction rolls back, no cache mutation is committed.
 
 ```tesl
-handler updateProfile(userId: String, req: UpdateProfileRequest)
+handler put updateProfile(userId: String, req: UpdateProfileRequest)
   -> UserProfile
   requires [dbWrite, cacheCap UserProfileCache] =
   transaction {
@@ -3560,7 +3659,7 @@ cache UserProfileCache = Cache {
   valueType: UserProfile
 }
 
-handler getUserProfile(id: String) -> UserProfile
+handler get getUserProfile(id: String) -> UserProfile
   requires [dbRead, cacheCap UserProfileCache] =
   let cached = Cache.get UserProfileCache ("profile_" ++ id)
   case cached of
@@ -3674,7 +3773,7 @@ After 5 failed attempts a row is marked `dead` and is no longer retried. Dead ro
 `Email.send` inside a `transaction` block is part of the same database transaction. If the transaction rolls back, the row is never inserted and the email is never sent. This prevents sending notifications for events that did not actually persist.
 
 ```tesl
-handler registerUser(req: RegistrationRequest) -> User requires [dbWrite, emailCap] =
+handler post registerUser(req: RegistrationRequest) -> User requires [dbWrite, emailCap] =
   transaction {
     let user = insert User { id: newId, email: req.email }
     Email.send AppEmail {
@@ -3919,7 +4018,7 @@ import Tesl.Tuple exposing [Tuple2]
 
 capability appService implies httpClient
 
-handler fetchExternalUser(id: String) -> HttpResponse requires [httpClient] =
+handler get fetchExternalUser(id: String) -> HttpResponse requires [httpClient] =
   let url     = "https://api.example.com/users/" ++ id
   let headers = [Tuple2 "Accept" "application/json",
                  Tuple2 "Authorization" "Bearer token"]

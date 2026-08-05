@@ -627,7 +627,7 @@ let emit_ts (m : module_form) : string =
   if ts_servers <> [] then begin
     add "// --- Human actions (agent -> human handoff) ---\n\n";
     List.iter (fun (sv : server_form) ->
-      let tools = List.map fst sv.bindings in
+      let tools = sv.handlers in
       List.iter (fun tool ->
         addf "const _%sHumanAction_%sSchema = z.object({ action: z.literal(%S), handle: z.string(), args: z.unknown() });\n"
           sv.name tool tool
@@ -689,7 +689,13 @@ let emit_ts (m : module_form) : string =
 
   if endpoints <> [] then begin
     add "// --- API client ---\n\n";
-    add "let _teslBase = \"\";\n";
+    (* #75: the App's `mountPath` (e.g. "/api") is a deployment/mounting
+       concern, never part of a route's semantic identity — so it seeds
+       `_teslBase`'s default instead of touching `ep.ire_path` (which also
+       drives this function's own name, above). `configure` still overrides
+       it for a client pointed at a different origin/prefix. *)
+    let mount_path = Option.value ~default:"" (Ast.main_app_string_field m "mountPath") in
+    addf "let _teslBase = %S;\n" mount_path;
     add "export function configure(base: string): void { _teslBase = base; }\n\n";
     let endpoint_fn_names = fn_names_of_endpoints (List.map (fun (ep : Ir.ir_endpoint) -> (ep.ire_method, ep.ire_path)) endpoints) in
     List.iter (fun (ep : Ir.ir_endpoint) ->

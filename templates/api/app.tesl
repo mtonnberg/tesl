@@ -159,7 +159,7 @@ fn seedExampleData() -> Int
   else
     0
 
-handler createTodo(requestUser: User ::: Authenticated requestUser, newTodo: NewTodo)
+handler post createTodo(requestUser: User ::: Authenticated requestUser, newTodo: NewTodo)
   -> exists todoId: String =>
         Todo ? FromDb (Id == todoId)
   requires [appDbRead, appDbWrite, time, random] =
@@ -179,7 +179,7 @@ handler createTodo(requestUser: User ::: Authenticated requestUser, newTodo: New
 # records that this Todo genuinely came from the database under the asked-for id
 # — not a fabricated value. A handler cannot mint this proof itself; only the
 # `select` boundary can, which is exactly what makes it trustworthy.
-handler getTodo(requestUser: User ::: Authenticated requestUser, todoId: String ::: TodoId todoId)
+handler get getTodo(requestUser: User ::: Authenticated requestUser, todoId: String ::: TodoId todoId)
   -> Todo ? FromDb (Id == todoId)
   requires [appDbRead] =
   telemetry "todo.get" { user.id = requestUser.id }
@@ -206,8 +206,8 @@ api AppApi {
 }
 
 server AppServer for AppApi {
-  createTodo = createTodo
-  getTodo = getTodo
+  createTodo
+  getTodo
 }
 
 # ── Tests ─────────────────────────────────────────────────────────────────────

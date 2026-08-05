@@ -55,27 +55,27 @@
 
 (define TemplateServer-sse-routes '())
 (define-api TemplateApi
-  [endpoint_0 :
+  [emptyObject :
     "empty"
     :> (Get JSON String)
     ]
-  [endpoint_1 :
+  [jsonObject :
     "json"
     :> (Get JSON String)
     ]
-  [endpoint_2 :
+  [unbalancedQuote :
     "quote"
     :> (Get JSON String)
     ]
-  [endpoint_3 :
+  [unclosedBrace :
     "unclosed"
     :> (Get JSON String)
     ]
-  [endpoint_4 :
+  [nestedBraces :
     "nested"
     :> (Get JSON String)
     ]
-  [endpoint_5 :
+  [echoThing :
     "things"
     :> (Capture idCapture [id : String])
     :> (Get JSON String)
@@ -84,12 +84,12 @@
 
 (define-server TemplateServer
   #:api TemplateApi
-  [endpoint_0 emptyObject]
-  [endpoint_1 jsonObject]
-  [endpoint_2 unbalancedQuote]
-  [endpoint_3 unclosedBrace]
-  [endpoint_4 nestedBraces]
-  [endpoint_5 echoThing]
+  [emptyObject emptyObject]
+  [jsonObject jsonObject]
+  [unbalancedQuote unbalancedQuote]
+  [unclosedBrace unclosedBrace]
+  [nestedBraces nestedBraces]
+  [echoThing echoThing]
 )
 
 (define-database TemplateDb

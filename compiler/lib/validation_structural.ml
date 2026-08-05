@@ -404,11 +404,6 @@ let proofs_of_expr
 
 (* ── 1. Server binding completeness ──────────────────────────────────────── *)
 
-(* Single definition now lives in Validation_common alongside
-   [server_endpoint_bindings], which needs the same synthetic/named distinction to
-   decide positional-vs-by-name pairing (get_handlers_do_not_mutate). *)
-let is_synthetic_endpoint_name = Validation_common.is_synthetic_endpoint_name
-
 let take n xs =
   let rec go acc remaining count =
     if count <= 0 then List.rev acc else
@@ -1516,9 +1511,19 @@ let check_server_handler_binding
     (auth_fn_preds : (string * string list) list)
     (sv : server_form)
     (endpoint_opt : api_endpoint option)
-    (endpoint_name, handler_name)
+    (handler_name : string)
     (errors : validation_error list ref)
   =
+  (* #65: bindings carry no name of their own anymore — use a display label
+     (method + path) for endpoint-referencing error messages. *)
+  let endpoint_name = match endpoint_opt with
+    | Some ep ->
+      let m = match ep.method_ with
+        | GET -> "GET" | POST -> "POST" | PUT -> "PUT"
+        | DELETE -> "DELETE" | PATCH -> "PATCH" | SSE -> "SSE" in
+      Printf.sprintf "%s %s" m ep.path
+    | None -> "?"
+  in
   match List.assoc_opt handler_name handlers with
   | None ->
     errors := make_error sv.loc
@@ -1536,6 +1541,58 @@ let check_server_handler_binding
       (Printf.sprintf "server '%s': '%s' is declared, but it is not a handler" sv.name handler_name)
       :: !errors
   | Some hdl ->
+    (* ── HTTP-method cross-check ───────────────────────────────────────────
+       A `handler` states the method(s) it serves, and the server block pairs
+       handlers to endpoints by POSITION.  Requiring the two to agree turns a
+       misordered server block from a silent misroute into a compile error: a
+       handler declared `get` landing in a POST slot cannot typecheck, no matter
+       how compatible its parameters and return type happen to be.
+
+       This is the discriminator W095 cannot supply on its own — W095 can only
+       warn that two endpoints are indistinguishable, whereas an explicit method
+       makes the pairing structurally verifiable.
+
+       The method is also what SEC005 keys on (a GET handler may not reach
+       `dbWrite`/`queueWrite`/`pubsub`/`emailCap`), so agreement here is what
+       lets that security rule read the handler's own declaration instead of
+       inferring the method through this positional pairing. *)
+    let declared_methods = match hdl with
+      | LocalHandler fd -> fd.http_methods
+      | ImportedHandler info -> info.fi_http_methods in
+    let handler_loc_of = function
+      | LocalHandler (fd : func_decl) -> fd.loc
+      | ImportedHandler (info : func_info) -> info.fi_loc in
+    let method_word = function
+      | GET -> "get" | POST -> "post" | PUT -> "put"
+      | DELETE -> "delete" | PATCH -> "patch" | SSE -> "sse" in
+    (match endpoint_opt with
+     | Some ep when ep.method_ <> SSE ->
+       if declared_methods = [] then
+         errors := make_error (handler_loc_of hdl)
+           ~hint:(Printf.sprintf
+             "write `handler %s %s(…)`. Server blocks pair handlers to endpoints by \
+              position, so stating the method lets the compiler verify this handler \
+              really belongs in the `%s` slot — and it is what decides whether \
+              SEC005's no-mutation rule for GET applies"
+             (method_word ep.method_) handler_name endpoint_name)
+           (Printf.sprintf
+             "handler '%s' does not declare an HTTP method, but serves endpoint '%s'"
+             handler_name endpoint_name)
+           :: !errors
+       else if not (List.mem ep.method_ declared_methods) then
+         errors := make_error (handler_loc_of hdl)
+           ~hint:(Printf.sprintf
+             "either change the handler to `handler %s %s(…)`, or move it to the \
+              slot matching the endpoint it should serve — handlers are paired to \
+              endpoints by POSITION in the server block, in api declaration order"
+             (method_word ep.method_) handler_name)
+           (Printf.sprintf
+             "handler '%s' declares `%s` but is bound to endpoint '%s'"
+             handler_name
+             (String.concat " " (List.map method_word declared_methods))
+             endpoint_name)
+           :: !errors
+     | _ -> ());
     (* Return type compatibility check: handler return type must match endpoint declaration *)
     (match endpoint_opt with
      | None -> ()
@@ -1567,7 +1624,46 @@ let check_server_handler_binding
                  sv.name handler_name h endpoint_name e)
                :: !errors
            | _ -> ())
-        | _ -> ())
+        | _ -> ());
+       (* ── Return PROOF compatibility ─────────────────────────────────────
+          The endpoint's declared return proof is the response's advertised
+          contract, and it is what the Elm/TS client generators are typed FROM
+          (`return_info_ir` reads the endpoint's return spec, not the handler's).
+          So a handler whose return carries different predicates makes the
+          endpoint's advertised guarantee — and every generated client — wrong,
+          while the head-type comparison above sees nothing (both are `String`).
+
+          Require the handler's predicates to COVER the endpoint's: carrying
+          more than advertised is a stronger guarantee and fine; carrying less,
+          or a different fact entirely, is the endpoint lying about its response.
+          Before this check, two endpoints differing only in return proof were
+          silently interchangeable — swapping their handlers compiled clean. *)
+       let all_preds spec =
+         List.sort_uniq String.compare
+           (pred_names_of_return_spec spec @ forall_preds_of_return_spec spec) in
+       let ep_preds = match ep_return_spec_opt ep with
+         | Some rs -> all_preds rs | None -> [] in
+       if ep_preds <> [] then begin
+         let h_spec = match hdl with
+           | LocalHandler fd -> fd.return_spec
+           | ImportedHandler info -> info.fi_return in
+         let h_preds = all_preds h_spec in
+         let missing = List.filter (fun p -> not (List.mem p h_preds)) ep_preds in
+         if missing <> [] then
+           errors := make_error (handler_loc_of hdl)
+             ~hint:(Printf.sprintf
+               "either return the advertised proof from `%s`, or change endpoint \
+                '%s' to declare what the handler actually establishes%s"
+               handler_name endpoint_name
+               (if h_preds = [] then " (the handler's return carries no proof)"
+                else Printf.sprintf " (it carries [%s])" (String.concat ", " h_preds)))
+             (Printf.sprintf
+               "server '%s': endpoint '%s' declares its response carries [%s], but \
+                handler '%s' does not establish %s"
+               sv.name endpoint_name (String.concat ", " ep_preds) handler_name
+               (String.concat ", " missing))
+             :: !errors
+       end
      | _ -> ());
     (* S16: positional arity contract, DERIVED from the endpoint.  The router
        supplies handler arguments positionally: the auth-proven value (if the
@@ -2137,45 +2233,26 @@ let check_server_completeness ?(extra_funcs = []) (decls : top_decl list) : vali
            (Printf.sprintf "server '%s' refers to unknown api '%s'" sv.name sv.api_name)
            :: !errors
        | Some api ->
+         (* #65: binding is purely positional now — handler i implements the
+            i-th non-SSE endpoint, no name-keyed path left to fall back to. *)
          let non_sse_eps = api.endpoints |> List.filter (fun ep -> ep.method_ <> SSE) in
-         let expected = List.map (fun (ep : api_endpoint) -> ep.name) non_sse_eps in
-         let bound_names = List.map fst sv.bindings in
-         if List.for_all is_synthetic_endpoint_name expected then begin
-           let expected_count = List.length expected in
-           let bound_count = List.length sv.bindings in
-           if bound_count < expected_count then
-             errors := make_error sv.loc
-               ~hint:(Printf.sprintf "add %d more `<endpointName> = <handlerName>` binding(s) to server '%s'" (expected_count - bound_count) sv.name)
-               (Printf.sprintf "server '%s' is missing %d binding(s) for api '%s'" sv.name (expected_count - bound_count) sv.api_name)
-               :: !errors;
-           List.iter (fun (endpoint_name, _handler_name) ->
-             errors := make_error sv.loc
-               ~hint:(Printf.sprintf "api '%s' declares %d endpoint(s)" sv.api_name expected_count)
-               (Printf.sprintf "server '%s' binds extra endpoint '%s'" sv.name endpoint_name)
-               :: !errors
-           ) (drop expected_count sv.bindings);
-           List.iteri (fun i binding ->
-             let ep_opt = List.nth_opt non_sse_eps i in
-             check_server_handler_binding handlers auth_preds auth_fn_preds sv ep_opt binding errors
-           ) (take expected_count sv.bindings)
-         end else begin
-           List.iter (fun endpoint_name ->
-             if not (List.mem endpoint_name bound_names) then
-               errors := make_error sv.loc
-                 ~hint:(Printf.sprintf "add `%s = <handlerName>` to server '%s'" endpoint_name sv.name)
-                 (Printf.sprintf "server '%s' is missing a binding for endpoint '%s'" sv.name endpoint_name)
-                 :: !errors
-           ) expected;
-           List.iter (fun (endpoint_name, handler_name) ->
-             if not (List.mem endpoint_name expected) then
-               errors := make_error sv.loc
-                 ~hint:(Printf.sprintf "valid endpoints: %s" (String.concat ", " expected))
-                 (Printf.sprintf "server '%s' binds unknown endpoint '%s'" sv.name endpoint_name)
-                 :: !errors;
-             let ep_opt = List.find_opt (fun (ep : api_endpoint) -> ep.name = endpoint_name) non_sse_eps in
-             check_server_handler_binding handlers auth_preds auth_fn_preds sv ep_opt (endpoint_name, handler_name) errors
-           ) sv.bindings
-         end)
+         let expected_count = List.length non_sse_eps in
+         let bound_count = List.length sv.handlers in
+         if bound_count < expected_count then
+           errors := make_error sv.loc
+             ~hint:(Printf.sprintf "add %d more handler(s) to server '%s'" (expected_count - bound_count) sv.name)
+             (Printf.sprintf "server '%s' is missing %d handler(s) for api '%s'" sv.name (expected_count - bound_count) sv.api_name)
+             :: !errors;
+         List.iter (fun handler_name ->
+           errors := make_error sv.loc
+             ~hint:(Printf.sprintf "api '%s' declares %d endpoint(s)" sv.api_name expected_count)
+             (Printf.sprintf "server '%s' has an extra handler '%s' with no matching endpoint" sv.name handler_name)
+             :: !errors
+         ) (drop expected_count sv.handlers);
+         List.iteri (fun i handler_name ->
+           let ep_opt = List.nth_opt non_sse_eps i in
+           check_server_handler_binding handlers auth_preds auth_fn_preds sv ep_opt handler_name errors
+         ) (take expected_count sv.handlers))
     | _ -> ()
   ) decls;
   List.rev !errors
@@ -2190,6 +2267,7 @@ type vkind =
   | VStr            (* string literal, or env/envString call *)
   | VInt            (* int literal, or envInt call *)
   | VPort           (* int literal proven in 1..65535 (a port-validity obligation), or envInt *)
+  | VMountPath      (* string literal: "/" or "/seg(/seg)*" — leading slash required, no trailing slash *)
   | VBool
   | VSub of string  (* nested record, validated against the named sub-schema *)
   | VConn           (* PostgresConnection: Tcp { host,port } | Socket { path } *)
@@ -2234,11 +2312,41 @@ let config_block_schema = function
   | "App" -> [ "database", VDatabaseRef, true; "queues", VRefList, false;
                "email", VRefList, false; "sseChannels", VRefList, false;
                "api", VTypeRef, true; "port", VExpr, false;
-               "static", VStr, false ]
+               "static", VStr, false; "mountPath", VMountPath, false ]
   (* Agent { provider, systemPrompt, maxTokens, tools } is a typed-record constructor
      validated by the type checker (registered record fields), so it needs no
      structural schema here. *)
   | _ -> []
+
+(** Per-field prose for a typed config block, surfaced by the LSP's
+    config-context hover/completion (see [Compile.config_field_type_label]'s
+    sibling `cfi_doc`) and by `tesl doc`.  [""] when a field needs no
+    explanation beyond its name and type — most do not.  Reserved for fields
+    whose CORRECT USE is not obvious from the signature, which is exactly where
+    an editor hint earns its keep. *)
+let config_field_doc (block : string) (field : string) : string =
+  match block, field with
+  | "App", "mountPath" ->
+    "Serve every route the `api` block declares under this path prefix, e.g. \
+     `\"/api\"` makes `get \"/widgets\"` answer at `/api/widgets`. Route strings \
+     stay prefix-free, so a new route cannot forget the prefix, and generated \
+     Elm/TS client names stay clean (`getWidgets`, not `getApiWidgets`) while \
+     the client's request URL gets the prefix. \
+     MOUNTED: api-block routes and their SSE routes. NOT MOUNTED: static files \
+     and the SPA fallback (the SPA is the other thing sharing this origin that \
+     the prefix separates the API from), and the SSO endpoints \
+     `/auth/<seg>/login|callback` (so the IdP-registered `redirect_uri` is not \
+     coupled to a deployment knob). `healthProbePath` names one of the api \
+     block's own routes, so it is api-relative and moves under the mount too — \
+     point load balancers at the mounted path. \
+     Must start with `/` and must not end with `/`."
+  | "App", "static" ->
+    "Directory served as static files on the RAW path, plus an index.html SPA \
+     fallback for any unrouted path. Not affected by `mountPath`."
+  | "App", "port" ->
+    "TCP port to listen on. An `envInt \"PORT\" 8080` read keeps it \
+     12-factor-configurable at deploy time."
+  | _ -> ""
 
 let cfg_fields = function
   | ERecord { fields; _ } -> fields
@@ -2299,6 +2407,24 @@ let check_typed_config_blocks (decls : top_decl list) : validation_error list =
          err (Printf.sprintf "field `%s` is not a valid port: `%s` is outside the range 1..65535" fname s)
        | _ when is_env_call "envInt" v -> []
        | _ -> err (Printf.sprintf "field `%s` must be a port number (an Int literal in 1..65535 or `envInt \"VAR\" default`)" fname))
+    | VMountPath ->
+      (* The one friction point this exists to remove: don't make the caller
+         guess whether the leading/trailing slash belongs. Exactly one shape
+         is valid — leading slash, no trailing slash, e.g. "/api". *)
+      (match v with
+       | ELit { lit = LString s; _ } ->
+         if s = "" then
+           err (Printf.sprintf
+             "field `%s` must not be empty — omit `mountPath` entirely to serve at the root" fname)
+         else if s.[0] <> '/' then
+           err (Printf.sprintf
+             "field `%s` must start with `/` — write %S, not %S" fname ("/" ^ s) s)
+         else if String.length s > 1 && s.[String.length s - 1] = '/' then
+           err (Printf.sprintf
+             "field `%s` must not end with `/` — write %S, not %S"
+             fname (String.sub s 0 (String.length s - 1)) s)
+         else []
+       | _ -> err (Printf.sprintf "field `%s` must be a String literal, e.g. \"/api\"" fname))
     | VBool ->
       (match v with ELit { lit = LBool _; _ } -> [] | _ -> err (Printf.sprintf "field `%s` must be a Bool (true/false)" fname))
     | VSub sub -> check_record (cfg_expr_loc v) sub (cfg_fields v)

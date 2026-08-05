@@ -243,12 +243,12 @@ let client_program ~with_cookie =
       "codec LoginRes {\n  toJson {\n\
       \    granted -> \"granted\" with_codec boolCodec\n  }\n\
       \  fromJson_forbidden\n}\n\n";
-      "handler doLogin(body: LoginReq) -> LoginRes requires [sessions] =\n";
+      "handler post doLogin(body: LoginReq) -> LoginRes requires [sessions] =\n";
       cookie_line;
       "  LoginRes { granted: True }\n\n";
       "api LoginApi {\n  post \"/login\"\n    body body: LoginReq\n\
       \    -> LoginRes\n}\n\n";
-      "server LoginSrv for LoginApi {\n  doLogin = doLogin\n}\n" ]
+      "server LoginSrv for LoginApi {\n  doLogin\n}\n" ]
 
 (* Both generators run off the PARSED module (that is what `tesl generate ts`
    does after gating on the full checker — compiler/bin/main.ml:1229-1235), so the

@@ -182,7 +182,7 @@ auth resolveCaller(request: HttpRequest) -> perms: List Permission ::: MayReadPr
       let perms = [ReadProjects]
       ok perms ::: MayReadProjects perms
 
-handler dummy(perms: List Permission ::: MayReadProjects perms) -> String =
+handler get dummy(perms: List Permission ::: MayReadProjects perms) -> String =
   "ok"
 
 api DummyApi {
@@ -192,7 +192,7 @@ api DummyApi {
 }
 
 server DummyServer for DummyApi {
-  dummy = dummy
+  dummy
 }
 |}
 
@@ -251,7 +251,7 @@ codec Grant {
   fromJson_forbidden
 }
 
-handler dummy() -> Grant =
+handler get dummy() -> Grant =
   let raw = ["read"]
   let allowed = check mayReadProjects raw
   Grant { granted: allowed }
@@ -261,7 +261,7 @@ api DummyApi {
 }
 
 server DummyServer for DummyApi {
-  dummy = dummy
+  dummy
 }
 |}
 

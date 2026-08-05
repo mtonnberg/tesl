@@ -602,8 +602,8 @@ auth qAuth(req: HttpRequest) -> q: String ::: QAuthed q =
     Nothing -> fail 400 "no q"
     Something v -> ok v ::: QAuthed q
 api A { get "/s" auth q : String ::: QAuthed q via qAuth -> String }
-handler s(req: HttpRequest, q: String ::: QAuthed q) -> String requires [] = q
-server S for A { s = s }
+handler get s(req: HttpRequest, q: String ::: QAuthed q) -> String requires [] = q
+server S for A { s }
 |}
 
 let test_R65_SH02_positional_handler_params_accepted () =
@@ -614,13 +614,13 @@ module R65Sh02 exposing [S]
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 capture idCapture: id: String using stringCodec
-handler createTask(x: String) -> String requires [] = x
-handler getTask(x: String) -> String requires [] = x
+handler post createTask(x: String) -> String requires [] = x
+handler get getTask(x: String) -> String requires [] = x
 api TaskApi {
   post "/tasks" -> String
   get "/tasks/:id" capture id: String via idCapture -> String
 }
-server S for TaskApi { createTask = createTask, getTask = getTask }
+server S for TaskApi { createTask, getTask }
 |}
 
 (* ── Test runner ─────────────────────────────────────────────────────────── *)

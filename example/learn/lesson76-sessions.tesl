@@ -251,7 +251,7 @@ codec Profile {
 fn credentialsAreGood(credentials: Credentials) -> Bool =
   String.length credentials.password >= 8
 
-handler login(body: Credentials) -> SessionResult requires [sessions] =
+handler post login(body: Credentials) -> SessionResult requires [sessions] =
   if credentialsAreGood body then
     let token = JWT.sign (Dict.singleton "sub" body.user) (sessionsSigningKey())
     let _ = Http.setSessionCookie token
@@ -286,7 +286,7 @@ auth sessionOwner(request: HttpRequest) -> user: String ::: Authenticated user
       let subject = subjectOf claims
       ok subject ::: Authenticated user
 
-handler whoami(user: String ::: Authenticated user) -> Profile =
+handler get whoami(user: String ::: Authenticated user) -> Profile =
   Profile { userId: user }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -297,7 +297,7 @@ handler whoami(user: String ::: Authenticated user) -> Profile =
 # No key, no clock — logout needs only `cookieCap`, and the narrower `requires`
 # says so.
 
-handler logout() -> SessionResult requires [cookieCap] =
+handler post logout() -> SessionResult requires [cookieCap] =
   let _ = Http.clearSessionCookie()
   SessionResult { granted: True }
 
@@ -319,9 +319,9 @@ api SessionApi {
 }
 
 server SessionServer for SessionApi {
-  login = login
-  whoami = whoami
-  logout = logout
+  login
+  whoami
+  logout
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

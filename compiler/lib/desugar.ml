@@ -214,9 +214,9 @@ let lower_expr (tables : lower_tables) (e : expr) : expr =
      | _ -> ());
     Buffer.add_string buf ")";
     ERuntimeCall { segments = [ RLit (Buffer.contents buf) ]; loc }
-  | EServe { server_name; port; capabilities; static_dir; loc } ->
+  | EServe { server_name; port; capabilities; static_dir; mount_path; loc } ->
     (* (serve NAME #:port <port via emit_expr_simple> #:capabilities (list CAP...)
-        [ #:static-dir "DIR"] #:sse-routes NAME-sse-routes) *)
+        [ #:static-dir "DIR"] [ #:mount-path "PATH"] #:sse-routes NAME-sse-routes) *)
     let prefix = Printf.sprintf "(serve %s #:port " server_name in
     let mid_buf = Buffer.create 64 in
     Buffer.add_string mid_buf " #:capabilities (list";
@@ -224,6 +224,9 @@ let lower_expr (tables : lower_tables) (e : expr) : expr =
     Buffer.add_string mid_buf ")";
     (match static_dir with
      | Some dir -> Buffer.add_string mid_buf (Printf.sprintf " #:static-dir %S" dir)
+     | None -> ());
+    (match mount_path with
+     | Some path -> Buffer.add_string mid_buf (Printf.sprintf " #:mount-path %S" path)
      | None -> ());
     Buffer.add_string mid_buf (Printf.sprintf " #:sse-routes %s-sse-routes)" server_name);
     ERuntimeCall { segments =
@@ -721,13 +724,16 @@ let lower_main_app (decls : top_decl list) (fd : func_decl) : func_decl =
     let static_dir = match List.assoc_opt "static" fields with
       | Some (ELit { lit = LString s; _ }) -> Some s
       | _ -> None in
+    let mount_path = match List.assoc_opt "mountPath" fields with
+      | Some (ELit { lit = LString s; _ }) -> Some s
+      | _ -> None in
     let worker_stmts = List.concat_map (fun qn ->
       let (caps, nw, has_dead) = match find_q qn with Some (_, c, n, d) -> (c, n, d) | None -> ([], None, false) in
       EStartWorkers { workers_name = qn ^ "Workers"; capabilities = caps; concurrency = nw; is_dead = false; loc }
       :: (if has_dead then [ EStartWorkers { workers_name = qn ^ "DeadWorkers"; capabilities = caps; concurrency = nw; is_dead = true; loc } ] else [])
     ) qs in
     let email_stmts = List.map (fun en -> EStartEmailWorker { email_name = en; loc }) es in
-    let serve = EServe { server_name = api; port; capabilities = main_caps; static_dir; loc } in
+    let serve = EServe { server_name = api; port; capabilities = main_caps; static_dir; mount_path; loc } in
     let rec chain = function
       | [] -> serve
       | [ last ] -> last

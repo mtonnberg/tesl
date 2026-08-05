@@ -123,7 +123,7 @@ record Doc {
   id: String
 }
 
-handler act() -> String requires [%s] =
+handler %s act() -> String requires [%s] =
 %s
 
 api ActApi {
@@ -131,7 +131,7 @@ api ActApi {
 }
 
 server ActServer for ActApi {
-  endpoint_0 = act
+  act
 }
 
 database ProbeDb = Database {
@@ -148,6 +148,7 @@ main() -> App requires [%s] =
 |}
     module_name
     (if writes then "import Tesl.DB exposing [dbWrite]" else "")
+    method_kw
     (if writes then "dbWrite" else "")
     (if writes then "  let saved = insert Doc { id: \"x\" }\n  \"ok\"" else "  \"ok\"")
     method_kw
@@ -180,7 +181,7 @@ record Doc {
   id: String
 }
 
-handler act() -> List Doc requires [dbRead] =
+handler get act() -> List Doc requires [dbRead] =
   select Doc
 
 api ActApi {
@@ -188,7 +189,7 @@ api ActApi {
 }
 
 server ActServer for ActApi {
-  endpoint_0 = act
+  act
 }
 
 database ProbeDb = Database {
@@ -231,7 +232,7 @@ email ProbeMail = Email {
   }
 }
 
-handler act() -> String requires [emailCap] =
+handler %s act() -> String requires [emailCap] =
   let _ = Email.send ProbeMail {
     to: "to@example.com"
     subject: "hi"
@@ -244,7 +245,7 @@ api ActApi {
 }
 
 server ActServer for ActApi {
-  endpoint_0 = act
+  act
 }
 
 main() -> App requires [emailCap] =
@@ -255,6 +256,7 @@ main() -> App requires [emailCap] =
     port: 8086
   }
 |}
+    method_kw
     method_kw
 
 let test_get_email_rejected () =
@@ -281,7 +283,7 @@ record Doc {
   id: String
 }
 
-handler act() -> String requires [audit] =
+handler get act() -> String requires [audit] =
   let saved = insert Doc { id: "x" }
   "ok"
 
@@ -290,7 +292,7 @@ api ActApi {
 }
 
 server ActServer for ActApi {
-  endpoint_0 = act
+  act
 }
 
 database ProbeDb = Database {
@@ -330,10 +332,10 @@ record Doc {
   id: String
 }
 
-handler readOnly() -> String requires [] =
+handler get readOnly() -> String requires [] =
   "ok"
 
-handler mutate() -> String requires [dbWrite] =
+handler post mutate() -> String requires [dbWrite] =
   let saved = insert Doc { id: "x" }
   "ok"
 
@@ -343,8 +345,8 @@ api ActApi {
 }
 
 server ActServer for ActApi {
-  endpoint_1 = mutate
-  endpoint_0 = readOnly
+  mutate
+  readOnly
 }
 
 database ProbeDb = Database {
@@ -377,10 +379,10 @@ record Doc {
   id: String
 }
 
-handler readOnly() -> String requires [] =
+handler post readOnly() -> String requires [] =
   "ok"
 
-handler mutate() -> String requires [dbWrite] =
+handler get mutate() -> String requires [dbWrite] =
   let saved = insert Doc { id: "x" }
   "ok"
 
@@ -390,8 +392,8 @@ api ActApi {
 }
 
 server ActServer for ActApi {
-  endpoint_0 = readOnly
-  endpoint_1 = mutate
+  readOnly
+  mutate
 }
 
 database ProbeDb = Database {
@@ -424,10 +426,10 @@ record Doc {
   id: String
 }
 
-handler readOnly() -> String requires [] =
+handler post readOnly() -> String requires [] =
   "ok"
 
-handler mutate() -> String requires [dbWrite] =
+handler get mutate() -> String requires [dbWrite] =
   let saved = insert Doc { id: "x" }
   "ok"
 
@@ -439,8 +441,8 @@ api ActApi {
 }
 
 server ActServer for ActApi {
-  endpoint_1 = readOnly
-  endpoint_2 = mutate
+  readOnly
+  mutate
 }
 
 database ProbeDb = Database {
@@ -474,7 +476,7 @@ fn doWrite() -> String requires [dbWrite] =
   let saved = insert Doc { id: "x" }
   "ok"
 
-handler act() -> String requires [dbWrite] =
+handler get act() -> String requires [dbWrite] =
   doWrite()
 
 api ActApi {
@@ -482,7 +484,7 @@ api ActApi {
 }
 
 server ActServer for ActApi {
-  endpoint_0 = act
+  act
 }
 
 database ProbeDb = Database {
@@ -514,7 +516,7 @@ record Doc {
   id: String
 }
 
-handler libMutate() -> String requires [dbWrite] =
+handler get libMutate() -> String requires [dbWrite] =
   let saved = insert Doc { id: "x" }
   "ok"
 |}
@@ -536,7 +538,7 @@ api ActApi {
 }
 
 server ActServer for ActApi {
-  endpoint_0 = libMutate
+  libMutate
 }
 
 database ProbeDb = Database {
@@ -567,7 +569,7 @@ record Doc {
   id: String
 }
 
-handler act() -> String requires [] =
+handler get act() -> String requires [] =
   telemetry "act.viewed" { n = 1 }
   "ok"
 
@@ -576,7 +578,7 @@ api ActApi {
 }
 
 server ActServer for ActApi {
-  endpoint_0 = act
+  act
 }
 
 database ProbeDb = Database {
@@ -620,6 +622,84 @@ let test_forbidden_set_pinned () =
     [ "dbWrite"; "emailCap"; "pubsub"; "queueWrite" ]
     (List.sort compare Validation_capabilities.get_forbidden_caps)
 
+(* ── Declaration-driven enforcement ────────────────────────────────────────
+   SEC005 used to obtain a handler's method by pairing server bindings to api
+   endpoints POSITIONALLY.  Now that a `handler` declares its own method, the
+   rule reads the handler's text.  Two holes that closed with it, both pinned
+   below because both were silently unchecked before:
+
+   - a mutating GET handler bound to NO server was invisible: there was no
+     pairing to infer a method from, so the rule never ran on it;
+   - [server_endpoint_bindings] returns [] when the handler count and endpoint
+     count disagree, so a malformed server block switched the rule OFF entirely.
+     A count mismatch is its own error, but it must not also disable a security
+     check — that is the fail-open direction this rule exists to remove. *)
+
+let unbound_prog ~method_kw = Printf.sprintf {|module Sec005Unbound exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.DB exposing [dbWrite]
+import Tesl.Database exposing [Database, Memory]
+
+record Doc {
+  id: String
+}
+
+database ProbeDb = Database {
+  entities: [Doc]
+  backend: Memory
+}
+
+handler %s leaky() -> String requires [dbWrite] =
+  let saved = insert Doc { id: "x" }
+  "ok"
+|} method_kw
+
+let test_unbound_get_handler_rejected () =
+  expect_sec005 ~who:"unbound mutating GET handler"
+    ~mentions:[ "dbWrite"; "leaky" ]
+    (unbound_prog ~method_kw:"get")
+
+let test_unbound_post_handler_accepted () =
+  (* Control: the method is what decides, not the mere presence of a write. *)
+  expect_no_sec005 ~who:"unbound mutating POST handler"
+    (unbound_prog ~method_kw:"post")
+
+let test_count_mismatch_still_checked () =
+  (* One handler listed for two endpoints.  That is itself an error, and the
+     program must ALSO still be told its GET mutates. *)
+  expect_sec005 ~who:"malformed server block"
+    ~mentions:[ "dbWrite"; "leaky" ]
+    {|module Sec005Mismatch exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.DB exposing [dbWrite]
+import Tesl.Database exposing [Database, Memory]
+
+record Doc {
+  id: String
+}
+
+database ProbeDb = Database {
+  entities: [Doc]
+  backend: Memory
+}
+
+handler get leaky() -> String requires [dbWrite] =
+  let saved = insert Doc { id: "x" }
+  "ok"
+
+handler get other() -> String requires [] =
+  "ok"
+
+api ActApi {
+  get "/leaky" -> String
+  get "/other" -> String
+}
+
+server ActServer for ActApi {
+  leaky
+}
+|}
+
 let () =
   run "SEC005-GetHandlersDoNotMutate" [
     "db-write", [
@@ -641,6 +721,14 @@ let () =
       test_case "binding order is authoritative (safe program accepted)" `Quick test_binding_order_is_authoritative;
       test_case "binding order can put the mutation on the GET (rejected)" `Quick test_binding_order_moves_mutation_to_get;
       test_case "an SSE route does not shift the pairing" `Quick test_sse_does_not_shift_pairing;
+    ];
+    "declaration-driven (not pairing-inferred)", [
+      test_case "a mutating GET handler bound to no server is still rejected" `Quick
+        test_unbound_get_handler_rejected;
+      test_case "a POST handler bound to no server stays clean" `Quick
+        test_unbound_post_handler_accepted;
+      test_case "a malformed server block does not switch the rule off" `Quick
+        test_count_mismatch_still_checked;
     ];
     "out-of-scope", [
       test_case "telemetry in a GET is not a mutation" `Quick test_get_telemetry_accepted;

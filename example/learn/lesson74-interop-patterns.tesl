@@ -127,7 +127,7 @@ codec NewDocument {
 # The content arrives over HTTP instead of appearing on disk. You get auth,
 # validation, a codec, and an audit trail for free — none of which a watched
 # directory gives you.
-handler importDocument(body: NewDocument)
+handler post importDocument(body: NewDocument)
   -> exists docId: String =>
       Document ? FromDb (Id == docId)
   requires [documentStore] =
@@ -149,7 +149,7 @@ handler importDocument(body: NewDocument)
 fn documentToCsvRow(doc: Document) -> String =
   doc.id ++ "," ++ doc.name
 
-handler exportDocuments() -> String requires [documentStore] =
+handler get exportDocuments() -> String requires [documentStore] =
   let docs = select doc from Document where doc.ownerId == "demo-user"
   String.join (List.map documentToCsvRow docs) "\n"
 
@@ -199,7 +199,7 @@ worker summariseDocument(job: SummariseDocument ::: FromQueue (Id == jobId) job)
 # Kicking the work off is one statement. The handler returns immediately —
 # there is deliberately no way to block a request on a job, because a request
 # that waits for slow work is the bug this design removes.
-handler requestSummary(body: NewDocument) -> String
+handler post requestSummary(body: NewDocument) -> String
   requires [documentStore, queueWrite] =
   let docId = generatePrefixedId "doc"
   let _stored = insert Document {
@@ -296,9 +296,9 @@ api Lesson74Api {
 }
 
 server Lesson74Server for Lesson74Api {
-  importDocument = importDocument
-  exportDocuments = exportDocuments
-  requestSummary = requestSummary
+  importDocument
+  exportDocuments
+  requestSummary
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

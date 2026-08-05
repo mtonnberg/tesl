@@ -65,11 +65,11 @@ auth adminAuth(request: HttpRequest) -> u: User ::: Authenticated u && Admin u =
     Nothing -> fail 401 "Missing admin cookie"
 
 # Greet the authenticated user.
-handler greet(u: User ::: Authenticated u) -> String =
+handler get greet(u: User ::: Authenticated u) -> String =
   String.concat "hello " u.id
 
 # Delete ALL notes. Admin only — the agent must never do this autonomously.
-handler wipeNotes(u: User ::: Authenticated u && Admin u) -> String =
+handler post wipeNotes(u: User ::: Authenticated u && Admin u) -> String =
   "all notes wiped"
 
 api NotesApi {
@@ -82,8 +82,8 @@ api NotesApi {
 }
 
 server NotesServer for NotesApi {
-  greet = greet
-  wipeNotes = wipeNotes
+  greet
+  wipeNotes
 }
 
 check mkUser(u: User) -> u: User ::: Authenticated u =

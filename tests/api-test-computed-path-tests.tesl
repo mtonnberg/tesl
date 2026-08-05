@@ -74,16 +74,16 @@ auth parseQuery(req: HttpRequest) -> q: String ::: ValidQuery q =
 
 capturer idCapture: id: String using stringCodec
 
-handler getThing(id: String) -> String =
+handler get getThing(id: String) -> String =
   "thing-" ++ id
 
-handler createThing() -> Created =
+handler post createThing() -> Created =
   Created { id: "generated-1" }
 
-handler search(q: String ::: ValidQuery q) -> String =
+handler get search(q: String ::: ValidQuery q) -> String =
   "found-" ++ q
 
-handler notify(topic: String) -> String
+handler post notify(topic: String) -> String
   requires [pubsub] =
   publish Notices(topic) Notice { message: "notice-" ++ topic }
   "ok"
@@ -110,10 +110,10 @@ api PathApi {
 }
 
 server PathServer for PathApi {
-  getThing = getThing
-  createThing = createThing
-  search = search
-  notify = notify
+  getThing
+  createThing
+  search
+  notify
 }
 
 # ── The literal form (unchanged) ─────────────────────────────────────────────

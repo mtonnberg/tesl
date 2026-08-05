@@ -504,7 +504,7 @@ module Err202 exposing []
 import Tesl.Prelude exposing [Int, String]
 api Err202Api { get "/ping" -> String }
 fn notAHandler() -> String requires [] = "pong"
-server Err202Server for Err202Api { notAHandler = notAHandler }
+server Err202Server for Err202Api { notAHandler }
 |}
 
 let test_ERR2_03_missing_import_gives_suggestion () =

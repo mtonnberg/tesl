@@ -36,7 +36,7 @@
 
 (define TracePropServer-sse-routes '())
 (define-api TracePropApi
-  [endpoint_0 :
+  [chargeNote :
     "charge"
     :> (Post JSON String)
     ]
@@ -44,7 +44,7 @@
 
 (define-server TracePropServer
   #:api TracePropApi
-  [endpoint_0 chargeNote]
+  [chargeNote chargeNote]
 )
 
 (define-database TracePropDb

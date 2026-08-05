@@ -115,19 +115,18 @@ api MainApi {
     -> Int
 }
 
-handler rawBox() -> Int =
+handler get rawBox() -> Int =
   let raw = Box { n: 3 }
   raw.n
 
-handler seedRows() -> Int requires [dbRead, dbWrite] =
+handler post seedRows() -> Int requires [dbRead, dbWrite] =
   let rows = [Thing { id: "a" }]
   insertMany rows in Thing
   1
 
 server MainServer for MainApi {
-  database = DB
-  rawBox = rawBox
-  seedRows = seedRows
+  rawBox
+  seedRows
 }
 |}
 
@@ -223,7 +222,7 @@ let i42_lib = {|module Lib exposing [moneyBack]
 import Tesl.Prelude exposing [String]
 import Tesl.Money exposing [Money, Money.sek]
 
-handler moneyBack() -> Money =
+handler get moneyBack() -> Money =
   Money.sek 5
 |}
 
@@ -238,7 +237,7 @@ api MainApi {
 }
 
 server MainServer for MainApi {
-  moneyBack = moneyBack
+  moneyBack
 }
 |}
 
@@ -521,7 +520,7 @@ fn parseUserId(id: String) -> String =
 
 capturer userIdCapture: String using stringCodec via parseUserId
 
-handler sendNotice() -> String requires [pubsub] =
+handler post sendNotice() -> String requires [pubsub] =
   publish Ch("u1") NoticeSent { message: "m" }
   "ok"
 
@@ -535,7 +534,7 @@ api MainApi {
 }
 
 server MainServer for MainApi {
-  sendNotice = sendNotice
+  sendNotice
 }
 |}
 
@@ -564,7 +563,7 @@ import Tesl.Queue exposing [pubsub]
 
 type Ev = EvMade message: String
 
-handler h() -> String requires [pubsub] =
+handler post h() -> String requires [pubsub] =
   publish Ghost("k") EvMade { message: "x" }
   "ok"
 
@@ -574,7 +573,7 @@ api MainApi {
 }
 
 server MainServer for MainApi {
-  h = h
+  h
 }
 |}
 
@@ -614,7 +613,7 @@ record GhostJob {
   name: String
 }
 
-handler h() -> String requires [queueWrite] =
+handler post h() -> String requires [queueWrite] =
   enqueue GhostJob { name: "x" }
   "ok"
 
@@ -624,7 +623,7 @@ api MainApi {
 }
 
 server MainServer for MainApi {
-  h = h
+  h
 }
 |} in
   with_project ~lib:"module Lib exposing []\n" ~main (fun ~lib_p:_ ~main_p ->
@@ -680,11 +679,11 @@ api MainApi {
     -> String
 }
 
-handler h() -> String =
+handler get h() -> String =
   "ok"
 
 server MainServer for MainApi {
-  h = h
+  h
 }
 |}
 

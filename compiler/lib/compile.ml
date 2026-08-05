@@ -1945,6 +1945,7 @@ let config_field_type_label (k : Validation_structural.vkind) : string =
   | Validation_structural.VStr         -> "String"
   | Validation_structural.VInt         -> "Int"
   | Validation_structural.VPort        -> "Int (port 1..65535)"
+  | Validation_structural.VMountPath   -> "String (leading `/`, no trailing `/`)"
   | Validation_structural.VBool        -> "Bool"
   | Validation_structural.VSub sub     -> sub ^ " { … }"
   | Validation_structural.VConn        -> "TcpConnection { … } | SocketConnection { … }"
@@ -1967,6 +1968,12 @@ let config_decl_expr (d : Ast.top_decl) : Ast.expr option =
   | Ast.DCache r    -> r.config_expr
   | Ast.DEmail r    -> r.config_expr
   | Ast.DAgent r    -> r.config_expr
+  (* `main`'s trailing `App { … }` record is a typed config block with a full
+     schema (see [Validation_structural.config_block_schema] "App"), so the
+     LSP's config-context hover/completion covers it like any other — it was
+     simply never wired up, leaving the one block every project has with no
+     field hints at all. *)
+  | Ast.DFunc fd    -> Ast.app_record_of_main fd
   | _ -> None
 
 (* Type name a typed-config record was hinted with (`Database`, `SmtpConfig`,
@@ -2049,7 +2056,7 @@ let config_context_source filename source line col : config_context option =
                List.map (fun (fname, kind, required) -> {
                  cfi_name     = fname;
                  cfi_type     = config_field_type_label kind;
-                 cfi_doc      = "";
+                 cfi_doc      = Validation_structural.config_field_doc block_type fname;
                  cfi_required = required;
                  cfi_present  = List.mem fname present;
                }) schema_fields

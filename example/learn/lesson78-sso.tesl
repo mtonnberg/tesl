@@ -125,7 +125,7 @@ auth sessionOwner(request: HttpRequest) -> user: User ::: Authenticated user
 
 # The protected endpoint: reachable ONLY through `sessionOwner`, so `user` is a
 # verified `User`. No SSO session, no page.
-handler me(user: User ::: Authenticated user) -> Profile =
+handler get me(user: User ::: Authenticated user) -> Profile =
   Profile { userId: user.id }
 
 api AppApi {
@@ -143,7 +143,7 @@ api AppApi {
 # [Sso]` is the CHECKED promise that no code path here mints a session cookie
 # except the SSO callback.
 server AppServer for AppApi {
-  endpoint_0 = me
+  me
   sso "github" connection githubConn onIdentity linkUser
   publicOrigin "https://app.example.com"
   sessionKey "SESSION_KEY"

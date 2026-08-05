@@ -134,7 +134,7 @@ api TaskApi {
     -> String
 }
 server S for TaskApi {
-  createTask = nonExistentHandler
+  nonExistentHandler
 }
 |}
 

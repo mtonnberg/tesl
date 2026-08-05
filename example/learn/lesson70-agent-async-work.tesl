@@ -310,7 +310,7 @@ fn turnAgent(conversationId: String) -> Agent
     tools: [reportTool conversationId]
   }
 
-handler sendMessage(req: MessageRequest) -> String
+handler post sendMessage(req: MessageRequest) -> String
   requires [reportTurn] =
   runTurn (turnAgent req.conversationId) req.conversationId req.message
 
@@ -325,7 +325,7 @@ api ReportApi {
 }
 
 server ReportServer for ReportApi {
-  sendMessage = sendMessage
+  sendMessage
 }
 
 # ══════════════════════════════════════════════════════════════════════════════

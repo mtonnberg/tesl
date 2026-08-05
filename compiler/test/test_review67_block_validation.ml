@@ -545,8 +545,8 @@ api MyApi {
   get "/health"
     -> String
 }
-handler health() -> String requires [] = "ok"
-server R67At02Server for MyApi { health = health }
+handler get health() -> String requires [] = "ok"
+server R67At02Server for MyApi { health }
 api-test "" for R67At02Server {
   let resp = get "/health"
   expect resp.status == 200
@@ -565,8 +565,8 @@ module R67At04 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.ApiTest exposing [statusOk]
 api R67At04Api { get "/ping" -> String }
-handler ping() -> String requires [] = "pong"
-server R67At04Server for R67At04Api { ping = ping }
+handler get ping() -> String requires [] = "pong"
+server R67At04Server for R67At04Api { ping }
 api-test "ping returns 200" for R67At04Server {
   let resp = get "/ping"
   expect statusOk resp
@@ -580,8 +580,8 @@ module R67At05 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.ApiTest exposing [statusOk]
 api R67At05Api { get "/echo" -> String }
-handler echo() -> String requires [] = "hello"
-server R67At05Server for R67At05Api { echo = echo }
+handler get echo() -> String requires [] = "hello"
+server R67At05Server for R67At05Api { echo }
 api-test "echo with seed" for R67At05Server {
   seed { }
   let resp = get "/echo"
@@ -599,9 +599,9 @@ api R67At06Api {
   get "/a" -> String
   get "/b" -> String
 }
-handler aHandler() -> String requires [] = "a"
-handler bHandler() -> String requires [] = "b"
-server R67At06Server for R67At06Api { aHandler = aHandler bHandler = bHandler }
+handler get aHandler() -> String requires [] = "a"
+handler get bHandler() -> String requires [] = "b"
+server R67At06Server for R67At06Api { aHandler bHandler }
 api-test "can call both endpoints" for R67At06Server {
   let ra = get "/a"
   let rb = get "/b"
@@ -909,13 +909,13 @@ capability pubsub
 record EmailJob { recipientId: String }
 worker processEmail(job: EmailJob) requires [emailCap] = job
 deadWorker handleDeadEmail(job: EmailJob) requires [emailCap] = job
-handler handleRoot() -> String requires [] = "ok"
+handler get handleRoot() -> String requires [] = "ok"
 database DemoDb = Database {
   schema: "demo"  entities: []
   backend: Postgres (PostgresConfig { dbName: env "DB" user: env "U" password: env "P" connection: TcpConnection { host: env "H" port: envInt "PORT" 5432 } })
 }
 api DemoApi { get "/" -> String }
-server DemoServer for DemoApi { endpoint_0 = handleRoot }
+server DemoServer for DemoApi { handleRoot }
 queue EmailQueue requires [emailCap, pubsub, queueRead] = Queue {
   database: DemoDb
   jobs: [ Job EmailJob processEmail (Something handleDeadEmail) ]
@@ -980,9 +980,9 @@ import Tesl.Prelude exposing [String, Int]
 import Tesl.App exposing [App]
 import Tesl.Env exposing [envInt, envRead]
 import Tesl.Database exposing [Database, Memory]
-handler handleRoot() -> String requires [] = "ok"
+handler get handleRoot() -> String requires [] = "ok"
 api DemoApi { get "/" -> String }
-server DemoServer for DemoApi { endpoint_0 = handleRoot }
+server DemoServer for DemoApi { handleRoot }
 database PlainDb = Database { entities: []  backend: Memory }
 |}
 
@@ -1057,9 +1057,9 @@ agent SupportAgent requires [myAi] = Agent {
   maxTokens: 256
   tools: []
 }
-handler handleRoot() -> String requires [] = "ok"
+handler get handleRoot() -> String requires [] = "ok"
 api DemoApi { get "/" -> String }
-server DemoServer for DemoApi { endpoint_0 = handleRoot }
+server DemoServer for DemoApi { handleRoot }
 database PlainDb = Database { entities: []  backend: Memory }
 main() -> App requires [] =
   App { database: PlainDb  api: DemoServer  port: 8086 }
@@ -1080,9 +1080,9 @@ agent SupportAgent requires [myAi] = Agent {
   maxTokens: 256
   tools: []
 }
-handler handleRoot() -> String requires [] = "ok"
+handler get handleRoot() -> String requires [] = "ok"
 api DemoApi { get "/" -> String }
-server DemoServer for DemoApi { endpoint_0 = handleRoot }
+server DemoServer for DemoApi { handleRoot }
 database PlainDb = Database { entities: []  backend: Memory }
 main() -> App requires [envRead] =
   App { database: PlainDb  api: DemoServer  port: 8086 }

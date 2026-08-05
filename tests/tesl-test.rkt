@@ -1519,7 +1519,7 @@
     "}\n"
     "fn extractSerial(payload: PositivePayload) -> serial: Int ::: Positive serial =\n"
     "  payload.serial\n"
-    "handler echoSerial(payload: PositivePayload) -> Int =\n"
+    "handler post echoSerial(payload: PositivePayload) -> Int =\n"
     "  payload.serial\n"
     "api PositivePayloadApi {\n"
     "  post \"/payload\"\n"
@@ -1527,7 +1527,7 @@
     "    -> Int\n"
     "}\n"
     "server PositivePayloadServer for PositivePayloadApi {\n"
-    "  echoSerial = echoSerial\n"
+    "  echoSerial\n"
     "}\n")))
 
 (define PositivePayload (tesl-module-value record-proof-field-module-path 'PositivePayload))
@@ -1553,7 +1553,7 @@
 
 (define api-codec-module-path
   (compile-tesl-source
-   "module ApiCodecSmoke exposing [CodecServer]\nimport Tesl.Prelude exposing [String]\nimport Tesl.Json exposing [stringCodec]\nrecord CodecCreateTaskRequest {\n  title: String\n}\ncodec CodecCreateTaskRequest {\n  toJson_forbidden\n  fromJson [\n    {\n      title <- \"title\" with_codec stringCodec\n    }\n  ]\n}\nrecord CodecTaskMeta {\n  title: String\n  slug: String\n}\nrecord CodecNewTask {\n  meta: CodecTaskMeta\n  audit: String\n}\nrecord CodecTask {\n  id: String\n  meta: CodecTaskMeta\n  status: String\n  audit: String\n}\nrecord CodecTaskResponse {\n  id: String\n  title: String\n  status: String\n}\ncodec CodecTaskResponse {\n  toJson {\n    id -> \"id\" with_codec stringCodec\n    title -> \"title\" with_codec stringCodec\n    status -> \"status\" with_codec stringCodec\n  }\n  fromJson_forbidden\n}\nfn makeTaskMeta(title: String) -> CodecTaskMeta =\n  CodecTaskMeta { title: title, slug: title }\nfn decodeCreateTask(request: CodecCreateTaskRequest) -> CodecNewTask =\n  CodecNewTask { meta: makeTaskMeta request.title, audit: \"decoded-from-wire\" }\nfn encodeTask(task: CodecTask) -> CodecTaskResponse =\n  CodecTaskResponse { id: task.id, title: task.meta.title, status: task.status }\nhandler createTask(newTask: CodecNewTask) -> CodecTask =\n  CodecTask { id: \"task-1\", meta: newTask.meta, status: \"draft\", audit: newTask.audit }\napi CodecApi {\n  post \"/tasks\"\n    body newTask: CodecNewTask from CodecCreateTaskRequest via decodeCreateTask\n    response CodecTaskResponse via encodeTask\n    -> CodecTask\n}\nserver CodecServer for CodecApi {\n  createTask = createTask\n}\n"))
+   "module ApiCodecSmoke exposing [CodecServer]\nimport Tesl.Prelude exposing [String]\nimport Tesl.Json exposing [stringCodec]\nrecord CodecCreateTaskRequest {\n  title: String\n}\ncodec CodecCreateTaskRequest {\n  toJson_forbidden\n  fromJson [\n    {\n      title <- \"title\" with_codec stringCodec\n    }\n  ]\n}\nrecord CodecTaskMeta {\n  title: String\n  slug: String\n}\nrecord CodecNewTask {\n  meta: CodecTaskMeta\n  audit: String\n}\nrecord CodecTask {\n  id: String\n  meta: CodecTaskMeta\n  status: String\n  audit: String\n}\nrecord CodecTaskResponse {\n  id: String\n  title: String\n  status: String\n}\ncodec CodecTaskResponse {\n  toJson {\n    id -> \"id\" with_codec stringCodec\n    title -> \"title\" with_codec stringCodec\n    status -> \"status\" with_codec stringCodec\n  }\n  fromJson_forbidden\n}\nfn makeTaskMeta(title: String) -> CodecTaskMeta =\n  CodecTaskMeta { title: title, slug: title }\nfn decodeCreateTask(request: CodecCreateTaskRequest) -> CodecNewTask =\n  CodecNewTask { meta: makeTaskMeta request.title, audit: \"decoded-from-wire\" }\nfn encodeTask(task: CodecTask) -> CodecTaskResponse =\n  CodecTaskResponse { id: task.id, title: task.meta.title, status: task.status }\nhandler post createTask(newTask: CodecNewTask) -> CodecTask =\n  CodecTask { id: \"task-1\", meta: newTask.meta, status: \"draft\", audit: newTask.audit }\napi CodecApi {\n  post \"/tasks\"\n    body newTask: CodecNewTask from CodecCreateTaskRequest via decodeCreateTask\n    response CodecTaskResponse via encodeTask\n    -> CodecTask\n}\nserver CodecServer for CodecApi {\n  createTask\n}\n"))
 
 (define CodecServer (tesl-module-value api-codec-module-path 'CodecServer))
 (define codec-create-response
@@ -3461,13 +3461,13 @@
       "worker q10Worker(job: Q10Job::: FromQueue (Id == jid) job)\n"
       "  requires [queueRead] =\n"
       "  job\n"
-      "handler q10Root() -> String requires [] =\n"
+      "handler get q10Root() -> String requires [] =\n"
       "  \"ok\"\n"
       "api Q10Api {\n"
       "  get \"/health\" -> String\n"
       "}\n"
       "server Q10Server for Q10Api {\n"
-      "  endpoint_0 = q10Root\n"
+      "  q10Root\n"
       "}\n"
       "main() -> App requires [queueRead] =\n"
       "  App {\n"
@@ -3780,9 +3780,9 @@
     "  fromJson_forbidden\n"
     "}\n"
     "capture itemIdCapture: String using stringCodec\n"
-    "handler createItem(req: CreateItemReq) -> Item =\n"
+    "handler post createItem(req: CreateItemReq) -> Item =\n"
     "  Item { id: \"item-1\", name: req.name }\n"
-    "handler addNote(itemId: String, req: AddNoteReq) -> Note =\n"
+    "handler post addNote(itemId: String, req: AddNoteReq) -> Note =\n"
     "  Note { itemId: itemId, text: req.text }\n"
     "api PrefixApi {\n"
     "  post \"/items\"\n"
@@ -3794,8 +3794,8 @@
     "    -> Note\n"
     "}\n"
     "server PrefixServer for PrefixApi {\n"
-    "  createItem = createItem\n"
-    "  addNote    = addNote\n"
+    "  createItem\n"
+    "  addNote\n"
     "}\n")))
 
 (define PrefixServer (tesl-module-value route-prefix-dispatch-path 'PrefixServer))
@@ -6727,7 +6727,7 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
     "    } via checkPriceExceedsQuantity\n"
     "  ]\n"
     "}\n"
-    "handler processOrder(order: BoundedOrder) -> Int =\n"
+    "handler post processOrder(order: BoundedOrder) -> Int =\n"
     "  order.price\n"
     "api BoundedOrderApi {\n"
     "  post \"/order\"\n"
@@ -6735,7 +6735,7 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
     "    -> Int\n"
     "}\n"
     "server BoundedOrderServer for BoundedOrderApi {\n"
-    "  processOrder = processOrder\n"
+    "  processOrder\n"
     "}\n")))
 (define BoundedOrderServer (tesl-module-value proof-param-codec-path 'BoundedOrderServer))
 (define valid-order-response

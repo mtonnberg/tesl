@@ -34,7 +34,7 @@
 
 (define MetricsServer-sse-routes '())
 (define-api MetricsApi
-  [endpoint_0 :
+  [runBatch :
     "run"
     :> (Get JSON String)
     ]
@@ -42,7 +42,7 @@
 
 (define-server MetricsServer
   #:api MetricsApi
-  [endpoint_0 runBatch]
+  [runBatch runBatch]
 )
 
 (define-database MetricsDb

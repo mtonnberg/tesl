@@ -76,7 +76,7 @@ auth resolveCaller(request: HttpRequest) -> c: Caller ::: Authenticated c =
       let c = callerFor claim
       ok c ::: Authenticated c
 
-handler whoami(c: Caller ::: Authenticated c) -> WhoAmI =
+handler get whoami(c: Caller ::: Authenticated c) -> WhoAmI =
   WhoAmI { actor: describe c }
 
 api CallerApi {
@@ -86,7 +86,7 @@ api CallerApi {
 }
 
 server CallerServer for CallerApi {
-  whoami = whoami
+  whoami
 }
 
 # The newtype spelling, in the same module, exercised as ordinary proof-carrying

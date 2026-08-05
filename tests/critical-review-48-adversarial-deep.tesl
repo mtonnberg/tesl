@@ -55,17 +55,17 @@ codec ValueBody {
 }
 
 # A1: handler calls single check, uses result in arithmetic
-handler fix1SingleCheck(req: ValueBody) -> Fix1NumResponse =
+handler post fix1SingleCheck(req: ValueBody) -> Fix1NumResponse =
   let v = check checkValidated req.value
   Fix1NumResponse { result: v * 10 + 1 }
 
 # A2: handler calls conjunction check, uses result in arithmetic
-handler fix1ConjCheck(req: ValueBody) -> Fix1NumResponse =
+handler post fix1ConjCheck(req: ValueBody) -> Fix1NumResponse =
   let v = check checkBoth req.value
   Fix1NumResponse { result: v + 999 }
 
 # A3: handler calls inline conjunction, uses result
-handler fix1InlineConj(req: ValueBody) -> Fix1NumResponse =
+handler post fix1InlineConj(req: ValueBody) -> Fix1NumResponse =
   let v = check (checkValidated && checkInBounds) req.value
   Fix1NumResponse { result: v * 2 }
 
@@ -74,7 +74,7 @@ fn fix1FnCheck(n: Int) -> Int =
   let v = check checkValidated n
   v + 100
 
-handler fix1FnProxy(req: ValueBody) -> Fix1NumResponse =
+handler post fix1FnProxy(req: ValueBody) -> Fix1NumResponse =
   Fix1NumResponse { result: fix1FnCheck req.value }
 
 api Fix1Api {
@@ -85,10 +85,10 @@ api Fix1Api {
 }
 
 server Fix1Server for Fix1Api {
-  fix1SingleCheck = fix1SingleCheck
-  fix1ConjCheck = fix1ConjCheck
-  fix1InlineConj = fix1InlineConj
-  fix1FnProxy = fix1FnProxy
+  fix1SingleCheck
+  fix1ConjCheck
+  fix1InlineConj
+  fix1FnProxy
 }
 
 # ── api-tests for Fix 1 ─────────────────────────────────────────────────────
@@ -214,21 +214,21 @@ auth doubleDelegatedAuth(request: HttpRequest)
       let validId = check String.requireNonEmpty userId
       ok validId ::: Authenticated user && HasValidSession user
 
-handler whoamiSimple(user: String ::: Authenticated user) -> AuthInfoResponse =
+handler get whoamiSimple(user: String ::: Authenticated user) -> AuthInfoResponse =
   AuthInfoResponse { userId: user }
 
-handler whoamiIdentity(user: String ::: Authenticated user) -> AuthInfoResponse =
+handler get whoamiIdentity(user: String ::: Authenticated user) -> AuthInfoResponse =
   AuthInfoResponse { userId: user }
 
-handler whoamiConj(user: String ::: Authenticated user && HasValidSession user)
+handler get whoamiConj(user: String ::: Authenticated user && HasValidSession user)
   -> AuthInfoResponse =
   AuthInfoResponse { userId: user }
 
-handler whoamiAdmin(user: String ::: IsAdmin user && Authenticated user)
+handler get whoamiAdmin(user: String ::: IsAdmin user && Authenticated user)
   -> AuthInfoResponse =
   AuthInfoResponse { userId: user }
 
-handler whoamiDouble(user: String ::: Authenticated user && HasValidSession user)
+handler get whoamiDouble(user: String ::: Authenticated user && HasValidSession user)
   -> AuthInfoResponse =
   AuthInfoResponse { userId: user }
 
@@ -255,11 +255,11 @@ api Fix2MultiArgApi {
 }
 
 server Fix2MultiArgServer for Fix2MultiArgApi {
-  whoamiSimple = whoamiSimple
-  whoamiIdentity = whoamiIdentity
-  whoamiConj = whoamiConj
-  whoamiAdmin = whoamiAdmin
-  whoamiDouble = whoamiDouble
+  whoamiSimple
+  whoamiIdentity
+  whoamiConj
+  whoamiAdmin
+  whoamiDouble
 }
 
 # ── api-tests for Fix 2 ─────────────────────────────────────────────────────
@@ -363,14 +363,14 @@ auth proofVarNested(request: HttpRequest)
       let (checked ::: p) = check checkVerified validId
       ok checked ::: p && Active user
 
-handler whoamiVerified(user: String ::: Verified user) -> AuthInfoResponse =
+handler get whoamiVerified(user: String ::: Verified user) -> AuthInfoResponse =
   AuthInfoResponse { userId: user }
 
-handler whoamiMixed(user: String ::: Verified user && Authenticated user)
+handler get whoamiMixed(user: String ::: Verified user && Authenticated user)
   -> AuthInfoResponse =
   AuthInfoResponse { userId: user }
 
-handler whoamiNested(user: String ::: Verified user && Active user)
+handler get whoamiNested(user: String ::: Verified user && Active user)
   -> AuthInfoResponse =
   AuthInfoResponse { userId: user }
 
@@ -389,9 +389,9 @@ api Fix3ProofVarApi {
 }
 
 server Fix3ProofVarServer for Fix3ProofVarApi {
-  whoamiVerified = whoamiVerified
-  whoamiMixed = whoamiMixed
-  whoamiNested = whoamiNested
+  whoamiVerified
+  whoamiMixed
+  whoamiNested
 }
 
 api-test "C1: single proof var auth" for Fix3ProofVarServer {
@@ -485,10 +485,10 @@ codec UserResponse {
   fromJson_forbidden
 }
 
-handler getItem(user: String ::: ItemAuth user, itemId: String) -> ItemResponse =
+handler get getItem(user: String ::: ItemAuth user, itemId: String) -> ItemResponse =
   ItemResponse { itemId: itemId, fetchedBy: user }
 
-handler getUser(user: String ::: UserAuth user, uid: String) -> UserResponse =
+handler get getUser(user: String ::: UserAuth user, uid: String) -> UserResponse =
   UserResponse { uid: uid, fetchedBy: user }
 
 api Fix4CaptureApi {
@@ -504,8 +504,8 @@ api Fix4CaptureApi {
 }
 
 server Fix4RoutingCaptureServer for Fix4CaptureApi {
-  getItem = getItem
-  getUser = getUser
+  getItem
+  getUser
 }
 
 # ── api-tests for Fix 4 ─────────────────────────────────────────────────────

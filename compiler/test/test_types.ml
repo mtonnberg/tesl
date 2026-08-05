@@ -563,14 +563,14 @@ queue Q requires [workerCap] = Queue {
   jobs: [Job Job process (Something handleDead)]
   numberOfWorkers: 2
 }
-handler trigger() -> String requires [enqueueCap] =
+handler get trigger() -> String requires [enqueueCap] =
   enqueue Job { id: "j-1" }
   "queued"
 api A {
   get "/" -> String
 }
 server S for A {
-  trigger = trigger
+  trigger
 }
 main() -> App requires [workerCap, enqueueCap] =
   App {

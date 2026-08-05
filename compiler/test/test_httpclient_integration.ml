@@ -283,35 +283,35 @@ database HttpClientTestDb = Database {
 # status code (or body).  `requires [httpClient]` declares the capability; the
 # App entry point auto-grants it at startup.
 
-handler getStatus() -> String requires [httpClient] =
+handler get getStatus() -> String requires [httpClient] =
   let resp = HttpClient.get "%s" []
   Int.toString resp.status
 
-handler getBody() -> String requires [httpClient] =
+handler get getBody() -> String requires [httpClient] =
   let resp = HttpClient.get "%s" []
   resp.body
 
-handler getUsersBody() -> String requires [httpClient] =
+handler get getUsersBody() -> String requires [httpClient] =
   let resp = HttpClient.get "%s" []
   resp.body
 
-handler getErrorStatus() -> String requires [httpClient] =
+handler get getErrorStatus() -> String requires [httpClient] =
   let resp = HttpClient.get "%s" []
   Int.toString resp.status
 
-handler postEchoStatus() -> String requires [httpClient] =
+handler get postEchoStatus() -> String requires [httpClient] =
   let resp = HttpClient.post "%s" [] "integration-test-payload"
   Int.toString resp.status
 
-handler postEchoBody() -> String requires [httpClient] =
+handler get postEchoBody() -> String requires [httpClient] =
   let resp = HttpClient.post "%s" [] "integration-test-payload"
   resp.body
 
-handler putStatus() -> String requires [httpClient] =
+handler get putStatus() -> String requires [httpClient] =
   let resp = HttpClient.put "%s" [] "payload"
   Int.toString resp.status
 
-handler deleteStatus() -> String requires [httpClient] =
+handler get deleteStatus() -> String requires [httpClient] =
   let resp = HttpClient.delete "%s" []
   Int.toString resp.status
 
@@ -327,14 +327,14 @@ api HttpClientTestApi {
 }
 
 server HttpClientTestServer for HttpClientTestApi {
-  endpoint_0 = getStatus
-  endpoint_1 = getBody
-  endpoint_2 = getUsersBody
-  endpoint_3 = getErrorStatus
-  endpoint_4 = postEchoStatus
-  endpoint_5 = postEchoBody
-  endpoint_6 = putStatus
-  endpoint_7 = deleteStatus
+  getStatus
+  getBody
+  getUsersBody
+  getErrorStatus
+  postEchoStatus
+  postEchoBody
+  putStatus
+  deleteStatus
 }
 
 main() -> App requires [httpClient] =

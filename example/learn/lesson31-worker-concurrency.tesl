@@ -133,7 +133,7 @@ deadWorker handleDeadEmail(job: EmailJob ::: FromDeadQueue (Id == jobId) job)
 
 # ── Example handler that enqueues an email ────────────────────────────────────
 
-handler sendWelcomeEmail()
+handler post sendWelcomeEmail()
   -> String
   requires [enqueueEmail] =
   enqueue EmailJob { recipientId: "user-123", subject: "Welcome!", body: "Thanks for signing up." }
@@ -147,7 +147,7 @@ api ConcurrencyApi {
 }
 
 server ConcurrencyServer for ConcurrencyApi {
-  sendWelcomeEmail = sendWelcomeEmail
+  sendWelcomeEmail
 }
 
 # ── Main — activates the email queue's workers ────────────────────────────────

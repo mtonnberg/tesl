@@ -20,10 +20,10 @@ deadWorker d(job: J ::: FromDeadQueue (Id == jobId) job) requires [] =
   job
 queue Q requires [queueRead] = Queue { database: DB  jobs: [Job J w (Something d)]  numberOfWorkers: 4 }
 
-handler health() -> Int requires [] =
+handler get health() -> Int requires [] =
   1
 api A { get "/health" -> Int }
-server S for A { health = health }
+server S for A { health }
 
 main() -> App requires [queueRead, envRead] =
   let port = envInt "PORT" 8199

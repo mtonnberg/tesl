@@ -261,7 +261,7 @@ let app_tail ?(method_kw = "get") ~endpoints app_port =
          Printf.sprintf "  %s \"%s\" -> String" method_kw path) endpoints) in
   let server_bindings =
     String.concat "\n"
-      (List.mapi (fun i (name, _) -> Printf.sprintf "  endpoint_%d = %s" i name) endpoints) in
+      (List.map (fun (name, _) -> Printf.sprintf "  %s" name) endpoints) in
   Printf.sprintf {|
 api EmailTestApi {
 %s
@@ -285,7 +285,7 @@ main() -> App requires [emailCap] =
 let tesl_email_load_app ~module_name smtp_port app_port =
   Printf.sprintf {|%s
 
-handler emailLoaded() -> String requires [] =
+handler get emailLoaded() -> String requires [] =
   "EMAIL-MODULE-LOADED"
 %s|}
     (app_prelude ~module_name smtp_port)
@@ -296,7 +296,7 @@ handler emailLoaded() -> String requires [] =
 let tesl_email_send_app ~module_name smtp_port app_port recipient =
   Printf.sprintf {|%s
 
-handler queueEmail() -> String requires [emailCap] =
+handler post queueEmail() -> String requires [emailCap] =
   let _ = Email.send EmailTestMail {
     to: "%s"
     subject: "Integration Test Subject"
@@ -312,7 +312,7 @@ handler queueEmail() -> String requires [emailCap] =
 let tesl_email_html_app ~module_name smtp_port app_port =
   Printf.sprintf {|%s
 
-handler sendHtml() -> String requires [emailCap] =
+handler post sendHtml() -> String requires [emailCap] =
   let _ = Email.send EmailTestMail {
     to: "html@example.com"
     subject: "HTML Email Test"
@@ -327,7 +327,7 @@ handler sendHtml() -> String requires [emailCap] =
 let tesl_email_rich_app ~module_name smtp_port app_port =
   Printf.sprintf {|%s
 
-handler sendRich() -> String requires [emailCap] =
+handler post sendRich() -> String requires [emailCap] =
   let _ = Email.send EmailTestMail {
     to: "rich@example.com"
     subject: "Rich Email Test"

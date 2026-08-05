@@ -272,7 +272,7 @@ codec EchoRequest {
   ]
 }
 
-handler echo(req: EchoRequest) -> EchoRequest =
+handler post echo(req: EchoRequest) -> EchoRequest =
   req
 
 api Api {
@@ -282,7 +282,7 @@ api Api {
 }
 
 server Server for Api {
-  echo = echo
+  echo
 }
 
 api-test "raw JSON body and dynamic response fields" for Server {
@@ -332,10 +332,10 @@ database MainDatabase = Database {
   })
 }
 
-handler echo(req: EchoRequest) -> EchoRequest =
+handler post echo(req: EchoRequest) -> EchoRequest =
   req
 
-handler getSeededNote() -> Note
+handler get getSeededNote() -> Note
   requires [dbRead] =
   let found = selectOne n from Note where n.id == "note-1"
   case found of
@@ -353,8 +353,8 @@ api Api {
 }
 
 server Server for Api {
-  echo = echo
-  getSeededNote = getSeededNote
+  echo
+  getSeededNote
 }
 
 api-test "seed prepares fresh in-memory state" for Server requires [dbRead, dbWrite] {
@@ -450,7 +450,7 @@ worker handleNotice(job: NotifyJob ::: FromQueue (Id == jobId) job)
   publish MainEvents(job.userId) NoticeSent { message: job.message }
   job
 
-handler sendNotice(req: SendNoticeRequest) -> String
+handler post sendNotice(req: SendNoticeRequest) -> String
   requires [queueWrite] =
   enqueue NotifyJob { userId: req.userId, message: req.message }
   "queued"
@@ -465,7 +465,7 @@ api Api {
 }
 
 server Server for Api {
-  sendNotice = sendNotice
+  sendNotice
 }
 
 api-test "subscribe collect and process queue" for Server requires [queueRead, queueWrite, pubsub] {
@@ -509,7 +509,7 @@ codec Greeting {
   ]
 }
 
-handler greet(g: Greeting) -> Greeting =
+handler post greet(g: Greeting) -> Greeting =
   Greeting { name: g.name, message: "Hello, ${g.name}!" }
 
 api Api {
@@ -519,7 +519,7 @@ api Api {
 }
 
 server Server for Api {
-  greet = greet
+  greet
 }
 
 load-test "greet throughput" for Server
@@ -554,7 +554,7 @@ database MainDatabase = Database {
   })
 }
 
-handler listBooks() -> List Book
+handler get listBooks() -> List Book
   requires [dbRead] =
   select b from Book
 
@@ -564,7 +564,7 @@ api Api {
 }
 
 server Server for Api {
-  listBooks = listBooks
+  listBooks
 }
 
 load-test "list books with seeded data" for Server
@@ -607,7 +607,7 @@ codec Greeting {
   ]
 }
 
-handler greet(g: Greeting) -> Greeting =
+handler post greet(g: Greeting) -> Greeting =
   Greeting { name: g.name, message: "Hello" }
 
 api Api {
@@ -617,7 +617,7 @@ api Api {
 }
 
 server Server for Api {
-  greet = greet
+  greet
 }
 
 load-test "greet throughput metric" for Server

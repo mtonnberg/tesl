@@ -403,14 +403,14 @@ check isTodoId(todoId: String) -> todoId: String ::: TodoId todoId =
   else
     fail 400 "bad"
 capture todoIdCapture: String using stringCodec
-handler getTodo(todoId: String ::: TodoId todoId) -> String requires [] = todoId
+handler get getTodo(todoId: String ::: TodoId todoId) -> String requires [] = todoId
 api TodoApi {
   get "/todos/:todoId"
     capture todoId: String via todoIdCapture
     -> String
 }
 server S for TodoApi {
-  getTodo = getTodo
+  getTodo
 }
 |}
 
@@ -426,14 +426,14 @@ import Tesl.Http exposing [HttpRequest]
 import Tesl.Json exposing [stringCodec]
 fact TodoId (todoId: String)
 capture todoIdCapture: String ::: TodoId todoId using stringCodec
-handler getTodo(todoId: String ::: TodoId todoId) -> String requires [] = todoId
+handler get getTodo(todoId: String ::: TodoId todoId) -> String requires [] = todoId
 api TodoApi {
   get "/todos/:todoId"
     capture todoId: String ::: TodoId todoId via todoIdCapture
     -> String
 }
 server S for TodoApi {
-  getTodo = getTodo
+  getTodo
 }
 |}
 
@@ -556,14 +556,14 @@ check isTodoId(todoId: String) -> todoId: String ::: TodoId todoId =
   else
     fail 400 "bad"
 capture todoIdCapture: String ::: TodoId todoId using stringCodec via isTodoId
-handler getTodo(todoId: String ::: TodoId todoId) -> String requires [] = todoId
+handler get getTodo(todoId: String ::: TodoId todoId) -> String requires [] = todoId
 api TodoApi {
   get "/todos/:todoId"
     capture todoId: String ::: TodoId todoId via todoIdCapture
     -> String
 }
 server TodoServer for TodoApi {
-  getTodo = getTodo
+  getTodo
 }
 |}
 

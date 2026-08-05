@@ -1187,7 +1187,7 @@ fn double(x: Int) -> Int =
   let result = x
   result
 
-handler appRoot() -> String
+handler get appRoot() -> String
   requires [] =
   "ok"
 
@@ -1196,7 +1196,7 @@ api AppApi {
 }
 
 server AppServer for AppApi {
-  endpoint_0 = appRoot
+  appRoot
 }
 
 main() -> App requires [] =
@@ -1329,7 +1329,7 @@ codec Ping {
   ]
 }
 
-handler echo(req: Ping) -> Ping =
+handler post echo(req: Ping) -> Ping =
   req
 
 fn boom(flag: Bool) -> Int =
@@ -1345,7 +1345,7 @@ api A {
 }
 
 server S for A {
-  echo = echo
+  echo
 }
 |}
 

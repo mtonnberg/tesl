@@ -499,9 +499,9 @@ codec Msg {
   toJson { text -> "text" with_codec stringCodec }
   fromJson [ { text <- "text" with_codec stringCodec } ]
 }
-handler echo(req: Msg) -> Msg = req
+handler post echo(req: Msg) -> Msg = req
 api A { post "/echo" body req: Msg -> Msg }
-server S for A { echo = echo }
+server S for A { echo }
 api-test "bad" for S {
   let r = post "/echo" body { "text": "hi" }
   expect true
@@ -519,9 +519,9 @@ codec Msg {
   toJson { text -> "text" with_codec stringCodec }
   fromJson [ { text <- "text" with_codec stringCodec } ]
 }
-handler echo(req: Msg) -> Msg = req
+handler post echo(req: Msg) -> Msg = req
 api A { post "/echo" body req: Msg -> Msg }
-server S for A { echo = echo }
+server S for A { echo }
 api-test "bad" for S {
   let r = post "/echo" body { "text": "hi" }
   let b = false

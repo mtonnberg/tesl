@@ -89,26 +89,26 @@ codec NewNote {
 }
 
 # Greet the authenticated user by id.
-handler greet(u: User ::: Authenticated u) -> String =
+handler get greet(u: User ::: Authenticated u) -> String =
   String.concat "hello " u.id
 
 # Store a validated note for the authenticated user.
-handler createNote(u: User ::: Authenticated u, note: NewNote) -> String =
+handler post createNote(u: User ::: Authenticated u, note: NewNote) -> String =
   String.concat (String.concat u.id ":") note.text
 
 # Read one note by its id.
-handler getNote(u: User ::: Authenticated u, noteId: String ::: NoteId noteId) -> String =
+handler get getNote(u: User ::: Authenticated u, noteId: String ::: NoteId noteId) -> String =
   String.concat "note " noteId
 
 # Do something only unblocked users may do.
-handler guarded(u: User ::: Authenticated u) -> String =
+handler get guarded(u: User ::: Authenticated u) -> String =
   if u.id == "blocked" then
     fail 403 "blocked user"
   else
     "ok"
 
 # Wipe everything. Admin only.
-handler adminWipe(u: User ::: Authenticated u && Admin u) -> String =
+handler post adminWipe(u: User ::: Authenticated u && Admin u) -> String =
   "wiped"
 
 api NotesApi {
@@ -136,11 +136,11 @@ api NotesApi {
 }
 
 server NotesServer for NotesApi {
-  greet = greet
-  createNote = createNote
-  getNote = getNote
-  guarded = guarded
-  adminWipe = adminWipe
+  greet
+  createNote
+  getNote
+  guarded
+  adminWipe
 }
 
 # Proof minting for tests (no HTTP request in sight): the same check-boundary

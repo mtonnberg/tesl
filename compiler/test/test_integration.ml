@@ -976,7 +976,7 @@ api MyApi {
     -> String
 }
 server MyServer for MyApi {
-  endpoint_1 = handler1Impl
+  handler1Impl
 }
 |} in
   check_contains "sse_routes" src "sse-routes"

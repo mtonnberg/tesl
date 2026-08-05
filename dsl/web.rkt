@@ -1284,6 +1284,24 @@
                (query-alist->hash (url-query (request-uri req)))
                req))
 
+;; #75: `App { … mountPath: "/api" }` reverse-proxy prefix. The compiler
+;; validates the string shape (leading `/`, no trailing `/`), so mount-path
+;; here is always #f or a plain "/seg(/seg)*" literal; segment-split it once
+;; per `serve` call rather than per request.
+;;
+;; Strips exactly [mount-segments] off the FRONT of [path-parts], returning
+;; the remaining segments, or #f when [path-parts] does not start with
+;; [mount-segments] — the caller's contract is to leave the request
+;; unmounted in that case, which naturally falls through every route table
+;; (none of them are declared with the mount prefix) to the normal 404.
+(define (strip-mount-path-segments path-parts mount-segments)
+  (let loop ([ps path-parts] [ms mount-segments])
+    (cond
+      [(null? ms) ps]
+      [(null? ps) #f]
+      [(string=? (car ps) (car ms)) (loop (cdr ps) (cdr ms))]
+      [else #f])))
+
 (define (instantiate-binder-proof binder bound proof-datum)
   (define instantiated
     (parameterize ([current-name-env (hash binder (named-value-name bound))])
@@ -2646,7 +2664,11 @@
                #:capabilities [capabilities '()]
                #:sse-routes   [sse-routes '()]
                #:sso-routes   [sso-routes '()]
-               #:static-dir   [static-dir #f])
+               #:static-dir   [static-dir #f]
+               #:mount-path   [mount-path #f])
+  ;; #75: split once per `serve` call, not per request.
+  (define mount-segments
+    (and mount-path (filter (lambda (s) (not (string=? s ""))) (string-split mount-path "/"))))
   ;; Auto-start pub/sub LISTEN for SSE channels when PostgreSQL is active.
   ;; This replaces the old startWebSocket ... on PORT call.
   (when (pair? sse-routes)
@@ -2716,7 +2738,36 @@
   (serve/servlet
    (harden-servlet
     (lambda (req)
-     (define dsl-req (request->dsl-request req))
+     (define raw (request->dsl-request req))
+     ;; #75: `mountPath` scopes exactly the DECLARED api surface — the routes in
+     ;; the `api` block and its SSE routes.  Everything else the runtime owns
+     ;; keeps answering on the RAW path:
+     ;;
+     ;;   - static files + the SPA fallback, because the SPA is precisely the
+     ;;     other thing sharing this origin that the prefix exists to separate
+     ;;     the API *from*; mounting it would make `mountPath` and `static`
+     ;;     mutually exclusive;
+     ;;   - the health probe, which load balancers hit host-blind at a fixed
+     ;;     path and which is already Host-validation-exempt;
+     ;;   - the SSO endpoints (/auth/<seg>/login|callback), so `redirect_uri`
+     ;;     (publicOrigin ++ "/auth/<seg>/callback") stays exactly what is
+     ;;     registered at the identity provider.  Deliberately NOT mounted:
+     ;;     coupling an externally-registered OAuth callback to a deployment
+     ;;     knob would mean changing `mountPath` silently invalidates the IdP
+     ;;     registration, breaking login in production.  `publicOrigin` cannot
+     ;;     carry a path (see `valid_public_origin`), so there is no way to
+     ;;     express a prefixed callback anyway.
+     ;;
+     ;; [api-req] is the mount-stripped request, or #f when a mount is
+     ;; configured and this path is outside it — i.e. "not an API call", which
+     ;; falls through to static/SPA below rather than dispatching against the
+     ;; unmounted path (that would let every route answer at BOTH its mounted
+     ;; and unmounted path, defeating the point of declaring a mount).
+     (define api-req
+       (if mount-segments
+           (let ([stripped (strip-mount-path-segments (dsl-request-path raw) mount-segments)])
+             (and stripped (struct-copy dsl-request raw [path stripped])))
+           raw))
 
      ;; 1. SSE routes (long-lived streaming responses)
      ;;
@@ -2736,30 +2787,38 @@
      ;; doubles as it), so excluding SSE here excludes it from request
      ;; counts too — by design: stream connects are connection-lifecycle
      ;; events, visible in the gauge, not request-shaped work.
-     (define sse-match (find-sse-match sse-routes dsl-req))
+     ;; SSE routes are declared in the `api` block, so they ARE mounted.
+     (define sse-match (and api-req (find-sse-match sse-routes api-req)))
+     ;; SSO routes are runtime-owned, so they are matched on the raw path.
      (define sso-match
        (find-sso-match
         (if (pair? sso-routes) sso-routes
             (hash-ref sso-routes-registry (sso-registry-key (server-spec-name server)) '()))
-        dsl-req))
+        raw))
      (cond
        ;; 0. Runtime-owned SSO routes (/auth/<seg>/login|callback).  Runs the
        ;;    connection/onIdentity/mint-session app code under the server's caps.
-       [sso-match (handle-sso-request sso-match dsl-req #:capabilities capabilities)]
+       [sso-match (handle-sso-request sso-match raw #:capabilities capabilities)]
        [sse-match
         (with-handlers ([check-fail? (lambda (f)
                                        (dsl-response->http-response
                                         (error-response (check-fail-status f)
                                                         (check-fail-message f))))])
-          (handle-sse-request sse-match dsl-req #:capabilities capabilities))]
+          (handle-sse-request sse-match api-req #:capabilities capabilities))]
 
-       ;; 2. Static files (exact match on disk)
-       [(try-serve-static dsl-req) => (lambda (r) r)]
+       ;; 2. Static files (exact match on disk) — raw path, never mounted.
+       [(try-serve-static raw) => (lambda (r) r)]
 
-       ;; 3. API dispatch
+       ;; 3. API dispatch — only for a request inside the mount.  A mounted app
+       ;;    reaching here with [api-req] = #f is "outside the mount", which is
+       ;;    not an API call: treat it as unmatched so the SPA fallback below
+       ;;    gets its chance, exactly like any other unrouted path.
        [else
         (define dispatch-start-ms (and (metrics-active?) (current-inexact-milliseconds)))
-        (define result (dispatch-request server dsl-req #:capabilities capabilities))
+        (define result
+          (if api-req
+              (dispatch-request server api-req #:capabilities capabilities)
+              'route-not-found))
         ;; Metrics for the 'route-not-found sentinel are recorded HERE, with the
         ;; RESOLVED status (200 SPA fallback vs real 404) — dispatch-request
         ;; deliberately skips the sentinel so healthy SPA page loads are not
@@ -2769,7 +2828,7 @@
             (metric-histogram-record!
              "http.server.request.duration"
              (/ (- (current-inexact-milliseconds) dispatch-start-ms) 1000.0)
-             (list (cons "http.request.method" (dsl-request-method dsl-req))
+             (list (cons "http.request.method" (dsl-request-method raw))
                    (cons "http.response.status_code" (number->string status))
                    (cons "tesl.operation"
                          (if (= status 404) "unmatched" "spa-fallback")))

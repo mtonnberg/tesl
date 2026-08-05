@@ -111,6 +111,7 @@ let vkind_label : Validation_structural.vkind -> string * string option = functi
   | VStr -> "String", None
   | VInt -> "Int", None
   | VPort -> "Int", Some "port, 1..65535"
+  | VMountPath -> "String", Some "leading `/`, no trailing `/`, e.g. \"/api\""
   | VBool -> "Bool", None
   | VSub sub -> Printf.sprintf "%s { ... }" sub, None
   | VConn -> "TcpConnection { host, port } | SocketConnection { path }", None

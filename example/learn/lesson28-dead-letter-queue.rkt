@@ -67,7 +67,7 @@
 
 (define AppServer-sse-routes '())
 (define-api AppApi
-  [endpoint_0 :
+  [appRoot :
     "health"
     :> (Get JSON String)
     ]
@@ -75,7 +75,7 @@
 
 (define-server AppServer
   #:api AppApi
-  [endpoint_0 appRoot]
+  [appRoot appRoot]
 )
 
 (module+ main

@@ -97,8 +97,8 @@ let test_server_bindings_ok () =
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 capture idCapture: id: String using stringCodec
-handler createTask(x: String) -> String requires [] = x
-handler getTask(x: String) -> String requires [] = x
+handler post createTask(x: String) -> String requires [] = x
+handler get getTask(x: String) -> String requires [] = x
 api TaskApi {
   post "/tasks"
     -> String
@@ -107,8 +107,8 @@ api TaskApi {
     -> String
 }
 server S for TaskApi {
-  createTask = createTask
-  getTask = getTask
+  createTask
+  getTask
 }
 |}
 
@@ -120,7 +120,7 @@ api TaskApi {
     -> String
 }
 server S for TaskApi {
-  createTask = nonExistentHandler
+  nonExistentHandler
 }
 |} "is not declared"
 
@@ -129,7 +129,7 @@ let test_server_missing_endpoint_binding () =
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 capture idCapture: id: String using stringCodec
-handler createTask(x: String) -> String requires [] = x
+handler post createTask(x: String) -> String requires [] = x
 api TaskApi {
   post "/tasks"
     -> String
@@ -138,9 +138,9 @@ api TaskApi {
     -> String
 }
 server S for TaskApi {
-  createTask = createTask
+  createTask
 }
-|} "missing 1 binding"
+|} "missing 1 handler"
 
 let test_server_sse_endpoint_does_not_require_binding () =
   assert_no_errors {|module Foo exposing [S]
@@ -167,7 +167,7 @@ sseChannel NoticeEvents(userId: String) = SseChannel {
   database: EventDatabase
   payload: NoticeEvent
 }
-handler sendNotice() -> String requires [] =
+handler post sendNotice() -> String requires [] =
   "queued"
 api TaskApi {
   post "/send"
@@ -178,7 +178,7 @@ api TaskApi {
     subscribe NoticeEvents(userId)
 }
 server S for TaskApi {
-  sendNotice = sendNotice
+  sendNotice
 }
 |}
 
@@ -204,7 +204,7 @@ sseChannel Notices(userId: String) = SseChannel {
   database: EventDatabase
   payload: NoticeEvent
 }
-handler getValue() -> String requires [] = "ok"
+handler get getValue() -> String requires [] = "ok"
 api DemoApi {
   sse "/events/:userId"
     capture userId: String using stringCodec
@@ -213,7 +213,7 @@ api DemoApi {
     -> String
 }
 server S for DemoApi {
-  getValue = getValue
+  getValue
 }
 |}
 
@@ -335,16 +335,127 @@ fn bad(source: String, rawPort: String) -> Int =
 let test_server_extra_endpoint_binding () =
   assert_validation_error {|module Foo exposing [S]
 import Tesl.Prelude exposing [String]
-handler createTask(x: String) -> String requires [] = x
+handler post createTask(x: String) -> String requires [] = x
 api TaskApi {
   post "/tasks"
     -> String
 }
 server S for TaskApi {
-  createTask = createTask
-  unknownEndpoint = createTask
+  createTask
+  createTask
 }
-|} "binds extra endpoint"
+|} "extra handler"
+
+(* ── Handler ⇄ endpoint contract cross-checks (#65 follow-up) ─────────────── *)
+
+let test_server_handler_method_mismatch () =
+  (* The misordering issue #65 was about: with methods declared, a handler
+     landing in the wrong slot is a compile error instead of a silent misroute. *)
+  assert_validation_error {|module Foo exposing [S]
+import Tesl.Prelude exposing [String]
+handler get ha() -> String requires [] = "a"
+handler post hb() -> String requires [] = "b"
+api A {
+  get "/a" -> String
+  post "/b" -> String
+}
+server S for A {
+  hb
+  ha
+}
+|} "declares `post` but is bound to endpoint 'GET /a'"
+
+let test_server_handler_missing_method () =
+  assert_validation_error {|module Foo exposing [S]
+import Tesl.Prelude exposing [String]
+handler ha() -> String requires [] = "a"
+api A {
+  get "/a" -> String
+}
+server S for A {
+  ha
+}
+|} "does not declare an HTTP method"
+
+let test_server_multi_method_handler_ok () =
+  (* One handler legitimately serving two slots declares both verbs. *)
+  assert_no_errors {|module Foo exposing [S]
+import Tesl.Prelude exposing [String]
+handler get post search() -> String requires [] = "s"
+api A {
+  get "/search" -> String
+  post "/search" -> String
+}
+server S for A {
+  search
+  search
+}
+|}
+
+let test_server_return_proof_mismatch () =
+  (* The endpoint's declared response proof is what the generated clients are
+     typed from, so a handler that does not establish it makes the advertised
+     contract wrong — invisible to the head-type comparison (both `String`). *)
+  assert_validation_error {|module Foo exposing [S]
+import Tesl.Prelude exposing [String]
+fact Alpha (v: String)
+fact Beta (v: String)
+check mkAlpha(v: String) -> v: String ::: Alpha v =
+  ok v ::: Alpha v
+check mkBeta(v: String) -> v: String ::: Beta v =
+  ok v ::: Beta v
+handler get ha(x: String) -> String ? Alpha requires [] = mkAlpha x
+handler get hb(x: String) -> String ? Beta requires [] = mkBeta x
+api A {
+  get "/a" body x: String -> String ? Alpha
+  get "/b" body x: String -> String ? Beta
+}
+server S for A {
+  hb
+  ha
+}
+|} "does not establish Alpha"
+
+let test_server_return_proof_matching_ok () =
+  (* Positive control for the check above: over-rejection here would break every
+     proof-carrying endpoint in the corpus, so the passing direction is pinned
+     alongside the failing one. *)
+  assert_no_errors {|module Foo exposing [S]
+import Tesl.Prelude exposing [String]
+fact Alpha (v: String)
+fact Beta (v: String)
+check mkAlpha(v: String) -> v: String ::: Alpha v =
+  ok v ::: Alpha v
+check mkBeta(v: String) -> v: String ::: Beta v =
+  ok v ::: Beta v
+handler get ha(x: String) -> String ? Alpha requires [] = mkAlpha x
+handler get hb(x: String) -> String ? Beta requires [] = mkBeta x
+api A {
+  get "/a" body x: String -> String ? Alpha
+  get "/b" body x: String -> String ? Beta
+}
+server S for A {
+  ha
+  hb
+}
+|}
+
+let test_server_return_proof_stronger_ok () =
+  (* Carrying MORE than advertised is a stronger guarantee, not a mismatch. *)
+  assert_no_errors {|module Foo exposing [S]
+import Tesl.Prelude exposing [String]
+fact Alpha (v: String)
+fact Beta (v: String)
+check mkBoth(v: String) -> v: String ::: Alpha v && Beta v =
+  ok v ::: Alpha v && Beta v
+handler get ha(x: String) -> String ? Alpha && Beta requires [] = mkBoth x
+api A {
+  get "/a" body x: String -> String ? Alpha
+}
+server S for A {
+  ha
+}
+|}
 
 let test_duplicate_function_import_rejected () =
   assert_validation_error {|module Foo exposing []
@@ -848,13 +959,13 @@ database AppDb = Database {
     connection: TcpConnection { host: "h" port: 5432 }
   })
 }
-handler getValue() -> Int requires [] = 1
+handler get getValue() -> Int requires [] = 1
 api TaskApi {
   get "/value"
     -> Int
 }
 server S for TaskApi {
-  getValue = getValue
+  getValue
 }
 main() -> App requires [] =
   let _ = initTelemetry service "my-service" endpoint "in-memory" console True
@@ -960,13 +1071,13 @@ database AppDb = Database {
     connection: TcpConnection { host: "h" port: 5432 }
   })
 }
-handler getValue() -> Int requires [] = 1
+handler get getValue() -> Int requires [] = 1
 api TaskApi {
   get "/value"
     -> Int
 }
 server S for TaskApi {
-  getValue = getValue
+  getValue
 }
 main() -> App requires [] =
   App {
@@ -1608,6 +1719,12 @@ let () =
       Alcotest.test_case "imported adt exhaustive is accepted" `Quick test_imported_adt_exhaustive_is_accepted;
       Alcotest.test_case "fail allows interpolated strings" `Quick test_fail_allows_interpolated_strings;
       Alcotest.test_case "extra endpoint binding" `Quick test_server_extra_endpoint_binding;
+      Alcotest.test_case "handler method mismatch" `Quick test_server_handler_method_mismatch;
+      Alcotest.test_case "handler missing method" `Quick test_server_handler_missing_method;
+      Alcotest.test_case "multi-method handler ok" `Quick test_server_multi_method_handler_ok;
+      Alcotest.test_case "return proof mismatch" `Quick test_server_return_proof_mismatch;
+      Alcotest.test_case "return proof matching ok" `Quick test_server_return_proof_matching_ok;
+      Alcotest.test_case "handler proof stronger than advertised ok" `Quick test_server_return_proof_stronger_ok;
     ];
     "import-validation", [
       Alcotest.test_case "duplicate function import" `Quick test_duplicate_function_import_rejected;

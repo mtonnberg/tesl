@@ -102,7 +102,7 @@ capturer taskIdCapture: id: String using stringCodec
 # handler is like fn but for HTTP endpoints.
 # Parameters: authenticated user (proof required), request body.
 # Requires taskDbWrite capability (it would write to DB in a real app).
-handler createTask(user: String ::: Authenticated user, body: NewTask) -> Task
+handler post createTask(user: String ::: Authenticated user, body: NewTask) -> Task
   requires [taskDbWrite] =
   # user: authenticated, body: decoded from JSON (title and priority fields validated at boundary)
   Task { id: "task-1", title: body.title, priority: body.priority, done: False }
@@ -110,7 +110,7 @@ handler createTask(user: String ::: Authenticated user, body: NewTask) -> Task
 
 # getTask: look up a task by ID.
 # Returns Maybe Task — Nothing if not found, Something task if found.
-handler getTask(user: String ::: Authenticated user, id: String) -> Maybe Task
+handler get getTask(user: String ::: Authenticated user, id: String) -> Maybe Task
   requires [taskDbRead] =
   # id: the parsed URL capture (plain String from taskIdCapture)
   Something (Task { id: id, title: "example task", priority: 3, done: False })
@@ -141,8 +141,8 @@ api TaskApi {
 # The names on the right are the handler functions defined above.
 
 server TaskServer for TaskApi {
-  createTask = createTask
-  getTask = getTask
+  createTask
+  getTask
 }
 
 # ─────────────────────────────────────────────

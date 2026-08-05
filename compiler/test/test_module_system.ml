@@ -279,7 +279,7 @@ let cyc_main_server = {|module Main exposing [MainServer]
 import Tesl.Prelude exposing [String]
 import Lib exposing [greetName]
 
-handler hello() -> String =
+handler get hello() -> String =
   greetName "world"
 
 api MainApi {
@@ -287,7 +287,7 @@ api MainApi {
 }
 
 server MainServer for MainApi {
-  hello = hello
+  hello
 }
 |}
 

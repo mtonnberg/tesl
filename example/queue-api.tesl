@@ -77,7 +77,7 @@ fn replayEmail(job: DeadJob ::: FromDeadQueue (Id == jobId) job) -> Bool
   requires [queueWrite] =
   requeue job
 
-handler appRoot() -> String
+handler get appRoot() -> String
   requires [] =
   "ok"
 
@@ -86,7 +86,7 @@ api AppApi {
 }
 
 server AppServer for AppApi {
-  endpoint_0 = appRoot
+  appRoot
 }
 
 main() -> App requires [appService, queueRead] =

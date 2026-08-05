@@ -702,8 +702,8 @@ functions — one for config, one for identity:
 
 ```tesl
 server AppServer for AppApi {
-  whoami = whoami
-  logout = logout
+  whoami
+  logout
 
   sso "github"    connection githubConn    onIdentity linkUser
   sso "google"    connection googleConn    onIdentity linkUser

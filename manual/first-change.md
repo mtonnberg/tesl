@@ -42,7 +42,7 @@ codec TodoRename {
 Find `api AppApi {` and paste this *above* it:
 
 ```tesl
-handler renameTodo(requestUser: User ::: Authenticated requestUser, todoId: String ::: TodoId todoId, rename: TodoRename)
+handler put renameTodo(requestUser: User ::: Authenticated requestUser, todoId: String ::: TodoId todoId, rename: TodoRename)
   -> Todo ? FromDb (Id == todoId)
   requires [appDbRead, appDbWrite] =
   let existing = selectOne todo from Todo where todo.id == todoId
@@ -70,10 +70,12 @@ Inside `api AppApi { … }`, after the existing `get "/todos/:todoId"` block:
     -> Todo ? FromDb (Id == todoId)
 ```
 
-and in `server AppServer for AppApi { … }`, next to `getTodo = getTodo`:
+and in `server AppServer for AppApi { … }`, after `getTodo` (server blocks bind handlers to
+routes by position, so the new handler goes wherever you added its route in `AppApi` — here,
+last):
 
 ```tesl
-  renameTodo = renameTodo
+  renameTodo
 ```
 
 Now:

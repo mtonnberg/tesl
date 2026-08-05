@@ -502,8 +502,8 @@ api AU01Api {
     auth user : String ::: Authenticated user via myAuth
     -> String
 }
-handler whoami() -> String requires [] = "who?"
-server AU01Server for AU01Api { whoami = whoami }
+handler get whoami() -> String requires [] = "who?"
+server AU01Server for AU01Api { whoami }
 |}
 
 let test_AU02_auth_proof_in_handler_accepted () =
@@ -523,9 +523,9 @@ api AU02Api {
     auth user : String ::: Authenticated user via myAuth
     -> String
 }
-handler whoami(user: String ::: Authenticated user) -> String requires [] =
+handler get whoami(user: String ::: Authenticated user) -> String requires [] =
   "hello ${user}"
-server AU02Server for AU02Api { whoami = whoami }
+server AU02Server for AU02Api { whoami }
 |}
 
 let test_AU03_auth_without_proof_annotation_in_endpoint_rejected () =
@@ -549,8 +549,8 @@ let test_AU04_public_endpoint_no_auth_accepted () =
 module AU04 exposing []
 import Tesl.Prelude exposing [String]
 api AU04Api { get "/health" -> String }
-handler health() -> String requires [] = "ok"
-server AU04Server for AU04Api { health = health }
+handler get health() -> String requires [] = "ok"
+server AU04Server for AU04Api { health }
 |}
 
 (* ── AP — API + server wiring ─────────────────────────────────────────────── *)
@@ -567,9 +567,9 @@ api AP01Api {
     capture id : String via idCapture
     -> Int
 }
-handler health() -> String requires [] = "ok"
-handler getItem(id: String) -> Int requires [] = 42
-server AP01Server for AP01Api { health = health getItem = getItem }
+handler get health() -> String requires [] = "ok"
+handler get getItem(id: String) -> Int requires [] = 42
+server AP01Server for AP01Api { health getItem }
 |}
 
 let test_AP02_server_missing_endpoint_binding_rejected () =
@@ -580,8 +580,8 @@ api AP02Api {
   get "/a" -> String
   get "/b" -> String
 }
-handler aHandler() -> String requires [] = "a"
-server AP02Server for AP02Api { aHandler = aHandler }
+handler get aHandler() -> String requires [] = "a"
+server AP02Server for AP02Api { aHandler }
 |}
 
 let test_AP03_endpoint_missing_return_type_rejected () =
@@ -598,7 +598,7 @@ module AP04 exposing []
 import Tesl.Prelude exposing [String]
 api AP04Api { get "/ping" -> String }
 fn notAHandler() -> String requires [] = "pong"
-server AP04Server for AP04Api { notAHandler = notAHandler }
+server AP04Server for AP04Api { notAHandler }
 |}
 
 (* ── SL — Standard library ────────────────────────────────────────────────── *)

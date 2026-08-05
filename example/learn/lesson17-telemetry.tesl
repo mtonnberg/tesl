@@ -69,7 +69,7 @@ fn processRequestWithSpan(userId: String, requestCount: Int) -> String requires 
 # The health handler emits a span; `main` wires up the exporter with
 # `initTelemetry` before serving. Telemetry needs no capability (it is ambient),
 # so the handler's `requires []` is enough.
-handler healthCheck() -> String requires [] =
+handler get healthCheck() -> String requires [] =
   telemetry "health.check" { status = "ok" }
   "ok"
 
@@ -78,7 +78,7 @@ api HealthApi {
 }
 
 server HealthServer for HealthApi {
-  endpoint_0 = healthCheck
+  healthCheck
 }
 
 database TelemetryDb = Database {

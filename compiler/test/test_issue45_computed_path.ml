@@ -59,10 +59,10 @@ record Created {
 
 capturer idCapture: id: String using stringCodec
 
-handler getThing(id: String) -> String =
+handler get getThing(id: String) -> String =
   "thing-" ++ id
 
-handler createThing() -> Created =
+handler post createThing() -> Created =
   Created { id: "generated-1" }
 
 api ThingApi {
@@ -75,8 +75,8 @@ api ThingApi {
 }
 
 server ThingServer for ThingApi {
-  getThing = getThing
-  createThing = createThing
+  getThing
+  createThing
 }
 
 api-test "literal" for ThingServer requires [] {

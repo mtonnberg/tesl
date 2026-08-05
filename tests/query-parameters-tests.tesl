@@ -20,9 +20,9 @@ api SearchApi {
     -> String
 }
 
-handler search(q: String ::: QueryAuthed q) -> String requires [] = q
+handler get search(q: String ::: QueryAuthed q) -> String requires [] = q
 
-server SearchServer for SearchApi { search = search }
+server SearchServer for SearchApi { search }
 
 # ── Positive ────────────────────────────────────────────────────────────────
 api-test "query parameter q is read" for SearchServer {

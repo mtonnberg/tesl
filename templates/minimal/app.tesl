@@ -99,7 +99,7 @@ capturer positiveTaskCapture: Int ::: Positive taskId using intCodec via isPosit
 # return spec. Here `getTask` receives `taskId: Int ::: Positive taskId` and the
 # `? Positive` return means callers downstream get the still-proven id back —
 # the positivity guarantee survives the round trip instead of being thrown away.
-handler getTask(requestUser: SessionUser ::: Authenticated requestUser, taskId: Int ::: Positive taskId)
+handler get getTask(requestUser: SessionUser ::: Authenticated requestUser, taskId: Int ::: Positive taskId)
   -> Int ? Positive =
   telemetry "task.fetch" { user.id = requestUser.id, task.id = taskId }
   # `taskId` already carries `Positive`; returning it satisfies `? Positive`
@@ -114,7 +114,7 @@ api AppApi {
 }
 
 server AppServer for AppApi {
-  getTask = getTask
+  getTask
 }
 
 main() -> App requires [readSessionCookie, envRead] =

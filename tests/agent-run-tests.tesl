@@ -147,7 +147,7 @@ fn publishStep(event: String) -> Unit requires [runPubSub] =
   publish RunSteps("run-1") Step { content: event }
 
 # Handler: enqueue a RunJob and return. (Fire-and-return; the worker does work.)
-handler startRun(req: RunJob)
+handler post startRun(req: RunJob)
   -> exists logId: String => RunLog ? FromDb (Id == logId)
   requires [runWrite, runQueue] =
     let logId = "run-1"
@@ -178,7 +178,7 @@ api AgentRunApi {
 }
 
 server AgentRunServer for AgentRunApi {
-  startRun = startRun
+  startRun
 }
 
 # ────────────────────────────────────────────────────────────────────────────

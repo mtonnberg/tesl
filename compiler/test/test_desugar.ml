@@ -64,7 +64,7 @@ let empty_tables () : Desugar.lower_tables = Desugar.empty_tables ()
    all-constructors bundle and standalone for the lowering assertions. *)
 let mk_enqueue () = EEnqueue { job_type = "J"; payload = int_ 35 1; loc = loc_at 36 }
 let mk_workers () = EStartWorkers { workers_name = "W"; capabilities = []; concurrency = None; is_dead = false; loc = loc_at 40 }
-let mk_serve   () = EServe { server_name = "Sv"; port = int_ 60 8080; capabilities = []; static_dir = None; loc = loc_at 61 }
+let mk_serve   () = EServe { server_name = "Sv"; port = int_ 60 8080; capabilities = []; static_dir = None; mount_path = None; loc = loc_at 61 }
 
 (* One expression that touches every Ast.expr constructor at least once. *)
 let sample_expr : expr =
@@ -130,7 +130,7 @@ let sample_func : func_decl = {
   kind = FnKind; name = "f"; params = [ dummy_binding "x" 100 ];
   return_spec = RetPlain { ty = TName { name = "Int"; loc = loc_at 101 }; loc = loc_at 102 };
   capabilities = []; body = sample_expr; loc = loc_at 103;
-  desugared_from = None; doc = None;
+  desugared_from = None; doc = None; http_methods = [];
 }
 
 let sample_const : const_form = { name = "K"; value = int_ 110 7; loc = loc_at 111 }
@@ -202,12 +202,23 @@ let () =
   (* 4b. EServe with static_dir injects the #:static-dir keyword arg. *)
   (match Desugar.desugar_expr (empty_tables ())
            (EServe { server_name = "Sv"; port = int_ 60 8080; capabilities = ["Cap"];
-                     static_dir = Some "public"; loc = loc_at 61 }) with
+                     static_dir = Some "public"; mount_path = None; loc = loc_at 61 }) with
    | ERuntimeCall { segments =
        [ RLit "(serve Sv #:port "; RArg _;
          RLit " #:capabilities (list Cap) #:static-dir \"public\" #:sse-routes Sv-sse-routes)" ]; _ } ->
      check "EServe with static_dir injects #:static-dir" true
    | _ -> check "EServe with static_dir injects #:static-dir" false);
+
+  (* 4b'. EServe with mount_path injects the #:mount-path keyword arg, after
+     #:static-dir and before #:sse-routes — issue #75. *)
+  (match Desugar.desugar_expr (empty_tables ())
+           (EServe { server_name = "Sv"; port = int_ 60 8080; capabilities = ["Cap"];
+                     static_dir = Some "public"; mount_path = Some "/api"; loc = loc_at 61 }) with
+   | ERuntimeCall { segments =
+       [ RLit "(serve Sv #:port "; RArg _;
+         RLit " #:capabilities (list Cap) #:static-dir \"public\" #:mount-path \"/api\" #:sse-routes Sv-sse-routes)" ]; _ } ->
+     check "EServe with mount_path injects #:mount-path" true
+   | _ -> check "EServe with mount_path injects #:mount-path" false);
 
   (* 4c. ETelemetry → (telemetry-event! "NAME" #:attributes ([%S v]...)).  A bare
      EVar field value becomes the raw [*name] (RRawVar — the literal surface name,

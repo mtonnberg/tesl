@@ -31,7 +31,7 @@ capability billingClient implies httpClient
 fn callBilling() -> HttpResponse requires [billingClient] =
   HttpClient.get "https://billing.internal/invoice/42" []
 
-handler chargeNote() -> String requires [billingClient] =
+handler post chargeNote() -> String requires [billingClient] =
   let resp = callBilling()
   if resp.status == 200 then
     "charged"
@@ -43,7 +43,7 @@ api TracePropApi {
 }
 
 server TracePropServer for TracePropApi {
-  endpoint_0 = chargeNote
+  chargeNote
 }
 
 database TracePropDb = Database {

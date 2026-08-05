@@ -174,7 +174,7 @@ fn createdRecently(createdMs: PosixMillis, nowMs: PosixMillis, withinMs: Int) ->
 
 # ─── Handlers ─────────────────────────────────────────────────────────────────
 
-handler createEvent(
+handler post createEvent(
     user: String ::: Authenticated user,
     req: CreateEventRequest)
   -> exists eventId: String => Event ? FromDb (Id == eventId)
@@ -190,7 +190,7 @@ handler createEvent(
       expiresAt: expiresAt
     }
 
-handler listActiveEvents(user: String ::: Authenticated user)
+handler get listActiveEvents(user: String ::: Authenticated user)
   -> List Event
   requires [timedRead] =
   # We select all events — filtering by expiry could be done here
@@ -210,8 +210,8 @@ api TimedApi {
 }
 
 server TimedServer for TimedApi {
-  createEvent = createEvent
-  listActiveEvents = listActiveEvents
+  createEvent
+  listActiveEvents
 }
 
 # ─────────────────────────────────────────────

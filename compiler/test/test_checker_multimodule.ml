@@ -259,7 +259,7 @@ import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [stringCodec, intCodec]
 import Lib exposing [UserId]
 
-handler getUser(uid: UserId) -> String =
+handler get getUser(uid: UserId) -> String =
   "user-${uid.value}"
 
 capturer uidCapture: uid: UserId using %s
@@ -274,11 +274,11 @@ api MainApi {
 }
 
 server MainServer for MainApi {
-  getUser = getUser
-  plainTag = plainTag
+  getUser
+  plainTag
 }
 
-handler plainTag(tag: String) -> String =
+handler get plainTag(tag: String) -> String =
   tag
 |} codec
 

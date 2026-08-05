@@ -160,7 +160,7 @@ auth cookieAuth(request: HttpRequest) -> user: String ::: Authenticated user
 # The return type "Note::: FromDb (Id == noteId)" says:
 #   "this Note came from the database and its id field equals noteId"
 # This proof is produced by the SQL layer — you do NOT write it yourself.
-handler getNote(user: String ::: Authenticated user, noteId: String ::: ValidNoteId noteId)
+handler get getNote(user: String ::: Authenticated user, noteId: String ::: ValidNoteId noteId)
   -> Note ? FromDb (Id == noteId)
   requires [noteDbRead] =
   let existing = selectOne note from Note where note.id == noteId
@@ -169,7 +169,7 @@ handler getNote(user: String ::: Authenticated user, noteId: String ::: ValidNot
     Something note where note.authorId != user -> fail 403 "not your note"
     Something note -> note
 
-handler listNotes(user: String ::: Authenticated user)
+handler get listNotes(user: String ::: Authenticated user)
   -> List Note
   requires [noteDbRead] =
   telemetry "notes.list" { user.id = user }
@@ -178,7 +178,7 @@ handler listNotes(user: String ::: Authenticated user)
 # INSERT also attaches FromDb proof to the returned value.
 # "exists noteId => ..." introduces noteId as an existential witness.
 # Callers get a Note proven to be in the DB, but cannot directly inspect noteId.
-handler createNote(user: String ::: Authenticated user, body: NewNote)
+handler post createNote(user: String ::: Authenticated user, body: NewNote)
   -> exists noteId: String =>
       Note ? FromDb (Id == noteId)
   requires [noteDbRead, noteDbWrite, noteTime, random] =
@@ -193,7 +193,7 @@ handler createNote(user: String ::: Authenticated user, body: NewNote)
     }
 
 # UPDATE with "returning one" also carries FromDb proof.
-handler updateNoteTitle(user: String ::: Authenticated user, noteId: String ::: ValidNoteId noteId, body: NewNote)
+handler put updateNoteTitle(user: String ::: Authenticated user, noteId: String ::: ValidNoteId noteId, body: NewNote)
   -> Note ? FromDb (Id == noteId)
   requires [noteDbRead, noteDbWrite] =
   let existing = selectOne note from Note where note.id == noteId
@@ -236,10 +236,10 @@ api NoteApi {
 defaultNotePort = 8090
 
 server NoteServer for NoteApi {
-  getNote = getNote
-  listNotes = listNotes
-  createNote = createNote
-  updateNoteTitle = updateNoteTitle
+  getNote
+  listNotes
+  createNote
+  updateNoteTitle
 }
 
 main() -> App requires [noteService, envRead] =

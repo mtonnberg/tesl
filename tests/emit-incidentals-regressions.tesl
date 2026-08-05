@@ -105,18 +105,18 @@ codec Acct {
   ]
 }
 
-handler getUser(uid: String) -> User =
+handler get getUser(uid: String) -> User =
   let typed = UserId uid
   User { id: typed, name: "user-${typed.value}" }
 
-handler echoUser(body: User) -> User =
+handler post echoUser(body: User) -> User =
   { body | id: UserId "echoed" }
 
-handler getAcct(aid: String) -> Acct =
+handler get getAcct(aid: String) -> Acct =
   let typed = AcctId aid
   Acct { id: typed, name: "acct-${typed.value}" }
 
-handler echoAcct(body: Acct) -> Acct =
+handler post echoAcct(body: Acct) -> Acct =
   { body | id: AcctId "echoed" }
 
 capturer uidCapture: uid: String using stringCodec
@@ -140,10 +140,10 @@ api MainApi {
 }
 
 server MainServer for MainApi {
-  getUser = getUser
-  echoUser = echoUser
-  getAcct = getAcct
-  echoAcct = echoAcct
+  getUser
+  echoUser
+  getAcct
+  echoAcct
 }
 
 api-test "newtype field encodes transparently (stringCodec spelling)" for MainServer requires [] {

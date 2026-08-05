@@ -253,12 +253,12 @@ database D = Database {
     connection: TcpConnection { host: "h" port: 5432 }
   })
 }
-handler root() -> String requires [] = "ok"
+handler get root() -> String requires [] = "ok"
 api SomeApi {
   get "/health" -> String
 }
 server S for SomeApi {
-  endpoint_0 = root
+  root
 }
 |} in
   assert_ok src (fun m ->
@@ -287,12 +287,12 @@ database D = Database {
     connection: TcpConnection { host: "h" port: 5432 }
   })
 }
-handler root() -> String requires [] = "ok"
+handler get root() -> String requires [] = "ok"
 api SomeApi {
   get "/health" -> String
 }
 server S for SomeApi {
-  endpoint_0 = root
+  root
 }
 |} in
   assert_ok src (fun m ->

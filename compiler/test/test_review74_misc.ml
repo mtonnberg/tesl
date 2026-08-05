@@ -214,8 +214,8 @@ module Me07Lib exposing [ping]
 import Tesl.Prelude exposing [String]
 fn ping() -> String = "pong"
 api Me07LibApi { get "/ping" -> String }
-handler pingH() -> String requires [] = "pong"
-server Me07LibServer for Me07LibApi { ping = pingH }
+handler get pingH() -> String requires [] = "pong"
+server Me07LibServer for Me07LibApi { pingH }
 |} "me07-app" {|
 module Me07App exposing [greet]
 import Me07Lib exposing [ping]

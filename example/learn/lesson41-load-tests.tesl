@@ -65,10 +65,10 @@ database Lesson41Database = Database {
   })
 }
 
-handler greet(g: Greeting) -> Greeting =
+handler post greet(g: Greeting) -> Greeting =
   Greeting { name: g.name, message: "Hello, ${g.name}!" }
 
-handler listBooks() -> List Book
+handler get listBooks() -> List Book
   requires [dbRead] =
   select b from Book
 
@@ -82,8 +82,8 @@ api Lesson41Api {
 }
 
 server Lesson41Server for Lesson41Api {
-  greet = greet
-  listBooks = listBooks
+  greet
+  listBooks
 }
 
 # ── Load test 1: basic throughput ────────────────────────────────────────────

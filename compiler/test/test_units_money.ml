@@ -877,10 +877,10 @@ entity Row table "rows" primaryKey id {
 }
 database SeedDatabase = Database { entities: [Row], backend: Memory }
 
-handler listRows() -> List Row requires [dbRead] =
+handler get listRows() -> List Row requires [dbRead] =
   with database SeedDatabase { select r from Row }
 api SeedApi { get "/rows" -> List Row }
-server SeedServer for SeedApi { listRows = listRows }
+server SeedServer for SeedApi { listRows }
 
 api-test "seed with a rate" for SeedServer requires [dbRead, dbWrite] {
   seed {

@@ -377,7 +377,7 @@ fn notifyWebhook(userId: String) -> HttpResponse
 #
 # Requires: userDbRead (duplicate check), userDbWrite (insert), userTime (nowMillis),
 #           userRandom (ID generation), userJwt (sign token), email (welcome email).
-handler register(body: RegisterRequest)
+handler post register(body: RegisterRequest)
   -> AuthResponse
   requires [userDbRead, userDbWrite, userTime, userRandom, userJwt, emailCap] =
   let existing = selectOne u from User where u.emailAddress == body.emailAddr
@@ -401,7 +401,7 @@ handler register(body: RegisterRequest)
 # POST /login
 # Demonstrates: JWT (sign token on successful password check).
 # Requires: userDbRead (look up user), userJwt (sign token).
-handler login(body: LoginRequest)
+handler post login(body: LoginRequest)
   -> AuthResponse
   requires [userDbRead, userJwt] =
   let found = selectOne u from User where u.emailAddress == body.emailAddr
@@ -425,7 +425,7 @@ handler login(body: LoginRequest)
 # TTL: 1 hour (set in the cache block above).
 #
 # Requires: userDbRead (cache miss path), cacheCap UserProfileCache.
-handler getProfile(userId: String ::: Authenticated userId)
+handler get getProfile(userId: String ::: Authenticated userId)
   -> User
   requires [userDbRead, cacheCap UserProfileCache] =
   let cacheKey = "profile_" ++ userId
@@ -453,7 +453,7 @@ handler getProfile(userId: String ::: Authenticated userId)
 #
 # Requires: userDbRead + userDbWrite (update), cacheCap UserProfileCache (invalidate),
 #           userHttp (webhook notification).
-handler updateProfile(
+handler put updateProfile(
     userId: String ::: Authenticated userId,
     body: UpdateProfileRequest)
   -> User
@@ -483,7 +483,7 @@ handler updateProfile(
 # to prevent leaking which email addresses have accounts.
 #
 # Requires: userDbRead (email lookup), email (reset email).
-handler forgotPassword(body: ForgotPasswordRequest)
+handler post forgotPassword(body: ForgotPasswordRequest)
   -> String
   requires [userDbRead, emailCap] =
   let found = selectOne u from User where u.emailAddress == body.emailAddr
@@ -534,11 +534,11 @@ api UserApi {
 # ─────────────────────────────────────────────────────────────────────────────
 
 server UserServer for UserApi {
-  register = register
-  login = login
-  getProfile = getProfile
-  updateProfile = updateProfile
-  forgotPassword = forgotPassword
+  register
+  login
+  getProfile
+  updateProfile
+  forgotPassword
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -155,7 +155,7 @@ codec LoginRequest {
   ]
 }
 
-handler registerHandler(req: RegisterRequest)
+handler post registerHandler(req: RegisterRequest)
   -> exists userId: String => KanelUser ? FromDb (Id == userId)
   requires [kanelDbRead, kanelDbWrite, random, time] =
   let email = check checkEmail (String.trim req.email)
@@ -177,7 +177,7 @@ handler registerHandler(req: RegisterRequest)
             createdAt: nowMillis()
           }
 
-handler loginHandler(req: LoginRequest) -> String
+handler post loginHandler(req: LoginRequest) -> String
   requires [kanelDbRead] =
   let email = check checkEmail req.email
   let found = selectOne u from KanelUser where u.email == email
@@ -194,7 +194,7 @@ handler loginHandler(req: LoginRequest) -> String
 # Creating an org automatically makes the creator an admin (the only member).
 # Proves: the creator has OrgAdmin proof after creation.
 
-handler createOrgHandler(
+handler post createOrgHandler(
     session: KanelSession ::: Authenticated session,
     req: NewOrgRequest)
   -> exists orgId: String => Org ? FromDb (Id == orgId)
@@ -227,7 +227,7 @@ handler createOrgHandler(
           }
       }
 
-handler getOrgHandler(
+handler get getOrgHandler(
     session: KanelSession ::: Authenticated session,
     orgId: String ::: ValidOrgId orgId)
   -> Org
@@ -247,7 +247,7 @@ fn fetchOrgByMembership(acc: List Org, m: OrgMembership) -> List Org
     Nothing -> acc
     Something o -> List.append acc [o]
 
-handler listMyOrgsHandler(session: KanelSession ::: Authenticated session)
+handler get listMyOrgsHandler(session: KanelSession ::: Authenticated session)
   -> List Org
   requires [kanelDbRead] =
   let memberships = select m from OrgMembership where m.userId == session.userId
@@ -283,7 +283,7 @@ codec ChangeMemberRoleRequest {
   ]
 }
 
-handler listOrgMembersHandler(
+handler get listOrgMembersHandler(
     session: KanelSession ::: Authenticated session,
     orgId: String ::: ValidOrgId orgId)
   -> List OrgMembership
@@ -291,7 +291,7 @@ handler listOrgMembersHandler(
   let _member = check checkOrgMember session.userId orgId
   select m from OrgMembership where m.orgId == orgId
 
-handler inviteMemberHandler(
+handler post inviteMemberHandler(
     session: KanelSession ::: Authenticated session,
     orgId: String ::: ValidOrgId orgId,
     req: InviteMemberRequest)
@@ -319,7 +319,7 @@ handler inviteMemberHandler(
               joinedAt: nowMillis()
             }
 
-handler changeMemberRoleHandler(
+handler put changeMemberRoleHandler(
     session: KanelSession ::: Authenticated session,
     orgId: String ::: ValidOrgId orgId,
     targetUserId: String ::: ValidUserId targetUserId,
@@ -353,7 +353,7 @@ handler changeMemberRoleHandler(
             set m.role = req.role
             returning one
 
-handler removeMemberHandler(
+handler delete removeMemberHandler(
     session: KanelSession ::: Authenticated session,
     orgId: String ::: ValidOrgId orgId,
     targetUserId: String ::: ValidUserId targetUserId)

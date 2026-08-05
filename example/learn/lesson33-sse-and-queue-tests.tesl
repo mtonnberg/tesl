@@ -106,7 +106,7 @@ worker handleNotice(job: NotifyJob ::: FromQueue (Id == jobId) job)
   publish Lesson33Events(job.userId) NoticeSent { message: job.message }
   job
 
-handler sendNotice(req: SendNoticeRequest) -> String
+handler post sendNotice(req: SendNoticeRequest) -> String
   requires [queueWrite] =
   enqueue NotifyJob { userId: req.userId, message: req.message }
   "queued"
@@ -122,7 +122,7 @@ api Lesson33Api {
 }
 
 server Lesson33Server for Lesson33Api {
-  sendNotice = sendNotice
+  sendNotice
 }
 
 api-test "subscribe collect and process queue" for Lesson33Server requires [queueRead, queueWrite, pubsub] {

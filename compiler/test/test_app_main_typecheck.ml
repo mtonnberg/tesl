@@ -239,6 +239,76 @@ let t_main_enqueue_bad_payload_rejected () =
      ^ queue_tail)
     "cannot unify"
 
+(* ── mountPath (#75): VMountPath structural validation on App { … } ────────── *)
+
+let t_mount_path_valid_accepted () =
+  assert_clean
+    (app_preamble
+     ^ {|main() -> App requires [] =
+|}
+     ^ {|  App {
+    database: D
+    api: Srv
+    port: 8097
+    mountPath: "/api"
+  }
+|})
+
+let t_mount_path_root_slash_accepted () =
+  assert_clean
+    (app_preamble
+     ^ {|main() -> App requires [] =
+|}
+     ^ {|  App {
+    database: D
+    api: Srv
+    port: 8097
+    mountPath: "/"
+  }
+|})
+
+let t_mount_path_missing_leading_slash_rejected () =
+  assert_error
+    (app_preamble
+     ^ {|main() -> App requires [] =
+|}
+     ^ {|  App {
+    database: D
+    api: Srv
+    port: 8097
+    mountPath: "api"
+  }
+|})
+    "must start with `/`"
+
+let t_mount_path_trailing_slash_rejected () =
+  assert_error
+    (app_preamble
+     ^ {|main() -> App requires [] =
+|}
+     ^ {|  App {
+    database: D
+    api: Srv
+    port: 8097
+    mountPath: "/api/"
+  }
+|})
+    "must not end with `/`"
+
+let t_mount_path_empty_rejected () =
+  assert_error
+    (app_preamble
+     ^ {|main() -> App requires [] =
+|}
+     ^ {|  App {
+    database: D
+    api: Srv
+    port: 8097
+    mountPath: ""
+  }
+|})
+    "must not be empty"
+
 let () =
   Alcotest.run "app-main body type-checking"
     [ ( "fail-open classes now rejected",
@@ -262,5 +332,13 @@ let () =
             t_main_enqueue_statement_ok;
           Alcotest.test_case "enqueue bad payload in main rejected" `Quick
             t_main_enqueue_bad_payload_rejected;
+        ] );
+      ( "mountPath (#75)",
+        [ Alcotest.test_case "valid mountPath accepted" `Quick t_mount_path_valid_accepted;
+          Alcotest.test_case "root \"/\" accepted" `Quick t_mount_path_root_slash_accepted;
+          Alcotest.test_case "missing leading slash rejected" `Quick
+            t_mount_path_missing_leading_slash_rejected;
+          Alcotest.test_case "trailing slash rejected" `Quick t_mount_path_trailing_slash_rejected;
+          Alcotest.test_case "empty string rejected" `Quick t_mount_path_empty_rejected;
         ] );
     ]

@@ -50,7 +50,7 @@ sseChannel RunEvents(scope: String) = SseChannel {
   payload: RunQueued
 }
 
-handler triggerRun(runId: String) -> String
+handler post triggerRun(runId: String) -> String
   requires [pubsub] =
   publish RunEvents("all") RunQueued { runId: runId }
   "ok"
@@ -65,7 +65,7 @@ api MainApi {
 }
 
 server MainServer for MainApi {
-  triggerRun = triggerRun
+  triggerRun
 }
 
 api-test "publish on a literal-keyed broadcast channel reaches the subscriber" for MainServer requires [pubsub] {

@@ -1158,7 +1158,7 @@ check isValidTitle(title: String) -> title: String ::: ValidTitle title =
   else
     fail 400 "bad title"
 
-handler getTask(taskId: String) -> Task ? FromDb (Id == taskId)
+handler get getTask(taskId: String) -> Task ? FromDb (Id == taskId)
   requires [dbRead] =
   let existing = selectOne t from Task where t.id == taskId
   case existing of

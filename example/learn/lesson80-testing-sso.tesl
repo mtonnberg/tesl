@@ -152,7 +152,7 @@ auth sessionOwner(request: HttpRequest) -> user: User ::: Authenticated user
       let subject = subjectOf claims
       ok (User { id: subject }) ::: Authenticated user
 
-handler me(user: User ::: Authenticated user) -> Profile =
+handler get me(user: User ::: Authenticated user) -> Profile =
   Profile { userId: user.id }
 
 api AppApi {
@@ -162,7 +162,7 @@ api AppApi {
 }
 
 server AppServer for AppApi {
-  endpoint_0 = me
+  me
   sso "github" connection githubConn onIdentity linkUser
   sso "idp" connection idpConn onIdentity linkUser
   publicOrigin "https://app.example.com"

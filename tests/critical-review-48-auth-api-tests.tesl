@@ -140,28 +140,28 @@ codec AuthInfoResponse {
 # Handlers
 # ═══════════════════════════════════════════════════════════════════════════
 
-handler doublePositive(user: String ::: Authenticated user, req: ValueRequest)
+handler post doublePositive(user: String ::: Authenticated user, req: ValueRequest)
   -> ValueResponse =
   let v = check checkPositive req.value
   ValueResponse { result: v * 2, label: "doubled" }
 
-handler tripleConj(user: String ::: Authenticated user, req: ValueRequest)
+handler post tripleConj(user: String ::: Authenticated user, req: ValueRequest)
   -> ConjResponse =
   let v = check checkPosAndSmall req.value
   ConjResponse { tripled: v * 3 }
 
-handler inlineConj(user: String ::: Authenticated user, req: ValueRequest)
+handler post inlineConj(user: String ::: Authenticated user, req: ValueRequest)
   -> ConjResponse =
   let v = check (checkPositive && checkSmall) req.value
   ConjResponse { tripled: v * 3 }
 
-handler whoami(user: String ::: Authenticated user) -> AuthInfoResponse =
+handler get whoami(user: String ::: Authenticated user) -> AuthInfoResponse =
   AuthInfoResponse { userId: user }
 
-handler whoamiAdmin(user: String ::: IsAdmin user && Authenticated user) -> AuthInfoResponse =
+handler get whoamiAdmin(user: String ::: IsAdmin user && Authenticated user) -> AuthInfoResponse =
   AuthInfoResponse { userId: user }
 
-handler conjAuthWhoami(user: String ::: Authenticated user && HasValidSession user)
+handler get conjAuthWhoami(user: String ::: Authenticated user && HasValidSession user)
   -> AuthInfoResponse =
   AuthInfoResponse { userId: user }
 
@@ -195,11 +195,11 @@ api R48AuthApi {
 }
 
 server R48AuthServer for R48AuthApi {
-  doublePositive = doublePositive
-  tripleConj = tripleConj
-  inlineConj = inlineConj
-  whoami = whoami
-  whoamiAdmin = whoamiAdmin
+  doublePositive
+  tripleConj
+  inlineConj
+  whoami
+  whoamiAdmin
 }
 
 api R48ConjAuthApi {
@@ -209,7 +209,7 @@ api R48ConjAuthApi {
 }
 
 server R48ConjAuthServer for R48ConjAuthApi {
-  conjAuthWhoami = conjAuthWhoami
+  conjAuthWhoami
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -358,11 +358,11 @@ auth conjCheckAuth(request: HttpRequest)
       let admin = check checkIsAdmin userId
       ok admin ::: Authenticated user && IsAdmin user
 
-handler conjManualWhoami(user: String ::: Authenticated user && HasValidSession user)
+handler get conjManualWhoami(user: String ::: Authenticated user && HasValidSession user)
   -> AuthInfoResponse =
   AuthInfoResponse { userId: user }
 
-handler conjCheckWhoami(user: String ::: Authenticated user && IsAdmin user)
+handler get conjCheckWhoami(user: String ::: Authenticated user && IsAdmin user)
   -> AuthInfoResponse =
   AuthInfoResponse { userId: user }
 
@@ -377,8 +377,8 @@ api R48ConjInAuthApi {
 }
 
 server R48ConjInAuthServer for R48ConjInAuthApi {
-  conjManualWhoami = conjManualWhoami
-  conjCheckWhoami = conjCheckWhoami
+  conjManualWhoami
+  conjCheckWhoami
 }
 
 api-test "conjManual: user+session passes" for R48ConjInAuthServer {
