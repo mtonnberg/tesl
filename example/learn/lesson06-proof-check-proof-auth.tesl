@@ -36,6 +36,7 @@ import Tesl.Http exposing [HttpRequest]
 import Tesl.Dict exposing [Dict.lookup]
 import Tesl.Env exposing [requireSecret, envRead]
 import Tesl.Crypto exposing [Crypto.checkSignature, Crypto.signatureFromHex]
+import Tesl.Maybe exposing [Maybe(..)]
 
 # ─── CHECK: validates at runtime, fails gracefully with HTTP status ───────────
 #

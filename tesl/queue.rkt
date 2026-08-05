@@ -27,6 +27,10 @@
          racket/format
          racket/list
          racket/match
+         ;; #79: job ids are UUID v7, minted WITHOUT the `uuid` capability (a
+         ;; queue insert is runtime-internal), so the leaf packer is required
+         ;; directly rather than Tesl.UUID's gated surface.
+         (only-in "private/uuid-gen.rkt" uuid-v7-string)
          (only-in "logging.rkt"
                   tesl-log-active?
                   tesl-log-enqueue!
@@ -136,6 +140,10 @@
  process-next-dead-job!
  process-next-dead-job/result!
  start-dead-workers!
+ ;; #79 test seam: the id minter, so tests/queue-job-id-tests.rkt can assert the
+ ;; shape and the cross-PROCESS property (the gensym form repeated ids after a
+ ;; restart, which is invisible to any single-process uniqueness check).
+ make-job-id
  ;; Struct accessors (tests)
  (struct-out queue-spec)
  queue-spec-job-type-refs ; forcing wrapper over the lazy field (see struct def)
@@ -329,11 +337,30 @@
 
 ;; ── In-memory job store helpers ──────────────────────────────────────────────
 
+;; Job ids (GitHub #79).  `id` is the PRIMARY KEY of tesl_jobs, and rows
+;; accumulate (undrained `pending` jobs, `dead` letters), so the id space has to
+;; be collision-free across the whole life of the table AND across process
+;; restarts.
+;;
+;; The previous form was `(symbol->string (gensym 'job))`, which is neither:
+;; Racket's gensym counter is a PROCESS-LOCAL integer that restarts near the same
+;; low value in every fresh process (two cold `racket -e '(gensym (quote job))'`
+;; runs both print `job574`).  So a restarted server replays ids a previous run
+;; already inserted, and the insert — which happens inside the enqueuing
+;; request's transaction — fails the CALLER's request with
+;; `duplicate key value violates unique constraint "tesl_jobs_pkey"`.
+;;
+;; A UUID v7 fixes both halves: 74 random bits make collision a non-concern, and
+;; the 48-bit millisecond prefix keeps ids time-ordered, which is what the
+;; `(queue_name, created_at)` dequeue index already wants.  The `job-` prefix is
+;; cosmetic (logs / `id=…` lines); nothing parses it.  Minted through the
+;; capability-free leaf, not `Tesl.UUID`: enqueueing must not demand the user's
+;; `uuid` capability.
 (define (make-job-id)
-  (symbol->string (gensym 'job)))
+  (string-append "job-" (uuid-v7-string)))
 
 ;; Monotonic enqueue sequence number for the in-memory store.  The store is a
-;; mutable hash keyed by gensym'd job-id, so iterating it yields ARBITRARY
+;; mutable hash keyed by job-id, so iterating it yields ARBITRARY
 ;; order — but dequeue must be FIFO for parity with the PostgreSQL path
 ;; (`order by created_at asc`, see dequeue-next!).  Every job-entry records
 ;; the sequence at enqueue time; status updates (hash-set on the existing

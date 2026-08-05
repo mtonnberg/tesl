@@ -298,6 +298,7 @@ let api_test_seeded_state_compiles () =
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.ApiTest exposing [statusOk]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
 

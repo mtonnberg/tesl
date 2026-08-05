@@ -223,7 +223,7 @@ let app_prelude ~module_name smtp_port = Printf.sprintf {|module %s exposing [Em
 
 import Tesl.Prelude exposing [String, Unit, Bool(..)]
 import Tesl.Database exposing [Database, DatabaseBackend, Memory]
-import Tesl.Email exposing [Email, SmtpConfig, emailCap]
+import Tesl.Email exposing [Email, SmtpConfig, emailCap, EmailBody(..)]
 import Tesl.App exposing [App]
 
 # In-memory database backs the email outbox — no Postgres required.
@@ -346,7 +346,7 @@ let tesl_email_no_cap_src module_name =
 
 import Tesl.Prelude exposing [String, Unit, Bool(..)]
 import Tesl.Database exposing [Database, DatabaseBackend, Memory]
-import Tesl.Email exposing [Email, SmtpConfig]
+import Tesl.Email exposing [Email, SmtpConfig, EmailBody(..)]
 
 database EmailTestDb = Database {
   schema: "email_test"

@@ -473,28 +473,17 @@ let imported_ctor_request_type_names (imp : import_decl) : string list =
     ) names
 
 (** Constructors exported by stdlib ADT types, keyed by the type name.
-    Used to detect conflicts when a local ADT reuses a stdlib constructor name. *)
-let stdlib_adt_ctors : (string * (string * string list)) list = [
-  (* (tesl_module, (type_name, [constructors...])) *)
-  ("Tesl.Maybe",   ("Maybe",        ["Maybe"; "Something"; "Nothing"]));
-  ("Tesl.Result",  ("Result",       ["Result"; "Ok"; "Err"]));
-  ("Tesl.Either",  ("Either",       ["Either"; "Left"; "Right"]));
-  ("Tesl.DB",      ("DeleteResult", ["DeleteResult"; "NoRowDeleted"; "RowsDeleted"]));
-  ("Tesl.ApiTest", ("JobResult",    ["JobResult"; "JobOk"; "JobFailed"]));
-  ("Tesl.Net",     ("HostClass",    ["HostClass"; "Loopback"; "PrivateIp";
-                                     "LinkLocal"; "Cgnat"; "Multicast";
-                                     "Unspecified"; "PublicIp"; "DomainName";
-                                     "InvalidHost"]));
-  (* #78.  CivilDate and IsoWeek are absent on purpose: they export no
-     constructors, so there is nothing for a local ADT to collide with. *)
-  ("Tesl.CivilTime", ("Month",      ["Month"; "January"; "February"; "March";
-                                     "April"; "May"; "June"; "July"; "August";
-                                     "September"; "October"; "November";
-                                     "December"]));
-  ("Tesl.CivilTime", ("Weekday",    ["Weekday"; "Monday"; "Tuesday";
-                                     "Wednesday"; "Thursday"; "Friday";
-                                     "Saturday"; "Sunday"]));
-]
+    Used to detect conflicts when a local ADT reuses a stdlib constructor name,
+    and to expand a `Type(..)` exposing list.
+
+    DERIVED from {!Type_system.stdlib_adt_ctor_groups} — the same table that
+    drives the emitter's require expansion and the constructor import gate — so
+    a new stdlib ADT cannot be registered in one of the three and forgotten in
+    the others.  The type name is prepended to its own constructor list, which is
+    the shape this table's consumers expect. *)
+let stdlib_adt_ctors : (string * (string * string list)) list =
+  List.map (fun (m, ty, ctors) -> (m, (ty, ty :: ctors)))
+    Type_system.stdlib_adt_ctor_groups
 
 let imported_plain_exposed_ctor_entries (m : module_form) : (string * string * string * loc) list =
   let is_tesl_module name =

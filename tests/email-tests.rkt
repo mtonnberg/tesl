@@ -14,7 +14,7 @@
   tesl/tesl/sse
   tesl/tesl/email
   (only-in tesl/tesl/prelude String Unit Bool)
-  (only-in tesl/tesl/email emailCap)
+  (only-in tesl/tesl/email emailCap EmailBody TextBody HtmlBody RichBody)
 )
 
 

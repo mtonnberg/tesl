@@ -28,7 +28,7 @@ let base_imports =
   "import Tesl.Prelude exposing [Int, String, Bool, List, Unit]\n\
    import Tesl.Maybe exposing [Maybe, Nothing, Something]\n\
    import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]\n\
-   import Tesl.Email exposing [Email, SmtpConfig, emailCap]\n"
+   import Tesl.Email exposing [Email, SmtpConfig, emailCap, EmailBody(..)]\n"
 
 let module_ ?(name="M") ?(exports="") ?(extra="") body =
   Printf.sprintf "module %s exposing [%s]\n%s%s\n%s"
@@ -472,7 +472,7 @@ let test_cap_email_decl_defines_capability () =
     "module M exposing []\n\
      import Tesl.Prelude exposing [Int, String, Bool, List, Unit]\n\
      import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]\n\
-     import Tesl.Email exposing [Email, SmtpConfig]\n%s\
+     import Tesl.Email exposing [Email, SmtpConfig, EmailBody(..)]\n%s\
      fn ping(addr: String) -> Unit requires [emailCap] =\n\
      Email.send AppEmail { to: addr subject: \"Hi\" body: TextBody \"Hi\" }\n"
     (with_db email_block) in

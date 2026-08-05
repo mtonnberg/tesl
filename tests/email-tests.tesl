@@ -10,7 +10,7 @@ import Tesl.Database exposing [
   TcpConnection,
   SocketConnection,
 ]
-import Tesl.Email exposing [Email, SmtpConfig, emailCap]
+import Tesl.Email exposing [Email, SmtpConfig, emailCap, EmailBody(..)]
 
 database TestDB = Database {
   schema: "public"

@@ -4350,25 +4350,20 @@ let collect_proof_names (m : module_form) =
   |> List.sort String.compare
 
 (** Known constructors for stdlib ADTs — used to expand Type(..) in import lists. *)
+(* DERIVED from {!Type_system.stdlib_adt_ctor_groups} (the single source shared
+   with Validation_names.stdlib_adt_ctors and the constructor import gate): type
+   name → itself plus its constructors, which is what a `Type(..)` import must
+   expand to in the emitted `only-in` require.  A type exported by two modules
+   (Either, from Tesl.Either and Tesl.EitherPrim) has one entry — the group lists
+   are identical, and Hashtbl.replace keeps the last.
+
+   #78: CivilDate and IsoWeek are deliberately absent from the source table —
+   they export no constructors, so `CivilDate(..)` has nothing to expand and the
+   bare type name is the whole import. *)
 let adt_constructors : (string, string list) Hashtbl.t =
   let h = Hashtbl.create 16 in
-  Hashtbl.replace h "Maybe"        ["Maybe"; "Something"; "Nothing"];
-  Hashtbl.replace h "Either"       ["Either"; "Left"; "Right"];
-  Hashtbl.replace h "Result"       ["Result"; "Ok"; "Err"];
-  Hashtbl.replace h "JobResult"    ["JobResult"; "JobOk"; "JobFailed"];
-  Hashtbl.replace h "DeleteResult" ["DeleteResult"; "NoRowDeleted"; "RowsDeleted"];
-  Hashtbl.replace h "HostClass"
-    ["HostClass"; "Loopback"; "PrivateIp"; "LinkLocal"; "Cgnat"; "Multicast";
-     "Unspecified"; "PublicIp"; "DomainName"; "InvalidHost"];
-  (* #78.  CivilDate and IsoWeek are deliberately absent: they export no
-     constructors, so `CivilDate(..)` has nothing to expand and the bare type
-     name is the whole import. *)
-  Hashtbl.replace h "Month"
-    ["Month"; "January"; "February"; "March"; "April"; "May"; "June";
-     "July"; "August"; "September"; "October"; "November"; "December"];
-  Hashtbl.replace h "Weekday"
-    ["Weekday"; "Monday"; "Tuesday"; "Wednesday"; "Thursday"; "Friday";
-     "Saturday"; "Sunday"];
+  List.iter (fun (_m, ty, ctors) -> Hashtbl.replace h ty (ty :: ctors))
+    Type_system.stdlib_adt_ctor_groups;
   h
 
 (** Expand an import name (possibly with (..)) to a list of concrete names.

@@ -81,6 +81,7 @@ import Tesl.Database exposing [
   TcpConnection,
   SocketConnection,
 ]
+import Tesl.Maybe exposing [Maybe(..)]
 
 # ─── Capabilities ─────────────────────────────────────────────────────────────
 capability timedRead implies dbRead

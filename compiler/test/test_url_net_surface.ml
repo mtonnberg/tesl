@@ -92,6 +92,7 @@ let url_imports =
 
 let net_imports =
   "import Tesl.Prelude exposing [String, Bool(..)]\n\
+   import Tesl.Maybe exposing [Maybe(..)]\n\
    import Tesl.Net exposing [HostClass(..), Net.classifyHost, \
    Net.isForbiddenHost, Net.normalizeHost]"
 

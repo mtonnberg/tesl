@@ -29,6 +29,7 @@ import Tesl.String exposing [String.length]
 import Tesl.Time exposing [nowMillis, time, Time.posixToSeconds]
 import Tesl.Random exposing [random]
 import Tesl.Id exposing [generatePrefixedId]
+import Tesl.Maybe exposing [Maybe(..)]
 
 # ─────────────────────────────────────────────
 # UNDERSTANDING — why it works this way

@@ -111,6 +111,7 @@ import Tesl.Time exposing [
   addMs,
 ]
 import Tesl.DB exposing [dbRead, dbWrite, DeleteResult(..)]
+import Tesl.Maybe exposing [Maybe(..)]
 
 # ─────────────────────────────────────────────
 # UNDERSTANDING — the type-checked SQL model

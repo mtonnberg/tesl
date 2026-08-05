@@ -380,7 +380,7 @@ fn fabricate(n: Int ::: Positive n) -> Int ? Positive && Small =
 let test_r47_29_nested_pack_maybe_compiles () =
   should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
-import Tesl.Maybe exposing [Maybe]
+import Tesl.Maybe exposing [Maybe(..)]
 fact ValidScore (n: Int)
 fn f() -> Maybe (Int ? ValidScore) =
   Nothing
@@ -593,7 +593,7 @@ fn f(n: Int) -> Int ? Positive =
 let test_r47_52_nested_maybe_pack_compiles () =
   should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
-import Tesl.Maybe exposing [Maybe]
+import Tesl.Maybe exposing [Maybe(..)]
 fact Positive (n: Int)
 fn f() -> Maybe (Int ? Positive) =
   Nothing

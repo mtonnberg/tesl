@@ -30,7 +30,7 @@
   (only-in tesl/tesl/jwt jwt JwtToken [JWT.sign tesl_import_JWT_sign] [JWT.verify tesl_import_JWT_verify])
   (only-in tesl/tesl/crypto Secret)
   (only-in tesl/tesl/http-client httpClient HttpResponse [HttpClient.post tesl_import_HttpClient_post])
-  (only-in tesl/tesl/email emailCap)
+  (only-in tesl/tesl/email emailCap EmailBody TextBody HtmlBody RichBody)
 )
 
 

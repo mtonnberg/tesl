@@ -63,6 +63,7 @@ import Tesl.Time exposing [Time.secondsToPosix]
 import Tesl.Units exposing [Duration, Duration.hours, Duration.minutes]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Database exposing [Database, Memory]
+import Tesl.Maybe exposing [Maybe(..)]
 
 # ─── Construction + display ──────────────────────────────────────────────────────
 # Per-currency constructors take MINOR units: `Money.usd 1050` = $10.50.

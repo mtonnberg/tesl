@@ -4,6 +4,7 @@ import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
 import Tesl.Dict exposing [Dict.lookup]
 import Tesl.ApiTest exposing [statusOk, statusClientError]
+import Tesl.Maybe exposing [Maybe(..)]
 
 # An auth function reads request.queryParameters — the same way lesson55 reads
 # request.cookies and ai-conversation-service reads request.headers.

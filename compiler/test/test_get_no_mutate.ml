@@ -212,7 +212,7 @@ let email_prog ~method_kw =
     {|module Sec005Email exposing []
 import Tesl.Prelude exposing [String, Unit]
 import Tesl.Database exposing [Database, Memory]
-import Tesl.Email exposing [Email, SmtpConfig, emailCap]
+import Tesl.Email exposing [Email, SmtpConfig, emailCap, EmailBody(..)]
 import Tesl.App exposing [App]
 
 database ProbeDb = Database {

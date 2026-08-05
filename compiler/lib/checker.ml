@@ -6261,6 +6261,17 @@ let collect_bound_names (m : module_form) : (string, unit) Hashtbl.t =
       List.iter (fun (b : binding) -> add b.name) fd.params;
       walk fd.body
     | DConst c -> add c.name; walk c.value
+    (* Locally DECLARED type / constructor / record / entity names.  A module
+       that declares `type Either a b = Left … | Right …` (learn lesson37) or its
+       own `type Weekday = Mon | …` is not referring to the stdlib ADT of the
+       same name, so the constructor import gate must not demand an import for
+       it.  Declaring AND importing the same name is a different case and stays a
+       shadowing error (`check_name_shadowing`). *)
+    | DType (TypeAdt { name; variants; _ }) ->
+      add name; List.iter (fun (v : adt_variant) -> add v.ctor) variants
+    | DType (TypeNewtype { name; _ }) | DType (TypeAlias { name; _ }) -> add name
+    | DRecord r -> add r.name
+    | DEntity e -> add e.name
     | _ -> ()
   ) m.decls;
   t
@@ -6312,12 +6323,47 @@ let collect_stdlib_fn_uses (m : module_form) : (string * Location.loc) list =
   let record name loc =
     if not (Hashtbl.mem seen name)
        && not (Hashtbl.mem bound name)               (* user shadow suppresses *)
-       && Type_system.stdlib_home_module_of name <> None
+       && (Type_system.stdlib_home_module_of name <> None
+           || Type_system.stdlib_ctor_home_modules_of name <> [])
     then Hashtbl.replace seen name loc
   in
-  (* Per-NODE recorder: a module-qualifier field access (Dict.lookup) or a bare
-     gated value (initTelemetry / mockProvider).  Bare constructors are never
-     recorded because they are absent from the home-module registry. *)
+  (* A module QUALIFIER parses as a nullary constructor (`Dict` in Dict.lookup),
+     so the qualifier occurrences are collected first and their locations skipped
+     by the bare-constructor recorder below — otherwise `Dict.lookup d k` would
+     also demand an import for a value named `Dict`. *)
+  let qualifier_locs : Location.loc list ref = ref [] in
+  let note_qualifiers (e : expr) : unit =
+    Ast_visitor.iter (fun node ->
+      match node with
+      | EField { obj = EConstructor ({ args = []; _ } as c); _ } ->
+        qualifier_locs := c.loc :: !qualifier_locs
+      | _ -> ()
+    ) e
+  in
+  (* Constructors in PATTERN position are recorded too.  A pattern needs no
+     runtime binding — it emits a quoted variant symbol
+     (`(eq? (adt-value-variant …) 'Monday)`) — so this half is not about
+     unboundness but about the rule being one rule: a module that names a stdlib
+     constructor anywhere says where it comes from, so the import list stays a
+     complete, greppable inventory of the module's stdlib surface.  Patterns
+     carry no sub-expressions, so [Ast_visitor.iter] does not reach them and they
+     are walked explicitly here. *)
+  let rec visit_pattern (p : pattern) : unit =
+    match p with
+    | PCon { ctor; fields; loc } ->
+      record ctor loc;
+      List.iter (fun (_, sub) -> visit_pattern sub) fields
+    | PNullary { ctor; loc } -> record ctor loc
+    | PVar _ | PWild | PLit _ -> ()
+  in
+  (* Per-NODE recorder: a module-qualifier field access (Dict.lookup), a bare
+     gated value (initTelemetry / mockProvider), or — roadmap
+     import_gated_stdlib_constructors.md — a bare stdlib CONSTRUCTOR in a value
+     position (`Monday`, `TextBody s`).  Constructors used to be invisible here:
+     they are absent from the home-module registry, so `case Monday of …` with no
+     `import Tesl.CivilTime` type-checked and then died at `raco expand` with
+     "unbound identifier", because the emitter drives its require list off the
+     imports. *)
   let visit (e : expr) : unit =
     Ast_visitor.iter (fun node ->
       match node with
@@ -6325,9 +6371,28 @@ let collect_stdlib_fn_uses (m : module_form) : (string * Location.loc) list =
                        | EVar { name = modname; _ }); field; loc } ->
         record (modname ^ "." ^ field) loc
       | EVar { name; loc } -> record name loc
+      | EConstructor { name; loc; _ } ->
+        if not (List.mem loc !qualifier_locs) then record name loc
+      | ECase { arms; _ } ->
+        List.iter (fun (a : case_arm) -> visit_pattern a.pattern) arms
       | _ -> ()
     ) e
   in
+  let visit e = note_qualifiers e; visit e in
+  (* Test-statement `case` arms carry their own pattern type. *)
+  let rec visit_test_patterns (s : test_stmt) : unit =
+    match s with
+    | TsCase { arms; _ } ->
+      List.iter (fun (a : ts_case_arm) ->
+        visit_pattern a.ts_pattern;
+        List.iter visit_test_patterns a.ts_body) arms
+    | TsIf { then_stmts; else_stmts; _ } ->
+      List.iter visit_test_patterns then_stmts;
+      List.iter visit_test_patterns else_stmts
+    | TsLet _ | TsLetProof _ | TsExpect _ | TsExpectFail _ | TsExpectHasProof _
+    | TsProperty _ | TsExpr _ -> ()
+  in
+  let iter_test_stmt f s = iter_test_stmt f s; visit_test_patterns s in
   List.iter (function
     | DFunc fd -> visit fd.body
     | DConst c -> visit c.value
@@ -6377,12 +6442,67 @@ let check_stdlib_fn_import_scope (m : module_form) : type_error list =
          List.exists (fun n -> strip_dotdot n = qname) names)
     ) m.imports
   in
+  (* Constructor / bare type-name-value scope (roadmap
+     import_gated_stdlib_constructors.md).  Differs from the function rule in two
+     ways, both forced by how constructors are exported:
+     - a constructor can come from MORE THAN ONE module (`Left` from Tesl.Either
+       and from Tesl.EitherPrim, whose split exists for the lifted-module require
+       cycle), so ANY of its home modules being imported satisfies it;
+     - an `exposing` list satisfies it either by naming the constructor directly
+       (`exposing [Monday]`) or by opening its owning type (`exposing
+       [Weekday(..)]`).  Both spellings emit the require — verified against `raco
+       expand`, not assumed. *)
+  let ctor_available modules cname =
+    let owner = List.assoc_opt cname Type_system.stdlib_ctor_owner_type in
+    List.exists (fun (imp : import_decl) ->
+      List.mem imp.module_name modules &&
+      (match imp.names with
+       | ImportAll -> true
+       | ImportExposing names ->
+         List.exists (fun n ->
+           let bare = strip_dotdot n in
+           bare = cname
+           || (bare <> n && Some bare = owner)      (* `Owner(..)` opens it *)
+         ) names)
+    ) m.imports
+  in
+  let ctor_error cname loc modules =
+    let target_module = List.hd modules in
+    let owner = List.assoc_opt cname Type_system.stdlib_ctor_owner_type in
+    let expose_name = match owner with Some ty -> ty ^ "(..)" | None -> cname in
+    let kind = if owner = None then "name" else "constructor" in
+    let alt =
+      match modules with
+      | _ :: (_ :: _ as rest) ->
+        Printf.sprintf " (also exported by %s)"
+          (String.concat ", " (List.map (Printf.sprintf "`%s`") rest))
+      | _ -> ""
+    in
+    let hint =
+      if List.exists (fun (imp : import_decl) -> imp.module_name = target_module)
+           m.imports
+      then Printf.sprintf
+        " (you have `import %s` but `%s` is not in the exposing list)"
+        target_module expose_name
+      else ""
+    in
+    { loc;
+      message = Printf.sprintf
+        "%s `%s` requires `import %s` (or `import %s exposing [%s]`)%s%s"
+        kind cname target_module target_module expose_name alt hint;
+      fix = Import_suggest.build_fix m ~target_module ~expose_name }
+  in
   List.filter_map (fun (qname, loc) ->
     (* A7: qualified (Dict.lookup) and bare (envInt / initTelemetry / mockProvider)
        names alike resolve through the SINGLE authoritative home-module registry. *)
     let tesl_module_opt = Type_system.stdlib_home_module_of qname in
     match tesl_module_opt with
-    | None -> None
+    | None ->
+      (match Type_system.stdlib_ctor_home_modules_of qname with
+       | [] -> None
+       | modules ->
+         if ctor_available modules qname then None
+         else Some (ctor_error qname loc modules))
     | Some tesl_module ->
       if is_fn_available tesl_module qname then None
       else

@@ -13,7 +13,7 @@ module MemoryBackendRegressions exposing []
 #      (unwrap-non-null) resurfacing in the aggregate path.  Fixed by
 #      in-memory-extreme (dsl/sql.rkt), which compares unwrapped values and
 #      returns the stored (still-wrapped) value.
-#   3. In-memory queue FIFO: the job store is a hash keyed by gensym'd job-id,
+#   3. In-memory queue FIFO: the job store is a hash keyed by the job-id string,
 #      so processNextJob dequeued in arbitrary hash order while the PostgreSQL
 #      path is FIFO (`order by created_at asc`).  Fixed by a monotonic enqueue
 #      sequence number in job-entry + sorted pending-jobs (tesl/queue.rkt).

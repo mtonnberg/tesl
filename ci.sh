@@ -1298,6 +1298,27 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  Phase 9d — Bare stdlib name import gate vs `raco expand`
+# ══════════════════════════════════════════════════════════════════════════════
+# roadmap/completed/import_gated_stdlib_constructors.md.  The compiler's "this bare
+# name needs its import" tables are a STATIC approximation of a runtime fact —
+# whether the emitted module binds the name at all — and an OCaml test can only
+# check those tables against each other.  This ratchet checks them against `raco
+# expand` in both directions: a gated name must be unbound without its import
+# AND bound with it, and an always-available name must really be bound.
+phase_begin "Bare stdlib name import gate (raco expand agreement)"
+_barename_rc=0
+TESL_REPO_ROOT="$SCRIPT_DIR" TESL_OCAML_COMPILER="$_main_exe" \
+    bash "$SCRIPT_DIR/tests/stdlib-bare-name-gate.sh" || _barename_rc=$?
+if [ "$_barename_rc" -eq 0 ]; then
+    phase_end OK
+elif [ "$_barename_rc" -eq 77 ]; then
+    phase_end SKIP
+else
+    phase_end FAIL
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  Phase 10 — Racket suites (debugger / headless-inspect / MCP / lifted-stdlib
 #             + AI (Tesl.Agent) mock feature & runtime suites)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1339,6 +1360,12 @@ else
         # edge, pow bounds the exponent before expt, NaN/inf convert cleanly —
         # plus issue #45's api-test path normalization (literal ≡ computed)
         "tests/int32-runtime-tests.rkt"
+        # #79: queue job ids.  Here rather than in a .tesl suite because the
+        # property that broke is CROSS-PROCESS — gensym's counter restarts near
+        # the same low value in every fresh process, so a restarted server
+        # replayed ids already committed to tesl_jobs and 500'd the enqueuing
+        # request on tesl_jobs_pkey.  This suite mints in two cold subprocesses.
+        "tests/queue-job-id-tests.rkt"
         # `secret X = T` runtime half (roadmap/completed/tesl_crypto.md phases 3+4).
         # Here because the enforcement is spread across SIX independent sinks
         # (telemetry jsexpr + OTLP AnyValue, metric attributes, safe-display, the

@@ -1704,17 +1704,31 @@ let tesl_module_export_set (module_name : string) : string list option =
     proof utilities.  Their runtime is provided by the always-emitted
     dsl/runtime + Prelude requires, so using them compiles with no `import`.
 
-    Constructors ([Ok]/[Err]/[Nothing]/[Something]/[Left]/[Right]/[Tuple2]/…/
-    [TextBody]/…) are DELIBERATELY excluded from both this set and
-    {!stdlib_home_module}: they are handled by the constructor-scope machinery
-    (`Maybe(..)`/`Result(..)`/`EmailBody` import forms), and the stdlib-fn scope
-    checker never records bare constructor uses. *)
+    Constructors are NO LONGER wholesale-excluded (roadmap
+    import_gated_stdlib_constructors.md): a bare stdlib constructor now resolves
+    only if its module is imported ({!stdlib_ctor_home_modules} +
+    [Checker.check_stdlib_fn_import_scope]), because the emitter drives its
+    Racket `require` list off the imports, so an ungated constructor type-checked
+    and then died at `raco expand` with "unbound identifier".
+
+    NO stdlib module's surface is exempt, deliberately.  Several stdlib
+    constructors (`Nothing`/`Something`, `Ok`/`Err`, `NoRowDeleted`, the `String`
+    type-name symbol) HAPPEN to be bound without an import, because the
+    always-emitted dsl/runtime + Prelude + dsl/sql requires provide them — so
+    corpus modules got away with using them while importing nothing.  That
+    accident is not a licence: `Nothing` belongs to `Tesl.Maybe` and a module that
+    uses it says so, exactly like every other stdlib name.  The corpus files that
+    relied on the accident were fixed rather than exempted.
+
+    What remains here is only what has no owning stdlib module to import:
+    operators, the Prelude literals, and the GDP proof utilities. *)
 let always_available_stdlib_names : string list = [
   (* arithmetic / comparison / boolean operators *)
   "+"; "-"; "*"; "/"; "%"; "quotient"; "modulo";
   "=="; "!="; "<"; "<="; ">"; ">=";
   "&&"; "||"; "!"; "not";
-  (* Prelude values that need no import *)
+  (* Prelude literals: `True`/`False` emit as #t/#f and `Unit` as the unit value —
+     no module provides them, so there is nothing to import. *)
   "True"; "False"; "Unit";
   (* `print` was REMOVED from the surface language 2026-07-29. It was ambient,
      needed no import, and was typed `t_fun [_a] t_unit` — a bare type variable
@@ -1810,9 +1824,114 @@ let stdlib_home_module : (string * string) list =
   stdlib_bare_home_module @ dotted_rows
 
 (** Resolve the Tesl.* module that provides [name] at runtime, or [None] when
-    [name] is always-available / a constructor / not a gated stdlib name. *)
+    [name] is always-available / a constructor / not a gated stdlib name.
+    Bare CONSTRUCTORS resolve through {!stdlib_ctor_home_modules} instead — they
+    can be exported by more than one module (`Left` by both Tesl.Either and
+    Tesl.EitherPrim), which an [assoc] lookup cannot express. *)
 let stdlib_home_module_of (name : string) : string option =
   List.assoc_opt name stdlib_home_module
+
+(* ── Single-source stdlib ADT constructor groups ───────────────────────────── *)
+
+(** THE authoritative (module, ADT type, constructors) table for stdlib ADTs.
+
+    Four consumers used to keep their own hand-written copy of this shape, and
+    each omission was invisible from the others:
+    - {!Validation_names.stdlib_adt_ctors} — local-ADT collision + `Type(..)`
+      exposing expansion (DERIVED from this table);
+    - {!Emit_racket.adt_constructors} — `Type(..)` → require expansion (DERIVED);
+    - {!stdlib_ctor_home_modules} below — the import gate (DERIVED);
+    - {!Validation_common.builtin_ctor_info} — arity/field types for
+      exhaustiveness, which needs per-constructor field types and so stays
+      hand-written; [test_import_gated_ctors.ml] asserts its stdlib rows cover
+      the groups here, so a new ADT cannot silently lose exhaustiveness.
+
+    The constructor lists deliberately do NOT repeat the type name; consumers
+    that want `["Maybe"; "Something"; "Nothing"]` prepend it themselves. *)
+let stdlib_adt_ctor_groups : (string * string * string list) list = [
+  "Tesl.Maybe",      "Maybe",        [ "Something"; "Nothing" ];
+  "Tesl.Result",     "Result",       [ "Ok"; "Err" ];
+  "Tesl.Either",     "Either",       [ "Left"; "Right" ];
+  (* The lifted-module split (Tesl.Either's combinators are written in Tesl and
+     take their leaves from Tesl.EitherPrim): both modules export the ctors, and
+     tesl/either.tesl itself imports only the PRIM one. *)
+  "Tesl.EitherPrim", "Either",       [ "Left"; "Right" ];
+  "Tesl.DB",         "DeleteResult", [ "NoRowDeleted"; "RowsDeleted" ];
+  "Tesl.ApiTest",    "JobResult",    [ "JobOk"; "JobFailed" ];
+  "Tesl.Email",      "EmailBody",    [ "TextBody"; "HtmlBody"; "RichBody" ];
+  "Tesl.Net",        "HostClass",
+    [ "Loopback"; "PrivateIp"; "LinkLocal"; "Cgnat"; "Multicast";
+      "Unspecified"; "PublicIp"; "DomainName"; "InvalidHost" ];
+  (* #78.  CivilDate and IsoWeek export no constructors on purpose (opaque), so
+     they have no group here. *)
+  "Tesl.CivilTime",  "Month",
+    [ "January"; "February"; "March"; "April"; "May"; "June"; "July";
+      "August"; "September"; "October"; "November"; "December" ];
+  "Tesl.CivilTime",  "Weekday",
+    [ "Monday"; "Tuesday"; "Wednesday"; "Thursday"; "Friday";
+      "Saturday"; "Sunday" ];
+]
+
+(** Constructor → the ADT type that owns it, for the `Type(..)` exposing form.
+    A constructor owned by two modules (Left/Right) has ONE owning type name. *)
+let stdlib_ctor_owner_type : (string * string) list =
+  List.concat_map (fun (_m, ty, ctors) -> List.map (fun c -> (c, ty)) ctors)
+    stdlib_adt_ctor_groups
+  |> List.sort_uniq compare
+
+(** Bare (dot-free, capital-initial) stdlib names usable in a VALUE position that
+    need their home module imported — constructors (`Monday`, `TextBody`) and the
+    type-name symbols the runtime provides (`Dict`, `Set`, `JwtToken`).
+
+    DERIVED from {!tesl_module_exports}, so a new stdlib ADT is gated the moment
+    its constructors are exported — the failure mode this closes was a
+    hand-maintained registry with no constructor rows at all.  Two subtractions,
+    both load-bearing:
+
+    - {!always_available_stdlib_names} — operators, Prelude literals and proof
+      utilities, which no module provides (see that list's note: names that merely
+      HAPPEN to be bound by the always-emitted requires are NOT exempt);
+    - [Stdlib_config_names.require_suppressed] — the config-only surface (the 489
+      IANA `TimeZone` constructors, the ISO 4217 currency constructors, the
+      config-block markers, the SI aliases, the Sso provider ctors).  These emit
+      NO `require` under any import, by design, so gating them would demand
+      imports that cannot help: `import Tesl.Time exposing [FixedOffset]` still
+      emits nothing.  (Using one outside a config block is unbound with OR
+      without the import — a separate, still-open hole, recorded in
+      roadmap/completed/import_gated_stdlib_constructors.md.)
+
+    The value is a LIST of modules: any one of them being imported satisfies the
+    reference. *)
+let stdlib_ctor_home_modules : (string * string list) list =
+  let ambient = always_available_stdlib_names in
+  let config_only = Stdlib_config_names.require_suppressed in
+  let is_candidate n =
+    String.length n > 0
+    && not (String.contains n '.')
+    && (let c = n.[0] in c >= 'A' && c <= 'Z')
+    && not (List.mem n ambient)
+    && not (List.mem n config_only)
+  in
+  let rows =
+    List.concat_map (fun (m, names) ->
+      List.filter_map (fun n -> if is_candidate n then Some (n, m) else None) names)
+      tesl_module_exports
+  in
+  (* name → every exporting module, deduped, deterministic order *)
+  List.fold_left (fun acc (n, m) ->
+    match List.assoc_opt n acc with
+    | Some ms when List.mem m ms -> acc
+    | Some ms -> (n, ms @ [m]) :: List.remove_assoc n acc
+    | None -> (n, [m]) :: acc)
+    [] rows
+  |> List.sort compare
+
+(** The stdlib modules that can provide bare [name] in a value position; [[]]
+    when [name] is not gated (always-available, config-only, or not stdlib). *)
+let stdlib_ctor_home_modules_of (name : string) : string list =
+  match List.assoc_opt name stdlib_ctor_home_modules with
+  | Some ms -> ms
+  | None -> []
 
 (** A2-3 single source: the capability(ies) a referenced stdlib name introduces.
 

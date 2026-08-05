@@ -9,8 +9,8 @@
 ;;;   import Tesl.UUID exposing [uuid, UUID.v4, UUID.v7, UUID.validate, IsUuid]
 ;;;   fn makeId() -> String requires [uuid] = UUID.v4()
 
-(require racket/random
-         racket/string
+(require racket/string
+         (only-in "private/uuid-gen.rkt" uuid-v4-string uuid-v7-string)
          "../dsl/check.rkt"
          "../dsl/types.rkt"
          (only-in "../dsl/private/evidence.rkt" detached-proof check-ok check-fail)
@@ -36,36 +36,10 @@
 
 ;; ── Internal helpers ─────────────────────────────────────────────────────────
 
-;; Format a byte as a two-character lowercase hex string.
-(define (byte->hex b)
-  (let ([s (number->string b 16)])
-    (if (= (string-length s) 1)
-        (string-append "0" s)
-        s)))
-
-;; Format 16 bytes as a UUID string: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-(define (bytes->uuid-string bs)
-  (string-append
-   (byte->hex (bytes-ref bs 0))
-   (byte->hex (bytes-ref bs 1))
-   (byte->hex (bytes-ref bs 2))
-   (byte->hex (bytes-ref bs 3))
-   "-"
-   (byte->hex (bytes-ref bs 4))
-   (byte->hex (bytes-ref bs 5))
-   "-"
-   (byte->hex (bytes-ref bs 6))
-   (byte->hex (bytes-ref bs 7))
-   "-"
-   (byte->hex (bytes-ref bs 8))
-   (byte->hex (bytes-ref bs 9))
-   "-"
-   (byte->hex (bytes-ref bs 10))
-   (byte->hex (bytes-ref bs 11))
-   (byte->hex (bytes-ref bs 12))
-   (byte->hex (bytes-ref bs 13))
-   (byte->hex (bytes-ref bs 14))
-   (byte->hex (bytes-ref bs 15))))
+;; The byte packing (version/variant nibbles, 48-bit v7 timestamp) lives in
+;; tesl/private/uuid-gen.rkt, which the queue's job-id minter shares: the
+;; runtime must be able to mint an id WITHOUT the user-facing `uuid` capability,
+;; and one copy of the nibble rules is the point.
 
 ;; UUID validity regexp: 8-4-4-4-12 lowercase or uppercase hex digits.
 (define uuid-regexp
@@ -86,12 +60,7 @@
 ;; Variant bits:   byte[8] = 0x80 | (low 6 bits of byte[8])
 (define (UUID.v4)
   (require-capabilities! (list uuid))
-  (define bs (bytes-copy (crypto-random-bytes 16)))
-  ;; Set version 4: byte[6] = 0x40 | (byte[6] & 0x0F)
-  (bytes-set! bs 6 (bitwise-ior #x40 (bitwise-and (bytes-ref bs 6) #x0f)))
-  ;; Set variant bits: byte[8] = 0x80 | (byte[8] & 0x3F)
-  (bytes-set! bs 8 (bitwise-ior #x80 (bitwise-and (bytes-ref bs 8) #x3f)))
-  (bytes->uuid-string bs))
+  (uuid-v4-string))
 
 ;; ── UUID v7 (time-ordered) ───────────────────────────────────────────────────
 
@@ -103,23 +72,7 @@
 ;; Requires the `uuid` capability.
 (define (UUID.v7)
   (require-capabilities! (list uuid))
-  (define ts (inexact->exact (floor (current-inexact-milliseconds))))
-  (define rand-bs (bytes-copy (crypto-random-bytes 10)))
-  (define bs (make-bytes 16 0))
-  ;; Pack 48-bit timestamp big-endian into bytes 0-5.
-  (bytes-set! bs 0 (bitwise-and (arithmetic-shift ts -40) #xff))
-  (bytes-set! bs 1 (bitwise-and (arithmetic-shift ts -32) #xff))
-  (bytes-set! bs 2 (bitwise-and (arithmetic-shift ts -24) #xff))
-  (bytes-set! bs 3 (bitwise-and (arithmetic-shift ts -16) #xff))
-  (bytes-set! bs 4 (bitwise-and (arithmetic-shift ts -8)  #xff))
-  (bytes-set! bs 5 (bitwise-and ts                        #xff))
-  ;; Bytes 6-15: random data from rand-bs
-  (bytes-copy! bs 6 rand-bs 0 10)
-  ;; Set version 7: byte[6] = 0x70 | (byte[6] & 0x0F)
-  (bytes-set! bs 6 (bitwise-ior #x70 (bitwise-and (bytes-ref bs 6) #x0f)))
-  ;; Set variant bits: byte[8] = 0x80 | (byte[8] & 0x3F)
-  (bytes-set! bs 8 (bitwise-ior #x80 (bitwise-and (bytes-ref bs 8) #x3f)))
-  (bytes->uuid-string bs))
+  (uuid-v7-string))
 
 ;; ── UUID.validate ────────────────────────────────────────────────────────────
 

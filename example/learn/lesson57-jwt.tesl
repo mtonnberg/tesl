@@ -83,6 +83,7 @@ import Tesl.Dict exposing [Dict, Dict.singleton, Dict.lookup]
 # `time` is imported only to be named in `authCap implies jwt, time` below —
 # JWT.sign reads the clock to stamp the expiry, so the capability has to say so.
 import Tesl.Time exposing [time]
+import Tesl.Maybe exposing [Maybe(..)]
 
 # ── Step 1: Declare a capability that implies `jwt` ───────────────────────────
 #

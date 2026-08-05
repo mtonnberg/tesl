@@ -165,6 +165,7 @@ fn clampToRange(lo: Int ::: ValidRange lo hi, hi: Int, value: Int) -> Int =
 (* Named-pack [?] entity + consumer for the FromDb 2-arg form. *)
 let named_pack_lib m = hdr m ^ {|
 import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Maybe exposing [Maybe(..)]
 entity Todo table "todos" primaryKey id { id: String title: String ownerId: String }
 fn getTodo(todoId: String) -> Todo ? FromDb (Id == todoId)
   requires [dbRead] =
@@ -411,6 +412,7 @@ let np_bare_select_wrong_pred idx =
     should_fail "Positive\\|does not\\|satisfy\\|V001\\|P001\\|not.*scope\\|FromDb"
       (hdr m ^ Printf.sprintf {|
 import Tesl.DB exposing [dbRead]
+import Tesl.Maybe exposing [Maybe(..)]
 entity Todo table "todos" primaryKey id { id: String title: String }
 fact Positive (t: Todo)
 fn bad(todoId: String) -> Todo ? Positive
@@ -434,6 +436,7 @@ let np_binder_differs idx =
     should_fail satisfy_re
       (hdr m ^ Printf.sprintf {|
 import Tesl.DB exposing [dbRead]
+import Tesl.Maybe exposing [Maybe(..)]
 entity Todo table "todos" primaryKey id { id: String title: String ownerId: String }
 fact OwnedBy (u: String) (t: Todo)
 fn getTodo(todoId: String) -> Todo ? FromDb (Id == todoId)

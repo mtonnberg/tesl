@@ -76,7 +76,7 @@ import Tesl.Database exposing [
   PostgresConfig,
   TcpConnection,
 ]
-import Tesl.Email exposing [Email, SmtpConfig, emailCap]
+import Tesl.Email exposing [Email, SmtpConfig, emailCap, EmailBody(..)]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CAPABILITIES

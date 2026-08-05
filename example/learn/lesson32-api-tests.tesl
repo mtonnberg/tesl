@@ -13,6 +13,7 @@ import Tesl.Database exposing [
   TcpConnection,
   SocketConnection,
 ]
+import Tesl.Maybe exposing [Maybe(..)]
 
 # lesson: track=testing order=160 needs=lesson14-test-blocks,lesson15-api-handlers-server
 # summary: Test a whole HTTP endpoint from Tesl: seeded state, request bodies and JSON response assertions

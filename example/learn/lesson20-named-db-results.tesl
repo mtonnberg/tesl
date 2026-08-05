@@ -32,6 +32,7 @@ module Lesson20NamedDbResults exposing [
 
 import Tesl.Prelude exposing [String]
 import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Maybe exposing [Maybe(..)]
 
 # ─────────────────────────────────────────────
 # UNDERSTANDING — why it works this way
