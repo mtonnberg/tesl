@@ -1,0 +1,214 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# proxy-binding-http-tests.tesl
+#
+# `Tesl.Proxy.verifyBinding` / `ProxyBound` (Item A, #50.2) across the real HTTP
+# boundary. The primitive already had a unit test (`tests/proxy-runtime-test.rkt`,
+# 25 lines, three cases straight against the Racket function) but nothing
+# exercised the shape the feature exists for: an `auth` block that turns a
+# request HEADER into `ProxyBound`, and a handler that cannot be reached without
+# it. Everything below goes through dispatch, so the auth block, the `check`
+# failure path and the 401 mapping are all live.
+#
+# The discriminator this feature encodes (#50.2): a header that IS the assertion
+# (`X-Auth-User: alice`) is only as good as the network topology, so it needs a
+# loopback `listenAddress`; a header VERIFIED against stored material needs no
+# topology claim. `Proxy.verifyBinding` is the second kind, and these tests pin
+# the "verified" half — a request that did not carry the shared secret never
+# reaches the protected work.
+#
+# What is asserted:
+#   - a matching binding authenticates and the ProxyBound-demanding helper runs
+#   - absent / empty / wrong / near-miss / case-shifted / whitespace-padded
+#     bindings are each a 401, never a 200 and never a 500
+#   - the comparison is on the whole value: neither a prefix nor an extension of
+#     the secret is accepted
+#   - an unprotected route on the same server still answers, so the 401s above
+#     are the auth block refusing rather than the server being broken
+#   - a session cookie is not a substitute for the binding
+# ─────────────────────────────────────────────────────────────────────────────
+
+module ProxyBindingHttpTests exposing [EdgeServer]
+
+import Tesl.Prelude exposing [Bool(..), String]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Json exposing [stringCodec, boolCodec]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Crypto exposing [Secret]
+import Tesl.Proxy exposing [ProxyBound, Proxy.verifyBinding]
+import Tesl.ApiTest exposing [statusOk]
+
+# ── The shared secret ─────────────────────────────────────────────────────────
+#
+# Via a helper: a string literal in a key position is what SEC003 is for. In
+# production this is `requireSecret "PROXY_BINDING_SECRET"`, set identically in
+# the app's environment and in the proxy's `proxy_set_header` line.
+
+fn makeSecret(s: String) -> Secret =
+  Secret s
+
+fn proxySecret() -> Secret =
+  makeSecret "proxy-binding-http-tests-shared-secret"
+
+# ── Facts and wire types ──────────────────────────────────────────────────────
+
+fact EdgeRequest (marker: String)
+
+record Internal {
+  released: String
+}
+
+codec Internal {
+  toJson {
+    released -> "released" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+record Public {
+  alive: Bool
+}
+
+codec Public {
+  toJson {
+    alive -> "alive" with_codec boolCodec
+  }
+  fromJson_forbidden
+}
+
+# ── The protected work ────────────────────────────────────────────────────────
+#
+# `internalOnly` DEMANDS `ProxyBound`, which no hand-written function may
+# declare — it exists only where `check Proxy.verifyBinding` matched. So this
+# body is unreachable for a request that did not carry the secret, and that is a
+# compile-time property rather than a runtime 403 the author has to remember.
+
+fn internalOnly(bound: String ::: ProxyBound bound) -> String =
+  "internal data released to a proxy-bound request"
+
+# ── The auth block: header → verified value → fact ───────────────────────────
+#
+# The binding header is read, verified, and the verified value is passed straight
+# into `internalOnly`. `check`'s refusal is a 401, so a mismatch never reaches
+# the handler.
+
+auth edgeAuth(request: HttpRequest) -> marker: String ::: EdgeRequest marker =
+  case Dict.lookup "x-proxy-binding" request.headers of
+    Nothing -> fail 401 "no proxy binding"
+    Something presented ->
+      let bound = check Proxy.verifyBinding (proxySecret()) presented
+      # Called HERE, inside the auth block, so the test's 200 is evidence that a
+      # `ProxyBound`-demanding function actually ran — not merely that the check
+      # returned without raising.
+      let released = internalOnly bound
+      ok released ::: EdgeRequest marker
+
+# ── Handlers ──────────────────────────────────────────────────────────────────
+
+handler get internalData(marker: String ::: EdgeRequest marker) -> Internal =
+  Internal { released: marker }
+
+# No auth at all: the control. If this route 401s, something other than the
+# binding is wrong.
+handler get publicPing() -> Public =
+  Public { alive: True }
+
+api EdgeApi {
+  get "/internal"
+    auth marker: String ::: EdgeRequest marker via edgeAuth
+    -> Internal
+
+  get "/ping"
+    -> Public
+}
+
+server EdgeServer for EdgeApi {
+  internalData
+  publicPing
+}
+
+# ── The happy path ────────────────────────────────────────────────────────────
+
+api-test "a matching binding reaches the ProxyBound-only work" for EdgeServer {
+  let r = get "/internal" headers { "x-proxy-binding": "proxy-binding-http-tests-shared-secret" }
+  expect statusOk r.status
+  expect r.body.released == "internal data released to a proxy-bound request"
+}
+
+api-test "the unprotected route answers with no binding at all" for EdgeServer {
+  # The control for every 401 below: dispatch, routing and codecs are fine, so a
+  # 401 on /internal is the auth block refusing.
+  let r = get "/ping"
+  expect statusOk r.status
+  expect r.body.alive == True
+}
+
+# ── Every way the binding can be wrong ───────────────────────────────────────
+
+api-test "no binding header is a 401" for EdgeServer {
+  let r = get "/internal"
+  expect r.status == 401
+}
+
+api-test "an empty binding header is a 401" for EdgeServer {
+  let r = get "/internal" headers { "x-proxy-binding": "" }
+  expect r.status == 401
+}
+
+api-test "a wrong binding is a 401" for EdgeServer {
+  let r = get "/internal" headers { "x-proxy-binding": "not-the-shared-secret" }
+  expect r.status == 401
+}
+
+api-test "a binding differing in one character is a 401" for EdgeServer {
+  # The compare is constant-time and total: a near-miss is as wrong as a
+  # completely different value.
+  let r = get "/internal" headers { "x-proxy-binding": "proxy-binding-http-tests-shared-secreT" }
+  expect r.status == 401
+}
+
+api-test "a case-shifted binding is a 401" for EdgeServer {
+  let r = get "/internal" headers { "x-proxy-binding": "PROXY-BINDING-HTTP-TESTS-SHARED-SECRET" }
+  expect r.status == 401
+}
+
+api-test "a prefix or an extension of the binding is a 401" for EdgeServer {
+  # Both directions: the whole value is compared, so neither truncating nor
+  # appending gets in.
+  let short = get "/internal" headers { "x-proxy-binding": "proxy-binding-http-tests-shared" }
+  expect short.status == 401
+  let long = get "/internal" headers { "x-proxy-binding": "proxy-binding-http-tests-shared-secret-and-more" }
+  expect long.status == 401
+}
+
+api-test "a whitespace-padded binding is a 401" for EdgeServer {
+  # No trimming anywhere on the path: the header value is compared as it arrived.
+  let trailing = get "/internal" headers { "x-proxy-binding": "proxy-binding-http-tests-shared-secret " }
+  expect trailing.status == 401
+  let leading = get "/internal" headers { "x-proxy-binding": " proxy-binding-http-tests-shared-secret" }
+  expect leading.status == 401
+}
+
+api-test "a refused binding is a 401, not a 500" for EdgeServer {
+  # A failing `check` is a refusal, not an exception: a 500 here would hand any
+  # client a way to turn the edge check into noise (and into a stack trace).
+  let r = get "/internal" headers { "x-proxy-binding": "wrong" }
+  expect r.status == 401
+  # The refusal message comes from the check itself and names no secret material.
+  expect r.body.error == "proxy binding does not match"
+}
+
+api-test "a session cookie is not a substitute for the binding" for EdgeServer {
+  # The topology story and the credential story are separate. Being logged in
+  # says nothing about which network path the request took.
+  let r = get "/internal" cookie "__Host-session=anything"
+  expect r.status == 401
+}
+
+api-test "a refused request leaves the next good one alone" for EdgeServer {
+  let bad = get "/internal" headers { "x-proxy-binding": "wrong" }
+  expect bad.status == 401
+  let good = get "/internal" headers { "x-proxy-binding": "proxy-binding-http-tests-shared-secret" }
+  expect statusOk good.status
+  expect good.body.released == "internal data released to a proxy-bound request"
+}

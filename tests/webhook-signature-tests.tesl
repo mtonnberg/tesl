@@ -1,0 +1,357 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# webhook-signature-tests.tesl
+#
+# Request-signature authentication: an inbound webhook whose `auth` block
+# verifies an HMAC over the RAW request body before anything trusts the payload.
+# This is the third machine-credential shape the stdlib supports (alongside the
+# hashed-token lookup and the proxy binding), and it had no Tesl-level coverage
+# at all: `Crypto.signWith` / `Crypto.checkSignature` were exercised only at the
+# Racket level (`tests/crypto-runtime-tests.rkt`) plus a lesson with no test
+# blocks, and `Crypto.signatureBase64` / `Crypto.signatureFromBase64` — the
+# Standard Webhooks transport — appeared in NO .tesl file in the repo.
+#
+# Both transports are covered here because they are separate parsers:
+#   hex    — the Stripe/GitHub `X-Signature: <hex>` shape
+#   base64 — the Standard Webhooks `webhook-signature: <base64>` shape
+#
+# What is asserted, at runtime:
+#   - a correct signature over the body authenticates, in BOTH transports
+#   - a body tampered with after signing is a 401 — the property the whole
+#     mechanism exists for
+#   - a signature that is valid for a DIFFERENT payload is a 401 (no replay
+#     across events)
+#   - the wrong key, a truncated tag, malformed hex, malformed base64 and a
+#     missing header are each a 401, never a 500 (a malformed tag must not be a
+#     denial-of-service handed to any caller)
+#   - the two transports do not accept each other's encodings
+#   - the raw body the auth block verifies over is the bytes that arrived
+# ─────────────────────────────────────────────────────────────────────────────
+
+module WebhookSignatureTests exposing [WebhookServer]
+
+import Tesl.Prelude exposing [Bool(..), String]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.String exposing [String.length, String.slice, String.toUpper]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Crypto exposing [
+  Secret,
+  Crypto.signWith,
+  Crypto.checkSignature,
+  Crypto.signatureHex,
+  Crypto.signatureFromHex,
+  Crypto.signatureBase64,
+  Crypto.signatureFromBase64,
+]
+import Tesl.ApiTest exposing [statusOk]
+
+# ── Keys ──────────────────────────────────────────────────────────────────────
+#
+# Via a helper: a string literal in a key position is what SEC003 is for. In
+# production the sender's secret comes from `requireSecret`, one per sender.
+
+fn makeSecret(s: String) -> Secret =
+  Secret s
+
+fn senderKey() -> Secret =
+  makeSecret "webhook-signature-tests-sender-key"
+
+fn otherSenderKey() -> Secret =
+  makeSecret "webhook-signature-tests-other-sender-key"
+
+# ── Signing, as the SENDER does it ────────────────────────────────────────────
+#
+# `Crypto.signWith` is symmetric (HMAC-SHA256): whoever can verify can also
+# sign, which is why it is not called `sign`. These helpers stand in for the
+# other side of the wire, and the tests call them to build the header.
+
+fn hexSignature(key: Secret, payload: String) -> String =
+  Crypto.signatureHex (Crypto.signWith key payload)
+
+fn base64Signature(key: Secret, payload: String) -> String =
+  Crypto.signatureBase64 (Crypto.signWith key payload)
+
+# ── Facts and wire types ──────────────────────────────────────────────────────
+
+fact SignedBySender (payload: String)
+
+fact RawBody (raw: String)
+
+record Ack {
+  seen: String
+}
+
+codec Ack {
+  toJson {
+    seen -> "seen" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+# A record of its own for the base64 route: two endpoints sharing one handler
+# signature are paired by POSITION alone, which is what W095 warns about.
+record Base64Ack {
+  seen: String
+}
+
+codec Base64Ack {
+  toJson {
+    seen -> "seen" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+record RawEcho {
+  raw: String
+  hex: String
+  base64: String
+}
+
+codec RawEcho {
+  toJson {
+    raw -> "raw" with_codec stringCodec
+    hex -> "hex" with_codec stringCodec
+    base64 -> "base64" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+# ── The auth blocks: header + raw body → verified payload ─────────────────────
+#
+# `check Crypto.checkSignature` recomputes the HMAC over the body that ARRIVED
+# and compares constant-time; its refusal is a 401. The value it yields carries
+# `Authentic`, and the handler can name the payload only through this block.
+
+auth hexSignedWebhook(request: HttpRequest) -> payload: String ::: SignedBySender payload =
+  case Dict.lookup "x-signature" request.headers of
+    Nothing -> fail 401 "no signature"
+    Something hex ->
+      let verified = check Crypto.checkSignature (senderKey()) (Crypto.signatureFromHex hex) request.body
+      ok verified ::: SignedBySender payload
+
+auth base64SignedWebhook(request: HttpRequest) -> payload: String ::: SignedBySender payload =
+  case Dict.lookup "webhook-signature" request.headers of
+    Nothing -> fail 401 "no signature"
+    Something b64 ->
+      let verified = check Crypto.checkSignature (senderKey()) (Crypto.signatureFromBase64 b64) request.body
+      ok verified ::: SignedBySender payload
+
+# Unverified on purpose: it exists so a test can pin WHAT the raw body is, and
+# so the signature a test builds is over the same string the auth blocks above
+# verify. It signs nothing and trusts nothing.
+auth rawBodyEcho(request: HttpRequest) -> raw: String ::: RawBody raw =
+  ok request.body ::: RawBody raw
+
+# ── Handlers ──────────────────────────────────────────────────────────────────
+
+handler post hexEvent(payload: String ::: SignedBySender payload) -> Ack =
+  Ack { seen: payload }
+
+handler post base64Event(payload: String ::: SignedBySender payload) -> Base64Ack =
+  Base64Ack { seen: payload }
+
+handler post echoRawBody(raw: String ::: RawBody raw) -> RawEcho =
+  RawEcho {
+    raw: raw,
+    hex: hexSignature (senderKey()) raw,
+    base64: base64Signature (senderKey()) raw
+  }
+
+api WebhookApi {
+  post "/hook/hex"
+    auth payload: String ::: SignedBySender payload via hexSignedWebhook
+    -> Ack
+
+  post "/hook/base64"
+    auth payload: String ::: SignedBySender payload via base64SignedWebhook
+    -> Base64Ack
+
+  post "/echo"
+    auth raw: String ::: RawBody raw via rawBodyEcho
+    -> RawEcho
+}
+
+server WebhookServer for WebhookApi {
+  hexEvent
+  base64Event
+  echoRawBody
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Unit: the two transports of one tag
+# ═══════════════════════════════════════════════════════════════════════════
+
+test "HMAC-SHA256 is deterministic and key-separated" {
+  let payload = "{\"event\":\"ping\"}"
+  expect hexSignature (senderKey()) payload == hexSignature (senderKey()) payload
+  expect hexSignature (senderKey()) payload != hexSignature (otherSenderKey()) payload
+  # 32 bytes as hex.
+  expect String.length (hexSignature (senderKey()) payload) == 64
+}
+
+test "hex and base64 are two encodings of the same tag" {
+  let payload = "{\"event\":\"ping\"}"
+  let hex = hexSignature (senderKey()) payload
+  let b64 = base64Signature (senderKey()) payload
+  expect hex != b64
+  # 32 bytes as base64 (unpadded or padded, depending on the encoder) is far
+  # shorter than the hex form — asserted so a silent change of encoding shows up.
+  expect String.length b64 < String.length hex
+}
+
+test "a one-character change to the payload changes the tag" {
+  let payload = "{\"event\":\"ping\"}"
+  let tampered = "{\"event\":\"pong\"}"
+  expect hexSignature (senderKey()) payload != hexSignature (senderKey()) tampered
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# The raw body the auth block verifies over
+# ═══════════════════════════════════════════════════════════════════════════
+
+api-test "the auth block sees the bytes that arrived" for WebhookServer {
+  # Pinned, because every signature below is computed over this exact string: if
+  # the api-test harness ever re-encodes a body differently, the signature tests
+  # would start failing for a reason that has nothing to do with signatures.
+  let e = post "/echo" body { "event": "ping" }
+  expect statusOk e.status
+  expect e.body.raw == "{\"event\":\"ping\"}"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Hex transport
+# ═══════════════════════════════════════════════════════════════════════════
+
+api-test "a correct hex signature authenticates the webhook" for WebhookServer {
+  let payload = "{\"event\":\"ping\"}"
+  let r = post "/hook/hex" headers { "x-signature": hexSignature (senderKey()) payload } body { "event": "ping" }
+  expect statusOk r.status
+  expect r.body.seen == payload
+}
+
+api-test "no signature header is a 401" for WebhookServer {
+  let r = post "/hook/hex" body { "event": "ping" }
+  expect r.status == 401
+}
+
+api-test "an empty hex signature is a 401" for WebhookServer {
+  let r = post "/hook/hex" headers { "x-signature": "" } body { "event": "ping" }
+  expect r.status == 401
+}
+
+api-test "malformed hex is a 401, not a 500" for WebhookServer {
+  # `Crypto.signatureFromHex` never raises on malformed input — the verification
+  # just fails. A 500 here would be a denial-of-service handed to any caller.
+  let notHex = post "/hook/hex" headers { "x-signature": "zzzz-not-hex-at-all" } body { "event": "ping" }
+  expect notHex.status == 401
+  let oddLength = post "/hook/hex" headers { "x-signature": "abc" } body { "event": "ping" }
+  expect oddLength.status == 401
+}
+
+api-test "a truncated but valid-prefix signature is a 401" for WebhookServer {
+  let payload = "{\"event\":\"ping\"}"
+  let full = hexSignature (senderKey()) payload
+  let truncated = String.slice full 0 32
+  let r = post "/hook/hex" headers { "x-signature": truncated } body { "event": "ping" }
+  expect r.status == 401
+}
+
+api-test "a signature from the wrong key is a 401" for WebhookServer {
+  let payload = "{\"event\":\"ping\"}"
+  let r = post "/hook/hex" headers { "x-signature": hexSignature (otherSenderKey()) payload } body { "event": "ping" }
+  expect r.status == 401
+}
+
+api-test "a body tampered with after signing is a 401" for WebhookServer {
+  # THE property. The signature is a genuine one the sender produced — for a
+  # different body. Verifying over the bytes that arrived is what catches it.
+  let signedPayload = "{\"event\":\"ping\"}"
+  let r = post "/hook/hex" headers { "x-signature": hexSignature (senderKey()) signedPayload } body { "event": "pong" }
+  expect r.status == 401
+}
+
+api-test "a signature for another event does not replay onto this one" for WebhookServer {
+  # Same shape from the other direction: a captured header from event A presented
+  # with event B's body.
+  let other = "{\"event\":\"charge.refunded\"}"
+  let r = post "/hook/hex" headers { "x-signature": hexSignature (senderKey()) other } body { "event": "charge.succeeded" }
+  expect r.status == 401
+}
+
+api-test "an upper-cased hex tag still verifies" for WebhookServer {
+  # Pinned because it is a real interop question, not an assumption: the
+  # comparison is over DECODED bytes, so `Crypto.signatureFromHex` accepts either
+  # hex case and a sender that upper-cases its tag is not mysteriously refused.
+  # If this ever flips it is a deliberate change, not drift.
+  let payload = "{\"event\":\"ping\"}"
+  let shouty = String.toUpper (hexSignature (senderKey()) payload)
+  let r = post "/hook/hex" headers { "x-signature": shouty } body { "event": "ping" }
+  expect statusOk r.status
+  expect r.body.seen == payload
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Base64 transport (Standard Webhooks)
+# ═══════════════════════════════════════════════════════════════════════════
+
+api-test "a correct base64 signature authenticates the webhook" for WebhookServer {
+  let payload = "{\"event\":\"ping\"}"
+  let r = post "/hook/base64" headers { "webhook-signature": base64Signature (senderKey()) payload } body { "event": "ping" }
+  expect statusOk r.status
+  expect r.body.seen == payload
+}
+
+api-test "malformed base64 is a 401, not a 500" for WebhookServer {
+  let notB64 = post "/hook/base64" headers { "webhook-signature": "!!!not-base64!!!" } body { "event": "ping" }
+  expect notB64.status == 401
+  let empty = post "/hook/base64" headers { "webhook-signature": "" } body { "event": "ping" }
+  expect empty.status == 401
+}
+
+api-test "a base64 signature from the wrong key is a 401" for WebhookServer {
+  let payload = "{\"event\":\"ping\"}"
+  let r = post "/hook/base64" headers { "webhook-signature": base64Signature (otherSenderKey()) payload } body { "event": "ping" }
+  expect r.status == 401
+}
+
+api-test "a tampered body is a 401 in the base64 transport too" for WebhookServer {
+  let signedPayload = "{\"event\":\"ping\"}"
+  let r = post "/hook/base64" headers { "webhook-signature": base64Signature (senderKey()) signedPayload } body { "event": "pong" }
+  expect r.status == 401
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# The transports do not cross
+# ═══════════════════════════════════════════════════════════════════════════
+
+api-test "a hex tag on the base64 route is a 401" for WebhookServer {
+  let payload = "{\"event\":\"ping\"}"
+  let r = post "/hook/base64" headers { "webhook-signature": hexSignature (senderKey()) payload } body { "event": "ping" }
+  expect r.status == 401
+}
+
+api-test "a base64 tag on the hex route is a 401" for WebhookServer {
+  let payload = "{\"event\":\"ping\"}"
+  let r = post "/hook/hex" headers { "x-signature": base64Signature (senderKey()) payload } body { "event": "ping" }
+  expect r.status == 401
+}
+
+api-test "the wrong header name is a 401 on both routes" for WebhookServer {
+  # Each route reads ONE header. A sender using the other convention is refused
+  # rather than silently unauthenticated-but-accepted.
+  let payload = "{\"event\":\"ping\"}"
+  let hexRoute = post "/hook/hex" headers { "webhook-signature": hexSignature (senderKey()) payload } body { "event": "ping" }
+  expect hexRoute.status == 401
+  let b64Route = post "/hook/base64" headers { "x-signature": base64Signature (senderKey()) payload } body { "event": "ping" }
+  expect b64Route.status == 401
+}
+
+api-test "a refused webhook leaves the next good one alone" for WebhookServer {
+  let payload = "{\"event\":\"ping\"}"
+  let bad = post "/hook/hex" headers { "x-signature": "deadbeef" } body { "event": "ping" }
+  expect bad.status == 401
+  let good = post "/hook/hex" headers { "x-signature": hexSignature (senderKey()) payload } body { "event": "ping" }
+  expect statusOk good.status
+  expect good.body.seen == payload
+}

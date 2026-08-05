@@ -902,8 +902,23 @@
              (named-value-value operand)
              (named-value-bindings operand))]
     [(check-ok? operand)
-     ;; Codec via-check results: unwrap to raw value + facts
-     (values #f (check-ok-value operand) (check-ok-bindings operand))]
+     ;; Codec via-check results: unwrap to raw value + facts.
+     ;;
+     ;; RECURSIVELY, because a `check` that names its subject wraps the value
+     ;; TWICE: `check Crypto.checkSignature …` yields
+     ;; `(check-ok (named-value Authentic1809 "thing-1" …) …)`, so a single
+     ;; unwrap left a `named-value` STRUCT where the field's String belonged.
+     ;; It compared unequal to every row (`equal?` on a struct vs a string) and
+     ;; the query silently matched nothing — a `where t.id == verified` after a
+     ;; `check` returned "no rows" instead of the row, with no error to notice.
+     ;; That is the shape every credential-verifying auth block has (verify the
+     ;; token, then look the row up by what was verified), and it read as "the
+     ;; credential is invalid" rather than "the query dropped the operand".
+     (define-values (inner-name inner-value inner-bindings)
+       (operand-name+value (check-ok-value operand)))
+     (values inner-name
+             inner-value
+             (merge-binding-tables (check-ok-bindings operand) inner-bindings))]
     [(and (symbol? operand)
           (hash-has-key? (current-proof-env) operand))
      (values operand

@@ -1177,6 +1177,39 @@ fn f(m: Maybe Int) -> Int =
 
 (* ── Suite ───────────────────────────────────────────────────────────────── *)
 
+(* An api-test body calling a ZERO-ARG helper in ARGUMENT position: `()` parses
+   as one empty-list argument, and the api-test emitter used to pass it through,
+   producing `(machineKey (list))` against a zero-arity Racket define. Every such
+   test died at runtime with "arity mismatch; expected 0, given 1" — and a
+   zero-arg helper (a key, a fixture, a clock) is the commonest thing a test body
+   calls, so this silently blocked the shape rather than failing to compile. The
+   ordinary emit paths have always applied this `is_unit_arg` rule
+   (`emit_racket.ml`'s emit_arg); the api-test path now shares it. *)
+let test_api_test_zero_arg_call_in_argument_position () =
+  let src = {|module ZeroArgArg exposing [ProbeServer]
+import Tesl.Prelude exposing [String]
+handler get echo() -> String = "ok"
+fn suffix() -> String = "-suffix"
+fn joinWith(a: String, b: String) -> String = a ++ b
+api ProbeApi {
+  get "/echo" -> String
+}
+server ProbeServer for ProbeApi {
+  echo
+}
+api-test "a zero-arg helper in argument position" for ProbeServer {
+  let built = joinWith "base" (suffix())
+  let r = get "/echo"
+  expect r.status == 200
+  expect built == "base-suffix"
+}
+|} in
+  let out = compile_ok src "api-test zero-arg argument" in
+  assert_contains ~name:"the zero-arg call is emitted with no argument"
+    out "(suffix)";
+  assert_not_contains ~name:"no empty-list argument is passed to a zero-arg call"
+    out "(suffix (list))"
+
 let () =
   Alcotest.run "Emit" [
     "require", [
@@ -1285,6 +1318,10 @@ let () =
     "eok-proof", [
       Alcotest.test_case "EOk check-value strips check wrapper" `Quick test_eok_check_value_strips_check_wrapper;
       Alcotest.test_case "checkout (user fn) not treated as check keyword" `Quick test_eok_checkout_not_stripped;
+    ];
+    "api-test-emit", [
+      Alcotest.test_case "zero-arg call in argument position drops the unit arg" `Quick
+        test_api_test_zero_arg_call_in_argument_position;
     ];
     "issue-26-ambiguous-dot", [
       Alcotest.test_case "field read on select-bound entity emits typed dot hint" `Quick test_issue26_field_read_typed_dot_hint;

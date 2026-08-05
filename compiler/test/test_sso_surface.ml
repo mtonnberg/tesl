@@ -420,6 +420,43 @@ let t_login_requires_sso () =
 let t_login_machine_licenses_minting () =
   should_pass (minting_server_prog "" "loginMethods [Sso, Machine]")
 
+(* A server program containing a PASSWORD-CHECK site (`Crypto.checkPassword`)
+   rather than the cookie chokepoint — the other kind of site the allowlist
+   scans for.  A machine credential verified as a hashed-token lookup is exactly
+   this shape (`manual/sso.md`: "a hashed token, `Crypto.checkSignature`, or
+   `Crypto.checkPassword`"). *)
+let pw_checking_server_prog clause =
+  Printf.sprintf
+    "module Probe exposing []\n\
+     import Tesl.Prelude exposing [String, Bool(..)]\n\
+     import Tesl.Maybe exposing [Maybe(..)]\n\
+     import Tesl.Crypto exposing [PasswordHash, Crypto.checkPassword]\n\
+     import Tesl.Database exposing [Database, DatabaseBackend, Memory]\n\
+     import Tesl.App exposing [App]\n\
+     handler get healthCheck() -> String requires [] = \"ok\"\n\
+     fn verify(stored: Maybe PasswordHash, candidate: String) -> Maybe PasswordHash requires [] =\n\
+    \  check Crypto.checkPassword stored candidate\n\
+     api HealthApi {\n  get \"/health\" -> String\n}\n\
+     server HealthServer for HealthApi {\n  healthCheck\n  %s\n}\n\
+     database ProbeDb = Database {\n  entities: []\n  backend: Memory\n}\n\
+     main() -> App requires [] =\n  App {\n    database: ProbeDb\n    api: HealthServer\n    port: 8086\n  }\n"
+    clause
+
+(* #50.2: `Machine` is its own method, so it needs `Sso` in the list like every
+   other member — the clause is the SSO-era declaration. *)
+let t_login_machine_still_requires_sso () =
+  should_fail "without .Sso" (server_prog "loginMethods [Machine]")
+
+(* The allowlist scans for password calls as well as the cookie chokepoint, so
+   `loginMethods [Sso]` alone must refuse a `Crypto.checkPassword` site too. *)
+let t_login_sso_rejects_password_check () =
+  should_fail "no method in this server" (pw_checking_server_prog "loginMethods [Sso]")
+
+(* And `Machine` licenses it: verifying a per-installation token against a stored
+   hash is a sanctioned machine-credential check, not a human password login. *)
+let t_login_machine_licenses_password_check () =
+  should_pass (pw_checking_server_prog "loginMethods [Sso, Machine]")
+
 let () =
   run "sso-surface" [
     "positive", [
@@ -519,6 +556,12 @@ let () =
         t_login_unknown_method;
       test_case "Machine licenses a session-minting site" `Quick
         t_login_machine_licenses_minting;
+      test_case "Machine without Sso is a compile error" `Quick
+        t_login_machine_still_requires_sso;
+      test_case "loginMethods [Sso] rejects a Crypto.checkPassword site" `Quick
+        t_login_sso_rejects_password_check;
+      test_case "Machine licenses a hashed-token password check" `Quick
+        t_login_machine_licenses_password_check;
       test_case "loginMethods without Sso is a compile error" `Quick
         t_login_requires_sso;
     ];

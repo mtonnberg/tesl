@@ -7671,7 +7671,17 @@ and emit_api_test_expr ctx ~server_name ~capabilities e =
           emit ctx renamed
         | EConstructor { name; _ } -> emit ctx name
         | _ -> emit_api_test_expr ctx ~server_name ~capabilities head);
-       List.iter (fun arg -> emit ctx " "; emit_api_test_arg ctx ~server_name ~capabilities arg) args;
+       (* A ZERO-ARG call (`machineKey()`) parses as one empty-list argument, and a
+          zero-arg Racket define takes none — so the argument must be dropped, the
+          same `is_unit_arg` rule emit_expr/emit_arg apply on the ordinary paths
+          (`emit_racket.ml:3422`).  Without it, `hmacTokenFor (machineKey()) id`
+          inside an api-test body emitted `(machineKey (list))` and every such test
+          died with "machineKey: arity mismatch; expected 0, given 1" — a helper
+          called with no arguments is the commonest shape in a test body (keys,
+          fixtures, clocks), so this silently blocked calling any of them. *)
+       let is_unit_arg = match args with [ EList { elems = []; _ } ] -> true | _ -> false in
+       if not is_unit_arg then
+         List.iter (fun arg -> emit ctx " "; emit_api_test_arg ctx ~server_name ~capabilities arg) args;
        emit ctx ")")
   (* `case ... of` used as a VALUE (e.g. a `let`'s right-hand side), not as its
      own statement (`TsCase` above already handles that shape). Without this

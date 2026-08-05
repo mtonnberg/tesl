@@ -2891,7 +2891,7 @@
 ;; This enables dot-access on HttpRequest values:
 ;;   request.cookies  → pre-parsed Dict of cookie key→value pairs
 ;;   request.headers  → Dict of header name→value (names lowercased)
-;; (request.queryParameters is not yet exposed — see roadmap/next.)
+;;   request.body     → the RAW request body, as it arrived, as a String
 ;;; ── #51: client address + the trusted-proxy edge declaration ─────────────────
 ;;;
 ;;; `HttpRequest` cannot see who its client is when a reverse proxy (the
@@ -2936,11 +2936,33 @@
          [else (string-trim (car rev))]))]))
 
 (register-runtime-type/runtime! 'HttpRequest dsl-request?)
+;; `body` is the RAW request body, exactly as it arrived, decoded as UTF-8 with
+;; `#\?` for any invalid byte (never a raise — a malformed body must not be a 500
+;; before the handler can refuse it).
+;;
+;; It is here because the checker has always ACCEPTED `request.body`
+;; (`checker.ml`'s `opaque_special_fields`) while the runtime never registered
+;; it, so an `auth` block that verified an inbound webhook signature over the
+;; body — the shape `Crypto.signatureFromHex`'s own docs describe ("a webhook's
+;; X-Signature header (Stripe, GitHub)") — compiled clean and then died with
+;; "dot: unknown field body for record/entity type HttpRequest" at request time.
+;; A MAC has to be computed over the bytes that arrived, not over a re-encoded
+;; record, so there is no way to write that auth block without this accessor.
+;;
+;; NOTE: `path` and `method_` are on the same checker list and are still NOT
+;; registered here (they typecheck and fail at runtime the same way `body` did).
+;; Both are a public-surface decision — a path as segments or as a string — so
+;; they are left alone rather than guessed at.
 (register-field-access! 'HttpRequest
-                        '(cookies headers queryParameters clientAddress)
+                        '(cookies headers queryParameters clientAddress body)
                         (lambda (value field-name)
                           (case field-name
                             [(headers) (dsl-request-headers value)]
                             [(queryParameters) (dsl-request-query value)]
                             [(clientAddress) (client-address-of value)]
+                            [(body) (let ([raw (dsl-request-body value)])
+                                      (cond
+                                        [(bytes? raw) (bytes->string/utf-8 raw #\?)]
+                                        [(string? raw) raw]
+                                        [else ""]))]
                             [else      (dsl-request-cookies value)])))

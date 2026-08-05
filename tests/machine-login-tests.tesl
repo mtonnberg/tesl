@@ -1,0 +1,1193 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# machine-login-tests.tesl
+#
+# `loginMethods [Sso, Machine]` (#50.2): a per-installation MACHINE credential —
+# a bearer token the app verifies against STORED MATERIAL — carried end to end
+# through the real HTTP boundary. Before this file the Machine member had exactly
+# one compile-time assertion (`compiler/test/test_sso_surface.ml`, "Machine
+# licenses a session-minting site") and NO runtime coverage at all: nothing
+# proved a machine credential actually authenticates, actually refuses, or
+# actually stays inside its tenant when the code runs.
+#
+# Two credential shapes are exercised, because the language supports both and
+# they fail differently:
+#
+#   FLAVOUR A — hashed-token lookup.  The store keeps only
+#     `Crypto.fingerprint token`; the auth block fingerprints what arrived and
+#     looks the row up by digest. The plaintext exists only in the client's
+#     config, so a database leak cannot be replayed.
+#
+#   FLAVOUR B — HMAC-bound token.  The token is `<installId>.<hex-tag>`, and
+#     `check Crypto.checkSignature` mints `Authentic <installId>` from the id
+#     INSIDE the credential. This is the subject-bound shape: the identity is not
+#     a free argument the caller supplies alongside a verification, so swapping
+#     the id invalidates the tag. The `install-b tag on install-a's id` test below
+#     is the whole point.
+#
+# What is asserted, at runtime, over the real dispatch path:
+#   - a valid token authenticates and yields the right installation and org
+#   - every malformed / absent / wrong / near-miss / revoked credential is a 401,
+#     including a token that is a strict PREFIX of a valid one
+#   - the scheme is matched case-insensitively (RFC 7235) but nothing else is
+#     tolerated: no scheme, wrong scheme, empty token, trailing junk are all 401
+#   - TENANCY: two installations in different orgs see disjoint data, and a write
+#     by one is invisible to the other. The org is read off the witness, never off
+#     the request
+#   - SCOPES: a read-only installation gets 403 on a write route while a
+#     read+write installation in the SAME org gets 200 — so the refusal is the
+#     scope, not the tenant
+#   - the two credential kinds do not cross: a session cookie does not
+#     authenticate a machine route, a bearer token does not authenticate a session
+#     route, and a valid cookie cannot rescue a bad bearer on a machine route
+#   - a machine request mints no session cookie (no Set-Cookie on its responses)
+#   - the store holds no plaintext token
+#
+# The compile-time half — `loginMethods [Sso]` refusing a session-minting site,
+# `Machine` licensing it, an unknown member rejected — lives in
+# `compiler/test/test_sso_surface.ml`.
+# ─────────────────────────────────────────────────────────────────────────────
+
+module MachineLoginTests exposing [MachineServer]
+
+import Tesl.Prelude exposing [Bool(..), String, List]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.List exposing [
+  List.member,
+  List.head,
+  List.last,
+  List.length,
+  List.map,
+]
+import Tesl.String exposing [
+  String.startsWith,
+  String.toLower,
+  String.length,
+  String.slice,
+  String.split,
+  String.contains,
+  String.join,
+  String.isEmpty,
+  String.fromInt,
+]
+import Tesl.Dict exposing [Dict, Dict.singleton, Dict.lookup]
+import Tesl.Json exposing [stringCodec, boolCodec]
+import Tesl.Time exposing [time]
+import Tesl.Crypto exposing [
+  Secret,
+  Crypto.fingerprint,
+  Crypto.signWith,
+  Crypto.checkSignature,
+  Crypto.signatureHex,
+  Crypto.signatureFromHex,
+]
+import Tesl.JWT exposing [jwt, JWT.sign, JWT.verify]
+import Tesl.Http exposing [
+  HttpRequest,
+  cookieCap,
+  Http.setSessionCookie,
+  Http.sessionToken,
+]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.ApiTest exposing [statusOk, responseCookie]
+
+# ── Capabilities ──────────────────────────────────────────────────────────────
+
+# The human half of this server (there is one: an extension host authenticates
+# both people and apps) needs the session trio. The machine half needs only
+# `dbRead` — verifying a bearer token is a lookup plus a constant-time compare,
+# no clock and no cookie.
+capability sessions implies jwt, time, cookieCap
+
+# ── Keys ──────────────────────────────────────────────────────────────────────
+#
+# Through a helper rather than `Secret "…"` at each call site: a string literal in
+# a key position is what the SEC003 lint is for, and a test corpus that trips its
+# own security lint teaches the reader to ignore lints.
+
+fn makeSecret(s: String) -> Secret =
+  Secret s
+
+fn sessionKey() -> Secret =
+  makeSecret "machine-login-tests-session-key"
+
+# The HMAC key for flavour B. A real deployment reads this with
+# `requireSecret "MACHINE_TOKEN_KEY"`.
+fn machineKey() -> Secret =
+  makeSecret "machine-login-tests-token-key"
+
+# A DIFFERENT key, used only to forge: a token signed with it must not verify.
+fn attackerKey() -> Secret =
+  makeSecret "machine-login-tests-attacker-key"
+
+# ── Scopes as an ADT, granted scopes as facts ────────────────────────────────
+#
+# The scope-to-proof mapping is the reason to do this in Tesl: each granted scope
+# is a `fact`, so an app-facing handler cannot reach privileged work without a
+# witness minted from the credential, and a forgotten scope check is a compile
+# error rather than a runtime 403 gap.
+
+type Scope
+  = ReadWidgets
+  | WriteWidgets
+
+record Caller {
+  install: String
+  orgId: String
+  granted: List Scope
+}
+
+# The witness the auth block mints. A handler can name its caller and its tenant
+# ONLY through this — there is no other way into a handler body.
+fact MachineCaller (c: Caller)
+
+fact MayUse (c: Caller) (s: Scope)
+
+check mayReadWidgets(c: Caller) -> c: Caller ::: MayUse c ReadWidgets =
+  if List.member ReadWidgets c.granted then
+    ok c ::: MayUse c ReadWidgets
+  else
+    fail 403 "missing scope widgets:read"
+
+check mayWriteWidgets(c: Caller) -> c: Caller ::: MayUse c WriteWidgets =
+  if List.member WriteWidgets c.granted then
+    ok c ::: MayUse c WriteWidgets
+  else
+    fail 403 "missing scope widgets:write"
+
+# ── The store ─────────────────────────────────────────────────────────────────
+#
+# `tokenFingerprint` is a DIGEST, never the token: `Crypto.randomToken` plus
+# storing only `Crypto.fingerprint` is the documented shape for a long-lived
+# revocable credential, and it is what makes revocation a row update rather than
+# a key rotation.
+
+entity Installation table "installations" primaryKey id {
+  id: String
+  orgId: String
+  tokenFingerprint: String
+  scopes: String
+  revoked: Bool
+}
+
+entity Widget table "widgets" primaryKey id {
+  id: String
+  orgId: String
+  name: String
+}
+
+database MarketplaceDb = Database {
+  schema: "marketplace"
+  entities: [Installation, Widget]
+  backend: Memory
+}
+
+# ── Fixture tokens ────────────────────────────────────────────────────────────
+#
+# Literal, because a test must be able to present the same token twice. In
+# production these come from `Crypto.randomToken` at install time and are shown
+# to the installer exactly once.
+
+fn tokenAlphaWrite() -> String =
+  "insta-4Zq7v1oXk2pR9sT0uW3yB6cD8eF1gH5j"
+
+fn tokenAlphaReadOnly() -> String =
+  "instd-7Hj2k9LmN4pQ6rS8tU0vW2xY5zA1bC3d"
+
+fn tokenBetaWrite() -> String =
+  "instb-2Bd5f8HkM1nP4qR7sT9uV3wX6yZ0aC8e"
+
+fn tokenRevoked() -> String =
+  "instc-9Zx6c3VbN8mK5jH2gF7dS4aQ1wE0rT6y"
+
+# ── Fixtures ──────────────────────────────────────────────────────────────────
+#
+# One function, called from every `seed { }` block, so the fixture set is defined
+# once. `api-test` gives each block a fresh in-memory database, so seeding is per
+# test and never shared.
+
+fn seedFixtures() -> Bool
+  requires [dbWrite] =
+  let installs = [
+    Installation {
+      id: "install-a",
+      orgId: "org-alpha",
+      tokenFingerprint: Crypto.fingerprint (tokenAlphaWrite()),
+      scopes: "read,write",
+      revoked: False
+    },
+    Installation {
+      id: "install-b",
+      orgId: "org-beta",
+      tokenFingerprint: Crypto.fingerprint (tokenBetaWrite()),
+      scopes: "read,write",
+      revoked: False
+    },
+    Installation {
+      id: "install-c",
+      orgId: "org-alpha",
+      tokenFingerprint: Crypto.fingerprint (tokenRevoked()),
+      scopes: "read,write",
+      revoked: True
+    },
+    Installation {
+      id: "install-d",
+      orgId: "org-alpha",
+      tokenFingerprint: Crypto.fingerprint (tokenAlphaReadOnly()),
+      scopes: "read",
+      revoked: False
+    }
+  ]
+  let widgets = [
+    Widget { id: "widget-1", orgId: "org-alpha", name: "alpha-one" },
+    Widget { id: "widget-2", orgId: "org-alpha", name: "alpha-two" },
+    Widget { id: "widget-3", orgId: "org-beta", name: "beta-one" }
+  ]
+  insertMany installs in Installation
+  insertMany widgets in Widget
+  True
+
+# ── Reading the credential off the request ───────────────────────────────────
+#
+# One function, so the parsing rule is stated once and tested directly. The
+# scheme is matched case-insensitively (RFC 7235 says the scheme is
+# case-insensitive, and real clients send `bearer`), and NOTHING else is
+# tolerated: the token is whatever follows exactly one space, with no trimming,
+# so `Bearer  tok` (two spaces) and `Bearer tok ` (trailing space) are different
+# strings from `Bearer tok` and do not authenticate.
+
+fn bearerCredential(request: HttpRequest) -> Maybe String =
+  case Dict.lookup "authorization" request.headers of
+    Nothing -> Nothing
+    Something raw ->
+      if String.startsWith (String.toLower raw) "bearer " then
+        let token = String.slice raw 7 (String.length raw)
+        if String.isEmpty token then
+          Nothing
+        else
+          Something token
+      else
+        Nothing
+
+fn scopesOf(stored: String) -> List Scope =
+  if String.contains stored "write" then
+    [ReadWidgets, WriteWidgets]
+  else
+    [ReadWidgets]
+
+fn callerOf(inst: Installation) -> Caller =
+  Caller { install: inst.id, orgId: inst.orgId, granted: scopesOf inst.scopes }
+
+# The store lookup, as a function, so a test can ask what the store holds without
+# reaching for the query grammar inside a test body.  Returns "" for no row.
+fn installationByStored(stored: String) -> String
+  requires [dbRead] =
+  case selectOne i from Installation where i.tokenFingerprint == stored of
+    Nothing -> ""
+    Something inst -> inst.id
+
+# A `check`-bound local used as a SQL VALUE OPERAND — the shape flavour B's auth
+# block has (verify the credential, then look the row up by what was verified).
+# This is a RATCHET: `check` results are wrapped twice (a `check-ok` around a
+# `named-value`), and the query layer unwrapped only one level, so the operand
+# reached the comparison as a STRUCT, matched no row, and the lookup silently
+# returned "not found" — a valid credential read as an invalid one, with no error
+# anywhere. Kept as a plain function so the regression is visible without HTTP.
+fn installationForVerifiedTag(claimedId: String, tag: String) -> String
+  requires [dbRead] =
+  let verifiedId = check Crypto.checkSignature (machineKey()) (Crypto.signatureFromHex tag) claimedId
+  case selectOne i from Installation where i.id == verifiedId of
+    Nothing -> "no-row"
+    Something inst -> inst.orgId
+
+# Revocation, as the operator would do it.  A function rather than an inline
+# statement so a test can revoke between two requests.
+fn revokeInstallation(installId: String) -> Bool
+  requires [dbWrite] =
+  update i in Installation
+    where i.id == installId
+    set i.revoked = True
+  True
+
+# ── FLAVOUR A: hashed-token lookup ───────────────────────────────────────────
+#
+# The digest of the presented token is the lookup key, so the store never holds
+# anything replayable. A row that is `revoked` fails closed — checked AFTER the
+# lookup so a revoked credential and an unknown one are indistinguishable to the
+# caller (both 401, same body).
+
+auth machineAuth(request: HttpRequest) -> c: Caller ::: MachineCaller c
+  requires [dbRead] =
+  case bearerCredential request of
+    Nothing -> fail 401 "no bearer credential"
+    Something token ->
+      let presented = Crypto.fingerprint token
+      case selectOne i from Installation where i.tokenFingerprint == presented of
+        Nothing -> fail 401 "unknown credential"
+        Something inst ->
+          if inst.revoked then
+            fail 401 "unknown credential"
+          else
+            let c = callerOf inst
+            ok c ::: MachineCaller c
+
+# ── FLAVOUR B: HMAC-bound token ──────────────────────────────────────────────
+#
+# `<installId>.<hex-tag>`, tag = HMAC(machineKey, installId). `check
+# Crypto.checkSignature` mints `Authentic installId` — the subject comes out of
+# the credential, so there is no free identity argument to substitute. A tag
+# minted for install-b cannot be presented with install-a's id.
+
+fn hmacTokenFor(key: Secret, installId: String) -> String =
+  installId ++ "." ++ Crypto.signatureHex (Crypto.signWith key installId)
+
+fn tokenInstallPart(token: String) -> Maybe String =
+  if List.length (String.split token ".") == 2 then
+    List.head (String.split token ".")
+  else
+    Nothing
+
+fn tokenTagPart(token: String) -> Maybe String =
+  if List.length (String.split token ".") == 2 then
+    List.last (String.split token ".")
+  else
+    Nothing
+
+auth hmacMachineAuth(request: HttpRequest) -> c: Caller ::: MachineCaller c
+  requires [dbRead] =
+  case bearerCredential request of
+    Nothing -> fail 401 "no bearer credential"
+    Something token ->
+      case tokenInstallPart token of
+        Nothing -> fail 401 "malformed credential"
+        Something claimedId ->
+          case tokenTagPart token of
+            Nothing -> fail 401 "malformed credential"
+            Something tag ->
+              # The ONLY thing between the header and the fact: one real
+              # verification. `check` routes its refusal to a 401.
+              let verifiedId = check Crypto.checkSignature (machineKey()) (Crypto.signatureFromHex tag) claimedId
+              case selectOne i from Installation where i.id == verifiedId of
+                Nothing -> fail 401 "unknown credential"
+                Something inst ->
+                  if inst.revoked then
+                    fail 401 "unknown credential"
+                  else
+                    let c = callerOf inst
+                    ok c ::: MachineCaller c
+
+# ── The human half: an ordinary session cookie ───────────────────────────────
+#
+# Present so the two credential kinds can be shown NOT to cross. `Machine` in
+# `loginMethods` is what licenses this `Http.setSessionCookie` call — under
+# `loginMethods [Sso]` alone it would not compile.
+
+fact HumanSession (user: String)
+
+fn subjectOf(claims: Dict String String) -> String =
+  case Dict.lookup "sub" claims of
+    Nothing -> ""
+    Something subject -> subject
+
+auth sessionOwner(request: HttpRequest) -> user: String ::: HumanSession user
+  requires [sessions] =
+  case Http.sessionToken request of
+    Nothing -> fail 401 "no session"
+    Something token ->
+      let claims = check JWT.verify token (sessionKey())
+      ok (subjectOf claims) ::: HumanSession user
+
+# ── Wire types ────────────────────────────────────────────────────────────────
+
+record Who {
+  install: String
+  orgId: String
+}
+
+codec Who {
+  toJson {
+    install -> "install" with_codec stringCodec
+    orgId -> "orgId" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+record HmacWho {
+  install: String
+  orgId: String
+}
+
+codec HmacWho {
+  toJson {
+    install -> "install" with_codec stringCodec
+    orgId -> "orgId" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+record WidgetList {
+  orgId: String
+  names: String
+  # The row count as a string, so the wire type stays exact: an `Int` on an
+  # encoded field trips W091 (JS loses precision past 2^53), and the count is an
+  # assertion aid rather than data a client computes with.
+  count: String
+}
+
+codec WidgetList {
+  toJson {
+    orgId -> "orgId" with_codec stringCodec
+    names -> "names" with_codec stringCodec
+    count -> "count" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+record NewWidget {
+  id: String
+  name: String
+}
+
+codec NewWidget {
+  toJson_forbidden
+  fromJson [
+    {
+      id <- "id" with_codec stringCodec
+      name <- "name" with_codec stringCodec
+    }
+  ]
+}
+
+record Created {
+  id: String
+  orgId: String
+}
+
+codec Created {
+  toJson {
+    id -> "id" with_codec stringCodec
+    orgId -> "orgId" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+record LoginRequest {
+  user: String
+}
+
+codec LoginRequest {
+  toJson_forbidden
+  fromJson [ { user <- "user" with_codec stringCodec } ]
+}
+
+record LoginOk {
+  success: Bool
+}
+
+codec LoginOk {
+  toJson {
+    success -> "success" with_codec boolCodec
+  }
+  fromJson_forbidden
+}
+
+record HumanWho {
+  user: String
+}
+
+codec HumanWho {
+  toJson {
+    user -> "user" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+# ── Core functions: the tenant comes off the witness ─────────────────────────
+#
+# `listWidgetsCore` DEMANDS `MayUse c ReadWidgets`, and it derives the org from
+# `c.orgId` — the witness — not from a path segment, a query parameter or a
+# body field. There is no spelling of these functions that reads a tenant from
+# the request, which is the property the tenancy tests below exercise from the
+# outside.
+
+fn listWidgetsCore(c: Caller ::: MayUse c ReadWidgets) -> WidgetList
+  requires [dbRead] =
+  # `order` so the assertion can be exact: row order out of a query is not a
+  # guarantee, and an order-dependent test that passes today is a flake.
+  let rows = select w from Widget
+    where w.orgId == c.orgId
+    order w.name asc
+  let names = List.map widgetName rows
+  WidgetList { orgId: c.orgId, names: String.join names ",", count: String.fromInt (List.length rows) }
+
+fn widgetName(w: Widget) -> String =
+  w.name
+
+fn createWidgetCore(c: Caller ::: MayUse c WriteWidgets, id: String, name: String) -> Created
+  requires [dbWrite] =
+  insert Widget { id: id, orgId: c.orgId, name: name }
+  Created { id: id, orgId: c.orgId }
+
+# ── Handlers ──────────────────────────────────────────────────────────────────
+
+handler get machineWhoami(c: Caller ::: MachineCaller c) -> Who =
+  Who { install: c.install, orgId: c.orgId }
+
+# A record of its own rather than a second `Who`: two endpoints with the same
+# handler signature are paired by POSITION only, which is what W095 warns about.
+handler get hmacWhoami(c: Caller ::: MachineCaller c) -> HmacWho =
+  HmacWho { install: c.install, orgId: c.orgId }
+
+handler get listWidgets(c: Caller ::: MachineCaller c) -> WidgetList
+  requires [dbRead] =
+  let reader = check mayReadWidgets c
+  listWidgetsCore reader
+
+handler post createWidget(c: Caller ::: MachineCaller c, body: NewWidget) -> Created
+  requires [dbWrite] =
+  let writer = check mayWriteWidgets c
+  createWidgetCore writer body.id body.name
+
+handler post login(body: LoginRequest) -> LoginOk
+  requires [sessions] =
+  let token = JWT.sign (Dict.singleton "sub" body.user) (sessionKey())
+  let _ = Http.setSessionCookie token
+  LoginOk { success: True }
+
+handler get humanWhoami(user: String ::: HumanSession user) -> HumanWho =
+  HumanWho { user: user }
+
+# ── API and server ────────────────────────────────────────────────────────────
+
+api MachineApi {
+  get "/machine/whoami"
+    auth c: Caller ::: MachineCaller c via machineAuth
+    -> Who
+
+  get "/hmac/whoami"
+    auth c: Caller ::: MachineCaller c via hmacMachineAuth
+    -> HmacWho
+
+  get "/machine/widgets"
+    auth c: Caller ::: MachineCaller c via machineAuth
+    -> WidgetList
+
+  post "/machine/widgets"
+    auth c: Caller ::: MachineCaller c via machineAuth
+    body body: NewWidget
+    -> Created
+
+  post "/login"
+    body body: LoginRequest
+    -> LoginOk
+
+  get "/session/whoami"
+    auth user: String ::: HumanSession user via sessionOwner
+    -> HumanWho
+}
+
+# `loginMethods [Sso, Machine]`: the checked promise that the only session-minting
+# and credential-checking sites in this module are the ones a declared method
+# licenses. Drop `Machine` and the `Http.setSessionCookie` in `login` above stops
+# compiling.
+server MachineServer for MachineApi {
+  machineWhoami
+  hmacWhoami
+  listWidgets
+  createWidget
+  login
+  humanWhoami
+
+  loginMethods [Sso, Machine]
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Unit tests: the credential parser, in isolation
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Parsing is where a permissive mistake is invisible from the outside: a parser
+# that trims, or that accepts a bare token with no scheme, widens the credential
+# space without any test going red. So the rule is pinned directly.
+
+test "the store keeps a digest, never the token" requires [dbRead, dbWrite] {
+  let _ = seedFixtures()
+  # The plaintext token is NOT a value in the store: looking a row up BY the
+  # token (rather than by its digest) finds nothing. A database leak therefore
+  # cannot be replayed against this endpoint.
+  expect installationByStored (tokenAlphaWrite()) == ""
+  # The digest of the same token DOES find it — so the negative above is a real
+  # property of the stored shape, not a broken fixture.
+  expect installationByStored (Crypto.fingerprint (tokenAlphaWrite())) == "install-a"
+}
+
+test "a check-bound value works as a SQL operand" requires [dbRead, dbWrite] {
+  let _ = seedFixtures()
+  case tokenTagPart (hmacTokenFor (machineKey()) "install-a") of
+    Nothing -> expect False
+    Something tag ->
+      # The row IS found: an operand that arrived from a `check` is compared as
+      # its value, not as the evidence struct wrapped around it.
+      expect installationForVerifiedTag "install-a" tag == "org-alpha"
+  # And a tag that does not verify still REFUSES — the `check` fails and the
+  # function never reaches its query, so the fix did not turn the comparison into
+  # "anything matches".
+  expectFail installationForVerifiedTag "install-a" "00000000000000000000000000000000000000000000000000000000000000ff"
+}
+
+test "fingerprint is deterministic and separates tokens" {
+  expect Crypto.fingerprint (tokenAlphaWrite()) == Crypto.fingerprint (tokenAlphaWrite())
+  expect Crypto.fingerprint (tokenAlphaWrite()) != Crypto.fingerprint (tokenBetaWrite())
+  # A one-character change is a completely different digest, so a near-miss token
+  # can never collide into a valid row.
+  expect Crypto.fingerprint (tokenAlphaWrite()) != Crypto.fingerprint (tokenAlphaWrite() ++ "x")
+}
+
+test "scopesOf grants write only when the stored scope says so" {
+  expect List.member WriteWidgets (scopesOf "read,write") == True
+  expect List.member WriteWidgets (scopesOf "read") == False
+  expect List.member ReadWidgets (scopesOf "read") == True
+}
+
+test "an HMAC-bound token is exactly <installId>.<hex-tag>" {
+  let token = hmacTokenFor (machineKey()) "install-a"
+  expect tokenInstallPart token == Something "install-a"
+  case tokenTagPart token of
+    Nothing -> expect False
+    Something tag -> expect String.length tag == 64
+  # A token with no separator, or with two, is not a credential at all.
+  expect tokenInstallPart "install-a" == Nothing
+  expect tokenInstallPart "install-a.tag.extra" == Nothing
+}
+
+test "the same id under two keys yields two different tags" {
+  let good = hmacTokenFor (machineKey()) "install-a"
+  let forged = hmacTokenFor (attackerKey()) "install-a"
+  expect good != forged
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FLAVOUR A — the happy path
+# ═══════════════════════════════════════════════════════════════════════════
+
+api-test "a valid machine token authenticates and names its own installation" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  let r = get "/machine/whoami" headers { authorization = "Bearer insta-4Zq7v1oXk2pR9sT0uW3yB6cD8eF1gH5j" }
+  expect statusOk r.status
+  expect r.body.install == "install-a"
+  expect r.body.orgId == "org-alpha"
+}
+
+api-test "the Bearer scheme is matched case-insensitively" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  # RFC 7235: the auth-scheme is case-insensitive, and real clients send
+  # `bearer`. Rejecting it would be a mystery 401 in the field.
+  let lower = get "/machine/whoami" headers { authorization = "bearer insta-4Zq7v1oXk2pR9sT0uW3yB6cD8eF1gH5j" }
+  expect statusOk lower.status
+  expect lower.body.install == "install-a"
+  let shouty = get "/machine/whoami" headers { authorization = "BEARER insta-4Zq7v1oXk2pR9sT0uW3yB6cD8eF1gH5j" }
+  expect statusOk shouty.status
+  expect shouty.body.install == "install-a"
+}
+
+api-test "a second installation authenticates as ITSELF, not as the first" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  # Two credentials, one server, one dispatch path: the witness must follow the
+  # token that was presented. A cached or module-level caller would show up here.
+  let a = get "/machine/whoami" headers { authorization = "Bearer insta-4Zq7v1oXk2pR9sT0uW3yB6cD8eF1gH5j" }
+  expect a.body.install == "install-a"
+  let b = get "/machine/whoami" headers { authorization = "Bearer instb-2Bd5f8HkM1nP4qR7sT9uV3wX6yZ0aC8e" }
+  expect b.body.install == "install-b"
+  expect b.body.orgId == "org-beta"
+  # And back again, so a per-request value cannot be a first-write-wins cell.
+  let a2 = get "/machine/whoami" headers { authorization = "Bearer insta-4Zq7v1oXk2pR9sT0uW3yB6cD8eF1gH5j" }
+  expect a2.body.install == "install-a"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FLAVOUR A — every way a credential can be wrong
+# ═══════════════════════════════════════════════════════════════════════════
+
+api-test "no Authorization header is a 401" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  let r = get "/machine/whoami"
+  expect r.status == 401
+}
+
+api-test "an empty Authorization header is a 401" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  let r = get "/machine/whoami" headers { authorization = "" }
+  expect r.status == 401
+}
+
+api-test "a bare token with no scheme is a 401" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  # The credential is only a credential in its declared frame. Accepting a bare
+  # value would let any header-shaped string in.
+  let r = get "/machine/whoami" headers { authorization = "insta-4Zq7v1oXk2pR9sT0uW3yB6cD8eF1gH5j" }
+  expect r.status == 401
+}
+
+api-test "another auth scheme carrying a valid token is a 401" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  let basic = get "/machine/whoami" headers { authorization = "Basic insta-4Zq7v1oXk2pR9sT0uW3yB6cD8eF1gH5j" }
+  expect basic.status == 401
+  let token = get "/machine/whoami" headers { authorization = "Token insta-4Zq7v1oXk2pR9sT0uW3yB6cD8eF1gH5j" }
+  expect token.status == 401
+  # No space after the scheme: `Bearerinsta-…` is one word, not a credential.
+  let glued = get "/machine/whoami" headers { authorization = "Bearerinsta-4Zq7v1oXk2pR9sT0uW3yB6cD8eF1gH5j" }
+  expect glued.status == 401
+}
+
+api-test "Bearer with an empty token is a 401" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  let r = get "/machine/whoami" headers { authorization = "Bearer " }
+  expect r.status == 401
+  let justScheme = get "/machine/whoami" headers { authorization = "Bearer" }
+  expect justScheme.status == 401
+}
+
+api-test "an unknown but well-formed token is a 401" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  let r = get "/machine/whoami" headers { authorization = "Bearer instx-0000000000000000000000000000000000" }
+  expect r.status == 401
+}
+
+api-test "a token that differs in one character is a 401" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  # The last character is flipped. A digest lookup has no near-miss, and this
+  # would catch any accidental prefix/substring matching in the lookup.
+  let r = get "/machine/whoami" headers { authorization = "Bearer insta-4Zq7v1oXk2pR9sT0uW3yB6cD8eF1gH5k" }
+  expect r.status == 401
+}
+
+api-test "a strict prefix of a valid token is a 401" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  let r = get "/machine/whoami" headers { authorization = "Bearer insta-4Zq7v1oXk2pR9sT0uW3y" }
+  expect r.status == 401
+  let oneChar = get "/machine/whoami" headers { authorization = "Bearer i" }
+  expect oneChar.status == 401
+}
+
+api-test "a valid token with trailing junk is a 401" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  # No trimming, no splitting on whitespace: the token is what follows the one
+  # space, so anything appended changes the digest.
+  let space = get "/machine/whoami" headers { authorization = "Bearer insta-4Zq7v1oXk2pR9sT0uW3yB6cD8eF1gH5j " }
+  expect space.status == 401
+  let extra = get "/machine/whoami" headers { authorization = "Bearer insta-4Zq7v1oXk2pR9sT0uW3yB6cD8eF1gH5j extra" }
+  expect extra.status == 401
+  let doubleSpace = get "/machine/whoami" headers { authorization = "Bearer  insta-4Zq7v1oXk2pR9sT0uW3yB6cD8eF1gH5j" }
+  expect doubleSpace.status == 401
+}
+
+api-test "a revoked installation is refused even with the right token" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  # The token is EXACTLY the stored one; only `revoked` differs. Revocation is
+  # what makes a long-lived credential acceptable, so this is the load-bearing
+  # negative of the whole flavour.
+  let r = get "/machine/whoami" headers { authorization = "Bearer instc-9Zx6c3VbN8mK5jH2gF7dS4aQ1wE0rT6y" }
+  expect r.status == 401
+}
+
+api-test "revoking mid-flight takes effect on the next request" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  # Authenticates now...
+  let before = get "/machine/whoami" headers { authorization = "Bearer insta-4Zq7v1oXk2pR9sT0uW3yB6cD8eF1gH5j" }
+  expect statusOk before.status
+  # ...the operator revokes the installation...
+  let _ = revokeInstallation "install-a"
+  # ...and the very next request with the same token is refused. Nothing is
+  # cached across requests, which is the property a session-token design would
+  # NOT give you (a signed session survives until it expires).
+  let after = get "/machine/whoami" headers { authorization = "Bearer insta-4Zq7v1oXk2pR9sT0uW3yB6cD8eF1gH5j" }
+  expect after.status == 401
+}
+
+api-test "a refused credential leaves no trace on the next good request" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  let bad = get "/machine/whoami" headers { authorization = "Bearer instx-0000000000000000000000000000000000" }
+  expect bad.status == 401
+  let good = get "/machine/whoami" headers { authorization = "Bearer insta-4Zq7v1oXk2pR9sT0uW3yB6cD8eF1gH5j" }
+  expect statusOk good.status
+  expect good.body.install == "install-a"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Tenancy: the org comes off the witness
+# ═══════════════════════════════════════════════════════════════════════════
+
+api-test "each installation sees only its own org's rows" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  let alpha = get "/machine/widgets" headers { authorization = "Bearer insta-4Zq7v1oXk2pR9sT0uW3yB6cD8eF1gH5j" }
+  expect statusOk alpha.status
+  expect alpha.body.orgId == "org-alpha"
+  expect alpha.body.count == "2"
+  expect alpha.body.names == "alpha-one,alpha-two"
+
+  let beta = get "/machine/widgets" headers { authorization = "Bearer instb-2Bd5f8HkM1nP4qR7sT9uV3wX6yZ0aC8e" }
+  expect statusOk beta.status
+  expect beta.body.orgId == "org-beta"
+  expect beta.body.count == "1"
+  expect beta.body.names == "beta-one"
+}
+
+api-test "a query parameter cannot re-point a machine caller at another org" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  # The endpoint declares no query parameter, and the handler derives the tenant
+  # from the witness — so a hopeful `?orgId=` is inert rather than authoritative.
+  let r = get "/machine/widgets?orgId=org-beta" headers { authorization = "Bearer insta-4Zq7v1oXk2pR9sT0uW3yB6cD8eF1gH5j" }
+  expect statusOk r.status
+  expect r.body.orgId == "org-alpha"
+  expect r.body.count == "2"
+}
+
+api-test "a write lands in the caller's own org and is invisible to the other" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  let created = post "/machine/widgets" headers { authorization = "Bearer insta-4Zq7v1oXk2pR9sT0uW3yB6cD8eF1gH5j" } body { "id": "widget-new", "name": "alpha-three" }
+  expect statusOk created.status
+  expect created.body.orgId == "org-alpha"
+
+  # The writer sees it...
+  let alpha = get "/machine/widgets" headers { authorization = "Bearer insta-4Zq7v1oXk2pR9sT0uW3yB6cD8eF1gH5j" }
+  expect alpha.body.count == "3"
+  expect String.contains alpha.body.names "alpha-three" == True
+
+  # ...and the other tenant does not.
+  let beta = get "/machine/widgets" headers { authorization = "Bearer instb-2Bd5f8HkM1nP4qR7sT9uV3wX6yZ0aC8e" }
+  expect beta.body.count == "1"
+  expect String.contains beta.body.names "alpha-three" == False
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Scopes: the refusal is the scope, not the tenant
+# ═══════════════════════════════════════════════════════════════════════════
+
+api-test "a read-only installation may read" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  let r = get "/machine/widgets" headers { authorization = "Bearer instd-7Hj2k9LmN4pQ6rS8tU0vW2xY5zA1bC3d" }
+  expect statusOk r.status
+  expect r.body.orgId == "org-alpha"
+  expect r.body.count == "2"
+}
+
+api-test "a read-only installation is 403 on a write, not 401" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  # 403, not 401: the credential is good, the SCOPE is missing. Collapsing the
+  # two would make a scope bug look like a credential bug in the field.
+  let r = post "/machine/widgets" headers { authorization = "Bearer instd-7Hj2k9LmN4pQ6rS8tU0vW2xY5zA1bC3d" } body { "id": "widget-nope", "name": "should-not-exist" }
+  expect r.status == 403
+
+  # And the write did not happen: a 403 that still mutated would be the worst of
+  # both worlds.
+  let after = get "/machine/widgets" headers { authorization = "Bearer instd-7Hj2k9LmN4pQ6rS8tU0vW2xY5zA1bC3d" }
+  expect after.body.count == "2"
+  expect String.contains after.body.names "should-not-exist" == False
+}
+
+api-test "a read+write installation in the SAME org may write" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  # install-a and install-d are both org-alpha; only the scopes differ. So the
+  # 403 above is attributable to the scope and to nothing else.
+  let r = post "/machine/widgets" headers { authorization = "Bearer insta-4Zq7v1oXk2pR9sT0uW3yB6cD8eF1gH5j" } body { "id": "widget-ok", "name": "alpha-four" }
+  expect statusOk r.status
+  expect r.body.orgId == "org-alpha"
+}
+
+api-test "a revoked credential is refused before any scope is consulted" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  # install-c holds read+write, so a 403 here would mean the scope check ran on a
+  # revoked installation. It must be 401 from the auth block instead.
+  let r = post "/machine/widgets" headers { authorization = "Bearer instc-9Zx6c3VbN8mK5jH2gF7dS4aQ1wE0rT6y" } body { "id": "widget-revoked", "name": "no" }
+  expect r.status == 401
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FLAVOUR B — the HMAC-bound token, and the subject-substitution attack
+# ═══════════════════════════════════════════════════════════════════════════
+
+api-test "an HMAC-bound token authenticates the id it was signed for" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  let token = hmacTokenFor (machineKey()) "install-a"
+  let r = get "/hmac/whoami" headers { authorization = "Bearer " ++ token }
+  expect statusOk r.status
+  expect r.body.install == "install-a"
+  expect r.body.orgId == "org-alpha"
+}
+
+api-test "an HMAC-bound token for the other installation authenticates as THAT one" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  let token = hmacTokenFor (machineKey()) "install-b"
+  let r = get "/hmac/whoami" headers { authorization = "Bearer " ++ token }
+  expect statusOk r.status
+  expect r.body.install == "install-b"
+  expect r.body.orgId == "org-beta"
+}
+
+api-test "a tag minted for one installation cannot be presented with another id" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  # THE test for the subject-bound shape. The attacker holds a legitimate
+  # credential for install-b and wants install-a. They keep their own tag and
+  # swap the id. Because the tag is over the ID, `check Crypto.checkSignature`
+  # refuses: the identity is not a free argument beside a verification, it comes
+  # out of the credential.
+  let mine = hmacTokenFor (machineKey()) "install-b"
+  case tokenTagPart mine of
+    Nothing -> expect False
+    Something myTag ->
+      let forged = "install-a." ++ myTag
+      let r = get "/hmac/whoami" headers { authorization = "Bearer " ++ forged }
+      expect r.status == 401
+}
+
+api-test "a tag signed with another key is a 401" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  let forged = hmacTokenFor (attackerKey()) "install-a"
+  let r = get "/hmac/whoami" headers { authorization = "Bearer " ++ forged }
+  expect r.status == 401
+}
+
+api-test "a tampered tag is a 401" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  let good = hmacTokenFor (machineKey()) "install-a"
+  case tokenTagPart good of
+    Nothing -> expect False
+    Something tag ->
+      # Same length, one nibble changed: still parses as hex, still fails the MAC.
+      let broken = "install-a." ++ String.slice tag 0 63 ++ "0"
+      let r = get "/hmac/whoami" headers { authorization = "Bearer " ++ broken }
+      expect r.status == 401
+}
+
+api-test "a non-hex tag is a 401, not a crash" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  # `Crypto.signatureFromHex` never raises on malformed input; the verification
+  # just fails. A 500 here would be a denial-of-service handed to any client.
+  let r = get "/hmac/whoami" headers { authorization = "Bearer install-a.not-hex-at-all" }
+  expect r.status == 401
+  let empty = get "/hmac/whoami" headers { authorization = "Bearer install-a." }
+  expect empty.status == 401
+}
+
+api-test "a shapeless HMAC token is a 401" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  let noDot = get "/hmac/whoami" headers { authorization = "Bearer install-a" }
+  expect noDot.status == 401
+  let twoDots = get "/hmac/whoami" headers { authorization = "Bearer install-a.tag.extra" }
+  expect twoDots.status == 401
+  let onlyDot = get "/hmac/whoami" headers { authorization = "Bearer ." }
+  expect onlyDot.status == 401
+}
+
+api-test "a validly signed id for a nonexistent installation is a 401" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  # The MAC verifies — the app signed it — but there is no such row. The lookup
+  # is the second gate, and it fails closed.
+  let token = hmacTokenFor (machineKey()) "install-zzz"
+  let r = get "/hmac/whoami" headers { authorization = "Bearer " ++ token }
+  expect r.status == 401
+}
+
+api-test "a validly signed id for a REVOKED installation is a 401" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  let token = hmacTokenFor (machineKey()) "install-c"
+  let r = get "/hmac/whoami" headers { authorization = "Bearer " ++ token }
+  expect r.status == 401
+}
+
+api-test "the two flavours do not accept each other's tokens" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  # A stored-digest token has no MAC, and an HMAC token is not in the store.
+  # Neither route is a fallback for the other.
+  let storedOnHmac = get "/hmac/whoami" headers { authorization = "Bearer insta-4Zq7v1oXk2pR9sT0uW3yB6cD8eF1gH5j" }
+  expect storedOnHmac.status == 401
+  let hmacOnStored = get "/machine/whoami" headers { authorization = "Bearer " ++ hmacTokenFor (machineKey()) "install-a" }
+  expect hmacOnStored.status == 401
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# The credential kinds do not cross
+# ═══════════════════════════════════════════════════════════════════════════
+
+api-test "a human session does not authenticate a machine route" for MachineServer requires [dbRead, dbWrite, sessions] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  let loginResp = post "/login" body { "user": "alice" }
+  expect statusOk loginResp.status
+  case responseCookie loginResp of
+    Nothing -> expect False
+    Something session ->
+      # A logged-in human is not an installation. The machine route wants a
+      # bearer credential and there is none.
+      let r = get "/machine/whoami" cookie session
+      expect r.status == 401
+}
+
+api-test "a machine token does not authenticate a session route" for MachineServer requires [dbRead, dbWrite, sessions] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  let r = get "/session/whoami" headers { authorization = "Bearer insta-4Zq7v1oXk2pR9sT0uW3yB6cD8eF1gH5j" }
+  expect r.status == 401
+}
+
+api-test "a valid session cookie cannot rescue a bad bearer token" for MachineServer requires [dbRead, dbWrite, sessions] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  let loginResp = post "/login" body { "user": "alice" }
+  case responseCookie loginResp of
+    Nothing -> expect False
+    Something session ->
+      # Both credentials present, one of them good — for the WRONG route. The
+      # machine auth block reads only the header, so the cookie is inert.
+      let r = get "/machine/whoami" cookie session headers { authorization = "Bearer instx-0000000000000000000000000000000000" }
+      expect r.status == 401
+}
+
+api-test "a bogus cookie does not disturb a valid machine token" for MachineServer requires [dbRead, dbWrite, sessions] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  let r = get "/machine/whoami" cookie "__Host-session=not-a-jwt" headers { authorization = "Bearer insta-4Zq7v1oXk2pR9sT0uW3yB6cD8eF1gH5j" }
+  expect statusOk r.status
+  expect r.body.install == "install-a"
+}
+
+api-test "a machine request mints no session cookie" for MachineServer requires [dbRead, dbWrite] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  # A machine credential is presented on every request; it must not silently
+  # become a browser session. Nothing on the machine path writes a cookie, and
+  # this asserts the absence rather than assuming it.
+  let accepted = get "/machine/whoami" headers { authorization = "Bearer insta-4Zq7v1oXk2pR9sT0uW3yB6cD8eF1gH5j" }
+  expect statusOk accepted.status
+  case responseCookie accepted of
+    Something pair -> expect False
+    Nothing -> expect True
+
+  let refused = get "/machine/whoami" headers { authorization = "Bearer instx-0000000000000000000000000000000000" }
+  expect refused.status == 401
+  case responseCookie refused of
+    Something pair -> expect False
+    Nothing -> expect True
+}
+
+api-test "the session half of the same server still works" for MachineServer requires [dbRead, dbWrite, sessions] {
+  seed {
+    let _ = seedFixtures()
+  }
+
+  # `Machine` licenses this `Http.setSessionCookie`; the round trip proves the
+  # licence is not merely a compile-time formality. An extension host really does
+  # authenticate both people and apps on one server.
+  let loginResp = post "/login" body { "user": "alice" }
+  expect statusOk loginResp.status
+  case responseCookie loginResp of
+    Nothing -> expect False
+    Something session ->
+      let me = get "/session/whoami" cookie session
+      expect statusOk me.status
+      expect me.body.user == "alice"
+}
