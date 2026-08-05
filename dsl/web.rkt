@@ -366,44 +366,40 @@
               ([part (in-list (cdr parts))])
       #`(tesl-dot/runtime #,expanded '#,part)))
 
+  ;; ── ERASED let/lambda-local binding (issue #80) ────────────────────────────
+  ;; This used to install the full runtime safety net PER BINDING: a structural
+  ;; value-field-access-type scan, a runtime-bind+evidence allocation, and FOUR
+  ;; parameterize frames.  Every `let` statement in every handler/fn body paid
+  ;; it, and recursive functions paid it per recursion level — the dominant
+  ;; constant behind GitHub #80's list-length blow-up.  It is now erased to the
+  ;; same shape as dsl/private/check-runtime.rkt's erasable template (D12/§2a:
+  ;; the static checker is the sole guarantor of local binding types/proofs):
+  ;;   • the check-fail? short-circuit is control flow and stays;
+  ;;   • *x is the raw value (zero allocation);
+  ;;   • x keeps the value itself when it IS a proof-carrying structure (so
+  ;;     detach/attach/forget still resolve structurally), else the raw value.
+  ;; Dot access on a let-bound record loses nothing: the erased current-type-env
+  ;; entry was itself computed structurally (value-field-access-type), which is
+  ;; exactly the fallback tesl-dot/runtime uses — same result, computed only at
+  ;; the (rare) dot site instead of at every binding.
   (define (wrap-runtime-named-binding name-id expr-stx body-stx)
     (define star-name-id (star-id name-id))
     (define value-id (format-id name-id "~a-runtime-value" (syntax-e name-id)))
-    (define evidence-id (format-id name-id "~a-runtime-evidence" (syntax-e name-id)))
-    (define binding-id (format-id name-id "~a-runtime-binding" (syntax-e name-id)))
-    (define type-id (format-id name-id "~a-runtime-type" (syntax-e name-id)))
-    #`(let* ([#,value-id #,expr-stx]
-             [#,type-id (value-field-access-type #,value-id)])
+    #`(let ([#,value-id #,expr-stx])
         (if (check-fail? #,value-id)
             (handle-check-fail-in-let #,value-id)
-            (let-values ([(#,evidence-id #,binding-id)
-                          (runtime-bind+evidence '#,(syntax-e name-id) #,value-id)])
-              (parameterize ([current-name-env
-                              (extend-name-env (current-name-env)
-                                               '(#,(syntax-e name-id))
-                                               (list #,binding-id))]
-                             [current-proof-env
-                              (extend-proof-env (current-proof-env)
-                                                (list #,binding-id))]
-                             [current-evidence-env
-                              (extend-evidence-env (current-evidence-env)
-                                                   (list #,evidence-id))]
-                             [current-type-env
-                              (extend-type-env (current-type-env)
-                                               (list #,binding-id)
-                                               (list #,type-id))])
-                (let ([#,star-name-id (runtime-binding-raw #,binding-id)]
-                      [#,name-id (if (or (named-value? #,value-id)
-                                         (check-result? #,value-id)
-                                         (runtime-binding? #,value-id)
-                                         (detached-proof? #,value-id)
-                                         (packed-witness? #,value-id)
-                                         (packed-exists? #,value-id)
-                                         (procedure? #,value-id)
-                                         (boolean? #,value-id))
-                                     #,value-id
-                                     (runtime-binding-name #,binding-id))])
-                  #,body-stx))))))
+            (let ([#,star-name-id (raw-value #,value-id)]
+                  [#,name-id (if (or (named-value? #,value-id)
+                                     (check-result? #,value-id)
+                                     (runtime-binding? #,value-id)
+                                     (detached-proof? #,value-id)
+                                     (packed-witness? #,value-id)
+                                     (packed-exists? #,value-id)
+                                     (procedure? #,value-id)
+                                     (boolean? #,value-id))
+                                 #,value-id
+                                 (raw-value #,value-id))])
+              #,body-stx))))
 
   (define (wrap-runtime-named-bindings name-ids expr-stxs body-stx)
     (for/fold ([expanded body-stx])

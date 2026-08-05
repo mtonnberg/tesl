@@ -1,0 +1,86 @@
+module Issue80ListBodyScalingTests exposing [Issue80Server]
+
+import Tesl.Prelude exposing [String, List]
+import Tesl.Json exposing [stringCodec, listCodec]
+import Tesl.List exposing [List.map]
+import Tesl.ApiTest exposing [statusOk, statusClientError]
+
+# ── Regression: GitHub #80 ───────────────────────────────────────────────────
+# A request body carrying a `List String` field (decoded `with_codec listCodec`)
+# got QUADRATICALLY slower in the list's length: every recursion level of the
+# lifted `List.map` re-validated its whole returned suffix, and each of those
+# per-element checks paid several full registry scans.  Under a 50rps load-test
+# the queueing turned that into p50 876ms for a SIX-element list.
+#
+# This file pins the fix with the same shape the report used: a handler that
+# does no database work at all — it only decodes the list body and maps a pure
+# function over it — hammered with a TWO-HUNDRED-element list (the issue's
+# documented batch cap).  Before the fix a single such request cost hundreds of
+# milliseconds on its own, so the p99 bound below failed by an order of
+# magnitude; after it, a request is single-digit milliseconds.
+#
+# The api-test guards the semantics the perf fix touched: the decoded list must
+# still arrive intact, in order, and element-typed (a non-string element in the
+# JSON array must still be rejected), so the fast path cannot silently become
+# a no-validation path.
+
+record RefsRequest {
+  refs: List String
+}
+
+codec RefsRequest {
+  toJson_forbidden
+  fromJson [
+    { refs <- "refs" with_codec listCodec }
+  ]
+}
+
+record RefResult {
+  text: String
+}
+
+codec RefResult {
+  toJson {
+    text -> "text" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+fn resolveOne(ref: String) -> RefResult =
+  RefResult { text: ref }
+
+handler post resolveRefs(body: RefsRequest) -> List RefResult =
+  List.map resolveOne body.refs
+
+api Issue80Api {
+  post "/api/refs"
+    body body: RefsRequest
+    -> List RefResult
+}
+
+server Issue80Server for Issue80Api {
+  resolveRefs
+}
+
+api-test "list body decodes intact, in order, and element-typed" for Issue80Server {
+  let resp = post "/api/refs" body { "refs": ["alpha", "beta", "gamma"] }
+  expect statusOk resp.status
+  expect resp.body == [
+    { "text": "alpha" },
+    { "text": "beta" },
+    { "text": "gamma" }
+  ]
+
+  let bad = post "/api/refs" body { "refs": ["alpha", 42] }
+  expect statusClientError bad.status
+}
+
+load-test "200-element List String body stays linear (issue #80)" for Issue80Server
+  rate 20rps
+  duration 3s {
+
+  post "/api/refs" body { "refs": ["ref-000", "ref-001", "ref-002", "ref-003", "ref-004", "ref-005", "ref-006", "ref-007", "ref-008", "ref-009", "ref-010", "ref-011", "ref-012", "ref-013", "ref-014", "ref-015", "ref-016", "ref-017", "ref-018", "ref-019", "ref-020", "ref-021", "ref-022", "ref-023", "ref-024", "ref-025", "ref-026", "ref-027", "ref-028", "ref-029", "ref-030", "ref-031", "ref-032", "ref-033", "ref-034", "ref-035", "ref-036", "ref-037", "ref-038", "ref-039", "ref-040", "ref-041", "ref-042", "ref-043", "ref-044", "ref-045", "ref-046", "ref-047", "ref-048", "ref-049", "ref-050", "ref-051", "ref-052", "ref-053", "ref-054", "ref-055", "ref-056", "ref-057", "ref-058", "ref-059", "ref-060", "ref-061", "ref-062", "ref-063", "ref-064", "ref-065", "ref-066", "ref-067", "ref-068", "ref-069", "ref-070", "ref-071", "ref-072", "ref-073", "ref-074", "ref-075", "ref-076", "ref-077", "ref-078", "ref-079", "ref-080", "ref-081", "ref-082", "ref-083", "ref-084", "ref-085", "ref-086", "ref-087", "ref-088", "ref-089", "ref-090", "ref-091", "ref-092", "ref-093", "ref-094", "ref-095", "ref-096", "ref-097", "ref-098", "ref-099", "ref-100", "ref-101", "ref-102", "ref-103", "ref-104", "ref-105", "ref-106", "ref-107", "ref-108", "ref-109", "ref-110", "ref-111", "ref-112", "ref-113", "ref-114", "ref-115", "ref-116", "ref-117", "ref-118", "ref-119", "ref-120", "ref-121", "ref-122", "ref-123", "ref-124", "ref-125", "ref-126", "ref-127", "ref-128", "ref-129", "ref-130", "ref-131", "ref-132", "ref-133", "ref-134", "ref-135", "ref-136", "ref-137", "ref-138", "ref-139", "ref-140", "ref-141", "ref-142", "ref-143", "ref-144", "ref-145", "ref-146", "ref-147", "ref-148", "ref-149", "ref-150", "ref-151", "ref-152", "ref-153", "ref-154", "ref-155", "ref-156", "ref-157", "ref-158", "ref-159", "ref-160", "ref-161", "ref-162", "ref-163", "ref-164", "ref-165", "ref-166", "ref-167", "ref-168", "ref-169", "ref-170", "ref-171", "ref-172", "ref-173", "ref-174", "ref-175", "ref-176", "ref-177", "ref-178", "ref-179", "ref-180", "ref-181", "ref-182", "ref-183", "ref-184", "ref-185", "ref-186", "ref-187", "ref-188", "ref-189", "ref-190", "ref-191", "ref-192", "ref-193", "ref-194", "ref-195", "ref-196", "ref-197", "ref-198", "ref-199"] }
+
+  assert p99 < 250ms
+  assert errorRate < 0.01
+}

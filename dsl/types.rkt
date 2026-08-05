@@ -317,6 +317,8 @@
 
 (struct runtime-type-entry (name predicate) #:transparent)
 (define runtime-type-registry (make-hash))
+;; name symbol -> (listof runtime-type-entry) — see "Registry name indexes"
+(define runtime-type-name-index (make-hash))
 ;; ── Non-shadowable aliases for Racket builtins the EMITTER emits bare ────────
 ;; Issue-#12 class: emitted code that calls a bare Racket builtin breaks the
 ;; moment a Tesl program binds a name that spells the same thing.  `hash` is the
@@ -533,11 +535,26 @@
 (define (registry-sort-key name)
   (symbol->string (type-key-name name)))
 
-(define (unique-match-by-name values target-name public-name-of who kind)
-  (define matches
-    (for/list ([value (in-list values)]
-               #:when (equal? (public-name-of value) target-name))
-      value))
+;; ── Registry name indexes (issue #80) ────────────────────────────────────────
+;; Each registry keyed by identity/type-key also keeps a side index from the
+;; PUBLIC name symbol to its entries, so the by-name fallback in the lookup
+;; functions is an O(1) hash ref instead of a full-registry scan (which also
+;; allocated a fresh `hash-values` list per call).  These lookups sit under
+;; `runtime-type-satisfied?`, i.e. on the per-element hot path of every
+;; request; with recursive stdlib combinators the scans compounded into
+;; quadratic request latency.  Indexes are mutated ONLY at registration time
+;; (module init), so the request path never writes.
+(define (registry-index-add! index name entry)
+  (hash-update! index name (lambda (old) (cons entry old)) '()))
+
+(define (registry-index-remove! index name entry)
+  (define remaining (remq entry (hash-ref index name '())))
+  (if (null? remaining)
+      (hash-remove! index name)
+      (hash-set! index name remaining)))
+
+(define (registry-index-ref index target-name who kind)
+  (define matches (hash-ref index target-name '()))
   (cond
     [(null? matches) #f]
     [(null? (cdr matches)) (car matches)]
@@ -552,7 +569,16 @@
     (raise-user-error 'register-runtime-type! "expected a symbol or module-scoped type name, got ~a" name))
   (unless (procedure? predicate)
     (raise-user-error 'register-runtime-type! "expected a predicate procedure, got ~a" predicate))
-  (hash-set! runtime-type-registry name (runtime-type-entry (type-key-name name) predicate))
+  ;; Re-registration under the same key replaces the entry; drop the stale
+  ;; entry from the name index so it cannot manufacture a false ambiguity.
+  (define old-entry (hash-ref runtime-type-registry name #f))
+  (when old-entry
+    (registry-index-remove! runtime-type-name-index
+                            (runtime-type-entry-name old-entry)
+                            old-entry))
+  (define entry (runtime-type-entry (type-key-name name) predicate))
+  (hash-set! runtime-type-registry name entry)
+  (registry-index-add! runtime-type-name-index (runtime-type-entry-name entry) entry)
   (void))
 
 (define-syntax (register-runtime-type! stx)
@@ -583,17 +609,20 @@
      (hash-ref built-in-runtime-type-registry resolved-name)]
     [(symbol? resolved-name)
      (define match
-       (unique-match-by-name (hash-values runtime-type-registry)
-                             resolved-name
-                             runtime-type-entry-name
-                             'runtime-type-predicate
-                             'runtime-type))
+       (registry-index-ref runtime-type-name-index
+                           resolved-name
+                           'runtime-type-predicate
+                           'runtime-type))
      (and match (runtime-type-entry-predicate match))]
     [else #f]))
 
 (define adt-registry (make-hash))
 (define record-registry (make-hash))
 (define field-access-registry (make-hash))
+;; name symbol -> (listof spec) — see "Registry name indexes"
+(define adt-name-index (make-hash))
+(define record-name-index (make-hash))
+(define field-access-name-index (make-hash))
 
 (struct record-spec (name identity fields raw) #:transparent)
 (struct record-field-spec (name type proof checker raw) #:transparent)
@@ -665,16 +694,16 @@
     (raise-user-error 'define-record "Record ~a is already defined" (record-spec-name spec)))
   (validate-record-spec! spec)
   (hash-set! record-registry identity spec)
+  (registry-index-add! record-name-index (record-spec-name spec) spec)
   (void))
 
 (define (lookup-record-spec name [default #f])
   (or (hash-ref record-registry name #f)
       (and (symbol? name)
-           (unique-match-by-name (hash-values record-registry)
-                                 name
-                                 record-spec-name
-                                 'lookup-record-spec
-                                 'record))
+           (registry-index-ref record-name-index
+                               name
+                               'lookup-record-spec
+                               'record))
       default))
 
 (define (register-field-access! type-name fields getter)
@@ -684,21 +713,29 @@
     (raise-user-error 'register-field-access! "expected a list of field symbols, got ~a" fields))
   (unless (procedure? getter)
     (raise-user-error 'register-field-access! "expected a field getter procedure, got ~a" getter))
-  (hash-set! field-access-registry type-name
-             (field-access-spec (type-key-name type-name)
-                                type-name
-                                (remove-duplicates fields)
-                                getter))
+  ;; Re-registration under the same key replaces the entry; drop the stale
+  ;; entry from the name index so it cannot manufacture a false ambiguity.
+  (define old-spec (hash-ref field-access-registry type-name #f))
+  (when old-spec
+    (registry-index-remove! field-access-name-index
+                            (field-access-spec-type-name old-spec)
+                            old-spec))
+  (define spec
+    (field-access-spec (type-key-name type-name)
+                       type-name
+                       (remove-duplicates fields)
+                       getter))
+  (hash-set! field-access-registry type-name spec)
+  (registry-index-add! field-access-name-index (field-access-spec-type-name spec) spec)
   (void))
 
 (define (lookup-field-access-spec type-name [default #f])
   (or (hash-ref field-access-registry type-name #f)
       (and (symbol? type-name)
-           (unique-match-by-name (hash-values field-access-registry)
-                                 type-name
-                                 field-access-spec-type-name
-                                 'lookup-field-access-spec
-                                 'record/entity-type))
+           (registry-index-ref field-access-name-index
+                               type-name
+                               'lookup-field-access-spec
+                               'record/entity-type))
       default))
 
 (define (register-adt! spec)
@@ -708,16 +745,16 @@
   (when (hash-has-key? adt-registry identity)
     (raise-user-error 'define-adt "ADT ~a is already defined" (adt-spec-name spec)))
   (hash-set! adt-registry identity spec)
+  (registry-index-add! adt-name-index (adt-spec-name spec) spec)
   (void))
 
 (define (lookup-adt-spec name [default #f])
   (or (hash-ref adt-registry name #f)
       (and (symbol? name)
-           (unique-match-by-name (hash-values adt-registry)
-                                 name
-                                 adt-spec-name
-                                 'lookup-adt-spec
-                                 'adt))
+           (registry-index-ref adt-name-index
+                               name
+                               'lookup-adt-spec
+                               'adt))
       default))
 
 (define (instantiate-adt-field-template template param-env)
@@ -1311,6 +1348,18 @@
            ((field-access-spec-getter (car field-specs)) unwrapped field-symbol)])])]))
 
 (define (runtime-type-satisfied? type-datum value)
+  ;; Issue #80 fast path: type VARIABLES (lowercase-initial keys, see
+  ;; type-variable-key?) are fail-open by design (S13) — no runtime constraint
+  ;; can apply, so answer #t BEFORE the registry lookups below.  Polymorphic
+  ;; stdlib returns like `(List b)` otherwise pay several registry lookups per
+  ;; element on every call, and recursive combinators (List.map et al.) turn
+  ;; that into quadratic request latency.  The parser guarantees no concrete
+  ;; type is lowercase-initial, so nothing can be registered under such a name.
+  (if (type-variable-key? type-datum)
+      #t
+      (runtime-type-satisfied?/concrete type-datum value)))
+
+(define (runtime-type-satisfied?/concrete type-datum value)
   (define maybe-adt-spec (adt-type-spec type-datum))
   (define maybe-record-spec (lookup-record-spec type-datum #f))
   (define maybe-list-type (list-type-argument type-datum))
@@ -1377,21 +1426,27 @@
                            (hash-ref actual-fields label))))))))]
     [maybe-record-spec
      (record-value-matches-spec? maybe-record-spec value)]
+    ;; Issue #80: when the element type is a type variable the per-element
+    ;; check is vacuously #t (see the fast path above) — skip the O(n) walk
+    ;; entirely so container checks on polymorphic types cost O(1).
     [maybe-list-type
      (and (list? value)
-          (for/and ([item (in-list value)])
-            (runtime-type-satisfied? maybe-list-type item)))]
+          (or (type-variable-key? maybe-list-type)
+              (for/and ([item (in-list value)])
+                (runtime-type-satisfied? maybe-list-type item))))]
     [maybe-dict-types
      (define key-type (first maybe-dict-types))
      (define value-type (second maybe-dict-types))
      (and (hash? value)
-          (for/and ([(key item) (in-hash value)])
-            (and (runtime-type-satisfied? key-type key)
-                 (runtime-type-satisfied? value-type item))))]
+          (or (and (type-variable-key? key-type) (type-variable-key? value-type))
+              (for/and ([(key item) (in-hash value)])
+                (and (runtime-type-satisfied? key-type key)
+                     (runtime-type-satisfied? value-type item)))))]
     [maybe-set-type
      (and (set? value)
-          (for/and ([item (in-set value)])
-            (runtime-type-satisfied? maybe-set-type item)))]
+          (or (type-variable-key? maybe-set-type)
+              (for/and ([item (in-set value)])
+                (runtime-type-satisfied? maybe-set-type item))))]
     [(type-key? type-datum)
      (define predicate (runtime-type-predicate type-datum))
      (cond
