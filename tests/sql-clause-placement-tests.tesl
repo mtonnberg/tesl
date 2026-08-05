@@ -1,0 +1,258 @@
+module SqlClausePlacementTests exposing []
+
+# ── Single-line query clause placement (GitHub #77) ──────────────────────────
+#
+# `select` is not a keyword: a query reaches the compiler as an ordinary
+# application spine, and application binds tighter than every binary operator.
+# So the moment a `where` predicate contained an operator, the spine SPLIT and
+# the trailing clause keywords were swallowed by the last operand's own
+# application chain instead of landing on the query:
+#
+#   select t from T where t.a == x && ilike t.name p order t.name asc limit 5
+#                                     └─────────── ONE application chain ────┘
+#
+# Two failure modes came out of that, both reported as #77:
+#
+#   * when the last conjunct was a FUNCTIONAL predicate (`ilike`), the clause
+#     atoms hid inside its argument list — `tesl check` was clean and the
+#     generated Racket referenced the row binder `t` outside the query, so the
+#     module could not even LOAD ("t: unbound identifier");
+#   * every other shape reported the misleading "unknown name: order" and
+#     rejected code that reads as valid Tesl.
+#
+# The parser now hoists those atoms back onto the query
+# (Parser.hoist_single_line_sql_clauses), so the single-line and the multi-line
+# spellings produce ONE AST.  These tests pin that on the RUNTIME, not on the
+# emitted text: every shape below is executed against the Memory backend and its
+# rows compared to the multi-line spelling of the same query.  A shape that
+# compiles but does not run is exactly what #77 was.
+#
+# Companion coverage: compiler/test/test_issue_77.ml (AST/lowering parity plus
+# the check-time gate that rejects a query shape codegen cannot lower).
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List]
+import Tesl.List exposing [List.map, List.length]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Memory]
+
+entity Thing table "clause_placement_things" primaryKey id {
+  id: String
+  orgId: String
+  name: String
+  qty: Int
+  archived: Bool
+}
+
+database D = Database {
+  entities: [Thing]
+  backend: Memory
+}
+
+fn names(ts: List Thing) -> List String =
+  List.map (fn(t: Thing) -> t.name) ts
+
+# ── The shapes under test, single-line ───────────────────────────────────────
+
+fn oneWhereOrder(org: String) -> List Thing requires [dbRead] =
+  with database D { select t from Thing where t.orgId == org order t.name asc }
+
+fn oneWhereOrderLimit(org: String) -> List Thing requires [dbRead] =
+  with database D { select t from Thing where t.orgId == org order t.name asc limit 2 }
+
+fn andWhereOrder(org: String) -> List Thing requires [dbRead] =
+  with database D {
+    select t from Thing where t.orgId == org && t.archived == False order t.name asc
+  }
+
+fn andWhereLimitOffset(org: String) -> List Thing requires [dbRead] =
+  with database D {
+    select t from Thing where t.orgId == org && t.archived == False order t.name asc limit 2 offset 1
+  }
+
+# The exact shape from the issue: two comparisons and a functional predicate,
+# then order + limit — the variant that used to pass `check` and die on load.
+fn andIlikeOrderLimit(org: String, pat: String) -> List Thing requires [dbRead] =
+  with database D {
+    select t from Thing where t.orgId == org && t.archived == False && ilike t.name pat order t.name asc limit 5
+  }
+
+fn orWhereOrder(org: String) -> List Thing requires [dbRead] =
+  with database D {
+    select t from Thing where t.orgId == org || t.archived == True order t.name asc
+  }
+
+# ── The same queries, multi-line (the documented workaround = the oracle) ────
+
+fn oneWhereOrderMulti(org: String) -> List Thing requires [dbRead] =
+  with database D {
+    select t from Thing
+      where t.orgId == org
+      order t.name asc
+  }
+
+fn andWhereOrderMulti(org: String) -> List Thing requires [dbRead] =
+  with database D {
+    select t from Thing
+      where t.orgId == org && t.archived == False
+      order t.name asc
+  }
+
+fn andWhereLimitOffsetMulti(org: String) -> List Thing requires [dbRead] =
+  with database D {
+    select t from Thing
+      where t.orgId == org && t.archived == False
+      order t.name asc
+      limit 2
+      offset 1
+  }
+
+# A multi-line `||` predicate: found while gating #77's class.  The continuation
+# merge handled `&&` only, so `||` spliced the whole left comparison in as one
+# application argument and the query silently failed to lower.
+fn orWhereOrderMulti(org: String) -> List Thing requires [dbRead] =
+  with database D {
+    select t from Thing
+      where t.orgId == org || t.archived == True
+      order t.name asc
+  }
+
+fn andIlikeOrderLimitMulti(org: String, pat: String) -> List Thing requires [dbRead] =
+  with database D {
+    select t from Thing
+      where t.orgId == org && t.archived == False && ilike t.name pat
+      order t.name asc
+      limit 5
+  }
+
+# ── A query in ARGUMENT position — both spellings ────────────────────────────
+# `List.length (select … where … order …)`: the single-line spelling used to
+# mis-parse and the multi-line one used to fail with "expected ) but got
+# NEWLINE", so a query could not be passed straight to a function at all.
+
+fn countInline(org: String) -> Int requires [dbRead] =
+  with database D {
+    List.length (select t from Thing where t.orgId == org && t.archived == False order t.name asc limit 5)
+  }
+
+fn countInlineMultiLine(org: String) -> Int requires [dbRead] =
+  with database D {
+    List.length (select t from Thing
+      where t.orgId == org && t.archived == False
+      order t.name asc
+      limit 5)
+  }
+
+# ── Non-`select` query heads take the same spine ─────────────────────────────
+
+fn oneRow(org: String) -> Maybe Thing requires [dbRead] =
+  with database D {
+    selectOne t from Thing where t.orgId == org && t.archived == False order t.name asc
+  }
+
+fn countRows(org: String) -> Int requires [dbRead] =
+  with database D {
+    selectCount t from Thing where t.orgId == org && t.archived == False
+  }
+
+fn maxQty(org: String) -> Int requires [dbRead] =
+  with database D {
+    selectMax t.qty from Thing where t.orgId == org && t.archived == False
+  }
+
+# A dynamic threshold in the PREDICATE (values there may be any expression —
+# unlike `limit`/`offset`, which take an integer literal), so the property below
+# can vary the query without varying the spelling.
+fn aboveOneLine(org: String, k: Int) -> List Thing requires [dbRead] =
+  with database D {
+    select t from Thing where t.orgId == org && t.qty >= k order t.name asc
+  }
+
+fn aboveMultiLine(org: String, k: Int) -> List Thing requires [dbRead] =
+  with database D {
+    select t from Thing
+      where t.orgId == org && t.qty >= k
+      order t.name asc
+  }
+
+fn seed() -> Thing requires [dbRead, dbWrite] =
+  with database D {
+    let _ = insert Thing { id: "a", orgId: "o1", name: "alpha", qty: 3, archived: False }
+    let _ = insert Thing { id: "b", orgId: "o1", name: "beta", qty: 7, archived: False }
+    let _ = insert Thing { id: "c", orgId: "o1", name: "gamma", qty: 5, archived: True }
+    let _ = insert Thing { id: "d", orgId: "o2", name: "delta", qty: 9, archived: False }
+    insert Thing { id: "e", orgId: "o1", name: "epsilon", qty: 1, archived: False }
+  }
+
+# ── Tests ───────────────────────────────────────────────────────────────────
+
+test "#77: one-line where + order runs and orders" requires [dbRead, dbWrite] {
+  let _ = seed ()
+  expect names (oneWhereOrder "o1") == ["alpha", "beta", "epsilon", "gamma"]
+  expect names (oneWhereOrderLimit "o1") == ["alpha", "beta"]
+}
+
+test "#77: one-line compound where + order/limit/offset runs" requires [dbRead, dbWrite] {
+  let _ = seed ()
+  expect names (andWhereOrder "o1") == ["alpha", "beta", "epsilon"]
+  expect names (andWhereLimitOffset "o1") == ["beta", "epsilon"]
+}
+
+# The issue's own repro: compiled clean before the fix, then died at load with
+# "t: unbound identifier".  Running it at all is the assertion.
+test "#77: one-line where with && + ilike + order + limit runs" requires [dbRead, dbWrite] {
+  let _ = seed ()
+  expect names (andIlikeOrderLimit "o1" "%a%") == ["alpha", "beta"]
+  expect names (andIlikeOrderLimit "o1" "%ETA%") == ["beta"]
+  expect names (andIlikeOrderLimit "o1" "%zzz%") == []
+}
+
+test "#77: || where + order runs in both spellings" requires [dbRead, dbWrite] {
+  let _ = seed ()
+  expect names (orWhereOrder "o1") == ["alpha", "beta", "epsilon", "gamma"]
+  expect names (orWhereOrderMulti "o1") == ["alpha", "beta", "epsilon", "gamma"]
+}
+
+# The property that matters: the spelling must not change the answer.
+test "#77: single-line and multi-line spellings agree" requires [dbRead, dbWrite] {
+  let _ = seed ()
+  expect names (oneWhereOrder "o1") == names (oneWhereOrderMulti "o1")
+  expect names (andWhereOrder "o1") == names (andWhereOrderMulti "o1")
+  expect names (andWhereLimitOffset "o1") == names (andWhereLimitOffsetMulti "o1")
+  expect names (andIlikeOrderLimit "o1" "%a%") == names (andIlikeOrderLimitMulti "o1" "%a%")
+  expect countInline "o1" == countInlineMultiLine "o1"
+}
+
+test "#77: a query in argument position, one line and many" requires [dbRead, dbWrite] {
+  let _ = seed ()
+  expect countInline "o1" == 3
+  expect countInlineMultiLine "o1" == 3
+}
+
+test "#77: selectOne/selectCount/selectMax take the same one-line spine" requires [dbRead, dbWrite] {
+  let _ = seed ()
+  expect countRows "o1" == 3
+  expect maxQty "o1" == 7
+  case oneRow "o1" of
+    Something t -> expect t.name == "alpha"
+    Nothing -> expect False == True
+}
+
+# The equivalence as a PROPERTY rather than a table: for any threshold, the
+# one-line and multi-line spellings of the same query must return the same rows.
+# The rows are seeded first, so the property is not vacuously true on an empty
+# table (both sides would trivially return []).
+test "#77: property - spelling never changes the result" with 40 runs requires [dbRead, dbWrite] {
+  let _ = seed ()
+  property "one-line == multi-line for any qty threshold" (k: Int where k > 0 && k < 12) {
+    names (aboveOneLine "o1" k) == names (aboveMultiLine "o1" k)
+  }
+}
+
+test "#77: a dynamic predicate value in a one-line query is read from scope" requires [dbRead, dbWrite] {
+  let _ = seed ()
+  expect names (aboveOneLine "o1" 1) == ["alpha", "beta", "epsilon", "gamma"]
+  expect names (aboveOneLine "o1" 5) == ["beta", "gamma"]
+  expect names (aboveOneLine "o1" 8) == []
+  expect List.length (aboveOneLine "o1" 3) == 3
+}

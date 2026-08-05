@@ -159,7 +159,11 @@ let db_ops = [
     op_body = "insert Note { id: id, authorId: id, n: 0 }" };
   { op_tag = "update";    op_cap = "dbWrite";
     op_ret = "Unit";
-    op_body = "update note in Note where note.id == id set note.authorId = id returning one" };
+    (* Multi-line: a SINGLE-LINE update has never had a lowering (codegen rejects
+       it), and since that became a CHECK error rather than an emit-time one
+       (#77) this sweep has to spell the form that actually compiles.  Indented to
+       sit under the one-space body indentation the templates splice it into. *)
+    op_body = "update note in Note\n    where note.id == id\n    set note.authorId = id\n    returning one" };
   { op_tag = "delete";    op_cap = "dbWrite";
     op_ret = "Unit";
     op_body = "delete note from Note where note.id == id" };

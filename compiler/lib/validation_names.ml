@@ -485,6 +485,15 @@ let stdlib_adt_ctors : (string * (string * string list)) list = [
                                      "LinkLocal"; "Cgnat"; "Multicast";
                                      "Unspecified"; "PublicIp"; "DomainName";
                                      "InvalidHost"]));
+  (* #78.  CivilDate and IsoWeek are absent on purpose: they export no
+     constructors, so there is nothing for a local ADT to collide with. *)
+  ("Tesl.CivilTime", ("Month",      ["Month"; "January"; "February"; "March";
+                                     "April"; "May"; "June"; "July"; "August";
+                                     "September"; "October"; "November";
+                                     "December"]));
+  ("Tesl.CivilTime", ("Weekday",    ["Weekday"; "Monday"; "Tuesday";
+                                     "Wednesday"; "Thursday"; "Friday";
+                                     "Saturday"; "Sunday"]));
 ]
 
 let imported_plain_exposed_ctor_entries (m : module_form) : (string * string * string * loc) list =
@@ -508,12 +517,16 @@ let imported_plain_exposed_ctor_entries (m : module_form) : (string * string * s
           in
           (* Only expand constructors for names explicitly listed with (..) *)
           let dotdot_types = names |> List.filter has_dotdot |> List.map strip_dotdot in
-          (match List.assoc_opt imp.module_name stdlib_adt_ctors with
-           | None -> []
-           | Some (type_name, ctors) ->
-             if List.mem type_name dotdot_types then
-               List.map (fun ctor -> (ctor, type_name, imp.module_name, imp.loc)) ctors
-             else [])
+          (* EVERY row for the module, not [List.assoc_opt]: Tesl.CivilTime owns
+             TWO ADTs (Month and Weekday, #78), and an assoc lookup sees only the
+             first — so `Weekday(..)` would import constructors that no
+             local-conflict check ever looked at. *)
+          stdlib_adt_ctors
+          |> List.filter (fun (owner, _) -> owner = imp.module_name)
+          |> List.concat_map (fun (_, (type_name, ctors)) ->
+               if List.mem type_name dotdot_types then
+                 List.map (fun ctor -> (ctor, type_name, imp.module_name, imp.loc)) ctors
+               else [])
     ) m.imports
   in
   stdlib_entries @

@@ -152,6 +152,175 @@ let time : entry list = [
   e "FixedOffset" ~m:"Tesl.Time" ~kind:(KType "FixedOffset <minutes> : TimeZone") ~doc:"A fixed UTC-offset zone (no DST), offset in minutes.";
 ]
 
+(* ── Tesl.CivilTime (GitHub #78) ───────────────────────────────────────────── *)
+(* The calendar half of time, separate from Tesl.Time because a DATE is not an
+   INSTANT.  Every function is exact integer arithmetic on a day number, so a DST
+   transition cannot move it; the module is LIFTED (tesl/civil-time.tesl), so the
+   signatures below are carried verbatim like Tesl.List's rather than rendered
+   from stdlib_env.  Pure: no capability, no clock read. *)
+
+let civil_time : entry list = [
+  e "CivilDate" ~m:"Tesl.CivilTime"
+    ~kind:(KType "type CivilDate   # opaque: a day number since 1970-01-01 AND the zone it was read in; built only by CivilTime.fromParts / fromChecked / fromDayNumber / fromInstant / fromIso")
+    ~doc:"A calendar date together with the calendar it was read in. Opaque, so February 30 has no value at all rather than being rejected at every use. The zone is part of the value because 2026-08-05 in Tokyo and in Los Angeles label different instants — which is why CivilTime.startOfDay / endOfDay take no zone argument and cannot disagree with the one the date was built in.";
+  e "IsoWeek" ~m:"Tesl.CivilTime"
+    ~kind:(KType "type IsoWeek   # opaque: the week-numbering YEAR and the week within it, as ONE value; built only by CivilTime.isoWeekOf / isoWeek")
+    ~doc:"An ISO-8601 week. A week number is meaningless without its week-year — week 1 of a year can fall in December of the previous one — so the pair travels together and cannot be mispaired, which is why CivilTime.isoWeekOf returns one IsoWeek instead of two Ints.";
+  e "Month" ~m:"Tesl.CivilTime"
+    ~kind:(KType "type Month = January | February | March | April | May | June | July | August | September | October | November | December")
+    ~doc:"A calendar month. An ADT rather than an Int, so `case` over a month is exhaustive and the 0-based/1-based month bug cannot be written; CivilTime.monthNumber gives the 1..12 Int when a wire format needs one.";
+  v "January"   ~m:"Tesl.CivilTime" ~doc:"Month: monthNumber 1.";
+  v "February"  ~m:"Tesl.CivilTime" ~doc:"Month: monthNumber 2 — 28 days, or 29 when CivilTime.isLeapYear says so.";
+  v "March"     ~m:"Tesl.CivilTime" ~doc:"Month: monthNumber 3.";
+  v "April"     ~m:"Tesl.CivilTime" ~doc:"Month: monthNumber 4.";
+  v "May"       ~m:"Tesl.CivilTime" ~doc:"Month: monthNumber 5.";
+  v "June"      ~m:"Tesl.CivilTime" ~doc:"Month: monthNumber 6.";
+  v "July"      ~m:"Tesl.CivilTime" ~doc:"Month: monthNumber 7.";
+  v "August"    ~m:"Tesl.CivilTime" ~doc:"Month: monthNumber 8.";
+  v "September" ~m:"Tesl.CivilTime" ~doc:"Month: monthNumber 9.";
+  v "October"   ~m:"Tesl.CivilTime" ~doc:"Month: monthNumber 10.";
+  v "November"  ~m:"Tesl.CivilTime" ~doc:"Month: monthNumber 11.";
+  v "December"  ~m:"Tesl.CivilTime" ~doc:"Month: monthNumber 12.";
+  e "Weekday" ~m:"Tesl.CivilTime"
+    ~kind:(KType "type Weekday = Monday | Tuesday | Wednesday | Thursday | Friday | Saturday | Sunday")
+    ~doc:"A day of the week, ISO-ordered from Monday; CivilTime.weekdayNumber gives the ISO number (Monday = 1 … Sunday = 7), which is not the C/JavaScript Sunday = 0.";
+  v "Monday"    ~m:"Tesl.CivilTime" ~doc:"Weekday: ISO number 1, and the day CivilTime.startOfWeek returns.";
+  v "Tuesday"   ~m:"Tesl.CivilTime" ~doc:"Weekday: ISO number 2.";
+  v "Wednesday" ~m:"Tesl.CivilTime" ~doc:"Weekday: ISO number 3.";
+  v "Thursday"  ~m:"Tesl.CivilTime" ~doc:"Weekday: ISO number 4 — the day that decides an ISO week's week-year.";
+  v "Friday"    ~m:"Tesl.CivilTime" ~doc:"Weekday: ISO number 5.";
+  v "Saturday"  ~m:"Tesl.CivilTime" ~doc:"Weekday: ISO number 6.";
+  v "Sunday"    ~m:"Tesl.CivilTime" ~doc:"Weekday: ISO number 7, NOT 0.";
+  (* The six range facts: an accessor hands back the value already carrying its
+     bound, so a caller can REQUIRE the bound without re-deriving it.  Each is
+     minted by one module-private check that verifies the bound rather than
+     asserting it, so none can be forged. *)
+  e "IsDayOfMonth" ~m:"Tesl.CivilTime" ~kind:(KFact "fact IsDayOfMonth (n: Int)")
+    ~doc:"The Int is a day of the month, 1..31; carried out of CivilTime.day so downstream code need not re-derive the bound.";
+  e "IsMonthNumber" ~m:"Tesl.CivilTime" ~kind:(KFact "fact IsMonthNumber (n: Int)")
+    ~doc:"The Int is a month number, 1..12; carried out of CivilTime.monthNumber.";
+  e "IsDayOfYear" ~m:"Tesl.CivilTime" ~kind:(KFact "fact IsDayOfYear (n: Int)")
+    ~doc:"The Int is a day of the year, 1..366; carried out of CivilTime.dayOfYear.";
+  e "IsWeekNumber" ~m:"Tesl.CivilTime" ~kind:(KFact "fact IsWeekNumber (n: Int)")
+    ~doc:"The Int is an ISO week number, 1..53; carried out of CivilTime.weekNumber.";
+  e "IsWeekdayNumber" ~m:"Tesl.CivilTime" ~kind:(KFact "fact IsWeekdayNumber (n: Int)")
+    ~doc:"The Int is an ISO weekday number, 1..7 with Monday = 1; carried out of CivilTime.weekdayNumber.";
+  e "IsMonthLength" ~m:"Tesl.CivilTime" ~kind:(KFact "fact IsMonthLength (n: Int)")
+    ~doc:"The Int is a month's length, 28..31; carried out of CivilTime.daysInMonth.";
+  e "DayOfMonth" ~m:"Tesl.CivilTime" ~kind:(KFact "fact DayOfMonth (y: Int) (m: Month) (d: Int)")
+    ~doc:"That day exists in that month of that year — the precondition of the TOTAL constructor CivilTime.fromChecked. Minted by `check CivilTime.checkDayOfMonth`, so a caller who validated the parts at a boundary does not also unwrap a Maybe.";
+  e "SameCalendar" ~m:"Tesl.CivilTime" ~kind:(KFact "fact SameCalendar (a: CivilDate) (b: CivilDate)")
+    ~doc:"Both dates were read in the same zone, so comparing them is meaningful. Required by every two-date operation (CivilTime.diffDays / datesBetween / isBefore) and minted only by `check CivilTime.sameCalendar`: \"days between today-in-Tokyo and today-in-LA\" has no right answer, so it must not silently have one.";
+  e "CivilTime.checkDayOfMonth" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "check CivilTime.checkDayOfMonth(y: Int, m: Month, d: Int) -> d: Int ::: DayOfMonth y m d")
+    ~doc:"Validates a (year, month, day) triple at a boundary, minting DayOfMonth for CivilTime.fromChecked; fails 400 when that month has no such day. Use CivilTime.fromParts instead when the caller would rather branch than discharge.";
+  e "CivilTime.sameCalendar" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "check CivilTime.sameCalendar(a: CivilDate, b: CivilDate) -> b: CivilDate ::: SameCalendar a b")
+    ~doc:"Discharges the obligation that two dates share a calendar, once, for CivilTime.diffDays / datesBetween / isBefore; fails 400 when they were read in different zones, because dates from different zones are not comparable.";
+  e "CivilTime.fromParts" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.fromParts(z: TimeZone, y: Int, m: Month, d: Int) -> Maybe CivilDate")
+    ~doc:"Builds a date from calendar parts in the zone z, Nothing when the parts are not a real date (2026-02-30). The one validation point for untrusted input.";
+  e "CivilTime.fromChecked" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.fromChecked(z: TimeZone, y: Int, m: Month, d: Int ::: DayOfMonth y m d) -> CivilDate")
+    ~doc:"Total counterpart of CivilTime.fromParts: the day is already known to exist in that month, so there is no failure case left to represent and no Maybe to unwrap.";
+  e "CivilTime.fromDayNumber" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.fromDayNumber(z: TimeZone, n: Int) -> CivilDate")
+    ~doc:"Total: the date n days after 1970-01-01 (negative before it), read in z. Every integer names a real civil date, which is exactly why the day number is the representation.";
+  e "CivilTime.fromInstant" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.fromInstant(z: TimeZone, ts: PosixMillis) -> CivilDate")
+    ~doc:"The civil date an instant falls on IN z. This is where a zone is genuinely needed: the same instant is two different dates on either side of the date line.";
+  e "CivilTime.fromIso" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.fromIso(z: TimeZone, s: String) -> Maybe CivilDate")
+    ~doc:"Strict YYYY-MM-DD read as a date in z; anything else — a bad length, a missing separator, a date that does not exist — is Nothing rather than a guess.";
+  e "CivilTime.startOfDay" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.startOfDay(d: CivilDate) -> PosixMillis")
+    ~doc:"The first instant of that day, DST-correct: the zone offset is resolved AT the local midnight, not at the epoch. No zone argument — the date carries the one it was read in — and this is the INCLUSIVE lower bound of a day filter.";
+  e "CivilTime.endOfDay" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.endOfDay(d: CivilDate) -> PosixMillis")
+    ~doc:"The first instant of the NEXT day — the EXCLUSIVE upper bound, so a calendar-day filter is the half-open range [startOfDay, endOfDay) and needs no 23:59:59.999 fudge. It has its own name because \"+ one day\" in milliseconds is the DST bug this module exists to remove.";
+  e "CivilTime.dayNumber" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.dayNumber(d: CivilDate) -> Int")
+    ~doc:"Days since 1970-01-01, exact and negative before it — the Int to store when a column has to be a plain integer.";
+  e "CivilTime.zone" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.zone(d: CivilDate) -> TimeZone")
+    ~doc:"The calendar the date was read in. Part of the value, so the producer's intent stays recoverable.";
+  e "CivilTime.year" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.year(d: CivilDate) -> Int")
+    ~doc:"The proleptic-Gregorian year of the date — see CivilTime.weekYear for the ISO week-numbering year, which differs around New Year.";
+  e "CivilTime.month" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.month(d: CivilDate) -> Month")
+    ~doc:"The Month of the date, as a constructor; CivilTime.monthNumber turns it into 1..12.";
+  e "CivilTime.day" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.day(d: CivilDate) -> Int ? IsDayOfMonth")
+    ~doc:"Day of the month, returned already carrying IsDayOfMonth (1..31) so a caller that needs the bound downstream gets it from here instead of re-deriving it.";
+  e "CivilTime.weekday" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.weekday(d: CivilDate) -> Weekday")
+    ~doc:"The Weekday the date falls on.";
+  e "CivilTime.dayOfYear" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.dayOfYear(d: CivilDate) -> Int ? IsDayOfYear")
+    ~doc:"1..366 counting January 1st as 1, returned already carrying IsDayOfYear.";
+  e "CivilTime.isoWeekOf" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.isoWeekOf(d: CivilDate) -> IsoWeek")
+    ~doc:"The ISO week the date belongs to, as ONE value: a bare week number could be stored or compared without its week-year, which is exactly how week 1 gets filed under the wrong year.";
+  e "CivilTime.isoWeek" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.isoWeek(y: Int, w: Int) -> Maybe IsoWeek")
+    ~doc:"Builds an IsoWeek from a week-year and week number, Nothing when that year has no such week (a year has 52 or 53; week 54 never).";
+  e "CivilTime.weekYear" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.weekYear(w: IsoWeek) -> Int")
+    ~doc:"The ISO week-numbering year — NOT the calendar year of the week's dates: a week belongs to the year that owns its Thursday, so 2027-01-01 is in week 53 of 2026.";
+  e "CivilTime.weekNumber" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.weekNumber(w: IsoWeek) -> Int ? IsWeekNumber")
+    ~doc:"The ISO week number, returned already carrying IsWeekNumber (1..53); only ever meaningful together with CivilTime.weekYear, which is why both come out of one IsoWeek.";
+  e "CivilTime.monthNumber" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.monthNumber(m: Month) -> Int ? IsMonthNumber")
+    ~doc:"1..12 with January = 1, returned already carrying IsMonthNumber.";
+  e "CivilTime.monthFromNumber" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.monthFromNumber(n: Int) -> Maybe Month")
+    ~doc:"1..12 to a Month; Nothing for 0, 13 or anything else, so an untrusted number cannot become a wrong month.";
+  e "CivilTime.weekdayNumber" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.weekdayNumber(w: Weekday) -> Int ? IsWeekdayNumber")
+    ~doc:"The ISO weekday number, Monday = 1 … Sunday = 7, returned already carrying IsWeekdayNumber.";
+  e "CivilTime.addDays" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.addDays(d: CivilDate, n: Int) -> CivilDate")
+    ~doc:"Moves a date by whole calendar days. This is how you say \"+1 day\": twice a year in a DST zone a civil day is 23 or 25 hours, so `addMs ts 86400000` lands on the wrong wall-clock day.";
+  e "CivilTime.diffDays" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.diffDays(a: CivilDate, b: CivilDate ::: SameCalendar a b) -> Int")
+    ~doc:"Whole calendar days a - b, exact — where `diffMs a b / 86400000` miscounts across a DST transition, the day between two midnights being 23 or 25 hours long. Requires SameCalendar from `check CivilTime.sameCalendar`: dates read in different zones are not comparable.";
+  e "CivilTime.addMonths" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.addMonths(d: CivilDate, n: Int) -> CivilDate")
+    ~doc:"Moves a date by whole months, CLAMPING the day of the month: 31 January plus one month is 28 February, or the 29th in a leap year — never 3 March. Clamping is the only total choice; CivilTime.endOfMonth and daysInMonth are there for a caller who wants a different policy.";
+  e "CivilTime.startOfMonth" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.startOfMonth(d: CivilDate) -> CivilDate")
+    ~doc:"The 1st of that date's month.";
+  e "CivilTime.endOfMonth" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.endOfMonth(d: CivilDate) -> CivilDate")
+    ~doc:"The LAST day of that date's month (the 28th..31st itself, not the 1st of the next one).";
+  e "CivilTime.startOfWeek" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.startOfWeek(d: CivilDate) -> CivilDate")
+    ~doc:"The ISO Monday of that date's week.";
+  e "CivilTime.startOfYear" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.startOfYear(d: CivilDate) -> CivilDate")
+    ~doc:"January 1st of that date's year.";
+  e "CivilTime.daysInMonth" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.daysInMonth(y: Int, m: Month) -> Int ? IsMonthLength")
+    ~doc:"28..31, returned already carrying IsMonthLength; the year is required because February's length depends on it.";
+  e "CivilTime.isLeapYear" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.isLeapYear(y: Int) -> Bool")
+    ~doc:"True for proleptic-Gregorian leap years, century rule included (1900 is not, 2000 is).";
+  e "CivilTime.datesBetween" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.datesBetween(a: CivilDate, b: CivilDate ::: SameCalendar a b) -> List CivilDate")
+    ~doc:"Every date in the HALF-OPEN range [a, b), ascending, and empty when b is not after a — so consecutive periods do not double-count the boundary day. Requires SameCalendar from `check CivilTime.sameCalendar`.";
+  e "CivilTime.isBefore" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.isBefore(a: CivilDate, b: CivilDate ::: SameCalendar a b) -> Bool")
+    ~doc:"True when a is an earlier day than b. Requires SameCalendar from `check CivilTime.sameCalendar`, because ordering dates read in different zones compares two different calendars.";
+  e "CivilTime.toIso" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.toIso(d: CivilDate) -> String")
+    ~doc:"\"2026-08-05\", zero-padded. Zone-free: a date is a LABEL, and formatting one through an instant would need a zone it has no business needing — that round trip is this module's off-by-one-day bug in miniature.";
+  e "CivilTime.isoWeekLabel" ~m:"Tesl.CivilTime"
+    ~kind:(KSyntax "fn CivilTime.isoWeekLabel(w: IsoWeek) -> String")
+    ~doc:"\"2026-W32\", zero-padded. The week-year is part of the label because the week number alone does not identify a week.";
+]
+
 (* ── Tesl.Int32 ────────────────────────────────────────────────────────────── *)
 
 let int32 : entry list = [
@@ -979,7 +1148,7 @@ let sso : entry list = [
 ]
 
 let entries : entry list =
-  ambient @ prelude @ email @ maybe_result @ time
+  ambient @ prelude @ email @ maybe_result @ time @ civil_time
   @ int32 @ db @ either @ string_ @ regex @ url @ net @ list_ @ list_prim @ int_ @ float_
   @ dict @ set_ @ tuple @ money @ random_uuid_id_env @ json_codecs
   @ api_test @ jwt @ crypto @ cache @ database @ http @ http_client @ agent @ queue

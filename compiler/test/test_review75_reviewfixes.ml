@@ -579,14 +579,18 @@ fn f(c: Int32, s: String) -> String requires [dbWrite] =
 let test_R75_NT07SQL_set_int_into_int32_rejected () =
   should_fail "SET clause: type mismatch\\|field type is `Int32`" (sql_width_prelude ^ {|
 fn f(n: Int) -> String requires [dbRead, dbWrite] =
-  update w in Widget where w.id == "x" set w.count = n
+  update w in Widget
+    where w.id == "x"
+    set w.count = n
   "ok"
 |})
 
 let test_R75_NT07SQL_set_string_into_newtype_rejected () =
   should_fail "SET clause: type mismatch\\|field type is `UserId`" (sql_width_prelude ^ {|
 fn f(s: String) -> String requires [dbRead, dbWrite] =
-  update w in Widget where w.id == "x" set w.owner = s
+  update w in Widget
+    where w.id == "x"
+    set w.owner = s
   "ok"
 |})
 
@@ -600,7 +604,10 @@ let test_R75_NT07SQL_exact_types_accepted () =
   should_pass (sql_width_prelude ^ {|
 fn f(c: Int32, u: UserId) -> List Widget requires [dbRead, dbWrite] =
   insert Widget { id: "w", count: c, owner: u }
-  update w in Widget where w.id == "w" set w.count = c set w.owner = u
+  update w in Widget
+    where w.id == "w"
+    set w.count = c
+    set w.owner = u
   select w from Widget where w.owner == u
 |})
 

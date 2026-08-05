@@ -10,6 +10,11 @@
          ;; on decode paths even before tesl/money.rkt is loaded.
          "private/money-core.rkt"
          (only-in "private/currency-data.rkt")
+         ;; TimeZone is struct-backed in the same way Money is, and needs the
+         ;; same explicit runtime-type row (see the registry below).  Taken from
+         ;; the PRIVATE engine, not from tesl/time.rkt — that surface module
+         ;; requires THIS file, so requiring it back would cycle.
+         (only-in "private/time-trunc.rkt" tesl-tz?)
          (for-syntax racket/base
                      racket/list
                      racket/syntax
@@ -467,6 +472,17 @@
         ;; tesl/time.rkt; structs need explicit rows).
         'Money tesl-money?
         'Currency tesl-currency?
+        ;; TimeZone: struct-backed (dsl/private/time-trunc.rkt's `tesl-tz`), for
+        ;; the same reason Money is — and it was MISSING, which made a TimeZone
+        ;; compile-clean and dead at runtime anywhere it had to satisfy its own
+        ;; declared type: a `zone: TimeZone` record field, an ADT field, a
+        ;; TimeZone-returning function.  Every such program failed with
+        ;; "expected … to satisfy type TimeZone, got #(struct:tesl-tz utc 0)" —
+        ;; the value rejected by its own type.  Storing the reporting zone next
+        ;; to the thing it applies to is ordinary code (and `Tesl.CivilTime`'s
+        ;; dates carry theirs), so the fail-closed default was wrong here, not
+        ;; conservative.
+        'TimeZone tesl-tz?
         'ExchangeRate tesl-exchange-rate?
         ;; MoneyRate: the canonical §MR name emits as 'MoneyRate; entity/
         ;; annotation ALIASES emit verbatim so the sql layer can key the

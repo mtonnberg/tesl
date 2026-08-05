@@ -1,0 +1,652 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Tesl.CivilTime — civil-date arithmetic: whole days, whole months, ISO weeks.
+# GitHub #78.
+#
+# WHY THIS EXISTS.  `Tesl.Time` covers INSTANTS well (PosixMillis, the
+# DST-correct TimeZone ADT, formatTime, Time.trunc*, addMs/diffMs).  What it
+# cannot express is calendar arithmetic, and the natural workaround is silently
+# wrong in exactly the zones it matters for: a civil day is not 86 400 000 ms —
+# twice a year in a DST zone it is 23 h or 25 h.  So
+#
+#     addMs ts 86400000          lands on the wrong wall-clock day, and
+#     diffMs a b / 86400000      miscounts across a transition.
+#
+# Everything here is instead exact INTEGER arithmetic on a day number (days since
+# 1970-01-01, Howard Hinnant's public-domain civil_from_days / days_from_civil),
+# so "the day after" and "how many days between" are right by construction and a
+# DST transition cannot move them.
+#
+# WHAT A CivilDate IS.  A date plus THE CALENDAR IT WAS READ IN.  The zone is
+# part of the value, not an argument at every use, because 2026-08-05 in Tokyo and
+# 2026-08-05 in Los Angeles are different labels of different instants — a date
+# that forgot its zone makes the producer's intent unrecoverable, and every
+# conversion back to an instant a place to pass the wrong one.  So
+# `startOfDay` / `endOfDay` take NO zone: they cannot disagree with the zone the
+# date was built in.  Comparing two dates read in DIFFERENT calendars is a
+# mistake rather than a number, so the two-date operations require a
+# `SameCalendar` proof (discharged once with `check CivilTime.sameCalendar`)
+# instead of quietly answering.
+#
+# WHAT IS UNREPRESENTABLE.  `CivilDate` and `IsoWeek` are OPAQUE: their
+# constructors are not exported, so the only ways in are the builders below, and
+# Feb 30 / week 54 have no value at all rather than being rejected at every use.
+# `Month` and `Weekday` are ADTs, so `case` over a month is exhaustive and the
+# 0-based/1-based month bug cannot be written.
+#
+# WHAT THE PROOFS BUY.  The parts a date hands back are bounded by construction
+# (a day of month is 1..31, an ISO week 1..53), and that is worth more to the
+# CALLER than to this module: the accessors return the value already carrying the
+# fact, so code downstream can require the bound without re-deriving it.  Each
+# fact has exactly ONE mint — a check in this module that VERIFIES the bound
+# rather than asserting it — and those mints are deliberately not exported.
+#
+# RANGE.  Proleptic Gregorian, no leap seconds (the civil calendar, like
+# elm/time).  Exact for year >= 1; day numbers before 1970 are ordinary negative
+# integers and work.
+#
+# This module is written in Tesl, not Racket: it is compiled at build time to
+# `tesl/civil-time-derived.rkt`, which the shim `tesl/civil-time.rkt` re-exports
+# under the dotted `CivilTime.*` runtime names.  The calendar logic — where the
+# subtle bugs live — is therefore type- and proof-checked by the language itself.
+# ─────────────────────────────────────────────────────────────────────────────
+module CivilTime exposing [
+  # Types.  CivilDate and IsoWeek are exported WITHOUT their constructors: an
+  # invalid date or week must have no value, not a validation rule.
+  CivilDate,
+  IsoWeek,
+  Month(..),
+  Weekday(..),
+  # Facts the accessors hand out, so a caller can require a bound it did not
+  # compute, and the two obligations this module asks of a caller.
+  IsDayOfMonth,
+  IsMonthNumber,
+  IsDayOfYear,
+  IsWeekNumber,
+  IsWeekdayNumber,
+  IsMonthLength,
+  DayOfMonth,
+  SameCalendar,
+  # The two exported checks: the mints for the obligations above.
+  checkDayOfMonth,
+  sameCalendar,
+  # Construction.
+  fromParts,
+  fromChecked,
+  fromDayNumber,
+  fromInstant,
+  fromIso,
+  # Instant bridge (no zone argument — it is in the date).
+  startOfDay,
+  endOfDay,
+  # Views.
+  dayNumber,
+  zone,
+  year,
+  month,
+  day,
+  weekday,
+  dayOfYear,
+  isoWeekOf,
+  isoWeek,
+  weekYear,
+  weekNumber,
+  monthNumber,
+  monthFromNumber,
+  weekdayNumber,
+  # Arithmetic.
+  addDays,
+  diffDays,
+  addMonths,
+  startOfMonth,
+  endOfMonth,
+  startOfWeek,
+  startOfYear,
+  daysInMonth,
+  isLeapYear,
+  datesBetween,
+  isBefore,
+  # ISO-8601 strings — zone-free, because a date is a label and formatting one
+  # through an instant needs a zone it has no business needing.
+  toIso,
+  isoWeekLabel,
+]
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List]
+import Tesl.Maybe exposing [Maybe, Something, Nothing]
+import Tesl.String exposing [String.concat, String.fromInt, String.join, String.length, String.padLeft, String.slice, String.toInt]
+import Tesl.List exposing [List.map, List.range]
+import Tesl.Time exposing [PosixMillis, TimeZone, Time.offsetAt, Time.secondsToPosix, addMs, diffMs]
+
+# ── Types ────────────────────────────────────────────────────────────────────
+
+# A civil date: the day number since 1970-01-01, and the calendar it was read in.
+# The constructor is module-private (see the `exposing` list) so every value comes
+# from a builder that has already established it is a real date.
+type CivilDate =
+  | Civil Int TimeZone
+
+# An ISO-8601 week: the week-numbering YEAR and the week within it, as ONE value.
+# Two Ints would let a caller pair week 53 with the wrong year, which is the
+# classic ISO-week bug — week 1 of a year can fall in December of the previous
+# one, so the pair only means something together.
+type IsoWeek =
+  | Week Int Int
+
+type Month =
+  | January
+  | February
+  | March
+  | April
+  | May
+  | June
+  | July
+  | August
+  | September
+  | October
+  | November
+  | December
+
+type Weekday =
+  | Monday
+  | Tuesday
+  | Wednesday
+  | Thursday
+  | Friday
+  | Saturday
+  | Sunday
+
+# ── Facts ────────────────────────────────────────────────────────────────────
+# Each names its own domain rather than a generic range: a reader of a signature
+# sees WHAT the number is, and the bound cannot be written wrongly at the call
+# site the way two magic literals can.
+
+fact IsDayOfMonth (n: Int)
+fact IsMonthNumber (n: Int)
+fact IsDayOfYear (n: Int)
+fact IsWeekNumber (n: Int)
+fact IsWeekdayNumber (n: Int)
+fact IsMonthLength (n: Int)
+
+# The day exists in that month of that year — the precondition of the TOTAL
+# constructor, so a caller who has validated the parts does not also unwrap a Maybe.
+fact DayOfMonth (y: Int) (m: Month) (d: Int)
+
+# Both dates were read in the same calendar, so comparing them is meaningful.
+fact SameCalendar (a: CivilDate) (b: CivilDate)
+
+# ── Mints (module-private) ───────────────────────────────────────────────────
+# The ONLY way to obtain the facts above.  Each verifies its bound instead of
+# asserting it, and none is exported, so no caller can forge one.
+
+check asDayOfMonth(n: Int) -> n: Int ::: IsDayOfMonth n =
+  if n >= 1 && n <= 31 then
+    ok n ::: IsDayOfMonth n
+  else
+    fail 500 "day of month out of range"
+
+check asMonthNumber(n: Int) -> n: Int ::: IsMonthNumber n =
+  if n >= 1 && n <= 12 then
+    ok n ::: IsMonthNumber n
+  else
+    fail 500 "month number out of range"
+
+check asDayOfYear(n: Int) -> n: Int ::: IsDayOfYear n =
+  if n >= 1 && n <= 366 then
+    ok n ::: IsDayOfYear n
+  else
+    fail 500 "day of year out of range"
+
+check asWeekNumber(n: Int) -> n: Int ::: IsWeekNumber n =
+  if n >= 1 && n <= 53 then
+    ok n ::: IsWeekNumber n
+  else
+    fail 500 "ISO week number out of range"
+
+check asWeekdayNumber(n: Int) -> n: Int ::: IsWeekdayNumber n =
+  if n >= 1 && n <= 7 then
+    ok n ::: IsWeekdayNumber n
+  else
+    fail 500 "weekday number out of range"
+
+check asMonthLength(n: Int) -> n: Int ::: IsMonthLength n =
+  if n >= 28 && n <= 31 then
+    ok n ::: IsMonthLength n
+  else
+    fail 500 "month length out of range"
+
+# ── Exported mints ───────────────────────────────────────────────────────────
+
+# Validate a (year, month, day) triple at a boundary.  Passing its result to
+# `fromChecked` builds the date with no Maybe to unwrap; use `fromParts` instead
+# when the caller would rather branch than discharge.
+check checkDayOfMonth(y: Int, m: Month, d: Int) -> d: Int ::: DayOfMonth y m d =
+  if d >= 1 && d <= rawDaysInMonth y m then
+    ok d ::: DayOfMonth y m d
+  else
+    fail 400 "no such day in that month"
+
+# Discharge the obligation that two dates share a calendar.  Fails when they do
+# not, which is the whole point: "days between today-in-Tokyo and today-in-LA"
+# has no right answer, so it must not silently have one.
+fn zoneMatches(a: CivilDate, b: CivilDate) -> Bool =
+  zone a == zone b
+
+check sameCalendar(a: CivilDate, b: CivilDate) -> b: CivilDate ::: SameCalendar a b =
+  if zoneMatches a b then
+    ok b ::: SameCalendar a b
+  else
+    fail 400 "the two dates were read in different time zones"
+
+# ── Integer helpers ──────────────────────────────────────────────────────────
+# `/` truncates toward zero and `%` is a truncating remainder, so both need a
+# correction once an operand can be negative (every day number before 1970 is).
+# Every divisor below is a positive literal, which is what discharges the
+# division-by-zero obligation without a proof at each site.
+
+fn floorDivDay(ms: Int) -> Int =
+  let q = ms / 86400000
+  if ms - q * 86400000 < 0 then
+    q - 1
+  else
+    q
+
+fn mod7(n: Int) -> Int =
+  let r = n % 7
+  if r < 0 then
+    r + 7
+  else
+    r
+
+# ── Hinnant's civil ↔ day-number conversion ──────────────────────────────────
+# days_from_civil, transcribed.  `era`/`yoe`/`mp`/`doy` are his names.  The
+# March-based year (Jan/Feb belong to the previous one) is what makes the leap day
+# the LAST day of the year and removes every special case from the arithmetic.
+
+fn marchYear(y: Int, monthNo: Int) -> Int =
+  if monthNo <= 2 then
+    y - 1
+  else
+    y
+
+fn marchMonthIndex(monthNo: Int) -> Int =
+  if monthNo > 2 then
+    monthNo - 3
+  else
+    monthNo + 9
+
+fn dayFromYmd(y: Int, monthNo: Int, d: Int) -> Int =
+  let my = marchYear y monthNo
+  let era = my / 400
+  let yoe = my - era * 400
+  let mp = marchMonthIndex monthNo
+  let doy = (153 * mp + 2) / 5 + d - 1
+  let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+  era * 146097 + doe - 719468
+
+# civil_from_days, split into one function per part so the era arithmetic appears
+# once per quantity and nothing is carried in a tuple.  `z` is shifted so every
+# division below is on a non-negative value for year >= 0, where truncating and
+# flooring division agree.
+
+fn shiftedDay(n: Int) -> Int =
+  n + 719468
+
+fn eraOf(n: Int) -> Int =
+  shiftedDay n / 146097
+
+fn doeOf(n: Int) -> Int =
+  shiftedDay n - eraOf n * 146097
+
+fn yoeOf(n: Int) -> Int =
+  let doe = doeOf n
+  (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+
+fn doyOf(n: Int) -> Int =
+  let yoe = yoeOf n
+  doeOf n - (365 * yoe + yoe / 4 - yoe / 100)
+
+fn mpOf(n: Int) -> Int =
+  (5 * doyOf n + 2) / 153
+
+fn rawDayOfMonth(n: Int) -> Int =
+  doyOf n - (153 * mpOf n + 2) / 5 + 1
+
+fn rawMonthNumber(n: Int) -> Int =
+  let mp = mpOf n
+  if mp < 10 then
+    mp + 3
+  else
+    mp - 9
+
+fn rawYear(n: Int) -> Int =
+  let marchBased = yoeOf n + eraOf n * 400
+  if rawMonthNumber n <= 2 then
+    marchBased + 1
+  else
+    marchBased
+
+# ── Month / Weekday ↔ Int ────────────────────────────────────────────────────
+
+fn rawMonthNumberOf(m: Month) -> Int =
+  case m of
+    January -> 1
+    February -> 2
+    March -> 3
+    April -> 4
+    May -> 5
+    June -> 6
+    July -> 7
+    August -> 8
+    September -> 9
+    October -> 10
+    November -> 11
+    December -> 12
+
+# Total by construction: every caller inside this module derives `n` from a real
+# date, so 1..12 is the whole domain; December is the last arm rather than a
+# default, so an impossible value still yields a month instead of a failure.
+fn monthOfNumber(n: Int) -> Month =
+  case n of
+    1 -> January
+    2 -> February
+    3 -> March
+    4 -> April
+    5 -> May
+    6 -> June
+    7 -> July
+    8 -> August
+    9 -> September
+    10 -> October
+    11 -> November
+    _ -> December
+
+fn rawWeekdayNumberOf(w: Weekday) -> Int =
+  case w of
+    Monday -> 1
+    Tuesday -> 2
+    Wednesday -> 3
+    Thursday -> 4
+    Friday -> 5
+    Saturday -> 6
+    Sunday -> 7
+
+fn weekdayOfNumber(n: Int) -> Weekday =
+  case n of
+    1 -> Monday
+    2 -> Tuesday
+    3 -> Wednesday
+    4 -> Thursday
+    5 -> Friday
+    6 -> Saturday
+    _ -> Sunday
+
+# ISO weekday of a day number: Monday = 1 … Sunday = 7.  Day 0 (1970-01-01) was a
+# Thursday, hence the +3 before the modulo.
+fn rawWeekdayOfDay(n: Int) -> Int =
+  1 + mod7 (n + 3)
+
+fn rawIsLeapYear(y: Int) -> Bool =
+  y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)
+
+fn rawDaysInMonth(y: Int, m: Month) -> Int =
+  case m of
+    January -> 31
+    February ->
+      if rawIsLeapYear y then
+        29
+      else
+        28
+    March -> 31
+    April -> 30
+    May -> 31
+    June -> 30
+    July -> 31
+    August -> 31
+    September -> 30
+    October -> 31
+    November -> 30
+    December -> 31
+
+# ── Construction ─────────────────────────────────────────────────────────────
+
+# The date [n] days after the epoch, in [z].  Total: every integer names a real
+# civil date, which is exactly why the day number is the representation.
+fn fromDayNumber(z: TimeZone, n: Int) -> CivilDate =
+  Civil n z
+
+# Build from calendar parts, or Nothing when the parts are not a real date
+# (2026-02-30, month 13).  Use this for untrusted input; `fromChecked` when the
+# caller would rather discharge the obligation once than branch.
+fn fromParts(z: TimeZone, y: Int, m: Month, d: Int) -> Maybe CivilDate =
+  if d >= 1 && d <= rawDaysInMonth y m then
+    Something (Civil (dayFromYmd y (rawMonthNumberOf m) d) z)
+  else
+    Nothing
+
+# Total counterpart of `fromParts`: the day is already known to exist in that
+# month, so there is no failure case left to represent.
+fn fromChecked(z: TimeZone, y: Int, m: Month, d: Int ::: DayOfMonth y m d) -> CivilDate =
+  Civil (dayFromYmd y (rawMonthNumberOf m) d) z
+
+# The civil date an instant falls on, in [z].  This is where a zone is genuinely
+# needed: the same instant is two different dates on either side of the date line.
+fn posixToMs(ts: PosixMillis) -> Int =
+  diffMs (Time.secondsToPosix 0) ts
+
+fn fromInstant(z: TimeZone, ts: PosixMillis) -> CivilDate =
+  let localMs = posixToMs ts + Time.offsetAt z ts * 60000
+  Civil (floorDivDay localMs) z
+
+# ── Instant bridge ───────────────────────────────────────────────────────────
+# A date is not an instant; a zone is required to cross, and it is the one the
+# date carries — so these take no zone argument and cannot be given a different
+# one than the date was read in.
+
+fn msToPosix(ms: Int) -> PosixMillis =
+  addMs (Time.secondsToPosix 0) ms
+
+# The first instant of the day, resolving the zone offset AT that local midnight
+# rather than at the epoch: on a DST transition day the offset before and after
+# differ, and the offset that matters is the one in force when the day starts.
+# Re-resolved twice, which is what makes a spring-forward or fall-back midnight
+# land on the true local start (the same two-step `Time.truncDay` performs).
+fn startOfDay(d: CivilDate) -> PosixMillis =
+  let z = zone d
+  let localMs = dayNumber d * 86400000
+  let off1 = Time.offsetAt z (msToPosix localMs)
+  let off2 = Time.offsetAt z (msToPosix (localMs - off1 * 60000))
+  let off3 = Time.offsetAt z (msToPosix (localMs - off2 * 60000))
+  msToPosix (localMs - off3 * 60000)
+
+# The first instant of the NEXT day — the exclusive END of a half-open day range,
+# which is what a timestamp filter wants:  start <= ts && ts < end.  It has its
+# own name because "+ one day" in milliseconds is precisely the DST bug this
+# module exists to remove.
+fn endOfDay(d: CivilDate) -> PosixMillis =
+  startOfDay (addDays d 1)
+
+# ── Views ────────────────────────────────────────────────────────────────────
+
+fn dayNumber(d: CivilDate) -> Int =
+  case d of
+    Civil n _ -> n
+
+fn zone(d: CivilDate) -> TimeZone =
+  case d of
+    Civil _ z -> z
+
+fn year(d: CivilDate) -> Int =
+  rawYear (dayNumber d)
+
+fn month(d: CivilDate) -> Month =
+  monthOfNumber (rawMonthNumber (dayNumber d))
+
+# The bound travels with the value: a caller that needs "this is a day of month"
+# downstream gets the fact from here instead of re-deriving it.
+fn day(d: CivilDate) -> Int ? IsDayOfMonth =
+  asDayOfMonth (rawDayOfMonth (dayNumber d))
+
+fn weekday(d: CivilDate) -> Weekday =
+  weekdayOfNumber (rawWeekdayOfDay (dayNumber d))
+
+fn dayOfYear(d: CivilDate) -> Int ? IsDayOfYear =
+  asDayOfYear (dayNumber d - dayFromYmd (year d) 1 1 + 1)
+
+fn monthNumber(m: Month) -> Int ? IsMonthNumber =
+  asMonthNumber (rawMonthNumberOf m)
+
+fn monthFromNumber(n: Int) -> Maybe Month =
+  if n >= 1 && n <= 12 then
+    Something (monthOfNumber n)
+  else
+    Nothing
+
+fn weekdayNumber(w: Weekday) -> Int ? IsWeekdayNumber =
+  asWeekdayNumber (rawWeekdayNumberOf w)
+
+# ── ISO-8601 weeks ───────────────────────────────────────────────────────────
+# A week belongs to the year that owns its THURSDAY.  That single rule is what
+# makes the week-year differ from the calendar year around New Year — 2027-01-01
+# is a Friday and belongs to week 53 of 2026 — and it is where hand-rolled
+# implementations go wrong.
+
+fn isoThursday(n: Int) -> Int =
+  n + 4 - rawWeekdayOfDay n
+
+fn rawWeekYear(n: Int) -> Int =
+  rawYear (isoThursday n)
+
+fn firstThursdayOf(y: Int) -> Int =
+  let jan1 = dayFromYmd y 1 1
+  jan1 + mod7 (4 - rawWeekdayOfDay jan1)
+
+fn rawWeekNumber(n: Int) -> Int =
+  (isoThursday n - firstThursdayOf (rawWeekYear n)) / 7 + 1
+
+fn isoWeekOf(d: CivilDate) -> IsoWeek =
+  let n = dayNumber d
+  Week (rawWeekYear n) (rawWeekNumber n)
+
+# Build a week from its parts, or Nothing when that year has no such week: a year
+# has 52 or 53 ISO weeks, and 28 December is always in the last one.
+fn weeksInYear(y: Int) -> Int =
+  rawWeekNumber (dayFromYmd y 12 28)
+
+fn isoWeek(y: Int, w: Int) -> Maybe IsoWeek =
+  if w >= 1 && w <= weeksInYear y then
+    Something (Week y w)
+  else
+    Nothing
+
+fn weekYear(w: IsoWeek) -> Int =
+  case w of
+    Week y _ -> y
+
+fn weekNumber(w: IsoWeek) -> Int ? IsWeekNumber =
+  asWeekNumber (rawWeekNumberOf w)
+
+fn rawWeekNumberOf(w: IsoWeek) -> Int =
+  case w of
+    Week _ n -> n
+
+# ── Arithmetic ───────────────────────────────────────────────────────────────
+
+# Whole days, exactly — the operation `addMs ts 86400000` gets wrong twice a year.
+fn addDays(d: CivilDate, n: Int) -> CivilDate =
+  Civil (dayNumber d + n) (zone d)
+
+# a - b, in whole days.  Requires the two dates to name the same calendar: the
+# difference between dates read in different zones is a question with no answer,
+# not a number to hand back.
+fn diffDays(a: CivilDate, b: CivilDate ::: SameCalendar a b) -> Int =
+  dayNumber a - dayNumber b
+
+fn isBefore(a: CivilDate, b: CivilDate ::: SameCalendar a b) -> Bool =
+  dayNumber a < dayNumber b
+
+# CLAMPS the day of month: 31 January plus one month is 28 February (29 in a leap
+# year), never 3 March.  Clamping is the only total choice, and the one every
+# calendar UI means; `endOfMonth` and `daysInMonth` are here so a caller who wants
+# a different policy can write it.
+fn addMonths(d: CivilDate, n: Int) -> CivilDate =
+  let months = year d * 12 + rawMonthNumber (dayNumber d) - 1 + n
+  let newYear = months / 12
+  let newMonthNo = months - newYear * 12 + 1
+  let newMonth = monthOfNumber newMonthNo
+  let currentDay = rawDayOfMonth (dayNumber d)
+  let lastInTarget = rawDaysInMonth newYear newMonth
+  let clamped = if currentDay <= lastInTarget then
+    currentDay
+  else
+    lastInTarget
+  Civil (dayFromYmd newYear newMonthNo clamped) (zone d)
+
+fn startOfMonth(d: CivilDate) -> CivilDate =
+  Civil (dayFromYmd (year d) (rawMonthNumber (dayNumber d)) 1) (zone d)
+
+fn endOfMonth(d: CivilDate) -> CivilDate =
+  let lastDay = rawDaysInMonth (year d) (month d)
+  Civil (dayFromYmd (year d) (rawMonthNumber (dayNumber d)) lastDay) (zone d)
+
+# The ISO week starts on Monday, so this is the Monday of [d]'s week.
+fn startOfWeek(d: CivilDate) -> CivilDate =
+  addDays d (1 - rawWeekdayOfDay (dayNumber d))
+
+fn startOfYear(d: CivilDate) -> CivilDate =
+  Civil (dayFromYmd (year d) 1 1) (zone d)
+
+fn daysInMonth(y: Int, m: Month) -> Int ? IsMonthLength =
+  asMonthLength (rawDaysInMonth y m)
+
+fn isLeapYear(y: Int) -> Bool =
+  rawIsLeapYear y
+
+# Every date in [a, b) — HALF-OPEN, so consecutive periods do not double-count
+# the boundary day, and empty when b is not after a.
+fn datesBetween(a: CivilDate, b: CivilDate ::: SameCalendar a b) -> List CivilDate =
+  let span = dayNumber b - dayNumber a
+  if span <= 0 then
+    []
+  else
+    List.map (fn(i: Int) -> addDays a i) (List.range 0 span)
+
+# ── ISO-8601 strings ─────────────────────────────────────────────────────────
+# Zone-free in both directions.  Formatting a date through an instant would need
+# a zone the date has no business needing, and that round trip — format in one
+# zone, parse in another — is the off-by-one-day bug of this whole module in
+# miniature.  A date is a LABEL; which calendar produced it is in the value, not
+# in the string.
+
+fn pad(n: Int, width: Int) -> String =
+  String.padLeft (String.fromInt n) width "0"
+
+fn toIso(d: CivilDate) -> String =
+  let ymd = [pad (year d) 4, pad (rawMonthNumber (dayNumber d)) 2, pad (rawDayOfMonth (dayNumber d)) 2]
+  String.join ymd "-"
+
+# Strict YYYY-MM-DD in the calendar [z]; anything else — a bad length, a missing
+# separator, a date that does not exist — is Nothing rather than a guess.
+fn fromIso(z: TimeZone, s: String) -> Maybe CivilDate =
+  if String.length s == 10 && String.slice s 4 5 == "-" && String.slice s 7 8 == "-" then
+    fromIsoParts z (String.toInt (String.slice s 0 4)) (String.toInt (String.slice s 5 7)) (String.toInt (String.slice s 8 10))
+  else
+    Nothing
+
+fn fromIsoParts(z: TimeZone, y: Maybe Int, m: Maybe Int, d: Maybe Int) -> Maybe CivilDate =
+  case y of
+    Nothing -> Nothing
+    Something yv ->
+      case m of
+        Nothing -> Nothing
+        Something mv ->
+          case d of
+            Nothing -> Nothing
+            Something dv ->
+              case monthFromNumber mv of
+                Nothing -> Nothing
+                Something month_ -> fromParts z yv month_ dv
+
+# "2026-W32" — the week-year and the week together, which is the only form that
+# identifies a week.
+fn isoWeekLabel(w: IsoWeek) -> String =
+  String.concat (pad (weekYear w) 4) (String.concat "-W" (pad (rawWeekNumberOf w) 2))

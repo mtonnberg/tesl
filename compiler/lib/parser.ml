@@ -1103,6 +1103,96 @@ let is_statement_starter_ident = function
   | "startEmailWorker" -> true
   | _ -> false
 
+(* ── Single-line SQL clause placement (issue #77) ───────────────────────────
+   `select` is not a keyword: a query parses as an ordinary application spine
+   whose atoms (`from`, `where`, `order`, `asc`, `limit`, …) are reinterpreted
+   structurally downstream by {!Emit_racket.extract_select_query}.  Application
+   binds tighter than every binary operator, so the moment the `where`
+   predicate contains an operator the spine SPLITS and the trailing clause
+   keywords are swallowed by the LAST operand's own application chain instead
+   of landing on the query:
+
+     select t from T where t.a == x && ilike t.name p order t.name asc limit 5
+
+     EBinop (BAnd, <spine … t.a> == x,
+                   ilike t.name p order t.name asc limit 5)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ONE app chain
+
+   Downstream the query then failed to extract, and the expression was emitted
+   as ordinary application — Racket referencing the row binder `t`, which only
+   exists inside a query.  `tesl check` was clean and the generated module could
+   not even load (issue #77).  In the shapes where a clause keyword landed in
+   name-checked position it was instead reported as the misleading
+   "unknown name: order", rejecting code that reads as valid.
+
+   [hoist_single_line_sql_clauses] moves those trailing clause atoms back out of
+   the last operand and re-applies them to the whole query, producing exactly
+   the tree the multi-line spelling produces through [merge_sql_continuation] —
+   ONE canonical shape for both spellings, so no downstream consumer needs a
+   second case.
+
+   Inside a query spine these words are RESERVED: a bare `order`/`limit`/… in
+   argument position is always a clause keyword, never a value.  The head chain
+   has always read them that way (`select t from T order t.name asc` works
+   today); this makes the operand chains agree with it. *)
+
+let is_select_query_head = function
+  | "select" | "selectOne" | "selectCount" | "selectSum"
+  | "selectMax" | "selectMin" | "selectCountBy" | "selectSumBy" -> true
+  | _ -> false
+
+let is_sql_clause_keyword = function
+  | "order" | "limit" | "offset" | "groupBy" | "innerJoin" -> true
+  | _ -> false
+
+(** Leftmost head of an application/operator spine. *)
+let rec sql_spine_head_name = function
+  | EApp { fn; _ } -> sql_spine_head_name fn
+  | EBinop { left; _ } -> sql_spine_head_name left
+  | EVar { name; _ } -> Some name
+  | _ -> None
+
+(* The synthesized application nodes carry the whole query's span: the atoms
+   keep their own locations, and [merge_sql_continuation] (the multi-line path
+   this mirrors) synthesizes its spine nodes the same way. *)
+let app_of_atoms ~loc base atoms =
+  List.fold_left (fun fn arg -> EApp { fn; arg; loc }) base atoms
+
+(** Split an application chain at its first bare clause-keyword argument.
+    [None] when the chain holds no clause keyword (the common case). *)
+let split_trailing_clause_atoms ~loc operand =
+  let rec atoms acc = function
+    | EApp { fn; arg; _ } -> atoms (arg :: acc) fn
+    | head -> (head, acc)
+  in
+  let (head, args) = atoms [] operand in
+  let rec split kept = function
+    | [] -> None
+    | (EVar { name; _ } as a) :: rest when is_sql_clause_keyword name ->
+      Some (List.rev kept, a :: rest)
+    | a :: rest -> split (a :: kept) rest
+  in
+  match split [] args with
+  | None -> None
+  | Some (kept, clause_atoms) -> Some (app_of_atoms ~loc head kept, clause_atoms)
+
+let hoist_single_line_sql_clauses e =
+  match e, sql_spine_head_name e with
+  (* Only an operator-split spine can misplace clauses; a pure application
+     spine (`select t from T order t.name asc`) already carries them. *)
+  | EBinop { loc; _ }, Some head when is_select_query_head head ->
+    let rec hoist = function
+      | EBinop b ->
+        (match hoist b.right with
+         | None -> None
+         | Some (right, atoms) -> Some (EBinop { b with right }, atoms))
+      | operand -> split_trailing_clause_atoms ~loc operand
+    in
+    (match hoist e with
+     | None -> e
+     | Some (query, clause_atoms) -> app_of_atoms ~loc query clause_atoms)
+  | _ -> e
+
 (* ── Expressions ─────────────────────────────────────────────────────────── *)
 
 (** The expression parser handles the full expression grammar.
@@ -1128,7 +1218,13 @@ let rec parse_expr s =
   | TELEMETRY -> parse_telemetry s
   | IDENT "exists" -> parse_exists_expr s
   | IDENT "startEmailWorker" -> parse_start_email_worker_stmt s
-  | _      -> parse_pipe_right s
+  | _      ->
+    (* issue #77: applied HERE and nowhere lower — the hoist must see the whole
+       operator spine, so doing it inside parse_logic (which builds `&&` chains
+       right-associatively, innermost first) would strand the clauses in the
+       middle of the chain. *)
+    let* e = parse_pipe_right s in
+    return (hoist_single_line_sql_clauses e)
 
 and parse_exists_expr s =
   (* exists name => expr — existential package construction *)
@@ -2305,6 +2401,21 @@ and parse_atom s =
       return (EList { elems = []; loc })  (* () = empty list = unit marker *)
     end else begin
       let* e = parse_expr s in
+      (* issue #77: a query written across several lines inside parens —
+           List.length (select t from T
+             where t.orgId == orgId
+             order t.name asc)
+         Its clause continuations belong to the query, not to the enclosing
+         call, so consume them here (the same merge the statement level does)
+         instead of failing with "expected ) but got NEWLINE".  Only queries get
+         this: any other parenthesized expression keeps the strict layout. *)
+      let* e =
+        if is_select_expr e then begin
+          let e = consume_sql_modifiers e s in
+          skip_layout s;
+          return e
+        end else return e
+      in
       let* _ = expect s RPAREN in
       return e
     end
@@ -2649,12 +2760,17 @@ and merge_sql_continuation select_e continuation =
     | head -> head :: acc
   in
   match continuation with
-  | EBinop { op = BAnd; left; right; loc; op_loc } ->
-    (* Compound AND: merge left side (e.g. "where p.x >= lo") with select_e first,
-       then wrap result in BAnd with the right side (e.g. "p.x <= hi").
-       This preserves the structure expected by collect_sql_clauses/extract_select_query. *)
+  | EBinop { op = (BAnd | BOr) as op; left; right; loc; op_loc } ->
+    (* Compound AND/OR: merge the left side (e.g. "where p.x >= lo") into
+       select_e first, then re-wrap with the right side (e.g. "p.x <= hi").  That
+       is the structure collect_sql_clauses/extract_select_query expect.
+       BOr used to fall through to the branch below, whose [get_atoms] descends
+       only EApp chains: for `where a == x || b == y` it spliced the whole `a == x`
+       comparison in as ONE application argument, the query then failed to
+       extract, and a multi-line `||` predicate was silently unlowerable — the
+       same fall-through as issue #77, found by the check-time gate added for it. *)
     (match merge_sql_continuation select_e left with
-     | Some merged_left -> Some (EBinop { op = BAnd; left = merged_left; right; loc; op_loc })
+     | Some merged_left -> Some (EBinop { op; left = merged_left; right; loc; op_loc })
      | None -> None)
   | EBinop { op; left; right; loc; op_loc } ->
     (* Simple comparison or || OR: flatten left's EApp atoms and merge with select *)

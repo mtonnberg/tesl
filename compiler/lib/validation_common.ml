@@ -847,6 +847,31 @@ let builtin_ctor_info : ctor_info = [
   ("PublicIp",    ([], mk_name_type "HostClass"));
   ("DomainName",  ([], mk_name_type "HostClass"));
   ("InvalidHost", ([], mk_name_type "HostClass"));
+  (* Month / Weekday (Tesl.CivilTime, GitHub #78) — twelve and seven nullary
+     variants.  These rows are the reason the calendar uses low-cardinality ADTs
+     instead of a 1..12 Int: `case CivilTime.month d of January -> …` has to be
+     exhaustiveness-checked, and without a variant list here a TOTAL case is
+     flagged non-exhaustive instead — the same false positive the EmailBody and
+     HostClass rows above exist to remove. *)
+  ("January",   ([], mk_name_type "Month"));
+  ("February",  ([], mk_name_type "Month"));
+  ("March",     ([], mk_name_type "Month"));
+  ("April",     ([], mk_name_type "Month"));
+  ("May",       ([], mk_name_type "Month"));
+  ("June",      ([], mk_name_type "Month"));
+  ("July",      ([], mk_name_type "Month"));
+  ("August",    ([], mk_name_type "Month"));
+  ("September", ([], mk_name_type "Month"));
+  ("October",   ([], mk_name_type "Month"));
+  ("November",  ([], mk_name_type "Month"));
+  ("December",  ([], mk_name_type "Month"));
+  ("Monday",    ([], mk_name_type "Weekday"));
+  ("Tuesday",   ([], mk_name_type "Weekday"));
+  ("Wednesday", ([], mk_name_type "Weekday"));
+  ("Thursday",  ([], mk_name_type "Weekday"));
+  ("Friday",    ([], mk_name_type "Weekday"));
+  ("Saturday",  ([], mk_name_type "Weekday"));
+  ("Sunday",    ([], mk_name_type "Weekday"));
 ]
 
 let build_ctor_info (decls : top_decl list) : ctor_info =
@@ -861,7 +886,41 @@ let build_ctor_info (decls : top_decl list) : ctor_info =
       [ (name, ([base_type], mk_name_type name)) ]
     | _ -> []
   ) decls in
-  adt_ctors @ builtin_ctor_info
+  (* A type the module DECLARES ITSELF is not the stdlib type of the same name.
+     Both lists are keyed by the constructor's RESULT type, so a module with its
+     own `type Weekday = Mon | … | Sun` was told its exhaustive case was "missing
+     constructor(s) [Monday, …, Sunday]" — the constructors of Tesl.CivilTime's
+     ADT, in a module that never imported it.  The hazard was latent for every
+     stdlib ADT name (`HostClass`, `EmailBody`, `DeleteResult`); common calendar
+     words are just the first ones a user was likely to pick.
+
+     This does NOT permit shadowing, which Tesl bans outright.  The two cases are
+     different, and only one of them is shadowing:
+       * DECLARES and IMPORTS the same name — a real collision, reported as
+         "top-level type `Weekday` shadows imported type from module …" by
+         [check_name_shadowing].  It never reaches the resolution below.
+       * DECLARES and does NOT import — the stdlib type is not in scope at all,
+         so nothing is being shadowed and its constructors have no standing here.
+
+     Deliberately NOT import-gated instead: a case can scrutinise a stdlib ADT
+     that arrives from an imported FUNCTION without the type being named in this
+     file's imports, and dropping the builtin rows there would silently disable
+     the exhaustiveness check — fail-open, for a rule whose whole value is that
+     it fails closed.  Local redefinition is the one signal that says the
+     builtin rows describe a different type. *)
+  let local_type_names = List.filter_map (function
+    | DType (TypeAdt { name; _ })
+    | DType (TypeNewtype { name; _ })
+    | DType (TypeAlias { name; _ }) -> Some name
+    | DRecord (r : record_form) -> Some r.name
+    | DEntity (e : entity_form) -> Some e.name
+    | _ -> None) decls in
+  let shadowed_builtin (_, (_, result_ty)) =
+    match result_ty with
+    | TName { name; _ } -> List.mem name local_type_names
+    | _ -> false
+  in
+  adt_ctors @ List.filter (fun row -> not (shadowed_builtin row)) builtin_ctor_info
 
 let build_func_info (decls : top_decl list) : (string * func_info) list =
   List.filter_map (function
@@ -886,6 +945,79 @@ let resolve_local_import_path source_file module_name =
   let kebab_path = Filename.concat dir (module_name_to_kebab module_name ^ ".tesl") in
   if Sys.file_exists kebab_path then kebab_path
   else Filename.concat dir (module_name ^ ".tesl")
+
+(* ── Lifted-stdlib source resolution ──────────────────────────────────────────
+   A subset of the [Tesl.*] standard library is written in Tesl itself: a bundled
+   `.tesl` under the repo's `tesl/` directory is BOTH the type source of truth and
+   (compiled to `*-derived.rkt` at build time) the implementation.  Consumers that
+   would otherwise read a hardcoded table consult that source instead.
+
+   This resolver lives HERE, in the lowest layer, because two different layers
+   need it: the checker reads the lifted signatures, and [load_imported_func_info]
+   below reads the lifted PROOF shape.  It used to live only in the checker, which
+   the validation layer cannot call — so the proof obligations and proof-carrying
+   returns of a lifted module were invisible to every call site (issue #78's
+   `SameCalendar` obligation and `? IsDayOfMonth` returns silently unenforced and
+   unavailable).  One resolver, both readers — the same reason
+   [module_name_to_kebab] is here rather than copied. *)
+
+(** Repo root: honor [TESL_REPO_ROOT], else walk up from the running executable
+    looking for a directory that contains a `compiler/` sibling.  Mirrors
+    [Compile.default_root_path] (which this, a lower layer, cannot call). *)
+let stdlib_repo_root () =
+  match Sys.getenv_opt "TESL_REPO_ROOT" with
+  | Some p when p <> "" -> p
+  | _ ->
+    let rec find dir =
+      let candidate = Filename.concat dir "compiler" in
+      if (try Sys.file_exists candidate && Sys.is_directory candidate with _ -> false)
+      then dir
+      else
+        let parent = Filename.dirname dir in
+        if parent = dir then Filename.current_dir_name
+        else find parent
+    in
+    find (Filename.dirname Sys.executable_name)
+
+(** Map a lifted [Tesl.X] module name to its bundled `.tesl` source's kebab
+    basename, e.g. [Tesl.List] -> [Some "list.tesl"].  Only modules that have
+    actually been lifted return [Some]; every other [Tesl.*] returns [None] so
+    callers fall back to their hardcoded rows. *)
+let lifted_stdlib_basename (module_name : string) : string option =
+  match module_name with
+  | "Tesl.List" -> Some "list.tesl"
+  | "Tesl.ListPrim" -> Some "list-prim.tesl"
+  | "Tesl.Either" -> Some "either.tesl"
+  (* #78.  The whole calendar module is written in Tesl — that is where its
+     subtle bugs would live (era arithmetic, the ISO week-year rule, day-of-month
+     clamping), so it is the language's own checker that verifies them.  Its
+     signatures, its proof obligations and its proof-carrying returns therefore
+     all come from the source, and it has NO function rows in [stdlib_env] or
+     [stdlib_func_infos]. *)
+  | "Tesl.CivilTime" -> Some "civil-time.tesl"
+  | _ -> None
+
+(** Resolve a lifted [Tesl.X] module to its bundled `.tesl` source path.
+    Returns [None] when the module is not lifted OR the source cannot be located
+    (graceful: the import then contributes no rows).  Looked up under the repo's
+    `tesl/` dir, with the installed-distribution collections layout
+    (`share/tesl-collections/tesl/tesl/`) as a fallback so an installed binary —
+    whose `tesl/` sources ship via the same path as the `.rkt` runtime — also
+    finds them.  This NEVER points at a runtime require; emission is unaffected. *)
+let lifted_stdlib_source_path (module_name : string) : string option =
+  match lifted_stdlib_basename module_name with
+  | None -> None
+  | Some base ->
+    let root = stdlib_repo_root () in
+    let candidates = [
+      Filename.concat root (Filename.concat "tesl" base);
+      (* Installed distribution: cp -r tesl share/tesl-collections/tesl/tesl *)
+      Filename.concat root
+        (Filename.concat "share"
+           (Filename.concat "tesl-collections"
+              (Filename.concat "tesl" (Filename.concat "tesl" base))));
+    ] in
+    List.find_opt Sys.file_exists candidates
 
 (** Canonical spelling of a module path, for identity comparisons (import
     cycle/SCC detection).  [resolve_local_import_path] builds paths relative
@@ -1377,6 +1509,41 @@ let load_imported_func_info (m : module_form) : (string * func_info) list =
   let is_tesl_module name =
     String.length name >= 5 && String.sub name 0 5 = "Tesl."
   in
+  (* A LIFTED stdlib module carries its proof shape in its own source, so read it
+     from there rather than from [stdlib_func_infos].  Without this the module
+     imports and type-checks while its obligations quietly do not apply: a
+     `::: SameCalendar a b` parameter accepts any second date, and a `? Fact`
+     return hands the caller nothing to require (issue #78).  Reading the source
+     also means the two can never drift, which is the whole point of lifting. *)
+  let lifted_func_infos (imp : import_decl) (path : string) : (string * func_info) list =
+    let source = In_channel.with_open_text path In_channel.input_all in
+    match Parser.parse_module path source with
+    | Err _ -> []
+    | Ok imported ->
+      let short_mod = snd (split_module_name imp.module_name) in
+      let strip_dotdot s =
+        let n = String.length s in
+        if n > 4 && String.sub s (n - 4) 4 = "(..)" then String.sub s 0 (n - 4) else s
+      in
+      let requested = match imp.names with
+        | ImportAll -> None
+        | ImportExposing names -> Some (List.map strip_dotdot names)
+      in
+      List.filter_map (function
+        | DFunc (fd : func_decl) ->
+          let dotted = short_mod ^ "." ^ fd.name in
+          let include_it = match requested with
+            | None -> true
+            | Some names -> List.mem dotted names || List.mem fd.name names
+          in
+          if include_it then
+            Some (dotted,
+                  { fi_name = dotted; fi_kind = fd.kind; fi_params = fd.params;
+                    fi_return = fd.return_spec; fi_loc = fd.loc;
+                    fi_http_methods = fd.http_methods })
+          else None
+        | _ -> None) imported.decls
+  in
   List.concat_map (fun (imp : import_decl) ->
     if is_tesl_module imp.module_name then
       (* Return stdlib func_info entries for functions imported from this module *)
@@ -1384,16 +1551,35 @@ let load_imported_func_info (m : module_form) : (string * func_info) list =
         | ImportAll -> None
         | ImportExposing names -> Some names
       in
-      List.filter_map (fun (full_name, info) ->
-        let include_it = match requested with
-          | None -> true
-          | Some names ->
-            (* "Int.divide" is included if "Int.divide" or "divide" is in names *)
-            let (_, local_name) = split_module_name full_name in
-            List.mem full_name names || List.mem local_name names
-        in
-        if include_it then Some (full_name, info) else None
-      ) stdlib_func_infos
+      let hardcoded =
+        List.filter_map (fun (full_name, info) ->
+          let include_it = match requested with
+            | None -> true
+            | Some names ->
+              (* "Int.divide" is included if "Int.divide" or "divide" is in names *)
+              let (_, local_name) = split_module_name full_name in
+              List.mem full_name names || List.mem local_name names
+          in
+          if include_it then Some (full_name, info) else None
+        ) stdlib_func_infos
+      in
+      (* A hardcoded row WINS over the lifted source, and the source only fills
+         names the table does not carry.  Source-wins was tried and is
+         fail-OPEN: `Tesl.List` is lifted, but its `.tesl` holds STUB signatures
+         for the leaves that stay hand-written Racket, and those stubs drop the
+         proof obligations the table states (`List.take`'s `IsNonNegative` among
+         them) — so reading them instead of the table silently accepted
+         `List.take` on an unproven index.  Filling only the gaps leaves every
+         existing module byte-identical and gives a fully-lifted module
+         (Tesl.CivilTime, which has no table rows at all) its obligations. *)
+      let lifted =
+        match lifted_stdlib_source_path imp.module_name with
+        | None -> []
+        | Some path ->
+          List.filter (fun (name, _) -> not (List.mem_assoc name hardcoded))
+            (lifted_func_infos imp path)
+      in
+      hardcoded @ lifted
     else
       let path = resolve_local_import_path m.source_file imp.module_name in
       if not (Sys.file_exists path) then []

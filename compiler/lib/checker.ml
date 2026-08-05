@@ -859,56 +859,13 @@ let module_name_to_kebab = Validation_common.module_name_to_kebab
    it is NOT [resolve_local_import_path] (which resolves relative to the user's
    importing file — it would never find the bundled stdlib). *)
 
-(** Repo root: honor [TESL_REPO_ROOT], else walk up from the running executable
-    looking for a directory that contains a `compiler/` sibling.  Mirrors
-    [Compile.default_root_path] (which the checker, a lower layer, cannot call). *)
-let stdlib_repo_root () =
-  match Sys.getenv_opt "TESL_REPO_ROOT" with
-  | Some p when p <> "" -> p
-  | _ ->
-    let rec find dir =
-      let candidate = Filename.concat dir "compiler" in
-      if (try Sys.file_exists candidate && Sys.is_directory candidate with _ -> false)
-      then dir
-      else
-        let parent = Filename.dirname dir in
-        if parent = dir then Filename.current_dir_name
-        else find parent
-    in
-    find (Filename.dirname Sys.executable_name)
-
-(** Map a lifted [Tesl.X] module name to its bundled `.tesl` TYPE source's
-    kebab basename, e.g. [Tesl.List] -> [Some "list.tesl"].  Only modules whose
-    types have actually been lifted return [Some]; every other [Tesl.*] returns
-    [None] so callers fall back to [stdlib_env]. *)
-let lifted_stdlib_basename (module_name : string) : string option =
-  match module_name with
-  | "Tesl.List" -> Some "list.tesl"
-  | "Tesl.ListPrim" -> Some "list-prim.tesl"
-  | "Tesl.Either" -> Some "either.tesl"
-  | _ -> None
-
-(** Resolve a lifted [Tesl.X] module to its bundled `.tesl` TYPE source path.
-    Returns [None] when the module is not lifted OR the source cannot be located
-    (graceful: the import then contributes no rows).  Looked up under the repo's
-    `tesl/` dir, with the installed-distribution collections layout
-    (`share/tesl-collections/tesl/tesl/`) as a fallback so an installed binary —
-    whose `tesl/` sources ship via the same path as the `.rkt` runtime — also
-    finds them.  This NEVER points at a runtime require; emission is unaffected. *)
-let lifted_stdlib_source_path (module_name : string) : string option =
-  match lifted_stdlib_basename module_name with
-  | None -> None
-  | Some base ->
-    let root = stdlib_repo_root () in
-    let candidates = [
-      Filename.concat root (Filename.concat "tesl" base);
-      (* Installed distribution: cp -r tesl share/tesl-collections/tesl/tesl *)
-      Filename.concat root
-        (Filename.concat "share"
-           (Filename.concat "tesl-collections"
-              (Filename.concat "tesl" (Filename.concat "tesl" base))));
-    ] in
-    List.find_opt Sys.file_exists candidates
+(* Review item 3 / issue #78: ONE canonical lifted-source resolver, in
+   Validation_common — the validation layer needs it too (a lifted module's proof
+   obligations and proof-carrying returns are read from its source), and it cannot
+   call back up into the checker. *)
+let stdlib_repo_root = Validation_common.stdlib_repo_root
+let lifted_stdlib_basename = Validation_common.lifted_stdlib_basename
+let lifted_stdlib_source_path = Validation_common.lifted_stdlib_source_path
 
 let resolve_local_import_path = Validation_common.resolve_local_import_path
 
@@ -958,31 +915,64 @@ let load_imported_func_kinds (m : module_form) : (string * func_kind) list =
     String.length name >= 5 && String.sub name 0 5 = "Tesl."
   in
   List.concat_map (fun (imp : import_decl) ->
-    if is_tesl_module imp.module_name then []
-    else
-      let path = resolve_local_import_path m.source_file imp.module_name in
-      match parse_local_import_module path with
+    (* A LIFTED stdlib module declares its own function KINDS, so a `check` it
+       exports is a check here too — which is what makes calling one without the
+       `check` keyword an error.  The hardcoded [stdlib_check_function_names]
+       covers only the hand-written stdlib; a lifted module read from source
+       needs no row there and cannot fall out of sync with one (issue #78). *)
+    let lifted = if is_tesl_module imp.module_name
+                 then lifted_stdlib_source_path imp.module_name else None in
+    let path_of = match lifted with
+      | Some p -> Some p
+      | None -> if is_tesl_module imp.module_name then None
+                else Some (resolve_local_import_path m.source_file imp.module_name)
+    in
+    match path_of with
+    | None -> []
+    | Some path ->
+      (* A lifted stdlib module is spelled by its TRAILING segment at the call
+         site (`CivilTime.sameCalendar`, never `Tesl.CivilTime.sameCalendar`),
+         which is also how it is written in `exposing`. *)
+      let qualifier =
+        if lifted <> None then
+          match String.rindex_opt imp.module_name '.' with
+          | Some i -> String.sub imp.module_name (i + 1)
+                        (String.length imp.module_name - i - 1)
+          | None -> imp.module_name
+        else imp.module_name
+      in
+      (match parse_local_import_module path with
       | None | Some (Err _) -> []
       | Some (Ok imported) ->
+          let strip_dotdot s =
+            let n = String.length s in
+            if n > 4 && String.sub s (n - 4) 4 = "(..)" then String.sub s 0 (n - 4) else s
+          in
           let requested = match imp.names with
             | ImportAll -> None
-            | ImportExposing names -> Some names
+            | ImportExposing names -> Some (List.map strip_dotdot names)
           in
           List.concat_map (function
             | DFunc fd ->
-              let qualified_name = imp.module_name ^ "." ^ fd.name in
+              let qualified_name = qualifier ^ "." ^ fd.name in
+              let requested_here names =
+                List.mem fd.name names || List.mem qualified_name names
+              in
               let include_plain = match requested with
-                | Some names -> List.mem fd.name names
+                | Some names -> requested_here names
                 | None -> false
               in
               let include_qualified = match requested with
-                | Some names -> List.mem fd.name names
+                | Some names -> requested_here names
                 | None -> true
               in
-              (if include_plain then [ (fd.name, fd.kind) ] else [])
+              (* A lifted stdlib function is only ever called qualified, so
+                 binding its bare name here would shadow a user function of the
+                 same name (`fn day`) with the stdlib's kind. *)
+              (if include_plain && lifted = None then [ (fd.name, fd.kind) ] else [])
               @ (if include_qualified then [ (qualified_name, fd.kind) ] else [])
             | _ -> []
-          ) imported.decls
+          ) imported.decls)
   ) m.imports
 
 (** Exposing-imported plain-name function DECLS from directly imported local
@@ -1652,6 +1642,52 @@ let reject_unchecked_check_binding ?proof_name ctx (name : string) (value : expr
       (Diag_fix.verified_insert_before ~source_lines:ctx.source_lines
          ~at:insert_loc.start ~expect:callee ~text:"check ")
 
+(* A DISCARDED statement whose value is a FUNCTION is never an effect.
+   ------------------------------------------------------------------------
+   A statement in a `let`-sequence has its value thrown away, so it is only
+   meaningful when evaluating it DOES something: a query, an enqueue, a
+   telemetry event.  A function value does nothing at all — reaching this point
+   means the author wrote a call and the call is missing arguments:
+
+     fn joinTwo(a: String, b: String) -> String =
+       String.concat (a)
+                     (b)          # a SEPARATE statement, never an argument
+
+   Application arguments must be on the call's own line, so the `(b)` line is
+   its own statement and `String.concat (a)` is under-applied.  The sequence's
+   TYPE is fine — it comes from the last statement — so nothing downstream
+   objected, and the module compiled and then died on load with
+   "String.concat: arity mismatch; expected: 2 given: 1".  Same
+   compile-clean/runtime-dead shape as the single-line SQL clause bug (#77),
+   reached through a different door.
+
+   The rule is decided by the INFERRED type, so it fires for a user function as
+   readily as a stdlib one, and only when the type is genuinely an arrow: an
+   unresolved type variable is left alone (it is not evidence of anything). *)
+let reject_discarded_function_value ctx (loc : Location.loc) (value : expr) (value_ty : ty) =
+  match apply !(ctx.subst) value_ty with
+  | TFun _ as resolved ->
+    let rec arity_left = function TFun (_, cod) -> 1 + arity_left cod | _ -> 0 in
+    let missing = arity_left resolved in
+    let (head, args) = flatten_app_expr [] value in
+    let callee = match head with
+      | EVar { name; _ } -> name
+      | EField { obj = EConstructor { name = m; _ }; field; _ } -> m ^ "." ^ field
+      | _ -> "this call"
+    in
+    let supplied = List.length args in
+    add_error ctx loc
+      (Printf.sprintf
+         "this statement's value is a function, not an effect: `%s` is applied \
+          to %d argument%s but needs %d. A discarded statement has to DO \
+          something; an under-applied call does nothing here and fails at \
+          runtime with an arity mismatch. Pass the remaining argument%s — and \
+          note that an argument on a CONTINUATION line is a separate statement, \
+          not part of the call."
+         callee supplied (if supplied = 1 then "" else "s") (supplied + missing)
+         (if missing = 1 then "" else "s"))
+  | _ -> ()
+
 (* The last six escape routes for an unwrapped check result: a case
    scrutinee, a record field value, a list element, a binop operand, and a
    string interpolation hole (the `if` condition is the same defect through
@@ -2091,6 +2127,23 @@ let no_eliminator_stdlib_types : (string * string) list = [
   "A TimeZone is a fixed ADT (`Utc`, `FixedOffset minutes`, or one of the baked \
    IANA zone constructors like `EuropeStockholm`) — match on it, or read its \
    DST-correct offset at an instant with `Time.offsetAt`.";
+  (* #78.  Both are OPAQUE (their `Civil` / `Week` constructors are not exported),
+     so there is nothing behind either but integers and the checker is the whole
+     enforcement.  Without these rows `d.year` takes the permissive EField
+     fallback, typechecks as ANYTHING, and then dies at runtime on "dot access is
+     only supported on declared record/entity values". *)
+  "CivilDate",
+  "A CivilDate is a calendar date — a day number and the zone it was read in — \
+   not a record. Read its parts with `CivilTime.year`, `CivilTime.month`, \
+   `CivilTime.day`, `CivilTime.weekday`, `CivilTime.dayOfYear` or \
+   `CivilTime.zone`, render it with `CivilTime.toIso`, or cross to an instant \
+   with `CivilTime.startOfDay` / `CivilTime.endOfDay` (which need no zone — it \
+   is already in the date).";
+  "IsoWeek",
+  "An IsoWeek carries the week-numbering YEAR and the week together on purpose \
+   — a week number alone does not identify a week — and it is not a record. \
+   Read it with `CivilTime.weekYear` / `CivilTime.weekNumber`, or render it \
+   with `CivilTime.isoWeekLabel`.";
 ]
 
 (* First-Class Units.  The canonical TCon of a quantity (`§Q[...]`) and of a
@@ -2134,7 +2187,7 @@ let opaque_display_name (type_name : string) : string =
 let known_qualifier_modules =
   [ "List"; "ListPrim"; "Dict"; "String"; "Regex"; "Url"; "Net";
     "Int"; "Float"; "Set"; "Maybe";
-    "Either"; "Result"; "Time"; "Random"; "Uuid"; "UUID"; "Env";
+    "Either"; "Result"; "Time"; "CivilTime"; "Random"; "Uuid"; "UUID"; "Env";
     "Http"; "HttpClient"; "Json"; "DB"; "Telemetry"; "Tesl"; "JWT"; "Email";
     (* First-Class Units *)
     "Money"; "Currency"; "ExchangeRate"; "MoneyRate" ]
@@ -2162,7 +2215,10 @@ let qualifier_modules_that_are_not_constructors =
     (* #68, same rule: `Url` is an opaque stdlib TYPE built only by `Url.parse`,
        and `Net` is a pure qualifier with no same-named type, so `Url x` /
        `Net x` are plain T001s rather than escaping to a fresh type variable. *)
-    "Url"; "Net" ]
+    "Url"; "Net";
+    (* #78: `CivilTime` is a pure qualifier with no same-named type, so a bare
+       `CivilTime x` is a plain T001 instead of resolving to `anything`. *)
+    "CivilTime" ]
 
 let bare_constructor_escape_modules =
   List.filter
@@ -4626,6 +4682,7 @@ let rec check_stmt ctx (e : expr) (expected : expectation) : unit =
         apply !(ctx.subst) expected_ty
       | None -> infer_expr ctx value
     in
+    if name = "_" then reject_discarded_function_value ctx loc value value_ty;
     let meta = binding_meta_for_binding ctx name value in
     let subject_chain = binding_subject_chain ctx name value in
     let hover_note = hover_note_for_meta ((name, subject_chain) :: ctx.subject_chain_env) name meta in

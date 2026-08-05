@@ -26,6 +26,11 @@ export TESL_REPO_ROOT="$REPO_ROOT"
 LIFTED=(
   "tesl/list.tesl:tesl/list-derived.rkt"
   "tesl/either.tesl:tesl/either-derived.rkt"
+  # Tesl.CivilTime (GitHub #78) is lifted in FULL — types and all — so the
+  # calendar arithmetic that everything else in the module derives from is
+  # type-checked Tesl rather than hand-written Racket.  There is no `-prim` leaf
+  # because nothing in it is irreducible.
+  "tesl/civil-time.tesl:tesl/civil-time-derived.rkt"
 )
 
 MODE="write"

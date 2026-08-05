@@ -278,7 +278,9 @@ fn get(id: String) -> Todo ? FromDb (Id == id)
 let pos_dead_sibling = hdr "PosDeadSibling" ^ {|
 fn complete(id: String, owner: String) -> Todo ? FromDb (Id == id)
   requires [dbRead, dbWrite] =
-  let bad = updateAndReturnOne t in Todo where t.ownerId == owner set t.status = "x"
+  let _ = updateAndReturnOne t in Todo
+    where t.ownerId == owner
+    set t.status = "x"
   updateAndReturnOne t in Todo
     where t.id == id
     set t.status = "done"

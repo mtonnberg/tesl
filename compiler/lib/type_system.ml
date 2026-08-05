@@ -41,6 +41,24 @@ let t_float   = TCon "Float"
 let t_unit    = TCon "Unit"
 let t_posix   = TCon "PosixMillis"
 let t_timezone = TCon "TimeZone"
+(* Tesl.CivilTime (GitHub #78).  The calendar half of time, kept apart from the
+   INSTANT half above because a civil day is not 86 400 000 ms — twice a year in
+   a DST zone it is 23 h or 25 h, so `addMs ts 86400000` and
+   `diffMs a b / 86400000` are wrong exactly where it matters.
+   `CivilDate` and `IsoWeek` are OPAQUE like Url / SsoConnection: their Tesl
+   constructors (`Civil` / `Week`) are not exported and there is no constructor
+   row for them in [stdlib_env], so Feb 30 and week 54 have no value at all
+   rather than being rejected at every use.  `Month` and `Weekday` are real ADTs
+   (constructor rows below) so a `case` over a month is exhaustive and the
+   0-based/1-based month bug cannot be written.
+
+   The module is LIFTED (Checker.lifted_stdlib_basename): its function
+   signatures come from `tesl/civil-time.tesl`, not from [stdlib_env] — these
+   four aliases exist for the nullary constructor rows and for readers. *)
+let t_civil_date = TCon "CivilDate"
+let t_iso_week   = TCon "IsoWeek"
+let t_month      = TCon "Month"
+let t_weekday    = TCon "Weekday"
 let t_fact    = TCon "Fact"
 let t_delete_result = TCon "DeleteResult"
 let t_jwt_token  = TCon "JwtToken"
@@ -701,6 +719,36 @@ let stdlib_env : (string * scheme) list = [
      compile error and completion lists every zone). *)
   "Utc",             mono t_timezone;
   "FixedOffset",     mono (t_fun [t_int] t_timezone);
+
+  (* ── CivilTime (GitHub #78) ─────────────────────────────────────────── *)
+  (* Only the ADT CONSTRUCTORS live here.  Tesl.CivilTime is a LIFTED module
+     (Checker.lifted_stdlib_basename), so every `CivilTime.*` function and check
+     takes its signature from `tesl/civil-time.tesl` — a row here would be a
+     second, drifting copy of a type the source already states.  `CivilDate` and
+     `IsoWeek` deliberately have no constructor row at all: that absence is what
+     makes them opaque, so `Civil n z` is an unknown-constructor error and the
+     builders are the only way in.  Nullary, like the HostClass rows. *)
+  "January",   mono t_month;
+  "February",  mono t_month;
+  "March",     mono t_month;
+  "April",     mono t_month;
+  "May",       mono t_month;
+  "June",      mono t_month;
+  "July",      mono t_month;
+  "August",    mono t_month;
+  "September", mono t_month;
+  "October",   mono t_month;
+  "November",  mono t_month;
+  "December",  mono t_month;
+  (* ISO order: a Weekday's number is Monday = 1 … Sunday = 7, never the
+     C/JavaScript Sunday = 0, so the constructors read in that order too. *)
+  "Monday",    mono t_weekday;
+  "Tuesday",   mono t_weekday;
+  "Wednesday", mono t_weekday;
+  "Thursday",  mono t_weekday;
+  "Friday",    mono t_weekday;
+  "Saturday",  mono t_weekday;
+  "Sunday",    mono t_weekday;
 
   (* ── Either ─────────────────────────────────────────────────────────── *)
   (* The two ADT CONSTRUCTORS stay here (they are leaves).  The 10 pure Either
@@ -1470,6 +1518,41 @@ let tesl_module_exports : (string * string list) list = [
       "Time.add"; "Time.subtract"; "Time.diff";
       "TimeZone"; "Utc"; "FixedOffset" ]
     @ Tz_zones.ctor_names );
+  ( "Tesl.CivilTime",
+    (* #78.  A separate module from Tesl.Time because a DATE is not an INSTANT:
+       everything here is exact integer arithmetic on a day number, which is what
+       a DST transition cannot move.  `CivilDate` and `IsoWeek` are TYPES only —
+       no constructor row in stdlib_env — so the builders below are the sole way
+       in; `Month` and `Weekday` are real ADTs, exposed with `Month(..)` /
+       `Weekday(..)` to `case` over them exhaustively.  Pure: no capability. *)
+    [ "CivilDate"; "IsoWeek";
+      "Month";
+      "January"; "February"; "March"; "April"; "May"; "June";
+      "July"; "August"; "September"; "October"; "November"; "December";
+      "Weekday";
+      "Monday"; "Tuesday"; "Wednesday"; "Thursday"; "Friday";
+      "Saturday"; "Sunday";
+      (* Proof predicates owned by this module: the six range facts the
+         accessors hand out, plus the two obligations it asks of a caller. *)
+      "IsDayOfMonth"; "IsMonthNumber"; "IsDayOfYear"; "IsWeekNumber";
+      "IsWeekdayNumber"; "IsMonthLength"; "DayOfMonth"; "SameCalendar";
+      (* The two exported checks — the mints for those two obligations. *)
+      "CivilTime.checkDayOfMonth"; "CivilTime.sameCalendar";
+      "CivilTime.fromParts"; "CivilTime.fromChecked"; "CivilTime.fromDayNumber";
+      "CivilTime.fromInstant"; "CivilTime.fromIso";
+      (* Instant bridge — no zone argument: it is in the date. *)
+      "CivilTime.startOfDay"; "CivilTime.endOfDay";
+      "CivilTime.dayNumber"; "CivilTime.zone"; "CivilTime.year";
+      "CivilTime.month"; "CivilTime.day"; "CivilTime.weekday";
+      "CivilTime.dayOfYear"; "CivilTime.isoWeekOf"; "CivilTime.isoWeek";
+      "CivilTime.weekYear"; "CivilTime.weekNumber"; "CivilTime.monthNumber";
+      "CivilTime.monthFromNumber"; "CivilTime.weekdayNumber";
+      "CivilTime.addDays"; "CivilTime.diffDays"; "CivilTime.addMonths";
+      "CivilTime.startOfMonth"; "CivilTime.endOfMonth"; "CivilTime.startOfWeek";
+      "CivilTime.startOfYear"; "CivilTime.daysInMonth"; "CivilTime.isLeapYear";
+      "CivilTime.datesBetween"; "CivilTime.isBefore";
+      (* ISO-8601 strings, zone-free in both directions. *)
+      "CivilTime.toIso"; "CivilTime.isoWeekLabel" ] );
   ( "Tesl.Money",
     [ "Money"; "Currency"; "ExchangeRate";
       (* proof predicates owned by this module *)
@@ -1823,7 +1906,12 @@ let tesl_known_module_names : string list = [
   "Tesl.Prelude"; "Tesl.String"; "Tesl.Regex"; "Tesl.Url"; "Tesl.Net";
   "Tesl.Int"; "Tesl.Int32"; "Tesl.Float";
   "Tesl.List"; "Tesl.ListPrim"; "Tesl.Dict"; "Tesl.Maybe"; "Tesl.Either"; "Tesl.EitherPrim"; "Tesl.Result";
-  "Tesl.Http"; "Tesl.HttpClient"; "Tesl.Json"; "Tesl.DB"; "Tesl.Time"; "Tesl.Random";
+  "Tesl.Http"; "Tesl.HttpClient"; "Tesl.Json"; "Tesl.DB"; "Tesl.Time";
+  (* #78: the calendar surface, backed by tesl/civil-time.rkt.  Without this row
+     `import Tesl.CivilTime` is rejected as an unknown stdlib module — and the
+     consistency test also derives every `CivilTime.*` export's home module
+     through it. *)
+  "Tesl.CivilTime"; "Tesl.Random";
   "Tesl.Uuid"; "Tesl.UUID"; "Tesl.Set"; "Tesl.Env";
   "Tesl.Telemetry"; "Tesl.ApiTest"; "Tesl.Tuple"; "Tesl.Id";
   "Tesl.Queue"; "Tesl.Sse"; "Tesl.Logging";

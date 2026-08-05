@@ -44,8 +44,13 @@ let strip_dotdot s =
   if n > 4 && String.sub s (n - 4) 4 = "(..)" then String.sub s 0 (n - 4) else s
 
 (** Modules whose function TYPES are lifted into a bundled `.tesl` source and
-    loaded from there, so [stdlib_env] intentionally has no row. *)
-let lifted_modules = [ "Tesl.List"; "Tesl.ListPrim"; "Tesl.Either" ]
+    loaded from there, so [stdlib_env] intentionally has no row.  Asked of the
+    COMPILER's own resolver rather than restated here: a hand-copied list is a
+    fourth place to remember when a module is lifted, and the one time it was
+    forgotten this test failed with 36 "untyped export" reports for a module
+    whose types were in fact fully declared (Tesl.CivilTime, #78). *)
+let is_lifted_module (m : string) : bool =
+  Validation_common.lifted_stdlib_basename m <> None
 
 (** Compiler-lowered forms: documented with [KSyntax], no value scheme possible.
     RATCHET — see the header.  Grouped by why they are lowered. *)
@@ -79,7 +84,7 @@ let lowered = SS.of_list lowered_forms
 
 let all_exports () : (string * string) list =
   List.concat_map (fun (m, names) ->
-    if List.mem m lifted_modules then []
+    if is_lifted_module m then []
     else List.map (fun n -> (strip_dotdot n, m)) names)
     Type_system.tesl_module_exports
   @ List.map (fun n -> (n, "<always-available>"))

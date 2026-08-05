@@ -620,6 +620,197 @@ let check_group_by_rules (decls : top_decl list) : validation_error list =
     | _ -> ()) decls;
   List.rev !errors
 
+(** A query the code generator cannot interpret is an error HERE, at check time.
+
+    Tesl's SQL surface is not keyword-parsed: `select t from T where … order …`
+    reaches the compiler as an ordinary application spine that {!Emit_racket}'s
+    extractors reinterpret structurally.  Any spelling those extractors did not
+    recognise fell through to ORDINARY application codegen, which emits the row
+    binder (`t`) and the clause keywords (`order`, `asc`, `limit`) as free
+    variables: `tesl check` clean, generated module dead on arrival with
+    "t: unbound identifier" (issue #77).
+
+    The parser now canonicalises the single-line spelling that triggered it
+    ([Parser.hoist_single_line_sql_clauses]), but the silent fall-through is the
+    CLASS — any spine shape the extractors miss, today's or tomorrow's, fails
+    exactly the same way.  This pass closes the class by construction: the code
+    generator's OWN extractors decide, so the gate cannot drift from what
+    codegen accepts, and an unrecognised query becomes a located compile error
+    instead of unloadable Racket.
+
+    Decide-by-resolution (as everywhere else on this surface): a user-declared
+    `fn select` — or any local binding of a SQL op name — stands the rule down
+    for that name. *)
+let check_sql_query_shape (decls : top_decl list) : validation_error list =
+  let errors = ref [] in
+  let emit err = errors := err :: !errors in
+  let user_fn_names =
+    List.filter_map (function DFunc (fd : func_decl) -> Some fd.name | _ -> None) decls in
+  (* Over-approximated shadowing: any name bound ANYWHERE in the module by a
+     let/lambda/case pattern stands the rule down for that name.  Deliberately
+     coarse — the alternative (threading a scope env) can only make this gate
+     fire on MORE programs, and a false error here rejects valid code. *)
+  let shadowed = ref [] in
+  let note_binder n = if not (List.mem n !shadowed) then shadowed := n :: !shadowed in
+  let rec pattern_binders = function
+    | PVar n -> note_binder n
+    | PCon { fields; _ } -> List.iter (fun (_, p) -> pattern_binders p) fields
+    | PWild | PNullary _ | PLit _ -> ()
+  in
+  let collect_binders e =
+    Ast_visitor.iter (fun e ->
+      match e with
+      | ELet { name; _ } -> note_binder name
+      | ELetProof { value_name; proof_name; _ } ->
+        note_binder value_name; note_binder proof_name
+      | ELambda { params; _ } -> List.iter (fun (p : binding) -> note_binder p.name) params
+      | ECase { arms; _ } ->
+        List.iter (fun (arm : case_arm) -> pattern_binders arm.pattern) arms
+      | _ -> ()) e
+  in
+  (* EVERY extractor emit_racket consults for a SQL spine.  Kept as one list, in
+     the two arities codegen uses it at, so adding an extractor there cannot
+     leave this gate behind: a new form is accepted by both or by neither. *)
+  let expr_accepted e =
+    Option.is_some (Emit_racket.extract_select_query e)
+    || Option.is_some (Emit_racket.extract_delete_query e)
+    || Option.is_some (Emit_racket.parse_insert_expr e)
+    || Option.is_some (Emit_racket.parse_insert_many_expr e)
+    || Option.is_some (Emit_racket.parse_upsert_expr e)
+  in
+  (* The statement-chain forms: multi-line `update`/`delete`/`select` lower to a
+     chain of underscore-lets, so they are recognised at the CHAIN node, one
+     level above the spine itself. *)
+  let chain_accepted e =
+    Option.is_some (Emit_racket.extract_update e)
+    || Option.is_some (Emit_racket.extract_delete e)
+    || Option.is_some (Emit_racket.extract_multiline_select_query e)
+  in
+  let sql_spine_head e =
+    let rec go = function
+      | EApp { fn; _ } -> go fn
+      | EBinop { left; _ } -> go left
+      | other -> other
+    in
+    match go e with
+    | EVar { name; loc } when Validation_common.is_sql_builtin name
+                           && not (List.mem name user_fn_names)
+                           && not (List.mem name !shadowed) -> Some (name, loc)
+    | _ -> None
+  in
+  (* Every atom of the spine, descending through the operators a `where`
+     predicate introduces — enough to name the CAUSE in the hint rather than
+     just the shape. *)
+  let rec spine_atoms e =
+    match e with
+    | EBinop { left; right; _ } -> spine_atoms left @ spine_atoms right
+    | EApp _ ->
+      let rec go acc = function
+        | EApp { fn; arg; _ } -> go (arg :: acc) fn
+        | hd -> (hd, acc)
+      in
+      let (base, args) = go [] e in
+      (match base with
+       | EBinop _ -> spine_atoms base @ args
+       | _ -> base :: args)
+    | other -> [other]
+  in
+  (* `limit`/`offset` are lowered from an INTEGER LITERAL only (emit_racket's
+     [parse_select_tail] reads them with [int_literal_value]); a variable or an
+     arithmetic expression there is the one cause a reader is most likely to hit
+     and least likely to guess from a generic message. *)
+  let rec non_literal_bound = function
+    | EVar { name = ("limit" | "offset") as kw; _ } :: value :: _
+      when (match value with ELit { lit = LInt _; _ } -> false | _ -> true) -> Some kw
+    | _ :: rest -> non_literal_bound rest
+    | [] -> None
+  in
+  let hint_for name atoms =
+    match non_literal_bound atoms with
+    | Some kw ->
+      Printf.sprintf
+        "`%s` is lowered from an integer literal — `%s 20` works, a variable or \
+         an expression does not (yet).  Bind the rows and slice them in Tesl, or \
+         use a literal bound."
+        kw kw
+    | None ->
+      match name with
+      | "update" | "updateAndReturnOne" | "delete" | "deleteAndReturnResult" ->
+        "write one clause per line, indented under the statement:\n\
+         \  update p in Entity\n\
+         \    where p.field == value\n\
+         \    set p.field = value"
+      | "insert" | "insertMany" | "upsert" ->
+        "the supported forms are `insert Entity { … }`, `insertMany rows in \
+         Entity` (the rows must be a NAME — bind the list with a `let` first) \
+         and `upsert Entity { … } onConflict [field] doUpdate [field]`"
+      | _ ->
+        "put each clause on its own line, indented under the query:\n\
+         \  let rows = select t from Thing\n\
+         \    where t.orgId == orgId && t.archived == False\n\
+         \    order t.name asc\n\
+         \    limit 5"
+  in
+  (* Does this spine actually have a QUERY's skeleton?  The op keywords are not
+     reserved words, and two other surfaces spell them:
+       * an api-test request verb — `delete "/widgets/w-1"`, `get "/widgets"`;
+       * the bare-entity read `select Doc`, which names no binder at all.
+     Neither is a query this rule has anything to say about, and demanding a
+     lowering for them rejected valid programs.  So the rule only applies once
+     the spine carries the structural keyword that makes it a query: `from` for a
+     read or a delete, `in` for a write.  Anything without one is left to the
+     passes that own it. *)
+  let query_shaped head atoms =
+    let has_kw k = List.exists (function EVar { name; _ } -> name = k | _ -> false) atoms in
+    match head with
+    | "select" | "selectOne" | "selectCount" | "selectSum" | "selectMax"
+    | "selectMin" | "selectMany" | "selectCountBy" | "selectSumBy"
+    | "delete" | "deleteAndReturnResult" -> has_kw "from"
+    | "update" | "updateAndReturnOne" | "insertMany" -> has_kw "in"
+    (* `insert Entity { … }` / `upsert Entity { … } onConflict …` name the entity
+       positionally, so the constructor IS the skeleton. *)
+    | "insert" | "upsert" ->
+      List.exists (function EConstructor _ -> true | _ -> false) atoms
+    | _ -> false
+  in
+  let rec walk e =
+    match e with
+    (* A chain node whose value starts a query: let codegen's chain extractors
+       have first look, before the spine inside it is judged on its own. *)
+    | ELet { value; _ } when Option.is_some (sql_spine_head value) && chain_accepted e -> ()
+    | _ ->
+      (match sql_spine_head e with
+       | Some (name, loc) when query_shaped name (spine_atoms e) ->
+         (* Judge the spine as a whole; do NOT descend, or every partial prefix
+            of a well-formed query (`select`, `select t`, `select t from T`)
+            would be reported as a broken one. *)
+         if not (expr_accepted e || chain_accepted e) then
+           emit (make_error loc
+             ~hint:(hint_for name (spine_atoms e))
+             (Printf.sprintf
+                "`%s`: the code generator has no lowering for this SQL shape — \
+                 left alone it would emit the row binder and the clause keywords \
+                 as ordinary variables, and the generated module would not load"
+                name))
+       (* Not query-shaped (an api-test verb, a bare-entity read): keep walking —
+          a real query can still sit inside its arguments. *)
+       | Some _ | None -> Ast_visitor.iter_children walk e)
+  in
+  List.iter (fun d ->
+    let bodies = match d with
+      | DFunc (fd : func_decl) -> [ fd.body ]
+      | DConst (c : const_form) -> [ c.value ]
+      | DTest (tf : test_form) -> List.concat_map test_stmt_exprs tf.stmts
+      | DApiTest (tf : api_test_form) ->
+        tf.seed_stmts @ List.concat_map test_stmt_exprs tf.stmts
+      | DLoadTest (tf : load_test_form) ->
+        tf.seed_stmts @ List.concat_map test_stmt_exprs tf.request_stmts
+      | _ -> []
+    in
+    List.iter collect_binders bodies;
+    List.iter walk bodies) decls;
+  List.rev !errors
+
 let check_record_field_proof_construction
     ?facts
     ?(extra_funcs : (string * func_info) list = [])

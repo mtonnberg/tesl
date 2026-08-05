@@ -105,6 +105,9 @@ let module_path_table : (string, string) Hashtbl.t =
      would claim a runtime file (tesl/json.rkt) that does not exist. *)
   add "Tesl.DB"        "tesl/db.rkt";
   add "Tesl.Time"      "tesl/time.rkt";
+  (* #78: the shim re-exports the compiled civil-time.tesl bodies under their
+     dotted `CivilTime.*` runtime names. *)
+  add "Tesl.CivilTime" "tesl/civil-time.rkt";
   add "Tesl.Random"    "tesl/random.rkt";
   add "Tesl.Uuid"      "tesl/uuid.rkt";
   add "Tesl.Set"       "tesl/set.rkt";
@@ -4357,6 +4360,15 @@ let adt_constructors : (string, string list) Hashtbl.t =
   Hashtbl.replace h "HostClass"
     ["HostClass"; "Loopback"; "PrivateIp"; "LinkLocal"; "Cgnat"; "Multicast";
      "Unspecified"; "PublicIp"; "DomainName"; "InvalidHost"];
+  (* #78.  CivilDate and IsoWeek are deliberately absent: they export no
+     constructors, so `CivilDate(..)` has nothing to expand and the bare type
+     name is the whole import. *)
+  Hashtbl.replace h "Month"
+    ["Month"; "January"; "February"; "March"; "April"; "May"; "June";
+     "July"; "August"; "September"; "October"; "November"; "December"];
+  Hashtbl.replace h "Weekday"
+    ["Weekday"; "Monday"; "Tuesday"; "Wednesday"; "Thursday"; "Friday";
+     "Saturday"; "Sunday"];
   h
 
 (** Expand an import name (possibly with (..)) to a list of concrete names.

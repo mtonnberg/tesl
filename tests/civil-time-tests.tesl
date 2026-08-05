@@ -1,0 +1,342 @@
+module CivilTimeTests exposing []
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List]
+import Tesl.Maybe exposing [Maybe, Something, Nothing]
+import Tesl.List exposing [List.length, List.map]
+import Tesl.Time exposing [
+  PosixMillis,
+  TimeZone,
+  Utc,
+  EuropeStockholm,
+  Time.secondsToPosix,
+  Time.truncDay,
+  Time.posixToSeconds,
+  Time.offsetAt,
+  addMs,
+  diffMs,
+]
+import Tesl.CivilTime exposing [
+  CivilDate,
+  IsoWeek,
+  Month(..),
+  Weekday(..),
+  IsDayOfMonth,
+  CivilTime.fromParts,
+  CivilTime.fromDayNumber,
+  CivilTime.fromInstant,
+  CivilTime.fromIso,
+  CivilTime.startOfDay,
+  CivilTime.endOfDay,
+  CivilTime.dayNumber,
+  CivilTime.year,
+  CivilTime.month,
+  CivilTime.day,
+  CivilTime.weekday,
+  CivilTime.dayOfYear,
+  CivilTime.monthNumber,
+  CivilTime.weekdayNumber,
+  CivilTime.isoWeekOf,
+  CivilTime.weekYear,
+  CivilTime.weekNumber,
+  CivilTime.isoWeekLabel,
+  CivilTime.addDays,
+  CivilTime.diffDays,
+  CivilTime.addMonths,
+  CivilTime.startOfMonth,
+  CivilTime.endOfMonth,
+  CivilTime.startOfWeek,
+  CivilTime.daysInMonth,
+  CivilTime.isLeapYear,
+  CivilTime.datesBetween,
+  CivilTime.toIso,
+  CivilTime.sameCalendar,
+]
+
+# A date built from parts that are known-good in tests: the Maybe is unwrapped
+# with an explicit fallback so a construction bug surfaces as a wrong date rather
+# than a skipped assertion.
+fn dateOf(y: Int, m: Month, d: Int) -> CivilDate =
+  case CivilTime.fromParts Utc y m d of
+    Something cd -> cd
+    Nothing -> CivilTime.fromDayNumber Utc 0
+
+fn isoOf(y: Int, m: Month, d: Int) -> String =
+  CivilTime.toIso (dateOf y m d)
+
+fn dayNumOf(y: Int, m: Month, d: Int) -> Int =
+  CivilTime.dayNumber (dateOf y m d)
+
+fn weekLabelOf(y: Int, m: Month, d: Int) -> String =
+  CivilTime.isoWeekLabel (CivilTime.isoWeekOf (dateOf y m d))
+
+fn needsDayOfMonth(n: Int ::: IsDayOfMonth n) -> Int =
+  n
+
+test "the epoch is day 0 = 1970-01-01" {
+  expect dayNumOf 1970 January 1 == 0
+  let d = CivilTime.fromDayNumber Utc 0
+  expect CivilTime.year d == 1970
+  expect CivilTime.monthNumber (CivilTime.month d) == 1
+  expect CivilTime.day d == 1
+}
+
+test "known dates round-trip through the day number" {
+  expect dayNumOf 2021 January 1 == 18628
+  let d = CivilTime.fromDayNumber Utc 18628
+  expect CivilTime.year d == 2021
+  expect CivilTime.monthNumber (CivilTime.month d) == 1
+  expect CivilTime.day d == 1
+  let e = dateOf 2023 November 14
+  expect CivilTime.year e == 2023
+  expect CivilTime.monthNumber (CivilTime.month e) == 11
+  expect CivilTime.day e == 14
+}
+
+test "dates before the epoch are ordinary negative day numbers" {
+  expect dayNumOf 1900 January 1 == 0 - 25567
+  let d = CivilTime.fromDayNumber Utc (0 - 25567)
+  expect CivilTime.year d == 1900
+  expect CivilTime.monthNumber (CivilTime.month d) == 1
+  expect CivilTime.day d == 1
+  expect isoOf 1900 February 28 == "1900-02-28"
+}
+
+test "leap years: 29 February exists in 2020 and the next day is 1 March" {
+  let feb29 = dateOf 2020 February 29
+  expect CivilTime.monthNumber (CivilTime.month feb29) == 2
+  expect CivilTime.day feb29 == 29
+  let next = CivilTime.addDays feb29 1
+  expect CivilTime.monthNumber (CivilTime.month next) == 3
+  expect CivilTime.day next == 1
+}
+
+test "century rules: 1900 is not a leap year, 2000 is" {
+  expect CivilTime.isLeapYear 1900 == False
+  expect CivilTime.isLeapYear 2000 == True
+  expect CivilTime.isLeapYear 2024 == True
+  expect CivilTime.isLeapYear 2026 == False
+  expect dayNumOf 1900 March 1 - dayNumOf 1900 February 28 == 1
+  expect dayNumOf 2000 March 1 - dayNumOf 2000 February 29 == 1
+  expect CivilTime.daysInMonth 1900 February == 28
+  expect CivilTime.daysInMonth 2000 February == 29
+}
+
+test "month and year lengths come out right" {
+  expect dayNumOf 2026 February 1 - dayNumOf 2026 January 1 == 31
+  expect dayNumOf 2026 March 1 - dayNumOf 2026 February 1 == 28
+  expect dayNumOf 2027 January 1 - dayNumOf 2026 December 1 == 31
+  expect dayNumOf 2027 January 1 - dayNumOf 2026 January 1 == 365
+  expect dayNumOf 2021 January 1 - dayNumOf 2020 January 1 == 366
+}
+
+test "a date that does not exist has no value" {
+  case CivilTime.fromParts Utc 2026 February 30 of
+    Something _ -> expect False == True
+    Nothing -> expect True == True
+  case CivilTime.fromParts Utc 2026 April 31 of
+    Something _ -> expect False == True
+    Nothing -> expect True == True
+  case CivilTime.fromParts Utc 2024 February 29 of
+    Something _ -> expect True == True
+    Nothing -> expect False == True
+}
+
+test "weekday and day of year" {
+  expect CivilTime.weekdayNumber (CivilTime.weekday (dateOf 1970 January 1)) == 4
+  expect CivilTime.weekdayNumber (CivilTime.weekday (dateOf 2026 August 5)) == 3
+  expect CivilTime.dayOfYear (dateOf 2026 December 31) == 365
+  expect CivilTime.dayOfYear (dateOf 2024 December 31) == 366
+  expect CivilTime.dayOfYear (dateOf 2026 January 1) == 1
+}
+
+# The week-numbering year is the one that owns the week's Thursday, so it differs
+# from the calendar year around New Year.  Values are the ISO-8601 reference set.
+test "ISO week numbering follows the Thursday rule" {
+  expect weekLabelOf 2026 August 5 == "2026-W32"
+  expect weekLabelOf 2027 January 1 == "2026-W53"
+  expect weekLabelOf 2021 January 1 == "2020-W53"
+  expect weekLabelOf 2020 December 31 == "2020-W53"
+  expect weekLabelOf 2026 January 1 == "2026-W01"
+  expect weekLabelOf 2024 December 30 == "2025-W01"
+  expect weekLabelOf 2004 January 1 == "2004-W01"
+  expect weekLabelOf 2005 January 1 == "2004-W53"
+  expect weekLabelOf 2005 January 3 == "2005-W01"
+  expect weekLabelOf 2006 January 1 == "2005-W52"
+  expect weekLabelOf 2007 December 31 == "2008-W01"
+}
+
+test "the week-year is separate from the calendar year" {
+  let w = CivilTime.isoWeekOf (dateOf 2027 January 1)
+  expect CivilTime.weekYear w == 2026
+  expect CivilTime.weekNumber w == 53
+  expect CivilTime.year (dateOf 2027 January 1) == 2027
+}
+
+test "addMonths clamps the day of month" {
+  let jan31 = dateOf 2026 January 31
+  expect CivilTime.toIso (CivilTime.addMonths jan31 1) == "2026-02-28"
+  expect CivilTime.toIso (CivilTime.addMonths (dateOf 2024 January 31) 1) == "2024-02-29"
+  expect CivilTime.toIso (CivilTime.addMonths jan31 12) == "2027-01-31"
+  expect CivilTime.toIso (CivilTime.addMonths jan31 (0 - 1)) == "2025-12-31"
+  expect CivilTime.toIso (CivilTime.addMonths (dateOf 2026 March 15) 0) == "2026-03-15"
+}
+
+test "month and week boundaries" {
+  expect CivilTime.toIso (CivilTime.startOfMonth (dateOf 2026 August 5)) == "2026-08-01"
+  expect CivilTime.toIso (CivilTime.endOfMonth (dateOf 2026 February 5)) == "2026-02-28"
+  expect CivilTime.toIso (CivilTime.endOfMonth (dateOf 2024 February 5)) == "2024-02-29"
+  expect CivilTime.toIso (CivilTime.startOfWeek (dateOf 2026 August 5)) == "2026-08-03"
+  expect CivilTime.toIso (CivilTime.startOfWeek (dateOf 2026 August 3)) == "2026-08-03"
+}
+
+test "datesBetween is half-open" {
+  let a = dateOf 2026 August 1
+  let b = dateOf 2026 August 4
+  let bb = check CivilTime.sameCalendar a b
+  expect List.length (CivilTime.datesBetween a bb) == 3
+  expect List.map CivilTime.toIso (CivilTime.datesBetween a bb) == ["2026-08-01", "2026-08-02", "2026-08-03"]
+  let same = check CivilTime.sameCalendar a a
+  expect List.length (CivilTime.datesBetween a same) == 0
+}
+
+test "diffDays counts whole days and needs a shared calendar" {
+  let a = dateOf 2026 August 1
+  let b = dateOf 2026 August 31
+  let bb = check CivilTime.sameCalendar a b
+  let aa = check CivilTime.sameCalendar b a
+  expect CivilTime.diffDays b aa == 30
+  expect CivilTime.diffDays a bb == 0 - 30
+}
+
+test "ISO strings round-trip without a zone" {
+  expect isoOf 2026 August 5 == "2026-08-05"
+  expect isoOf 2026 January 1 == "2026-01-01"
+  case CivilTime.fromIso Utc "2026-08-05" of
+    Something d -> expect CivilTime.toIso d == "2026-08-05"
+    Nothing -> expect False == True
+  case CivilTime.fromIso Utc "2026-02-30" of
+    Something _ -> expect False == True
+    Nothing -> expect True == True
+  case CivilTime.fromIso Utc "2026-8-5" of
+    Something _ -> expect False == True
+    Nothing -> expect True == True
+  case CivilTime.fromIso Utc "not a date" of
+    Something _ -> expect False == True
+    Nothing -> expect True == True
+}
+
+# The bound the accessor proved is consumable without a re-check.
+test "an accessor's proof travels with the value" {
+  let d = dateOf 2026 August 5
+  let dd = CivilTime.day d
+  expect needsDayOfMonth dd == 5
+}
+
+# In UTC the day bridge must agree with the instant bucket engine exactly.
+test "startOfDay agrees with Time.truncDay in UTC" {
+  let ts = Time.secondsToPosix 1780000000
+  let d = CivilTime.fromInstant Utc ts
+  expect Time.posixToSeconds (CivilTime.startOfDay d) == Time.posixToSeconds (Time.truncDay Utc ts)
+  expect Time.posixToSeconds (CivilTime.endOfDay d) - Time.posixToSeconds (CivilTime.startOfDay d) == 86400
+}
+
+test "property - the day number round-trips through the calendar parts" with 200 runs {
+  property "fromParts (year, month, day) recovers the day number" (n: Int where n > 0 - 40000 && n < 40000) {
+    CivilTime.dayNumber (dateOf (CivilTime.year (CivilTime.fromDayNumber Utc n)) (CivilTime.month (CivilTime.fromDayNumber Utc n)) (CivilTime.day (CivilTime.fromDayNumber Utc n))) == n
+  }
+}
+
+test "property - toIso then fromIso is the identity" with 200 runs {
+  property "an ISO string parses back to the same date" (n: Int where n > 0 - 40000 && n < 40000) {
+    CivilTime.toIso (CivilTime.fromDayNumber Utc n) == isoRoundTrip n
+  }
+}
+
+fn isoRoundTrip(n: Int) -> String =
+  case CivilTime.fromIso Utc (CivilTime.toIso (CivilTime.fromDayNumber Utc n)) of
+    Something d -> CivilTime.toIso d
+    Nothing -> "unparsable"
+
+test "property - ISO week and day-of-year stay in range" with 200 runs {
+  property "week 1..53 and day-of-year 1..366 for every day number" (n: Int where n > 0 - 40000 && n < 40000) {
+    weekInRange n && doyInRange n
+  }
+}
+
+fn weekInRange(n: Int) -> Bool =
+  let w = CivilTime.weekNumber (CivilTime.isoWeekOf (CivilTime.fromDayNumber Utc n))
+  w >= 1 && w <= 53
+
+fn doyInRange(n: Int) -> Bool =
+  let doy = CivilTime.dayOfYear (CivilTime.fromDayNumber Utc n)
+  doy >= 1 && doy <= 366
+
+test "property - addDays and diffDays are inverse" with 200 runs {
+  property "diffDays (addDays d k) d == k" (k: Int where k > 0 - 5000 && k < 5000) {
+    addDiffInverse k
+  }
+}
+
+fn addDiffInverse(k: Int) -> Bool =
+  let a = CivilTime.fromDayNumber Utc 20000
+  let b = CivilTime.addDays a k
+  let aa = check CivilTime.sameCalendar b a
+  CivilTime.diffDays b aa == k
+
+# ── The DST claim, on a real zone ────────────────────────────────────────────
+# This is what issue #78 was actually about.  In Europe/Stockholm the clocks go
+# forward on 2026-03-29 and back on 2026-10-25, so those civil days are 23 h and
+# 25 h long.  Millisecond arithmetic cannot express either.
+
+fn stockholmDay(y: Int, m: Month, d: Int) -> CivilDate =
+  case CivilTime.fromParts EuropeStockholm y m d of
+    Something cd -> cd
+    Nothing -> CivilTime.fromDayNumber EuropeStockholm 0
+
+fn dayLengthSeconds(d: CivilDate) -> Int =
+  Time.posixToSeconds (CivilTime.endOfDay d) - Time.posixToSeconds (CivilTime.startOfDay d)
+
+test "a civil day in a DST zone is 23 h or 25 h, and the bridge knows it" {
+  expect dayLengthSeconds (stockholmDay 2026 March 29) == 23 * 3600
+  expect dayLengthSeconds (stockholmDay 2026 October 25) == 25 * 3600
+  expect dayLengthSeconds (stockholmDay 2026 August 5) == 24 * 3600
+}
+
+# The half-open day range must start at true local midnight on both sides of a
+# transition — the same instant Time.truncDay picks, which is the oracle the
+# PostgreSQL bucket expressions are tested against.
+test "startOfDay is local midnight, and agrees with Time.truncDay" {
+  let noonAfterSpringForward = addMs (CivilTime.startOfDay (stockholmDay 2026 March 29)) (14 * 3600000)
+  let d = CivilTime.fromInstant EuropeStockholm noonAfterSpringForward
+  expect CivilTime.toIso d == "2026-03-29"
+  expect Time.posixToSeconds (CivilTime.startOfDay d) == Time.posixToSeconds (Time.truncDay EuropeStockholm noonAfterSpringForward)
+  expect Time.offsetAt EuropeStockholm (CivilTime.startOfDay d) == 60
+  expect Time.offsetAt EuropeStockholm (CivilTime.endOfDay d) == 120
+}
+
+# The bug the module removes, stated as an assertion: adding 86 400 000 ms to a
+# local midnight does NOT land on the next local midnight across a transition,
+# while addDays does.
+test "millisecond day arithmetic is wrong exactly where addDays is right" {
+  let start = CivilTime.startOfDay (stockholmDay 2026 March 29)
+  let msNextDay = addMs start 86400000
+  let civilNextDay = CivilTime.startOfDay (CivilTime.addDays (stockholmDay 2026 March 29) 1)
+  expect Time.posixToSeconds msNextDay - Time.posixToSeconds civilNextDay == 3600
+  expect CivilTime.toIso (CivilTime.fromInstant EuropeStockholm civilNextDay) == "2026-03-30"
+}
+
+# Dates read in different calendars are not comparable, and the obligation says
+# so: the same day NUMBER in two zones is two different labels, and discharging
+# `sameCalendar` across them fails rather than answering.
+fn diffAcrossZones() -> Int =
+  let inUtc = CivilTime.fromDayNumber Utc 20000
+  let inStockholm = CivilTime.fromDayNumber EuropeStockholm 20000
+  let bad = check CivilTime.sameCalendar inUtc inStockholm
+  CivilTime.diffDays inUtc bad
+
+test "two dates in different zones cannot be diffed" {
+  let inUtc = CivilTime.fromDayNumber Utc 20000
+  let inStockholm = CivilTime.fromDayNumber EuropeStockholm 20000
+  expect CivilTime.dayNumber inUtc == CivilTime.dayNumber inStockholm
+  expectFail diffAcrossZones ()
+}
