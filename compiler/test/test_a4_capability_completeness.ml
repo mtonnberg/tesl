@@ -151,7 +151,7 @@ handler h(m: Maybe String) -> String requires [] =
    Tesl.Env import it passes the (old) checker but is unbound at runtime. *)
 let neg_agent_config_leak = {|module AgentLeak exposing []
 import Tesl.Prelude exposing [String, Int]
-import Tesl.Agent exposing [aiProvider]
+import Tesl.Agent exposing [aiProvider, anthropic]
 agent Assistant requires [aiProvider] = Agent {
   provider: anthropic (requireEnv "ANTHROPIC_KEY") "claude-3"
   systemPrompt: "hi"
@@ -163,7 +163,7 @@ agent Assistant requires [aiProvider] = Agent {
 let pos_agent_config_imported = {|module AgentOk exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Env exposing [requireEnv, envRead]
-import Tesl.Agent exposing [aiProvider]
+import Tesl.Agent exposing [aiProvider, anthropic]
 agent Assistant requires [aiProvider, envRead] = Agent {
   provider: anthropic (requireEnv "ANTHROPIC_KEY") "claude-3"
   systemPrompt: "hi"

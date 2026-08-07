@@ -17,7 +17,7 @@ import Tesl.Agent exposing [
   decodeAs,
   replyText,
 ]
-import Tesl.Env exposing [requireEnv]
+import Tesl.Env exposing [requireEnv, envRead]
 
 # lesson: track=ai order=440 needs=lesson62-ai-agents
 # summary: Turn a model reply into a typed value with askFor, and give each user their own provider credentials
@@ -77,7 +77,7 @@ fn classifyPriority(provider: LlmProvider, ticket: String) -> Priority
 # the call site with `askWith` — the agent's behaviour never changes with whose key
 # is used; only who pays and which model answers.
 
-agent Assistant requires [assistantAi] = Agent {
+agent Assistant requires [envRead] = Agent {
   provider: anthropic (requireEnv "ANTHROPIC_API_KEY") "claude-opus-4-8"
   systemPrompt: "You are a helpful assistant. Be concise."
   tools: []

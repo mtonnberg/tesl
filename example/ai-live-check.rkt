@@ -17,7 +17,7 @@
   (only-in tesl/tesl/prelude String Bool)
   (only-in tesl/tesl/env envInt envRead requireEnv)
   (only-in tesl/tesl/telemetry initTelemetry)
-  (only-in tesl/tesl/agent aiProvider askReply replyText)
+  (only-in tesl/tesl/agent aiProvider askReply replyText anthropic)
 )
 
 
