@@ -209,7 +209,7 @@ let agent_block_uses_env_cap_without_declaring_maxTokens () =
 |}
 
 let agent_block_missing_import () =
-  should_fail "fooooooo" {|
+  should_fail ".*anthropic.*requires.*import Tesl.Agent.*" {|
   module AiLiveCheck exposing [AiServer, askClaude, AskRequest]
 
 import Tesl.Prelude exposing [String, Bool(..)]
@@ -279,6 +279,76 @@ main() -> App requires [liveAi, envRead] =
 |}
 
 
+let agent_block_missing_local_import () =
+  should_fail ".*tool.*missing_func.*" {|
+  module AiLiveCheck exposing [AiServer, askClaude, AskRequest]
+
+import Tesl.Prelude exposing [String, Bool(..)]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Env exposing [envInt, envRead, requireEnv]
+import Tesl.Telemetry exposing [initTelemetry]
+import Tesl.App exposing [App]
+import Tesl.Agent exposing [aiProvider, askReply, asTool, anthropic, replyText]
+
+capability liveAi implies aiProvider
+
+# The agent's provider/model/apiKey are the live production binding. `apiKey` is
+# read from the environment when inference runs.
+agent Assistant requires [liveAi, envRead] = Agent {
+  provider: anthropic (requireEnv "ANTHROPIC_API_KEY") "claude-opus-4-8"
+  systemPrompt: "You are a helpful assistant. Answer in one short sentence."
+  tools: [asTool missing_func]
+  maxTokens: 256
+}
+
+record AskRequest {
+  prompt: String
+}
+
+codec AskRequest {
+  toJson_forbidden
+  fromJson [
+    {
+      prompt <- "prompt" with_codec stringCodec
+    }
+  ]
+}
+
+# Calls the REAL model (askReply requires the aiProvider capability) and returns
+# the assistant's text. There is intentionally no mock here — this is the live path.
+handler post askClaude(req: AskRequest) -> String
+  requires [liveAi] =
+  replyText (askReply Assistant req.prompt)
+
+api AiApi {
+  post "/ask"
+    body req: AskRequest
+    -> String
+}
+
+server AiServer for AiApi {
+  askClaude
+}
+
+# An in-memory database keeps this runnable with only the API key set — no
+# PostgreSQL required for the smoke check.
+database LiveDb = Database {
+  schema: "ai_live"
+  entities: []
+  backend: Memory
+}
+
+main() -> App requires [liveAi, envRead] =
+  let _ = initTelemetry service "ai-live-check" endpoint "in-memory" console True
+  let port = envInt "PORT" 8088
+  App {
+    database: LiveDb
+    api: AiServer
+    port: port
+  }
+
+|}
+
 
 (* ── Test runner ─────────────────────────────────────────────────────────── *)
 
@@ -292,5 +362,6 @@ let () =
     ];
     "imports", [
       test_case "PIN01I01" `Quick agent_block_missing_import;
+      test_case "PIN01I02" `Quick agent_block_missing_local_import;
     ];
   ]

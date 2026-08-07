@@ -5,7 +5,7 @@ import Tesl.Json exposing [stringCodec]
 import Tesl.Env exposing [envInt, envRead, requireEnv]
 import Tesl.Telemetry exposing [initTelemetry]
 import Tesl.App exposing [App]
-import Tesl.Agent exposing [aiProvider, askReply, replyText]
+import Tesl.Agent exposing [aiProvider, askReply, replyText, anthropic]
 
 # ══════════════════════════════════════════════════════════════════════════════
 # LIVE real-provider smoke check — talks to the REAL Anthropic API.

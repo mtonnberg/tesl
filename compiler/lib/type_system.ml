@@ -1783,11 +1783,9 @@ let stdlib_bare_home_module : (string * string) list = [
   (* Metrics signal — same module, same ambient model. *)
   "counter", "Tesl.Telemetry"; "histogram", "Tesl.Telemetry";
   "gauge", "Tesl.Telemetry";
-  (* Whole Tesl.Agent bare API — was MISSING from every checker table.
-     NOTE: the compile-time-lowered provider/tool forms
-     (anthropic/openai/mistral/local/asTool) are intentionally NOT here — they
-     lower via the `__tart_` desugar path and have no plain runtime require, so
-     demanding an import for them would contradict what the emitter honors. *)
+  (* Whole Tesl.Agent bare API — was MISSING from every checker table. *)
+  "anthropic", "Tesl.Agent"; "openai", "Tesl.Agent"; "mistral", "Tesl.Agent"; "local", "Tesl.Agent";
+  "asTool", "Tesl.Agent";
   "mockProvider", "Tesl.Agent"; "ask", "Tesl.Agent";
   "mockToolProvider", "Tesl.Agent"; "toolUseStep", "Tesl.Agent";
   "textStep", "Tesl.Agent"; "tool", "Tesl.Agent";
