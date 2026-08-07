@@ -244,36 +244,73 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
          a tool-authority claim.  Running collect_needed_capabilities on the tools
          list expression charges every function referenced by any tool form
          (`asTool fn` and manual `tool … validate v dispatch d`). *)
-      let tool_caps_from_fields fields =
-        match List.assoc_opt "tools" fields with
+      let field_caps_from_fields field fields =
+        match List.assoc_opt field fields with
         | Some tools_expr -> collect_needed_capabilities ~func_caps tools_expr
         | None -> []
       in
-      let needed =
+      let needed_tools_cap =
         match a.config_expr with
-        | Some (ERecord { fields; _ }) -> tool_caps_from_fields fields
+        | Some (ERecord { fields; _ }) -> field_caps_from_fields "tools" fields
         | Some (EApp { fn = EConstructor { name = "Agent"; _ };
-                       arg = ERecord { fields; _ }; _ }) -> tool_caps_from_fields fields
+                       arg = ERecord { fields; _ }; _ }) -> field_caps_from_fields "tools" fields
         | _ ->
           (* legacy: a bare list of tool-fn names *)
           List.concat_map (fun tn ->
             match List.assoc_opt tn func_caps with Some cs -> cs | None -> []) a.tools
       in
-      let missing =
+      let missing_tool_caps =
         List.sort_uniq String.compare
-          (List.filter (fun c -> not (cap_covered a.capabilities c)) needed)
+          (List.filter (fun c -> not (cap_covered a.capabilities c)) needed_tools_cap)
       in
-      if missing <> [] then
+      let needed_provider_generic a_field =
+        match a.config_expr with
+        | Some (ERecord { fields; _ }) -> field_caps_from_fields a_field fields
+        | Some (EApp { fn = EConstructor { name = "Agent"; _ };
+                       arg = ERecord { fields; _ }; _ }) -> field_caps_from_fields a_field fields
+        | _ -> []
+      in
+      let missing_generic_field_caps a_field =
+        List.sort_uniq String.compare
+        (List.filter (fun c -> not (cap_covered a.capabilities c)) (needed_provider_generic a_field))
+      in
+      let missing_provider_field_caps = missing_generic_field_caps "provider"
+      in
+      let missing_system_prompt_field_caps = missing_generic_field_caps "systemPrompt"
+      in
+      let missing_token_field_caps = missing_generic_field_caps "maxTokens"
+      in
+      let generic_field_error m_caps a_field =
+        make_error a.loc
+          ~hint:(Printf.sprintf
+                   "add [%s] to `agent %s`'s `requires` (or a capability that implies %s)"
+                   (String.concat ", " m_caps) a.name (String.concat ", " m_caps))
+          (Printf.sprintf
+             "agent '%s' '%s' property requiring [%s] but its `requires` does not declare %s — \
+              the agent's `requires` must bound the authority of ALL its properties"
+             a.name a_field (String.concat ", " m_caps)
+             (if List.length m_caps = 1 then "it" else "them"))
+      in
+      if missing_tool_caps <> [] then
         errors := make_error a.loc
           ~hint:(Printf.sprintf
                    "add [%s] to `agent %s`'s `requires` (or a capability that implies %s)"
-                   (String.concat ", " missing) a.name (String.concat ", " missing))
+                   (String.concat ", " missing_tool_caps) a.name (String.concat ", " missing_tool_caps))
           (Printf.sprintf
              "agent '%s' hosts tools requiring [%s] but its `requires` does not declare %s — \
               the agent's `requires` must bound the authority of ALL its tools \
               (both `asTool fn` and manual `tool` constructors)"
-             a.name (String.concat ", " missing)
-             (if List.length missing = 1 then "it" else "them"))
+             a.name (String.concat ", " missing_tool_caps)
+             (if List.length missing_tool_caps = 1 then "it" else "them"))
+        :: !errors
+      else if missing_provider_field_caps <> [] then
+        errors := (generic_field_error missing_provider_field_caps "provider")
+        :: !errors
+      else if missing_system_prompt_field_caps <> [] then
+        errors := (generic_field_error missing_system_prompt_field_caps "systemPrompt")
+        :: !errors
+      else if missing_token_field_caps <> [] then
+        errors := (generic_field_error missing_token_field_caps "maxTokens")
         :: !errors
     | _ -> ()
   ) decls;

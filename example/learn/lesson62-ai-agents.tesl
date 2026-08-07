@@ -2,7 +2,7 @@ module Lesson62AiAgents exposing [WeatherAgent, getWeather, bookTable]
 
 import Tesl.Prelude exposing [Int, String]
 import Tesl.String exposing [String.concat]
-import Tesl.Env exposing [requireEnv]
+import Tesl.Env exposing [requireEnv, envRead]
 import Tesl.Agent exposing [
   aiProvider,
   anthropic,
@@ -86,7 +86,7 @@ fn bookTable(restaurant: String, guests: Int) -> String =
 # provider per call with a scripted mock, so the agent value is identical in
 # production and under test.
 
-agent WeatherAgent requires [myAi] = Agent {
+agent WeatherAgent requires [envRead] = Agent {
   provider: anthropic (requireEnv "ANTHROPIC_API_KEY") "claude-opus-4-8"
   systemPrompt: "You are a helpful concierge. Use the tools to answer."
   tools: [asTool getWeather, asTool bookTable]

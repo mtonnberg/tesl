@@ -1043,7 +1043,7 @@ fn readPort() -> Int requires [envRead] = envInt "PORT" 8086
 (* Uniformity — a NON-database config block (agent) whose config reads env makes
    main require envRead just the same; the database block is not special. *)
 let test_R67_ENV08_main_with_env_agent_without_envRead_rejected () =
-  should_fail "envRead" {|
+  should_fail ".*envRead.*" {|
 module R67EnvAgent exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.App exposing [App]
@@ -1074,7 +1074,7 @@ import Tesl.Env exposing [requireEnv, envRead]
 import Tesl.Database exposing [Database, Memory]
 import Tesl.Agent exposing [aiProvider, anthropic, Agent, asTool]
 capability myAi implies aiProvider
-agent SupportAgent requires [myAi] = Agent {
+agent SupportAgent requires [myAi, envRead] = Agent {
   provider: anthropic (requireEnv "ANTHROPIC_API_KEY") "claude-opus-4-8"
   systemPrompt: "x"
   maxTokens: 256

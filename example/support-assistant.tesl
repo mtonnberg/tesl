@@ -3,7 +3,7 @@ module SupportAssistant exposing [SupportAgent, classifyTicket, Triage]
 import Tesl.Prelude exposing [Int, String, Bool]
 import Tesl.Json exposing [stringCodec, intCodec]
 import Tesl.String exposing [String.concat]
-import Tesl.Env exposing [requireEnv]
+import Tesl.Env exposing [requireEnv, envRead]
 import Tesl.Agent exposing [
   aiProvider,
   LlmProvider,
@@ -65,7 +65,7 @@ fn refundOrder(orderId: String, confirmed: Bool) -> String =
 # default (the production binding); the tools are typed Tesl functions referenced
 # by name. Tests override the provider per call with a mock, so the agent value
 # itself is identical in production and under test.
-agent SupportAgent requires [supportBot] = Agent {
+agent SupportAgent requires [supportBot, envRead] = Agent {
   provider: anthropic (requireEnv "ANTHROPIC_API_KEY") "claude-opus-4-8"
   systemPrompt: "You are a concise customer-support assistant. Never invent order ids."
   tools: [asTool lookupOrder, asTool refundOrder]

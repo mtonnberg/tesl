@@ -16,7 +16,7 @@
   (prefix-in __tart_ (only-in tesl/tesl/agent defineAgent withTools tool anthropic openai mistral local tesl-agent-decode-args))
   (only-in tesl/tesl/prelude Int String)
   (only-in tesl/tesl/string [String.concat tesl_import_String_concat])
-  (only-in tesl/tesl/env requireEnv)
+  (only-in tesl/tesl/env requireEnv envRead)
   (only-in tesl/tesl/agent aiProvider anthropic Agent mockToolProvider toolUseStep textStep askWith replyText replyToolCalls)
 )
 

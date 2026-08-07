@@ -496,7 +496,7 @@ import Tesl.Agent exposing [aiProvider, anthropic, Agent, asTool]
 import Tesl.Random exposing [random]
 import Tesl.Id exposing [generatePrefixedId]
 capability botAi implies aiProvider
-agent Bot requires [botAi] = Agent {
+agent Bot requires [botAi, envRead] = Agent {
   provider: anthropic (requireEnv "KEY") "claude-opus-4-8"
   systemPrompt: "sys"
   tools: [asTool genTool]
@@ -509,12 +509,12 @@ let test_R75_A24_agent_tool_cap_covered_accepted () =
   should_pass {|
 module A24Ok exposing []
 import Tesl.Prelude exposing [String]
-import Tesl.Env exposing [requireEnv]
+import Tesl.Env exposing [requireEnv, envRead]
 import Tesl.Agent exposing [aiProvider, anthropic, Agent, asTool]
 import Tesl.Random exposing [random]
 import Tesl.Id exposing [generatePrefixedId]
 capability botAi implies aiProvider
-agent Bot requires [botAi, random] = Agent {
+agent Bot requires [botAi, random, envRead] = Agent {
   provider: anthropic (requireEnv "KEY") "claude-opus-4-8"
   systemPrompt: "sys"
   tools: [asTool genTool]

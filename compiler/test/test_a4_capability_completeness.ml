@@ -164,7 +164,7 @@ let pos_agent_config_imported = {|module AgentOk exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Env exposing [requireEnv, envRead]
 import Tesl.Agent exposing [aiProvider]
-agent Assistant requires [aiProvider] = Agent {
+agent Assistant requires [aiProvider, envRead] = Agent {
   provider: anthropic (requireEnv "ANTHROPIC_KEY") "claude-3"
   systemPrompt: "hi"
   tools: []

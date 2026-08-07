@@ -30,7 +30,7 @@ capability liveAi implies aiProvider
 
 # The agent's provider/model/apiKey are the live production binding. `apiKey` is
 # read from the environment when inference runs.
-agent Assistant requires [liveAi] = Agent {
+agent Assistant requires [liveAi, envRead] = Agent {
   provider: anthropic (requireEnv "ANTHROPIC_API_KEY") "claude-opus-4-8"
   systemPrompt: "You are a helpful assistant. Answer in one short sentence."
   tools: []

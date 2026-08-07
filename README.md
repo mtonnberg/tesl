@@ -6,10 +6,14 @@ structurally prevents whole classes of forgotten-validation and defensive-boiler
 downstream. Auth, effects, typed SQL, queues, real-time pub/sub, and AI-agent tools are part of the
 language, not bolted on.
 
-> **Status: beta.** The guarantees below are real and compiler-enforced 
+> **Status: beta.** The guarantees below are compiler-enforced 
 > guarantees with no runtime re-check ([runtime cost](manual/tour.md#runtime-cost)), and the trust
 > boundary is drawn precisely in [`LANGUAGE-SPEC.md` §7](LANGUAGE-SPEC.md). Breaking changes are
-> expected. Read this as the design intent and what is enforced today — not as a promise.
+> expected.
+
+## Playground
+
+See the compiler in action [Playground](https://mtonnberg.github.io/tesl/index.html).
 
 ## The 60-second version
 
@@ -68,7 +72,7 @@ auto-starts a project-local PostgreSQL and loads `.env`, so the API is live with
 Ship it as a Docker image with `tesl build --with-postgres` (all-in-one) or `tesl build --app-only`
 (bring your own database) — see [`manual/deploy.md`](manual/deploy.md).
 
-**Honest caveat: Nix is a hard gate.** Nix is the only supported install path today. If you do not
+**Caveat: Nix is required** Nix is the only supported install path today. If you do not
 have Nix and do not want it, this is where the trail ends for now — a standalone binary is on the
 roadmap, not done. See [`INSTALL.md`](INSTALL.md).
 
@@ -112,9 +116,8 @@ the normal way to get things done. The goal is that a normal programmer asking *
 for my next web API?"* can answer *"Tesl"* — because the language makes the correct path the obvious
 path.
 
-## Beta status, plainly
+## Beta status
 
 The language is in active development, breaking changes are expected, and backward compatibility is
 not a goal yet. The implementation is real and useful for exploration and non-critical apps, but it
-is not finished: some guarantees are enforced statically, and some runtime integrity checks still
-live in trusted internals. Feedback and ideas are most appreciated.
+is not finished. Feedback and ideas are most appreciated.
