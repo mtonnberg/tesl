@@ -240,11 +240,15 @@
     display: flex; align-items: center; gap: .25rem; padding: 0 .45rem 0 .5rem;
     height: calc(var(--code-size) * var(--code-lh));
   }
-  #gutter .gn { flex: 1 1 auto; text-align: right; }
+  #gutter .gn { flex: 1 1 auto; text-align: right; cursor: pointer; }
   #gutter .gm { width: .7em; text-align: center; font-size: .8em; color: transparent; }
   #gutter .gm.error   { color: var(--err); }
   #gutter .gm.warning { color: var(--warn); }
   #gutter .gm.info    { color: var(--info); }
+  /* Line number selection for highlight drag */
+  #gutter .gl.selecting { background: var(--sel); opacity: 0.5; }
+  #gutter .gl.selected { background: var(--accent); opacity: 0.4; }
+  #gutter .gl.selected .gn { color: var(--accent-fg); font-weight: 600; }
   #codebox { position: relative; flex: 1 1 auto; min-width: 0; }
   #underlay, #src {
     position: absolute; inset: 0; margin: 0; border: 0;
@@ -276,6 +280,27 @@
   .t-ann   { color: var(--t-ann); }
   .t-op, .t-txt { color: var(--t-op); }
   .t-txt   { color: var(--fg); }
+
+  /* Line highlighting for shared links */
+  .line-highlight {
+    background: rgb(187, 255, 0, 0.15);
+    /* display: block; */
+    margin-left: calc(-1 * var(--code-pad-x));
+    margin-right: calc(-1 * var(--code-pad-x));
+    padding-left: var(--code-pad-x);
+    padding-right: var(--code-pad-x);
+    border-left: 2px solid var(--accent);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .line-highlight {
+      animation: highlight-pulse 1.5s ease-out 1;
+    }
+    @keyframes highlight-pulse {
+      0% { background: rgba(187, 255, 0, 0.15); }
+      90% { background: rgba(187, 255, 0, 0.55); }
+      100% { background: rgba(187, 255, 0, 0.15); }
+    }
+  }
 
   /* Squiggles: the EXACT diagnostic range, including across lines. */
   .sq { text-decoration: underline wavy; text-decoration-skip-ink: none;
@@ -614,6 +639,8 @@ fn addNote(id: String, body: String) -> Note
 //   #s<base64url>            uncompressed source
 //   #z<base64url>.L42        …and put the caret on line 42
 //   #z<base64url>.L42-45     …and select lines 42 through 45
+//   #z<base64url>.H55-75     …and highlight lines 55 through 75
+//   #z<base64url>.L42.H55-75  …caret on 42 AND highlight 55-75
 //
 // The position is OPTIONAL and appended after the payload. `.` cannot occur in
 // base64url (alphabet: A-Z a-z 0-9 - _), so old links with no position decode
@@ -637,7 +664,7 @@ const b64u = {
   }
 };
 
-async function encodeShare(text, pos) {
+async function encodeShare(text, pos, highlight) {
   const raw = new TextEncoder().encode(text);
   let payload = null;
   if (typeof CompressionStream === "function") {
@@ -650,24 +677,30 @@ async function encodeShare(text, pos) {
     } catch (e) { /* fall through */ }
   }
   if (payload === null) payload = "s" + b64u.enc(raw);
-  if (pos) payload += "." + pos;
+  if (pos) payload += ".L" + pos;
+  if (highlight) payload += ".H" + highlight;
   return payload;
 }
 
-// → { text, from, to } | null.  `from`/`to` are 1-based line numbers or null.
+// → { text, from, to, highlightFrom, highlightTo } | null.
+// `from`/`to` are 1-based line numbers or null (for caret/selection).
+// `highlightFrom`/`highlightTo` are 1-based line numbers or null (for line highlighting).
 async function decodeShare(frag) {
   if (!frag) return null;
-  const m = /^([sz])([A-Za-z0-9_-]*)(?:\.L(\d+)(?:-(\d+))?)?$/.exec(frag);
+  // Match the base payload and optional .L and .H sections
+  // The regex matches: kind, body, then optionally .Lstart-end and/or .Hstart-end
+  const m = /^([sz])([A-Za-z0-9_-]*)(?:\.L(\d+)(?:-(\d+))?)?(?:\.H(\d+)(?:-(\d+))?)?$/.exec(frag);
   if (!m) return null;
-  const [, kind, body, a, b] = m;
+  const [, kind, body, a, b, h1, h2] = m;
   const pos = a ? { from: Number(a), to: b ? Number(b) : Number(a) } : { from: null, to: null };
+  const highlight = h1 ? { highlightFrom: Number(h1), highlightTo: h2 ? Number(h2) : Number(h1) } : { highlightFrom: null, highlightTo: null };
   try {
-    if (kind === "s") return { text: new TextDecoder().decode(b64u.dec(body)), ...pos };
+    if (kind === "s") return { text: new TextDecoder().decode(b64u.dec(body)), ...pos, ...highlight };
     const ds = new DecompressionStream("deflate-raw");
     const w = ds.writable.getWriter();
     w.write(b64u.dec(body)); w.close();
     const buf = await new Response(ds.readable).arrayBuffer();
-    return { text: new TextDecoder().decode(new Uint8Array(buf)), ...pos };
+    return { text: new TextDecoder().decode(new Uint8Array(buf)), ...pos, ...highlight };
   } catch (e) { return null; }
 }
 
@@ -846,7 +879,7 @@ function diagSlices(lines, diags) {
   return per;
 }
 
-function renderEditorLayers(text, diags) {
+function renderEditorLayers(text, diags, highlightFrom, highlightTo) {
   const lines = text.split("\n");
   const slices = diagSlices(lines, diags);
   // Rows are JOINED with "\n", never terminated with it: one extra "\n" would
@@ -857,6 +890,8 @@ function renderEditorLayers(text, diags) {
   for (let L = 0; L < lines.length; L++) {
     let html = "";
     const line = lines[L], len = line.length;
+    const lineNum = L + 1;  // 1-based line number
+    const isHighlighted = highlightFrom && highlightTo && lineNum >= highlightFrom && lineNum <= highlightTo;
     const toks = tokenize(line);
     const cls = new Array(len), mark = new Array(len);
     for (const t of toks) for (let k = t.s; k < t.e; k++) cls[k] = t.cls;
@@ -888,9 +923,15 @@ function renderEditorLayers(text, diags) {
       const m = slices[L][0];
       html += `<span class="sq empty ${m.sev}" data-d="${m.i}" title="${esc(diagTitle(diags[m.i]))}"></span>`;
     }
+    // Wrap in line-highlight if this line is in the highlight range
+    if (isHighlighted) {
+      html = `<span class="line-highlight">${html}</span>`;
+    }
     rows.push(html);
     const sev = worst ? worst.sev : "";
-    gut.push(`<div class="gl"><span class="gm ${sev}">${sev ? "●" : ""}</span><span class="gn">${L + 1}</span></div>`);
+    const isGutterHighlighted = highlightFrom && highlightTo && (L + 1) >= highlightFrom && (L + 1) <= highlightTo;
+    const gutterClass = isGutterHighlighted ? "gl selected" : "gl";
+    gut.push(`<div class="${gutterClass}" data-line="${L + 1}"><span class="gm ${sev}">${sev ? "●" : ""}</span><span class="gn">${L + 1}</span></div>`);
   }
   // Two zero-width spaces, each earning its keep:
   //  * leading: the HTML parser drops a newline that immediately follows <pre>,
@@ -955,6 +996,10 @@ const el = (tag, cls, text) => {
 let ready = false;
 let landing = false;          // item 4: the guided-first-failure framing is up
 let explainCache = new Map();
+let currentHighlight = null;   // { from: number, to: number } or null for line highlighting
+// Gutter drag-to-highlight state
+let dragStartLine = null;
+let isDragging = false;
 
 function setLanding(on) {
   landing = on;
@@ -1130,13 +1175,18 @@ function render(result) {
   if (landing && primaryFixBtn) primaryFixBtn.classList.add("primary");
 
   renderTabs(result);
-  renderEditorLayers($("src").value, diags);
+  renderEditorLayers($("src").value, diags, currentHighlight ? currentHighlight.from : null, currentHighlight ? currentHighlight.to : null);
 }
 
-function setSource(text) {
+function setSource(text, highlight) {
   $("src").value = text;
   updateRunNote(text);
-  renderEditorLayers(text, []);
+  if (highlight) {
+    currentHighlight = { from: highlight.highlightFrom, to: highlight.highlightTo };
+  } else {
+    currentHighlight = null;
+  }
+  renderEditorLayers(text, [], currentHighlight ? currentHighlight.from : null, currentHighlight ? currentHighlight.to : null);
 }
 
 function run() {
@@ -1205,8 +1255,22 @@ async function boot() {
 
   const shared = await decodeShare(location.hash.slice(1));
   if (shared) {
-    setSource(shared.text);
+    setSource(shared.text, shared);
     setLanding(false);                      // a shared link is not a first visit
+    // Scroll to highlight immediately (before compiler is ready)
+    if (shared && (shared.highlightFrom || currentHighlight)) {
+      const line = shared.highlightFrom || (currentHighlight && currentHighlight.from);
+      if (line) {
+        // Scroll to highlight_start - 3 (1-based to 0-based conversion)
+        const scrollToLine = Math.max(0, line - 1 - 3);
+        setTimeout(() => {
+          const srcEl = $("src");
+          const lh = parseFloat(getComputedStyle(srcEl).lineHeight) || 20;
+          srcEl.scrollTop = Math.max(0, scrollToLine * lh - srcEl.clientHeight / 3);
+          syncScroll();
+        }, 50);
+      }
+    }
   } else {
     setSource(EXAMPLES[1].src);
     sel.value = "1";
@@ -1227,26 +1291,141 @@ async function boot() {
   src.addEventListener("input", () => {
     setLanding(false);                      // the visitor has taken over
     updateRunNote(src.value);
-    renderEditorLayers(src.value, []);      // keep the highlight in step at once
+    renderEditorLayers(src.value, [], currentHighlight ? currentHighlight.from : null, currentHighlight ? currentHighlight.to : null);      // keep the highlight in step at once
     scheduleRun();                          // …then re-check on the debounce
   });
   src.addEventListener("scroll", syncScroll);
+  
+  // ── Gutter drag-to-highlight ──────────────────────────────────────────────
+  const gutter = $("gutter");
+  
+  // Mouse down on line number: start drag selection
+  gutter.addEventListener("mousedown", (ev) => {
+    const gl = ev.target.closest(".gl");
+    if (!gl) return;
+    ev.preventDefault();
+    dragStartLine = parseInt(gl.dataset.line, 10);
+    isDragging = true;
+    // Set initial highlight to just this line (but don't re-render yet)
+    currentHighlight = { from: dragStartLine, to: dragStartLine };
+    
+    // Clear any existing gutter selection classes
+    document.querySelectorAll("#gutter .gl").forEach(el => {
+      el.classList.remove("selected");
+    });
+    // Highlight the starting line
+    gl.classList.add("selected");
+  });
+  
+  // Mouse move over line numbers: update selection
+  gutter.addEventListener("mousemove", (ev) => {
+    if (!isDragging) return;
+    const gl = ev.target.closest(".gl");
+    if (!gl) return;
+    const lineNum = parseInt(gl.dataset.line, 10);
+    
+    // Update visual feedback on gutter
+    document.querySelectorAll("#gutter .gl").forEach(el => {
+      const l = parseInt(el.dataset.line, 10);
+      el.classList.remove("selected");
+      if (l >= Math.min(dragStartLine, lineNum) && l <= Math.max(dragStartLine, lineNum)) {
+        el.classList.add("selected");
+      }
+    });
+    
+    // Update highlight range
+    currentHighlight = {
+      from: Math.min(dragStartLine, lineNum),
+      to: Math.max(dragStartLine, lineNum)
+    };
+  });
+  
+  // Mouse up: end drag selection and finalize
+  document.addEventListener("mouseup", (ev) => {
+    if (isDragging) {
+      isDragging = false;
+      dragStartLine = null;
+      // Re-render to ensure consistency
+      if (currentHighlight) {
+        renderEditorLayers(src.value, [], currentHighlight.from, currentHighlight.to);
+        // Scroll to highlight start - 3
+        const scrollLine = Math.max(0, currentHighlight.from - 1 - 3);
+        const lh = parseFloat(getComputedStyle(src).lineHeight) || 20;
+        src.scrollTop = Math.max(0, scrollLine * lh - src.clientHeight / 3);
+        syncScroll();
+      } else {
+        renderEditorLayers(src.value, []);
+      }
+    }
+  });
+  
+  // Click on line number (without drag): set single line highlight
+  gutter.addEventListener("click", (ev) => {
+    if (isDragging) return; // Drag already handled
+    const gl = ev.target.closest(".gl");
+    if (!gl) return;
+    const lineNum = parseInt(gl.dataset.line, 10);
+    
+    // If clicking the same line that's already highlighted alone, clear it
+    if (currentHighlight && currentHighlight.from === lineNum && currentHighlight.to === lineNum) {
+      currentHighlight = null;
+    } else {
+      currentHighlight = { from: lineNum, to: lineNum };
+    }
+    
+    // Re-render with new highlight
+    renderEditorLayers(src.value, [], currentHighlight ? currentHighlight.from : null, currentHighlight ? currentHighlight.to : null);
+    
+    // Scroll to highlight
+    if (currentHighlight) {
+      const scrollLine = Math.max(0, currentHighlight.from - 1 - 3);
+      const lh = parseFloat(getComputedStyle(src).lineHeight) || 20;
+      src.scrollTop = Math.max(0, scrollLine * lh - src.clientHeight / 3);
+      syncScroll();
+    }
+  });
+  
   src.addEventListener("keydown", ev => {
     if ((ev.ctrlKey || ev.metaKey) && ev.key === "Enter") { ev.preventDefault(); run(); }
+    // Ctrl+Shift+H to set/clear highlight from current selection
+    if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && ev.key === "H") {
+      ev.preventDefault();
+      const offs = lineOffsets(src.value);
+      const lineOf = off => { let L = 0; while (L + 1 < offs.length && offs[L + 1] <= off) L++; return L + 1; };
+      if (src.selectionEnd > src.selectionStart) {
+        const a = lineOf(src.selectionStart), b = lineOf(src.selectionEnd - 1);
+        currentHighlight = { from: Math.min(a, b), to: Math.max(a, b) };
+      } else {
+        currentHighlight = null;
+      }
+      renderEditorLayers(src.value, [], currentHighlight ? currentHighlight.from : null, currentHighlight ? currentHighlight.to : null);
+      // Scroll to highlight start - 3 if highlight was set
+      if (currentHighlight) {
+        const scrollLine = Math.max(0, currentHighlight.from - 1 - 3);
+        const lh = parseFloat(getComputedStyle(src).lineHeight) || 20;
+        src.scrollTop = Math.max(0, scrollLine * lh - src.clientHeight / 3);
+        syncScroll();
+      }
+    }
   });
   window.addEventListener("resize", syncScroll);
 
   $("share").addEventListener("click", async () => {
     // A selection means "look at THIS": it becomes `.L<from>-<to>` in the link.
-    // No selection means share the source alone, exactly as before.
+    // The current highlight range (if set) becomes `.H<from>-<to>`.
+    // No selection and no highlight means share the source alone.
     const offs = lineOffsets(src.value);
     const lineOf = off => { let L = 0; while (L + 1 < offs.length && offs[L + 1] <= off) L++; return L + 1; };
     let pos = null;
     if (src.selectionEnd > src.selectionStart) {
       const a = lineOf(src.selectionStart), b = lineOf(src.selectionEnd - 1);
-      pos = "L" + a + (b > a ? "-" + b : "");
+      pos = a + (b > a ? "-" + b : "");
     }
-    const frag = await encodeShare(src.value, pos);
+    let highlight = null;
+    if (currentHighlight) {
+      highlight = currentHighlight.from + (currentHighlight.to > currentHighlight.from ? "-" + currentHighlight.to : "");
+    }
+    const frag = await encodeShare(src.value, pos, highlight);
     const url = location.origin + location.pathname + location.search + "#" + frag;
     history.replaceState(null, "", "#" + frag);
     try { await navigator.clipboard.writeText(url); $("share").textContent = "Copied!"; }
@@ -1259,6 +1438,7 @@ async function boot() {
     if (typeof window.teslCheck === "function") {
       ready = true;
       run();
+      // Handle caret/selection position
       if (shared && shared.from) gotoRange(shared.from - 1, 0, shared.to, 0);
     } else {
       setTimeout(waitFor, 50);
