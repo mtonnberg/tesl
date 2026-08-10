@@ -27,6 +27,11 @@ pkgs.mkShell {
     curl
     jq
     postgresql
+    go
+    gosec
+    govulncheck
+    golangci-lint
+    nilaway
     libsodium   # dlopen()ed by tesl/crypto.rkt — see TESL_LIBSODIUM below
     tesl-cli
     ocamlPackages.ocaml

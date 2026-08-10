@@ -63,6 +63,10 @@ type compile_result =
   | Success of string            (** Racket source code *)
   | Failure of diagnostic list   (** Parse or type errors *)
 
+type go_compile_result =
+  | GoSuccess of Emit_go.artifact list
+  | GoFailure of diagnostic list
+
 type local_binding = {
   file : string;
   line : int;
@@ -3208,6 +3212,38 @@ let compile_file ?(root_path=default_root_path ()) ?(type_check=true) filename =
       in
       Success racket
 
+let diag_of_go_emit_error (error : Emit_go.emit_error) : diagnostic = {
+  file       = error.loc.file;
+  start_line = error.loc.start.line;
+  start_col  = error.loc.start.col;
+  end_line   = error.loc.stop.line;
+  end_col    = error.loc.stop.col;
+  severity   = "error";
+  code       = "V001";
+  message    = error.message;
+  fix        = None;
+  source     = "go-emitter";
+  manual     = None;
+}
+
+(** Compile a checked Tesl module into a complete standalone Go module tree.
+    Go receives the surface AST: Racket-specific [Desugar.ERuntimeCall] nodes
+    must never cross this backend boundary. *)
+let compile_go_source filename source =
+  match parse_module filename source with
+  | Err error -> GoFailure [diag_of_parse_error error]
+  | Ok m ->
+    let diags = check_module source m in
+    if diags <> [] then GoFailure diags
+    else
+      (match Emit_go.compile_module ~mode:Emit_go.Release m with
+       | Ok artifacts -> GoSuccess artifacts
+       | Error errors -> GoFailure (List.map diag_of_go_emit_error errors))
+
+let compile_go_file filename =
+  let source = In_channel.with_open_text filename In_channel.input_all in
+  compile_go_source filename source
+
 (** Check only — return diagnostics without emitting Racket. *)
 let local_binding_of_checker (b : Checker.local_binding_info) : local_binding = {
   file = b.loc.file;
@@ -4188,6 +4224,146 @@ let mutate_file ?(root_path=default_root_path ()) ?(extra_test_files=[]) filenam
        let invalid  = List.length (List.filter (fun (_, r) -> match r with Mutate.Invalid _ -> true | _ -> false) results) in
        let errors   = List.length (List.filter (fun (_, r) -> match r with Mutate.Error _ -> true | _ -> false) results) in
        MutateOk { Mutate.total = List.length mutants; killed; survived; invalid; errors; results }))
+
+let rec remove_tree path =
+  if Sys.file_exists path then
+    if Sys.is_directory path then begin
+      Sys.readdir path |> Array.iter (fun name -> remove_tree (Filename.concat path name));
+      Unix.rmdir path
+    end else Sys.remove path
+
+let fresh_temp_dir prefix =
+  let marker = Filename.temp_file prefix ".tmp" in
+  Sys.remove marker;
+  Unix.mkdir marker 0o755;
+  marker
+
+let rec mkdir_p path =
+  if path = "" || path = Filename.current_dir_name then ()
+  else if Sys.file_exists path then ()
+  else begin
+    mkdir_p (Filename.dirname path);
+    Unix.mkdir path 0o755
+  end
+
+let write_go_artifacts root (artifacts : Emit_go.artifact list) =
+  List.iter (fun (artifact : Emit_go.artifact) ->
+    let path = Filename.concat root artifact.path in
+    mkdir_p (Filename.dirname path);
+    Out_channel.with_open_bin path (fun channel ->
+      output_string channel artifact.contents)) artifacts
+
+type go_test_outcome =
+  | GoTestsPassed
+  | GoTestsFailed of string
+  | GoBuildFailed of string
+  | GoTestsTimedOut of string
+  | GoTestRunnerFailed of string
+
+let string_contains value needle =
+  try ignore (Str.search_forward (Str.regexp_string needle) value 0); true
+  with Not_found -> false
+
+let classify_go_test_run ~exit_code ~output =
+  let started = string_contains output "TESL_GO_TESTS_STARTED" in
+  let failed_test = string_contains output "--- FAIL:" in
+  if exit_code = 0 && started then GoTestsPassed
+  else if exit_code <> 0 && started && failed_test then GoTestsFailed output
+  else GoTestRunnerFailed output
+
+let run_go_test_artifacts artifacts =
+  let test_artifact = List.find_opt (fun (artifact : Emit_go.artifact) ->
+    Filename.check_suffix artifact.path "_test.go") artifacts in
+  match test_artifact with
+  | None -> GoBuildFailed "emitted project has no Go test package"
+  | Some test_artifact ->
+    let root = fresh_temp_dir "tesl_go_mutant_" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_go_artifacts root artifacts;
+      let package = "./" ^ Filename.dirname test_artifact.path in
+      let binary = Filename.concat root "tesl-tests" in
+      let build_cmd = Printf.sprintf "cd %s && go test -c -o %s %s"
+        (Filename.quote root) (Filename.quote binary) (Filename.quote package) in
+      let build_code, build_output = run_capture build_cmd in
+      if build_code <> 0 then GoBuildFailed build_output
+      else
+        let timeout_pfx = Lazy.force timeout_prefix in
+        let run_cmd = Printf.sprintf "%s%s -test.v"
+          timeout_pfx (Filename.quote binary) in
+        let run_code, run_output = run_capture run_cmd in
+        if run_code = 124 then GoTestsTimedOut run_output
+        else classify_go_test_run ~exit_code:run_code ~output:run_output)
+
+(** Go mutation runner. Mutation generation remains backend-neutral: each
+    surface-AST mutant passes through [Emit_go], is compiled first, then its test
+    binary runs. A Go compile failure is invalid and can never inflate kills. *)
+let mutate_go_file ?(extra_test_files=[]) filename : mutate_result =
+  if Sys.command "go version >/dev/null 2>&1" <> 0 then
+    MutateErr "Go mutation testing requires `go` on PATH"
+  else
+    let source = In_channel.with_open_text filename In_channel.input_all in
+    match parse_module filename source with
+    | Err error ->
+      MutateErr (Printf.sprintf "parse error at %s:%d: %s"
+        error.loc.file (error.loc.start.line + 1) error.msg)
+    | Ok m ->
+      let diags = check_module source m in
+      (match List.filter (fun (d : diagnostic) -> d.severity = "error") diags with
+       | diagnostic :: _ -> MutateErr ("type error: " ^ diagnostic.message)
+       | [] ->
+         (match collect_extra_test_decls extra_test_files with
+          | `Err message -> MutateErr message
+          | `Ok extra_test_decls ->
+            let with_tests module_ =
+              let merged =
+                if extra_test_decls = [] then module_
+                else { module_ with decls = module_.decls @ extra_test_decls }
+              in
+              Mutate.strip_infra_tests merged
+            in
+            let baseline = with_tests m in
+            let has_tests = List.exists (function DTest _ -> true | _ -> false) baseline.decls in
+            if not has_tests then MutateErr "Go mutation baseline has no runnable tests"
+            else
+              (match Emit_go.compile_module ~mode:Emit_go.Release baseline with
+               | Error (error :: _) -> MutateErr ("Go mutation baseline emit failed: " ^ error.message)
+               | Error [] -> MutateErr "Go mutation baseline emit failed"
+               | Ok artifacts ->
+                 (match run_go_test_artifacts artifacts with
+                  | GoBuildFailed output -> MutateErr ("Go mutation baseline did not compile:\n" ^ output)
+                  | GoTestsFailed output -> MutateErr ("Go mutation baseline tests fail:\n" ^ output)
+                  | GoTestsTimedOut output -> MutateErr ("Go mutation baseline timed out:\n" ^ output)
+                  | GoTestRunnerFailed output -> MutateErr ("Go mutation baseline runner failed:\n" ^ output)
+                  | GoTestsPassed ->
+                    let mutants = Mutate.generate_mutants m in
+                    let results = List.map (fun (mutant : Mutate.mutant) ->
+                      let module_ = with_tests mutant.module_ in
+                      let result =
+                        match Emit_go.compile_module ~mode:Emit_go.Release module_ with
+                        | Error (error :: _) -> Mutate.Error ("Go emit failed: " ^ error.message)
+                        | Error [] -> Mutate.Error "Go emit failed"
+                        | Ok artifacts ->
+                          (match run_go_test_artifacts artifacts with
+                           | GoTestsPassed -> Mutate.Survived
+                           | GoTestsFailed _ -> Mutate.Killed
+                           | GoBuildFailed output -> Mutate.Invalid output
+                           | GoTestsTimedOut output -> Mutate.Error ("Go test timed out: " ^ output)
+                           | GoTestRunnerFailed output -> Mutate.Error ("Go test runner failed: " ^ output))
+                      in
+                      mutant, result) mutants in
+                    let count predicate = List.length (List.filter predicate results) in
+                    let killed = count (fun (_, result) -> result = Mutate.Killed) in
+                    let survived = count (fun (_, result) -> result = Mutate.Survived) in
+                    let invalid = count (fun (_, result) -> match result with Mutate.Invalid _ -> true | _ -> false) in
+                    let errors = count (fun (_, result) -> match result with Mutate.Error _ -> true | _ -> false) in
+                    MutateOk {
+                      Mutate.total = List.length mutants;
+                      killed;
+                      survived;
+                      invalid;
+                      errors;
+                      results;
+                    }))))
 
 (* ── WS6: standalone-executable build (`tesl --exe`) ─────────────────────────
    Emit the program's Racket *exactly* as `tesl <file>` would (byte-identical

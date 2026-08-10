@@ -1335,6 +1335,12 @@ case "$CMD" in
     exec racket -l tesl/dsl/debug/attach-client -- "$@"
     ;;
   compile)
+    if [ "${1:-}" = "--backend" ]; then
+      [ "${2:-}" = "go" ] || { echo "Usage: tesl compile --backend go <file.tesl> --out <dir>" >&2; exit 1; }
+      [ $# -eq 5 ] && [ "${4:-}" = "--out" ] || { echo "Usage: tesl compile --backend go <file.tesl> --out <dir>" >&2; exit 1; }
+      _tesl_require_compiler
+      exec "$TESL_OCAML_COMPILER" --backend go "$3" --out "$5"
+    fi
     if [ $# -eq 0 ]; then
       _TESL_ENTRY="$(_tesl_default_entry "tesl compile [file.tesl]")" || exit 1
       set -- "$_TESL_ENTRY"
@@ -1570,10 +1576,11 @@ case "$CMD" in
     ;;
   mutate)
     # Mutation testing: perturb the program and confirm the tests catch it.
-    # Forwards to the compiler's `--mutate <file> [extra-test-files…]`, which
+    # Forwards to the compiler's `--mutate [--backend racket|go] <file>
+    # [extra-test-files…]`, which
     # compiles + runs each mutant and prints a "Mutation score" report. This is
     # the first-class command the docs (best-practices) reference as `tesl mutate`.
-    [ $# -gt 0 ] || { echo "Usage: tesl mutate <file.tesl> [more-test-files.tesl ...]" >&2; exit 1; }
+    [ $# -gt 0 ] || { echo "Usage: tesl mutate [--backend racket|go] <file.tesl> [more-test-files.tesl ...]" >&2; exit 1; }
     _tesl_require_compiler
     exec "$TESL_OCAML_COMPILER" --mutate "$@"
     ;;
@@ -1755,6 +1762,7 @@ Usage:
                            [--tag NAME] [--no-docker]        runnable Docker image
                            [--out DIR]                       ([deploy].target = "container")
   tesl compile             [file.tesl]                    Compile .tesl → .rkt (into .tesl-stuff/build/)
+  tesl compile --backend go <file.tesl> --out <dir>       Emit experimental standalone Go module
   tesl clean                                              Delete the project's build output (.tesl-stuff/build/)
   tesl check               [file.tesl ...]               Type-check without output
   tesl lint                <file.tesl> [more.tesl ...]   Run the opinionated linter
@@ -1766,6 +1774,7 @@ Usage:
   tesl debug-attach        [--project DIR] [command…]     Attach to a `tesl run --debug` process
                            (arm breakpoints, inspect, resume — see tesl debug-attach --help)
   tesl test                [file.tesl ...]               Compile and run tests
+  tesl mutate              [--backend racket|go] <file>  Run mutation testing
   tesl watch               [file.tesl] [args…]           Watch, recompile, and restart on changes
 
   A [file.tesl] argument is OPTIONAL inside a project: with none, the verb uses

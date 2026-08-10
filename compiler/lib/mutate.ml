@@ -22,8 +22,8 @@
       as the nullary constructors [EConstructor {name="True"|"False"; args=[]}]
       (the idiomatic form) and, for the legacy lowercase [true]/[false], as
       [ELit (LBool _)] — both node shapes are flipped.
-    - {b integer-literal perturbation} ([ELit (LInt n)] → [LInt (n+1)]): the
-      classic off-by-one on a numeric threshold constant.
+    - {b integer-literal perturbation} ([LInt]/[LBigInt] n → n+1): exact
+      decimal arithmetic preserves arbitrary-precision threshold mutations.
 
     Usage: [tesl --mutate file.tesl]
 *)
@@ -67,7 +67,7 @@ type mutation_op =
   | MOBinop of binop     (** replace an [EBinop]'s operator with this one *)
   | MOBool  of bool      (** flip a boolean literal (the [True]/[False] constructor,
                              or a legacy [ELit (LBool _)]) to this value *)
-  | MOInt   of int       (** replace an [ELit (LInt _)] with this value (n → n+1) *)
+  | MOInt   of string    (** replace an integer literal with canonical decimal n+1 *)
 
 (** Which node kind a mutation targets.  Each kind carries its OWN independent
     pre-order index space (see {!collect_sites}), so adding a kind never shifts
@@ -103,7 +103,7 @@ let mutation_display original op =
   | MOBinop new_op, MOBinop old_op -> binop_display old_op ^ " → " ^ binop_display new_op
   | MOBool b, MOBool old_b ->
     (if old_b then "True" else "False") ^ " → " ^ (if b then "True" else "False")
-  | MOInt n, MOInt old_n -> string_of_int old_n ^ " → " ^ string_of_int n
+  | MOInt n, MOInt old_n -> old_n ^ " → " ^ n
   | _ -> "?"
 
 (* ── Mutation site collection ───────────────────────────────────────────── *)
@@ -146,6 +146,43 @@ let collect_sites fn_name fn_kind body : (mutation_site * mutation_op list) list
     | ELit { loc; _ } | EConstructor { loc; _ } | EBinop { loc; _ } -> loc
     | _ -> Location.dummy_loc "?"
   in
+  let increment_magnitude digits =
+    let bytes = Bytes.of_string digits in
+    let index = ref (Bytes.length bytes - 1) in
+    while !index >= 0 && Bytes.get bytes !index = '9' do
+      Bytes.set bytes !index '0';
+      decr index
+    done;
+    if !index < 0 then "1" ^ Bytes.to_string bytes
+    else begin
+      Bytes.set bytes !index (Char.chr (Char.code (Bytes.get bytes !index) + 1));
+      Bytes.to_string bytes
+    end
+  in
+  let decrement_magnitude digits =
+    let bytes = Bytes.of_string digits in
+    let index = ref (Bytes.length bytes - 1) in
+    while !index >= 0 && Bytes.get bytes !index = '0' do
+      Bytes.set bytes !index '9';
+      decr index
+    done;
+    if !index >= 0 then
+      Bytes.set bytes !index (Char.chr (Char.code (Bytes.get bytes !index) - 1));
+    let value = Bytes.to_string bytes in
+    let rec first_nonzero i =
+      if i + 1 >= String.length value || value.[i] <> '0' then i
+      else first_nonzero (i + 1)
+    in
+    let start = first_nonzero 0 in
+    String.sub value start (String.length value - start)
+  in
+  let increment_decimal value =
+    if String.length value > 0 && value.[0] = '-' then
+      let magnitude = String.sub value 1 (String.length value - 1) in
+      let decremented = decrement_magnitude magnitude in
+      if decremented = "0" then "0" else "-" ^ decremented
+    else increment_magnitude value
+  in
   let visit e =
     match e with
     | EBinop { op; loc; _ } ->
@@ -153,7 +190,10 @@ let collect_sites fn_name fn_kind body : (mutation_site * mutation_op list) list
       record KBinop binop_ctr (MOBinop op) alts loc
     | ELit { lit = LInt n; loc } ->
       (* Integer-literal perturbation: n → n+1 (classic off-by-one). *)
-      record KInt int_ctr (MOInt n) [MOInt (n + 1)] loc
+      let value = string_of_int n in
+      record KInt int_ctr (MOInt value) [MOInt (increment_decimal value)] loc
+    | ELit { lit = LBigInt value; loc } ->
+      record KInt int_ctr (MOInt value) [MOInt (increment_decimal value)] loc
     | _ ->
       (match bool_literal_value e with
        | Some b ->
@@ -198,9 +238,16 @@ let replace_at ~kind ~target_index ~op expr =
         let left'  = walk left in
         let right' = walk right in
         EBinop { op = old_op; left = left'; right = right'; loc; op_loc }
-    | ELit { lit = LInt _; loc } when kind = KInt ->
+    | ELit { lit = (LInt _ | LBigInt _); loc } when kind = KInt ->
       if hit int_ctr then
-        (match op with MOInt n -> ELit { lit = LInt n; loc } | _ -> e)
+        (match op with
+         | MOInt value ->
+           let lit = match int_of_string_opt value with
+             | Some n -> LInt n
+             | None -> LBigInt value
+           in
+           ELit { lit; loc }
+         | _ -> e)
       else e
     | _ when kind = KBool && bool_literal_value e <> None ->
       (* Boolean-literal node (True/False constructor or legacy LBool). *)

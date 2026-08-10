@@ -181,6 +181,20 @@
  (modules test_racket_discover)
  (libraries str unix))
 
+; First Go-backend vertical slice: pure emission assertions always run. When Go
+; is on PATH (mandatory in the project dev shell/CI), it also compiles, tests,
+; vets, and race-tests a freshly emitted module.
+(test
+ (name test_emit_go)
+ (modules test_emit_go)
+ (libraries tesl_compiler_lib alcotest unix)
+ (deps ../bin/main.exe))
+
+(test
+ (name test_mutation_go)
+ (modules test_mutation_go)
+ (libraries tesl_compiler_lib alcotest unix))
+
 ; Stdlib binding-existence seam test (stdlib-surface-drift class closer): every
 ; name the checker accepts an import of must resolve to a REAL runtime provide
 ; (via racket module->exports), and every module_path_table row must point to a

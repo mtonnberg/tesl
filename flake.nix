@@ -312,6 +312,11 @@
             curl
             jq
             postgresql
+            go
+            gosec
+            govulncheck
+            golangci-lint
+            nilaway
             ocamlPackages.ocaml
             ocamlPackages.dune_3
             ocamlPackages.findlib

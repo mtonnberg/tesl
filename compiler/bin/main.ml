@@ -2,6 +2,7 @@
 
     Usage:
       tesl <file>                compile .tesl file to Racket (stdout)
+      tesl --backend go <file> --out <dir>  emit an experimental Go module
       tesl --check <file> ...    check for parse + type errors (exit 1 if any)
       tesl --check-batch <file> ...  batch-check many files in one process (per-file summary)
       tesl --check-all <dir>     recursively batch-check every .tesl file under <dir>
@@ -18,7 +19,7 @@
       tesl --ir <file>           emit API IR JSON
       tesl --deps <file>         list all transitively imported local .tesl files
       tesl --semantic-json <file>  emit full module semantic snapshot as JSON
-      tesl --mutate <file> [test-file ...]  run mutation testing
+      tesl --mutate [--backend racket|go] <file> [test-file ...]  run mutation testing
       tesl doc [name|Tesl.Module]  show a builtin's Tesl signature / a module's surface
       tesl --doc-json <name>     same, as JSON (editor/agent integration)
       tesl help [manual] [section]  show help and documentation
@@ -26,6 +27,8 @@
 
 let usage = {|Usage:
   tesl <file>                  compile .tesl file to Racket (stdout)
+  tesl --backend racket <file> compile .tesl file to Racket (stdout)
+  tesl --backend go <file> --out <dir>  emit an experimental Go module tree
   tesl --check <file> [...]    check for parse + type errors (exit 1 if any)
   tesl --check-batch <file> [...]  batch-check many files in one process (shared import cache, per-file summary)
   tesl --check-all <dir>       recursively batch-check every .tesl file under <dir>
@@ -49,7 +52,7 @@ let usage = {|Usage:
   tesl agent-context <file>    emit a compact AI-agent snapshot (diagnostics+symbols+obligations) as JSON
   tesl --agent-context-json <file>  alias for `tesl agent-context`
   tesl debug-inspect <file> --break-at SPEC [...]  run to a breakpoint (headless) and dump paused runtime state as JSON
-  tesl --mutate <file> [test-file ...]  run mutation testing; optionally merge tests from extra files
+  tesl --mutate [--backend racket|go] <file> [test-file ...]  run mutation testing; optionally merge tests from extra files
   tesl --exe <file> [--out <path>]  build a standalone executable via `raco exe` (needs raco on PATH)
 
 Documentation:
@@ -92,6 +95,29 @@ let read_file filename =
     close_in ic;
     Some contents
   with Sys_error _ -> None
+
+let rec ensure_directory path =
+  if path = "" || path = Filename.current_dir_name then ()
+  else if Sys.file_exists path then begin
+    if not (Sys.is_directory path) then
+      failwith (Printf.sprintf "%s exists and is not a directory" path)
+  end else begin
+    ensure_directory (Filename.dirname path);
+    Unix.mkdir path 0o755
+  end
+
+let write_go_project out_dir (artifacts : Emit_go.artifact list) =
+  if Sys.file_exists out_dir then
+    failwith (Printf.sprintf "Go output directory already exists: %s" out_dir);
+  ensure_directory out_dir;
+  List.iter (fun (artifact : Emit_go.artifact) ->
+    if not (Filename.is_relative artifact.path)
+       || List.mem ".." (String.split_on_char '/' artifact.path) then
+      failwith (Printf.sprintf "unsafe Go artifact path: %s" artifact.path);
+    let path = Filename.concat out_dir artifact.path in
+    ensure_directory (Filename.dirname path);
+    Out_channel.with_open_bin path (fun channel ->
+      output_string channel artifact.contents)) artifacts
 
 (** Read a file from disk; fall back to the embedded content store when the
     file is not present on disk (e.g. in an installed nix-flake binary with
@@ -1523,7 +1549,25 @@ let () =
          exit 1
      with
      | Failure msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
-     | Sys_error msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
+      | Sys_error msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
+
+  | ["--backend"; "racket"; filename] ->
+    (match Compile.compile_file ~root_path ~type_check:true filename with
+     | Compile.Success racket -> print_string racket
+     | Compile.Failure diags -> List.iter print_diagnostic diags; exit 1)
+
+  | ["--backend"; "go"; filename; "--out"; out_dir] ->
+    (match Compile.compile_go_file filename with
+     | Compile.GoFailure diags -> List.iter print_diagnostic diags; exit 1
+     | Compile.GoSuccess artifacts ->
+       write_go_project out_dir artifacts;
+       Printf.printf "emitted Go module: %s\n" out_dir)
+
+  | "--backend" :: backend :: _ ->
+    Printf.eprintf "%serror%s: unsupported backend or arguments: %s\n"
+      (col "1;31") (col "0") backend;
+    Printf.eprintf "usage: tesl --backend racket <file> | tesl --backend go <file> --out <dir>\n";
+    exit 2
 
   | "--exe" :: filename :: rest
     when not (String.length filename > 2 && filename.[0] = '-')
@@ -1540,9 +1584,23 @@ let () =
      | Compile.BuildErr msg ->
        Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
 
-  | "--mutate" :: filename :: rest when rest = [] || List.for_all (fun s -> not (String.length s > 2 && s.[0] = '-' && s.[1] = '-')) rest ->
-    let extra_test_files = rest in
-    (match Compile.mutate_file ~root_path ~extra_test_files filename with
+  | "--mutate" :: args ->
+    let backend, filename, extra_test_files = match args with
+      | "--backend" :: ("go" | "racket" as backend) :: filename :: rest ->
+        backend, filename, rest
+      | filename :: rest
+        when not (String.length filename > 2 && filename.[0] = '-')
+             && List.for_all (fun s -> not (String.length s > 2 && s.[0] = '-' && s.[1] = '-')) rest ->
+        "racket", filename, rest
+      | _ ->
+        Printf.eprintf "usage: tesl --mutate [--backend racket|go] <file> [test-file ...]\n";
+        exit 2
+    in
+    let mutation_result =
+      if backend = "go" then Compile.mutate_go_file ~extra_test_files filename
+      else Compile.mutate_file ~root_path ~extra_test_files filename
+    in
+    (match mutation_result with
      | Compile.MutateErr msg ->
        Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg;
        exit 1
@@ -1594,8 +1652,8 @@ let () =
           Invalid/Error/NoTests) proves nothing about test strength — reporting
           "100%" for it read as "perfectly tested" when coverage was actually
           nil.  Report "n/a" for the no-coverage case instead of a misleading
-          perfect score.  (Exit is unchanged: survived = 0 here.) *)
-       if scored = 0 then
+           perfect score. Incomplete runs exit non-zero below. *)
+        if scored = 0 then
          Printf.printf "\n%sMutation score%s: n/a %s(0 scorable mutants — no effective coverage)%s\n"
            (col "1") (col "0") (col "2") (col "0")
        else begin
@@ -1603,7 +1661,7 @@ let () =
          Printf.printf "\n%sMutation score%s: %.0f%%" (col "1") (col "0") score;
          Printf.printf " %s(%d killed / %d scored)%s\n" (col "2") killed scored (col "0")
        end;
-       if survived > 0 then exit 1)
+        if survived > 0 || invalid > 0 || errors > 0 || no_tests > 0 then exit 1)
 
   | _ -> print_string usage; exit 1)
   with

@@ -199,7 +199,7 @@ let () =
 
   (* Integer-literal perturbation: the literal `3` must be perturbed to `4`. *)
   check "operator: integer-literal perturbation present (3 → 4)"
-    (has_op mutants (function Mutate.MOInt 4 -> true | _ -> false));
+    (has_op mutants (function Mutate.MOInt "4" -> true | _ -> false));
   check "operator: int perturbation described as `3 → 4`"
     (desc_has mutants "3 → 4");
 

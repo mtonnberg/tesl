@@ -28,6 +28,7 @@
 # Phase order (each runs at most once):
 #    1. Build                 dune build                              (compiler/)
 #    2. Dune test             OCaml alcotest suite, ID-keyed waivers   (compiler/)
+#   2a. Go backend           runtime + fresh emitted module toolchain gates
 #    3. Lifted-stdlib snaps   scripts/gen-stdlib-rkt.sh --check
 #    4. Embedded-docs sync    embedded_docs.ml matches manual/+example/ (promote)
 #   4a. Doc integrity         tests/doc-integrity.sh — relative links, cited
@@ -137,7 +138,7 @@ phase_started_at=$SECONDS
 
 # ── Phase registry / progress bar ────────────────────────────────────────────
 # We know the phase count up front so each phase can print "[N/T] <name>".
-TOTAL_PHASES=20
+TOTAL_PHASES=22
 PHASE_NUM=0
 # Parallel arrays: name / status (OK|FAIL|SKIP) / elapsed seconds.
 PHASE_NAMES=()
@@ -773,6 +774,40 @@ if [ "$dune_test_fail" -gt 0 ]; then
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  Phase 2a — Go runtime and emitted-code gates
+# ══════════════════════════════════════════════════════════════════════════════
+phase_begin "Go runtime + emitted-code gates"
+go_gate_fail=0
+for tool in go gofmt gosec govulncheck golangci-lint nilaway; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        printf "  %s✗%s  required Go gate tool not found: %s\n" "$C_RED" "$C_RESET" "$tool"
+        go_gate_fail=1
+    fi
+done
+if [ "$go_gate_fail" -eq 0 ]; then
+    (
+      cd "$SCRIPT_DIR/runtime/go" || exit 1
+      _unformatted="$(gofmt -l teslrt/*.go)"
+      if [ -n "$_unformatted" ]; then
+          printf "unformatted Go files:\n%s\n" "$_unformatted" >&2
+          exit 1
+      fi
+      go test -count=1 ./... &&
+      go test -race -count=1 ./... &&
+      go test ./teslrt -run '^$' -fuzz '^FuzzIntDecimalAndJSONRoundTrip$' -fuzztime="${TESL_GO_FUZZTIME:-3s}" &&
+      go test ./teslrt -run '^$' -fuzz '^FuzzIntArithmeticAgainstBig$' -fuzztime="${TESL_GO_FUZZTIME:-3s}" &&
+      go test ./teslrt -run '^$' -fuzz '^FuzzIntJSONInput$' -fuzztime="${TESL_GO_FUZZTIME:-3s}" &&
+      go vet ./... &&
+      CGO_ENABLED=0 go build ./... &&
+      golangci-lint run ./... &&
+      gosec -quiet ./... &&
+      govulncheck ./... &&
+      nilaway ./...
+    ) || go_gate_fail=1
+fi
+if [ "$go_gate_fail" -eq 0 ]; then phase_end OK; else phase_end FAIL; fi
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  Phase 3 — Lifted-stdlib runtime snapshots
 # ══════════════════════════════════════════════════════════════════════════════
 # Modules whose pure combinator bodies are written in Tesl (e.g. tesl/list.tesl)
@@ -1090,31 +1125,49 @@ if [ -z "$TESL_BIN" ]; then
         TESL_BIN="tesl"
     fi
 fi
-if [ -f "$mutation_lesson" ] && command -v raco >/dev/null 2>&1; then
-    printf "  Running: tesl --mutate %s\n" "$(basename "$mutation_lesson")"
-    # TESL_MUTATION_TIMEOUT caps the full --mutate run (default 120s). Each mutant
-    # calls raco test; TESL_MUTATE_TIMEOUT (passed through) caps each invocation.
-    _mutation_timeout="${TESL_MUTATION_TIMEOUT:-120}"
-    mutation_out=$(timeout "$_mutation_timeout" "$TESL_BIN" --mutate "$mutation_lesson" 2>&1)
-    _mut_exit=$?
-    if [ "$_mut_exit" -eq 124 ]; then
-        printf "  %s⚠%s  Mutation testing timed out after %ss — skipping\n" "$C_YELLOW" "$C_RESET" "$_mutation_timeout"
-        phase_end SKIP
-    elif [ "$_mut_exit" -ne 0 ]; then
-        mutation_fail=1
-        printf "  %s✗%s  Mutation testing failed\n" "$C_RED" "$C_RESET"
-        printf "%s\n" "$mutation_out" | head -40
-        phase_end FAIL
-    else
-        printf "  %s✓%s  All mutants killed (score: 100%%)\n" "$C_GREEN" "$C_RESET"
-        phase_end OK
-    fi
-elif ! command -v raco >/dev/null 2>&1; then
-    printf "  %s⚠%s  raco not available — skipping mutation testing\n" "$C_YELLOW" "$C_RESET"
-    phase_end SKIP
+if [ ! -f "$mutation_lesson" ]; then
+    printf "  %s✗%s  %s not found\n" "$C_RED" "$C_RESET" "$mutation_lesson"
+    mutation_fail=1
 else
-    printf "  %s⚠%s  %s not found — skipping mutation testing\n" "$C_YELLOW" "$C_RESET" "$mutation_lesson"
-    phase_end SKIP
+    _mutation_timeout="${TESL_MUTATION_TIMEOUT:-180}"
+    if command -v raco >/dev/null 2>&1; then
+        printf "  Running Racket mutation oracle: %s\n" "$(basename "$mutation_lesson")"
+        mutation_out=$(timeout "$_mutation_timeout" "$TESL_BIN" --mutate "$mutation_lesson" 2>&1)
+        _mut_exit=$?
+        if [ "$_mut_exit" -ne 0 ]; then
+            mutation_fail=1
+            printf "  %s✗%s  Racket mutation testing failed (exit %d)\n%s\n" \
+                "$C_RED" "$C_RESET" "$_mut_exit" "$mutation_out"
+        else
+            case "$mutation_out" in
+                *"Summary: 20 mutants | 20 killed | 0 survived"*) ;;
+                *) mutation_fail=1; printf "  %s✗%s  Racket mutation report was incomplete\n%s\n" "$C_RED" "$C_RESET" "$mutation_out" ;;
+            esac
+        fi
+    else
+        printf "  %s✗%s  raco unavailable — cannot prove Racket/Go mutation parity\n" "$C_RED" "$C_RESET"
+        mutation_fail=1
+    fi
+
+    printf "  Running Go mutation backend: %s\n" "$(basename "$mutation_lesson")"
+    go_mutation_out=$(timeout "$_mutation_timeout" "$TESL_BIN" --mutate --backend go "$mutation_lesson" 2>&1)
+    _go_mut_exit=$?
+    if [ "$_go_mut_exit" -ne 0 ]; then
+        mutation_fail=1
+        printf "  %s✗%s  Go mutation testing failed (exit %d)\n%s\n" \
+            "$C_RED" "$C_RESET" "$_go_mut_exit" "$go_mutation_out"
+    else
+        case "$go_mutation_out" in
+            *"Summary: 20 mutants | 20 killed | 0 survived"*) ;;
+            *) mutation_fail=1; printf "  %s✗%s  Go mutation report was incomplete\n%s\n" "$C_RED" "$C_RESET" "$go_mutation_out" ;;
+        esac
+    fi
+fi
+if [ "$mutation_fail" -eq 0 ]; then
+    printf "  %s✓%s  Racket/Go mutation parity: 20/20 killed\n" "$C_GREEN" "$C_RESET"
+    phase_end OK
+else
+    phase_end FAIL
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════

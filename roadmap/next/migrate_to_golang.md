@@ -14,6 +14,7 @@ Hard requirements for any Go backend, regardless of how the design below evolves
 4. **Lint-clean emitted code.** `go vet`, `staticcheck`, `gosec`, `govulncheck`, `golangci-lint`, `go test -race`, `goleak`, and `nilaway` must all pass (where applicable) on transpiled output, always — see "Toolchain gates" below for how each one actually plugs in.
 5. **Coraza WAF, opt-out.** Evaluate embedding Coraza to harden Tesl apps' runtime, well integrated with the OTel infrastructure — both for protection and to build trust. If it turns out to be pure cost with no upside, skip it. *(Decided 2026-08-04: skipped for now, cheap to add later — see "Coraza" below.)*
 6. **Best practices by construction.** Emitted code and the runtime library follow Go performance, security, and style best practices. Since Tesl users never write Go, every "Go developers should…" rule becomes an emitter/runtime obligation — see "Runtime hardening defaults" below.
+7. **Mutation-test parity.** Built-in mutation testing must execute each Tesl mutant through the selected backend. Go mutants compile before tests run; a Go compile failure is invalid, never a kill. Baseline tests must pass before scoring, mutation IDs/operators stay backend-neutral, and the Racket/Go reports must agree before Racket retirement.
 
 ## Background
 
@@ -126,6 +127,8 @@ Requirement 1 made concrete. The Racket-side test estate has three fates:
 3. **Dropped, with a flag.** Tests of code that evaporates into the Go stdlib or an approved library (pool internals, hand-rolled OTLP wire format, servlet plumbing). Each drop is recorded with its justification in the migration tracker; "the stdlib is tested upstream" is acceptable, silence is not.
 
 Additionally, Go enables test classes Racket didn't have: the differential corpus runs under `go test -race`, `goleak` verifies no goroutine outlives its test, and native fuzzing (`go test -fuzz`) targets the runtime's parsing edges (JSON codecs, header parsing, the breakpoint-condition evaluator) plus the hybrid `teslrt.Int` spill/normalize paths in scheduled runs. The `teslrt.Int` module additionally carries its own property-based suite and formal review per the Decisions mandate — it is held to the same standard as the capability/proof runtime.
+
+Mutation testing is part of test parity, not a Racket-only utility. `tesl mutate --backend go` uses the same surface-AST mutants as Racket, compiles every emitted mutant before running its generated Go tests, and classifies only an executed test failure as killed. CI runs the lesson42 GDP-boundary corpus through both backends and pins the same mutant count/order and kill result. The Go runner must reject a red baseline before generating a score, use per-mutant timeouts, and report unsupported emit/build states as incomplete failures.
 
 ## Debugger and api-test port
 
@@ -257,10 +260,23 @@ Honest limit to keep in the docs: the credibility transfer covers the *runtime*,
 1. Lift the pure-logic stdlib modules into Tesl (see "Pre-migration" above) — this is useful on its own and can start immediately. (An earlier step 0 — retrofitting checked-int64 semantics into the Racket backend — was deleted when the Int decision was revised to the hybrid representation; no semantic change ships in the current product.)
 2. ~~Settle the dependency exceptions~~ — done 2026-08-04, all four approved (see "Dependency exceptions").
 3. `emit_go.ml` behind a flag; Racket stays the reference backend. Toolchain gates (vet/staticcheck/gosec/golangci-lint) wired into CI from the first emitted program, not retrofitted. Release/debug mode split (see "Release builds") designed in from the start. The hybrid `teslrt.Int` type and its full test suite (property-based + fuzz + formal review, per the Decisions mandate) land first, before any emit code depends on arithmetic.
-4. Migrate/port the test estate per "Test migration and parity" — backend-agnostic suites run against both backends from day one; Go unit tests land with each ported module.
+4. Migrate/port the test estate per "Test migration and parity" — backend-agnostic suites run against both backends from day one; Go unit tests land with each ported module. Port built-in mutation execution in this phase too; its AST operators remain shared and each backend owns compile/test execution.
 5. **Differential corpus testing**: run the entire `.tesl` corpus (`compile-examples.sh`, `tests/*.tesl`, plus the lifted stdlib `.tesl` modules) through both backends and diff observable behavior — the existing ratchet suite becomes a cross-backend oracle, run under `-race` on the Go side. This is the main defense against the long tail of parity bugs (float formatting, string/unicode, JSON edges).
 6. Port runtime lib by lib, capability/proof runtime with its own focused security review. Runtime hardening defaults land here as each subsystem ports.
 7. Debugger and api-test instrumentation last, against the parity checklist (requirement 3).
 8. Retire the Racket backend only when the corpus diff has been empty across the full suite for an extended period, test coverage parity is documented, and the debug-parity checklist is fully green.
+
+### Implementation tracker
+
+| Slice | Status | Evidence / exit condition |
+|---|---|---|
+| Hybrid `teslrt.Int` | Implemented on `go_migration` | Canonical small/spill representation, non-comparable by construction, unit/property/fuzz/JSON/hash tests, race + vet + static gates. |
+| Experimental emitter flag | Implemented, narrow subset | `tesl compile --backend go FILE --out DIR`; standalone `go.mod`, `internal/<module>`, embedded `internal/teslrt`, `//line`, release-only output. Unsupported forms fail closed. |
+| Pure functions and deterministic tests | Implemented, narrow subset | Int/String/Bool/Unit, calls, tail `let`/`if`, arithmetic/comparison, `test` expectations; freshly emitted trees pass build/test/vet/race. |
+| Facts/checks and mutation execution | Implemented, narrow subset | Facts erase; check results remain explicit. `tesl mutate --backend go` requires a green baseline, compile-checks mutants, and gets 20/20 kills on lesson42 like Racket. |
+| Whole stdlib/runtime and corpus parity | Pending | Lift/port modules, run every backend-neutral test under both backends, document every intentionally dropped Racket test. |
+| APIs, SQL, hardening, approved dependencies | Pending | `net/http`, pgx, codecs, capabilities/proofs, server defaults, deployment output, full lint corpus. |
+| Debugger/api-test attach parity | Pending | Breakpoints, stepping, locals/value tree, SQL lens, live attach, CLI/MCP/VSCode checklist green. |
+| Racket retirement | Blocked by pending slices | Extended empty differential, documented coverage parity, all gates green. |
 
 Scale estimate: person-year class — roughly half the Rust estimate with ~90% of the gains.
