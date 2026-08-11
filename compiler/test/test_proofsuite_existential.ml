@@ -6,7 +6,7 @@
 
     Families covered:
       NOEX  — body has no `exists` expression though the return type declares one
-              ("body has no exists expression").
+              ("does not produce a top-level `exists` pack").
       RAW   — `exists w => p` packs a raw PARAMETER whose declared proof is not
               demonstrably attached ("proof is not demonstrably attached").
       CONS  — feeding an existential result to a proof-requiring consumer is
@@ -136,7 +136,7 @@ entity Todo table "todos" primaryKey id { id: String title: String }
    NOEX — existential return type but the body has no `exists` expression.
    ══════════════════════════════════════════════════════════════════════════ *)
 
-let noex_re = "no exists expression\\|body has no exists"
+let noex_re = "does not produce a top-level `exists` pack"
 
 (* Matrix over the inner return shape and the body that omits `exists`. *)
 let noex_case idx ~ret ~body =

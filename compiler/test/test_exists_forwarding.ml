@@ -21,8 +21,8 @@
     ------------------------------------------------------------------------
     A packed existential IS a value of the declared type: if every TAIL of the
     body is a call to a function whose own return spec is the same existential —
-    same binder arity, and a proof that entails the declared one after
-    alpha-renaming the callee's binders and parameters to the call site — the
+    the same single witness name/type, and a proof that entails the declared one
+    after substituting the callee's parameters at the call site — the
     package the caller receives is bit-for-bit the callee's.  Nothing is minted,
     so nothing can be forged.
 
@@ -196,6 +196,48 @@ fn wrapper(name: String) -> exists id: String => Thing ? FromDb (Id == id)
   packed
 |})
 
+let test_forward_via_let_bound_if () =
+  should_pass "forwarding every branch through a let-bound package"
+    (db {|
+fn wrapper(name: String, flag: Bool) -> exists id: String => Thing ? FromDb (Id == id)
+  requires [dbWrite, time, random] =
+  let packed = if flag then
+    core name
+  else
+    core "fallback"
+  packed
+|})
+
+let test_forward_via_let_bound_if_or_fail () =
+  should_pass "forwarding through a let-bound branch that may fail"
+    (db {|
+fn wrapper(name: String, flag: Bool) -> exists id: String => Thing ? FromDb (Id == id)
+  requires [dbWrite, time, random] =
+  let packed = if flag then
+    core name
+  else
+    fail 503 "unavailable"
+  packed
+|})
+
+let test_forward_via_long_alias_chain () =
+  should_pass "forwarding through more than eight aliases"
+    (db {|
+fn wrapper(name: String) -> exists id: String => Thing ? FromDb (Id == id)
+  requires [dbWrite, time, random] =
+  let a = core name
+  let b = a
+  let c = b
+  let d = c
+  let e = d
+  let f = e
+  let g = f
+  let h = g
+  let i = h
+  let j = i
+  j
+|})
+
 let test_forward_every_branch () =
   should_pass "every branch forwards"
     (db {|
@@ -214,6 +256,16 @@ fn wrapper(a: String, b: String)
   -> exists tok: String => tok: String ::: TaggedWith a tok
   requires [idGen] =
   core a b
+|})
+
+let test_forward_via_argument_alias () =
+  should_pass "proof subjects resolve through argument aliases"
+    (tok {|
+fn wrapper(tag: String, other: String)
+  -> exists tok: String => tok: String ::: TaggedWith tag tok
+  requires [idGen] =
+  let alias = tag
+  core alias other
 |})
 
 let test_forward_cross_module () =
@@ -286,7 +338,7 @@ fn wrapper(name: String) -> exists id: String => Thing ? FromDb (Id == id)
 
 let test_reject_fabricated_tail () =
   should_fail "a record literal tail is still not a pack"
-    ~expect:"body has no exists expression"
+    ~expect:"does not produce a top-level `exists` pack"
     (db {|
 fn wrapper(name: String) -> exists id: String => Thing ? FromDb (Id == id)
   requires [time] =
@@ -320,7 +372,7 @@ fn wrapper(a: String, b: String)
 
 let test_reject_unknown_callee () =
   should_fail "an unresolved callee is not a forwarding site"
-    ~expect:"body has no exists expression"
+    ~expect:"does not produce a top-level `exists` pack"
     (db {|
 fn wrapper(name: String) -> exists id: String => Thing ? FromDb (Id == id)
   requires [time] =
@@ -388,8 +440,12 @@ let () =
     "forward", [
       test_case "direct tail call"            `Quick test_forward_direct;
       test_case "let-bound package"           `Quick test_forward_via_let;
+      test_case "let-bound branching package" `Quick test_forward_via_let_bound_if;
+      test_case "let-bound forward-or-fail"    `Quick test_forward_via_let_bound_if_or_fail;
+      test_case "long alias chain"            `Quick test_forward_via_long_alias_chain;
       test_case "every branch forwards"       `Quick test_forward_every_branch;
       test_case "renamed parameters"          `Quick test_forward_renamed_parameters;
+      test_case "argument alias"              `Quick test_forward_via_argument_alias;
       test_case "imported callee"             `Quick test_forward_cross_module;
     ];
     "fail-closed", [

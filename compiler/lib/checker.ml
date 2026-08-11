@@ -3314,10 +3314,10 @@ let rec infer_expr ctx (e : expr) : ty =
              apply !(ctx.subst) result_ty
            end else
              infer_direct_call base_fn args)
-     | EVar { name = "make-witness"; _ } ->
-        (match args with
-         | [EApp { fn = EVar { name = _; _ }; arg = body; _ }] -> infer_expr ctx body
-         | _ -> fresh ())
+      | EVar { name = "make-witness"; _ } ->
+         (match args with
+          | [EApp { fn = EVar { name = _; _ }; arg = body; _ }] -> infer_expr ctx body
+          | _ -> fresh ())
      (* BUG-1 fix: user-defined functions named `select`, `selectOne`, `insert`, `update`,
         `delete`, `upsert` must be type-checked as normal function calls when they appear
         in ctx.env (user-defined). Only treat them as SQL operations when NOT user-defined. *)
@@ -5199,6 +5199,53 @@ let check_func_decl ?(user_fn_names : string list = []) ctx (fd : func_decl) =
     | RetMaybeAttached { binding = b; _ } -> t_maybe (ty_of_type_expr b.type_expr)
     | RetExists { body; _ } -> ret_spec_type body
   in
+  (* Existential construction erases to its body type during ordinary inference,
+     so witness types need a return-path-scoped check.  Following only tail aliases
+     avoids applying this function's contract to discarded local packs. *)
+  let rec check_exists_witnesses ctx aliases resolving spec expr =
+    match expr with
+    | EVar { name; _ } when not (List.mem name resolving) ->
+      (match List.assoc_opt name aliases with
+       | Some (value, value_ctx) ->
+         check_exists_witnesses value_ctx aliases (name :: resolving) spec value
+       | None -> ())
+    | ELet { name; value; body; _ } ->
+      let value_ty = infer_expr ctx value in
+      let sch = generalize (free_vars_env ctx.env) !(ctx.subst) value_ty in
+      let body_ctx = { ctx with env = env_extend name sch ctx.env } in
+      check_exists_witnesses body_ctx ((name, (value, ctx)) :: aliases) resolving spec body
+    | ELetProof { value_name; proof_name; value; body; _ } ->
+      let value_ty = infer_expr ctx value in
+      let sch = generalize (free_vars_env ctx.env) !(ctx.subst) value_ty in
+      let env = env_extend proof_name (mono t_fact) (env_extend value_name sch ctx.env) in
+      let body_ctx = { ctx with env } in
+      check_exists_witnesses body_ctx ((value_name, (value, ctx)) :: aliases) resolving spec body
+    | EIf { then_; else_; _ } ->
+      check_exists_witnesses ctx aliases resolving spec then_;
+      check_exists_witnesses ctx aliases resolving spec else_
+    | ECase { scrut; arms; _ } ->
+      let scrut_ty = infer_expr ctx scrut in
+      List.iter (fun (arm : case_arm) ->
+        let arm_env = bind_pattern_vars ctx scrut_ty arm.pattern in
+        let arm_ctx = { ctx with env = arm_env @ ctx.env } in
+        check_exists_witnesses arm_ctx aliases resolving spec arm.body
+      ) arms
+    | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
+    | EWithTransaction { body; _ } ->
+      check_exists_witnesses ctx aliases resolving spec body
+    | EFail _ -> ()
+    | EApp {
+        fn = EVar { name = "make-witness"; _ };
+        arg = EApp { fn = EVar { name; loc }; arg = body; _ };
+        _ } ->
+      (match spec with
+       | RetExists { binding; body = inner_spec; _ } ->
+         let witness_ty = infer_expr ctx (EVar { name; loc }) in
+         unify_at ctx loc witness_ty (ty_of_type_expr binding.type_expr);
+         check_exists_witnesses ctx aliases [] inner_spec body
+       | _ -> ())
+    | _ -> ()
+  in
   (* App-pass entry point: `main() -> App = … App { … }` is declarative
      configuration whose fields reference declarations (databases/queues/servers)
      by name, not as values. It is validated structurally and lowered by the
@@ -5252,10 +5299,14 @@ let check_func_decl ?(user_fn_names : string list = []) ctx (fd : func_decl) =
        | _ -> ()  (* the App { … } tail — owned by the structural pass *)
      in
      check_app_main_lets ctx' fd.body
-   else
-   check_stmt ctx' fd.body
-     (mk_expectation ~origin:fd.loc ~role:(ReturnBody fd.name)
-       ~reason:(return_reason fd.name expected) expected));
+    else begin
+      check_stmt ctx' fd.body
+        (mk_expectation ~origin:fd.loc ~role:(ReturnBody fd.name)
+          ~reason:(return_reason fd.name expected) expected);
+      (match fd.return_spec with
+       | RetExists _ -> check_exists_witnesses ctx' [] [] fd.return_spec fd.body
+       | _ -> ())
+    end);
   (* Eq/Ord Stage 3: record this fn's harvested obligations for call-site discharge. *)
   finalize_ord_eq_constraints ctx fd.name fd.params fd.return_spec
 

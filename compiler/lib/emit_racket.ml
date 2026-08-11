@@ -1993,9 +1993,7 @@ let rec emit_expr ctx e =
        free to pack a differently-named local.  That gap was a check-passes /
        test-fails trap ("returned an existential package missing witness name").
        Emitting the DECLARED name bound to the body's local closes it, so the
-       positional rule the checker documents is the one that actually runs.
-       Only the single-binder shape is remapped; a nested `exists a => exists b`
-       chain packs nested packages and is left exactly as before. *)
+        positional rule the checker documents is the one that actually runs. *)
     let public_name =
       match ctx.func_return_spec with
       | Some (RetExists { binding; body = inner; _ })

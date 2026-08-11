@@ -234,7 +234,7 @@ let rec type_of_expr signatures env expr =
     let then_ty = type_of_expr signatures env then_ in
     let else_ty = type_of_expr signatures env else_ in
     (match then_ty, else_ty with
-     | TFailure, TFailure -> unsupported loc "Go backend cannot infer a check result from two failures"
+     | TFailure, TFailure -> TFailure
      | TFailure, ty | ty, TFailure -> ty
      | left, right when left = right -> left
      | _ -> unsupported loc "Go backend if branches have different types")
@@ -261,7 +261,8 @@ let rec type_of_expr signatures env expr =
   | ERuntimeCall { loc; _ } ->
     unsupported loc "internal error: Go backend received Racket-specific desugaring"
 
-let rec emit_expr ?expected signatures env expr =
+let rec emit_expr ?expected ?(indent="") signatures env expr =
+  let emit = emit_expr ~indent signatures env in
   match expr with
   | ELit { lit = LInt value; _ } -> Printf.sprintf "teslrt.FromInt64(%d)" value
   | ELit { lit = LBigInt value; _ } ->
@@ -270,7 +271,7 @@ let rec emit_expr ?expected signatures env expr =
   | ELit { lit = LBool value; _ } -> if value then "true" else "false"
   | ELit { lit = LFloat _; loc } ->
     unsupported loc "Go backend cannot emit Float yet"
-  | ELit { lit = LInterp segments; _ } -> emit_interp signatures env segments
+  | ELit { lit = LInterp segments; _ } -> emit_interp ~indent signatures env segments
   | EVar { name; loc } ->
     (match List.assoc_opt name env, Hashtbl.find_opt signatures name with
      | Some _, _ -> sanitize_ident name
@@ -293,12 +294,12 @@ let rec emit_expr ?expected signatures env expr =
              | None -> unsupported loc "Go backend cannot resolve check `%s`" name
            in
            Printf.sprintf "teslrt.MustCheck(%s(%s))" signature.go_name
-             (String.concat ", " (List.map (emit_expr signatures env) call_args))
+              (String.concat ", " (List.map emit call_args))
          | _ -> unsupported loc "Go backend requires a named check function")
      | EVar { name = "not"; _ } when not (Hashtbl.mem signatures "not") ->
        ignore (type_of_expr signatures env app);
        (match args with
-        | [arg] -> Printf.sprintf "!(%s)" (emit_expr signatures env arg)
+         | [arg] -> Printf.sprintf "!(%s)" (emit arg)
         | _ -> assert false)
      | EVar { name; _ } ->
        let signature = match Hashtbl.find_opt signatures name with
@@ -308,12 +309,12 @@ let rec emit_expr ?expected signatures env expr =
        let args = normalize_call_args signature.params args in
        ignore (type_of_expr signatures env app);
        Printf.sprintf "%s(%s)" signature.go_name
-         (String.concat ", " (List.map (emit_expr signatures env) args))
+          (String.concat ", " (List.map emit args))
      | _ -> unsupported loc "Go backend supports calls to named functions only")
   | EBinop { op; left; right; _ } ->
     let ty = type_of_expr signatures env left in
-    let emitted_left = emit_expr signatures env left in
-    let emitted_right = emit_expr signatures env right in
+    let emitted_left = emit left in
+    let emitted_right = emit right in
     let emit_bool_literal_comparison equal =
       match bool_literal_value left, bool_literal_value right with
       | Some expected, None ->
@@ -344,19 +345,19 @@ let rec emit_expr ?expected signatures env expr =
        else
          let op = match op with BLt -> "<" | BLe -> "<=" | BGt -> ">" | BGe -> ">=" | _ -> assert false in
           Printf.sprintf "(%s %s %s)" emitted_left op emitted_right)
-  | EUnop { op = UNeg; arg; _ } -> Printf.sprintf "teslrt.Neg(%s)" (emit_expr signatures env arg)
-  | EUnop { op = UNot; arg; _ } -> Printf.sprintf "!(%s)" (emit_expr signatures env arg)
-  | EIf { loc; _ } -> unsupported loc "Go backend supports if only in tail position"
-  | ELet { loc; _ } -> unsupported loc "Go backend supports let only in tail position"
+  | EUnop { op = UNeg; arg; _ } -> Printf.sprintf "teslrt.Neg(%s)" (emit arg)
+  | EUnop { op = UNot; arg; _ } -> Printf.sprintf "!(%s)" (emit arg)
+  | EIf _ as if_expr -> emit_if_expr ?expected ~indent signatures env if_expr
+  | ELet _ as let_expr -> emit_let_expr ?expected ~indent signatures env let_expr
   | EField { loc; _ } | ECase { loc; _ } | ELetProof { loc; _ }
   | ERecord { loc; _ } | EList { loc; _ } ->
     unsupported loc "Go backend cannot emit this expression yet"
-  | EOk { value; _ } -> Printf.sprintf "teslrt.Accept(%s)" (emit_expr signatures env value)
+  | EOk { value; _ } -> Printf.sprintf "teslrt.Accept(%s)" (emit value)
   | EFail { status; message; loc } ->
     (match expected with
      | Some (TCheck result) ->
        Printf.sprintf "teslrt.Reject[%s](%d, %s)" (go_type result) status
-         (emit_expr signatures env message)
+          (emit message)
      | _ -> unsupported loc "Go backend can emit fail only in a check tail")
   | ETelemetry { loc; _ } | EEnqueue { loc; _ } | EPublish { loc; _ }
   | EStartWorkers { loc; _ } | ECacheGet { loc; _ } | ECacheSet { loc; _ }
@@ -366,11 +367,11 @@ let rec emit_expr ?expected signatures env expr =
   | ELambda { loc; _ } | ERuntimeCall { loc; _ } ->
     unsupported loc "Go backend cannot emit this expression yet"
 
-and emit_interp signatures env segments =
+and emit_interp ?(indent="") signatures env segments =
   let parts = List.map (function
     | ILiteral value -> go_quote value
     | IExpr expr ->
-      let emitted = emit_expr signatures env expr in
+      let emitted = emit_expr ~indent signatures env expr in
       match type_of_expr signatures env expr with
       | TString -> emitted
       | TInt -> emitted ^ ".String()"
@@ -382,6 +383,46 @@ and emit_interp signatures env segments =
   | [part] -> part
   | _ -> "(" ^ String.concat " + " parts ^ ")"
 
+and emit_if_expr ?expected ?(indent="") signatures env expr =
+  match expr with
+  | EIf { cond; then_; else_; _ } ->
+    let inferred = type_of_expr signatures env expr in
+    let result = match inferred, expected with
+      | TFailure, Some expected -> expected
+      | _ -> inferred
+    in
+    Printf.sprintf "teslrt.If(%s, func() %s {\n%s\treturn %s\n%s}, func() %s {\n%s\treturn %s\n%s})"
+      (emit_expr ~indent signatures env cond)
+      (go_type result)
+      indent (emit_expr ~expected:result ~indent:(indent ^ "\t") signatures env then_) indent
+      (go_type result)
+      indent (emit_expr ~expected:result ~indent:(indent ^ "\t") signatures env else_) indent
+  | _ -> invalid_arg "emit_if_expr requires EIf"
+
+and emit_let_expr ?expected ?(indent="") signatures env expr =
+  let inferred = type_of_expr signatures env expr in
+  let result = match inferred, expected with
+    | TFailure, Some expected -> expected
+    | _ -> inferred
+  in
+  let buffer = Buffer.create 192 in
+  Printf.bprintf buffer "(func() %s {\n" (go_type result);
+  let rec emit_bindings env = function
+    | ELet { name; value; body; _ } ->
+      let inferred_value_ty = type_of_expr signatures env value in
+      let value_ty = if inferred_value_ty = TFailure then result else inferred_value_ty in
+      let go_name = sanitize_ident name in
+      Printf.bprintf buffer "%s\t%s := %s\n%s\t_ = %s\n" indent go_name
+        (emit_expr ~expected:value_ty ~indent:(indent ^ "\t") signatures env value) indent go_name;
+      emit_bindings ((name, value_ty) :: env) body
+    | body ->
+      Printf.bprintf buffer "%s\treturn %s\n" indent
+        (emit_expr ~expected:result ~indent:(indent ^ "\t") signatures env body)
+  in
+  emit_bindings env expr;
+  Printf.bprintf buffer "%s}())" indent;
+  Buffer.contents buffer
+
 let strip_outer_parens value =
   let length = String.length value in
   if length >= 2 && value.[0] = '(' && value.[length - 1] = ')' then
@@ -392,11 +433,12 @@ let emit_tail buffer signatures env expected indent expr =
   let rec go env indent expr =
     match expr with
     | ELet { name; value; body; loc; _ } ->
-      let ty = type_of_expr signatures env value in
+      let inferred = type_of_expr signatures env value in
+      let ty = if inferred = TFailure then expected else inferred in
       Printf.bprintf buffer "%s{\n" indent;
       Buffer.add_string buffer (line_directive loc);
       Printf.bprintf buffer "%s\t%s := %s\n" indent (sanitize_ident name)
-        (emit_expr signatures env value);
+        (emit_expr ~expected:ty ~indent:(indent ^ "\t") signatures env value);
       Printf.bprintf buffer "%s\t_ = %s\n" indent (sanitize_ident name);
       go ((name, ty) :: env) (indent ^ "\t") body;
       Printf.bprintf buffer "%s}\n" indent
@@ -404,7 +446,7 @@ let emit_tail buffer signatures env expected indent expr =
       ignore (type_of_expr signatures env expr);
       Buffer.add_string buffer (line_directive loc);
       Printf.bprintf buffer "%sif %s {\n" indent
-        (strip_outer_parens (emit_expr signatures env cond));
+        (strip_outer_parens (emit_expr ~indent signatures env cond));
       go env (indent ^ "\t") then_;
       Printf.bprintf buffer "%s} else {\n" indent;
       go env (indent ^ "\t") else_;
@@ -412,7 +454,7 @@ let emit_tail buffer signatures env expected indent expr =
     | _ ->
       ignore (type_of_expr signatures env expr);
       Buffer.add_string buffer (line_directive (Checker.expr_loc expr));
-      Printf.bprintf buffer "%sreturn %s\n" indent (emit_expr ~expected signatures env expr)
+      Printf.bprintf buffer "%sreturn %s\n" indent (emit_expr ~expected ~indent signatures env expr)
   in
   go env indent expr
 
@@ -457,7 +499,8 @@ let module_source module_path package signatures (funcs : func_decl list) =
     let result = type_of_return_spec fd.return_spec in
     let env = params in
     let body_ty = type_of_expr signatures env fd.body in
-    if body_ty <> result then unsupported fd.loc "Go backend function result type mismatch";
+    if body_ty <> result && body_ty <> TFailure then
+      unsupported fd.loc "Go backend function result type mismatch";
     Buffer.add_char body '\n';
     Buffer.add_string body (line_directive fd.loc);
     let signature = Hashtbl.find signatures fd.name in
@@ -483,7 +526,7 @@ let test_source module_path package signatures (tests : test_form list) =
       Printf.bprintf body "%s{\n" indent;
       Buffer.add_string body (line_directive loc);
       Printf.bprintf body "%s\t%s := %s\n" indent (sanitize_ident name)
-        (emit_expr signatures env value);
+        (emit_expr ~indent:(indent ^ "\t") signatures env value);
       Printf.bprintf body "%s\t_ = %s\n" indent (sanitize_ident name);
       emit_stmts ((name, ty) :: env) (indent ^ "\t") rest;
       Printf.bprintf body "%s}\n" indent
@@ -492,20 +535,21 @@ let test_source module_path package signatures (tests : test_form list) =
       let failure_condition = match right with
         | None ->
           if left_ty <> TBool then unsupported loc "Go backend bare expect requires Bool";
-          Printf.sprintf "!(%s)" (strip_outer_parens (emit_expr signatures env left))
+          Printf.sprintf "!(%s)" (strip_outer_parens (emit_expr ~indent signatures env left))
         | Some right ->
           let right_ty = type_of_expr signatures env right in
           if left_ty <> right_ty then unsupported loc "Go backend expect operands have different types";
           (match left_ty, bool_literal_value left, bool_literal_value right with
            | TBool, Some expected, None ->
-             let compared = strip_outer_parens (emit_expr signatures env right) in
+             let compared = strip_outer_parens (emit_expr ~indent signatures env right) in
              if expected then Printf.sprintf "!(%s)" compared else compared
            | TBool, None, Some expected ->
-             let compared = strip_outer_parens (emit_expr signatures env left) in
+             let compared = strip_outer_parens (emit_expr ~indent signatures env left) in
              if expected then Printf.sprintf "!(%s)" compared else compared
            | _ ->
              strip_outer_parens
-               (unequal_expr left_ty (emit_expr signatures env left) (emit_expr signatures env right)))
+               (unequal_expr left_ty (emit_expr ~indent signatures env left)
+                  (emit_expr ~indent signatures env right)))
       in
       Buffer.add_string body (line_directive loc);
       Printf.bprintf body "%sif %s {\n%s\tteslT.Fatal(\"Tesl expectation failed\")\n%s}\n"
@@ -514,7 +558,7 @@ let test_source module_path package signatures (tests : test_form list) =
     | TsExpr { e; loc } :: rest ->
       ignore (type_of_expr signatures env e);
       Buffer.add_string body (line_directive loc);
-      Printf.bprintf body "%s_ = %s\n" indent (emit_expr signatures env e);
+      Printf.bprintf body "%s_ = %s\n" indent (emit_expr ~indent signatures env e);
       emit_stmts env indent rest
     | TsExpectFail { fn = EVar { name = "check"; _ }; arg; loc } :: rest ->
       let result_ty = type_of_expr signatures env arg in
@@ -523,7 +567,7 @@ let test_source module_path package signatures (tests : test_form list) =
        | _ -> unsupported loc "Go backend expectFail target is not a check");
       Buffer.add_string body (line_directive loc);
       Printf.bprintf body "%sif (%s).OK() {\n%s\tteslT.Fatal(\"expected Tesl check failure\")\n%s}\n"
-        indent (emit_expr signatures env arg) indent indent;
+        indent (emit_expr ~indent signatures env arg) indent indent;
       emit_stmts env indent rest
     | (TsLetProof { loc; _ } | TsExpectFail { loc; _ } | TsExpectHasProof { loc; _ }
       | TsProperty { loc; _ } | TsIf { loc; _ } | TsCase { loc; _ }) :: _ ->

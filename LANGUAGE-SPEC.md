@@ -1378,15 +1378,18 @@ build an agent.
 
 ```text
 <binding> ::= <identifier> ":" <gdp-expr> [ ":::" <gdp-expr> ]
+<exists-binding> ::= <identifier> ":" <gdp-expr>
 
-<return-spec> ::= "exists" <binding> "=>" <return-spec>
-                | <binding>
-                | <gdp-expr> " ? " <gdp-expr> ":::" <gdp-expr>   -- new canonical form
-                | <gdp-expr> " ? " <gdp-expr>                    -- new canonical form, no other proofs
-                | "?" <gdp-expr> ":::" <gdp-expr>                -- legacy form (still accepted)
-                | "?" <gdp-expr>                                  -- legacy form (still accepted)
-                | <gdp-expr> ":::" <gdp-expr>
-                | <gdp-expr>
+<return-spec> ::= "exists" <exists-binding> "=>" <plain-return-spec>
+                | <plain-return-spec>
+
+<plain-return-spec> ::= <binding>
+                      | <gdp-expr> " ? " <gdp-expr> ":::" <gdp-expr>   -- new canonical form
+                      | <gdp-expr> " ? " <gdp-expr>                    -- new canonical form, no other proofs
+                      | "?" <gdp-expr> ":::" <gdp-expr>                -- legacy form (still accepted)
+                      | "?" <gdp-expr>                                  -- legacy form (still accepted)
+                      | <gdp-expr> ":::" <gdp-expr>
+                      | <gdp-expr>
 ```
 
 Interpretation:
@@ -1396,7 +1399,7 @@ Interpretation:
 - a binding return spec such as `x: Int ::: Positive x` means the return is conceptually a named value whose proof may refer to that binder;
 - a **named-pack** return spec such as `Todo ? FromDb (Id == id)` means the returned entity is automatically named by the caller's `let` binder (see section 7.13); the entity-append rule appends `_entity` to every leaf predicate in the `?` group;
 - a **ForAll** return spec such as `List Note ::: ForAll (FromDb (AuthorId == user))` means every element of the returned list satisfies the given proof predicate (see section 16.9); compile-time only with zero runtime overhead;
-- an existential return spec packages a witness and then a body return spec.
+- an existential return spec packages one unannotated witness and then a non-existential body return spec. Nested/multi-witness returns and `:::` annotations on the witness binder are rejected until their runtime contract is implemented.
 
 Note: the current `.tesl` surface uses lowercase `exists ... => ...`. The elaborated Racket core currently uses `Exists`.
 
@@ -3243,9 +3246,9 @@ f 4                      # 7
 ### 16.3 Final public existential surface
 **Accepted design, Implemented.**
 
-Existential packaging uses `exists witness => body` in function bodies. The witness variable is scoped to the body block and cannot escape. Return types use `exists name: T => InnerType` syntax. The compiler enforces that ordinary functions with existential return types actually return a pack, while the runtime/core still enforces witness escape prevention at evaluation time. This surface is settled.
+Existential packaging uses `exists witness => body` in function bodies. The witness variable is scoped to the body block and cannot escape. Return types use `exists name: T => InnerType` syntax with exactly one unannotated witness; nested existential returns and proof annotations on the witness binder are rejected. The compiler enforces that ordinary functions with existential return types actually return a pack, while the runtime/core still enforces witness escape prevention at evaluation time. This surface is settled.
 
-A function may also **forward** an existential instead of introducing one: if every tail of the body is a call to a function whose own return type is the same `exists` type — same binder arity, and a proof that entails the declared one once the callee's binders and parameters are read at the call site — the package the caller receives is the callee's, unchanged. This is what lets several thin handlers share one proof-carrying core:
+A function may also **forward** an existential instead of introducing one: if every tail of the body is a call to a function whose own return type has the same single binder name, the same ground non-function witness type, and a proof that entails the declared one once the callee's parameters are read at the call site, the package the caller receives is the callee's, unchanged. Generic/function-typed witnesses and alpha-renamed binder forwarding fail closed until package renaming and scoped type instantiation are implemented. This is what lets several thin handlers share one proof-carrying core:
 
 ```tesl
 fn createThing(name: String) -> exists id: String => Thing ? FromDb (Id == id) ... =

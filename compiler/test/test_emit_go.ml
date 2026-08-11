@@ -1,6 +1,6 @@
 open Alcotest
 
-let source = {|module GoSmoke exposing [add, choose, boundary, withUnused, map, teslMap, describe, describeComputed, Positive, checkPositive, doublePositive]
+let source = {|module GoSmoke exposing [add, choose, nestedChoice, boundary, withUnused, map, teslMap, describe, describeComputed, Positive, checkPositive, checkPositiveNested, alwaysReject, rejectEither, doublePositive]
 import Tesl.Prelude exposing [Bool(..), Int, String]
 
 fn add(left: Int, right: Int) -> Int = left + right
@@ -10,6 +10,15 @@ fn choose(useLeft: Bool, left: Int, right: Int) -> Int =
     left
   else
     right
+
+fn nestedChoice(useLeft: Bool, left: Int, right: Int) -> Int =
+  let selected = if useLeft then
+    let branchValue = left
+    branchValue
+  else
+    let branchValue = right
+    branchValue
+  selected + 1
 
 fn boundary() -> Int = 9223372036854775807 + 1
 
@@ -34,6 +43,24 @@ check checkPositive(n: Int) -> n: Int ::: Positive n =
   else
     fail 422 "not positive"
 
+check checkPositiveNested(n: Int) -> n: Int ::: Positive n =
+  let outcome = if n > 0 then
+    ok n ::: Positive n
+  else
+    let rejected = n
+    fail 422 "not positive: ${rejected}"
+  outcome
+
+check alwaysReject(n: Int) -> n: Int ::: Positive n =
+  let outcome = fail 422 "always rejected"
+  outcome
+
+check rejectEither(n: Int) -> n: Int ::: Positive n =
+  if n > 0 then
+    fail 422 "positive rejected"
+  else
+    fail 422 "non-positive rejected"
+
 fn doublePositive(n: Int ::: Positive n) -> Int = n * 2
 
 test "pure Go backend" {
@@ -41,6 +68,8 @@ test "pure Go backend" {
   expect add 10 -3 == 7
   expect choose True 7 9 == 7
   expect choose False 7 9 == 9
+  expect nestedChoice True 7 9 == 8
+  expect nestedChoice False 7 9 == 10
   expect boundary() == 9223372036854775808
   expect withUnused 7 == 7
   expect map 4 == 4
@@ -54,6 +83,11 @@ test "pure Go backend" {
   expect check checkPositive one == 1
   let zero = 0
   expectFail check checkPositive zero
+  expect check checkPositiveNested one == 1
+  expectFail check checkPositiveNested zero
+  expectFail check alwaysReject one
+  expectFail check rejectEither one
+  expectFail check rejectEither zero
   let two = 2
   let positive = check checkPositive two
   expect doublePositive positive == 4
@@ -104,6 +138,12 @@ let test_artifact_layout () =
     (contains module_go "teslrt.Add(tesl_count, teslrt.FromInt64(1)).String()");
   check bool "computed interpolation emits Bool expression" true
     (contains module_go "strconv.FormatBool(!(tesl_ready))");
+  check bool "expression-position if stays lazy" true
+    (contains module_go "teslrt.If(tesl_useLeft, func() teslrt.Int");
+  check bool "expression-position let keeps lexical scope" true
+    (contains module_go "return (func() teslrt.Int {\n"
+     && contains module_go "tesl_branchValue := tesl_left"
+     && contains module_go "_ = tesl_branchValue");
   check bool "proof-consuming parameter erases to scalar" true
     (contains module_go "func Tesl_doublePositive(tesl_n teslrt.Int) teslrt.Int");
   check bool "release has no debugger import" false (contains module_go "teslrt/debug");
@@ -241,11 +281,18 @@ fn bypass(left: String, right: String, other: String) -> String =
     check bool "cross-subject mismatch rejected before Go emission" true
       (List.exists (fun (d : Compile.diagnostic) -> d.source <> "go-emitter") diagnostics)
 
-let test_interpolation_holes_receive_frontend_validation () =
+let test_nested_expressions_receive_frontend_validation () =
   let expect_error label needle source =
     let diagnostics = Compile.check_source ("<" ^ label ^ ">") source in
     if not (List.exists (fun (d : Compile.diagnostic) -> contains d.message needle) diagnostics) then
       failf "%s: expected diagnostic containing %S, got: %s" label needle
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let expect_clean label source =
+    match Compile.check_source ("<" ^ label ^ ">") source with
+    | [] -> ()
+    | diagnostics ->
+      failf "%s: expected no diagnostics, got: %s" label
         (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
   in
   expect_error "proof call in failure interpolation" "proof" {|module FailHole exposing []
@@ -271,6 +318,187 @@ import Tesl.Prelude exposing [Bool, Int, List, String]
 import Tesl.List exposing [List.filterCheck, List.length]
 fn plain(n: Int) -> Bool = n > 0
 fn bad(xs: List Int) -> String = "${List.length (List.filterCheck plain xs)}"
+|};
+  expect_error "proof call in case guard" "proof" {|module GuardProof exposing []
+import Tesl.Prelude exposing [Int, Maybe(..)]
+fact Positive (n: Int)
+fn requiresPositive(n: Int ::: Positive n) -> Int = n
+fn bad(value: Maybe Int) -> Int =
+  case value of
+    Something n where requiresPositive n > 0 -> n
+    Something n -> n
+    Nothing -> 0
+|};
+  expect_error "filterCheck callback in case guard" "not a `check` function" {|module GuardFilter exposing []
+import Tesl.Prelude exposing [Bool, Int, List, Maybe(..)]
+import Tesl.List exposing [List.filterCheck, List.length]
+fn plain(n: Int) -> Bool = n > 0
+fn bad(value: Maybe (List Int)) -> Int =
+  case value of
+    Something xs where List.length (List.filterCheck plain xs) > 0 -> 1
+    Something _ -> 0
+    Nothing -> 0
+|};
+  expect_error "existential pack nested in interpolation" "top-level `exists` pack" {|module NestedExists exposing [IsToken, forge]
+import Tesl.Prelude exposing [String]
+fact IsToken (token: String)
+fn forge(raw: String) -> exists token: String => token: String ::: IsToken token =
+  "${exists token => raw}"
+|};
+  expect_error "returned alias cannot hide unproven pack" "must carry the proof" {|module AliasExists exposing [Tagged, forge]
+import Tesl.Prelude exposing [String]
+fact Tagged (tag: String, value: String)
+fn forge(raw: String) -> exists token: String => token: String ::: Tagged raw token =
+  let packed = exists raw => raw
+  packed
+|};
+  expect_error "existential binder proof annotation" "proof annotations on an `exists` witness binder" {|module BinderProof exposing [Positive, forge]
+import Tesl.Prelude exposing [Int]
+fact Positive (value: Int)
+fn forge(raw: Int) -> exists witness: Int ::: Positive witness => Int =
+  exists raw => raw
+|};
+  expect_error "existential witness type mismatch" "type mismatch" {|module WitnessType exposing [forge]
+import Tesl.Prelude exposing [Int, String]
+fn forge(raw: String) -> exists witness: Int => String =
+  exists raw => raw
+|};
+  expect_error "existential forwarding witness type mismatch" "does not return the same `exists` type" {|module ForwardType exposing [source, forge]
+import Tesl.Prelude exposing [Int, String]
+fn source(raw: String) -> exists witness: String => String =
+  exists raw => raw
+fn forge(raw: String) -> exists witness: Int => String =
+  source raw
+|};
+  expect_error "nested existential return rejected" "nested `exists` return types are not supported" {|module MissingPack exposing [forge]
+import Tesl.Prelude exposing [Int, String]
+fn forge(first: Int, second: String) -> exists a: Int => exists b: String => Int =
+  exists first => first
+|};
+  expect_error "extra nested existential pack" "exactly 1 nested `exists` pack" {|module ExtraPack exposing [forge]
+import Tesl.Prelude exposing [Int]
+fn forge(value: Int) -> exists a: Int => Int =
+  exists value =>
+    exists value => value
+|};
+  expect_error "mixed nested existential paths" "nested `exists` return types are not supported" {|module MixedPack exposing [forge]
+import Tesl.Prelude exposing [Bool, Int, String]
+fn forge(flag: Bool, first: Int, second: String) -> exists a: Int => exists b: String => Int =
+  if flag then
+    exists first =>
+      exists second => first
+  else
+    exists first => first
+|};
+  expect_error "generic existential forwarding fails closed" "does not return the same `exists` type" {|module GenericForward exposing [core, wrapper]
+import Tesl.Prelude exposing [String]
+fn core(value: a) -> exists witness: a => a =
+  exists value => value
+fn wrapper(value: String) -> exists witness: String => String =
+  core value
+|};
+  expect_error "alpha-renamed forwarding fails closed" "does not return the same `exists` type" {|module RenamedForward exposing [source, wrapper]
+import Tesl.Prelude exposing [String]
+fn source(value: String) -> exists original: String => String =
+  exists value => value
+fn wrapper(value: String) -> exists renamed: String => String =
+  source value
+|};
+  expect_error "forwarding alias cannot cross shadowing" "shadows" {|module ShadowedForward exposing [core, wrapper]
+import Tesl.Prelude exposing [String]
+fn core(tag: String, value: String) -> exists witness: String => String =
+  exists value => value
+fn wrapper(expected: String, actual: String) -> exists witness: String => String =
+  let alias = actual
+  let actual = expected
+  core alias actual
+|};
+  expect_error "failure cannot be packed as body data" "with a value body" {|module PackedFailure exposing [pack]
+import Tesl.Prelude exposing [Int]
+fn pack(value: Int) -> exists witness: Int => Int =
+  exists value =>
+    fail 500 "not a packed value"
+|};
+  expect_error "existential call cannot be packed as body data" "with a value body" {|module PackedExistentialCall exposing [inner, outer]
+import Tesl.Prelude exposing [Int]
+fn inner(value: Int) -> exists witness: Int => Int =
+  exists value => value
+fn outer(value: Int) -> exists witness: Int => Int =
+  exists value => inner value
+|};
+  expect_error "failure cannot hide in packed condition" "with a value body" {|module PackedFailureCondition exposing [pack]
+import Tesl.Prelude exposing [Int]
+fn pack(value: Int) -> exists witness: Int => Int =
+  exists value =>
+    let condition = fail 500 "bad condition"
+    if condition then
+      value
+    else
+      value
+|};
+  expect_error "nested pack cannot hide in packed argument" "with a value body" {|module PackedArgument exposing [pack]
+import Tesl.Prelude exposing [Int]
+fn identity(value: Int) -> Int = value
+fn pack(value: Int) -> exists witness: Int => Int =
+  exists value => identity (exists value => value)
+|};
+  expect_clean "discarded pack has no return witness contract" {|module DiscardedPack exposing [pack]
+import Tesl.Prelude exposing [Int, String]
+fn pack(raw: String, value: Int) -> exists witness: Int => Int =
+  let discarded = exists raw => raw
+  exists value => value
+|};
+  expect_clean "nested pattern proof in case guard" {|module NestedPatternGuard exposing []
+import Tesl.Prelude exposing [Int]
+import Tesl.Maybe exposing [Maybe(..)]
+fact Positive (value: Int)
+type PositiveBox
+  = MkPositiveBox (value: Int ::: Positive value)
+fn requiresPositive(value: Int ::: Positive value) -> Int = value
+fn valid(box: Maybe PositiveBox) -> Int =
+  case box of
+    Something (MkPositiveBox value) where requiresPositive value > 0 -> value
+    Something (MkPositiveBox value) -> value
+    Nothing -> 0
+|};
+  expect_error "nested cross-field proof uses actual sibling" "proof" {|module NestedCrossFieldBad exposing []
+import Tesl.Prelude exposing [String]
+fact TaggedWith (tag: String, value: String)
+type TaggedPair
+  = MkTaggedPair (tag: String) (value: String ::: TaggedWith tag value)
+type WrappedPair
+  = MkWrappedPair (pair: TaggedPair)
+fn need(tag: String, value: String ::: TaggedWith tag value) -> String = value
+fn bad(claimed: String, wrapped: WrappedPair) -> String =
+  case wrapped of
+    MkWrappedPair (MkTaggedPair actual value) where need claimed value == value -> actual
+    MkWrappedPair (MkTaggedPair actual _) -> actual
+|};
+  expect_clean "nested cross-field proof substitutes sibling" {|module NestedCrossFieldGood exposing []
+import Tesl.Prelude exposing [String]
+fact TaggedWith (tag: String, value: String)
+type TaggedPair
+  = MkTaggedPair (tag: String) (value: String ::: TaggedWith tag value)
+type WrappedPair
+  = MkWrappedPair (pair: TaggedPair)
+fn need(tag: String, value: String ::: TaggedWith tag value) -> String = value
+fn good(wrapped: WrappedPair) -> String =
+  case wrapped of
+    MkWrappedPair (MkTaggedPair actual value) where need actual value == value -> actual
+    MkWrappedPair (MkTaggedPair actual _) -> actual
+|};
+  expect_error "compound cross-field proof needs sibling binder" "proof" {|module CompoundCrossFieldBad exposing []
+import Tesl.Prelude exposing [Bool, String]
+fact Related (same: Bool, value: String)
+type RelatedPair
+  = MkRelatedPair (tag: String) (value: String ::: Related (tag == value) value)
+type WrappedRelatedPair
+  = MkWrappedRelatedPair (pair: RelatedPair)
+fn need(tag: String, value: String ::: Related (tag == value) value) -> String = value
+fn bad(tag: String, wrapped: WrappedRelatedPair) -> String =
+  case wrapped of
+    MkWrappedRelatedPair (MkRelatedPair _ value) where need tag value == value -> value
+    MkWrappedRelatedPair (MkRelatedPair _ value) -> value
 |}
 
 let test_unreachable_private_function_fails_closed () =
@@ -512,7 +740,7 @@ let () =
       test_case "unproven calls fail before emission" `Quick test_unproven_call_never_reaches_emitter;
       test_case "unsupported interpolation fails closed" `Quick test_unsupported_interpolation_fails_closed;
       test_case "cross-subject mismatch fails before emission" `Quick test_cross_subject_mismatch_never_reaches_emitter;
-      test_case "interpolation holes receive frontend validation" `Quick test_interpolation_holes_receive_frontend_validation;
+      test_case "nested expressions receive frontend validation" `Quick test_nested_expressions_receive_frontend_validation;
       test_case "unreachable private functions fail closed" `Quick test_unreachable_private_function_fails_closed;
       test_case "String and Bool proof consumers" `Slow test_string_bool_proof_consumers_with_go;
       test_case "special package names are prefixed" `Quick test_special_package_names_are_prefixed;
