@@ -27,13 +27,6 @@ exception Unsupported of emit_error
 let unsupported loc fmt =
   Printf.ksprintf (fun message -> raise (Unsupported { loc; message })) fmt
 
-let go_keywords = [
-  "break"; "default"; "func"; "interface"; "select"; "case"; "defer";
-  "go"; "map"; "struct"; "chan"; "else"; "goto"; "package"; "switch";
-  "const"; "fallthrough"; "if"; "range"; "type"; "continue"; "for";
-  "import"; "return"; "var";
-]
-
 let sanitize_ident name =
   let b = Buffer.create (String.length name + 8) in
   Buffer.add_string b "tesl_";
@@ -52,9 +45,7 @@ let package_name name =
     if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
     then Buffer.add_char b (Char.lowercase_ascii c)) name;
   let value = Buffer.contents b in
-  if value = "" || (value.[0] >= '0' && value.[0] <= '9') || List.mem value go_keywords
-  then "teslmodule" ^ value
-  else value
+  "teslmod" ^ value
 
 let go_quote value =
   let b = Buffer.create (String.length value + 2) in
@@ -77,7 +68,7 @@ let directive_file file =
   String.map (function '\n' | '\r' -> '_' | c -> c) file
 
 let line_directive loc =
-  let line = if loc.Location.start.line <= 0 then 1 else loc.Location.start.line in
+  let line = max 1 (loc.Location.start.line + 1) in
   Printf.sprintf "//line %s:%d\n" (directive_file loc.Location.file) line
 
 let type_of_type_expr = function

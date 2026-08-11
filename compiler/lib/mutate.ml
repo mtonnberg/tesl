@@ -96,6 +96,21 @@ let set_bool_literal e b =
     EConstructor { name = (if b then "True" else "False"); args = []; loc }
   | _ -> e
 
+let signed_integer_literal_value = function
+  | ELit { lit = LInt n; _ } -> Some (string_of_int n)
+  | ELit { lit = LBigInt value; _ } -> Some value
+  | EUnop { op = UNeg; arg = ELit { lit = LInt n; _ }; _ } when n >= 0 ->
+    Some ("-" ^ string_of_int n)
+  | EUnop { op = UNeg; arg = ELit { lit = LBigInt value; _ }; _ }
+    when String.length value = 0 || value.[0] <> '-' ->
+    Some ("-" ^ value)
+  | _ -> None
+
+let integer_expr loc value =
+  match int_of_string_opt value with
+  | Some n -> ELit { lit = LInt n; loc }
+  | None -> ELit { lit = LBigInt value; loc }
+
 (** A human-readable "before → after" for the mutation, e.g. ["> → >="],
     ["True → False"], ["3 → 4"]. *)
 let mutation_display original op =
@@ -179,8 +194,10 @@ let collect_sites fn_name fn_kind body : (mutation_site * mutation_op list) list
   let increment_decimal value =
     if String.length value > 0 && value.[0] = '-' then
       let magnitude = String.sub value 1 (String.length value - 1) in
-      let decremented = decrement_magnitude magnitude in
-      if decremented = "0" then "0" else "-" ^ decremented
+      if magnitude = "0" then "1"
+      else
+        let decremented = decrement_magnitude magnitude in
+        if decremented = "0" then "0" else "-" ^ decremented
     else increment_magnitude value
   in
   let visit e =
@@ -188,12 +205,6 @@ let collect_sites fn_name fn_kind body : (mutation_site * mutation_op list) list
     | EBinop { op; loc; _ } ->
       let alts = List.map (fun o -> MOBinop o) (mutation_alternatives op) in
       record KBinop binop_ctr (MOBinop op) alts loc
-    | ELit { lit = LInt n; loc } ->
-      (* Integer-literal perturbation: n → n+1 (classic off-by-one). *)
-      let value = string_of_int n in
-      record KInt int_ctr (MOInt value) [MOInt (increment_decimal value)] loc
-    | ELit { lit = LBigInt value; loc } ->
-      record KInt int_ctr (MOInt value) [MOInt (increment_decimal value)] loc
     | _ ->
       (match bool_literal_value e with
        | Some b ->
@@ -201,7 +212,16 @@ let collect_sites fn_name fn_kind body : (mutation_site * mutation_op list) list
          record KBool bool_ctr (MOBool b) [MOBool (not b)] (loc_of e)
        | None -> ())
   in
-  Ast_visitor.iter visit body;
+  let rec walk e =
+    match signed_integer_literal_value e with
+    | Some value ->
+      let loc = Checker.expr_loc e in
+      record KInt int_ctr (MOInt value) [MOInt (increment_decimal value)] loc
+    | None ->
+      visit e;
+      Ast_visitor.iter_children walk e
+  in
+  walk body;
   List.rev !acc
 
 (* ── AST node replacement ────────────────────────────────────────────────── *)
@@ -225,6 +245,12 @@ let replace_at ~kind ~target_index ~op expr =
   let int_ctr   = ref 0 in
   let hit ctr = let idx = !ctr in incr ctr; idx = target_index in
   let rec walk e =
+    match signed_integer_literal_value e with
+    | Some _ when kind = KInt ->
+      if hit int_ctr then
+        (match op with MOInt value -> integer_expr (Checker.expr_loc e) value | _ -> e)
+      else e
+    | _ ->
     match e with
     | EBinop { op = old_op; left; right; loc; op_loc } ->
       let matched = kind = KBinop && hit binop_ctr in
@@ -238,17 +264,6 @@ let replace_at ~kind ~target_index ~op expr =
         let left'  = walk left in
         let right' = walk right in
         EBinop { op = old_op; left = left'; right = right'; loc; op_loc }
-    | ELit { lit = (LInt _ | LBigInt _); loc } when kind = KInt ->
-      if hit int_ctr then
-        (match op with
-         | MOInt value ->
-           let lit = match int_of_string_opt value with
-             | Some n -> LInt n
-             | None -> LBigInt value
-           in
-           ELit { lit; loc }
-         | _ -> e)
-      else e
     | _ when kind = KBool && bool_literal_value e <> None ->
       (* Boolean-literal node (True/False constructor or legacy LBool). *)
       if hit bool_ctr then

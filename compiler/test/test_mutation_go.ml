@@ -67,6 +67,23 @@ test "huge boundary" {
 }
 |}
 
+let negative_boundary_source = {|module GoMutationBoundary exposing [AboveNegativeOne, checkAboveNegativeOne]
+import Tesl.Prelude exposing [Int]
+
+fact AboveNegativeOne (n: Int)
+
+check checkAboveNegativeOne(n: Int) -> n: Int ::: AboveNegativeOne n =
+  if n > -1 then
+    ok n ::: AboveNegativeOne n
+  else
+    fail 422 "too small"
+
+test "negative boundary" {
+  expect check checkAboveNegativeOne 0 == 0
+  expectFail check checkAboveNegativeOne -1
+}
+|}
+
 let with_source source f =
   let dir = Filename.temp_dir "tesl-go-mutation" "" in
   let path = Filename.concat dir "go-mutation-boundary.tesl" in
@@ -125,6 +142,16 @@ let test_huge_integer_literal_is_mutated_exactly () =
        | Mutate.MOInt "9223372036854775809" -> true
        | _ -> false) report.Mutate.results)
 
+let test_negative_literal_mutates_as_signed_value () =
+  let report = report negative_boundary_source in
+  check int "negative mutant count" 4 report.Mutate.total;
+  check int "negative killed" 4 report.Mutate.killed;
+  check bool "-1 increments to zero" true
+    (List.exists (fun ((mutant : Mutate.mutant), _) ->
+       match mutant.site.original, mutant.replacement with
+       | Mutate.MOInt "-1", Mutate.MOInt "0" -> true
+       | _ -> false) report.Mutate.results)
+
 let test_runner_failures_never_count_as_kills () =
   (match Compile.classify_go_test_run ~exit_code:2
            ~output:"TESL_GO_TESTS_STARTED\npanic: init failed\n" with
@@ -136,7 +163,22 @@ let test_runner_failures_never_count_as_kills () =
    | _ -> fail "executed failed test was not classified as a kill");
   (match Compile.classify_go_test_run ~exit_code:0 ~output:"PASS\n" with
    | Compile.GoTestRunnerFailed _ -> ()
-   | _ -> fail "missing test-start marker was accepted")
+   | _ -> fail "missing test-start marker was accepted");
+  (match Compile.classify_go_build_run ~exit_code:124 ~output:"" with
+   | Some (Compile.GoTestsTimedOut _) -> ()
+   | _ -> fail "Go test build timeout was not classified as a timeout");
+  (match Compile.classify_go_build_run ~exit_code:1 ~output:"compile failed" with
+   | Some (Compile.GoBuildFailed _) -> ()
+   | _ -> fail "Go test compile failure was not classified as a build failure")
+
+let test_infrastructure_tests_are_not_silently_skipped () =
+  require_go ();
+  let path = Filename.concat (Compile.default_root_path ())
+      "example/learn/lesson32-api-tests.tesl" in
+  match Compile.mutate_go_file path with
+  | Compile.MutateOk _ -> fail "api-test suite produced a partial mutation score"
+  | Compile.MutateErr message ->
+    check bool "partial score refused" true (starts_with "mutation testing would skip" message)
 
 let () =
   run "mutation_go" [
@@ -145,6 +187,8 @@ let () =
       test_case "weak suite reports survivors" `Slow test_weak_suite_reports_survivors;
       test_case "red baseline aborts scoring" `Slow test_red_baseline_never_scores_mutants;
       test_case "huge integer threshold mutates exactly" `Slow test_huge_integer_literal_is_mutated_exactly;
+      test_case "negative integer mutates as signed" `Slow test_negative_literal_mutates_as_signed_value;
       test_case "runner failures are not kills" `Quick test_runner_failures_never_count_as_kills;
+      test_case "infrastructure tests are not skipped" `Quick test_infrastructure_tests_are_not_silently_skipped;
     ];
   ]

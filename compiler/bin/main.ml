@@ -107,7 +107,9 @@ let rec ensure_directory path =
   end
 
 let write_go_project out_dir (artifacts : Emit_go.artifact list) =
-  if Sys.file_exists out_dir then
+  if String.trim out_dir = "" then
+    failwith "Go output directory must not be empty"
+  else if Sys.file_exists out_dir then
     failwith (Printf.sprintf "Go output directory already exists: %s" out_dir);
   ensure_directory out_dir;
   List.iter (fun (artifact : Emit_go.artifact) ->
@@ -1625,8 +1627,12 @@ let () =
            | Mutate.Invalid _ -> "INVALID",  "1;33"
            | Mutate.Error _   -> "ERROR",    "1;33"
          in
-         Printf.printf "  [%s%s%s] %s\n"
-           (col colour) marker (col "0") mut.description
+          Printf.printf "  [%s%s%s] %s\n"
+            (col colour) marker (col "0") mut.description;
+          (match result with
+           | Mutate.Invalid message | Mutate.Error message ->
+             Printf.printf "      %s\n" (String.trim message)
+           | Mutate.Killed | Mutate.Survived | Mutate.NoTests -> ())
        ) report.Mutate.results;
        Printf.printf "\n%sSummary%s: %d mutants | %s%d killed%s | %s%d survived%s"
          (col "1") (col "0")
@@ -1653,15 +1659,22 @@ let () =
           "100%" for it read as "perfectly tested" when coverage was actually
           nil.  Report "n/a" for the no-coverage case instead of a misleading
            perfect score. Incomplete runs exit non-zero below. *)
-        if scored = 0 then
-         Printf.printf "\n%sMutation score%s: n/a %s(0 scorable mutants — no effective coverage)%s\n"
+        let incomplete = invalid + errors + no_tests in
+        if total = 0 then
+          Printf.printf "\n%sMutation score%s: n/a %s(no mutable sites)%s\n"
+            (col "1") (col "0") (col "2") (col "0")
+        else if incomplete > 0 then
+          Printf.printf "\n%sMutation score%s: n/a %s(incomplete: %d mutant(s) did not execute)%s\n"
+            (col "1") (col "0") (col "2") incomplete (col "0")
+        else if scored = 0 then
+          Printf.printf "\n%sMutation score%s: n/a %s(0 scorable mutants — no effective coverage)%s\n"
            (col "1") (col "0") (col "2") (col "0")
        else begin
          let score = float_of_int killed /. float_of_int scored *. 100.0 in
          Printf.printf "\n%sMutation score%s: %.0f%%" (col "1") (col "0") score;
          Printf.printf " %s(%d killed / %d scored)%s\n" (col "2") killed scored (col "0")
        end;
-        if survived > 0 || invalid > 0 || errors > 0 || no_tests > 0 then exit 1)
+        if total = 0 || survived > 0 || incomplete > 0 then exit 1)
 
   | _ -> print_string usage; exit 1)
   with

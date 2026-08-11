@@ -133,6 +133,29 @@ test "misses boundary" {
   check bool "mentions SURVIVED" true (has_str out "SURVIVED");
   check bool "does not claim 100% score" false (has_str out "100%")
 
+let test_red_baseline_aborts_scoring () =
+  if not (has_mutate_support ()) then skip ();
+  if not (raco_available ()) then skip ();
+  let src = {|module T exposing [checkPos]
+import Tesl.Prelude exposing [Int]
+
+fact IsPositive (n: Int)
+
+check checkPos(n: Int) -> n: Int ::: IsPositive n =
+  if n > 0 then
+    ok n ::: IsPositive n
+  else
+    fail 400 "not positive"
+
+test "red baseline" {
+  expect check checkPos 1 == 99
+}
+|} in
+  let code, out = run_mutate src in
+  check int "red baseline exits nonzero" 1 code;
+  check bool "baseline failure reported" true (has_str out "baseline tests fail");
+  check bool "no mutation score reported" false (has_str out "Mutation score")
+
 (** A check with no mutable operators (only string comparison). *)
 let test_no_mutations () =
   if not (has_mutate_support ()) then skip ();
@@ -158,6 +181,22 @@ test "admin check" {
   (* Just check it runs without error *)
   check bool "ran without crash" true (code = 0 || code = 1);
   ignore out
+
+let test_zero_mutants_is_not_success () =
+  if not (has_mutate_support ()) then skip ();
+  if not (raco_available ()) then skip ();
+  let src = {|module T exposing [identity]
+import Tesl.Prelude exposing [Int]
+
+fn identity(n: Int) -> Int = n
+
+test "identity" {
+  expect identity 1 == 1
+}
+|} in
+  let code, out = run_mutate src in
+  check int "zero mutants exits nonzero" 1 code;
+  check bool "no mutable sites reported" true (has_str out "no mutable sites")
 
 (** Compound condition: `&&` → `||` mutation should be caught. *)
 let test_compound_condition () =
@@ -253,7 +292,9 @@ let () =
     "mutation-results", [
       test_case "all mutants killed with strong tests" `Slow test_all_killed;
       test_case "off-by-one survives weak tests" `Slow test_boundary_off_by_one;
+      test_case "red baseline aborts scoring" `Slow test_red_baseline_aborts_scoring;
       test_case "no-test block shows NO TESTS" `Slow test_no_test_block;
+      test_case "zero mutants is not success" `Slow test_zero_mutants_is_not_success;
       test_case "compound condition killed with full coverage" `Slow test_compound_condition;
     ];
     "mutation-scope", [

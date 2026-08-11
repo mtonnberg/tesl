@@ -1117,13 +1117,10 @@ fi
 phase_begin "Mutation testing (lesson42)"
 mutation_fail=0
 mutation_lesson="$SCRIPT_DIR/example/learn/lesson42-mutation-testing.tesl"
-TESL_BIN="${TESL_BIN:-}"
-if [ -z "$TESL_BIN" ]; then
-    if [ -x "$_main_exe" ]; then
-        TESL_BIN="$_main_exe"
-    else
-        TESL_BIN="tesl"
-    fi
+if [ -x "$_main_exe" ]; then
+    TESL_BIN="$_main_exe"
+else
+    TESL_BIN="tesl"
 fi
 if [ ! -f "$mutation_lesson" ]; then
     printf "  %s✗%s  %s not found\n" "$C_RED" "$C_RESET" "$mutation_lesson"

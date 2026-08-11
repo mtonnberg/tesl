@@ -3906,8 +3906,13 @@ let collect_extra_test_decls test_files =
          match parse_module path src with
          | Err e -> `Err (Printf.sprintf "parse error in %s:%d: %s" path (e.loc.start.line + 1) e.msg)
          | Ok m ->
-           let tests = List.filter (function Ast.DTest _ -> true | _ -> false) m.decls in
-           go (List.rev tests @ acc) rest)
+            if List.exists (function Ast.DApiTest _ | Ast.DLoadTest _ -> true | _ -> false) m.decls then
+              `Err (Printf.sprintf
+                "mutation testing does not support api-test/load-test from extra file %s yet; refusing to skip them"
+                path)
+            else
+              let tests = List.filter (function Ast.DTest _ -> true | _ -> false) m.decls in
+              go (List.rev tests @ acc) rest)
   in
   go [] test_files
 
@@ -3924,11 +3929,29 @@ let mutant_timeout_secs =
 (** Shell prefix that bounds a command's wall-clock time, when the coreutils
     [timeout] utility is available; empty otherwise (so the command still runs,
     just unbounded).  Computed once.  [timeout] exits 124 when the budget is
-    exceeded, which [classify_mutant_run] treats as a kill. *)
+    exceeded; callers classify exit 124 as an infrastructure error, never a kill. *)
 let timeout_prefix = lazy (
   if Sys.command "command -v timeout >/dev/null 2>&1" = 0
   then Printf.sprintf "timeout %d " mutant_timeout_secs
   else "")
+
+let mutation_test_count (m : module_form) =
+  List.fold_left (fun count -> function
+    | DTest _ | DApiTest _ | DLoadTest _ -> count + 1
+    | _ -> count) 0 m.decls
+
+let prepare_mutation_suite extra_test_decls (m : module_form) =
+  let merged =
+    if extra_test_decls = [] then m
+    else { m with decls = m.decls @ extra_test_decls }
+  in
+  let stripped = Mutate.strip_infra_tests merged in
+  let removed = mutation_test_count merged - mutation_test_count stripped in
+  if removed > 0 then
+    Result.Error (Printf.sprintf
+      "mutation testing would skip %d infrastructure/api/load test block(s); refusing to report a partial score"
+      removed)
+  else Result.Ok stripped
 
 (** Run [cmd] via the shell, capturing its combined stdout+stderr and exit code.
     Output is redirected to a temporary file and read back, so this depends only
@@ -4034,6 +4057,27 @@ let classify_mutant_outcome ~exit_code ~output =
   else if output_indicates_tests_ran output then `Killed
   else `Invalid
 
+let run_racket_mutation_baseline ~root_path (m : module_form) =
+  let timeout_pfx = Lazy.force timeout_prefix in
+  if timeout_pfx = "" then Result.Error "mutation testing requires `timeout` on PATH"
+  else
+    match (try Result.Ok (Emit_racket.compile_to_string ~root_path m)
+           with exn -> Result.Error (Printexc.to_string exn)) with
+    | Result.Error message -> Result.Error ("Racket mutation baseline emit failed: " ^ message)
+    | Result.Ok racket ->
+      let path = Filename.temp_file "tesl_mutation_baseline_" ".rkt" in
+      Fun.protect ~finally:(fun () -> try Sys.remove path with Sys_error _ -> ()) (fun () ->
+        Out_channel.with_open_text path (fun channel -> output_string channel racket);
+        let command = Printf.sprintf "%sraco test --quiet %s"
+          timeout_pfx (Filename.quote path) in
+        let exit_code, output = run_capture command in
+        if exit_code = 124 then Result.Error "Racket mutation baseline timed out"
+        else
+          match classify_mutant_outcome ~exit_code ~output with
+          | `Survived -> Result.Ok ()
+          | `Killed -> Result.Error ("Racket mutation baseline tests fail:\n" ^ output)
+          | `Invalid -> Result.Error ("Racket mutation baseline did not compile:\n" ^ output))
+
 (** Number of mutant [raco test] processes to run concurrently.  Defaults to
     the machine's available parallelism (≈ [nproc]), capped at 16 so a very
     large core count doesn't spawn an unreasonable number of Racket processes,
@@ -4116,8 +4160,18 @@ let mutate_file ?(root_path=default_root_path ()) ?(extra_test_files=[]) filenam
      | [] ->
        (* Collect extra test declarations from companion test files *)
        (match collect_extra_test_decls extra_test_files with
-        | `Err msg -> MutateErr msg
-        | `Ok extra_test_decls ->
+         | `Err msg -> MutateErr msg
+         | `Ok extra_test_decls ->
+       (match prepare_mutation_suite extra_test_decls m with
+        | Error message -> MutateErr message
+        | Ok base_module ->
+       let suite_diags = check_module source base_module in
+       (match List.filter (fun (d : diagnostic) -> d.severity = "error") suite_diags with
+        | diagnostic :: _ -> MutateErr ("mutation test suite error: " ^ diagnostic.message)
+        | [] ->
+       (match run_racket_mutation_baseline ~root_path base_module with
+        | Error message -> MutateErr message
+        | Ok () ->
        let mutants = Mutate.generate_mutants m in
        (* Warm the Tesl DSL bytecode ONCE before timing any mutant.  The first
           per-mutant `raco test` otherwise cold-compiles the whole DSL (~10-13s),
@@ -4125,11 +4179,7 @@ let mutate_file ?(root_path=default_root_path ()) ?(extra_test_files=[]) filenam
           as [Error] (124).  Compiling the original module's emitted .rkt with
           `raco make` builds the shared DSL .zo so each subsequent `raco test` just
           loads it.  Best-effort: any failure here is harmless (mutants still run). *)
-       (let base_module =
-          if extra_test_decls = [] then m
-          else { m with decls = m.decls @ extra_test_decls }
-        in
-        match (try Some (Emit_racket.compile_to_string ~root_path base_module)
+       (match (try Some (Emit_racket.compile_to_string ~root_path base_module)
                with _ -> None) with
         | None -> ()
         | Some r ->
@@ -4162,12 +4212,9 @@ let mutate_file ?(root_path=default_root_path ()) ?(extra_test_files=[]) filenam
        let prepared = Array.map (fun (mut : Mutate.mutant) ->
          (* Merge extra tests into this mutant's module, then strip the
             infrastructure-touching ones before emitting. *)
-         let module_with_tests =
-           let merged =
+           let module_with_tests =
              if extra_test_decls = [] then mut.module_
              else { mut.module_ with decls = mut.module_.decls @ extra_test_decls }
-           in
-           Mutate.strip_infra_tests merged
          in
          (* Emit without type-checking — the mutant may be semantically
             invalid from the proof perspective, but Racket will still run
@@ -4223,7 +4270,7 @@ let mutate_file ?(root_path=default_root_path ()) ?(extra_test_files=[]) filenam
        let survived = List.length (List.filter (fun (_, r) -> r = Mutate.Survived) results) in
        let invalid  = List.length (List.filter (fun (_, r) -> match r with Mutate.Invalid _ -> true | _ -> false) results) in
        let errors   = List.length (List.filter (fun (_, r) -> match r with Mutate.Error _ -> true | _ -> false) results) in
-       MutateOk { Mutate.total = List.length mutants; killed; survived; invalid; errors; results }))
+       MutateOk { Mutate.total = List.length mutants; killed; survived; invalid; errors; results })))))
 
 let rec remove_tree path =
   if Sys.file_exists path then
@@ -4233,10 +4280,7 @@ let rec remove_tree path =
     end else Sys.remove path
 
 let fresh_temp_dir prefix =
-  let marker = Filename.temp_file prefix ".tmp" in
-  Sys.remove marker;
-  Unix.mkdir marker 0o755;
-  marker
+  Filename.temp_dir prefix ""
 
 let rec mkdir_p path =
   if path = "" || path = Filename.current_dir_name then ()
@@ -4248,6 +4292,9 @@ let rec mkdir_p path =
 
 let write_go_artifacts root (artifacts : Emit_go.artifact list) =
   List.iter (fun (artifact : Emit_go.artifact) ->
+    if not (Filename.is_relative artifact.path)
+       || List.mem ".." (String.split_on_char '/' artifact.path) then
+      invalid_arg ("unsafe Go artifact path: " ^ artifact.path);
     let path = Filename.concat root artifact.path in
     mkdir_p (Filename.dirname path);
     Out_channel.with_open_bin path (fun channel ->
@@ -4271,25 +4318,33 @@ let classify_go_test_run ~exit_code ~output =
   else if exit_code <> 0 && started && failed_test then GoTestsFailed output
   else GoTestRunnerFailed output
 
+let classify_go_build_run ~exit_code ~output =
+  if exit_code = 0 then None
+  else if exit_code = 124 then Some (GoTestsTimedOut output)
+  else Some (GoBuildFailed output)
+
 let run_go_test_artifacts artifacts =
   let test_artifact = List.find_opt (fun (artifact : Emit_go.artifact) ->
     Filename.check_suffix artifact.path "_test.go") artifacts in
   match test_artifact with
   | None -> GoBuildFailed "emitted project has no Go test package"
   | Some test_artifact ->
+    let timeout_pfx = Lazy.force timeout_prefix in
+    if timeout_pfx = "" then GoTestRunnerFailed "Go mutation testing requires `timeout` on PATH"
+    else
     let root = fresh_temp_dir "tesl_go_mutant_" in
     Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
       write_go_artifacts root artifacts;
       let package = "./" ^ Filename.dirname test_artifact.path in
       let binary = Filename.concat root "tesl-tests" in
-      let build_cmd = Printf.sprintf "cd %s && go test -c -o %s %s"
-        (Filename.quote root) (Filename.quote binary) (Filename.quote package) in
-      let build_code, build_output = run_capture build_cmd in
-      if build_code <> 0 then GoBuildFailed build_output
-      else
-        let timeout_pfx = Lazy.force timeout_prefix in
-        let run_cmd = Printf.sprintf "%s%s -test.v"
-          timeout_pfx (Filename.quote binary) in
+       let build_cmd = Printf.sprintf "cd %s && %sgo test -c -o %s %s"
+         (Filename.quote root) timeout_pfx (Filename.quote binary) (Filename.quote package) in
+       let build_code, build_output = run_capture build_cmd in
+       match classify_go_build_run ~exit_code:build_code ~output:build_output with
+       | Some outcome -> outcome
+       | None ->
+         let run_cmd = Printf.sprintf "%s%s -test.v"
+           timeout_pfx (Filename.quote binary) in
         let run_code, run_output = run_capture run_cmd in
         if run_code = 124 then GoTestsTimedOut run_output
         else classify_go_test_run ~exit_code:run_code ~output:run_output)
@@ -4298,7 +4353,10 @@ let run_go_test_artifacts artifacts =
     surface-AST mutant passes through [Emit_go], is compiled first, then its test
     binary runs. A Go compile failure is invalid and can never inflate kills. *)
 let mutate_go_file ?(extra_test_files=[]) filename : mutate_result =
-  if Sys.command "go version >/dev/null 2>&1" <> 0 then
+  let timeout_pfx = Lazy.force timeout_prefix in
+  if timeout_pfx = "" then
+    MutateErr "Go mutation testing requires `timeout` on PATH"
+  else if fst (run_capture (timeout_pfx ^ "go version")) <> 0 then
     MutateErr "Go mutation testing requires `go` on PATH"
   else
     let source = In_channel.with_open_text filename In_channel.input_all in
@@ -4312,16 +4370,19 @@ let mutate_go_file ?(extra_test_files=[]) filename : mutate_result =
        | diagnostic :: _ -> MutateErr ("type error: " ^ diagnostic.message)
        | [] ->
          (match collect_extra_test_decls extra_test_files with
-          | `Err message -> MutateErr message
-          | `Ok extra_test_decls ->
-            let with_tests module_ =
-              let merged =
-                if extra_test_decls = [] then module_
-                else { module_ with decls = module_.decls @ extra_test_decls }
-              in
-              Mutate.strip_infra_tests merged
-            in
-            let baseline = with_tests m in
+           | `Err message -> MutateErr message
+           | `Ok extra_test_decls ->
+             (match prepare_mutation_suite extra_test_decls m with
+              | Error message -> MutateErr message
+              | Ok baseline ->
+             let suite_diags = check_module source baseline in
+             (match List.filter (fun (d : diagnostic) -> d.severity = "error") suite_diags with
+              | diagnostic :: _ -> MutateErr ("mutation test suite error: " ^ diagnostic.message)
+              | [] ->
+             let with_tests module_ =
+               if extra_test_decls = [] then module_
+               else { module_ with decls = module_.decls @ extra_test_decls }
+             in
             let has_tests = List.exists (function DTest _ -> true | _ -> false) baseline.decls in
             if not has_tests then MutateErr "Go mutation baseline has no runnable tests"
             else
@@ -4363,7 +4424,7 @@ let mutate_go_file ?(extra_test_files=[]) filename : mutate_result =
                       invalid;
                       errors;
                       results;
-                    }))))
+                    }))))))
 
 (* ── WS6: standalone-executable build (`tesl --exe`) ─────────────────────────
    Emit the program's Racket *exactly* as `tesl <file>` would (byte-identical

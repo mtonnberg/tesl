@@ -119,9 +119,7 @@ let () =
   (* Intentional standalone executables that no `dune test` gate runs — each has
      a documented reason in compiler/test/dune.  Adding a new (executable) test_*
      without allowlisting it here fails the build. *)
-  let standalone_executable_allowlist =
-    [ "test_mutate_differential";  (* reads the lesson corpus by relative path; run via `dune exec` *)
-      "test_mutate_classify" ]     (* kept executable so it builds without the alcotest/Racket deps *)
+  let standalone_executable_allowlist = []
   in
   let not_run =
     List.filter (fun n ->

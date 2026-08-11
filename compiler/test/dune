@@ -111,20 +111,17 @@
 ; Differential check that the {!Mutate} walks (now on {!Ast_visitor}) produce
 ; byte-identical site indices / replacements vs a reference of the original
 ; hand-rolled walk, over the real lesson corpus.  Pure OCaml; no Racket.  A
-; standalone executable (not a `test`) because it reads the lesson corpus by
-; relative path from the invocation CWD, which is stable only under `dune exec`
-; from the compiler/ root, not the runtest sandbox:
+; Uses Compile.default_root_path, so it is stable under the runtest sandbox:
 ;   dune exec test/test_mutate_differential.exe
-(executable
+(test
  (name test_mutate_differential)
  (modules test_mutate_differential)
  (libraries tesl_compiler_lib))
 
 ; Pure-OCaml unit test for the mutation-testing classification logic.
-; Standalone executable (no alcotest / no Racket) so it builds and runs even
-; when the integration test deps are unavailable:
+; No alcotest / no Racket, so it builds and runs in every gate:
 ;   dune exec test/test_mutate_classify.exe
-(executable
+(test
  (name test_mutate_classify)
  (modules test_mutate_classify)
  (libraries tesl_compiler_lib str))

@@ -66,17 +66,18 @@ let test_artifact_layout () =
   let paths = List.map (fun (a : Emit_go.artifact) -> a.path) emitted in
   List.iter (fun path -> check bool ("contains " ^ path) true (List.mem path paths)) [
     "go.mod";
-    "internal/gosmoke/module.go";
-    "internal/gosmoke/module_test.go";
+    "internal/teslmodgosmoke/module.go";
+    "internal/teslmodgosmoke/module_test.go";
     "internal/teslrt/int.go";
   ];
-  let module_go = artifact "internal/gosmoke/module.go" emitted in
+  let module_go = artifact "internal/teslmodgosmoke/module.go" emitted in
   check bool "Int arithmetic uses runtime helper" true
     (contains module_go "teslrt.Add(tesl_left, tesl_right)");
   check bool "huge Int crosses boundary exactly" true
     (contains module_go
        "teslrt.Add(teslrt.MustParseDecimal(\"9223372036854775807\"), teslrt.FromInt64(1))");
-  check bool "Tesl source mapping emitted" true (contains module_go "//line <go-test>:");
+  check bool "Tesl source mapping is 1-based" true
+    (contains module_go "//line <go-test>:4");
   check bool "check result is explicit" true (contains module_go "teslrt.Check[teslrt.Int]");
   check bool "check accept emitted" true (contains module_go "teslrt.Accept(tesl_n)");
   check bool "check reject emitted" true (contains module_go "teslrt.Reject[teslrt.Int](422");
@@ -137,8 +138,8 @@ test "literal" { expect literal() == "teslrt." }
     failf "string-only Go compile failed: %s"
       (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
   | Compile.GoSuccess artifacts ->
-    let module_go = artifact "internal/teslmodulego/module.go" artifacts in
-    check bool "package keyword escaped" true (contains module_go "package teslmodulego");
+    let module_go = artifact "internal/teslmodgo/module.go" artifacts in
+    check bool "package keyword escaped" true (contains module_go "package teslmodgo");
     check bool "literal preserved" true (contains module_go "\"teslrt.\"");
     check bool "no false runtime import" false (contains module_go "/internal/teslrt");
     check bool "runtime not copied" false
@@ -154,6 +155,25 @@ fn loop(n: Int) -> Int = loop n
   | Compile.GoFailure diagnostics ->
     check bool "recursion diagnostic" true
       (List.exists (fun (d : Compile.diagnostic) -> contains d.message "no tail-call optimization") diagnostics)
+
+let test_special_package_names_are_prefixed () =
+  List.iter (fun (module_name, package) ->
+    let source = Printf.sprintf
+      "module %s exposing [identity]\nimport Tesl.Prelude exposing [Int]\nfn identity(n: Int) -> Int = n\n"
+      module_name in
+    match Compile.compile_go_source "<go-package>" source with
+    | Compile.GoFailure diagnostics ->
+      failf "%s package compile failed: %s" module_name
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+    | Compile.GoSuccess artifacts ->
+      check bool (module_name ^ " package path") true
+        (List.exists (fun (a : Emit_go.artifact) ->
+           a.path = "internal/" ^ package ^ "/module.go") artifacts)) [
+    "Main", "teslmodmain";
+    "Teslrt", "teslmodteslrt";
+    "Testdata", "teslmodtestdata";
+    "Vendor", "teslmodvendor";
+  ]
 
 let rec remove_tree path =
   if Sys.file_exists path then
@@ -204,6 +224,26 @@ let test_cli_backend_flag () =
      | Unix.WSTOPPED signal -> failf "CLI stopped %d:\n%s" signal process_output);
     check bool "CLI emitted go.mod" true (Sys.file_exists (Filename.concat output "go.mod")))
 
+let test_cli_rejects_empty_output_path () =
+  let root = Filename.temp_dir "tesl-go-empty-output" "" in
+  Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+    let input = Filename.concat root "go-smoke.tesl" in
+    Out_channel.with_open_bin input (fun channel -> output_string channel source);
+    let compiler =
+      if Filename.is_relative compiler then Filename.concat (Sys.getcwd ()) compiler else compiler
+    in
+    let command = Printf.sprintf "cd %s && %s --backend go %s --out '' 2>&1"
+      (Filename.quote root) (Filename.quote compiler) (Filename.quote input) in
+    let channel = Unix.open_process_in command in
+    let process_output = In_channel.input_all channel in
+    (match Unix.close_process_in channel with
+     | Unix.WEXITED 0 -> failf "CLI accepted an empty Go output path:\n%s" process_output
+     | Unix.WEXITED _ -> ()
+     | Unix.WSIGNALED signal -> failf "CLI signaled %d:\n%s" signal process_output
+     | Unix.WSTOPPED signal -> failf "CLI stopped %d:\n%s" signal process_output);
+    check bool "empty path did not write into cwd" false
+      (Sys.file_exists (Filename.concat root "go.mod")))
+
 let run_command root command =
   let command = Printf.sprintf "cd %s && %s 2>&1" (Filename.quote root) command in
   let channel = Unix.open_process_in command in
@@ -250,7 +290,9 @@ let () =
       test_case "unsupported forms fail closed" `Quick test_unsupported_fails_closed;
       test_case "strings cannot trigger imports" `Quick test_string_cannot_trigger_runtime_import;
       test_case "recursion fails closed" `Quick test_recursion_fails_closed;
+      test_case "special package names are prefixed" `Quick test_special_package_names_are_prefixed;
       test_case "CLI backend flag emits tree" `Quick test_cli_backend_flag;
+      test_case "CLI rejects empty output path" `Quick test_cli_rejects_empty_output_path;
       test_case "fresh module passes Go gates" `Slow test_generated_module_with_go;
     ];
   ]

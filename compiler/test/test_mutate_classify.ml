@@ -203,6 +203,18 @@ let () =
   check "operator: int perturbation described as `3 → 4`"
     (desc_has mutants "3 → 4");
 
+  let loc = Location.dummy_loc "<negative-zero>" in
+  let negative_zero = Ast.EUnop {
+    op = Ast.UNeg;
+    arg = Ast.ELit { lit = Ast.LInt 0; loc };
+    loc;
+  } in
+  let negative_zero_sites = Mutate.collect_sites "zero" Ast.FnKind negative_zero in
+  check "operator: negative zero increments to one"
+    (List.exists (fun ((site : Mutate.mutation_site), alternatives) ->
+       site.original = Mutate.MOInt "-0" && List.mem (Mutate.MOInt "1") alternatives)
+       negative_zero_sites);
+
   (* Determinism: regenerating yields the identical sequence of (kind, index,
      replacement) triples.  (Full descriptions embed the temp file path, which
      differs per call, so we compare the path-independent mutation identity.) *)
