@@ -20,6 +20,19 @@ let
     export TESL_REPO_ROOT="${toString ./.}"
     export TESL_OCAML_COMPILER="$TESL_REPO_ROOT/compiler/_build/default/bin/main.exe"
   '' + builtins.readFile ./nix/tesl-cli-body.sh);
+  staticcheck = pkgs.buildGoModule rec {
+    pname = "staticcheck";
+    version = "2026.1";
+    src = pkgs.fetchFromGitHub {
+      owner = "dominikh";
+      repo = "go-tools";
+      rev = version;
+      hash = "sha256-cj/pHKwp7eGuOO1zhv5bFmuPHgsFytktLQmihhdYkfY=";
+    };
+    vendorHash = "sha256-Wu8+e0r0bkztLbxekbHktoKjg6c8q7ls5APSEdO8CKs=";
+    subPackages = [ "cmd/staticcheck" ];
+    meta.mainProgram = "staticcheck";
+  };
 in
 pkgs.mkShell {
   buildInputs = with pkgs; [
@@ -28,6 +41,7 @@ pkgs.mkShell {
     jq
     postgresql
     go
+    staticcheck
     gosec
     govulncheck
     golangci-lint

@@ -41,7 +41,7 @@
 #    7. Exact-match snaps     byte-exact re-emit vs committed example/learn/*.rkt
 #                             + templates/{api,minimal}/app.rkt (`tesl init` scaffold)
 #    8. Tesl test files       generated Racket test submodules (batch runner)
-#    9. Mutation              tesl --mutate lesson42
+#    9. Mutation              Racket/Go parity on lesson42 + scalar proof corpus
 #   10. Integration           httpclient + email alcotest integration exes
 #   11. Racket suites         debugger / headless-inspect / MCP / lifted-stdlib
 #                             + AI (Tesl.Agent) mock feature/runtime suites
@@ -778,7 +778,7 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 phase_begin "Go runtime + emitted-code gates"
 go_gate_fail=0
-for tool in go gofmt gosec govulncheck golangci-lint nilaway; do
+for tool in go gofmt staticcheck gosec govulncheck golangci-lint nilaway; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         printf "  %s✗%s  required Go gate tool not found: %s\n" "$C_RED" "$C_RESET" "$tool"
         go_gate_fail=1
@@ -799,6 +799,7 @@ if [ "$go_gate_fail" -eq 0 ]; then
       go test ./teslrt -run '^$' -fuzz '^FuzzIntJSONInput$' -fuzztime="${TESL_GO_FUZZTIME:-3s}" &&
       go vet ./... &&
       CGO_ENABLED=0 go build ./... &&
+      staticcheck ./... &&
       golangci-lint run ./... &&
       gosec -quiet ./... &&
       govulncheck ./... &&
@@ -1112,22 +1113,32 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Phase 8 — Mutation testing (lesson42 — GDP boundary functions)
+#  Phase 8 — Mutation testing (backend parity)
 # ══════════════════════════════════════════════════════════════════════════════
-phase_begin "Mutation testing (lesson42)"
+phase_begin "Mutation testing (Racket/Go parity)"
 mutation_fail=0
-mutation_lesson="$SCRIPT_DIR/example/learn/lesson42-mutation-testing.tesl"
 if [ -x "$_main_exe" ]; then
     TESL_BIN="$_main_exe"
 else
     TESL_BIN="tesl"
 fi
-if [ ! -f "$mutation_lesson" ]; then
-    printf "  %s✗%s  %s not found\n" "$C_RED" "$C_RESET" "$mutation_lesson"
+if ! command -v raco >/dev/null 2>&1; then
+    printf "  %s✗%s  raco unavailable — cannot prove Racket/Go mutation parity\n" "$C_RED" "$C_RESET"
     mutation_fail=1
 else
     _mutation_timeout="${TESL_MUTATION_TIMEOUT:-180}"
-    if command -v raco >/dev/null 2>&1; then
+    for _mutation_spec in \
+        "example/learn/lesson42-mutation-testing.tesl|20" \
+        "example/learn/lesson05-intro-to-proofs.tesl|13"; do
+        _mutation_relative="${_mutation_spec%|*}"
+        _mutation_expected="${_mutation_spec##*|}"
+        mutation_lesson="$SCRIPT_DIR/$_mutation_relative"
+        if [ ! -f "$mutation_lesson" ]; then
+            printf "  %s✗%s  %s not found\n" "$C_RED" "$C_RESET" "$mutation_lesson"
+            mutation_fail=1
+            continue
+        fi
+        _mutation_summary="Summary: $_mutation_expected mutants | $_mutation_expected killed | 0 survived"
         printf "  Running Racket mutation oracle: %s\n" "$(basename "$mutation_lesson")"
         mutation_out=$(timeout "$_mutation_timeout" "$TESL_BIN" --mutate "$mutation_lesson" 2>&1)
         _mut_exit=$?
@@ -1137,31 +1148,35 @@ else
                 "$C_RED" "$C_RESET" "$_mut_exit" "$mutation_out"
         else
             case "$mutation_out" in
-                *"Summary: 20 mutants | 20 killed | 0 survived"*) ;;
+                *"$_mutation_summary"*) ;;
                 *) mutation_fail=1; printf "  %s✗%s  Racket mutation report was incomplete\n%s\n" "$C_RED" "$C_RESET" "$mutation_out" ;;
             esac
         fi
-    else
-        printf "  %s✗%s  raco unavailable — cannot prove Racket/Go mutation parity\n" "$C_RED" "$C_RESET"
-        mutation_fail=1
-    fi
 
-    printf "  Running Go mutation backend: %s\n" "$(basename "$mutation_lesson")"
-    go_mutation_out=$(timeout "$_mutation_timeout" "$TESL_BIN" --mutate --backend go "$mutation_lesson" 2>&1)
-    _go_mut_exit=$?
-    if [ "$_go_mut_exit" -ne 0 ]; then
-        mutation_fail=1
-        printf "  %s✗%s  Go mutation testing failed (exit %d)\n%s\n" \
-            "$C_RED" "$C_RESET" "$_go_mut_exit" "$go_mutation_out"
-    else
-        case "$go_mutation_out" in
-            *"Summary: 20 mutants | 20 killed | 0 survived"*) ;;
-            *) mutation_fail=1; printf "  %s✗%s  Go mutation report was incomplete\n%s\n" "$C_RED" "$C_RESET" "$go_mutation_out" ;;
-        esac
-    fi
+        printf "  Running Go mutation backend: %s\n" "$(basename "$mutation_lesson")"
+        go_mutation_out=$(timeout "$_mutation_timeout" "$TESL_BIN" --mutate --backend go "$mutation_lesson" 2>&1)
+        _go_mut_exit=$?
+        if [ "$_go_mut_exit" -ne 0 ]; then
+            mutation_fail=1
+            printf "  %s✗%s  Go mutation testing failed (exit %d)\n%s\n" \
+                "$C_RED" "$C_RESET" "$_go_mut_exit" "$go_mutation_out"
+        else
+            case "$go_mutation_out" in
+                *"$_mutation_summary"*) ;;
+                *) mutation_fail=1; printf "  %s✗%s  Go mutation report was incomplete\n%s\n" "$C_RED" "$C_RESET" "$go_mutation_out" ;;
+            esac
+        fi
+        _racket_mutants=$(printf '%s\n' "$mutation_out" | sed -n 's/^  \[KILLED\] //p')
+        _go_mutants=$(printf '%s\n' "$go_mutation_out" | sed -n 's/^  \[KILLED\] //p')
+        if [ "$_racket_mutants" != "$_go_mutants" ]; then
+            mutation_fail=1
+            printf "  %s✗%s  Racket/Go mutant identity or order diverged for %s\n" \
+                "$C_RED" "$C_RESET" "$(basename "$mutation_lesson")"
+        fi
+    done
 fi
 if [ "$mutation_fail" -eq 0 ]; then
-    printf "  %s✓%s  Racket/Go mutation parity: 20/20 killed\n" "$C_GREEN" "$C_RESET"
+    printf "  %s✓%s  Racket/Go mutation parity: 33/33 killed across 2 corpora\n" "$C_GREEN" "$C_RESET"
     phase_end OK
 else
     phase_end FAIL

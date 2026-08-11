@@ -10,6 +10,19 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+        staticcheck = pkgs.buildGoModule rec {
+          pname = "staticcheck";
+          version = "2026.1";
+          src = pkgs.fetchFromGitHub {
+            owner = "dominikh";
+            repo = "go-tools";
+            rev = version;
+            hash = "sha256-cj/pHKwp7eGuOO1zhv5bFmuPHgsFytktLQmihhdYkfY=";
+          };
+          vendorHash = "sha256-Wu8+e0r0bkztLbxekbHktoKjg6c8q7ls5APSEdO8CKs=";
+          subPackages = [ "cmd/staticcheck" ];
+          meta.mainProgram = "staticcheck";
+        };
 
         # ── OCaml compiler binary ─────────────────────────────────────────────
         # Builds compiler/_build/default/bin/main.exe via dune.
@@ -287,8 +300,8 @@
 
       in {
         # ── Packages ──────────────────────────────────────────────────────────
-        packages = {
-          inherit tesl-compiler tesl-racket tesl-cli tesl-lsp tesl-mcp tesl-full;
+          packages = {
+           inherit tesl-compiler tesl-racket tesl-cli tesl-lsp tesl-mcp tesl-full staticcheck;
           default = tesl-full;
           # Reusable PostgreSQL so the managed-PG lifecycle (`tesl db`) can source
           # initdb / pg_ctl / createdb via nix without entering a dev shell.
@@ -313,6 +326,7 @@
             jq
             postgresql
             go
+            staticcheck
             gosec
             govulncheck
             golangci-lint

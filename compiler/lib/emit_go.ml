@@ -20,6 +20,7 @@ type go_type = TInt | TString | TBool | TUnit | TCheck of go_type | TFailure
 type signature = {
   params : go_type list;
   result : go_type;
+  go_name : string;
 }
 
 exception Unsupported of emit_error
@@ -38,6 +39,9 @@ let sanitize_ident name =
     if valid then Buffer.add_char b c
     else Buffer.add_string b (Printf.sprintf "_x%02x_" (Char.code c))) name;
   Buffer.contents b
+
+let exported_ident name =
+  String.capitalize_ascii (sanitize_ident name)
 
 let package_name name =
   let b = Buffer.create (String.length name) in
@@ -110,6 +114,12 @@ let equal_expr ty left right =
   | TString | TBool | TUnit -> Printf.sprintf "(%s == %s)" left right
   | TCheck _ | TFailure -> invalid_arg "Go check results require explicit test handling"
 
+let unequal_expr ty left right =
+  match ty with
+  | TInt -> Printf.sprintf "!teslrt.Equal(%s, %s)" left right
+  | TString | TBool | TUnit -> Printf.sprintf "(%s != %s)" left right
+  | TCheck _ | TFailure -> invalid_arg "Go check results require explicit test handling"
+
 let lookup_env loc name env =
   match List.assoc_opt name env with
   | Some ty -> ty
@@ -125,18 +135,32 @@ let normalize_call_args params args =
   | [], [EList { elems = []; _ }] -> []
   | _ -> args
 
+let bool_literal_value = function
+  | ELit { lit = LBool value; _ } -> Some value
+  | EConstructor { name = "True"; args = []; _ } -> Some true
+  | EConstructor { name = "False"; args = []; _ } -> Some false
+  | _ -> None
+
 let rec type_of_expr signatures env expr =
   match expr with
   | ELit { lit = LInt _ | LBigInt _; _ } -> TInt
   | ELit { lit = LString _; _ } -> TString
   | ELit { lit = LBool _; _ } -> TBool
-  | ELit { lit = LFloat _; loc }
-  | ELit { lit = LInterp _; loc } ->
-    unsupported loc "Go backend does not support Float or interpolation yet"
+  | ELit { lit = LFloat _; loc } ->
+    unsupported loc "Go backend does not support Float yet"
+  | ELit { lit = LInterp segments; _ } ->
+    List.iter (function
+      | ILiteral _ -> ()
+      | IExpr expr ->
+        (match type_of_expr signatures env expr with
+         | TString | TInt | TBool -> ()
+         | _ -> unsupported (Checker.expr_loc expr)
+           "Go backend interpolation supports String, Int, and Bool only")) segments;
+    TString
   | EVar { name; loc } ->
     (match List.assoc_opt name env, Hashtbl.find_opt signatures name with
      | Some ty, _ -> ty
-     | None, Some { params = []; result } -> result
+     | None, Some { params = []; result; _ } -> result
      | None, Some _ -> unsupported loc "Go backend does not support function `%s` as a value" name
      | None, None -> lookup_env loc name env)
   | EConstructor { name = "True" | "False"; args = []; _ } -> TBool
@@ -150,7 +174,7 @@ let rec type_of_expr signatures env expr =
        (match args with
         | EVar { name; _ } :: call_args ->
           (match Hashtbl.find_opt signatures name with
-           | Some { params; result = TCheck result } ->
+            | Some { params; result = TCheck result; _ } ->
              if List.length params <> List.length call_args then
                unsupported loc "Go backend requires a fully-applied check `%s`" name;
              List.iter2 (fun arg want ->
@@ -160,7 +184,12 @@ let rec type_of_expr signatures env expr =
              result
            | Some _ -> unsupported loc "`%s` is not a check" name
            | None -> unsupported loc "Go backend cannot resolve check `%s`" name)
-        | _ -> unsupported loc "Go backend requires `check` followed by a named check function")
+         | _ -> unsupported loc "Go backend requires `check` followed by a named check function")
+     | EVar { name = "not"; _ } when not (Hashtbl.mem signatures "not") ->
+       (match args with
+        | [arg] when type_of_expr signatures env arg = TBool -> TBool
+        | [_] -> unsupported loc "Go backend `not` requires Bool"
+        | _ -> unsupported loc "Go backend requires a fully-applied call to `not`")
      | EVar { name; _ } ->
        (match Hashtbl.find_opt signatures name with
         | None -> unsupported loc "Go backend cannot resolve function `%s`" name
@@ -239,12 +268,13 @@ let rec emit_expr ?expected signatures env expr =
     Printf.sprintf "teslrt.MustParseDecimal(%s)" (go_quote value)
   | ELit { lit = LString value; _ } -> go_quote value
   | ELit { lit = LBool value; _ } -> if value then "true" else "false"
-  | ELit { lit = LFloat _ | LInterp _; loc } ->
-    unsupported loc "Go backend cannot emit this literal yet"
+  | ELit { lit = LFloat _; loc } ->
+    unsupported loc "Go backend cannot emit Float yet"
+  | ELit { lit = LInterp segments; _ } -> emit_interp signatures env segments
   | EVar { name; loc } ->
     (match List.assoc_opt name env, Hashtbl.find_opt signatures name with
      | Some _, _ -> sanitize_ident name
-     | None, Some { params = []; _ } -> sanitize_ident name ^ "()"
+     | None, Some { params = []; go_name; _ } -> go_name ^ "()"
      | None, Some _ -> unsupported loc "Go backend does not support function `%s` as a value" name
      | None, None -> sanitize_ident name)
   | EConstructor { name = "True"; args = []; _ } -> "true"
@@ -258,9 +288,18 @@ let rec emit_expr ?expected signatures env expr =
        (match args with
         | EVar { name; _ } :: call_args ->
           ignore (type_of_expr signatures env app);
-          Printf.sprintf "teslrt.MustCheck(%s(%s))" (sanitize_ident name)
-            (String.concat ", " (List.map (emit_expr signatures env) call_args))
-        | _ -> unsupported loc "Go backend requires a named check function")
+           let signature = match Hashtbl.find_opt signatures name with
+             | Some signature -> signature
+             | None -> unsupported loc "Go backend cannot resolve check `%s`" name
+           in
+           Printf.sprintf "teslrt.MustCheck(%s(%s))" signature.go_name
+             (String.concat ", " (List.map (emit_expr signatures env) call_args))
+         | _ -> unsupported loc "Go backend requires a named check function")
+     | EVar { name = "not"; _ } when not (Hashtbl.mem signatures "not") ->
+       ignore (type_of_expr signatures env app);
+       (match args with
+        | [arg] -> Printf.sprintf "!(%s)" (emit_expr signatures env arg)
+        | _ -> assert false)
      | EVar { name; _ } ->
        let signature = match Hashtbl.find_opt signatures name with
          | Some signature -> signature
@@ -268,31 +307,43 @@ let rec emit_expr ?expected signatures env expr =
        in
        let args = normalize_call_args signature.params args in
        ignore (type_of_expr signatures env app);
-       Printf.sprintf "%s(%s)" (sanitize_ident name)
+       Printf.sprintf "%s(%s)" signature.go_name
          (String.concat ", " (List.map (emit_expr signatures env) args))
      | _ -> unsupported loc "Go backend supports calls to named functions only")
   | EBinop { op; left; right; _ } ->
     let ty = type_of_expr signatures env left in
-    let left = emit_expr signatures env left in
-    let right = emit_expr signatures env right in
+    let emitted_left = emit_expr signatures env left in
+    let emitted_right = emit_expr signatures env right in
+    let emit_bool_literal_comparison equal =
+      match bool_literal_value left, bool_literal_value right with
+      | Some expected, None ->
+        if expected = equal then emitted_right else Printf.sprintf "!(%s)" emitted_right
+      | None, Some expected ->
+        if expected = equal then emitted_left else Printf.sprintf "!(%s)" emitted_left
+      | _ ->
+        if equal then equal_expr ty emitted_left emitted_right
+        else unequal_expr ty emitted_left emitted_right
+    in
     (match op with
-     | BAdd -> Printf.sprintf "teslrt.Add(%s, %s)" left right
-     | BSub -> Printf.sprintf "teslrt.Sub(%s, %s)" left right
-     | BMul -> Printf.sprintf "teslrt.Mul(%s, %s)" left right
-     | BDiv -> Printf.sprintf "teslrt.MustQuo(%s, %s)" left right
-     | BMod -> Printf.sprintf "teslrt.MustRem(%s, %s)" left right
-     | BConcat -> Printf.sprintf "(%s + %s)" left right
-     | BAnd -> Printf.sprintf "(%s && %s)" left right
-     | BOr -> Printf.sprintf "(%s || %s)" left right
-     | BEq -> equal_expr ty left right
-     | BNeq -> Printf.sprintf "!%s" (equal_expr ty left right)
+     | BEq when ty = TBool -> emit_bool_literal_comparison true
+     | BNeq when ty = TBool -> emit_bool_literal_comparison false
+     | BAdd -> Printf.sprintf "teslrt.Add(%s, %s)" emitted_left emitted_right
+     | BSub -> Printf.sprintf "teslrt.Sub(%s, %s)" emitted_left emitted_right
+     | BMul -> Printf.sprintf "teslrt.Mul(%s, %s)" emitted_left emitted_right
+     | BDiv -> Printf.sprintf "teslrt.MustQuo(%s, %s)" emitted_left emitted_right
+     | BMod -> Printf.sprintf "teslrt.MustRem(%s, %s)" emitted_left emitted_right
+     | BConcat -> Printf.sprintf "(%s + %s)" emitted_left emitted_right
+     | BAnd -> Printf.sprintf "(%s && %s)" emitted_left emitted_right
+     | BOr -> Printf.sprintf "(%s || %s)" emitted_left emitted_right
+     | BEq -> equal_expr ty emitted_left emitted_right
+     | BNeq -> unequal_expr ty emitted_left emitted_right
      | BLt | BLe | BGt | BGe ->
        if ty = TInt then
          let op = match op with BLt -> "<" | BLe -> "<=" | BGt -> ">" | BGe -> ">=" | _ -> assert false in
-         Printf.sprintf "(teslrt.Compare(%s, %s) %s 0)" left right op
+          Printf.sprintf "(teslrt.Compare(%s, %s) %s 0)" emitted_left emitted_right op
        else
          let op = match op with BLt -> "<" | BLe -> "<=" | BGt -> ">" | BGe -> ">=" | _ -> assert false in
-         Printf.sprintf "(%s %s %s)" left op right)
+          Printf.sprintf "(%s %s %s)" emitted_left op emitted_right)
   | EUnop { op = UNeg; arg; _ } -> Printf.sprintf "teslrt.Neg(%s)" (emit_expr signatures env arg)
   | EUnop { op = UNot; arg; _ } -> Printf.sprintf "!(%s)" (emit_expr signatures env arg)
   | EIf { loc; _ } -> unsupported loc "Go backend supports if only in tail position"
@@ -314,6 +365,22 @@ let rec emit_expr ?expected signatures env expr =
   | EWithCapabilities { loc; _ } | EWithTransaction { loc; _ } | EServe { loc; _ }
   | ELambda { loc; _ } | ERuntimeCall { loc; _ } ->
     unsupported loc "Go backend cannot emit this expression yet"
+
+and emit_interp signatures env segments =
+  let parts = List.map (function
+    | ILiteral value -> go_quote value
+    | IExpr expr ->
+      let emitted = emit_expr signatures env expr in
+      match type_of_expr signatures env expr with
+      | TString -> emitted
+      | TInt -> emitted ^ ".String()"
+      | TBool -> Printf.sprintf "strconv.FormatBool(%s)" emitted
+      | _ -> unsupported (Checker.expr_loc expr)
+        "Go backend interpolation supports String, Int, and Bool only") segments in
+  match parts with
+  | [] -> go_quote ""
+  | [part] -> part
+  | _ -> "(" ^ String.concat " + " parts ^ ")"
 
 let strip_outer_parens value =
   let length = String.length value in
@@ -370,6 +437,13 @@ let contains_go_code haystack needle =
   in
   needle_length = 0 || loop 0 false false false
 
+let import_block paths =
+  match paths with
+  | [] -> ""
+  | [path] -> Printf.sprintf "\nimport %s\n" (go_quote path)
+  | _ -> Printf.sprintf "\nimport (\n%s)\n"
+      (String.concat "" (List.map (fun path -> "\t" ^ go_quote path ^ "\n") paths))
+
 let module_source module_path package signatures (funcs : func_decl list) =
   let body = Buffer.create 1024 in
   List.iter (fun (fd : func_decl) ->
@@ -378,8 +452,6 @@ let module_source module_path package signatures (funcs : func_decl list) =
     if fd.capabilities <> [] then unsupported fd.loc
       "Go backend does not support capabilities yet";
     let params = List.map (fun (binding : binding) ->
-      if binding.proof_ann <> None then unsupported binding.loc
-        "Go backend does not support proof-bearing parameters yet";
       let ty = type_of_type_expr binding.type_expr in
       binding.name, ty) fd.params in
     let result = type_of_return_spec fd.return_spec in
@@ -388,18 +460,18 @@ let module_source module_path package signatures (funcs : func_decl list) =
     if body_ty <> result then unsupported fd.loc "Go backend function result type mismatch";
     Buffer.add_char body '\n';
     Buffer.add_string body (line_directive fd.loc);
+    let signature = Hashtbl.find signatures fd.name in
     Printf.bprintf body "func %s(%s) %s {\n"
-      (sanitize_ident fd.name)
+      signature.go_name
       (String.concat ", " (List.map (fun (name, ty) -> sanitize_ident name ^ " " ^ go_type ty) params))
       (go_type result);
     emit_tail body signatures env result "\t" fd.body;
     Buffer.add_string body "}\n") funcs;
   let body = Buffer.contents body in
-  let header =
-    if contains_go_code body "teslrt." then
-      Printf.sprintf "package %s\n\nimport %s\n" package (go_quote (module_path ^ "/internal/teslrt"))
-    else Printf.sprintf "package %s\n" package
-  in
+  let imports =
+    (if contains_go_code body "strconv." then ["strconv"] else [])
+    @ (if contains_go_code body "teslrt." then [module_path ^ "/internal/teslrt"] else []) in
+  let header = Printf.sprintf "package %s\n%s" package (import_block imports) in
   header ^ body
 
 let test_source module_path package signatures (tests : test_form list) =
@@ -417,18 +489,27 @@ let test_source module_path package signatures (tests : test_form list) =
       Printf.bprintf body "%s}\n" indent
     | TsExpect { left; right; loc } :: rest ->
       let left_ty = type_of_expr signatures env left in
-      let condition = match right with
+      let failure_condition = match right with
         | None ->
           if left_ty <> TBool then unsupported loc "Go backend bare expect requires Bool";
-          emit_expr signatures env left
+          Printf.sprintf "!(%s)" (strip_outer_parens (emit_expr signatures env left))
         | Some right ->
           let right_ty = type_of_expr signatures env right in
           if left_ty <> right_ty then unsupported loc "Go backend expect operands have different types";
-          equal_expr left_ty (emit_expr signatures env left) (emit_expr signatures env right)
+          (match left_ty, bool_literal_value left, bool_literal_value right with
+           | TBool, Some expected, None ->
+             let compared = strip_outer_parens (emit_expr signatures env right) in
+             if expected then Printf.sprintf "!(%s)" compared else compared
+           | TBool, None, Some expected ->
+             let compared = strip_outer_parens (emit_expr signatures env left) in
+             if expected then Printf.sprintf "!(%s)" compared else compared
+           | _ ->
+             strip_outer_parens
+               (unequal_expr left_ty (emit_expr signatures env left) (emit_expr signatures env right)))
       in
       Buffer.add_string body (line_directive loc);
-      Printf.bprintf body "%sif !(%s) {\n%s\tteslT.Fatal(\"Tesl expectation failed\")\n%s}\n"
-        indent condition indent indent;
+      Printf.bprintf body "%sif %s {\n%s\tteslT.Fatal(\"Tesl expectation failed\")\n%s}\n"
+        indent failure_condition indent indent;
       emit_stmts env indent rest
     | TsExpr { e; loc } :: rest ->
       ignore (type_of_expr signatures env e);
@@ -456,15 +537,13 @@ let test_source module_path package signatures (tests : test_form list) =
     emit_stmts [] "\t" test.stmts;
     Buffer.add_string body "}\n") tests;
   let body = Buffer.contents body in
-  let imports =
-    if contains_go_code body "teslrt." then
-      Printf.sprintf "import (\n\t\"fmt\"\n\t\"os\"\n\t%s\n\t\"testing\"\n)\n"
-        (go_quote (module_path ^ "/internal/teslrt"))
-    else "import (\n\t\"fmt\"\n\t\"os\"\n\t\"testing\"\n)\n"
-  in
+  let imports = ["fmt"; "os"]
+    @ (if contains_go_code body "strconv." then ["strconv"] else [])
+    @ (if contains_go_code body "teslrt." then [module_path ^ "/internal/teslrt"] else [])
+    @ ["testing"] in
   Printf.sprintf
-    "package %s\n\n%s\nfunc TestMain(teslM *testing.M) {\n\t_, _ = fmt.Fprintln(os.Stderr, \"TESL_GO_TESTS_STARTED\")\n\tos.Exit(teslM.Run())\n}\n%s"
-    package imports body
+    "package %s\n%s\nfunc TestMain(teslM *testing.M) {\n\t_, _ = fmt.Fprintln(os.Stderr, \"TESL_GO_TESTS_STARTED\")\n\tos.Exit(teslM.Run())\n}\n%s"
+    package (import_block imports) body
 
 let compile_module ?(mode=Release) (m : module_form) =
   try
@@ -501,6 +580,9 @@ let compile_module ?(mode=Release) (m : module_form) =
       | DServer s -> unsupported s.loc "Go backend does not support servers yet"
       | DApiTest t -> unsupported t.loc "Go backend does not support api-test yet"
       | DLoadTest t -> unsupported t.loc "Go backend does not support load-test yet") m.decls;
+    let is_exported name = List.exists (function
+      | ExportName exported -> exported = name
+      | ExportAdt _ -> false) m.exports in
     let function_names = List.map (fun (fd : func_decl) -> fd.name) funcs in
     let graph = List.map (fun (fd : func_decl) ->
       let calls = ref [] in
@@ -508,7 +590,28 @@ let compile_module ?(mode=Release) (m : module_form) =
         | EVar { name; _ } when List.mem name function_names && not (List.mem name !calls) ->
           calls := name :: !calls
         | _ -> ()) fd.body;
-      fd.name, !calls) funcs in
+       fd.name, !calls) funcs in
+    let test_roots = ref [] in
+    List.iter (fun (test : test_form) ->
+      List.iter (fun stmt ->
+        List.iter (Ast_visitor.iter (function
+          | EVar { name; _ } when List.mem name function_names ->
+            if not (List.mem name !test_roots) then test_roots := name :: !test_roots
+          | _ -> ())) (Ast.test_stmt_exprs stmt)) test.stmts) tests;
+    let rec reachable visited name =
+      if List.mem name visited then visited
+      else
+        let visited = name :: visited in
+        match List.assoc_opt name graph with
+        | None -> visited
+        | Some calls -> List.fold_left reachable visited calls
+    in
+    let roots = !test_roots @ List.filter is_exported function_names in
+    let reachable_names = List.fold_left reachable [] roots in
+    List.iter (fun (fd : func_decl) ->
+      if not (List.mem fd.name reachable_names) then unsupported fd.loc
+        "Go backend does not emit unreachable private function `%s` yet; export it, call it, or remove it"
+        fd.name) funcs;
     let rec reaches target visited current =
       if List.mem current visited then false
       else
@@ -524,7 +627,13 @@ let compile_module ?(mode=Release) (m : module_form) =
     let signatures = Hashtbl.create (List.length funcs) in
     List.iter (fun (fd : func_decl) ->
       let params = List.map (fun (binding : binding) -> type_of_type_expr binding.type_expr) fd.params in
-      Hashtbl.replace signatures fd.name { params; result = type_of_return_spec fd.return_spec }) funcs;
+      let exported = is_exported fd.name in
+      let go_name = if exported then exported_ident fd.name else sanitize_ident fd.name in
+      Hashtbl.replace signatures fd.name {
+        params;
+        result = type_of_return_spec fd.return_spec;
+        go_name;
+      }) funcs;
     let package = package_name m.module_name in
     let module_path = "tesl.generated/" ^ package in
     let source = module_source module_path package signatures funcs in

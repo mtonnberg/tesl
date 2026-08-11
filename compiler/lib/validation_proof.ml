@@ -662,7 +662,9 @@ let rec check_expr_call_proofs
                  | ELambda { params; body = b; _ } ->
                    if not (List.exists (fun (p : binding) -> p.name = name) params)
                    then visit b
-                 | ELit _ | EVar _ | EStartWorkers _ -> ()
+                  | ELit { lit = LInterp segments; _ } ->
+                    List.iter (function ILiteral _ -> () | IExpr e -> visit e) segments
+                  | ELit _ | EVar _ | EStartWorkers _ -> ()
                  | ECacheGet _ | ECacheDelete _ | ECacheInvalidate _ -> ()
                  | ECacheSet { value; _ } -> visit value
                  | ESendEmail _ | EStartEmailWorker _ -> ()
@@ -751,6 +753,8 @@ let rec check_expr_call_proofs
           | ELambda { params = ps; body = b; _ } ->
             if not (List.exists (fun (p : binding) -> p.name = name) ps)
             then visit b
+          | ELit { lit = LInterp segments; _ } ->
+            List.iter (function ILiteral _ -> () | IExpr e -> visit e) segments
           | ELit _ | EVar _ | EStartWorkers _ -> ()
           | ECacheGet _ | ECacheDelete _ | ECacheInvalidate _ -> ()
           | ECacheSet { value; _ } -> visit value
@@ -1208,13 +1212,19 @@ let rec check_expr_call_proofs
         (b.name, List.map Proof_kernel.assume_param (flatten_proof_conj proof)) :: acc
     ) proof_env params in
     check_expr_call_proofs subject_env proof_env' funcs body
+  | ELit { lit = LInterp segments; _ } ->
+    List.concat_map (function
+      | ILiteral _ -> []
+      | IExpr expr -> check_expr_call_proofs subject_env proof_env funcs expr)
+      segments
   (* Explicit no-obligation LEAVES.  EField is deliberately a leaf here (it does
      NOT descend into its [obj]): the original arm returned [] and that omission
      is load-bearing — qualified-name field accesses like `Module.fn` are not
      call sites and carry no proof obligation, so we must NOT start walking into
-     [obj].  EVar/ELit/EFail/EStartWorkers/EStartEmailWorker have no proof-bearing
-     children either. *)
-  | ELit _ | EVar _ | EField _ | EFail _ | EStartWorkers _ | EStartEmailWorker _ -> []
+     [obj]. Plain literals, EVar, EStartWorkers, and EStartEmailWorker have no
+     proof-bearing children. Interpolated literals are handled above; EFail
+     falls through because its message may contain an interpolation. *)
+  | ELit _ | EVar _ | EField _ | EStartWorkers _ | EStartEmailWorker _ -> []
   (* Purely-MECHANICAL structural descent: thread the SAME (subject_env, proof_env,
      funcs) context UNCHANGED into every immediate child and concatenate the
      resulting error lists left-to-right.  Migrated onto the shared
@@ -1695,7 +1705,12 @@ pass a `check` function or a `&&` combination of check functions"
        let (head, args) = collect_call_head_and_args [] e in
        walk head;
        List.iter walk args
-     | ELit _ | EVar _ | EConstructor _ | EFail _ | EStartWorkers _ | EServe _ | EField _ -> ()
+     | ELit { lit = LInterp segments; _ } ->
+       List.iter (function ILiteral _ -> () | IExpr e -> walk e) segments
+     | ELit _ | EVar _ | EStartWorkers _ | EField _ -> ()
+     | EConstructor { args; _ } -> List.iter walk args
+     | EFail { message; _ } -> walk message
+     | EServe { port; _ } -> walk port
      | EBinop { left; right; _ } -> walk left; walk right
      | EUnop { arg; _ } -> walk arg
      | EIf { cond; then_; else_; _ } -> walk cond; walk then_; walk else_
@@ -2252,7 +2267,12 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
        Ast.expr variant becomes a COMPILE error here rather than silently
        escaping this ForAll-consistency walk.  None of these are ForAll-producing
        / ForAll-return-tail forms, so their behaviour is unchanged (no descent). *)
-    | ELit _ | EConstructor _ | EFail _ | EStartWorkers _ | EServe _
+    | ELit { lit = LInterp segments; _ } ->
+      List.iter (function
+        | ILiteral _ -> ()
+        | IExpr expr -> walk forall_env None expr) segments
+    | EFail { message; _ } -> walk forall_env None message
+    | ELit _ | EConstructor _ | EStartWorkers _ | EServe _
     | EBinop _ | EUnop _ | ERecord _ | ETelemetry _ | EOk _ | EEnqueue _
     | EPublish _ | ELambda _ | ECacheGet _ | ECacheSet _ | ECacheDelete _
     | ECacheInvalidate _ | ESendEmail _ | EStartEmailWorker _ | ERuntimeCall _ -> ()
@@ -2343,7 +2363,13 @@ let rec exists_witnesses (e : expr) : string list =
   | EWithDatabase { body; _ } | EWithCapabilities { body; _ } | EWithTransaction { body; _ } -> exists_witnesses body
   | EServe { port; _ } -> exists_witnesses port
   | ELambda { body; _ } -> exists_witnesses body
-  | ELit _ | EVar _ | EField _ | EConstructor _ | EFail _ -> []
+  | ELit { lit = LInterp segments; _ } ->
+    List.concat_map (function
+      | ILiteral _ -> []
+      | IExpr expr -> exists_witnesses expr) segments
+  | EConstructor { args; _ } -> List.concat_map exists_witnesses args
+  | EFail { message; _ } -> exists_witnesses message
+  | ELit _ | EVar _ | EField _ -> []
   | ECacheGet { key; _ } -> exists_witnesses key
   | ECacheSet { key; value; ttl; _ } ->
     exists_witnesses key @ exists_witnesses value
@@ -3279,7 +3305,11 @@ if every guard fails at runtime, the case has no match"
       List.rev !errs
     in
     scrut_errors @ case_errors @ arity_errors @ literal_errors @ recursive_errors @ redundancy_errors @ arm_errors
-  | ELit _ | EVar _ | EConstructor _ | EFail _ -> []
+  | ELit { lit = LInterp segments; _ } ->
+    List.concat_map (function ILiteral _ -> [] | IExpr expr -> recurse expr) segments
+  | EConstructor { args; _ } -> List.concat_map recurse args
+  | EFail { message; _ } -> recurse message
+  | ELit _ | EVar _ -> []
   | EField { obj; _ } -> recurse obj
   | EApp { fn; arg; _ } -> recurse fn @ recurse arg
   | EBinop { left; right; _ } -> recurse left @ recurse right
@@ -3326,4 +3356,3 @@ if every guard fails at runtime, the case has no match"
   | EStartEmailWorker _ -> []
   | ERuntimeCall { segments; _ } ->
     List.concat_map (function RLit _ | RRawVar _ -> [] | RArg e -> recurse e) segments
-

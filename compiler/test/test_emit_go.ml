@@ -1,7 +1,7 @@
 open Alcotest
 
-let source = {|module GoSmoke exposing [add, choose, boundary, withUnused, map, teslMap, Positive, checkPositive]
-import Tesl.Prelude exposing [Bool(..), Int]
+let source = {|module GoSmoke exposing [add, choose, boundary, withUnused, map, teslMap, describe, describeComputed, Positive, checkPositive, doublePositive]
+import Tesl.Prelude exposing [Bool(..), Int, String]
 
 fn add(left: Int, right: Int) -> Int = left + right
 
@@ -20,6 +20,12 @@ fn withUnused(value: Int) -> Int =
 fn map(value: Int) -> Int = value
 fn teslMap(value: Int) -> Int = value + 1
 
+fn describe(label: String, count: Int, ready: Bool) -> String =
+  "${label}: ${count}, ready=${ready}"
+
+fn describeComputed(prefix: String, count: Int, ready: Bool) -> String =
+  "\"${prefix}\\${count + 1}:${not ready}:~:$:雪:😀"
+
 fact Positive (n: Int)
 
 check checkPositive(n: Int) -> n: Int ::: Positive n =
@@ -27,6 +33,8 @@ check checkPositive(n: Int) -> n: Int ::: Positive n =
     ok n ::: Positive n
   else
     fail 422 "not positive"
+
+fn doublePositive(n: Int ::: Positive n) -> Int = n * 2
 
 test "pure Go backend" {
   expect add 40 2 == 42
@@ -37,10 +45,18 @@ test "pure Go backend" {
   expect withUnused 7 == 7
   expect map 4 == 4
   expect teslMap 4 == 5
+  expect describe "jobs" 9223372036854775808 True == "jobs: 9223372036854775808, ready=true"
+  expect describeComputed "" -2 True == "\"\\-1:false:~:$:雪:😀"
+  expect describeComputed "x" -9223372036854775809 False == "\"x\\-9223372036854775808:true:~:$:雪:😀"
   let teslT = 1
   expect teslT == 1
-  expect check checkPositive 1 == 1
-  expectFail check checkPositive 0
+  let one = 1
+  expect check checkPositive one == 1
+  let zero = 0
+  expectFail check checkPositive zero
+  let two = 2
+  let positive = check checkPositive two
+  expect doublePositive positive == 4
 }
 |}
 
@@ -81,6 +97,15 @@ let test_artifact_layout () =
   check bool "check result is explicit" true (contains module_go "teslrt.Check[teslrt.Int]");
   check bool "check accept emitted" true (contains module_go "teslrt.Accept(tesl_n)");
   check bool "check reject emitted" true (contains module_go "teslrt.Reject[teslrt.Int](422");
+  check bool "Int interpolation is exact" true (contains module_go "tesl_count.String()");
+  check bool "Bool interpolation uses Tesl spelling" true
+    (contains module_go "strconv.FormatBool(tesl_ready)");
+  check bool "computed interpolation emits exact Int arithmetic" true
+    (contains module_go "teslrt.Add(tesl_count, teslrt.FromInt64(1)).String()");
+  check bool "computed interpolation emits Bool expression" true
+    (contains module_go "strconv.FormatBool(!(tesl_ready))");
+  check bool "proof-consuming parameter erases to scalar" true
+    (contains module_go "func Tesl_doublePositive(tesl_n teslrt.Int) teslrt.Int");
   check bool "release has no debugger import" false (contains module_go "teslrt/debug");
   let go_mod = artifact "go.mod" emitted in
   check bool "no third-party requirement" false (contains go_mod "require")
@@ -145,6 +170,23 @@ test "literal" { expect literal() == "teslrt." }
     check bool "runtime not copied" false
       (List.exists (fun (a : Emit_go.artifact) -> contains a.path "internal/teslrt") artifacts)
 
+let test_bool_interpolation_imports_only_strconv () =
+  let source = {|module BoolInterpolation exposing [render]
+import Tesl.Prelude exposing [Bool, String]
+fn render(value: Bool) -> String = "${value}"
+test "Bool interpolation" { expect render False == "false" }
+|} in
+  match Compile.compile_go_source "<go-bool-interpolation>" source with
+  | Compile.GoFailure diagnostics ->
+    failf "Bool interpolation compile failed: %s"
+      (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  | Compile.GoSuccess artifacts ->
+    let module_go = artifact "internal/teslmodboolinterpolation/module.go" artifacts in
+    check bool "Bool-only module imports strconv" true (contains module_go "import \"strconv\"");
+    check bool "Bool-only module has no runtime import" false (contains module_go "teslrt");
+    check bool "Bool-only module omits runtime files" false
+      (List.exists (fun (a : Emit_go.artifact) -> contains a.path "internal/teslrt") artifacts)
+
 let test_recursion_fails_closed () =
   let recursive = {|module Recursive exposing [loop]
 import Tesl.Prelude exposing [Int]
@@ -155,6 +197,94 @@ fn loop(n: Int) -> Int = loop n
   | Compile.GoFailure diagnostics ->
     check bool "recursion diagnostic" true
       (List.exists (fun (d : Compile.diagnostic) -> contains d.message "no tail-call optimization") diagnostics)
+
+let test_unproven_call_never_reaches_emitter () =
+  let invalid = {|module InvalidProof exposing [Positive, requiresPositive, bypass]
+import Tesl.Prelude exposing [Int, String]
+fact Positive (n: Int)
+fn requiresPositive(n: Int ::: Positive n) -> Int = n
+fn bypass(n: Int) -> String = "value=${requiresPositive n}"
+|} in
+  match Compile.compile_go_source "<go-invalid-proof>" invalid with
+  | Compile.GoSuccess _ -> fail "unproven call emitted Go artifacts"
+  | Compile.GoFailure diagnostics ->
+    check bool "proof checker rejected call before Go emission" true
+      (List.exists (fun (d : Compile.diagnostic) ->
+         d.source <> "go-emitter") diagnostics)
+
+let test_unsupported_interpolation_fails_closed () =
+  let unsupported = {|module UnsupportedInterpolation exposing [render]
+import Tesl.Prelude exposing [String]
+fn render() -> String = "value=${1.5}"
+|} in
+  match Compile.compile_go_source "<go-unsupported-interpolation>" unsupported with
+  | Compile.GoSuccess _ -> fail "unsupported interpolation emitted Go artifacts"
+  | Compile.GoFailure diagnostics ->
+    check bool "non-scalar interpolation rejected by Go emitter" true
+      (List.exists (fun (d : Compile.diagnostic) ->
+         d.source = "go-emitter" && contains d.message "Float") diagnostics)
+
+let test_cross_subject_mismatch_never_reaches_emitter () =
+  let invalid = {|module InvalidCrossProof exposing [Matches, checkMatches, consume, bypass]
+import Tesl.Prelude exposing [String]
+fact Matches (left: String, right: String)
+check checkMatches(left: String, right: String) -> left: String ::: Matches left right =
+  if left == right then ok left ::: Matches left right else fail 400 "different"
+fn consume(left: String ::: Matches left right, right: String) -> String = left
+fn bypass(left: String, right: String, other: String) -> String =
+  let matched = check checkMatches left right
+  consume matched other
+|} in
+  match Compile.compile_go_source "<go-invalid-cross-proof>" invalid with
+  | Compile.GoSuccess _ -> fail "cross-subject proof mismatch emitted Go artifacts"
+  | Compile.GoFailure diagnostics ->
+    check bool "cross-subject mismatch rejected before Go emission" true
+      (List.exists (fun (d : Compile.diagnostic) -> d.source <> "go-emitter") diagnostics)
+
+let test_interpolation_holes_receive_frontend_validation () =
+  let expect_error label needle source =
+    let diagnostics = Compile.check_source ("<" ^ label ^ ">") source in
+    if not (List.exists (fun (d : Compile.diagnostic) -> contains d.message needle) diagnostics) then
+      failf "%s: expected diagnostic containing %S, got: %s" label needle
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  expect_error "proof call in failure interpolation" "proof" {|module FailHole exposing []
+import Tesl.Prelude exposing [Int]
+fact Positive (n: Int)
+fn requiresPositive(n: Int ::: Positive n) -> Int = n
+check bad(n: Int) -> n: Int ::: Positive n =
+  if n > 0 then
+    ok n ::: Positive n
+  else
+    fail 400 "bad ${requiresPositive n}"
+|};
+  expect_error "proof alias call in interpolation" "proof" {|module AliasHole exposing []
+import Tesl.Prelude exposing [Int, String]
+fact Positive (n: Int)
+fn requiresPositive(n: Int ::: Positive n) -> Int = n
+fn bad(n: Int) -> String =
+  let alias = requiresPositive
+  "${alias n}"
+|};
+  expect_error "filterCheck callback in interpolation" "not a `check` function" {|module FilterHole exposing []
+import Tesl.Prelude exposing [Bool, Int, List, String]
+import Tesl.List exposing [List.filterCheck, List.length]
+fn plain(n: Int) -> Bool = n > 0
+fn bad(xs: List Int) -> String = "${List.length (List.filterCheck plain xs)}"
+|}
+
+let test_unreachable_private_function_fails_closed () =
+  let unsupported = {|module DeadPrivate exposing [live]
+import Tesl.Prelude exposing [Int]
+fn live(n: Int) -> Int = n
+fn dead(n: Int) -> Int = n + 1
+|} in
+  match Compile.compile_go_source "<go-dead-private>" unsupported with
+  | Compile.GoSuccess _ -> fail "unreachable private function bypassed lint-clean gate"
+  | Compile.GoFailure diagnostics ->
+    check bool "unreachable private function rejected explicitly" true
+      (List.exists (fun (d : Compile.diagnostic) ->
+         d.source = "go-emitter" && contains d.message "unreachable private function") diagnostics)
 
 let test_special_package_names_are_prefixed () =
   List.iter (fun (module_name, package) ->
@@ -258,6 +388,97 @@ let run_command root command =
 let command_available command =
   Sys.command ("command -v " ^ Filename.quote command ^ " >/dev/null 2>&1") = 0
 
+let run_optional_go_gates root =
+  if command_available "staticcheck" then ignore (run_command root "staticcheck ./...");
+  if command_available "golangci-lint" then ignore (run_command root "golangci-lint run ./...");
+  if command_available "gosec" then ignore (run_command root "gosec -quiet ./...");
+  if command_available "govulncheck" then ignore (run_command root "govulncheck ./...");
+  if command_available "nilaway" then ignore (run_command root "nilaway ./...")
+
+let proof_scalar_source = {|module GoProofScalars exposing [NonEmpty, Enabled, checkNonEmpty, checkEnabled, label, invert]
+import Tesl.Prelude exposing [Bool(..), String]
+
+fact NonEmpty (value: String)
+fact Enabled (value: Bool)
+
+check checkNonEmpty(value: String) -> value: String ::: NonEmpty value =
+  if value != "" then
+    ok value ::: NonEmpty value
+  else
+    fail 400 "empty"
+
+check checkEnabled(value: Bool) -> value: Bool ::: Enabled value =
+  if value then
+    ok value ::: Enabled value
+  else
+    fail 400 "disabled"
+
+fn label(value: String ::: NonEmpty value) -> String = "label=${value}"
+fn invert(value: Bool ::: Enabled value) -> Bool = not value
+
+test "String and Bool proof consumers" {
+  let text = "ready"
+  let checkedText = check checkNonEmpty text
+  expect label checkedText == "label=ready"
+  let enabled = True
+  let checkedEnabled = check checkEnabled enabled
+  expect invert checkedEnabled == False
+  let empty = ""
+  expectFail check checkNonEmpty empty
+  let disabled = False
+  expectFail check checkEnabled disabled
+}
+|}
+
+let test_string_bool_proof_consumers_with_go () =
+  let emitted = match Compile.compile_go_source "<go-proof-scalars>" proof_scalar_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "String/Bool proof consumer compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgoproofscalars/module.go" emitted in
+  check bool "String proof parameter erases to String" true
+    (contains module_go "func Tesl_label(tesl_value string) string");
+  check bool "Bool proof parameter erases to Bool" true
+    (contains module_go "func Tesl_invert(tesl_value bool) bool");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then
+    let root = Filename.temp_dir "tesl-go-proof-scalars" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      ignore (run_command root "go test -count=1 ./..."))
+
+let scalar_proof_corpus = [
+  "example/learn/lesson00-hello-world.tesl";
+  "example/learn/lesson05-intro-to-proofs.tesl";
+  "example/learn/lesson10-cross-parameter-proofs.tesl";
+  "example/learn/lesson40-implicit-value-unwrapping.tesl";
+  "tests/multiparam_test.tesl";
+]
+
+let test_scalar_proof_corpus_with_go () =
+  if Sys.command "go version >/dev/null 2>&1" <> 0 then
+    Printf.printf "SKIP: Go not on PATH (CI/dev shell runs this case with Go)\n%!"
+  else
+    List.iter (fun relative ->
+      let path = Filename.concat (Compile.default_root_path ()) relative in
+      let emitted = match Compile.compile_go_file path with
+        | Compile.GoSuccess artifacts -> artifacts
+        | Compile.GoFailure diagnostics ->
+          failf "%s Go compilation failed: %s" relative
+            (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+      in
+      let root = Filename.temp_dir "tesl-go-corpus" "" in
+      Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+        write_artifacts root emitted;
+        let unformatted = run_command root "gofmt -l ." |> String.trim in
+        if unformatted <> "" then failf "%s emitted unformatted Go: %s" relative unformatted;
+        ignore (run_command root "go test -count=1 ./...");
+        ignore (run_command root "go vet ./...");
+        ignore (run_command root "go test -race -count=1 ./...");
+        ignore (run_command root "CGO_ENABLED=0 go build ./...");
+        run_optional_go_gates root)) scalar_proof_corpus
+
 let test_generated_module_with_go () =
   if Sys.command "go version >/dev/null 2>&1" <> 0 then
     Printf.printf "SKIP: Go not on PATH (CI/dev shell runs this case with Go)\n%!"
@@ -275,10 +496,7 @@ let test_generated_module_with_go () =
       ignore (run_command marker "go vet ./...");
       ignore (run_command marker "go test -race -count=1 ./...");
       ignore (run_command marker "CGO_ENABLED=0 go build ./...");
-      if command_available "golangci-lint" then ignore (run_command marker "golangci-lint run ./...");
-      if command_available "gosec" then ignore (run_command marker "gosec -quiet ./...");
-      if command_available "govulncheck" then ignore (run_command marker "govulncheck ./...");
-      if command_available "nilaway" then ignore (run_command marker "nilaway ./..."))
+      run_optional_go_gates marker)
   end
 
 let () =
@@ -289,10 +507,18 @@ let () =
       test_case "Racket behavior oracle" `Slow test_racket_go_behavior_oracle;
       test_case "unsupported forms fail closed" `Quick test_unsupported_fails_closed;
       test_case "strings cannot trigger imports" `Quick test_string_cannot_trigger_runtime_import;
+      test_case "Bool interpolation imports strconv only" `Quick test_bool_interpolation_imports_only_strconv;
       test_case "recursion fails closed" `Quick test_recursion_fails_closed;
+      test_case "unproven calls fail before emission" `Quick test_unproven_call_never_reaches_emitter;
+      test_case "unsupported interpolation fails closed" `Quick test_unsupported_interpolation_fails_closed;
+      test_case "cross-subject mismatch fails before emission" `Quick test_cross_subject_mismatch_never_reaches_emitter;
+      test_case "interpolation holes receive frontend validation" `Quick test_interpolation_holes_receive_frontend_validation;
+      test_case "unreachable private functions fail closed" `Quick test_unreachable_private_function_fails_closed;
+      test_case "String and Bool proof consumers" `Slow test_string_bool_proof_consumers_with_go;
       test_case "special package names are prefixed" `Quick test_special_package_names_are_prefixed;
       test_case "CLI backend flag emits tree" `Quick test_cli_backend_flag;
       test_case "CLI rejects empty output path" `Quick test_cli_rejects_empty_output_path;
+      test_case "scalar proof corpus runs with Go" `Slow test_scalar_proof_corpus_with_go;
       test_case "fresh module passes Go gates" `Slow test_generated_module_with_go;
     ];
   ]
