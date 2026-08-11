@@ -15,7 +15,21 @@ type emit_error = {
   message : string;
 }
 
-type go_type = TInt | TString | TBool | TUnit | TCheck of go_type | TFailure
+type go_type =
+  | TInt
+  | TString
+  | TBool
+  | TUnit
+  | TNewtype of newtype_info
+  | TCheck of go_type
+  | TFailure
+
+and newtype_info = {
+  tesl_name : string;
+  go_name : string;
+  base : go_type;
+  loc : Location.loc;
+}
 
 type signature = {
   params : go_type list;
@@ -75,20 +89,35 @@ let line_directive loc =
   let line = max 1 (loc.Location.start.line + 1) in
   Printf.sprintf "//line %s:%d\n" (directive_file loc.Location.file) line
 
-let type_of_type_expr = function
+let primitive_type_of_type_expr = function
   | TName { name = "Int"; _ } -> TInt
   | TName { name = "String"; _ } -> TString
   | TName { name = "Bool"; _ } -> TBool
   | TName { name = "Unit"; _ } -> TUnit
-  | TName { name; loc } -> unsupported loc "Go backend does not support type `%s` yet" name
+  | TName { name; loc } ->
+    unsupported loc "Go backend newtype base `%s` is not a direct scalar type" name
   | TVar { name; loc } -> unsupported loc "Go backend does not support type variable `%s` yet" name
   | TApp { loc; _ } -> unsupported loc "Go backend does not support applied types yet"
   | TFun { loc; _ } -> unsupported loc "Go backend does not support function values yet"
   | TTuple { loc; _ } -> unsupported loc "Go backend does not support tuple types yet"
 
-let type_of_return_spec = function
-  | RetPlain { ty; _ } -> type_of_type_expr ty
-  | RetAttached { binding; _ } -> TCheck (type_of_type_expr binding.type_expr)
+let type_of_type_expr newtypes = function
+  | TName { name = "Int"; _ } -> TInt
+  | TName { name = "String"; _ } -> TString
+  | TName { name = "Bool"; _ } -> TBool
+  | TName { name = "Unit"; _ } -> TUnit
+  | TName { name; loc } ->
+    (match Hashtbl.find_opt newtypes name with
+     | Some info -> TNewtype info
+     | None -> unsupported loc "Go backend does not support type `%s` yet" name)
+  | TVar { name; loc } -> unsupported loc "Go backend does not support type variable `%s` yet" name
+  | TApp { loc; _ } -> unsupported loc "Go backend does not support applied types yet"
+  | TFun { loc; _ } -> unsupported loc "Go backend does not support function values yet"
+  | TTuple { loc; _ } -> unsupported loc "Go backend does not support tuple types yet"
+
+let type_of_return_spec newtypes = function
+  | RetPlain { ty; _ } -> type_of_type_expr newtypes ty
+  | RetAttached { binding; _ } -> TCheck (type_of_type_expr newtypes binding.type_expr)
   | RetNamedPack { loc; _ }
   | RetForAll { loc; _ }
   | RetMaybeForAll { loc; _ }
@@ -105,20 +134,42 @@ let rec go_type = function
   | TString -> "string"
   | TBool -> "bool"
   | TUnit -> "struct{}"
+  | TNewtype info -> info.go_name
   | TCheck ty -> Printf.sprintf "teslrt.Check[%s]" (go_type ty)
   | TFailure -> invalid_arg "Go failure has no standalone type"
 
-let equal_expr ty left right =
+let rec equal_expr ty left right =
   match ty with
   | TInt -> Printf.sprintf "teslrt.Equal(%s, %s)" left right
   | TString | TBool | TUnit -> Printf.sprintf "(%s == %s)" left right
+  | TNewtype info ->
+    equal_expr info.base (Printf.sprintf "(%s).teslValue" left)
+      (Printf.sprintf "(%s).teslValue" right)
   | TCheck _ | TFailure -> invalid_arg "Go check results require explicit test handling"
 
-let unequal_expr ty left right =
+let rec unequal_expr ty left right =
   match ty with
   | TInt -> Printf.sprintf "!teslrt.Equal(%s, %s)" left right
   | TString | TBool | TUnit -> Printf.sprintf "(%s != %s)" left right
+  | TNewtype info ->
+    unequal_expr info.base (Printf.sprintf "(%s).teslValue" left)
+      (Printf.sprintf "(%s).teslValue" right)
   | TCheck _ | TFailure -> invalid_arg "Go check results require explicit test handling"
+
+let rec ordered_expr ty op left right =
+  match ty with
+  | TInt -> Printf.sprintf "(teslrt.Compare(%s, %s) %s 0)" left right op
+  | TString -> Printf.sprintf "(%s %s %s)" left op right
+  | TNewtype info ->
+    ordered_expr info.base op (Printf.sprintf "(%s).teslValue" left)
+      (Printf.sprintf "(%s).teslValue" right)
+  | TBool | TUnit | TCheck _ | TFailure ->
+    invalid_arg "Go ordering requires an ordered scalar type"
+
+let rec supports_ordering = function
+  | TInt | TString -> true
+  | TNewtype info -> supports_ordering info.base
+  | TBool | TUnit | TCheck _ | TFailure -> false
 
 let lookup_env loc name env =
   match List.assoc_opt name env with
@@ -134,6 +185,15 @@ let normalize_call_args params args =
   | [], [EConstructor { name = "Unit"; args = []; _ }]
   | [], [EList { elems = []; _ }] -> []
   | _ -> args
+
+let expect_fail_call fn arg loc =
+  let args = match arg with
+    | EList { elems = []; _ } -> []
+    | _ ->
+      let head, rest = flatten_app [] arg in
+      head :: rest
+  in
+  List.fold_left (fun call arg -> EApp { fn = call; arg; loc }) fn args
 
 let bool_literal_value = function
   | ELit { lit = LBool value; _ } -> Some value
@@ -165,8 +225,14 @@ let rec type_of_expr signatures env expr =
      | None, None -> lookup_env loc name env)
   | EConstructor { name = "True" | "False"; args = []; _ } -> TBool
   | EConstructor { name = "Unit"; args = []; _ } -> TUnit
-  | EConstructor { name; loc; _ } ->
-    unsupported loc "Go backend does not support constructor `%s` yet" name
+  | EConstructor { name; args; loc } ->
+    (match Hashtbl.find_opt signatures name with
+     | Some { params = [base]; result = (TNewtype _ as result); _ } ->
+       (match args with
+        | [arg] when type_of_expr signatures env arg = base -> result
+        | [_] -> unsupported loc "Go backend newtype constructor `%s` argument type mismatch" name
+        | _ -> unsupported loc "Go backend requires a fully-applied newtype constructor `%s`" name)
+     | _ -> unsupported loc "Go backend does not support constructor `%s` yet" name)
   | EApp { loc; _ } as app ->
     let head, args = flatten_app [] app in
     (match head with
@@ -185,12 +251,23 @@ let rec type_of_expr signatures env expr =
            | Some _ -> unsupported loc "`%s` is not a check" name
            | None -> unsupported loc "Go backend cannot resolve check `%s`" name)
          | _ -> unsupported loc "Go backend requires `check` followed by a named check function")
-     | EVar { name = "not"; _ } when not (Hashtbl.mem signatures "not") ->
+      | EVar { name = "not"; _ } when not (Hashtbl.mem signatures "not") ->
        (match args with
         | [arg] when type_of_expr signatures env arg = TBool -> TBool
         | [_] -> unsupported loc "Go backend `not` requires Bool"
-        | _ -> unsupported loc "Go backend requires a fully-applied call to `not`")
-     | EVar { name; _ } ->
+         | _ -> unsupported loc "Go backend requires a fully-applied call to `not`")
+      | EConstructor { name; args = constructor_args; _ } ->
+        (match Hashtbl.find_opt signatures name with
+         | Some { params = [base]; result = (TNewtype _ as result); _ } ->
+           let args = constructor_args @ args in
+           (match args with
+            | [arg] when type_of_expr signatures env arg = base -> result
+            | [_] ->
+              unsupported loc "Go backend newtype constructor `%s` argument type mismatch" name
+            | _ ->
+              unsupported loc "Go backend requires a fully-applied newtype constructor `%s`" name)
+         | _ -> unsupported loc "Go backend does not support constructor `%s` yet" name)
+      | EVar { name; _ } ->
        (match Hashtbl.find_opt signatures name with
         | None -> unsupported loc "Go backend cannot resolve function `%s`" name
         | Some signature ->
@@ -219,10 +296,10 @@ let rec type_of_expr signatures env expr =
        if left_ty <> TBool then unsupported loc "Go backend boolean operator requires Bool";
        TBool
      | BEq | BNeq -> TBool
-     | BLt | BLe | BGt | BGe ->
-       if left_ty <> TInt && left_ty <> TString then
-         unsupported loc "Go backend ordering supports Int and String only";
-       TBool)
+      | BLt | BLe | BGt | BGe ->
+        if not (supports_ordering left_ty) then
+          unsupported loc "Go backend ordering supports Int, String, and their scalar newtypes only";
+        TBool)
   | EUnop { op; arg; loc } ->
     let arg_ty = type_of_expr signatures env arg in
     (match op with
@@ -241,7 +318,12 @@ let rec type_of_expr signatures env expr =
   | ELet { name; value; body; _ } ->
     let value_ty = type_of_expr signatures env value in
     type_of_expr signatures ((name, value_ty) :: env) body
-  | EField { loc; _ } -> unsupported loc "Go backend does not support record fields yet"
+  | EField { obj; field = "value"; loc } ->
+    (match type_of_expr signatures env obj with
+     | TNewtype info -> info.base
+     | _ -> unsupported loc "Go backend `.value` requires a supported newtype")
+  | EField { field; loc; _ } ->
+    unsupported loc "Go backend does not support field `%s` yet" field
   | ECase { loc; _ } -> unsupported loc "Go backend does not support case expressions yet"
   | ELetProof { loc; _ } -> unsupported loc "Go backend does not support proof decomposition yet"
   | ERecord { loc; _ } -> unsupported loc "Go backend does not support records yet"
@@ -281,7 +363,15 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
   | EConstructor { name = "True"; args = []; _ } -> "true"
   | EConstructor { name = "False"; args = []; _ } -> "false"
   | EConstructor { name = "Unit"; args = []; _ } -> "struct{}{}"
-  | EConstructor { name; loc; _ } -> unsupported loc "Go backend cannot emit constructor `%s`" name
+  | EConstructor { name; args; loc } ->
+    (match Hashtbl.find_opt signatures name with
+     | Some { params = [_]; result = (TNewtype _ as result); _ } ->
+       ignore (type_of_expr signatures env expr);
+       (match args with
+        | [arg] ->
+          Printf.sprintf "%s{teslValue: %s}" (go_type result) (emit arg)
+        | _ -> unsupported loc "Go backend requires a fully-applied newtype constructor `%s`" name)
+     | _ -> unsupported loc "Go backend cannot emit constructor `%s`" name)
   | EApp { loc; _ } as app ->
     let head, args = flatten_app [] app in
     (match head with
@@ -296,12 +386,21 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
            Printf.sprintf "teslrt.MustCheck(%s(%s))" signature.go_name
               (String.concat ", " (List.map emit call_args))
          | _ -> unsupported loc "Go backend requires a named check function")
-     | EVar { name = "not"; _ } when not (Hashtbl.mem signatures "not") ->
+      | EVar { name = "not"; _ } when not (Hashtbl.mem signatures "not") ->
        ignore (type_of_expr signatures env app);
        (match args with
          | [arg] -> Printf.sprintf "!(%s)" (emit arg)
-        | _ -> assert false)
-     | EVar { name; _ } ->
+         | _ -> assert false)
+      | EConstructor { name; args = constructor_args; _ } ->
+        (match Hashtbl.find_opt signatures name with
+         | Some { result = (TNewtype _ as result); _ } ->
+           ignore (type_of_expr signatures env app);
+           (match constructor_args @ args with
+            | [arg] ->
+              Printf.sprintf "%s{teslValue: %s}" (go_type result) (emit arg)
+            | _ -> assert false)
+         | _ -> unsupported loc "Go backend cannot emit constructor `%s`" name)
+      | EVar { name; _ } ->
        let signature = match Hashtbl.find_opt signatures name with
          | Some signature -> signature
          | None -> unsupported loc "Go backend cannot resolve function `%s`" name
@@ -339,16 +438,15 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
      | BEq -> equal_expr ty emitted_left emitted_right
      | BNeq -> unequal_expr ty emitted_left emitted_right
      | BLt | BLe | BGt | BGe ->
-       if ty = TInt then
-         let op = match op with BLt -> "<" | BLe -> "<=" | BGt -> ">" | BGe -> ">=" | _ -> assert false in
-          Printf.sprintf "(teslrt.Compare(%s, %s) %s 0)" emitted_left emitted_right op
-       else
-         let op = match op with BLt -> "<" | BLe -> "<=" | BGt -> ">" | BGe -> ">=" | _ -> assert false in
-          Printf.sprintf "(%s %s %s)" emitted_left op emitted_right)
+       let op = match op with BLt -> "<" | BLe -> "<=" | BGt -> ">" | BGe -> ">=" | _ -> assert false in
+       ordered_expr ty op emitted_left emitted_right)
   | EUnop { op = UNeg; arg; _ } -> Printf.sprintf "teslrt.Neg(%s)" (emit arg)
   | EUnop { op = UNot; arg; _ } -> Printf.sprintf "!(%s)" (emit arg)
   | EIf _ as if_expr -> emit_if_expr ?expected ~indent signatures env if_expr
   | ELet _ as let_expr -> emit_let_expr ?expected ~indent signatures env let_expr
+  | EField { obj; field = "value"; _ } ->
+    ignore (type_of_expr signatures env expr);
+    Printf.sprintf "(%s).teslValue" (emit obj)
   | EField { loc; _ } | ECase { loc; _ } | ELetProof { loc; _ }
   | ERecord { loc; _ } | EList { loc; _ } ->
     unsupported loc "Go backend cannot emit this expression yet"
@@ -486,24 +584,31 @@ let import_block paths =
   | _ -> Printf.sprintf "\nimport (\n%s)\n"
       (String.concat "" (List.map (fun path -> "\t" ^ go_quote path ^ "\n") paths))
 
-let module_source module_path package signatures (funcs : func_decl list) =
+let module_source module_path package signatures newtypes (funcs : func_decl list) =
   let body = Buffer.create 1024 in
+  Hashtbl.to_seq_values newtypes
+  |> List.of_seq
+  |> List.sort (fun left right -> String.compare left.tesl_name right.tesl_name)
+  |> List.iter (fun info ->
+    Buffer.add_char body '\n';
+    Buffer.add_string body (line_directive info.loc);
+    Printf.bprintf body "type %s struct {\n\tteslValue %s\n}\n"
+      info.go_name (go_type info.base));
   List.iter (fun (fd : func_decl) ->
     if fd.kind <> FnKind && fd.kind <> CheckKind then unsupported fd.loc
       "Go backend supports plain `fn` and `check` declarations only";
     if fd.capabilities <> [] then unsupported fd.loc
       "Go backend does not support capabilities yet";
-    let params = List.map (fun (binding : binding) ->
-      let ty = type_of_type_expr binding.type_expr in
-      binding.name, ty) fd.params in
-    let result = type_of_return_spec fd.return_spec in
+    let signature = Hashtbl.find signatures fd.name in
+    let params = List.map2 (fun (binding : binding) ty -> binding.name, ty)
+      fd.params signature.params in
+    let result = signature.result in
     let env = params in
     let body_ty = type_of_expr signatures env fd.body in
     if body_ty <> result && body_ty <> TFailure then
       unsupported fd.loc "Go backend function result type mismatch";
     Buffer.add_char body '\n';
     Buffer.add_string body (line_directive fd.loc);
-    let signature = Hashtbl.find signatures fd.name in
     Printf.bprintf body "func %s(%s) %s {\n"
       signature.go_name
       (String.concat ", " (List.map (fun (name, ty) -> sanitize_ident name ^ " " ^ go_type ty) params))
@@ -569,6 +674,20 @@ let test_source module_path package signatures (tests : test_form list) =
       Printf.bprintf body "%sif (%s).OK() {\n%s\tteslT.Fatal(\"expected Tesl check failure\")\n%s}\n"
         indent (emit_expr ~indent signatures env arg) indent indent;
       emit_stmts env indent rest
+    | TsExpectFail { fn = (EVar _ as fn); arg; loc } :: rest ->
+      let call = expect_fail_call fn arg loc in
+      let result_ty = type_of_expr signatures env call in
+      let emitted = emit_expr ~indent signatures env call in
+      Buffer.add_string body (line_directive loc);
+      (match result_ty with
+       | TCheck _ ->
+         Printf.bprintf body "%sif (%s).OK() {\n%s\tteslT.Fatal(\"expected Tesl check failure\")\n%s}\n"
+           indent emitted indent indent
+       | TInt | TString | TBool | TUnit | TNewtype _ ->
+         Printf.bprintf body "%steslExpectFailure(teslT, func() {\n%s\t_ = %s\n%s})\n"
+           indent indent emitted indent
+       | TFailure -> unsupported loc "Go backend expectFail target has no result type");
+      emit_stmts env indent rest
     | (TsLetProof { loc; _ } | TsExpectFail { loc; _ } | TsExpectHasProof { loc; _ }
       | TsProperty { loc; _ } | TsIf { loc; _ } | TsCase { loc; _ }) :: _ ->
       unsupported loc "Go backend does not support this test statement yet"
@@ -581,13 +700,18 @@ let test_source module_path package signatures (tests : test_form list) =
     emit_stmts [] "\t" test.stmts;
     Buffer.add_string body "}\n") tests;
   let body = Buffer.contents body in
+  let expect_failure_helper =
+    if contains_go_code body "teslExpectFailure(" then
+      "\nfunc teslExpectFailure(teslT *testing.T, teslThunk func()) {\n\tteslT.Helper()\n\tdefer func() {\n\t\tif recover() == nil {\n\t\t\tteslT.Fatal(\"expected Tesl failure\")\n\t\t}\n\t}()\n\tteslThunk()\n}\n"
+    else ""
+  in
   let imports = ["fmt"; "os"]
     @ (if contains_go_code body "strconv." then ["strconv"] else [])
     @ (if contains_go_code body "teslrt." then [module_path ^ "/internal/teslrt"] else [])
     @ ["testing"] in
   Printf.sprintf
-    "package %s\n%s\nfunc TestMain(teslM *testing.M) {\n\t_, _ = fmt.Fprintln(os.Stderr, \"TESL_GO_TESTS_STARTED\")\n\tos.Exit(teslM.Run())\n}\n%s"
-    package (import_block imports) body
+    "package %s\n%s\nfunc TestMain(teslM *testing.M) {\n\t_, _ = fmt.Fprintln(os.Stderr, \"TESL_GO_TESTS_STARTED\")\n\tos.Exit(teslM.Run())\n}\n%s%s"
+    package (import_block imports) expect_failure_helper body
 
 let compile_module ?(mode=Release) (m : module_form) =
   try
@@ -600,12 +724,26 @@ let compile_module ?(mode=Release) (m : module_form) =
         "Go backend does not support import `%s` yet" import.module_name) m.imports;
     let funcs = List.filter_map (function DFunc fd -> Some fd | _ -> None) m.decls in
     let tests = List.filter_map (function DTest test -> Some test | _ -> None) m.decls in
+    let newtypes = Hashtbl.create 8 in
+    List.iter (function
+      | DType (TypeNewtype { name; secret = true; loc; _ }) ->
+        unsupported loc "Go backend does not support secret newtype `%s` yet" name
+      | DType (TypeNewtype { name; base_type; loc; _ }) ->
+        let base = primitive_type_of_type_expr base_type in
+        Hashtbl.replace newtypes name {
+          tesl_name = name;
+          go_name = exported_ident name;
+          base;
+          loc;
+        }
+      | _ -> ()) m.decls;
     List.iter (function
       | DFunc _ | DTest _ -> ()
-      | DType form ->
-        let loc = match form with
-          | TypeNewtype { loc; _ } | TypeAlias { loc; _ } | TypeAdt { loc; _ } -> loc in
-        unsupported loc "Go backend does not support type declarations yet"
+      | DType (TypeNewtype _) -> ()
+      | DType (TypeAlias { loc; _ }) ->
+        unsupported loc "Go backend does not support transparent type aliases yet"
+      | DType (TypeAdt { loc; _ }) ->
+        unsupported loc "Go backend does not support ADT declarations yet"
       | DRecord r -> unsupported r.loc "Go backend does not support records yet"
       | DEntity e -> unsupported e.loc "Go backend does not support entities yet"
       | DFact _ -> ()
@@ -668,19 +806,28 @@ let compile_module ?(mode=Release) (m : module_form) =
       if reaches fd.name [] fd.name then unsupported fd.loc
         "Go backend does not support recursive function `%s` yet; Go has no tail-call optimization"
         fd.name) funcs;
-    let signatures = Hashtbl.create (List.length funcs) in
+    let signatures = Hashtbl.create (List.length funcs + Hashtbl.length newtypes) in
+    Hashtbl.iter (fun name info ->
+      Hashtbl.add signatures name {
+        params = [info.base];
+        result = TNewtype info;
+        go_name = info.go_name;
+      }) newtypes;
     List.iter (fun (fd : func_decl) ->
-      let params = List.map (fun (binding : binding) -> type_of_type_expr binding.type_expr) fd.params in
+      if Hashtbl.mem signatures fd.name then unsupported fd.loc
+        "Go backend generated name collision for `%s`" fd.name;
+      let params = List.map (fun (binding : binding) ->
+        type_of_type_expr newtypes binding.type_expr) fd.params in
       let exported = is_exported fd.name in
       let go_name = if exported then exported_ident fd.name else sanitize_ident fd.name in
-      Hashtbl.replace signatures fd.name {
+      Hashtbl.add signatures fd.name {
         params;
-        result = type_of_return_spec fd.return_spec;
+        result = type_of_return_spec newtypes fd.return_spec;
         go_name;
       }) funcs;
     let package = package_name m.module_name in
     let module_path = "tesl.generated/" ^ package in
-    let source = module_source module_path package signatures funcs in
+    let source = module_source module_path package signatures newtypes funcs in
     let tests_source = if tests = [] then None else Some (test_source module_path package signatures tests) in
     let needs_runtime = contains_go_code source "teslrt." ||
       match tests_source with Some text -> contains_go_code text "teslrt." | None -> false in

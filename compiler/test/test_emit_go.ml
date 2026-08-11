@@ -1,6 +1,6 @@
 open Alcotest
 
-let source = {|module GoSmoke exposing [add, choose, nestedChoice, boundary, withUnused, map, teslMap, describe, describeComputed, Positive, checkPositive, checkPositiveNested, alwaysReject, rejectEither, doublePositive]
+let source = {|module GoSmoke exposing [add, choose, nestedChoice, boundary, withUnused, map, teslMap, describe, describeComputed, Positive, checkPositive, checkPositiveNested, alwaysReject, rejectEither, requirePositive, doublePositive]
 import Tesl.Prelude exposing [Bool(..), Int, String]
 
 fn add(left: Int, right: Int) -> Int = left + right
@@ -61,6 +61,10 @@ check rejectEither(n: Int) -> n: Int ::: Positive n =
   else
     fail 422 "non-positive rejected"
 
+fn requirePositive(n: Int) -> Int =
+  let positive = check checkPositive n
+  positive
+
 fn doublePositive(n: Int ::: Positive n) -> Int = n * 2
 
 test "pure Go backend" {
@@ -83,6 +87,8 @@ test "pure Go backend" {
   expect check checkPositive one == 1
   let zero = 0
   expectFail check checkPositive zero
+  expect requirePositive one == 1
+  expectFail requirePositive zero
   expect check checkPositiveNested one == 1
   expectFail check checkPositiveNested zero
   expectFail check alwaysReject one
@@ -150,6 +156,29 @@ let test_artifact_layout () =
   let go_mod = artifact "go.mod" emitted in
   check bool "no third-party requirement" false (contains go_mod "require")
 
+let test_named_expect_fail_emission () =
+  let emitted = artifacts () in
+  let module_go = artifact "internal/teslmodgosmoke/module.go" emitted in
+  let test_go = artifact "internal/teslmodgosmoke/module_test.go" emitted in
+  check bool "plain wrapper uses test-only recovery" true
+    (contains test_go "teslExpectFailure(teslT, func()"
+     && contains test_go "_ = Tesl_requirePositive(tesl_zero)");
+  check bool "recovery helper stays out of release module" false
+    (contains module_go "teslExpectFailure")
+
+let test_named_expect_fail_requires_full_application () =
+  let unsupported = {|module PartialExpectFail exposing [add]
+import Tesl.Prelude exposing [Int]
+fn add(left: Int, right: Int) -> Int = left + right
+test "partial expectFail" { expectFail add 1 }
+|} in
+  match Compile.compile_go_source "<go-partial-expect-fail>" unsupported with
+  | Compile.GoSuccess _ -> fail "partial expectFail emitted Go artifacts"
+  | Compile.GoFailure diagnostics ->
+    check bool "partial named call rejected by Go emitter" true
+      (List.exists (fun (d : Compile.diagnostic) ->
+         d.source = "go-emitter" && contains d.message "fully-applied call") diagnostics)
+
 let test_racket_default_unchanged () =
   match Compile.compile_source "<go-test>" source with
   | Compile.Success racket ->
@@ -183,14 +212,14 @@ let test_racket_go_behavior_oracle () =
 let test_unsupported_fails_closed () =
   let unsupported = {|module Unsupported exposing []
 import Tesl.Prelude exposing [Int]
-type Count = Int
+secret Count = Int
 |} in
   match Compile.compile_go_source "<go-unsupported>" unsupported with
-  | Compile.GoSuccess _ -> fail "unsupported fact emitted instead of failing closed"
+  | Compile.GoSuccess _ -> fail "secret newtype emitted instead of failing closed"
   | Compile.GoFailure diagnostics ->
     check bool "go emitter diagnostic" true
       (List.exists (fun (d : Compile.diagnostic) ->
-         d.source = "go-emitter" && contains d.message "type declarations") diagnostics)
+         d.source = "go-emitter" && contains d.message "secret newtype") diagnostics)
 
 let test_string_cannot_trigger_runtime_import () =
   let source = {|module Go exposing [literal]
@@ -658,6 +687,99 @@ test "String and Bool proof consumers" {
 }
 |}
 
+let newtype_source = {|module GoNewtypes exposing [Count, Label, EnabledFlag, Marker, PositiveCount, makeCount, countValue, sameCount, countBefore, makeLabel, labelValue, makeEnabled, enabledValue, makeMarker, markerValue, checkPositiveCount, usePositiveCount]
+import Tesl.Prelude exposing [Bool(..), Int, String, Unit(..)]
+
+type Count = Int
+type Label = String
+type EnabledFlag = Bool
+type Marker = Unit
+
+fact PositiveCount (value: Count)
+
+fn makeCount(raw: Int) -> Count = Count raw
+fn countValue(value: Count) -> Int = value.value
+fn sameCount(left: Count, right: Count) -> Bool = left == right
+fn countBefore(left: Count, right: Count) -> Bool = left < right
+fn makeLabel(raw: String) -> Label = Label raw
+fn labelValue(value: Label) -> String = value.value
+fn makeEnabled(raw: Bool) -> EnabledFlag = EnabledFlag raw
+fn enabledValue(value: EnabledFlag) -> Bool = value.value
+fn makeMarker(raw: Unit) -> Marker = Marker raw
+fn markerValue(value: Marker) -> Unit = value.value
+
+check checkPositiveCount(value: Count) -> value: Count ::: PositiveCount value =
+  if value.value > 0 then
+    ok value ::: PositiveCount value
+  else
+    fail 400 "not positive"
+
+fn usePositiveCount(value: Count ::: PositiveCount value) -> Int = value.value
+
+test "scalar newtypes stay nominal" {
+  let one = makeCount 1
+  let two = makeCount 2
+  expect countValue one == 1
+  expect sameCount one (makeCount 1) == True
+  expect countBefore one two == True
+  expect labelValue (makeLabel "ready") == "ready"
+  expect enabledValue (makeEnabled True) == True
+  expect markerValue (makeMarker Unit) == Unit
+  let positive = check checkPositiveCount one
+  expect usePositiveCount positive == 1
+  let zero = makeCount 0
+  expectFail check checkPositiveCount zero
+}
+|}
+
+let test_scalar_newtypes_with_go () =
+  let emitted = match Compile.compile_go_source "<go-newtypes>" newtype_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "scalar newtype compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgonewtypes/module.go" emitted in
+  check bool "Int newtype is nominal" true
+    (contains module_go "type Tesl_Count struct {\n\tteslValue teslrt.Int\n}");
+  check bool "String newtype is nominal" true
+    (contains module_go "type Tesl_Label struct {\n\tteslValue string\n}");
+  check bool "Bool newtype is nominal" true
+    (contains module_go "type Tesl_EnabledFlag struct {\n\tteslValue bool\n}");
+  check bool "Unit newtype is nominal" true
+    (contains module_go "type Tesl_Marker struct {\n\tteslValue struct{}\n}");
+  check bool "newtype Int equality uses runtime helper" true
+    (contains module_go "teslrt.Equal((tesl_left).teslValue, (tesl_right).teslValue)");
+  check bool "newtype Int ordering uses runtime helper" true
+    (contains module_go "teslrt.Compare((tesl_left).teslValue, (tesl_right).teslValue)");
+  check bool "newtype checks keep explicit result" true
+    (contains module_go "teslrt.Check[Tesl_Count]");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then
+    let root = Filename.temp_dir "tesl-go-newtypes" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./..."))
+
+let test_unsupported_newtypes_fail_closed () =
+  let expect_go_error label needle source =
+    match Compile.compile_go_source ("<" ^ label ^ ">") source with
+    | Compile.GoSuccess _ -> failf "%s emitted unsupported Go artifacts" label
+    | Compile.GoFailure diagnostics ->
+      check bool label true
+        (List.exists (fun (d : Compile.diagnostic) ->
+           d.source = "go-emitter" && contains d.message needle) diagnostics)
+  in
+  expect_go_error "applied newtype base" "applied types" {|module AppliedNewtype exposing [Counts]
+import Tesl.Prelude exposing [Int, List]
+type Counts = (List Int)
+|};
+  expect_go_error "transitive newtype base" "not a direct scalar type" {|module TransitiveNewtype exposing [UserId, WrappedUserId]
+import Tesl.Prelude exposing [String]
+type UserId = String
+type WrappedUserId = UserId
+|}
+
 let test_string_bool_proof_consumers_with_go () =
   let emitted = match Compile.compile_go_source "<go-proof-scalars>" proof_scalar_source with
     | Compile.GoSuccess artifacts -> artifacts
@@ -678,9 +800,11 @@ let test_string_bool_proof_consumers_with_go () =
 
 let scalar_proof_corpus = [
   "example/learn/lesson00-hello-world.tesl";
+  "example/learn/lesson04-newtypes.tesl";
   "example/learn/lesson05-intro-to-proofs.tesl";
   "example/learn/lesson10-cross-parameter-proofs.tesl";
   "example/learn/lesson40-implicit-value-unwrapping.tesl";
+  "example/learn/lesson44-multi-param-proofs.tesl";
   "tests/multiparam_test.tesl";
 ]
 
@@ -731,6 +855,8 @@ let () =
   run "emit_go" [
     "emission", [
       test_case "artifact layout and helpers" `Quick test_artifact_layout;
+      test_case "named expectFail emission" `Quick test_named_expect_fail_emission;
+      test_case "named expectFail requires full application" `Quick test_named_expect_fail_requires_full_application;
       test_case "Racket remains default" `Quick test_racket_default_unchanged;
       test_case "Racket behavior oracle" `Slow test_racket_go_behavior_oracle;
       test_case "unsupported forms fail closed" `Quick test_unsupported_fails_closed;
@@ -743,6 +869,8 @@ let () =
       test_case "nested expressions receive frontend validation" `Quick test_nested_expressions_receive_frontend_validation;
       test_case "unreachable private functions fail closed" `Quick test_unreachable_private_function_fails_closed;
       test_case "String and Bool proof consumers" `Slow test_string_bool_proof_consumers_with_go;
+      test_case "scalar newtypes" `Slow test_scalar_newtypes_with_go;
+      test_case "unsupported newtypes fail closed" `Quick test_unsupported_newtypes_fail_closed;
       test_case "special package names are prefixed" `Quick test_special_package_names_are_prefixed;
       test_case "CLI backend flag emits tree" `Quick test_cli_backend_flag;
       test_case "CLI rejects empty output path" `Quick test_cli_rejects_empty_output_path;

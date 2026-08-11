@@ -84,6 +84,28 @@ test "negative boundary" {
 }
 |}
 
+let named_wrapper_source = {|module GoMutationBoundary exposing [Positive, checkPositive, requirePositive]
+import Tesl.Prelude exposing [Int]
+
+fact Positive (n: Int)
+
+check checkPositive(n: Int) -> n: Int ::: Positive n =
+  if n > 0 then
+    ok n ::: Positive n
+  else
+    fail 422 "not positive"
+
+fn requirePositive(n: Int) -> Int =
+  let positive = check checkPositive n
+  positive
+
+test "named wrapper failures kill boundary mutations" {
+  expect requirePositive 1 == 1
+  expectFail requirePositive 0
+  expectFail requirePositive -1
+}
+|}
+
 let with_source source f =
   let dir = Filename.temp_dir "tesl-go-mutation" "" in
   let path = Filename.concat dir "go-mutation-boundary.tesl" in
@@ -152,6 +174,14 @@ let test_negative_literal_mutates_as_signed_value () =
        | Mutate.MOInt "-1", Mutate.MOInt "0" -> true
        | _ -> false) report.Mutate.results)
 
+let test_named_wrapper_expect_fail_kills_all () =
+  let report = report named_wrapper_source in
+  check int "named wrapper mutant count" 4 report.Mutate.total;
+  check int "named wrapper killed" 4 report.Mutate.killed;
+  check int "named wrapper survived" 0 report.Mutate.survived;
+  check int "named wrapper invalid" 0 report.Mutate.invalid;
+  check int "named wrapper errors" 0 report.Mutate.errors
+
 let test_runner_failures_never_count_as_kills () =
   (match Compile.classify_go_test_run ~exit_code:2
            ~output:"TESL_GO_TESTS_STARTED\npanic: init failed\n" with
@@ -188,6 +218,7 @@ let () =
       test_case "red baseline aborts scoring" `Slow test_red_baseline_never_scores_mutants;
       test_case "huge integer threshold mutates exactly" `Slow test_huge_integer_literal_is_mutated_exactly;
       test_case "negative integer mutates as signed" `Slow test_negative_literal_mutates_as_signed_value;
+      test_case "named wrapper expectFail kills all" `Slow test_named_wrapper_expect_fail_kills_all;
       test_case "runner failures are not kills" `Quick test_runner_failures_never_count_as_kills;
       test_case "infrastructure tests are not skipped" `Quick test_infrastructure_tests_are_not_silently_skipped;
     ];
