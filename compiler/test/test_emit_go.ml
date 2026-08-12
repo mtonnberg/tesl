@@ -122,6 +122,7 @@ let test_artifact_layout () =
   let paths = List.map (fun (a : Emit_go.artifact) -> a.path) emitted in
   List.iter (fun path -> check bool ("contains " ^ path) true (List.mem path paths)) [
     "go.mod";
+    ".golangci.yml";
     "internal/teslmodgosmoke/module.go";
     "internal/teslmodgosmoke/module_test.go";
     "internal/teslrt/int.go";
@@ -187,11 +188,13 @@ let test_racket_default_unchanged () =
     failf "default Racket compile failed: %s"
       (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
 
-let test_racket_go_behavior_oracle () =
+(* The same Tesl source must pass its own `test` blocks on BOTH backends: the Go
+   side runs them as Go tests, this runs them under Racket. *)
+let racket_behavior_oracle label source () =
   if Sys.command "raco help >/dev/null 2>&1" <> 0 then
     Printf.printf "SKIP: raco not on PATH\n%!"
   else
-    match Compile.compile_source "<go-test>" source with
+    match Compile.compile_source label source with
     | Compile.Failure diagnostics ->
       failf "Racket oracle compile failed: %s"
         (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
@@ -208,6 +211,8 @@ let test_racket_go_behavior_oracle () =
         | Unix.WEXITED code -> failf "Racket oracle exited %d:\n%s" code output
         | Unix.WSIGNALED signal -> failf "Racket oracle signaled %d:\n%s" signal output
         | Unix.WSTOPPED signal -> failf "Racket oracle stopped %d:\n%s" signal output)
+
+let test_racket_go_behavior_oracle = racket_behavior_oracle "<go-test>" source
 
 let test_unsupported_fails_closed () =
   let unsupported = {|module Unsupported exposing []
@@ -255,17 +260,6 @@ test "Bool interpolation" { expect render False == "false" }
     check bool "Bool-only module has no runtime import" false (contains module_go "teslrt");
     check bool "Bool-only module omits runtime files" false
       (List.exists (fun (a : Emit_go.artifact) -> contains a.path "internal/teslrt") artifacts)
-
-let test_recursion_fails_closed () =
-  let recursive = {|module Recursive exposing [loop]
-import Tesl.Prelude exposing [Int]
-fn loop(n: Int) -> Int = loop n
-|} in
-  match Compile.compile_go_source "<go-recursive>" recursive with
-  | Compile.GoSuccess _ -> fail "recursive function emitted without TCO"
-  | Compile.GoFailure diagnostics ->
-    check bool "recursion diagnostic" true
-      (List.exists (fun (d : Compile.diagnostic) -> contains d.message "no tail-call optimization") diagnostics)
 
 let test_unproven_call_never_reaches_emitter () =
   let invalid = {|module InvalidProof exposing [Positive, requiresPositive, bypass]
@@ -652,6 +646,133 @@ let run_optional_go_gates root =
   if command_available "govulncheck" then ignore (run_command root "govulncheck ./...");
   if command_available "nilaway" then ignore (run_command root "nilaway ./...")
 
+let recursion_source = {|module GoRecursion exposing [factorial, isEven, isOdd, sumTo, sumToLet, drain, countdown, Small, checkSmall]
+import Tesl.Prelude exposing [Bool(..), Int]
+
+fn factorial(n: Int) -> Int =
+  if n <= 1 then
+    1
+  else
+    n * factorial (n - 1)
+
+fn isEven(n: Int) -> Bool =
+  if n <= 0 then
+    True
+  else
+    isOdd (n - 1)
+
+fn isOdd(n: Int) -> Bool =
+  if n <= 0 then
+    False
+  else
+    isEven (n - 1)
+
+fn sumTo(n: Int, acc: Int) -> Int =
+  if n <= 0 then
+    acc
+  else
+    sumTo (n - 1) (acc + n)
+
+fn sumToLet(n: Int, acc: Int) -> Int =
+  if n <= 0 then
+    acc
+  else
+    let next = acc + n
+    sumToLet (n - 1) next
+
+fn drain(n: Int, k: Int) -> Int =
+  if n <= 0 then
+    k
+  else
+    drain (n - 1) k
+
+fact Small (n: Int)
+
+check checkSmall(n: Int) -> n: Int ::: Small n =
+  if n < 10 then
+    ok n ::: Small n
+  else
+    fail 400 "too big"
+
+fn countdown(n: Int) -> Int =
+  if n <= 0 then
+    0
+  else
+    countdown (n - 1)
+
+test "recursion" {
+  expect factorial 5 == 120
+  expect factorial 1 == 1
+  expect isEven 10 == True
+  expect isOdd 10 == False
+  expect isEven 7 == False
+  expect sumTo 100 0 == 5050
+  expect sumToLet 100 0 == 5050
+  expect drain 1000 42 == 42
+  expect countdown 100000 == 0
+  expect check checkSmall 3 == 3
+  expectFail check checkSmall 30
+}
+|}
+
+(* Racket has TCO and Go does not, and a Go stack overflow is FATAL (unrecoverable
+   by `recover`), so a self tail call must become a loop rather than a stack frame —
+   otherwise a program that merely runs on Racket kills the Go process. *)
+let test_recursion_with_go () =
+  let emitted = match Compile.compile_go_source "<go-recursion>" recursion_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "recursion compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgorecursion/module.go" emitted in
+  check bool "self tail call becomes a labelled loop" true
+    (contains module_go "func Tesl_sumTo(tesl_n teslrt.Int, tesl_acc teslrt.Int) teslrt.Int {\nteslLoop:\n\tfor {");
+  check bool "each argument lands in its own temporary" true
+    (contains module_go "tesl_n, tesl_acc = teslArg3_0, teslArg3_1");
+  check bool "a pass-through argument is never self-assigned" false
+    (contains module_go "tesl_k = tesl_k");
+  check bool "self tail call after a let still loops" true
+    (contains module_go "tesl_next := teslrt.Add(tesl_acc, tesl_n)"
+     && contains module_go "continue teslLoop");
+  check bool "non-tail recursion stays plain Go recursion" true
+    (contains module_go "teslrt.Mul(tesl_n, Tesl_factorial(teslrt.Sub(tesl_n, teslrt.FromInt64(1))))");
+  check bool "a non-looping function carries no unused label" true
+    (contains module_go "func Tesl_factorial(tesl_n teslrt.Int) teslrt.Int {\n//line");
+  check bool "mutual recursion emits two plain functions" true
+    (contains module_go "return Tesl_isOdd(teslrt.Sub(tesl_n, teslrt.FromInt64(1)))"
+     && contains module_go "return Tesl_isEven(teslrt.Sub(tesl_n, teslrt.FromInt64(1)))");
+  check bool "a recursive check keeps its explicit result" true
+    (contains module_go "teslrt.Check[teslrt.Int]");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then
+    let root = Filename.temp_dir "tesl-go-recursion" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted recursion source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_optional_go_gates root)
+
+(* The loop rewrite only fires when the called name is not shadowed by a local.  That
+   guard is containment rather than a reachable case: the frontend rejects shadowing
+   outright, which this pins so the guard is not deleted as dead code. *)
+let test_self_name_cannot_be_shadowed () =
+  let shadowing = {|module ShadowSelf exposing [pick]
+import Tesl.Prelude exposing [Int]
+fn pick(n: Int) -> Int =
+  let pick = n + 1
+  pick
+|} in
+  match Compile.compile_go_source "<go-shadow-self>" shadowing with
+  | Compile.GoSuccess _ -> fail "a let shadowing the enclosing function compiled"
+  | Compile.GoFailure diagnostics ->
+    check bool "the frontend rejects shadowing the enclosing function name" true
+      (List.exists (fun (d : Compile.diagnostic) -> contains d.message "shadows") diagnostics)
+
 let proof_scalar_source = {|module GoProofScalars exposing [NonEmpty, Enabled, checkNonEmpty, checkEnabled, label, invert]
 import Tesl.Prelude exposing [Bool(..), String]
 
@@ -780,6 +901,312 @@ type UserId = String
 type WrappedUserId = UserId
 |}
 
+let record_source = {|module GoRecords exposing [Slug, Point, Line, makePoint, moveTo, retarget, sameSpot, slugOf, describeX]
+import Tesl.Prelude exposing [Bool(..), Int, String]
+
+type Slug = String
+
+record Point {
+  x: Int
+  y: Int
+}
+
+record Line {
+  from: Point
+  to: Point
+  label: Slug
+}
+
+fn makePoint(x: Int, y: Int) -> Point = Point { x: x, y: y }
+
+fn moveTo(p: Point, x: Int) -> Point = { p | x = x }
+
+fn retarget(l: Line, x: Int) -> Line =
+  let target = l.to
+  { l | to = { target | x = x } }
+
+fn sameSpot(left: Point, right: Point) -> Bool = left == right
+
+fn slugOf(l: Line) -> String = l.label.value
+
+fn describeX(p: Point) -> String = "x=${p.x}"
+
+test "records are nominal structs" {
+  let a = makePoint 1 2
+  let b = makePoint 1 2
+  expect sameSpot a b == True
+  expect sameSpot a (makePoint 3 2) == False
+  expect a == b
+  expect (moveTo a 9).x == 9
+  expect (moveTo a 9).y == 2
+  expect describeX a == "x=1"
+  let chained = { b | y = 7 }
+  let twice = { chained | x = 4 }
+  expect twice.x == 4
+  expect twice.y == 7
+  expect b.y == 2
+  let line = Line { from: a, to: b, label: Slug "edge" }
+  let moved = retarget line 8
+  expect moved.to.x == 8
+  expect moved.to.y == 2
+  expect moved.from.x == 1
+  expect slugOf moved == "edge"
+  expect moved != line
+}
+|}
+
+let test_records_with_go () =
+  let emitted = match Compile.compile_go_source "<go-records>" record_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "record compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgorecords/module.go" emitted in
+  check bool "record is a nominal struct with gofmt-aligned fields" true
+    (contains module_go "type Tesl_Point struct {\n\tTesl_x teslrt.Int\n\tTesl_y teslrt.Int\n}");
+  check bool "record fields may be records and newtypes" true
+    (contains module_go
+       "type Tesl_Line struct {\n\tTesl_from  Tesl_Point\n\tTesl_to    Tesl_Point\n\tTesl_label Tesl_Slug\n}");
+  check bool "record literal names every field" true
+    (contains module_go "Tesl_Point{Tesl_x: tesl_x, Tesl_y: tesl_y}");
+  check bool "record update copies the preserved fields" true
+    (contains module_go "Tesl_Point{Tesl_x: tesl_x, Tesl_y: (tesl_p).Tesl_y}");
+  check bool "record equality is field-wise, never Go ==" true
+    (contains module_go
+       "(teslrt.Equal((tesl_left).Tesl_x, (tesl_right).Tesl_x) && teslrt.Equal((tesl_left).Tesl_y, (tesl_right).Tesl_y))");
+  check bool "record never compares with Go ==" false (contains module_go "tesl_left == tesl_right");
+  check bool "record field read is direct" true (contains module_go "(tesl_l).Tesl_label");
+  let test_go = artifact "internal/teslmodgorecords/module_test.go" emitted in
+  check bool "chained update reads the previous copy" true
+    (contains test_go "Tesl_Point{Tesl_x: teslrt.FromInt64(4), Tesl_y: (tesl_chained).Tesl_y}");
+  check bool "no double negation in emitted conditions" false (contains test_go "!(!(");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then
+    let root = Filename.temp_dir "tesl-go-records" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted record source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_optional_go_gates root)
+
+let test_unsupported_records_fail_closed () =
+  let expect_go_error label needle source =
+    match Compile.compile_go_source ("<" ^ label ^ ">") source with
+    | Compile.GoSuccess _ -> failf "%s emitted unsupported Go artifacts" label
+    | Compile.GoFailure diagnostics ->
+      check bool label true
+        (List.exists (fun (d : Compile.diagnostic) ->
+           d.source = "go-emitter" && contains d.message needle) diagnostics)
+  in
+  (* A recursive record is an infinitely sized Go struct. *)
+  expect_go_error "recursive record" "recursive record" {|module RecursiveRecord exposing [Node, valueOf]
+import Tesl.Prelude exposing [Int]
+record Node {
+  value: Int
+  next: Node
+}
+fn valueOf(n: Node) -> Int = n.value
+|};
+  expect_go_error "mutually recursive records" "recursive record" {|module MutualRecord exposing [Left, Right, valueOf]
+import Tesl.Prelude exposing [Int]
+record Left {
+  value: Int
+  right: Right
+}
+record Right {
+  left: Left
+}
+fn valueOf(l: Left) -> Int = l.value
+|};
+  expect_go_error "record invariant" "record invariants" {|module InvariantRecord exposing [Span, width]
+import Tesl.Prelude exposing [Int]
+fact Ordered (lo: Int, hi: Int)
+record Span {
+  lo: Int
+  hi: Int
+} ::: Ordered lo hi
+fn width(s: Span) -> Int = s.hi - s.lo
+|};
+  expect_go_error "proof-carrying record field" "proof-carrying record field" {|module ProofFieldRecord exposing [Positive, Box, valueOf]
+import Tesl.Prelude exposing [Int]
+fact Positive (n: Int)
+record Box {
+  value: Int ::: Positive value
+}
+fn valueOf(b: Box) -> Int = b.value
+|};
+  expect_go_error "unsupported record field type" "applied types" {|module ListFieldRecord exposing [Bag, sizeOf]
+import Tesl.Prelude exposing [Int, List]
+record Bag {
+  items: List Int
+}
+fn sizeOf(b: Bag) -> Int = 0
+|}
+
+let test_missing_record_field_never_reaches_emitter () =
+  let invalid = {|module MissingField exposing [Point, make]
+import Tesl.Prelude exposing [Int]
+record Point {
+  x: Int
+  y: Int
+}
+fn make(x: Int) -> Point = Point { x: x }
+|} in
+  match Compile.compile_go_source "<go-missing-record-field>" invalid with
+  | Compile.GoSuccess _ -> fail "partial record literal emitted Go artifacts"
+  | Compile.GoFailure diagnostics ->
+    check bool "partial record literal rejected before emission" true
+      (List.exists (fun (d : Compile.diagnostic) ->
+         contains d.message "missing required field") diagnostics)
+
+let adt_source = {|module GoAdts exposing [Status, describe, isOpen, classify, sameStatus, priority]
+import Tesl.Prelude exposing [Bool(..), Int, String]
+
+type Status
+  = Open
+  | Closed
+  | Pending (reason: String) (attempts: Int)
+
+fn describe(s: Status) -> String =
+  case s of
+    Open -> "open"
+    Closed -> "closed"
+    Pending reason attempts -> "pending ${reason} after ${attempts}"
+
+fn isOpen(s: Status) -> Bool =
+  case s of
+    Open -> True
+    _ -> False
+
+fn classify(s: Status) -> String =
+  case s of
+    Pending reason attempts where attempts > 3 -> "stuck ${reason}"
+    Pending reason _ -> "waiting ${reason}"
+    other -> describe other
+
+fn sameStatus(left: Status, right: Status) -> Bool = left == right
+
+fn priority(s: Status) -> Int =
+  let base = case s of
+    Open -> 1
+    Closed -> 0
+    Pending _ attempts -> attempts
+  base + 1
+
+test "ADTs and case" {
+  expect describe Open == "open"
+  expect describe Closed == "closed"
+  expect describe (Pending "retry" 2) == "pending retry after 2"
+  expect isOpen Open == True
+  expect isOpen Closed == False
+  expect classify (Pending "net" 5) == "stuck net"
+  expect classify (Pending "net" 1) == "waiting net"
+  expect classify Closed == "closed"
+  expect sameStatus Open Open == True
+  expect sameStatus Open Closed == False
+  expect sameStatus (Pending "a" 1) (Pending "a" 1) == True
+  expect sameStatus (Pending "a" 1) (Pending "b" 1) == False
+  expect priority (Pending "x" 4) == 5
+  expect priority Open == 2
+}
+|}
+
+let test_adts_with_go () =
+  let emitted = match Compile.compile_go_source "<go-adts>" adt_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "ADT compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgoadts/module.go" emitted in
+  check bool "ADT tag is an enum type" true
+    (contains module_go "type Tesl_StatusTag int"
+     && contains module_go "Tesl_StatusTag_Open Tesl_StatusTag = iota");
+  check bool "ADT is one flat value struct" true
+    (contains module_go
+       "type Tesl_Status struct {\n\tteslTag               Tesl_StatusTag\n\tTesl_Pending_reason   string\n\tTesl_Pending_attempts teslrt.Int\n}");
+  let adt_test_go = artifact "internal/teslmodgoadts/module_test.go" emitted in
+  check bool "constructor names the tag" true
+    (contains adt_test_go "Tesl_Status{teslTag: Tesl_StatusTag_Pending, Tesl_Pending_reason:");
+  check bool "guard-free case emits a tag switch" true
+    (contains module_go "switch teslScrut1.teslTag {\n\t\tcase Tesl_StatusTag_Open:");
+  check bool "unmatched tag is contained, not silently accepted" true
+    (contains module_go "panic(\"unreachable: checker guarantees case exhaustiveness\")");
+  check bool "catch-all names the tags it covers, so `exhaustive` can verify it" true
+    (contains module_go "case Tesl_StatusTag_Closed, Tesl_StatusTag_Pending:");
+  check bool "TeslEqual lists the payload-free tags too" true
+    (contains module_go "case Tesl_StatusTag_Open, Tesl_StatusTag_Closed:\n\t\treturn true");
+  let lint_config = artifact ".golangci.yml" emitted in
+  check bool "emitted project enables the exhaustive linter" true
+    (contains lint_config "- exhaustive"
+     && contains lint_config "default-signifies-exhaustive: false");
+  check bool "guarded case falls through in order" true
+    (contains module_go "if teslScrut1.teslTag == Tesl_StatusTag_Pending {");
+  check bool "payload binds positionally" true
+    (contains module_go "tesl_attempts := teslScrut1.Tesl_Pending_attempts");
+  check bool "ADT equality routes through the generated method" true
+    (contains module_go "(tesl_left).TeslEqual(tesl_right)"
+     && contains module_go "func (teslLeft Tesl_Status) TeslEqual(teslRight Tesl_Status) bool");
+  check bool "ADT equality never uses Go == on the struct" false
+    (contains module_go "tesl_left == tesl_right");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then
+    let root = Filename.temp_dir "tesl-go-adts" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted ADT source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_optional_go_gates root)
+
+let test_unsupported_adts_fail_closed () =
+  let expect_go_error label needle source =
+    match Compile.compile_go_source ("<" ^ label ^ ">") source with
+    | Compile.GoSuccess _ -> failf "%s emitted unsupported Go artifacts" label
+    | Compile.GoFailure diagnostics ->
+      check bool label true
+        (List.exists (fun (d : Compile.diagnostic) ->
+           d.source = "go-emitter" && contains d.message needle) diagnostics)
+  in
+  expect_go_error "generic ADT" "generic type" {|module GenericAdt exposing [Boxed, unbox]
+import Tesl.Prelude exposing [Int]
+type Boxed a
+  = Box (value: a)
+fn unbox(b: Boxed Int) -> Int = 0
+|};
+  expect_go_error "recursive ADT" "recursive type" {|module RecursiveAdt exposing [Chain, depth]
+import Tesl.Prelude exposing [Int]
+type Chain
+  = Stop
+  | Link (next: Chain)
+fn depth(c: Chain) -> Int = 0
+|};
+  expect_go_error "case over a non-ADT" "case` over a module ADT" {|module CaseOverInt exposing [classify]
+import Tesl.Prelude exposing [Int, String]
+fn classify(n: Int) -> String =
+  case n of
+    0 -> "zero"
+    _ -> "other"
+|};
+  expect_go_error "proof-carrying constructor field" "proof-carrying constructor field"
+    {|module ProofVariant exposing [Positive, Wrapped, unwrap]
+import Tesl.Prelude exposing [Int]
+fact Positive (n: Int)
+type Wrapped
+  = Wrap (value: Int ::: Positive value)
+fn unwrap(w: Wrapped) -> Int =
+  case w of
+    Wrap value -> value
+|}
+
 let test_string_bool_proof_consumers_with_go () =
   let emitted = match Compile.compile_go_source "<go-proof-scalars>" proof_scalar_source with
     | Compile.GoSuccess artifacts -> artifacts
@@ -798,8 +1225,9 @@ let test_string_bool_proof_consumers_with_go () =
       write_artifacts root emitted;
       ignore (run_command root "go test -count=1 ./..."))
 
-let scalar_proof_corpus = [
+let go_corpus = [
   "example/learn/lesson00-hello-world.tesl";
+  "example/learn/lesson03-records.tesl";
   "example/learn/lesson04-newtypes.tesl";
   "example/learn/lesson05-intro-to-proofs.tesl";
   "example/learn/lesson10-cross-parameter-proofs.tesl";
@@ -808,7 +1236,7 @@ let scalar_proof_corpus = [
   "tests/multiparam_test.tesl";
 ]
 
-let test_scalar_proof_corpus_with_go () =
+let test_go_corpus_with_go () =
   if Sys.command "go version >/dev/null 2>&1" <> 0 then
     Printf.printf "SKIP: Go not on PATH (CI/dev shell runs this case with Go)\n%!"
   else
@@ -829,7 +1257,7 @@ let test_scalar_proof_corpus_with_go () =
         ignore (run_command root "go vet ./...");
         ignore (run_command root "go test -race -count=1 ./...");
         ignore (run_command root "CGO_ENABLED=0 go build ./...");
-        run_optional_go_gates root)) scalar_proof_corpus
+        run_optional_go_gates root)) go_corpus
 
 let test_generated_module_with_go () =
   if Sys.command "go version >/dev/null 2>&1" <> 0 then
@@ -862,7 +1290,9 @@ let () =
       test_case "unsupported forms fail closed" `Quick test_unsupported_fails_closed;
       test_case "strings cannot trigger imports" `Quick test_string_cannot_trigger_runtime_import;
       test_case "Bool interpolation imports strconv only" `Quick test_bool_interpolation_imports_only_strconv;
-      test_case "recursion fails closed" `Quick test_recursion_fails_closed;
+      test_case "recursion" `Slow test_recursion_with_go;
+      test_case "recursion behaves the same on Racket" `Slow (racket_behavior_oracle "<go-recursion>" recursion_source);
+      test_case "self name cannot be shadowed" `Quick test_self_name_cannot_be_shadowed;
       test_case "unproven calls fail before emission" `Quick test_unproven_call_never_reaches_emitter;
       test_case "unsupported interpolation fails closed" `Quick test_unsupported_interpolation_fails_closed;
       test_case "cross-subject mismatch fails before emission" `Quick test_cross_subject_mismatch_never_reaches_emitter;
@@ -874,7 +1304,14 @@ let () =
       test_case "special package names are prefixed" `Quick test_special_package_names_are_prefixed;
       test_case "CLI backend flag emits tree" `Quick test_cli_backend_flag;
       test_case "CLI rejects empty output path" `Quick test_cli_rejects_empty_output_path;
-      test_case "scalar proof corpus runs with Go" `Slow test_scalar_proof_corpus_with_go;
+      test_case "records" `Slow test_records_with_go;
+      test_case "records behave the same on Racket" `Slow (racket_behavior_oracle "<go-records>" record_source);
+      test_case "ADTs and case" `Slow test_adts_with_go;
+      test_case "ADTs behave the same on Racket" `Slow (racket_behavior_oracle "<go-adts>" adt_source);
+      test_case "unsupported ADTs fail closed" `Quick test_unsupported_adts_fail_closed;
+      test_case "unsupported records fail closed" `Quick test_unsupported_records_fail_closed;
+      test_case "partial record literal fails before emission" `Quick test_missing_record_field_never_reaches_emitter;
+      test_case "Go corpus runs with Go" `Slow test_go_corpus_with_go;
       test_case "fresh module passes Go gates" `Slow test_generated_module_with_go;
     ];
   ]
