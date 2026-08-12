@@ -129,30 +129,30 @@ let test_artifact_layout () =
   ];
   let module_go = artifact "internal/teslmodgosmoke/module.go" emitted in
   check bool "Int arithmetic uses runtime helper" true
-    (contains module_go "teslrt.Add(tesl_left, tesl_right)");
+    (contains module_go "teslrt.Add(left, right)");
   check bool "huge Int crosses boundary exactly" true
     (contains module_go
        "teslrt.Add(teslrt.MustParseDecimal(\"9223372036854775807\"), teslrt.FromInt64(1))");
   check bool "Tesl source mapping is 1-based" true
     (contains module_go "//line <go-test>:4");
   check bool "check result is explicit" true (contains module_go "teslrt.Check[teslrt.Int]");
-  check bool "check accept emitted" true (contains module_go "teslrt.Accept(tesl_n)");
+  check bool "check accept emitted" true (contains module_go "teslrt.Accept(n)");
   check bool "check reject emitted" true (contains module_go "teslrt.Reject[teslrt.Int](422");
-  check bool "Int interpolation is exact" true (contains module_go "tesl_count.String()");
+  check bool "Int interpolation is exact" true (contains module_go "count.String()");
   check bool "Bool interpolation uses Tesl spelling" true
-    (contains module_go "strconv.FormatBool(tesl_ready)");
+    (contains module_go "strconv.FormatBool(ready)");
   check bool "computed interpolation emits exact Int arithmetic" true
-    (contains module_go "teslrt.Add(tesl_count, teslrt.FromInt64(1)).String()");
+    (contains module_go "teslrt.Add(count, teslrt.FromInt64(1)).String()");
   check bool "computed interpolation emits Bool expression" true
-    (contains module_go "strconv.FormatBool(!(tesl_ready))");
+    (contains module_go "strconv.FormatBool(!(ready))");
   check bool "expression-position if stays lazy" true
-    (contains module_go "teslrt.If(tesl_useLeft, func() teslrt.Int");
+    (contains module_go "teslrt.If(useLeft, func() teslrt.Int");
   check bool "expression-position let keeps lexical scope" true
     (contains module_go "return (func() teslrt.Int {\n"
-     && contains module_go "tesl_branchValue := tesl_left"
-     && contains module_go "_ = tesl_branchValue");
+     && contains module_go "branchValue := left"
+     && contains module_go "_ = branchValue");
   check bool "proof-consuming parameter erases to scalar" true
-    (contains module_go "func Tesl_doublePositive(tesl_n teslrt.Int) teslrt.Int");
+    (contains module_go "func DoublePositive(n teslrt.Int) teslrt.Int");
   check bool "release has no debugger import" false (contains module_go "teslrt/debug");
   let go_mod = artifact "go.mod" emitted in
   check bool "no third-party requirement" false (contains go_mod "require")
@@ -163,7 +163,7 @@ let test_named_expect_fail_emission () =
   let test_go = artifact "internal/teslmodgosmoke/module_test.go" emitted in
   check bool "plain wrapper uses test-only recovery" true
     (contains test_go "teslExpectFailure(teslT, func()"
-     && contains test_go "_ = Tesl_requirePositive(tesl_zero)");
+     && contains test_go "_ = RequirePositive(zero)");
   check bool "recovery helper stays out of release module" false
     (contains module_go "teslExpectFailure")
 
@@ -639,12 +639,23 @@ let run_command root command =
 let command_available command =
   Sys.command ("command -v " ^ Filename.quote command ^ " >/dev/null 2>&1") = 0
 
-let run_optional_go_gates root =
-  if command_available "staticcheck" then ignore (run_command root "staticcheck ./...");
-  if command_available "golangci-lint" then ignore (run_command root "golangci-lint run ./...");
-  if command_available "gosec" then ignore (run_command root "gosec -quiet ./...");
-  if command_available "govulncheck" then ignore (run_command root "govulncheck ./...");
-  if command_available "nilaway" then ignore (run_command root "nilaway ./...")
+(* The emitted-code gates are MANDATORY, matching ci.sh phase 2a for the
+   hand-written runtime.  Skipping an absent linter here was a fail-open
+   asymmetry: a lint finding on emitted code is an emitter bug by contract, so a
+   missing linter has to be a failure rather than a silent pass. *)
+let required_go_gates = [
+  "staticcheck", "staticcheck ./...";
+  "golangci-lint", "golangci-lint run ./...";
+  "gosec", "gosec -quiet ./...";
+  "govulncheck", "govulncheck ./...";
+  "nilaway", "nilaway ./...";
+]
+
+let run_go_gates root =
+  List.iter (fun (tool, command) ->
+    if not (command_available tool) then
+      failf "required Go gate tool not found: %s (ci.sh phase 2a requires it too)" tool;
+    ignore (run_command root command)) required_go_gates
 
 let recursion_source = {|module GoRecursion exposing [factorial, isEven, isOdd, sumTo, sumToLet, drain, countdown, Small, checkSmall]
 import Tesl.Prelude exposing [Bool(..), Int]
@@ -727,21 +738,21 @@ let test_recursion_with_go () =
   in
   let module_go = artifact "internal/teslmodgorecursion/module.go" emitted in
   check bool "self tail call becomes a labelled loop" true
-    (contains module_go "func Tesl_sumTo(tesl_n teslrt.Int, tesl_acc teslrt.Int) teslrt.Int {\nteslLoop:\n\tfor {");
+    (contains module_go "func SumTo(n teslrt.Int, acc teslrt.Int) teslrt.Int {\nteslLoop:\n\tfor {");
   check bool "each argument lands in its own temporary" true
-    (contains module_go "tesl_n, tesl_acc = teslArg3_0, teslArg3_1");
+    (contains module_go "n, acc = teslArg3_0, teslArg3_1");
   check bool "a pass-through argument is never self-assigned" false
-    (contains module_go "tesl_k = tesl_k");
+    (contains module_go "k = k");
   check bool "self tail call after a let still loops" true
-    (contains module_go "tesl_next := teslrt.Add(tesl_acc, tesl_n)"
+    (contains module_go "next := teslrt.Add(acc, n)"
      && contains module_go "continue teslLoop");
   check bool "non-tail recursion stays plain Go recursion" true
-    (contains module_go "teslrt.Mul(tesl_n, Tesl_factorial(teslrt.Sub(tesl_n, teslrt.FromInt64(1))))");
+    (contains module_go "teslrt.Mul(n, Factorial(teslrt.Sub(n, teslrt.FromInt64(1))))");
   check bool "a non-looping function carries no unused label" true
-    (contains module_go "func Tesl_factorial(tesl_n teslrt.Int) teslrt.Int {\n//line");
+    (contains module_go "func Factorial(n teslrt.Int) teslrt.Int {\n//line");
   check bool "mutual recursion emits two plain functions" true
-    (contains module_go "return Tesl_isOdd(teslrt.Sub(tesl_n, teslrt.FromInt64(1)))"
-     && contains module_go "return Tesl_isEven(teslrt.Sub(tesl_n, teslrt.FromInt64(1)))");
+    (contains module_go "return IsOdd(teslrt.Sub(n, teslrt.FromInt64(1)))"
+     && contains module_go "return IsEven(teslrt.Sub(n, teslrt.FromInt64(1)))");
   check bool "a recursive check keeps its explicit result" true
     (contains module_go "teslrt.Check[teslrt.Int]");
   if Sys.command "go version >/dev/null 2>&1" = 0 then
@@ -755,7 +766,7 @@ let test_recursion_with_go () =
       ignore (run_command root "go test -count=1 ./...");
       ignore (run_command root "go vet ./...");
       ignore (run_command root "go test -race -count=1 ./...");
-      run_optional_go_gates root)
+      run_go_gates root)
 
 (* The loop rewrite only fires when the called name is not shadowed by a local.  That
    guard is containment rather than a reachable case: the frontend rejects shadowing
@@ -862,19 +873,19 @@ let test_scalar_newtypes_with_go () =
   in
   let module_go = artifact "internal/teslmodgonewtypes/module.go" emitted in
   check bool "Int newtype is nominal" true
-    (contains module_go "type Tesl_Count struct {\n\tteslValue teslrt.Int\n}");
+    (contains module_go "type Count struct {\n\tteslValue teslrt.Int\n}");
   check bool "String newtype is nominal" true
-    (contains module_go "type Tesl_Label struct {\n\tteslValue string\n}");
+    (contains module_go "type Label struct {\n\tteslValue string\n}");
   check bool "Bool newtype is nominal" true
-    (contains module_go "type Tesl_EnabledFlag struct {\n\tteslValue bool\n}");
+    (contains module_go "type EnabledFlag struct {\n\tteslValue bool\n}");
   check bool "Unit newtype is nominal" true
-    (contains module_go "type Tesl_Marker struct {\n\tteslValue struct{}\n}");
+    (contains module_go "type Marker struct {\n\tteslValue struct{}\n}");
   check bool "newtype Int equality uses runtime helper" true
-    (contains module_go "teslrt.Equal((tesl_left).teslValue, (tesl_right).teslValue)");
+    (contains module_go "teslrt.Equal(left.teslValue, right.teslValue)");
   check bool "newtype Int ordering uses runtime helper" true
-    (contains module_go "teslrt.Compare((tesl_left).teslValue, (tesl_right).teslValue)");
+    (contains module_go "teslrt.Compare(left.teslValue, right.teslValue)");
   check bool "newtype checks keep explicit result" true
-    (contains module_go "teslrt.Check[Tesl_Count]");
+    (contains module_go "teslrt.Check[Count]");
   if Sys.command "go version >/dev/null 2>&1" = 0 then
     let root = Filename.temp_dir "tesl-go-newtypes" "" in
     Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
@@ -964,22 +975,22 @@ let test_records_with_go () =
   in
   let module_go = artifact "internal/teslmodgorecords/module.go" emitted in
   check bool "record is a nominal struct with gofmt-aligned fields" true
-    (contains module_go "type Tesl_Point struct {\n\tTesl_x teslrt.Int\n\tTesl_y teslrt.Int\n}");
+    (contains module_go "type Point struct {\n\tX teslrt.Int\n\tY teslrt.Int\n}");
   check bool "record fields may be records and newtypes" true
     (contains module_go
-       "type Tesl_Line struct {\n\tTesl_from  Tesl_Point\n\tTesl_to    Tesl_Point\n\tTesl_label Tesl_Slug\n}");
+       "type Line struct {\n\tFrom  Point\n\tTo    Point\n\tLabel Slug\n}");
   check bool "record literal names every field" true
-    (contains module_go "Tesl_Point{Tesl_x: tesl_x, Tesl_y: tesl_y}");
+    (contains module_go "Point{X: x, Y: y}");
   check bool "record update copies the preserved fields" true
-    (contains module_go "Tesl_Point{Tesl_x: tesl_x, Tesl_y: (tesl_p).Tesl_y}");
+    (contains module_go "Point{X: x, Y: p.Y}");
   check bool "record equality is field-wise, never Go ==" true
     (contains module_go
-       "(teslrt.Equal((tesl_left).Tesl_x, (tesl_right).Tesl_x) && teslrt.Equal((tesl_left).Tesl_y, (tesl_right).Tesl_y))");
-  check bool "record never compares with Go ==" false (contains module_go "tesl_left == tesl_right");
-  check bool "record field read is direct" true (contains module_go "(tesl_l).Tesl_label");
+       "(teslrt.Equal(left.X, right.X) && teslrt.Equal(left.Y, right.Y))");
+  check bool "record never compares with Go ==" false (contains module_go "left == right");
+  check bool "record field read is direct" true (contains module_go "l.Label");
   let test_go = artifact "internal/teslmodgorecords/module_test.go" emitted in
   check bool "chained update reads the previous copy" true
-    (contains test_go "Tesl_Point{Tesl_x: teslrt.FromInt64(4), Tesl_y: (tesl_chained).Tesl_y}");
+    (contains test_go "Point{X: teslrt.FromInt64(4), Y: chained.Y}");
   check bool "no double negation in emitted conditions" false (contains test_go "!(!(");
   if Sys.command "go version >/dev/null 2>&1" = 0 then
     let root = Filename.temp_dir "tesl-go-records" "" in
@@ -992,7 +1003,7 @@ let test_records_with_go () =
       ignore (run_command root "go test -count=1 ./...");
       ignore (run_command root "go vet ./...");
       ignore (run_command root "go test -race -count=1 ./...");
-      run_optional_go_gates root)
+      run_go_gates root)
 
 let test_unsupported_records_fail_closed () =
   let expect_go_error label needle source =
@@ -1125,35 +1136,35 @@ let test_adts_with_go () =
   in
   let module_go = artifact "internal/teslmodgoadts/module.go" emitted in
   check bool "ADT tag is an enum type" true
-    (contains module_go "type Tesl_StatusTag int"
-     && contains module_go "Tesl_StatusTag_Open Tesl_StatusTag = iota");
+    (contains module_go "type StatusTag int"
+     && contains module_go "StatusOpen StatusTag = iota");
   check bool "ADT is one flat value struct" true
     (contains module_go
-       "type Tesl_Status struct {\n\tteslTag               Tesl_StatusTag\n\tTesl_Pending_reason   string\n\tTesl_Pending_attempts teslrt.Int\n}");
+       "type Status struct {\n\tteslTag         StatusTag\n\tPendingReason   string\n\tPendingAttempts teslrt.Int\n}");
   let adt_test_go = artifact "internal/teslmodgoadts/module_test.go" emitted in
   check bool "constructor names the tag" true
-    (contains adt_test_go "Tesl_Status{teslTag: Tesl_StatusTag_Pending, Tesl_Pending_reason:");
+    (contains adt_test_go "Status{teslTag: StatusPending, PendingReason:");
   check bool "guard-free case emits a tag switch" true
-    (contains module_go "switch teslScrut1.teslTag {\n\t\tcase Tesl_StatusTag_Open:");
+    (contains module_go "switch teslScrut1.teslTag {\n\t\tcase StatusOpen:");
   check bool "unmatched tag is contained, not silently accepted" true
     (contains module_go "panic(\"unreachable: checker guarantees case exhaustiveness\")");
   check bool "catch-all names the tags it covers, so `exhaustive` can verify it" true
-    (contains module_go "case Tesl_StatusTag_Closed, Tesl_StatusTag_Pending:");
+    (contains module_go "case StatusClosed, StatusPending:");
   check bool "TeslEqual lists the payload-free tags too" true
-    (contains module_go "case Tesl_StatusTag_Open, Tesl_StatusTag_Closed:\n\t\treturn true");
+    (contains module_go "case StatusOpen, StatusClosed:\n\t\treturn true");
   let lint_config = artifact ".golangci.yml" emitted in
   check bool "emitted project enables the exhaustive linter" true
     (contains lint_config "- exhaustive"
      && contains lint_config "default-signifies-exhaustive: false");
   check bool "guarded case falls through in order" true
-    (contains module_go "if teslScrut1.teslTag == Tesl_StatusTag_Pending {");
+    (contains module_go "if teslScrut1.teslTag == StatusPending {");
   check bool "payload binds positionally" true
-    (contains module_go "tesl_attempts := teslScrut1.Tesl_Pending_attempts");
+    (contains module_go "attempts := teslScrut1.PendingAttempts");
   check bool "ADT equality routes through the generated method" true
-    (contains module_go "(tesl_left).TeslEqual(tesl_right)"
-     && contains module_go "func (teslLeft Tesl_Status) TeslEqual(teslRight Tesl_Status) bool");
+    (contains module_go "left.TeslEqual(right)"
+     && contains module_go "func (teslLeft Status) TeslEqual(teslRight Status) bool");
   check bool "ADT equality never uses Go == on the struct" false
-    (contains module_go "tesl_left == tesl_right");
+    (contains module_go "left == right");
   if Sys.command "go version >/dev/null 2>&1" = 0 then
     let root = Filename.temp_dir "tesl-go-adts" "" in
     Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
@@ -1165,7 +1176,7 @@ let test_adts_with_go () =
       ignore (run_command root "go test -count=1 ./...");
       ignore (run_command root "go vet ./...");
       ignore (run_command root "go test -race -count=1 ./...");
-      run_optional_go_gates root)
+      run_go_gates root)
 
 let test_unsupported_adts_fail_closed () =
   let expect_go_error label needle source =
@@ -1216,9 +1227,9 @@ let test_string_bool_proof_consumers_with_go () =
   in
   let module_go = artifact "internal/teslmodgoproofscalars/module.go" emitted in
   check bool "String proof parameter erases to String" true
-    (contains module_go "func Tesl_label(tesl_value string) string");
+    (contains module_go "func Label(value string) string");
   check bool "Bool proof parameter erases to Bool" true
-    (contains module_go "func Tesl_invert(tesl_value bool) bool");
+    (contains module_go "func Invert(value bool) bool");
   if Sys.command "go version >/dev/null 2>&1" = 0 then
     let root = Filename.temp_dir "tesl-go-proof-scalars" "" in
     Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
@@ -1257,7 +1268,7 @@ let test_go_corpus_with_go () =
         ignore (run_command root "go vet ./...");
         ignore (run_command root "go test -race -count=1 ./...");
         ignore (run_command root "CGO_ENABLED=0 go build ./...");
-        run_optional_go_gates root)) go_corpus
+        run_go_gates root)) go_corpus
 
 let test_generated_module_with_go () =
   if Sys.command "go version >/dev/null 2>&1" <> 0 then
@@ -1276,7 +1287,7 @@ let test_generated_module_with_go () =
       ignore (run_command marker "go vet ./...");
       ignore (run_command marker "go test -race -count=1 ./...");
       ignore (run_command marker "CGO_ENABLED=0 go build ./...");
-      run_optional_go_gates marker)
+      run_go_gates marker)
   end
 
 let () =

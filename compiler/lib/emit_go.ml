@@ -69,7 +69,33 @@ exception Unsupported of emit_error
 let unsupported loc fmt =
   Printf.ksprintf (fun message -> raise (Unsupported { loc; message })) fmt
 
-let sanitize_suffix name =
+(* Emitted identifiers are the most visible surface of the "if Tesl does not work
+   out you hold plain Go code" argument: a reviewer should read `Area(r)`, not
+   `Tesl_area(tesl_r)`.  Names therefore keep their Tesl spelling and are only
+   altered when they would collide with a Go keyword, a predeclared identifier, an
+   imported package name, the emitter's own `tesl…` namespace, or another emitted
+   name in the same package. *)
+let go_keywords = [
+  "break"; "case"; "chan"; "const"; "continue"; "default"; "defer"; "else";
+  "fallthrough"; "for"; "func"; "go"; "goto"; "if"; "import"; "interface"; "map";
+  "package"; "range"; "return"; "select"; "struct"; "switch"; "type"; "var";
+]
+
+let go_predeclared = [
+  "any"; "bool"; "byte"; "comparable"; "complex64"; "complex128"; "error"; "float32";
+  "float64"; "int"; "int8"; "int16"; "int32"; "int64"; "rune"; "string"; "uint";
+  "uint8"; "uint16"; "uint32"; "uint64"; "uintptr"; "true"; "false"; "iota"; "nil";
+  "append"; "cap"; "clear"; "close"; "complex"; "copy"; "delete"; "imag"; "len";
+  "make"; "max"; "min"; "new"; "panic"; "print"; "println"; "real"; "recover";
+]
+
+(* Package names the emitted files import, plus the emitter's own namespace: every
+   generated helper, temporary, and field the emitter introduces is spelled
+   `tesl…`/`Tesl…`, so a Tesl name in that namespace is renamed rather than risking
+   a silent capture. *)
+let go_emitter_owned = ["fmt"; "os"; "strconv"; "testing"; "teslrt"]
+
+let sanitize_chars name =
   let b = Buffer.create (String.length name) in
   String.iter (fun c ->
     let valid =
@@ -78,22 +104,54 @@ let sanitize_suffix name =
     in
     if valid then Buffer.add_char b c
     else Buffer.add_string b (Printf.sprintf "_x%02x_" (Char.code c))) name;
-  Buffer.contents b
+  let value = Buffer.contents b in
+  if value = "" then "tesl"
+  else if value.[0] >= '0' && value.[0] <= '9' then "_" ^ value
+  else value
 
-let sanitize_ident name =
-  let b = Buffer.create (String.length name + 8) in
-  Buffer.add_string b "tesl_";
-  String.iter (fun c ->
-    let valid =
-      (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-      || c = '_' || (c >= '0' && c <= '9')
-    in
-    if valid then Buffer.add_char b c
-    else Buffer.add_string b (Printf.sprintf "_x%02x_" (Char.code c))) name;
-  Buffer.contents b
+let reserved_go_ident name =
+  let lowered = String.lowercase_ascii name in
+  List.mem lowered go_keywords
+  || List.mem lowered go_predeclared
+  || List.mem lowered go_emitter_owned
+  || (String.length name >= 4 && String.sub lowered 0 4 = "tesl")
 
-let exported_ident name =
-  String.capitalize_ascii (sanitize_ident name)
+let go_ident ~exported name =
+  let cleaned = sanitize_chars name in
+  let cased =
+    if exported then String.capitalize_ascii cleaned
+    else String.uncapitalize_ascii cleaned
+  in
+  if reserved_go_ident cased then cased ^ "_" else cased
+
+(** A local, parameter, or pattern binder. Tesl rejects shadowing a top-level name,
+    so these cannot collide with an emitted package-level name. *)
+let local_ident name = go_ident ~exported:false name
+
+(* Package-level names are minted through one table so two Tesl names can never
+   render to the same Go identifier. *)
+(* `r.Width` rather than `(r).Width`: the parentheses are only needed when the object
+   is a compound expression. *)
+let selector_operand value =
+  let simple =
+    value <> ""
+    && (let ok = ref true in
+        String.iteri (fun index c ->
+          let valid =
+            (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c = '_'
+            || ((c >= '0' && c <= '9' || c = '.') && index > 0)
+          in
+          if not valid then ok := false) value;
+        !ok)
+  in
+  if simple then value else "(" ^ value ^ ")"
+
+let unique_ident taken candidate =
+  let rec loop candidate =
+    if Hashtbl.mem taken candidate then loop (candidate ^ "_")
+    else begin Hashtbl.add taken candidate (); candidate end
+  in
+  loop candidate
 
 let package_name name =
   let b = Buffer.create (String.length name) in
@@ -188,7 +246,7 @@ let rec go_type = function
   | TCheck ty -> Printf.sprintf "teslrt.Check[%s]" (go_type ty)
   | TFailure -> invalid_arg "Go failure has no standalone type"
 
-let record_field_go_name = exported_ident
+let record_field_go_name name = go_ident ~exported:true name
 
 (* `!(!(x))` is a staticcheck finding (SA4013) on emitted code, so negation
    cancels an existing top-level `!(...)` instead of stacking on it.  The scan
@@ -234,20 +292,20 @@ let rec equal_expr ty left right =
   | TInt -> Printf.sprintf "teslrt.Equal(%s, %s)" left right
   | TString | TBool | TUnit -> Printf.sprintf "(%s == %s)" left right
   | TNewtype info ->
-    equal_expr info.base (Printf.sprintf "(%s).teslValue" left)
-      (Printf.sprintf "(%s).teslValue" right)
+    equal_expr info.base (Printf.sprintf "%s.teslValue" (selector_operand left))
+      (Printf.sprintf "%s.teslValue" (selector_operand right))
   | TRecord info ->
     (match info.rec_fields with
      | [] -> "true"
      | fields ->
        let parts = List.map (fun (name, field_ty) ->
          let field = record_field_go_name name in
-         equal_expr field_ty (Printf.sprintf "(%s).%s" left field)
-           (Printf.sprintf "(%s).%s" right field)) fields in
+         equal_expr field_ty (Printf.sprintf "%s.%s" (selector_operand left) field)
+           (Printf.sprintf "%s.%s" (selector_operand right) field)) fields in
        "(" ^ String.concat " && " parts ^ ")")
   (* Per-variant payload comparison lives in a generated method: inlining it would
      duplicate the whole tag switch at every comparison site. *)
-  | TAdt _ -> Printf.sprintf "(%s).TeslEqual(%s)" left right
+  | TAdt _ -> Printf.sprintf "%s.TeslEqual(%s)" (selector_operand left) right
   | TCheck _ | TFailure -> invalid_arg "Go check results require explicit test handling"
 
 let rec unequal_expr ty left right =
@@ -255,8 +313,8 @@ let rec unequal_expr ty left right =
   | TInt -> Printf.sprintf "!teslrt.Equal(%s, %s)" left right
   | TString | TBool | TUnit -> Printf.sprintf "(%s != %s)" left right
   | TNewtype info ->
-    unequal_expr info.base (Printf.sprintf "(%s).teslValue" left)
-      (Printf.sprintf "(%s).teslValue" right)
+    unequal_expr info.base (Printf.sprintf "%s.teslValue" (selector_operand left))
+      (Printf.sprintf "%s.teslValue" (selector_operand right))
   | TRecord info ->
     (* De Morgan is applied here rather than negating the conjunction: emitted
        `!(a && b)` is a golangci-lint finding (staticcheck QF1001). *)
@@ -265,10 +323,10 @@ let rec unequal_expr ty left right =
      | fields ->
        let parts = List.map (fun (name, field_ty) ->
          let field = record_field_go_name name in
-         unequal_expr field_ty (Printf.sprintf "(%s).%s" left field)
-           (Printf.sprintf "(%s).%s" right field)) fields in
+         unequal_expr field_ty (Printf.sprintf "%s.%s" (selector_operand left) field)
+           (Printf.sprintf "%s.%s" (selector_operand right) field)) fields in
        "(" ^ String.concat " || " parts ^ ")")
-  | TAdt _ -> Printf.sprintf "!(%s).TeslEqual(%s)" left right
+  | TAdt _ -> Printf.sprintf "!%s.TeslEqual(%s)" (selector_operand left) right
   | TCheck _ | TFailure -> invalid_arg "Go check results require explicit test handling"
 
 let rec ordered_expr ty op left right =
@@ -276,8 +334,8 @@ let rec ordered_expr ty op left right =
   | TInt -> Printf.sprintf "(teslrt.Compare(%s, %s) %s 0)" left right op
   | TString -> Printf.sprintf "(%s %s %s)" left op right
   | TNewtype info ->
-    ordered_expr info.base op (Printf.sprintf "(%s).teslValue" left)
-      (Printf.sprintf "(%s).teslValue" right)
+    ordered_expr info.base op (Printf.sprintf "%s.teslValue" (selector_operand left))
+      (Printf.sprintf "%s.teslValue" (selector_operand right))
   | TBool | TUnit | TRecord _ | TAdt _ | TCheck _ | TFailure ->
     invalid_arg "Go ordering requires an ordered scalar type"
 
@@ -293,8 +351,10 @@ let record_info_of_signature signatures name =
 
 let adt_tag_field = "teslTag"
 
+(* Every variant's payload lives in one flat struct, so a payload field is named
+   after its constructor: `Pending (reason: String)` becomes `PendingReason`. *)
 let variant_field_go_name variant name =
-  exported_ident (variant.var_ctor ^ "_" ^ name)
+  go_ident ~exported:true variant.var_ctor ^ go_ident ~exported:true name
 
 let find_variant info ctor =
   List.find_opt (fun variant -> variant.var_ctor = ctor) info.adt_variants
@@ -662,9 +722,9 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
   | ELit { lit = LInterp segments; _ } -> emit_interp ~indent signatures env segments
   | EVar { name; loc } ->
     (match List.assoc_opt name env, Hashtbl.find_opt signatures name with
-     | Some _, _ -> sanitize_ident name
+     | Some _, _ -> local_ident name
      | None, Some _ -> unsupported loc "Go backend does not support function `%s` as a value" name
-     | None, None -> sanitize_ident name)
+     | None, None -> local_ident name)
   | EConstructor { name = "True"; args = []; _ } -> "true"
   | EConstructor { name = "False"; args = []; _ } -> "false"
   | EConstructor { name = "Unit"; args = []; _ } -> "struct{}{}"
@@ -787,10 +847,10 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
     (match type_of_expr signatures env obj with
      | TNewtype _ ->
        ignore (type_of_expr signatures env expr);
-       Printf.sprintf "(%s).teslValue" (emit obj)
+       Printf.sprintf "%s.teslValue" (selector_operand (emit obj))
      | TRecord _ ->
        ignore (type_of_expr signatures env expr);
-       Printf.sprintf "(%s).%s" (emit obj) (record_field_go_name field)
+       Printf.sprintf "%s.%s" (selector_operand (emit obj)) (record_field_go_name field)
      | _ -> unsupported (Checker.expr_loc expr) "Go backend cannot emit this field read")
   | ERecord { type_hint = Some name; fields; loc } ->
     (match record_info_of_signature signatures name with
@@ -869,12 +929,12 @@ and emit_case_statements ?(indent="") signatures env buffer emit_body scrut arms
     (match whole with
      | None -> ()
      | Some name ->
-       Printf.bprintf buffer "%s%s := %s\n%s_ = %s\n" body_indent (sanitize_ident name)
-         scrut_name body_indent (sanitize_ident name);
+       Printf.bprintf buffer "%s%s := %s\n%s_ = %s\n" body_indent (local_ident name)
+         scrut_name body_indent (local_ident name);
        env := (name, TAdt info) :: !env);
     List.iter (fun (name, go_field, field_ty) ->
-      Printf.bprintf buffer "%s%s := %s.%s\n%s_ = %s\n" body_indent (sanitize_ident name)
-        scrut_name go_field body_indent (sanitize_ident name);
+      Printf.bprintf buffer "%s%s := %s.%s\n%s_ = %s\n" body_indent (local_ident name)
+        scrut_name go_field body_indent (local_ident name);
       env := (name, field_ty) :: !env) bindings;
     !env
   in
@@ -1026,7 +1086,7 @@ and emit_record_update ?(indent="") signatures env loc fields =
      stays as containment rather than an untested emit path. *)
   if not (is_local base) then
     unsupported loc "Go backend record update requires a bound record value";
-  literal indent (Printf.sprintf "(%s)" (emit_expr ~indent signatures env base))
+  literal indent (selector_operand (emit_expr ~indent signatures env base))
 
 and emit_interp ?(indent="") signatures env segments =
   let parts = List.map (function
@@ -1072,7 +1132,7 @@ and emit_let_expr ?expected ?(indent="") signatures env expr =
     | ELet { name; value; body; _ } ->
       let inferred_value_ty = type_of_expr signatures env value in
       let value_ty = if inferred_value_ty = TFailure then result else inferred_value_ty in
-      let go_name = sanitize_ident name in
+      let go_name = local_ident name in
       Printf.bprintf buffer "%s\t%s := %s\n%s\t_ = %s\n" indent go_name
         (emit_expr ~expected:value_ty ~indent:(indent ^ "\t") signatures env value) indent go_name;
       emit_bindings ((name, value_ty) :: env) body
@@ -1148,9 +1208,9 @@ let emit_tail ?self buffer signatures env expected indent expr =
       let ty = if inferred = TFailure then expected else inferred in
       Printf.bprintf buffer "%s{\n" indent;
       Buffer.add_string buffer (line_directive loc);
-      Printf.bprintf buffer "%s\t%s := %s\n" indent (sanitize_ident name)
+      Printf.bprintf buffer "%s\t%s := %s\n" indent (local_ident name)
         (emit_expr ~expected:ty ~indent:(indent ^ "\t") signatures env value);
-      Printf.bprintf buffer "%s\t_ = %s\n" indent (sanitize_ident name);
+      Printf.bprintf buffer "%s\t_ = %s\n" indent (local_ident name);
       go ((name, ty) :: env) (indent ^ "\t") body;
       Printf.bprintf buffer "%s}\n" indent
     | EIf { cond; then_; else_; loc } ->
@@ -1301,12 +1361,12 @@ let module_source module_path package signatures types (funcs : func_decl list) 
     Buffer.add_string body (line_directive fd.loc);
     Printf.bprintf body "func %s(%s) %s {\n"
       signature.go_name
-      (String.concat ", " (List.map (fun (name, ty) -> sanitize_ident name ^ " " ^ go_type ty) params))
+      (String.concat ", " (List.map (fun (name, ty) -> local_ident name ^ " " ^ go_type ty) params))
       (go_type result);
     (* Emit the body once assuming it may loop.  If no self tail call actually turned
        into a `continue`, re-emit it flat: an unused label is a Go compile error, and
        a function that never tail-calls itself should read as plain Go. *)
-    let self = fd.name, List.map (fun (name, _) -> sanitize_ident name) params in
+    let self = fd.name, List.map (fun (name, _) -> local_ident name) params in
     let looped = Buffer.create 256 in
     emit_tail ~self looped signatures env result "\t\t" fd.body;
     if contains_go_code (Buffer.contents looped) ("continue " ^ loop_label) then begin
@@ -1331,9 +1391,9 @@ let test_source module_path package signatures (tests : test_form list) =
       let ty = type_of_expr signatures env value in
       Printf.bprintf body "%s{\n" indent;
       Buffer.add_string body (line_directive loc);
-      Printf.bprintf body "%s\t%s := %s\n" indent (sanitize_ident name)
+      Printf.bprintf body "%s\t%s := %s\n" indent (local_ident name)
         (emit_expr ~indent:(indent ^ "\t") signatures env value);
-      Printf.bprintf body "%s\t_ = %s\n" indent (sanitize_ident name);
+      Printf.bprintf body "%s\t_ = %s\n" indent (local_ident name);
       emit_stmts ((name, ty) :: env) (indent ^ "\t") rest;
       Printf.bprintf body "%s}\n" indent
     | TsExpect { left; right; loc } :: rest ->
@@ -1432,6 +1492,10 @@ let compile_module ?(mode=Release) (m : module_form) =
       records = Hashtbl.create 8;
       adts = Hashtbl.create 8;
     } in
+    (* Every package-level Go name is minted here, in declaration order, so the
+       emitted names are deterministic and provably distinct. *)
+    let taken : (string, unit) Hashtbl.t = Hashtbl.create 32 in
+    let package_ident name = unique_ident taken (go_ident ~exported:true name) in
     List.iter (function
       | DType (TypeNewtype { name; secret = true; loc; _ }) ->
         unsupported loc "Go backend does not support secret newtype `%s` yet" name
@@ -1439,7 +1503,7 @@ let compile_module ?(mode=Release) (m : module_form) =
         let base = primitive_type_of_type_expr base_type in
         Hashtbl.replace types.newtypes name {
           tesl_name = name;
-          go_name = exported_ident name;
+          go_name = package_ident name;
           base;
           loc;
         }
@@ -1460,7 +1524,7 @@ let compile_module ?(mode=Release) (m : module_form) =
         unsupported r.loc "Go backend generated type name collision for `%s`" r.name;
       Hashtbl.replace types.records r.name {
         rec_tesl_name = r.name;
-        rec_go_name = exported_ident r.name;
+        rec_go_name = package_ident r.name;
         rec_fields = [];
         rec_loc = r.loc;
       }) record_forms;
@@ -1482,13 +1546,14 @@ let compile_module ?(mode=Release) (m : module_form) =
       if Hashtbl.mem types.newtypes name || Hashtbl.mem types.records name
          || Hashtbl.mem types.adts name then
         unsupported loc "Go backend generated type name collision for `%s`" name;
+      let go_name = package_ident name in
       Hashtbl.replace types.adts name {
         adt_tesl_name = name;
-        adt_go_name = exported_ident name;
-        adt_tag_type = exported_ident name ^ "Tag";
+        adt_go_name = go_name;
+        adt_tag_type = unique_ident taken (go_name ^ "Tag");
         adt_variants = List.map (fun (variant : adt_variant) -> {
           var_ctor = variant.ctor;
-          var_tag = exported_ident name ^ "Tag_" ^ sanitize_suffix variant.ctor;
+          var_tag = unique_ident taken (go_name ^ go_ident ~exported:true variant.ctor);
           var_fields = [];
           var_loc = variant.loc;
         }) variants;
@@ -1627,7 +1692,7 @@ let compile_module ?(mode=Release) (m : module_form) =
       let params = List.map (fun (binding : binding) ->
         type_of_type_expr types binding.type_expr) fd.params in
       let exported = is_exported fd.name in
-      let go_name = if exported then exported_ident fd.name else sanitize_ident fd.name in
+      let go_name = unique_ident taken (go_ident ~exported fd.name) in
       Hashtbl.add signatures fd.name {
         params;
         result = type_of_return_spec types fd.return_spec;
