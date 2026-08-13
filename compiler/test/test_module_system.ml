@@ -397,6 +397,104 @@ let pure_cycle_allowed_and_inlined () =
          if code <> 0 then failf "raco make CycA.rkt (pure cycle) failed:\n%s" out
        end)
 
+(* Two members of a cycle declaring the SAME private name.  Both backends collapse a
+   cyclic SCC into one namespace — Racket inlines the members into one module, Go merges
+   them into one package — so the second declaration has nowhere to go.  The Racket
+   inliner used to SKIP it (to avoid a duplicate Racket definition), which silently
+   rebound CollideB's calls to CollideA's function: `twoEntry 5` returned 6 instead of
+   10, with no diagnostic.  Rejected at CHECK time now, so neither backend can reach the
+   collapse holding a collision. *)
+let collide_a = {|module CollideA exposing [oneEntry, oneSeed]
+
+import Tesl.Prelude exposing [Int]
+import CollideB exposing [twoEntry]
+
+fn helper(n: Int) -> Int = n + 1
+
+fn oneEntry(n: Int) -> Int = helper (twoEntry n)
+
+fn oneSeed() -> Int = 7
+|}
+
+let collide_b = {|module CollideB exposing [twoEntry]
+
+import Tesl.Prelude exposing [Int]
+import CollideA exposing [oneSeed]
+
+fn helper(n: Int) -> Int = n * 2
+
+fn twoEntry(n: Int) -> Int = helper n
+|}
+
+let cycle_name_collision_rejected () =
+  with_temp_project [("CollideA.tesl", collide_a); ("CollideB.tesl", collide_b)]
+    (fun dir ->
+       let code, out = run_cc_in dir ["--check"; "CollideA.tesl"] in
+       if code = 0 then
+         failf "a name declared by two members of a cycle must be rejected — the \
+                Racket inliner silently rebinds the second one:\n%s" out;
+       if not (contains "declare `helper`" out) then
+         failf "the collision diagnostic must name the colliding declaration:\n%s" out;
+       (* Reported for either entry, since the collapse happens either way. *)
+       let code, out = run_cc_in dir ["--check"; "CollideB.tesl"] in
+       if code = 0 then
+         failf "the collision must be reported with CollideB as entry too:\n%s" out)
+
+(* The collision need not be between two modules that sit next to each other on a cycle
+   path.  Hub imports both Spoke1 and Spoke2 and both import Hub back, so all three are
+   ONE strongly connected component — but the DFS back edges only ever produce
+   [Hub; Spoke1] and [Hub; Spoke2], and the colliding pair is Spoke1 with Spoke2.  The
+   corpus shipped this exact shape (Sandbox/Sandbox2/Sandbox3, where Sandbox3's `ARecord`,
+   `ARecord2` and `doSomething2` were all silently dropped from the emitted Racket in
+   favour of Sandbox2's — and `Sandbox3.ARecord2` had a `foo3` field the surviving struct
+   did not, so a qualified read of it would have failed at runtime).  Checking the
+   component rather than the path is what catches it. *)
+let hub_source = {|module Hub exposing [hubSeed, viaOne, viaTwo]
+
+import Tesl.Prelude exposing [Int]
+import Spoke1 exposing [oneOf]
+import Spoke2 exposing [twoOf]
+
+fn hubSeed() -> Int = 5
+
+fn viaOne(n: Int) -> Int = oneOf n
+
+fn viaTwo(n: Int) -> Int = twoOf n
+|}
+
+let spoke1_source = {|module Spoke1 exposing [oneOf]
+
+import Tesl.Prelude exposing [Int]
+import Hub exposing [hubSeed]
+
+fn shared(n: Int) -> Int = n + 1
+
+fn oneOf(n: Int) -> Int = shared n + hubSeed()
+|}
+
+let spoke2_source = {|module Spoke2 exposing [twoOf]
+
+import Tesl.Prelude exposing [Int]
+import Hub exposing [hubSeed]
+
+fn shared(n: Int) -> Int = n * 100
+
+fn twoOf(n: Int) -> Int = shared n + hubSeed()
+|}
+
+let cycle_collision_across_component_rejected () =
+  with_temp_project [("Hub.tesl", hub_source); ("Spoke1.tesl", spoke1_source);
+                     ("Spoke2.tesl", spoke2_source)]
+    (fun dir ->
+       let code, out = run_cc_in dir ["--check"; "Hub.tesl"] in
+       if code = 0 then
+         failf "a collision between two members of one SCC must be rejected even when \
+                they never share a cycle path:\n%s" out;
+       if not (contains "declare `shared`" out) then
+         failf "the diagnostic must name the colliding declaration:\n%s" out;
+       if not (contains "Spoke1" out && contains "Spoke2" out) then
+         failf "the diagnostic must name both colliding modules:\n%s" out)
+
 (* ── BUG 3: CamelCase module filename — require matches the emitted dep ──── *)
 
 let camel_lib = {|module LibB exposing [twice]
@@ -760,6 +858,10 @@ let () =
       test_case "self-import rejected" `Quick self_import_rejected;
       test_case "pure fn cycle allowed + inlined from bare CLI spelling" `Quick
         pure_cycle_allowed_and_inlined;
+      test_case "cycle name collision rejected" `Quick
+        cycle_name_collision_rejected;
+      test_case "cycle name collision across an SCC rejected" `Quick
+        cycle_collision_across_component_rejected;
     ];
     "bug3-camelcase-filename", [
       test_case "require uses resolved basename (CamelCase)" `Quick

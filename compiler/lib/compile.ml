@@ -2807,6 +2807,45 @@ let cycle_unsafe_decl_reason (d : Ast.top_decl) : string option =
   | Ast.DApi a        -> Some (Printf.sprintf "api `%s`" a.name)
   | Ast.DServer s     -> Some (Printf.sprintf "server `%s`" s.name)
 
+(* The name a declaration binds, for the collision check below.  Facts are included
+   because a fact's proof symbol is emitted as a definition too. *)
+let cycle_decl_bound_name (d : Ast.top_decl) : string option =
+  match d with
+  | Ast.DFunc fd -> Some fd.name
+  | Ast.DConst c -> Some c.name
+  | Ast.DRecord r -> Some r.name
+  | Ast.DEntity e -> Some e.name
+  | Ast.DFact f -> Some f.name
+  | Ast.DType (Ast.TypeAdt { name; _ })
+  | Ast.DType (Ast.TypeNewtype { name; _ })
+  | Ast.DType (Ast.TypeAlias { name; _ }) -> Some name
+  | _ -> None
+
+(* BOTH backends collapse a cyclic SCC into one namespace — Racket inlines the members
+   into one module, Go merges them into one package — so two members declaring the same
+   name have nowhere to live.  Racket's inliner used to SKIP the second declaration to
+   avoid a duplicate Racket definition, which silently rebound the second module's
+   references to the FIRST module's function: a legal program compiled to wrong answers
+   with no diagnostic.  Reported here, in the shared check, so neither backend can reach
+   the collapse with a collision in hand. *)
+let cycle_name_collision (members : Ast.module_form list) =
+  let seen : (string, string) Hashtbl.t = Hashtbl.create 16 in
+  (* Sorted so the pair reported is the same whichever member the compile started
+     from — the diagnostic must not depend on graph traversal order. *)
+  let sorted = List.sort (fun (left : Ast.module_form) (right : Ast.module_form) ->
+    String.compare left.module_name right.module_name) members in
+  List.fold_left (fun found (mf : Ast.module_form) ->
+    List.fold_left (fun found decl ->
+      match found, cycle_decl_bound_name decl with
+      | Some _, _ | None, None -> found
+      | None, Some name ->
+        (match Hashtbl.find_opt seen name with
+         | Some owner when owner <> mf.Ast.module_name ->
+           Some (name, owner, mf.Ast.module_name, Ast.top_decl_loc decl)
+         | Some _ -> None
+         | None -> Hashtbl.replace seen name mf.Ast.module_name; None))
+      found mf.Ast.decls) None sorted
+
 let cross_module_diags ?(skip_dep_body : string -> bool = fun _ -> false)
     (m : Ast.module_form) : diagnostic list =
   let entry = m.Ast.source_file in
@@ -2958,6 +2997,35 @@ let cross_module_diags ?(skip_dep_body : string -> bool = fun _ -> false)
       ) im.Ast.imports
     in
     dfs entry_canon m [];
+    (* Name collisions are checked per STRONGLY CONNECTED COMPONENT, not per cycle path.
+       Two members can collide without ever appearing together on a single back edge:
+       the corpus's own Sandbox/Sandbox2/Sandbox3 is exactly that shape — Sandbox imports
+       both, both import Sandbox, so all three are one SCC, yet the DFS paths are only
+       [Sandbox; Sandbox2] and [Sandbox; Sandbox3] and the colliding pair (Sandbox2 with
+       Sandbox3) is in neither.  Checking the component closes that hole. *)
+    List.iter (fun component ->
+      if List.length component > 1 then begin
+        let members = List.filter_map (fun canon ->
+          match parse_at ~spelling:canon ~canon with
+          | Some (Parser.Ok mf) -> Some mf
+          | _ -> None) component in
+        match cycle_name_collision members with
+        | None -> ()
+        | Some (name, first_module, second_module, loc) ->
+          diags := mk_diag ~source:"validation" loc
+            (Printf.sprintf
+               "import cycle detected: %s — both `%s` and `%s` declare `%s`, and the \
+                compiler collapses a cycle into ONE namespace (Racket inlines the \
+                members into one module, Go merges them into one package), so one \
+                declaration would silently shadow the other. Rename it in one module, \
+                or move the shared declaration into a separate module imported by both \
+                sides."
+               (String.concat " <-> "
+                  (List.sort String.compare
+                     (List.map (fun (mf : Ast.module_form) -> mf.Ast.module_name) members)))
+               first_module second_module name)
+            :: !diags
+      end) (tarjan_sccs (build_local_import_graph entry));
     (* ── Entrypoint-closure name-wired resolution (issue #41 class) ─────────
        Cache / email / publish / subscribe / enqueue sites resolve their NAME
        through the process-wide domain registry at runtime when the declaring
@@ -3229,42 +3297,147 @@ let diag_of_go_emit_error (error : Emit_go.emit_error) : diagnostic = {
 (** Compile a checked Tesl module into a complete standalone Go module tree.
     Go receives the surface AST: Racket-specific [Desugar.ERuntimeCall] nodes
     must never cross this backend boundary. *)
+(* An import CYCLE collapses into ONE Go module: Racket forbids cyclic `require` (hence
+   emit_racket's SCC inliner), but Go files in the same package reference each other
+   freely — no ordering, no forward declarations — so mutual recursion needs no inlining
+   at all, just a shared package.
+   Merging the members into one synthetic module reuses the whole single-module path,
+   including the two-phase type registration that makes A's type visible to B and back.
+   Source mapping survives because every emitted declaration carries its OWN
+   `//line <file>:<n>`, so a merged file still points each declaration at the .tesl it
+   came from.
+   The one thing merging loses is per-member scoping: two members that declare the same
+   Tesl name would become one binding. That is reported rather than silently resolved. *)
+(* Two imports of the SAME module merge into one carrying the union of the exposed
+   names.  Both callers need this: merging a cycle unions its members' outside imports
+   (two members may import one module with different exposed lists), and rewriting an
+   outside importer's references to collapsed members turns several imports into one. *)
+let merge_exposed_imports (left : Ast.import_decl) (right : Ast.import_decl) =
+  match left.names, right.names with
+  (* ImportAll is rejected by the Go emitter with its own message; keep it visible rather
+     than silently widening or narrowing the import. *)
+  | Ast.ImportAll, _ | _, Ast.ImportAll -> { left with names = Ast.ImportAll }
+  | Ast.ImportExposing ours, Ast.ImportExposing theirs ->
+    { left with names = Ast.ImportExposing
+                  (ours @ List.filter (fun name -> not (List.mem name ours)) theirs) }
+
+let rec add_merged_import acc (imp : Ast.import_decl) =
+  match acc with
+  | [] -> [imp]
+  | (existing : Ast.import_decl) :: rest when existing.module_name = imp.module_name ->
+    merge_exposed_imports existing imp :: rest
+  | existing :: rest -> existing :: add_merged_import rest imp
+
+let merge_cycle_members (members : Ast.module_form list) =
+  match List.sort (fun (left : Ast.module_form) (right : Ast.module_form) ->
+          String.compare left.module_name right.module_name) members with
+  | [] -> Error "Go backend found an empty import cycle"
+  | [single] -> Ok single
+  | first :: _ as sorted ->
+    let names = List.map (fun (m : Ast.module_form) -> m.module_name) sorted in
+    (* Backstop only: `cross_module_diags` reports this at CHECK time, with a better
+       message and for both backends, so a compile never reaches here with a collision.
+       It shares `cycle_decl_bound_name` so the two can never disagree about what counts
+       as a declared name. *)
+    let declared_names = List.concat_map (fun (m : Ast.module_form) ->
+      List.filter_map cycle_decl_bound_name m.decls) sorted in
+    let rec first_duplicate = function
+      | [] -> None
+      | name :: rest -> if List.mem name rest then Some name else first_duplicate rest
+    in
+    (match first_duplicate declared_names with
+     | Some name ->
+       Error (Printf.sprintf
+         "Go backend collapses the import cycle %s into one package, and `%s` is declared by more than one member; rename it in one of them"
+         (String.concat " <-> " names) name)
+     | None ->
+       Ok { first with
+            (* Deliberately keeps the first member's name and source_file: the package is
+               named after it, and the file is only used for whole-module diagnostics. *)
+            decls = List.concat_map (fun (m : Ast.module_form) -> m.decls) sorted;
+            exports = List.concat_map (fun (m : Ast.module_form) -> m.exports) sorted;
+            imports =
+              (* An import of a fellow member disappears with the boundary; everything
+                 else is kept once. *)
+              List.fold_left (fun acc (m : Ast.module_form) ->
+                List.fold_left (fun acc (imp : Ast.import_decl) ->
+                  if List.mem imp.module_name names then acc
+                  else add_merged_import acc imp) acc m.imports) [] sorted })
+
 (* Every LOCAL module the entry imports, transitively, parsed and checked.  Import
    resolution is this module's job, not the emitter's: `build_local_import_graph` already
    knows how a module name becomes a file path, and it canonicalises so the same file
-   reached two ways is one node.  A cycle is rejected for now — the roadmap's mapping is
-   to collapse a cyclic SCC into one Go package with one file per module, which is more
-   than name resolution. *)
+   reached two ways is one node.  A cyclic SCC collapses into ONE Go package. *)
 type go_dependencies =
-  | GoDeps of Ast.module_form list
+  (* The collapsed graph handed to the emitter, plus the ORIGINAL per-file modules.  Both
+     are needed: the emitter wants one node per SCC, while checking must run per file,
+     because a merged module's decls come from several source texts. *)
+  (* [entry_emit] is the module the ENTRY landed in: after collapsing it may be a merged
+     module named after a different member, and the emitter needs that one to derive the
+     Go module path. *)
+  | GoDeps of { emit : Ast.module_form list; originals : Ast.module_form list;
+                entry_emit : Ast.module_form }
   | GoDepsError of string
 
 let local_dependency_modules entry_path (entry : Ast.module_form) =
-  if entry_path = "" || Filename.check_suffix entry_path ">" then GoDeps [entry]
+  if entry_path = "" || Filename.check_suffix entry_path ">" then GoDeps { emit = [entry]; originals = [entry]; entry_emit = entry }
   else
     let graph = build_local_import_graph entry_path in
     let entry_canon = canonical_import_path entry_path in
-    let cycles = List.filter (fun component -> List.length component > 1)
-      (tarjan_sccs graph) in
-    match cycles with
-    | component :: _ ->
-      GoDepsError (Printf.sprintf
-        "Go backend does not support the import cycle %s yet"
-        (String.concat " -> " (List.map Filename.basename component)))
-    | [] ->
-      let modules = ref [] in
-      let failed = ref None in
-      Hashtbl.iter (fun path _ ->
-        if path <> entry_canon then
-          match parse_module_file path with
-          | Some m -> modules := m :: !modules
-          | None ->
-            if !failed = None then
-              failed := Some (Printf.sprintf "Go backend could not parse imported module %s"
-                                (Filename.basename path))) graph;
-      (match !failed with
-       | Some message -> GoDepsError message
-       | None -> GoDeps (entry :: !modules))
+    (* One node per SCC: a cycle becomes ONE Go package, so the emitter never sees the
+       members separately. *)
+    let components = tarjan_sccs graph in
+    let failed = ref None in
+    let parsed path =
+      if path = entry_canon then Some entry
+      else match parse_module_file path with
+        | Some m -> Some m
+        | None ->
+          if !failed = None then
+            failed := Some (Printf.sprintf "Go backend could not parse imported module %s"
+                              (Filename.basename path));
+          None
+    in
+    let originals = ref [] in
+    let collapsed = List.filter_map (fun component ->
+      let members = List.filter_map parsed component in
+      if members = [] then None
+      else begin
+        originals := !originals @ members;
+        match merge_cycle_members members with
+        | Ok merged ->
+          Some (merged, List.map (fun (m : Ast.module_form) -> m.module_name) members)
+        | Error message ->
+          if !failed = None then failed := Some message;
+          None
+      end) components in
+    (* A module OUTSIDE the cycle imports a MEMBER by name, but the merged module answers
+       to only one name.  Rewriting those references here is what keeps the emitter free
+       of any cycle concept: after this, no module name refers to a collapsed member. *)
+    let rename_table = List.concat_map (fun ((merged : Ast.module_form), members) ->
+      List.filter_map (fun member ->
+        if member = merged.module_name then None else Some (member, merged.module_name))
+        members) collapsed in
+    let rewrite (m : Ast.module_form) =
+      { m with imports = List.fold_left (fun acc (imp : Ast.import_decl) ->
+          let target = match List.assoc_opt imp.module_name rename_table with
+            | Some merged_name -> merged_name
+            | None -> imp.module_name
+          in
+          (* A member importing its own merged self is the cycle boundary disappearing. *)
+          if target = m.module_name then acc
+          else add_merged_import acc { imp with module_name = target }) [] m.imports }
+    in
+    (match !failed with
+     | Some message -> GoDepsError message
+     | None ->
+       let emit = List.map (fun (merged, members) -> (rewrite merged, members)) collapsed in
+       let entry_emit =
+         match List.find_opt (fun (_, members) -> List.mem entry.module_name members) emit with
+         | Some (merged, _) -> merged
+         | None -> entry
+       in
+       GoDeps { emit = List.map fst emit; originals = !originals; entry_emit })
 
 let go_project_diag file message = {
   file; start_line = 1; start_col = 1; end_line = 1; end_col = 1;
@@ -3281,19 +3454,19 @@ let compile_go_source ?(path="") filename source =
     else
       (match local_dependency_modules path m with
        | GoDepsError message -> GoFailure [go_project_diag filename message]
-       | GoDeps modules ->
+       | GoDeps { emit = modules; originals; entry_emit } ->
          (* Each dependency is checked in its own right: an importer only sees names its
             dependency exports, so a dependency that does not compile must not be
             emitted as if it did. *)
          let dependency_diags = List.concat_map (fun (dependency : Ast.module_form) ->
-           if dependency.module_name = m.module_name then []
+           if dependency.source_file = m.source_file then []
            else
              match In_channel.with_open_text dependency.source_file In_channel.input_all with
              | dependency_source -> check_module dependency_source dependency
-             | exception Sys_error _ -> []) modules in
+             | exception Sys_error _ -> []) originals in
          if dependency_diags <> [] then GoFailure dependency_diags
          else
-           match Emit_go.compile_project ~mode:Emit_go.Release ~entry:m modules with
+           match Emit_go.compile_project ~mode:Emit_go.Release ~entry:entry_emit modules with
            | Ok artifacts -> GoSuccess artifacts
            | Error errors -> GoFailure (List.map diag_of_go_emit_error errors))
 

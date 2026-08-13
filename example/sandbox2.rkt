@@ -91,7 +91,7 @@
   (thsl-src! "example/sandbox.tesl" 34 (list (cons 'x *x)) (lambda () 2)))
 
 (define/pow
-  (shouldWork7 [x : Sandbox3.ARecord2])
+  (shouldWork7 [x : Sandbox3.S3Record2])
   #:returns Integer
   (thsl-src! "example/sandbox.tesl" 36 (list (cons 'x *x)) (lambda () (tesl-dot/runtime x 'foo3))))
 
@@ -127,7 +127,21 @@
 
 
 ; ── Inlined from cyclic module Sandbox3 ──────────────────
+(define-record S3Record
+  [title : String]
+)
+
+(define-record S3Record2
+  [title : String]
+  [foo3 : Integer]
+)
+
 (define/pow
   (doSomething3 [x : Integer ::: (ValidPort x)])
   #:returns Integer
   (thsl-src! "example/sandbox3.tesl" 15 (list (cons 'x *x)) (lambda () (raw-value (dummy_add x x)))))
+
+(define/pow
+  (doSomething2Of3 [x : Integer ::: ((ValidPort x) && (IsPositive x))])
+  #:returns Integer
+  (thsl-src! "example/sandbox3.tesl" 18 (list (cons 'x *x)) (lambda () *x)))

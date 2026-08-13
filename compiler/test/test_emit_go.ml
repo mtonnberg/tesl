@@ -627,6 +627,16 @@ let test_cli_rejects_empty_output_path () =
     check bool "empty path did not write into cwd" false
       (Sys.file_exists (Filename.concat root "go.mod")))
 
+(* Returns the exit code and output instead of failing, for a caller that must tell one
+   kind of failure from another. *)
+let run_command_status root command =
+  let command = Printf.sprintf "cd %s && %s 2>&1" (Filename.quote root) command in
+  let channel = Unix.open_process_in command in
+  let output = In_channel.input_all channel in
+  match Unix.close_process_in channel with
+  | Unix.WEXITED code -> code, output
+  | Unix.WSIGNALED signal | Unix.WSTOPPED signal -> 128 + signal, output
+
 let run_command root command =
   let command = Printf.sprintf "cd %s && %s 2>&1" (Filename.quote root) command in
   let channel = Unix.open_process_in command in
@@ -653,11 +663,32 @@ let required_go_gates = [
   "nilaway", "nilaway ./...";
 ]
 
+(* `govulncheck` fetches its vulnerability database over the network, so a DNS or
+   connectivity blip fails it with a message that reads like a finding on the emitted
+   code.  That is a REAL flake: one outage mid-run failed 13 of these tests at once.  A
+   fetch failure is reported and skipped; every other failure — including an actual
+   vulnerability — still fails the gate, and the tool being absent still fails, since
+   silently skipping a missing linter is the fail-open asymmetry noted above. *)
+let unreachable_vulnerability_database output =
+  let markers = ["dial tcp"; "no such host"; "i/o timeout"; "connection refused";
+                 "TLS handshake timeout"; "proxy.golang.org"; "vuln.go.dev"] in
+  let contains_marker marker =
+    let n = String.length output and m = String.length marker in
+    let rec scan i = i + m <= n && (String.sub output i m = marker || scan (i + 1)) in
+    m > 0 && scan 0
+  in
+  List.exists contains_marker markers
+
 let run_go_gates root =
   List.iter (fun (tool, command) ->
     if not (command_available tool) then
       failf "required Go gate tool not found: %s (ci.sh phase 2a requires it too)" tool;
-    ignore (run_command root command)) required_go_gates
+    match run_command_status root command with
+    | 0, _ -> ()
+    | _, output when tool = "govulncheck" && unreachable_vulnerability_database output ->
+      Printf.printf
+        "  SKIP %s: vulnerability database unreachable (network), not a finding\n%!" tool
+    | code, output -> failf "%s exited %d:\n%s" command code output) required_go_gates
 
 let recursion_source = {|module GoRecursion exposing [factorial, isEven, isOdd, sumTo, sumToLet, drain, countdown, Small, checkSmall]
 import Tesl.Prelude exposing [Bool(..), Int]
@@ -2091,6 +2122,293 @@ let test_cross_module_types_with_go () =
       run_go_gates out
     end)
 
+(* ── Import cycles ────────────────────────────────────────────────────────────
+   A cyclic SCC collapses into ONE Go package.  Racket cannot express a cyclic
+   `require`, so its backend inlines the members into one module; Go files in the same
+   package reference each other with no ordering and no forward declarations, so the
+   cycle needs no inlining at all — just a shared package.  compile.ml does the
+   collapsing, which is why nothing in emit_go.ml knows what a cycle is. *)
+let cycle_facts_source = {|module CycFacts exposing [Positive, checkPositive, checkedArea, tagOf, sizeOf, describe, deepB]
+import Tesl.Prelude exposing [Int, String]
+import CycShapes exposing [Point, Shape(..), Slug, origin, area, deepA]
+
+fact Positive (n: Int)
+
+check checkPositive(n: Int) -> n: Int ::: Positive n =
+  if n > 0 then
+    ok n ::: Positive n
+  else
+    fail 400 "must be positive"
+
+# A foreign record's field read, from the other member of the cycle.
+fn sizeOf(p: Point) -> Int = p.x + p.y
+
+# A foreign ADT, matched here.
+fn describe(s: Shape) -> String =
+  case s of
+    Dot -> "dot"
+    Box w -> "box ${w}"
+
+# A foreign newtype, unwrapped here.
+fn tagOf(slug: Slug) -> String = slug.value
+
+# Establishes the proof HERE and calls the consumer over there.
+fn checkedArea(w: Int, h: Int) -> Int =
+  if w > 0 then
+    let checkedWidth = check checkPositive w
+    area checkedWidth h
+  else
+    0
+
+# Mutual recursion across the cycle.
+fn deepB(n: Int) -> Int =
+  if n <= 0 then
+    1
+  else
+    deepA (n - 1)
+
+test "cycle: facts side" {
+  expect sizeOf (origin()) == 0
+  expect describe Dot == "dot"
+  expect describe (Box 4) == "box 4"
+  expect tagOf (Slug "abc") == "abc"
+  expect checkedArea 3 4 == 12
+  expect checkedArea 0 4 == 0
+  expect deepB 6 == 1
+}
+|}
+
+let cycle_shapes_source = {|module CycShapes exposing [Point, Shape(..), Slug, origin, area, deepA, report]
+import Tesl.Prelude exposing [Int, String]
+import CycFacts exposing [Positive, checkPositive, sizeOf, describe, deepB]
+
+record Point {
+  x: Int
+  y: Int
+}
+
+type Shape
+  = Dot
+  | Box (w: Int)
+
+type Slug = String
+
+fn origin() -> Point = Point { x: 0, y: 0 }
+
+# Consumes a fact declared in the OTHER member of the cycle.
+fn area(w: Int ::: Positive w, h: Int) -> Int = w * h
+
+# Calls a function that reads a type declared here.
+fn report(p: Point) -> String = "size=${sizeOf p} shape=${describe Dot}"
+
+fn deepA(n: Int) -> Int =
+  if n <= 0 then
+    0
+  else
+    deepB (n - 1)
+
+test "cycle: shapes side" {
+  let five = 5
+  let checkedFive = check checkPositive five
+  expect area checkedFive 2 == 10
+  expect report (Point { x: 1, y: 2 }) == "size=3 shape=dot"
+  expect deepA 7 == 1
+}
+|}
+
+(* The case that matters most: each member imports from the other a DIFFERENT KIND of
+   declaration — CycFacts imports a type, a record, an ADT and a newtype from CycShapes,
+   while CycShapes imports a FACT (and its check) back from CycFacts.  Merging is
+   kind-agnostic precisely because everything lands in one namespace. *)
+let test_import_cycle_with_go () =
+  let root = Filename.temp_dir "tesl-go-cycle" "" in
+  Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+    let write name contents =
+      let path = Filename.concat root name in
+      Out_channel.with_open_bin path (fun channel -> output_string channel contents);
+      path
+    in
+    let facts = write "cyc-facts.tesl" cycle_facts_source in
+    let shapes = write "cyc-shapes.tesl" cycle_shapes_source in
+    (* Either member may be the entry, and both must produce the same single package. *)
+    List.iter (fun (label, entry) ->
+      let emitted = match Compile.compile_go_file entry with
+        | Compile.GoSuccess artifacts -> artifacts
+        | Compile.GoFailure diagnostics ->
+          failf "cyclic compilation failed (entry %s): %s" label
+            (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+      in
+      (* Named after the alphabetically-first member, so the package is stable no matter
+         which member the compile started from. *)
+      let merged = artifact "internal/teslmodcycfacts/module.go" emitted in
+      check bool (label ^ ": one package holds both members") true
+        (contains merged "func SizeOf(" && contains merged "func Area(");
+      check bool (label ^ ": no second package is emitted for the other member") true
+        (not (List.exists (fun (a : Emit_go.artifact) ->
+           a.path = "internal/teslmodcycshapes/module.go") emitted));
+      (* Same package, so a cross-member reference needs no qualification at all. *)
+      check bool (label ^ ": a cross-member call is unqualified") true
+        (contains merged "return Mul(" || contains merged "teslrt.Mul(w, h)");
+      check bool (label ^ ": the foreign record's type is unqualified") true
+        (contains merged "func SizeOf(p Point) teslrt.Int");
+      (* Each declaration keeps its OWN source file, so a merged file still maps every
+         declaration back to the .tesl it was written in. *)
+      check bool (label ^ ": both source files appear in //line directives") true
+        (contains merged "//line cyc-facts.tesl" && contains merged "//line cyc-shapes.tesl");
+      (* The fact crossing the boundary erases, like every other proof. *)
+      check bool (label ^ ": the imported fact leaves no runtime trace") true
+        (contains merged "func Area(w teslrt.Int, h teslrt.Int) teslrt.Int");
+      let tests_file = artifact "internal/teslmodcycfacts/module_test.go" emitted in
+      check bool (label ^ ": both members' test blocks survive the merge") true
+        (contains tests_file "TestTesl0" && contains tests_file "TestTesl1");
+      if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+        let out = Filename.concat root ("emitted-" ^ label) in
+        write_artifacts out emitted;
+        let unformatted = run_command out "gofmt -l ." |> String.trim in
+        if unformatted <> "" then
+          failf "emitted cyclic source is not gofmt-clean (%s):\n%s"
+            unformatted (run_command out "gofmt -d .");
+        ignore (run_command out "go test -count=1 ./...");
+        ignore (run_command out "go vet ./...");
+        ignore (run_command out "go test -race -count=1 ./...");
+        run_go_gates out
+      end) ["facts", facts; "shapes", shapes])
+
+let cycle_leaf_source = {|module Leaf exposing [double, triple]
+import Tesl.Prelude exposing [Int]
+
+fn double(n: Int) -> Int = n * 2
+
+fn triple(n: Int) -> Int = n * 3
+|}
+
+let cycle_tri_a_source = {|module TriA exposing [AType, fromA, deepA]
+import Tesl.Prelude exposing [Int, String]
+import TriB exposing [fromB, deepB]
+
+record AType {
+  label: String
+}
+
+fn fromA(n: Int) -> Int = fromB n + 1
+
+fn deepA(n: Int) -> Int =
+  if n <= 0 then
+    0
+  else
+    deepB (n - 1)
+|}
+
+let cycle_tri_b_source = {|module TriB exposing [fromB, deepB]
+import Tesl.Prelude exposing [Int]
+import TriC exposing [fromC, deepC]
+import Leaf exposing [double]
+
+fn fromB(n: Int) -> Int = double (fromC n)
+
+fn deepB(n: Int) -> Int =
+  if n <= 0 then
+    1
+  else
+    deepC (n - 1)
+|}
+
+let cycle_tri_c_source = {|module TriC exposing [fromC, deepC, describeA]
+import Tesl.Prelude exposing [Int, String]
+import TriA exposing [AType, deepA]
+import Leaf exposing [triple]
+
+fn fromC(n: Int) -> Int = triple n + 10
+
+fn describeA(a: AType) -> String = "label=${a.label}"
+
+fn deepC(n: Int) -> Int =
+  if n <= 0 then
+    2
+  else
+    deepA (n - 1)
+|}
+
+let cycle_top_source = {|module Top exposing [total, viaC, named]
+import Tesl.Prelude exposing [Int, String]
+import TriA exposing [AType, fromA]
+import TriC exposing [fromC, describeA]
+import Leaf exposing [double]
+
+fn total(n: Int) -> Int = fromA n + double n
+
+fn viaC(n: Int) -> Int = fromC n
+
+fn named(label: String) -> String = describeA (AType { label: label })
+
+test "cycle seen from outside" {
+  expect viaC 5 == 25
+  expect total 1 == 29
+  expect named "x" == "label=x"
+}
+|}
+
+(* Three members, an acyclic module hanging off the cycle, and an entry OUTSIDE it that
+   imports names declared in two DIFFERENT members.  The outside importer is the reason
+   compile.ml rewrites import targets: it writes `import TriC exposing [fromC]`, but the
+   merged package answers to one name only, so a reference to a collapsed member would
+   otherwise resolve to nothing. *)
+let test_import_cycle_three_modules_with_go () =
+  let root = Filename.temp_dir "tesl-go-cycle3" "" in
+  Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+    let write name contents =
+      let path = Filename.concat root name in
+      Out_channel.with_open_bin path (fun channel -> output_string channel contents);
+      path
+    in
+    ignore (write "leaf.tesl" cycle_leaf_source);
+    ignore (write "tri-a.tesl" cycle_tri_a_source);
+    ignore (write "tri-b.tesl" cycle_tri_b_source);
+    ignore (write "tri-c.tesl" cycle_tri_c_source);
+    let top = write "top.tesl" cycle_top_source in
+    let emitted = match Compile.compile_go_file top with
+      | Compile.GoSuccess artifacts -> artifacts
+      | Compile.GoFailure diagnostics ->
+        failf "three-module cyclic compilation failed: %s"
+          (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+    in
+    let merged = artifact "internal/teslmodtria/module.go" emitted in
+    let outside = artifact "internal/teslmodtop/module.go" emitted in
+    check bool "all three members land in one package" true
+      (contains merged "func FromA(" && contains merged "func FromB("
+       && contains merged "func FromC(");
+    check bool "a module outside the cycle stays its own package" true
+      (contains (artifact "internal/teslmodleaf/module.go" emitted) "func Double(");
+    check bool "no package is emitted for a collapsed member" true
+      (not (List.exists (fun (a : Emit_go.artifact) ->
+         a.path = "internal/teslmodtrib/module.go" || a.path = "internal/teslmodtric/module.go")
+         emitted));
+    (* `fromC` is declared by TriC, but reached through the merged package's name. *)
+    check bool "an outside importer reaches a member through the merged package" true
+      (contains outside "return teslmodtria.FromC(n)");
+    (* TriB imports `double` and TriC imports `triple` — the SAME outside module with
+       DIFFERENT exposed lists, which merging must union into one import rather than
+       registering the dependency twice. *)
+    check bool "the cycle's own acyclic dependency is still imported normally" true
+      (contains merged "teslmodleaf.Double(" && contains merged "teslmodleaf.Triple(");
+    (* The record literal below is the bug this slice found: a record declared in another
+       package was constructed with a BARE type name, which does not compile.  It escaped
+       the cross-module test because that test only ever constructed a foreign NEWTYPE. *)
+    check bool "a foreign record literal is qualified" true
+      (contains outside "teslmodtria.AType{Label: label}");
+    if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+      let out = Filename.concat root "emitted" in
+      write_artifacts out emitted;
+      let unformatted = run_command out "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command out "gofmt -d .");
+      ignore (run_command out "go test -count=1 ./...");
+      ignore (run_command out "go vet ./...");
+      ignore (run_command out "go test -race -count=1 ./...");
+      run_go_gates out
+    end)
+
 let proof_scalar_source = {|module GoProofScalars exposing [NonEmpty, Enabled, checkNonEmpty, checkEnabled, label, invert]
 import Tesl.Prelude exposing [Bool(..), String]
 
@@ -2646,6 +2964,8 @@ let () =
       test_case "Tesl.Set leaves" `Slow test_sets_with_go;
       test_case "multi-module program" `Slow test_multi_module_with_go;
       test_case "cross-module types" `Slow test_cross_module_types_with_go;
+      test_case "import cycle" `Slow test_import_cycle_with_go;
+      test_case "import cycle across three modules" `Slow test_import_cycle_three_modules_with_go;
       test_case "sets behave the same on Racket" `Slow (racket_behavior_oracle "<go-sets>" set_source);
       test_case "Float behaves the same on Racket" `Slow (racket_behavior_oracle "<go-floats>" float_source);
       test_case "divergent Float functions fail closed" `Quick test_divergent_float_functions_fail_closed;

@@ -2244,7 +2244,10 @@ and emit_record_literal ?(indent="") signatures env info fields =
     in
     Printf.sprintf "%s: %s" (record_field_go_name name)
       (emit_expr ~expected:field_ty ~indent signatures env value)) info.rec_fields in
-  Printf.sprintf "%s{%s}" info.rec_go_name (String.concat ", " parts)
+  (* Qualified for the same reason `go_type` qualifies: a record declared by another
+     package is constructed through that package's name. *)
+  Printf.sprintf "%s{%s}" (qualified info.rec_owner info.rec_go_name)
+    (String.concat ", " parts)
 
 (* Tesl record update copies the base and overrides the listed fields.  A struct
    literal naming every field is the readable Go shape, but it repeats the base
@@ -2263,7 +2266,8 @@ and emit_record_update ?(indent="") signatures env loc fields =
         | None -> Printf.sprintf "%s.%s" base_text (record_field_go_name name)
       in
       Printf.sprintf "%s: %s" (record_field_go_name name) value) info.rec_fields in
-    Printf.sprintf "%s{%s}" info.rec_go_name (String.concat ", " parts)
+    Printf.sprintf "%s{%s}" (qualified info.rec_owner info.rec_go_name)
+      (String.concat ", " parts)
   in
   let rec is_local = function
     | EVar { name; _ } -> List.mem_assoc name env

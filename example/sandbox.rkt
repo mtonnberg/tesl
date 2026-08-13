@@ -18,7 +18,7 @@
 )
 
 
-(provide shouldWork dummy_add ValidPort IsPositive doSomething doSomething2 ARecord ARecord2 FiveCases CaseOne CaseTwo CaseThree CaseFour CaseFive doSomething3 shouldWork-signature dummy_add-signature)
+(provide shouldWork dummy_add ValidPort IsPositive doSomething doSomething2 ARecord ARecord2 FiveCases CaseOne CaseTwo CaseThree CaseFour CaseFive doSomething3 doSomething2Of3 S3Record S3Record2 shouldWork-signature dummy_add-signature)
 
 (define IsPositive 'IsPositive)
 (define ValidPort 'ValidPort)
@@ -54,9 +54,9 @@
   (thsl-src! "example/sandbox.tesl" 34 (list (cons 'x *x)) (lambda () 2)))
 
 (define/pow
-  (shouldWork7 [x : Sandbox3.ARecord2])
+  (shouldWork7 [x : Sandbox3.S3Record2])
   #:returns Integer
-  (thsl-src! "example/sandbox.tesl" 36 (list (cons 'x *x)) (lambda () (tesl-dot/runtime x 'foo3 'Sandbox3.ARecord2))))
+  (thsl-src! "example/sandbox.tesl" 36 (list (cons 'x *x)) (lambda () (tesl-dot/runtime x 'foo3 'Sandbox3.S3Record2))))
 
 (define/pow
   (shouldWork8 [x : Sandbox2.ARecord2])
@@ -129,7 +129,21 @@
 
 
 ; ── Inlined from cyclic module Sandbox3 ──────────────────
+(define-record S3Record
+  [title : String]
+)
+
+(define-record S3Record2
+  [title : String]
+  [foo3 : Integer]
+)
+
 (define/pow
   (doSomething3 [x : Integer ::: (ValidPort x)])
   #:returns Integer
   (thsl-src! "example/sandbox3.tesl" 15 (list (cons 'x *x)) (lambda () (raw-value (dummy_add x x)))))
+
+(define/pow
+  (doSomething2Of3 [x : Integer ::: ((ValidPort x) && (IsPositive x))])
+  #:returns Integer
+  (thsl-src! "example/sandbox3.tesl" 18 (list (cons 'x *x)) (lambda () *x)))
