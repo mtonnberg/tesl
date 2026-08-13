@@ -1331,7 +1331,7 @@ let test_higher_order_lists_with_go () =
      to a generated name because there is no lambda parameter to name it after.
      `triple` is unexported here because the module does not expose it. *)
   check bool "a named function argument is a direct call" true
-    (contains module_go "teslOut1[teslAt1] = triple(teslValue1)");
+    (contains module_go "teslOut1[teslAt1] = triple(Value1)");
   check bool "no runtime higher-order helper is used" false
     (contains module_go "teslrt.ListMap" || contains module_go "teslrt.ListFoldl");
   if Sys.command "go version >/dev/null 2>&1" = 0 then
@@ -1435,9 +1435,9 @@ let test_check_driven_lists_with_go () =
     (contains module_go "func Kept(xs []teslrt.Int) []teslrt.Int");
   check bool "filterCheck keeps the accepted value from the check" true
     (contains module_go
-       "if teslKept1, teslOK1 := (CheckSmall(teslValue1)).Value(); teslOK1 {\n\t\t\t\tteslOut1 = append(teslOut1, teslKept1)");
+       "if teslKept1, teslOK1 := (CheckSmall(Value1)).Value(); teslOK1 {\n\t\t\t\tteslOut1 = append(teslOut1, teslKept1)");
   check bool "a partially applied check is emitted fully applied" true
-    (contains module_go "(CheckBelow(limit, teslValue1)).Value()");
+    (contains module_go "(CheckBelow(limit, Value1)).Value()");
   (* The per-element ok is scoped to its `if`; a running flag sharing that name would
      assign to the shadow and allCheck could never report failure. *)
   check bool "allCheck's running flag is not shadowed by the per-element ok" true
@@ -1851,6 +1851,246 @@ import Tesl.Float exposing [Float, %s]
 fn apply(x: Float) -> Float = %s x
 |} name name)) ["Float.log"; "Float.exp"; "Float.sin"; "Float.cos"; "Float.tan"]
 
+let set_source = {|module GoSets exposing [build, has, size, without, both, common, only, subset, listed, sameSet, emptyOf]
+import Tesl.Prelude exposing [Bool(..), Int, List, String]
+import Tesl.Set exposing [Set, Set.empty, Set.singleton, Set.member, Set.insert, Set.remove, Set.size, Set.isEmpty, Set.toList, Set.fromList, Set.union, Set.intersection, Set.difference, Set.isSubset]
+import Tesl.List exposing [List.length, List.member]
+
+fn build(s: Set String, value: String) -> Set String = Set.insert value s
+
+fn has(s: Set String, value: String) -> Bool = Set.member value s
+
+fn size(s: Set String) -> Int = Set.size s
+
+fn without(s: Set String, value: String) -> Set String = Set.remove value s
+
+fn both(left: Set String, right: Set String) -> Set String = Set.union left right
+
+fn common(left: Set String, right: Set String) -> Set String = Set.intersection left right
+
+fn only(left: Set String, right: Set String) -> Set String = Set.difference left right
+
+fn subset(left: Set String, right: Set String) -> Bool = Set.isSubset left right
+
+fn listed(s: Set String) -> List String = Set.toList s
+
+fn sameSet(left: Set String, right: Set String) -> Bool = left == right
+
+fn emptyOf() -> Set String = Set.empty
+
+test "Tesl.Set leaves" {
+  let base = Set.fromList ["b", "a", "b"]
+  expect size base == 2
+  expect has base "a" == True
+  expect has base "zz" == False
+  expect size (build base "c") == 3
+  expect size (build base "a") == 2
+  expect size (without base "a") == 1
+  expect size (both base (Set.singleton "c")) == 3
+  expect size (common base (Set.fromList ["a"])) == 1
+  expect size (only base (Set.fromList ["a"])) == 1
+  expect subset (Set.fromList ["a"]) base == True
+  expect subset (Set.fromList ["zz"]) base == False
+  # Set element order is UNSPECIFIED in Tesl (Racket iterates a hash), so only
+  # membership and size may be observed.
+  expect List.length (listed base) == 2
+  expect List.member "a" (listed base) == True
+  expect sameSet base (Set.fromList ["a", "b"]) == True
+  expect sameSet base (Set.fromList ["a"]) == False
+  expect Set.isEmpty (emptyOf()) == True
+  expect Set.size (emptyOf()) == 0
+}
+|}
+
+(* Set is Dict's sibling: elements kept sorted, for the same two reasons (a Go map
+   cannot be keyed by the non-comparable teslrt.Int, and Go randomises map order per
+   run).  Sorted storage is also what lets union/intersection/difference be one ordered
+   pass instead of n lookups. *)
+let test_sets_with_go () =
+  let emitted = match Compile.compile_go_source "<go-sets>" set_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "Set compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgosets/module.go" emitted in
+  check bool "the runtime Set ships with the project" true
+    (List.exists (fun (a : Emit_go.artifact) -> a.path = "internal/teslrt/set.go") emitted);
+  check bool "Set renders with its element type" true
+    (contains module_go "func Build(s teslrt.Set[string], value string) teslrt.Set[string]");
+  check bool "a membership leaf carries the element ordering" true
+    (contains module_go
+       "teslrt.SetInsert(value, s, func(teslX, teslY string) bool { return (teslX < teslY) })");
+  check bool "the algebra keeps its Tesl argument order" true
+    (contains module_go "teslrt.SetUnion(left, right, func(teslX, teslY string) bool");
+  (* `Set.empty` takes no arguments, so it parses as a bare field access over the module
+     name and its type parameter has to be written out. *)
+  check bool "Set.empty is instantiated from the expected type" true
+    (contains module_go "return teslrt.SetEmpty[string]()");
+  check bool "set equality is one ordered pass" true
+    (contains module_go "teslrt.SetEqualBy(left, right, func(teslX, teslY string) bool");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then
+    let root = Filename.temp_dir "tesl-go-sets" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted Set source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+
+(* A multi-module program emits ONE Go package per Tesl module, all under a single Go
+   module path so an importer and its dependency agree on the import path.  A reference
+   to a name another module owns is qualified with that package; a reference to one's own
+   is bare, since Go forbids self-qualification. *)
+let test_multi_module_with_go () =
+  let path = Filename.concat (Compile.default_root_path ())
+    "example/learn/lesson07-consumer.tesl" in
+  let emitted = match Compile.compile_go_file path with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "multi-module compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let paths = List.map (fun (a : Emit_go.artifact) -> a.path) emitted in
+  List.iter (fun path -> check bool ("emits " ^ path) true (List.mem path paths)) [
+    "go.mod";
+    "internal/teslmodlesson07consumer/module.go";
+    "internal/teslmodlesson07home/module.go";
+    "internal/teslrt/int.go";
+  ];
+  (* Shared artifacts are emitted once, not once per module. *)
+  check bool "go.mod is emitted exactly once" true
+    (List.length (List.filter (fun p -> p = "go.mod") paths) = 1);
+  let consumer = artifact "internal/teslmodlesson07consumer/module.go" emitted in
+  check bool "the dependency's package is imported" true
+    (contains consumer
+       "\"tesl.generated/teslmodlesson07consumer/internal/teslmodlesson07home\"");
+  check bool "a call into the dependency is qualified" true
+    (contains consumer "teslmodlesson07home.CheckInBounds(rawN)"
+     && contains consumer "teslmodlesson07home.Sanitize(rawLabel)");
+  check bool "a call within the module stays unqualified" true
+    (contains consumer "return ProcessInput(validN, validLabel)");
+  (* Imported facts erase entirely — the proofs they carry are compile-time only.
+     `Sanitized` is the witness rather than `InBounds`, because the latter is a
+     substring of the check function `CheckInBounds` and so cannot distinguish a leaked
+     fact from a legitimate call. *)
+  check bool "imported facts leave no runtime trace" false (contains consumer "Sanitized");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then
+    let root = Filename.temp_dir "tesl-go-multi" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted multi-module source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+
+let cross_module_dep_source = {|module GoDep exposing [Point, Status(..), Slug, origin, shift, describe, tagOf]
+import Tesl.Prelude exposing [Int, String]
+
+type Slug = String
+
+record Point {
+  x: Int
+  y: Int
+}
+
+type Status
+  = Open
+  | Closed (reason: String)
+
+fn origin() -> Point = Point { x: 0, y: 0 }
+
+fn shift(p: Point, dx: Int) -> Point = { p | x = p.x + dx }
+
+fn describe(s: Status) -> String =
+  case s of
+    Open -> "open"
+    Closed reason -> "closed: ${reason}"
+
+fn tagOf(slug: Slug) -> String = slug.value
+|}
+
+let cross_module_user_source = {|module GoUser exposing [start, moved, sameSpot, report, label]
+import Tesl.Prelude exposing [Bool, Int, String]
+import GoDep exposing [Point, Status(..), Slug, origin, shift, describe, tagOf]
+
+fn start() -> Point = origin()
+
+fn moved(dx: Int) -> Point = shift (origin()) dx
+
+fn sameSpot(left: Point, right: Point) -> Bool = left == right
+
+fn report(s: Status) -> String = describe s
+
+fn label(raw: String) -> String = tagOf (Slug raw)
+
+test "cross-module types" {
+  expect (start()).x == 0
+  expect (moved 3).x == 3
+  expect sameSpot (start()) (origin()) == True
+  expect sameSpot (start()) (moved 1) == False
+  expect report Open == "open"
+  expect report (Closed "eod") == "closed: eod"
+  expect label "abc" == "abc"
+}
+|}
+
+(* A TYPE crossing a module boundary is the same type on both sides because the importer
+   reuses the very info record its dependency emitted from — modules are compiled
+   dependency-first for exactly this reason.  Re-deriving would produce a record that
+   compares unequal to the original (`go_type` equality is structural), so a value
+   crossing the boundary would look like a different type. *)
+let test_cross_module_types_with_go () =
+  let root = Filename.temp_dir "tesl-go-crossmodule" "" in
+  Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+    let write name contents =
+      let path = Filename.concat root name in
+      Out_channel.with_open_bin path (fun channel -> output_string channel contents);
+      path
+    in
+    ignore (write "go-dep.tesl" cross_module_dep_source);
+    let user = write "go-user.tesl" cross_module_user_source in
+    let emitted = match Compile.compile_go_file user with
+      | Compile.GoSuccess artifacts -> artifacts
+      | Compile.GoFailure diagnostics ->
+        failf "cross-module compilation failed: %s"
+          (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+    in
+    let consumer = artifact "internal/teslmodgouser/module.go" emitted in
+    let dependency = artifact "internal/teslmodgodep/module.go" emitted in
+    check bool "a record type is qualified at the use site" true
+      (contains consumer "func Moved(dx teslrt.Int) teslmodgodep.Point");
+    check bool "only the declaring package emits the declaration" true
+      (contains dependency "type Point struct {" && not (contains consumer "type Point struct {"));
+    check bool "a foreign record's fields are read directly" true
+      (contains consumer "(teslrt.Equal(left.X, right.X) && teslrt.Equal(left.Y, right.Y))");
+    (* A newtype's wrapper field is exported for the same reason the ADT tag is: it is
+       constructed from another package. *)
+    check bool "a foreign newtype is constructed with an exported field" true
+      (contains consumer "teslmodgodep.Slug{Value: raw}");
+    check bool "a foreign ADT is matched on its qualified tag" true
+      (contains dependency "StatusOpen");
+    if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+      let out = Filename.concat root "emitted" in
+      write_artifacts out emitted;
+      let unformatted = run_command out "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted cross-module source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command out "gofmt -d .");
+      ignore (run_command out "go test -count=1 ./...");
+      ignore (run_command out "go vet ./...");
+      ignore (run_command out "go test -race -count=1 ./...");
+      run_go_gates out
+    end)
+
 let proof_scalar_source = {|module GoProofScalars exposing [NonEmpty, Enabled, checkNonEmpty, checkEnabled, label, invert]
 import Tesl.Prelude exposing [Bool(..), String]
 
@@ -1940,17 +2180,17 @@ let test_scalar_newtypes_with_go () =
   in
   let module_go = artifact "internal/teslmodgonewtypes/module.go" emitted in
   check bool "Int newtype is nominal" true
-    (contains module_go "type Count struct {\n\tteslValue teslrt.Int\n}");
+    (contains module_go "type Count struct {\n\tValue teslrt.Int\n}");
   check bool "String newtype is nominal" true
-    (contains module_go "type Label struct {\n\tteslValue string\n}");
+    (contains module_go "type Label struct {\n\tValue string\n}");
   check bool "Bool newtype is nominal" true
-    (contains module_go "type EnabledFlag struct {\n\tteslValue bool\n}");
+    (contains module_go "type EnabledFlag struct {\n\tValue bool\n}");
   check bool "Unit newtype is nominal" true
-    (contains module_go "type Marker struct {\n\tteslValue struct{}\n}");
+    (contains module_go "type Marker struct {\n\tValue struct{}\n}");
   check bool "newtype Int equality uses runtime helper" true
-    (contains module_go "teslrt.Equal(left.teslValue, right.teslValue)");
+    (contains module_go "teslrt.Equal(left.Value, right.Value)");
   check bool "newtype Int ordering uses runtime helper" true
-    (contains module_go "teslrt.Compare(left.teslValue, right.teslValue)");
+    (contains module_go "teslrt.Compare(left.Value, right.Value)");
   check bool "newtype checks keep explicit result" true
     (contains module_go "teslrt.Check[Count]");
   if Sys.command "go version >/dev/null 2>&1" = 0 then
@@ -2118,15 +2358,16 @@ record Box {
 }
 fn valueOf(b: Box) -> Int = b.value
 |};
-  (* A Float field works now; `Tesl.Set` has no Go representation yet. *)
-  expect_go_error "unsupported record field type" "import `Tesl.Set`"
-    {|module SetFieldRecord exposing [Bag, sizeOf]
+  (* Float and Set fields both work now, so the boundary is the one that will outlast
+     the collection tier: a FUNCTION-typed field, which needs the calling-convention
+     decision function values are waiting on. *)
+  expect_go_error "unsupported record field type" "function values"
+    {|module FunctionFieldRecord exposing [Handler, run]
 import Tesl.Prelude exposing [Int]
-import Tesl.Set exposing [Set]
-record Bag {
-  items: Set Int
+record Handler {
+  apply: Int -> Int
 }
-fn sizeOf(b: Bag) -> Int = 0
+fn run(h: Handler) -> Int = 0
 |}
 
 let test_missing_record_field_never_reaches_emitter () =
@@ -2402,6 +2643,10 @@ let () =
       test_case "Either from the runtime" `Slow test_either_with_go;
       test_case "Tesl.Dict leaves" `Slow test_dicts_with_go;
       test_case "Float" `Slow test_floats_with_go;
+      test_case "Tesl.Set leaves" `Slow test_sets_with_go;
+      test_case "multi-module program" `Slow test_multi_module_with_go;
+      test_case "cross-module types" `Slow test_cross_module_types_with_go;
+      test_case "sets behave the same on Racket" `Slow (racket_behavior_oracle "<go-sets>" set_source);
       test_case "Float behaves the same on Racket" `Slow (racket_behavior_oracle "<go-floats>" float_source);
       test_case "divergent Float functions fail closed" `Quick test_divergent_float_functions_fail_closed;
       test_case "dicts behave the same on Racket" `Slow (racket_behavior_oracle "<go-dicts>" dict_source);

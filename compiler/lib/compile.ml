@@ -3229,20 +3229,77 @@ let diag_of_go_emit_error (error : Emit_go.emit_error) : diagnostic = {
 (** Compile a checked Tesl module into a complete standalone Go module tree.
     Go receives the surface AST: Racket-specific [Desugar.ERuntimeCall] nodes
     must never cross this backend boundary. *)
-let compile_go_source filename source =
+(* Every LOCAL module the entry imports, transitively, parsed and checked.  Import
+   resolution is this module's job, not the emitter's: `build_local_import_graph` already
+   knows how a module name becomes a file path, and it canonicalises so the same file
+   reached two ways is one node.  A cycle is rejected for now — the roadmap's mapping is
+   to collapse a cyclic SCC into one Go package with one file per module, which is more
+   than name resolution. *)
+type go_dependencies =
+  | GoDeps of Ast.module_form list
+  | GoDepsError of string
+
+let local_dependency_modules entry_path (entry : Ast.module_form) =
+  if entry_path = "" || Filename.check_suffix entry_path ">" then GoDeps [entry]
+  else
+    let graph = build_local_import_graph entry_path in
+    let entry_canon = canonical_import_path entry_path in
+    let cycles = List.filter (fun component -> List.length component > 1)
+      (tarjan_sccs graph) in
+    match cycles with
+    | component :: _ ->
+      GoDepsError (Printf.sprintf
+        "Go backend does not support the import cycle %s yet"
+        (String.concat " -> " (List.map Filename.basename component)))
+    | [] ->
+      let modules = ref [] in
+      let failed = ref None in
+      Hashtbl.iter (fun path _ ->
+        if path <> entry_canon then
+          match parse_module_file path with
+          | Some m -> modules := m :: !modules
+          | None ->
+            if !failed = None then
+              failed := Some (Printf.sprintf "Go backend could not parse imported module %s"
+                                (Filename.basename path))) graph;
+      (match !failed with
+       | Some message -> GoDepsError message
+       | None -> GoDeps (entry :: !modules))
+
+let go_project_diag file message = {
+  file; start_line = 1; start_col = 1; end_line = 1; end_col = 1;
+  severity = "error"; code = "V001"; message; fix = None; source = "go-emitter";
+  manual = None;
+}
+
+let compile_go_source ?(path="") filename source =
   match parse_module filename source with
   | Err error -> GoFailure [diag_of_parse_error error]
   | Ok m ->
     let diags = check_module source m in
     if diags <> [] then GoFailure diags
     else
-      (match Emit_go.compile_module ~mode:Emit_go.Release m with
-       | Ok artifacts -> GoSuccess artifacts
-       | Error errors -> GoFailure (List.map diag_of_go_emit_error errors))
+      (match local_dependency_modules path m with
+       | GoDepsError message -> GoFailure [go_project_diag filename message]
+       | GoDeps modules ->
+         (* Each dependency is checked in its own right: an importer only sees names its
+            dependency exports, so a dependency that does not compile must not be
+            emitted as if it did. *)
+         let dependency_diags = List.concat_map (fun (dependency : Ast.module_form) ->
+           if dependency.module_name = m.module_name then []
+           else
+             match In_channel.with_open_text dependency.source_file In_channel.input_all with
+             | dependency_source -> check_module dependency_source dependency
+             | exception Sys_error _ -> []) modules in
+         if dependency_diags <> [] then GoFailure dependency_diags
+         else
+           match Emit_go.compile_project ~mode:Emit_go.Release ~entry:m modules with
+           | Ok artifacts -> GoSuccess artifacts
+           | Error errors -> GoFailure (List.map diag_of_go_emit_error errors))
 
 let compile_go_file filename =
   let source = In_channel.with_open_text filename In_channel.input_all in
-  compile_go_source filename source
+  compile_go_source ~path:filename filename source
 
 (** Check only — return diagnostics without emitting Racket. *)
 let local_binding_of_checker (b : Checker.local_binding_info) : local_binding = {
@@ -4389,7 +4446,7 @@ let mutate_go_file ?(extra_test_files=[]) filename : mutate_result =
               (match Emit_go.compile_module ~mode:Emit_go.Release baseline with
                | Error (error :: _) -> MutateErr ("Go mutation baseline emit failed: " ^ error.message)
                | Error [] -> MutateErr "Go mutation baseline emit failed"
-               | Ok artifacts ->
+               | Ok (artifacts, _exports) ->
                  (match run_go_test_artifacts artifacts with
                   | GoBuildFailed output -> MutateErr ("Go mutation baseline did not compile:\n" ^ output)
                   | GoTestsFailed output -> MutateErr ("Go mutation baseline tests fail:\n" ^ output)
@@ -4403,7 +4460,7 @@ let mutate_go_file ?(extra_test_files=[]) filename : mutate_result =
                         match Emit_go.compile_module ~mode:Emit_go.Release module_ with
                         | Error (error :: _) -> Mutate.Error ("Go emit failed: " ^ error.message)
                         | Error [] -> Mutate.Error "Go emit failed"
-                        | Ok artifacts ->
+                        | Ok (artifacts, _exports) ->
                           (match run_go_test_artifacts artifacts with
                            | GoTestsPassed -> Mutate.Survived
                            | GoTestsFailed _ -> Mutate.Killed

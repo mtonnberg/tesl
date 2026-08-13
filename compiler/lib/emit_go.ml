@@ -26,12 +26,16 @@ type go_type =
   | TAdt of adt_info * go_type list
   | TList of go_type
   | TDict of go_type * go_type
+  | TSet of go_type
   | TParam of string
   | TCheck of go_type
   | TFailure
 
 and newtype_info = {
   tesl_name : string;
+  (* The package that DECLARES this type.  A reference from another package has to be
+     qualified, and only the declaring package may emit the declaration. *)
+  owner : string;
   go_name : string;
   base : go_type;
   loc : Location.loc;
@@ -39,6 +43,7 @@ and newtype_info = {
 
 and record_info = {
   rec_tesl_name : string;
+  rec_owner : string;
   rec_go_name : string;
   mutable rec_fields : (string * go_type) list;
   rec_loc : Location.loc;
@@ -49,6 +54,7 @@ and record_info = {
    checkable by the `exhaustive` linter, which a Go type switch would not be. *)
 and adt_info = {
   adt_tesl_name : string;
+  adt_owner : string;
   adt_go_name : string;
   adt_tag_type : string;
   (* Tesl type parameters in declaration order, paired with the Go type-parameter
@@ -75,7 +81,20 @@ type signature = {
   params : go_type list;
   result : go_type;
   go_name : string;
+  (* Empty for a runtime function (already spelled `teslrt.X`) and for the module being
+     emitted; otherwise the package that declares it. *)
+  sig_owner : string;
 }
+
+(* The package currently being emitted.  A reference to a name owned by another package
+   is qualified with the owner; a reference to one's own package is bare, since Go
+   forbids self-qualification.  This is a ref rather than a threaded parameter because
+   `go_type` is called from ~40 sites; it is set once per module in compile_project and
+   read nowhere else. *)
+let current_package = ref ""
+
+let qualified owner name =
+  if owner = "" || owner = !current_package then name else owner ^ "." ^ name
 
 exception Unsupported of emit_error
 
@@ -218,6 +237,18 @@ type type_table = {
   adts : (string, adt_info) Hashtbl.t;
 }
 
+(* What a compiled module offers its importers: the very tables it emitted from.  A
+   dependent reuses these exact info records rather than re-deriving them, so the two
+   cannot disagree about a type's Go name, its fields, or its identity — `go_type`
+   equality is structural, and two separately-derived records would compare unequal even
+   when they describe the same Tesl type. *)
+type module_exports = {
+  ex_module : string;
+  ex_package : string;
+  ex_types : type_table;
+  ex_signatures : (string, signature) Hashtbl.t;
+}
+
 let rec flatten_type_app args = function
   | TApp { head; arg; _ } -> flatten_type_app (arg :: args) head
   | head -> head, args
@@ -259,6 +290,10 @@ let rec type_of_type_expr ?(params=[]) types ty =
        (match args with
         | [key; value] -> TDict (recur key, recur value)
         | _ -> unsupported loc "Go backend requires `Dict` to be applied to 2 type arguments")
+     | TName { name = "Set"; _ } ->
+       (match args with
+        | [element] -> TSet (recur element)
+        | _ -> unsupported loc "Go backend requires `Set` to be applied to 1 type argument")
      | TName { name; _ } ->
        (match Hashtbl.find_opt types.adts name with
         | Some info ->
@@ -299,14 +334,16 @@ let rec go_type = function
   | TString -> "string"
   | TBool -> "bool"
   | TUnit -> "struct{}"
-  | TNewtype info -> info.go_name
-  | TRecord info -> info.rec_go_name
-  | TAdt (info, []) -> info.adt_go_name
+  | TNewtype info -> qualified info.owner info.go_name
+  | TRecord info -> qualified info.rec_owner info.rec_go_name
+  | TAdt (info, []) -> qualified info.adt_owner info.adt_go_name
   | TAdt (info, args) ->
-    Printf.sprintf "%s[%s]" info.adt_go_name (String.concat ", " (List.map go_type args))
+    Printf.sprintf "%s[%s]" (qualified info.adt_owner info.adt_go_name)
+      (String.concat ", " (List.map go_type args))
   | TList element -> "[]" ^ go_type element
   | TDict (key, value) ->
     Printf.sprintf "teslrt.Dict[%s, %s]" (go_type key) (go_type value)
+  | TSet element -> Printf.sprintf "teslrt.Set[%s]" (go_type element)
   | TParam name -> name
   | TCheck ty -> Printf.sprintf "teslrt.Check[%s]" (go_type ty)
   | TFailure -> invalid_arg "Go failure has no standalone type"
@@ -407,6 +444,7 @@ let rec substitute_type bindings ty =
   | TCheck inner -> TCheck (substitute_type bindings inner)
   | TList element -> TList (substitute_type bindings element)
   | TDict (key, value) -> TDict (substitute_type bindings key, substitute_type bindings value)
+  | TSet element -> TSet (substitute_type bindings element)
   | TInt | TFloat | TString | TBool | TUnit | TNewtype _ | TRecord _ | TFailure -> ty
 
 (** A variant's payload types with the ADT's type arguments substituted in. *)
@@ -433,8 +471,8 @@ and equal_expr ty left right =
   | TFloat -> Printf.sprintf "teslrt.FloatEqual(%s, %s)" left right
   | TString | TBool | TUnit -> Printf.sprintf "(%s == %s)" left right
   | TNewtype info ->
-    equal_expr info.base (Printf.sprintf "%s.teslValue" (selector_operand left))
-      (Printf.sprintf "%s.teslValue" (selector_operand right))
+    equal_expr info.base (Printf.sprintf "%s.Value" (selector_operand left))
+      (Printf.sprintf "%s.Value" (selector_operand right))
   | TRecord info ->
     (match info.rec_fields with
      | [] -> "true"
@@ -478,7 +516,8 @@ and equal_expr ty left right =
           equal_expr field_ty (Printf.sprintf "%s.%s" (selector_operand left) field)
             (Printf.sprintf "%s.%s" (selector_operand right) field)) fields in
         Some (Printf.sprintf "(%s.%s != %s || %s)"
-                (selector_operand left) adt_tag_field variant.var_tag
+                (selector_operand left) adt_tag_field
+                (qualified info.adt_owner variant.var_tag)
                 (String.concat " && " parts))) info.adt_variants in
     "(" ^ String.concat " && " (tag_equal :: payloads) ^ ")"
   (* A generic Go function cannot compare a `T`, so the element comparison is passed
@@ -489,6 +528,8 @@ and equal_expr ty left right =
   | TDict (key, value) ->
     Printf.sprintf "teslrt.DictEqualBy(%s, %s, %s, %s)" left right
       (element_equal_func key) (element_equal_func value)
+  | TSet element ->
+    Printf.sprintf "teslrt.SetEqualBy(%s, %s, %s)" left right (element_equal_func element)
   | TParam _ | TCheck _ | TFailure ->
     invalid_arg "Go equality on this type is rejected before emission"
 
@@ -498,8 +539,8 @@ and unequal_expr ty left right =
   | TFloat -> Printf.sprintf "!teslrt.FloatEqual(%s, %s)" left right
   | TString | TBool | TUnit -> Printf.sprintf "(%s != %s)" left right
   | TNewtype info ->
-    unequal_expr info.base (Printf.sprintf "%s.teslValue" (selector_operand left))
-      (Printf.sprintf "%s.teslValue" (selector_operand right))
+    unequal_expr info.base (Printf.sprintf "%s.Value" (selector_operand left))
+      (Printf.sprintf "%s.Value" (selector_operand right))
   | TRecord info ->
     (* De Morgan is applied here rather than negating the conjunction: emitted
        `!(a && b)` is a golangci-lint finding (staticcheck QF1001). *)
@@ -531,6 +572,8 @@ and unequal_expr ty left right =
   | TDict (key, value) ->
     Printf.sprintf "!teslrt.DictEqualBy(%s, %s, %s, %s)" left right
       (element_equal_func key) (element_equal_func value)
+  | TSet element ->
+    Printf.sprintf "!teslrt.SetEqualBy(%s, %s, %s)" left right (element_equal_func element)
   | TParam _ | TCheck _ | TFailure ->
     invalid_arg "Go equality on this type is rejected before emission"
 
@@ -540,17 +583,17 @@ and ordered_expr ty op left right =
   (* Ordering, unlike equality, IS plain IEEE in both backends. *)
   | TFloat | TString -> Printf.sprintf "(%s %s %s)" left op right
   | TNewtype info ->
-    ordered_expr info.base op (Printf.sprintf "%s.teslValue" (selector_operand left))
-      (Printf.sprintf "%s.teslValue" (selector_operand right))
-  | TBool | TUnit | TRecord _ | TAdt _ | TList _ | TDict _ | TParam _ | TCheck _
-  | TFailure ->
+    ordered_expr info.base op (Printf.sprintf "%s.Value" (selector_operand left))
+      (Printf.sprintf "%s.Value" (selector_operand right))
+  | TBool | TUnit | TRecord _ | TAdt _ | TList _ | TDict _ | TSet _ | TParam _
+  | TCheck _ | TFailure ->
     invalid_arg "Go ordering requires an ordered scalar type"
 
 let rec supports_ordering = function
   | TInt | TFloat | TString -> true
   | TNewtype info -> supports_ordering info.base
-  | TBool | TUnit | TRecord _ | TAdt _ | TList _ | TDict _ | TParam _ | TCheck _
-  | TFailure -> false
+  | TBool | TUnit | TRecord _ | TAdt _ | TList _ | TDict _ | TSet _ | TParam _
+  | TCheck _ | TFailure -> false
 
 (* A generic ADT has no comparable Go form: `TeslEqual` would have to dispatch
    `teslrt.Equal` for whatever the type parameter was instantiated with, which Go
@@ -575,6 +618,7 @@ let rec supports_equality = function
            (variant_field_types info args variant)) info.adt_variants)
   | TList element -> supports_equality element
   | TDict (key, value) -> supports_equality key && supports_equality value
+  | TSet element -> supports_equality element
   | TParam _ | TCheck _ | TFailure -> false
 
 let record_info_of_signature signatures name =
@@ -671,6 +715,52 @@ let dict_leaves = [
 ]
 
 let dict_leaf name = List.find_opt (fun leaf -> leaf.dict_name = name) dict_leaves
+
+(* Set leaves.  `set_result` says how the result is built from the element type; the Set
+   argument keeps its Tesl position, since the runtime signatures were written to match
+   (`SetInsert(value, s, less)`). *)
+type set_leaf = {
+  set_name : string;
+  set_go : string;
+  set_arity : int;
+  set_result : [ `Set | `Int | `Bool | `Elements ];
+  set_needs_order : bool;
+  (* Index of the Set argument, or -1 when there is none (`Set.empty`). *)
+  set_index : int;
+}
+
+let set_leaves = [
+  { set_name = "Set.empty"; set_go = "teslrt.SetEmpty"; set_arity = 0;
+    set_result = `Set; set_needs_order = false; set_index = -1 };
+  { set_name = "Set.singleton"; set_go = "teslrt.SetSingleton"; set_arity = 1;
+    set_result = `Set; set_needs_order = false; set_index = -1 };
+  { set_name = "Set.member"; set_go = "teslrt.SetMember"; set_arity = 2;
+    set_result = `Bool; set_needs_order = true; set_index = 1 };
+  { set_name = "Set.insert"; set_go = "teslrt.SetInsert"; set_arity = 2;
+    set_result = `Set; set_needs_order = true; set_index = 1 };
+  { set_name = "Set.remove"; set_go = "teslrt.SetRemove"; set_arity = 2;
+    set_result = `Set; set_needs_order = true; set_index = 1 };
+  { set_name = "Set.delete"; set_go = "teslrt.SetRemove"; set_arity = 2;
+    set_result = `Set; set_needs_order = true; set_index = 1 };
+  { set_name = "Set.size"; set_go = "teslrt.SetSize"; set_arity = 1;
+    set_result = `Int; set_needs_order = false; set_index = 0 };
+  { set_name = "Set.isEmpty"; set_go = "teslrt.SetIsEmpty"; set_arity = 1;
+    set_result = `Bool; set_needs_order = false; set_index = 0 };
+  { set_name = "Set.toList"; set_go = "teslrt.SetToList"; set_arity = 1;
+    set_result = `Elements; set_needs_order = false; set_index = 0 };
+  { set_name = "Set.fromList"; set_go = "teslrt.SetFromList"; set_arity = 1;
+    set_result = `Set; set_needs_order = true; set_index = -1 };
+  { set_name = "Set.union"; set_go = "teslrt.SetUnion"; set_arity = 2;
+    set_result = `Set; set_needs_order = true; set_index = 0 };
+  { set_name = "Set.intersection"; set_go = "teslrt.SetIntersection"; set_arity = 2;
+    set_result = `Set; set_needs_order = true; set_index = 0 };
+  { set_name = "Set.difference"; set_go = "teslrt.SetDifference"; set_arity = 2;
+    set_result = `Set; set_needs_order = true; set_index = 0 };
+  { set_name = "Set.isSubset"; set_go = "teslrt.SetIsSubset"; set_arity = 2;
+    set_result = `Bool; set_needs_order = true; set_index = 0 };
+]
+
+let set_leaf name = List.find_opt (fun leaf -> leaf.set_name = name) set_leaves
 
 (* `Tuple2.first p` is a field read dressed as a call: the accessors are the only way
    to reach a tuple's components, since a tuple has no user-visible field syntax. *)
@@ -854,6 +944,11 @@ let rec type_of_expr signatures env expr =
             | _ ->
               unsupported loc "Go backend requires a fully-applied newtype constructor `%s`" name)
          | _ -> unsupported loc "Go backend does not support constructor `%s` yet" name)
+      | EVar { name; _ } when set_leaf name <> None && Hashtbl.mem signatures name ->
+       let leaf = match set_leaf name with Some leaf -> leaf | None -> assert false in
+       (* No expectation is available here; `Set.empty` resolves through type_of_arg,
+          which is the path that carries one. *)
+       type_of_set_leaf signatures env loc leaf args None
       | EVar { name; _ } when dict_leaf name <> None && Hashtbl.mem signatures name ->
        let leaf = match dict_leaf name with Some leaf -> leaf | None -> assert false in
        type_of_dict_leaf signatures env loc leaf args
@@ -947,6 +1042,20 @@ let rec type_of_expr signatures env expr =
   | ELet { name; value; body; _ } ->
     let value_ty = type_of_expr signatures env value in
     type_of_expr signatures ((name, value_ty) :: env) body
+  (* `Set.empty` takes no arguments, so it parses as a bare field access over the module
+     name rather than a call.  Normalising it here lets the leaf tables resolve it. *)
+  | EField _ when (match normalize_call_head expr with
+                   | EVar { name; _ } ->
+                     (set_leaf name <> None || dict_leaf name <> None)
+                     && Hashtbl.mem signatures name
+                   | _ -> false) ->
+    (match normalize_call_head expr with
+     | EVar { name; loc } ->
+       (match set_leaf name, dict_leaf name with
+        | Some leaf, _ -> type_of_set_leaf signatures env loc leaf [] None
+        | _, Some leaf -> type_of_dict_leaf signatures env loc leaf []
+        | None, None -> assert false)
+     | _ -> assert false)
   | EField { obj; field; loc } ->
     (match type_of_expr signatures env obj, field with
      | TNewtype info, "value" -> info.base
@@ -1151,6 +1260,50 @@ and constructor_head expr =
      | _ -> None)
   | _ -> None
 
+(* A set leaf's element type comes from its Set argument, from the element it is given
+   (`Set.singleton`), from the list (`Set.fromList`), or — for `Set.empty`, which has
+   neither — from the expectation, like `Nothing`. *)
+and type_of_set_leaf signatures env loc leaf args expected =
+  let args = normalize_call_args (List.init leaf.set_arity (fun _ -> TUnit)) args in
+  if List.length args <> leaf.set_arity then
+    unsupported loc "Go backend requires `%s` applied to %d argument(s)"
+      leaf.set_name leaf.set_arity;
+  let element =
+    if leaf.set_index >= 0 then
+      match type_of_expr signatures env (List.nth args leaf.set_index) with
+      | TSet element -> element
+      | _ -> unsupported loc "Go backend `%s` requires a Set argument" leaf.set_name
+    else match leaf.set_name, expected with
+      | "Set.empty", Some (TSet element) -> element
+      | "Set.empty", _ ->
+        unsupported loc "Go backend cannot infer the element type of `Set.empty`"
+      | "Set.singleton", _ -> type_of_expr signatures env (List.nth args 0)
+      | "Set.fromList", _ ->
+        (match type_of_expr signatures env (List.nth args 0) with
+         | TList element -> element
+         | _ -> unsupported loc "Go backend `%s` requires a List argument" leaf.set_name)
+      | _ -> unsupported loc "Go backend cannot resolve `%s`" leaf.set_name
+  in
+  if leaf.set_needs_order && not (supports_ordering element) then
+    unsupported loc "Go backend `%s` needs ordered elements" leaf.set_name;
+  (* Check the non-Set arguments: an element for member/insert/remove, a Set for the
+     algebra. *)
+  List.iteri (fun index arg ->
+    if index <> leaf.set_index then begin
+      let want = match leaf.set_name with
+        | "Set.union" | "Set.intersection" | "Set.difference" | "Set.isSubset" -> TSet element
+        | "Set.fromList" -> TList element
+        | _ -> element
+      in
+      if type_of_arg signatures env want arg <> want then unsupported loc
+        "Go backend `%s` argument %d has an unsupported type" leaf.set_name (index + 1)
+    end) args;
+  (match leaf.set_result with
+   | `Set -> TSet element
+   | `Int -> TInt
+   | `Bool -> TBool
+   | `Elements -> TList element)
+
 (* A dict leaf's types come from its Dict argument — except `Dict.empty`, which has no
    argument at all and so takes its type from the expectation, like `Nothing`. *)
 and type_of_dict_leaf signatures env loc leaf args =
@@ -1214,6 +1367,13 @@ and type_of_arg signatures env want arg =
   | EList { elems = []; _ } when (match want with TList _ -> true | _ -> false) -> want
   (* The expectation belongs to each BRANCH, and a branch is exactly where an
      under-constrained constructor sits. *)
+  (* `Set.empty` and `Dict.empty` have no argument to infer an element type from, so the
+     expectation supplies it — the same rule as an empty list literal and a nullary
+     constructor.  Both are spelled as a bare name, since they take no arguments. *)
+  | _ when (match normalize_call_head arg, want with
+            | EVar { name = "Set.empty"; _ }, TSet _ -> true
+            | EVar { name = "Dict.empty"; _ }, TDict _ -> true
+            | _ -> false) -> want
   | EIf { cond; then_; else_; loc } ->
     if type_of_expr signatures env cond <> TBool then
       unsupported loc "Go backend if condition must be Bool";
@@ -1406,7 +1566,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
        ignore (type_of_expr signatures env expr);
        (match args with
         | [arg] ->
-          Printf.sprintf "%s{teslValue: %s}" (go_type result) (emit arg)
+          Printf.sprintf "%s{Value: %s}" (go_type result) (emit arg)
         | _ -> unsupported loc "Go backend requires a fully-applied newtype constructor `%s`" name)
      | _ -> unsupported loc "Go backend cannot emit constructor `%s`" name)
   | EApp { loc; _ } as app ->
@@ -1450,7 +1610,8 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
              | Some signature -> signature
              | None -> unsupported loc "Go backend cannot resolve check `%s`" name
            in
-           Printf.sprintf "teslrt.MustCheck(%s(%s))" signature.go_name
+           Printf.sprintf "teslrt.MustCheck(%s(%s))"
+             (qualified signature.sig_owner signature.go_name)
               (String.concat ", " (List.map emit call_args))
          | _ -> unsupported loc "Go backend requires a named check function")
       | EVar { name = "not"; _ } when not (Hashtbl.mem signatures "not") ->
@@ -1464,9 +1625,13 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
            ignore (type_of_expr signatures env app);
            (match constructor_args @ args with
             | [arg] ->
-              Printf.sprintf "%s{teslValue: %s}" (go_type result) (emit arg)
+              Printf.sprintf "%s{Value: %s}" (go_type result) (emit arg)
             | _ -> assert false)
          | _ -> unsupported loc "Go backend cannot emit constructor `%s`" name)
+      | EVar { name; _ } when set_leaf name <> None && Hashtbl.mem signatures name ->
+       let leaf = match set_leaf name with Some leaf -> leaf | None -> assert false in
+       emit_set_leaf ~indent signatures env loc leaf args
+         (type_of_expr signatures env app) expected
       | EVar { name; _ } when dict_leaf name <> None && Hashtbl.mem signatures name ->
        let leaf = match dict_leaf name with Some leaf -> leaf | None -> assert false in
        emit_dict_leaf ~indent signatures env loc leaf args
@@ -1514,7 +1679,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
        in
        let args = normalize_call_args signature.params args in
        ignore (type_of_expr signatures env app);
-       Printf.sprintf "%s(%s)" signature.go_name
+       Printf.sprintf "%s(%s)" (qualified signature.sig_owner signature.go_name)
           (String.concat ", " (List.map2 (fun arg want ->
              emit_expr ~expected:want ~indent signatures env arg) args signature.params))
      | _ -> unsupported loc "Go backend supports calls to named functions only")
@@ -1562,11 +1727,27 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
   | EUnop { op = UNot; arg; _ } -> emit_negated ~indent signatures env arg
   | EIf _ as if_expr -> emit_if_expr ?expected ~indent signatures env if_expr
   | ELet _ as let_expr -> emit_let_expr ?expected ~indent signatures env let_expr
+  | EField _ when (match normalize_call_head expr with
+                   | EVar { name; _ } ->
+                     (set_leaf name <> None || dict_leaf name <> None)
+                     && Hashtbl.mem signatures name
+                   | _ -> false) ->
+    (match normalize_call_head expr with
+     | EVar { name; loc } ->
+       (match set_leaf name, dict_leaf name with
+        | Some leaf, _ ->
+          emit_set_leaf ~indent signatures env loc leaf []
+            (match expected with Some want -> want | None -> TFailure) expected
+        | _, Some leaf ->
+          emit_dict_leaf ~indent signatures env loc leaf []
+            (match expected with Some want -> want | None -> TFailure) expected
+        | None, None -> assert false)
+     | _ -> assert false)
   | EField { obj; field; _ } ->
     (match type_of_expr signatures env obj with
      | TNewtype _ ->
        ignore (type_of_expr signatures env expr);
-       Printf.sprintf "%s.teslValue" (selector_operand (emit obj))
+       Printf.sprintf "%s.Value" (selector_operand (emit obj))
      | TRecord _ ->
        ignore (type_of_expr signatures env expr);
        Printf.sprintf "%s.%s" (selector_operand (emit obj)) (record_field_go_name field)
@@ -1694,7 +1875,8 @@ and emit_case_statements ?(indent="") signatures env buffer emit_body scrut arms
         let body_indent = inner ^ "\t" in
         (match variant with
          | Some variant ->
-           Printf.bprintf buffer "%sif %s.%s == %s {\n" inner scrut_name adt_tag_field variant.var_tag
+           Printf.bprintf buffer "%sif %s.%s == %s {\n" inner scrut_name adt_tag_field
+             (qualified info.adt_owner variant.var_tag)
          | None -> Printf.bprintf buffer "%s{\n" inner);
         let arm_env = bind_arm body_indent (whole, bindings) in
         (match arm.guard with
@@ -1712,7 +1894,8 @@ and emit_case_statements ?(indent="") signatures env buffer emit_body scrut arms
     (* Every tag is named explicitly — a Tesl catch-all becomes the list of tags no
        earlier arm covered — so the `exhaustive` linter can still verify the switch
        (`default:` alone would blind it under default-signifies-exhaustive: false). *)
-    let all_tags = List.map (fun variant -> variant.var_tag) info.adt_variants in
+    let all_tags =
+      List.map (fun variant -> qualified info.adt_owner variant.var_tag) info.adt_variants in
     Printf.bprintf buffer "%sswitch %s.%s {\n" inner scrut_name adt_tag_field;
     let containment_default () =
       Printf.bprintf buffer "%sdefault:\n" inner;
@@ -1723,12 +1906,13 @@ and emit_case_statements ?(indent="") signatures env buffer emit_body scrut arms
       | ((arm : case_arm), (variant, whole, bindings)) :: rest ->
         (match variant with
          | Some variant ->
-           if List.mem variant.var_tag seen then cases seen rest
+           let tag = qualified info.adt_owner variant.var_tag in
+           if List.mem tag seen then cases seen rest
            else begin
-             Printf.bprintf buffer "%scase %s:\n" inner variant.var_tag;
+             Printf.bprintf buffer "%scase %s:\n" inner tag;
              let arm_env = bind_arm (inner ^ "\t") (whole, bindings) in
              emit_body arm_env (inner ^ "\t") arm.body;
-             cases (variant.var_tag :: seen) rest
+             cases (tag :: seen) rest
            end
          | None ->
            let uncovered = List.filter (fun tag -> not (List.mem tag seen)) all_tags in
@@ -1796,7 +1980,7 @@ and emit_applied ?(indent="") signatures env callable params bound =
     emit_expr ~indent signatures env body
   | EVar { name; _ } ->
     let go_name = match Hashtbl.find_opt signatures name with
-      | Some signature -> signature.go_name
+      | Some signature -> qualified signature.sig_owner signature.go_name
       | None -> invalid_arg "function argument validated before emission"
     in
     Printf.sprintf "%s(%s)" go_name (String.concat ", " bound)
@@ -1805,7 +1989,7 @@ and emit_applied ?(indent="") signatures env callable params bound =
     let go_name = match normalize_call_head head with
       | EVar { name; _ } ->
         (match Hashtbl.find_opt signatures name with
-         | Some signature -> signature.go_name
+         | Some signature -> qualified signature.sig_owner signature.go_name
          | None -> invalid_arg "function argument validated before emission")
       | _ -> invalid_arg "function argument validated before emission"
     in
@@ -1835,7 +2019,7 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
   match hof with
   | HofMap | HofFilter | HofAny | HofAll ->
     let element = element_of 1 in
-    let value = match callable_binders callable [Printf.sprintf "teslValue%d" depth] with
+    let value = match callable_binders callable [Printf.sprintf "Value%d" depth] with
       | [value] -> value
       | _ -> invalid_arg "higher-order leaf validated before emission"
     in
@@ -1902,7 +2086,7 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
       inner inner out indent
   | HofFilterCheck | HofAllCheck ->
     let element = element_of 1 in
-    let value = match callable_binders callable [Printf.sprintf "teslValue%d" depth] with
+    let value = match callable_binders callable [Printf.sprintf "Value%d" depth] with
       | [value] -> value
       | _ -> invalid_arg "higher-order leaf validated before emission"
     in
@@ -1944,7 +2128,7 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
     let element = element_of 2 in
     let accumulator = result in
     let bound = match callable_binders callable
-      [Printf.sprintf "teslAcc%d" depth; Printf.sprintf "teslValue%d" depth] with
+      [Printf.sprintf "teslAcc%d" depth; Printf.sprintf "Value%d" depth] with
       | [acc; value] -> [acc; value]
       | _ -> invalid_arg "higher-order leaf validated before emission"
     in
@@ -2012,6 +2196,31 @@ and emit_dict_leaf ?(indent="") signatures env loc leaf args result expected =
   in
   Printf.sprintf "%s%s(%s)" leaf.dict_go instantiation (String.concat ", " emitted)
 
+(* Set leaves are ordinary runtime calls; the ordering is appended last, and
+   `Set.empty` writes its type parameter out since it has no argument to infer from. *)
+and emit_set_leaf ?(indent="") signatures env loc leaf args result expected =
+  let args = normalize_call_args (List.init leaf.set_arity (fun _ -> TUnit)) args in
+  let element = match result, expected with
+    | TSet element, _ -> element
+    | _, Some (TSet element) -> element
+    | _ ->
+      if leaf.set_index >= 0 then
+        (match type_of_expr signatures env (List.nth args leaf.set_index) with
+         | TSet element -> element
+         | _ -> unsupported loc "Go backend `%s` requires a Set argument" leaf.set_name)
+      else unsupported loc "Go backend cannot infer the element type of `%s`" leaf.set_name
+  in
+  let instantiation =
+    if leaf.set_name <> "Set.empty" then ""
+    else Printf.sprintf "[%s]" (go_type element)
+  in
+  let emitted = List.map (emit_expr ~indent signatures env) args in
+  let emitted =
+    if not leaf.set_needs_order then emitted
+    else emitted @ [element_less_func element]
+  in
+  Printf.sprintf "%s%s(%s)" leaf.set_go instantiation (String.concat ", " emitted)
+
 and emit_variant_literal ?(indent="") signatures env result variant args =
   let info, type_args = match result with
     | TAdt (info, args) -> info, args
@@ -2023,7 +2232,7 @@ and emit_variant_literal ?(indent="") signatures env result variant args =
       (emit_expr ~expected:field_ty ~indent signatures env arg)) args payload in
   let fields =
     if single_variant info <> None then parts
-    else (adt_tag_field ^ ": " ^ variant.var_tag) :: parts
+    else (adt_tag_field ^ ": " ^ qualified info.adt_owner variant.var_tag) :: parts
   in
   Printf.sprintf "%s{%s}" (go_type result) (String.concat ", " fields)
 
@@ -2243,7 +2452,10 @@ let contains_go_code haystack needle =
   in
   needle_length = 0 || loop 0 false false false
 
+(* gofmt sorts an import block, so it is emitted sorted — otherwise every multi-import
+   file is reported unformatted. *)
 let import_block paths =
+  let paths = List.sort_uniq String.compare paths in
   match paths with
   | [] -> ""
   | [path] -> Printf.sprintf "\nimport %s\n" (go_quote path)
@@ -2312,19 +2524,26 @@ let adt_source info =
   Buffer.contents body
   end
 
-let module_source module_path package signatures types (funcs : func_decl list) =
+let module_source ?(imported_packages=[]) module_path package signatures types
+    (funcs : func_decl list) =
   let body = Buffer.create 1024 in
+  (* ONLY THE DECLARING PACKAGE EMITS A DECLARATION.  An imported type is present in
+     these tables so it can be referenced and its fields read, but emitting it here too
+     would produce a second, incompatible Go type with the same Tesl name. *)
+  let declared_here owner = owner = package in
   Hashtbl.to_seq_values types.newtypes
   |> List.of_seq
   |> List.sort (fun left right -> String.compare left.tesl_name right.tesl_name)
+  |> List.filter (fun info -> declared_here info.owner)
   |> List.iter (fun info ->
     Buffer.add_char body '\n';
     Buffer.add_string body (line_directive info.loc);
-    Printf.bprintf body "type %s struct {\n\tteslValue %s\n}\n"
+    Printf.bprintf body "type %s struct {\n\tValue %s\n}\n"
       info.go_name (go_type info.base));
   Hashtbl.to_seq_values types.records
   |> List.of_seq
   |> List.sort (fun left right -> String.compare left.rec_tesl_name right.rec_tesl_name)
+  |> List.filter (fun info -> declared_here info.rec_owner)
   |> List.iter (fun info ->
     (* gofmt aligns a struct's field types in one column; emit that alignment
        directly so the corpus stays gofmt-clean. *)
@@ -2343,7 +2562,8 @@ let module_source module_path package signatures types (funcs : func_decl list) 
   |> List.of_seq
   |> List.sort (fun left right -> String.compare left.adt_tesl_name right.adt_tesl_name)
   |> List.iter (fun info ->
-    if not info.adt_builtin then Buffer.add_string body (adt_source info));
+    if not info.adt_builtin && declared_here info.adt_owner then
+      Buffer.add_string body (adt_source info));
   List.iter (fun (fd : func_decl) ->
     if fd.kind <> FnKind && fd.kind <> CheckKind then unsupported fd.loc
       "Go backend supports plain `fn` and `check` declarations only";
@@ -2379,11 +2599,20 @@ let module_source module_path package signatures types (funcs : func_decl list) 
   let body = Buffer.contents body in
   let imports =
     (if contains_go_code body "strconv." then ["strconv"] else [])
-    @ (if contains_go_code body "teslrt." then [module_path ^ "/internal/teslrt"] else []) in
+    @ (if contains_go_code body "teslrt." then [module_path ^ "/internal/teslrt"] else [])
+    (* Only packages the emitted body actually references: an unused import is a Go
+       compile error, and a Tesl module may import names it only uses in a type
+       annotation, or import facts that erase entirely. *)
+    @ List.filter_map (fun dependency ->
+        if contains_go_code body (dependency ^ ".") then
+          Some (module_path ^ "/internal/" ^ dependency)
+        else None)
+        (List.sort String.compare imported_packages) in
   let header = Printf.sprintf "package %s\n%s" package (import_block imports) in
   header ^ body
 
-let test_source module_path package signatures (tests : test_form list) =
+let test_source ?(imported_packages=[]) module_path package signatures
+    (tests : test_form list) =
   let body = Buffer.create 1024 in
   let rec emit_stmts env indent = function
     | [] -> ()
@@ -2462,7 +2691,7 @@ let test_source module_path package signatures (tests : test_form list) =
          Printf.bprintf body "%sif (%s).OK() {\n%s\tteslT.Fatal(\"expected Tesl check failure\")\n%s}\n"
            indent emitted indent indent
        | TInt | TFloat | TString | TBool | TUnit | TNewtype _ | TRecord _ | TAdt _
-       | TList _ | TDict _ | TParam _ ->
+       | TList _ | TDict _ | TSet _ | TParam _ ->
          Printf.bprintf body "%steslExpectFailure(teslT, func() {\n%s\t_ = %s\n%s})\n"
            indent indent emitted indent
        | TFailure -> unsupported loc "Go backend expectFail target has no result type");
@@ -2487,12 +2716,61 @@ let test_source module_path package signatures (tests : test_form list) =
   let imports = ["fmt"; "os"]
     @ (if contains_go_code body "strconv." then ["strconv"] else [])
     @ (if contains_go_code body "teslrt." then [module_path ^ "/internal/teslrt"] else [])
+    (* A test block may construct a dependency's type or call into it directly, so the
+       test file needs the same imports — and only the ones it actually references. *)
+    @ List.filter_map (fun dependency ->
+        if contains_go_code body (dependency ^ ".") then
+          Some (module_path ^ "/internal/" ^ dependency)
+        else None) imported_packages
     @ ["testing"] in
   Printf.sprintf
     "package %s\n%s\nfunc TestMain(teslM *testing.M) {\n\t_, _ = fmt.Fprintln(os.Stderr, \"TESL_GO_TESTS_STARTED\")\n\tos.Exit(teslM.Run())\n}\n%s%s"
     package (import_block imports) expect_failure_helper body
 
-let compile_module ?(mode=Release) (m : module_form) =
+(* Brings an imported local module's exposed names into scope by COPYING the entries
+   from the tables that module emitted from.  Nothing is re-derived: a second derivation
+   would produce info records that compare unequal to the originals (go_type equality is
+   structural), so a value crossing the boundary would look like a different type.
+   Facts are absent from these tables by design — a fact erases entirely, so an exposed
+   name that resolves to nothing is not an error. *)
+let register_imported_module ~loc ~exposed types signatures (exports : module_exports) =
+  List.iter (fun name ->
+    let copy_type () =
+      match Hashtbl.find_opt exports.ex_types.newtypes name,
+            Hashtbl.find_opt exports.ex_types.records name,
+            Hashtbl.find_opt exports.ex_types.adts name with
+      | Some info, _, _ -> Hashtbl.replace types.newtypes name info; true
+      | None, Some info, _ -> Hashtbl.replace types.records name info; true
+      | None, None, Some info -> Hashtbl.replace types.adts name info; true
+      | None, None, None -> false
+    in
+    (* An ADT exposed as `Colour(..)` brings its constructors; the bare name is also
+       accepted, since the constructors live in the signature table either way. *)
+    let base = match String.index_opt name '(' with
+      | Some index -> String.sub name 0 index
+      | None -> name
+    in
+    let found_type = copy_type () || (base <> name &&
+      (match Hashtbl.find_opt exports.ex_types.adts base with
+       | Some info -> Hashtbl.replace types.adts base info; true
+       | None -> false)) in
+    let found_value = match Hashtbl.find_opt exports.ex_signatures name with
+      | Some signature -> Hashtbl.replace signatures name signature; true
+      | None -> false
+    in
+    (* A constructor of an exposed ADT is itself a signature entry. *)
+    if found_type then
+      Hashtbl.iter (fun ctor (signature : signature) ->
+        match signature.result with
+        | TAdt (info, _) when info.adt_tesl_name = base ->
+          Hashtbl.replace signatures ctor signature
+        | _ -> ()) exports.ex_signatures;
+    (* A name that is neither a type nor a value is a FACT: the frontend has already
+       validated the import, and a fact has no runtime form to bring across. *)
+    ignore (found_type, found_value, loc))
+    exposed
+
+let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_form) =
   try
     (match mode with
      | Release -> ()
@@ -2522,12 +2800,17 @@ let compile_module ?(mode=Release) (m : module_form) =
             "Go backend does not support `Tesl.Maybe` export `%s` yet" other) exposed;
         maybe_imported := true
       | "Tesl.String" | "Tesl.List" | "Tesl.Int" | "Tesl.Tuple" | "Tesl.Dict"
-      | "Tesl.Float" | "Tesl.Either" | "Tesl.EitherPrim" -> ()
+      | "Tesl.Set" | "Tesl.Float" | "Tesl.Either" | "Tesl.EitherPrim" -> ()
         (* validated against the leaf/type tables below *)
+      | other when List.exists (fun (dependency : module_exports) ->
+                     dependency.ex_module = other) dependencies ->
+        (* A LOCAL module: registered below, once the type tables exist. *)
+        ()
       | other ->
         unsupported import.loc "Go backend does not support import `%s` yet" other) m.imports;
     let funcs = List.filter_map (function DFunc fd -> Some fd | _ -> None) m.decls in
     let tests = List.filter_map (function DTest test -> Some test | _ -> None) m.decls in
+    let package = package_name m.module_name in
     let types = {
       newtypes = Hashtbl.create 8;
       records = Hashtbl.create 8;
@@ -2544,6 +2827,7 @@ let compile_module ?(mode=Release) (m : module_form) =
         let base = primitive_type_of_type_expr base_type in
         Hashtbl.replace types.newtypes name {
           tesl_name = name;
+          owner = package;
           go_name = package_ident name;
           base;
           loc;
@@ -2565,11 +2849,26 @@ let compile_module ?(mode=Release) (m : module_form) =
         unsupported r.loc "Go backend generated type name collision for `%s`" r.name;
       Hashtbl.replace types.records r.name {
         rec_tesl_name = r.name;
+        rec_owner = package;
         rec_go_name = package_ident r.name;
         rec_fields = [];
         rec_loc = r.loc;
       }) record_forms;
     let tuple_imported = ref false in
+    let set_imports = ref [] in
+    List.iter (fun (import : import_decl) ->
+      if import.module_name = "Tesl.Set" then begin
+        let exposed = match import.names with
+          | ImportAll -> []
+          | ImportExposing names -> names
+        in
+        List.iter (fun name ->
+          if set_leaf name <> None then set_imports := name :: !set_imports
+          else match name with
+            | "Set" -> ()
+            | other -> unsupported import.loc
+              "Go backend does not support `Tesl.Set` export `%s` yet" other) exposed
+      end) m.imports;
     let dict_imports = ref [] in
     List.iter (fun (import : import_decl) ->
       if import.module_name = "Tesl.Dict" then begin
@@ -2758,6 +3057,7 @@ let compile_module ?(mode=Release) (m : module_form) =
           field, name ^ go_ident ~exported:true field) fields in
         Hashtbl.replace types.adts name {
           adt_tesl_name = name;
+          adt_owner = "";
           adt_go_name = "teslrt." ^ name;
           adt_tag_type = "teslrt." ^ name ^ "Tag";
           adt_params = List.init arity (fun index ->
@@ -2790,6 +3090,7 @@ let compile_module ?(mode=Release) (m : module_form) =
       let loc = Location.dummy_loc m.source_file in
       Hashtbl.replace types.adts "Either" {
         adt_tesl_name = "Either";
+        adt_owner = "";
         adt_go_name = "teslrt.Either";
         adt_tag_type = "teslrt.EitherTag";
         adt_params = ["a", "A"; "b", "B"];
@@ -2809,6 +3110,7 @@ let compile_module ?(mode=Release) (m : module_form) =
       let loc = Location.dummy_loc m.source_file in
       Hashtbl.replace types.adts "Maybe" {
         adt_tesl_name = "Maybe";
+        adt_owner = "";
         adt_go_name = "teslrt.Maybe";
         adt_tag_type = "teslrt.MaybeTag";
         adt_params = ["a", "A"];
@@ -2846,6 +3148,7 @@ let compile_module ?(mode=Release) (m : module_form) =
         param, unique_ident param_names (go_ident ~exported:true param)) params in
       Hashtbl.replace types.adts name {
         adt_tesl_name = name;
+        adt_owner = package;
         adt_go_name = go_name;
         adt_tag_type = unique_ident taken (go_name ^ "Tag");
         adt_params = go_params;
@@ -2970,13 +3273,13 @@ let compile_module ?(mode=Release) (m : module_form) =
       Hashtbl.add signatures name {
         params = [info.base];
         result = TNewtype info;
-        go_name = info.go_name;
+        go_name = info.go_name; sig_owner = info.owner;
       }) types.newtypes;
     Hashtbl.iter (fun name info ->
       Hashtbl.add signatures name {
         params = List.map snd info.rec_fields;
         result = TRecord info;
-        go_name = info.rec_go_name;
+        go_name = info.rec_go_name; sig_owner = info.rec_owner;
       }) types.records;
     (* Each constructor is its own signature entry: the surface syntax names the
        constructor, and the variant it belongs to is recovered from the result type. *)
@@ -2989,17 +3292,22 @@ let compile_module ?(mode=Release) (m : module_form) =
         Hashtbl.add signatures variant.var_ctor {
           params = List.map snd variant.var_fields;
           result = TAdt (info, []);
-          go_name = variant.var_tag;
+          go_name = variant.var_tag; sig_owner = info.adt_owner;
         }) info.adt_variants) types.adts;
     (* Imported stdlib leaves are ordinary signatures whose Go name is a runtime
        function, so the existing call machinery emits them with no special case. *)
     (* A list leaf is registered only so the call arms can tell an imported name from
        an unresolved one; its params/result are computed per call site. *)
     List.iter (fun name ->
+      let leaf = match set_leaf name with Some leaf -> leaf | None -> assert false in
+      if not (Hashtbl.mem signatures name) then
+        Hashtbl.add signatures name
+          { params = []; result = TFailure; go_name = leaf.set_go; sig_owner = "" }) !set_imports;
+    List.iter (fun name ->
       let leaf = match dict_leaf name with Some leaf -> leaf | None -> assert false in
       if not (Hashtbl.mem signatures name) then
         Hashtbl.add signatures name
-          { params = []; result = TFailure; go_name = leaf.dict_go }) !dict_imports;
+          { params = []; result = TFailure; go_name = leaf.dict_go; sig_owner = "" }) !dict_imports;
     List.iter (fun name ->
       (* A higher-order leaf has no runtime function at all — it lowers to a loop — so
          its entry exists only to mark the name as imported. *)
@@ -3009,7 +3317,7 @@ let compile_module ?(mode=Release) (m : module_form) =
       in
       if not (Hashtbl.mem signatures name) then
         Hashtbl.add signatures name
-          { params = []; result = TFailure; go_name }) !list_imports;
+          { params = []; result = TFailure; go_name; sig_owner = "" }) !list_imports;
     List.iter (fun name ->
       let params, result, go_name =
         match List.find_opt (fun (leaf, _, _, _) -> leaf = name) string_leaves with
@@ -3039,11 +3347,26 @@ let compile_module ?(mode=Release) (m : module_form) =
         | `CheckInt -> TCheck TInt
       in
       if not (Hashtbl.mem signatures name) then
-        Hashtbl.add signatures name {
-          params = List.map shape params;
-          result = shape result;
-          go_name;
-        }) !string_imports;
+        Hashtbl.add signatures name { params = List.map shape params; result = shape result; go_name; sig_owner = "" }) !string_imports;
+    (* An imported local module contributes its exported functions with the OWNING
+       package attached, so every reference to them is qualified. *)
+    let imported_packages = ref [] in
+    List.iter (fun (import : import_decl) ->
+      match List.find_opt (fun (dependency : module_exports) ->
+              dependency.ex_module = import.module_name) dependencies with
+      | None -> ()
+      | Some dependency ->
+        let exposed = match import.names with
+          | ImportAll ->
+            unsupported import.loc
+              "Go backend requires `import %s exposing [...]`: a qualified-only import gives the emitter no names to resolve"
+              import.module_name
+          | ImportExposing names -> names
+        in
+        if not (List.mem dependency.ex_package !imported_packages) then
+          imported_packages := dependency.ex_package :: !imported_packages;
+        register_imported_module ~loc:import.loc ~exposed types signatures dependency)
+      m.imports;
     List.iter (fun (fd : func_decl) ->
       if Hashtbl.mem signatures fd.name then unsupported fd.loc
         "Go backend generated name collision for `%s`" fd.name;
@@ -3055,11 +3378,22 @@ let compile_module ?(mode=Release) (m : module_form) =
         params;
         result = type_of_return_spec types fd.return_spec;
         go_name;
+        sig_owner = package;
       }) funcs;
-    let package = package_name m.module_name in
-    let module_path = "tesl.generated/" ^ package in
-    let source = module_source module_path package signatures types funcs in
-    let tests_source = if tests = [] then None else Some (test_source module_path package signatures tests) in
+    (* Every package in a multi-module program lives under ONE Go module path, so an
+       importer and its dependency agree on the import path. *)
+    let module_path = match project_path with
+      | Some path -> path
+      | None -> "tesl.generated/" ^ package
+    in
+    current_package := package;
+    let source =
+      module_source ~imported_packages:!imported_packages module_path package signatures
+        types funcs in
+    let tests_source =
+      if tests = [] then None
+      else Some (test_source ~imported_packages:!imported_packages module_path package
+                   signatures tests) in
     let needs_runtime = contains_go_code source "teslrt." ||
       match tests_source with Some text -> contains_go_code text "teslrt." | None -> false in
     (* The lint configuration is part of the emitter contract, versioned with this
@@ -3090,5 +3424,65 @@ let compile_module ?(mode=Release) (m : module_form) =
         { path = "internal/teslrt/" ^ name; contents }) Embedded_go_runtime.files
       else artifacts
     in
-    Ok artifacts
+    Ok (artifacts, { ex_module = m.module_name; ex_package = package;
+                     ex_types = types; ex_signatures = signatures })
   with Unsupported error -> Error [error]
+
+(* Emits a whole program: one Go package per Tesl module, all under the entry module's
+   Go module path.  `modules` must contain the entry and every local module it imports,
+   transitively; the caller resolves that graph (compile.ml owns file resolution).
+   Shared artifacts — go.mod, the lint config, the runtime — are emitted once.
+
+   Modules are compiled DEPENDENCY-FIRST so an importer receives the very tables its
+   dependency emitted from.  That is what makes a type crossing the boundary the same
+   type on both sides: `go_type` equality is structural, so a re-derived record would
+   compare unequal to the original even when it describes the same Tesl declaration. *)
+let compile_project ?(mode=Release) ~(entry : module_form) (modules : module_form list) =
+  let project_path = "tesl.generated/" ^ package_name entry.module_name in
+  let local_names = List.map (fun (m : module_form) -> m.module_name) modules in
+  let dependencies_of (m : module_form) =
+    List.filter_map (fun (import : import_decl) ->
+      if List.mem import.module_name local_names then Some import.module_name else None)
+      m.imports
+  in
+  (* Topological order.  A cycle cannot appear here — compile.ml rejects one before this
+     point — but the counter keeps a malformed graph from looping forever rather than
+     failing. *)
+  let rec order done_names remaining passes =
+    if remaining = [] then Ok (List.rev done_names)
+    else if passes = 0 then
+      Error [{ loc = Location.dummy_loc entry.source_file;
+               message = "Go backend could not order the module graph" }]
+    else
+      let ready, blocked = List.partition (fun (m : module_form) ->
+        List.for_all (fun name -> List.mem name done_names) (dependencies_of m)) remaining in
+      if ready = [] then
+        Error [{ loc = Location.dummy_loc entry.source_file;
+                 message = "Go backend could not order the module graph" }]
+      else
+        order (List.rev_append (List.map (fun (m : module_form) -> m.module_name) ready)
+                 done_names) blocked (passes - 1)
+  in
+  match order [] modules (List.length modules + 1) with
+  | Error errors -> Error errors
+  | Ok ordered_names ->
+    let ordered = List.filter_map (fun name ->
+      List.find_opt (fun (m : module_form) -> m.module_name = name) modules) ordered_names in
+    let rec emit acc exports = function
+      | [] -> Ok (List.rev acc)
+      | (m : module_form) :: rest ->
+        (match compile_module ~mode ~dependencies:exports ~project_path m with
+         | Error errors -> Error errors
+         | Ok (artifacts, module_exports) ->
+           emit (List.rev_append artifacts acc) (module_exports :: exports) rest)
+    in
+    (match emit [] [] ordered with
+     | Error errors -> Error errors
+     | Ok artifacts ->
+       (* On a duplicate path the FIRST wins, and dependencies are emitted first, so the
+          shared artifacts (go.mod, lint config, runtime) come from whichever module
+          needed them earliest — they are byte-identical either way. *)
+       let seen = Hashtbl.create 16 in
+       Ok (List.filter (fun (artifact : artifact) ->
+         if Hashtbl.mem seen artifact.path then false
+         else begin Hashtbl.add seen artifact.path (); true end) artifacts))
