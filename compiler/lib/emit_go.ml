@@ -263,9 +263,17 @@ let rec type_of_type_expr ?(params=[]) types ty =
 let type_of_return_spec types = function
   | RetPlain { ty; _ } -> type_of_type_expr types ty
   | RetAttached { binding; _ } -> TCheck (type_of_type_expr types binding.type_expr)
+  (* `List T ::: ForAll P` is a TYPE-LEVEL contract with zero runtime structure
+     (LANGUAGE-SPEC 16.9: "at runtime, the list is a plain list with no per-element
+     proof structs"), so it erases to the list itself.  The frontend has already
+     discharged the proof; nothing is erased that was not checked. *)
+  | RetForAll { elem_ty; _ } -> TList (type_of_type_expr types elem_ty)
+  | RetMaybeForAll { elem_ty; loc; _ } ->
+    (match Hashtbl.find_opt types.adts "Maybe" with
+     | Some info -> TAdt (info, [TList (type_of_type_expr types elem_ty)])
+     | None -> unsupported loc
+       "Go backend needs `Tesl.Maybe` imported for a `Maybe (List … ::: ForAll …)` return")
   | RetNamedPack { loc; _ }
-  | RetForAll { loc; _ }
-  | RetMaybeForAll { loc; _ }
   | RetMaybeAttached { loc; _ }
   | RetSetForAll { loc; _ }
   | RetMaybeSetForAll { loc; _ }
@@ -476,6 +484,31 @@ let list_leaves = [
 
 let list_leaf name = List.find_opt (fun leaf -> leaf.leaf_name = name) list_leaves
 
+(* The higher-order leaves lower to an emitted LOOP rather than a runtime helper: a Go
+   func value passed into a generic helper costs an indirect call per element and
+   blocks inlining, and these are hot-path functions.  A lambda argument's body is
+   inlined into the loop (no closure, no call), a named function becomes a direct
+   call. *)
+type hof = HofMap | HofFilter | HofFoldl | HofAny | HofAll | HofFilterCheck | HofAllCheck
+
+let higher_order_leaf = function
+  | "List.map" -> Some HofMap
+  | "List.filter" -> Some HofFilter
+  | "List.foldl" -> Some HofFoldl
+  | "List.any" -> Some HofAny
+  | "List.all" -> Some HofAll
+  | "List.filterCheck" -> Some HofFilterCheck
+  | "List.allCheck" -> Some HofAllCheck
+  | _ -> None
+
+let higher_order_leaf_names =
+  ["List.map"; "List.filter"; "List.foldl"; "List.any"; "List.all";
+   "List.filterCheck"; "List.allCheck"]
+
+let hof_arity = function
+  | HofFoldl -> 3
+  | HofMap | HofFilter | HofAny | HofAll | HofFilterCheck | HofAllCheck -> 2
+
 let adt_tag_field = "Tag"
 
 (* Every variant's payload lives in one flat struct, so a payload field is named
@@ -646,6 +679,9 @@ let rec type_of_expr signatures env expr =
             | _ ->
               unsupported loc "Go backend requires a fully-applied newtype constructor `%s`" name)
          | _ -> unsupported loc "Go backend does not support constructor `%s` yet" name)
+      | EVar { name; _ } when higher_order_leaf name <> None && Hashtbl.mem signatures name ->
+       let hof = match higher_order_leaf name with Some hof -> hof | None -> assert false in
+       type_of_hof signatures env loc name hof args
       | EVar { name; _ } when list_leaf name <> None && Hashtbl.mem signatures name ->
        let leaf = match list_leaf name with Some leaf -> leaf | None -> assert false in
        type_of_list_leaf signatures env loc leaf args
@@ -811,6 +847,88 @@ and type_of_list_leaf signatures env loc leaf args =
    | `Same -> TList element
    | `MaybeElement -> maybe_of element
    | `MaybeSame -> maybe_of (TList element))
+
+(* A function ARGUMENT is either a lambda (whose parameter types come from the call
+   site, so the declared annotations need no resolving here) or a named function. *)
+and type_of_callable signatures env loc what callable param_types =
+  match callable with
+  | ELambda { params; body; _ } ->
+    if List.length params <> List.length param_types then
+      unsupported loc "Go backend `%s` needs a %d-parameter function" what
+        (List.length param_types);
+    let env = List.map2 (fun (binding : binding) ty -> binding.name, ty) params param_types @ env in
+    type_of_expr signatures env body
+  | EVar { name; _ } ->
+    (match Hashtbl.find_opt signatures name with
+     | Some signature ->
+       if signature.params <> param_types then unsupported loc
+         "Go backend `%s` function argument has unsupported parameter types" what;
+       signature.result
+     | None -> unsupported loc "Go backend cannot resolve function `%s`" name)
+  | EApp _ ->
+    (* A partial application supplied AT the call site — `List.filterCheck (checkFn
+       arg) xs`.  The loop supplies the remaining arguments, so this needs no general
+       function-value support: the emitted call is still fully applied. *)
+    let head, supplied = flatten_app [] callable in
+    let head = normalize_call_head head in
+    (match head with
+     | EVar { name; _ } ->
+       (match Hashtbl.find_opt signatures name with
+        | Some signature ->
+          let count = List.length supplied in
+          if count >= List.length signature.params then unsupported loc
+            "Go backend `%s` function argument is already fully applied" what;
+          let prefix = List.filteri (fun index _ -> index < count) signature.params in
+          let rest = List.filteri (fun index _ -> index >= count) signature.params in
+          List.iter2 (fun arg want ->
+            if type_of_expr signatures env arg <> want then unsupported loc
+              "Go backend `%s` partial application argument type mismatch" what)
+            supplied prefix;
+          if rest <> param_types then unsupported loc
+            "Go backend `%s` function argument has unsupported parameter types" what;
+          signature.result
+        | None -> unsupported loc "Go backend cannot resolve function `%s`" name)
+     | _ -> unsupported loc "Go backend `%s` takes a lambda or a named function" what)
+  | _ ->
+    unsupported loc "Go backend `%s` takes a lambda or a named function" what
+
+and type_of_hof signatures env loc what hof args =
+  if List.length args <> hof_arity hof then
+    unsupported loc "Go backend requires `%s` applied to %d argument(s)" what (hof_arity hof);
+  let list_of index =
+    match type_of_expr signatures env (List.nth args index) with
+    | TList element -> element
+    | _ -> unsupported loc "Go backend `%s` requires a List argument" what
+  in
+  match hof with
+  | HofMap ->
+    let element = list_of 1 in
+    TList (type_of_callable signatures env loc what (List.nth args 0) [element])
+  | HofFilter | HofAny | HofAll ->
+    let element = list_of 1 in
+    if type_of_callable signatures env loc what (List.nth args 0) [element] <> TBool then
+      unsupported loc "Go backend `%s` needs a Bool-returning function" what;
+    (match hof with HofFilter -> TList element | _ -> TBool)
+  | HofFilterCheck | HofAllCheck ->
+    let element = list_of 1 in
+    let result = type_of_callable signatures env loc what (List.nth args 0) [element] in
+    if result <> TCheck element then unsupported loc
+      "Go backend `%s` takes a `check` function over the element type" what;
+    (match hof with
+     | HofFilterCheck -> TList element
+     | _ ->
+       (match adt_ctor_of_signature signatures "Nothing" with
+        | Some (info, _) -> TAdt (info, [TList element])
+        | None -> unsupported loc
+          "Go backend `%s` returns a Maybe; import `Tesl.Maybe`" what))
+  | HofFoldl ->
+    let element = list_of 2 in
+    let accumulator = type_of_expr signatures env (List.nth args 1) in
+    let result =
+      type_of_callable signatures env loc what (List.nth args 0) [accumulator; element] in
+    if result <> accumulator then unsupported loc
+      "Go backend `%s` must return its accumulator type" what;
+    accumulator
 
 and type_of_arg signatures env want arg =
   match arg with
@@ -1046,6 +1164,10 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
               Printf.sprintf "%s{teslValue: %s}" (go_type result) (emit arg)
             | _ -> assert false)
          | _ -> unsupported loc "Go backend cannot emit constructor `%s`" name)
+      | EVar { name; _ } when higher_order_leaf name <> None && Hashtbl.mem signatures name ->
+       let hof = match higher_order_leaf name with Some hof -> hof | None -> assert false in
+       emit_hof ~indent signatures env loc name hof args
+         (type_of_expr signatures env app)
       | EVar { name; _ } when list_leaf name <> None && Hashtbl.mem signatures name ->
        let leaf = match list_leaf name with Some leaf -> leaf | None -> assert false in
        ignore (type_of_expr signatures env app);
@@ -1319,6 +1441,160 @@ and emit_negated ?(indent="") signatures env expr =
 
 (* A generic ADT's composite literal must name its type arguments: Go infers type
    parameters for calls, never for a composite literal. *)
+(* Applies a function argument to already-bound Go variables.  A lambda's body is
+   emitted with its parameters bound to those variable NAMES, so the loop variable is
+   named after the lambda parameter and the body needs no rewriting — and if the name
+   shadows an outer binding, the Go shadowing matches the Tesl scoping exactly. *)
+and emit_applied ?(indent="") signatures env callable params bound =
+  match callable with
+  | ELambda { params = lambda_params; body; _ } ->
+    let env =
+      List.map2 (fun (binding : binding) ty -> binding.name, ty) lambda_params params @ env in
+    emit_expr ~indent signatures env body
+  | EVar { name; _ } ->
+    let go_name = match Hashtbl.find_opt signatures name with
+      | Some signature -> signature.go_name
+      | None -> invalid_arg "function argument validated before emission"
+    in
+    Printf.sprintf "%s(%s)" go_name (String.concat ", " bound)
+  | EApp _ ->
+    let head, supplied = flatten_app [] callable in
+    let go_name = match normalize_call_head head with
+      | EVar { name; _ } ->
+        (match Hashtbl.find_opt signatures name with
+         | Some signature -> signature.go_name
+         | None -> invalid_arg "function argument validated before emission")
+      | _ -> invalid_arg "function argument validated before emission"
+    in
+    let supplied = List.map (emit_expr ~indent signatures env) supplied in
+    Printf.sprintf "%s(%s)" go_name (String.concat ", " (supplied @ bound))
+  | _ -> invalid_arg "function argument validated before emission"
+
+and callable_binders callable fallback =
+  match callable with
+  | ELambda { params = lambda_params; _ } ->
+    List.map (fun (binding : binding) -> local_ident binding.name) lambda_params
+  | _ -> fallback
+
+(* Each higher-order leaf is one emitted loop.  The output slice is allocated once at
+   its exact length rather than grown, and nothing here allocates a closure. *)
+and emit_hof ?(indent="") signatures env _loc _what hof args result =
+  let depth = String.length indent in
+  let inner = indent ^ "\t" in
+  let body_indent = inner ^ "\t" in
+  let callable = List.nth args 0 in
+  let emit_list index = emit_expr ~indent signatures env (List.nth args index) in
+  let element_of index =
+    match type_of_expr signatures env (List.nth args index) with
+    | TList element -> element
+    | _ -> invalid_arg "higher-order leaf validated before emission"
+  in
+  match hof with
+  | HofMap | HofFilter | HofAny | HofAll ->
+    let element = element_of 1 in
+    let value = match callable_binders callable [Printf.sprintf "teslValue%d" depth] with
+      | [value] -> value
+      | _ -> invalid_arg "higher-order leaf validated before emission"
+    in
+    let applied = emit_applied ~indent:body_indent signatures env callable [element] [value] in
+    let source = emit_list 1 in
+    (match hof with
+     | HofMap ->
+       let out = Printf.sprintf "teslOut%d" depth and index = Printf.sprintf "teslAt%d" depth in
+       Printf.sprintf
+         "(func() %s {\n%s%s := make(%s, len(%s))\n%sfor %s, %s := range %s {\n%s%s[%s] = %s\n%s}\n%sreturn %s\n%s}())"
+         (go_type result) inner out (go_type result) source
+         inner index value source
+         body_indent out index applied
+         inner inner out indent
+     | HofFilter ->
+       let out = Printf.sprintf "teslOut%d" depth in
+       Printf.sprintf
+         "(func() %s {\n%s%s := make(%s, 0, len(%s))\n%sfor _, %s := range %s {\n%sif %s {\n%s\t%s = append(%s, %s)\n%s}\n%s}\n%sreturn %s\n%s}())"
+         (go_type result) inner out (go_type result) source
+         inner value source
+         body_indent (strip_outer_parens applied)
+         body_indent out out value
+         body_indent inner inner out indent
+     | _ ->
+       let found = (hof = HofAny) in
+       Printf.sprintf
+         "(func() bool {\n%sfor _, %s := range %s {\n%sif %s {\n%s\treturn %b\n%s}\n%s}\n%sreturn %b\n%s}())"
+         inner value source
+         body_indent
+         (if found then strip_outer_parens applied
+          else strip_outer_parens (emit_negated_applied ~indent:body_indent signatures env callable element value))
+         body_indent found body_indent inner inner (not found) indent)
+  | HofFilterCheck | HofAllCheck ->
+    let element = element_of 1 in
+    let value = match callable_binders callable [Printf.sprintf "teslValue%d" depth] with
+      | [value] -> value
+      | _ -> invalid_arg "higher-order leaf validated before emission"
+    in
+    let checked = emit_applied ~indent:body_indent signatures env callable [element] [value] in
+    let source = emit_list 1 in
+    let out = Printf.sprintf "teslOut%d" depth in
+    let kept = Printf.sprintf "teslKept%d" depth in
+    let ok = Printf.sprintf "teslOK%d" depth in
+    (* The per-element `ok` is scoped to its `if`, so the running flag MUST NOT share
+       its name: `teslOK := false` would otherwise assign to the shadow and allCheck
+       would never report a failure. *)
+    let all_ok = Printf.sprintf "teslAll%d" depth in
+    let elements = go_type (TList element) in
+    (match hof with
+     | HofFilterCheck ->
+       Printf.sprintf
+         "(func() %s {\n%s%s := make(%s, 0, len(%s))\n%sfor _, %s := range %s {\n%sif %s, %s := (%s).Value(); %s {\n%s\t%s = append(%s, %s)\n%s}\n%s}\n%sreturn %s\n%s}())"
+         elements inner out elements source
+         inner value source
+         body_indent kept ok checked ok
+         body_indent out out kept
+         body_indent inner inner out indent
+     | _ ->
+       (* Racket's allCheck runs the check on EVERY element before deciding, so this
+          does too: an early return would skip checks the Racket backend performs. *)
+       Printf.sprintf
+         "(func() %s {\n%s%s := true\n%s%s := make(%s, 0, len(%s))\n%sfor _, %s := range %s {\n%sif %s, %s := (%s).Value(); %s {\n%s\t%s = append(%s, %s)\n%s} else {\n%s\t%s = false\n%s}\n%s}\n%sif %s {\n%s\treturn %s{%s: %s, %s: %s}\n%s}\n%sreturn %s{%s: %s}\n%s}())"
+         (go_type result) inner all_ok
+         inner out elements source
+         inner value source
+         body_indent kept ok checked ok
+         body_indent out out kept
+         body_indent body_indent all_ok body_indent
+         inner
+         inner all_ok inner (go_type result) adt_tag_field "teslrt.MaybeSomething"
+         "SomethingValue" out inner
+         inner (go_type result) adt_tag_field "teslrt.MaybeNothing" indent)
+  | HofFoldl ->
+    let element = element_of 2 in
+    let accumulator = result in
+    let bound = match callable_binders callable
+      [Printf.sprintf "teslAcc%d" depth; Printf.sprintf "teslValue%d" depth] with
+      | [acc; value] -> [acc; value]
+      | _ -> invalid_arg "higher-order leaf validated before emission"
+    in
+    let state = Printf.sprintf "teslState%d" depth in
+    let applied =
+      emit_applied ~indent:body_indent signatures env callable [accumulator; element] bound in
+    Printf.sprintf
+      "(func() %s {\n%s%s := %s\n%sfor _, %s := range %s {\n%s%s := %s\n%s_ = %s\n%s%s = %s\n%s}\n%sreturn %s\n%s}())"
+      (go_type accumulator) inner state (emit_list 1)
+      inner (List.nth bound 1) (emit_list 2)
+      body_indent (List.nth bound 0) state
+      body_indent (List.nth bound 0)
+      body_indent state applied
+      inner inner state indent
+
+(* `all` is the negation of "any element fails", and negating structurally keeps the
+   emitted condition free of the `!(a && b)` shapes the lint gate rejects. *)
+and emit_negated_applied ?(indent="") signatures env callable element value =
+  match callable with
+  | ELambda { params = lambda_params; body; _ } ->
+    let env =
+      List.map2 (fun (binding : binding) ty -> binding.name, ty) lambda_params [element] @ env in
+    emit_negated ~indent signatures env body
+  | _ -> negate_bool (emit_applied ~indent signatures env callable [element] [value])
+
 and emit_variant_literal ?(indent="") signatures env result variant args =
   let info, type_args = match result with
     | TAdt (info, args) -> info, args
@@ -1696,7 +1972,19 @@ let test_source module_path package signatures (tests : test_form list) =
       emit_stmts ((name, ty) :: env) (indent ^ "\t") rest;
       Printf.bprintf body "%s}\n" indent
     | TsExpect { left; right; loc } :: rest ->
-      let left_ty = type_of_expr signatures env left in
+      (* Each side may be the one that supplies the other's type: `expect xs == []`
+         and `expect [] == xs` both have to work, and an empty list literal (like a
+         nullary generic constructor) carries no type of its own. *)
+      let needs_expectation = function
+        | EList { elems = []; _ } -> true
+        | EConstructor { args = []; _ } -> true
+        | _ -> false
+      in
+      let left_ty = match right with
+        | Some right when needs_expectation left ->
+          type_of_arg signatures env (type_of_expr signatures env right) left
+        | _ -> type_of_expr signatures env left
+      in
       (* The emitted guard is the NEGATION of the expectation, built structurally so
          no `!(a && b)` / `!(a == b)` shape reaches the lint gate. *)
       let failure_condition = match right with
@@ -1704,7 +1992,7 @@ let test_source module_path package signatures (tests : test_form list) =
           if left_ty <> TBool then unsupported loc "Go backend bare expect requires Bool";
           strip_outer_parens (emit_negated ~indent signatures env left)
         | Some right ->
-          let right_ty = type_of_expr signatures env right in
+          let right_ty = type_of_arg signatures env left_ty right in
           if left_ty <> right_ty then unsupported loc "Go backend expect operands have different types";
           (match left_ty, bool_literal_value left, bool_literal_value right with
            | TBool, Some expected, None ->
@@ -1717,8 +2005,9 @@ let test_source module_path package signatures (tests : test_form list) =
              if not (supports_equality left_ty) then unsupported loc
                "Go backend does not support `expect` equality on this type yet";
              strip_outer_parens
-               (unequal_expr left_ty (emit_expr ~indent signatures env left)
-                  (emit_expr ~indent signatures env right)))
+               (unequal_expr left_ty
+                  (emit_expr ~expected:left_ty ~indent signatures env left)
+                  (emit_expr ~expected:left_ty ~indent signatures env right)))
       in
       Buffer.add_string body (line_directive loc);
       Printf.bprintf body "%sif %s {\n%s\tteslT.Fatal(\"Tesl expectation failed\")\n%s}\n"
@@ -1860,7 +2149,7 @@ let compile_module ?(mode=Release) (m : module_form) =
       "List.length"; "List.isEmpty"; "List.head"; "List.tail"; "List.last";
       "List.append"; "List.take"; "List.drop"; "List.reverse"; "List.sum";
       "List.member"; "List.contains"; "List.unique"; "List.sort";
-    ] in
+    ] @ higher_order_leaf_names in
     let list_imports = ref [] in
     List.iter (fun (import : import_decl) ->
       if import.module_name = "Tesl.List" then begin
@@ -2151,10 +2440,15 @@ let compile_module ?(mode=Release) (m : module_form) =
     (* A list leaf is registered only so the call arms can tell an imported name from
        an unresolved one; its params/result are computed per call site. *)
     List.iter (fun name ->
-      let leaf = match list_leaf name with Some leaf -> leaf | None -> assert false in
+      (* A higher-order leaf has no runtime function at all — it lowers to a loop — so
+         its entry exists only to mark the name as imported. *)
+      let go_name = match list_leaf name with
+        | Some leaf -> leaf.leaf_go
+        | None -> "teslrt.EmittedAsALoop"
+      in
       if not (Hashtbl.mem signatures name) then
         Hashtbl.add signatures name
-          { params = []; result = TFailure; go_name = leaf.leaf_go }) !list_imports;
+          { params = []; result = TFailure; go_name }) !list_imports;
     List.iter (fun name ->
       let params, result, go_name =
         match List.find_opt (fun (leaf, _, _, _) -> leaf = name) string_leaves with

@@ -1209,12 +1209,12 @@ let test_unsupported_list_exports_fail_closed () =
         (List.exists (fun (d : Compile.diagnostic) ->
            d.source = "go-emitter" && contains d.message needle) diagnostics)
   in
-  (* The higher-order leaves need function VALUES, which the backend does not have. *)
-  expect_go_error "higher-order list leaf" "`List.map`" {|module ListMap exposing [double]
+  (* `List.map`/`filter`/`foldl`/`any`/`all` are implemented as loops now; `foldr` is
+     not, and an unimplemented leaf of a supported module must still fail closed. *)
+  expect_go_error "unimplemented higher-order leaf" "`List.foldr`" {|module ListFoldr exposing [total]
 import Tesl.Prelude exposing [Int, List]
-import Tesl.List exposing [List.map]
-fn twice(n: Int) -> Int = n * 2
-fn double(xs: List Int) -> List Int = List.map twice xs
+import Tesl.List exposing [List.foldr]
+fn total(xs: List Int) -> Int = List.foldr (fn(x: Int, acc: Int) -> acc + x) 0 xs
 |};
   (* `List.sum` on a non-Int list never reaches the emitter — the frontend's own
      signature rejects it — so the emitter's guard is containment, and what this pins
@@ -1237,6 +1237,211 @@ import Tesl.Prelude exposing [Bool, List]
 import Tesl.List exposing [List.sort]
 fn ordered(xs: List Bool) -> List Bool = List.sort xs
 |}
+
+let hof_source = {|module GoHof exposing [doubled, evens, total, anyBig, allSmall, named, byName, longest]
+import Tesl.Prelude exposing [Bool(..), Int, List, String]
+import Tesl.List exposing [List.map, List.filter, List.foldl, List.any, List.all, List.length]
+import Tesl.String exposing [String.length, String.concat]
+
+fn doubled(xs: List Int) -> List Int = List.map (fn(x: Int) -> x * 2) xs
+
+fn evens(xs: List Int) -> List Int = List.filter (fn(x: Int) -> x % 2 == 0) xs
+
+fn total(xs: List Int) -> Int = List.foldl (fn(acc: Int, x: Int) -> acc + x) 0 xs
+
+fn anyBig(xs: List Int) -> Bool = List.any (fn(x: Int) -> x > 10) xs
+
+fn allSmall(xs: List Int) -> Bool = List.all (fn(x: Int) -> x < 10) xs
+
+fn triple(n: Int) -> Int = n * 3
+
+fn named(xs: List Int) -> List Int = List.map triple xs
+
+fn byName(names: List String) -> List Int = List.map (fn(n: String) -> String.length n) names
+
+fn pickLonger(acc: String, n: String) -> String =
+  if String.length n > String.length acc then
+    n
+  else
+    acc
+
+fn longest(names: List String) -> String = List.foldl pickLonger "" names
+
+test "higher-order list leaves" {
+  let xs = [1, 2, 3, 11]
+  expect doubled xs == [2, 4, 6, 22]
+  expect doubled [] == []
+  expect evens xs == [2]
+  expect total xs == 17
+  expect total [] == 0
+  expect anyBig xs == True
+  expect anyBig [1] == False
+  expect allSmall xs == False
+  expect allSmall [1, 2] == True
+  expect allSmall [] == True
+  expect named [1, 2] == [3, 6]
+  expect byName ["ab", "c"] == [2, 1]
+  expect longest ["a", "bbb", "cc"] == "bbb"
+}
+|}
+
+(* The higher-order leaves lower to LOOPS, not runtime helpers: a func value passed
+   into a generic helper costs an indirect call per element and blocks inlining, and
+   these are hot-path operations.  A lambda body is inlined outright. *)
+let test_higher_order_lists_with_go () =
+  let emitted = match Compile.compile_go_source "<go-hof>" hof_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "higher-order list compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgohof/module.go" emitted in
+  check bool "map inlines the lambda body into a loop" true
+    (contains module_go
+       "teslOut1 := make([]teslrt.Int, len(xs))\n\t\tfor teslAt1, x := range xs {\n\t\t\tteslOut1[teslAt1] = teslrt.Mul(x, teslrt.FromInt64(2))");
+  check bool "no closure is allocated for a lambda argument" false
+    (contains module_go "func(x teslrt.Int)");
+  (* map fills by index into an exact-length slice; filter is the one that appends,
+     into a slice preallocated with capacity.  Asserting "no append anywhere" would
+     match filter's loop, which reuses the same variable name at the same depth. *)
+  check bool "map allocates at exact length and writes by index" true
+    (contains module_go "make([]teslrt.Int, len(xs))\n\t\tfor teslAt1, x := range xs {");
+  check bool "filter allocates with capacity and appends" true
+    (contains module_go "make([]teslrt.Int, 0, len(xs))"
+     && contains module_go "teslOut1 = append(teslOut1, x)");
+  check bool "foldl threads an accumulator without a closure" true
+    (contains module_go "teslState1 = teslrt.Add(acc, x)");
+  check bool "all is a structurally negated early return" true
+    (contains module_go "if teslrt.Compare(x, teslrt.FromInt64(10)) >= 0 {\n\t\t\t\treturn false");
+  (* A named function argument becomes a direct call, and the loop variable falls back
+     to a generated name because there is no lambda parameter to name it after.
+     `triple` is unexported here because the module does not expose it. *)
+  check bool "a named function argument is a direct call" true
+    (contains module_go "teslOut1[teslAt1] = triple(teslValue1)");
+  check bool "no runtime higher-order helper is used" false
+    (contains module_go "teslrt.ListMap" || contains module_go "teslrt.ListFoldl");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then
+    let root = Filename.temp_dir "tesl-go-hof" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted higher-order source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+
+(* Tesl functions are curried and lambdas are real closures, so a function VALUE is a
+   language feature rather than a corner case — and it needs a calling-convention
+   decision the backend has not made.  Until then it must fail closed rather than
+   emit something that only works for the fully-applied shape. *)
+let test_function_values_fail_closed () =
+  let expect_failure label source =
+    match Compile.compile_go_source ("<" ^ label ^ ">") source with
+    | Compile.GoSuccess _ -> failf "%s emitted Go artifacts" label
+    | Compile.GoFailure diagnostics ->
+      check bool label true
+        (List.exists (fun (d : Compile.diagnostic) ->
+           d.source = "go-emitter") diagnostics)
+  in
+  expect_failure "let-bound lambda as a function value" {|module LambdaValue exposing [doubled]
+import Tesl.Prelude exposing [Int, List]
+import Tesl.List exposing [List.map]
+fn doubled(xs: List Int) -> List Int =
+  let twice = fn(x: Int) -> x * 2
+  List.map twice xs
+|};
+  (* A partial application AT a higher-order argument is supported — it emits fully
+     applied — so the boundary is a partial application used as a VALUE. *)
+  expect_failure "let-bound partial application" {|module PartialValue exposing [shifted]
+import Tesl.Prelude exposing [Int, List]
+import Tesl.List exposing [List.map]
+fn add(a: Int, b: Int) -> Int = a + b
+fn shifted(xs: List Int) -> List Int =
+  let bump = add 1
+  List.map bump xs
+|}
+
+let check_list_source = {|module GoCheckLists exposing [Small, checkSmall, checkBelow, kept, keptBelow, allKept, sizeOfKept]
+import Tesl.Prelude exposing [Int, List]
+import Tesl.List exposing [List.filterCheck, List.allCheck, List.length]
+import Tesl.Maybe exposing [Maybe(..)]
+
+fact Small (n: Int)
+
+check checkSmall(n: Int) -> n: Int ::: Small n =
+  if n < 10 then
+    ok n ::: Small n
+  else
+    fail 400 "too big"
+
+check checkBelow(limit: Int, n: Int) -> n: Int ::: Small n =
+  if n < limit then
+    ok n ::: Small n
+  else
+    fail 400 "too big"
+
+fn kept(xs: List Int) -> List Int ::: ForAll (Small) =
+  List.filterCheck checkSmall xs
+
+fn keptBelow(limit: Int, xs: List Int) -> List Int ::: ForAll (Small) =
+  List.filterCheck (checkBelow limit) xs
+
+fn allKept(xs: List Int) -> Int =
+  case List.allCheck checkSmall xs of
+    Something values -> List.length values
+    Nothing -> 0 - 1
+
+fn sizeOfKept(xs: List Int) -> Int = List.length (kept xs)
+
+test "check-driven list leaves" {
+  expect sizeOfKept [1, 20, 3] == 2
+  expect sizeOfKept [] == 0
+  expect List.length (keptBelow 5 [1, 7, 3]) == 2
+  expect allKept [1, 2] == 2
+  expect allKept [1, 20] == 0 - 1
+  expect allKept [] == 0
+}
+|}
+
+(* `ForAll` is a TYPE-LEVEL contract with zero runtime structure (LANGUAGE-SPEC 16.9),
+   so a `List T ::: ForAll P` return erases to the list — nothing is erased that the
+   frontend has not already discharged. *)
+let test_check_driven_lists_with_go () =
+  let emitted = match Compile.compile_go_source "<go-check-lists>" check_list_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "check-driven list compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgochecklists/module.go" emitted in
+  check bool "a ForAll return erases to the list itself" true
+    (contains module_go "func Kept(xs []teslrt.Int) []teslrt.Int");
+  check bool "filterCheck keeps the accepted value from the check" true
+    (contains module_go
+       "if teslKept1, teslOK1 := (CheckSmall(teslValue1)).Value(); teslOK1 {\n\t\t\t\tteslOut1 = append(teslOut1, teslKept1)");
+  check bool "a partially applied check is emitted fully applied" true
+    (contains module_go "(CheckBelow(limit, teslValue1)).Value()");
+  (* The per-element ok is scoped to its `if`; a running flag sharing that name would
+     assign to the shadow and allCheck could never report failure. *)
+  check bool "allCheck's running flag is not shadowed by the per-element ok" true
+    (contains module_go "teslAll2 := true" && contains module_go "teslAll2 = false");
+  check bool "allCheck yields Nothing on any failure" true
+    (contains module_go "return teslrt.Maybe[[]teslrt.Int]{Tag: teslrt.MaybeNothing}");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then
+    let root = Filename.temp_dir "tesl-go-check-lists" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted check-driven source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
 
 let proof_scalar_source = {|module GoProofScalars exposing [NonEmpty, Enabled, checkNonEmpty, checkEnabled, label, invert]
 import Tesl.Prelude exposing [Bool(..), String]
@@ -1781,6 +1986,11 @@ let () =
       test_case "Maybe from the runtime" `Slow test_maybe_with_go;
       test_case "Tesl.String leaves" `Slow test_string_stdlib_with_go;
       test_case "Tesl.List leaves" `Slow test_lists_with_go;
+      test_case "higher-order list leaves" `Slow test_higher_order_lists_with_go;
+      test_case "check-driven list leaves" `Slow test_check_driven_lists_with_go;
+      test_case "check-driven lists behave the same on Racket" `Slow (racket_behavior_oracle "<go-check-lists>" check_list_source);
+      test_case "higher-order lists behave the same on Racket" `Slow (racket_behavior_oracle "<go-hof>" hof_source);
+      test_case "function values fail closed" `Quick test_function_values_fail_closed;
       test_case "lists behave the same on Racket" `Slow (racket_behavior_oracle "<go-lists>" list_source);
       test_case "unsupported Tesl.List exports fail closed" `Quick test_unsupported_list_exports_fail_closed;
       test_case "Tesl.String behaves the same on Racket" `Slow (racket_behavior_oracle "<go-strings>" string_source);
