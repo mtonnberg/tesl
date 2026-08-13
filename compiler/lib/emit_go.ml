@@ -24,6 +24,7 @@ type go_type =
   | TRecord of record_info
   | TAdt of adt_info * go_type list
   | TList of go_type
+  | TDict of go_type * go_type
   | TParam of string
   | TCheck of go_type
   | TFailure
@@ -251,6 +252,10 @@ let rec type_of_type_expr ?(params=[]) types ty =
        (match args with
         | [element] -> TList (recur element)
         | _ -> unsupported loc "Go backend requires `List` to be applied to 1 type argument")
+     | TName { name = "Dict"; _ } ->
+       (match args with
+        | [key; value] -> TDict (recur key, recur value)
+        | _ -> unsupported loc "Go backend requires `Dict` to be applied to 2 type arguments")
      | TName { name; _ } ->
        (match Hashtbl.find_opt types.adts name with
         | Some info ->
@@ -296,6 +301,8 @@ let rec go_type = function
   | TAdt (info, args) ->
     Printf.sprintf "%s[%s]" info.adt_go_name (String.concat ", " (List.map go_type args))
   | TList element -> "[]" ^ go_type element
+  | TDict (key, value) ->
+    Printf.sprintf "teslrt.Dict[%s, %s]" (go_type key) (go_type value)
   | TParam name -> name
   | TCheck ty -> Printf.sprintf "teslrt.Check[%s]" (go_type ty)
   | TFailure -> invalid_arg "Go failure has no standalone type"
@@ -369,6 +376,7 @@ let rec substitute_type bindings ty =
   | TAdt (info, args) -> TAdt (info, List.map (substitute_type bindings) args)
   | TCheck inner -> TCheck (substitute_type bindings inner)
   | TList element -> TList (substitute_type bindings element)
+  | TDict (key, value) -> TDict (substitute_type bindings key, substitute_type bindings value)
   | TInt | TString | TBool | TUnit | TNewtype _ | TRecord _ | TFailure -> ty
 
 (** A variant's payload types with the ADT's type arguments substituted in. *)
@@ -444,6 +452,10 @@ and equal_expr ty left right =
      in: the emitter knows the concrete element type at every call site. *)
   | TList element ->
     Printf.sprintf "teslrt.ListEqualBy(%s, %s, %s)" left right (element_equal_func element)
+  (* Both dicts are stored in key order, so one pass compares them. *)
+  | TDict (key, value) ->
+    Printf.sprintf "teslrt.DictEqualBy(%s, %s, %s, %s)" left right
+      (element_equal_func key) (element_equal_func value)
   | TParam _ | TCheck _ | TFailure ->
     invalid_arg "Go equality on this type is rejected before emission"
 
@@ -482,6 +494,9 @@ and unequal_expr ty left right =
   | TAdt _ -> negate_bool (equal_expr ty left right)
   | TList element ->
     Printf.sprintf "!teslrt.ListEqualBy(%s, %s, %s)" left right (element_equal_func element)
+  | TDict (key, value) ->
+    Printf.sprintf "!teslrt.DictEqualBy(%s, %s, %s, %s)" left right
+      (element_equal_func key) (element_equal_func value)
   | TParam _ | TCheck _ | TFailure ->
     invalid_arg "Go equality on this type is rejected before emission"
 
@@ -492,13 +507,15 @@ and ordered_expr ty op left right =
   | TNewtype info ->
     ordered_expr info.base op (Printf.sprintf "%s.teslValue" (selector_operand left))
       (Printf.sprintf "%s.teslValue" (selector_operand right))
-  | TBool | TUnit | TRecord _ | TAdt _ | TList _ | TParam _ | TCheck _ | TFailure ->
+  | TBool | TUnit | TRecord _ | TAdt _ | TList _ | TDict _ | TParam _ | TCheck _
+  | TFailure ->
     invalid_arg "Go ordering requires an ordered scalar type"
 
 let rec supports_ordering = function
   | TInt | TString -> true
   | TNewtype info -> supports_ordering info.base
-  | TBool | TUnit | TRecord _ | TAdt _ | TList _ | TParam _ | TCheck _ | TFailure -> false
+  | TBool | TUnit | TRecord _ | TAdt _ | TList _ | TDict _ | TParam _ | TCheck _
+  | TFailure -> false
 
 (* A generic ADT has no comparable Go form: `TeslEqual` would have to dispatch
    `teslrt.Equal` for whatever the type parameter was instantiated with, which Go
@@ -522,6 +539,7 @@ let rec supports_equality = function
          List.for_all (fun (_, ty) -> supports_equality ty)
            (variant_field_types info args variant)) info.adt_variants)
   | TList element -> supports_equality element
+  | TDict (key, value) -> supports_equality key && supports_equality value
   | TParam _ | TCheck _ | TFailure -> false
 
 let record_info_of_signature signatures name =
@@ -579,6 +597,45 @@ let list_leaves = [
 ]
 
 let list_leaf name = List.find_opt (fun leaf -> leaf.leaf_name = name) list_leaves
+
+(* Dict leaves are polymorphic in both key and value, so like the list leaves they are
+   typed per call site rather than by a fixed signature.  Every one that has to find a
+   key takes the key ORDERING the emitter supplies — the same device used for list
+   equality and sorting. *)
+type dict_leaf = {
+  dict_name : string;
+  dict_go : string;
+  dict_arity : int;
+  dict_result : [ `Dict | `MaybeValue | `Int | `Bool | `Keys | `Values | `Pairs ];
+  dict_needs_order : bool;
+}
+
+let dict_leaves = [
+  { dict_name = "Dict.empty"; dict_go = "teslrt.DictEmpty"; dict_arity = 0;
+    dict_result = `Dict; dict_needs_order = false };
+  { dict_name = "Dict.insert"; dict_go = "teslrt.DictInsert"; dict_arity = 3;
+    dict_result = `Dict; dict_needs_order = true };
+  { dict_name = "Dict.lookup"; dict_go = "teslrt.DictLookup"; dict_arity = 2;
+    dict_result = `MaybeValue; dict_needs_order = true };
+  { dict_name = "Dict.member"; dict_go = "teslrt.DictMember"; dict_arity = 2;
+    dict_result = `Bool; dict_needs_order = true };
+  { dict_name = "Dict.remove"; dict_go = "teslrt.DictRemove"; dict_arity = 2;
+    dict_result = `Dict; dict_needs_order = true };
+  { dict_name = "Dict.size"; dict_go = "teslrt.DictSize"; dict_arity = 1;
+    dict_result = `Int; dict_needs_order = false };
+  { dict_name = "Dict.isEmpty"; dict_go = "teslrt.DictIsEmpty"; dict_arity = 1;
+    dict_result = `Bool; dict_needs_order = false };
+  { dict_name = "Dict.keys"; dict_go = "teslrt.DictKeys"; dict_arity = 1;
+    dict_result = `Keys; dict_needs_order = false };
+  { dict_name = "Dict.values"; dict_go = "teslrt.DictValues"; dict_arity = 1;
+    dict_result = `Values; dict_needs_order = false };
+  { dict_name = "Dict.toList"; dict_go = "teslrt.DictToList"; dict_arity = 1;
+    dict_result = `Pairs; dict_needs_order = false };
+  { dict_name = "Dict.fromList"; dict_go = "teslrt.DictFromList"; dict_arity = 1;
+    dict_result = `Dict; dict_needs_order = true };
+]
+
+let dict_leaf name = List.find_opt (fun leaf -> leaf.dict_name = name) dict_leaves
 
 (* `Tuple2.first p` is a field read dressed as a call: the accessors are the only way
    to reach a tuple's components, since a tuple has no user-visible field syntax. *)
@@ -763,6 +820,9 @@ let rec type_of_expr signatures env expr =
             | _ ->
               unsupported loc "Go backend requires a fully-applied newtype constructor `%s`" name)
          | _ -> unsupported loc "Go backend does not support constructor `%s` yet" name)
+      | EVar { name; _ } when dict_leaf name <> None && Hashtbl.mem signatures name ->
+       let leaf = match dict_leaf name with Some leaf -> leaf | None -> assert false in
+       type_of_dict_leaf signatures env loc leaf args
       | EVar { name; _ } when tuple_accessor name <> None ->
        let owner, field = match tuple_accessor name with
          | Some pair -> pair
@@ -1046,6 +1106,63 @@ and constructor_head expr =
      | _ -> None)
   | _ -> None
 
+(* A dict leaf's types come from its Dict argument — except `Dict.empty`, which has no
+   argument at all and so takes its type from the expectation, like `Nothing`. *)
+and type_of_dict_leaf signatures env loc leaf args =
+  let args = normalize_call_args (List.init leaf.dict_arity (fun _ -> TUnit)) args in
+  if List.length args <> leaf.dict_arity then
+    unsupported loc "Go backend requires `%s` applied to %d argument(s)"
+      leaf.dict_name leaf.dict_arity;
+  let pair_of index =
+    match type_of_expr signatures env (List.nth args index) with
+    | TDict (key, value) -> key, value
+    | _ -> unsupported loc "Go backend `%s` requires a Dict argument" leaf.dict_name
+  in
+  let maybe_of inner =
+    match adt_ctor_of_signature signatures "Nothing" with
+    | Some (info, _) -> TAdt (info, [inner])
+    | None -> unsupported loc
+      "Go backend `%s` returns a Maybe; import `Tesl.Maybe`" leaf.dict_name
+  in
+  match leaf.dict_name with
+  | "Dict.empty" ->
+    unsupported loc "Go backend cannot infer the key and value types of `Dict.empty`"
+  | "Dict.fromList" ->
+    (match type_of_expr signatures env (List.nth args 0) with
+     | TList (TAdt (info, [key; value])) when info.adt_tesl_name = "Tuple2" ->
+       if not (supports_ordering key) then unsupported loc
+         "Go backend `%s` needs ordered keys" leaf.dict_name;
+       TDict (key, value)
+     | _ -> unsupported loc
+       "Go backend `%s` requires a List (Tuple2 k v) argument" leaf.dict_name)
+  | _ ->
+    (* The Dict is the LAST argument in every remaining leaf. *)
+    let key, value = pair_of (leaf.dict_arity - 1) in
+    if leaf.dict_needs_order && not (supports_ordering key) then
+      unsupported loc "Go backend `%s` needs ordered keys" leaf.dict_name;
+    (match leaf.dict_name with
+     | "Dict.insert" ->
+       if type_of_arg signatures env key (List.nth args 0) <> key then unsupported loc
+         "Go backend `%s` key has an unsupported type" leaf.dict_name;
+       if type_of_arg signatures env value (List.nth args 1) <> value then unsupported loc
+         "Go backend `%s` value has an unsupported type" leaf.dict_name
+     | "Dict.lookup" | "Dict.member" | "Dict.remove" ->
+       if type_of_arg signatures env key (List.nth args 0) <> key then unsupported loc
+         "Go backend `%s` key has an unsupported type" leaf.dict_name
+     | _ -> ());
+    (match leaf.dict_result with
+     | `Dict -> TDict (key, value)
+     | `MaybeValue -> maybe_of value
+     | `Int -> TInt
+     | `Bool -> TBool
+     | `Keys -> TList key
+     | `Values -> TList value
+     | `Pairs ->
+       (match Hashtbl.find_opt signatures "Tuple2" with
+        | Some { result = TAdt (info, _); _ } -> TList (TAdt (info, [key; value]))
+        | _ -> unsupported loc
+          "Go backend `%s` returns tuples; import `Tesl.Tuple`" leaf.dict_name))
+
 and type_of_arg signatures env want arg =
   match arg with
   (* An empty list literal has no element to infer from: the expectation supplies it. *)
@@ -1306,6 +1423,10 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
               Printf.sprintf "%s{teslValue: %s}" (go_type result) (emit arg)
             | _ -> assert false)
          | _ -> unsupported loc "Go backend cannot emit constructor `%s`" name)
+      | EVar { name; _ } when dict_leaf name <> None && Hashtbl.mem signatures name ->
+       let leaf = match dict_leaf name with Some leaf -> leaf | None -> assert false in
+       emit_dict_leaf ~indent signatures env loc leaf args
+         (type_of_expr signatures env app) expected
       | EVar { name; _ } when tuple_accessor name <> None ->
        let field = match tuple_accessor name with
          | Some (_, field) -> field
@@ -1797,6 +1918,48 @@ and emit_negated_applied ?(indent="") signatures env callable element value =
     emit_negated ~indent signatures env body
   | _ -> negate_bool (emit_applied ~indent signatures env callable [element] [value])
 
+(* Dict leaves are ordinary runtime calls; the only emitted extra is the key ordering,
+   appended last so the hand-written signatures read naturally. *)
+and emit_dict_leaf ?(indent="") signatures env loc leaf args result expected =
+  let args = normalize_call_args (List.init leaf.dict_arity (fun _ -> TUnit)) args in
+  let key =
+    match leaf.dict_name, result, expected with
+    | "Dict.empty", _, Some (TDict (key, _)) -> Some key
+    | "Dict.empty", _, _ -> None
+    | _, TDict (key, _), _ -> Some key
+    | _ ->
+      (match type_of_expr signatures env (List.nth args (leaf.dict_arity - 1)) with
+       | TDict (key, _) -> Some key
+       | _ -> None)
+  in
+  (* `Dict.empty` takes no argument, so its type parameters have to be written out. *)
+  let instantiation =
+    if leaf.dict_name <> "Dict.empty" then ""
+    else match expected with
+      | Some (TDict (key, value)) ->
+        Printf.sprintf "[%s, %s]" (go_type key) (go_type value)
+      | _ -> unsupported loc
+        "Go backend cannot infer the key and value types of `Dict.empty`"
+  in
+  let emitted = List.map (emit_expr ~indent signatures env) args in
+  (* Tesl puts the dict LAST (`Dict.insert key value d`); the runtime signatures put it
+     first, which is what a Go author expects.  The emitter rotates rather than
+     distorting the hand-written runtime. *)
+  let emitted =
+    if leaf.dict_arity > 1 then
+      match List.rev emitted with
+      | dict :: rest -> dict :: List.rev rest
+      | [] -> emitted
+    else emitted
+  in
+  let emitted =
+    if not leaf.dict_needs_order then emitted
+    else match key with
+      | Some key -> emitted @ [element_less_func key]
+      | None -> unsupported loc "Go backend `%s` needs ordered keys" leaf.dict_name
+  in
+  Printf.sprintf "%s%s(%s)" leaf.dict_go instantiation (String.concat ", " emitted)
+
 and emit_variant_literal ?(indent="") signatures env result variant args =
   let info, type_args = match result with
     | TAdt (info, args) -> info, args
@@ -2246,7 +2409,7 @@ let test_source module_path package signatures (tests : test_form list) =
          Printf.bprintf body "%sif (%s).OK() {\n%s\tteslT.Fatal(\"expected Tesl check failure\")\n%s}\n"
            indent emitted indent indent
        | TInt | TString | TBool | TUnit | TNewtype _ | TRecord _ | TAdt _ | TList _
-       | TParam _ ->
+       | TDict _ | TParam _ ->
          Printf.bprintf body "%steslExpectFailure(teslT, func() {\n%s\t_ = %s\n%s})\n"
            indent indent emitted indent
        | TFailure -> unsupported loc "Go backend expectFail target has no result type");
@@ -2305,7 +2468,7 @@ let compile_module ?(mode=Release) (m : module_form) =
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.Maybe` export `%s` yet" other) exposed;
         maybe_imported := true
-      | "Tesl.String" | "Tesl.List" | "Tesl.Int" | "Tesl.Tuple"
+      | "Tesl.String" | "Tesl.List" | "Tesl.Int" | "Tesl.Tuple" | "Tesl.Dict"
       | "Tesl.Either" | "Tesl.EitherPrim" -> ()
         (* validated against the leaf/type tables below *)
       | other ->
@@ -2354,6 +2517,24 @@ let compile_module ?(mode=Release) (m : module_form) =
         rec_loc = r.loc;
       }) record_forms;
     let tuple_imported = ref false in
+    let dict_imports = ref [] in
+    List.iter (fun (import : import_decl) ->
+      if import.module_name = "Tesl.Dict" then begin
+        let exposed = match import.names with
+          | ImportAll -> []
+          | ImportExposing names -> names
+        in
+        List.iter (fun name ->
+          if dict_leaf name <> None then begin
+            dict_imports := name :: !dict_imports;
+            (* lookup returns a Maybe; toList/fromList speak in tuples. *)
+            if name = "Dict.lookup" then maybe_imported := true;
+            if name = "Dict.toList" || name = "Dict.fromList" then tuple_imported := true
+          end else match name with
+            | "Dict" -> ()
+            | other -> unsupported import.loc
+              "Go backend does not support `Tesl.Dict` export `%s` yet" other) exposed
+      end) m.imports;
     (* A list leaf is element-polymorphic, so its signature cannot be a fixed tuple of
        types like a String leaf's.  Each entry says how to type the call from the
        element type, and `emit_go` builds the argument list the same way. *)
@@ -2728,6 +2909,11 @@ let compile_module ?(mode=Release) (m : module_form) =
        function, so the existing call machinery emits them with no special case. *)
     (* A list leaf is registered only so the call arms can tell an imported name from
        an unresolved one; its params/result are computed per call site. *)
+    List.iter (fun name ->
+      let leaf = match dict_leaf name with Some leaf -> leaf | None -> assert false in
+      if not (Hashtbl.mem signatures name) then
+        Hashtbl.add signatures name
+          { params = []; result = TFailure; go_name = leaf.dict_go }) !dict_imports;
     List.iter (fun name ->
       (* A higher-order leaf has no runtime function at all — it lowers to a loop — so
          its entry exists only to mark the name as imported. *)

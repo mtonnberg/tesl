@@ -1628,6 +1628,115 @@ let test_either_with_go () =
       ignore (run_command root "go test -race -count=1 ./...");
       run_go_gates root)
 
+let dict_source = {|module GoDicts exposing [build, get, has, size, without, names, sameDict, fromPairs]
+import Tesl.Prelude exposing [Bool(..), Int, List, String]
+import Tesl.Dict exposing [Dict, Dict.insert, Dict.lookup, Dict.member, Dict.remove, Dict.size, Dict.keys, Dict.values, Dict.toList, Dict.fromList]
+import Tesl.Tuple exposing [Tuple2]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.List exposing [List.length, List.member]
+
+fn build(d: Dict String Int, key: String, value: Int) -> Dict String Int =
+  Dict.insert key value d
+
+fn get(d: Dict String Int, key: String) -> Int =
+  case Dict.lookup key d of
+    Something value -> value
+    Nothing -> 0
+
+fn has(d: Dict String Int, key: String) -> Bool = Dict.member key d
+
+fn size(d: Dict String Int) -> Int = Dict.size d
+
+fn without(d: Dict String Int, key: String) -> Dict String Int = Dict.remove key d
+
+fn names(d: Dict String Int) -> List String = Dict.keys d
+
+fn sameDict(left: Dict String Int, right: Dict String Int) -> Bool = left == right
+
+fn fromPairs(pairs: List (Tuple2 String Int)) -> Dict String Int = Dict.fromList pairs
+
+test "Tesl.Dict leaves" {
+  let base = fromPairs [Tuple2 "b" 2, Tuple2 "a" 1]
+  expect size base == 2
+  expect get base "a" == 1
+  expect get base "zz" == 0
+  expect has base "b" == True
+  expect has base "zz" == False
+  expect size (build base "c" 3) == 3
+  expect get (build base "a" 9) "a" == 9
+  expect size (without base "a") == 1
+  # Dict iteration order is UNSPECIFIED in Tesl (tesl/dict.rkt iterates a hash), so a
+  # test may only observe membership and size — never an order. The Go backend happens
+  # to iterate sorted, and asserting that here would fail on Racket.
+  expect List.length (names base) == 2
+  expect List.member "a" (names base) == True
+  expect List.member "b" (names base) == True
+  expect List.member "zz" (names base) == False
+  expect List.length (Dict.values base) == 2
+  expect List.length (Dict.toList base) == 2
+  expect sameDict base (fromPairs [Tuple2 "a" 1, Tuple2 "b" 2]) == True
+  expect sameDict base (fromPairs [Tuple2 "a" 1]) == False
+  expect fromPairs [Tuple2 "a" 1, Tuple2 "a" 2] == fromPairs [Tuple2 "a" 2]
+}
+|}
+
+(* A Dict is entries kept sorted by key rather than a Go map.  Two reasons, both in
+   internal/teslrt/dict.go: a Go map cannot be keyed by the non-comparable teslrt.Int
+   at all, and Go randomises map iteration order PER RUN — which would make the same
+   binary print different output on different runs, strictly worse than Racket's
+   unspecified-but-stable hash order.  Sorted order costs nothing here: the insertion
+   point is the binary search lookup already performs. *)
+let test_dicts_with_go () =
+  let emitted = match Compile.compile_go_source "<go-dicts>" dict_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "Dict compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgodicts/module.go" emitted in
+  check bool "the runtime Dict ships with the project" true
+    (List.exists (fun (a : Emit_go.artifact) -> a.path = "internal/teslrt/dict.go") emitted);
+  check bool "a Dict type renders with both parameters" true
+    (contains module_go "d teslrt.Dict[string, teslrt.Int]");
+  (* Tesl puts the dict last; the runtime signatures put it first, so the emitter
+     rotates rather than distorting the hand-written Go. *)
+  check bool "the dict argument is rotated to the front" true
+    (contains module_go "teslrt.DictInsert(d, key, value, func(teslX, teslY string) bool");
+  check bool "a key-finding leaf carries the key ordering" true
+    (contains module_go
+       "teslrt.DictLookup(d, key, func(teslX, teslY string) bool { return (teslX < teslY) })");
+  check bool "lookup yields a Maybe matched on the runtime tag" true
+    (contains module_go "case teslrt.MaybeSomething:");
+  check bool "dict equality is one pass with both comparisons supplied" true
+    (contains module_go "teslrt.DictEqualBy(left, right, func(teslX, teslY string) bool");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then
+    let root = Filename.temp_dir "tesl-go-dicts" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted Dict source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+
+let test_unordered_dict_keys_fail_closed () =
+  (* The representation finds keys by ordering, so a key type with no ordering cannot
+     be stored — better a rejection than a silently wrong lookup. *)
+  let unsupported = {|module BoolKeys exposing [get]
+import Tesl.Prelude exposing [Bool, Int]
+import Tesl.Dict exposing [Dict, Dict.member]
+fn get(d: Dict Bool Int) -> Bool = Dict.member True d
+|} in
+  match Compile.compile_go_source "<go-bool-dict>" unsupported with
+  | Compile.GoSuccess _ -> fail "a dict with unordered keys emitted Go artifacts"
+  | Compile.GoFailure diagnostics ->
+    check bool "unordered dict keys fail closed" true
+      (List.exists (fun (d : Compile.diagnostic) ->
+         d.source = "go-emitter" && contains d.message "needs ordered keys") diagnostics)
+
 let proof_scalar_source = {|module GoProofScalars exposing [NonEmpty, Enabled, checkNonEmpty, checkEnabled, label, invert]
 import Tesl.Prelude exposing [Bool(..), String]
 
@@ -2176,6 +2285,9 @@ let () =
       test_case "check-driven list leaves" `Slow test_check_driven_lists_with_go;
       test_case "tuples" `Slow test_tuples_with_go;
       test_case "Either from the runtime" `Slow test_either_with_go;
+      test_case "Tesl.Dict leaves" `Slow test_dicts_with_go;
+      test_case "dicts behave the same on Racket" `Slow (racket_behavior_oracle "<go-dicts>" dict_source);
+      test_case "unordered dict keys fail closed" `Quick test_unordered_dict_keys_fail_closed;
       test_case "Either behaves the same on Racket" `Slow (racket_behavior_oracle "<go-either>" either_source);
       test_case "tuples behave the same on Racket" `Slow (racket_behavior_oracle "<go-tuples>" tuple_source);
       test_case "check-driven lists behave the same on Racket" `Slow (racket_behavior_oracle "<go-check-lists>" check_list_source);
