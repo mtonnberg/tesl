@@ -63,6 +63,9 @@ and variant_info = {
   var_ctor : string;
   var_tag : string;
   mutable var_fields : (string * go_type) list;
+  (* Explicit Go field names, for a runtime-provided type whose struct is written by
+     hand.  Empty means "derive from the constructor and field names". *)
+  var_go_fields : (string * string) list;
   var_loc : Location.loc;
 }
 
@@ -338,6 +341,38 @@ let strip_outer_parens value =
 (* Records hold teslrt.Int values, which are non-comparable by construction, so
    Go `==` on a record struct is a compile error rather than a wrong answer.
    Record equality is therefore always emitted field by field. *)
+(* Every variant's payload lives in one flat struct, so a payload field is named
+   after its constructor: `Pending (reason: String)` becomes `PendingReason`. *)
+let variant_field_go_name variant name =
+  match List.assoc_opt name variant.var_go_fields with
+  | Some go_name -> go_name
+  | None -> go_ident ~exported:true variant.var_ctor ^ go_ident ~exported:true name
+
+(* A single-variant ADT has nothing to discriminate: it needs no tag field, matching
+   binds its payload directly, and equality is field-wise like a record's. *)
+let single_variant info =
+  match info.adt_variants with
+  | [variant] -> Some variant
+  | _ -> None
+
+let find_variant info ctor =
+  List.find_opt (fun variant -> variant.var_ctor = ctor) info.adt_variants
+
+let rec substitute_type bindings ty =
+  match ty with
+  | TParam name -> (match List.assoc_opt name bindings with Some ty -> ty | None -> ty)
+  | TAdt (info, args) -> TAdt (info, List.map (substitute_type bindings) args)
+  | TCheck inner -> TCheck (substitute_type bindings inner)
+  | TList element -> TList (substitute_type bindings element)
+  | TInt | TString | TBool | TUnit | TNewtype _ | TRecord _ | TFailure -> ty
+
+(** A variant's payload types with the ADT's type arguments substituted in. *)
+let variant_field_types info args variant =
+  if info.adt_params = [] || args = [] then variant.var_fields
+  else
+    let bindings = List.map2 (fun (_, go_param) arg -> go_param, arg) info.adt_params args in
+    List.map (fun (name, ty) -> name, substitute_type bindings ty) variant.var_fields
+
 let rec element_equal_func element =
   (* One-line func literal so the emitted code stays gofmt-stable. *)
   Printf.sprintf "func(teslX, teslY %s) bool { return %s }" (go_type element)
@@ -363,9 +398,43 @@ and equal_expr ty left right =
          equal_expr field_ty (Printf.sprintf "%s.%s" (selector_operand left) field)
            (Printf.sprintf "%s.%s" (selector_operand right) field)) fields in
        "(" ^ String.concat " && " parts ^ ")")
-  (* Per-variant payload comparison lives in a generated method: inlining it would
-     duplicate the whole tag switch at every comparison site. *)
-  | TAdt _ -> Printf.sprintf "%s.TeslEqual(%s)" (selector_operand left) right
+  | TAdt (info, args) when single_variant info <> None ->
+    (match single_variant info with
+     | Some variant ->
+       (match variant_field_types info args variant with
+        | [] -> "true"
+        | fields ->
+          let parts = List.map (fun (name, field_ty) ->
+            let field = variant_field_go_name variant name in
+            equal_expr field_ty (Printf.sprintf "%s.%s" (selector_operand left) field)
+              (Printf.sprintf "%s.%s" (selector_operand right) field)) fields in
+          "(" ^ String.concat " && " parts ^ ")")
+     | None -> assert false)
+  (* A module-declared, non-generic ADT gets a generated `TeslEqual` method: it keeps
+     the comparison site short.  A runtime-provided or generic one cannot — a method
+     needs a type the module declares, and `teslrt.Maybe` is neither — so its payload
+     comparison is inlined instead.  No tag SWITCH is needed for that: "same tag, and
+     for each variant either the tag differs or the payload matches" says the same
+     thing as a conjunction, which Go can express as an expression. *)
+  | TAdt (info, args) when not info.adt_builtin && info.adt_params = [] ->
+    Printf.sprintf "%s.TeslEqual(%s)" (selector_operand left) right
+  | TAdt (info, args) ->
+    let tag_equal =
+      Printf.sprintf "%s.%s == %s.%s"
+        (selector_operand left) adt_tag_field (selector_operand right) adt_tag_field
+    in
+    let payloads = List.filter_map (fun variant ->
+      match variant_field_types info args variant with
+      | [] -> None
+      | fields ->
+        let parts = List.map (fun (name, field_ty) ->
+          let field = variant_field_go_name variant name in
+          equal_expr field_ty (Printf.sprintf "%s.%s" (selector_operand left) field)
+            (Printf.sprintf "%s.%s" (selector_operand right) field)) fields in
+        Some (Printf.sprintf "(%s.%s != %s || %s)"
+                (selector_operand left) adt_tag_field variant.var_tag
+                (String.concat " && " parts))) info.adt_variants in
+    "(" ^ String.concat " && " (tag_equal :: payloads) ^ ")"
   (* A generic Go function cannot compare a `T`, so the element comparison is passed
      in: the emitter knows the concrete element type at every call site. *)
   | TList element ->
@@ -391,7 +460,21 @@ and unequal_expr ty left right =
          unequal_expr field_ty (Printf.sprintf "%s.%s" (selector_operand left) field)
            (Printf.sprintf "%s.%s" (selector_operand right) field)) fields in
        "(" ^ String.concat " || " parts ^ ")")
-  | TAdt _ -> Printf.sprintf "!%s.TeslEqual(%s)" (selector_operand left) right
+  | TAdt (info, args) when single_variant info <> None ->
+    (match single_variant info with
+     | Some variant ->
+       (match variant_field_types info args variant with
+        | [] -> "false"
+        | fields ->
+          let parts = List.map (fun (name, field_ty) ->
+            let field = variant_field_go_name variant name in
+            unequal_expr field_ty (Printf.sprintf "%s.%s" (selector_operand left) field)
+              (Printf.sprintf "%s.%s" (selector_operand right) field)) fields in
+          "(" ^ String.concat " || " parts ^ ")")
+     | None -> assert false)
+  | TAdt (info, _) when not info.adt_builtin && info.adt_params = [] ->
+    Printf.sprintf "!%s.TeslEqual(%s)" (selector_operand left) right
+  | TAdt _ -> negate_bool (equal_expr ty left right)
   | TList element ->
     Printf.sprintf "!teslrt.ListEqualBy(%s, %s, %s)" left right (element_equal_func element)
   | TParam _ | TCheck _ | TFailure ->
@@ -421,10 +504,18 @@ let rec supports_equality = function
   | TNewtype info -> supports_equality info.base
   | TRecord info -> List.for_all (fun (_, ty) -> supports_equality ty) info.rec_fields
   | TAdt (info, args) ->
-    info.adt_params = [] && args = []
-    && List.for_all (fun variant ->
-         List.for_all (fun (_, ty) -> supports_equality ty) variant.var_fields)
-         info.adt_variants
+    (match single_variant info with
+     (* A single-variant type compares field-wise, so it stays comparable even when
+        generic: the emitter knows the instantiation at the comparison site. *)
+     | Some variant ->
+       List.for_all (fun (_, ty) -> supports_equality ty)
+         (variant_field_types info args variant)
+     | None ->
+       (* A multi-variant type is comparable when every payload it could hold is —
+          generic or not, since the instantiation is known at the comparison site. *)
+       List.for_all (fun variant ->
+         List.for_all (fun (_, ty) -> supports_equality ty)
+           (variant_field_types info args variant)) info.adt_variants)
   | TList element -> supports_equality element
   | TParam _ | TCheck _ | TFailure -> false
 
@@ -484,12 +575,24 @@ let list_leaves = [
 
 let list_leaf name = List.find_opt (fun leaf -> leaf.leaf_name = name) list_leaves
 
+(* `Tuple2.first p` is a field read dressed as a call: the accessors are the only way
+   to reach a tuple's components, since a tuple has no user-visible field syntax. *)
+let tuple_accessor = function
+  | "Tuple2.first" -> Some ("Tuple2", "first")
+  | "Tuple2.second" -> Some ("Tuple2", "second")
+  | "Tuple3.first" -> Some ("Tuple3", "first")
+  | "Tuple3.second" -> Some ("Tuple3", "second")
+  | "Tuple3.third" -> Some ("Tuple3", "third")
+  | _ -> None
+
 (* The higher-order leaves lower to an emitted LOOP rather than a runtime helper: a Go
    func value passed into a generic helper costs an indirect call per element and
    blocks inlining, and these are hot-path functions.  A lambda argument's body is
    inlined into the loop (no closure, no call), a named function becomes a direct
    call. *)
-type hof = HofMap | HofFilter | HofFoldl | HofAny | HofAll | HofFilterCheck | HofAllCheck
+type hof =
+  | HofMap | HofFilter | HofFoldl | HofAny | HofAll | HofFilterCheck | HofAllCheck
+  | HofZip
 
 let higher_order_leaf = function
   | "List.map" -> Some HofMap
@@ -499,40 +602,18 @@ let higher_order_leaf = function
   | "List.all" -> Some HofAll
   | "List.filterCheck" -> Some HofFilterCheck
   | "List.allCheck" -> Some HofAllCheck
+  | "List.zip" -> Some HofZip
   | _ -> None
 
 let higher_order_leaf_names =
   ["List.map"; "List.filter"; "List.foldl"; "List.any"; "List.all";
-   "List.filterCheck"; "List.allCheck"]
+   "List.filterCheck"; "List.allCheck"; "List.zip"]
 
 let hof_arity = function
   | HofFoldl -> 3
-  | HofMap | HofFilter | HofAny | HofAll | HofFilterCheck | HofAllCheck -> 2
+  | HofMap | HofFilter | HofAny | HofAll | HofFilterCheck | HofAllCheck | HofZip -> 2
 
 let adt_tag_field = "Tag"
-
-(* Every variant's payload lives in one flat struct, so a payload field is named
-   after its constructor: `Pending (reason: String)` becomes `PendingReason`. *)
-let variant_field_go_name variant name =
-  go_ident ~exported:true variant.var_ctor ^ go_ident ~exported:true name
-
-let find_variant info ctor =
-  List.find_opt (fun variant -> variant.var_ctor = ctor) info.adt_variants
-
-let rec substitute_type bindings ty =
-  match ty with
-  | TParam name -> (match List.assoc_opt name bindings with Some ty -> ty | None -> ty)
-  | TAdt (info, args) -> TAdt (info, List.map (substitute_type bindings) args)
-  | TCheck inner -> TCheck (substitute_type bindings inner)
-  | TList element -> TList (substitute_type bindings element)
-  | TInt | TString | TBool | TUnit | TNewtype _ | TRecord _ | TFailure -> ty
-
-(** A variant's payload types with the ADT's type arguments substituted in. *)
-let variant_field_types info args variant =
-  if info.adt_params = [] || args = [] then variant.var_fields
-  else
-    let bindings = List.map2 (fun (_, go_param) arg -> go_param, arg) info.adt_params args in
-    List.map (fun (name, ty) -> name, substitute_type bindings ty) variant.var_fields
 
 (* Every constructor is registered in the signature table under its own name, so a
    constructor application resolves without knowing its ADT up front. *)
@@ -679,6 +760,23 @@ let rec type_of_expr signatures env expr =
             | _ ->
               unsupported loc "Go backend requires a fully-applied newtype constructor `%s`" name)
          | _ -> unsupported loc "Go backend does not support constructor `%s` yet" name)
+      | EVar { name; _ } when tuple_accessor name <> None ->
+       let owner, field = match tuple_accessor name with
+         | Some pair -> pair
+         | None -> assert false
+       in
+       (match args with
+        | [tuple] ->
+          (match type_of_expr signatures env tuple with
+           | TAdt (info, type_args) when info.adt_tesl_name = owner ->
+             (match single_variant info with
+              | Some variant ->
+                (match List.assoc_opt field (variant_field_types info type_args variant) with
+                 | Some ty -> ty
+                 | None -> unsupported loc "Go backend `%s` has no component `%s`" owner field)
+              | None -> unsupported loc "Go backend `%s` is not a tuple" owner)
+           | _ -> unsupported loc "Go backend `%s` requires a `%s` argument" name owner)
+        | _ -> unsupported loc "Go backend requires `%s` applied to 1 argument" name)
       | EVar { name; _ } when higher_order_leaf name <> None && Hashtbl.mem signatures name ->
        let hof = match higher_order_leaf name with Some hof -> hof | None -> assert false in
        type_of_hof signatures env loc name hof args
@@ -909,6 +1007,12 @@ and type_of_hof signatures env loc what hof args =
     if type_of_callable signatures env loc what (List.nth args 0) [element] <> TBool then
       unsupported loc "Go backend `%s` needs a Bool-returning function" what;
     (match hof with HofFilter -> TList element | _ -> TBool)
+  | HofZip ->
+    let left = list_of 0 and right = list_of 1 in
+    (match Hashtbl.find_opt signatures "Tuple2" with
+     | Some { result = TAdt (info, _); _ } -> TList (TAdt (info, [left; right]))
+     | _ -> unsupported loc
+       "Go backend needs `Tesl.Tuple` imported for `%s`" what)
   | HofFilterCheck | HofAllCheck ->
     let element = list_of 1 in
     let result = type_of_callable signatures env loc what (List.nth args 0) [element] in
@@ -1164,6 +1268,24 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
               Printf.sprintf "%s{teslValue: %s}" (go_type result) (emit arg)
             | _ -> assert false)
          | _ -> unsupported loc "Go backend cannot emit constructor `%s`" name)
+      | EVar { name; _ } when tuple_accessor name <> None ->
+       let field = match tuple_accessor name with
+         | Some (_, field) -> field
+         | None -> assert false
+       in
+       ignore (type_of_expr signatures env app);
+       (match args with
+        | [tuple] ->
+          let variant = match type_of_expr signatures env tuple with
+            | TAdt (info, _) ->
+              (match single_variant info with
+               | Some variant -> variant
+               | None -> invalid_arg "tuple accessor validated before emission")
+            | _ -> invalid_arg "tuple accessor validated before emission"
+          in
+          Printf.sprintf "%s.%s" (selector_operand (emit tuple))
+            (variant_field_go_name variant field)
+        | _ -> invalid_arg "tuple accessor validated before emission")
       | EVar { name; _ } when higher_order_leaf name <> None && Hashtbl.mem signatures name ->
        let hof = match higher_order_leaf name with Some hof -> hof | None -> assert false in
        emit_hof ~indent signatures env loc name hof args
@@ -1324,6 +1446,10 @@ and emit_case_statements ?(indent="") signatures env buffer emit_body scrut arms
   let plans =
     List.map (fun (arm : case_arm) -> arm, pattern_plan info type_args arm.pattern) arms in
   let guarded = List.exists (fun (arm : case_arm) -> arm.guard <> None) arms in
+  (* A single-variant ADT (a tuple) has nothing to discriminate: the first arm always
+     matches, so binding its payload IS the match.  A switch would need a tag the type
+     does not carry. *)
+  let single = single_variant info <> None && not guarded in
   let bind_arm body_indent (whole, bindings) =
     let env = ref env in
     (match whole with
@@ -1342,7 +1468,13 @@ and emit_case_statements ?(indent="") signatures env buffer emit_body scrut arms
     Printf.bprintf buffer "%spanic(\"unreachable: checker guarantees case exhaustiveness\")\n"
       body_indent
   in
-  if guarded then begin
+  if single then begin
+    match plans with
+    | ((arm : case_arm), (_, whole, bindings)) :: _ ->
+      let arm_env = bind_arm inner (whole, bindings) in
+      emit_body arm_env inner arm.body
+    | [] -> invalid_arg "case validated before emission"
+  end else if guarded then begin
     (* First match wins, so an unguarded catch-all ends the chain: anything after
        it is dead code, which `go vet` rejects. *)
     let rec chain = function
@@ -1525,6 +1657,38 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
          (if found then strip_outer_parens applied
           else strip_outer_parens (emit_negated_applied ~indent:body_indent signatures env callable element value))
          body_indent found body_indent inner inner (not found) indent)
+  | HofZip ->
+    (* Racket truncates to the shorter list; the emitted loop does the same. *)
+    let out = Printf.sprintf "teslOut%d" depth in
+    let index = Printf.sprintf "teslAt%d" depth in
+    let left = Printf.sprintf "teslLeft%d" depth in
+    let right = Printf.sprintf "teslRight%d" depth in
+    let pair = match result with
+      | TList (TAdt (info, args)) ->
+        (match single_variant info with
+         | Some variant ->
+           let names = List.map (fun (name, _) -> variant_field_go_name variant name)
+             (variant_field_types info args variant) in
+           (match names with
+            | [first; second] ->
+              Printf.sprintf "%s{%s: %s[%s], %s: %s[%s]}"
+                (go_type (TAdt (info, args))) first left index second right index
+            | _ -> invalid_arg "zip validated before emission")
+         | None -> invalid_arg "zip validated before emission")
+      | _ -> invalid_arg "zip validated before emission"
+    in
+    Printf.sprintf
+      "(func() %s {\n%s%s := %s\n%s%s := %s\n%s%s := len(%s)\n%sif len(%s) < %s {\n%s\t%s = len(%s)\n%s}\n%s%s := make(%s, %s)\n%sfor %s := range %s {\n%s%s[%s] = %s\n%s}\n%sreturn %s\n%s}())"
+      (go_type result) inner left (emit_list 0)
+      inner right (emit_list 1)
+      inner (Printf.sprintf "teslLen%d" depth) left
+      inner right (Printf.sprintf "teslLen%d" depth)
+      inner (Printf.sprintf "teslLen%d" depth) right
+      inner
+      inner out (go_type result) (Printf.sprintf "teslLen%d" depth)
+      inner index out
+      body_indent out index pair
+      inner inner out indent
   | HofFilterCheck | HofAllCheck ->
     let element = element_of 1 in
     let value = match callable_binders callable [Printf.sprintf "teslValue%d" depth] with
@@ -1604,8 +1768,11 @@ and emit_variant_literal ?(indent="") signatures env result variant args =
   let parts = List.map2 (fun arg (name, field_ty) ->
     Printf.sprintf "%s: %s" (variant_field_go_name variant name)
       (emit_expr ~expected:field_ty ~indent signatures env arg)) args payload in
-  Printf.sprintf "%s{%s}" (go_type result)
-    (String.concat ", " ((adt_tag_field ^ ": " ^ variant.var_tag) :: parts))
+  let fields =
+    if single_variant info <> None then parts
+    else (adt_tag_field ^ ": " ^ variant.var_tag) :: parts
+  in
+  Printf.sprintf "%s{%s}" (go_type result) (String.concat ", " fields)
 
 and emit_record_literal ?(indent="") signatures env info fields =
   let parts = List.map (fun (name, field_ty) ->
@@ -2096,7 +2263,8 @@ let compile_module ?(mode=Release) (m : module_form) =
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.Maybe` export `%s` yet" other) exposed;
         maybe_imported := true
-      | "Tesl.String" | "Tesl.List" | "Tesl.Int" -> ()  (* validated against the leaf tables below *)
+      | "Tesl.String" | "Tesl.List" | "Tesl.Int" | "Tesl.Tuple" -> ()
+        (* validated against the leaf/type tables below *)
       | other ->
         unsupported import.loc "Go backend does not support import `%s` yet" other) m.imports;
     let funcs = List.filter_map (function DFunc fd -> Some fd | _ -> None) m.decls in
@@ -2142,6 +2310,7 @@ let compile_module ?(mode=Release) (m : module_form) =
         rec_fields = [];
         rec_loc = r.loc;
       }) record_forms;
+    let tuple_imported = ref false in
     (* A list leaf is element-polymorphic, so its signature cannot be a fixed tuple of
        types like a String leaf's.  Each entry says how to type the call from the
        element type, and `emit_go` builds the argument list the same way. *)
@@ -2160,6 +2329,9 @@ let compile_module ?(mode=Release) (m : module_form) =
         List.iter (fun name ->
           if List.mem name list_leaf_names then begin
             list_imports := name :: !list_imports;
+            (* zip builds tuples, so importing it brings the runtime tuple types in
+               even when the module never names Tuple2. *)
+            if name = "List.zip" then tuple_imported := true;
             (* head/tail/last return a Maybe, so importing one brings the runtime
                Maybe in even when the module never names it. *)
             if List.mem name ["List.head"; "List.tail"; "List.last"] then
@@ -2250,6 +2422,44 @@ let compile_module ?(mode=Release) (m : module_form) =
             | other -> unsupported import.loc
               "Go backend does not support `Tesl.String` export `%s` yet" other) exposed
       end) m.imports;
+    List.iter (fun (import : import_decl) ->
+      if import.module_name = "Tesl.Tuple" then begin
+        let exposed = match import.names with
+          | ImportAll -> []
+          | ImportExposing names -> names
+        in
+        List.iter (fun name ->
+          match name with
+          | "Tuple2" | "Tuple3" | "Tuple2(..)" | "Tuple3(..)"
+          | "Tuple2.first" | "Tuple2.second"
+          | "Tuple3.first" | "Tuple3.second" | "Tuple3.third" -> ()
+          | other -> unsupported import.loc
+            "Go backend does not support `Tesl.Tuple` export `%s` yet" other) exposed;
+        tuple_imported := true
+      end) m.imports;
+    if !tuple_imported then begin
+      let loc = Location.dummy_loc m.source_file in
+      let component index = Printf.sprintf "%c" (Char.chr (Char.code 'A' + index)) in
+      List.iter (fun (name, arity) ->
+        let fields = List.init arity (fun index ->
+          let field = List.nth ["first"; "second"; "third"] index in
+          field, TParam (component index)) in
+        let go_fields = List.map (fun (field, _) ->
+          field, name ^ go_ident ~exported:true field) fields in
+        Hashtbl.replace types.adts name {
+          adt_tesl_name = name;
+          adt_go_name = "teslrt." ^ name;
+          adt_tag_type = "teslrt." ^ name ^ "Tag";
+          adt_params = List.init arity (fun index ->
+            String.lowercase_ascii (component index), component index);
+          adt_variants = [
+            { var_ctor = name; var_tag = "teslrt." ^ name ^ "Only";
+              var_fields = fields; var_go_fields = go_fields; var_loc = loc };
+          ];
+          adt_loc = loc;
+          adt_builtin = true;
+        }) ["Tuple2", 2; "Tuple3", 3]
+    end;
     if !maybe_imported then begin
       let loc = Location.dummy_loc m.source_file in
       Hashtbl.replace types.adts "Maybe" {
@@ -2259,9 +2469,9 @@ let compile_module ?(mode=Release) (m : module_form) =
         adt_params = ["a", "A"];
         adt_variants = [
           { var_ctor = "Nothing"; var_tag = "teslrt.MaybeNothing";
-            var_fields = []; var_loc = loc };
+            var_fields = []; var_go_fields = []; var_loc = loc };
           { var_ctor = "Something"; var_tag = "teslrt.MaybeSomething";
-            var_fields = ["value", TParam "A"]; var_loc = loc };
+            var_fields = ["value", TParam "A"]; var_go_fields = []; var_loc = loc };
         ];
         adt_loc = loc;
         adt_builtin = true;
@@ -2298,6 +2508,7 @@ let compile_module ?(mode=Release) (m : module_form) =
           var_ctor = variant.ctor;
           var_tag = unique_ident taken (go_name ^ go_ident ~exported:true variant.ctor);
           var_fields = [];
+          var_go_fields = [];
           var_loc = variant.loc;
         }) variants;
         adt_loc = loc;

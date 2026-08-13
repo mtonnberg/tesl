@@ -36,7 +36,7 @@
 (rule
  (target embedded_go_runtime.ml)
  (mode promote)
- (deps ../../runtime/go/teslrt/check.go ../../runtime/go/teslrt/control.go ../../runtime/go/teslrt/int.go ../../runtime/go/teslrt/list.go ../../runtime/go/teslrt/maybe.go ../../runtime/go/teslrt/string.go)
+ (deps ../../runtime/go/teslrt/check.go ../../runtime/go/teslrt/control.go ../../runtime/go/teslrt/int.go ../../runtime/go/teslrt/list.go ../../runtime/go/teslrt/maybe.go ../../runtime/go/teslrt/string.go ../../runtime/go/teslrt/tuple.go)
  (action
   (with-stdout-to %{target}
    (run %{exe:../gen/gen_go_runtime.exe}))))

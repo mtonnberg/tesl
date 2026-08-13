@@ -862,12 +862,16 @@ let test_generic_limits_fail_closed () =
         (List.exists (fun (d : Compile.diagnostic) ->
            d.source = "go-emitter" && contains d.message needle) diagnostics)
   in
-  (* Equality would need `TeslEqual` to dispatch `teslrt.Equal` for whatever the
-     parameter was instantiated with, which Go generics cannot express. *)
-  expect_go_error "equality on a generic ADT" "equality on this type" {|module GenericEq exposing [Boxed, same]
+  (* A SINGLE-variant generic type compares field-wise, so it is comparable.  A
+     MULTI-variant one is not: `TeslEqual` would have to dispatch `teslrt.Equal` for
+     whatever the parameter was instantiated with, which Go generics cannot express,
+     and a per-variant payload comparison needs the tag that only a switch can read. *)
+  expect_go_error "equality on a multi-variant generic ADT" "equality on this type"
+    {|module GenericEq exposing [Boxed, same]
 import Tesl.Prelude exposing [Bool, Int]
 type Boxed a
   = Box value: a
+  | Empty
 fn same(left: Boxed Int, right: Boxed Int) -> Bool = left == right
 |};
   (* An unapplied generic name never reaches the Go emitter: the frontend already
@@ -1443,6 +1447,96 @@ let test_check_driven_lists_with_go () =
       ignore (run_command root "go test -race -count=1 ./...");
       run_go_gates root)
 
+let tuple_source = {|module GoTuples exposing [make, firstOf, secondOf, sumPair, describe, triple, thirdOf, samePair, paired, pairedSize]
+import Tesl.Prelude exposing [Bool, Int, List, String]
+import Tesl.Tuple exposing [Tuple2, Tuple3, Tuple2.first, Tuple2.second, Tuple3.third]
+import Tesl.List exposing [List.zip, List.length]
+
+fn make(a: Int, b: Int) -> Tuple2 Int Int = Tuple2 a b
+
+fn firstOf(p: Tuple2 Int Int) -> Int = Tuple2.first p
+
+fn secondOf(p: Tuple2 Int String) -> String = Tuple2.second p
+
+fn sumPair(p: Tuple2 Int Int) -> Int =
+  case p of
+    Tuple2 x y -> x + y
+
+fn describe(p: Tuple2 Int String) -> String =
+  case p of
+    Tuple2 count label -> "${label}=${count}"
+
+fn triple(a: Int, b: String, c: Bool) -> Tuple3 Int String Bool = Tuple3 a b c
+
+fn thirdOf(t: Tuple3 Int String Bool) -> Bool = Tuple3.third t
+
+fn samePair(left: Tuple2 Int Int, right: Tuple2 Int Int) -> Bool = left == right
+
+fn paired(xs: List Int, ys: List String) -> List (Tuple2 Int String) = List.zip xs ys
+
+fn pairedSize(xs: List Int, ys: List String) -> Int = List.length (List.zip xs ys)
+
+test "tuples" {
+  expect firstOf (make 3 4) == 3
+  expect sumPair (make 3 4) == 7
+  expect secondOf (Tuple2 1 "x") == "x"
+  expect describe (Tuple2 2 "hits") == "hits=2"
+  expect thirdOf (triple 1 "a" True) == True
+  expect samePair (make 1 2) (make 1 2) == True
+  expect samePair (make 1 2) (make 2 1) == False
+  expect make 1 2 == make 1 2
+  expect pairedSize [1, 2, 3] ["a", "b"] == 2
+  expect Tuple2.second (Tuple2 0 "z") == "z"
+}
+|}
+
+(* A tuple is a single-variant generic ADT, so it needs no tag: matching binds the
+   payload directly and equality is field-wise — which also makes a GENERIC type
+   comparable, since the emitter knows the instantiation at the comparison site. *)
+let test_tuples_with_go () =
+  let emitted = match Compile.compile_go_source "<go-tuples>" tuple_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "tuple compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgotuples/module.go" emitted in
+  check bool "the runtime tuple types ship with the project" true
+    (List.exists (fun (a : Emit_go.artifact) -> a.path = "internal/teslrt/tuple.go") emitted);
+  check bool "a tuple literal carries no tag" true
+    (contains module_go
+       "teslrt.Tuple2[teslrt.Int, teslrt.Int]{Tuple2First: a, Tuple2Second: b}");
+  check bool "matching a tuple binds its payload without a switch" true
+    (contains module_go "x := teslScrut1.Tuple2First"
+     && contains module_go "y := teslScrut1.Tuple2Second");
+  check bool "a single-variant match emits no tag switch" false
+    (contains module_go "switch teslScrut1.Tag");
+  check bool "an accessor is a field read" true
+    (contains module_go "return p.Tuple2First");
+  check bool "a generic single-variant type is still comparable" true
+    (contains module_go
+       "(teslrt.Equal(left.Tuple2First, right.Tuple2First) && teslrt.Equal(left.Tuple2Second, right.Tuple2Second))");
+  check bool "zip truncates to the shorter list" true
+    (contains module_go "teslLen1 := len(teslLeft1)"
+     && contains module_go "if len(teslRight1) < teslLen1 {");
+  check bool "zip builds tuples without a runtime helper" true
+    (contains module_go "Tuple2First: teslLeft1[teslAt1], Tuple2Second: teslRight1[teslAt1]");
+  (* `make` is predeclared in Go, so the collision rule must rename it. *)
+  check bool "a name colliding with a Go predeclared identifier is renamed" true
+    (contains module_go "func Make_(");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then
+    let root = Filename.temp_dir "tesl-go-tuples" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted tuple source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+
 let proof_scalar_source = {|module GoProofScalars exposing [NonEmpty, Enabled, checkNonEmpty, checkEnabled, label, invert]
 import Tesl.Prelude exposing [Bool(..), String]
 
@@ -1904,6 +1998,7 @@ let go_corpus = [
   "example/learn/lesson05-intro-to-proofs.tesl";
   "example/learn/lesson07-home.tesl";
   "example/learn/lesson39-case-where-guards.tesl";
+  "example/learn/lesson45-tuples.tesl";
   "example/learn/lesson65-pipe-operators.tesl";
   "example/learn/lesson10-cross-parameter-proofs.tesl";
   "example/learn/lesson40-implicit-value-unwrapping.tesl";
@@ -1988,6 +2083,8 @@ let () =
       test_case "Tesl.List leaves" `Slow test_lists_with_go;
       test_case "higher-order list leaves" `Slow test_higher_order_lists_with_go;
       test_case "check-driven list leaves" `Slow test_check_driven_lists_with_go;
+      test_case "tuples" `Slow test_tuples_with_go;
+      test_case "tuples behave the same on Racket" `Slow (racket_behavior_oracle "<go-tuples>" tuple_source);
       test_case "check-driven lists behave the same on Racket" `Slow (racket_behavior_oracle "<go-check-lists>" check_list_source);
       test_case "higher-order lists behave the same on Racket" `Slow (racket_behavior_oracle "<go-hof>" hof_source);
       test_case "function values fail closed" `Quick test_function_values_fail_closed;
