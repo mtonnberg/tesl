@@ -48,6 +48,38 @@ func FloatEqual(left, right float64) bool {
 	return left == right
 }
 
+// FloatKeyLess is the ordering Dict and Set use for Float KEYS, and it is deliberately
+// NOT the IEEE ordering that user-visible comparisons and List.sort use.
+//
+// Dict and Set are sorted, so their binary search derives key equivalence from the
+// comparator: "neither side is less" means "same key". Native `<` breaks that in two
+// ways, and both are real lookup bugs rather than output-order quirks:
+//
+//   - Every comparison involving NaN is false, so a NaN key looks equivalent to whatever
+//     value the search happens to probe. `SetMember(NaN, {1,2,3})` returned TRUE with the
+//     native comparator, and inserting NaN was a no-op.
+//   - Native ordering treats -0.0 and +0.0 as equal, while FloatEqual deliberately
+//     distinguishes them, so the two collapsed into one key.
+//
+// The law this function must satisfy, and which float_test.go checks exhaustively:
+//
+//	FloatEqual(a, b)  ==  !FloatKeyLess(a, b) && !FloatKeyLess(b, a)
+//
+// All NaNs form ONE key-equivalence class (matching FloatEqual) and sort before every
+// number; -0.0 sorts immediately before +0.0. Where the NaN class sits is internal and is
+// not Tesl language semantics — only the equivalence classes are.
+func FloatKeyLess(left, right float64) bool {
+	leftIsNaN, rightIsNaN := math.IsNaN(left), math.IsNaN(right)
+	if leftIsNaN || rightIsNaN {
+		return leftIsNaN && !rightIsNaN
+	}
+	if left == right {
+		// Only -0.0 and +0.0 reach here as distinct values.
+		return math.Signbit(left) && !math.Signbit(right)
+	}
+	return left < right
+}
+
 // ParseFloat accepts what Tesl's `Float.parse` accepts: a decimal float, with no
 // leading or trailing space and no Racket reader syntax.
 func ParseFloat(text string) Maybe[float64] {

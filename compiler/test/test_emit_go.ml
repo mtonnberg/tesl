@@ -526,19 +526,6 @@ fn bad(tag: String, wrapped: WrappedRelatedPair) -> String =
     MkWrappedRelatedPair (MkRelatedPair _ value) -> value
 |}
 
-let test_unreachable_private_function_fails_closed () =
-  let unsupported = {|module DeadPrivate exposing [live]
-import Tesl.Prelude exposing [Int]
-fn live(n: Int) -> Int = n
-fn dead(n: Int) -> Int = n + 1
-|} in
-  match Compile.compile_go_source "<go-dead-private>" unsupported with
-  | Compile.GoSuccess _ -> fail "unreachable private function bypassed lint-clean gate"
-  | Compile.GoFailure diagnostics ->
-    check bool "unreachable private function rejected explicitly" true
-      (List.exists (fun (d : Compile.diagnostic) ->
-         d.source = "go-emitter" && contains d.message "unreachable private function") diagnostics)
-
 let test_special_package_names_are_prefixed () =
   List.iter (fun (module_name, package) ->
     let source = Printf.sprintf
@@ -689,6 +676,46 @@ let run_go_gates root =
       Printf.printf
         "  SKIP %s: vulnerability database unreachable (network), not a finding\n%!" tool
     | code, output -> failf "%s exited %d:\n%s" command code output) required_go_gates
+
+(* This case used to assert the emitter REFUSED a program containing an uncalled private
+   function, on the grounds that an unused unexported Go function is a lint finding and a
+   finding on emitted code is an emitter bug.  The conclusion was wrong: an unused private
+   declaration is legal Tesl and the Racket backend emits it, so refusing made a legal
+   program un-emittable — lesson35 declares `prependInt` to illustrate it and could not be
+   compiled at all.  The function is emitted and referenced once at package level, which
+   satisfies the linter without dropping code the author wrote.  The gate is what proves
+   it: `run_go_gates` includes the `unused` linter that motivated the original refusal. *)
+let test_unreachable_private_function_is_emitted () =
+  let source = {|module DeadPrivate exposing [live]
+import Tesl.Prelude exposing [Int]
+fn live(n: Int) -> Int = n
+fn dead(n: Int) -> Int = n + 1
+fn alsoDead(n: Int) -> Int = n * 3
+|} in
+  let emitted = match Compile.compile_go_source "<go-dead-private>" source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "an uncalled private function must still emit: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmoddeadprivate/module.go" emitted in
+  check bool "the uncalled function is emitted, not dropped" true
+    (contains module_go "func dead(n teslrt.Int) teslrt.Int");
+  (* Grouped and name-ordered, so the output is deterministic. *)
+  check bool "each uncalled function is kept alive once" true
+    (contains module_go "var (" && contains module_go "\t_ = alsoDead"
+     && contains module_go "\t_ = dead");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-dead-private" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go vet ./...");
+      run_go_gates root)
+  end
 
 let recursion_source = {|module GoRecursion exposing [factorial, isEven, isOdd, sumTo, sumToLet, drain, countdown, Small, checkSmall]
 import Tesl.Prelude exposing [Bool(..), Int]
@@ -1254,12 +1281,14 @@ let test_unsupported_list_exports_fail_closed () =
         (List.exists (fun (d : Compile.diagnostic) ->
            d.source = "go-emitter" && contains d.message needle) diagnostics)
   in
-  (* `List.map`/`filter`/`foldl`/`any`/`all` are implemented as loops now; `foldr` is
-     not, and an unimplemented leaf of a supported module must still fail closed. *)
-  expect_go_error "unimplemented higher-order leaf" "`List.foldr`" {|module ListFoldr exposing [total]
+  (* `map`/`filter`/`foldl`/`foldr`/`any`/`all` are loops now, so this moved to the next
+     unimplemented higher-order leaf: an unimplemented leaf of a SUPPORTED module must
+     still fail closed rather than emit something plausible. *)
+  expect_go_error "unimplemented higher-order leaf" "`List.find`" {|module ListFind exposing [firstBig]
 import Tesl.Prelude exposing [Int, List]
-import Tesl.List exposing [List.foldr]
-fn total(xs: List Int) -> Int = List.foldr (fn(x: Int, acc: Int) -> acc + x) 0 xs
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.List exposing [List.find]
+fn firstBig(xs: List Int) -> Maybe Int = List.find (fn(x: Int) -> x > 10) xs
 |};
   (* `List.sum` on a non-Int list never reaches the emitter — the frontend's own
      signature rejects it — so the emitter's guard is containment, and what this pins
@@ -1863,6 +1892,318 @@ let test_floats_with_go () =
       ignore (run_command root "go vet ./...");
       ignore (run_command root "go test -race -count=1 ./...");
       run_go_gates root)
+
+(* ── Float KEYS in Dict and Set ────────────────────────────────────────────────
+   Dict and Set are sorted, so their binary search reads key equivalence off the
+   comparator: "neither side is less" means "same key".  IEEE ordering therefore cannot
+   be the key comparator, because its equivalence classes are not `FloatEqual`'s — every
+   NaN comparison is false (so a NaN key matched whatever the search probed first, and
+   `Set.member NaN {1,2,3}` returned TRUE) and -0.0 compares equal to +0.0 (while
+   `FloatEqual` distinguishes them, so the two keys collapsed into one).  User-visible
+   comparisons and `List.sort` keep plain IEEE; only the collection key path changes.
+   Reported by the migration review; the runtime's own float_test.go carries the
+   exhaustive comparator laws, including NaN payloads and signs. *)
+let float_key_source = {|module GoFloatKeys exposing [Weight, zeroKeys, newtypeKeys, ieeeOrdering, noWeights]
+import Tesl.Prelude exposing [Bool(..), Int, String]
+import Tesl.Float exposing [Float]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Set exposing [Set, Set.insert, Set.singleton, Set.size]
+import Tesl.Dict exposing [Dict, Dict.insert, Dict.lookup, Dict.size, Dict.empty]
+
+type Weight = Float
+
+# -0.0 and 0.0 are DISTINCT keys, because Float equality distinguishes them.
+fn zeroKeys() -> Int =
+  let s = Set.insert 0.0 (Set.singleton -0.0)
+  Set.size s
+
+# A Float-backed newtype inherits the key comparator.
+fn newtypeKeys() -> Int =
+  let s = Set.insert (Weight 0.0) (Set.singleton (Weight -0.0))
+  Set.size s
+
+# User-visible comparison stays plain IEEE: -0.0 is NOT less than 0.0.
+fn ieeeOrdering() -> Bool = -0.0 < 0.0
+
+fn noWeights() -> Dict Float String = Dict.empty
+
+test "float keys are not IEEE-ordered" {
+  expect zeroKeys() == 2
+  expect newtypeKeys() == 2
+  expect ieeeOrdering() == False
+  expect (0.0 < 1.0) == True
+  let d = Dict.insert 0.0 "pos" (Dict.insert -0.0 "neg" (noWeights()))
+  expect Dict.size d == 2
+  expect Dict.lookup -0.0 d == Something "neg"
+  expect Dict.lookup 0.0 d == Something "pos"
+}
+|}
+
+let test_float_keys_with_go () =
+  let emitted = match Compile.compile_go_source "<go-float-keys>" float_key_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "float key compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgofloatkeys/module.go" emitted in
+  check bool "a Float-keyed Set orders by the KEY comparator" true
+    (contains module_go "teslrt.FloatKeyLess(teslX, teslY)");
+  (* The review asked for this explicitly: a Float-backed newtype must inherit it. *)
+  check bool "a Float-backed newtype key inherits the key comparator" true
+    (contains module_go "teslrt.FloatKeyLess(teslX.Value, teslY.Value)");
+  check bool "user-visible ordering stays plain IEEE" true
+    (contains module_go "(math.Copysign(0, -1) < float64(0))");
+  (* `-0.0` has no Go literal: `-float64(0)` is POSITIVE zero (staticcheck SA4026), so
+     negation folds into the literal.  That also means the module needs `math` imported —
+     which it did not, because no earlier probe used a negative-zero, NaN or infinity
+     literal. *)
+  check bool "a negative zero literal is a real negative zero" true
+    (contains module_go "math.Copysign(0, -1)"
+     && not (contains module_go "-float64(0)"));
+  check bool "a math literal pulls in the math import" true
+    (contains module_go "\t\"math\"" || contains module_go "import \"math\"");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-floatkeys" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+  end
+
+(* ── `List.foldr` ─────────────────────────────────────────────────────────────
+   Emitted as a BACKWARDS loop, not recursion: Go has no TCO and a Go stack overflow is
+   a fatal error `recover` cannot catch, so recursing once per element would put a list
+   length ceiling on a function Racket runs fine.  The list is bound once because it is
+   an arbitrary expression and backwards iteration needs both its length and an index.
+   The callback takes (element, accumulator) — the REVERSE of `foldl` — which was
+   confirmed against `tesl/list-derived.rkt` (`(f *first (foldr f acc *rest))`) rather
+   than read off a doc string, since lesson53 names its foldr parameters the other way
+   round and would have misled the guess.
+
+   What this does NOT fix: a callback that performs an immutable write on a growing
+   accumulator.  `List.append [x] acc` copies Θ(k) at step k, so the canonical
+   reconstruction fold below is Θ(n²) in the CALLBACK.  Lowering recognised builder folds
+   to an allocate-once private builder is a tracked gate that needs an escape/linearity
+   condition first — an arbitrary callback may retain an earlier accumulator inside its
+   result, so uniqueness cannot be inferred from the call shape alone. *)
+let foldr_source = {|module GoFoldr exposing [sumRight, joinRight, minusRight, reverseList, prependInt, countLong, bumpIfLong]
+import Tesl.Prelude exposing [Bool(..), Int, List, String]
+import Tesl.List exposing [List.foldr, List.append, List.length]
+import Tesl.String exposing [String.length]
+
+fn sumRight(ns: List Int) -> Int =
+  List.foldr (fn(x: Int, acc: Int) -> x + acc) 0 ns
+
+# Direction-sensitive: a left-to-right loop with this callback would give "cba".
+fn joinRight(parts: List String) -> String =
+  List.foldr (fn(x: String, acc: String) -> "${x}${acc}") "" parts
+
+# Non-associative, so it pins the nesting: 1 - (2 - (3 - 0)) = 2.
+fn minusRight(ns: List Int) -> Int =
+  List.foldr (fn(x: Int, acc: Int) -> x - acc) 0 ns
+
+# A NAMED callback, and the canonical list-reconstruction shape.
+fn prependInt(x: Int, acc: List Int) -> List Int =
+  List.append [x] acc
+
+fn reverseList(ns: List Int) -> List Int =
+  List.foldr prependInt [] ns
+
+# The accumulator has a different type from the element.
+fn bumpIfLong(w: String, acc: Int) -> Int =
+  if String.length w > 3 then
+    acc + 1
+  else
+    acc
+
+fn countLong(words: List String) -> Int =
+  List.foldr bumpIfLong 0 words
+
+test "foldr folds from the right" {
+  expect sumRight [1, 2, 3] == 6
+  expect sumRight [] == 0
+  expect joinRight ["a", "b", "c"] == "abc"
+  expect minusRight [1, 2, 3] == 2
+  expect reverseList [1, 2, 3] == [1, 2, 3]
+  expect List.length (reverseList [4, 5]) == 2
+  expect countLong ["hi", "there", "you", "friend"] == 2
+}
+|}
+
+let test_foldr_with_go () =
+  let emitted = match Compile.compile_go_source "<go-foldr>" foldr_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "foldr compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgofoldr/module.go" emitted in
+  check bool "foldr walks the slice backwards in a plain loop" true
+    (contains module_go "for teslAt1 := len(teslSource1) - 1; teslAt1 >= 0; teslAt1-- {");
+  check bool "the list is bound once rather than re-evaluated" true
+    (contains module_go "teslSource1 := ns");
+  (* Argument order is the whole correctness question for foldr: `x - acc`, not
+     `acc - x`. *)
+  check bool "the callback receives (element, accumulator)" true
+    (contains module_go "teslState1 = teslrt.Sub(x, acc)");
+  check bool "a named callback is called directly" true
+    (contains module_go "teslState1 = PrependInt(Value1, teslAcc1)");
+  (* An empty list literal init has no element type of its own; the named callback's
+     declared result type supplies it. *)
+  check bool "an empty accumulator is typed from the callback's result" true
+    (contains module_go "teslState1 := []teslrt.Int{}");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-foldr" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+  end
+
+(* A fold whose initial accumulator is a bare `[]` and whose callback is a LAMBDA — the
+   idiomatic list-rebuilding fold, and what lesson35 writes.  Nothing about `[]` says what
+   it holds, so the type comes from the lambda's own parameter annotation at the
+   accumulator position; that needed the module's type table where only `signatures` was
+   threaded, hence `current_types`.  This started life as a fail-closed test and became a
+   positive one when the support landed: `foldl` had the same limitation, so both are
+   pinned here. *)
+let fold_empty_init_source = {|module GoFoldEmptyInit exposing [rebuild, reverseLeft]
+import Tesl.Prelude exposing [Int, List]
+import Tesl.List exposing [List.foldr, List.foldl, List.append]
+
+fn rebuild(xs: List Int) -> List Int =
+  List.foldr (fn(x: Int, acc: List Int) -> List.append [x] acc) [] xs
+
+# lesson35's idiomatic reverse: foldl with a lambda and a bare [] init.
+fn reverseLeft(xs: List Int) -> List Int =
+  List.foldl (fn(acc: List Int, x: Int) -> List.append [x] acc) [] xs
+
+test "lambda folds with an empty init" {
+  expect rebuild [1, 2, 3] == [1, 2, 3]
+  expect reverseLeft [1, 2, 3] == [3, 2, 1]
+  expect reverseLeft [] == []
+}
+|}
+
+let test_fold_empty_init_with_go () =
+  let emitted = match Compile.compile_go_source "<go-fold-empty-init>" fold_empty_init_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "empty-init fold compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgofoldemptyinit/module.go" emitted in
+  check bool "the empty accumulator is typed from the lambda's annotation" true
+    (contains module_go "teslState1 := []teslrt.Int{}");
+  check bool "both fold directions accept it" true
+    (contains module_go "func Rebuild(" && contains module_go "func ReverseLeft(");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-emptyinit" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+  end
+
+(* Five more `Tesl.List` leaves.  `range` and `repeat` CONSTRUCT a list rather than
+   consuming one, so they carry no list argument for the leaf table to read an element
+   type from and are resolved on their own: `range` is always `List Int`, `repeat` takes
+   its element from its first argument.  Both counts carry an `IsNonNegative` proof that
+   erases, so the runtime check is containment rather than the enforcement.  `concat` and
+   `flatten` are the same leaf under two names (per the stdlib docs) and size the result
+   before filling, so a list of n lists costs one allocation instead of n appends;
+   `maximum`/`minimum` are `Nothing` for the empty list and take the ordering the emitter
+   supplies, which is what lets them work on a non-Int element type. *)
+let list_leaves_source = {|module GoListLeaves exposing [counts, copies, flat, biggest, smallest, biggestWord]
+import Tesl.Prelude exposing [Int, List, String]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.List exposing [List.range, List.repeat, List.concat, List.flatten, List.maximum, List.minimum, List.length]
+import Tesl.Int exposing [Int.nonNegative]
+
+fn counts(n: Int) -> List Int =
+  let safeN = check Int.nonNegative n
+  List.range 0 safeN
+
+fn copies(word: String, n: Int) -> List String =
+  let safeN = check Int.nonNegative n
+  List.repeat word safeN
+
+fn flat(xss: List (List Int)) -> List Int =
+  List.concat xss
+
+fn biggest(ns: List Int) -> Maybe Int =
+  List.maximum ns
+
+fn smallest(ns: List Int) -> Maybe Int =
+  List.minimum ns
+
+# Ordering on a non-Int element type.
+fn biggestWord(words: List String) -> Maybe String =
+  List.maximum words
+
+test "constructing and reducing lists" {
+  expect counts 4 == [0, 1, 2, 3]
+  expect counts 0 == []
+  expect copies "a" 3 == ["a", "a", "a"]
+  expect copies "a" 0 == []
+  expect flat [[1, 2], [], [3]] == [1, 2, 3]
+  expect List.length (flat []) == 0
+  expect biggest [3, 9, 2] == Something 9
+  expect smallest [3, 9, 2] == Something 2
+  expect biggest [] == Nothing
+  expect biggestWord ["pear", "apple"] == Something "pear"
+}
+|}
+
+let test_list_leaves_with_go () =
+  let emitted = match Compile.compile_go_source "<go-list-leaves>" list_leaves_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "list leaf compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgolistleaves/module.go" emitted in
+  check bool "range and repeat resolve without a list argument" true
+    (contains module_go "teslrt.ListRange(" && contains module_go "teslrt.ListRepeat(");
+  check bool "concat and flatten share one runtime leaf" true
+    (contains module_go "teslrt.ListConcat(");
+  check bool "maximum takes the ordering the emitter supplies" true
+    (contains module_go "teslrt.ListMaximum(ns, func(teslX, teslY teslrt.Int) bool");
+  (* The element type is what makes the ordering closure work on a non-Int list. *)
+  check bool "ordering follows the element type" true
+    (contains module_go "teslrt.ListMaximum(words, func(teslX, teslY string) bool");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-list-leaves" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+  end
 
 let test_divergent_float_functions_fail_closed () =
   (* Go's sin/cos/tan disagree with Racket on 22-34% of inputs and its math.Log is
@@ -2877,6 +3218,10 @@ let go_corpus = [
   "example/learn/lesson10-cross-parameter-proofs.tesl";
   "example/learn/lesson40-implicit-value-unwrapping.tesl";
   "example/learn/lesson44-multi-param-proofs.tesl";
+  (* Reached by the fold slice: `foldr`, an unreachable private declaration (which the
+     emitter used to refuse outright), a `let` before an under-constrained tail, and
+     `List (List Int)` equality — whose comparator is the one that must be hoisted. *)
+  "example/learn/lesson35-list-decomposition.tesl";
   "tests/multiparam_test.tesl";
 ]
 
@@ -2941,7 +3286,7 @@ let () =
       test_case "unsupported interpolation fails closed" `Quick test_unsupported_interpolation_fails_closed;
       test_case "cross-subject mismatch fails before emission" `Quick test_cross_subject_mismatch_never_reaches_emitter;
       test_case "nested expressions receive frontend validation" `Quick test_nested_expressions_receive_frontend_validation;
-      test_case "unreachable private functions fail closed" `Quick test_unreachable_private_function_fails_closed;
+      test_case "unreachable private functions are emitted" `Slow test_unreachable_private_function_is_emitted;
       test_case "String and Bool proof consumers" `Slow test_string_bool_proof_consumers_with_go;
       test_case "scalar newtypes" `Slow test_scalar_newtypes_with_go;
       test_case "unsupported newtypes fail closed" `Quick test_unsupported_newtypes_fail_closed;
@@ -2968,6 +3313,18 @@ let () =
       test_case "import cycle across three modules" `Slow test_import_cycle_three_modules_with_go;
       test_case "sets behave the same on Racket" `Slow (racket_behavior_oracle "<go-sets>" set_source);
       test_case "Float behaves the same on Racket" `Slow (racket_behavior_oracle "<go-floats>" float_source);
+      test_case "more Tesl.List leaves" `Slow test_list_leaves_with_go;
+      test_case "more Tesl.List leaves behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-list-leaves>" list_leaves_source);
+      test_case "List.foldr" `Slow test_foldr_with_go;
+      test_case "List.foldr behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-foldr>" foldr_source);
+      test_case "folds with an empty accumulator" `Slow test_fold_empty_init_with_go;
+      test_case "empty-init folds behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-fold-empty-init>" fold_empty_init_source);
+      test_case "Float keys in Dict and Set" `Slow test_float_keys_with_go;
+      test_case "Float keys behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-float-keys>" float_key_source);
       test_case "divergent Float functions fail closed" `Quick test_divergent_float_functions_fail_closed;
       test_case "dicts behave the same on Racket" `Slow (racket_behavior_oracle "<go-dicts>" dict_source);
       test_case "unordered dict keys fail closed" `Quick test_unordered_dict_keys_fail_closed;

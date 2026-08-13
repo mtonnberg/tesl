@@ -36,14 +36,40 @@ let tesl =
 let check_subcmd =
   if Filename.basename tesl = "main.exe" then "--check" else "check"
 
+(* Each source gets its OWN directory rather than a bare temp file in the shared build
+   sandbox.  Under a parallel `dune test` this suite intermittently failed with
+   "unterminated string literal at EOF" — the compiler reading a PARTIAL file, which a
+   plain write-then-close cannot produce on its own; the shared sandbox directory being
+   cleaned underneath it can.  A private directory removes the interference, and
+   `with_open_bin` closes the file even if writing raises, so the compiler never sees a
+   half-written source. *)
+(* The compiler resolves imports by FILE NAME and rejects a module header that does not
+   match it, so the probe is named after the module it declares.  (The old flat temp name
+   satisfied that check only by accident: `tesl-r77<hex>.tesl` happened to contain the
+   `r77…` module spelling.) *)
+let module_name_of src =
+  match String.index_opt src 'm' with
+  | _ ->
+    let words = String.split_on_char ' ' (String.trim src) in
+    let rec after = function
+      | "module" :: name :: _ -> Some name
+      | _ :: rest -> after rest
+      | [] -> None
+    in
+    (match after (List.concat_map (String.split_on_char '\n') words) with
+     | Some name when name <> "" -> name
+     | _ -> "Probe")
+
 let compile_string src =
-  let tmp = Filename.temp_file "tesl-r77" ".tesl" in
-  let oc = open_out tmp in output_string oc src; close_out oc;
+  let dir = Filename.temp_dir "tesl-r77" "" in
+  let tmp = Filename.concat dir (module_name_of src ^ ".tesl") in
+  Out_channel.with_open_bin tmp (fun oc -> Out_channel.output_string oc src);
   let cmd = Printf.sprintf "%s %s %s 2>&1" tesl check_subcmd tmp in
   let ic = Unix.open_process_in cmd in
   let out = In_channel.input_all ic in
   let _ = Unix.close_process_in ic in
   (try Sys.remove tmp with _ -> ());
+  (try Sys.rmdir dir with _ -> ());
   out
 
 let has_error out =

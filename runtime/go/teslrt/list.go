@@ -199,3 +199,92 @@ func StringSplit(s, sep string) []string {
 func StringJoin(parts []string, sep string) string {
 	return strings.Join(parts, sep)
 }
+
+// exactCount converts a proven-non-negative Int to a length. The frontend has already
+// discharged `IsNonNegative`, so a negative value here means the emitter let an unproven
+// call through; a count that does not fit cannot be allocated at all, and Racket would
+// exhaust memory attempting it, so both panic rather than silently truncating to a
+// wrong-length list.
+func exactCount(who string, count Int) int {
+	if count.Sign() < 0 {
+		panic(who + ": count must be non-negative")
+	}
+	value, ok := count.Int64()
+	if !ok || value > int64(maxAllocElements) {
+		panic(who + ": count is too large to allocate")
+	}
+	return int(value)
+}
+
+// maxAllocElements bounds a single constructed list. Not a language limit — the point
+// past which the allocation cannot succeed anyway, reported as a clear panic rather than
+// an out-of-memory kill.
+const maxAllocElements = 1 << 31
+
+// ListRange is start INCLUSIVE to end EXCLUSIVE, matching `for/list ([i (in-range …)])`
+// in tesl/list.rkt, and empty when start >= end.
+func ListRange(start, end Int) []Int {
+	if Compare(start, end) >= 0 {
+		return []Int{}
+	}
+	span := exactCount("List.range", Sub(end, start))
+	out := make([]Int, span)
+	current := start
+	for index := range out {
+		out[index] = current
+		current = Add(current, FromInt64(1))
+	}
+	return out
+}
+
+// ListRepeat holds n copies of one value. `n` carries an IsNonNegative proof, so the
+// check here is containment rather than the enforcement.
+func ListRepeat[T any](value T, n Int) []T {
+	out := make([]T, exactCount("List.repeat", n))
+	for index := range out {
+		out[index] = value
+	}
+	return out
+}
+
+// ListConcat flattens ONE level, like `List.concat`/`List.flatten`. It sizes the result
+// first, so a list of n lists costs one allocation rather than n appends.
+func ListConcat[T any](xss [][]T) []T {
+	total := 0
+	for _, xs := range xss {
+		total += len(xs)
+	}
+	out := make([]T, 0, total)
+	for _, xs := range xss {
+		out = append(out, xs...)
+	}
+	return out
+}
+
+// ListMaximum and ListMinimum are Nothing for the empty list. Ordering comes in from the
+// emitter, which knows the concrete element type at each call site.
+func ListMaximum[T any](xs []T, less func(T, T) bool) Maybe[T] {
+	if len(xs) == 0 {
+		return Nothing[T]()
+	}
+	best := xs[0]
+	for _, value := range xs[1:] {
+		if less(best, value) {
+			best = value
+		}
+	}
+	return Something(best)
+}
+
+func ListMinimum[T any](xs []T, less func(T, T) bool) Maybe[T] {
+	if len(xs) == 0 {
+		return Nothing[T]()
+	}
+	best := xs[0]
+	for _, value := range xs[1:] {
+		if less(value, best) {
+			best = value
+		}
+	}
+	return Something(best)
+}

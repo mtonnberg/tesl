@@ -202,3 +202,146 @@ func TestFloatParseAndRequireNonZero(t *testing.T) {
 		}
 	}
 }
+
+// The Float KEY comparator. Dict and Set derive key equivalence from the comparator, so
+// these are lookup-correctness tests, not ordering-taste tests.
+func floatKeyCorpus() []float64 {
+	return []float64{
+		math.NaN(),
+		-math.NaN(),
+		math.Float64frombits(0x7FF8000000000001), // a NaN with a different payload
+		math.Float64frombits(0xFFF8000000000001), // negative sign, different payload
+		math.Inf(-1), -math.MaxFloat64, -1e308, -1.5, -1, -math.SmallestNonzeroFloat64,
+		math.Copysign(0, -1), 0, math.SmallestNonzeroFloat64, 1, 1.5, 1e308,
+		math.MaxFloat64, math.Inf(1),
+	}
+}
+
+// The defining law: the comparator's equivalence classes must be exactly FloatEqual's.
+func TestFloatKeyLessMatchesFloatEqual(t *testing.T) {
+	corpus := floatKeyCorpus()
+	for _, left := range corpus {
+		for _, right := range corpus {
+			equivalent := !FloatKeyLess(left, right) && !FloatKeyLess(right, left)
+			if equivalent != FloatEqual(left, right) {
+				t.Errorf("FloatKeyLess equivalence for (%v, %v) = %v, FloatEqual = %v",
+					left, right, equivalent, FloatEqual(left, right))
+			}
+		}
+	}
+}
+
+func TestFloatKeyLessIsStrictWeakOrder(t *testing.T) {
+	corpus := floatKeyCorpus()
+	for _, value := range corpus {
+		if FloatKeyLess(value, value) {
+			t.Errorf("FloatKeyLess(%v, %v) must be false (irreflexive)", value, value)
+		}
+	}
+	for _, left := range corpus {
+		for _, right := range corpus {
+			if FloatKeyLess(left, right) && FloatKeyLess(right, left) {
+				t.Errorf("FloatKeyLess is not asymmetric at (%v, %v)", left, right)
+			}
+		}
+	}
+	// Transitivity of both `less` and of the induced equivalence.
+	for _, a := range corpus {
+		for _, b := range corpus {
+			for _, c := range corpus {
+				if FloatKeyLess(a, b) && FloatKeyLess(b, c) && !FloatKeyLess(a, c) {
+					t.Errorf("FloatKeyLess is not transitive at (%v, %v, %v)", a, b, c)
+				}
+				equal := func(x, y float64) bool { return !FloatKeyLess(x, y) && !FloatKeyLess(y, x) }
+				if equal(a, b) && equal(b, c) && !equal(a, c) {
+					t.Errorf("key equivalence is not transitive at (%v, %v, %v)", a, b, c)
+				}
+			}
+		}
+	}
+}
+
+func TestFloatKeyLessSignedZeroAndNaNPlacement(t *testing.T) {
+	negZero := math.Copysign(0, -1)
+	if !FloatKeyLess(negZero, 0) {
+		t.Error("-0.0 must sort before +0.0, since FloatEqual distinguishes them")
+	}
+	if FloatKeyLess(0, negZero) {
+		t.Error("+0.0 must not sort before -0.0")
+	}
+	// All NaNs are one class, and it sits before every number.
+	for _, number := range []float64{math.Inf(-1), -1, negZero, 0, 1, math.Inf(1)} {
+		if !FloatKeyLess(math.NaN(), number) {
+			t.Errorf("the NaN class must sort before %v", number)
+		}
+		if FloatKeyLess(number, math.NaN()) {
+			t.Errorf("%v must not sort before the NaN class", number)
+		}
+	}
+	if FloatKeyLess(math.NaN(), -math.NaN()) || FloatKeyLess(-math.NaN(), math.NaN()) {
+		t.Error("all NaNs are one key-equivalence class")
+	}
+}
+
+// The bugs that motivated the comparator, as Set/Dict operations.
+func TestFloatKeyedCollectionsUseTheKeyComparator(t *testing.T) {
+	nan, negZero := math.NaN(), math.Copysign(0, -1)
+	set := SetFromList([]float64{1, 2, 3}, FloatKeyLess)
+	if SetMember(nan, set, FloatKeyLess) {
+		t.Error("NaN must not be a member of {1,2,3}")
+	}
+	withNaN := SetInsert(nan, set, FloatKeyLess)
+	if got := SetSize(withNaN).String(); got != "4" {
+		t.Errorf("inserting NaN gave size %s, want 4", got)
+	}
+	if !SetMember(nan, withNaN, FloatKeyLess) {
+		t.Error("NaN must be found once inserted")
+	}
+	// Idempotent: NaN is one key.
+	if got := SetSize(SetInsert(-nan, withNaN, FloatKeyLess)).String(); got != "4" {
+		t.Errorf("re-inserting a differently-signed NaN gave size %s, want 4", got)
+	}
+	zeros := SetInsert(0, SetSingleton(negZero), FloatKeyLess)
+	if got := SetSize(zeros).String(); got != "2" {
+		t.Errorf("-0.0 and +0.0 are distinct keys (FloatEqual says so), got size %s", got)
+	}
+	// Set algebra over the same values.
+	left := SetFromList([]float64{nan, negZero, 1}, FloatKeyLess)
+	right := SetFromList([]float64{nan, 0, 1}, FloatKeyLess)
+	if got := SetSize(SetIntersection(left, right, FloatKeyLess)).String(); got != "2" {
+		t.Errorf("intersection should keep NaN and 1, got size %s", got)
+	}
+	if got := SetSize(SetUnion(left, right, FloatKeyLess)).String(); got != "4" {
+		t.Errorf("union should hold NaN, -0.0, +0.0 and 1, got size %s", got)
+	}
+	if got := SetSize(SetDifference(left, right, FloatKeyLess)).String(); got != "1" {
+		t.Errorf("difference should keep only -0.0, got size %s", got)
+	}
+	if !SetIsSubset(SetSingleton(nan), left, FloatKeyLess) {
+		t.Error("a NaN singleton is a subset of a set containing NaN")
+	}
+	// Dict lookup and replacement.
+	dict := DictInsert(DictEmpty[float64, string](), nan, "nan", FloatKeyLess)
+	dict = DictInsert(dict, negZero, "neg", FloatKeyLess)
+	dict = DictInsert(dict, 0, "pos", FloatKeyLess)
+	if got := DictSize(dict).String(); got != "3" {
+		t.Errorf("NaN, -0.0 and +0.0 are three keys, got size %s", got)
+	}
+	for _, probe := range []struct {
+		key  float64
+		want string
+	}{{nan, "nan"}, {negZero, "neg"}, {0, "pos"}} {
+		switch found := DictLookup(dict, probe.key, FloatKeyLess); found.Tag {
+		case MaybeSomething:
+			if found.SomethingValue != probe.want {
+				t.Errorf("lookup %v = %q, want %q", probe.key, found.SomethingValue, probe.want)
+			}
+		case MaybeNothing:
+			t.Errorf("lookup %v found nothing, want %q", probe.key, probe.want)
+		}
+	}
+	replaced := DictInsert(dict, -nan, "again", FloatKeyLess)
+	if got := DictSize(replaced).String(); got != "3" {
+		t.Errorf("re-inserting a NaN key must replace, got size %s", got)
+	}
+}

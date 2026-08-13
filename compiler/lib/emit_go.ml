@@ -237,6 +237,14 @@ type type_table = {
   adts : (string, adt_info) Hashtbl.t;
 }
 
+(* The table for the module being emitted.  A ref for the same reason `current_package`
+   is one: the type family threads `signatures` only, and a lambda's PARAMETER
+   ANNOTATION has to be resolvable where a fold's accumulator type is settled — that is
+   the only thing that determines the type of `List.foldl (fn(acc: List Int, …) -> …) []
+   xs`, the idiomatic list-rebuilding fold.  Set once per module beside
+   `current_package`. *)
+let current_types : type_table option ref = ref None
+
 (* What a compiled module offers its importers: the very tables it emitted from.  A
    dependent reuses these exact info records rather than re-deriving them, so the two
    cannot disagree about a type's Go name, its fields, or its identity — `go_type`
@@ -454,14 +462,79 @@ let variant_field_types info args variant =
     let bindings = List.map2 (fun (_, go_param) arg -> go_param, arg) info.adt_params args in
     List.map (fun (name, ty) -> name, substitute_type bindings ty) variant.var_fields
 
+(* Comparator helpers hoisted to package level, keyed by their generated name so the
+   same comparator is defined once per file.  Reset and flushed by whichever file is being
+   emitted; the tests file is in the same package but gets its own copies, because a
+   helper defined in module.go and used only from the test would read as unused there. *)
+let pending_helpers : (string, string) Hashtbl.t = Hashtbl.create 16
+
+let helper_suffix ty =
+  let text = go_type ty in
+  let buffer = Buffer.create (String.length text) in
+  let capitalize = ref true in
+  String.iter (fun c ->
+    if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') then begin
+      Buffer.add_char buffer (if !capitalize then Char.uppercase_ascii c else c);
+      capitalize := false
+    end else capitalize := true) text;
+  Buffer.contents buffer
+
+(* A comparator is passed INLINE as a one-line func literal, which is how the emitted code
+   reads best — but go/printer keeps a literal on one line only while it judges the body
+   small enough, and that heuristic is not something the emitter can predict.  A comparator
+   whose body contains another comparator (the element type is itself a collection) crosses
+   that threshold, and gofmt then reformats the emitted file, which the gate treats as an
+   emitter bug.  Such a comparator is therefore hoisted into a named package-level
+   function, so what appears at the call site is an identifier and no size heuristic
+   applies at any nesting depth. *)
+let comparator kind ty body =
+  let literal =
+    Printf.sprintf "func(teslX, teslY %s) bool { return %s }" (go_type ty) body in
+  (* Skip the literal's own leading `func(` and look for another one inside the body. *)
+  let nested =
+    let needle = "func(" in
+    let n = String.length literal and m = String.length needle in
+    let rec scan index =
+      index + m <= n
+      && (String.sub literal index m = needle || scan (index + 1))
+    in
+    scan 1
+  in
+  if not nested then literal
+  else begin
+    let name = Printf.sprintf "tesl%s%s" kind (helper_suffix ty) in
+    if not (Hashtbl.mem pending_helpers name) then
+      Hashtbl.replace pending_helpers name
+        (Printf.sprintf "\nfunc %s(teslX, teslY %s) bool {\n\treturn %s\n}\n"
+           name (go_type ty) body);
+    name
+  end
+
 let rec element_equal_func element =
-  (* One-line func literal so the emitted code stays gofmt-stable. *)
-  Printf.sprintf "func(teslX, teslY %s) bool { return %s }" (go_type element)
-    (equal_expr element "teslX" "teslY")
+  comparator "Equal" element (equal_expr element "teslX" "teslY")
 
 and element_less_func element =
-  Printf.sprintf "func(teslX, teslY %s) bool { return %s }" (go_type element)
-    (ordered_expr element "<" "teslX" "teslY")
+  comparator "Less" element (ordered_expr element "<" "teslX" "teslY")
+
+(* The ordering Dict and Set use for KEYS, which is NOT the user-visible ordering.  Both
+   are sorted, so their binary search reads key equivalence off the comparator — "neither
+   side is less" means "same key" — and that equivalence must match the equality the
+   language uses, or lookup itself is wrong.  For Float the two orderings genuinely
+   differ: IEEE makes every NaN comparison false (so a NaN key matches whatever the search
+   probes first) and treats -0.0 and +0.0 as equal (while `FloatEqual` distinguishes
+   them).  `List.sort` and user comparisons keep plain IEEE. *)
+and element_key_less_func element =
+  comparator "KeyLess" element (ordered_key_expr element "teslX" "teslY")
+
+and ordered_key_expr ty left right =
+  match ty with
+  | TFloat -> Printf.sprintf "teslrt.FloatKeyLess(%s, %s)" left right
+  (* A Float-backed newtype inherits the key comparator, so it must be unwrapped here
+     rather than delegated to `ordered_expr`. *)
+  | TNewtype info ->
+    ordered_key_expr info.base (Printf.sprintf "%s.Value" (selector_operand left))
+      (Printf.sprintf "%s.Value" (selector_operand right))
+  | _ -> ordered_expr ty "<" left right
 
 and equal_expr ty left right =
   match ty with
@@ -566,7 +639,29 @@ and unequal_expr ty left right =
      | None -> assert false)
   | TAdt (info, _) when not info.adt_builtin && info.adt_params = [] ->
     Printf.sprintf "!%s.TeslEqual(%s)" (selector_operand left) right
-  | TAdt _ -> negate_bool (equal_expr ty left right)
+  (* De Morgan applied to the inlined runtime/generic ADT equality above, for the same
+     reason records and single-variant ADTs get it: `negate_bool` would emit
+     `!(a && b)`, which staticcheck rejects as QF1001, and a lint finding on emitted code
+     is an emitter bug by contract.  "Same tag AND every variant's payload matches"
+     negates to "tags differ OR some variant's tag is held and its payload differs". *)
+  | TAdt (info, args) ->
+    let tag_unequal =
+      Printf.sprintf "%s.%s != %s.%s"
+        (selector_operand left) adt_tag_field (selector_operand right) adt_tag_field
+    in
+    let payloads = List.filter_map (fun variant ->
+      match variant_field_types info args variant with
+      | [] -> None
+      | fields ->
+        let parts = List.map (fun (name, field_ty) ->
+          let field = variant_field_go_name variant name in
+          unequal_expr field_ty (Printf.sprintf "%s.%s" (selector_operand left) field)
+            (Printf.sprintf "%s.%s" (selector_operand right) field)) fields in
+        Some (Printf.sprintf "(%s.%s == %s && %s)"
+                (selector_operand left) adt_tag_field
+                (qualified info.adt_owner variant.var_tag)
+                (String.concat " || " parts))) info.adt_variants in
+    "(" ^ String.concat " || " (tag_unequal :: payloads) ^ ")"
   | TList element ->
     Printf.sprintf "!teslrt.ListEqualBy(%s, %s, %s)" left right (element_equal_func element)
   | TDict (key, value) ->
@@ -637,7 +732,8 @@ type list_leaf = {
   leaf_go : string;
   leaf_arity : int;
   (* How the result type is built from the element type of the list argument. *)
-  leaf_result : [ `Int | `Bool | `Same | `MaybeElement | `MaybeSame ];
+  (* `Inner` is for a leaf over a list OF lists, whose result is the inner list. *)
+  leaf_result : [ `Int | `Bool | `Same | `MaybeElement | `MaybeSame | `Inner ];
   (* Which extra closure the runtime function takes, if any. *)
   leaf_closure : [ `None | `Equal | `Less ];
   (* Index of the argument that is the list, and of a non-list argument to check. *)
@@ -673,6 +769,15 @@ let list_leaves = [
     leaf_result = `Same; leaf_closure = `Equal; leaf_list_index = 0 };
   { leaf_name = "List.sort"; leaf_go = "teslrt.ListSortBy"; leaf_arity = 1;
     leaf_result = `Same; leaf_closure = `Less; leaf_list_index = 0 };
+  (* `flatten` is `concat` under another name, per the stdlib docs. *)
+  { leaf_name = "List.concat"; leaf_go = "teslrt.ListConcat"; leaf_arity = 1;
+    leaf_result = `Inner; leaf_closure = `None; leaf_list_index = 0 };
+  { leaf_name = "List.flatten"; leaf_go = "teslrt.ListConcat"; leaf_arity = 1;
+    leaf_result = `Inner; leaf_closure = `None; leaf_list_index = 0 };
+  { leaf_name = "List.maximum"; leaf_go = "teslrt.ListMaximum"; leaf_arity = 1;
+    leaf_result = `MaybeElement; leaf_closure = `Less; leaf_list_index = 0 };
+  { leaf_name = "List.minimum"; leaf_go = "teslrt.ListMinimum"; leaf_arity = 1;
+    leaf_result = `MaybeElement; leaf_closure = `Less; leaf_list_index = 0 };
 ]
 
 let list_leaf name = List.find_opt (fun leaf -> leaf.leaf_name = name) list_leaves
@@ -778,13 +883,14 @@ let tuple_accessor = function
    inlined into the loop (no closure, no call), a named function becomes a direct
    call. *)
 type hof =
-  | HofMap | HofFilter | HofFoldl | HofAny | HofAll | HofFilterCheck | HofAllCheck
-  | HofZip
+  | HofMap | HofFilter | HofFoldl | HofFoldr | HofAny | HofAll | HofFilterCheck
+  | HofAllCheck | HofZip
 
 let higher_order_leaf = function
   | "List.map" -> Some HofMap
   | "List.filter" -> Some HofFilter
   | "List.foldl" -> Some HofFoldl
+  | "List.foldr" -> Some HofFoldr
   | "List.any" -> Some HofAny
   | "List.all" -> Some HofAll
   | "List.filterCheck" -> Some HofFilterCheck
@@ -793,11 +899,11 @@ let higher_order_leaf = function
   | _ -> None
 
 let higher_order_leaf_names =
-  ["List.map"; "List.filter"; "List.foldl"; "List.any"; "List.all";
+  ["List.map"; "List.filter"; "List.foldl"; "List.foldr"; "List.any"; "List.all";
    "List.filterCheck"; "List.allCheck"; "List.zip"]
 
 let hof_arity = function
-  | HofFoldl -> 3
+  | HofFoldl | HofFoldr -> 3
   | HofMap | HofFilter | HofAny | HofAll | HofFilterCheck | HofAllCheck | HofZip -> 2
 
 (* Every constructor is registered in the signature table under its own name, so a
@@ -972,6 +1078,24 @@ let rec type_of_expr signatures env expr =
       | EVar { name; _ } when higher_order_leaf name <> None && Hashtbl.mem signatures name ->
        let hof = match higher_order_leaf name with Some hof -> hof | None -> assert false in
        type_of_hof signatures env loc name hof args
+      (* `List.range` and `List.repeat` CONSTRUCT a list rather than consuming one, so
+         they carry no list argument for the leaf table to read an element type from.
+         `range` is always `List Int`; `repeat` takes its element from its first
+         argument.  Their counts carry an `IsNonNegative` proof that erases, so nothing
+         about the count survives to the emitted call. *)
+      | EVar { name = "List.range"; _ } when Hashtbl.mem signatures "List.range" ->
+        if List.length args <> 2 then
+          unsupported loc "Go backend requires `List.range` applied to 2 argument(s)";
+        List.iter (fun arg ->
+          if type_of_expr signatures env arg <> TInt then
+            unsupported loc "Go backend `List.range` takes two Ints") args;
+        TList TInt
+      | EVar { name = "List.repeat"; _ } when Hashtbl.mem signatures "List.repeat" ->
+        if List.length args <> 2 then
+          unsupported loc "Go backend requires `List.repeat` applied to 2 argument(s)";
+        if type_of_expr signatures env (List.nth args 1) <> TInt then
+          unsupported loc "Go backend `List.repeat` takes a count as its second argument";
+        TList (type_of_expr signatures env (List.nth args 0))
       | EVar { name; _ } when list_leaf name <> None && Hashtbl.mem signatures name ->
        let leaf = match list_leaf name with Some leaf -> leaf | None -> assert false in
        type_of_list_leaf signatures env loc leaf args
@@ -1069,7 +1193,7 @@ let rec type_of_expr signatures env expr =
       | _ -> unsupported loc "Go backend supports `case` over a module ADT only"
     in
     if arms = [] then unsupported loc "Go backend requires at least one `case` arm";
-    let arm_types = List.map (fun (arm : case_arm) ->
+    let arm_envs = List.map (fun (arm : case_arm) ->
       let bindings = pattern_bindings loc info type_args arm.pattern in
       let arm_env = bindings @ env in
       (match arm.guard with
@@ -1077,13 +1201,29 @@ let rec type_of_expr signatures env expr =
        | Some guard ->
          if type_of_expr signatures arm_env guard <> TBool then
            unsupported (Checker.expr_loc guard) "Go backend `case` guard must be Bool");
-      type_of_expr signatures arm_env arm.body) arms in
-    List.fold_left (fun acc ty ->
-      match acc, ty with
-      | TFailure, ty | ty, TFailure -> ty
-      | left, right when left = right -> left
-      | _ -> unsupported loc "Go backend `case` arms have different types")
-      TFailure arm_types
+      arm_env, arm) arms in
+    (* An arm can be UNDER-CONSTRAINED on its own while a sibling settles the case's
+       type: `case … of Nothing -> Nothing | Something x -> Something (x + 1)` — a bare
+       `Nothing` carries no type argument, but the other arm gives `Maybe Int`.  Such an
+       arm is skipped here and later emitted against the resolved type, the same way an
+       `if` branch is.  Nothing is lost by skipping: every arm is still emitted, so an arm
+       that is genuinely unsupported raises there instead. *)
+    let arm_types = List.map (fun (arm_env, (arm : case_arm)) ->
+      try Some (type_of_expr signatures arm_env arm.body) with Unsupported _ -> None)
+      arm_envs in
+    (match List.filter_map (fun ty -> ty) arm_types with
+     | [] ->
+       (* No arm types on its own — report from the first, which raises the real reason. *)
+       (match arm_envs with
+        | (arm_env, arm) :: _ -> type_of_expr signatures arm_env arm.body
+        | [] -> unsupported loc "Go backend requires at least one `case` arm")
+     | types ->
+       List.fold_left (fun acc ty ->
+         match acc, ty with
+         | TFailure, ty | ty, TFailure -> ty
+         | left, right when left = right -> left
+         | _ -> unsupported loc "Go backend `case` arms have different types")
+         TFailure types)
   | ELetProof { loc; _ } -> unsupported loc "Go backend does not support proof decomposition yet"
   | ERecord { type_hint = Some name; fields; loc } ->
     (match record_info_of_signature signatures name with
@@ -1093,12 +1233,27 @@ let rec type_of_expr signatures env expr =
     unsupported loc "Go backend cannot infer the record type of this literal"
   | EList { elems = []; loc } ->
     unsupported loc "Go backend cannot infer the element type of an empty list literal"
-  | EList { elems; _ } ->
-    let element = type_of_expr signatures env (List.hd elems) in
+  | EList { elems; loc } ->
+    (* An element may be under-constrained on its own — a nested `[]`, a bare `Nothing` —
+       while its SIBLINGS settle the element type: `[[1, 2], [], [3]]`.  So the type comes
+       from the first element that types, and the rest are checked AGAINST it through
+       `type_of_arg`, which is the same expectation the emitter passes down per element.
+       If no element types on its own, the first one is re-typed to report the real
+       reason. *)
+    let inferred = List.fold_left (fun found elem ->
+      match found with
+      | Some _ -> found
+      | None -> (try Some (type_of_expr signatures env elem) with Unsupported _ -> None))
+      None elems in
+    let element = match inferred with
+      | Some element -> element
+      | None -> type_of_expr signatures env (List.hd elems)
+    in
     List.iter (fun elem ->
-      if type_of_expr signatures env elem <> element then
+      if type_of_arg signatures env element elem <> element then
         unsupported (Checker.expr_loc elem)
           "Go backend list literal elements have different types") elems;
+    ignore loc;
     TList element
   | EOk { value; _ } -> TCheck (type_of_expr signatures env value)
   | EFail { message; loc; _ } ->
@@ -1161,7 +1316,11 @@ and type_of_list_leaf signatures env loc leaf args =
    | `Bool -> TBool
    | `Same -> TList element
    | `MaybeElement -> maybe_of element
-   | `MaybeSame -> maybe_of (TList element))
+   | `MaybeSame -> maybe_of (TList element)
+   | `Inner ->
+     (match element with
+      | TList inner -> TList inner
+      | _ -> unsupported loc "Go backend `%s` requires a List of Lists" leaf.leaf_name))
 
 (* A function ARGUMENT is either a lambda (whose parameter types come from the call
    site, so the declared annotations need no resolving here) or a named function. *)
@@ -1242,11 +1401,57 @@ and type_of_hof signatures env loc what hof args =
         | Some (info, _) -> TAdt (info, [TList element])
         | None -> unsupported loc
           "Go backend `%s` returns a Maybe; import `Tesl.Maybe`" what))
-  | HofFoldl ->
+  | HofFoldl | HofFoldr ->
     let element = list_of 2 in
-    let accumulator = type_of_expr signatures env (List.nth args 1) in
-    let result =
-      type_of_callable signatures env loc what (List.nth args 0) [accumulator; element] in
+    (* An EMPTY list literal as the initial accumulator carries no element type of its
+       own, and it is the idiomatic init for a fold that rebuilds a list
+       (`List.foldr prependInt [] ns`).  A NAMED callback settles it: the fold requires
+       f's result to BE the accumulator, so the declared result type is the accumulator
+       type.  A lambda's parameter annotations are not in scope here, so a lambda with a
+       bare `[]` still fails closed rather than guessing. *)
+    let declared_accumulator () =
+      let resolve name = match Hashtbl.find_opt signatures name with
+        | Some signature -> Some signature.result
+        | None -> None
+      in
+      match List.nth args 0 with
+      | EVar { name; _ } -> resolve name
+      | EApp _ ->
+        let head, _ = flatten_app [] (List.nth args 0) in
+        (match normalize_call_head head with
+         | EVar { name; _ } -> resolve name
+         | _ -> None)
+      | _ -> None
+    in
+    (* A lambda annotates its parameters, so the accumulator position says what the
+       empty init cannot. *)
+    let annotated_accumulator () =
+      match List.nth args 0, !current_types with
+      | ELambda { params; _ }, Some types ->
+        let position = match hof with HofFoldr -> 1 | _ -> 0 in
+        (match List.nth_opt params position with
+         | Some (binding : binding) ->
+           (try Some (type_of_type_expr types binding.type_expr) with Unsupported _ -> None)
+         | None -> None)
+      | _ -> None
+    in
+    let accumulator = match List.nth args 1 with
+      | EList { elems = []; _ } ->
+        (match declared_accumulator () with
+         | Some ty -> ty
+         | None ->
+           (match annotated_accumulator () with
+            | Some ty -> ty
+            | None -> type_of_expr signatures env (List.nth args 1)))
+      | _ -> type_of_expr signatures env (List.nth args 1)
+    in
+    (* `foldl`'s callback takes (accumulator, element); `foldr`'s takes them the other way
+       round, per the stdlib signatures. *)
+    let params = match hof with
+      | HofFoldr -> [element; accumulator]
+      | _ -> [accumulator; element]
+    in
+    let result = type_of_callable signatures env loc what (List.nth args 0) params in
     if result <> accumulator then unsupported loc
       "Go backend `%s` must return its accumulator type" what;
     accumulator
@@ -1381,6 +1586,33 @@ and type_of_arg signatures env want arg =
      | TFailure, ty | ty, TFailure -> ty
      | left, right when left = right -> left
      | _ -> unsupported loc "Go backend if branches have different types")
+  (* A `let` chain passes the expectation THROUGH to its tail, the same way the tail
+     emitter does.  Without this, one `let` before an `if` was enough to lose it, and an
+     under-constrained tail (`[]`, `Nothing`, `Set.empty`) failed for no reason the author
+     could see — the very shape a list-building function has. *)
+  | ELet { name; value; body; _ } ->
+    let inferred = type_of_expr signatures env value in
+    let ty = if inferred = TFailure then want else inferred in
+    type_of_arg signatures ((name, ty) :: env) want body
+  (* The expectation belongs to each ARM for the same reason it belongs to each `if`
+     branch. *)
+  | ECase { scrut; arms; loc } ->
+    let info, type_args = match type_of_expr signatures env scrut with
+      | TAdt (info, args) -> info, args
+      | _ -> unsupported loc "Go backend supports `case` over a module ADT only"
+    in
+    if arms = [] then unsupported loc "Go backend requires at least one `case` arm";
+    List.fold_left (fun acc (arm : case_arm) ->
+      let arm_env = pattern_bindings loc info type_args arm.pattern @ env in
+      (match arm.guard with
+       | None -> ()
+       | Some guard ->
+         if type_of_expr signatures arm_env guard <> TBool then
+           unsupported (Checker.expr_loc guard) "Go backend `case` guard must be Bool");
+      match acc, type_of_arg signatures arm_env want arm.body with
+      | TFailure, ty | ty, TFailure -> ty
+      | left, right when left = right -> left
+      | _ -> unsupported loc "Go backend `case` arms have different types") TFailure arms
   | _ ->
     (* A constructor cannot always infer its ADT's type arguments from its own
        arguments — `Nothing` supplies none, and `Left e` never mentions the Right
@@ -1658,6 +1890,11 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
        let hof = match higher_order_leaf name with Some hof -> hof | None -> assert false in
        emit_hof ~indent signatures env loc name hof args
          (type_of_expr signatures env app)
+      | EVar { name = ("List.range" | "List.repeat") as name; _ }
+        when Hashtbl.mem signatures name ->
+        ignore (type_of_expr signatures env app);
+        let go = if name = "List.range" then "teslrt.ListRange" else "teslrt.ListRepeat" in
+        Printf.sprintf "%s(%s)" go (String.concat ", " (List.map emit args))
       | EVar { name; _ } when list_leaf name <> None && Hashtbl.mem signatures name ->
        let leaf = match list_leaf name with Some leaf -> leaf | None -> assert false in
        ignore (type_of_expr signatures env app);
@@ -1721,6 +1958,13 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
      | BLt | BLe | BGt | BGe ->
        let op = match op with BLt -> "<" | BLe -> "<=" | BGt -> ">" | BGe -> ">=" | _ -> assert false in
        ordered_expr ty op emitted_left emitted_right)
+  (* Negating a LITERAL folds into the literal rather than emitting `-float64(0)`, which
+     in Go is POSITIVE zero — the negation is applied to the already-typed value, so it
+     cannot produce a negative zero (staticcheck SA4026 says exactly this).  Racket's
+     `-0.0` is a real negative zero, and Tesl's Float equality distinguishes the two, so
+     this was a wrong answer and not only a lint finding. *)
+  | EUnop { op = UNeg; arg = ELit { lit = LFloat value; _ }; _ } ->
+    emit_float_literal (-.value)
   | EUnop { op = UNeg; arg; _ } when type_of_expr signatures env arg = TFloat ->
     Printf.sprintf "(-%s)" (emit arg)
   | EUnop { op = UNeg; arg; _ } -> Printf.sprintf "teslrt.Neg(%s)" (emit arg)
@@ -2011,6 +2255,10 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
   let body_indent = inner ^ "\t" in
   let callable = List.nth args 0 in
   let emit_list index = emit_expr ~indent signatures env (List.nth args index) in
+  (* A fold's initial accumulator may be an empty list literal, which only emits against
+     an expected type. *)
+  let emit_init accumulator =
+    emit_expr ~expected:accumulator ~indent signatures env (List.nth args 1) in
   let element_of index =
     match type_of_expr signatures env (List.nth args index) with
     | TList element -> element
@@ -2137,10 +2385,46 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
       emit_applied ~indent:body_indent signatures env callable [accumulator; element] bound in
     Printf.sprintf
       "(func() %s {\n%s%s := %s\n%sfor _, %s := range %s {\n%s%s := %s\n%s_ = %s\n%s%s = %s\n%s}\n%sreturn %s\n%s}())"
-      (go_type accumulator) inner state (emit_list 1)
+      (go_type accumulator) inner state (emit_init accumulator)
       inner (List.nth bound 1) (emit_list 2)
       body_indent (List.nth bound 0) state
       body_indent (List.nth bound 0)
+      body_indent state applied
+      inner inner state indent
+  (* `foldr` walks the slice BACKWARDS in a plain loop rather than recursing: Go has no
+     TCO and a Go stack overflow is fatal (no `recover`), so recursing once per element
+     would put a list length limit on a function Racket runs fine.  The fold itself
+     therefore adds only O(n) traversal.  What it CANNOT fix is a callback that performs
+     an immutable write on a growing accumulator — `List.append [x] acc` copies Θ(k) at
+     step k, so the canonical reconstruction fold is Θ(n²) in the CALLBACK, not in the
+     fold.  Lowering recognised builder folds to a private allocate-once builder is a
+     tracked gate, and it needs an escape/linearity condition first: an arbitrary callback
+     may retain an earlier accumulator inside its result, so uniqueness cannot be assumed
+     from the shape alone. *)
+  | HofFoldr ->
+    let element = element_of 2 in
+    let accumulator = result in
+    let bound = match callable_binders callable
+      [Printf.sprintf "Value%d" depth; Printf.sprintf "teslAcc%d" depth] with
+      | [value; acc] -> [value; acc]
+      | _ -> invalid_arg "higher-order leaf validated before emission"
+    in
+    let state = Printf.sprintf "teslState%d" depth in
+    let source = Printf.sprintf "teslSource%d" depth in
+    let index = Printf.sprintf "teslAt%d" depth in
+    let applied =
+      emit_applied ~indent:body_indent signatures env callable [element; accumulator] bound in
+    (* The list is bound once: it is an arbitrary expression, and backwards iteration
+       needs both its length and an index into it. *)
+    Printf.sprintf
+      "(func() %s {\n%s%s := %s\n%s%s := %s\n%sfor %s := len(%s) - 1; %s >= 0; %s-- {\n%s%s := %s[%s]\n%s_ = %s\n%s%s := %s\n%s_ = %s\n%s%s = %s\n%s}\n%sreturn %s\n%s}())"
+      (go_type accumulator) inner state (emit_init accumulator)
+      inner source (emit_list 2)
+      inner index source index index
+      body_indent (List.nth bound 0) source index
+      body_indent (List.nth bound 0)
+      body_indent (List.nth bound 1) state
+      body_indent (List.nth bound 1)
       body_indent state applied
       inner inner state indent
 
@@ -2191,7 +2475,7 @@ and emit_dict_leaf ?(indent="") signatures env loc leaf args result expected =
   let emitted =
     if not leaf.dict_needs_order then emitted
     else match key with
-      | Some key -> emitted @ [element_less_func key]
+      | Some key -> emitted @ [element_key_less_func key]
       | None -> unsupported loc "Go backend `%s` needs ordered keys" leaf.dict_name
   in
   Printf.sprintf "%s%s(%s)" leaf.dict_go instantiation (String.concat ", " emitted)
@@ -2217,7 +2501,7 @@ and emit_set_leaf ?(indent="") signatures env loc leaf args result expected =
   let emitted = List.map (emit_expr ~indent signatures env) args in
   let emitted =
     if not leaf.set_needs_order then emitted
-    else emitted @ [element_less_func element]
+    else emitted @ [element_key_less_func element]
   in
   Printf.sprintf "%s%s(%s)" leaf.set_go instantiation (String.concat ", " emitted)
 
@@ -2528,8 +2812,9 @@ let adt_source info =
   Buffer.contents body
   end
 
-let module_source ?(imported_packages=[]) module_path package signatures types
-    (funcs : func_decl list) =
+let module_source ?(imported_packages=[]) ?(unreachable=[]) module_path package signatures
+    types (funcs : func_decl list) =
+  Hashtbl.reset pending_helpers;
   let body = Buffer.create 1024 in
   (* ONLY THE DECLARING PACKAGE EMITS A DECLARATION.  An imported type is present in
      these tables so it can be referenced and its fields read, but emitting it here too
@@ -2600,9 +2885,36 @@ let module_source ?(imported_packages=[]) module_path package signatures types
     end else
       emit_tail body signatures env result "\t" fd.body;
     Buffer.add_string body "}\n") funcs;
+  (* Comparator helpers the body referenced, in name order so the output is
+     deterministic. *)
+  Hashtbl.to_seq pending_helpers
+  |> List.of_seq
+  |> List.sort (fun (left, _) (right, _) -> String.compare left right)
+  |> List.iter (fun (_, source) -> Buffer.add_string body source);
+  (* A private Tesl function that nothing calls is legal Tesl, and the Racket backend
+     emits it, so refusing to emit Go for the whole module over it was a divergence with
+     no upside — a teaching file that declares a function to illustrate it could not be
+     compiled at all.  It is emitted, and referenced once here because Go's `unused`
+     linter (staticcheck U1000) rejects an uncalled unexported function, and a lint
+     finding on emitted code is an emitter bug by contract. *)
+  (match List.sort String.compare unreachable with
+   | [] -> ()
+   | names ->
+     Buffer.add_string body
+       "\n// Declared in Tesl but not called within this module.  Tesl permits an unused\n\
+        // private declaration; Go's linters do not, so these references keep them.\n";
+     (match names with
+      | [single] -> Printf.bprintf body "var _ = %s\n" single
+      | names ->
+        Buffer.add_string body "var (\n";
+        List.iter (fun name -> Printf.bprintf body "\t_ = %s\n" name) names;
+        Buffer.add_string body ")\n"));
   let body = Buffer.contents body in
   let imports =
     (if contains_go_code body "strconv." then ["strconv"] else [])
+    (* A Float literal that Go has no syntax for — negative zero, an infinity, a NaN —
+       renders as a `math` call, so the literal itself pulls the import in. *)
+    @ (if contains_go_code body "math." then ["math"] else [])
     @ (if contains_go_code body "teslrt." then [module_path ^ "/internal/teslrt"] else [])
     (* Only packages the emitted body actually references: an unused import is a Go
        compile error, and a Tesl module may import names it only uses in a type
@@ -2617,6 +2929,7 @@ let module_source ?(imported_packages=[]) module_path package signatures types
 
 let test_source ?(imported_packages=[]) module_path package signatures
     (tests : test_form list) =
+  Hashtbl.reset pending_helpers;
   let body = Buffer.create 1024 in
   let rec emit_stmts env indent = function
     | [] -> ()
@@ -2717,8 +3030,20 @@ let test_source ?(imported_packages=[]) module_path package signatures
       "\nfunc teslExpectFailure(teslT *testing.T, teslThunk func()) {\n\tteslT.Helper()\n\tdefer func() {\n\t\tif recover() == nil {\n\t\t\tteslT.Fatal(\"expected Tesl failure\")\n\t\t}\n\t}()\n\tteslThunk()\n}\n"
     else ""
   in
+  let body =
+    (* The test file gets its OWN copies of the comparator helpers it referenced: it is in
+       the same package, but a helper defined in module.go and used only from the test
+       would read as unused there. *)
+    (Hashtbl.to_seq pending_helpers
+     |> List.of_seq
+     |> List.sort (fun (left, _) (right, _) -> String.compare left right)
+     |> List.map snd
+     |> String.concat "")
+    ^ body
+  in
   let imports = ["fmt"; "os"]
     @ (if contains_go_code body "strconv." then ["strconv"] else [])
+    @ (if contains_go_code body "math." then ["math"] else [])
     @ (if contains_go_code body "teslrt." then [module_path ^ "/internal/teslrt"] else [])
     (* A test block may construct a dependency's type or call into it directly, so the
        test file needs the same imports — and only the ones it actually references. *)
@@ -2898,6 +3223,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       "List.length"; "List.isEmpty"; "List.head"; "List.tail"; "List.last";
       "List.append"; "List.take"; "List.drop"; "List.reverse"; "List.sum";
       "List.member"; "List.contains"; "List.unique"; "List.sort";
+      "List.concat"; "List.flatten"; "List.maximum"; "List.minimum";
+      "List.range"; "List.repeat";
     ] @ higher_order_leaf_names in
     let list_imports = ref [] in
     List.iter (fun (import : import_decl) ->
@@ -2914,10 +3241,16 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             if name = "List.zip" then tuple_imported := true;
             (* head/tail/last return a Maybe, so importing one brings the runtime
                Maybe in even when the module never names it. *)
-            if List.mem name ["List.head"; "List.tail"; "List.last"] then
-              maybe_imported := true
-          end else unsupported import.loc
-            "Go backend does not support `Tesl.List` export `%s` yet" name) exposed
+            if List.mem name
+                 ["List.head"; "List.tail"; "List.last"; "List.maximum"; "List.minimum"]
+            then maybe_imported := true
+          end else match name with
+            (* `Tesl.List`'s proof predicates are compile-time only, like
+               `Tesl.String`'s: they erase with every other proof, so importing one
+               needs no runtime support. *)
+            | "IsSorted" | "ForAll" | "IsNonEmpty" | "IsNonNegative" -> ()
+            | other -> unsupported import.loc
+              "Go backend does not support `Tesl.List` export `%s` yet" other) exposed
       end) m.imports;
     let string_leaves = [
       (* name, params, result-shape, teslrt function *)
@@ -3267,10 +3600,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
     in
     let roots = !test_roots @ List.filter is_exported function_names in
     let reachable_names = List.fold_left reachable [] roots in
-    List.iter (fun (fd : func_decl) ->
-      if not (List.mem fd.name reachable_names) then unsupported fd.loc
-        "Go backend does not emit unreachable private function `%s` yet; export it, call it, or remove it"
-        fd.name) funcs;
+    let unreachable_private = List.filter_map (fun (fd : func_decl) ->
+      if List.mem fd.name reachable_names then None else Some fd.name) funcs in
     let signatures = Hashtbl.create
       (List.length funcs + Hashtbl.length types.newtypes + Hashtbl.length types.records) in
     Hashtbl.iter (fun name info ->
@@ -3391,9 +3722,14 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       | None -> "tesl.generated/" ^ package
     in
     current_package := package;
+    current_types := Some types;
     let source =
-      module_source ~imported_packages:!imported_packages module_path package signatures
-        types funcs in
+      module_source ~imported_packages:!imported_packages
+        ~unreachable:(List.filter_map (fun name ->
+          match Hashtbl.find_opt signatures name with
+          | Some signature -> Some signature.go_name
+          | None -> None) unreachable_private)
+        module_path package signatures types funcs in
     let tests_source =
       if tests = [] then None
       else Some (test_source ~imported_packages:!imported_packages module_path package

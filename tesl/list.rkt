@@ -176,14 +176,36 @@
 ; (moved) List.reverse
 
 ;; Natural sort — returns sorted list ::: IsSorted result
+;; The ordering List.sort has always used: numbers and strings, with anything else
+;; treated as incomparable.  Named so List.maximum/List.minimum can share it.
+(define (tesl-list-value<? a b)
+  (cond
+    [(and (number? (rv a)) (number? (rv b))) (< (rv a) (rv b))]
+    [(and (string? (rv a)) (string? (rv b))) (string<? (rv a) (rv b))]
+    [else #f]))
+
 (define (List.sort xs)
-  (define sorted
-    (sort (rv xs) (lambda (a b)
-                    (cond
-                      [(and (number? (rv a)) (number? (rv b))) (< (rv a) (rv b))]
-                      [(and (string? (rv a)) (string? (rv b))) (string<? (rv a) (rv b))]
-                      [else #f]))))
-  (attach-sorted-proof sorted))
+  (attach-sorted-proof (sort (rv xs) tesl-list-value<?)))
+
+;; List.maximum / List.minimum are defined HERE rather than taken from the lifted
+;; tesl/list.tesl, because the lifted bodies compare with `>` / `<`, which Tesl admits
+;; only for numbers: `List.maximum ["pear", "apple"]` type-checks (the signature is
+;; `List a -> Maybe a`) and then died at runtime with tesl-gt?'s internal "this is a
+;; compiler bug" error.  Sharing List.sort's ordering makes the two consistent — a list
+;; that can be sorted has a maximum — and no working program depended on the crash.
+(define (List.maximum xs)
+  (define lst (rv xs))
+  (if (null? lst)
+      Nothing
+      (Something (for/fold ([best (car lst)]) ([value (cdr lst)])
+                   (if (tesl-list-value<? best value) value best)))))
+
+(define (List.minimum xs)
+  (define lst (rv xs))
+  (if (null? lst)
+      Nothing
+      (Something (for/fold ([best (car lst)]) ([value (cdr lst)])
+                   (if (tesl-list-value<? value best) value best)))))
 
 ;; Sort by a key function — returns sorted list ::: IsSorted result
 (define (List.sortBy f xs)
@@ -350,8 +372,6 @@
                   [all List.all]
                   [find List.find]
                   [sum List.sum]
-                  [maximum List.maximum]
-                  [minimum List.minimum]
                   [member List.member]
                   [contains List.contains]
                   [concat List.concat]

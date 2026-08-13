@@ -289,3 +289,110 @@ func TestStringSplitAndJoin(t *testing.T) {
 		t.Errorf("StringJoin(nil) = %q", got)
 	}
 }
+
+func TestListRange(t *testing.T) {
+	toInts := func(xs []Int) []int64 {
+		out := make([]int64, len(xs))
+		for index, value := range xs {
+			v, _ := value.Int64()
+			out[index] = v
+		}
+		return out
+	}
+	// start inclusive, end exclusive — and empty rather than reversed when start >= end.
+	for _, row := range []struct {
+		start, end int64
+		want       []int64
+	}{
+		{1, 5, []int64{1, 2, 3, 4}},
+		{0, 1, []int64{0}},
+		{3, 3, []int64{}},
+		{5, 1, []int64{}},
+		{-2, 2, []int64{-2, -1, 0, 1}},
+	} {
+		got := toInts(ListRange(FromInt64(row.start), FromInt64(row.end)))
+		if len(got) != len(row.want) {
+			t.Fatalf("ListRange(%d, %d) = %v, want %v", row.start, row.end, got, row.want)
+		}
+		for index := range got {
+			if got[index] != row.want[index] {
+				t.Errorf("ListRange(%d, %d) = %v, want %v", row.start, row.end, got, row.want)
+				break
+			}
+		}
+	}
+}
+
+func TestListRepeat(t *testing.T) {
+	got := ListRepeat("x", FromInt64(3))
+	if len(got) != 3 || got[0] != "x" || got[2] != "x" {
+		t.Errorf("ListRepeat(x, 3) = %v", got)
+	}
+	if len(ListRepeat("x", FromInt64(0))) != 0 {
+		t.Error("ListRepeat(x, 0) must be empty")
+	}
+	// The IsNonNegative proof is discharged by the frontend; this is containment.
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("a negative count must panic")
+			}
+		}()
+		ListRepeat("x", FromInt64(-1))
+	}()
+	// A count no allocation could satisfy is reported, not truncated.
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("an unallocatable count must panic")
+			}
+		}()
+		ListRepeat("x", MustParseDecimal("99999999999999999999"))
+	}()
+}
+
+func TestListConcat(t *testing.T) {
+	got := ListConcat([][]int{{1, 2}, {}, {3}})
+	want := []int{1, 2, 3}
+	if len(got) != len(want) {
+		t.Fatalf("ListConcat = %v, want %v", got, want)
+	}
+	for index := range got {
+		if got[index] != want[index] {
+			t.Errorf("ListConcat = %v, want %v", got, want)
+			break
+		}
+	}
+	if len(ListConcat([][]int{})) != 0 {
+		t.Error("concat of no lists is empty")
+	}
+	if len(ListConcat([][]int{{}, {}})) != 0 {
+		t.Error("concat of empty lists is empty")
+	}
+	// A writer: the result must not alias either input's array.
+	first := []int{1, 2}
+	out := ListConcat([][]int{first, {3}})
+	out[0] = 99
+	if first[0] != 1 {
+		t.Error("ListConcat must not alias its input")
+	}
+}
+
+func TestListMaximumMinimum(t *testing.T) {
+	less := func(a, b int) bool { return a < b }
+	if ListMaximum([]int{}, less).Tag != MaybeNothing {
+		t.Error("maximum of the empty list is Nothing")
+	}
+	if ListMinimum([]int{}, less).Tag != MaybeNothing {
+		t.Error("minimum of the empty list is Nothing")
+	}
+	if got := ListMaximum([]int{3, 9, 2}, less); got.Tag != MaybeSomething || got.SomethingValue != 9 {
+		t.Errorf("maximum = %v", got)
+	}
+	if got := ListMinimum([]int{3, 9, 2}, less); got.Tag != MaybeSomething || got.SomethingValue != 2 {
+		t.Errorf("minimum = %v", got)
+	}
+	if got := ListMaximum([]int{7}, less); got.SomethingValue != 7 {
+		t.Errorf("single element = %v", got)
+	}
+}
