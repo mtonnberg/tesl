@@ -376,3 +376,20 @@ func validJSONInteger(value string) bool {
 	}
 	return true
 }
+
+// IntNonZero and IntNonNegative are Tesl's `Int.nonZero` / `Int.nonNegative`
+// checks: the proof they mint erases, the rejection does not. The messages and the
+// 400 status are observable behavior and match the Racket implementations.
+func IntNonZero(value Int) Check[Int] {
+	if value.IsZero() {
+		return Reject[Int](400, "expected a non-zero integer")
+	}
+	return Accept(value)
+}
+
+func IntNonNegative(value Int) Check[Int] {
+	if value.Sign() < 0 {
+		return Reject[Int](400, "expected a non-negative integer")
+	}
+	return Accept(value)
+}

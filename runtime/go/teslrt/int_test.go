@@ -340,3 +340,35 @@ func assertCanonical(t *testing.T, value Int) {
 		t.Fatalf("non-canonical big Int %s retains small=%d", value.String(), value.small)
 	}
 }
+
+func TestIntChecksRejectWithTeslStatusAndMessage(t *testing.T) {
+	for _, row := range []struct {
+		name    string
+		result  Check[Int]
+		ok      bool
+		message string
+	}{
+		{"nonZero(1)", IntNonZero(FromInt64(1)), true, ""},
+		{"nonZero(0)", IntNonZero(Int{}), false, "expected a non-zero integer"},
+		{"nonZero(-1)", IntNonZero(FromInt64(-1)), true, ""},
+		{"nonNegative(0)", IntNonNegative(Int{}), true, ""},
+		{"nonNegative(1)", IntNonNegative(FromInt64(1)), true, ""},
+		{"nonNegative(-1)", IntNonNegative(FromInt64(-1)), false, "expected a non-negative integer"},
+		{"nonNegative(-huge)", IntNonNegative(Neg(MustParseDecimal("99999999999999999999"))), false,
+			"expected a non-negative integer"},
+	} {
+		if row.result.OK() != row.ok {
+			t.Errorf("%s: OK = %v, want %v", row.name, row.result.OK(), row.ok)
+			continue
+		}
+		if row.ok {
+			continue
+		}
+		if row.result.Status() != 400 {
+			t.Errorf("%s: status = %d, want 400", row.name, row.result.Status())
+		}
+		if row.result.Message() != row.message {
+			t.Errorf("%s: message = %q, want %q", row.name, row.result.Message(), row.message)
+		}
+	}
+}

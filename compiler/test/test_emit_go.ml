@@ -784,6 +784,460 @@ fn pick(n: Int) -> Int =
     check bool "the frontend rejects shadowing the enclosing function name" true
       (List.exists (fun (d : Compile.diagnostic) -> contains d.message "shadows") diagnostics)
 
+let generic_source = {|module GoGenerics exposing [Labeled, describeInt, describeText, tagOf]
+import Tesl.Prelude exposing [Int, String]
+
+type Labeled a
+  = Label tag: String value: a
+  | Empty
+
+fn describeInt(x: Labeled Int) -> String =
+  case x of
+    Label tag value where value > 50 -> "${tag} high ${value}"
+    Label tag value -> "${tag} low ${value}"
+    Empty -> "empty"
+
+fn describeText(x: Labeled String) -> String =
+  case x of
+    Label tag value -> "${tag}=${value}"
+    Empty -> "empty"
+
+fn tagOf(x: Labeled Int) -> String =
+  case x of
+    Label tag _ -> tag
+    _ -> ""
+
+test "generic ADTs instantiate per use" {
+  expect describeInt (Label "a" 99) == "a high 99"
+  expect describeInt (Label "a" 1) == "a low 1"
+  expect describeInt Empty == "empty"
+  expect describeText (Label "k" "v") == "k=v"
+  expect describeText Empty == "empty"
+  expect tagOf (Label "z" 3) == "z"
+  expect tagOf Empty == ""
+}
+|}
+
+(* Go infers type parameters for calls but never for a composite literal, so every
+   emitted constructor of a generic ADT has to name its type arguments. *)
+let test_generics_with_go () =
+  let emitted = match Compile.compile_go_source "<go-generics>" generic_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "generic ADT compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgogenerics/module.go" emitted in
+  let test_go = artifact "internal/teslmodgogenerics/module_test.go" emitted in
+  check bool "generic ADT carries Go type parameters" true
+    (contains module_go
+       "type Labeled[A any] struct {\n\tTag        LabeledTag\n\tLabelTag   string\n\tLabelValue A\n}");
+  check bool "constructor names its type arguments" true
+    (contains test_go "Labeled[teslrt.Int]{Tag: LabeledLabel, LabelTag: \"a\", LabelValue: teslrt.FromInt64(99)}");
+  check bool "a nullary constructor is instantiated by the expected type" true
+    (contains test_go "Labeled[teslrt.Int]{Tag: LabeledEmpty}"
+     && contains test_go "Labeled[string]{Tag: LabeledEmpty}");
+  check bool "payload binds at the instantiated type" true
+    (contains module_go "value := teslScrut1.LabelValue");
+  check bool "a generic ADT gets no equality method" false (contains module_go "func (teslLeft Labeled");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then
+    let root = Filename.temp_dir "tesl-go-generics" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted generic source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+
+let test_generic_limits_fail_closed () =
+  let expect_go_error label needle source =
+    match Compile.compile_go_source ("<" ^ label ^ ">") source with
+    | Compile.GoSuccess _ -> failf "%s emitted unsupported Go artifacts" label
+    | Compile.GoFailure diagnostics ->
+      check bool label true
+        (List.exists (fun (d : Compile.diagnostic) ->
+           d.source = "go-emitter" && contains d.message needle) diagnostics)
+  in
+  (* Equality would need `TeslEqual` to dispatch `teslrt.Equal` for whatever the
+     parameter was instantiated with, which Go generics cannot express. *)
+  expect_go_error "equality on a generic ADT" "equality on this type" {|module GenericEq exposing [Boxed, same]
+import Tesl.Prelude exposing [Bool, Int]
+type Boxed a
+  = Box value: a
+fn same(left: Boxed Int, right: Boxed Int) -> Bool = left == right
+|};
+  (* An unapplied generic name never reaches the Go emitter: the frontend already
+     requires the type arguments. *)
+  (match Compile.compile_go_source "<bare-generic>" {|module BareGeneric exposing [Boxed, unbox]
+import Tesl.Prelude exposing [Int]
+type Boxed a
+  = Box value: a
+fn unbox(b: Boxed) -> Int = 0
+|} with
+   | Compile.GoSuccess _ -> fail "an unapplied generic type emitted Go artifacts"
+   | Compile.GoFailure diagnostics ->
+     check bool "unapplied generic type rejected before emission" true
+       (List.exists (fun (d : Compile.diagnostic) ->
+          d.source <> "go-emitter" && contains d.message "type argument") diagnostics));
+  (* A nullary constructor outside an expected-type position has nothing to
+     instantiate it. *)
+  expect_go_error "uninstantiated nullary constructor" "cannot infer type argument"
+    {|module LooseNullary exposing [Boxed, make]
+import Tesl.Prelude exposing [Int]
+type Boxed a
+  = Box value: a
+  | None_
+fn make() -> Int =
+  let b = None_
+  0
+|}
+
+let maybe_source = {|module GoMaybe exposing [Slot, describe, orZero, wrap, none, emptySlot, slotValue]
+import Tesl.Prelude exposing [Int, String]
+import Tesl.Maybe exposing [Maybe(..)]
+
+record Slot {
+  label: String
+  held: Maybe Int
+}
+
+fn describe(m: Maybe Int) -> String =
+  case m of
+    Something value where value > 10 -> "big ${value}"
+    Something value -> "small ${value}"
+    Nothing -> "none"
+
+fn orZero(m: Maybe Int) -> Int =
+  case m of
+    Something value -> value
+    Nothing -> 0
+
+fn wrap(value: Int) -> Maybe Int = Something value
+
+fn none() -> Maybe Int = Nothing
+
+fn emptySlot(label: String) -> Slot = Slot { label: label, held: Nothing }
+
+fn slotValue(s: Slot) -> Int =
+  case s.held of
+    Something value -> value
+    Nothing -> 0
+
+test "Maybe comes from the runtime" {
+  expect describe (Something 42) == "big 42"
+  expect describe (Something 3) == "small 3"
+  expect describe Nothing == "none"
+  expect orZero (Something 7) == 7
+  expect orZero Nothing == 0
+  expect orZero (wrap 5) == 5
+  expect orZero (none()) == 0
+  expect slotValue (emptySlot "a") == 0
+  expect slotValue (Slot { label: "b", held: Something 9 }) == 9
+}
+|}
+
+(* `Maybe` is a RUNTIME type, not an emitted one: a Maybe crosses module boundaries,
+   so two emitted packages declaring their own would be incompatible Go types. *)
+let test_maybe_with_go () =
+  let emitted = match Compile.compile_go_source "<go-maybe>" maybe_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "Maybe compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgomaybe/module.go" emitted in
+  check bool "Maybe is referenced from the runtime package" true
+    (contains module_go "func Describe(m teslrt.Maybe[teslrt.Int]) string");
+  check bool "the runtime type ships with the project" true
+    (List.exists (fun (a : Emit_go.artifact) -> a.path = "internal/teslrt/maybe.go") emitted);
+  check bool "no Maybe type is emitted per module" false
+    (contains module_go "type Maybe" || contains module_go "type MaybeTag");
+  check bool "matching reads the exported tag" true
+    (contains module_go "teslScrut1.Tag == teslrt.MaybeSomething");
+  check bool "payload reads the runtime field name" true
+    (contains module_go "value := teslScrut1.SomethingValue");
+  check bool "a record field of Maybe type takes a bare Nothing" true
+    (contains module_go
+       "Slot{Label: label, Held: teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}}");
+  check bool "a bare Nothing return is instantiated by the return type" true
+    (contains module_go "func None() teslrt.Maybe[teslrt.Int] {"
+     && contains module_go "\treturn teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}\n");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then
+    let root = Filename.temp_dir "tesl-go-maybe" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted Maybe source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+
+(* `Tesl.Maybe` exports exactly `Maybe`, `Something`, and `Nothing`
+   (type_system.ml), so its whole surface is supported and there is no function left
+   to reject there.  What must stay closed is the generalisation: `Maybe` is
+   whitelisted by name, not "any generic stdlib ADT". *)
+let test_other_stdlib_adts_fail_closed () =
+  let unsupported = {|module ResultUser exposing [firstOr]
+import Tesl.Prelude exposing [Int]
+import Tesl.Result exposing [Result(..)]
+fn firstOr(r: Result Int Int) -> Int = 0
+|} in
+  match Compile.compile_go_source "<go-result>" unsupported with
+  | Compile.GoSuccess _ -> fail "an unsupported stdlib ADT emitted Go artifacts"
+  | Compile.GoFailure diagnostics ->
+    check bool "only Maybe is whitelisted" true
+      (List.exists (fun (d : Compile.diagnostic) ->
+         d.source = "go-emitter" && contains d.message "import `Tesl.Result`") diagnostics)
+
+let string_source = {|module GoStrings exposing [size, shout, initial, parsed, found, label, checked]
+import Tesl.Prelude exposing [Bool, Int, String]
+import Tesl.String exposing [String.length, String.isEmpty, String.startsWith, String.contains, String.concat, String.slice, String.toUpper, String.trim, String.fromInt, String.toInt, String.indexOf, String.padLeft, String.requireNonEmpty, IsNonEmpty]
+import Tesl.Maybe exposing [Maybe(..)]
+
+fn size(s: String) -> Int = String.length s
+
+fn shout(s: String) -> String = String.toUpper (String.trim s)
+
+fn initial(s: String) -> String = String.slice s 0 1
+
+fn parsed(s: String) -> Int =
+  case String.toInt s of
+    Something n -> n
+    Nothing -> 0
+
+fn found(s: String, needle: String) -> Int =
+  case String.indexOf s needle of
+    Something at -> at
+    Nothing -> 0 - 1
+
+fn label(n: Int) -> String = String.concat "n=" (String.padLeft (String.fromInt n) 3 "0")
+
+fn checked(raw: String) -> String =
+  let value = check String.requireNonEmpty raw
+  value
+
+test "Tesl.String leaves" {
+  expect size "abc" == 3
+  expect size "雪だるま" == 4
+  expect String.isEmpty "" == True
+  expect String.startsWith "abc" "ab" == True
+  expect String.contains "abc" "z" == False
+  expect shout "  hi  " == "HI"
+  expect initial "abc" == "a"
+  expect initial "" == ""
+  expect parsed "42" == 42
+  expect parsed "x" == 0
+  expect found "雪だるま" "だ" == 1
+  expect found "abc" "z" == 0 - 1
+  expect label 7 == "n=007"
+  expect checked "ok" == "ok"
+  expectFail checked ""
+}
+|}
+
+(* A `Tesl.String` function is an ordinary signature whose Go name is a runtime
+   leaf, so the existing call path emits it.  The interesting parts are that the
+   qualified name has to be recognised at all (`String.length s` parses as a field
+   access over the module name) and that a leaf returning `Maybe Int` pulls in the
+   runtime Maybe without the module naming Maybe. *)
+let test_string_stdlib_with_go () =
+  let emitted = match Compile.compile_go_source "<go-strings>" string_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "Tesl.String compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgostrings/module.go" emitted in
+  check bool "the runtime string leaves ship with the project" true
+    (List.exists (fun (a : Emit_go.artifact) -> a.path = "internal/teslrt/string.go") emitted);
+  check bool "a qualified stdlib call resolves" true
+    (contains module_go "return teslrt.StringLength(s)");
+  check bool "nested stdlib calls compose" true
+    (contains module_go "return teslrt.StringToUpper(teslrt.StringTrim(s))");
+  check bool "a Maybe-returning leaf is matched on the runtime tag" true
+    (contains module_go "teslScrut1 := teslrt.StringIndexOf(s, needle)"
+     && contains module_go "case teslrt.MaybeSomething:");
+  check bool "a stdlib check keeps the explicit result" true
+    (contains module_go "teslrt.MustCheck(teslrt.StringRequireNonEmpty(raw))");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then
+    let root = Filename.temp_dir "tesl-go-strings" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted Tesl.String source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+
+let test_unsupported_string_exports_fail_closed () =
+  (* `String.split` is supported now that lists are, so the boundary this pins moved:
+     `trimLeft`/`trimRight` are still unimplemented leaves of a supported module. *)
+  let unsupported = {|module StringTrimLeft exposing [tidy]
+import Tesl.Prelude exposing [String]
+import Tesl.String exposing [String.trimLeft]
+fn tidy(s: String) -> String = String.trimLeft s
+|} in
+  match Compile.compile_go_source "<go-string-trimleft>" unsupported with
+  | Compile.GoSuccess _ -> fail "an unsupported Tesl.String export emitted Go artifacts"
+  | Compile.GoFailure diagnostics ->
+    check bool "an unimplemented leaf of a supported module fails closed" true
+      (List.exists (fun (d : Compile.diagnostic) ->
+         d.source = "go-emitter" && contains d.message "`String.trimLeft`") diagnostics)
+
+let list_source = {|module GoLists exposing [size, empty, firstOr, rest, joined, parts, top, dedup, ordered, hasTwo, both, prefix]
+import Tesl.Prelude exposing [Bool, Int, List, String]
+import Tesl.List exposing [List.length, List.isEmpty, List.head, List.tail, List.append, List.take, List.drop, List.reverse, List.sum, List.member, List.unique, List.sort]
+import Tesl.String exposing [String.split, String.join]
+import Tesl.Int exposing [Int.nonNegative, IsNonNegative]
+import Tesl.Maybe exposing [Maybe(..)]
+
+fn size(xs: List Int) -> Int = List.length xs
+
+fn empty(xs: List Int) -> Bool = List.isEmpty xs
+
+fn firstOr(xs: List Int) -> Int =
+  case List.head xs of
+    Something value -> value
+    Nothing -> 0
+
+fn rest(xs: List Int) -> Int =
+  case List.tail xs of
+    Something more -> List.sum more
+    Nothing -> 0
+
+fn joined(pieces: List String) -> String = String.join pieces ","
+
+fn parts(s: String) -> List String = String.split s ","
+
+fn top(xs: List Int) -> List Int =
+  let count = check Int.nonNegative 2
+  List.take count (List.reverse xs)
+
+fn dedup(xs: List Int) -> List Int = List.unique xs
+
+fn ordered(xs: List String) -> List String = List.sort xs
+
+fn hasTwo(xs: List Int) -> Bool = List.member 2 xs
+
+fn both(xs: List Int, ys: List Int) -> Int = List.sum (List.append xs ys)
+
+fn prefix(xs: List Int) -> List Int =
+  let count = check Int.nonNegative 1
+  List.drop count xs
+
+test "Tesl.List leaves" {
+  let xs = [3, 1, 2]
+  expect size xs == 3
+  expect size [] == 0
+  expect empty [] == True
+  expect empty xs == False
+  expect firstOr xs == 3
+  expect firstOr [] == 0
+  expect rest xs == 3
+  expect joined ["a", "b"] == "a,b"
+  expect parts "a,b" == ["a", "b"]
+  expect top xs == [2, 1]
+  expect dedup [1, 1, 2, 1] == [1, 2]
+  expect ordered ["b", "a"] == ["a", "b"]
+  expect hasTwo xs == True
+  expect hasTwo [5] == False
+  expect both [1] [2, 3] == 6
+  expect prefix xs == [1, 2]
+  expect [1, 2] != [2, 1]
+}
+|}
+
+(* A Tesl list is a Go slice, which keeps emitted code idiomatic but makes immutability
+   the runtime's job (see internal/teslrt/list.go).  The emitter's part is supplying
+   the element comparison a generic Go function cannot express. *)
+let test_lists_with_go () =
+  let emitted = match Compile.compile_go_source "<go-lists>" list_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "list compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgolists/module.go" emitted in
+  let test_go = artifact "internal/teslmodgolists/module_test.go" emitted in
+  check bool "the runtime list leaves ship with the project" true
+    (List.exists (fun (a : Emit_go.artifact) -> a.path = "internal/teslrt/list.go") emitted);
+  check bool "List a is a Go slice" true
+    (contains module_go "func Size(xs []teslrt.Int) teslrt.Int");
+  check bool "a list literal names its element type" true
+    (contains test_go "[]teslrt.Int{teslrt.FromInt64(3), teslrt.FromInt64(1), teslrt.FromInt64(2)}");
+  check bool "an empty list literal is typed by the expectation" true
+    (contains test_go "Size([]teslrt.Int{})");
+  check bool "equality passes an element comparison" true
+    (contains module_go
+       "teslrt.ListMemberBy(teslrt.FromInt64(2), xs, func(teslX, teslY teslrt.Int) bool { return teslrt.Equal(teslX, teslY) })");
+  check bool "sorting passes an element ordering" true
+    (contains module_go
+       "teslrt.ListSortBy(xs, func(teslX, teslY string) bool { return (teslX < teslY) })");
+  check bool "list equality is element-wise through the runtime" true
+    (contains test_go "teslrt.ListEqualBy(");
+  check bool "a proof-total count goes through its check" true
+    (contains module_go "teslrt.MustCheck(teslrt.IntNonNegative(teslrt.FromInt64(2)))");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then
+    let root = Filename.temp_dir "tesl-go-lists" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted list source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+
+let test_unsupported_list_exports_fail_closed () =
+  let expect_go_error label needle source =
+    match Compile.compile_go_source ("<" ^ label ^ ">") source with
+    | Compile.GoSuccess _ -> failf "%s emitted unsupported Go artifacts" label
+    | Compile.GoFailure diagnostics ->
+      check bool label true
+        (List.exists (fun (d : Compile.diagnostic) ->
+           d.source = "go-emitter" && contains d.message needle) diagnostics)
+  in
+  (* The higher-order leaves need function VALUES, which the backend does not have. *)
+  expect_go_error "higher-order list leaf" "`List.map`" {|module ListMap exposing [double]
+import Tesl.Prelude exposing [Int, List]
+import Tesl.List exposing [List.map]
+fn twice(n: Int) -> Int = n * 2
+fn double(xs: List Int) -> List Int = List.map twice xs
+|};
+  (* `List.sum` on a non-Int list never reaches the emitter — the frontend's own
+     signature rejects it — so the emitter's guard is containment, and what this pins
+     is that the program is refused SOMEWHERE rather than emitted. *)
+  (match Compile.compile_go_source "<sum-strings>" {|module SumStrings exposing [total]
+import Tesl.Prelude exposing [Int, List, String]
+import Tesl.List exposing [List.sum]
+fn total(xs: List String) -> Int = List.sum xs
+|} with
+   | Compile.GoSuccess _ -> fail "List.sum over strings emitted Go artifacts"
+   | Compile.GoFailure diagnostics ->
+     check bool "sum of a non-Int list rejected before emission" true
+       (List.exists (fun (d : Compile.diagnostic) ->
+          d.source <> "go-emitter" && contains d.message "cannot unify") diagnostics));
+  (* Sorting IS fully polymorphic in the frontend, so the ordering requirement is the
+     emitter's to enforce. *)
+  expect_go_error "sort of an unordered element" "needs ordered elements"
+    {|module SortBools exposing [ordered]
+import Tesl.Prelude exposing [Bool, List]
+import Tesl.List exposing [List.sort]
+fn ordered(xs: List Bool) -> List Bool = List.sort xs
+|}
+
 let proof_scalar_source = {|module GoProofScalars exposing [NonEmpty, Enabled, checkNonEmpty, checkEnabled, label, invert]
 import Tesl.Prelude exposing [Bool(..), String]
 
@@ -1051,12 +1505,14 @@ record Box {
 }
 fn valueOf(b: Box) -> Int = b.value
 |};
-  expect_go_error "unsupported record field type" "applied types" {|module ListFieldRecord exposing [Bag, sizeOf]
-import Tesl.Prelude exposing [Int, List]
-record Bag {
-  items: List Int
+  expect_go_error "unsupported record field type" "import `Tesl.Float`"
+    {|module FloatFieldRecord exposing [Reading, valueOf]
+import Tesl.Prelude exposing [Int]
+import Tesl.Float exposing [Float]
+record Reading {
+  celsius: Float
 }
-fn sizeOf(b: Bag) -> Int = 0
+fn valueOf(r: Reading) -> Int = 0
 |}
 
 let test_missing_record_field_never_reaches_emitter () =
@@ -1140,12 +1596,12 @@ let test_adts_with_go () =
      && contains module_go "StatusOpen StatusTag = iota");
   check bool "ADT is one flat value struct" true
     (contains module_go
-       "type Status struct {\n\tteslTag         StatusTag\n\tPendingReason   string\n\tPendingAttempts teslrt.Int\n}");
+       "type Status struct {\n\tTag             StatusTag\n\tPendingReason   string\n\tPendingAttempts teslrt.Int\n}");
   let adt_test_go = artifact "internal/teslmodgoadts/module_test.go" emitted in
   check bool "constructor names the tag" true
-    (contains adt_test_go "Status{teslTag: StatusPending, PendingReason:");
+    (contains adt_test_go "Status{Tag: StatusPending, PendingReason:");
   check bool "guard-free case emits a tag switch" true
-    (contains module_go "switch teslScrut1.teslTag {\n\t\tcase StatusOpen:");
+    (contains module_go "switch teslScrut1.Tag {\n\t\tcase StatusOpen:");
   check bool "unmatched tag is contained, not silently accepted" true
     (contains module_go "panic(\"unreachable: checker guarantees case exhaustiveness\")");
   check bool "catch-all names the tags it covers, so `exhaustive` can verify it" true
@@ -1157,7 +1613,7 @@ let test_adts_with_go () =
     (contains lint_config "- exhaustive"
      && contains lint_config "default-signifies-exhaustive: false");
   check bool "guarded case falls through in order" true
-    (contains module_go "if teslScrut1.teslTag == StatusPending {");
+    (contains module_go "if teslScrut1.Tag == StatusPending {");
   check bool "payload binds positionally" true
     (contains module_go "attempts := teslScrut1.PendingAttempts");
   check bool "ADT equality routes through the generated method" true
@@ -1187,11 +1643,11 @@ let test_unsupported_adts_fail_closed () =
         (List.exists (fun (d : Compile.diagnostic) ->
            d.source = "go-emitter" && contains d.message needle) diagnostics)
   in
-  expect_go_error "generic ADT" "generic type" {|module GenericAdt exposing [Boxed, unbox]
-import Tesl.Prelude exposing [Int]
-type Boxed a
-  = Box (value: a)
-fn unbox(b: Boxed Int) -> Int = 0
+  (* Generic ADTs themselves are supported (see the generic-ADT cases); a type
+     parameter the emitter cannot resolve to a Go type still fails closed. *)
+  expect_go_error "generic function signature" "type variable" {|module GenericFn exposing [identity]
+import Tesl.Prelude exposing []
+fn identity(value: a) -> a = value
 |};
   expect_go_error "recursive ADT" "recursive type" {|module RecursiveAdt exposing [Chain, depth]
 import Tesl.Prelude exposing [Int]
@@ -1241,6 +1697,9 @@ let go_corpus = [
   "example/learn/lesson03-records.tesl";
   "example/learn/lesson04-newtypes.tesl";
   "example/learn/lesson05-intro-to-proofs.tesl";
+  "example/learn/lesson07-home.tesl";
+  "example/learn/lesson39-case-where-guards.tesl";
+  "example/learn/lesson65-pipe-operators.tesl";
   "example/learn/lesson10-cross-parameter-proofs.tesl";
   "example/learn/lesson40-implicit-value-unwrapping.tesl";
   "example/learn/lesson44-multi-param-proofs.tesl";
@@ -1318,6 +1777,18 @@ let () =
       test_case "records" `Slow test_records_with_go;
       test_case "records behave the same on Racket" `Slow (racket_behavior_oracle "<go-records>" record_source);
       test_case "ADTs and case" `Slow test_adts_with_go;
+      test_case "generic ADTs" `Slow test_generics_with_go;
+      test_case "Maybe from the runtime" `Slow test_maybe_with_go;
+      test_case "Tesl.String leaves" `Slow test_string_stdlib_with_go;
+      test_case "Tesl.List leaves" `Slow test_lists_with_go;
+      test_case "lists behave the same on Racket" `Slow (racket_behavior_oracle "<go-lists>" list_source);
+      test_case "unsupported Tesl.List exports fail closed" `Quick test_unsupported_list_exports_fail_closed;
+      test_case "Tesl.String behaves the same on Racket" `Slow (racket_behavior_oracle "<go-strings>" string_source);
+      test_case "unsupported Tesl.String exports fail closed" `Quick test_unsupported_string_exports_fail_closed;
+      test_case "Maybe behaves the same on Racket" `Slow (racket_behavior_oracle "<go-maybe>" maybe_source);
+      test_case "other stdlib ADTs fail closed" `Quick test_other_stdlib_adts_fail_closed;
+      test_case "generic ADTs behave the same on Racket" `Slow (racket_behavior_oracle "<go-generics>" generic_source);
+      test_case "generic limits fail closed" `Quick test_generic_limits_fail_closed;
       test_case "ADTs behave the same on Racket" `Slow (racket_behavior_oracle "<go-adts>" adt_source);
       test_case "unsupported ADTs fail closed" `Quick test_unsupported_adts_fail_closed;
       test_case "unsupported records fail closed" `Quick test_unsupported_records_fail_closed;

@@ -22,7 +22,9 @@ type go_type =
   | TUnit
   | TNewtype of newtype_info
   | TRecord of record_info
-  | TAdt of adt_info
+  | TAdt of adt_info * go_type list
+  | TList of go_type
+  | TParam of string
   | TCheck of go_type
   | TFailure
 
@@ -47,8 +49,14 @@ and adt_info = {
   adt_tesl_name : string;
   adt_go_name : string;
   adt_tag_type : string;
+  (* Tesl type parameters in declaration order, paired with the Go type-parameter
+     names they render as. A generic ADT is only ever referenced instantiated. *)
+  adt_params : (string * string) list;
   mutable adt_variants : variant_info list;
   adt_loc : Location.loc;
+  (* A runtime-provided ADT (today only `Maybe`) is referenced, never declared: the
+     emitter must not write its type, tag constants, or methods. *)
+  adt_builtin : bool;
 }
 
 and variant_info = {
@@ -204,7 +212,16 @@ type type_table = {
   adts : (string, adt_info) Hashtbl.t;
 }
 
-let type_of_type_expr types = function
+let rec flatten_type_app args = function
+  | TApp { head; arg; _ } -> flatten_type_app (arg :: args) head
+  | head -> head, args
+
+(** [params] is the type-parameter scope: non-empty only while resolving the field
+    types of a generic ADT's own variants. Everywhere else a type variable has no
+    Go rendering and is rejected. *)
+let rec type_of_type_expr ?(params=[]) types ty =
+  let recur = type_of_type_expr ~params types in
+  match ty with
   | TName { name = "Int"; _ } -> TInt
   | TName { name = "String"; _ } -> TString
   | TName { name = "Bool"; _ } -> TBool
@@ -214,10 +231,32 @@ let type_of_type_expr types = function
            Hashtbl.find_opt types.adts name with
      | Some info, _, _ -> TNewtype info
      | None, Some info, _ -> TRecord info
-     | None, None, Some info -> TAdt info
+     | None, None, Some info ->
+       if info.adt_params <> [] then unsupported loc
+         "Go backend requires `%s` to be applied to %d type argument(s)"
+         name (List.length info.adt_params);
+       TAdt (info, [])
      | None, None, None -> unsupported loc "Go backend does not support type `%s` yet" name)
-  | TVar { name; loc } -> unsupported loc "Go backend does not support type variable `%s` yet" name
-  | TApp { loc; _ } -> unsupported loc "Go backend does not support applied types yet"
+  | TVar { name; loc } ->
+    (match List.assoc_opt name params with
+     | Some go_name -> TParam go_name
+     | None -> unsupported loc "Go backend does not support type variable `%s` yet" name)
+  | TApp { loc; _ } ->
+    let head, args = flatten_type_app [] ty in
+    (match head with
+     | TName { name = "List"; _ } ->
+       (match args with
+        | [element] -> TList (recur element)
+        | _ -> unsupported loc "Go backend requires `List` to be applied to 1 type argument")
+     | TName { name; _ } ->
+       (match Hashtbl.find_opt types.adts name with
+        | Some info ->
+          if List.length args <> List.length info.adt_params then unsupported loc
+            "Go backend requires `%s` to be applied to %d type argument(s)"
+            name (List.length info.adt_params);
+          TAdt (info, List.map recur args)
+        | None -> unsupported loc "Go backend does not support applied type `%s` yet" name)
+     | _ -> unsupported loc "Go backend does not support applied types yet")
   | TFun { loc; _ } -> unsupported loc "Go backend does not support function values yet"
   | TTuple { loc; _ } -> unsupported loc "Go backend does not support tuple types yet"
 
@@ -242,7 +281,11 @@ let rec go_type = function
   | TUnit -> "struct{}"
   | TNewtype info -> info.go_name
   | TRecord info -> info.rec_go_name
-  | TAdt info -> info.adt_go_name
+  | TAdt (info, []) -> info.adt_go_name
+  | TAdt (info, args) ->
+    Printf.sprintf "%s[%s]" info.adt_go_name (String.concat ", " (List.map go_type args))
+  | TList element -> "[]" ^ go_type element
+  | TParam name -> name
   | TCheck ty -> Printf.sprintf "teslrt.Check[%s]" (go_type ty)
   | TFailure -> invalid_arg "Go failure has no standalone type"
 
@@ -287,7 +330,16 @@ let strip_outer_parens value =
 (* Records hold teslrt.Int values, which are non-comparable by construction, so
    Go `==` on a record struct is a compile error rather than a wrong answer.
    Record equality is therefore always emitted field by field. *)
-let rec equal_expr ty left right =
+let rec element_equal_func element =
+  (* One-line func literal so the emitted code stays gofmt-stable. *)
+  Printf.sprintf "func(teslX, teslY %s) bool { return %s }" (go_type element)
+    (equal_expr element "teslX" "teslY")
+
+and element_less_func element =
+  Printf.sprintf "func(teslX, teslY %s) bool { return %s }" (go_type element)
+    (ordered_expr element "<" "teslX" "teslY")
+
+and equal_expr ty left right =
   match ty with
   | TInt -> Printf.sprintf "teslrt.Equal(%s, %s)" left right
   | TString | TBool | TUnit -> Printf.sprintf "(%s == %s)" left right
@@ -306,9 +358,14 @@ let rec equal_expr ty left right =
   (* Per-variant payload comparison lives in a generated method: inlining it would
      duplicate the whole tag switch at every comparison site. *)
   | TAdt _ -> Printf.sprintf "%s.TeslEqual(%s)" (selector_operand left) right
-  | TCheck _ | TFailure -> invalid_arg "Go check results require explicit test handling"
+  (* A generic Go function cannot compare a `T`, so the element comparison is passed
+     in: the emitter knows the concrete element type at every call site. *)
+  | TList element ->
+    Printf.sprintf "teslrt.ListEqualBy(%s, %s, %s)" left right (element_equal_func element)
+  | TParam _ | TCheck _ | TFailure ->
+    invalid_arg "Go equality on this type is rejected before emission"
 
-let rec unequal_expr ty left right =
+and unequal_expr ty left right =
   match ty with
   | TInt -> Printf.sprintf "!teslrt.Equal(%s, %s)" left right
   | TString | TBool | TUnit -> Printf.sprintf "(%s != %s)" left right
@@ -327,29 +384,99 @@ let rec unequal_expr ty left right =
            (Printf.sprintf "%s.%s" (selector_operand right) field)) fields in
        "(" ^ String.concat " || " parts ^ ")")
   | TAdt _ -> Printf.sprintf "!%s.TeslEqual(%s)" (selector_operand left) right
-  | TCheck _ | TFailure -> invalid_arg "Go check results require explicit test handling"
+  | TList element ->
+    Printf.sprintf "!teslrt.ListEqualBy(%s, %s, %s)" left right (element_equal_func element)
+  | TParam _ | TCheck _ | TFailure ->
+    invalid_arg "Go equality on this type is rejected before emission"
 
-let rec ordered_expr ty op left right =
+and ordered_expr ty op left right =
   match ty with
   | TInt -> Printf.sprintf "(teslrt.Compare(%s, %s) %s 0)" left right op
   | TString -> Printf.sprintf "(%s %s %s)" left op right
   | TNewtype info ->
     ordered_expr info.base op (Printf.sprintf "%s.teslValue" (selector_operand left))
       (Printf.sprintf "%s.teslValue" (selector_operand right))
-  | TBool | TUnit | TRecord _ | TAdt _ | TCheck _ | TFailure ->
+  | TBool | TUnit | TRecord _ | TAdt _ | TList _ | TParam _ | TCheck _ | TFailure ->
     invalid_arg "Go ordering requires an ordered scalar type"
 
 let rec supports_ordering = function
   | TInt | TString -> true
   | TNewtype info -> supports_ordering info.base
-  | TBool | TUnit | TRecord _ | TAdt _ | TCheck _ | TFailure -> false
+  | TBool | TUnit | TRecord _ | TAdt _ | TList _ | TParam _ | TCheck _ | TFailure -> false
+
+(* A generic ADT has no comparable Go form: `TeslEqual` would have to dispatch
+   `teslrt.Equal` for whatever the type parameter was instantiated with, which Go
+   generics cannot express without an interface the thin-runtime invariant forbids.
+   Equality on such a type is therefore rejected before emission. *)
+let rec supports_equality = function
+  | TInt | TString | TBool | TUnit -> true
+  | TNewtype info -> supports_equality info.base
+  | TRecord info -> List.for_all (fun (_, ty) -> supports_equality ty) info.rec_fields
+  | TAdt (info, args) ->
+    info.adt_params = [] && args = []
+    && List.for_all (fun variant ->
+         List.for_all (fun (_, ty) -> supports_equality ty) variant.var_fields)
+         info.adt_variants
+  | TList element -> supports_equality element
+  | TParam _ | TCheck _ | TFailure -> false
 
 let record_info_of_signature signatures name =
   match Hashtbl.find_opt signatures name with
   | Some { result = TRecord info; _ } -> Some info
   | _ -> None
 
-let adt_tag_field = "teslTag"
+(* The tag is EXPORTED: an ADT provided by the runtime (or, later, by another
+   emitted module) is matched from a different package, where an unexported field
+   would be invisible. *)
+(* `Tesl.List` leaves are element-polymorphic, so they cannot be fixed signatures
+   like the String leaves.  Arity and argument ORDER come from tesl/list.tesl:
+   `take n xs`, `member x xs`, `append xs ys`. *)
+type list_leaf = {
+  leaf_name : string;
+  leaf_go : string;
+  leaf_arity : int;
+  (* How the result type is built from the element type of the list argument. *)
+  leaf_result : [ `Int | `Bool | `Same | `MaybeElement | `MaybeSame ];
+  (* Which extra closure the runtime function takes, if any. *)
+  leaf_closure : [ `None | `Equal | `Less ];
+  (* Index of the argument that is the list, and of a non-list argument to check. *)
+  leaf_list_index : int;
+}
+
+let list_leaves = [
+  { leaf_name = "List.length"; leaf_go = "teslrt.ListLength"; leaf_arity = 1;
+    leaf_result = `Int; leaf_closure = `None; leaf_list_index = 0 };
+  { leaf_name = "List.isEmpty"; leaf_go = "teslrt.ListIsEmpty"; leaf_arity = 1;
+    leaf_result = `Bool; leaf_closure = `None; leaf_list_index = 0 };
+  { leaf_name = "List.head"; leaf_go = "teslrt.ListHead"; leaf_arity = 1;
+    leaf_result = `MaybeElement; leaf_closure = `None; leaf_list_index = 0 };
+  { leaf_name = "List.last"; leaf_go = "teslrt.ListLast"; leaf_arity = 1;
+    leaf_result = `MaybeElement; leaf_closure = `None; leaf_list_index = 0 };
+  { leaf_name = "List.tail"; leaf_go = "teslrt.ListTail"; leaf_arity = 1;
+    leaf_result = `MaybeSame; leaf_closure = `None; leaf_list_index = 0 };
+  { leaf_name = "List.reverse"; leaf_go = "teslrt.ListReverse"; leaf_arity = 1;
+    leaf_result = `Same; leaf_closure = `None; leaf_list_index = 0 };
+  { leaf_name = "List.sum"; leaf_go = "teslrt.ListSum"; leaf_arity = 1;
+    leaf_result = `Int; leaf_closure = `None; leaf_list_index = 0 };
+  { leaf_name = "List.append"; leaf_go = "teslrt.ListAppend"; leaf_arity = 2;
+    leaf_result = `Same; leaf_closure = `None; leaf_list_index = 0 };
+  { leaf_name = "List.take"; leaf_go = "teslrt.ListTake"; leaf_arity = 2;
+    leaf_result = `Same; leaf_closure = `None; leaf_list_index = 1 };
+  { leaf_name = "List.drop"; leaf_go = "teslrt.ListDrop"; leaf_arity = 2;
+    leaf_result = `Same; leaf_closure = `None; leaf_list_index = 1 };
+  { leaf_name = "List.member"; leaf_go = "teslrt.ListMemberBy"; leaf_arity = 2;
+    leaf_result = `Bool; leaf_closure = `Equal; leaf_list_index = 1 };
+  { leaf_name = "List.contains"; leaf_go = "teslrt.ListMemberBy"; leaf_arity = 2;
+    leaf_result = `Bool; leaf_closure = `Equal; leaf_list_index = 1 };
+  { leaf_name = "List.unique"; leaf_go = "teslrt.ListUniqueBy"; leaf_arity = 1;
+    leaf_result = `Same; leaf_closure = `Equal; leaf_list_index = 0 };
+  { leaf_name = "List.sort"; leaf_go = "teslrt.ListSortBy"; leaf_arity = 1;
+    leaf_result = `Same; leaf_closure = `Less; leaf_list_index = 0 };
+]
+
+let list_leaf name = List.find_opt (fun leaf -> leaf.leaf_name = name) list_leaves
+
+let adt_tag_field = "Tag"
 
 (* Every variant's payload lives in one flat struct, so a payload field is named
    after its constructor: `Pending (reason: String)` becomes `PendingReason`. *)
@@ -359,11 +486,26 @@ let variant_field_go_name variant name =
 let find_variant info ctor =
   List.find_opt (fun variant -> variant.var_ctor = ctor) info.adt_variants
 
+let rec substitute_type bindings ty =
+  match ty with
+  | TParam name -> (match List.assoc_opt name bindings with Some ty -> ty | None -> ty)
+  | TAdt (info, args) -> TAdt (info, List.map (substitute_type bindings) args)
+  | TCheck inner -> TCheck (substitute_type bindings inner)
+  | TList element -> TList (substitute_type bindings element)
+  | TInt | TString | TBool | TUnit | TNewtype _ | TRecord _ | TFailure -> ty
+
+(** A variant's payload types with the ADT's type arguments substituted in. *)
+let variant_field_types info args variant =
+  if info.adt_params = [] || args = [] then variant.var_fields
+  else
+    let bindings = List.map2 (fun (_, go_param) arg -> go_param, arg) info.adt_params args in
+    List.map (fun (name, ty) -> name, substitute_type bindings ty) variant.var_fields
+
 (* Every constructor is registered in the signature table under its own name, so a
    constructor application resolves without knowing its ADT up front. *)
 let adt_ctor_of_signature signatures name =
   match Hashtbl.find_opt signatures name with
-  | Some { result = TAdt info; _ } ->
+  | Some { result = TAdt (info, _); _ } ->
     (match find_variant info name with
      | Some variant -> Some (info, variant)
      | None -> None)
@@ -377,6 +519,14 @@ let lookup_env loc name env =
 let rec flatten_app args = function
   | EApp { fn; arg; _ } -> flatten_app (arg :: args) fn
   | head -> head, args
+
+(* `String.length s` parses as a field access over the module name (`String` is a
+   UIDENT, so it is an EConstructor).  Normalising it to the qualified name lets the
+   ordinary call path resolve it against the stdlib signature table. *)
+let normalize_call_head = function
+  | EField { obj = EConstructor { name = module_name; args = []; _ }; field; loc } ->
+    EVar { name = module_name ^ "." ^ field; loc }
+  | head -> head
 
 let normalize_call_args params args =
   match params, args with
@@ -430,8 +580,7 @@ let rec type_of_expr signatures env expr =
       | Some pair -> pair
       | None -> assert false
     in
-    check_variant_args signatures env loc info variant args;
-    TAdt info
+    type_of_variant_application signatures env loc info variant args
   | EConstructor { name; args; loc } ->
     (match Hashtbl.find_opt signatures name with
      | Some { params = [base]; result = (TNewtype _ as result); _ } ->
@@ -442,6 +591,7 @@ let rec type_of_expr signatures env expr =
      | _ -> unsupported loc "Go backend does not support constructor `%s` yet" name)
   | EApp { loc; _ } as app ->
     let head, args = flatten_app [] app in
+    let head = normalize_call_head head in
     (match head with
      | EVar { name = "#record-update#"; _ } ->
        (match args with
@@ -464,17 +614,16 @@ let rec type_of_expr signatures env expr =
          | Some pair -> pair
          | None -> assert false
        in
-       check_variant_args signatures env loc info variant (constructor_args @ args);
-       TAdt info
+       type_of_variant_application signatures env loc info variant (constructor_args @ args)
      | EVar { name = "check"; _ } ->
-       (match args with
+       (match List.map normalize_call_head args with
         | EVar { name; _ } :: call_args ->
           (match Hashtbl.find_opt signatures name with
             | Some { params; result = TCheck result; _ } ->
              if List.length params <> List.length call_args then
                unsupported loc "Go backend requires a fully-applied check `%s`" name;
              List.iter2 (fun arg want ->
-               if type_of_expr signatures env arg <> want then
+               if type_of_arg signatures env want arg <> want then
                  unsupported (Checker.expr_loc arg) "Go backend check `%s` argument type mismatch" name)
                call_args params;
              result
@@ -497,6 +646,9 @@ let rec type_of_expr signatures env expr =
             | _ ->
               unsupported loc "Go backend requires a fully-applied newtype constructor `%s`" name)
          | _ -> unsupported loc "Go backend does not support constructor `%s` yet" name)
+      | EVar { name; _ } when list_leaf name <> None && Hashtbl.mem signatures name ->
+       let leaf = match list_leaf name with Some leaf -> leaf | None -> assert false in
+       type_of_list_leaf signatures env loc leaf args
       | EVar { name; _ } ->
        (match Hashtbl.find_opt signatures name with
         | None -> unsupported loc "Go backend cannot resolve function `%s`" name
@@ -505,7 +657,7 @@ let rec type_of_expr signatures env expr =
           if List.length args <> List.length signature.params then
             unsupported loc "Go backend requires a fully-applied call to `%s`" name;
           List.iter2 (fun arg want ->
-            let got = type_of_expr signatures env arg in
+            let got = type_of_arg signatures env want arg in
             if got <> want then unsupported (Checker.expr_loc arg)
               "Go backend call to `%s` has an unsupported argument type" name)
             args signature.params;
@@ -525,7 +677,12 @@ let rec type_of_expr signatures env expr =
      | BAnd | BOr ->
        if left_ty <> TBool then unsupported loc "Go backend boolean operator requires Bool";
        TBool
-     | BEq | BNeq -> TBool
+     | BEq | BNeq ->
+       (* A generic ADT (or anything holding a type parameter) has no comparable Go
+          form, so equality on it fails closed rather than reaching the emitter. *)
+       if not (supports_equality left_ty) then unsupported loc
+         "Go backend does not support equality on this type yet";
+       TBool
       | BLt | BLe | BGt | BGe ->
         if not (supports_ordering left_ty) then
           unsupported loc "Go backend ordering supports Int, String, and their scalar newtypes only";
@@ -556,13 +713,13 @@ let rec type_of_expr signatures env expr =
      | TRecord info, _ -> record_field_type loc info field
      | _ -> unsupported loc "Go backend does not support field `%s` yet" field)
   | ECase { scrut; arms; loc } ->
-    let info = match type_of_expr signatures env scrut with
-      | TAdt info -> info
+    let info, type_args = match type_of_expr signatures env scrut with
+      | TAdt (info, args) -> info, args
       | _ -> unsupported loc "Go backend supports `case` over a module ADT only"
     in
     if arms = [] then unsupported loc "Go backend requires at least one `case` arm";
     let arm_types = List.map (fun (arm : case_arm) ->
-      let bindings = pattern_bindings signatures loc info arm.pattern in
+      let bindings = pattern_bindings loc info type_args arm.pattern in
       let arm_env = bindings @ env in
       (match arm.guard with
        | None -> ()
@@ -583,7 +740,15 @@ let rec type_of_expr signatures env expr =
      | None -> unsupported loc "Go backend does not support record type `%s` yet" name)
   | ERecord { type_hint = None; loc; _ } ->
     unsupported loc "Go backend cannot infer the record type of this literal"
-  | EList { loc; _ } -> unsupported loc "Go backend does not support lists yet"
+  | EList { elems = []; loc } ->
+    unsupported loc "Go backend cannot infer the element type of an empty list literal"
+  | EList { elems; _ } ->
+    let element = type_of_expr signatures env (List.hd elems) in
+    List.iter (fun elem ->
+      if type_of_expr signatures env elem <> element then
+        unsupported (Checker.expr_loc elem)
+          "Go backend list literal elements have different types") elems;
+    TList element
   | EOk { value; _ } -> TCheck (type_of_expr signatures env value)
   | EFail { message; loc; _ } ->
     if type_of_expr signatures env message <> TString then
@@ -599,24 +764,101 @@ let rec type_of_expr signatures env expr =
   | ERuntimeCall { loc; _ } ->
     unsupported loc "internal error: Go backend received Racket-specific desugaring"
 
-and check_variant_args signatures env loc info variant args =
-  let wanted = List.length variant.var_fields in
-  if List.length args <> wanted then
+(* A nullary constructor of a generic ADT carries no argument to infer its type
+   arguments from (`Empty` for `Labeled a`), so where a type is expected — a call
+   argument — that expectation instantiates it.  Anywhere else it fails closed. *)
+(* Types a list-leaf call from the element type of its list argument.  The same table
+   drives emission, so arity and argument order cannot drift between the two. *)
+and type_of_list_leaf signatures env loc leaf args =
+  if List.length args <> leaf.leaf_arity then
+    unsupported loc "Go backend requires `%s` applied to %d argument(s)"
+      leaf.leaf_name leaf.leaf_arity;
+  let arg_types = List.map (type_of_expr signatures env) args in
+  let element = match List.nth arg_types leaf.leaf_list_index with
+    | TList element -> element
+    | _ -> unsupported loc "Go backend `%s` requires a List argument" leaf.leaf_name
+  in
+  (* The non-list argument is the element itself (member/contains) or a count. *)
+  List.iteri (fun index arg_ty ->
+    if index <> leaf.leaf_list_index then begin
+      let want = match leaf.leaf_name with
+        | "List.take" | "List.drop" -> TInt
+        | "List.append" -> TList element
+        | _ -> element
+      in
+      if arg_ty <> want then unsupported loc
+        "Go backend `%s` argument %d has an unsupported type" leaf.leaf_name (index + 1)
+    end) arg_types;
+  if leaf.leaf_name = "List.sum" && element <> TInt then
+    unsupported loc "Go backend `List.sum` requires a List Int";
+  (match leaf.leaf_closure with
+   | `Equal ->
+     if not (supports_equality element) then unsupported loc
+       "Go backend `%s` needs comparable elements" leaf.leaf_name
+   | `Less ->
+     if not (supports_ordering element) then unsupported loc
+       "Go backend `%s` needs ordered elements" leaf.leaf_name
+   | `None -> ());
+  let maybe_of inner =
+    match adt_ctor_of_signature signatures "Nothing" with
+    | Some (info, _) -> TAdt (info, [inner])
+    | None -> unsupported loc
+      "Go backend `%s` returns a Maybe; import `Tesl.Maybe`" leaf.leaf_name
+  in
+  (match leaf.leaf_result with
+   | `Int -> TInt
+   | `Bool -> TBool
+   | `Same -> TList element
+   | `MaybeElement -> maybe_of element
+   | `MaybeSame -> maybe_of (TList element))
+
+and type_of_arg signatures env want arg =
+  match arg with
+  (* An empty list literal has no element to infer from, exactly like a nullary
+     generic constructor: the expected type supplies it. *)
+  | EList { elems = []; _ } when (match want with TList _ -> true | _ -> false) -> want
+  | EConstructor { name; args = []; _ } ->
+    (match adt_ctor_of_signature signatures name, want with
+     | Some (owner, variant), TAdt (info, (_ :: _))
+       when owner.adt_tesl_name = info.adt_tesl_name && variant.var_fields = [] -> want
+     | _ -> type_of_expr signatures env arg)
+  | _ -> type_of_expr signatures env arg
+
+(* A constructor application determines the ADT's type arguments: each parameter is
+   read off the argument whose declared field type IS that parameter.  A parameter
+   that appears in no field (or only nested inside another type) cannot be inferred
+   here, and the application is rejected rather than guessed at. *)
+and type_of_variant_application signatures env loc info variant args =
+  if List.length args <> List.length variant.var_fields then
     unsupported loc "Go backend requires constructor `%s.%s` applied to %d argument(s)"
-      info.adt_tesl_name variant.var_ctor wanted;
-  List.iter2 (fun arg (name, want) ->
-    let got = type_of_expr signatures env arg in
+      info.adt_tesl_name variant.var_ctor (List.length variant.var_fields);
+  let arg_types = List.map (type_of_expr signatures env) args in
+  let type_args = List.map (fun (tesl_param, go_param) ->
+    let rec find fields types =
+      match fields, types with
+      | (_, TParam candidate) :: _, arg_ty :: _ when candidate = go_param -> Some arg_ty
+      | _ :: fields, _ :: types -> find fields types
+      | _, _ -> None
+    in
+    match find variant.var_fields arg_types with
+    | Some ty -> ty
+    | None ->
+      unsupported loc
+        "Go backend cannot infer type argument `%s` of `%s` from constructor `%s`"
+        tesl_param info.adt_tesl_name variant.var_ctor) info.adt_params in
+  let expected = variant_field_types info type_args variant in
+  List.iter2 (fun got (name, want) ->
     if got <> want then
-      unsupported (Checker.expr_loc arg)
-        "Go backend constructor field `%s.%s` has an unsupported value type"
-        variant.var_ctor name) args variant.var_fields
+      unsupported loc "Go backend constructor field `%s.%s` has an unsupported value type"
+        variant.var_ctor name) arg_types expected;
+  TAdt (info, type_args)
 
 (* Returns the bindings a pattern introduces, rejecting every pattern shape the
    emitter cannot lower rather than binding it to the wrong payload field. *)
-and pattern_bindings _signatures _loc info pattern =
+and pattern_bindings _loc info type_args pattern =
   match pattern with
   | PWild -> []
-  | PVar name -> [name, TAdt info]
+  | PVar name -> [name, TAdt (info, type_args)]
   | PLit { loc; _ } ->
     unsupported loc "Go backend does not support literal patterns over `%s` yet"
       info.adt_tesl_name
@@ -640,7 +882,7 @@ and pattern_bindings _signatures _loc info pattern =
        (* Sub-patterns bind POSITIONALLY, matching the Racket backend: the pattern's
           own key is a binder name, not necessarily the declared field name. *)
        List.concat (List.mapi (fun index (_key, sub) ->
-         let _, field_ty = List.nth variant.var_fields index in
+         let _, field_ty = List.nth (variant_field_types info type_args variant) index in
          match sub with
          | PWild -> []
          | PVar name -> [name, field_ty]
@@ -679,7 +921,7 @@ and check_record_literal signatures env loc info fields =
       unsupported loc "Go backend record literal for `%s` is missing field `%s`"
         info.rec_tesl_name name
     | Some value ->
-      let got = type_of_expr signatures env value in
+      let got = type_of_arg signatures env want value in
       if got <> want then
         unsupported (Checker.expr_loc value)
           "Go backend record field `%s.%s` has an unsupported value type"
@@ -729,12 +971,18 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
   | EConstructor { name = "False"; args = []; _ } -> "false"
   | EConstructor { name = "Unit"; args = []; _ } -> "struct{}{}"
   | EConstructor { name; args; _ } when adt_ctor_of_signature signatures name <> None ->
-    let info, variant = match adt_ctor_of_signature signatures name with
+    let owner, variant = match adt_ctor_of_signature signatures name with
       | Some pair -> pair
       | None -> assert false
     in
-    ignore (type_of_expr signatures env expr);
-    emit_variant_literal ~indent signatures env info variant args
+    (* A nullary constructor of a generic ADT is instantiated by the expected type;
+       `type_of_expr` alone cannot know the type arguments. *)
+    let result = match expected, args with
+      | Some (TAdt (info, (_ :: _)) as want), []
+        when info.adt_tesl_name = owner.adt_tesl_name -> want
+      | _ -> type_of_expr signatures env expr
+    in
+    emit_variant_literal ~indent signatures env result variant args
   | EConstructor { name; args; loc } ->
     (match Hashtbl.find_opt signatures name with
      | Some { params = [_]; result = (TNewtype _ as result); _ } ->
@@ -746,6 +994,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
      | _ -> unsupported loc "Go backend cannot emit constructor `%s`" name)
   | EApp { loc; _ } as app ->
     let head, args = flatten_app [] app in
+    let head = normalize_call_head head in
     (match head with
      | EVar { name = "#record-update#"; _ } ->
        (match args with
@@ -766,14 +1015,14 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
         | _ -> unsupported loc "Go backend cannot emit record literal `%s`" name)
      | EConstructor { name; args = constructor_args; _ }
        when adt_ctor_of_signature signatures name <> None ->
-       let info, variant = match adt_ctor_of_signature signatures name with
+       let _, variant = match adt_ctor_of_signature signatures name with
          | Some pair -> pair
          | None -> assert false
        in
-       ignore (type_of_expr signatures env app);
-       emit_variant_literal ~indent signatures env info variant (constructor_args @ args)
+       emit_variant_literal ~indent signatures env
+         (type_of_expr signatures env app) variant (constructor_args @ args)
      | EVar { name = "check"; _ } ->
-       (match args with
+       (match List.map normalize_call_head args with
         | EVar { name; _ } :: call_args ->
           ignore (type_of_expr signatures env app);
            let signature = match Hashtbl.find_opt signatures name with
@@ -797,6 +1046,20 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
               Printf.sprintf "%s{teslValue: %s}" (go_type result) (emit arg)
             | _ -> assert false)
          | _ -> unsupported loc "Go backend cannot emit constructor `%s`" name)
+      | EVar { name; _ } when list_leaf name <> None && Hashtbl.mem signatures name ->
+       let leaf = match list_leaf name with Some leaf -> leaf | None -> assert false in
+       ignore (type_of_expr signatures env app);
+       let element = match type_of_expr signatures env (List.nth args leaf.leaf_list_index) with
+         | TList element -> element
+         | _ -> invalid_arg "list leaf validated before emission"
+       in
+       let emitted = List.map emit args in
+       let emitted = match leaf.leaf_closure with
+         | `None -> emitted
+         | `Equal -> emitted @ [element_equal_func element]
+         | `Less -> emitted @ [element_less_func element]
+       in
+       Printf.sprintf "%s(%s)" leaf.leaf_go (String.concat ", " emitted)
       | EVar { name; _ } ->
        let signature = match Hashtbl.find_opt signatures name with
          | Some signature -> signature
@@ -805,7 +1068,8 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
        let args = normalize_call_args signature.params args in
        ignore (type_of_expr signatures env app);
        Printf.sprintf "%s(%s)" signature.go_name
-          (String.concat ", " (List.map emit args))
+          (String.concat ", " (List.map2 (fun arg want ->
+             emit_expr ~expected:want ~indent signatures env arg) args signature.params))
      | _ -> unsupported loc "Go backend supports calls to named functions only")
   | EBinop { op; left; right; _ } ->
     let ty = type_of_expr signatures env left in
@@ -871,8 +1135,19 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
           (emit_expr ~expected:result ~indent:body_indent signatures arm_env body))
       scrut arms;
     Printf.sprintf "(func() %s {\n%s%s}())" (go_type result) (Buffer.contents buffer) indent
+  | EList { elems; _ } ->
+    let element = match expected, elems with
+      | Some (TList element), [] -> element
+      | _ ->
+        (match type_of_expr signatures env expr with
+         | TList element -> element
+         | _ -> invalid_arg "list literal validated before emission")
+    in
+    Printf.sprintf "[]%s{%s}" (go_type element)
+      (String.concat ", " (List.map (fun elem ->
+         emit_expr ~expected:element ~indent signatures env elem) elems))
   | ELetProof { loc; _ }
-  | ERecord { loc; _ } | EList { loc; _ } ->
+  | ERecord { loc; _ } ->
     unsupported loc "Go backend cannot emit this expression yet"
   | EOk { value; _ } -> Printf.sprintf "teslrt.Accept(%s)" (emit value)
   | EFail { status; message; loc } ->
@@ -891,7 +1166,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
 
 (* What one arm has to test and bind, resolved once so the type rule and the
    emitter cannot disagree about which payload field a binder refers to. *)
-and pattern_plan info pattern =
+and pattern_plan info type_args pattern =
   match pattern with
   | PWild -> None, None, []
   | PVar name -> None, Some name, []
@@ -902,7 +1177,8 @@ and pattern_plan info pattern =
       | None -> invalid_arg "case pattern validated before emission"
     in
     let bindings = List.concat (List.mapi (fun index (_key, sub) ->
-      let field_name, field_ty = List.nth variant.var_fields index in
+      let field_name, field_ty =
+        List.nth (variant_field_types info type_args variant) index in
       match sub with
       | PVar name -> [name, variant_field_go_name variant field_name, field_ty]
       | _ -> []) fields) in
@@ -913,16 +1189,18 @@ and pattern_plan info pattern =
    guard (so the emitted switch stays checkable), an ordered if-chain when a guard
    can make an arm fall through to the next one. *)
 and emit_case_statements ?(indent="") signatures env buffer emit_body scrut arms =
-  let info = match type_of_expr signatures env scrut with
-    | TAdt info -> info
+  let info, type_args = match type_of_expr signatures env scrut with
+    | TAdt (info, args) -> info, args
     | _ -> invalid_arg "case scrutinee validated before emission"
   in
+  let scrut_ty = TAdt (info, type_args) in
   let scrut_name = Printf.sprintf "teslScrut%d" (String.length indent) in
   let inner = indent ^ "\t" in
   Printf.bprintf buffer "%s{\n" indent;
   Printf.bprintf buffer "%s%s := %s\n" inner scrut_name
-    (emit_expr ~expected:(TAdt info) ~indent:inner signatures env scrut);
-  let plans = List.map (fun (arm : case_arm) -> arm, pattern_plan info arm.pattern) arms in
+    (emit_expr ~expected:scrut_ty ~indent:inner signatures env scrut);
+  let plans =
+    List.map (fun (arm : case_arm) -> arm, pattern_plan info type_args arm.pattern) arms in
   let guarded = List.exists (fun (arm : case_arm) -> arm.guard <> None) arms in
   let bind_arm body_indent (whole, bindings) =
     let env = ref env in
@@ -931,7 +1209,7 @@ and emit_case_statements ?(indent="") signatures env buffer emit_body scrut arms
      | Some name ->
        Printf.bprintf buffer "%s%s := %s\n%s_ = %s\n" body_indent (local_ident name)
          scrut_name body_indent (local_ident name);
-       env := (name, TAdt info) :: !env);
+       env := (name, scrut_ty) :: !env);
     List.iter (fun (name, go_field, field_ty) ->
       Printf.bprintf buffer "%s%s := %s.%s\n%s_ = %s\n" body_indent (local_ident name)
         scrut_name go_field body_indent (local_ident name);
@@ -1039,11 +1317,18 @@ and emit_negated ?(indent="") signatures env expr =
     ordered_expr ty flipped (emit left) (emit right)
   | _ -> negate_bool (emit expr)
 
-and emit_variant_literal ?(indent="") signatures env info variant args =
+(* A generic ADT's composite literal must name its type arguments: Go infers type
+   parameters for calls, never for a composite literal. *)
+and emit_variant_literal ?(indent="") signatures env result variant args =
+  let info, type_args = match result with
+    | TAdt (info, args) -> info, args
+    | _ -> invalid_arg "constructor validated before emission"
+  in
+  let payload = variant_field_types info type_args variant in
   let parts = List.map2 (fun arg (name, field_ty) ->
     Printf.sprintf "%s: %s" (variant_field_go_name variant name)
-      (emit_expr ~expected:field_ty ~indent signatures env arg)) args variant.var_fields in
-  Printf.sprintf "%s{%s}" info.adt_go_name
+      (emit_expr ~expected:field_ty ~indent signatures env arg)) args payload in
+  Printf.sprintf "%s{%s}" (go_type result)
     (String.concat ", " ((adt_tag_field ^ ": " ^ variant.var_tag) :: parts))
 
 and emit_record_literal ?(indent="") signatures env info fields =
@@ -1228,7 +1513,9 @@ let emit_tail ?self buffer signatures env expected indent expr =
       emit_case_statements ~indent signatures env buffer
         (fun arm_env body_indent body -> go arm_env body_indent body) scrut arms
     | _ ->
-      ignore (type_of_expr signatures env expr);
+      (* The tail is checked against the EXPECTED type so a bare nullary constructor
+         of a generic ADT (`Nothing`) is instantiated by the return type. *)
+      ignore (type_of_arg signatures env expected expr);
       Buffer.add_string buffer (line_directive (Checker.expr_loc expr));
       Printf.bprintf buffer "%sreturn %s\n" indent (emit_expr ~expected ~indent signatures env expr)
   in
@@ -1269,6 +1556,11 @@ let adt_source info =
   let body = Buffer.create 512 in
   Buffer.add_char body '\n';
   Buffer.add_string body (line_directive info.adt_loc);
+  let type_params =
+    if info.adt_params = [] then ""
+    else "[" ^ String.concat ", "
+      (List.map (fun (_, go_param) -> go_param ^ " any") info.adt_params) ^ "]"
+  in
   Printf.bprintf body "type %s int\n\nconst (\n" info.adt_tag_type;
   List.iteri (fun index variant ->
     if index = 0 then Printf.bprintf body "\t%s %s = iota\n" variant.var_tag info.adt_tag_type
@@ -1280,12 +1572,17 @@ let adt_source info =
            variant_field_go_name variant name, go_type field_ty) variant.var_fields)
          info.adt_variants in
   let width = List.fold_left (fun width (name, _) -> max width (String.length name)) 0 fields in
-  Printf.bprintf body "type %s struct {\n" info.adt_go_name;
+  Printf.bprintf body "type %s%s struct {\n" info.adt_go_name type_params;
   List.iter (fun (name, go_field_type) ->
     Printf.bprintf body "\t%s%s %s\n" name
       (String.make (width - String.length name) ' ') go_field_type) fields;
-  Buffer.add_string body "}\n\n";
+  Buffer.add_string body "}\n";
   let payload_variants = List.filter (fun variant -> variant.var_fields <> []) info.adt_variants in
+  (* A generic ADT gets no `TeslEqual`: equality on it is rejected before emission,
+     and an unused method would be a lint finding. *)
+  if info.adt_params <> [] then Buffer.contents body
+  else begin
+  Buffer.add_char body '\n';
   Printf.bprintf body "func (teslLeft %s) TeslEqual(teslRight %s) bool {\n"
     info.adt_go_name info.adt_go_name;
   if payload_variants = [] then
@@ -1312,6 +1609,7 @@ let adt_source info =
   end;
   Buffer.add_string body "}\n";
   Buffer.contents body
+  end
 
 let module_source module_path package signatures types (funcs : func_decl list) =
   let body = Buffer.create 1024 in
@@ -1343,7 +1641,8 @@ let module_source module_path package signatures types (funcs : func_decl list) 
   Hashtbl.to_seq_values types.adts
   |> List.of_seq
   |> List.sort (fun left right -> String.compare left.adt_tesl_name right.adt_tesl_name)
-  |> List.iter (fun info -> Buffer.add_string body (adt_source info));
+  |> List.iter (fun info ->
+    if not info.adt_builtin then Buffer.add_string body (adt_source info));
   List.iter (fun (fd : func_decl) ->
     if fd.kind <> FnKind && fd.kind <> CheckKind then unsupported fd.loc
       "Go backend supports plain `fn` and `check` declarations only";
@@ -1354,7 +1653,7 @@ let module_source module_path package signatures types (funcs : func_decl list) 
       fd.params signature.params in
     let result = signature.result in
     let env = params in
-    let body_ty = type_of_expr signatures env fd.body in
+    let body_ty = type_of_arg signatures env result fd.body in
     if body_ty <> result && body_ty <> TFailure then
       unsupported fd.loc "Go backend function result type mismatch";
     Buffer.add_char body '\n';
@@ -1415,6 +1714,8 @@ let test_source module_path package signatures (tests : test_form list) =
              if expected then strip_outer_parens (emit_negated ~indent signatures env left)
              else strip_outer_parens (emit_expr ~indent signatures env left)
            | _ ->
+             if not (supports_equality left_ty) then unsupported loc
+               "Go backend does not support `expect` equality on this type yet";
              strip_outer_parens
                (unequal_expr left_ty (emit_expr ~indent signatures env left)
                   (emit_expr ~indent signatures env right)))
@@ -1446,7 +1747,8 @@ let test_source module_path package signatures (tests : test_form list) =
        | TCheck _ ->
          Printf.bprintf body "%sif (%s).OK() {\n%s\tteslT.Fatal(\"expected Tesl check failure\")\n%s}\n"
            indent emitted indent indent
-       | TInt | TString | TBool | TUnit | TNewtype _ | TRecord _ | TAdt _ ->
+       | TInt | TString | TBool | TUnit | TNewtype _ | TRecord _ | TAdt _ | TList _
+       | TParam _ ->
          Printf.bprintf body "%steslExpectFailure(teslT, func() {\n%s\t_ = %s\n%s})\n"
            indent indent emitted indent
        | TFailure -> unsupported loc "Go backend expectFail target has no result type");
@@ -1482,9 +1784,32 @@ let compile_module ?(mode=Release) (m : module_form) =
      | Release -> ()
      | Debug -> unsupported (Location.dummy_loc m.source_file)
        "Go debugger instrumentation is not implemented yet");
+    (* `Maybe` is provided by `internal/teslrt` rather than emitted per module: a
+       Maybe crosses module boundaries, and two packages declaring their own would
+       be incompatible Go types.  Only the type and its constructors are available;
+       the `Tesl.Maybe` FUNCTIONS still fail closed. *)
+    let maybe_imported = ref false in
     List.iter (fun (import : import_decl) ->
-      if import.module_name <> "Tesl.Prelude" then unsupported import.loc
-        "Go backend does not support import `%s` yet" import.module_name) m.imports;
+      let exposed = match import.names with
+        | ImportAll -> []
+        | ImportExposing names -> names
+      in
+      match import.module_name with
+      | "Tesl.Prelude" ->
+        if List.exists (fun name -> name = "Maybe" || name = "Maybe(..)") exposed then
+          maybe_imported := true
+      | "Tesl.Maybe" ->
+        (* The type and its two constructors are the runtime type; every `Maybe.*`
+           FUNCTION still fails closed until the stdlib lands. *)
+        List.iter (fun name ->
+          match name with
+          | "Maybe" | "Maybe(..)" | "Nothing" | "Something" -> ()
+          | other -> unsupported import.loc
+            "Go backend does not support `Tesl.Maybe` export `%s` yet" other) exposed;
+        maybe_imported := true
+      | "Tesl.String" | "Tesl.List" | "Tesl.Int" -> ()  (* validated against the leaf tables below *)
+      | other ->
+        unsupported import.loc "Go backend does not support import `%s` yet" other) m.imports;
     let funcs = List.filter_map (function DFunc fd -> Some fd | _ -> None) m.decls in
     let tests = List.filter_map (function DTest test -> Some test | _ -> None) m.decls in
     let types = {
@@ -1528,12 +1853,135 @@ let compile_module ?(mode=Release) (m : module_form) =
         rec_fields = [];
         rec_loc = r.loc;
       }) record_forms;
+    (* A list leaf is element-polymorphic, so its signature cannot be a fixed tuple of
+       types like a String leaf's.  Each entry says how to type the call from the
+       element type, and `emit_go` builds the argument list the same way. *)
+    let list_leaf_names = [
+      "List.length"; "List.isEmpty"; "List.head"; "List.tail"; "List.last";
+      "List.append"; "List.take"; "List.drop"; "List.reverse"; "List.sum";
+      "List.member"; "List.contains"; "List.unique"; "List.sort";
+    ] in
+    let list_imports = ref [] in
+    List.iter (fun (import : import_decl) ->
+      if import.module_name = "Tesl.List" then begin
+        let exposed = match import.names with
+          | ImportAll -> []
+          | ImportExposing names -> names
+        in
+        List.iter (fun name ->
+          if List.mem name list_leaf_names then begin
+            list_imports := name :: !list_imports;
+            (* head/tail/last return a Maybe, so importing one brings the runtime
+               Maybe in even when the module never names it. *)
+            if List.mem name ["List.head"; "List.tail"; "List.last"] then
+              maybe_imported := true
+          end else unsupported import.loc
+            "Go backend does not support `Tesl.List` export `%s` yet" name) exposed
+      end) m.imports;
+    let string_leaves = [
+      (* name, params, result-shape, teslrt function *)
+      "String.length",    [`Str], `Int,     "teslrt.StringLength";
+      "String.isEmpty",   [`Str], `Bool,    "teslrt.StringIsEmpty";
+      "String.startsWith",[`Str; `Str], `Bool, "teslrt.StringStartsWith";
+      "String.endsWith",  [`Str; `Str], `Bool, "teslrt.StringEndsWith";
+      "String.contains",  [`Str; `Str], `Bool, "teslrt.StringContains";
+      "String.concat",    [`Str; `Str], `Str,  "teslrt.StringConcat";
+      "String.replace",   [`Str; `Str; `Str], `Str, "teslrt.StringReplace";
+      "String.slice",     [`Str; `Int; `Int], `Str, "teslrt.StringSlice";
+      "String.toUpper",   [`Str], `Str,     "teslrt.StringToUpper";
+      "String.toLower",   [`Str], `Str,     "teslrt.StringToLower";
+      "String.trim",      [`Str], `Str,     "teslrt.StringTrim";
+      "String.fromInt",   [`Int], `Str,     "teslrt.StringFromInt";
+      "String.toInt",     [`Str], `MaybeInt,"teslrt.StringToInt";
+      "String.indexOf",   [`Str; `Str], `MaybeInt, "teslrt.StringIndexOf";
+      "String.dropPrefix",[`Str; `Str], `Str, "teslrt.StringDropPrefix";
+      "String.dropSuffix",[`Str; `Str], `Str, "teslrt.StringDropSuffix";
+      "String.padLeft",   [`Str; `Int; `Str], `Str, "teslrt.StringPadLeft";
+      "String.padRight",  [`Str; `Int; `Str], `Str, "teslrt.StringPadRight";
+      "String.repeat",    [`Str; `Int], `Str, "teslrt.StringRepeat";
+      "String.reverse",   [`Str], `Str,     "teslrt.StringReverse";
+      "String.requireNonEmpty", [`Str], `CheckStr, "teslrt.StringRequireNonEmpty";
+      "String.split",     [`Str; `Str], `StrList, "teslrt.StringSplit";
+      "String.join",      [`StrList; `Str], `Str, "teslrt.StringJoin";
+      (* `Tesl.Int` checks: `List.take`/`List.drop` are proof-total, so a caller
+         needs `check Int.nonNegative n` before it can pass a count at all. *)
+      "Int.nonZero",      [`Int], `CheckInt, "teslrt.IntNonZero";
+      "Int.nonNegative",  [`Int], `CheckInt, "teslrt.IntNonNegative";
+      "Int.abs",          [`Int], `Int,      "teslrt.Abs";
+      "Int.min",          [`Int; `Int], `Int, "teslrt.Min";
+      "Int.max",          [`Int; `Int], `Int, "teslrt.Max";
+      (* Proof-total: the divisor carries `IsNonZero`, so the runtime guard is
+         containment rather than the primary check. *)
+      "Int.divide",       [`Int; `Int], `Int, "teslrt.MustQuo";
+      (* Tesl's `Int.modulo` is Racket `remainder` (truncated, sign of the
+         dividend), NOT `modulo` (floored) — see tesl/int.rkt:183.  Mapping it to
+         teslrt.MustMod would silently disagree on every negative dividend. *)
+      "Int.modulo",       [`Int; `Int], `Int, "teslrt.MustRem";
+    ] in
+    let leaf_names_for prefix =
+      List.filter_map (fun (name, _, _, _) ->
+        if String.length name > String.length prefix
+           && String.sub name 0 (String.length prefix) = prefix then Some name else None)
+        string_leaves
+    in
+    let string_leaf_names = leaf_names_for "String." in
+    let int_leaf_names = leaf_names_for "Int." in
+    (* `String.toInt` and `String.indexOf` return `Maybe Int`, so importing either
+       one brings the runtime Maybe in even when the module never names Maybe. *)
+    let string_imports = ref [] in
+    List.iter (fun (import : import_decl) ->
+      if import.module_name = "Tesl.Int" then begin
+        let exposed = match import.names with
+          | ImportAll -> []
+          | ImportExposing names -> names
+        in
+        List.iter (fun name ->
+          if List.mem name int_leaf_names then string_imports := name :: !string_imports
+          else match name with
+            (* Proof predicates are compile-time only. *)
+            | "IsNonZero" | "IsNonNegative" | "IsPositive" -> ()
+            | other -> unsupported import.loc
+              "Go backend does not support `Tesl.Int` export `%s` yet" other) exposed
+      end) m.imports;
+    List.iter (fun (import : import_decl) ->
+      if import.module_name = "Tesl.String" then begin
+        let exposed = match import.names with
+          | ImportAll -> []
+          | ImportExposing names -> names
+        in
+        List.iter (fun name ->
+          if List.mem name string_leaf_names then begin
+            string_imports := name :: !string_imports;
+            if name = "String.toInt" || name = "String.indexOf" then maybe_imported := true
+          end else match name with
+            (* The proof predicates are compile-time only: they erase with every
+               other proof, so importing one needs no runtime support. *)
+            | "IsTrimmed" | "IsUpperCase" | "IsLowerCase" | "IsNonNegative"
+            | "IsNonEmpty" -> ()
+            | other -> unsupported import.loc
+              "Go backend does not support `Tesl.String` export `%s` yet" other) exposed
+      end) m.imports;
+    if !maybe_imported then begin
+      let loc = Location.dummy_loc m.source_file in
+      Hashtbl.replace types.adts "Maybe" {
+        adt_tesl_name = "Maybe";
+        adt_go_name = "teslrt.Maybe";
+        adt_tag_type = "teslrt.MaybeTag";
+        adt_params = ["a", "A"];
+        adt_variants = [
+          { var_ctor = "Nothing"; var_tag = "teslrt.MaybeNothing";
+            var_fields = []; var_loc = loc };
+          { var_ctor = "Something"; var_tag = "teslrt.MaybeSomething";
+            var_fields = ["value", TParam "A"]; var_loc = loc };
+        ];
+        adt_loc = loc;
+        adt_builtin = true;
+      }
+    end;
     let adt_forms = List.filter_map (function
       | DType (TypeAdt { name; params; variants; loc }) -> Some (name, params, variants, loc)
       | _ -> None) m.decls in
     List.iter (fun (name, params, variants, loc) ->
-      if params <> [] then unsupported loc
-        "Go backend does not support the generic type `%s` yet" name;
       if variants = [] then unsupported loc "Go backend requires `%s` to have variants" name;
       List.iter (fun (variant : adt_variant) ->
         List.iter (fun (field : field_def) ->
@@ -1547,10 +1995,16 @@ let compile_module ?(mode=Release) (m : module_form) =
          || Hashtbl.mem types.adts name then
         unsupported loc "Go backend generated type name collision for `%s`" name;
       let go_name = package_ident name in
+      (* Type parameters live in the type's own scope, so they are named
+         independently of the package-level uniqueness table. *)
+      let param_names = Hashtbl.create 4 in
+      let go_params = List.map (fun param ->
+        param, unique_ident param_names (go_ident ~exported:true param)) params in
       Hashtbl.replace types.adts name {
         adt_tesl_name = name;
         adt_go_name = go_name;
         adt_tag_type = unique_ident taken (go_name ^ "Tag");
+        adt_params = go_params;
         adt_variants = List.map (fun (variant : adt_variant) -> {
           var_ctor = variant.ctor;
           var_tag = unique_ident taken (go_name ^ go_ident ~exported:true variant.ctor);
@@ -1558,6 +2012,7 @@ let compile_module ?(mode=Release) (m : module_form) =
           var_loc = variant.loc;
         }) variants;
         adt_loc = loc;
+        adt_builtin = false;
       }) adt_forms;
     (* Field types resolve only after every named type is registered, so records and
        ADTs may reference each other; a cycle would be an infinitely sized Go value
@@ -1568,13 +2023,16 @@ let compile_module ?(mode=Release) (m : module_form) =
         field.name, type_of_type_expr types field.type_expr) r.fields) record_forms;
     List.iter (fun (name, _, variants, _) ->
       let info = Hashtbl.find types.adts name in
+      (* The ADT's own type parameters are in scope only here, while resolving the
+         field types of its variants. *)
+      let params = info.adt_params in
       List.iter2 (fun (variant : adt_variant) target ->
         target.var_fields <- List.map (fun (field : field_def) ->
-          field.name, type_of_type_expr types field.type_expr) variant.fields)
+          field.name, type_of_type_expr ~params types field.type_expr) variant.fields)
         variants info.adt_variants) adt_forms;
     let contained = function
       | TRecord info -> `Record info
-      | TAdt info -> `Adt info
+      | TAdt (info, _) -> `Adt info
       | _ -> `Scalar
     in
     let rec reaches target visited ty =
@@ -1681,11 +2139,48 @@ let compile_module ?(mode=Release) (m : module_form) =
       List.iter (fun variant ->
         if Hashtbl.mem signatures variant.var_ctor then unsupported variant.var_loc
           "Go backend generated name collision for constructor `%s`" variant.var_ctor;
+        (* The result carries no type arguments: it exists so a constructor
+           application can find its ADT, which then infers the arguments. *)
         Hashtbl.add signatures variant.var_ctor {
           params = List.map snd variant.var_fields;
-          result = TAdt info;
+          result = TAdt (info, []);
           go_name = variant.var_tag;
         }) info.adt_variants) types.adts;
+    (* Imported stdlib leaves are ordinary signatures whose Go name is a runtime
+       function, so the existing call machinery emits them with no special case. *)
+    (* A list leaf is registered only so the call arms can tell an imported name from
+       an unresolved one; its params/result are computed per call site. *)
+    List.iter (fun name ->
+      let leaf = match list_leaf name with Some leaf -> leaf | None -> assert false in
+      if not (Hashtbl.mem signatures name) then
+        Hashtbl.add signatures name
+          { params = []; result = TFailure; go_name = leaf.leaf_go }) !list_imports;
+    List.iter (fun name ->
+      let params, result, go_name =
+        match List.find_opt (fun (leaf, _, _, _) -> leaf = name) string_leaves with
+        | Some (_, params, result, go_name) -> params, result, go_name
+        | None -> assert false
+      in
+      let maybe_int () =
+        match Hashtbl.find_opt types.adts "Maybe" with
+        | Some info -> TAdt (info, [TInt])
+        | None -> assert false
+      in
+      let shape = function
+        | `Str -> TString
+        | `Int -> TInt
+        | `Bool -> TBool
+        | `MaybeInt -> maybe_int ()
+        | `StrList -> TList TString
+        | `CheckStr -> TCheck TString
+        | `CheckInt -> TCheck TInt
+      in
+      if not (Hashtbl.mem signatures name) then
+        Hashtbl.add signatures name {
+          params = List.map shape params;
+          result = shape result;
+          go_name;
+        }) !string_imports;
     List.iter (fun (fd : func_decl) ->
       if Hashtbl.mem signatures fd.name then unsupported fd.loc
         "Go backend generated name collision for `%s`" fd.name;
