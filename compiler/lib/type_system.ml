@@ -784,7 +784,13 @@ let stdlib_env : (string * scheme) list = [
   "Float.min",      mono (t_fun [t_float; t_float] t_float);
   "Float.max",      mono (t_fun [t_float; t_float] t_float);
   "Float.clamp",    mono (t_fun [t_float; t_float; t_float] t_float);
+  (* Float.sqrt's argument must carry FloatNonNegative (from
+     Float.requireNonNegative).  Racket's `sqrt` returns a COMPLEX number for a
+     negative flonum — (sqrt -1.0) is 0.0+1.0i — which Tesl's Float type cannot hold,
+     and Go's math.Sqrt yields NaN instead.  The proof removes the divergence at the
+     source rather than papering over it in one backend. *)
   "Float.sqrt",     mono (t_fun [t_float] t_float);
+  "Float.requireNonNegative", mono (t_fun [t_float] t_float);
   "Float.pow",      mono (t_fun [t_float; t_float] t_float);
   "Float.log",      mono (t_fun [t_float] t_float);
   "Float.exp",      mono (t_fun [t_float] t_float);
@@ -1480,7 +1486,7 @@ let tesl_module_exports : (string * string list) list = [
       "Int.isOdd"; "Int.gcd"; "Int.lcm"; "Int.pow"; "Int.digits"; "Int.toFloat";
       "Int.sign"; "Int.nonZero"; "Int.nonNegative"; "Int.divide"; "Int.modulo" ] );
   ( "Tesl.Float",
-    [ "Float"; "FloatNonZero";
+    [ "Float"; "FloatNonZero"; "FloatNonNegative"; "Float.requireNonNegative";
       "Float.requireNonZero"; "Float.parse"; "Float.toString"; "Float.toInt";
       "Float.add"; "Float.sub"; "Float.mul"; "Float.div"; "Float.abs";
       "Float.min"; "Float.max"; "Float.clamp"; "Float.ceil"; "Float.floor";

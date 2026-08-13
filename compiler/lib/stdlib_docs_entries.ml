@@ -631,11 +631,14 @@ let float_ : entry list = [
     ~doc:"Double-precision floating point (never use for money — see Tesl.Money).";
   e "FloatNonZero" ~m:"Tesl.Float" ~kind:(KFact "fact FloatNonZero (f: Float)")
     ~doc:"The float is != 0.0; minted by Float.requireNonZero, required as the denominator proof of Float.div.";
+  e "FloatNonNegative" ~m:"Tesl.Float" ~kind:(KFact "fact FloatNonNegative (f: Float)")
+    ~doc:"The float is >= 0.0; minted by Float.requireNonNegative, required as the argument proof of Float.sqrt (a negative input has no real square root).";
   f "Float.add" [ "a"; "b" ] ~m:"Tesl.Float" ~doc:"Float addition.";
   f "Float.sub" [ "a"; "b" ] ~m:"Tesl.Float" ~doc:"Float subtraction.";
   f "Float.mul" [ "a"; "b" ] ~m:"Tesl.Float" ~doc:"Float multiplication.";
   f "Float.div" [ "a"; "b" ] ~m:"Tesl.Float" ~doc:"Float division; the denominator must carry a FloatNonZero proof (from Float.requireNonZero).";
   f "Float.requireNonZero" [ "f" ] ~m:"Tesl.Float" ~doc:"Check function: passes f != 0.0, minting FloatNonZero.";
+  f "Float.requireNonNegative" [ "f" ] ~m:"Tesl.Float" ~doc:"Check function: passes f >= 0.0, minting FloatNonNegative. Zero is accepted, since sqrt 0.0 is 0.0.";
   f "Float.round" [ "f" ] ~m:"Tesl.Float" ~doc:"Rounds to the nearest integer.";
   f "Float.floor" [ "f" ] ~m:"Tesl.Float" ~doc:"Largest integer <= f.";
   f "Float.ceil" [ "f" ] ~m:"Tesl.Float" ~doc:"Smallest integer >= f.";

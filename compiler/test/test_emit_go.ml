@@ -276,16 +276,18 @@ fn bypass(n: Int) -> String = "value=${requiresPositive n}"
          d.source <> "go-emitter") diagnostics)
 
 let test_unsupported_interpolation_fails_closed () =
+  (* Float interpolation is supported now (it renders through teslrt.FormatFloat), so
+     the boundary moved to a type with no rendering: a list has no interpolated form. *)
   let unsupported = {|module UnsupportedInterpolation exposing [render]
-import Tesl.Prelude exposing [String]
-fn render() -> String = "value=${1.5}"
+import Tesl.Prelude exposing [Int, List, String]
+fn render(xs: List Int) -> String = "value=${xs}"
 |} in
   match Compile.compile_go_source "<go-unsupported-interpolation>" unsupported with
   | Compile.GoSuccess _ -> fail "unsupported interpolation emitted Go artifacts"
   | Compile.GoFailure diagnostics ->
-    check bool "non-scalar interpolation rejected by Go emitter" true
+    check bool "a type with no interpolated form is rejected" true
       (List.exists (fun (d : Compile.diagnostic) ->
-         d.source = "go-emitter" && contains d.message "Float") diagnostics)
+         contains d.message "interpolation") diagnostics)
 
 let test_cross_subject_mismatch_never_reaches_emitter () =
   let invalid = {|module InvalidCrossProof exposing [Matches, checkMatches, consume, bypass]
@@ -1737,6 +1739,118 @@ fn get(d: Dict Bool Int) -> Bool = Dict.member True d
       (List.exists (fun (d : Compile.diagnostic) ->
          d.source = "go-emitter" && contains d.message "needs ordered keys") diagnostics)
 
+let float_source = {|module GoFloats exposing [half, scale, average, describe, rounded, biggest, sameValue, ordered, parsed, safeSqrt]
+import Tesl.Prelude exposing [Bool(..), Int, String]
+import Tesl.Float exposing [Float, FloatNonNegative, Float.abs, Float.max, Float.round, Float.sqrt, Float.requireNonNegative, Float.toString, Float.parse]
+import Tesl.Maybe exposing [Maybe(..)]
+
+fn half(x: Float) -> Float = x / 2.0
+
+fn scale(x: Float, factor: Float) -> Float = x * factor + 1.0
+
+fn average(a: Float, b: Float) -> Float = (a + b) / 2.0
+
+fn describe(x: Float) -> String = "value=${x}"
+
+fn rounded(x: Float) -> Int = Float.round x
+
+fn biggest(a: Float, b: Float) -> Float = Float.max a b
+
+fn sameValue(a: Float, b: Float) -> Bool = a == b
+
+fn ordered(a: Float, b: Float) -> Bool = a < b
+
+fn safeSqrt(x: Float) -> Float =
+  let nonNegative = check Float.requireNonNegative x
+  Float.sqrt nonNegative
+
+fn parsed(raw: String) -> Float =
+  case Float.parse raw of
+    Something value -> value
+    Nothing -> 0.0
+
+test "Float arithmetic and rendering" {
+  expect half 5.0 == 2.5
+  expect scale 2.0 3.0 == 7.0
+  expect average 1.0 2.0 == 1.5
+  expect describe 1.0 == "value=1.0"
+  expect describe 0.5 == "value=0.5"
+  expect rounded 2.5 == 2
+  expect rounded 3.5 == 4
+  expect biggest 1.0 2.0 == 2.0
+  expect Float.abs -2.5 == 2.5
+  expect safeSqrt 4.0 == 2.0
+  expect safeSqrt 0.0 == 0.0
+  expectFail safeSqrt -1.0
+  expect Float.toString 100.0 == "100.0"
+  expect sameValue 1.0 1.0 == True
+  expect sameValue 1.0 2.0 == False
+  expect ordered 1.0 2.0 == True
+  expect parsed "1.5" == 1.5
+  expect parsed "x" == 0.0
+}
+|}
+
+(* Float is float64, but three things are NOT Go's defaults, and each is emitted
+   deliberately: literals are TYPED (Go folds untyped constant arithmetic exactly, so
+   `0.1 + 0.2` would become 0.3 where Racket gives 0.30000000000000004), equality is
+   structural rather than IEEE, and rendering appends `.0` so a Float is never mistaken
+   for an Int. *)
+let test_floats_with_go () =
+  let emitted = match Compile.compile_go_source "<go-floats>" float_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "Float compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgofloats/module.go" emitted in
+  check bool "Float is float64" true (contains module_go "func Half(x float64) float64");
+  check bool "arithmetic is native, not a runtime helper" true
+    (contains module_go "return (x / float64(2))");
+  check bool "a literal is typed, never an untyped constant" false
+    (contains module_go "/ 2)" && contains module_go "* 3)");
+  check bool "a literal reads as decimal, not a hex float" false (contains module_go "0x1p");
+  check bool "equality is structural, never Go ==" true
+    (contains module_go "teslrt.FloatEqual(a, b)");
+  check bool "ordering is native IEEE" true (contains module_go "return (a < b)");
+  check bool "interpolation renders through the runtime" true
+    (contains module_go "teslrt.FormatFloat(x)");
+  (* sqrt now carries a FloatNonNegative obligation, so the proof erases here but the
+     check that discharged it is real code. *)
+  check bool "a discharged sqrt proof erases to the plain call" true
+    (contains module_go "teslrt.MustCheck(teslrt.FloatRequireNonNegative(x))"
+     && contains module_go "return teslrt.FloatSqrt(nonNegative)");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then
+    let root = Filename.temp_dir "tesl-go-floats" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted Float source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+
+let test_divergent_float_functions_fail_closed () =
+  (* Go's sin/cos/tan disagree with Racket on 22-34% of inputs and its math.Log is
+     outright wrong for subnormals, so these are rejected rather than emitted
+     divergent.  sqrt is the one that is bit-identical, and it IS supported. *)
+  let expect_go_error name source =
+    match Compile.compile_go_source ("<go-" ^ name ^ ">") source with
+    | Compile.GoSuccess _ -> failf "%s emitted Go artifacts" name
+    | Compile.GoFailure diagnostics ->
+      check bool name true
+        (List.exists (fun (d : Compile.diagnostic) ->
+           d.source = "go-emitter" && contains d.message ("`" ^ name ^ "`")) diagnostics)
+  in
+  List.iter (fun name ->
+    expect_go_error name (Printf.sprintf {|module Divergent exposing [apply]
+import Tesl.Float exposing [Float, %s]
+fn apply(x: Float) -> Float = %s x
+|} name name)) ["Float.log"; "Float.exp"; "Float.sin"; "Float.cos"; "Float.tan"]
+
 let proof_scalar_source = {|module GoProofScalars exposing [NonEmpty, Enabled, checkNonEmpty, checkEnabled, label, invert]
 import Tesl.Prelude exposing [Bool(..), String]
 
@@ -2004,14 +2118,15 @@ record Box {
 }
 fn valueOf(b: Box) -> Int = b.value
 |};
-  expect_go_error "unsupported record field type" "import `Tesl.Float`"
-    {|module FloatFieldRecord exposing [Reading, valueOf]
+  (* A Float field works now; `Tesl.Set` has no Go representation yet. *)
+  expect_go_error "unsupported record field type" "import `Tesl.Set`"
+    {|module SetFieldRecord exposing [Bag, sizeOf]
 import Tesl.Prelude exposing [Int]
-import Tesl.Float exposing [Float]
-record Reading {
-  celsius: Float
+import Tesl.Set exposing [Set]
+record Bag {
+  items: Set Int
 }
-fn valueOf(r: Reading) -> Int = 0
+fn sizeOf(b: Bag) -> Int = 0
 |}
 
 let test_missing_record_field_never_reaches_emitter () =
@@ -2286,6 +2401,9 @@ let () =
       test_case "tuples" `Slow test_tuples_with_go;
       test_case "Either from the runtime" `Slow test_either_with_go;
       test_case "Tesl.Dict leaves" `Slow test_dicts_with_go;
+      test_case "Float" `Slow test_floats_with_go;
+      test_case "Float behaves the same on Racket" `Slow (racket_behavior_oracle "<go-floats>" float_source);
+      test_case "divergent Float functions fail closed" `Quick test_divergent_float_functions_fail_closed;
       test_case "dicts behave the same on Racket" `Slow (racket_behavior_oracle "<go-dicts>" dict_source);
       test_case "unordered dict keys fail closed" `Quick test_unordered_dict_keys_fail_closed;
       test_case "Either behaves the same on Racket" `Slow (racket_behavior_oracle "<go-either>" either_source);

@@ -94,6 +94,7 @@ import Tesl.Float exposing [
   Float.add,
   Float.mul,
   Float.requireNonZero,
+  Float.requireNonNegative,
   FloatNonZero,
   Float.div,
   Float.isPositive,
@@ -1115,7 +1116,8 @@ fn safeRecip(x: Float) -> Float =
   Float.div 1.0 nz
 
 fn safeSqrt(x: Float) -> Float =
-  Float.sqrt (Float.abs x)
+  let magnitude = check Float.requireNonNegative (Float.abs x)
+  Float.sqrt magnitude
 
 test "safe reciprocal of 2.0" {
   expect safeRecip 2.0 == 0.5

@@ -3,7 +3,8 @@
 (require "../dsl/types.rkt"
          "../dsl/check.rkt"
          (only-in "../dsl/private/evidence.rkt" detached-proof check-ok check-fail)
-         (only-in "../dsl/private/check-runtime.rkt" attach))
+         (only-in "../dsl/private/check-runtime.rkt" attach)
+         (only-in "../dsl/private/check-runtime.rkt" validate-runtime-argument))
 
 ;; Float (64-bit double) utility functions.
 ;; In Tesl, Float/Double and Number are all Racket inexact reals.
@@ -13,11 +14,14 @@
 (define Float 'Float)
 
 ;; Proof predicate symbols exported for use in Tesl type annotations.
-;;   f ::: FloatNonZero f    (float is not zero; from Float.requireNonZero)
+;;   f ::: FloatNonZero f       (float is not zero; from Float.requireNonZero)
+;;   f ::: FloatNonNegative f   (float is >= 0; from Float.requireNonNegative)
 (provide
  Float
  FloatNonZero
+ FloatNonNegative
  Float.requireNonZero
+ Float.requireNonNegative
  Float.parse
  Float.toString
  Float.toInt
@@ -52,6 +56,7 @@
 
 ;; Proof predicate symbol
 (define FloatNonZero 'FloatNonZero)
+(define FloatNonNegative 'FloatNonNegative)
 
 ;; Helper: attach a proof predicate (symbol) to a Float value
 (define (attach-float-proof pred-name value)
@@ -72,6 +77,18 @@
              [fact `(FloatNonZero ,subj)])
         (check-ok nv (list fact) (hash subj v)))
       (check-fail "expected a non-zero float" 422 #f)))
+
+;; Float.requireNonNegative — check function returning f ::: FloatNonNegative f.
+;; Zero is accepted: (sqrt 0.0) is 0.0, not a complex number, so requiring strict
+;; positivity would reject a well-defined call.
+(define (Float.requireNonNegative f)
+  (define v (exact->inexact (rv f)))
+  (if (>= v 0)
+      (let* ([nv   (attach-float-proof 'FloatNonNegative v)]
+             [subj (named-value-name nv)]
+             [fact `(FloatNonNegative ,subj)])
+        (check-ok nv (list fact) (hash subj v)))
+      (check-fail "expected a non-negative float" 422 #f)))
 
 (define Float.infinity +inf.0)
 (define Float.nan      +nan.0)
@@ -123,7 +140,17 @@
 (define (Float.floor f) (inexact->exact (floor    (rv f))))
 (define (Float.round f) (inexact->exact (round    (rv f))))
 
-(define (Float.sqrt  f) (exact->inexact (sqrt  (rv f))))
+;; Float.sqrt requires FloatNonNegative on its argument (see
+;; compiler/lib/validation_common.ml): without it, (sqrt -1.0) returns the COMPLEX
+;; 0.0+1.0i, which no Tesl Float can hold.  The runtime guard mirrors the static one.
+(define (Float.sqrt f)
+  (define checked
+    (validate-runtime-argument 'Float.sqrt "function" 'f f 'Float '(FloatNonNegative f)))
+  (define v (rv checked))
+  (when (< v 0)
+    (raise-user-error 'Float.sqrt
+                      "negative input — use `check Float.requireNonNegative(f)` first"))
+  (exact->inexact (sqrt v)))
 (define (Float.pow base exp) (exact->inexact (expt (rv base) (rv exp))))
 (define (Float.log  f) (log  (exact->inexact (rv f))))
 (define (Float.exp  f) (exp  (exact->inexact (rv f))))

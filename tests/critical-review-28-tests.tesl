@@ -121,6 +121,7 @@ import Tesl.Either exposing [
 import Tesl.Float exposing [
   Float,
   Float.requireNonZero,
+  Float.requireNonNegative,
   FloatNonZero,
   Float.div,
   Float.sqrt,
@@ -905,9 +906,17 @@ test "T21b: float division by zero" {
 }
 
 test "T21c: float sqrt" {
-  expect Float.sqrt 9.0 == 3.0
-  expect Float.sqrt 4.0 == 2.0
-  expect Float.sqrt 0.0 == 0.0
+  # Float.sqrt requires FloatNonNegative on its argument, and a proof subject must be a
+  # `let` binder rather than an inline literal.
+  let nineRaw = 9.0
+  let nine = check Float.requireNonNegative nineRaw
+  expect Float.sqrt nine == 3.0
+  let fourRaw = 4.0
+  let four = check Float.requireNonNegative fourRaw
+  expect Float.sqrt four == 2.0
+  let zeroRaw = 0.0
+  let zero = check Float.requireNonNegative zeroRaw
+  expect Float.sqrt zero == 0.0
 }
 
 test "T21d: float arithmetic" {

@@ -17,6 +17,7 @@ type emit_error = {
 
 type go_type =
   | TInt
+  | TFloat
   | TString
   | TBool
   | TUnit
@@ -199,6 +200,7 @@ let line_directive loc =
 
 let primitive_type_of_type_expr = function
   | TName { name = "Int"; _ } -> TInt
+  | TName { name = "Float"; _ } -> TFloat
   | TName { name = "String"; _ } -> TString
   | TName { name = "Bool"; _ } -> TBool
   | TName { name = "Unit"; _ } -> TUnit
@@ -227,6 +229,7 @@ let rec type_of_type_expr ?(params=[]) types ty =
   let recur = type_of_type_expr ~params types in
   match ty with
   | TName { name = "Int"; _ } -> TInt
+  | TName { name = "Float"; _ } -> TFloat
   | TName { name = "String"; _ } -> TString
   | TName { name = "Bool"; _ } -> TBool
   | TName { name = "Unit"; _ } -> TUnit
@@ -292,6 +295,7 @@ let type_of_return_spec types = function
 
 let rec go_type = function
   | TInt -> "teslrt.Int"
+  | TFloat -> "float64"
   | TString -> "string"
   | TBool -> "bool"
   | TUnit -> "struct{}"
@@ -331,6 +335,32 @@ let paren_wraps_whole value from =
         | _ -> scan (index + 1) depth false false
   in
   from + 1 < length && value.[from] = '(' && scan from 0 false false
+
+(* A float literal is never emitted bare.  Go folds UNTYPED constant arithmetic
+   EXACTLY — `0.1 + 0.2` becomes 0.3, where Racket gives 0.30000000000000004 — so every
+   literal is emitted as a typed float64 value and each operation rounds per-op, as it
+   must.  Two further reasons a bare literal will not do: Go constants have no negative
+   zero, and a typed constant that overflows is a COMPILE error where Racket yields
+   ±inf.0. *)
+let emit_float_literal value =
+  if Float.is_nan value then "math.NaN()"
+  else if Float.is_integer value && Float.abs value = Float.infinity then
+    if value > 0.0 then "math.Inf(1)" else "math.Inf(-1)"
+  else if value = 0.0 && 1.0 /. value < 0.0 then "math.Copysign(0, -1)"
+  else
+    (* Shortest decimal that round-trips: Go parses decimal exactly, and `%h` (hex
+       float) would round-trip too but reads as `0x1p+1` in code a human is supposed to
+       own after ejecting. *)
+    let shortest =
+      let rec attempt = function
+        | [] -> Printf.sprintf "%.17g" value
+        | digits :: rest ->
+          let text = Printf.sprintf "%.*g" digits value in
+          if float_of_string text = value then text else attempt rest
+      in
+      attempt [1; 2; 3; 4; 5; 6; 7; 8; 9; 10; 11; 12; 13; 14; 15; 16; 17]
+    in
+    Printf.sprintf "float64(%s)" shortest
 
 let negate_bool value =
   let length = String.length value in
@@ -377,7 +407,7 @@ let rec substitute_type bindings ty =
   | TCheck inner -> TCheck (substitute_type bindings inner)
   | TList element -> TList (substitute_type bindings element)
   | TDict (key, value) -> TDict (substitute_type bindings key, substitute_type bindings value)
-  | TInt | TString | TBool | TUnit | TNewtype _ | TRecord _ | TFailure -> ty
+  | TInt | TFloat | TString | TBool | TUnit | TNewtype _ | TRecord _ | TFailure -> ty
 
 (** A variant's payload types with the ADT's type arguments substituted in. *)
 let variant_field_types info args variant =
@@ -398,6 +428,9 @@ and element_less_func element =
 and equal_expr ty left right =
   match ty with
   | TInt -> Printf.sprintf "teslrt.Equal(%s, %s)" left right
+  (* Float equality is Racket `equal?`, not IEEE `==`: NaN equals NaN and 0.0 does not
+     equal -0.0.  Both are inverted from Go's `==`, so `==` is never emitted. *)
+  | TFloat -> Printf.sprintf "teslrt.FloatEqual(%s, %s)" left right
   | TString | TBool | TUnit -> Printf.sprintf "(%s == %s)" left right
   | TNewtype info ->
     equal_expr info.base (Printf.sprintf "%s.teslValue" (selector_operand left))
@@ -462,6 +495,7 @@ and equal_expr ty left right =
 and unequal_expr ty left right =
   match ty with
   | TInt -> Printf.sprintf "!teslrt.Equal(%s, %s)" left right
+  | TFloat -> Printf.sprintf "!teslrt.FloatEqual(%s, %s)" left right
   | TString | TBool | TUnit -> Printf.sprintf "(%s != %s)" left right
   | TNewtype info ->
     unequal_expr info.base (Printf.sprintf "%s.teslValue" (selector_operand left))
@@ -503,7 +537,8 @@ and unequal_expr ty left right =
 and ordered_expr ty op left right =
   match ty with
   | TInt -> Printf.sprintf "(teslrt.Compare(%s, %s) %s 0)" left right op
-  | TString -> Printf.sprintf "(%s %s %s)" left op right
+  (* Ordering, unlike equality, IS plain IEEE in both backends. *)
+  | TFloat | TString -> Printf.sprintf "(%s %s %s)" left op right
   | TNewtype info ->
     ordered_expr info.base op (Printf.sprintf "%s.teslValue" (selector_operand left))
       (Printf.sprintf "%s.teslValue" (selector_operand right))
@@ -512,7 +547,7 @@ and ordered_expr ty op left right =
     invalid_arg "Go ordering requires an ordered scalar type"
 
 let rec supports_ordering = function
-  | TInt | TString -> true
+  | TInt | TFloat | TString -> true
   | TNewtype info -> supports_ordering info.base
   | TBool | TUnit | TRecord _ | TAdt _ | TList _ | TDict _ | TParam _ | TCheck _
   | TFailure -> false
@@ -522,7 +557,7 @@ let rec supports_ordering = function
    generics cannot express without an interface the thin-runtime invariant forbids.
    Equality on such a type is therefore rejected before emission. *)
 let rec supports_equality = function
-  | TInt | TString | TBool | TUnit -> true
+  | TInt | TFloat | TString | TBool | TUnit -> true
   | TNewtype info -> supports_equality info.base
   | TRecord info -> List.for_all (fun (_, ty) -> supports_equality ty) info.rec_fields
   | TAdt (info, args) ->
@@ -728,16 +763,15 @@ let rec type_of_expr signatures env expr =
   | ELit { lit = LInt _ | LBigInt _; _ } -> TInt
   | ELit { lit = LString _; _ } -> TString
   | ELit { lit = LBool _; _ } -> TBool
-  | ELit { lit = LFloat _; loc } ->
-    unsupported loc "Go backend does not support Float yet"
+  | ELit { lit = LFloat _; _ } -> TFloat
   | ELit { lit = LInterp segments; _ } ->
     List.iter (function
       | ILiteral _ -> ()
       | IExpr expr ->
         (match type_of_expr signatures env expr with
-         | TString | TInt | TBool -> ()
+         | TString | TInt | TBool | TFloat -> ()
          | _ -> unsupported (Checker.expr_loc expr)
-           "Go backend interpolation supports String, Int, and Bool only")) segments;
+           "Go backend interpolation supports String, Int, Float, and Bool only")) segments;
     TString
   | EVar { name; loc } ->
     (* A bare function name is a function VALUE, which the Go subset has no
@@ -865,8 +899,15 @@ let rec type_of_expr signatures env expr =
     let right_ty = type_of_expr signatures env right in
     if left_ty <> right_ty then unsupported loc "Go backend binary operands have different types";
     (match op with
-     | BAdd | BSub | BMul | BDiv | BMod ->
-       if left_ty <> TInt then unsupported loc "Go backend arithmetic requires Int";
+     | BAdd | BSub | BMul | BDiv ->
+       (match left_ty with
+        | TInt -> TInt
+        | TFloat -> TFloat
+        | _ -> unsupported loc "Go backend arithmetic requires Int or Float")
+     | BMod ->
+       (* Racket's `modulo`/`remainder` are integer operations; a Float `%` does not
+          exist in Go either. *)
+       if left_ty <> TInt then unsupported loc "Go backend `%%` requires Int";
        TInt
      | BConcat ->
        if left_ty <> TString then unsupported loc "Go backend ++ requires String";
@@ -887,7 +928,11 @@ let rec type_of_expr signatures env expr =
   | EUnop { op; arg; loc } ->
     let arg_ty = type_of_expr signatures env arg in
     (match op with
-     | UNeg -> if arg_ty <> TInt then unsupported loc "Go backend unary - requires Int"; TInt
+     | UNeg ->
+       (match arg_ty with
+        | TInt -> TInt
+        | TFloat -> TFloat
+        | _ -> unsupported loc "Go backend unary - requires Int or Float")
      | UNot -> if arg_ty <> TBool then unsupported loc "Go backend ! requires Bool"; TBool)
   | EIf { cond; then_; else_; loc } ->
     if type_of_expr signatures env cond <> TBool then
@@ -1333,8 +1378,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
     Printf.sprintf "teslrt.MustParseDecimal(%s)" (go_quote value)
   | ELit { lit = LString value; _ } -> go_quote value
   | ELit { lit = LBool value; _ } -> if value then "true" else "false"
-  | ELit { lit = LFloat _; loc } ->
-    unsupported loc "Go backend cannot emit Float yet"
+  | ELit { lit = LFloat value; _ } -> emit_float_literal value
   | ELit { lit = LInterp segments; _ } -> emit_interp ~indent signatures env segments
   | EVar { name; loc } ->
     (match List.assoc_opt name env, Hashtbl.find_opt signatures name with
@@ -1493,6 +1537,12 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
     (match op with
      | BEq when ty = TBool -> emit_bool_literal_comparison true
      | BNeq when ty = TBool -> emit_bool_literal_comparison false
+     | BAdd when ty = TFloat -> Printf.sprintf "(%s + %s)" emitted_left emitted_right
+     | BSub when ty = TFloat -> Printf.sprintf "(%s - %s)" emitted_left emitted_right
+     | BMul when ty = TFloat -> Printf.sprintf "(%s * %s)" emitted_left emitted_right
+     (* No zero guard: IEEE division by zero yields ±Inf, which is what Racket's `/` on
+        a flonum does too. *)
+     | BDiv when ty = TFloat -> Printf.sprintf "(%s / %s)" emitted_left emitted_right
      | BAdd -> Printf.sprintf "teslrt.Add(%s, %s)" emitted_left emitted_right
      | BSub -> Printf.sprintf "teslrt.Sub(%s, %s)" emitted_left emitted_right
      | BMul -> Printf.sprintf "teslrt.Mul(%s, %s)" emitted_left emitted_right
@@ -1506,6 +1556,8 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
      | BLt | BLe | BGt | BGe ->
        let op = match op with BLt -> "<" | BLe -> "<=" | BGt -> ">" | BGe -> ">=" | _ -> assert false in
        ordered_expr ty op emitted_left emitted_right)
+  | EUnop { op = UNeg; arg; _ } when type_of_expr signatures env arg = TFloat ->
+    Printf.sprintf "(-%s)" (emit arg)
   | EUnop { op = UNeg; arg; _ } -> Printf.sprintf "teslrt.Neg(%s)" (emit arg)
   | EUnop { op = UNot; arg; _ } -> emit_negated ~indent signatures env arg
   | EIf _ as if_expr -> emit_if_expr ?expected ~indent signatures env if_expr
@@ -2025,9 +2077,10 @@ and emit_interp ?(indent="") signatures env segments =
       match type_of_expr signatures env expr with
       | TString -> emitted
       | TInt -> emitted ^ ".String()"
+      | TFloat -> Printf.sprintf "teslrt.FormatFloat(%s)" emitted
       | TBool -> Printf.sprintf "strconv.FormatBool(%s)" emitted
       | _ -> unsupported (Checker.expr_loc expr)
-        "Go backend interpolation supports String, Int, and Bool only") segments in
+        "Go backend interpolation supports String, Int, Float, and Bool only") segments in
   match parts with
   | [] -> go_quote ""
   | [part] -> part
@@ -2408,8 +2461,8 @@ let test_source module_path package signatures (tests : test_form list) =
        | TCheck _ ->
          Printf.bprintf body "%sif (%s).OK() {\n%s\tteslT.Fatal(\"expected Tesl check failure\")\n%s}\n"
            indent emitted indent indent
-       | TInt | TString | TBool | TUnit | TNewtype _ | TRecord _ | TAdt _ | TList _
-       | TDict _ | TParam _ ->
+       | TInt | TFloat | TString | TBool | TUnit | TNewtype _ | TRecord _ | TAdt _
+       | TList _ | TDict _ | TParam _ ->
          Printf.bprintf body "%steslExpectFailure(teslT, func() {\n%s\t_ = %s\n%s})\n"
            indent indent emitted indent
        | TFailure -> unsupported loc "Go backend expectFail target has no result type");
@@ -2469,7 +2522,7 @@ let compile_module ?(mode=Release) (m : module_form) =
             "Go backend does not support `Tesl.Maybe` export `%s` yet" other) exposed;
         maybe_imported := true
       | "Tesl.String" | "Tesl.List" | "Tesl.Int" | "Tesl.Tuple" | "Tesl.Dict"
-      | "Tesl.Either" | "Tesl.EitherPrim" -> ()
+      | "Tesl.Float" | "Tesl.Either" | "Tesl.EitherPrim" -> ()
         (* validated against the leaf/type tables below *)
       | other ->
         unsupported import.loc "Go backend does not support import `%s` yet" other) m.imports;
@@ -2597,6 +2650,22 @@ let compile_module ?(mode=Release) (m : module_form) =
       "Int.max",          [`Int; `Int], `Int, "teslrt.Max";
       (* Proof-total: the divisor carries `IsNonZero`, so the runtime guard is
          containment rather than the primary check. *)
+      (* `Tesl.Float`.  The transcendentals are absent on purpose: Go's sin/cos/tan
+         diverge from Racket on 22-34% of inputs and its math.Log is outright wrong for
+         subnormals, so they fail closed rather than emit divergent results. *)
+      "Float.abs",        [`Float], `Float, "teslrt.FloatAbs";
+      "Float.min",        [`Float; `Float], `Float, "teslrt.FloatMin";
+      "Float.max",        [`Float; `Float], `Float, "teslrt.FloatMax";
+      "Float.clamp",      [`Float; `Float; `Float], `Float, "teslrt.FloatClamp";
+      "Float.sqrt",       [`Float], `Float, "teslrt.FloatSqrt";
+      "Float.floor",      [`Float], `Int,   "teslrt.FloatFloor";
+      "Float.ceil",       [`Float], `Int,   "teslrt.FloatCeil";
+      "Float.round",      [`Float], `Int,   "teslrt.FloatRound";
+      "Float.toString",   [`Float], `Str,   "teslrt.FormatFloat";
+      "Float.toInt",      [`Float], `Int,   "teslrt.FloatToIntTruncating";
+      "Float.parse",      [`Str], `MaybeFloat, "teslrt.ParseFloat";
+      "Float.requireNonZero", [`Float], `CheckFloat, "teslrt.FloatRequireNonZero";
+      "Float.requireNonNegative", [`Float], `CheckFloat, "teslrt.FloatRequireNonNegative";
       "Int.divide",       [`Int; `Int], `Int, "teslrt.MustQuo";
       (* Tesl's `Int.modulo` is Racket `remainder` (truncated, sign of the
          dividend), NOT `modulo` (floored) — see tesl/int.rkt:183.  Mapping it to
@@ -2611,9 +2680,26 @@ let compile_module ?(mode=Release) (m : module_form) =
     in
     let string_leaf_names = leaf_names_for "String." in
     let int_leaf_names = leaf_names_for "Int." in
+    let string_imports = ref [] in
+    let float_leaf_names = leaf_names_for "Float." in
+    List.iter (fun (import : import_decl) ->
+      if import.module_name = "Tesl.Float" then begin
+        let exposed = match import.names with
+          | ImportAll -> []
+          | ImportExposing names -> names
+        in
+        List.iter (fun name ->
+          if List.mem name float_leaf_names then begin
+            string_imports := name :: !string_imports;
+            if name = "Float.parse" then maybe_imported := true
+          end else match name with
+            | "Float" | "FloatNonZero" | "FloatNonNegative" -> ()
+            | other -> unsupported import.loc
+              "Go backend does not support `Tesl.Float` export `%s` yet" other) exposed
+      end) m.imports;
     (* `String.toInt` and `String.indexOf` return `Maybe Int`, so importing either
        one brings the runtime Maybe in even when the module never names Maybe. *)
-    let string_imports = ref [] in
+
     List.iter (fun (import : import_decl) ->
       if import.module_name = "Tesl.Int" then begin
         let exposed = match import.names with
@@ -2935,9 +3021,17 @@ let compile_module ?(mode=Release) (m : module_form) =
         | Some info -> TAdt (info, [TInt])
         | None -> assert false
       in
+      let maybe_of inner =
+        match Hashtbl.find_opt types.adts "Maybe" with
+        | Some info -> TAdt (info, [inner])
+        | None -> assert false
+      in
       let shape = function
         | `Str -> TString
         | `Int -> TInt
+        | `Float -> TFloat
+        | `MaybeFloat -> maybe_of TFloat
+        | `CheckFloat -> TCheck TFloat
         | `Bool -> TBool
         | `MaybeInt -> maybe_int ()
         | `StrList -> TList TString

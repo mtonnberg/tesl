@@ -91,6 +91,7 @@ import Tesl.Float exposing [
   Float.div,
   Float.isPositive,
   Float.sqrt,
+  Float.requireNonNegative,
   Float.abs,
 ]
 import Tesl.Result exposing [Result(..)]
@@ -662,12 +663,18 @@ test "T14d: very small positive float" {
   expect floatEdge 0.0001 == "positive"
 }
 
+# Float.sqrt now requires a FloatNonNegative proof on its argument, so these establish
+# it first. A proof subject must be a `let` binder rather than an inline literal.
 test "T14e: Float.sqrt of 0 is 0 (non-positive)" {
-  expect floatEdge (Float.sqrt 0.0) == "non-positive"
+  let zeroRaw = 0.0
+  let zero = check Float.requireNonNegative zeroRaw
+  expect floatEdge (Float.sqrt zero) == "non-positive"
 }
 
 test "T14f: Float.sqrt of 4 is 2 (positive)" {
-  expect floatEdge (Float.sqrt 4.0) == "positive"
+  let fourRaw = 4.0
+  let four = check Float.requireNonNegative fourRaw
+  expect floatEdge (Float.sqrt four) == "positive"
 }
 
 test "T14g: Float.abs of negative is positive" {

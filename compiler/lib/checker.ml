@@ -6197,7 +6197,7 @@ let tesl_module_predicate_exports : (string * string list) list = [
      them from both Tesl.Int and Tesl.Int32 in one file is a V001 ambiguous
      import (the existing single-source rule), which is the intended answer. *)
   ("Tesl.Int32",   ["IsNonNegative"; "IsNonZero"]);
-  ("Tesl.Float",   ["FloatNonZero"]);
+  ("Tesl.Float",   ["FloatNonZero"; "FloatNonNegative"]);
   ("Tesl.Dict",    ["HasKey"]);
 ]
 

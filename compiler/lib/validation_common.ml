@@ -1218,6 +1218,19 @@ let stdlib_func_infos : (string * func_info) list =
      { fi_name = "Float.requireNonZero"; fi_kind = CheckKind;
        fi_params = [ plain "f" "Float" ];
        fi_return = ret_attached "f" "Float" "FloatNonZero"; fi_loc = g; fi_http_methods = [] });
+    (* Float.sqrt: the argument must carry FloatNonNegative.  Racket's `sqrt` returns a
+       COMPLEX number for a negative flonum, which Tesl's Float cannot represent; the
+       proof rules the case out instead of leaving each backend to differ. *)
+    ("Float.sqrt",
+     { fi_name = "Float.sqrt"; fi_kind = FnKind;
+       fi_params = [ with_proof "f" "Float" "FloatNonNegative" ];
+       fi_return = ret "Float"; fi_loc = g; fi_http_methods = [] });
+    (* Float.requireNonNegative: check function returning f ::: FloatNonNegative f *)
+    ("Float.requireNonNegative",
+     { fi_name = "Float.requireNonNegative"; fi_kind = CheckKind;
+       fi_params = [ plain "f" "Float" ];
+       fi_return = ret_attached "f" "Float" "FloatNonNegative"; fi_loc = g;
+       fi_http_methods = [] });
     (* Int.nonZero: check function returning n ::: IsNonZero n *)
     ("Int.nonZero",
      { fi_name = "Int.nonZero"; fi_kind = CheckKind;

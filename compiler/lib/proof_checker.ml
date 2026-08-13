@@ -1221,6 +1221,7 @@ let stdlib_predicates : string list =
   Type_system.framework_proof_predicates
   @ [ "IsNonZero"; "IsNonNegative"; "IsNonEmpty"; "IsUpperCase"; "IsLowerCase"
     ; "IsTrimmed"; "IsSorted"; "HasKey"; "Authenticated"; "Fact"; "FloatNonZero"
+    ; "FloatNonNegative"
     (* Money (First-Class Units) predicates, owned by Tesl.Money *)
     ; "SameCurrency"; "NonNegativeMoney"; "RateFor"
     (* Crypto predicates, owned by Tesl.Crypto.  Deliberately NOT in

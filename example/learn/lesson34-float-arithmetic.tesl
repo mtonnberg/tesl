@@ -1,4 +1,5 @@
 module Lesson34FloatArithmetic exposing [
+  rootOf,
   circleArea,
   hypotenuse,
   clampUnit,
@@ -49,6 +50,7 @@ import Tesl.Float exposing [
   Float.max,
   Float.clamp,
   Float.sqrt,
+  Float.requireNonNegative,
   Float.pow,
   Float.ceil,
   Float.floor,
@@ -75,8 +77,18 @@ fn circleArea(radius: Float) -> Float =
   pi * radius * radius
 
 # Hypotenuse of a right triangle: √(a² + b²)
+# Float.sqrt requires a FloatNonNegative proof on its argument: a negative input has no
+# real square root, so the proof rules the case out instead of returning a nonsense
+# value. Here the sum of two squares is non-negative, but the proof still has to be
+# ESTABLISHED — the checker does not reason about arithmetic.
+# rootOf pairs the check with the call, which is the shape most callers want.
+fn rootOf(x: Float) -> Float =
+  let nonNegative = check Float.requireNonNegative x
+  Float.sqrt nonNegative
+
 fn hypotenuse(a: Float, b: Float) -> Float =
-  Float.sqrt (a * a + b * b)
+  let squares = check Float.requireNonNegative (a * a + b * b)
+  Float.sqrt squares
 
 # Clamp a Float to [0.0, 1.0] — useful for normalised values
 fn clampUnit(x: Float) -> Float =
@@ -164,9 +176,20 @@ test "safeAverage" {
 }
 
 test "Float.sqrt" {
-  expect Float.round (Float.sqrt 4.0) == 2
-  expect Float.round (Float.sqrt 9.0) == 3
-  expect Float.round (Float.sqrt 2.0 * 100.0) == 141 # √2 ≈ 1.414
+  # A proof subject must be a `let` binder, not an inline literal, so the value being
+  # proven is nameable.
+  let fourRaw = 4.0
+  let four = check Float.requireNonNegative fourRaw
+  expect Float.round (Float.sqrt four) == 2
+  let nineRaw = 9.0
+  let nine = check Float.requireNonNegative nineRaw
+  expect Float.round (Float.sqrt nine) == 3
+  let twoRaw = 2.0
+  let two = check Float.requireNonNegative twoRaw
+  expect Float.round (Float.sqrt two * 100.0) == 141 # √2 ≈ 1.414
+  # A negative input is rejected by the check rather than producing a complex number.
+  let negative = 0.0 - 1.0
+  expectFail rootOf negative
 }
 
 test "Float.pow" {
