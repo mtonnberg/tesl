@@ -341,6 +341,11 @@ let strip_outer_parens value =
 (* Records hold teslrt.Int values, which are non-comparable by construction, so
    Go `==` on a record struct is a compile error rather than a wrong answer.
    Record equality is therefore always emitted field by field. *)
+(* The tag is EXPORTED: an ADT provided by the runtime — or, later, by another emitted
+   module — is matched from a different package, where an unexported field would be
+   invisible. *)
+let adt_tag_field = "Tag"
+
 (* Every variant's payload lives in one flat struct, so a payload field is named
    after its constructor: `Pending (reason: String)` becomes `PendingReason`. *)
 let variant_field_go_name variant name =
@@ -416,7 +421,7 @@ and equal_expr ty left right =
      comparison is inlined instead.  No tag SWITCH is needed for that: "same tag, and
      for each variant either the tag differs or the payload matches" says the same
      thing as a conjunction, which Go can express as an expression. *)
-  | TAdt (info, args) when not info.adt_builtin && info.adt_params = [] ->
+  | TAdt (info, _) when not info.adt_builtin && info.adt_params = [] ->
     Printf.sprintf "%s.TeslEqual(%s)" (selector_operand left) right
   | TAdt (info, args) ->
     let tag_equal =
@@ -612,8 +617,6 @@ let higher_order_leaf_names =
 let hof_arity = function
   | HofFoldl -> 3
   | HofMap | HofFilter | HofAny | HofAll | HofFilterCheck | HofAllCheck | HofZip -> 2
-
-let adt_tag_field = "Tag"
 
 (* Every constructor is registered in the signature table under its own name, so a
    constructor application resolves without knowing its ADT up front. *)
@@ -1034,17 +1037,49 @@ and type_of_hof signatures env loc what hof args =
       "Go backend `%s` must return its accumulator type" what;
     accumulator
 
+and constructor_head expr =
+  match expr with
+  | EConstructor { name; args; _ } -> Some (name, args)
+  | EApp _ ->
+    (match flatten_app [] expr with
+     | EConstructor { name; args; _ }, rest -> Some (name, args @ rest)
+     | _ -> None)
+  | _ -> None
+
 and type_of_arg signatures env want arg =
   match arg with
-  (* An empty list literal has no element to infer from, exactly like a nullary
-     generic constructor: the expected type supplies it. *)
+  (* An empty list literal has no element to infer from: the expectation supplies it. *)
   | EList { elems = []; _ } when (match want with TList _ -> true | _ -> false) -> want
-  | EConstructor { name; args = []; _ } ->
-    (match adt_ctor_of_signature signatures name, want with
-     | Some (owner, variant), TAdt (info, (_ :: _))
-       when owner.adt_tesl_name = info.adt_tesl_name && variant.var_fields = [] -> want
+  (* The expectation belongs to each BRANCH, and a branch is exactly where an
+     under-constrained constructor sits. *)
+  | EIf { cond; then_; else_; loc } ->
+    if type_of_expr signatures env cond <> TBool then
+      unsupported loc "Go backend if condition must be Bool";
+    (match type_of_arg signatures env want then_, type_of_arg signatures env want else_ with
+     | TFailure, ty | ty, TFailure -> ty
+     | left, right when left = right -> left
+     | _ -> unsupported loc "Go backend if branches have different types")
+  | _ ->
+    (* A constructor cannot always infer its ADT's type arguments from its own
+       arguments — `Nothing` supplies none, and `Left e` never mentions the Right
+       parameter — so where a type is expected, that expectation instantiates it. *)
+    (match constructor_head arg, want with
+     | Some (name, supplied), TAdt (info, (_ :: _ as type_args)) ->
+       (match adt_ctor_of_signature signatures name with
+        | Some (owner, variant) when owner.adt_tesl_name = info.adt_tesl_name ->
+          let expected = variant_field_types info type_args variant in
+          if List.length supplied <> List.length expected then
+            unsupported (Checker.expr_loc arg)
+              "Go backend requires constructor `%s.%s` applied to %d argument(s)"
+              info.adt_tesl_name variant.var_ctor (List.length expected);
+          List.iter2 (fun value (field, field_ty) ->
+            if type_of_arg signatures env field_ty value <> field_ty then
+              unsupported (Checker.expr_loc value)
+                "Go backend constructor field `%s.%s` has an unsupported value type"
+                variant.var_ctor field) supplied expected;
+          want
+        | _ -> type_of_expr signatures env arg)
      | _ -> type_of_expr signatures env arg)
-  | _ -> type_of_expr signatures env arg
 
 (* A constructor application determines the ADT's type arguments: each parameter is
    read off the argument whose declared field type IS that parameter.  A parameter
@@ -1197,11 +1232,10 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
       | Some pair -> pair
       | None -> assert false
     in
-    (* A nullary constructor of a generic ADT is instantiated by the expected type;
-       `type_of_expr` alone cannot know the type arguments. *)
-    let result = match expected, args with
-      | Some (TAdt (info, (_ :: _)) as want), []
-        when info.adt_tesl_name = owner.adt_tesl_name -> want
+    (* The expected type instantiates the ADT whenever it is available: a
+       constructor's own arguments need not mention every type parameter. *)
+    let result = match expected with
+      | Some (TAdt (info, (_ :: _)) as want) when info.adt_tesl_name = owner.adt_tesl_name -> want
       | _ -> type_of_expr signatures env expr
     in
     emit_variant_literal ~indent signatures env result variant args
@@ -1237,12 +1271,16 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
         | _ -> unsupported loc "Go backend cannot emit record literal `%s`" name)
      | EConstructor { name; args = constructor_args; _ }
        when adt_ctor_of_signature signatures name <> None ->
-       let _, variant = match adt_ctor_of_signature signatures name with
+       let owner, variant = match adt_ctor_of_signature signatures name with
          | Some pair -> pair
          | None -> assert false
        in
-       emit_variant_literal ~indent signatures env
-         (type_of_expr signatures env app) variant (constructor_args @ args)
+       let result = match expected with
+         | Some (TAdt (info, (_ :: _)) as want)
+           when info.adt_tesl_name = owner.adt_tesl_name -> want
+         | _ -> type_of_expr signatures env app
+       in
+       emit_variant_literal ~indent signatures env result variant (constructor_args @ args)
      | EVar { name = "check"; _ } ->
        (match List.map normalize_call_head args with
         | EVar { name; _ } :: call_args ->
@@ -1942,7 +1980,11 @@ let emit_tail ?self buffer signatures env expected indent expr =
       go ((name, ty) :: env) (indent ^ "\t") body;
       Printf.bprintf buffer "%s}\n" indent
     | EIf { cond; then_; else_; loc } ->
-      ignore (type_of_expr signatures env expr);
+      (* Only the condition is typed here: each branch is typed against the EXPECTED
+         type as it is emitted, which is what lets an under-constrained constructor in
+         a branch resolve. *)
+      if type_of_expr signatures env cond <> TBool then
+        unsupported loc "Go backend if condition must be Bool";
       Buffer.add_string buffer (line_directive loc);
       Printf.bprintf buffer "%sif %s {\n" indent
         (strip_outer_parens (emit_expr ~indent signatures env cond));
@@ -2263,7 +2305,8 @@ let compile_module ?(mode=Release) (m : module_form) =
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.Maybe` export `%s` yet" other) exposed;
         maybe_imported := true
-      | "Tesl.String" | "Tesl.List" | "Tesl.Int" | "Tesl.Tuple" -> ()
+      | "Tesl.String" | "Tesl.List" | "Tesl.Int" | "Tesl.Tuple"
+      | "Tesl.Either" | "Tesl.EitherPrim" -> ()
         (* validated against the leaf/type tables below *)
       | other ->
         unsupported import.loc "Go backend does not support import `%s` yet" other) m.imports;
@@ -2459,6 +2502,41 @@ let compile_module ?(mode=Release) (m : module_form) =
           adt_loc = loc;
           adt_builtin = true;
         }) ["Tuple2", 2; "Tuple3", 3]
+    end;
+    (* `Either` is the same runtime-provided shape as `Maybe`: two variants, one
+       payload each, provided by teslrt so it can cross module boundaries. *)
+    let either_imported = ref false in
+    List.iter (fun (import : import_decl) ->
+      if import.module_name = "Tesl.Either" || import.module_name = "Tesl.EitherPrim" then begin
+        let exposed = match import.names with
+          | ImportAll -> []
+          | ImportExposing names -> names
+        in
+        List.iter (fun name ->
+          match name with
+          | "Either" | "Either(..)" | "Left" | "Right" -> ()
+          | other -> unsupported import.loc
+            "Go backend does not support `%s` export `%s` yet" import.module_name other) exposed;
+        either_imported := true
+      end) m.imports;
+    if !either_imported then begin
+      let loc = Location.dummy_loc m.source_file in
+      Hashtbl.replace types.adts "Either" {
+        adt_tesl_name = "Either";
+        adt_go_name = "teslrt.Either";
+        adt_tag_type = "teslrt.EitherTag";
+        adt_params = ["a", "A"; "b", "B"];
+        adt_variants = [
+          { var_ctor = "Left"; var_tag = "teslrt.EitherLeft";
+            var_fields = ["value", TParam "A"];
+            var_go_fields = ["value", "LeftValue"]; var_loc = loc };
+          { var_ctor = "Right"; var_tag = "teslrt.EitherRight";
+            var_fields = ["value", TParam "B"];
+            var_go_fields = ["value", "RightValue"]; var_loc = loc };
+        ];
+        adt_loc = loc;
+        adt_builtin = true;
+      }
     end;
     if !maybe_imported then begin
       let loc = Location.dummy_loc m.source_file in

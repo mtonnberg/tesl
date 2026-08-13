@@ -862,18 +862,26 @@ let test_generic_limits_fail_closed () =
         (List.exists (fun (d : Compile.diagnostic) ->
            d.source = "go-emitter" && contains d.message needle) diagnostics)
   in
-  (* A SINGLE-variant generic type compares field-wise, so it is comparable.  A
-     MULTI-variant one is not: `TeslEqual` would have to dispatch `teslrt.Equal` for
-     whatever the parameter was instantiated with, which Go generics cannot express,
-     and a per-variant payload comparison needs the tag that only a switch can read. *)
-  expect_go_error "equality on a multi-variant generic ADT" "equality on this type"
-    {|module GenericEq exposing [Boxed, same]
+  (* Equality on a generic ADT USED to be rejected — a `TeslEqual` method cannot
+     dispatch `teslrt.Equal` for an unknown instantiation.  It is supported now,
+     because a payload comparison needs no tag switch: "same tag, and for each variant
+     either the tag differs or the payload matches" is an expression.  Pinned as a
+     positive so the capability cannot regress into a rejection. *)
+  (match Compile.compile_go_source "<generic-eq>" {|module GenericEq exposing [Boxed, same]
 import Tesl.Prelude exposing [Bool, Int]
 type Boxed a
   = Box value: a
   | Empty
 fn same(left: Boxed Int, right: Boxed Int) -> Bool = left == right
-|};
+|} with
+   | Compile.GoFailure diagnostics ->
+     failf "generic ADT equality regressed to a rejection: %s"
+       (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+   | Compile.GoSuccess artifacts ->
+     let module_go = artifact "internal/teslmodgenericeq/module.go" artifacts in
+     check bool "generic multi-variant equality is inlined without a tag switch" true
+       (contains module_go
+          "(left.Tag == right.Tag && (left.Tag != BoxedBox || teslrt.Equal(left.BoxValue, right.BoxValue)))"));
   (* An unapplied generic name never reaches the Go emitter: the frontend already
      requires the type arguments. *)
   (match Compile.compile_go_source "<bare-generic>" {|module BareGeneric exposing [Boxed, unbox]
@@ -1537,6 +1545,89 @@ let test_tuples_with_go () =
       ignore (run_command root "go test -race -count=1 ./...");
       run_go_gates root)
 
+let either_source = {|module GoEither exposing [parse, describe, orZero, sameOutcome, sameMaybe]
+import Tesl.Prelude exposing [Bool(..), Int, String]
+import Tesl.Either exposing [Either(..)]
+import Tesl.Maybe exposing [Maybe(..)]
+
+fn parse(raw: Int) -> Either String Int =
+  if raw < 0 then
+    Left "negative"
+  else
+    Right raw
+
+fn describe(e: Either String Int) -> String =
+  case e of
+    Left reason -> "bad: ${reason}"
+    Right value -> "ok: ${value}"
+
+fn orZero(e: Either String Int) -> Int =
+  case e of
+    Left _ -> 0
+    Right value -> value
+
+fn sameOutcome(left: Either String Int, right: Either String Int) -> Bool = left == right
+
+fn sameMaybe(left: Maybe Int, right: Maybe Int) -> Bool = left == right
+
+test "Either from the runtime" {
+  expect describe (parse 5) == "ok: 5"
+  expect describe (parse -1) == "bad: negative"
+  expect orZero (parse 5) == 5
+  expect orZero (parse -1) == 0
+  expect sameOutcome (parse 5) (parse 5) == True
+  expect sameOutcome (parse 5) (parse 6) == False
+  expect sameOutcome (parse -1) (parse 5) == False
+  expect sameMaybe (Something 1) (Something 1) == True
+  expect sameMaybe (Something 1) (Something 2) == False
+  expect sameMaybe Nothing (Something 1) == False
+  expect sameMaybe Nothing Nothing == True
+}
+|}
+
+(* Either is the same runtime-provided shape as Maybe.  The interesting part is that
+   `Left "x"` never mentions the Right type parameter, so its instantiation has to come
+   from the expectation — including through an `if`, where each BRANCH is what carries
+   the under-constrained constructor. *)
+let test_either_with_go () =
+  let emitted = match Compile.compile_go_source "<go-either>" either_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "Either compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgoeither/module.go" emitted in
+  check bool "the runtime Either ships with the project" true
+    (List.exists (fun (a : Emit_go.artifact) -> a.path = "internal/teslrt/either.go") emitted);
+  check bool "a constructor mentioning one parameter is instantiated by the expectation" true
+    (contains module_go
+       "return teslrt.Either[string, teslrt.Int]{Tag: teslrt.EitherLeft, LeftValue: \"negative\"}");
+  check bool "both branches of an if resolve against the return type" true
+    (contains module_go
+       "return teslrt.Either[string, teslrt.Int]{Tag: teslrt.EitherRight, RightValue: raw}");
+  check bool "matching Either reads the runtime field names" true
+    (contains module_go "reason := teslScrut1.LeftValue"
+     && contains module_go "value := teslScrut1.RightValue");
+  (* A runtime or generic ADT gets no `TeslEqual` method — a method needs a type the
+     module declares — so its payload comparison is inlined instead. *)
+  check bool "runtime ADT equality is inlined, not a method call" true
+    (contains module_go
+       "(left.Tag == right.Tag && (left.Tag != teslrt.MaybeSomething || teslrt.Equal(left.SomethingValue, right.SomethingValue)))");
+  check bool "no TeslEqual method is expected on a runtime type" false
+    (contains module_go "teslrt.Maybe" && contains module_go ".TeslEqual(");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then
+    let root = Filename.temp_dir "tesl-go-either" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted Either source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+
 let proof_scalar_source = {|module GoProofScalars exposing [NonEmpty, Enabled, checkNonEmpty, checkEnabled, label, invert]
 import Tesl.Prelude exposing [Bool(..), String]
 
@@ -2084,6 +2175,8 @@ let () =
       test_case "higher-order list leaves" `Slow test_higher_order_lists_with_go;
       test_case "check-driven list leaves" `Slow test_check_driven_lists_with_go;
       test_case "tuples" `Slow test_tuples_with_go;
+      test_case "Either from the runtime" `Slow test_either_with_go;
+      test_case "Either behaves the same on Racket" `Slow (racket_behavior_oracle "<go-either>" either_source);
       test_case "tuples behave the same on Racket" `Slow (racket_behavior_oracle "<go-tuples>" tuple_source);
       test_case "check-driven lists behave the same on Racket" `Slow (racket_behavior_oracle "<go-check-lists>" check_list_source);
       test_case "higher-order lists behave the same on Racket" `Slow (racket_behavior_oracle "<go-hof>" hof_source);
