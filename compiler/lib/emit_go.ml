@@ -3226,10 +3226,12 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
     (* `establish` returns a detached proof, which erases — so the function body computes
        nothing observable and the emitted function returns the zero-size proof value.  It
        is still emitted (rather than dropped) because callers name it. *)
+    (* An `auth` function is a check over the request: it returns `ok value ::: Proof` or
+       `fail 401 …`, so it emits exactly like a `check`. *)
     if fd.kind <> FnKind && fd.kind <> CheckKind && fd.kind <> EstablishKind
-       && fd.kind <> HandlerKind then
+       && fd.kind <> HandlerKind && fd.kind <> AuthKind then
       unsupported fd.loc
-        "Go backend supports `fn`, `check`, `establish` and `handler` declarations only";
+        "Go backend supports `fn`, `check`, `auth`, `establish` and `handler` declarations only";
     if fd.capabilities <> [] then unsupported fd.loc
       "Go backend does not support capabilities yet";
     let signature = Hashtbl.find signatures fd.name in
@@ -3464,8 +3466,6 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
         server.api_name (List.length endpoints) (List.length server.handlers);
     let bound = List.combine endpoints server.handlers in
     List.iter (fun ((ep : api_endpoint), _) ->
-      if ep.auth <> None then unsupported ep.loc
-        "Go backend does not support `auth` endpoints yet";
       (* A capture that runs a CHECK mints a proof at the boundary; that arrives with the
          auth slice, since both are the same "prove before the body runs" machinery. *)
       List.iter (fun (capture : api_capture) ->
@@ -3481,6 +3481,7 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
       let endpoint_loc = endpoint.loc in
       let endpoint_path = endpoint.path in
       let endpoint_captures = endpoint.captures in
+      let endpoint_auth = endpoint.auth in
       let endpoint_body = ep_body endpoint in
       let signature = match Hashtbl.find_opt signatures handler with
         | Some signature -> signature
@@ -3500,6 +3501,23 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
       (* Arguments are assembled in the handler's own parameter order: captures first (in
          path order), then the decoded body, matching how the endpoint declares them. *)
       let arguments = ref [] in
+      (* Auth runs FIRST, before captures and the body: a request that is not authenticated
+         is rejected before anything else about it is examined.  Its result carries the
+         proven value the handler's proof-annotated parameter requires; the proof itself
+         erases, so what the handler receives is the value. *)
+      (match endpoint_auth with
+       | None -> ()
+       | Some (auth : api_auth) ->
+         let signature = match Hashtbl.find_opt signatures auth.via_fn with
+           | Some signature -> signature
+           | None -> unsupported endpoint_loc
+             "Go backend cannot resolve auth function `%s`" auth.via_fn
+         in
+         let binder = local_ident auth.binding.name in
+         Printf.bprintf body
+           "\t\t\tteslAuth := %s(teslrt.NewHttpRequest(teslRequest, \"\"))\n\t\t\tif !teslAuth.OK() {\n\t\t\t\treturn teslrt.Fail(teslAuth.Status(), teslAuth.Message())\n\t\t\t}\n\t\t\t%s, _ := teslAuth.Value()\n"
+           (qualified signature.sig_owner signature.go_name) binder;
+         arguments := !arguments @ [binder]);
       List.iter (fun (capture : api_capture) ->
         let name = capture.binding.name in
         (match type_of_type_expr types capture.binding.type_expr with
@@ -3813,6 +3831,15 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | "stringCodec" | "intCodec" | "boolCodec" | "floatCodec" -> ()
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.Json` export `%s` yet" other) exposed
+      (* `Tesl.Http`: the request type is runtime-provided (registered above) and
+         `cookieCap` is a capability name the checker enforces — neither needs anything at
+         run time.  The cookie WRITERS arrive with the session slice. *)
+      | "Tesl.Http" ->
+        List.iter (fun name ->
+          match name with
+          | "HttpRequest" | "cookieCap" -> ()
+          | other -> unsupported import.loc
+            "Go backend does not support `Tesl.Http` export `%s` yet" other) exposed
       | "Tesl.String" | "Tesl.List" | "Tesl.Int" | "Tesl.Tuple" | "Tesl.Dict"
       | "Tesl.Set" | "Tesl.Float" | "Tesl.Either" | "Tesl.EitherPrim" -> ()
         (* validated against the leaf/type tables below *)
@@ -4109,6 +4136,31 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           adt_builtin = true;
         }) ["Tuple2", 2; "Tuple3", 3]
     end;
+    (* `HttpRequest` is runtime-provided too: a plain record the dispatcher builds once per
+       request.  Only the fields Tesl exposes are present, so an ejecting author is not
+       handed the whole net/http surface. *)
+    List.iter (fun (import : import_decl) ->
+      if import.module_name = "Tesl.Http" then begin
+        let exposed = match import.names with
+          | ImportAll -> [] | ImportExposing names -> names in
+        if List.mem "HttpRequest" exposed then begin
+          let string_dict = TDict (TString, TString) in
+          (* No explicit Go field names are needed: `record_field_go_name` capitalises, and
+             the runtime struct is written with exactly those names.  `rec_owner = ""`
+             keeps the declaration from being emitted, the same way `Maybe` does it. *)
+          Hashtbl.replace types.records "HttpRequest" {
+            rec_tesl_name = "HttpRequest";
+            rec_owner = "";
+            rec_go_name = "teslrt.HttpRequest";
+            rec_fields = [
+              "method", TString; "path", TString;
+              "cookies", string_dict; "headers", string_dict;
+              "queryParameters", string_dict; "body", TString;
+            ];
+            rec_loc = import.loc;
+          }
+        end
+      end) m.imports;
     (* `Either` is the same runtime-provided shape as `Maybe`: two variants, one
        payload each, provided by teslrt so it can cross module boundaries. *)
     let either_imported = ref false in
@@ -4453,7 +4505,10 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
        \      default-signifies-exhaustive: false\n"
     in
     let artifacts = [
-      { path = "go.mod"; contents = Printf.sprintf "module %s\n\ngo 1.22\n" module_path };
+      (* The go directive tracks the toolchain the gates pin (maintainer: use the latest
+         stable Go).  It also sets the language version the emitted code may use, so it has
+         to be at least as new as anything the runtime relies on. *)
+      { path = "go.mod"; contents = Printf.sprintf "module %s\n\ngo 1.26\n" module_path };
       { path = ".golangci.yml"; contents = lint_config };
       { path = "internal/" ^ package ^ "/module.go"; contents = source };
     ] in
@@ -4462,9 +4517,22 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       | Some contents -> artifacts @ [{ path = "internal/" ^ package ^ "/module_test.go"; contents }]
     in
     let artifacts =
-      if needs_runtime then artifacts @ List.map (fun (name, contents) ->
-        { path = "internal/teslrt/" ^ name; contents }) Embedded_go_runtime.files
-      else artifacts
+      if not needs_runtime then artifacts
+      else begin
+        (* The HTTP half of the runtime ships ONLY to a module that serves HTTP.  Emitting
+           it everywhere pulled `net/http` — and its whole dependency chain — into every
+           program, including pure-computation ones: govulncheck then reported a real
+           stdlib vulnerability (GO-2026-5972, reachable as
+           `teslrt.init -> http.init -> asn1.Unmarshal`) against a module that never opens
+           a socket.  A dependency a program does not use should not be in it, for
+           vulnerability surface as much as for the eject story. *)
+        let serves_http = servers <> [] in
+        let http_only = [ "server.go"; "request.go" ] in
+        artifacts @ List.filter_map (fun (name, contents) ->
+          if (not serves_http) && List.mem name http_only then None
+          else Some { path = "internal/teslrt/" ^ name; contents })
+          Embedded_go_runtime.files
+      end
     in
     Ok (artifacts, { ex_module = m.module_name; ex_package = package;
                      ex_types = types; ex_signatures = signatures })

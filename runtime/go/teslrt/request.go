@@ -2,6 +2,7 @@ package teslrt
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 )
 
@@ -90,4 +91,51 @@ const (
 func ClearSessionCookie(scope *RequestScope) {
 	scope.SetCookieHeader("Http.clearSessionCookie",
 		fmt.Sprintf("%s=; %s; Max-Age=0", sessionCookieName, sessionCookieAttributes))
+}
+
+// HttpRequest is what an `auth` function and a handler see of the incoming request.
+// It is a plain value built once per request by the dispatcher — the fields Tesl exposes,
+// nothing more, so an ejecting author is not handed the whole net/http surface.
+//
+// The maps are teslrt.Dict values because that is what Tesl's `Dict.lookup` expects.
+// A Dict is stored sorted by key, and these are built with plain string ordering, which is
+// exactly the comparator the emitter passes at a `Dict.lookup` call site on String keys.
+type HttpRequest struct {
+	Method          string
+	Path            string
+	Cookies         Dict[string, string]
+	Headers         Dict[string, string]
+	QueryParameters Dict[string, string]
+	Body            string
+}
+
+func stringKeyLess(left, right string) bool { return left < right }
+
+// NewHttpRequest snapshots the request. Header names are lower-cased so a lookup does not
+// depend on the casing a client happened to send; cookie names are left exactly as sent.
+func NewHttpRequest(request *http.Request, body string) HttpRequest {
+	headers := DictEmpty[string, string]()
+	for name, values := range request.Header {
+		if len(values) > 0 {
+			headers = DictInsert(headers, strings.ToLower(name), values[0], stringKeyLess)
+		}
+	}
+	cookies := DictEmpty[string, string]()
+	for _, cookie := range request.Cookies() {
+		cookies = DictInsert(cookies, cookie.Name, cookie.Value, stringKeyLess)
+	}
+	query := DictEmpty[string, string]()
+	for name, values := range request.URL.Query() {
+		if len(values) > 0 {
+			query = DictInsert(query, name, values[0], stringKeyLess)
+		}
+	}
+	return HttpRequest{
+		Method:          request.Method,
+		Path:            request.URL.Path,
+		Cookies:         cookies,
+		Headers:         headers,
+		QueryParameters: query,
+		Body:            body,
+	}
 }

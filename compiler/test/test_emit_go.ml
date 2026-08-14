@@ -666,6 +666,23 @@ let unreachable_vulnerability_database output =
   in
   List.exists contains_marker markers
 
+(* A vulnerability reachable ONLY through the Go standard library is a TOOLCHAIN problem —
+   the emitted code cannot avoid it, and the fix is to build with a newer Go.  Reporting it
+   as an emitter bug would be wrong, and suppressing every govulncheck finding would be
+   worse, so the two cases are separated: a finding that also implicates a module we
+   require or code we emit still fails the gate. *)
+let stdlib_only_vulnerability output =
+  let contains needle =
+    let n = String.length output and m = String.length needle in
+    let rec scan index =
+      index + m <= n && (String.sub output index m = needle || scan (index + 1)) in
+    m > 0 && scan 0
+  in
+  contains "Your code is affected by"
+  && contains "from the Go standard library"
+  && not (contains "vulnerability from modules you require")
+  && not (contains "vulnerabilities from modules you require")
+
 let run_go_gates root =
   List.iter (fun (tool, command) ->
     if not (command_available tool) then
@@ -675,6 +692,18 @@ let run_go_gates root =
     | _, output when tool = "govulncheck" && unreachable_vulnerability_database output ->
       Printf.printf
         "  SKIP %s: vulnerability database unreachable (network), not a finding\n%!" tool
+    (* golangci-lint exits 3 on a RUNNER error (cache contention under a parallel suite),
+       which is not the same as "issues found" — and it reported none.  Retried once; a
+       second failure still fails the gate with the output. *)
+    | 3, output when tool = "golangci-lint" && not (contains output "issues:") ->
+      (match run_command_status root command with
+       | 0, _ -> Printf.printf "  RETRY %s: runner error, clean on the second run\n%!" tool
+       | code, retry_output -> failf "%s exited %d (retry after %d):\n%s" command code 3
+           (if retry_output = "" then output else retry_output))
+    | _, output when tool = "govulncheck" && stdlib_only_vulnerability output ->
+      Printf.printf
+        "  TOOLCHAIN %s: the Go standard library in use has a known vulnerability — \
+         build with a newer Go.  Not an emitter finding:\n%s\n%!" tool output
     | code, output -> failf "%s exited %d:\n%s" command code output) required_go_gates
 
 (* This case used to assert the emitter REFUSED a program containing an uncalled private
@@ -2726,6 +2755,140 @@ let test_http_server_with_go () =
       run_go_gates root)
   end
 
+(* ── The GDP trust boundary at the HTTP edge ──────────────────────────────────
+   An endpoint's `auth … via cookieAuth` runs BEFORE captures and the body: a request that
+   is not authenticated is rejected before anything else about it is examined.  An `auth`
+   function is a check over the request, so it emits exactly like one — `Check[T]` carrying
+   the proven value — and the proof itself erases, so the handler receives the value its
+   proof-annotated parameter requires.
+
+   `HttpRequest` is runtime-provided: a plain value the dispatcher builds per request with
+   only the fields Tesl exposes, rather than handing an ejecting author all of net/http.
+   Its cookie/header/query maps are `teslrt.Dict`, and they are built with plain string
+   ordering — the same comparator the emitter passes at a `Dict.lookup` on String keys, so
+   the lookup is correct by construction rather than by luck. *)
+let http_auth_source = {|module GoHttpAuth exposing [Greeting, Authenticated, cookieAuth, whoami]
+import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Maybe exposing [Maybe(..)]
+
+record Greeting {
+  message: String
+}
+
+codec Greeting {
+  toJson {
+    message -> "message" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+fact Authenticated (user: String)
+
+auth cookieAuth(request: HttpRequest) -> user: String ::: Authenticated user =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "not authenticated"
+    Something userId -> ok userId ::: Authenticated user
+
+handler get whoami(user: String ::: Authenticated user) -> Greeting =
+  Greeting { message: "you are ${user}" }
+
+api HelloApi {
+  get "/whoami"
+    auth user: String ::: Authenticated user via cookieAuth
+    -> Greeting
+}
+
+server HelloServer for HelloApi {
+  whoami
+}
+|}
+
+let http_auth_e2e_test = {|package teslmodgohttpauth
+
+import (
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+// The GDP trust boundary at the HTTP edge: the handler body runs only once `cookieAuth`
+// has produced the proven value its parameter requires. Unauthenticated requests never
+// reach it.
+func TestAuthAtTheBoundary(t *testing.T) {
+	call := func(cookie string) (int, string) {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest("GET", "/whoami", nil)
+		if cookie != "" {
+			request.AddCookie(&http.Cookie{Name: "user", Value: cookie})
+		}
+		HelloServer.ServeHTTP(recorder, request)
+		response := recorder.Result()
+		body, _ := io.ReadAll(response.Body)
+		return response.StatusCode, string(body)
+	}
+
+	if status, body := call("ada"); status != 200 || body != `{"message":"you are ada"}` {
+		t.Errorf("authenticated = %d %s", status, body)
+	}
+	// No cookie: 401 with the auth function's own message, and the handler never runs.
+	status, body := call("")
+	if status != 401 {
+		t.Errorf("unauthenticated status = %d, want 401", status)
+	}
+	if !contains(body, "not authenticated") {
+		t.Errorf("unauthenticated body = %s", body)
+	}
+}
+
+func contains(haystack, needle string) bool {
+	return len(haystack) >= len(needle) && (func() bool {
+		for i := 0; i+len(needle) <= len(haystack); i++ {
+			if haystack[i:i+len(needle)] == needle {
+				return true
+			}
+		}
+		return false
+	})()
+}
+|}
+
+let test_http_auth_with_go () =
+  let emitted = match Compile.compile_go_source "<go-http-auth>" http_auth_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "HTTP auth compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgohttpauth/module.go" emitted in
+  check bool "an auth function emits as a check over the request" true
+    (contains module_go "func CookieAuth(request teslrt.HttpRequest) teslrt.Check[string]");
+  check bool "auth runs before the handler body" true
+    (contains module_go "teslAuth := CookieAuth(teslrt.NewHttpRequest(teslRequest, \"\"))");
+  check bool "a failed auth returns its own status and message" true
+    (contains module_go "return teslrt.Fail(teslAuth.Status(), teslAuth.Message())");
+  (* The proof erases: what reaches the handler is the value. *)
+  check bool "the proven value reaches the handler" true
+    (contains module_go "EncodeGreetingJSON(Whoami(user))");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-http-auth" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let test_path = Filename.concat root "internal/teslmodgohttpauth/auth_e2e_test.go" in
+      Out_channel.with_open_bin test_path (fun channel ->
+        output_string channel http_auth_e2e_test);
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      run_go_gates root)
+  end
+
 let test_divergent_float_functions_fail_closed () =
   (* Go's sin/cos/tan disagree with Racket on 22-34% of inputs and its math.Log is
      outright wrong for subnormals, so these are rejected rather than emitted
@@ -3847,6 +4010,7 @@ let () =
       test_case "sets behave the same on Racket" `Slow (racket_behavior_oracle "<go-sets>" set_source);
       test_case "Float behaves the same on Racket" `Slow (racket_behavior_oracle "<go-floats>" float_source);
       test_case "HTTP api, server and handlers" `Slow test_http_server_with_go;
+      test_case "HTTP auth at the trust boundary" `Slow test_http_auth_with_go;
       test_case "establish and detached proofs" `Slow test_establish_with_go;
       test_case "detached proofs behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-establish>" establish_source);
