@@ -116,8 +116,6 @@ type HttpRequest struct {
 	Body            string
 }
 
-func stringKeyLess(left, right string) bool { return left < right }
-
 // NewHttpRequest snapshots the request. Header names are lower-cased so a lookup does not
 // depend on the casing a client happened to send; cookie names are left exactly as sent.
 //
@@ -151,4 +149,85 @@ func NewHttpRequest(request *http.Request, body string) HttpRequest {
 		QueryParameters: query,
 		Body:            body,
 	}
+}
+
+// SetSessionCookie is `Http.setSessionCookie`: the ONE blessed session transport. The name is
+// `__Host-`-prefixed so the browser enforces Secure, host-only and Path=/, and the lifetime
+// matches the token's own TTL — a cookie that outlived its token would only produce 401s.
+//
+// There is no name parameter and no attribute parameter: every option here is a way to get it
+// wrong, and the fixed shape is what makes `Http.sessionToken` able to read it back.
+func SetSessionCookie(scope *RequestScope, token JwtToken) struct{} {
+	// The value must LOOK like a signed token — three non-empty base64url segments. A session
+	// cookie carrying anything else is a misuse (writing an unverified cookie value straight
+	// back, say), and writing it would mint a session out of attacker-supplied text. Racket
+	// applies the same shape check for the same reason, and the trap is contained by the
+	// router's sanitized 500 rather than reaching the client.
+	if !looksLikeJWT(token.Value) {
+		panic(fmt.Sprintf("Http.setSessionCookie: expected a JwtToken produced by `JWT.sign`, "+
+			"got %q.\n  A session cookie must carry a signed token; this value is not a\n"+
+			"  well-formed JWT and will not be written to the response.", token.Value))
+	}
+	scope.SetCookieHeader("Http.setSessionCookie",
+		fmt.Sprintf("%s=%s; %s; Max-Age=%d",
+			sessionCookieName, token.Value, sessionCookieAttributes, jwtTTLSeconds))
+	return struct{}{}
+}
+
+// looksLikeJWT is the wire SHAPE only — `header.payload.signature`, base64url — never a
+// verification. Deciding whether a token is authentic is `JWT.verify`'s job, and conflating the
+// two here would be the more dangerous kind of check: one that looks like a guarantee.
+func looksLikeJWT(value string) bool {
+	segments := strings.Split(value, ".")
+	if len(segments) != 3 {
+		return false
+	}
+	for _, segment := range segments {
+		if segment == "" {
+			return false
+		}
+		for _, character := range segment {
+			isBase64URL := (character >= 'A' && character <= 'Z') ||
+				(character >= 'a' && character <= 'z') ||
+				(character >= '0' && character <= '9') ||
+				character == '_' || character == '-'
+			if !isBase64URL {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// SessionToken is `Http.sessionToken`: the reader, so the fixed cookie name is written down
+// once rather than spelled out at every call site — where a typo is a permanent 401. It is pure
+// and ungated; `JWT.verify` is what sits between this and a fact.
+func SessionToken(request HttpRequest) Maybe[JwtToken] {
+	value, found := DictLookup(request.Cookies, sessionCookieName, stringKeyLess).Value()
+	if !found {
+		return Nothing[JwtToken]()
+	}
+	return Something(JwtToken{Value: value})
+}
+
+// ResponseCookie is the api-test reader: the session cookie a response set, as a
+// Cookie-header-ready `name=value` pair, so a round-trip test can feed it straight back. The
+// ATTRIBUTES are stripped deliberately — assert those against the raw `set-cookie` header,
+// which is the full line.
+func ResponseCookie(response ApiResponse) Maybe[string] {
+	line, found := DictLookup(response.Headers, "set-cookie", stringKeyLess).Value()
+	if !found {
+		return Nothing[string]()
+	}
+	// The pair is everything up to the first `;`. Indexed only after a length check: a split
+	// result is a slice whose emptiness nothing here guarantees to a reader (or to nilaway).
+	segments := strings.Split(line, ";")
+	if len(segments) == 0 {
+		return Nothing[string]()
+	}
+	pair := strings.TrimSpace(segments[0])
+	if !strings.Contains(pair, "=") {
+		return Nothing[string]()
+	}
+	return Something(pair)
 }

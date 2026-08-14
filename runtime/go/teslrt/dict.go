@@ -1,6 +1,9 @@
 package teslrt
 
-import "slices"
+import (
+	"fmt"
+	"slices"
+)
 
 // Dict is Tesl's `Dict k v`, held as entries kept SORTED BY KEY.
 //
@@ -182,4 +185,38 @@ func DictEqualBy[K any, V any](
 		}
 	}
 	return true
+}
+
+// stringKeyLess is the ordering a String-keyed Dict is built with — the comparator the emitter
+// passes at every `Dict.lookup` on String keys. It lives here rather than with the HTTP request
+// snapshot that first needed it: `Tesl.JWT`'s claims are a String-keyed Dict too, and a program
+// that signs a token need not serve HTTP.
+func stringKeyLess(left, right string) bool { return left < right }
+
+// DictSingleton is `Dict.singleton`: the one-entry dict, which is how a claims dict or a
+// single-key lookup table is usually written.
+func DictSingleton[K any, V any](key K, value V) Dict[K, V] {
+	return Dict[K, V]{Entries: []DictEntry[K, V]{{Key: key, Value: value}}}
+}
+
+// DictRequireKey is `check Dict.requireKey key d`: it answers the SAME dict, and what a caller
+// gains is the `HasKey` proof that makes `Dict.get` reachable. The proof erases here, so what
+// survives is the rejection — a 400, because a missing key in a request-shaped dict is bad input
+// rather than a broken program.
+func DictRequireKey[K any, V any](d Dict[K, V], key K, less func(K, K) bool) Check[Dict[K, V]] {
+	if _, found := dictSearch(d, key, less); found {
+		return Accept(d)
+	}
+	return Reject[Dict[K, V]](400, fmt.Sprintf("expected key %v to be present in Dict", key))
+}
+
+// DictGet is `Dict.get`: the value for a key the caller has PROVEN present. The proof is what
+// makes it total, and it erases — so this traps rather than answering a zero value, which is the
+// only honest thing left if a caller ever reached it without the proof.
+func DictGet[K any, V any](d Dict[K, V], key K, less func(K, K) bool) V {
+	if index, found := dictSearch(d, key, less); found {
+		return d.Entries[index].Value
+	}
+	panic(fmt.Sprintf("Dict.get: key %v is not present — a `check Dict.requireKey` must prove it "+
+		"first", key))
 }

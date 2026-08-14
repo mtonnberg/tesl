@@ -3861,6 +3861,159 @@ let test_crypto_with_go () =
     (contains module_go "teslrt.CheckSignature(signingKey(), teslrt.SignatureFromHex(tag), payload)");
   gate_emitted ~env:[ "GOCRYPTO_KEY=test-signing-key" ] "tesl-go-crypto" emitted
 
+(* ─── `Tesl.JWT` and the session cookie ───────────────────────────────────────
+   The one blessed session: an HS256 token in one fixed `__Host-`-prefixed cookie, with no
+   options anywhere. The signature is `Tesl.Crypto`'s HMAC-SHA256 over `header.payload`, so a
+   token minted by either backend verifies on the other — the runtime suite pins that against an
+   actual Racket-minted token, and this case pins the SURFACE: what the emitter writes, and that
+   the whole round trip behaves the same on both backends. *)
+let jwt_source = {|module GoJwt exposing [issue, subjectOf, renewFor, LoginOut, SessionApi, SessionServer]
+
+import Tesl.Prelude exposing [Bool, String]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Dict exposing [Dict, Dict.singleton, Dict.lookup]
+import Tesl.Json exposing [stringCodec, boolCodec]
+import Tesl.String exposing [String.startsWith]
+import Tesl.Env exposing [requireSecret, envRead]
+import Tesl.Crypto exposing [Secret]
+import Tesl.Time exposing [time]
+import Tesl.JWT exposing [jwt, JwtToken, JWT.sign, JWT.verify, JWT.renew, JWT.decode, Authentic]
+import Tesl.Http exposing [
+  HttpRequest,
+  cookieCap,
+  Http.setSessionCookie,
+  Http.clearSessionCookie,
+  Http.sessionToken,
+]
+import Tesl.ApiTest exposing [statusOk, responseCookie]
+
+# A module-level constant: the JOSE header prefix every token shares, which is what makes the
+# `kid` stamp assertable without repeating it.
+joseHeaderPrefix = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6"
+
+capability sessions implies jwt, cookieCap, envRead, time
+
+fn sessionKey() -> Secret
+  requires [sessions] =
+  requireSecret "GOJWT_KEY"
+
+fn issue(subject: String) -> JwtToken
+  requires [sessions] =
+  JWT.sign (Dict.singleton "sub" subject) (sessionKey())
+
+fn subjectOf(token: JwtToken) -> String
+  requires [sessions] =
+  let claims = check JWT.verify token (sessionKey())
+  case Dict.lookup "sub" claims of
+    Nothing -> ""
+    Something s -> s
+
+fn renewFor(token: JwtToken) -> JwtToken
+  requires [sessions] =
+  check JWT.renew token (sessionKey())
+
+fn decodedSubject(token: JwtToken) -> String
+  requires [sessions] =
+  case Dict.lookup "sub" (JWT.decode token) of
+    Nothing -> ""
+    Something s -> s
+
+record LoginOut { succeeded: Bool }
+
+codec LoginOut {
+  toJson {
+    succeeded -> "succeeded" with_codec boolCodec
+  }
+  fromJson_forbidden
+}
+
+# A handler that writes the session cookie and then FAILS: no session may escape on a non-2xx
+# response even though the cookie was written.
+handler post loginThenFail() -> LoginOut
+  requires [sessions] =
+  let _ = Http.setSessionCookie (issue "carol")
+  fail 403 "second factor required"
+
+handler post login() -> LoginOut
+  requires [sessions] =
+  let _ = Http.setSessionCookie (issue "carol")
+  LoginOut { succeeded: True }
+
+api SessionApi {
+  post "/login"
+    -> LoginOut
+
+  post "/login-then-fail"
+    -> LoginOut
+}
+
+server SessionServer for SessionApi {
+  login
+  loginThenFail
+}
+
+test "a token round-trips through sign and verify" requires [sessions] {
+  let token = issue "carol"
+  expect subjectOf token == "carol"
+  expect decodedSubject token == "carol"
+  expect String.startsWith token.value joseHeaderPrefix
+}
+
+test "a token minted under another key does not verify" requires [sessions] {
+  let token = JWT.sign (Dict.singleton "sub" "mallory") (Secret "not-the-session-key")
+  expectFail subjectOf token
+}
+
+test "renewal preserves the subject" requires [sessions] {
+  let token = issue "carol"
+  expect subjectOf (renewFor token) == "carol"
+}
+
+api-test "a successful login sets the session cookie" for SessionServer requires [sessions] {
+  let response = post "/login"
+  expect statusOk response.status
+  case responseCookie response of
+    Nothing -> expect False
+    Something cookie -> expect String.startsWith cookie "__Host-session="
+}
+
+api-test "a handler that fails mints no session" for SessionServer requires [sessions] {
+  let response = post "/login-then-fail"
+  expect response.status == 403
+  case responseCookie response of
+    Nothing -> expect True
+    Something cookie -> expect False
+}
+|}
+
+let test_jwt_with_go () =
+  let emitted = emit_ok "<go-jwt>" jwt_source in
+  let module_go = artifact "internal/teslmodgojwt/module.go" emitted in
+  check bool "a module-level constant becomes a package-level var" true
+    (contains module_go "var JoseHeaderPrefix = \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6\"");
+  check bool "signing is one runtime call over the claims dict" true
+    (contains module_go
+       "teslrt.JwtSign(teslrt.DictSingleton(\"sub\", subject), sessionKey(teslScope))");
+  (* A verification rejected inside a `fn` traps, as it does on Racket; inside a HANDLER it
+     answers. What matters here is that it is the runtime's check, not a hand-rolled compare. *)
+  check bool "verification goes through the runtime's check" true
+    (contains module_go "teslrt.JwtVerify(token, sessionKey(teslScope))");
+  (* Every function declaring the BUNDLE takes the scope, including the pure ones: the
+     `requires` clause is the proxy for "may write to the response", and a bundle makes that
+     proxy coarse. It is sound and it is visible — a call-graph pass would narrow it. *)
+  (* The cookie writer needs the request scope, and `sessions implies cookieCap` is what says
+     so — testing the capability NAME directly missed every program that bundles capabilities. *)
+  check bool "an implied cookieCap still threads the request scope" true
+    (contains module_go "func login(teslScope *teslrt.RequestScope) LoginOut");
+  check bool "the session cookie is written through the scope" true
+    (contains module_go "teslrt.SetSessionCookie(teslScope, Issue(teslScope, \"carol\"))");
+  (* A handler's `fail` is a statement, not a returned closure: `panic` terminates, which is
+     also what keeps it gofmt-stable at any message length. *)
+  check bool "a handler's `fail` travels as a request rejection" true
+    (contains module_go
+       "panic(teslrt.RequestRejection{Status: 403, Message: \"second factor required\"})");
+  gate_emitted ~env:[ "GOJWT_KEY=test-session-key" ] "tesl-go-jwt" emitted
+
 (* Password storage: Argon2id through `golang.org/x/crypto/argon2`, the ONE approved non-stdlib
    dependency emitted code can take (maintainer decision, 2026-08-14).  The alternatives were
    both worse: stdlib PBKDF2 would mint hashes the Racket side cannot verify — a shared database
@@ -5853,6 +6006,10 @@ let go_corpus = [
      transports, and a stdlib check rejected inside an `auth` propagating as a 401 rather than
      panicking. *)
   "tests/webhook-signature-tests.tesl";
+  (* The session transport end to end: the `__Host-` cookie shape, a sliding renewal, a handler
+     that sets a cookie and then FAILS (no session may escape on a non-2xx answer), and a
+     trapping auth block answering a SANITIZED 500 rather than leaking the trap text. *)
+  "tests/session-cookie-tests.tesl";
 ]
 
 let test_go_corpus_with_go () =
@@ -5965,6 +6122,9 @@ let () =
       test_case "`case` as a test statement" `Slow test_case_statement_with_go;
       test_case "test-statement case behaves the same on Racket" `Slow
         (racket_behavior_oracle "<go-test-case-oracle>" test_case_stmt_source);
+      test_case "Tesl.JWT and the session cookie" `Slow test_jwt_with_go;
+      test_case "JWT and sessions behave the same on Racket" `Slow
+        (racket_behavior_oracle ~env:[ "GOJWT_KEY=test-session-key" ] "<go-jwt-oracle>" jwt_source);
       test_case "Tesl.Crypto: MACs, digests, tokens" `Slow test_crypto_with_go;
       test_case "Tesl.Crypto behaves the same on Racket" `Slow
         (racket_behavior_oracle ~env:[ "GOCRYPTO_KEY=test-signing-key" ]

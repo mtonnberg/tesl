@@ -314,6 +314,11 @@ type type_table = {
   (* Keyed by the QUEUE's name and again by its job type: `enqueue` names the job type,
      while an api-test verb names the queue. *)
   queues : (string, queue_info) Hashtbl.t;
+  (* Module-level constants: a NAME and its Go spelling, referenced bare rather than called.
+     They live here rather than in `signatures` because a signature describes something that is
+     APPLIED, and a const that resolved through that table would be indistinguishable from a
+     nullary function — whose bare mention is a partial application the emitter refuses. *)
+  consts : (string, go_type * string) Hashtbl.t;
 }
 
 (* The table for the module being emitted.  A ref for the same reason `current_package`
@@ -350,6 +355,14 @@ let api_response_key = "HttpResponse (api-test)"
 (* Tesl type names that have their OWN codec in the module being emitted.  A value with a
    codec encodes through it; anything else falls back to the generic wire shape below. *)
 let current_codec_types : string list ref = ref []
+
+(* True while emitting somewhere that HAS a request scope in hand: a function that declares a
+   cookie-writing capability, or a handler adapter.  A test body has none — Racket agrees, since
+   a test has no HTTP response to attach a cookie to — so a call there passes `nil`, and the
+   runtime's own "no HTTP response to attach a cookie to" trap is what a test writing a cookie
+   gets.  Without this, an emitted test that called a scope-taking function referenced a
+   `teslScope` that does not exist there. *)
+let current_scope_in_hand = ref false
 
 (* True while a HANDLER's body is being emitted.  A check rejection consumed there must
    ANSWER the client with its own status rather than trap: `dsl/web.rkt` installs the
@@ -1134,15 +1147,24 @@ type dict_leaf = {
   dict_name : string;
   dict_go : string;
   dict_arity : int;
-  dict_result : [ `Dict | `MaybeValue | `Int | `Bool | `Keys | `Values | `Pairs ];
+  dict_result : [ `Dict | `MaybeValue | `Value | `CheckDict | `Int | `Bool | `Keys | `Values
+                | `Pairs ];
   dict_needs_order : bool;
 }
 
 let dict_leaves = [
   { dict_name = "Dict.empty"; dict_go = "teslrt.DictEmpty"; dict_arity = 0;
     dict_result = `Dict; dict_needs_order = false };
+  { dict_name = "Dict.singleton"; dict_go = "teslrt.DictSingleton"; dict_arity = 2;
+    dict_result = `Dict; dict_needs_order = false };
   { dict_name = "Dict.insert"; dict_go = "teslrt.DictInsert"; dict_arity = 3;
     dict_result = `Dict; dict_needs_order = true };
+  (* `requireKey` answers the same dict plus a `HasKey` proof, which erases — so what is left is
+     a check whose REJECTION is the point, and `get` is the total read the proof licenses. *)
+  { dict_name = "Dict.requireKey"; dict_go = "teslrt.DictRequireKey"; dict_arity = 2;
+    dict_result = `CheckDict; dict_needs_order = true };
+  { dict_name = "Dict.get"; dict_go = "teslrt.DictGet"; dict_arity = 2;
+    dict_result = `Value; dict_needs_order = true };
   { dict_name = "Dict.lookup"; dict_go = "teslrt.DictLookup"; dict_arity = 2;
     dict_result = `MaybeValue; dict_needs_order = true };
   { dict_name = "Dict.member"; dict_go = "teslrt.DictMember"; dict_arity = 2;
@@ -1392,6 +1414,13 @@ let rec type_of_expr signatures env expr =
        backend, which hands back a procedure. *)
     (match List.assoc_opt name env, Hashtbl.find_opt signatures name with
      | Some ty, _ -> ty
+     (* A module-level CONSTANT is referenced bare, so it resolves here rather than through the
+        call paths — after a local binding, which may shadow it. *)
+     | None, _ when Option.bind !current_types (fun types ->
+                      Hashtbl.find_opt types.consts name) <> None ->
+       (match Option.bind !current_types (fun types -> Hashtbl.find_opt types.consts name) with
+        | Some (ty, _) -> ty
+        | None -> assert false)
      (* A named function referred to WITHOUT arguments is a function value: Go spells that
         the same way (the function's own name), so the type is its signature read as an
         arrow.  A check is excluded — its `Check` result is not an ordinary value. *)
@@ -1668,6 +1697,27 @@ let rec type_of_expr signatures env expr =
      | EVar { name = ("statusOk" | "statusClientError" | "statusServerError"); _ } -> TBool
       (* `Http.clearSessionCookie()` returns Unit and writes to the response. *)
       | EVar { name = "Http.clearSessionCookie"; _ } -> TUnit
+      (* The session transport.  `setSessionCookie` writes the ONE blessed cookie (Unit, and it
+         needs the response scope); `sessionToken` reads it back, so the fixed name is written
+         down once instead of at every call site, where a typo is a permanent 401. *)
+      | EVar { name = "Http.setSessionCookie"; _ } when args <> [] ->
+        List.iter (fun arg -> ignore (type_of_expr signatures env arg)) args;
+        TUnit
+      | EVar { name = ("Http.sessionToken" | "responseCookie") as reader; _ } when args <> [] ->
+        let inner = match reader with
+          | "Http.sessionToken" ->
+            (match Option.bind !current_types (fun types ->
+                     Hashtbl.find_opt types.newtypes "JwtToken") with
+             | Some info -> TNewtype info
+             | None -> unsupported loc
+               "Go backend `Http.sessionToken` needs `Tesl.JWT`'s `JwtToken` type")
+          | _ -> TString
+        in
+        List.iter (fun arg -> ignore (type_of_expr signatures env arg)) args;
+        (match adt_ctor_of_signature signatures "Nothing" with
+         | Some (info, _) -> TAdt (info, [inner])
+         | None -> unsupported loc
+           "Go backend `%s` yields a Maybe; import `Tesl.Maybe`" reader)
       | EVar { name = ("detachFact" | "introAnd" | "andLeft" | "andRight"); _ } -> TUnit
       | EVar { name; _ } when higher_order_leaf name <> None && Hashtbl.mem signatures name ->
        let hof = match higher_order_leaf name with Some hof -> hof | None -> assert false in
@@ -2321,6 +2371,13 @@ and type_of_dict_leaf signatures env loc leaf args =
   match leaf.dict_name with
   | "Dict.empty" ->
     unsupported loc "Go backend cannot infer the key and value types of `Dict.empty`"
+  (* The one leaf that BUILDS a dict from a key and a value rather than taking one. *)
+  | "Dict.singleton" ->
+    let key = type_of_expr signatures env (List.nth args 0) in
+    let value = type_of_expr signatures env (List.nth args 1) in
+    if not (supports_ordering key) then unsupported loc
+      "Go backend `%s` needs ordered keys" leaf.dict_name;
+    TDict (key, value)
   | "Dict.fromList" ->
     (match type_of_expr signatures env (List.nth args 0) with
      | TList (TAdt (info, [key; value])) when info.adt_tesl_name = "Tuple2" ->
@@ -2340,13 +2397,15 @@ and type_of_dict_leaf signatures env loc leaf args =
          "Go backend `%s` key has an unsupported type" leaf.dict_name;
        if type_of_arg signatures env value (List.nth args 1) <> value then unsupported loc
          "Go backend `%s` value has an unsupported type" leaf.dict_name
-     | "Dict.lookup" | "Dict.member" | "Dict.remove" ->
+     | "Dict.lookup" | "Dict.member" | "Dict.remove" | "Dict.requireKey" | "Dict.get" ->
        if type_of_arg signatures env key (List.nth args 0) <> key then unsupported loc
          "Go backend `%s` key has an unsupported type" leaf.dict_name
      | _ -> ());
     (match leaf.dict_result with
      | `Dict -> TDict (key, value)
      | `MaybeValue -> maybe_of value
+     | `Value -> value
+     | `CheckDict -> TCheck (TDict (key, value))
      | `Int -> TInt
      | `Bool -> TBool
      | `Keys -> TList key
@@ -2588,6 +2647,11 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
   | EVar { name; loc } ->
     (match List.assoc_opt name env, Hashtbl.find_opt signatures name with
      | Some _, _ -> local_ident name
+     | None, _ when Option.bind !current_types (fun types ->
+                      Hashtbl.find_opt types.consts name) <> None ->
+       (match Option.bind !current_types (fun types -> Hashtbl.find_opt types.consts name) with
+        | Some (_, go_name) -> go_name
+        | None -> assert false)
      (* A named function used as a VALUE is its own Go name; the type rule has already
         established that this is a function type and not a check. *)
      | None, Some signature when (match type_of_expr signatures env expr with
@@ -3025,6 +3089,14 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
       (* The cookie writer targets the response the scope owns. *)
       | EVar { name = "Http.clearSessionCookie"; _ } ->
         "teslrt.ClearSessionCookie(teslScope)"
+      | EVar { name = "Http.setSessionCookie"; _ } when args <> [] ->
+        ignore (type_of_expr signatures env app);
+        Printf.sprintf "teslrt.SetSessionCookie(teslScope, %s)" (emit (List.hd args))
+      | EVar { name = ("Http.sessionToken" | "responseCookie") as reader; _ } when args <> [] ->
+        ignore (type_of_expr signatures env app);
+        Printf.sprintf "teslrt.%s(%s)"
+          (if reader = "Http.sessionToken" then "SessionToken" else "ResponseCookie")
+          (emit (List.hd args))
       | EVar { name = ("detachFact" | "introAnd" | "andLeft" | "andRight"); _ } ->
         List.iter (fun arg -> ignore (type_of_expr signatures env arg)) args;
         "struct{}{}"
@@ -3081,7 +3153,10 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
        (* A callee that may write to the response takes the request scope FIRST.  The
           caller always has one to pass: the checker requires it to declare `cookieCap`
           too, which is what gave the caller its own scope parameter. *)
-       let scope_argument = if signature.sig_needs_scope then [ "teslScope" ] else [] in
+       let scope_argument =
+         if not signature.sig_needs_scope then []
+         else if !current_scope_in_hand then [ "teslScope" ] else [ "nil" ]
+       in
        Printf.sprintf "%s(%s)" (qualified signature.sig_owner signature.go_name)
           (String.concat ", " (scope_argument @ List.map2 (fun arg want ->
              emit_expr ~expected:want ~indent signatures env arg) args signature.params))
@@ -3276,6 +3351,16 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
      | Some (TCheck result) ->
        Printf.sprintf "teslrt.Reject[%s](%d, %s)" (go_type result) status
           (emit message)
+     (* A HANDLER may fail too — `fail 403 "second factor required"` is an ordinary answer, not
+        an error — but its Go signature returns the handler's own type, with nowhere to put a
+        failure.  So it travels as the same `RequestRejection` a rejected check uses, and the
+        router turns it back into a response carrying this status.  A cookie written before the
+        failure is NOT sent: `writeResponse` attaches cookies to 2xx only, which is the rule
+        `dsl/web.rkt` states and what keeps a session from escaping on a non-2xx answer. *)
+     | _ when !current_handler_body ->
+       Printf.sprintf "func() %s { panic(teslrt.RequestRejection{Status: %d, Message: %s}) }()"
+         (match expected with Some ty -> go_type ty | None -> "struct{}{}")
+         status (emit message)
      | _ -> unsupported loc "Go backend can emit fail only in a check tail")
   | EWithDatabase { body; _ } -> emit_expr ?expected ~indent signatures env body
   | EEnqueue { job_type; payload; loc } ->
@@ -3860,9 +3945,11 @@ and emit_dict_leaf ?(indent="") signatures env loc leaf args result expected =
   let emitted = List.map (emit_expr ~indent signatures env) args in
   (* Tesl puts the dict LAST (`Dict.insert key value d`); the runtime signatures put it
      first, which is what a Go author expects.  The emitter rotates rather than
-     distorting the hand-written runtime. *)
+     distorting the hand-written runtime.  `Dict.singleton` is the exception: it BUILDS a
+     dict from a key and a value, so its last argument is not one to move to the front —
+     rotating it silently swapped the pair. *)
   let emitted =
-    if leaf.dict_arity > 1 then
+    if leaf.dict_arity > 1 && leaf.dict_name <> "Dict.singleton" then
       match List.rev emitted with
       | dict :: rest -> dict :: List.rev rest
       | [] -> emitted
@@ -4590,6 +4677,14 @@ let emit_tail ?self buffer signatures env expected indent expr =
         (List.map (fun (arm : case_arm) ->
            arm.pattern, arm.guard,
            (fun arm_env body_indent -> go arm_env body_indent arm.body)) arms)
+    (* A HANDLER's `fail` in tail position: `panic` terminates the function, so this is a
+       statement rather than a returned expression — which is also what keeps it gofmt-stable
+       (a one-line `func() T { panic(…) }()` is reflowed once the message is long). *)
+    | EFail { status; message; loc } when !current_handler_body
+                                          && (match expected with TCheck _ -> false | _ -> true) ->
+      Buffer.add_string buffer (line_directive loc);
+      Printf.bprintf buffer "%spanic(teslrt.RequestRejection{Status: %d, Message: %s})\n"
+        indent status (emit_expr ~expected:TString ~indent signatures env message)
     (* A check whose TAIL is another check hands that check's result straight back: the
        delegate's status and message are this check's, and no unwrapping happens at all. *)
     | _ when (match check_application signatures expr, expected with
@@ -4810,9 +4905,27 @@ let http_method_name = function
   | GET -> "GET" | POST -> "POST" | PUT -> "PUT"
   | DELETE -> "DELETE" | PATCH -> "PATCH" | SSE -> "SSE"
 
+(* Does a `requires` clause reach `cookieCap`?  A capability may IMPLY others
+   (`capability sessions implies cookieCap, jwt`), so the answer is the transitive closure over
+   the module's own declarations — testing the name directly missed every program that bundles
+   its capabilities, and the handler then referenced a request scope it had never been given. *)
+let implies_cookie_cap (capabilities : capability_form list) declared =
+  let seen = Hashtbl.create 8 in
+  let rec reaches name =
+    if name = "cookieCap" then true
+    else if Hashtbl.mem seen name then false
+    else begin
+      Hashtbl.add seen name ();
+      match List.find_opt (fun (c : capability_form) -> c.name = name) capabilities with
+      | Some form -> List.exists reaches form.implies
+      | None -> false
+    end
+  in
+  List.exists reaches declared
+
 let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=[])
-    ?(servers=[]) ?(capturers=[]) module_path package signatures types
-    (funcs : func_decl list) =
+    ?(servers=[]) ?(capturers=[]) ?(consts=[]) ?(capabilities=[]) module_path package signatures
+    types (funcs : func_decl list) =
   Hashtbl.reset pending_helpers;
   Hashtbl.reset helper_names;
   Hashtbl.reset module_helpers;
@@ -4887,6 +5000,19 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
     Buffer.add_string body (line_directive info.ent_loc);
     Printf.bprintf body "var %s = teslrt.NewTable[%s]()\n"
       info.ent_table_var info.ent_row.rec_go_name);
+  (* Module-level constants, in declaration order: each one's type settles as it is emitted, so
+     a constant may be written in terms of an earlier one. *)
+  List.iter (fun (c : const_form) ->
+    let go_name = match Hashtbl.find_opt types.consts c.name with
+      | Some (_, go_name) -> go_name
+      | None -> unsupported c.loc "Go backend cannot resolve constant `%s`" c.name
+    in
+    let ty = type_of_expr signatures [] c.value in
+    Hashtbl.replace types.consts c.name (ty, go_name);
+    Buffer.add_char body '\n';
+    Buffer.add_string body (line_directive c.loc);
+    Printf.bprintf body "var %s = %s\n" go_name
+      (emit_expr ~expected:ty signatures [] c.value)) consts;
   List.iter (fun (fd : func_decl) ->
     (* `establish` returns a detached proof, which erases — so the function body computes
        nothing observable and the emitted function returns the zero-size proof value.  It
@@ -4906,7 +5032,7 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
        run time.  `cookieCap` is the exception in shape only — it says this function may
        write to the response, so it receives the request scope.  That marker is the
        `requires` clause itself; no call-graph analysis is needed. *)
-    let needs_scope = List.mem "cookieCap" fd.capabilities in
+    let needs_scope = implies_cookie_cap capabilities fd.capabilities in
     (* No capability is checked against a list any more.  A capability is a COMPILE-TIME
        grant with no runtime form, and a capability naming a subsystem this backend does
        not implement cannot be exercised anyway — its functions are what fail closed, at
@@ -4956,6 +5082,7 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
     end else begin
     let self = fd.name, List.map (fun (name, _) -> local_ident name) params in
     current_handler_body := (fd.kind = HandlerKind);
+    current_scope_in_hand := needs_scope;
     let looped = Buffer.create 256 in
     emit_tail ~self looped signatures env result "\t\t" fd.body;
     if contains_go_code (Buffer.contents looped) ("continue " ^ loop_label) then begin
@@ -4965,6 +5092,7 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
     end else
       emit_tail body signatures env result "\t" fd.body;
     current_handler_body := false;
+    current_scope_in_hand := false;
     Buffer.add_string body "}\n" end) funcs;
   (* ── Codecs ─────────────────────────────────────────────────────────────── *)
   (* Which types have their own codec, for the response encoder above. *)
@@ -5288,6 +5416,7 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
             "Go backend cannot encode handler `%s`'s response type" handler
         | result -> value_encoder result
       in
+      current_scope_in_hand := true;
       Printf.bprintf body
         "\t\t%S: func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {\n\t\t\t_ = teslScope\n"
         handler;
@@ -5319,9 +5448,12 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
              "Go backend cannot resolve auth function `%s`" auth.via_fn
          in
          let binder = local_ident auth.binding.name in
+         (* An `auth` that may write a cookie (a sliding session renews one) takes the request
+            scope like any other cookie-writing function. *)
+         let scope_argument = if signature.sig_needs_scope then "teslScope, " else "" in
          Printf.bprintf body
-           "\t\t\tteslAuth := %s(teslrt.NewHttpRequest(teslRequest, teslBodyText))\n\t\t\tif !teslAuth.OK() {\n\t\t\t\treturn teslrt.Fail(teslAuth.Status(), teslAuth.Message())\n\t\t\t}\n\t\t\t%s, _ := teslAuth.Value()\n"
-           (qualified signature.sig_owner signature.go_name) binder;
+           "\t\t\tteslAuth := %s(%steslrt.NewHttpRequest(teslRequest, teslBodyText))\n\t\t\tif !teslAuth.OK() {\n\t\t\t\treturn teslrt.Fail(teslAuth.Status(), teslAuth.Message())\n\t\t\t}\n\t\t\t%s, _ := teslAuth.Value()\n"
+           (qualified signature.sig_owner signature.go_name) scope_argument binder;
          arguments := !arguments @ [binder]);
       List.iter (fun (capture : api_capture) ->
         let name = capture.binding.name in
@@ -5382,7 +5514,8 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
         "\t\t\treturn teslrt.Response{Status: 200, Body: %s(%s(%s))}\n\t\t},\n"
         encoder (qualified signature.sig_owner signature.go_name)
         (String.concat ", " call_arguments)) bound;
-    Buffer.add_string body "\t},\n}\n") servers;
+    Buffer.add_string body "\t},\n}\n";
+    current_scope_in_hand := false) servers;
   (* Comparator helpers the body referenced, in name order so the output is
      deterministic. *)
   Hashtbl.to_seq pending_helpers
@@ -5840,12 +5973,15 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
              runs, and the assertions that read the call log afterwards. *)
           | "stubHttp" | "stubHttpFailure" | "stubHttpTimeout"
           | "httpCalled" | "httpCallCount" | "httpLastBody" -> ()
+          (* The session cookie a response set, for a round-trip test. *)
+          | "responseCookie" -> ()
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.ApiTest` export `%s` yet" other) exposed
       | "Tesl.Http" ->
         List.iter (fun name ->
           match name with
-          | "HttpRequest" | "cookieCap" | "Http.clearSessionCookie" -> ()
+          | "HttpRequest" | "cookieCap" | "Http.clearSessionCookie"
+          | "Http.setSessionCookie" | "Http.sessionToken" -> ()
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.Http` export `%s` yet" other) exposed
       (* `Tesl.Crypto`: message authentication, digests and tokens are runtime leaves over Go's
@@ -5869,6 +6005,16 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | "HashFor" | "PasswordVerified" | "Authentic" -> ()
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.Crypto` export `%s` yet" other) exposed
+      (* `Tesl.JWT`: the one blessed session token.  HS256 over `header.payload`, which is
+         `Tesl.Crypto`'s own primitive — so a token minted by either backend verifies on the
+         other, and a test pins that against a real Racket-minted token. *)
+      | "Tesl.JWT" ->
+        List.iter (fun name ->
+          match name with
+          | "jwt" | "JwtToken" | "Authentic"
+          | "JWT.sign" | "JWT.verify" | "JWT.renew" | "JWT.decode" -> ()
+          | other -> unsupported import.loc
+            "Go backend does not support `Tesl.JWT` export `%s` yet" other) exposed
       (* `Tesl.HttpClient`: the four verbs and the two secret-accepting header builders are
          runtime leaves (registered below); `HttpResponse` is the runtime-provided record
          they answer with, and `httpClient` is the capability the checker enforces. *)
@@ -5949,6 +6095,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       adts = Hashtbl.create 8;
       entities = Hashtbl.create 8;
       queues = Hashtbl.create 8;
+      consts = Hashtbl.create 8;
     } in
     (* Every package-level Go name is minted here, in declaration order, so the
        emitted names are deterministic and provably distinct. *)
@@ -5970,6 +6117,11 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           secret;
           loc;
         }
+      (* A module-level constant's Go name is minted in the same pass as every other
+         package-level name, so a constant cannot collide with a record, a queue store or a
+         function.  Its TYPE is filled in when the value is emitted (typing it needs the
+         signature table), which is also why the entry starts as Unit. *)
+      | DConst c -> Hashtbl.replace types.consts c.name (TUnit, package_ident c.name)
       | _ -> ()) m.decls;
     let record_forms = List.filter_map (function DRecord r -> Some r | _ -> None) m.decls in
     List.iter (fun (r : record_form) ->
@@ -6361,6 +6513,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       "Crypto.sha256"; "Crypto.sha512";
     ] in
     let crypto_imports = ref [] in
+    let jwt_imports = ref [] in
+    let jwt_type_needed = ref false in
     let secret_type_needed = ref false in
     List.iter (fun (import : import_decl) ->
       let exposed = match import.names with
@@ -6373,6 +6527,14 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           exposed
       | "Tesl.Env" ->
         if List.mem "requireSecret" exposed then secret_type_needed := true
+      (* A JWT is signed with `Tesl.Crypto`'s `Secret`, so importing `Tesl.JWT` brings that type
+         into play even when the module never names it. *)
+      | "Tesl.JWT" ->
+        secret_type_needed := true;
+        jwt_type_needed := true;
+        List.iter (fun name ->
+          if List.mem name [ "JWT.sign"; "JWT.verify"; "JWT.renew"; "JWT.decode" ] then
+            jwt_imports := name :: !jwt_imports) exposed
       | _ -> ()) m.imports;
     if !secret_type_needed then begin
       let loc = Location.dummy_loc m.source_file in
@@ -6392,6 +6554,13 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         base = TString; secret = false; loc;
       }
     end;
+    if !jwt_type_needed then
+      (* The dot-separated `header.payload.signature` text.  Not a secret newtype: a session
+         token is held, compared and put in a cookie by the program that owns it. *)
+      Hashtbl.replace types.newtypes "JwtToken" {
+        tesl_name = "JwtToken"; owner = ""; go_name = "teslrt.JwtToken";
+        base = TString; secret = false; loc = Location.dummy_loc m.source_file;
+      };
     (* ── `Tesl.HttpClient`: the outbound verbs ───────────────────────────────
        The `httpClient` capability erases with every other one; what the emitter needs is the
        four verbs, the two secret-accepting header builders, and the response record.
@@ -6819,7 +6988,10 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
          call against the declared set and forces the grant to propagate to callers, so the
          declaration has no emitted form — the same reason a `requires` clause has none. *)
       | DCapability _ -> ()
-      | DConst c -> unsupported c.loc "Go backend does not support constants yet"
+      (* A module-level constant becomes a package-level `var`.  Its NAME is minted here, in
+         declaration order with every other package-level name, so it cannot collide; its TYPE
+         is settled where the value is emitted, since typing it needs the signature table. *)
+      | DConst _ -> ()
       (* Validated and registered above; the store variable is emitted with the tables. *)
       | DQueue _ -> ()
       | DChannel c -> unsupported c.loc "Go backend does not support channels yet"
@@ -7062,6 +7234,35 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           { params; result; go_name; sig_owner = ""; sig_needs_scope = false })
         !crypto_imports
     end;
+    if !jwt_imports <> [] then begin
+      let loc = Location.dummy_loc m.source_file in
+      let secret = match Hashtbl.find_opt types.newtypes "Secret" with
+        | Some info -> TNewtype info
+        | None -> unsupported loc "Go backend `Tesl.JWT` needs `Tesl.Crypto`'s `Secret` type"
+      in
+      let token = match Hashtbl.find_opt types.newtypes "JwtToken" with
+        | Some info -> TNewtype info
+        | None -> unsupported loc "Go backend `Tesl.JWT` needs its `JwtToken` type"
+      in
+      let claims = TDict (TString, TString) in
+      List.iter (fun name ->
+        let params, result, go_name = match name with
+          | "JWT.sign" -> [claims; secret], token, "teslrt.JwtSign"
+          (* Verification and renewal are CHECKS: each answers its value or a 401, and every
+             rejection on those paths — malformed, wrong signature, expired, past the absolute
+             cap — is a 401 rather than a trap, because the token arrives in a cookie. *)
+          | "JWT.verify" -> [token; secret], TCheck claims, "teslrt.JwtVerify"
+          | "JWT.renew" -> [token; secret], TCheck token, "teslrt.JwtRenew"
+          (* `decode` reads WITHOUT verifying — for choosing which key to check a token with —
+             so it mints no fact and its result must not be trusted. *)
+          | "JWT.decode" -> [token], claims, "teslrt.JwtDecode"
+          | other -> unsupported loc
+            "Go backend does not support `Tesl.JWT` export `%s` yet" other
+        in
+        Hashtbl.replace signatures name
+          { params; result; go_name; sig_owner = ""; sig_needs_scope = false })
+        !jwt_imports
+    end;
     (* The outbound verbs.  A header list is `List (Tuple2 String String)`; the response is
        the record registered above.  `bearer`/`secretHeader` take a `Secret String`, which is
        a secret newtype — its Go type comes from the argument, so the parameter is typed as
@@ -7167,7 +7368,10 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         (* The `requires` clause is the marker: a function that may write to the response
            takes the request scope, and the checker guarantees its callers declare the same
            capability — so the scope reaches it without any call-graph analysis. *)
-        sig_needs_scope = List.mem "cookieCap" fd.capabilities;
+        sig_needs_scope =
+          implies_cookie_cap
+            (List.filter_map (function DCapability c -> Some c | _ -> None) m.decls)
+            fd.capabilities;
       }) funcs;
     (* Every package in a multi-module program lives under ONE Go module path, so an
        importer and its dependency agree on the import path. *)
@@ -7179,6 +7383,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
     current_types := Some types;
     let source =
       module_source ~imported_packages:!imported_packages ~codecs ~apis ~servers ~capturers
+        ~consts:(List.filter_map (function DConst c -> Some c | _ -> None) m.decls)
+        ~capabilities:(List.filter_map (function DCapability c -> Some c | _ -> None) m.decls)
         ~unreachable:(List.filter_map (fun name ->
           match Hashtbl.find_opt signatures name with
           | Some signature -> Some signature.go_name

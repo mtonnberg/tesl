@@ -1,7 +1,10 @@
 package teslrt
 
 import (
+	"fmt"
 	"net/http"
+	"os"
+	"runtime/debug"
 	"strings"
 )
 
@@ -63,11 +66,17 @@ func callHandler(handler HandlerFunc, scope *RequestScope, request *http.Request
 		if recovered == nil {
 			return
 		}
-		rejection, isRejection := recovered.(RequestRejection)
-		if !isRejection {
-			panic(recovered)
+		if rejection, isRejection := recovered.(RequestRejection); isRejection {
+			response = Fail(rejection.Status, rejection.Message)
+			return
 		}
-		response = Fail(rejection.Status, rejection.Message)
+		// ANY other trap becomes a SANITIZED 500. The message is deliberately generic and the
+		// trap text never reaches the client: a trap message carries whatever the program was
+		// holding (a path, a key, a row), and an `auth` block is exactly where a malformed
+		// cookie can provoke one — so a client-triggerable trap must not become a
+		// client-readable disclosure. The detail is still available to the operator, on stderr.
+		fmt.Fprintf(os.Stderr, "tesl: handler trapped: %v\n%s", recovered, debug.Stack())
+		response = Fail(500, "Internal server error")
 	}()
 	return handler(scope, request)
 }
