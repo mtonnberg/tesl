@@ -2,6 +2,7 @@ package teslrt
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 )
 
@@ -106,6 +107,43 @@ func (queue *Queue) dequeue(status string) (string, any, int, bool) {
 	}
 	oldest.entry.status = jobProcessing
 	return oldest.id, oldest.entry.payload, oldest.entry.attempts, true
+}
+
+// DeadJob is one entry in a queue's dead letter. It is OPAQUE to Tesl — `deadJobs` is typed
+// `List DeadJob` and the type has no accessors — so it carries the job's identity for the
+// runtime's use and nothing a program can read: what a test does with the list is count it.
+type DeadJob struct{ ID string }
+
+// DeadJobs is the dead letter's contents, oldest first. The order is by enqueue sequence
+// rather than by map iteration, matching the PostgreSQL path's `order by created_at asc`.
+func DeadJobs(queue *Queue) []DeadJob {
+	queue.mutex.Lock()
+	defer queue.mutex.Unlock()
+	type entry struct {
+		id  string
+		seq int64
+	}
+	found := make([]entry, 0, len(queue.jobs))
+	for id, job := range queue.jobs {
+		if job.status == jobDead {
+			found = append(found, entry{id: id, seq: job.seq})
+		}
+	}
+	sort.Slice(found, func(left, right int) bool { return found[left].seq < found[right].seq })
+	dead := make([]DeadJob, 0, len(found))
+	for _, each := range found {
+		dead = append(dead, DeadJob{ID: each.id})
+	}
+	return dead
+}
+
+// ResetQueue empties the store, for a test block that starts from a fresh queue. The
+// sequence counter is deliberately NOT reset: it only has to be monotonic, and a counter that
+// restarts is how job ids came to repeat once already.
+func ResetQueue(queue *Queue) {
+	queue.mutex.Lock()
+	defer queue.mutex.Unlock()
+	queue.jobs = map[string]*queuedJob{}
 }
 
 // JobOutcome is what a worker run produced, for the `expectJobOk` style assertions.

@@ -329,6 +329,14 @@ let current_types : type_table option ref = ref None
    tells the emitter which server it addresses. *)
 let current_api_server : string option ref = ref None
 
+(* Where the api-test response record lives in the record table.  It shares the Tesl name
+   `HttpResponse` with `Tesl.HttpClient`'s outbound response — the checker has one opaque
+   type for both, since field access on either is untyped — but the two have different
+   RUNTIME shapes, and a module may import both.  So the api-test shape is keyed by a string
+   no Tesl type name can spell, and the plain name is left for the outbound one, which is the
+   only one an annotation can mention. *)
+let api_response_key = "HttpResponse (api-test)"
+
 (* Tesl type names that have their OWN codec in the module being emitted.  A value with a
    codec encodes through it; anything else falls back to the generic wire shape below. *)
 let current_codec_types : string list ref = ref []
@@ -1536,7 +1544,7 @@ let rec type_of_expr signatures env expr =
         when !current_api_server <> None ->
         (match !current_types with
          | Some types ->
-           (match Hashtbl.find_opt types.records "HttpResponse" with
+           (match Hashtbl.find_opt types.records api_response_key with
             | Some info -> TRecord info
             | None -> unsupported loc
               "Go backend needs `Tesl.ApiTest` imported for a request in an api-test")
@@ -1544,7 +1552,8 @@ let rec type_of_expr signatures env expr =
       (* The api-test queue verbs name a QUEUE, which the emitter resolves statically; their
         result types come from the queue's job type. *)
      | EVar { name = ("pendingJobCount" | "drainQueue" | "processNextJob"
-                     | "processNextDeadJob") as verb; _ } when queue_argument args <> None ->
+                     | "processNextDeadJob" | "deadJobs") as verb; _ }
+       when queue_argument args <> None ->
        let info = match queue_argument args with
          | Some name -> queue_of_job_type loc name
          | None -> assert false
@@ -1552,7 +1561,39 @@ let rec type_of_expr signatures env expr =
        (match verb with
         | "pendingJobCount" -> TInt
         | "drainQueue" -> TUnit
+        (* The dead-letter contents.  `DeadJob` is opaque — a test counts the list or
+           requeues from it, which is all the Racket surface allows either. *)
+        | "deadJobs" ->
+          (match Option.bind !current_types (fun types ->
+                   Hashtbl.find_opt types.records "DeadJob") with
+           | Some row -> TList (TRecord row)
+           | None -> unsupported loc
+             "Go backend needs `deadJobs` imported from `Tesl.Queue`")
         | _ -> job_result_type signatures loc info)
+     (* The secret-accepting header builders.  Their secret parameter is deliberately NOT
+        matched against a fixed type: every `secret` newtype is a distinct Go type, and the
+        generic call path demands an exact match, so the argument is checked here and unwrapped
+        at the emit site.  A plain String is accepted for the same reason Racket accepts one. *)
+     | EVar { name = ("HttpClient.bearer" | "HttpClient.secretHeader") as leaf; _ } ->
+       let signature = match Hashtbl.find_opt signatures leaf with
+         | Some signature -> signature
+         | None -> unsupported loc "Go backend cannot resolve function `%s`" leaf
+       in
+       let secret = match leaf, args with
+         | "HttpClient.bearer", [secret] -> secret
+         | "HttpClient.secretHeader", [name; secret] ->
+           if type_of_expr signatures env name <> TString then
+             unsupported (Checker.expr_loc name)
+               "Go backend `HttpClient.secretHeader` takes a String header name";
+           secret
+         | _ -> unsupported loc "Go backend `%s` is applied to the wrong arity" leaf
+       in
+       (match type_of_expr signatures env secret with
+        | TNewtype info when info.secret -> ()
+        | TString -> ()
+        | _ -> unsupported (Checker.expr_loc secret)
+          "Go backend `%s` takes a `secret` over String" leaf);
+       signature.result
      | EVar { name = ("expectJobOk" | "expectJobFailed"); _ } ->
        (match args with
         | [result] ->
@@ -2717,7 +2758,8 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
          holds payloads as `any` because a queue may carry several job types, and the emitter
          is what knows which one this queue carries. *)
       | EVar { name = ("pendingJobCount" | "drainQueue" | "processNextJob"
-                      | "processNextDeadJob") as verb; _ } when queue_argument args <> None ->
+                      | "processNextDeadJob" | "deadJobs") as verb; _ }
+        when queue_argument args <> None ->
         let info = match queue_argument args with
           | Some name -> queue_of_job_type loc name
           | None -> assert false
@@ -2751,6 +2793,8 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
         in
         (match verb with
          | "pendingJobCount" -> Printf.sprintf "teslrt.PendingJobCount(%s)" queue
+         (* `deadJobs` reads the store; no worker runs, so the dispatcher is unused here. *)
+         | "deadJobs" -> Printf.sprintf "teslrt.DeadJobs(%s)" queue
          | "drainQueue" ->
            (* A drain is a statement; the count it reports is not surfaced in Tesl. *)
            Printf.sprintf
@@ -2776,6 +2820,32 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
              Printf.sprintf "%s\treturn teslrt.JobOk(teslJob)\n" indent;
              Printf.sprintf "%s}())" indent;
            ])
+      (* The secret-accepting header builders.  They are the sanctioned sink for a `secret`,
+         so the ARGUMENT is where the unwrapping happens: a secret newtype hands over its
+         payload, and a plain String is wrapped on the way in — which is what
+         `make-secret-header` accepts on Racket too.  The runtime then holds the plaintext
+         behind an unguessable handle, so what the returned `Tuple2 String String` carries is
+         not the secret itself. *)
+      | EVar { name = ("HttpClient.bearer" | "HttpClient.secretHeader") as leaf; _ }
+        when args <> [] ->
+        ignore (type_of_expr signatures env app);
+        let secret_argument value =
+          let emitted = emit value in
+          match type_of_expr signatures env value with
+          | TNewtype info when info.secret ->
+            Printf.sprintf "%s.Value" (selector_operand emitted)
+          | TString -> Printf.sprintf "teslrt.MakeSecret(%s)" emitted
+          | _ -> unsupported loc
+            "Go backend `%s` takes a `secret` over String" leaf
+        in
+        (match leaf, args with
+         | "HttpClient.bearer", [secret] ->
+           Printf.sprintf "teslrt.HttpBearer(%s)" (secret_argument secret)
+         | "HttpClient.secretHeader", [name; secret] ->
+           Printf.sprintf "teslrt.HttpSecretHeader(%s, %s)"
+             (emit_expr ~expected:TString ~indent signatures env name)
+             (secret_argument secret)
+         | _ -> unsupported loc "Go backend `%s` is applied to the wrong arity" leaf)
       | EVar { name = ("expectJobOk" | "expectJobFailed") as verb; _ } when args <> [] ->
         ignore (type_of_expr signatures env app);
         Printf.sprintf "teslrt.%s(%s)"
@@ -5090,6 +5160,47 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) module_path package sign
   let body = Buffer.create 1024 in
   (* Numbers the operand bindings a comparison introduces, unique across the file. *)
   let expect_operand = ref 0 in
+  (* ── Per-test isolation ────────────────────────────────────────────────────
+     Every test block starts from empty stores, which is what Racket's
+     `call-with-fresh-memory-db` gives every `test`/`api-test` body.  Go runs a package's
+     tests in one process and (absent t.Parallel, which emitted tests never use) one at a
+     time, so without this the second block would see the first block's rows, jobs and HTTP
+     stubs — the exact leak the Racket side was fixed for, where one api-test saw another's
+     seed and answered 200 instead of 404.
+     Tables and queues of IMPORTED packages are reset too: a `database` block in another
+     module is where that leak actually bit, and here the owning package is known rather than
+     having to be recovered from a runtime registry. *)
+  let reset_calls =
+    let owned owner = owner = package || List.mem owner imported_packages in
+    match !current_types with
+    | None -> []
+    | Some types ->
+      let tables =
+        Hashtbl.to_seq_values types.entities
+        |> List.of_seq
+        |> List.filter (fun info -> owned info.ent_owner)
+        |> List.map (fun info ->
+             Printf.sprintf "teslrt.TableTruncate(%s)"
+               (qualified info.ent_owner info.ent_table_var))
+      and queues =
+        Hashtbl.to_seq_values types.queues
+        |> List.of_seq
+        |> List.filter (fun info -> owned info.qu_owner)
+        |> List.map (fun info ->
+             Printf.sprintf "teslrt.ResetQueue(%s)" (qualified info.qu_owner info.qu_go_var))
+      in
+      (* The stub table is only reset when the module can stub at all: `stubHttp` is in
+         `signatures` exactly when `Tesl.ApiTest` exposed it. *)
+      let stubs =
+        if Hashtbl.mem signatures "stubHttp" || Hashtbl.mem signatures "httpCallCount"
+           || Hashtbl.mem signatures "httpCalled" || Hashtbl.mem signatures "httpLastBody"
+        then ["teslrt.ResetHttpStubs()"] else []
+      in
+      List.sort_uniq String.compare (tables @ queues) @ stubs
+  in
+  let emit_reset () =
+    if reset_calls <> [] then Buffer.add_string body "\tteslResetTestState()\n"
+  in
   let rec emit_stmts env indent = function
     | [] -> ()
     | TsLet { name; value; loc; _ } :: rest ->
@@ -5271,6 +5382,7 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) module_path package sign
     ignore test.database;
     Buffer.add_char body '\n';
     Printf.bprintf body "func TestTesl%d(teslT *testing.T) {\n" index;
+    emit_reset ();
     emit_stmts [] "\t" test.stmts;
     Buffer.add_string body "}\n") tests;
   (* An `api-test` drives the emitted server IN PROCESS — no socket, so it is an ordinary
@@ -5288,10 +5400,19 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) module_path package sign
     Printf.bprintf body "// api-test %s\n//\n" (String.escaped api_test.description);
     Buffer.add_string body (line_directive api_test.loc);
     Printf.bprintf body "func TestTeslApi%d(teslT *testing.T) {\n" index;
+    emit_reset ();
     current_api_server := Some (go_ident ~exported:true api_test.server_name);
     emit_stmts [] "\t" api_test.stmts;
     current_api_server := None;
     Buffer.add_string body "}\n") api_tests;
+  if reset_calls <> [] then begin
+    Buffer.add_string body
+      "\n// teslResetTestState empties the stores every test block starts from, so no block\n\
+       // inherits another's rows, jobs, or outbound-HTTP stubs.\n\
+       func teslResetTestState() {\n";
+    List.iter (fun call -> Printf.bprintf body "\t%s\n" call) reset_calls;
+    Buffer.add_string body "}\n"
+  end;
   let body = Buffer.contents body in
   let expect_failure_helper =
     if contains_go_code body "teslExpectFailure(" then
@@ -5436,6 +5557,10 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | "isNull" | "isNotNull" | "isEmpty" | "isNotEmpty" | "hasLength" | "hasField"
           | "jsonInt" | "jsonString" | "jsonBool" | "jsonArray" | "jsonObject" | "jsonLength"
           | "arrayAt" | "fieldAt" | "bodyField" | "jsonContains" -> ()
+          (* The outbound-HTTP double: statements a test writes before the code under test
+             runs, and the assertions that read the call log afterwards. *)
+          | "stubHttp" | "stubHttpFailure" | "stubHttpTimeout"
+          | "httpCalled" | "httpCallCount" | "httpLastBody" -> ()
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.ApiTest` export `%s` yet" other) exposed
       | "Tesl.Http" ->
@@ -5444,6 +5569,17 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | "HttpRequest" | "cookieCap" | "Http.clearSessionCookie" -> ()
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.Http` export `%s` yet" other) exposed
+      (* `Tesl.HttpClient`: the four verbs and the two secret-accepting header builders are
+         runtime leaves (registered below); `HttpResponse` is the runtime-provided record
+         they answer with, and `httpClient` is the capability the checker enforces. *)
+      | "Tesl.HttpClient" ->
+        List.iter (fun name ->
+          match name with
+          | "httpClient" | "HttpResponse" | "HttpResponse?"
+          | "HttpClient.get" | "HttpClient.post" | "HttpClient.put" | "HttpClient.delete"
+          | "HttpClient.bearer" | "HttpClient.secretHeader" -> ()
+          | other -> unsupported import.loc
+            "Go backend does not support `Tesl.HttpClient` export `%s` yet" other) exposed
       (* `Tesl.DB` exports the two database CAPABILITIES, which the checker enforces and
          which have no runtime form, plus the `delete … returning result` ADT — refused
          while `deleteAndReturnResult` is. *)
@@ -5477,9 +5613,12 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           match name with
           | "Queue" | "QueueRetryStrategy" | "Fixed" | "Exponential" | "Linear"
           | "queueRead" | "queueWrite" | "FromQueue" | "FromDeadQueue" | "Job"
-          (* `pubsub` is the SSE capability and `deadJobs` a queue capability: both are
-             compile-time grants, and the FUNCTIONS they gate fail closed on their own. *)
-          | "pubsub" | "deadJobs" -> ()
+          (* `pubsub` is the SSE capability: a compile-time grant, and the functions it
+             gates fail closed on their own. *)
+          | "pubsub"
+          (* `deadJobs` is a FUNCTION over a queue (registered as a leaf below), and
+             `DeadJob` the opaque type of its elements. *)
+          | "deadJobs" | "DeadJob" -> ()
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.Queue` export `%s` yet" other) exposed
         (* validated against the leaf/type tables below *)
@@ -5905,6 +6044,52 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           loc = import.loc;
         }
       end) m.imports;
+    (* ── `Tesl.HttpClient`: the outbound verbs ───────────────────────────────
+       The `httpClient` capability erases with every other one; what the emitter needs is the
+       four verbs, the two secret-accepting header builders, and the response record.
+       `Tuple2` is registered as a side effect because the header list is a
+       `List (Tuple2 String String)` whether or not the module names the type itself. *)
+    let httpclient_leaf_names = [
+      "HttpClient.get"; "HttpClient.post"; "HttpClient.put"; "HttpClient.delete";
+      "HttpClient.bearer"; "HttpClient.secretHeader";
+    ] in
+    let httpclient_imports = ref [] in
+    let httpclient_imported = ref false in
+    List.iter (fun (import : import_decl) ->
+      if import.module_name = "Tesl.HttpClient" then begin
+        let exposed = match import.names with
+          | ImportAll -> [] | ImportExposing names -> names in
+        List.iter (fun name ->
+          if List.mem name httpclient_leaf_names then
+            httpclient_imports := name :: !httpclient_imports) exposed;
+        httpclient_imported := true;
+        tuple_imported := true
+      end) m.imports;
+    (* The outbound-HTTP test double.  Its declarations and assertions are ordinary calls, so
+       only the leaf table is needed — plus the per-test reset, emitted with the test bodies. *)
+    let http_stub_leaf_names = [
+      "stubHttp"; "stubHttpFailure"; "stubHttpTimeout";
+      "httpCalled"; "httpCallCount"; "httpLastBody";
+    ] in
+    let http_stub_imports = ref [] in
+    List.iter (fun (import : import_decl) ->
+      if import.module_name = "Tesl.ApiTest" then begin
+        let exposed = match import.names with
+          | ImportAll -> [] | ImportExposing names -> names in
+        List.iter (fun name ->
+          if List.mem name http_stub_leaf_names then
+            http_stub_imports := name :: !http_stub_imports) exposed
+      end) m.imports;
+    (* `deadJobs` answers the dead-letter contents of a queue.  Its element type is opaque
+       (`DeadJob`), so what a test can do with the list is count it or requeue from it — which
+       is what the Racket surface allows too. *)
+    let dead_jobs_imported = ref false in
+    List.iter (fun (import : import_decl) ->
+      if import.module_name = "Tesl.Queue" then begin
+        let exposed = match import.names with
+          | ImportAll -> [] | ImportExposing names -> names in
+        if List.mem "deadJobs" exposed then dead_jobs_imported := true
+      end) m.imports;
     List.iter (fun (import : import_decl) ->
       if import.module_name = "Tesl.String" then begin
         let exposed = match import.names with
@@ -5962,6 +6147,34 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           adt_builtin = true;
         }) ["Tuple2", 2; "Tuple3", 3]
     end;
+    (* The outbound `HttpResponse`: `{ status: Int, body: String, headers: List (Tuple2 String
+       String) }`.  Its `body` is response TEXT, not a parsed value — an outbound call is
+       ordinary program code, so a body it wants to read structurally goes through a codec
+       like any other string, and `String.contains resp.body "…"` stays a String operation. *)
+    if !httpclient_imported then begin
+      let loc = Location.dummy_loc m.source_file in
+      let header_pair = match Hashtbl.find_opt types.adts "Tuple2" with
+        | Some info -> TAdt (info, [TString; TString])
+        | None -> unsupported loc "Go backend needs `Tuple2` for HttpClient headers"
+      in
+      Hashtbl.replace types.records "HttpResponse" {
+        rec_tesl_name = "HttpResponse";
+        rec_owner = "";
+        rec_go_name = "teslrt.HttpResponse";
+        rec_fields = [ "status", TInt; "body", TString; "headers", TList header_pair ];
+        rec_loc = loc;
+      }
+    end;
+    (* `DeadJob` is opaque: the runtime carries the job's identity and nothing a program can
+       read, so the element type is a runtime struct with no Tesl-visible fields. *)
+    if !dead_jobs_imported then
+      Hashtbl.replace types.records "DeadJob" {
+        rec_tesl_name = "DeadJob";
+        rec_owner = "";
+        rec_go_name = "teslrt.DeadJob";
+        rec_fields = [];
+        rec_loc = Location.dummy_loc m.source_file;
+      };
     (* `HttpRequest` is runtime-provided too: a plain record the dispatcher builds once per
        request.  Only the fields Tesl exposes are present, so an ejecting author is not
        handed the whole net/http surface. *)
@@ -5972,8 +6185,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         (* Registered whenever `Tesl.ApiTest` is imported at all, not only when the type
            is named in the exposing list: a module may import just `statusOk` and still
            write `let r = get "/path"`, whose result IS this type. *)
-        if import.module_name = "Tesl.ApiTest" then
-          Hashtbl.replace types.records "HttpResponse" {
+        if import.module_name = "Tesl.ApiTest" then begin
+          let api_response = {
             rec_tesl_name = "HttpResponse";
             rec_owner = "";
             rec_go_name = "teslrt.ApiResponse";
@@ -5984,7 +6197,18 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
               "status", TInt; "body", TJson; "headers", TDict (TString, TString);
             ];
             rec_loc = import.loc;
-          };
+          } in
+          (* The checker has ONE opaque `HttpResponse`, shared by `Tesl.ApiTest` and
+             `Tesl.HttpClient`, because field access on it is untyped either way.  The two
+             backends' RUNTIME shapes differ (a parsed body here, response text and a header
+             list there), and a module may import both — lesson58 does — so the api-test
+             shape is kept under a key no Tesl type name can spell, and the NAME resolves to
+             the outbound response whenever `Tesl.HttpClient` is imported: that is the one an
+             annotation like `-> HttpResponse` can mention. *)
+          Hashtbl.replace types.records api_response_key api_response;
+          if not !httpclient_imported then
+            Hashtbl.replace types.records "HttpResponse" api_response
+        end;
         if List.mem "HttpRequest" exposed then begin
           let string_dict = TDict (TString, TString) in
           (* No explicit Go field names are needed: `record_field_go_name` capitalises, and
@@ -6428,6 +6652,56 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       Hashtbl.replace signatures name
         { params; result; go_name; sig_owner = ""; sig_needs_scope = false })
       !time_imports;
+    (* The outbound verbs.  A header list is `List (Tuple2 String String)`; the response is
+       the record registered above.  `bearer`/`secretHeader` take a `Secret String`, which is
+       a secret newtype — its Go type comes from the argument, so the parameter is typed as
+       the newtype the call site has rather than being fixed here. *)
+    if !httpclient_imports <> [] then begin
+      let loc = Location.dummy_loc m.source_file in
+      let response = match Hashtbl.find_opt types.records "HttpResponse" with
+        | Some info -> TRecord info
+        | None -> unsupported loc "Go backend `Tesl.HttpClient` needs its response type"
+      in
+      let header_pair = match Hashtbl.find_opt types.adts "Tuple2" with
+        | Some info -> TAdt (info, [TString; TString])
+        | None -> unsupported loc "Go backend needs `Tuple2` for HttpClient headers"
+      in
+      let headers = TList header_pair in
+      List.iter (fun name ->
+        let params, result, go_name = match name with
+          | "HttpClient.get" -> [TString; headers], response, "teslrt.HttpGet"
+          | "HttpClient.post" -> [TString; headers; TString], response, "teslrt.HttpPost"
+          | "HttpClient.put" -> [TString; headers; TString], response, "teslrt.HttpPut"
+          | "HttpClient.delete" -> [TString; headers], response, "teslrt.HttpDelete"
+          (* The secret parameter is typed `TParam` so a call passes its own secret newtype
+             through unchanged: the runtime takes a `teslrt.SecretString`, which is what every
+             secret newtype's Go representation is. *)
+          | "HttpClient.bearer" -> [TParam "Secret"], header_pair, "teslrt.HttpBearer"
+          | "HttpClient.secretHeader" ->
+            [TString; TParam "Secret"], header_pair, "teslrt.HttpSecretHeader"
+          | other -> unsupported loc
+            "Go backend does not support `Tesl.HttpClient` export `%s` yet" other
+        in
+        Hashtbl.replace signatures name
+          { params; result; go_name; sig_owner = ""; sig_needs_scope = false })
+        !httpclient_imports
+    end;
+    (* The outbound-HTTP double.  A stub DECLARATION is a statement whose Tesl type is Unit,
+       so the runtime entry points answer `struct{}` like `enqueue` does. *)
+    List.iter (fun name ->
+      let params, result, go_name = match name with
+        | "stubHttp" -> [TString; TString; TInt; TString], TUnit, "teslrt.StubHttp"
+        | "stubHttpFailure" -> [TString; TString; TString], TUnit, "teslrt.StubHttpFailure"
+        | "stubHttpTimeout" -> [TString; TString], TUnit, "teslrt.StubHttpTimeout"
+        | "httpCalled" -> [TString; TString], TBool, "teslrt.HttpCalled"
+        | "httpCallCount" -> [TString; TString], TInt, "teslrt.HttpCallCount"
+        | "httpLastBody" -> [TString; TString], TString, "teslrt.HttpLastBody"
+        | other -> unsupported (Location.dummy_loc m.source_file)
+          "Go backend does not support the HTTP-stub leaf `%s` yet" other
+      in
+      Hashtbl.replace signatures name
+        { params; result; go_name; sig_owner = ""; sig_needs_scope = false })
+      !http_stub_imports;
     (* An imported local module contributes its exported functions with the OWNING
        package attached, so every reference to them is qualified. *)
     let imported_packages = ref [] in

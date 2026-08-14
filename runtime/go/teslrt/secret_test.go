@@ -10,10 +10,14 @@ import (
 // The point of the type: an accidental print must not disclose the payload.
 func TestSecretRedactsEverywhere(t *testing.T) {
 	secret := MakeSecret("hunter2")
+	// The verb comes through a variable so that each case really does go through fmt's
+	// formatting machinery: written literally, `fmt.Sprintf("%s", secret)` is a finding
+	// (S1025) whose suggested rewrite — call String() directly — deletes the thing under test.
+	formatted := func(verb string) string { return fmt.Sprintf(verb, secret) }
 	for label, rendered := range map[string]string{
-		"%v":     fmt.Sprintf("%v", secret),
-		"%s":     fmt.Sprintf("%s", secret),
-		"%#v":    fmt.Sprintf("%#v", secret),
+		"%v":     formatted("%v"),
+		"%s":     formatted("%s"),
+		"%#v":    formatted("%#v"),
 		"Sprint": fmt.Sprint(secret),
 		"inside a struct": fmt.Sprintf("%v", struct {
 			Password SecretString

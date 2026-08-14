@@ -3729,6 +3729,364 @@ let test_queue_with_go () =
   gate_emitted "tesl-go-queue" emitted
 
 
+(* ─── Outbound HTTP, and its test double ──────────────────────────────────────
+   `Tesl.HttpClient` is the only stdlib module that reaches the network, so the emitted call
+   carries protections a program cannot opt out of (a CR/LF header guard, SSRF containment by
+   resolved address, verified TLS, deadlines, a response-body cap) — those are unit-tested in
+   the runtime.  What is tested HERE is the language surface: the four verbs, the response
+   record's fields, and the stub double that makes a handler which calls out testable at all.
+
+   `HttpResponse` is also where the two backends' shapes could drift: the checker has ONE
+   opaque type shared with `Tesl.ApiTest`, so a module importing both (lesson58 does) must get
+   the outbound record for an annotation and the api-test record for a request verb. *)
+let httpclient_source = {|module GoHttpClient exposing [fetchRates, isSuccess, headersOf]
+
+import Tesl.Prelude exposing [Int, String, Bool(..), List]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.List exposing [List.head, List.length]
+import Tesl.String exposing [String.contains]
+import Tesl.Tuple exposing [Tuple2, Tuple2.first, Tuple2.second]
+import Tesl.HttpClient exposing [
+  httpClient,
+  HttpResponse,
+  HttpClient.get,
+  HttpClient.post,
+  HttpClient.put,
+  HttpClient.delete,
+]
+import Tesl.ApiTest exposing [
+  stubHttp,
+  stubHttpFailure,
+  stubHttpTimeout,
+  httpCalled,
+  httpCallCount,
+  httpLastBody,
+]
+
+capability webClient implies httpClient
+
+fn isSuccess(resp: HttpResponse) -> Bool =
+  resp.status >= 200 && resp.status < 300
+
+fn headersOf(resp: HttpResponse) -> List (Tuple2 String String) =
+  resp.headers
+
+fn firstHeaderName(headers: List (Tuple2 String String)) -> Maybe String =
+  case List.head headers of
+    Something h -> Something (Tuple2.first h)
+    Nothing -> Nothing
+
+fn fetchRates(url: String) -> HttpResponse
+  requires [webClient] =
+  HttpClient.get url [Tuple2 "Accept" "application/json"]
+
+fn pushRates(url: String, payload: String) -> HttpResponse
+  requires [webClient] =
+  HttpClient.post url [] payload
+
+fn replaceRates(url: String, payload: String) -> HttpResponse
+  requires [webClient] =
+  HttpClient.put url [] payload
+
+fn dropRates(url: String) -> HttpResponse
+  requires [webClient] =
+  HttpClient.delete url []
+
+test "a canned response answers without touching the network" requires [webClient] {
+  stubHttp "GET" "https://rates.test/v1" 200 "{\"usd\": 110}"
+  let r = fetchRates "https://rates.test/v1"
+  expect r.status == 200
+  expect r.body == "{\"usd\": 110}"
+  expect isSuccess r == True
+  expect String.contains r.body "usd"
+  expect httpCalled "GET" "https://rates.test/v1"
+  expect httpCallCount "GET" "https://rates.test/v1" == 1
+}
+
+test "the method is part of the match, and every verb dispatches" requires [webClient] {
+  stubHttp "GET" "https://rates.test/v1" 200 "get"
+  stubHttp "POST" "https://rates.test/v1" 201 "post"
+  stubHttp "PUT" "https://rates.test/v1" 202 "put"
+  stubHttp "DELETE" "https://rates.test/v1" 204 "delete"
+  expect (fetchRates "https://rates.test/v1").body == "get"
+  expect (pushRates "https://rates.test/v1" "p").body == "post"
+  expect (replaceRates "https://rates.test/v1" "p").body == "put"
+  expect (dropRates "https://rates.test/v1").status == 204
+}
+
+test "a trailing * matches a URL prefix and the first declared rule wins" requires [webClient] {
+  stubHttp "GET" "https://rates.test/v1" 200 "specific"
+  stubHttp "*" "https://rates.test/*" 500 "catch-all"
+  expect (fetchRates "https://rates.test/v1").body == "specific"
+  expect (fetchRates "https://rates.test/v2?since=1").status == 500
+}
+
+test "httpLastBody shows what was actually sent" requires [webClient] {
+  stubHttp "POST" "https://rates.test/log" 202 "queued"
+  let r = pushRates "https://rates.test/log" "{\"event\": \"sync\"}"
+  expect r.status == 202
+  expect httpLastBody "POST" "https://rates.test/log" == "{\"event\": \"sync\"}"
+}
+
+test "a refused connection and a timeout are both reachable" requires [webClient] {
+  stubHttpFailure "GET" "https://rates.test/down" "connection refused"
+  expectFail fetchRates "https://rates.test/down"
+  stubHttpTimeout "GET" "https://rates.test/slow"
+  expectFail fetchRates "https://rates.test/slow"
+}
+
+test "an unstubbed call fails loudly instead of reaching the network" requires [webClient] {
+  stubHttp "GET" "https://rates.test/v1" 200 "ok"
+  expectFail fetchRates "https://elsewhere.test/v1"
+  expect httpCalled "GET" "https://elsewhere.test/v1"
+}
+
+test "neither a rule nor the call log leaks out of the previous block" requires [webClient] {
+  expect httpCallCount "*" "*" == 0
+  expect httpCalled "GET" "https://rates.test/v1" == False
+  stubHttp "GET" "https://other.test/v1" 200 "ok"
+  expectFail fetchRates "https://rates.test/v1"
+}
+
+test "response headers are a list of pairs" requires [webClient] {
+  stubHttp "GET" "https://rates.test/v1" 200 "body"
+  let r = fetchRates "https://rates.test/v1"
+  expect List.length (headersOf r) == 0
+  expect firstHeaderName (headersOf r) == Nothing
+  expect firstHeaderName [Tuple2 "Content-Type" "application/json"] == Something "Content-Type"
+  expect Tuple2.second (Tuple2 "a" "b") == "b"
+}
+|}
+
+let test_httpclient_with_go () =
+  let emitted = emit_ok "<go-httpclient>" httpclient_source in
+  let module_go = artifact "internal/teslmodgohttpclient/module.go" emitted in
+  check bool "a verb is one runtime call carrying the header list" true
+    (contains module_go
+       "teslrt.HttpGet(url, []teslrt.Tuple2[string, string]{teslrt.Tuple2[string, string]{Tuple2First: \"Accept\", Tuple2Second: \"application/json\"}})");
+  check bool "the response record is the runtime's" true
+    (contains module_go "func IsSuccess(resp teslrt.HttpResponse) bool");
+  check bool "and its body is response TEXT, not a parsed value" true
+    (contains module_go "func HeadersOf(resp teslrt.HttpResponse) []teslrt.Tuple2[string, string]");
+  let tests_go = artifact "internal/teslmodgohttpclient/module_test.go" emitted in
+  check bool "a stub declaration is a statement" true
+    (contains tests_go
+       "_ = teslrt.StubHttp(\"GET\", \"https://rates.test/v1\", teslrt.FromInt64(200), \"{\\\"usd\\\": 110}\")");
+  check bool "and the call log is read back through the runtime" true
+    (contains tests_go "teslrt.HttpCallCount(\"GET\", \"https://rates.test/v1\")");
+  (* Isolation is not a property of the runtime alone: it needs the emitted per-test reset,
+     because Go runs a package's tests in ONE process. *)
+  check bool "every test block starts from a cleared stub table" true
+    (contains tests_go "teslrt.ResetHttpStubs()");
+  gate_emitted "tesl-go-httpclient" emitted
+
+(* The secret-accepting header builders are the sanctioned sink for a `secret`: they exist so
+   that `("Authorization", "Bearer " ++ key.value)` — which `secret` makes impossible — has a
+   replacement.  Their Tesl type is `Tuple2 String String`, so the value half is a Go `string`
+   and CANNOT be Racket's opaque wrapper; it is an unguessable handle naming the plaintext in a
+   runtime table instead, unwrapped only on its way to the socket.  Same property, different
+   mechanism — so the test asserts the property: the name is readable, the value is not the
+   secret, and the call still goes out. *)
+let secret_header_source = {|module GoSecretHeader exposing [callUpstream, callWithApiKey]
+
+import Tesl.Prelude exposing [Int, String, Bool(..), List]
+import Tesl.Tuple exposing [Tuple2, Tuple2.first, Tuple2.second]
+import Tesl.HttpClient exposing [
+  httpClient,
+  HttpResponse,
+  HttpClient.get,
+  HttpClient.bearer,
+  HttpClient.secretHeader,
+]
+import Tesl.ApiTest exposing [stubHttp, httpCallCount]
+
+capability webClient implies httpClient
+
+secret ApiKey = String
+
+fn callUpstream(url: String, key: ApiKey) -> HttpResponse
+  requires [webClient] =
+  HttpClient.get url [HttpClient.bearer key]
+
+fn callWithApiKey(url: String, key: ApiKey) -> HttpResponse
+  requires [webClient] =
+  HttpClient.get url [HttpClient.secretHeader "X-Api-Key" key]
+
+test "a bearer header carries a secret to the upstream" requires [webClient] {
+  stubHttp "GET" "https://api.test/me" 200 "{\"id\": \"u-1\"}"
+  let r = callUpstream "https://api.test/me" (ApiKey "sk-live-123")
+  expect r.status == 200
+  expect httpCallCount "GET" "https://api.test/me" == 1
+}
+
+test "a named secret header does too" requires [webClient] {
+  stubHttp "GET" "https://api.test/me" 200 "ok"
+  let r = callWithApiKey "https://api.test/me" (ApiKey "sk-live-123")
+  expect r.body == "ok"
+}
+
+test "the header NAME is readable, and the value is not the secret" requires [webClient] {
+  let header = HttpClient.bearer (ApiKey "sk-live-123")
+  expect Tuple2.first header == "Authorization"
+  expect (Tuple2.second header == "sk-live-123") == False
+}
+|}
+
+let test_secret_header_with_go () =
+  let emitted = emit_ok "<go-secret-header>" secret_header_source in
+  let module_go = artifact "internal/teslmodgosecretheader/module.go" emitted in
+  (* The unwrapping is at the ARGUMENT: every `secret` newtype is a distinct Go type, so the
+     builder takes the payload rather than the wrapper. *)
+  check bool "a secret newtype hands over its payload at the sink" true
+    (contains module_go "teslrt.HttpBearer(key.Value)");
+  check bool "and a named header does the same" true
+    (contains module_go "teslrt.HttpSecretHeader(\"X-Api-Key\", key.Value)");
+  gate_emitted "tesl-go-secret-header" emitted
+
+(* A hung upstream INSIDE A WORKER is the case the deadline exists for: without one the job
+   never fails, so retry and dead-lettering never run.  Stubbing the timeout makes that
+   deterministic, and `deadJobs` is how a test sees where the job ended up.
+
+   This module imports `Tesl.HttpClient` and `Tesl.ApiTest` together — the shape that made the
+   shared `HttpResponse` name ambiguous — so an annotation resolving to the outbound record and
+   a request verb resolving to the api-test one are both exercised here. *)
+let http_worker_source = {|module GoHttpWorker exposing [SyncServer]
+
+import Tesl.Prelude exposing [Int, String, Bool(..), List]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.List exposing [List.length]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.Queue exposing [
+  FromQueue,
+  deadJobs,
+  queueRead,
+  queueWrite,
+  Queue,
+  Job,
+  QueueRetryStrategy,
+  Fixed,
+]
+import Tesl.HttpClient exposing [httpClient, HttpResponse, HttpClient.get]
+import Tesl.ApiTest exposing [
+  statusOk,
+  JobResult(..),
+  processNextJob,
+  pendingJobCount,
+  expectJobFailed,
+  stubHttp,
+  stubHttpTimeout,
+  httpCallCount,
+]
+
+capability webClient implies httpClient
+
+database SyncDb = Database {
+  schema: "gohttpworker"
+  entities: []
+  backend: Memory
+}
+
+fn fetchUpstream(url: String) -> HttpResponse
+  requires [webClient] =
+  HttpClient.get url []
+
+record SyncJob {
+  tag: String
+}
+
+queue SyncQueue requires [queueRead, webClient] = Queue {
+  database: SyncDb
+  jobs: [Job SyncJob syncWorker Nothing]
+  retry: QueueRetryStrategy {
+    maxAttempts: 2
+    backoff: Fixed
+    initialDelay: 1
+  }
+}
+
+worker syncWorker(job: SyncJob ::: FromQueue (Id == jobId) job)
+  requires [queueRead, webClient] =
+  let _resp = fetchUpstream "https://upstream.test/sync"
+  job
+
+record SyncRequest {
+  tag: String
+}
+
+codec SyncRequest {
+  toJson {
+    tag -> "tag" with_codec stringCodec
+  }
+  fromJson [
+    {
+      tag <- "tag" with_codec stringCodec
+    }
+  ]
+}
+
+handler post startSync(req: SyncRequest) -> String
+  requires [queueWrite] =
+  enqueue SyncJob { tag: req.tag }
+  "queued"
+
+api SyncApi {
+  post "/sync"
+    body req: SyncRequest
+    -> String
+}
+
+server SyncServer for SyncApi {
+  startSync
+}
+
+api-test "an upstream timeout fails the job, then dead-letters it" for SyncServer requires [queueRead, queueWrite, webClient] {
+  stubHttpTimeout "GET" "https://upstream.test/sync"
+
+  let queued = post "/sync" body { "tag": "nightly" }
+  expect statusOk queued.status
+  expect pendingJobCount SyncQueue == 1
+
+  let first = processNextJob SyncQueue
+  let firstJob = expectJobFailed first
+  expect pendingJobCount SyncQueue == 1
+
+  let second = processNextJob SyncQueue
+  let secondJob = expectJobFailed second
+  expect pendingJobCount SyncQueue == 0
+  expect List.length (deadJobs SyncQueue) == 1
+
+  expect httpCallCount "GET" "https://upstream.test/sync" == 2
+}
+
+api-test "the same worker succeeds when the upstream answers" for SyncServer requires [queueRead, queueWrite, webClient] {
+  stubHttp "GET" "https://upstream.test/sync" 200 "ok"
+
+  let queued = post "/sync" body { "tag": "nightly" }
+  expect statusOk queued.status
+
+  let done = processNextJob SyncQueue
+  expect pendingJobCount SyncQueue == 0
+  expect List.length (deadJobs SyncQueue) == 0
+  expect httpCallCount "GET" "https://upstream.test/sync" == 1
+}
+|}
+
+let test_http_worker_with_go () =
+  let emitted = emit_ok "<go-http-worker>" http_worker_source in
+  let module_go = artifact "internal/teslmodgohttpworker/module.go" emitted in
+  check bool "the worker's outbound call is an ordinary emitted call" true
+    (contains module_go "teslrt.HttpGet(url, []teslrt.Tuple2[string, string]{})");
+  let tests_go = artifact "internal/teslmodgohttpworker/module_test.go" emitted in
+  check bool "the dead letter is read through the runtime" true
+    (contains tests_go "teslrt.DeadJobs(SyncQueueQueue)");
+  (* The SECOND api-test asserts an EMPTY dead letter, which only holds because the queue is
+     reset per block: Racket gets that from `call-with-fresh-memory-db` wrapping every test
+     body, and Go needs it emitted. *)
+  check bool "the queue is emptied before each block" true
+    (contains tests_go "teslrt.ResetQueue(SyncQueueQueue)");
+  gate_emitted "tesl-go-http-worker" emitted
+
 (* ─── Combined checks, and `case` as a test statement ─────────────────────────
    `check (checkA && checkB) x` runs each in turn and short-circuits on the first
    rejection — Racket's `check-and`, with the fact merge dropped because facts erase.  A
@@ -5081,6 +5439,11 @@ let go_corpus = [
      `Maybe (Fact P)` whose Maybe is real control flow. *)
   "example/sandbox.tesl";
   "tests/multiparam_test.tesl";
+  (* Outbound HTTP: the lesson is the docs-facing surface (four verbs, the response record,
+     the stub double), and the stub suite adds the case the deadline exists for — a hung
+     upstream INSIDE a worker, which must fail the job so retry and dead-lettering run. *)
+  "example/learn/lesson58-httpclient.tesl";
+  "tests/http-stub-tests.tesl";
 ]
 
 let test_go_corpus_with_go () =
@@ -5193,6 +5556,15 @@ let () =
       test_case "`case` as a test statement" `Slow test_case_statement_with_go;
       test_case "test-statement case behaves the same on Racket" `Slow
         (racket_behavior_oracle "<go-test-case-oracle>" test_case_stmt_source);
+      test_case "outbound HTTP and its test double" `Slow test_httpclient_with_go;
+      test_case "outbound HTTP behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-httpclient-oracle>" httpclient_source);
+      test_case "secret-accepting outbound headers" `Slow test_secret_header_with_go;
+      test_case "secret headers behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-secret-header-oracle>" secret_header_source);
+      test_case "an upstream timeout inside a worker" `Slow test_http_worker_with_go;
+      test_case "a worker's upstream timeout behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-http-worker-oracle>" http_worker_source);
       test_case "Memory-backend queues" `Slow test_queue_with_go;
       test_case "queues behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-queue-oracle>" queue_source);
