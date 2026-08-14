@@ -42,6 +42,10 @@ and newtype_info = {
   owner : string;
   go_name : string;
   base : go_type;
+  (* A `secret` newtype.  Its payload is a `teslrt.SecretString`, which prints as
+     "[redacted]" through every fmt verb, and equality on it is CONSTANT TIME — a secret
+     that leaked through a log line or a timing difference would be a secret in name only. *)
+  secret : bool;
   loc : Location.loc;
 }
 
@@ -748,6 +752,12 @@ and equal_expr ty left right =
      equal -0.0.  Both are inverted from Go's `==`, so `==` is never emitted. *)
   | TFloat -> Printf.sprintf "teslrt.FloatEqual(%s, %s)" left right
   | TString | TBool | TUnit -> Printf.sprintf "(%s == %s)" left right
+  (* A SECRET compares in CONSTANT TIME: comparing its payload with `==` would leak a prefix
+     through how long the comparison took, which is the classic way a token check betrays the
+     token.  Racket's `secret-constant-time-equal?` says the same thing. *)
+  | TNewtype info when info.secret ->
+    Printf.sprintf "teslrt.SecretEqual(%s.Value, %s.Value)"
+      (selector_operand left) (selector_operand right)
   | TNewtype info ->
     equal_expr info.base (Printf.sprintf "%s.Value" (selector_operand left))
       (Printf.sprintf "%s.Value" (selector_operand right))
@@ -816,6 +826,9 @@ and unequal_expr ty left right =
   | TInt -> Printf.sprintf "!teslrt.Equal(%s, %s)" left right
   | TFloat -> Printf.sprintf "!teslrt.FloatEqual(%s, %s)" left right
   | TString | TBool | TUnit -> Printf.sprintf "(%s != %s)" left right
+  | TNewtype info when info.secret ->
+    Printf.sprintf "!teslrt.SecretEqual(%s.Value, %s.Value)"
+      (selector_operand left) (selector_operand right)
   | TNewtype info ->
     unequal_expr info.base (Printf.sprintf "%s.Value" (selector_operand left))
       (Printf.sprintf "%s.Value" (selector_operand right))
@@ -891,7 +904,9 @@ and ordered_expr ty op left right =
 
 let rec supports_ordering = function
   | TInt | TFloat | TString -> true
-  | TNewtype info -> supports_ordering info.base
+  (* A secret must not be ORDERED: sorting or comparing them leaks their relative values,
+     and there is no use for it. *)
+  | TNewtype info -> (not info.secret) && supports_ordering info.base
   | TBool | TUnit | TRecord _ | TAdt _ | TList _ | TDict _ | TSet _ | TParam _
   | TFunc _ | TCheck _ | TFailure -> false
 
@@ -2447,7 +2462,13 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
        ignore (type_of_expr signatures env expr);
        (match args with
         | [arg] ->
-          Printf.sprintf "%s{Value: %s}" (go_type result) (emit arg)
+          let payload = emit arg in
+          let payload = match result with
+            | TNewtype info when info.secret ->
+              Printf.sprintf "teslrt.MakeSecret(%s)" payload
+            | _ -> payload
+          in
+          Printf.sprintf "%s{Value: %s}" (go_type result) payload
         | _ -> unsupported loc "Go backend requires a fully-applied newtype constructor `%s`" name)
      (* A proof term erases: `ValidPort port` is the zero-size proof value. *)
      | Some { params = []; result = TUnit; go_name = "struct{}{}"; _ } -> "struct{}{}"
@@ -2559,7 +2580,14 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
            ignore (type_of_expr signatures env app);
            (match constructor_args @ args with
             | [arg] ->
-              Printf.sprintf "%s{Value: %s}" (go_type result) (emit arg)
+              (* A secret's payload goes in through `MakeSecret`, so the plaintext is held by
+                 the redacting carrier from the moment it is constructed. *)
+              let payload = match result with
+                | TNewtype info when info.secret ->
+                  Printf.sprintf "teslrt.MakeSecret(%s)" (emit arg)
+                | _ -> emit arg
+              in
+              Printf.sprintf "%s{Value: %s}" (go_type result) payload
             | _ -> assert false)
          (* A proof term erases: `ValidPort port` is the zero-size proof value. *)
          | Some { params = []; result = TUnit; go_name = "struct{}{}"; _ } -> "struct{}{}"
@@ -4396,8 +4424,17 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
   |> List.iter (fun info ->
     Buffer.add_char body '\n';
     Buffer.add_string body (line_directive info.loc);
-    Printf.bprintf body "type %s struct {\n\tValue %s\n}\n"
-      info.go_name (go_type info.base));
+    if info.secret then begin
+      (* A SECRET newtype carries a redacting payload, and the type itself gets `String()` so
+         that printing the newtype — not just its field — redacts.  Reaching the plaintext is
+         `.Value.Reveal()`, spelled to be greppable. *)
+      Printf.bprintf body "type %s struct {\n\tValue teslrt.SecretString\n}\n" info.go_name;
+      Printf.bprintf body
+        "\nfunc (teslSecret %s) String() string { return teslrt.SecretRedaction }\n"
+        info.go_name
+    end else
+      Printf.bprintf body "type %s struct {\n\tValue %s\n}\n"
+        info.go_name (go_type info.base));
   Hashtbl.to_seq_values types.records
   |> List.of_seq
   |> List.sort (fun left right -> String.compare left.rec_tesl_name right.rec_tesl_name)
@@ -5279,15 +5316,19 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
     let taken : (string, unit) Hashtbl.t = Hashtbl.create 32 in
     let package_ident name = unique_ident taken (go_ident ~exported:true name) in
     List.iter (function
-      | DType (TypeNewtype { name; secret = true; loc; _ }) ->
-        unsupported loc "Go backend does not support secret newtype `%s` yet" name
-      | DType (TypeNewtype { name; base_type; loc; _ }) ->
+      | DType (TypeNewtype { name; base_type; secret; loc; _ }) ->
         let base = primitive_type_of_type_expr base_type in
+        (* A secret's payload is held as a `teslrt.SecretString`, so only a String base has a
+           representation today; a secret over Int would need its own redacting carrier and
+           has no corpus use. *)
+        if secret && base <> TString then unsupported loc
+          "Go backend supports a `secret` newtype over String only (`%s`)" name;
         Hashtbl.replace types.newtypes name {
           tesl_name = name;
           owner = package;
           go_name = package_ident name;
           base;
+          secret;
           loc;
         }
       | _ -> ()) m.decls;
@@ -5660,6 +5701,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           owner = "";
           go_name = "teslrt.PosixMillis";
           base = TInt;
+          secret = false;
           loc = import.loc;
         }
       end) m.imports;

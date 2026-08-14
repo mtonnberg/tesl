@@ -215,6 +215,10 @@ let racket_behavior_oracle label source () =
 let test_racket_go_behavior_oracle = racket_behavior_oracle "<go-test>" source
 
 let test_unsupported_fails_closed () =
+  (* A `secret` over a String IS supported now (see the secret-newtype case below); an
+     Int-backed one has no redacting carrier and still fails closed, which keeps this case
+     doing what it was written for: proving an unsupported form produces a diagnostic from
+     the go-emitter rather than artifacts. *)
   let unsupported = {|module Unsupported exposing []
 import Tesl.Prelude exposing [Int]
 secret Count = Int
@@ -224,7 +228,8 @@ secret Count = Int
   | Compile.GoFailure diagnostics ->
     check bool "go emitter diagnostic" true
       (List.exists (fun (d : Compile.diagnostic) ->
-         d.source = "go-emitter" && contains d.message "secret newtype") diagnostics)
+         d.source = "go-emitter" && contains d.message "newtype over String only")
+         diagnostics)
 
 let test_string_cannot_trigger_runtime_import () =
   let source = {|module Go exposing [literal]
@@ -3860,6 +3865,68 @@ let test_function_values_with_go () =
     (contains module_go "ApplyTwice(addOne, n)");
   gate_emitted "tesl-go-func-value" emitted
 
+
+(* ─── Secret newtypes ─────────────────────────────────────────────────────────
+   A `secret` newtype's payload is a `teslrt.SecretString`: it prints as "[redacted]"
+   through every fmt verb (and through JSON), and equality on it is CONSTANT TIME.  Both
+   halves matter — a secret that leaked through a log line or through how long a comparison
+   took would be a secret in name only. *)
+let secret_source = {|module GoSecret exposing [matches, stored]
+
+import Tesl.Prelude exposing [Bool(..), String]
+
+# A `secret` newtype: distinct from String, and its payload must never print.
+secret Password = String
+
+record Credential {
+  user: String
+  password: Password
+}
+
+fn matches(left: Password, right: Password) -> Bool =
+  left == right
+
+fn stored(user: String, raw: String) -> Credential =
+  Credential { user: user, password: Password raw }
+
+test "secrets compare by value and travel inside records" {
+  expect matches (Password "hunter2") (Password "hunter2") == True
+  expect matches (Password "hunter2") (Password "hunter3") == False
+  expect (stored "ada" "hunter2").user == "ada"
+  expect matches (stored "ada" "hunter2").password (Password "hunter2") == True
+}
+|}
+
+let test_secret_newtype_with_go () =
+  let emitted = emit_ok "<go-secret>" secret_source in
+  let module_go = artifact "internal/teslmodgosecret/module.go" emitted in
+  check bool "a secret's payload is the redacting carrier" true
+    (contains module_go "type Password struct {\n\tValue teslrt.SecretString\n}");
+  check bool "and the type itself redacts when printed" true
+    (contains module_go
+       "func (teslSecret Password) String() string { return teslrt.SecretRedaction }");
+  check bool "the plaintext enters through MakeSecret" true
+    (contains module_go "Password{Value: teslrt.MakeSecret(raw)}");
+  check bool "equality is constant time, never ==" true
+    (contains module_go "teslrt.SecretEqual(left.Value, right.Value)");
+  check bool "a secret is never compared with Go ==" false
+    (contains module_go "left.Value == right.Value");
+  gate_emitted "tesl-go-secret" emitted
+
+let test_secret_over_non_string_fails_closed () =
+  let unsupported = {|module SecretInt exposing [wrap]
+import Tesl.Prelude exposing [Int]
+secret Token = Int
+fn wrap(n: Int) -> Token = Token n
+|} in
+  match Compile.compile_go_source "<go-secret-int>" unsupported with
+  | Compile.GoSuccess _ -> fail "a secret over Int emitted Go artifacts"
+  | Compile.GoFailure diagnostics ->
+    check bool "only a String-backed secret has a carrier today" true
+      (List.exists (fun (d : Compile.diagnostic) ->
+         d.source = "go-emitter" && contains d.message "`secret` newtype over String only")
+         diagnostics)
+
 let test_divergent_float_functions_fail_closed () =
   (* Go's sin/cos/tan disagree with Racket on 22-34% of inputs and its math.Log is
      outright wrong for subnormals, so these are rejected rather than emitted
@@ -4990,6 +5057,11 @@ let () =
       test_case "HTTP checked path captures" `Slow test_http_capture_with_go;
       test_case "HTTP cookie writing via requires [cookieCap]" `Slow test_http_cookie_with_go;
       test_case "Tesl api-tests run against the Go server" `Slow test_go_api_tests;
+      test_case "secret newtypes" `Slow test_secret_newtype_with_go;
+      test_case "secrets behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-secret-oracle>" secret_source);
+      test_case "a secret over a non-String fails closed" `Quick
+        test_secret_over_non_string_fails_closed;
       test_case "function values and lambdas" `Slow test_function_values_with_go;
       test_case "function values behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-func-value-oracle>" function_value_source);
