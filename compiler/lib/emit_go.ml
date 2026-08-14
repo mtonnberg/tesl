@@ -197,6 +197,34 @@ let package_name name =
   let value = Buffer.contents b in
   "teslmod" ^ value
 
+(* JSON string/number rendering for an api-test body template.  Separate from `go_quote`,
+   which escapes for GO source: here the escapes are JSON's, and the result is then quoted
+   for Go as ordinary text. *)
+let json_quote value =
+  let b = Buffer.create (String.length value + 2) in
+  Buffer.add_char b '"';
+  String.iter (fun c ->
+    match c with
+    | '"' -> Buffer.add_string b "\\\""
+    | '\\' -> Buffer.add_string b "\\\\"
+    | '\n' -> Buffer.add_string b "\\n"
+    | '\r' -> Buffer.add_string b "\\r"
+    | '\t' -> Buffer.add_string b "\\t"
+    | c when Char.code c < 0x20 ->
+      Buffer.add_string b (Printf.sprintf "\\u%04x" (Char.code c))
+    | c -> Buffer.add_char b c) value;
+  Buffer.add_char b '"';
+  Buffer.contents b
+
+(* JSON has no Inf/NaN, so a template carrying one is a compile error rather than invalid
+   JSON on the wire. *)
+let json_float value =
+  if Float.is_nan value || Float.is_integer value = false && Float.is_finite value = false
+  then invalid_arg "api-test body: JSON has no representation for NaN or Infinity"
+  else if Float.is_integer value && Float.abs value < 1e15 then
+    Printf.sprintf "%.1f" value
+  else Printf.sprintf "%.17g" value
+
 let go_quote value =
   let b = Buffer.create (String.length value + 2) in
   Buffer.add_char b '"';
@@ -249,12 +277,29 @@ type entity_info = {
   ent_loc : Location.loc;
 }
 
+(* A `queue` is a job STORE plus the wiring from job type to worker.  Like an entity's
+   table it is one package-level variable; unlike one, it also carries the dispatch a
+   test's `processNextJob` needs, which is why the worker names live here. *)
+type queue_info = {
+  qu_tesl_name : string;
+  qu_go_var : string;
+  qu_owner : string;
+  qu_job_type : string;            (* the job record's Tesl name *)
+  qu_worker : string;              (* the worker function's Tesl name *)
+  qu_dead_worker : string option;
+  qu_max_attempts : int;
+  qu_loc : Location.loc;
+}
+
 (** Named nominal types the emitter can resolve: scalar newtypes and records. *)
 type type_table = {
   newtypes : (string, newtype_info) Hashtbl.t;
   records : (string, record_info) Hashtbl.t;
   adts : (string, adt_info) Hashtbl.t;
   entities : (string, entity_info) Hashtbl.t;
+  (* Keyed by the QUEUE's name and again by its job type: `enqueue` names the job type,
+     while an api-test verb names the queue. *)
+  queues : (string, queue_info) Hashtbl.t;
 }
 
 (* The table for the module being emitted.  A ref for the same reason `current_package`
@@ -897,6 +942,32 @@ let entity_of_query loc name =
   | Some info -> info
   | None -> unsupported loc "Go backend cannot resolve entity `%s`" name
 
+(* A queue is found by the JOB TYPE (`enqueue`) or by its own name (an api-test verb); the
+   table holds both keys. *)
+let queue_of_job_type loc name =
+  match Option.bind !current_types (fun types -> Hashtbl.find_opt types.queues name) with
+  | Some info -> info
+  | None -> unsupported loc "Go backend cannot resolve a queue for `%s`" name
+
+(* An api-test queue verb takes the QUEUE as its only argument, written as a bare name
+   (`pendingJobCount SendQueue`), which parses as a constructor. *)
+let queue_argument args =
+  match args with
+  | [EConstructor { name; args = []; _ }] | [EVar { name; _ }] -> Some name
+  | _ -> None
+
+let job_result_type signatures loc (info : queue_info) =
+  let payload =
+    match Option.bind !current_types
+            (fun types -> Hashtbl.find_opt types.records info.qu_job_type) with
+    | Some row -> TRecord row
+    | None -> unsupported loc "Go backend cannot resolve job type `%s`" info.qu_job_type
+  in
+  match Hashtbl.find_opt signatures "JobOk" with
+  | Some { result = TAdt (adt, _); _ } -> TAdt (adt, [payload])
+  | _ -> unsupported loc
+    "Go backend needs `JobResult` imported from `Tesl.ApiTest` for `processNextJob`"
+
 let entity_column loc (info : entity_info) field =
   match List.assoc_opt field info.ent_row.rec_fields with
   | Some ty -> ty
@@ -1351,7 +1422,27 @@ let rec type_of_expr signatures env expr =
             | None -> unsupported loc
               "Go backend needs `Tesl.ApiTest` imported for a request in an api-test")
          | None -> unsupported loc "Go backend cannot resolve the api-test response type")
-      | EVar { name = ("statusOk" | "statusClientError" | "statusServerError"); _ } -> TBool
+      (* The api-test queue verbs name a QUEUE, which the emitter resolves statically; their
+        result types come from the queue's job type. *)
+     | EVar { name = ("pendingJobCount" | "drainQueue" | "processNextJob"
+                     | "processNextDeadJob") as verb; _ } when queue_argument args <> None ->
+       let info = match queue_argument args with
+         | Some name -> queue_of_job_type loc name
+         | None -> assert false
+       in
+       (match verb with
+        | "pendingJobCount" -> TInt
+        | "drainQueue" -> TUnit
+        | _ -> job_result_type signatures loc info)
+     | EVar { name = ("expectJobOk" | "expectJobFailed"); _ } ->
+       (match args with
+        | [result] ->
+          (match type_of_expr signatures env result with
+           | TAdt (info, [payload]) when info.adt_tesl_name = "JobResult" -> payload
+           | _ -> unsupported loc
+             "Go backend `expectJobOk` takes the result of `processNextJob`")
+        | _ -> unsupported loc "Go backend requires `expectJobOk` applied to 1 argument")
+     | EVar { name = ("statusOk" | "statusClientError" | "statusServerError"); _ } -> TBool
       (* `Http.clearSessionCookie()` returns Unit and writes to the response. *)
       | EVar { name = "Http.clearSessionCookie"; _ } -> TUnit
       | EVar { name = ("detachFact" | "introAnd" | "andLeft" | "andRight"); _ } -> TUnit
@@ -1601,7 +1692,9 @@ let rec type_of_expr signatures env expr =
      `backend: Memory` that store IS the entity's table variable, so the block adds
      nothing at run time and types as its body. *)
   | EWithDatabase { body; _ } -> type_of_expr signatures env body
-  | ETelemetry { loc; _ } | EEnqueue { loc; _ } | EPublish { loc; _ }
+  (* `enqueue` is a statement: the job id stays inside the store, as it does on Racket. *)
+  | EEnqueue { payload; _ } -> ignore (type_of_expr signatures env payload); TUnit
+  | ETelemetry { loc; _ } | EPublish { loc; _ }
   | EStartWorkers { loc; _ } | ECacheGet { loc; _ } | ECacheSet { loc; _ }
   | ECacheDelete { loc; _ } | ECacheInvalidate { loc; _ } | ESendEmail { loc; _ }
   | EStartEmailWorker { loc; _ }
@@ -2329,18 +2422,96 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
       | EVar { name = ("get" | "post" | "put" | "delete" | "patch") as verb; _ }
         when !current_api_server <> None ->
         let server = match !current_api_server with Some s -> s | None -> assert false in
+        (* `post "/p" body { … } cookie c headers { … }` — the modifiers arrive as
+           keyword/value pairs in the flat argument list, the same shape the Racket api-test
+           emitter scans for. *)
         let path, request_body = match args with
-          | [ path ] -> path, None
-          | [ path; request_body ] -> path, Some request_body
-          | _ -> unsupported loc
-            "Go backend api-test request takes a path and an optional body"
+          | path :: rest ->
+            let rec scan body = function
+              | EVar { name = "body"; _ } :: value :: more -> scan (Some value) more
+              | EVar { name = ("cookie" | "headers") as modifier; _ } :: _ :: _ ->
+                unsupported loc
+                  "Go backend does not support the api-test `%s` modifier yet" modifier
+              | _ :: more -> scan body more
+              | [] -> body
+            in
+            path, scan None rest
+          | [] -> unsupported loc "Go backend api-test request needs a path"
         in
         Printf.sprintf "teslrt.ApiRequest(%s, %S, %s, %s)" server
           (String.uppercase_ascii verb)
           (emit_expr ~expected:TString ~indent signatures env path)
           (match request_body with
            | None -> "\"\""
-           | Some value -> emit_expr ~expected:TString ~indent signatures env value)
+           | Some value -> emit_api_test_body ~indent signatures env value)
+      (* The api-test queue verbs.  The worker runs through a DISPATCHER closure: the store
+         holds payloads as `any` because a queue may carry several job types, and the emitter
+         is what knows which one this queue carries. *)
+      | EVar { name = ("pendingJobCount" | "drainQueue" | "processNextJob"
+                      | "processNextDeadJob") as verb; _ } when queue_argument args <> None ->
+        let info = match queue_argument args with
+          | Some name -> queue_of_job_type loc name
+          | None -> assert false
+        in
+        ignore (type_of_expr signatures env app);
+        let queue = qualified info.qu_owner info.qu_go_var in
+        let row_go = match Option.bind !current_types
+                             (fun types -> Hashtbl.find_opt types.records info.qu_job_type) with
+          | Some row -> go_type (TRecord row)
+          | None -> unsupported loc "Go backend cannot resolve job type `%s`" info.qu_job_type
+        in
+        let worker = match verb with
+          | "processNextDeadJob" ->
+            (match info.qu_dead_worker with
+             | Some dead -> dead
+             | None -> unsupported loc
+               "Go backend: queue `%s` has no dead-letter worker" info.qu_tesl_name)
+          | _ -> info.qu_worker
+        in
+        let worker_go = match Hashtbl.find_opt signatures worker with
+          | Some signature -> qualified signature.sig_owner signature.go_name
+          | None -> unsupported loc "Go backend cannot resolve worker `%s`" worker
+        in
+        (* The dispatcher is spliced as an ARGUMENT inside the wrapper closure, so its body
+           sits one level deeper than the wrapper's statements. *)
+        let inner = indent ^ "\t" in
+        let dispatcher =
+          Printf.sprintf
+            "func(teslPayload any) teslrt.JobOutcome {\n%s\tteslJob = teslPayload.(%s)\n%s\t_ = %s(teslJob)\n%s\treturn teslrt.JobOutcome{OK: true}\n%s}"
+            inner row_go inner worker_go inner inner
+        in
+        (match verb with
+         | "pendingJobCount" -> Printf.sprintf "teslrt.PendingJobCount(%s)" queue
+         | "drainQueue" ->
+           (* A drain is a statement; the count it reports is not surfaced in Tesl. *)
+           Printf.sprintf
+             "(func() struct{} {\n%s\tvar teslJob %s\n%s\t_ = teslJob\n%s\t_ = teslrt.DrainQueue(%s, %s, 1000)\n%s\treturn struct{}{}\n%s}())"
+             indent row_go indent indent queue dispatcher indent indent
+         | _ ->
+           let runner = if verb = "processNextDeadJob" then "ProcessNextDeadJob"
+                        else "ProcessNextJob" in
+           (* The claimed job is captured so the result can carry it, which is what
+              `expectJobOk` reads — and what `JobFailed job error` needs too. *)
+           String.concat "" [
+             Printf.sprintf "(func() teslrt.JobResult[%s] {\n" row_go;
+             Printf.sprintf "%s\tvar teslJob %s\n" indent row_go;
+             Printf.sprintf "%s\tteslOutcome := teslrt.%s(%s, %s)\n"
+               indent runner queue dispatcher;
+             Printf.sprintf "%s\tif !teslOutcome.Ran {\n" indent;
+             Printf.sprintf "%s\t\tpanic(teslrt.EmptyQueue(%s, %s))\n"
+               indent (go_quote info.qu_tesl_name) (go_quote verb);
+             Printf.sprintf "%s\t}\n" indent;
+             Printf.sprintf "%s\tif !teslOutcome.OK {\n" indent;
+             Printf.sprintf "%s\t\treturn teslrt.JobFailed(teslJob, teslOutcome.Message)\n" indent;
+             Printf.sprintf "%s\t}\n" indent;
+             Printf.sprintf "%s\treturn teslrt.JobOk(teslJob)\n" indent;
+             Printf.sprintf "%s}())" indent;
+           ])
+      | EVar { name = ("expectJobOk" | "expectJobFailed") as verb; _ } when args <> [] ->
+        ignore (type_of_expr signatures env app);
+        Printf.sprintf "teslrt.%s(%s)"
+          (if verb = "expectJobOk" then "ExpectJobOk" else "ExpectJobFailed")
+          (emit (List.hd args))
       | EVar { name = ("statusOk" | "statusClientError" | "statusServerError") as predicate; _ } ->
         let go_name = match predicate with
           | "statusOk" -> "StatusOk"
@@ -2547,7 +2718,17 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
           (emit message)
      | _ -> unsupported loc "Go backend can emit fail only in a check tail")
   | EWithDatabase { body; _ } -> emit_expr ?expected ~indent signatures env body
-  | ETelemetry { loc; _ } | EEnqueue { loc; _ } | EPublish { loc; _ }
+  | EEnqueue { job_type; payload; loc } ->
+    let info = queue_of_job_type loc job_type in
+    let row = match Option.bind !current_types
+                      (fun types -> Hashtbl.find_opt types.records info.qu_job_type) with
+      | Some row -> TRecord row
+      | None -> unsupported loc "Go backend cannot resolve job type `%s`" job_type
+    in
+    Printf.sprintf "teslrt.EnqueueJob(%s, %s)"
+      (qualified info.qu_owner info.qu_go_var)
+      (emit_expr ~expected:row ~indent signatures env payload)
+  | ETelemetry { loc; _ } | EPublish { loc; _ }
   | EStartWorkers { loc; _ } | ECacheGet { loc; _ } | ECacheSet { loc; _ }
   | ECacheDelete { loc; _ } | ECacheInvalidate { loc; _ } | ESendEmail { loc; _ }
   | EStartEmailWorker { loc; _ }
@@ -3131,6 +3312,45 @@ and emit_variant_literal ?(indent="") signatures env result variant args =
   Printf.sprintf "%s{%s}" (go_type result) (String.concat ", " fields)
 
 and emit_record_literal ?(indent="") signatures env info fields =
+  (* A field-by-field COPY between two records with the same fields in the same order is a
+     staticcheck finding on the emitted code (S1016, "should convert instead of using a
+     struct literal") — and a lint finding on emitted code is an emitter bug by contract.
+     It is also what the Go conversion says more clearly, so `Target(source)` is emitted
+     when every field is `source.<same field>` and the source type matches field for
+     field. *)
+  let conversion_source () =
+    let field_of_source name =
+      match List.assoc_opt name fields with
+      | Some (EField { obj = EVar { name = binder; _ }; field; _ }) when field = name ->
+        Some binder
+      | _ -> None
+    in
+    match info.rec_fields with
+    | [] -> None
+    | (first, _) :: _ ->
+      (match field_of_source first with
+       | None -> None
+       | Some binder ->
+         let all_from_binder =
+           List.for_all (fun (name, _) -> field_of_source name = Some binder)
+             info.rec_fields
+         in
+         if not all_from_binder then None
+         else
+           (match List.assoc_opt binder env with
+            | Some (TRecord source)
+              when source.rec_go_name <> info.rec_go_name
+                && List.length source.rec_fields = List.length info.rec_fields
+                && List.for_all2 (fun (left, left_ty) (right, right_ty) ->
+                     left = right && left_ty = right_ty)
+                     source.rec_fields info.rec_fields ->
+              Some (local_ident binder)
+            | _ -> None))
+  in
+  match conversion_source () with
+  | Some source ->
+    Printf.sprintf "%s(%s)" (qualified info.rec_owner info.rec_go_name) source
+  | None ->
   let parts = List.map (fun (name, field_ty) ->
     let value = match List.assoc_opt name fields with
       | Some value -> value
@@ -3446,6 +3666,45 @@ and emit_sql_form ?(indent="") signatures env loc form =
       "Go backend does not support `deleteAndReturnResult` yet";
     Printf.sprintf "teslrt.TableDelete(%s, %s)" (sql_table_ref info)
       (emit_sql_predicate ~indent signatures env loc info seed.binder clauses)
+
+(* An api-test request BODY is a JSON template: `body { "tag": "one" }`.  It is rendered to
+   the JSON text the request carries.  A literal template becomes a constant string at
+   compile time; a value spliced from the test's own bindings is encoded at run time through
+   the runtime's JSON writer, so the two cannot disagree about escaping. *)
+and emit_api_test_body ?(indent="") signatures env value =
+  let rec literal_json expr =
+    match expr with
+    | ELit { lit = LString text; _ } -> Some (json_quote text)
+    | ELit { lit = LInt n; _ } -> Some (string_of_int n)
+    | ELit { lit = LBigInt text; _ } -> Some text
+    | ELit { lit = LBool b; _ } -> Some (if b then "true" else "false")
+    | ELit { lit = LFloat f; _ } -> Some (json_float f)
+    | EConstructor { name = "True"; args = []; _ } -> Some "true"
+    | EConstructor { name = "False"; args = []; _ } -> Some "false"
+    | EList { elems; _ } ->
+      let rendered = List.map literal_json elems in
+      if List.for_all Option.is_some rendered then
+        Some ("[" ^ String.concat "," (List.map Option.get rendered) ^ "]")
+      else None
+    | ERecord { fields; _ } ->
+      let rendered = List.map (fun (key, field_value) ->
+        Option.map (fun text -> json_quote key ^ ":" ^ text) (literal_json field_value))
+        fields in
+      if List.for_all Option.is_some rendered then
+        Some ("{" ^ String.concat "," (List.map Option.get rendered) ^ "}")
+      else None
+    | _ -> None
+  in
+  match literal_json value with
+  | Some json -> go_quote json
+  | None ->
+    (* Not a constant template: a String expression is sent as-is (it IS the body), and
+       anything else fails closed rather than being guessed at. *)
+    if type_of_expr signatures env value = TString then
+      emit_expr ~expected:TString ~indent signatures env value
+    else
+      unsupported (Checker.expr_loc value)
+        "Go backend api-test body must be a literal JSON template or a String"
 
 and emit_interp ?(indent="") signatures env segments =
   let parts = List.map (function
@@ -3949,6 +4208,18 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
   |> List.iter (fun info ->
     if not info.adt_builtin && declared_here info.adt_owner then
       Buffer.add_string body (adt_source info));
+  (* The job store for a queue.  `maxAttempts` is baked in because the retry rule belongs to
+     the queue rather than to any call site; the lowered form supplies it (default 1, matching
+     "no retry" for a queue that declares none). *)
+  Hashtbl.to_seq_values types.queues
+  |> List.of_seq
+  |> List.sort_uniq (fun left right -> String.compare left.qu_tesl_name right.qu_tesl_name)
+  |> List.filter (fun info -> info.qu_owner = package)
+  |> List.iter (fun info ->
+    Buffer.add_char body '\n';
+    Buffer.add_string body (line_directive info.qu_loc);
+    Printf.bprintf body "var %s = teslrt.NewQueue(%s, %d)\n"
+      info.qu_go_var (go_quote info.qu_tesl_name) info.qu_max_attempts);
   (* The store for a `backend: Memory` entity.  One variable per entity, initialised at
      package level: an entity belongs to exactly one database, and the table itself is
      what carries the lock, so nothing has to be threaded through call sites. *)
@@ -3967,10 +4238,14 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
        is still emitted (rather than dropped) because callers name it. *)
     (* An `auth` function is a check over the request: it returns `ok value ::: Proof` or
        `fail 401 …`, so it emits exactly like a `check`. *)
+    (* A `worker` / `deadWorker` is an ordinary function of the job: its `FromQueue` proof
+       annotation erases like every other proof, and the queue runtime is what calls it. *)
     if fd.kind <> FnKind && fd.kind <> CheckKind && fd.kind <> EstablishKind
-       && fd.kind <> HandlerKind && fd.kind <> AuthKind then
+       && fd.kind <> HandlerKind && fd.kind <> AuthKind
+       && fd.kind <> WorkerKind && fd.kind <> DeadWorkerKind then
       unsupported fd.loc
-        "Go backend supports `fn`, `check`, `auth`, `establish` and `handler` declarations only";
+        "Go backend supports `fn`, `check`, `auth`, `establish`, `handler`, `worker` and \
+         `deadWorker` declarations only";
     (* A capability is a COMPILE-TIME grant: the checker verifies every call against the
        declared set and forces it to propagate to callers, so nothing about it survives to
        run time.  `cookieCap` is the exception in shape only — it says this function may
@@ -4671,6 +4946,12 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           match name with
           | "HttpResponse" | "statusOk" | "statusClientError" | "statusServerError"
           | "get" | "post" | "put" | "delete" | "patch" -> ()
+          (* The queue verbs an api-test drives.  `JobResult` is runtime-provided (registered
+             below with Maybe and Either), the rest are calls whose QUEUE argument the
+             emitter resolves statically. *)
+          | "JobResult" | "JobResult(..)" | "JobOk" | "JobFailed"
+          | "processNextJob" | "processNextDeadJob" | "pendingJobCount" | "drainQueue"
+          | "expectJobOk" | "expectJobFailed" -> ()
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.ApiTest` export `%s` yet" other) exposed
       | "Tesl.Http" ->
@@ -4703,6 +4984,20 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       | "Tesl.String" | "Tesl.List" | "Tesl.Int" | "Tesl.Tuple" | "Tesl.Dict"
       | "Tesl.Set" | "Tesl.Float" | "Tesl.Either" | "Tesl.EitherPrim"
       | "Tesl.Time" | "Tesl.Env" | "Tesl.Random" | "Tesl.Id" | "Tesl.Result" -> ()
+      (* `Tesl.Queue` exports the DECLARATION vocabulary (`Queue`, the retry strategy and
+         its backoff constructors), two capabilities, and the `FromQueue`/`FromDeadQueue`
+         provenance proofs — which erase.  None of it needs a runtime binding: the store is
+         the queue's own variable and the retry rule is baked into it. *)
+      | "Tesl.Queue" ->
+        List.iter (fun name ->
+          match name with
+          | "Queue" | "QueueRetryStrategy" | "Fixed" | "Exponential" | "Linear"
+          | "queueRead" | "queueWrite" | "FromQueue" | "FromDeadQueue" | "Job"
+          (* `pubsub` is the SSE capability and `deadJobs` a queue capability: both are
+             compile-time grants, and the FUNCTIONS they gate fail closed on their own. *)
+          | "pubsub" | "deadJobs" -> ()
+          | other -> unsupported import.loc
+            "Go backend does not support `Tesl.Queue` export `%s` yet" other) exposed
         (* validated against the leaf/type tables below *)
       | other when List.exists (fun (dependency : module_exports) ->
                      dependency.ex_module = other) dependencies ->
@@ -4730,6 +5025,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       records = Hashtbl.create 8;
       adts = Hashtbl.create 8;
       entities = Hashtbl.create 8;
+      queues = Hashtbl.create 8;
     } in
     (* Every package-level Go name is minted here, in declaration order, so the
        emitted names are deterministic and provably distinct. *)
@@ -4774,6 +5070,43 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         rec_fields = [];
         rec_loc = r.loc;
       }) record_forms;
+    (* A `queue` declaration: one store variable plus the job-type → worker wiring.  The
+       typed form (`= Queue { … }`) keeps its fields in `config_expr`, and the Go pipeline
+       does not run the desugar pass, so the same lowering the Racket backend gets is
+       applied here — including `job_entries`, which pairs each job type with its worker and
+       optional dead-letter worker. *)
+    let queue_forms = List.filter_map (function DQueue q -> Some q | _ -> None) m.decls in
+    List.iter (fun (q : queue_form) ->
+      let entries = match q.config_expr with
+        | None -> []
+        | Some config ->
+          (match List.assoc_opt "jobs" (Desugar.config_record_fields config) with
+           | Some jobs -> Desugar.job_entries jobs
+           | None -> [])
+      in
+      let lowered = Desugar.desugar_queue_config q in
+      (match entries with
+       | [] -> unsupported q.loc
+         "Go backend requires `jobs: [Job <JobType> <worker> …]` on queue `%s`" q.name
+       | _ :: _ :: _ -> unsupported q.loc
+         "Go backend does not support a queue carrying more than one job type yet (`%s`)"
+         q.name
+       | [(job_type, worker, dead_worker)] ->
+         let go_var = package_ident (q.name ^ "Queue") in
+         let info = {
+           qu_tesl_name = q.name;
+           qu_go_var = go_var;
+           qu_owner = package;
+           qu_job_type = job_type;
+           qu_worker = worker;
+           qu_dead_worker = dead_worker;
+           qu_max_attempts = Option.value lowered.max_attempts ~default:1;
+           qu_loc = q.loc;
+         } in
+         Hashtbl.replace types.queues q.name info;
+         (* Also by job type, since `enqueue` names the JOB and not the queue. *)
+         Hashtbl.replace types.queues job_type info;
+         ignore lowered)) queue_forms;
     (* An entity's ROW type is registered exactly like a record — a query result and an
        `insert` argument are ordinary struct values — and its store is one package-level
        table variable. *)
@@ -5190,6 +5523,30 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             "Go backend does not support `%s` export `%s` yet" import.module_name other) exposed;
         either_imported := true
       end) m.imports;
+    (* `JobResult` is the queue counterpart: `JobOk job` and `JobFailed job error` — the
+       failed case carries BOTH, as it does on the Racket side, so a test can assert on the
+       payload of a job that failed. *)
+    List.iter (fun (import : import_decl) ->
+      if import.module_name = "Tesl.ApiTest" then begin
+        let loc = import.loc in
+        Hashtbl.replace types.adts "JobResult" {
+          adt_tesl_name = "JobResult";
+          adt_owner = "";
+          adt_go_name = "teslrt.JobResult";
+          adt_tag_type = "teslrt.JobResultTag";
+          adt_params = ["job", "Payload"];
+          adt_variants = [
+            { var_ctor = "JobOk"; var_tag = "teslrt.JobResultOk";
+              var_fields = ["job", TParam "Payload"];
+              var_go_fields = ["job", "OkJob"]; var_loc = loc };
+            { var_ctor = "JobFailed"; var_tag = "teslrt.JobResultFailed";
+              var_fields = ["job", TParam "Payload"; "error", TString];
+              var_go_fields = ["job", "FailedJob"; "error", "FailedError"]; var_loc = loc };
+          ];
+          adt_loc = loc;
+          adt_builtin = true;
+        }
+      end) m.imports;
     (* `Result ok err` is the same runtime-provided shape as `Either`: two variants, one
        payload each, provided by teslrt so it can cross module boundaries.  Tesl.Result
        exports the type and its constructors only — there are no `Result.*` functions. *)
@@ -5395,9 +5752,13 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
          declaration has no emitted form — the same reason a `requires` clause has none. *)
       | DCapability _ -> ()
       | DConst c -> unsupported c.loc "Go backend does not support constants yet"
-      | DQueue q -> unsupported q.loc "Go backend does not support queues yet"
+      (* Validated and registered above; the store variable is emitted with the tables. *)
+      | DQueue _ -> ()
       | DChannel c -> unsupported c.loc "Go backend does not support channels yet"
-      | DWorkers w -> unsupported w.loc "Go backend does not support workers yet"
+      (* A `workers` block wires job types to worker functions.  With the folded `jobs:`
+         form the wiring is already on the queue, and the workers only RUN on App
+         activation, which is its own slice — so the declaration itself adds nothing. *)
+      | DWorkers _ -> ()
       | DCache c -> unsupported c.loc "Go backend does not support caches yet"
       | DAgent a -> unsupported a.loc "Go backend does not support agents yet"
       | DEmail e -> unsupported e.loc "Go backend does not support email yet"

@@ -67,9 +67,13 @@ func (scope *RequestScope) SetCookieHeader(who, value string) {
 }
 
 // CookieHeaders hands back a copy, so a caller cannot reach the scope's own storage.
+//
+// An EMPTY slice rather than nil for "no scope": callers range over or index the result, and
+// nilaway is right that a nil return travelling into a slice operation is a nil-panic waiting
+// for the one caller who forgets to check.
 func (scope *RequestScope) CookieHeaders() []string {
 	if scope == nil {
-		return nil
+		return []string{}
 	}
 	out := make([]string, len(scope.cookies))
 	copy(out, scope.cookies)

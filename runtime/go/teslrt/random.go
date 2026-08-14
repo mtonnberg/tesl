@@ -3,7 +3,9 @@ package teslrt
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"math/big"
+	"time"
 )
 
 // Randomness is an effect Tesl gates behind the `random` capability, which the checker
@@ -57,4 +59,32 @@ func GeneratePrefixedId(prefix string) string {
 // with the dash — parity with Racket, which appends the separator unconditionally.
 func GenerateId() string {
 	return GeneratePrefixedId("")
+}
+
+// UUIDv7 is a time-ordered UUID: 48 bits of Unix milliseconds, then random bits, with the
+// version and variant nibbles set (RFC 9562). The layout matches `uuid-v7-string` in
+// tesl/private/uuid-gen.rkt byte for byte, so an id generated on either backend sorts and
+// parses the same way.
+//
+// Time-ordered matters for the queue: a job id that is monotonic makes "oldest first"
+// recoverable from the id alone, and a v4 id would not.
+func UUIDv7() string {
+	milliseconds := time.Now().UnixMilli()
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw[6:]); err != nil {
+		panic("UUID.v7: no randomness available: " + err.Error())
+	}
+	// Masked, not just shifted: the truncation to a byte is the POINT (a 48-bit timestamp
+	// spread over six bytes), and gosec's integer-overflow check is right to ask that it be
+	// written explicitly rather than left to conversion.
+	stamp := uint64(milliseconds)
+	raw[0] = byte((stamp >> 40) & 0xff)
+	raw[1] = byte((stamp >> 32) & 0xff)
+	raw[2] = byte((stamp >> 24) & 0xff)
+	raw[3] = byte((stamp >> 16) & 0xff)
+	raw[4] = byte((stamp >> 8) & 0xff)
+	raw[5] = byte(stamp & 0xff)
+	raw[6] = 0x70 | (raw[6] & 0x0f)
+	raw[8] = 0x80 | (raw[8] & 0x3f)
+	return fmt.Sprintf("%x-%x-%x-%x-%x", raw[0:4], raw[4:6], raw[6:8], raw[8:10], raw[10:16])
 }

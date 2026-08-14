@@ -3586,6 +3586,139 @@ let test_check_delegation_with_go () =
      one, 200 with the body for the happy path. *)
   gate_emitted "tesl-go-check-delegate" emitted
 
+
+(* ─── Queues ──────────────────────────────────────────────────────────────────
+   The `backend: Memory` job store: `enqueue` from a handler, then the api-test verbs
+   (`pendingJobCount`, `processNextJob`, `expectJobOk`) driving the queue's worker.  Racket
+   runs the same source as the oracle. *)
+let queue_source = {|module GoQueue exposing [QueueServer]
+
+import Tesl.Prelude exposing [Int, String, Unit]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Json exposing [stringCodec, intCodec]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.Queue exposing [
+  FromQueue,
+  queueRead,
+  queueWrite,
+  Queue,
+  QueueRetryStrategy,
+  Fixed,
+]
+import Tesl.ApiTest exposing [
+  statusOk,
+  JobResult(..),
+  processNextJob,
+  pendingJobCount,
+  expectJobOk,
+]
+
+database QueueDb = Database {
+  schema: "queueprobe"
+  entities: []
+  backend: Memory
+}
+
+record SendJob {
+  tag: String
+}
+
+queue SendQueue requires [queueRead] = Queue {
+  database: QueueDb
+  jobs: [Job SendJob handleSend Nothing]
+  retry: QueueRetryStrategy {
+    maxAttempts: 2
+    backoff: Fixed
+    initialDelay: 1
+  }
+}
+
+worker handleSend(job: SendJob ::: FromQueue (Id == jobId) job)
+  requires [queueRead] =
+  job
+
+record TriggerRequest {
+  tag: String
+}
+
+codec TriggerRequest {
+  toJson {
+    tag -> "tag" with_codec stringCodec
+  }
+  fromJson [
+    {
+      tag <- "tag" with_codec stringCodec
+    }
+  ]
+}
+
+record TriggerReply {
+  queued: String
+}
+
+codec TriggerReply {
+  toJson {
+    queued -> "queued" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+handler post send(request: TriggerRequest) -> TriggerReply
+  requires [queueWrite] =
+  enqueue SendJob { tag: request.tag }
+  TriggerReply { queued: request.tag }
+
+api QueueApi {
+  post "/send"
+    body request: TriggerRequest
+    -> TriggerReply
+}
+
+server QueueServer for QueueApi {
+  send
+}
+
+api-test "the queue dequeues in enqueue order" for QueueServer requires [queueRead, queueWrite] {
+  let r1 = post "/send" body { "tag": "one" }
+  expect statusOk r1.status
+  let r2 = post "/send" body { "tag": "two" }
+  expect statusOk r2.status
+
+  expect pendingJobCount SendQueue == 2
+
+  let resA = processNextJob SendQueue
+  let jobA = expectJobOk resA
+  expect jobA.tag == "one"
+
+  let resB = processNextJob SendQueue
+  let jobB = expectJobOk resB
+  expect jobB.tag == "two"
+
+  expect pendingJobCount SendQueue == 0
+}
+|}
+
+let test_queue_with_go () =
+  let emitted = emit_ok "<go-queue>" queue_source in
+  let module_go = artifact "internal/teslmodgoqueue/module.go" emitted in
+  check bool "a queue becomes one package-level store with its retry rule" true
+    (contains module_go "var SendQueueQueue = teslrt.NewQueue(\"SendQueue\", 2)");
+  check bool "`enqueue` names the job type and resolves to its queue" true
+    (contains module_go "teslrt.EnqueueJob(SendQueueQueue, ");
+  (* A record copied field-for-field into a structurally identical one is emitted as a
+     CONVERSION: the struct literal is a staticcheck finding (S1016) on emitted code. *)
+  check bool "a field-for-field record copy becomes a conversion" true
+    (contains module_go "SendJob(request)");
+  let tests_go = artifact "internal/teslmodgoqueue/module_test.go" emitted in
+  check bool "an api-test drives the queue's own worker" true
+    (contains tests_go "teslrt.ProcessNextJob(SendQueueQueue, func(teslPayload any) teslrt.JobOutcome {");
+  check bool "and an empty queue traps with the Racket hint" true
+    (contains tests_go "panic(teslrt.EmptyQueue(\"SendQueue\", \"processNextJob\"))");
+  check bool "a JSON body template becomes constant JSON" true
+    (contains tests_go "teslrt.ApiRequest(QueueServer, \"POST\", \"/send\", \"{\\\"tag\\\":\\\"one\\\"}\")");
+  (* `go test` RUNS the api-test: FIFO order and the pending count are asserted there. *)
+  gate_emitted "tesl-go-queue" emitted
+
 let test_divergent_float_functions_fail_closed () =
   (* Go's sin/cos/tan disagree with Racket on 22-34% of inputs and its math.Log is
      outright wrong for subnormals, so these are rejected rather than emitted
@@ -4716,6 +4849,9 @@ let () =
       test_case "HTTP checked path captures" `Slow test_http_capture_with_go;
       test_case "HTTP cookie writing via requires [cookieCap]" `Slow test_http_cookie_with_go;
       test_case "Tesl api-tests run against the Go server" `Slow test_go_api_tests;
+      test_case "Memory-backend queues" `Slow test_queue_with_go;
+      test_case "queues behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-queue-oracle>" queue_source);
       test_case "Memory-backend databases" `Slow test_db_with_go;
       test_case "databases behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-db-oracle>" db_source);
