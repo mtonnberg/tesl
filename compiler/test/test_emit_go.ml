@@ -2889,6 +2889,189 @@ let test_http_auth_with_go () =
       run_go_gates root)
   end
 
+(* A CHECKED path capture: the capturer names how the segment is parsed and a check that
+   mints a proof on it — the same "prove before the body runs" rule auth follows, applied
+   to a path segment.  A failing check returns its own status, so a bad segment never
+   reaches the handler. *)
+let http_capture_source = {|module GoHttpCapture exposing [Greeting, ValidId, checkId, item]
+import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+import Tesl.String exposing [String.isEmpty]
+
+record Greeting {
+  message: String
+}
+
+codec Greeting {
+  toJson {
+    message -> "message" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+fact ValidId (id: String)
+
+check checkId(id: String) -> id: String ::: ValidId id =
+  if String.isEmpty id then
+    fail 400 "id must not be empty"
+  else
+    ok id ::: ValidId id
+
+capturer itemIdCapture: String ::: ValidId id using stringCodec via checkId
+
+handler get item(id: String ::: ValidId id) -> Greeting =
+  Greeting { message: "item ${id}" }
+
+api HelloApi {
+  get "/items/:id"
+    capture id: String ::: ValidId id via itemIdCapture
+    -> Greeting
+}
+
+server HelloServer for HelloApi {
+  item
+}
+|}
+
+(* Cookie writing, which is what settled the ambient-state question.  `wipe` is a plain
+   `fn`, NOT a handler: it may write to the response because it declares
+   `requires [cookieCap]`, and `logout` can pass it a scope because the checker forces the
+   caller to declare the same capability.  The `requires` clause IS the marker — no
+   ambient state, no goroutine-local substitute, and no call-graph analysis.  Every other
+   function in the module keeps a plain signature. *)
+let http_cookie_source = {|module GoHttpCookie exposing [Status, logout, wipe]
+import Tesl.Prelude exposing [String, Unit]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Http exposing [cookieCap, Http.clearSessionCookie]
+
+record Status {
+  state: String
+}
+
+codec Status {
+  toJson {
+    state -> "state" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+# A plain fn that writes a cookie: legal because it declares the capability, and the
+# checker forces every caller to declare it too.
+fn wipe() -> Unit requires [cookieCap] =
+  Http.clearSessionCookie()
+
+handler post logout() -> Status requires [cookieCap] =
+  let _ = wipe()
+  Status { state: "logged out" }
+
+api HelloApi {
+  post "/logout"
+    -> Status
+}
+
+server HelloServer for HelloApi {
+  logout
+}
+|}
+
+(* Tesl `api-test` blocks driving the emitted server IN PROCESS — no socket, so they are
+   ordinary `go test` cases.  Racket dispatches the same way, so both backends exercise the
+   same layer.  The statements are the same `test_stmt` forms an ordinary `test` block
+   uses, so only the request verbs needed emitting. *)
+let go_api_test_source = {|module GoApiTest exposing [Greeting, hello]
+import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+import Tesl.ApiTest exposing [HttpResponse, statusOk, statusClientError]
+
+record Greeting {
+  message: String
+}
+
+codec Greeting {
+  toJson {
+    message -> "message" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+handler get hello() -> Greeting =
+  Greeting { message: "hi" }
+
+api HelloApi {
+  get "/hello"
+    -> Greeting
+}
+
+server HelloServer for HelloApi {
+  hello
+}
+
+api-test "GET /hello returns the greeting" for HelloServer requires [] {
+  let r = get "/hello"
+  expect statusOk r.status
+  expect r.body == "{\"message\":\"hi\"}"
+}
+
+api-test "an unknown path is a client error" for HelloServer requires [] {
+  let r = get "/nope"
+  expect statusClientError r.status
+}
+|}
+
+let emit_ok label source =
+  match Compile.compile_go_source label source with
+  | Compile.GoSuccess artifacts -> artifacts
+  | Compile.GoFailure diagnostics ->
+    failf "%s failed to compile: %s" label
+      (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+
+let gate_emitted prefix emitted =
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir prefix "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      run_go_gates root)
+  end
+
+let test_http_capture_with_go () =
+  let emitted = emit_ok "<go-http-capture>" http_capture_source in
+  let module_go = artifact "internal/teslmodgohttpcapture/module.go" emitted in
+  check bool "the capturer's check runs on the segment" true
+    (contains module_go "teslCapturedId := CheckId(id)");
+  check bool "a failing capture returns the check's own status" true
+    (contains module_go "return teslrt.Fail(teslCapturedId.Status(), teslCapturedId.Message())");
+  gate_emitted "tesl-go-http-capture" emitted
+
+let test_http_cookie_with_go () =
+  let emitted = emit_ok "<go-http-cookie>" http_cookie_source in
+  let module_go = artifact "internal/teslmodgohttpcookie/module.go" emitted in
+  (* A plain `fn` gets the scope because it declares the capability. *)
+  check bool "a cookieCap function takes the request scope" true
+    (contains module_go "func Wipe(teslScope *teslrt.RequestScope) struct{}");
+  check bool "the caller passes its own scope down" true
+    (contains module_go "_ = Wipe(teslScope)");
+  check bool "the cookie is written through the scope" true
+    (contains module_go "teslrt.ClearSessionCookie(teslScope)");
+  gate_emitted "tesl-go-http-cookie" emitted
+
+let test_go_api_tests () =
+  let emitted = emit_ok "<go-api-test>" go_api_test_source in
+  let tests_go = artifact "internal/teslmodgoapitest/module_test.go" emitted in
+  check bool "an api-test becomes a Go test" true
+    (contains tests_go "func TestTeslApi0(teslT *testing.T)");
+  check bool "the request drives the emitted server in process" true
+    (contains tests_go "teslrt.ApiRequest(HelloServer, \"GET\", \"/hello\", \"\")");
+  check bool "a status predicate becomes a runtime call" true
+    (contains tests_go "teslrt.StatusOk(r.Status)");
+  (* `go test` on the emitted tree RUNS these, so a wrong body or status fails here. *)
+  gate_emitted "tesl-go-api-test" emitted
+
 let test_divergent_float_functions_fail_closed () =
   (* Go's sin/cos/tan disagree with Racket on 22-34% of inputs and its math.Log is
      outright wrong for subnormals, so these are rejected rather than emitted
@@ -4011,6 +4194,9 @@ let () =
       test_case "Float behaves the same on Racket" `Slow (racket_behavior_oracle "<go-floats>" float_source);
       test_case "HTTP api, server and handlers" `Slow test_http_server_with_go;
       test_case "HTTP auth at the trust boundary" `Slow test_http_auth_with_go;
+      test_case "HTTP checked path captures" `Slow test_http_capture_with_go;
+      test_case "HTTP cookie writing via requires [cookieCap]" `Slow test_http_cookie_with_go;
+      test_case "Tesl api-tests run against the Go server" `Slow test_go_api_tests;
       test_case "establish and detached proofs" `Slow test_establish_with_go;
       test_case "detached proofs behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-establish>" establish_source);

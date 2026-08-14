@@ -4273,7 +4273,10 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       if import.module_name = "Tesl.Http" || import.module_name = "Tesl.ApiTest" then begin
         let exposed = match import.names with
           | ImportAll -> [] | ImportExposing names -> names in
-        if List.mem "HttpResponse" exposed then
+        (* Registered whenever `Tesl.ApiTest` is imported at all, not only when the type
+           is named in the exposing list: a module may import just `statusOk` and still
+           write `let r = get "/path"`, whose result IS this type. *)
+        if import.module_name = "Tesl.ApiTest" then
           Hashtbl.replace types.records "HttpResponse" {
             rec_tesl_name = "HttpResponse";
             rec_owner = "";
