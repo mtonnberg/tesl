@@ -324,7 +324,15 @@ let rec type_of_type_expr ?(params=[]) types ty =
             "Go backend requires `%s` to be applied to %d type argument(s)"
             name (List.length info.adt_params);
           TAdt (info, List.map recur args)
-        | None -> unsupported loc "Go backend does not support applied type `%s` yet" name)
+        | None ->
+          (* `Fact P` is a DETACHED PROOF: a first-class witness produced by `establish`
+             and consumed by `attachFact`.  It erases like every other proof — the runtime
+             comment in dsl/private/check-runtime.rkt states the rule outright ("the proof
+             is asserted without re-checking — correctness is guaranteed by the
+             compile-time type system"), and LANGUAGE-SPEC 16.9 gives a proof no runtime
+             structure.  So it becomes a zero-size value that carries nothing. *)
+          if name = "Fact" then TUnit
+          else unsupported loc "Go backend does not support applied type `%s` yet" name)
      | _ -> unsupported loc "Go backend does not support applied types yet")
   | TFun { loc; _ } -> unsupported loc "Go backend does not support function values yet"
   | TTuple { loc; _ } -> unsupported loc "Go backend does not support tuple types yet"
@@ -516,8 +524,29 @@ let remember_helper ~prefix ~signature ~body =
       (Printf.sprintf "\nfunc %s%s {\n\treturn %s\n}\n" name signature body);
     name
 
+(* The helper's name must be INJECTIVE over Go types: stripping punctuation alone made
+   `[]teslrt.Int` and `teslrt.Int` collide on `TeslrtInt`, so a `List (List Int)`
+   comparison silently reused the `Int` comparator and Go rejected the call.  The
+   structural markers are spelled out before the punctuation is dropped. *)
 let helper_suffix ty =
   let text = go_type ty in
+  let text =
+    let buffer = Buffer.create (String.length text + 8) in
+    let length = String.length text in
+    let index = ref 0 in
+    while !index < length do
+      (* A marker is followed by a separator so the next segment capitalises: the name is
+         read by whoever ejects, and `SliceOfTeslrtInt` beats `SliceOfteslrtInt`. *)
+      if !index + 1 < length && text.[!index] = '[' && text.[!index + 1] = ']' then begin
+        Buffer.add_string buffer "SliceOf."; index := !index + 2
+      end else if !index + 3 < length && String.sub text !index 4 = "map[" then begin
+        Buffer.add_string buffer "MapOf."; index := !index + 4
+      end else begin
+        Buffer.add_char buffer text.[!index]; incr index
+      end
+    done;
+    Buffer.contents buffer
+  in
   let buffer = Buffer.create (String.length text) in
   let capitalize = ref true in
   String.iter (fun c ->
@@ -1114,6 +1143,12 @@ let rec type_of_expr signatures env expr =
               | None -> unsupported loc "Go backend `%s` is not a tuple" owner)
            | _ -> unsupported loc "Go backend `%s` requires a `%s` argument" name owner)
         | _ -> unsupported loc "Go backend requires `%s` applied to 1 argument" name)
+      (* The GDP proof combinators erase: a proof has no runtime content, so `attachFact`
+         and `forgetFact` are the identity on their value and `detachFact`/`introAnd`/
+         `andLeft`/`andRight` produce the zero-size proof value. *)
+      | EVar { name = ("forgetFact" | "attachFact") ; _ } when args <> [] ->
+        type_of_expr signatures env (List.hd args)
+      | EVar { name = ("detachFact" | "introAnd" | "andLeft" | "andRight"); _ } -> TUnit
       | EVar { name; _ } when higher_order_leaf name <> None && Hashtbl.mem signatures name ->
        let hof = match higher_order_leaf name with Some hof -> hof | None -> assert false in
        type_of_hof signatures env loc name hof args
@@ -1153,8 +1188,20 @@ let rec type_of_expr signatures env expr =
           signature.result)
      | _ -> unsupported loc "Go backend supports calls to named functions only")
   | EBinop { op; left; right; loc; _ } ->
-    let left_ty = type_of_expr signatures env left in
-    let right_ty = type_of_expr signatures env right in
+    (* A DEFAULTED empty list yields to a real type here for the same reason it does in an
+       `if` branch: `List.reverse words == []` compares `List String`, not the default. *)
+    let left_result, left_defaulted = typed_with_default (type_of_expr signatures env) left in
+    let right_result, right_defaulted = typed_with_default (type_of_expr signatures env) right in
+    let left_ty, right_ty = match left_result, right_result with
+      | Some left_ty, Some right_ty when left_defaulted && not right_defaulted ->
+        ignore left_ty; right_ty, right_ty
+      | Some left_ty, Some right_ty when right_defaulted && not left_defaulted ->
+        ignore right_ty; left_ty, left_ty
+      | Some left_ty, Some right_ty -> left_ty, right_ty
+      | _ ->
+        (* Nothing to reconcile: re-type so the original error is reported. *)
+        type_of_expr signatures env left, type_of_expr signatures env right
+    in
     if left_ty <> right_ty then unsupported loc "Go backend binary operands have different types";
     (match op with
      | BAdd | BSub | BMul | BDiv ->
@@ -1718,6 +1765,12 @@ and type_of_dict_leaf signatures env loc leaf args =
 
 and type_of_arg signatures env want arg =
   match arg with
+  (* `f <| value ::: pf` attaches a detached proof at the call site.  It parses as the same
+     node as a check's `ok value ::: P`, and the two are told apart by what is EXPECTED: a
+     check's tail wants a `Check`, an ordinary parameter wants the value.  The proof erases,
+     so the argument is just the value. *)
+  | EOk { value; _ } when (match want with TCheck _ -> false | _ -> true) ->
+    type_of_arg signatures env want value
   (* An empty list literal has no element to infer from: the expectation supplies it. *)
   | EList { elems = []; _ } when (match want with TList _ -> true | _ -> false) -> want
   (* The expectation belongs to each BRANCH, and a branch is exactly where an
@@ -2036,6 +2089,12 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
           Printf.sprintf "%s.%s" (selector_operand (emit tuple))
             (variant_field_go_name variant field)
         | _ -> invalid_arg "tuple accessor validated before emission")
+      | EVar { name = ("forgetFact" | "attachFact"); _ } when args <> [] ->
+        (* The value passes through; the proof operand disappears with the proof. *)
+        emit (List.hd args)
+      | EVar { name = ("detachFact" | "introAnd" | "andLeft" | "andRight"); _ } ->
+        List.iter (fun arg -> ignore (type_of_expr signatures env arg)) args;
+        "struct{}{}"
       | EVar { name; _ } when higher_order_leaf name <> None && Hashtbl.mem signatures name ->
        let hof = match higher_order_leaf name with Some hof -> hof | None -> assert false in
        emit_hof ~indent signatures env loc name hof args
@@ -2080,9 +2139,17 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
              emit_expr ~expected:want ~indent signatures env arg) args signature.params))
      | _ -> unsupported loc "Go backend supports calls to named functions only")
   | EBinop { op; left; right; _ } ->
-    let ty = type_of_expr signatures env left in
-    let emitted_left = emit left in
-    let emitted_right = emit right in
+    let expr_binop_operand_source =
+      match left, right with
+      | EList { elems = []; _ }, _ -> right
+      | _ -> left
+    in
+    (* The operand type is the one the TYPE rule settled on, which may come from the other
+       side when this one is a defaulted empty list — so both operands are emitted against
+       it rather than against whatever each infers alone. *)
+    let ty = type_of_expr signatures env expr_binop_operand_source in
+    let emitted_left = emit_expr ~expected:ty ~indent signatures env left in
+    let emitted_right = emit_expr ~expected:ty ~indent signatures env right in
     let emit_bool_literal_comparison equal =
       match bool_literal_value left, bool_literal_value right with
       | Some expected, None ->
@@ -2188,6 +2255,9 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
   | ELetProof { loc; _ }
   | ERecord { loc; _ } ->
     unsupported loc "Go backend cannot emit this expression yet"
+  | EOk { value; _ } when (match expected with Some (TCheck _) | None -> false | Some _ -> true) ->
+    (* Proof attachment at a call site: the proof has no runtime content. *)
+    emit_expr ?expected ~indent signatures env value
   | EOk { value; _ } -> Printf.sprintf "teslrt.Accept(%s)" (emit value)
   | EFail { status; message; loc } ->
     (match expected with
@@ -3099,8 +3169,18 @@ let primitive_codec = function
   | "floatCodec" -> Some `Float
   | _ -> None
 
-let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) module_path package
-    signatures types (funcs : func_decl list) =
+(* ── HTTP: `api` routes and the `server` that binds them ──────────────────────
+   An `api` declares endpoints; a `server` binds handler functions to them POSITIONALLY in
+   declaration order (the endpoint's own `name` is a parser-assigned placeholder, and the
+   syntax used to carry a name-keyed-looking prefix that was always matched by position).
+   Both become ordinary Go values, so someone who sheds Tesl can read the routing table,
+   call a handler directly, or mount the server on any net/http mux. *)
+let http_method_name = function
+  | GET -> "GET" | POST -> "POST" | PUT -> "PUT"
+  | DELETE -> "DELETE" | PATCH -> "PATCH" | SSE -> "SSE"
+
+let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=[])
+    ?(servers=[]) module_path package signatures types (funcs : func_decl list) =
   Hashtbl.reset pending_helpers;
   Hashtbl.reset helper_names;
   Hashtbl.reset module_helpers;
@@ -3143,8 +3223,13 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) module_
     if not info.adt_builtin && declared_here info.adt_owner then
       Buffer.add_string body (adt_source info));
   List.iter (fun (fd : func_decl) ->
-    if fd.kind <> FnKind && fd.kind <> CheckKind then unsupported fd.loc
-      "Go backend supports plain `fn` and `check` declarations only";
+    (* `establish` returns a detached proof, which erases — so the function body computes
+       nothing observable and the emitted function returns the zero-size proof value.  It
+       is still emitted (rather than dropped) because callers name it. *)
+    if fd.kind <> FnKind && fd.kind <> CheckKind && fd.kind <> EstablishKind
+       && fd.kind <> HandlerKind then
+      unsupported fd.loc
+        "Go backend supports `fn`, `check`, `establish` and `handler` declarations only";
     if fd.capabilities <> [] then unsupported fd.loc
       "Go backend does not support capabilities yet";
     let signature = Hashtbl.find signatures fd.name in
@@ -3152,9 +3237,13 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) module_
       fd.params signature.params in
     let result = signature.result in
     let env = params in
-    let body_ty = type_of_arg signatures env result fd.body in
-    if body_ty <> result && body_ty <> TFailure then
-      unsupported fd.loc "Go backend function result type mismatch";
+    (* An `establish` body is a proof TERM, not a value expression — it is never typed or
+       emitted, so it is not checked against the result type either. *)
+    if fd.kind <> EstablishKind then begin
+      let body_ty = type_of_arg signatures env result fd.body in
+      if body_ty <> result && body_ty <> TFailure then
+        unsupported fd.loc "Go backend function result type mismatch"
+    end;
     Buffer.add_char body '\n';
     Buffer.add_string body (line_directive fd.loc);
     Printf.bprintf body "func %s(%s) %s {\n"
@@ -3164,6 +3253,14 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) module_
     (* Emit the body once assuming it may loop.  If no self tail call actually turned
        into a `continue`, re-emit it flat: an unused label is a Go compile error, and
        a function that never tail-calls itself should read as plain Go. *)
+    (* An `establish` body constructs a proof TERM (`Named "http" port`), which has no
+       runtime content — so the emitted function returns the zero-size proof value and the
+       body is not emitted at all.  Its parameters stay, since callers pass them. *)
+    if fd.kind = EstablishKind then begin
+      List.iter (fun (name, _) ->
+        Printf.bprintf body "\t_ = %s\n" (local_ident name)) params;
+      Printf.bprintf body "\treturn struct{}{}\n}\n"
+    end else begin
     let self = fd.name, List.map (fun (name, _) -> local_ident name) params in
     let looped = Buffer.create 256 in
     emit_tail ~self looped signatures env result "\t\t" fd.body;
@@ -3173,7 +3270,7 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) module_
       Buffer.add_string body "\t}\n"
     end else
       emit_tail body signatures env result "\t" fd.body;
-    Buffer.add_string body "}\n") funcs;
+    Buffer.add_string body "}\n" end) funcs;
   (* ── Codecs ─────────────────────────────────────────────────────────────── *)
   List.iter (fun (codec : codec_form) ->
     let type_name = codec.type_name in
@@ -3352,6 +3449,88 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) module_
             "\tif teslHaveFailure {\n\t\treturn teslFirstFailure\n\t}\n\treturn teslrt.Reject[%s](400, \"no decode alternative matched\")\n"
             go_type_name);
        Buffer.add_string body "}\n")) codecs;
+  (* ── HTTP servers ───────────────────────────────────────────────────────── *)
+  List.iter (fun (server : server_form) ->
+    let api = match List.find_opt (fun (a : api_form) -> a.name = server.api_name) apis with
+      | Some api -> api
+      | None -> unsupported server.loc "Go backend cannot resolve api `%s`" server.api_name
+    in
+    (* SSE endpoints are a different transport and are not bound here. *)
+    let endpoints = List.filter (fun (ep : api_endpoint) ->
+      match ep.kind with Http _ -> true | Sse _ -> false) api.endpoints in
+    if List.length endpoints <> List.length server.handlers then
+      unsupported server.loc
+        "Go backend needs one handler per endpoint in `%s` (%d endpoint(s), %d handler(s))"
+        server.api_name (List.length endpoints) (List.length server.handlers);
+    let bound = List.combine endpoints server.handlers in
+    List.iter (fun ((ep : api_endpoint), _) ->
+      if ep.auth <> None then unsupported ep.loc
+        "Go backend does not support `auth` endpoints yet";
+      (* A capture that runs a CHECK mints a proof at the boundary; that arrives with the
+         auth slice, since both are the same "prove before the body runs" machinery. *)
+      List.iter (fun (capture : api_capture) ->
+        if capture.inline_check <> None || capture.via_fn <> "" then unsupported ep.loc
+          "Go backend does not support a capture with a check yet") ep.captures) bound;
+    let server_name = go_ident ~exported:true server.name in
+    Printf.bprintf body "\nvar %s = teslrt.Server{\n\tRoutes: []teslrt.Route{\n" server_name;
+    List.iter (fun ((ep : api_endpoint), handler) ->
+      Printf.bprintf body "\t\t{Method: %S, Path: %S, Endpoint: %S},\n"
+        (http_method_name ep.method_) ep.path handler) bound;
+    Buffer.add_string body "\t},\n\tHandlers: map[string]teslrt.HandlerFunc{\n";
+    List.iter (fun ((endpoint : api_endpoint), handler) ->
+      let endpoint_loc = endpoint.loc in
+      let endpoint_path = endpoint.path in
+      let endpoint_captures = endpoint.captures in
+      let endpoint_body = ep_body endpoint in
+      let signature = match Hashtbl.find_opt signatures handler with
+        | Some signature -> signature
+        | None -> unsupported server.loc "Go backend cannot resolve handler `%s`" handler
+      in
+      (* The response goes through the result type's own codec, so the body bytes are the
+         ones the codec layer already agrees with Racket on. *)
+      let encoder = match signature.result with
+        | TRecord info -> codec_encode_name info.rec_tesl_name
+        | TAdt (info, _) -> codec_encode_name info.adt_tesl_name
+        | _ -> unsupported server.loc
+          "Go backend handler `%s` must return a type with a codec" handler
+      in
+      Printf.bprintf body
+        "\t\t%S: func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {\n\t\t\t_ = teslScope\n"
+        handler;
+      (* Arguments are assembled in the handler's own parameter order: captures first (in
+         path order), then the decoded body, matching how the endpoint declares them. *)
+      let arguments = ref [] in
+      List.iter (fun (capture : api_capture) ->
+        let name = capture.binding.name in
+        (match type_of_type_expr types capture.binding.type_expr with
+         | TString -> ()
+         | _ -> unsupported endpoint_loc
+           "Go backend supports String path captures only for now");
+        Printf.bprintf body
+          "\t\t\t%s, teslFound%s := teslrt.PathParam(%S, teslRequest.URL.Path, %S)\n\t\t\tif !teslFound%s {\n\t\t\t\treturn teslrt.Fail(404, \"not found\")\n\t\t\t}\n"
+          (local_ident name) (go_ident ~exported:true name) endpoint_path name
+          (go_ident ~exported:true name);
+        arguments := !arguments @ [local_ident name]) endpoint_captures;
+      (match endpoint_body with
+       | None -> Buffer.add_string body "\t\t\t_ = teslRequest\n"
+       | Some (binding : binding) ->
+         let decoder = match type_of_type_expr types binding.type_expr with
+           | TRecord info -> codec_decode_name info.rec_tesl_name
+           | TAdt (info, _) -> codec_decode_name info.adt_tesl_name
+           | _ -> unsupported endpoint_loc
+             "Go backend request body needs a type with a codec"
+         in
+         (* The two failure strings are the ones the Racket server sends, so a client sees
+            the same 400 either way. *)
+         Printf.bprintf body
+           "\t\t\tteslBodyBytes, teslBodyErr := io.ReadAll(teslRequest.Body)\n\t\t\tif teslBodyErr != nil {\n\t\t\t\treturn teslrt.Fail(400, \"Missing JSON payload\")\n\t\t\t}\n\t\t\tteslParsed, teslParseErr := teslrt.ParseJSON(teslBodyBytes)\n\t\t\tif teslParseErr != nil {\n\t\t\t\treturn teslrt.Fail(400, \"Malformed JSON payload\")\n\t\t\t}\n\t\t\tteslDecoded := %s(teslParsed)\n\t\t\tif !teslDecoded.OK() {\n\t\t\t\treturn teslrt.Fail(teslDecoded.Status(), teslDecoded.Message())\n\t\t\t}\n\t\t\tteslBody, _ := teslDecoded.Value()\n"
+           decoder;
+         arguments := !arguments @ ["teslBody"]);
+      Printf.bprintf body
+        "\t\t\treturn teslrt.Response{Status: 200, Body: %s(%s(%s))}\n\t\t},\n"
+        encoder (qualified signature.sig_owner signature.go_name)
+        (String.concat ", " !arguments)) bound;
+    Buffer.add_string body "\t},\n}\n") servers;
   (* Comparator helpers the body referenced, in name order so the output is
      deterministic. *)
   Hashtbl.to_seq pending_helpers
@@ -3384,6 +3563,9 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) module_
     (* A Float literal that Go has no syntax for — negative zero, an infinity, a NaN —
        renders as a `math` call, so the literal itself pulls the import in. *)
     @ (if contains_go_code body "math." then ["math"] else [])
+    (* A server's handler adapters take an `*http.Request`. *)
+    @ (if contains_go_code body "http.Request" then ["net/http"] else [])
+    @ (if contains_go_code body "io.ReadAll" then ["io"] else [])
     @ (if contains_go_code body "teslrt." then [module_path ^ "/internal/teslrt"] else [])
     (* Only packages the emitted body actually references: an unused import is a Go
        compile error, and a Tesl module may import names it only uses in a type
@@ -3642,6 +3824,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         unsupported import.loc "Go backend does not support import `%s` yet" other) m.imports;
     let funcs = List.filter_map (function DFunc fd -> Some fd | _ -> None) m.decls in
     let codecs = List.filter_map (function DCodec c -> Some c | _ -> None) m.decls in
+    let apis = List.filter_map (function DApi a -> Some a | _ -> None) m.decls in
+    let servers = List.filter_map (function DServer s -> Some s | _ -> None) m.decls in
     let tests = List.filter_map (function DTest test -> Some test | _ -> None) m.decls in
     let package = package_name m.module_name in
     let types = {
@@ -4086,8 +4270,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       | DAgent a -> unsupported a.loc "Go backend does not support agents yet"
       | DEmail e -> unsupported e.loc "Go backend does not support email yet"
       | DCapture c -> unsupported c.loc "Go backend does not support captures yet"
-      | DApi a -> unsupported a.loc "Go backend does not support APIs yet"
-      | DServer s -> unsupported s.loc "Go backend does not support servers yet"
+      | DApi _ -> ()
+      | DServer _ -> ()
       | DApiTest t -> unsupported t.loc "Go backend does not support api-test yet"
       | DLoadTest t -> unsupported t.loc "Go backend does not support load-test yet") m.decls;
     let is_exported name = List.exists (function
@@ -4242,7 +4426,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
     current_package := package;
     current_types := Some types;
     let source =
-      module_source ~imported_packages:!imported_packages ~codecs
+      module_source ~imported_packages:!imported_packages ~codecs ~apis ~servers
         ~unreachable:(List.filter_map (fun name ->
           match Hashtbl.find_opt signatures name with
           | Some signature -> Some signature.go_name

@@ -2503,6 +2503,229 @@ let test_int_leaves_with_go () =
       run_go_gates root)
   end
 
+(* `establish` and first-class proof values (`Fact P`).  An `establish` returns a DETACHED
+   proof — a witness a caller can carry and attach later with `f <| value ::: pf`.  All of
+   it erases: `dsl/private/check-runtime.rkt` states the rule outright ("the proof is
+   asserted without re-checking — correctness is guaranteed by the compile-time type
+   system"), and LANGUAGE-SPEC 16.9 gives a proof no runtime structure.  So `Fact P` is a
+   zero-size value, an `establish` body (which builds a proof TERM, not a value) is not
+   emitted at all, and the proof combinators reduce to their value operand.
+   The parse detail that matters: `value ::: proof` in expression position produces the
+   SAME node as a check's `ok value ::: P`.  They are told apart by what is expected — a
+   check's tail wants a `Check`, an ordinary parameter wants the value. *)
+let establish_source = {|module GoEstablish exposing [Named, proveHttp, needHttp, useProof]
+import Tesl.Prelude exposing [Int, String, Fact]
+
+fact Named (name: String) (port: Int)
+
+establish proveHttp(port: Int) -> Fact (Named "http" port) =
+  Named "http" port
+
+fn needHttp(port: Int ::: Named "http" port) -> Int = port
+
+fn useProof(raw: Int) -> Int =
+  let pf = proveHttp raw
+  needHttp <| raw ::: pf
+
+test "detached proofs erase" {
+  expect useProof 8080 == 8080
+}
+|}
+
+let test_establish_with_go () =
+  let emitted = match Compile.compile_go_source "<go-establish>" establish_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "establish compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgoestablish/module.go" emitted in
+  check bool "a detached proof is a zero-size value" true
+    (contains module_go "func ProveHttp(port teslrt.Int) struct{}");
+  check bool "the proof term is not emitted" true
+    (not (contains module_go "Named"));
+  (* The attachment disappears: the callee takes the value alone. *)
+  check bool "proof attachment erases at the call site" true
+    (contains module_go "return NeedHttp(raw)");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-establish" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      run_go_gates root)
+  end
+
+(* ── HTTP: `api` + `server` + `handler` ───────────────────────────────────────
+   An `api` declares endpoints; a `server` binds handlers to them POSITIONALLY in
+   declaration order (the endpoint's own `name` is a parser placeholder).  Both emit as
+   ordinary Go values, so someone who sheds Tesl can read the routing table, call a handler
+   directly, or mount the server on any net/http mux.
+
+   The per-request state a handler may write (cookies) is created by the dispatcher and
+   passed in — no ambient state, and no goroutine-local substitute, because Tesl already
+   says which functions need it via `requires [cookieCap]`.
+
+   Request bodies decode through the codec the same module emits, so the accepted bytes are
+   the ones the codec layer already agrees with Racket on, and the two failure strings
+   ("Missing JSON payload" / "Malformed JSON payload") are the ones the Racket server
+   sends. *)
+let http_server_source = {|module GoHttpServer exposing [Greeting, NewGreeting, hello, greet, lookup]
+import Tesl.Prelude exposing [Int, String]
+import Tesl.Json exposing [stringCodec]
+
+record Greeting {
+  message: String
+}
+
+record NewGreeting {
+  name: String
+}
+
+codec Greeting {
+  toJson {
+    message -> "message" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+codec NewGreeting {
+  toJson_forbidden
+  fromJson [
+    {
+      name <- "name" with_codec stringCodec
+    }
+  ]
+}
+
+handler get hello() -> Greeting =
+  Greeting { message: "hi" }
+
+handler post greet(body: NewGreeting) -> Greeting =
+  Greeting { message: "hello ${body.name}" }
+
+handler get lookup(id: String) -> Greeting =
+  Greeting { message: "id=${id}" }
+
+api HelloApi {
+  get "/hello"
+    -> Greeting
+
+  post "/greet"
+    body body: NewGreeting
+    -> Greeting
+
+  get "/items/:id"
+    capture id: String using stringCodec
+    -> Greeting
+}
+
+server HelloServer for HelloApi {
+  hello
+  greet
+  lookup
+}
+|}
+
+(* Driven through the EMITTED server value: a real request in, JSON out. *)
+let http_server_e2e_test = {|package teslmodgohttpserver
+
+import (
+	"io"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+// End to end through the EMITTED server value: a real request in, JSON out. Nothing here
+// touches ambient state — the dispatcher creates the request scope and passes it in.
+func do(t *testing.T, method, path, body string) (int, string) {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(method, path, strings.NewReader(body))
+	HelloServer.ServeHTTP(recorder, request)
+	response := recorder.Result()
+	out, _ := io.ReadAll(response.Body)
+	return response.StatusCode, string(out)
+}
+
+func TestEmittedServer(t *testing.T) {
+	if status, body := do(t, "GET", "/hello", ""); status != 200 || body != `{"message":"hi"}` {
+		t.Errorf("GET /hello = %d %s", status, body)
+	}
+	// The request body decodes through the codec the same module emitted.
+	if status, body := do(t, "POST", "/greet", `{"name":"ada"}`); status != 200 ||
+		body != `{"message":"hello ada"}` {
+		t.Errorf("POST /greet = %d %s", status, body)
+	}
+	// A `:id` segment reaches the handler.
+	if status, body := do(t, "GET", "/items/42", ""); status != 200 ||
+		body != `{"message":"id=42"}` {
+		t.Errorf("GET /items/42 = %d %s", status, body)
+	}
+}
+
+func TestEmittedServerRejections(t *testing.T) {
+	// Malformed JSON and a missing required field are both 400, with the messages the
+	// Racket server sends.
+	if status, body := do(t, "POST", "/greet", `{"name":`); status != 400 ||
+		!strings.Contains(body, "Malformed JSON payload") {
+		t.Errorf("malformed = %d %s", status, body)
+	}
+	if status, body := do(t, "POST", "/greet", `{}`); status != 400 {
+		t.Errorf("missing field = %d %s", status, body)
+	}
+	if status, _ := do(t, "GET", "/nope", ""); status != 404 {
+		t.Errorf("unknown path status = %d", status)
+	}
+	if status, _ := do(t, "DELETE", "/hello", ""); status != 405 {
+		t.Errorf("wrong method status = %d", status)
+	}
+}
+|}
+
+let test_http_server_with_go () =
+  let emitted = match Compile.compile_go_source "<go-http-server>" http_server_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "HTTP server compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgohttpserver/module.go" emitted in
+  check bool "the routing table is data" true
+    (contains module_go "{Method: \"GET\", Path: \"/hello\", Endpoint: \"hello\"}");
+  check bool "a handler is an ordinary function" true
+    (contains module_go "func Hello() Greeting");
+  check bool "the response goes through the type's codec" true
+    (contains module_go "Body: EncodeGreetingJSON(Hello())");
+  check bool "a request body decodes through the codec" true
+    (contains module_go "teslDecoded := DecodeNewGreetingJSON(teslParsed)");
+  check bool "a path capture reaches the handler" true
+    (contains module_go "teslrt.PathParam(\"/items/:id\", teslRequest.URL.Path, \"id\")");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-http" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      (* The end-to-end test is written INTO the emitted tree, so it exercises the server
+         value the emitter produced rather than a hand-written copy of it. *)
+      let test_path =
+        Filename.concat root "internal/teslmodgohttpserver/server_e2e_test.go" in
+      Out_channel.with_open_bin test_path (fun channel ->
+        output_string channel http_server_e2e_test);
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+  end
+
 let test_divergent_float_functions_fail_closed () =
   (* Go's sin/cos/tan disagree with Racket on 22-34% of inputs and its math.Log is
      outright wrong for subnormals, so these are rejected rather than emitted
@@ -3530,6 +3753,8 @@ let go_corpus = [
      emitter used to refuse outright), a `let` before an under-constrained tail, and
      `List (List Int)` equality — whose comparator is the one that must be hoisted. *)
   "example/learn/lesson35-list-decomposition.tesl";
+  (* First-class detached proofs: `establish` + `f <| value ::: pf`. *)
+  "example/learn/lesson53-literal-parametrized-predicates.tesl";
   "tests/multiparam_test.tesl";
 ]
 
@@ -3621,6 +3846,10 @@ let () =
       test_case "import cycle across three modules" `Slow test_import_cycle_three_modules_with_go;
       test_case "sets behave the same on Racket" `Slow (racket_behavior_oracle "<go-sets>" set_source);
       test_case "Float behaves the same on Racket" `Slow (racket_behavior_oracle "<go-floats>" float_source);
+      test_case "HTTP api, server and handlers" `Slow test_http_server_with_go;
+      test_case "establish and detached proofs" `Slow test_establish_with_go;
+      test_case "detached proofs behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-establish>" establish_source);
       test_case "more Tesl.Int leaves" `Slow test_int_leaves_with_go;
       test_case "more Tesl.Int leaves behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-int-leaves>" int_leaves_source);

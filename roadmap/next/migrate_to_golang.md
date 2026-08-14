@@ -211,6 +211,87 @@ codec with `via`, defaults, a cross-check and two alternatives, as generated Go 
 with a differential test against Racket — no HTTP, so the codec contract is pinned before
 the server layer depends on it.
 
+## `Tesl.Http` reconnaissance — the ambient-state problem (2026-08-13)
+
+Measured corpus wall, scanning every `example/` and `tests/` module through the Go
+backend: **21 of 155 emit today**, and the two dominant blockers are `Tesl.Http` (21
+files) and `Tesl.DB` (21), followed by `Tesl.Time` (10), `Fact` as an applied type (8),
+`Tesl.Database` (7) and `Tesl.ApiTest` (7). Http and DB are subsystems, not leaves — no
+amount of stdlib-leaf work moves those files.
+
+**The structural finding: per-request AMBIENT STATE has no Go equivalent.** The Racket
+runtime keeps three kinds of per-request state in `parameterize` scopes established around
+dispatch — response cookies (`dsl/response-cookies.rkt`), the trace context
+(`dsl/trace-context.rkt`) and the telemetry context/events (`dsl/otel.rkt`). A Racket
+parameter is thread-local and every request is served on its own thread, so a handler deep
+in a call chain can call `Http.setSessionCookie` and the runtime knows which response it
+belongs to. **Go has no goroutine-local storage**, and the idiomatic substitute —
+`context.Context` — must be threaded through every function that might touch it.
+
+What makes this sharp rather than routine: **the restriction is enforced at RUNTIME, not by
+the checker.** `Http.setSessionCookie` is an ordinary typed stdlib function
+(`type_system.ml`), callable from anywhere that type-checks; calling it outside a request
+scope fails at runtime with "no HTTP response to attach a cookie to". So the compiler does
+not currently know which functions need the scope.
+
+Three ways out, with the trade-off stated:
+
+1. **Thread a scope parameter through every emitted function.** Simple and uniform, but it
+   infects pure functions with a parameter they never use and damages the eject story —
+   the emitted Go stops looking like code a person would write.
+2. **Thread it only where it is needed, computed from the call graph.** The emitter already
+   builds a reachability graph over the module's functions (added for the unreachable-
+   private-function rule), so it can mark every function that transitively reaches a
+   request-scoped stdlib call and give exactly those an extra `ctx` parameter. Pure
+   functions stay pure. Cost: the marking must be transitive ACROSS modules, so the
+   per-module export tables need to carry it.
+3. **Make the scope explicit in the language** — a handler receives a value it passes on.
+   Cleanest for Go and worst for existing Tesl code, which would all need rewriting.
+
+Recommendation was (2) — until the maintainer asked the obvious question: *why does this
+need to be ambient at all, when the request is only reachable in auth functions?*
+
+**SETTLED design (maintainer, 2026-08-13), after two wrong turns worth recording:**
+
+*First wrong turn (mine):* a call-graph pass marking every function that transitively
+reaches a cookie write. *Second wrong turn (mine, after the maintainer asked why cookies
+need to be ambient at all):* restrict cookie writes to handlers and `auth` functions, since
+that is all the corpus does.
+
+*Both are wrong, because cookie writing is gated by a CAPABILITY, not by being a handler.*
+A plain `fn` may write cookies if it declares `requires [cookieCap]` — and the compiler
+already enforces the whole rule: without the declaration it rejects the function ("uses
+privileged operations and callees requiring [cookieCap] but does not declare them"), and
+`check_handler_capabilities` forces every caller to declare it too, transitively and across
+module boundaries. A handler-only restriction would have been both wrong (it contradicts
+the language's capability model) and redundant.
+
+**So the marker is the `requires` clause itself.** A function whose EXPANDED declared
+capabilities include `cookieCap` takes a `*teslrt.RequestScope` parameter; its callers must
+declare `cookieCap` too, so the scope threads down the chain by construction; the HTTP
+entry point creates it. No ambient state, no goroutine-local substitute, and no call-graph
+analysis — the declaration already says which functions need it. The same rule generalises
+to any future request-scoped capability.
+
+(Superseded, kept for the reasoning: the scope as a parameter on entry points only.) Reading is already explicit
+(`Http.sessionToken request` takes the request); only WRITING lacks an argument.
+
+**Capabilities are NOT in the scope, and are not runtime-checked in Go.** Every capability
+site in the AST carries a STATIC list of names (`requires [...]`, `withCapabilities [...]`,
+`serve`, `workers`), so the granted set is known at compile time and the checker already
+verifies each call against it — a runtime check would compare two compile-time constants.
+Keeping one would also force the scope through every capability-gated function, the exact
+blast radius this design avoids. Racket checks at runtime because its capability set is a
+dynamic parameter, and that mechanism is itself what broke delegation at deferred tool
+execution ("passes test, fails live") — a failure mode a compile-time-only design does not
+have. Precedent: record proofs already have no runtime backstop; the checker is the sole
+enforcement.
+
+Not yet probed: route/handler emission shape, the request/response representation, SSE
+streaming, static files and mount paths, and how `auth … via cookieAuth` carries its proof
+across the boundary. Those are ordinary codegen questions; the ambient-state decision is the
+one that changes the shape of every emitted signature, so it should be settled first.
+
 ## Requirements (maintainer, 2026-08-04)
 
 Hard requirements for any Go backend, regardless of how the design below evolves:
@@ -643,6 +724,9 @@ Output allocates once at exact length (`make([]U, len(xs))`, filled by index) ra
 | Five more `Tesl.List` leaves | Implemented (`range`, `repeat`, `concat`/`flatten`, `maximum`, `minimum`) | `range` and `repeat` CONSTRUCT a list rather than consuming one, so they carry no list argument for the leaf table to read an element type from and are resolved on their own — `range` is always `List Int`, `repeat` takes its element from its first argument. Both counts carry an `IsNonNegative` proof that erases, so the runtime check is containment, not the enforcement; a count that cannot be allocated panics with a clear message rather than truncating to a wrong-length list. Semantics were taken from `tesl/list.rkt`, NOT the lifted `tesl/list.tesl` — **the lifted `range`/`repeat` bodies there are truncated stubs** (`range start end = if start < end then [start] else []`, one element), which never ship because `list.rkt` imports exactly 16 lifted names with `only-in` and defines these two natively. Worth knowing before anyone wires them up. `concat`/`flatten` are one leaf under two names and size the result before filling (one allocation instead of n appends); `maximum`/`minimum` are `Nothing` for the empty list and take the emitter-supplied ordering, which is what makes them work on a non-Int element type. `Tesl.List`'s proof predicates (`IsSorted`, `ForAll`, …) are now accepted and erased, like `Tesl.String`'s. **Expectation propagation reached list LITERALS too**: an element that is under-constrained alone while its siblings settle the type (`[[1, 2], [], [3]]`) now types from the first element that resolves, with the rest checked against it. Known remaining boundary: the expectation still does not reach a leaf's list ARGUMENT, so `List.maximum []` fails closed. Corpus reach is unchanged — lesson25 now gets past the whole list layer and stops at `Int.clamp`, and lesson47/lifted-list-tests need the higher-order leaves (`find`, `filterMap`, `concatMap`, `sortBy`), which is the next slice. |
 | Racket `List.maximum`/`minimum` on strings (found here, fixed) | Fixed | The differential oracle earned its keep: the Go leaf ordered a `List String` happily, and Racket died with `tesl-gt?: ordered comparison needs a number, got "pear". This is a compiler bug… Please report it.` The hole is in the STDLIB, not either backend's ordering: the signature is `List a -> Maybe a` with no ordering constraint, so `List.maximum ["pear", "apple"]` type-checks, while the LIFTED implementation in `tesl/list.tesl` compares with `>`, which Tesl admits only for numbers. `List.sort` had no such problem — its native implementation in `list.rkt` has always ordered numbers AND strings — so the two stdlib functions disagreed about what is comparable. `List.maximum`/`List.minimum` are now defined natively beside `List.sort`, sharing one named comparator (`tesl-list-value<?`), and dropped from the `only-in` lifted import. A list that can be sorted now has a maximum. Not a breaking change in any useful sense: the previous behaviour was a runtime crash, so nothing working depended on it. Both backends now agree on the probe. |
 | Review77 suite flake | Fixed | Under a parallel `dune test` this suite intermittently failed with "unterminated string literal at EOF" — the compiler reading a PARTIAL probe file. `Filename.temp_file` is unique, so it was never a name collision; the file sat directly in dune's shared build sandbox. Each probe now gets its own directory, written through `with_open_bin` so the file is closed even if writing raises. Recorded here because it failed a full run twice and would otherwise keep reading as a real regression. |
+| First-class detached proofs (`establish` / `Fact P`) | Implemented | An `establish` returns a DETACHED proof — a witness the caller carries and attaches later with `f <| value ::: pf` — and `Fact P` is its type. All of it erases, on the runtime's own stated rule: `dsl/private/check-runtime.rkt` says "the proof is asserted without re-checking — correctness is guaranteed by the compile-time type system", and LANGUAGE-SPEC 16.9 gives a proof no runtime structure. So `Fact P` is a zero-size value, an `establish` body is not emitted at all (it builds a proof TERM, not a value expression, so it is not type-checked against the result either), and `attachFact`/`forgetFact` reduce to their value operand while `detachFact`/`introAnd`/`andLeft`/`andRight` produce the zero value. The parse detail that made this non-obvious: **`value ::: proof` in expression position produces the SAME AST node as a check's `ok value ::: P`**, so the emitter tells them apart by what is EXPECTED — a check's tail wants a `Check`, an ordinary parameter wants the value. Corpus reach 21 → 23, and `Fact` disappears from the blocker census entirely (it was blocking 8 files, the largest non-subsystem blocker). |
+| Two bugs found by the empty-list default | Fixed | Both surfaced from the maintainer-approved change that lets an unconstrained empty list compile. **(1)** A defaulted type did not yield to a real one in a BINARY operand — `List.reverse words == []` compared `List String` against the default. The reconciliation the `if`/`case`/literal paths already had now covers `==`, and both operands emit against the settled type. **(2)** A NAME COLLISION in the hoisted comparators: `helper_suffix` stripped punctuation, so `[]teslrt.Int` and `teslrt.Int` both became `TeslrtInt`, and since helpers are keyed by name the first one registered won — a `List (List Int)` comparison silently got the `Int` comparator. The suffix is injective now (`SliceOf`/`MapOf` spelled out before punctuation is dropped). Worth recording HOW it was caught: `go vet` on the emitted tree, which is exactly the safety net claimed when arguing a wrong default cannot ship silently — but the collision is fixed at the source rather than left for the gate. |
+| HTTP: `api`, `server`, `handler` (first slice) | Implemented, no auth yet | A Tesl API now emits a working Go server. An `api` becomes a `[]teslrt.Route` table, a `server` becomes a `teslrt.Server` binding endpoint names to handler adapters, and a `handler` is an ordinary Go function — so someone who sheds Tesl can read the routes as data, call a handler directly, or mount the server on any `net/http` mux. Binding is POSITIONAL (the endpoint's own `name` is a parser placeholder), and the emitter fails closed when the counts disagree. Runtime (`teslrt/server.go`): dispatch by method and path with `:name` segments, `PathParam`, **404 for an unknown path vs 405 for a known path with the wrong method** (404 there would tell a client the resource does not exist when it does), Racket's error body `{"ok":false,"error":…,"details":[]}`, and cookies attached to **2xx only** — a handler that sets a cookie and then fails mints no session, matching dsl/web.rkt. Request bodies decode through the codec the same module emits, with the Racket server's own 400 strings ("Missing JSON payload" / "Malformed JSON payload"). Verified end to end by writing a Go test INTO the emitted tree, so it drives the server value the emitter produced: GET, POST with a decoded body, a path capture, malformed JSON, a missing required field, 404 and 405. Still fails closed with its own message: `auth` endpoints, and a capture that runs a CHECK — both are the same "prove before the body runs" machinery and arrive together in the next slice. |
 | Emitted-code negation | Implemented | Negation is structural (De Morgan applied in the emitter), because emitted `!(!(x))` and `!(a && b)` are staticcheck/golangci-lint findings — and a lint finding on emitted code is an emitter bug by contract, not something to suppress. |
 | Idiomatic emitted names | Implemented | Serves the eject argument directly: emitted code now reads `return teslrt.Mul(r.Width, r.Height)` inside `func Area(r Rectangle) teslrt.Int`, not `Tesl_area(tesl_r)` with `(tesl_r).Tesl_width`. Names keep their Tesl spelling; a `_` suffix is appended only on collision with a Go keyword, a predeclared identifier, an imported package name, the emitter's own `tesl…` namespace, or another emitted package-level name (all package-level names are minted through one uniqueness table in declaration order, so the output stays deterministic). Exported-ness follows the Tesl `exposing` list for functions; types stay exported for the coming cross-package imports. Record fields are `X`/`Width`; ADT tags are `StatusOpen`; variant payloads are `PendingReason`. Selector parentheses are dropped when the object is a plain identifier chain. |
 | Whole stdlib/runtime and corpus parity | Pending | Next wall is imports: 137 of 155 corpus modules stop at `import` (Tesl.Maybe 17×, Tesl.String 10×, Tesl.Json 8×). Needs multi-module emission plus generics (`Maybe a`) before the lifted stdlib can flow through. Then run every backend-neutral test under both backends and document every intentionally dropped Racket test. |
