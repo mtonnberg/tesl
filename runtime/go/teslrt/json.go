@@ -178,3 +178,103 @@ func EncodeJSONValue(value any) string {
 		return string(encoded)
 	}
 }
+
+// DecodeObjectShape is the shape check a DERIVED record decoder runs before reading any
+// field: a record with no `codec` block still decodes from JSON, and the rule it follows is
+// the Racket runtime's generic decode (dsl/types.rkt `jsexpr->typed-value`) — the object's
+// keys must be EXACTLY the record's fields. A missing field is a 400 because the field has no
+// value to take, and an EXTRA field is a 400 too, which is the surprising half: silently
+// ignoring unknown keys is how a typo'd field name becomes a silent default.
+func DecodeObjectShape(raw any, typeName string, expected []string) (map[string]any, error) {
+	fields, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("expected record JSON for type %s, got %v", typeName, raw)
+	}
+	missing := make([]string, 0, len(expected))
+	for _, name := range expected {
+		if _, present := fields[name]; !present {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("record JSON for type %s is missing field%s (%s)",
+			typeName, plural(len(missing)), strings.Join(missing, " "))
+	}
+	extra := make([]string, 0, len(fields))
+	for name := range fields {
+		if !containsName(expected, name) {
+			extra = append(extra, name)
+		}
+	}
+	if len(extra) > 0 {
+		sort.Strings(extra)
+		return nil, fmt.Errorf("record JSON for type %s has unexpected field%s (%s)",
+			typeName, plural(len(extra)), strings.Join(extra, " "))
+	}
+	return fields, nil
+}
+
+func plural(count int) string {
+	if count == 1 {
+		return ""
+	}
+	return "s"
+}
+
+func containsName(names []string, wanted string) bool {
+	for _, name := range names {
+		if name == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+// The value-level counterparts of the DecodeXField helpers, for a derived decoder that has
+// already taken the object apart (and for a list element, which has no key at all).
+
+func DecodeIntValue(raw any) (Int, error) {
+	number, ok := raw.(json.Number)
+	if !ok {
+		return Int{}, fmt.Errorf("expected JSON integer, got %v", raw)
+	}
+	value, ok := new(big.Int).SetString(number.String(), 10)
+	if !ok {
+		return Int{}, fmt.Errorf("expected JSON integer, got %v", number.String())
+	}
+	return fromBig(value), nil
+}
+
+func DecodeBoolValue(raw any) (bool, error) {
+	flag, ok := raw.(bool)
+	if !ok {
+		return false, fmt.Errorf("expected JSON boolean, got %v", raw)
+	}
+	return flag, nil
+}
+
+func DecodeFloatValue(raw any) (float64, error) {
+	number, ok := raw.(json.Number)
+	if !ok {
+		return 0, fmt.Errorf("expected JSON number, got %v", raw)
+	}
+	return number.Float64()
+}
+
+// DecodeListValue decodes a JSON array element-wise through `element`, so a derived decoder
+// composes over `List T` without the emitter writing the loop at every use.
+func DecodeListValue[Element any](raw any, element func(any) (Element, error)) ([]Element, error) {
+	items, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("expected JSON array, got %v", raw)
+	}
+	out := make([]Element, 0, len(items))
+	for _, item := range items {
+		decoded, err := element(item)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, decoded)
+	}
+	return out, nil
+}

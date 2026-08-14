@@ -3452,12 +3452,32 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
        | TList element -> element
        | _ -> invalid_arg "higher-order leaf validated before emission")
   in
-  let emit_list index =
+  let emit_list ?(at=indent) index =
     match List.nth args index with
     | EList { elems = []; _ } ->
-      emit_expr ~expected:(TList (element_of index)) ~indent signatures env
+      emit_expr ~expected:(TList (element_of index)) ~indent:at signatures env
         (List.nth args index)
-    | arg -> emit_expr ~indent signatures env arg
+    | arg -> emit_expr ~indent:at signatures env arg
+  in
+  (* The source list is BOUND, never spliced twice: `make(…, len(xs))` and `range xs` both
+     mention it, and a source that is itself a comprehension would otherwise be emitted — and
+     evaluated — twice, squaring the work of `List.filter f (List.map g xs)`.  Binding it at
+     `inner` also gives the nested emission its own depth, so its `teslOut`/`teslAt` names
+     cannot shadow this level's. *)
+  let source_binding index =
+    let emitted = emit_list ~at:inner index in
+    (* A plain name needs no binding: it is already a single evaluation, and the extra line
+       would be noise in the emitted code a reader is meant to be able to eject to. *)
+    let simple =
+      emitted <> ""
+      && String.for_all (fun c ->
+           (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+           || c = '_' || c = '.') emitted
+    in
+    if simple then emitted, ""
+    else
+      let name = Printf.sprintf "teslSrc%d" depth in
+      name, Printf.sprintf "%s%s := %s\n" inner name emitted
   in
   (* A fold's initial accumulator may be an empty list literal, which only emits against
      an expected type. *)
@@ -3471,21 +3491,21 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
       | _ -> invalid_arg "higher-order leaf validated before emission"
     in
     let applied = emit_applied ~indent:body_indent signatures env callable [element] [value] in
-    let source = emit_list 1 in
+    let source, bind_source = source_binding 1 in
     (match hof with
      | HofMap ->
        let out = Printf.sprintf "teslOut%d" depth and index = Printf.sprintf "teslAt%d" depth in
        Printf.sprintf
-         "(func() %s {\n%s%s := make(%s, len(%s))\n%sfor %s, %s := range %s {\n%s%s[%s] = %s\n%s}\n%sreturn %s\n%s}())"
-         (go_type result) inner out (go_type result) source
+         "(func() %s {\n%s%s%s := make(%s, len(%s))\n%sfor %s, %s := range %s {\n%s%s[%s] = %s\n%s}\n%sreturn %s\n%s}())"
+         (go_type result) bind_source inner out (go_type result) source
          inner index value source
          body_indent out index applied
          inner inner out indent
      | HofFilter ->
        let out = Printf.sprintf "teslOut%d" depth in
        Printf.sprintf
-         "(func() %s {\n%s%s := make(%s, 0, len(%s))\n%sfor _, %s := range %s {\n%sif %s {\n%s\t%s = append(%s, %s)\n%s}\n%s}\n%sreturn %s\n%s}())"
-         (go_type result) inner out (go_type result) source
+         "(func() %s {\n%s%s%s := make(%s, 0, len(%s))\n%sfor _, %s := range %s {\n%sif %s {\n%s\t%s = append(%s, %s)\n%s}\n%s}\n%sreturn %s\n%s}())"
+         (go_type result) bind_source inner out (go_type result) source
          inner value source
          body_indent (strip_outer_parens applied)
          body_indent out out value
@@ -3493,8 +3513,8 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
      | _ ->
        let found = (hof = HofAny) in
        Printf.sprintf
-         "(func() bool {\n%sfor _, %s := range %s {\n%sif %s {\n%s\treturn %b\n%s}\n%s}\n%sreturn %b\n%s}())"
-         inner value source
+         "(func() bool {\n%s%sfor _, %s := range %s {\n%sif %s {\n%s\treturn %b\n%s}\n%s}\n%sreturn %b\n%s}())"
+         bind_source inner value source
          body_indent
          (if found then strip_outer_parens applied
           else strip_outer_parens (emit_negated_applied ~indent:body_indent signatures env callable element value))
@@ -3521,8 +3541,8 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
     in
     Printf.sprintf
       "(func() %s {\n%s%s := %s\n%s%s := %s\n%s%s := len(%s)\n%sif len(%s) < %s {\n%s\t%s = len(%s)\n%s}\n%s%s := make(%s, %s)\n%sfor %s := range %s {\n%s%s[%s] = %s\n%s}\n%sreturn %s\n%s}())"
-      (go_type result) inner left (emit_list 0)
-      inner right (emit_list 1)
+      (go_type result) inner left (emit_list ~at:inner 0)
+      inner right (emit_list ~at:inner 1)
       inner (Printf.sprintf "teslLen%d" depth) left
       inner right (Printf.sprintf "teslLen%d" depth)
       inner (Printf.sprintf "teslLen%d" depth) right
@@ -3538,7 +3558,7 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
       | _ -> invalid_arg "higher-order leaf validated before emission"
     in
     let checked = emit_applied ~indent:body_indent signatures env callable [element] [value] in
-    let source = emit_list 1 in
+    let source, bind_source = source_binding 1 in
     let out = Printf.sprintf "teslOut%d" depth in
     let kept = Printf.sprintf "teslKept%d" depth in
     let ok = Printf.sprintf "teslOK%d" depth in
@@ -3550,8 +3570,8 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
     (match hof with
      | HofFilterCheck ->
        Printf.sprintf
-         "(func() %s {\n%s%s := make(%s, 0, len(%s))\n%sfor _, %s := range %s {\n%sif %s, %s := (%s).Value(); %s {\n%s\t%s = append(%s, %s)\n%s}\n%s}\n%sreturn %s\n%s}())"
-         elements inner out elements source
+         "(func() %s {\n%s%s%s := make(%s, 0, len(%s))\n%sfor _, %s := range %s {\n%sif %s, %s := (%s).Value(); %s {\n%s\t%s = append(%s, %s)\n%s}\n%s}\n%sreturn %s\n%s}())"
+         elements bind_source inner out elements source
          inner value source
          body_indent kept ok checked ok
          body_indent out out kept
@@ -3560,8 +3580,8 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
        (* Racket's allCheck runs the check on EVERY element before deciding, so this
           does too: an early return would skip checks the Racket backend performs. *)
        Printf.sprintf
-         "(func() %s {\n%s%s := true\n%s%s := make(%s, 0, len(%s))\n%sfor _, %s := range %s {\n%sif %s, %s := (%s).Value(); %s {\n%s\t%s = append(%s, %s)\n%s} else {\n%s\t%s = false\n%s}\n%s}\n%sif %s {\n%s\treturn %s{%s: %s, %s: %s}\n%s}\n%sreturn %s{%s: %s}\n%s}())"
-         (go_type result) inner all_ok
+         "(func() %s {\n%s%s%s := true\n%s%s := make(%s, 0, len(%s))\n%sfor _, %s := range %s {\n%sif %s, %s := (%s).Value(); %s {\n%s\t%s = append(%s, %s)\n%s} else {\n%s\t%s = false\n%s}\n%s}\n%sif %s {\n%s\treturn %s{%s: %s, %s: %s}\n%s}\n%sreturn %s{%s: %s}\n%s}())"
+         (go_type result) bind_source inner all_ok
          inner out elements source
          inner value source
          body_indent kept ok checked ok
@@ -3579,14 +3599,14 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
       | _ -> invalid_arg "higher-order leaf validated before emission"
     in
     let applied = emit_applied ~indent:body_indent signatures env callable [element] [value] in
-    let source = emit_list 1 in
+    let source, bind_source = source_binding 1 in
     let out = Printf.sprintf "teslOut%d" depth in
     let found = Printf.sprintf "teslFound%d" depth in
     (match hof with
      | HofFind ->
        Printf.sprintf
-         "(func() %s {\n%sfor _, %s := range %s {\n%sif %s {\n%s\treturn %s{%s: teslrt.MaybeSomething, SomethingValue: %s}\n%s}\n%s}\n%sreturn %s{%s: teslrt.MaybeNothing}\n%s}())"
-         (go_type result) inner value source
+         "(func() %s {\n%s%sfor _, %s := range %s {\n%sif %s {\n%s\treturn %s{%s: teslrt.MaybeSomething, SomethingValue: %s}\n%s}\n%s}\n%sreturn %s{%s: teslrt.MaybeNothing}\n%s}())"
+         (go_type result) bind_source inner value source
          body_indent (strip_outer_parens applied)
          body_indent (go_type result) adt_tag_field value
          body_indent inner
@@ -3594,16 +3614,16 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
      | HofFilterMap ->
        (* Decided by the TAG: a `Something` whose payload is `false` is still kept. *)
        Printf.sprintf
-         "(func() %s {\n%s%s := make(%s, 0, len(%s))\n%sfor _, %s := range %s {\n%sif %s := %s; %s.%s == teslrt.MaybeSomething {\n%s\t%s = append(%s, %s.SomethingValue)\n%s}\n%s}\n%sreturn %s\n%s}())"
-         (go_type result) inner out (go_type result) source
+         "(func() %s {\n%s%s%s := make(%s, 0, len(%s))\n%sfor _, %s := range %s {\n%sif %s := %s; %s.%s == teslrt.MaybeSomething {\n%s\t%s = append(%s, %s.SomethingValue)\n%s}\n%s}\n%sreturn %s\n%s}())"
+         (go_type result) bind_source inner out (go_type result) source
          inner value source
          body_indent found applied found adt_tag_field
          body_indent out out found
          body_indent inner inner out indent
      | _ ->
        Printf.sprintf
-         "(func() %s {\n%s%s := make(%s, 0, len(%s))\n%sfor _, %s := range %s {\n%s%s = append(%s, %s...)\n%s}\n%sreturn %s\n%s}())"
-         (go_type result) inner out (go_type result) source
+         "(func() %s {\n%s%s%s := make(%s, 0, len(%s))\n%sfor _, %s := range %s {\n%s%s = append(%s, %s...)\n%s}\n%sreturn %s\n%s}())"
+         (go_type result) bind_source inner out (go_type result) source
          inner value source
          body_indent out out applied
          inner inner out indent)
@@ -3657,7 +3677,7 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
     Printf.sprintf
       "(func() %s {\n%s%s := %s\n%sfor _, %s := range %s {\n%s%s := %s\n%s_ = %s\n%s%s = %s\n%s}\n%sreturn %s\n%s}())"
       (go_type accumulator) inner state (emit_init accumulator)
-      inner (List.nth bound 1) (emit_list 2)
+      inner (List.nth bound 1) (emit_list ~at:inner 2)
       body_indent (List.nth bound 0) state
       body_indent (List.nth bound 0)
       body_indent state applied
@@ -3690,7 +3710,7 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
     Printf.sprintf
       "(func() %s {\n%s%s := %s\n%s%s := %s\n%sfor %s := len(%s) - 1; %s >= 0; %s-- {\n%s%s := %s[%s]\n%s_ = %s\n%s%s := %s\n%s_ = %s\n%s%s = %s\n%s}\n%sreturn %s\n%s}())"
       (go_type accumulator) inner state (emit_init accumulator)
-      inner source (emit_list 2)
+      inner source (emit_list ~at:inner 2)
       inner index source index index
       body_indent (List.nth bound 0) source index
       body_indent (List.nth bound 0)
@@ -3956,12 +3976,22 @@ and emit_sql_predicate ~indent signatures env loc (info : entity_info) binder cl
     | SqlLike { field; pattern } -> like field pattern false
     | SqlILike { field; pattern } -> like field pattern true
   in
+  (* The predicate is emitted ALREADY SPLIT across lines rather than as a one-liner.  A
+     `func(r T) bool { return … }` survives gofmt only while go/printer judges the whole line
+     short enough, and a two-clause `where` on a newtype column is already past that — so a
+     one-liner is gofmt-stable for small predicates and reflowed for the rest, which the
+     emitted-code gate reads as an emitter bug (correctly: the emitter must produce gofmt's
+     own output).  gofmt never JOINS a split literal, so the split form is stable at every
+     size. *)
+  let split params returned =
+    Printf.sprintf "func(%s) bool {\n%s\treturn %s\n%s}" params indent returned indent
+  in
   match clauses with
   (* No clause means every row, and naming the row would leave an unused parameter. *)
-  | [] -> Printf.sprintf "func(_ %s) bool { return true }" (sql_row_type info)
+  | [] -> split (Printf.sprintf "_ %s" (sql_row_type info)) "true"
   | _ ->
-    Printf.sprintf "func(%s %s) bool { return %s }" (local_ident binder)
-      (sql_row_type info) (String.concat " && " (List.map clause clauses))
+    split (Printf.sprintf "%s %s" (local_ident binder) (sql_row_type info))
+      (String.concat " && " (List.map clause clauses))
 
 (* `where_field` is the field the RECOVERY saw first; every supported form also produces
    a clause for it.  One left over means the predicate was written in a shape this
@@ -4921,7 +4951,11 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
                  "\tteslChecked%s := %s(%s)\n\tif !teslChecked%s.OK() {\n\t\treturn teslrt.Reject[%s](teslChecked%s.Status(), teslChecked%s.Message())\n\t}\n\t%s, _ = teslChecked%s.Value()\n"
                  suffix (qualified signature.sig_owner signature.go_name) binder
                  suffix go_type_name suffix suffix binder suffix) via;
-             assignments := (field_name, binder) :: !assignments
+             (* Whether the binder holds the field's own type or its BASE value: a primitive
+                codec answers a `string`/`Int`, so a newtype field still needs its constructor;
+                a nested codec already answers the field's type. *)
+             let base_value = primitive_codec field_codec <> None in
+             assignments := (field_name, binder, base_value) :: !assignments
            | DecodeDefault { field_name; default_lit; _ } ->
              let binder = Printf.sprintf "teslField%s" (go_ident ~exported:true field_name) in
              let rendered = match default_lit, field_type field_name with
@@ -4933,14 +4967,30 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
                  "Go backend codec `%s` default for `%s` is not a literal" type_name field_name
              in
              Printf.bprintf body "\t%s := %s\n" binder rendered;
-             assignments := (field_name, binder) :: !assignments
+             assignments := (field_name, binder, true) :: !assignments
            | DecodeCrossCheck _ -> ()) alternative;
          (* The record is built before any cross-check, which takes the whole value. *)
          let assignments = List.rev !assignments in
+         (* A field whose TYPE is a newtype decoded its BASE value — a primitive codec answers
+            a `string`/`Int`, never the wrapper — so the constructor is applied here, at
+            construction, and NOT before.  That ordering is the fix a Racket-side soundness bug
+            forced (`compiler/test/test_secret_surface.ml` ratchets it): wrapping first meant a
+            `via` checker declared `(text: String)` was handed the wrapped secret, so an
+            arbitrary checker could reach the plaintext under a signature promising it never saw
+            more than a String — and echo it into a client-facing 400.  `via` therefore runs on
+            the raw value above, and only a successful check's value is wrapped. *)
+         let wrapped field binder =
+           match field_type field with
+           | TNewtype info when info.secret ->
+             Printf.sprintf "%s{Value: teslrt.MakeSecret(%s)}" (go_type (TNewtype info)) binder
+           | TNewtype info -> Printf.sprintf "%s{Value: %s}" (go_type (TNewtype info)) binder
+           | _ -> binder
+         in
          Printf.bprintf body "\tteslDecoded := %s{" go_type_name;
          Buffer.add_string body
-           (String.concat ", " (List.map (fun (field, binder) ->
-              Printf.sprintf "%s: %s" (field_go field) binder) assignments));
+           (String.concat ", " (List.map (fun (field, binder, base_value) ->
+              Printf.sprintf "%s: %s" (field_go field)
+                (if base_value then wrapped field binder else binder)) assignments));
          Buffer.add_string body "}\n";
          List.iter (fun entry ->
            match entry with
@@ -4956,7 +5006,8 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
              Printf.bprintf body
                "\tteslCross := %s(%s)\n\tif !teslCross.OK() {\n\t\treturn teslrt.Reject[%s](teslCross.Status(), teslCross.Message())\n\t}\n"
                (qualified signature.sig_owner signature.go_name)
-               (String.concat ", " (List.map snd assignments)) go_type_name
+               (String.concat ", " (List.map (fun (_, binder, _) -> binder) assignments))
+               go_type_name
            | _ -> ()) alternative;
          Buffer.add_string body "\treturn teslrt.Accept(teslDecoded)\n}\n") alternatives;
        (* The entry point tries each alternative in order and reports the LAST failure
@@ -4983,6 +5034,86 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
             "\tif teslHaveFailure {\n\t\treturn teslFirstFailure\n\t}\n\treturn teslrt.Reject[%s](400, \"no decode alternative matched\")\n"
             go_type_name);
        Buffer.add_string body "}\n")) codecs;
+  (* ── Derived decoders ───────────────────────────────────────────────────────
+     A request-body record needs no `codec` block: Racket decodes it generically from the
+     record spec at run time (`dsl/types.rkt jsexpr->typed-value`), so the type alone is the
+     contract. Go has no runtime type registry, so the equivalent decoder is EMITTED — and it
+     has to be, because the dispatcher above already calls `Decode<T>JSON` for every body
+     type. Without this the emitted package referenced a function nobody wrote: a fail-OPEN
+     that produced uncompilable Go rather than a refusal.
+
+     The rules are the generic decoder's, not a new dialect: the object's keys must be exactly
+     the record's fields (an extra key is a 400, because silently ignoring unknown keys is how
+     a typo'd field name becomes a silent default), a newtype decodes its base and is then
+     wrapped, and a nested record recurses. A shape the generic decoder handles but this does
+     not yet — an ADT's `{tag, fields}`, Dict, Set, Money — fails closed at emit. *)
+  let derived_decoders = ref [] in
+  let rec derive_decoder loc ty =
+    match ty with
+    | TRecord info when info.rec_owner = package
+                        && not (List.mem info.rec_tesl_name !current_codec_types) ->
+      if not (List.mem info.rec_tesl_name !derived_decoders) then begin
+        derived_decoders := info.rec_tesl_name :: !derived_decoders;
+        (* Fields first: a nested record's decoder is emitted before the one that calls it,
+           which also keeps a cycle from recursing forever (the name is claimed above). *)
+        List.iter (fun (_, field_ty) -> derive_decoder loc field_ty) info.rec_fields;
+        let go_ty = go_type ty in
+        Printf.bprintf body
+          "\n// %s is the DERIVED decoder for a record with no `codec` block: the type is the\n\
+           // whole contract, exactly as it is on the Racket runtime's generic decode.\n\
+           func %s(teslJSON any) teslrt.Check[%s] {\n"
+          (codec_decode_name info.rec_tesl_name) (codec_decode_name info.rec_tesl_name) go_ty;
+        Printf.bprintf body "\tteslFields, teslShapeErr := teslrt.DecodeObjectShape(teslJSON, %s, []string{%s})\n\tif teslShapeErr != nil {\n\t\treturn teslrt.RejectShape[%s](teslShapeErr.Error())\n\t}\n"
+          (go_quote info.rec_tesl_name)
+          (String.concat ", " (List.map (fun (name, _) -> go_quote name) info.rec_fields))
+          go_ty;
+        List.iter (fun (name, field_ty) ->
+          let suffix = go_ident ~exported:true name in
+          (* Every field decoder is a `func(any) (T, error)`, so a list composes over the
+             element's own decoder without the emitter writing the loop. *)
+          let rec value_decoder ty = match ty with
+            | TString -> "teslrt.DecodeStringValue"
+            | TInt -> "teslrt.DecodeIntValue"
+            | TBool -> "teslrt.DecodeBoolValue"
+            | TFloat -> "teslrt.DecodeFloatValue"
+            | TNewtype info ->
+              let inner = value_decoder info.base in
+              let wrap = if info.secret then "teslrt.MakeSecret(teslBase)" else "teslBase" in
+              Printf.sprintf
+                "func(teslRaw any) (%s, error) {\n\t\tteslBase, teslErr := %s(teslRaw)\n\t\tif teslErr != nil {\n\t\t\treturn %s{}, teslErr\n\t\t}\n\t\treturn %s{Value: %s}, nil\n\t}"
+                (go_type ty) inner (go_type ty) (go_type ty) wrap
+            | TList element ->
+              Printf.sprintf
+                "func(teslRaw any) ([]%s, error) {\n\t\treturn teslrt.DecodeListValue(teslRaw, %s)\n\t}"
+                (go_type element) (value_decoder element)
+            | TRecord nested when nested.rec_owner = package
+                                  || List.mem nested.rec_tesl_name !current_codec_types ->
+              (* A nested record decodes through its own decoder — derived or hand-written —
+                 and its `Check` becomes an `error` here so one field shape covers both. *)
+              Printf.sprintf
+                "func(teslRaw any) (%s, error) {\n\t\tteslNested := %s(teslRaw)\n\t\tif !teslNested.OK() {\n\t\t\treturn %s{}, errors.New(teslNested.Message())\n\t\t}\n\t\tteslValue, _ := teslNested.Value()\n\t\treturn teslValue, nil\n\t}"
+                (go_type ty) (codec_decode_name nested.rec_tesl_name) (go_type ty)
+            | _ -> unsupported loc
+              "Go backend cannot derive a decoder for field `%s.%s`; give the type a `codec`"
+              info.rec_tesl_name name
+          in
+          Printf.bprintf body
+            "\tteslField%s, teslErr%s := %s(teslFields[%s])\n\tif teslErr%s != nil {\n\t\treturn teslrt.RejectShape[%s](teslErr%s.Error())\n\t}\n"
+            suffix suffix (value_decoder field_ty) (go_quote name) suffix go_ty suffix)
+          info.rec_fields;
+        Printf.bprintf body "\treturn teslrt.Accept(%s{%s})\n}\n" go_ty
+          (String.concat ", " (List.map (fun (name, _) ->
+             Printf.sprintf "%s: teslField%s" (record_field_go_name name)
+               (go_ident ~exported:true name)) info.rec_fields))
+      end
+    | _ -> ()
+  in
+  List.iter (fun (api : api_form) ->
+    List.iter (fun (endpoint : api_endpoint) ->
+      match endpoint.kind with
+      | Http { body = Some (binding : binding); _ } ->
+        derive_decoder endpoint.loc (type_of_type_expr types binding.type_expr)
+      | _ -> ()) api.endpoints) apis;
   (* ── HTTP servers ───────────────────────────────────────────────────────── *)
   List.iter (fun (server : server_form) ->
     let api = match List.find_opt (fun (a : api_form) -> a.name = server.api_name) apis with
@@ -5141,6 +5272,8 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
     (* A server's handler adapters take an `*http.Request`. *)
     @ (if contains_go_code body "http.Request" then ["net/http"] else [])
     @ (if contains_go_code body "io.ReadAll" then ["io"] else [])
+    (* A derived decoder turns a nested record's rejection into an `error`. *)
+    @ (if contains_go_code body "errors.New" then ["errors"] else [])
     @ (if contains_go_code body "teslrt." then [module_path ^ "/internal/teslrt"] else [])
     (* Only packages the emitted body actually references: an unused import is a Go
        compile error, and a Tesl module may import names it only uses in a type
@@ -6816,7 +6949,22 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
            `teslrt.init -> http.init -> asn1.Unmarshal`) against a module that never opens
            a socket.  A dependency a program does not use should not be in it, for
            vulnerability surface as much as for the eject story. *)
-        let serves_http = servers <> [] in
+        (* Declaring a `server` is the common way to need the HTTP half, but not the only one:
+           an `auth` function takes a `teslrt.HttpRequest`, and a module can declare one while
+           the `server` that routes to it lives elsewhere.  So the test is what the emitted code
+           REFERENCES, not what it declares — otherwise the package compiles against a runtime
+           file that was not shipped (`undefined: teslrt.HttpRequest`), which is the fail-open
+           version of the same size argument. *)
+        let mentions name =
+          contains_go_code source name
+          || (match tests_source with
+              | Some text -> contains_go_code text name
+              | None -> false)
+        in
+        let serves_http = servers <> []
+          || List.exists mentions
+               [ "teslrt.HttpRequest"; "teslrt.ApiResponse"; "teslrt.ApiRequest";
+                 "teslrt.JsonValue"; "teslrt.RequestScope"; "teslrt.Server" ] in
         (* `apitest_json.go` travels with `apitest.go`: the untyped JSON view exists to inspect
            a RESPONSE, so a module that serves no HTTP has no use for it. *)
         let http_only = [ "server.go"; "request.go"; "apitest.go"; "apitest_json.go" ] in

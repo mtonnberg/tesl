@@ -120,11 +120,17 @@ func stringKeyLess(left, right string) bool { return left < right }
 
 // NewHttpRequest snapshots the request. Header names are lower-cased so a lookup does not
 // depend on the casing a client happened to send; cookie names are left exactly as sent.
+//
+// A REPEATED name — `?q=first&q=second`, or two `X-Forwarded-For` headers — collapses to the
+// LAST value, because a Dict holds one value per key and that is the answer the Racket runtime
+// gives: both its header and query hashes are built with `for/hash`, which keeps the last
+// binding. Taking the first instead is the natural Go spelling (`Query().Get`) and the wrong
+// one; `tests/query-parameters-tests.tesl` pins the rule.
 func NewHttpRequest(request *http.Request, body string) HttpRequest {
 	headers := DictEmpty[string, string]()
 	for name, values := range request.Header {
 		if len(values) > 0 {
-			headers = DictInsert(headers, strings.ToLower(name), values[0], stringKeyLess)
+			headers = DictInsert(headers, strings.ToLower(name), values[len(values)-1], stringKeyLess)
 		}
 	}
 	cookies := DictEmpty[string, string]()
@@ -134,7 +140,7 @@ func NewHttpRequest(request *http.Request, body string) HttpRequest {
 	query := DictEmpty[string, string]()
 	for name, values := range request.URL.Query() {
 		if len(values) > 0 {
-			query = DictInsert(query, name, values[0], stringKeyLess)
+			query = DictInsert(query, name, values[len(values)-1], stringKeyLess)
 		}
 	}
 	return HttpRequest{

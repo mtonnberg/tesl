@@ -3280,12 +3280,16 @@ let test_db_with_go () =
   check bool "insert carries the primary-key conflict test" true
     (contains module_go
        "teslrt.TableInsert(ItemTable, \"Item\", Item{Id: \"i1\", Sku: Sku{Value: \"S-1\"}, Name: \"alpha\", Qty: teslrt.FromInt64(7)}, func(teslRow, teslNew Item) bool { return (teslRow.Id == teslNew.Id) })");
+  (* The predicate is emitted pre-split across lines: a one-liner survives gofmt only while
+     go/printer judges the line short enough, so the emitter writes gofmt's own output at every
+     size rather than at the small ones. *)
   check bool "a where clause becomes a predicate over the row" true
-    (contains module_go
-       "teslrt.TableSelectOne(ItemTable, func(i Item) bool { return (i.Id == wanted) })");
+    (contains module_go "teslrt.TableSelectOne(ItemTable, func(i Item) bool {");
+  check bool "and the clause itself is the predicate's body" true
+    (contains module_go "return (i.Id == wanted)");
   check bool "`order … desc` swaps the comparison rather than sorting twice" true
     (contains module_go
-       "teslrt.TableSelectSorted(ItemTable, func(_ Item) bool { return true }, func(teslLeft, teslRight Item) bool { return (teslrt.Compare(teslRight.Qty, teslLeft.Qty) < 0) }, 0, -1)");
+       "func(teslLeft, teslRight Item) bool { return (teslrt.Compare(teslRight.Qty, teslLeft.Qty) < 0) }, 0, -1)");
   check bool "selectSum folds the column with its own addition" true
     (contains module_go "teslrt.TableFold(ItemTable,");
   check bool "`like` is a matcher, never a regular expression" true
@@ -3728,6 +3732,159 @@ let test_queue_with_go () =
   (* `go test` RUNS the api-test: FIFO order and the pending count are asserted there. *)
   gate_emitted "tesl-go-queue" emitted
 
+
+(* ─── Derived decoders, and the near-miss batch they came from ────────────────
+   A request-body record needs no `codec` block: Racket decodes it generically from the record
+   spec at run time, so the type IS the contract.  The emitter had no counterpart and still
+   emitted the dispatcher's `Decode<T>JSON` call, so the package referenced a function nobody
+   wrote — uncompilable Go rather than a refusal, which is the worst shape a gap can take. *)
+let derived_body_source = {|module GoDerivedBody exposing [Inner, Outer, Reply, save, DerivedApi, DerivedServer]
+
+import Tesl.Prelude exposing [Bool, Int, String, List]
+import Tesl.Float exposing [Float]
+import Tesl.ApiTest exposing [statusOk, statusClientError]
+
+secret Token = String
+
+record Inner { note: String, count: Int }
+record Outer {
+  name: String
+  token: Token
+  inner: Inner
+  tags: List String
+  ratio: Float
+  active: Bool
+}
+record Reply { saved: String }
+
+handler post save(body: Outer) -> Reply =
+  let out = Reply { saved: body.inner.note }
+  out
+
+api DerivedApi {
+  post "/save"
+    body body: Outer
+    -> Reply
+}
+
+server DerivedServer for DerivedApi {
+  save
+}
+
+api-test "a record with no codec still decodes, nested and all" for DerivedServer {
+  let fine = post "/save" body { "name": "n", "token": "t", "inner": { "note": "hi", "count": 2 }, "tags": ["a", "b"], "ratio": 1.5, "active": True }
+  expect statusOk fine.status
+  expect fine.body.saved == "hi"
+}
+
+api-test "a missing field is a 400" for DerivedServer {
+  let bad = post "/save" body { "name": "n" }
+  expect statusClientError bad.status
+}
+
+api-test "an unexpected field is a 400 too" for DerivedServer {
+  let bad = post "/save" body { "name": "n", "token": "t", "inner": { "note": "hi", "count": 2 }, "tags": [], "ratio": 1.0, "active": True, "extra": "x" }
+  expect statusClientError bad.status
+}
+|}
+
+let test_derived_body_with_go () =
+  let emitted = emit_ok "<go-derived-body>" derived_body_source in
+  let module_go = artifact "internal/teslmodgoderivedbody/module.go" emitted in
+  check bool "the derived decoder checks the object's shape first" true
+    (contains module_go
+       "teslrt.DecodeObjectShape(teslJSON, \"Outer\", []string{\"name\", \"token\", \"inner\", \"tags\", \"ratio\", \"active\"})");
+  (* A secret field decodes its BASE value and is wrapped after — the same ordering the
+     `via` case needs, for the same reason. *)
+  check bool "a secret field is minted from the decoded string" true
+    (contains module_go "return Token{Value: teslrt.MakeSecret(teslBase)}, nil");
+  check bool "a nested record decodes through its own derived decoder" true
+    (contains module_go "teslNested := DecodeInnerJSON(teslRaw)");
+  check bool "and a list composes over its element's decoder" true
+    (contains module_go "teslrt.DecodeListValue(teslRaw, teslrt.DecodeStringValue)");
+  (* `go test` runs the api-tests: an extra key is a 400, which is the surprising half of the
+     generic decoder's rule and the one worth pinning at runtime. *)
+  gate_emitted "tesl-go-derived-body" emitted
+
+(* An `auth` function takes a `teslrt.HttpRequest`, and the module declaring it need not be
+   the one declaring the `server`.  The HTTP half of the runtime ships by REFERENCE for that
+   reason: keyed on `server` declarations alone, this module compiled against a runtime file
+   that was never shipped. *)
+let auth_without_server_source = {|module GoAuthOnly exposing [cookieAuth]
+
+import Tesl.Prelude exposing [String]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Maybe exposing [Maybe(..)]
+
+fact Authenticated (user: String)
+
+auth cookieAuth(request: HttpRequest) -> user: String ::: Authenticated user =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "not signed in"
+    Something name -> ok name ::: Authenticated user
+|}
+
+let test_auth_without_server_ships_the_http_runtime () =
+  let emitted = emit_ok "<go-auth-only>" auth_without_server_source in
+  (* `artifact` fails the test when the path is absent, which is the assertion here. *)
+  ignore (artifact "internal/teslrt/request.go" emitted);
+  gate_emitted "tesl-go-auth-only" emitted;
+  (* And the size argument still holds: a module that touches no HTTP does not pull net/http
+     (and its vulnerability surface) into a pure-computation program. *)
+  let pure = emit_ok "<go-pure>" recursion_source in
+  check bool "a pure module ships no HTTP runtime" true
+    (not (List.exists (fun (a : Emit_go.artifact) -> a.path = "internal/teslrt/request.go") pure))
+
+(* A comprehension whose SOURCE is another comprehension: `List.filter f (List.map g xs)`.
+   The source used to be spliced twice — evaluating the inner comprehension twice, squaring the
+   work — at the OUTER indent, which gofmt then reflowed (a finding on emitted code), with both
+   levels reusing the same `teslOut1` name. *)
+let nested_comprehension_source = {|module GoNestedComprehension exposing [negatives, longWords]
+
+import Tesl.Prelude exposing [Int, String, Bool, List]
+import Tesl.List exposing [List.map, List.filter, List.length]
+import Tesl.String exposing [String.length, String.concat]
+
+fn negatives(xs: List Int) -> List Int =
+  List.filter (fn(x: Int) -> x < 0) (List.map (fn(x: Int) -> 0 - x) xs)
+
+fn longWords(words: List String) -> Int =
+  List.length (List.filter (fn(w: String) -> String.length w > 3) (List.map (fn(w: String) -> String.concat w "!") words))
+
+test "a nested comprehension answers what the source says" {
+  expect negatives [1, 0 - 2, 3] == [0 - 1, 0 - 3]
+  expect longWords ["a", "abc", "abcd"] == 2
+}
+|}
+
+let test_nested_comprehension_with_go () =
+  let emitted = emit_ok "<go-nested-comprehension>" nested_comprehension_source in
+  let module_go = artifact "internal/teslmodgonestedcomprehension/module.go" emitted in
+  check bool "the inner comprehension is bound to a name rather than spliced twice" true
+    (contains module_go "teslSrc1 := (func() []teslrt.Int {");
+  (* The nested level gets its OWN depth, so its loop variables cannot shadow the outer
+     level's — both used to be `teslOut1`/`teslAt1`. *)
+  check bool "and the nested level has its own loop names" true
+    (contains module_go "teslOut2[teslAt2] =");
+  (* The inner comprehension appears ONCE. Its `make` line is the marker: two copies meant two
+     evaluations of the whole nested loop. *)
+  let inner_copies =
+    let rec count from total =
+      match String.index_from_opt module_go from 'm' with
+      | None -> total
+      | Some at ->
+        let candidate = "make([]teslrt.Int, len(xs))" in
+        let matches =
+          at + String.length candidate <= String.length module_go
+          && String.sub module_go at (String.length candidate) = candidate
+        in
+        count (at + 1) (if matches then total + 1 else total)
+    in
+    count 0 0
+  in
+  check int "the inner comprehension is emitted once" 1 inner_copies;
+  gate_emitted "tesl-go-nested-comprehension" emitted
 
 (* ─── Outbound HTTP, and its test double ──────────────────────────────────────
    `Tesl.HttpClient` is the only stdlib module that reaches the network, so the emitted call
@@ -5444,6 +5601,11 @@ let go_corpus = [
      upstream INSIDE a worker, which must fail the job so retry and dead-lettering run. *)
   "example/learn/lesson58-httpclient.tesl";
   "tests/http-stub-tests.tesl";
+  (* A repeated query parameter is LAST-wins, and a request body with no `codec` block decodes
+     from the record spec alone. Both were emitted wrongly (the first value; a call to a decoder
+     nobody wrote), and both are cheap to keep pinned end to end. *)
+  "tests/query-parameters-tests.tesl";
+  "tests/secret-inbound-tests.tesl";
 ]
 
 let test_go_corpus_with_go () =
@@ -5556,6 +5718,14 @@ let () =
       test_case "`case` as a test statement" `Slow test_case_statement_with_go;
       test_case "test-statement case behaves the same on Racket" `Slow
         (racket_behavior_oracle "<go-test-case-oracle>" test_case_stmt_source);
+      test_case "derived decoders for a body with no codec" `Slow test_derived_body_with_go;
+      test_case "derived decoders behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-derived-body-oracle>" derived_body_source);
+      test_case "an `auth` module ships the HTTP runtime it references" `Slow
+        test_auth_without_server_ships_the_http_runtime;
+      test_case "nested comprehensions" `Slow test_nested_comprehension_with_go;
+      test_case "nested comprehensions behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-nested-comprehension-oracle>" nested_comprehension_source);
       test_case "outbound HTTP and its test double" `Slow test_httpclient_with_go;
       test_case "outbound HTTP behaves the same on Racket" `Slow
         (racket_behavior_oracle "<go-httpclient-oracle>" httpclient_source);

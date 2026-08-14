@@ -9,6 +9,11 @@ type Check[T any] struct {
 	status  int
 	message string
 	ok      bool
+	// shape marks "the JSON is not this shape" as opposed to "this value is invalid"; see
+	// RejectShape. It is a FLAG rather than a reserved status, because the status is also what
+	// a leaked rejection writes on the wire, and a sentinel status of 0 there is not a
+	// response — `WriteHeader(0)` panics.
+	shape bool
 }
 
 func Accept[T any](value T) Check[T] {
@@ -67,9 +72,9 @@ func MustCheckRequest[T any](result Check[T]) T {
 	return result.value
 }
 
-// ShapeMismatch is the status a codec alternative reports when the JSON simply is not
-// this shape — a missing or mistyped field — as opposed to a VALIDATION failure from a
-// `via` or cross-check, which carries the status the check itself chose.
+// RejectShape reports that the JSON simply is not this shape — a missing or mistyped field —
+// as opposed to a VALIDATION failure from a `via` or cross-check, which carries the status the
+// check itself chose.
 //
 // The distinction is load-bearing when a codec has several alternatives. Racket's
 // registry loop treats a raised decode exception as "try the next decoder" while a
@@ -77,14 +82,14 @@ func MustCheckRequest[T any](result Check[T]) T {
 // succeed. Collapsing the two would report "required field \"userName\" not found" —
 // the last alternative's shape complaint — in place of the real 400 the first
 // alternative's check produced.
-const ShapeMismatch = 0
-
+// A shape rejection still carries 400, so a decoder with no alternatives behind it (a DERIVED
+// record decoder) can answer the client with it directly.
 func RejectShape[T any](message string) Check[T] {
-	return Reject[T](ShapeMismatch, message)
+	return Check[T]{status: 400, message: message, shape: true}
 }
 
 // IsShapeMismatch reports whether a failure means "not this shape" rather than "this
 // value is invalid".
 func (result Check[T]) IsShapeMismatch() bool {
-	return !result.OK() && result.Status() == ShapeMismatch
+	return !result.ok && result.shape
 }
