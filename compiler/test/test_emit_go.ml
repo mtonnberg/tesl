@@ -3857,26 +3857,118 @@ let test_crypto_with_go () =
     (contains module_go "teslrt.CheckSignature(signingKey(), teslrt.SignatureFromHex(tag), payload)");
   gate_emitted ~env:[ "GOCRYPTO_KEY=test-signing-key" ] "tesl-go-crypto" emitted
 
-(* Password storage is refused BY NAME, with the reason: it is a dependency decision, and a
-   substitute would mint hashes the Racket side cannot verify. *)
-let test_password_storage_fails_closed () =
-  let source = {|module GoPassword exposing [store]
+(* Password storage: Argon2id through `golang.org/x/crypto/argon2`, the ONE approved non-stdlib
+   dependency emitted code can take (maintainer decision, 2026-08-14).  The alternatives were
+   both worse: stdlib PBKDF2 would mint hashes the Racket side cannot verify — a shared database
+   becoming a silent lockout — and hand-writing Argon2id would put hand-rolled cryptography in
+   the runtime.  The runtime suite verifies an ACTUAL libsodium hash, which is the property that
+   justifies the dependency; what is checked here is that the dependency travels correctly and
+   only with the programs that need it. *)
+let password_source = {|module GoPassword exposing [Stored, register, signIn, staleHash]
 
-import Tesl.Prelude exposing [String]
-import Tesl.Crypto exposing [PasswordHash, Crypto.hashPassword]
+import Tesl.Prelude exposing [Bool, String]
+import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Random exposing [random]
+import Tesl.Crypto exposing [
+  PasswordHash,
+  Crypto.hashPassword,
+  Crypto.checkPassword,
+  Crypto.needsRehash,
+]
 
-fn store(plaintext: String) -> PasswordHash
-  requires [random] =
-  Crypto.hashPassword plaintext
-|} in
-  match Compile.compile_go_source "<go-password>" source with
-  | Compile.GoSuccess _ -> fail "password storage emitted Go"
-  | Compile.GoFailure diagnostics ->
-    let message = String.concat "; "
-      (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics) in
-    check bool "the refusal names the dependency it waits on" true
-      (contains message "golang.org/x/crypto/argon2")
+capability accounts implies random
+
+secret Password = String
+
+fact SignedIn (stored: Maybe PasswordHash)
+
+record Stored { hash: PasswordHash }
+
+fn register(plaintext: Password) -> Stored
+  requires [accounts] =
+  Stored { hash: Crypto.hashPassword plaintext }
+
+# The check is used for its FAILURE: reaching the next line at all is the guarantee.
+check signIn(stored: Maybe PasswordHash, submitted: Password) -> verified: Maybe PasswordHash ::: SignedIn verified requires [accounts] =
+  let verified = check Crypto.checkPassword stored submitted
+  ok verified ::: SignedIn verified
+
+fn staleHash(hash: PasswordHash) -> Bool =
+  Crypto.needsRehash hash
+
+test "a fresh hash verifies, and does not ask to be rehashed" requires [accounts] {
+  let stored = register (Password "hunter2")
+  let verified = check signIn (Something stored.hash) (Password "hunter2")
+  expect staleHash stored.hash == False
+}
+
+test "a wrong password does not verify" requires [accounts] {
+  let stored = register (Password "hunter2")
+  expectFail check signIn (Something stored.hash) (Password "hunter3")
+}
+
+# A missing account answers exactly like a wrong password — same status, same message — because
+# the difference would enumerate the user table.
+test "a missing account is refused too" requires [accounts] {
+  expectFail check signIn Nothing (Password "hunter2")
+}
+
+test "two hashes of one password differ, since each draws its own salt" requires [accounts] {
+  let first = register (Password "hunter2")
+  let second = register (Password "hunter2")
+  expect staleHash first.hash == False
+  expect staleHash second.hash == False
+}
+|}
+
+let test_password_storage_with_go () =
+  let emitted = emit_ok "<go-password>" password_source in
+  let module_go = artifact "internal/teslmodgopassword/module.go" emitted in
+  (* The plaintext reaches the runtime as the secret newtype's own payload — never as a bare
+     string, and with no `Reveal()` at the call site. *)
+  check bool "the plaintext is handed over as a SecretString" true
+    (contains module_go "teslrt.HashPassword(plaintext.Value)");
+  check bool "and a verification takes the same shape" true
+    (contains module_go "teslrt.CheckPassword(stored, submitted.Value)");
+  check bool "no call site reveals the plaintext" false (contains module_go ".Reveal()");
+  (* The dependency travels with the program that needs it, pinned, with its go.sum. *)
+  let go_mod = artifact "go.mod" emitted in
+  check bool "the emitted module requires x/crypto" true
+    (contains go_mod "require golang.org/x/crypto v0.55.0");
+  ignore (artifact "go.sum" emitted);
+  ignore (artifact "internal/teslrt/password.go" emitted);
+  gate_emitted "tesl-go-password" emitted
+
+(* And nothing else carries it: a program that stores no passwords emits a go.mod with no
+   requirements at all, which is the property the by-reference rule protects. *)
+let test_password_dependency_ships_only_where_needed () =
+  let emitted = emit_ok "<go-no-password>" recursion_source in
+  let go_mod = artifact "go.mod" emitted in
+  check bool "a program without password storage requires nothing" false
+    (contains go_mod "require");
+  check bool "and does not ship the Argon2 runtime" false
+    (List.exists (fun (a : Emit_go.artifact) -> a.path = "internal/teslrt/password.go") emitted);
+  check bool "nor a go.sum" false
+    (List.exists (fun (a : Emit_go.artifact) -> a.path = "go.sum") emitted)
+
+(* The pinned versions are the runtime module's own: a bump in one place would otherwise leave
+   emitted projects on a version whose hashes no longer match, which fails at `go build` time in
+   a way that reads as an emitter bug. *)
+let test_dependency_pin_matches_the_runtime_module () =
+  let read path =
+    let full = Filename.concat (Compile.default_root_path ()) path in
+    In_channel.with_open_bin full In_channel.input_all
+  in
+  let runtime_go_mod = read "runtime/go/go.mod" in
+  let runtime_go_sum = read "runtime/go/go.sum" in
+  let emitted = emit_ok "<go-password-pin>" password_source in
+  let go_mod = artifact "go.mod" emitted in
+  List.iter (fun requirement ->
+    check bool (requirement ^ " is the runtime module's version") true
+      (contains runtime_go_mod requirement && contains go_mod requirement))
+    [ "golang.org/x/crypto v0.55.0"; "golang.org/x/sys v0.47.0" ];
+  check string "the emitted go.sum is the runtime module's" runtime_go_sum
+    (artifact "go.sum" emitted)
 
 (* ─── Derived decoders, and the near-miss batch they came from ────────────────
    A request-body record needs no `codec` block: Racket decodes it generically from the record
@@ -5873,7 +5965,13 @@ let () =
       test_case "Tesl.Crypto behaves the same on Racket" `Slow
         (racket_behavior_oracle ~env:[ "GOCRYPTO_KEY=test-signing-key" ]
            "<go-crypto-oracle>" crypto_source);
-      test_case "password storage fails closed" `Quick test_password_storage_fails_closed;
+      test_case "password storage (Argon2id)" `Slow test_password_storage_with_go;
+      test_case "password storage behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-password-oracle>" password_source);
+      test_case "the Argon2 dependency ships only where needed" `Quick
+        test_password_dependency_ships_only_where_needed;
+      test_case "the dependency pin matches the runtime module" `Quick
+        test_dependency_pin_matches_the_runtime_module;
       test_case "derived decoders for a body with no codec" `Slow test_derived_body_with_go;
       test_case "derived decoders behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-derived-body-oracle>" derived_body_source);

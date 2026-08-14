@@ -335,6 +335,16 @@ let current_api_server : string option ref = ref None
    RUNTIME shapes, and a module may import both.  So the api-test shape is keyed by a string
    no Tesl type name can spell, and the plain name is left for the outbound one, which is the
    only one an annotation can mention. *)
+(* The go.sum for the ONE dependency emitted code can take: `golang.org/x/crypto/argon2`, for
+   password storage (see `password.go`).  Pinned here rather than fetched, so an emitted project
+   builds without a network round trip deciding what it got, and checked against
+   `runtime/go/go.sum` by a seam test so the two cannot drift. *)
+let password_dependency_go_sum =
+  "golang.org/x/crypto v0.55.0 h1:+KWHjbgOaAQ66dh/YlkZKHlz9ZUlq61AFirAR9ntP8M=\n\
+   golang.org/x/crypto v0.55.0/go.mod h1:uq0V9dE/fzQuJtbnL+2EhWOE63vo164FY8xqEnV9xis=\n\
+   golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=\n\
+   golang.org/x/sys v0.47.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=\n"
+
 let api_response_key = "HttpResponse (api-test)"
 
 (* Tesl type names that have their OWN codec in the module being emitted.  A value with a
@@ -1490,7 +1500,17 @@ let rec type_of_expr signatures env expr =
              if List.length params <> List.length call_args then
                unsupported loc "Go backend requires a fully-applied check `%s`" name;
              List.iter2 (fun arg want ->
-               if type_of_arg signatures env want arg <> want then
+               let got = type_of_arg signatures env want arg in
+               (* One relaxation, and only for the password plaintext: `checkPassword` takes the
+                  raw password, which a program normally holds as a `secret Password = String`.
+                  Racket's `raw-str` unwraps any newtype there, and the emitter unwraps the same
+                  two shapes at the call site — so accepting a newtype over String here is
+                  agreement with the other backend, not looseness. *)
+               let password_plaintext =
+                 name = "Crypto.checkPassword" && want = TString
+                 && (match got with TNewtype info -> info.base = TString | _ -> false)
+               in
+               if got <> want && not password_plaintext then
                  unsupported (Checker.expr_loc arg) "Go backend check `%s` argument type mismatch" name)
                call_args params;
              result
@@ -1580,6 +1600,33 @@ let rec type_of_expr signatures env expr =
         matched against a fixed type: every `secret` newtype is a distinct Go type, and the
         generic call path demands an exact match, so the argument is checked here and unwrapped
         at the emit site.  A plain String is accepted for the same reason Racket accepts one. *)
+     (* `hashPassword`/`checkPassword` take the PLAINTEXT, which is normally a
+        `secret Password = String` — Racket's `raw-str` unwraps any newtype, so the Go side
+        accepts the same two shapes and hands the runtime a `SecretString` either way.  The
+        plaintext therefore never appears as an ordinary string at the call site. *)
+     | EVar { name = ("Crypto.hashPassword" | "Crypto.checkPassword") as leaf; _ } ->
+       let signature = match Hashtbl.find_opt signatures leaf with
+         | Some signature -> signature
+         | None -> unsupported loc "Go backend cannot resolve function `%s`" leaf
+       in
+       let plaintext = match leaf, args with
+         | "Crypto.hashPassword", [plaintext] -> plaintext
+         | "Crypto.checkPassword", [stored; plaintext] ->
+           (match signature.params with
+            | want :: _ ->
+              if type_of_arg signatures env want stored <> want then
+                unsupported (Checker.expr_loc stored)
+                  "Go backend `Crypto.checkPassword` takes a `Maybe PasswordHash`"
+            | [] -> ());
+           plaintext
+         | _ -> unsupported loc "Go backend `%s` is applied to the wrong arity" leaf
+       in
+       (match type_of_expr signatures env plaintext with
+        | TString -> ()
+        | TNewtype info when info.base = TString -> ()
+        | _ -> unsupported (Checker.expr_loc plaintext)
+          "Go backend `%s` takes a String or a newtype over String" leaf);
+       signature.result
      | EVar { name = ("HttpClient.bearer" | "HttpClient.secretHeader") as leaf; _ } ->
        let signature = match Hashtbl.find_opt signatures leaf with
          | Some signature -> signature
@@ -2681,7 +2728,9 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
            Printf.sprintf "teslrt.%s(%s(%s))"
              (if !current_handler_body then "MustCheckRequest" else "MustCheck")
              (qualified signature.sig_owner signature.go_name)
-              (String.concat ", " (List.map emit call_args))
+              (String.concat ", " (List.map2
+                 (emit_leaf_argument ~indent signatures env name)
+                 signature.params call_args))
          | _ -> unsupported loc "Go backend requires a named check function")
       | EVar { name = "not"; _ } when not (Hashtbl.mem signatures "not") ->
        ignore (type_of_expr signatures env app);
@@ -2858,6 +2907,30 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
          `make-secret-header` accepts on Racket too.  The runtime then holds the plaintext
          behind an unguessable handle, so what the returned `Tuple2 String String` carries is
          not the secret itself. *)
+      (* The password plaintext reaches the runtime as a `SecretString`: a secret newtype hands
+         over its payload, a plain newtype is unwrapped and re-wrapped, and a String is wrapped.
+         Nothing at the call site holds it as a bare string. *)
+      | EVar { name = ("Crypto.hashPassword" | "Crypto.checkPassword") as leaf; _ }
+        when args <> [] ->
+        ignore (type_of_expr signatures env app);
+        let plaintext_argument value =
+          let emitted = emit value in
+          match type_of_expr signatures env value with
+          | TNewtype info when info.secret ->
+            Printf.sprintf "%s.Value" (selector_operand emitted)
+          | TNewtype _ ->
+            Printf.sprintf "teslrt.MakeSecret(%s.Value)" (selector_operand emitted)
+          | TString -> Printf.sprintf "teslrt.MakeSecret(%s)" emitted
+          | _ -> unsupported loc
+            "Go backend `%s` takes a String or a newtype over String" leaf
+        in
+        (match leaf, args with
+         | "Crypto.hashPassword", [plaintext] ->
+           Printf.sprintf "teslrt.HashPassword(%s)" (plaintext_argument plaintext)
+         | "Crypto.checkPassword", [stored; plaintext] ->
+           Printf.sprintf "teslrt.CheckPassword(%s, %s)"
+             (emit stored) (plaintext_argument plaintext)
+         | _ -> unsupported loc "Go backend `%s` is applied to the wrong arity" leaf)
       | EVar { name = ("HttpClient.bearer" | "HttpClient.secretHeader") as leaf; _ }
         when args <> [] ->
         ignore (type_of_expr signatures env app);
@@ -4213,6 +4286,31 @@ and emit_sql_form ?(indent="") signatures env loc form =
    the JSON text the request carries.  A literal template becomes a constant string at
    compile time; a value spliced from the test's own bindings is encoded at run time through
    the runtime's JSON writer, so the two cannot disagree about escaping. *)
+(* The password plaintext is the one argument whose RUNTIME type differs from its Tesl type:
+   `hashPassword`/`checkPassword` take a `teslrt.SecretString`, while Tesl types the parameter as
+   String and a program normally holds the value as a `secret Password = String`.  Racket's
+   `raw-str` unwraps any newtype there, so both shapes are accepted — and the conversion lives
+   HERE, in one function every emitting path calls, rather than being repeated at each call site
+   (the emit_elm lesson: a wrap rule copied four times is a rule that drifts three ways).
+   The plaintext never appears as a bare string in emitted code: a secret newtype hands over its
+   own `SecretString`, and anything else is wrapped on the way in. *)
+and emit_leaf_argument ?(indent="") signatures env name want arg =
+  (* Matched on EITHER spelling — the Tesl name at a direct call, the Go name where the emitter
+     only has the resolved signature (the delegation paths). *)
+  let password_plaintext =
+    List.mem name
+      [ "Crypto.hashPassword"; "Crypto.checkPassword";
+        "teslrt.HashPassword"; "teslrt.CheckPassword" ]
+    && want = TString
+  in
+  if not password_plaintext then emit_expr ~expected:want ~indent signatures env arg
+  else
+    let emitted = emit_expr ~indent signatures env arg in
+    match type_of_expr signatures env arg with
+    | TNewtype info when info.secret -> Printf.sprintf "%s.Value" (selector_operand emitted)
+    | TNewtype _ -> Printf.sprintf "teslrt.MakeSecret(%s.Value)" (selector_operand emitted)
+    | _ -> Printf.sprintf "teslrt.MakeSecret(%s)" emitted
+
 and emit_api_test_body ?(indent="") signatures env value =
   let rec literal_json expr =
     match expr with
@@ -4430,9 +4528,11 @@ let emit_tail ?self buffer signatures env expected indent expr =
       let temporary = Printf.sprintf "teslDelegated%d" (String.length indent) in
       Printf.bprintf buffer "%s\t%s := %s(%s)\n" indent temporary
         (qualified signature.sig_owner signature.go_name)
-        (String.concat ", " (List.map2 (fun arg want ->
-           emit_expr ~expected:want ~indent:(indent ^ "\t") signatures env arg)
-           args signature.params));
+        (String.concat ", " (List.map2
+           (fun want arg ->
+              emit_leaf_argument ~indent:(indent ^ "\t") signatures env
+                signature.go_name want arg)
+           signature.params args));
       Printf.bprintf buffer "%s\tif !%s.OK() {\n%s\t\treturn teslrt.Reject[%s](%s.Status(), %s.Message())\n%s\t}\n"
         indent temporary indent (go_type (match expected with TCheck ty -> ty | ty -> ty))
         temporary temporary indent;
@@ -4502,8 +4602,10 @@ let emit_tail ?self buffer signatures env expected indent expr =
       Buffer.add_string buffer (line_directive (Checker.expr_loc expr));
       Printf.bprintf buffer "%sreturn %s(%s)\n" indent
         (qualified signature.sig_owner signature.go_name)
-        (String.concat ", " (List.map2 (fun arg want ->
-           emit_expr ~expected:want ~indent signatures env arg) args signature.params))
+        (String.concat ", " (List.map2
+           (fun want arg ->
+              emit_leaf_argument ~indent signatures env signature.go_name want arg)
+           signature.params args))
     | _ ->
       (* The tail is checked against the EXPECTED type so a bare nullary constructor
          of a generic ADT (`Nothing`) is instantiated by the return type. *)
@@ -5748,15 +5850,16 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             "Go backend does not support `Tesl.Http` export `%s` yet" other) exposed
       (* `Tesl.Crypto`: message authentication, digests and tokens are runtime leaves over Go's
          standard library — the same primitives the Racket runtime reaches for in libsodium, so
-         a tag or a fingerprint produced by one backend verifies on the other.  PASSWORD
-         STORAGE is refused by name: Racket uses libsodium's Argon2id and Go's standard library
-         has no Argon2, so matching it takes a dependency (`golang.org/x/crypto/argon2`) rather
-         than an implementation — and a PBKDF2 substitute would mint hashes the Racket side
-         cannot verify, which is worse than not having it. *)
+         a tag or a fingerprint produced by one backend verifies on the other.  PASSWORD STORAGE
+         is Argon2id through `golang.org/x/crypto/argon2` (the one approved non-stdlib
+         dependency): the alternative substitutes would mint hashes the Racket side cannot
+         verify, turning a shared database into a silent lockout.  It ships only with a program
+         that stores passwords. *)
       | "Tesl.Crypto" ->
         List.iter (fun name ->
           match name with
-          | "Secret" | "Signature"
+          | "Secret" | "Signature" | "PasswordHash"
+          | "Crypto.hashPassword" | "Crypto.checkPassword" | "Crypto.needsRehash"
           | "Crypto.signWith" | "Crypto.hmacSha256" | "Crypto.checkSignature"
           | "Crypto.signatureHex" | "Crypto.signatureFromHex"
           | "Crypto.signatureBase64" | "Crypto.signatureFromBase64"
@@ -5764,13 +5867,6 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | "Crypto.sha256" | "Crypto.sha512" -> ()
           (* The proof predicates erase, like every other fact. *)
           | "HashFor" | "PasswordVerified" | "Authentic" -> ()
-          | ("PasswordHash" | "Crypto.hashPassword" | "Crypto.checkPassword"
-            | "Crypto.needsRehash") as password ->
-            unsupported import.loc
-              "Go backend does not support `%s` yet: password storage is Argon2id on the \
-               Racket runtime, and matching it needs an approved dependency \
-               (`golang.org/x/crypto/argon2`) — a weaker substitute would mint hashes the \
-               other backend cannot verify" password
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.Crypto` export `%s` yet" other) exposed
       (* `Tesl.HttpClient`: the four verbs and the two secret-accepting header builders are
@@ -6257,6 +6353,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
        which is the representation the Racket runtime keeps, so a tag crossing between the two
        is the same string. *)
     let crypto_leaf_names = [
+      "Crypto.hashPassword"; "Crypto.checkPassword"; "Crypto.needsRehash";
       "Crypto.signWith"; "Crypto.hmacSha256"; "Crypto.checkSignature";
       "Crypto.signatureHex"; "Crypto.signatureFromHex";
       "Crypto.signatureBase64"; "Crypto.signatureFromBase64";
@@ -6285,6 +6382,13 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       };
       Hashtbl.replace types.newtypes "Signature" {
         tesl_name = "Signature"; owner = ""; go_name = "teslrt.Signature";
+        base = TString; secret = false; loc;
+      };
+      (* A stored hash is opaque: a program stores it, verifies against it, or asks whether it
+         needs re-minting.  It is NOT a secret newtype — a hash is safe to hold and to log,
+         which is the entire reason for hashing — so it prints as itself. *)
+      Hashtbl.replace types.newtypes "PasswordHash" {
+        tesl_name = "PasswordHash"; owner = ""; go_name = "teslrt.PasswordHash";
         base = TString; secret = false; loc;
       }
     end;
@@ -6914,8 +7018,25 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         | Some info -> TNewtype info
         | None -> unsupported loc "Go backend `Tesl.Crypto` needs its `Signature` type"
       in
+      let password_hash = match Hashtbl.find_opt types.newtypes "PasswordHash" with
+        | Some info -> TNewtype info
+        | None -> unsupported loc "Go backend `Tesl.Crypto` needs its `PasswordHash` type"
+      in
+      let maybe_hash () = match Hashtbl.find_opt types.adts "Maybe" with
+        | Some info -> TAdt (info, [password_hash])
+        | None -> unsupported loc
+          "Go backend `Crypto.checkPassword` takes a Maybe; import `Tesl.Maybe`"
+      in
       List.iter (fun name ->
         let params, result, go_name = match name with
+          (* Password storage.  `hashPassword` answers a VALUE (its Tesl type says so), and an
+             over-long password is refused at the request boundary from inside the runtime. *)
+          | "Crypto.hashPassword" -> [TString], password_hash, "teslrt.HashPassword"
+          (* `checkPassword` takes a `Maybe` deliberately: a missing account and a wrong
+             password must cost and answer the same, so `Nothing` still hashes. *)
+          | "Crypto.checkPassword" ->
+            [maybe_hash (); TString], TCheck (maybe_hash ()), "teslrt.CheckPassword"
+          | "Crypto.needsRehash" -> [password_hash], TBool, "teslrt.NeedsRehash"
           (* `hmacSha256` is the expert alias for the same function. *)
           | "Crypto.signWith" | "Crypto.hmacSha256" ->
             [secret; TString], signature, "teslrt.SignWith"
@@ -7083,14 +7204,40 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
        \    exhaustive:\n\
        \      default-signifies-exhaustive: false\n"
     in
+    (* PASSWORD STORAGE is the one part of the runtime that is not standard-library-only:
+       Argon2id comes from `golang.org/x/crypto/argon2`, because Racket hashes with libsodium's
+       Argon2id and a stdlib substitute would mint hashes the other backend cannot verify — a
+       shared database would become a silent lockout.  The dependency therefore travels with
+       `password.go` and ONLY with it: a program that stores no passwords still emits a go.mod
+       with no requirements at all.  The versions are pinned here and checked against
+       `runtime/go/go.mod`/`go.sum` by a seam test, so a bump cannot drift. *)
+    let password_runtime =
+      let mentions name =
+        contains_go_code source name
+        || (match tests_source with
+            | Some text -> contains_go_code text name
+            | None -> false)
+      in
+      List.exists mentions
+        [ "teslrt.HashPassword"; "teslrt.CheckPassword"; "teslrt.NeedsRehash";
+          "teslrt.PasswordHash" ]
+    in
+    let dependency_requires =
+      if password_runtime then
+        "\nrequire golang.org/x/crypto v0.55.0\n\nrequire golang.org/x/sys v0.47.0 // indirect\n"
+      else ""
+    in
     let artifacts = [
       (* The go directive tracks the toolchain the gates pin (maintainer: use the latest
          stable Go).  It also sets the language version the emitted code may use, so it has
          to be at least as new as anything the runtime relies on. *)
-      { path = "go.mod"; contents = Printf.sprintf "module %s\n\ngo 1.26\n" module_path };
+      { path = "go.mod";
+        contents = Printf.sprintf "module %s\n\ngo 1.26\n%s" module_path dependency_requires };
       { path = ".golangci.yml"; contents = lint_config };
       { path = "internal/" ^ package ^ "/module.go"; contents = source };
-    ] in
+    ] @ (if password_runtime then
+           [ { path = "go.sum"; contents = password_dependency_go_sum } ]
+         else []) in
     let artifacts = match tests_source with
       | None -> artifacts
       | Some contents -> artifacts @ [{ path = "internal/" ^ package ^ "/module_test.go"; contents }]
@@ -7126,6 +7273,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         let http_only = [ "server.go"; "request.go"; "apitest.go"; "apitest_json.go" ] in
         artifacts @ List.filter_map (fun (name, contents) ->
           if (not serves_http) && List.mem name http_only then None
+          else if name = "password.go" && not password_runtime then None
           else Some { path = "internal/teslrt/" ^ name; contents })
           Embedded_go_runtime.files
       end
