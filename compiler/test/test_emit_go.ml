@@ -2888,8 +2888,12 @@ let test_http_auth_with_go () =
   let module_go = artifact "internal/teslmodgohttpauth/module.go" emitted in
   check bool "an auth function emits as a check over the request" true
     (contains module_go "func CookieAuth(request teslrt.HttpRequest) teslrt.Check[string]");
+  (* The body is read ONCE, up front, and handed to the auth: an auth may verify a MAC over the
+     raw bytes, and `teslRequest.Body` is a stream that can only be read once. *)
   check bool "auth runs before the handler body" true
-    (contains module_go "teslAuth := CookieAuth(teslrt.NewHttpRequest(teslRequest, \"\"))");
+    (contains module_go "teslAuth := CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))");
+  check bool "and it sees the bytes that arrived" true
+    (contains module_go "teslBodyBytes, teslBodyErr := io.ReadAll(teslRequest.Body)");
   check bool "a failed auth returns its own status and message" true
     (contains module_go "return teslrt.Fail(teslAuth.Status(), teslAuth.Message())");
   (* The proof erases: what reaches the handler is the value. *)
@@ -3097,7 +3101,7 @@ let test_go_api_tests () =
   check bool "an api-test becomes a Go test" true
     (contains tests_go "func TestTeslApi0(teslT *testing.T)");
   check bool "the request drives the emitted server in process" true
-    (contains tests_go "teslrt.ApiRequest(HelloServer, \"GET\", \"/hello\", \"\")");
+    (contains tests_go "teslrt.ApiRequest(HelloServer, \"GET\", \"/hello\", \"\", nil, nil)");
   check bool "a status predicate becomes a runtime call" true
     (contains tests_go "teslrt.StatusOk(r.Status)");
   (* The response body is inspected WITHOUT types, exactly as on Racket: a field read is a
@@ -3738,7 +3742,7 @@ let test_queue_with_go () =
   check bool "and an empty queue traps with the Racket hint" true
     (contains tests_go "panic(teslrt.EmptyQueue(\"SendQueue\", \"processNextJob\"))");
   check bool "a JSON body template becomes constant JSON" true
-    (contains tests_go "teslrt.ApiRequest(QueueServer, \"POST\", \"/send\", \"{\\\"tag\\\":\\\"one\\\"}\")");
+    (contains tests_go "teslrt.ApiRequest(QueueServer, \"POST\", \"/send\", \"{\\\"tag\\\":\\\"one\\\"}\", nil, nil)");
   (* `go test` RUNS the api-test: FIFO order and the pending count are asserted there. *)
   gate_emitted "tesl-go-queue" emitted
 
