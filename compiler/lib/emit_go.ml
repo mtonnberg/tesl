@@ -447,7 +447,7 @@ let rec type_of_type_expr ?(params=[]) types ty =
     TFunc (params, result)
   | TTuple { loc; _ } -> unsupported loc "Go backend does not support tuple types yet"
 
-let type_of_return_spec types = function
+let rec type_of_return_spec types = function
   | RetPlain { ty; _ } -> type_of_type_expr types ty
   | RetAttached { binding; _ } -> TCheck (type_of_type_expr types binding.type_expr)
   (* `List T ::: ForAll P` is a TYPE-LEVEL contract with zero runtime structure
@@ -489,11 +489,13 @@ let type_of_return_spec types = function
   | RetForAllDictValues { key_ty; val_ty; _ }
   | RetForAllDictKeys { key_ty; val_ty; _ } ->
     TDict (type_of_type_expr types key_ty, type_of_type_expr types val_ty)
-  (* An EXISTENTIAL return is not erasure-only: `pack`/`unpack` are real structure, and
-     forwarding one is where proof soundness has bitten before (issue #73).  It stays
-     closed until that path is built deliberately. *)
-  | RetExists { loc; _ } ->
-    unsupported loc "Go backend does not support an existential return type yet"
+  (* An EXISTENTIAL return (`-> exists taskId: String => Task ? FromDb (Id == taskId)`) hides
+     the witness from the caller's proof context.  The witness is a proof SUBJECT, not a
+     value the caller receives — the body still returns the same value it would without the
+     `exists` — so the type is the inner spec's and the quantifier erases.  Soundness here is
+     the CHECKER's: it is what refuses to let a packed witness be forwarded where the fact
+     does not hold (issue #73), and it runs before this point. *)
+  | RetExists { body; _ } -> type_of_return_spec types body
 
 let rec go_type = function
   | TInt -> "teslrt.Int"
@@ -1417,6 +1419,13 @@ let rec type_of_expr signatures env expr =
          | None -> assert false
        in
        type_of_variant_application signatures env loc info variant (constructor_args @ args)
+     (* `exists name => body` parses as `make-witness (name body)`: the witness is a proof
+        SUBJECT, not a value the caller receives, so the package erases to its body. *)
+     | EVar { name = "make-witness"; _ } ->
+       (match args with
+        | [EApp { arg = body; _ }] -> type_of_expr signatures env body
+        | [body] -> type_of_expr signatures env body
+        | _ -> unsupported loc "Go backend cannot resolve this existential package")
      | EVar { name = "check"; _ }
        when (match args with
              | conjunction :: _ ->
@@ -2514,6 +2523,13 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
         feeding the checked value to the next — Racket's `check-and`, with the fact merge
         dropped because facts erase.  Hoisted into a helper so the call site stays one
         expression whatever the number of conjuncts. *)
+      (* The existential package erases to its body. *)
+      | EVar { name = "make-witness"; _ } ->
+        (match args with
+         | [EApp { arg = body; _ }] | [body] ->
+           ignore (type_of_expr signatures env app);
+           emit_expr ?expected ~indent signatures env body
+         | _ -> unsupported loc "Go backend cannot emit this existential package")
      | EVar { name = "check"; _ }
        when (match args with
              | conjunction :: _ ->
@@ -6263,6 +6279,11 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
          and the proof erases, so the result is just T.  Typing every attached return as a
          Check rejected an ordinary proof-passing `fn` as a "result type mismatch". *)
       let result = match type_of_return_spec types fd.return_spec, fd.kind with
+        (* A `check`/`auth` can REJECT, so whatever its return spec says about the value, the
+           result is a `Check` of it: `-> String ? Authenticated` on an `auth` is
+           `Check[string]`, not `string`. *)
+        | (TCheck _ as result), (CheckKind | AuthKind) -> result
+        | result, (CheckKind | AuthKind) -> TCheck result
         | TCheck inner, (FnKind | WorkerKind | DeadWorkerKind | HandlerKind | MainKind) ->
           inner
         | result, _ -> result
