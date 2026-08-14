@@ -3030,7 +3030,7 @@ server HelloServer for HelloApi {
 api-test "GET /hello returns the greeting" for HelloServer requires [] {
   let r = get "/hello"
   expect statusOk r.status
-  expect r.body == "{\"message\":\"hi\"}"
+  expect r.body.message == "hi"
 }
 
 api-test "an unknown path is a client error" for HelloServer requires [] {
@@ -3090,6 +3090,10 @@ let test_go_api_tests () =
     (contains tests_go "teslrt.ApiRequest(HelloServer, \"GET\", \"/hello\", \"\")");
   check bool "a status predicate becomes a runtime call" true
     (contains tests_go "teslrt.StatusOk(r.Status)");
+  (* The response body is inspected WITHOUT types, exactly as on Racket: a field read is a
+     dynamic read on the parsed body, not a string compare against serialised JSON. *)
+  check bool "a body field read is a dynamic JSON read" true
+    (contains tests_go "teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, \"message\"), \"hi\")");
   (* `go test` on the emitted tree RUNS these, so a wrong body or status fails here. *)
   gate_emitted "tesl-go-api-test" emitted
 
@@ -3927,6 +3931,102 @@ fn wrap(n: Int) -> Token = Token n
          d.source = "go-emitter" && contains d.message "`secret` newtype over String only")
          diagnostics)
 
+
+(* ─── The api-test surface is UNTYPED, as it is on Racket ──────────────────────
+   Inside an `api-test` block a response body is inspected without types: `r.body.userId`
+   is a dynamic read, a missing key is NULL rather than an error, and every assertion reads
+   like the JSON it checks.  That ergonomics is deliberate — the checker types the body as a
+   fresh variable — so the emitter carries a dynamic value rather than inventing a typed
+   view.  `resp.body` is therefore the PARSED body, matching
+   `api-test-field-access-ref`; a raw string would have turned every assertion into a
+   string-compare against serialised JSON. *)
+let api_json_source = {|module GoApiJson exposing [JsonServer]
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List]
+import Tesl.Json exposing [stringCodec, intCodec]
+import Tesl.ApiTest exposing [
+  statusOk,
+  isNull,
+  isNotNull,
+  isEmpty,
+  isNotEmpty,
+  hasField,
+  hasLength,
+  jsonInt,
+  jsonString,
+  jsonLength,
+  arrayAt,
+  fieldAt,
+  bodyField,
+  jsonContains,
+]
+
+record Reply {
+  userId: String
+  count: Int
+}
+
+codec Reply {
+  toJson {
+    userId -> "userId" with_codec stringCodec
+    count -> "count" with_codec intCodec
+  }
+  fromJson_forbidden
+}
+
+handler get show() -> Reply =
+  Reply { userId: "user-1", count: 3 }
+
+api JsonApi {
+  get "/show"
+    -> Reply
+}
+
+server JsonServer for JsonApi {
+  show
+}
+
+# Every assertion here reads the body WITHOUT types, exactly as it does on Racket.
+api-test "a response body is inspected without types" for JsonServer requires [] {
+  let r = get "/show"
+  expect statusOk r.status
+
+  expect r.body.userId == "user-1"
+  expect r.body.count == 3
+  expect isNull r.body.missing
+  expect isNotNull r.body.userId
+  expect hasField "userId" r.body
+  expect jsonString r.body.userId == "user-1"
+  expect jsonInt r.body.count == 3
+  expect jsonLength r.body == 2
+  expect hasLength 2 r.body
+  expect isNotEmpty r.body
+  expect fieldAt "userId" r.body == "user-1"
+  expect bodyField "count" r == 3
+  expect jsonContains "user" r.body.userId
+}
+|}
+
+let test_api_test_json_with_go () =
+  let emitted = emit_ok "<go-api-json>" api_json_source in
+  let tests_go = artifact "internal/teslmodgoapijson/module_test.go" emitted in
+  check bool "a body field read is dynamic" true
+    (contains tests_go "teslrt.JsonFieldOf(r.Body, \"userId\")");
+  check bool "and comparing it to a Tesl value is structural" true
+    (contains tests_go
+       "teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, \"count\"), teslrt.FromInt64(3))");
+  check bool "a missing key is null, not an error" true
+    (contains tests_go "teslrt.JsonIsNull(teslrt.JsonFieldOf(r.Body, \"missing\"))");
+  check bool "the predicates keep Tesl's argument order" true
+    (contains tests_go "teslrt.JsonHasField(\"userId\", r.Body)");
+  check bool "hasLength takes the length first" true
+    (contains tests_go "teslrt.JsonHasLength(teslrt.FromInt64(2), r.Body)");
+  check bool "bodyField reads the response's own body" true
+    (contains tests_go "teslrt.JsonFieldAt(\"count\", r.Body)");
+  (* `go test` RUNS the api-test, so every assertion above is checked against a real
+     response. *)
+  gate_emitted "tesl-go-api-json" emitted
+
 let test_divergent_float_functions_fail_closed () =
   (* Go's sin/cos/tan disagree with Racket on 22-34% of inputs and its math.Log is
      outright wrong for subnormals, so these are rejected rather than emitted
@@ -4722,7 +4822,11 @@ record Right {
 }
 fn valueOf(l: Left) -> Int = l.value
 |};
-  expect_go_error "record invariant" "record invariants" {|module InvariantRecord exposing [Span, width]
+  (* A record INVARIANT used to fail closed here.  It ERASES: LANGUAGE-SPEC calls the
+     record-level `::: P` a zero-cost annotation, and the Racket emitter reads it only for
+     property-test generators, never for a check at construction — so this is now a positive
+     assertion, like the proof-carrying FIELD below. *)
+  (match Compile.compile_go_source "<invariant-record>" {|module InvariantRecord exposing [Span, width]
 import Tesl.Prelude exposing [Int]
 fact Ordered (lo: Int, hi: Int)
 record Span {
@@ -4730,7 +4834,14 @@ record Span {
   hi: Int
 } ::: Ordered lo hi
 fn width(s: Span) -> Int = s.hi - s.lo
-|};
+|} with
+   | Compile.GoSuccess artifacts ->
+     let module_go = artifact "internal/teslmodinvariantrecord/module.go" artifacts in
+     check bool "a record invariant leaves no runtime structure" true
+       (contains module_go "type Span struct {\n\tLo teslrt.Int\n\tHi teslrt.Int\n}")
+   | Compile.GoFailure diagnostics ->
+     failf "record invariant failed to compile: %s"
+       (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics)));
   (* A proof-carrying record field used to fail closed here.  It ERASES like every other
      proof — codecs forced the question, since a decoded field is exactly one — so this is
      now a positive assertion. *)
@@ -4749,17 +4860,25 @@ fn valueOf(b: Box) -> Int = b.value
      let module_go = artifact "internal/teslmodprooffieldrecord/module.go" artifacts in
      check bool "the proof erases from the field type" true
        (contains module_go "Value teslrt.Int"));
-  (* Float and Set fields both work now, so the boundary is the one that will outlast
-     the collection tier: a FUNCTION-typed field, which needs the calling-convention
-     decision function values are waiting on. *)
-  expect_go_error "unsupported record field type" "function values"
-    {|module FunctionFieldRecord exposing [Handler, run]
+  (* Float, Set and — since function values landed — FUNCTION-typed fields all work.  The
+     calling-convention decision this was waiting on is made: a function value is a Go func
+     type, so a field holding one is an ordinary field. *)
+  (match Compile.compile_go_source "<function-field-record>" {|module FunctionFieldRecord exposing [Handler, run]
 import Tesl.Prelude exposing [Int]
 record Handler {
   apply: Int -> Int
 }
-fn run(h: Handler) -> Int = 0
-|}
+fn run(h: Handler, n: Int) -> Int = h.apply n
+|} with
+   | Compile.GoSuccess artifacts ->
+     let module_go = artifact "internal/teslmodfunctionfieldrecord/module.go" artifacts in
+     check bool "a function-typed field is a Go func field" true
+       (contains module_go "Apply func(teslrt.Int) teslrt.Int");
+     check bool "and calling through it is an ordinary call" true
+       (contains module_go "h.Apply(n)")
+   | Compile.GoFailure diagnostics ->
+     failf "function-typed record field failed to compile: %s"
+       (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics)))
 
 let test_missing_record_field_never_reaches_emitter () =
   let invalid = {|module MissingField exposing [Point, make]
@@ -5057,6 +5176,9 @@ let () =
       test_case "HTTP checked path captures" `Slow test_http_capture_with_go;
       test_case "HTTP cookie writing via requires [cookieCap]" `Slow test_http_cookie_with_go;
       test_case "Tesl api-tests run against the Go server" `Slow test_go_api_tests;
+      test_case "api-test bodies are untyped" `Slow test_api_test_json_with_go;
+      test_case "untyped api-test bodies behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-api-json-oracle>" api_json_source);
       test_case "secret newtypes" `Slow test_secret_newtype_with_go;
       test_case "secrets behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-secret-oracle>" secret_source);

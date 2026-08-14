@@ -32,6 +32,12 @@ type go_type =
      capability row on the arrow is compile-time (the checker propagates it), so only the
      domain and codomain survive. *)
   | TFunc of go_type list * go_type
+  (* The UNTYPED api-test view of a JSON value.  Inside an `api-test` block a response body
+     is inspected without types — `resp.body.userId` is deliberately untyped, and the checker
+     types it as a fresh variable so the assertion reads like the JSON it checks.  That
+     ergonomics is by design, so the emitter carries a dynamic value here rather than
+     inventing a typed view the source never asked for. *)
+  | TJson
   | TCheck of go_type
   | TFailure
 
@@ -519,6 +525,7 @@ let rec go_type = function
        so a function value and a named function agree on shape. *)
     Printf.sprintf "func(%s) %s"
       (String.concat ", " (List.map go_type params)) (go_type result)
+  | TJson -> "teslrt.JsonValue"
   | TCheck ty -> Printf.sprintf "teslrt.Check[%s]" (go_type ty)
   | TFailure -> invalid_arg "Go failure has no standalone type"
 
@@ -621,6 +628,7 @@ let rec substitute_type bindings ty =
   | TSet element -> TSet (substitute_type bindings element)
   | TFunc (params, result) ->
     TFunc (List.map (substitute_type bindings) params, substitute_type bindings result)
+  | TJson -> ty
   | TInt | TFloat | TString | TBool | TUnit | TNewtype _ | TRecord _ | TFailure -> ty
 
 (** A variant's payload types with the ADT's type arguments substituted in. *)
@@ -822,6 +830,7 @@ and equal_expr ty left right =
     Printf.sprintf "teslrt.SetEqualBy(%s, %s, %s)" left right (element_equal_func element)
   | TFunc _ | TParam _ | TCheck _ | TFailure ->
     invalid_arg "Go equality on this type is rejected before emission"
+  | TJson -> invalid_arg "Go api-test JSON equality goes through JsonEqual"
 
 and unequal_expr ty left right =
   match ty with
@@ -891,6 +900,7 @@ and unequal_expr ty left right =
     Printf.sprintf "!teslrt.SetEqualBy(%s, %s, %s)" left right (element_equal_func element)
   | TFunc _ | TParam _ | TCheck _ | TFailure ->
     invalid_arg "Go equality on this type is rejected before emission"
+  | TJson -> invalid_arg "Go api-test JSON equality goes through JsonEqual"
 
 and ordered_expr ty op left right =
   match ty with
@@ -901,7 +911,7 @@ and ordered_expr ty op left right =
     ordered_expr info.base op (Printf.sprintf "%s.Value" (selector_operand left))
       (Printf.sprintf "%s.Value" (selector_operand right))
   | TBool | TUnit | TRecord _ | TAdt _ | TList _ | TDict _ | TSet _ | TParam _
-  | TFunc _ | TCheck _ | TFailure ->
+  | TFunc _ | TJson | TCheck _ | TFailure ->
     invalid_arg "Go ordering requires an ordered scalar type"
 
 let rec supports_ordering = function
@@ -910,7 +920,7 @@ let rec supports_ordering = function
      and there is no use for it. *)
   | TNewtype info -> (not info.secret) && supports_ordering info.base
   | TBool | TUnit | TRecord _ | TAdt _ | TList _ | TDict _ | TSet _ | TParam _
-  | TFunc _ | TCheck _ | TFailure -> false
+  | TFunc _ | TJson | TCheck _ | TFailure -> false
 
 (* A generic ADT has no comparable Go form: `TeslEqual` would have to dispatch
    `teslrt.Equal` for whatever the type parameter was instantiated with, which Go
@@ -936,7 +946,7 @@ let rec supports_equality = function
   | TList element -> supports_equality element
   | TDict (key, value) -> supports_equality key && supports_equality value
   | TSet element -> supports_equality element
-  | TFunc _ | TParam _ | TCheck _ | TFailure -> false
+  | TFunc _ | TJson | TParam _ | TCheck _ | TFailure -> false
 
 let record_info_of_signature signatures name =
   match Hashtbl.find_opt signatures name with
@@ -1551,6 +1561,16 @@ let rec type_of_expr signatures env expr =
            | _ -> unsupported loc
              "Go backend `expectJobOk` takes the result of `processNextJob`")
         | _ -> unsupported loc "Go backend requires `expectJobOk` applied to 1 argument")
+     (* The api-test JSON surface.  Every one of these takes the UNTYPED value, and the
+        argument order is Tesl's (needle/index/field first), matching tesl/api-test.rkt. *)
+     | EVar { name = ("isNull" | "isNotNull" | "isEmpty" | "isNotEmpty"); _ } -> TBool
+     | EVar { name = ("hasField" | "hasLength" | "jsonContains"); _ } -> TBool
+     | EVar { name = "jsonLength"; _ } -> TInt
+     | EVar { name = "jsonInt"; _ } -> TInt
+     | EVar { name = "jsonString"; _ } -> TString
+     | EVar { name = "jsonBool"; _ } -> TBool
+     | EVar { name = ("arrayAt" | "fieldAt" | "bodyField" | "jsonArray" | "jsonObject"); _ } ->
+       TJson
      | EVar { name = ("statusOk" | "statusClientError" | "statusServerError"); _ } -> TBool
       (* `Http.clearSessionCookie()` returns Unit and writes to the response. *)
       | EVar { name = "Http.clearSessionCookie"; _ } -> TUnit
@@ -1611,6 +1631,22 @@ let rec type_of_expr signatures env expr =
               "Go backend call to `%s` has an unsupported argument type" name)
             args signature.params;
           signature.result)
+     (* A call through any FUNCTION-VALUED expression — a record field holding one, say —
+        not just through a name. *)
+     | head when (match type_of_expr signatures env head with TFunc _ -> true | _ -> false) ->
+       let params, result = match type_of_expr signatures env head with
+         | TFunc (params, result) -> params, result
+         | _ -> assert false
+       in
+       if List.length args <> List.length params then
+         unsupported loc "Go backend requires this function value applied to %d argument(s)"
+           (List.length params);
+       List.iter2 (fun arg want ->
+         if type_of_arg signatures env want arg <> want then
+           unsupported (Checker.expr_loc arg)
+             "Go backend call through a function value has an unsupported argument type")
+         args params;
+       result
      | _ -> unsupported loc "Go backend supports calls to named functions only")
   | EBinop { op; left; right; loc; _ } ->
     (* A DEFAULTED empty list yields to a real type here for the same reason it does in an
@@ -1627,7 +1663,18 @@ let rec type_of_expr signatures env expr =
         (* Nothing to reconcile: re-type so the original error is reported. *)
         type_of_expr signatures env left, type_of_expr signatures env right
     in
-    if left_ty <> right_ty then unsupported loc "Go backend binary operands have different types";
+    (* An UNTYPED api-test value compares against anything: `expect resp.body.age == 7` is
+       the point of the dynamic view, and on Racket both sides are ordinary values by then.
+       Only equality is allowed — ordering an untyped value has no meaning the source can
+       rely on. *)
+    if (left_ty = TJson || right_ty = TJson) && left_ty <> right_ty then begin
+      match op with
+      | BEq | BNeq -> ()
+      | _ -> unsupported loc
+        "Go backend supports `==` / `!=` on an api-test JSON value, not this operator"
+    end
+    else if left_ty <> right_ty then
+      unsupported loc "Go backend binary operands have different types";
     (match op with
      | BAdd | BSub | BMul | BDiv ->
        (match left_ty with
@@ -1713,6 +1760,10 @@ let rec type_of_expr signatures env expr =
      | TNewtype info, _ ->
        unsupported loc "Go backend newtype `%s` has no field `%s`" info.tesl_name field
      | TRecord info, _ -> record_field_type loc info field
+     (* A field read on an UNTYPED JSON value stays untyped: `resp.body.user.id` is a chain
+        of dynamic reads, and a missing key is null rather than an error — the same shape
+        `api-test-field-access-ref` gives on Racket. *)
+     | TJson, _ -> TJson
      | _ -> unsupported loc "Go backend does not support field `%s` yet" field)
   | ECase { scrut; arms; loc } ->
     let info, type_args = match type_of_expr signatures env scrut with
@@ -2730,6 +2781,63 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
         Printf.sprintf "teslrt.%s(%s)"
           (if verb = "expectJobOk" then "ExpectJobOk" else "ExpectJobFailed")
           (emit (List.hd args))
+      (* The api-test JSON surface.  The runtime keeps Tesl's argument order, so the arguments
+         go through unshuffled; `bodyField` is `fieldAt` on the response's body. *)
+      | EVar { name = ("isNull" | "isNotNull" | "isEmpty" | "isNotEmpty" | "jsonLength"
+                      | "jsonInt" | "jsonString" | "jsonBool" | "jsonArray" | "jsonObject"
+                      | "hasField" | "hasLength" | "arrayAt" | "fieldAt" | "jsonContains"
+                      | "bodyField") as verb; _ } ->
+        ignore (type_of_expr signatures env app);
+        let json_argument index =
+          match List.nth_opt args index with
+          | Some argument -> emit argument
+          | None -> unsupported loc "Go backend requires `%s` applied to its argument(s)" verb
+        in
+        let string_argument index =
+          match List.nth_opt args index with
+          | Some argument -> emit_expr ~expected:TString ~indent signatures env argument
+          | None -> unsupported loc "Go backend requires `%s` applied to its argument(s)" verb
+        in
+        let int_argument index =
+          match List.nth_opt args index with
+          | Some argument -> emit_expr ~expected:TInt ~indent signatures env argument
+          | None -> unsupported loc "Go backend requires `%s` applied to its argument(s)" verb
+        in
+        (match verb with
+         | "isNull" -> Printf.sprintf "teslrt.JsonIsNull(%s)" (json_argument 0)
+         | "isNotNull" -> Printf.sprintf "teslrt.JsonIsNotNull(%s)" (json_argument 0)
+         | "isEmpty" -> Printf.sprintf "teslrt.JsonIsEmpty(%s)" (json_argument 0)
+         | "isNotEmpty" -> Printf.sprintf "teslrt.JsonIsNotEmpty(%s)" (json_argument 0)
+         | "jsonLength" -> Printf.sprintf "teslrt.JsonLength(%s)" (json_argument 0)
+         | "jsonInt" -> Printf.sprintf "teslrt.JsonAsInt(%s)" (json_argument 0)
+         | "jsonString" -> Printf.sprintf "teslrt.JsonAsString(%s)" (json_argument 0)
+         | "jsonBool" -> Printf.sprintf "teslrt.JsonAsBool(%s)" (json_argument 0)
+         (* `jsonArray`/`jsonObject` assert the shape and hand the value back; the assertion
+            happens inside the length/field helpers that follow, so the value passes through. *)
+         | "jsonArray" | "jsonObject" -> json_argument 0
+         | "hasField" ->
+           Printf.sprintf "teslrt.JsonHasField(%s, %s)" (string_argument 0) (json_argument 1)
+         | "hasLength" ->
+           Printf.sprintf "teslrt.JsonHasLength(%s, %s)" (int_argument 0) (json_argument 1)
+         | "arrayAt" ->
+           Printf.sprintf "teslrt.JsonArrayAt(%s, %s)" (int_argument 0) (json_argument 1)
+         | "fieldAt" ->
+           Printf.sprintf "teslrt.JsonFieldAt(%s, %s)" (string_argument 0) (json_argument 1)
+         | "bodyField" ->
+           Printf.sprintf "teslrt.JsonFieldAt(%s, %s.Body)"
+             (string_argument 0) (selector_operand (json_argument 1))
+         | _ ->
+           (* jsonContains: the needle is an ordinary Tesl value, compared structurally. *)
+           let needle = match List.nth_opt args 0 with
+             | Some argument ->
+               (match type_of_expr signatures env argument with
+                | TJson -> emit argument
+                | TString | TInt | TBool | TFloat -> emit argument
+                | _ -> unsupported loc
+                  "Go backend `jsonContains` takes a scalar or an api-test value as its needle")
+             | None -> unsupported loc "Go backend requires `jsonContains` applied to 2 arguments"
+           in
+           Printf.sprintf "teslrt.JsonContains(%s, %s)" needle (json_argument 1))
       | EVar { name = ("statusOk" | "statusClientError" | "statusServerError") as predicate; _ } ->
         let go_name = match predicate with
           | "statusOk" -> "StatusOk"
@@ -2802,7 +2910,48 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
        Printf.sprintf "%s(%s)" (qualified signature.sig_owner signature.go_name)
           (String.concat ", " (scope_argument @ List.map2 (fun arg want ->
              emit_expr ~expected:want ~indent signatures env arg) args signature.params))
+      (* The same call, emitted: the head is an expression of func type. *)
+      | head when (match type_of_expr signatures env head with TFunc _ -> true | _ -> false) ->
+        let params = match type_of_expr signatures env head with
+          | TFunc (params, _) -> params
+          | _ -> assert false
+        in
+        ignore (type_of_expr signatures env app);
+        Printf.sprintf "%s(%s)" (selector_operand (emit head))
+          (String.concat ", " (List.map2 (fun arg want ->
+             emit_expr ~expected:want ~indent signatures env arg) args params))
      | _ -> unsupported loc "Go backend supports calls to named functions only")
+  (* One side is an UNTYPED api-test value: compare structurally through the runtime, with the
+     typed side ENCODED the same way a response body is, so the two directions cannot disagree
+     about what a value looks like as JSON. *)
+  | EBinop { op = (BEq | BNeq) as op; left; right; loc; _ }
+    when (let json side = type_of_expr signatures env side = TJson in
+          json left <> json right) ->
+    let json_side, typed_side =
+      if type_of_expr signatures env left = TJson then left, right else right, left in
+    let typed_ty = type_of_expr signatures env typed_side in
+    (* The typed side is handed over in the shape the runtime compares against: a scalar as
+       itself, a newtype unwrapped, a list lifted.  Anything richer (a record, a dict) fails
+       closed rather than being compared as something it is not — an api-test compares FIELDS,
+       and that is the shape the corpus uses. *)
+    let rec comparand ty emitted = match ty with
+      | TInt | TString | TBool | TFloat -> emitted
+      | TNewtype info when not info.secret ->
+        comparand info.base (Printf.sprintf "%s.Value" (selector_operand emitted))
+      | TList (TInt | TString | TBool | TFloat) ->
+        Printf.sprintf "teslrt.JsonListOf(%s)" emitted
+      | _ -> unsupported loc
+        "Go backend compares an api-test JSON value against a scalar, a newtype over one, or \
+         a list of those"
+    in
+    let encoded =
+      if typed_ty = TJson then emit_expr ~indent signatures env typed_side
+      else comparand typed_ty
+        (emit_expr ~expected:typed_ty ~indent signatures env typed_side)
+    in
+    Printf.sprintf "%steslrt.JsonEqual(%s, %s)"
+      (if op = BNeq then "!" else "")
+      (emit_expr ~indent signatures env json_side) encoded
   | EBinop { op; left; right; _ } ->
     let expr_binop_operand_source =
       match left, right with
@@ -2902,6 +3051,11 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
      | TRecord _ ->
        ignore (type_of_expr signatures env expr);
        Printf.sprintf "%s.%s" (selector_operand (emit obj)) (record_field_go_name field)
+     (* A dynamic read on an api-test JSON value: a missing key is null, which is what makes
+        `expect isNull resp.body.missing` writable. *)
+     | TJson ->
+       ignore (type_of_expr signatures env expr);
+       Printf.sprintf "teslrt.JsonFieldOf(%s, %s)" (emit obj) (go_quote field)
      | _ -> unsupported (Checker.expr_loc expr) "Go backend cannot emit this field read")
   | ERecord { type_hint = Some name; fields; loc } ->
     (match record_info_of_signature signatures name with
@@ -4409,7 +4563,7 @@ let rec value_encoder ty =
       ~body:(Printf.sprintf
         "func() any {\n\t\tteslOut := make([]any, len(teslValue))\n\t\tfor teslAt, teslItem := range teslValue {\n\t\t\tteslOut[teslAt] = %s(teslItem)\n\t\t}\n\t\treturn teslOut\n\t}()"
         (value_encoder element))
-  | TDict _ | TSet _ | TParam _ | TFunc _ | TCheck _ | TFailure ->
+  | TDict _ | TSet _ | TParam _ | TFunc _ | TJson | TCheck _ | TFailure ->
     invalid_arg "Go response encoding for this type is rejected before emission"
 
 (* ── HTTP: `api` routes and the `server` that binds them ──────────────────────
@@ -4974,6 +5128,29 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) module_path package sign
           strip_outer_parens (emit_negated ~indent signatures env left)
         | Some right ->
           let right_ty = type_of_arg signatures env left_ty right in
+          (* An UNTYPED api-test value on either side compares structurally through the
+             runtime — `expect r.body.count == 3` is the shape these tests are written in, and
+             the two sides are different Go types by construction. *)
+          if left_ty = TJson || right_ty = TJson then begin
+            let json_side, typed_side, typed_ty =
+              if left_ty = TJson then left, right, right_ty else right, left, left_ty in
+            let rec comparand ty emitted = match ty with
+              | TJson -> emitted
+              | TInt | TString | TBool | TFloat -> emitted
+              | TNewtype info when not info.secret ->
+                comparand info.base (Printf.sprintf "%s.Value" (selector_operand emitted))
+              | TList (TInt | TString | TBool | TFloat) ->
+                Printf.sprintf "teslrt.JsonListOf(%s)" emitted
+              | _ -> unsupported loc
+                "Go backend compares an api-test JSON value against a scalar, a newtype over \
+                 one, or a list of those"
+            in
+            let encoded = comparand typed_ty
+              (if typed_ty = TJson then emit_expr ~indent signatures env typed_side
+               else emit_expr ~expected:typed_ty ~indent signatures env typed_side) in
+            Printf.sprintf "!teslrt.JsonEqual(%s, %s)"
+              (emit_expr ~indent signatures env json_side) encoded
+          end else begin
           if left_ty <> right_ty then unsupported loc "Go backend expect operands have different types";
           (match left_ty, bool_literal_value left, bool_literal_value right with
            | TBool, Some expected, None ->
@@ -5009,6 +5186,7 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) module_path package sign
              let emitted_left = bind "Left" left in
              let emitted_right = bind "Right" right in
              strip_outer_parens (unequal_expr left_ty emitted_left emitted_right))
+          end
       in
       Buffer.add_string body (line_directive loc);
       Printf.bprintf body "%sif %s {\n%s\tteslT.Fatal(\"Tesl expectation failed\")\n%s}\n"
@@ -5038,7 +5216,7 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) module_path package sign
          Printf.bprintf body "%sif (%s).OK() {\n%s\tteslT.Fatal(\"expected Tesl check failure\")\n%s}\n"
            indent emitted indent indent
        | TInt | TFloat | TString | TBool | TUnit | TNewtype _ | TRecord _ | TAdt _
-       | TList _ | TDict _ | TSet _ | TParam _ | TFunc _ ->
+       | TList _ | TDict _ | TSet _ | TParam _ | TFunc _ | TJson ->
          Printf.bprintf body "%steslExpectFailure(teslT, func() {\n%s\t_ = %s\n%s})\n"
            indent indent emitted indent
        | TFailure -> unsupported loc "Go backend expectFail target has no result type");
@@ -5252,6 +5430,12 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | "JobResult" | "JobResult(..)" | "JobOk" | "JobFailed"
           | "processNextJob" | "processNextDeadJob" | "pendingJobCount" | "drainQueue"
           | "expectJobOk" | "expectJobFailed" -> ()
+          (* The untyped JSON surface: `JsonValue`/`JsonNull` are the type names, the rest are
+             the predicates and accessors the emitter renders directly. *)
+          | "JsonValue" | "JsonNull"
+          | "isNull" | "isNotNull" | "isEmpty" | "isNotEmpty" | "hasLength" | "hasField"
+          | "jsonInt" | "jsonString" | "jsonBool" | "jsonArray" | "jsonObject" | "jsonLength"
+          | "arrayAt" | "fieldAt" | "bodyField" | "jsonContains" -> ()
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.ApiTest` export `%s` yet" other) exposed
       | "Tesl.Http" ->
@@ -5794,7 +5978,10 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             rec_owner = "";
             rec_go_name = "teslrt.ApiResponse";
             rec_fields = [
-              "status", TInt; "body", TString; "headers", TDict (TString, TString);
+              (* `body` is a PARSED JSON value, matching Racket: `api-test-field-access-ref`
+                 normalises the response and hands back the parsed body, which is why
+                 `resp.body.userId` reads like the JSON it checks. *)
+              "status", TInt; "body", TJson; "headers", TDict (TString, TString);
             ];
             rec_loc = import.loc;
           };
@@ -6356,7 +6543,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
            a socket.  A dependency a program does not use should not be in it, for
            vulnerability surface as much as for the eject story. *)
         let serves_http = servers <> [] in
-        let http_only = [ "server.go"; "request.go"; "apitest.go" ] in
+        (* `apitest_json.go` travels with `apitest.go`: the untyped JSON view exists to inspect
+           a RESPONSE, so a module that serves no HTTP has no use for it. *)
+        let http_only = [ "server.go"; "request.go"; "apitest.go"; "apitest_json.go" ] in
         artifacts @ List.filter_map (fun (name, contents) ->
           if (not serves_http) && List.mem name http_only then None
           else Some { path = "internal/teslrt/" ^ name; contents })

@@ -13,8 +13,13 @@ import (
 // same way (`dispatch-api-test-request` calls the server's own router rather than opening
 // a connection), so the two backends exercise the same layer.
 type ApiResponse struct {
-	Status  Int
-	Body    string
+	Status Int
+	// The body as a PARSED JSON value, not as text.  An api-test inspects it without types
+	// (`resp.body.userId`), which is the ergonomics the Racket surface has:
+	// `api-test-field-access-ref` normalises the response and hands back the parsed body, so a
+	// raw string here would have made every assertion a string-compare against serialised
+	// JSON — a different language for the same test.
+	Body    JsonValue
 	Headers Dict[string, string]
 }
 
@@ -41,7 +46,7 @@ func ApiRequest(server Server, method, path, body string, cookies ...string) Api
 	}
 	return ApiResponse{
 		Status:  FromInt64(int64(result.StatusCode)),
-		Body:    string(raw),
+		Body:    JsonParseBody(string(raw)),
 		Headers: headers,
 	}
 }
