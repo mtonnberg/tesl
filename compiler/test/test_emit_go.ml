@@ -3719,6 +3719,147 @@ let test_queue_with_go () =
   (* `go test` RUNS the api-test: FIFO order and the pending count are asserted there. *)
   gate_emitted "tesl-go-queue" emitted
 
+
+(* ─── Combined checks, and `case` as a test statement ─────────────────────────
+   `check (checkA && checkB) x` runs each in turn and short-circuits on the first
+   rejection — Racket's `check-and`, with the fact merge dropped because facts erase.  A
+   `case` inside a test block discriminates through the same emitter as an expression
+   `case`; only the arm bodies differ (statements rather than a value). *)
+let combined_check_source = {|module GoCombinedCheck exposing [tidy]
+
+import Tesl.Prelude exposing [Int, String]
+import Tesl.String exposing [String.isEmpty, String.contains]
+
+fact NonEmpty(s: String)
+fact HasAt(s: String)
+
+check checkNonEmpty(s: String) -> s: String ::: NonEmpty s =
+  if String.isEmpty s then
+    fail 400 "must not be empty"
+  else
+    ok s ::: NonEmpty s
+
+check checkHasAt(s: String) -> s: String ::: HasAt s =
+  if String.contains s "@" then
+    ok s ::: HasAt s
+  else
+    fail 400 "must contain @"
+
+# The combined check runs both in order and short-circuits on the first rejection.
+fn tidy(raw: String) -> String =
+  let email = check (checkHasAt && checkNonEmpty) raw
+  "ok:${email}"
+
+test "a combined check accepts a value both halves accept" {
+  expect tidy "a@b" == "ok:a@b"
+}
+
+test "a combined check rejects when the FIRST half rejects" {
+  expectFail tidy "no-at-sign"
+}
+
+test "a combined check rejects when the SECOND half rejects" {
+  expectFail tidy ""
+}
+|}
+
+let test_case_stmt_source = {|module GoTestCase exposing [pick]
+
+import Tesl.Prelude exposing [Bool(..), Int, String]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.List exposing [List.head]
+
+fn pick(wanted: Int) -> Maybe Int =
+  case List.head [wanted] of
+    Nothing -> Nothing
+    Something first -> Something first
+
+# `case` as a TEST statement: each arm carries statements, not a value.
+test "case in a test block discriminates and binds" {
+  case pick 7 of
+    Nothing -> expect False == True
+    Something value -> expect value == 7
+}
+
+test "the other arm is reachable too" {
+  case pick 0 of
+    Something value -> expect value == 0
+    Nothing -> expect False == True
+}
+|}
+
+let test_combined_check_with_go () =
+  let emitted = emit_ok "<go-combined-check>" combined_check_source in
+  let module_go = artifact "internal/teslmodgocombinedcheck/module.go" emitted in
+  check bool "the conjuncts are hoisted into one helper" true
+    (contains module_go "func teslCheckAll1(teslValue string) teslrt.Check[string] {");
+  check bool "the first rejection short-circuits" true
+    (contains module_go "return teslrt.Reject[string](teslStep0.Status(), teslStep0.Message())");
+  check bool "and the checked value feeds the next conjunct" true
+    (contains module_go "teslStep1 := checkNonEmpty(teslrt.MustCheck(teslStep0))");
+  (* `go test` RUNS all three cases: both halves accepting, and each half rejecting. *)
+  gate_emitted "tesl-go-combined-check" emitted
+
+let test_case_statement_with_go () =
+  let emitted = emit_ok "<go-test-case>" test_case_stmt_source in
+  let tests_go = artifact "internal/teslmodgotestcase/module_test.go" emitted in
+  check bool "a test-block case switches on the ADT tag" true
+    (contains tests_go "switch teslScrut1.Tag {");
+  check bool "and binds the arm's payload for its statements" true
+    (contains tests_go "value := teslScrut1.SomethingValue");
+  gate_emitted "tesl-go-test-case" emitted
+
+
+(* ─── Function values and lambdas ─────────────────────────────────────────────
+   `f: Int -> Int` as a parameter, a lambda passed to it, and a NAMED function passed as a
+   value — all three are the same Go shape (`func(teslrt.Int) teslrt.Int`).  The arrow's
+   capability row is compile-time and does not survive. *)
+let function_value_source = {|module GoFuncValue exposing [applyTwice, addTen, shout]
+
+import Tesl.Prelude exposing [Int, String, List]
+import Tesl.List exposing [List.map]
+
+# A function VALUE as a parameter.
+fn applyTwice(f: Int -> Int, n: Int) -> Int =
+  f (f n)
+
+fn addOne(n: Int) -> Int =
+  n + 1
+
+# A lambda passed to a user function that takes a function value.
+fn addTen(n: Int) -> Int =
+  applyTwice (fn(x: Int) -> x + 5) n
+
+# A NAMED function passed as a value.
+fn twiceNamed(n: Int) -> Int =
+  applyTwice addOne n
+
+# A lambda into a higher-order list leaf still works.
+fn shout(xs: List Int) -> List Int =
+  List.map (fn(x: Int) -> x * 2) xs
+
+test "function values, lambdas and named functions" {
+  expect addTen 0 == 10
+  expect twiceNamed 5 == 7
+  expect applyTwice (fn(x: Int) -> x * 3) 2 == 18
+  expect shout [1, 2] == [2, 4]
+}
+|}
+
+let test_function_values_with_go () =
+  let emitted = emit_ok "<go-func-value>" function_value_source in
+  let module_go = artifact "internal/teslmodgofuncvalue/module.go" emitted in
+  check bool "a function parameter is a Go func type" true
+    (contains module_go
+       "func ApplyTwice(f func(teslrt.Int) teslrt.Int, n teslrt.Int) teslrt.Int {");
+  check bool "a call through it is an ordinary call" true
+    (contains module_go "return f(f(n))");
+  check bool "a lambda is a func literal" true
+    (contains module_go "func(x teslrt.Int) teslrt.Int {");
+  check bool "and a named function passed as a value is its own name" true
+    (contains module_go "ApplyTwice(addOne, n)");
+  gate_emitted "tesl-go-func-value" emitted
+
 let test_divergent_float_functions_fail_closed () =
   (* Go's sin/cos/tan disagree with Racket on 22-34% of inputs and its math.Log is
      outright wrong for subnormals, so these are rejected rather than emitted
@@ -4849,6 +4990,15 @@ let () =
       test_case "HTTP checked path captures" `Slow test_http_capture_with_go;
       test_case "HTTP cookie writing via requires [cookieCap]" `Slow test_http_cookie_with_go;
       test_case "Tesl api-tests run against the Go server" `Slow test_go_api_tests;
+      test_case "function values and lambdas" `Slow test_function_values_with_go;
+      test_case "function values behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-func-value-oracle>" function_value_source);
+      test_case "combined checks" `Slow test_combined_check_with_go;
+      test_case "combined checks behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-combined-check-oracle>" combined_check_source);
+      test_case "`case` as a test statement" `Slow test_case_statement_with_go;
+      test_case "test-statement case behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-test-case-oracle>" test_case_stmt_source);
       test_case "Memory-backend queues" `Slow test_queue_with_go;
       test_case "queues behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-queue-oracle>" queue_source);
