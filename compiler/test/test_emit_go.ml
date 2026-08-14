@@ -6031,11 +6031,15 @@ type Chain
   | Link (next: Chain)
 fn depth(c: Chain) -> Int = 0
 |};
-  expect_go_error "case over a non-ADT" "case` over a module ADT" {|module CaseOverInt exposing [classify]
+  (* A `case` over Int, String or Bool IS supported now; anything with no equality this backend
+     emits — a record here, and a Float, which cannot even be written as a pattern — still fails
+     closed rather than being guessed at. *)
+  expect_go_error "case over a record" "case` over a module ADT or a scalar"
+    {|module CaseOverRecord exposing [classify]
 import Tesl.Prelude exposing [Int, String]
-fn classify(n: Int) -> String =
-  case n of
-    0 -> "zero"
+record Point { x: Int }
+fn classify(p: Point) -> String =
+  case p of
     _ -> "other"
 |};
   expect_go_error "proof-carrying constructor field" "proof-carrying constructor field"
