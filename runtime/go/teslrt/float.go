@@ -186,3 +186,17 @@ func FloatRequireNonNegative(value float64) Check[float64] {
 	}
 	return Accept(value)
 }
+
+// The Float ARITHMETIC surface (`Float.add` and friends), for code that prefers named
+// operations to operators. Plain IEEE arithmetic — the same thing `a + b` emits.
+func FloatAdd(left, right float64) float64 { return left + right }
+
+func FloatSub(left, right float64) float64 { return left - right }
+
+func FloatMul(left, right float64) float64 { return left * right }
+
+// FloatDiv's divisor carries a `FloatNonZero` proof, which erases; division by zero would
+// otherwise be ±Inf, which is what Racket's `/` on a flonum gives too. No guard is added
+// here: adding one would make the emitted program behave differently from `a / b`, and the
+// proof is the enforcement.
+func FloatDiv(left, right float64) float64 { return left / right }

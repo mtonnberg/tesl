@@ -2352,8 +2352,13 @@ let rec infer_sql_aggregate_type (e : expr) : type_expr option =
   | EApp _ ->
     let (head, _) = collect_call_head_and_args [] e in
     (match function_name_of_expr head with
-     | Some ("selectCount" | "selectSum" | "selectMin" | "selectMax") ->
+     | Some ("selectCount" | "selectSum") ->
        Some (mk_name_type "Int")
+     (* MAX/MIN are OPTIONAL: no matching row has no maximum.  The element type is not
+        recovered here (this pass only needs the OUTER shape, so a `case` over the result
+        sees `Maybe`), which is the same approximation `selectOne` uses. *)
+     | Some ("selectMin" | "selectMax") ->
+       Some (mk_app_type (mk_name_type "Maybe") (mk_var_type "a"))
      | Some ("select" | "selectMany") ->
        Some (mk_app_type (mk_name_type "List") (mk_var_type "a"))
      | Some "selectOne" ->
@@ -2529,8 +2534,10 @@ let rec infer_expr_type
             Some (unwind head_ty (List.length args))
           | _ ->
          (match fn_name with
-          | "selectCount" | "selectSum" | "selectMin" | "selectMax" ->
+          | "selectCount" | "selectSum" ->
             Some (mk_name_type "Int")
+          | "selectMin" | "selectMax" ->
+            Some (mk_app_type (mk_name_type "Maybe") (mk_var_type "a"))
           | "select" | "selectMany" ->
             Some (mk_app_type (mk_name_type "List") (mk_var_type "a"))
           | "selectOne" ->

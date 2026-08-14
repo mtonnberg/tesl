@@ -4,7 +4,7 @@
     soundness boundary identified during Review 32.
 
     Findings covered:
-      G53  selectMax/selectMin — NOW implemented in type-checker; should pass
+      G53  selectMax/selectMin — implemented in the type-checker, typed `Maybe V`
       G54  Lambda bodies cannot carry proof annotations — restriction documented
       G55  Float arithmetic: selectSum on Float field should return Float not Int
       G56  `establish` cannot call `fail` — already enforced (regression guard)
@@ -138,12 +138,11 @@ let proof_prelude =
 (* If it still fails, we confirm the bug is NOT yet fixed.                    *)
 (* We use should_pass to indicate the DESIRED state (fixed).                  *)
 let test_g53_selectmax_now_in_type_checker () =
+  (* The return type is `Maybe Int` since 2026-08-14: an aggregate over no matching row
+     has no value of the column's type, so MAX/MIN are optional where SUM is not. *)
   let src = db_prelude ^
-    "fn maxPrice() -> Int requires [dbRead] =\n" ^
+    "fn maxPrice() -> Maybe Int requires [dbRead] =\n" ^
     "  selectMax p.price from Product\n" in
-  (* If this passes, selectMax is fixed in the type-checker.               *)
-  (* If it fails with "unknown name", the G31 bug is still present.        *)
-  (* We assert it SHOULD compile — to document the intended correct state.  *)
   should_pass src
 
 (* ── G54: Lambda bodies cannot carry GDP proof annotations ─────────────── *)

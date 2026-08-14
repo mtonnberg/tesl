@@ -2815,30 +2815,64 @@ let cycle_decl_bound_name (d : Ast.top_decl) : string option =
   | Ast.DType (Ast.TypeAlias { name; _ }) -> Some name
   | _ -> None
 
-(* BOTH backends collapse a cyclic SCC into one namespace — Racket inlines the members
-   into one module, Go merges them into one package — so two members declaring the same
-   name have nowhere to live.  Racket's inliner used to SKIP the second declaration to
-   avoid a duplicate Racket definition, which silently rebound the second module's
-   references to the FIRST module's function: a legal program compiled to wrong answers
-   with no diagnostic.  Reported here, in the shared check, so neither backend can reach
-   the collapse with a collision in hand. *)
-let cycle_name_collision (members : Ast.module_form list) =
-  let seen : (string, string) Hashtbl.t = Hashtbl.create 16 in
-  (* Sorted so the pair reported is the same whichever member the compile started
-     from — the diagnostic must not depend on graph traversal order. *)
-  let sorted = List.sort (fun (left : Ast.module_form) (right : Ast.module_form) ->
-    String.compare left.module_name right.module_name) members in
-  List.fold_left (fun found (mf : Ast.module_form) ->
-    List.fold_left (fun found decl ->
-      match found, cycle_decl_bound_name decl with
-      | Some _, _ | None, None -> found
-      | None, Some name ->
-        (match Hashtbl.find_opt seen name with
-         | Some owner when owner <> mf.Ast.module_name ->
-           Some (name, owner, mf.Ast.module_name, Ast.top_decl_loc decl)
-         | Some _ -> None
-         | None -> Hashtbl.replace seen name mf.Ast.module_name; None))
-      found mf.Ast.decls) None sorted
+(* A cyclic SCC is COLLAPSED into one namespace, and that is where a same-named
+   declaration can be lost.  The rule is not "two members of a cycle share a name" —
+   measured, that compiles and runs CORRECTLY for a two-member cycle: `A <-> B` where each
+   declares its own `helper` keeps them apart from either entry (tests/tesl-test.rkt pins
+   it, for a function and for a record reached through qualified annotations).
+
+   What breaks is a member that inlines TWO other members which share a name: the
+   collapse keeps one definition and the other member's references silently rebind to it.
+   The corpus shipped exactly that — Sandbox imports Sandbox2 and Sandbox3, both import
+   Sandbox back, so all three are one component, and Sandbox3's `ARecord`, `ARecord2` and
+   `doSomething2` were dropped in favour of Sandbox2's; `Sandbox3.ARecord2` even had a
+   `foo3` field the surviving struct did not, so a qualified read of it failed at runtime.
+   Re-measured 2026-08-14 on the Hub/Spoke1/Spoke2 shape: `viaTwo 1` answered 7 where the
+   program says 105, with no diagnostic.
+
+   So the check is per INLINING member: for each member, the OTHER members it reaches
+   within the component, and a name declared by two of them. *)
+let cycle_inlined_name_collision
+    (graph : (string, string list) Hashtbl.t)
+    (component : string list)
+    (module_of : string -> Ast.module_form option) =
+  let in_component path = List.mem path component in
+  (* Members reachable from `start` within the component, excluding `start` itself. *)
+  let inlined_by start =
+    let seen : (string, unit) Hashtbl.t = Hashtbl.create 8 in
+    let rec walk path =
+      List.iter (fun dep ->
+        if in_component dep && dep <> start && not (Hashtbl.mem seen dep) then begin
+          Hashtbl.add seen dep ();
+          walk dep
+        end) (Option.value (Hashtbl.find_opt graph path) ~default:[])
+    in
+    walk start;
+    List.filter (fun path -> Hashtbl.mem seen path) component
+  in
+  let collision_among members =
+    let seen : (string, Ast.module_form) Hashtbl.t = Hashtbl.create 16 in
+    List.fold_left (fun found (mf : Ast.module_form) ->
+      List.fold_left (fun found decl ->
+        match found, cycle_decl_bound_name decl with
+        | Some _, _ | None, None -> found
+        | None, Some name ->
+          (match Hashtbl.find_opt seen name with
+           | Some owner when owner.Ast.module_name <> mf.Ast.module_name ->
+             Some (name, owner.Ast.module_name, mf.Ast.module_name, Ast.top_decl_loc decl)
+           | Some _ -> None
+           | None -> Hashtbl.replace seen name mf; None))
+        found mf.Ast.decls) None members
+  in
+  (* Sorted so the reported pair does not depend on traversal order. *)
+  let sorted = List.sort String.compare component in
+  List.fold_left (fun found start ->
+    match found with
+    | Some _ -> found
+    | None ->
+      let members = List.filter_map module_of
+        (List.sort String.compare (inlined_by start)) in
+      collision_among members) None sorted
 
 let cross_module_diags ?(skip_dep_body : string -> bool = fun _ -> false)
     (m : Ast.module_form) : diagnostic list =
@@ -2991,35 +3025,28 @@ let cross_module_diags ?(skip_dep_body : string -> bool = fun _ -> false)
       ) im.Ast.imports
     in
     dfs entry_canon m [];
-    (* Name collisions are checked per STRONGLY CONNECTED COMPONENT, not per cycle path.
-       Two members can collide without ever appearing together on a single back edge:
-       the corpus's own Sandbox/Sandbox2/Sandbox3 is exactly that shape — Sandbox imports
-       both, both import Sandbox, so all three are one SCC, yet the DFS paths are only
-       [Sandbox; Sandbox2] and [Sandbox; Sandbox3] and the colliding pair (Sandbox2 with
-       Sandbox3) is in neither.  Checking the component closes that hole. *)
+    (* Collisions are checked per COMPONENT, because the members that collapse together
+       need not sit next to each other on any single cycle path (see
+       {!cycle_inlined_name_collision}). *)
+    let cycle_graph = build_local_import_graph entry in
     List.iter (fun component ->
-      if List.length component > 1 then begin
-        let members = List.filter_map (fun canon ->
-          match parse_at ~spelling:canon ~canon with
-          | Some (Parser.Ok mf) -> Some mf
-          | _ -> None) component in
-        match cycle_name_collision members with
+      if List.length component > 1 then
+        match cycle_inlined_name_collision cycle_graph component
+                (fun canon -> match parse_at ~spelling:canon ~canon with
+                   | Some (Parser.Ok mf) -> Some mf
+                   | _ -> None) with
         | None -> ()
         | Some (name, first_module, second_module, loc) ->
           diags := mk_diag ~source:"validation" loc
             (Printf.sprintf
-               "import cycle detected: %s — both `%s` and `%s` declare `%s`, and the \
-                compiler collapses a cycle into ONE namespace (Racket inlines the \
-                members into one module, Go merges them into one package), so one \
-                declaration would silently shadow the other. Rename it in one module, \
-                or move the shared declaration into a separate module imported by both \
-                sides."
-               (String.concat " <-> "
-                  (List.sort String.compare
-                     (List.map (fun (mf : Ast.module_form) -> mf.Ast.module_name) members)))
+               "import cycle: `%s` and `%s` are both collapsed into one namespace here \
+                and both declare `%s`, so one declaration would REPLACE the other and \
+                the losing module's references would silently rebind. Rename it in one \
+                module, or move the shared declaration into a separate module imported \
+                by both sides."
                first_module second_module name)
-            :: !diags
-      end) (tarjan_sccs (build_local_import_graph entry));
+            :: !diags)
+      (tarjan_sccs cycle_graph);
     (* ── Entrypoint-closure name-wired resolution (issue #41 class) ─────────
        Cache / email / publish / subscribe / enqueue sites resolve their NAME
        through the process-wide domain registry at runtime when the declaring
@@ -3329,10 +3356,13 @@ let merge_cycle_members (members : Ast.module_form list) =
   | [single] -> Ok single
   | first :: _ as sorted ->
     let names = List.map (fun (m : Ast.module_form) -> m.module_name) sorted in
-    (* Backstop only: `cross_module_diags` reports this at CHECK time, with a better
-       message and for both backends, so a compile never reaches here with a collision.
-       It shares `cycle_decl_bound_name` so the two can never disagree about what counts
-       as a declared name. *)
+    (* GO-SPECIFIC, and the only guard: Racket INLINES an SCC's members with per-module
+       renaming, so two members declaring the same name compile correctly there — measured,
+       and pinned by tests/tesl-test.rkt (same-named `helper`, and a `Widget` record in both
+       members reached through qualified annotations).  Go merges the members into ONE
+       package, where the second declaration would take the first's place in the signature
+       table, so this backend refuses it.  A shared check-time error was tried and was
+       wrong: it rejected programs the Racket backend runs correctly. *)
     let declared_names = List.concat_map (fun (m : Ast.module_form) ->
       List.filter_map cycle_decl_bound_name m.decls) sorted in
     let rec first_duplicate = function

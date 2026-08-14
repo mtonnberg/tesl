@@ -1106,7 +1106,7 @@ let is_statement_starter_ident = function
 (* ── Single-line SQL clause placement (issue #77) ───────────────────────────
    `select` is not a keyword: a query parses as an ordinary application spine
    whose atoms (`from`, `where`, `order`, `asc`, `limit`, …) are reinterpreted
-   structurally downstream by {!Emit_racket.extract_select_query}.  Application
+   structurally downstream by {!Sql_query.extract_select_query}.  Application
    binds tighter than every binary operator, so the moment the `where`
    predicate contains an operator the spine SPLITS and the trailing clause
    keywords are swallowed by the LAST operand's own application chain instead

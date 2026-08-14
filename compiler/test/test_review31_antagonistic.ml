@@ -103,13 +103,20 @@ let proof_prelude =
 
 (* ── G31: selectMax / selectMin now fully supported in the type checker ───── *)
 (*                                                                              *)
-(* `selectMax p.field from Entity` is now recognized by both the emitter and  *)
-(* the type checker (FIXED). selectMax/selectMin return Int and compile.       *)
+(* `selectMax p.field from Entity` is recognized by both the emitter and the    *)
+(* type checker (FIXED).  It answers `Maybe <field type>` (2026-08-14): over no *)
+(* matching row there is no value of the column's type, where `selectSum` has   *)
+(* zero as its identity.  Both the Maybe shape and the rejection of the old     *)
+(* bare-`Int` return are pinned here.                                           *)
 let test_g31_selectmax_unknown_name () =
   let src = db_prelude ^
+    "fn maxPrice() -> Maybe Int requires [dbRead] =\n" ^
+    "  selectMax p.price from Product\n" in
+  should_pass src;
+  let bare = db_prelude ^
     "fn maxPrice() -> Int requires [dbRead] =\n" ^
     "  selectMax p.price from Product\n" in
-  should_pass src
+  should_fail "cannot unify Maybe Int with Int" bare
 
 (* ── G32: selectSum always returns Int even when field type is Float ─────── *)
 (*                                                                              *)

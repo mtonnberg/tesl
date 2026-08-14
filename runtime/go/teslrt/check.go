@@ -44,6 +44,29 @@ func MustCheck[T any](result Check[T]) T {
 	return result.value
 }
 
+// RequestRejection is a check rejection consumed inside a HANDLER body. It travels as a
+// panic because a handler's Go signature returns its value type, with nowhere to put a
+// failure — and the router turns it back into a response carrying the check's own status.
+//
+// That is the Racket behaviour, not an invention: `dsl/web.rkt` installs the
+// raise-on-escaping-failure wrapper for every function kind EXCEPT `handler`, so a
+// rejection reached in a handler body flows out as the response's status (422, 404, …)
+// rather than as a server error. Reporting 500 there would turn "you sent an invalid age"
+// into "this server is broken".
+type RequestRejection struct {
+	Status  int
+	Message string
+}
+
+// MustCheckRequest is `MustCheck` at the request boundary: same unwrapping, but a rejection
+// answers the client instead of crashing the request.
+func MustCheckRequest[T any](result Check[T]) T {
+	if !result.ok {
+		panic(RequestRejection{Status: result.status, Message: result.message})
+	}
+	return result.value
+}
+
 // ShapeMismatch is the status a codec alternative reports when the JSON simply is not
 // this shape — a missing or mistyped field — as opposed to a VALIDATION failure from a
 // `via` or cross-check, which carries the status the check itself chose.

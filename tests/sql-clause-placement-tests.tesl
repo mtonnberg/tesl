@@ -155,9 +155,14 @@ fn countRows(org: String) -> Int requires [dbRead] =
     selectCount t from Thing where t.orgId == org && t.archived == False
   }
 
+# selectMax answers a Maybe (no matching row has no maximum); the one-line spine this
+# test is about is unchanged by that.
 fn maxQty(org: String) -> Int requires [dbRead] =
   with database D {
-    selectMax t.qty from Thing where t.orgId == org && t.archived == False
+    let biggest = selectMax t.qty from Thing where t.orgId == org && t.archived == False
+    case biggest of
+      Nothing -> 0
+      Something qty -> qty
   }
 
 # A dynamic threshold in the PREDICATE (values there may be any expression —

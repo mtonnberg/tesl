@@ -2012,9 +2012,10 @@ let select_entity_type args =
     | _ -> None
   ) args
 
-(** Infer the return type of a scalar aggregate (selectSum / selectMax / selectMin)
-    by looking up the field type in the entity definition.
-    Falls back to [t_int] if the entity or field cannot be resolved. *)
+(** The COLUMN type of a scalar aggregate (selectSum / selectMax / selectMin), looked up
+    in the entity definition.  Falls back to [t_int] if the entity or field cannot be
+    resolved.  `selectSum` returns this type directly; `selectMax`/`selectMin` wrap it in
+    [t_maybe], since over no matching row they have no value to return. *)
 
 let select_aggregate_field_type ctx args =
   let field_opt = List.find_map (function
@@ -2280,9 +2281,7 @@ let rec classify_lowered_query ctx e =
     | EVar { name = "selectOne"; _ } -> Some (t_maybe (Option.value (select_entity_type args) ~default:(fresh ())))
     | EVar { name = "select"; _ } -> Some (t_list (Option.value (select_entity_type args) ~default:(fresh ())))
     | EVar { name = "selectCount"; _ } -> Some t_int
-    | EVar { name = "selectSum"; _ }
-    | EVar { name = "selectMax"; _ }
-    | EVar { name = "selectMin"; _ } ->
+    | EVar { name = "selectSum"; _ } ->
       (* Aggregate + where lowering: refine by the queried FIELD's declared type
          exactly like the plain (non-where) path — a `selectSum l.price … where …`
          over a Money column is Money, over a newtype column that newtype.
@@ -2290,6 +2289,14 @@ let rec classify_lowered_query ctx e =
          REJECTED ("cannot unify Int with Money") while the checker-demanded
          `-> Int` then trapped at runtime (the runtime value really is Money). *)
       Some (select_aggregate_field_type ctx args)
+    | EVar { name = "selectMax"; _ }
+    | EVar { name = "selectMin"; _ } ->
+      (* `Maybe V`, not `V`: over no matching row MAX/MIN have no value of the column's
+         type to return.  SUM does (zero is its identity), which is why only these two
+         are optional.  They previously typed as the column type while the runtime
+         answered `#f` / SQL NULL — a value of a type the program was promised it could
+         not receive, which then failed wherever it was used. *)
+      Some (t_maybe (select_aggregate_field_type ctx args))
     | EVar { name = ("selectCountBy" | "selectSumBy"); _ } ->
       (* grouped aggregates (GitHub #29): List (Tuple2 K V); K/V are refined by
          [grouped_query_type] at the infer sites (needs ctx + the FULL expr) *)
@@ -3332,10 +3339,12 @@ let rec infer_expr ctx (e : expr) : ty =
         t_list (Option.value (select_entity_type args) ~default:(fresh ()))
      | EVar { name = "selectCount"; _ } ->
         t_int
-     | EVar { name = "selectSum"; _ }
+     | EVar { name = "selectSum"; _ } ->
+        select_aggregate_field_type ctx args
+     (* MAX/MIN are optional; SUM is not (see the lowering path above). *)
      | EVar { name = "selectMax"; _ }
      | EVar { name = "selectMin"; _ } ->
-        select_aggregate_field_type ctx args
+        t_maybe (select_aggregate_field_type ctx args)
      | EVar { name = ("selectCountBy" | "selectSumBy"); _ } ->
         (match grouped_query_type app with
          | Some ty -> ty

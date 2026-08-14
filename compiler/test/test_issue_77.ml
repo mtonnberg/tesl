@@ -147,7 +147,7 @@ let lower label src =
     | Ast.EWithDatabase { body = q; _ } -> q
     | other -> other
   in
-  match Emit_racket.extract_select_query query with
+  match Sql_query.extract_select_query query with
   | None ->
     failf "%s: codegen has no lowering for this query — the #77 fall-through" label
   | Some (seed, clauses) ->

@@ -54,6 +54,24 @@ type Server struct {
 // The status choices mirror the Racket router: an unknown path is 404, and a known path
 // with the wrong method is 405 — reporting 404 for a method mismatch would tell a client
 // the resource does not exist when it does.
+// callHandler runs one handler and converts a check rejection that escaped its body into
+// the response that rejection describes. Any OTHER panic is left alone: a genuine bug must
+// not be reported to the client as a validation failure.
+func callHandler(handler HandlerFunc, scope *RequestScope, request *http.Request) (response Response) {
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			return
+		}
+		rejection, isRejection := recovered.(RequestRejection)
+		if !isRejection {
+			panic(recovered)
+		}
+		response = Fail(rejection.Status, rejection.Message)
+	}()
+	return handler(scope, request)
+}
+
 func (server Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	pathMatched := false
 	for _, route := range server.Routes {
@@ -70,7 +88,7 @@ func (server Server) ServeHTTP(writer http.ResponseWriter, request *http.Request
 			return
 		}
 		scope := NewRequestScope()
-		writeResponse(writer, scope, handler(scope, request))
+		writeResponse(writer, scope, callHandler(handler, scope, request))
 		return
 	}
 	if pathMatched {

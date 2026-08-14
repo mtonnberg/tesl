@@ -326,8 +326,8 @@ the ceremony.
 timestamp is expected. It auto-maps to `BIGINT` in PostgreSQL with no annotation, and `Date.now()` on
 the frontend reads it directly — no conversion layer, no timezone surprises.
 
-**Grouped aggregates and time bucketing.** `selectCount`/`selectSum`/`selectMax`/`selectMin` return
-one scalar; `selectCountBy`/`selectSumBy … groupBy <key>` return **one row per group** as a
+**Grouped aggregates and time bucketing.** `selectCount`/`selectSum` return one scalar and
+`selectMax`/`selectMin` return `Maybe` of the column type (no matching row has no maximum); `selectCountBy`/`selectSumBy … groupBy <key>` return **one row per group** as a
 `List (Tuple2 key aggregate)`, ordered by key — the server-side series a chart wants.
 `Time.truncHour/Day/Week/Month/Year zone ts` give the calendar bucket (ISO Monday weeks) both as
 the `groupBy` key and as a plain function for computing range bounds. `TimeZone` is a **fixed

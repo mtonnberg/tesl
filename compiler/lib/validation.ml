@@ -129,6 +129,11 @@ let check_module (m : module_form) : validation_error list =
      checkable `(Column == subject)` form, so the dataflow verifiers above can
      never be silently bypassed by a non-canonical spelling. *)
   @ (TDatabase @: check_provenance_spelling decls)
+  (* A SQL keyword left outside a recognised query shape (a typo'd `from`/`where`) used to
+     reach the RACKET emitter as a free variable and raise there — invisible to
+     `tesl --check` and to the editor, and a guard the Go backend would have had to
+     reimplement.  Checked here so both backends inherit it. *)
+  @ (TDatabase @: check_sql_patterns_recognised decls)
   @ (TStructural @: check_cookies_field_access decls)
   @ (TNaming @: check_adt_variant_names decls)
   (* 2026-07-03 hole #8: reject `fact FromDb`/`fact ForAll`/… re-declarations of

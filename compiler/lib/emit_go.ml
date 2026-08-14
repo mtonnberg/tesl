@@ -234,11 +234,27 @@ let primitive_type_of_type_expr = function
   | TFun { loc; _ } -> unsupported loc "Go backend does not support function values yet"
   | TTuple { loc; _ } -> unsupported loc "Go backend does not support tuple types yet"
 
+(* An `entity` is a record PLUS a store.  The row type is an ordinary struct — that is
+   what a query returns and what `insert` takes — and the store is one package-level
+   table variable, since an entity belongs to exactly one database.  Both live here so a
+   query can find the table from the entity name alone. *)
+type entity_info = {
+  ent_tesl_name : string;
+  ent_row : record_info;
+  (* The package-level `var XTable = teslrt.NewTable[X]()`, qualified by its owner when
+     referenced from another package. *)
+  ent_table_var : string;
+  ent_owner : string;
+  ent_primary_key : string;
+  ent_loc : Location.loc;
+}
+
 (** Named nominal types the emitter can resolve: scalar newtypes and records. *)
 type type_table = {
   newtypes : (string, newtype_info) Hashtbl.t;
   records : (string, record_info) Hashtbl.t;
   adts : (string, adt_info) Hashtbl.t;
+  entities : (string, entity_info) Hashtbl.t;
 }
 
 (* The table for the module being emitted.  A ref for the same reason `current_package`
@@ -253,6 +269,17 @@ let current_types : type_table option ref = ref None
    request verb (`get "/path"`) only means something inside such a block, and this is what
    tells the emitter which server it addresses. *)
 let current_api_server : string option ref = ref None
+
+(* Tesl type names that have their OWN codec in the module being emitted.  A value with a
+   codec encodes through it; anything else falls back to the generic wire shape below. *)
+let current_codec_types : string list ref = ref []
+
+(* True while a HANDLER's body is being emitted.  A check rejection consumed there must
+   ANSWER the client with its own status rather than trap: `dsl/web.rkt` installs the
+   raise-on-escaping-failure wrapper for every function kind except `handler`, so a
+   rejection reached in a handler body is the response on the Racket side too.  Set around
+   the body, since the consumption site is where the choice is made. *)
+let current_handler_body = ref false
 
 (* Set when an empty list literal fell back to its DEFAULT element type because nothing
    constrained it.  The tolerance paths (an `if` branch, a `case` arm, a sibling element)
@@ -365,17 +392,34 @@ let type_of_return_spec types = function
      there goes through `raw-value`, so the wrapper is an implementation detail of that
      backend rather than part of the value.
      The parser puts the FIRST `? P` in `entity_proof` whether or not it is a provenance
-     proof, so that field cannot tell the two apart here.  It does not need to: a real
-     FromDb provenance proof can only come from a DB read, and `entity`/`database`
-     declarations are refused before this point, so nothing reaching here carries one. *)
+     proof, so that field cannot tell the two apart here.  It does not need to: a `FromDb`
+     provenance proof erases by the same rule as every other proof — it records WHERE a
+     value came from for the checker, and the checker has already used it.  (This used to
+     be justified by "entities are refused before this point", which stopped being true
+     when the DB slice landed; the rule above is the real reason.) *)
   | RetNamedPack { ty; _ } -> type_of_type_expr types ty
-  | RetMaybeAttached { loc; _ }
-  | RetSetForAll { loc; _ }
-  | RetMaybeSetForAll { loc; _ }
-  | RetForAllDictValues { loc; _ }
-  | RetForAllDictKeys { loc; _ }
+  (* Every remaining proof-bearing return is the same erasure applied to a different
+     container: the proof is a TYPE-LEVEL contract with no runtime structure, so what comes
+     back is the Maybe, the Set or the Dict itself. *)
+  | RetMaybeAttached { binding; loc; _ } ->
+    (match Hashtbl.find_opt types.adts "Maybe" with
+     | Some info -> TAdt (info, [type_of_type_expr types binding.type_expr])
+     | None -> unsupported loc
+       "Go backend needs `Tesl.Maybe` imported for a `Maybe (… ::: …)` return")
+  | RetSetForAll { elem_ty; _ } -> TSet (type_of_type_expr types elem_ty)
+  | RetMaybeSetForAll { elem_ty; loc; _ } ->
+    (match Hashtbl.find_opt types.adts "Maybe" with
+     | Some info -> TAdt (info, [TSet (type_of_type_expr types elem_ty)])
+     | None -> unsupported loc
+       "Go backend needs `Tesl.Maybe` imported for a `Maybe (Set … ::: ForAll …)` return")
+  | RetForAllDictValues { key_ty; val_ty; _ }
+  | RetForAllDictKeys { key_ty; val_ty; _ } ->
+    TDict (type_of_type_expr types key_ty, type_of_type_expr types val_ty)
+  (* An EXISTENTIAL return is not erasure-only: `pack`/`unpack` are real structure, and
+     forwarding one is where proof soundness has bitten before (issue #73).  It stays
+     closed until that path is built deliberately. *)
   | RetExists { loc; _ } ->
-    unsupported loc "Go backend does not support proof-bearing return types yet"
+    unsupported loc "Go backend does not support an existential return type yet"
 
 let rec go_type = function
   | TInt -> "teslrt.Int"
@@ -792,6 +836,62 @@ let record_info_of_signature signatures name =
   | Some { result = TRecord info; _ } -> Some info
   | _ -> None
 
+(* ─── SQL ──────────────────────────────────────────────────────────────────────
+   A query is ordinary application syntax in the surface tree, so its structure is
+   recovered by {!Sql_query} — the same module the Racket backend and the checker use.
+   Nothing about the shape of a query is re-derived here; this only decides which Go
+   the recovered structure renders to. *)
+type sql_form =
+  | SqlSelect of Sql_query.sql_select_seed * Sql_query.sql_clause list
+  | SqlInsert of Sql_query.sql_insert
+  | SqlInsertMany of string * string            (* list binding, entity *)
+  | SqlUpdate of Sql_query.sql_update
+  | SqlDelete of Sql_query.sql_delete_seed * Sql_query.sql_clause list
+
+(* The three surface shapes a query arrives in: a plain application, an application
+   wrapped in the comparison that a `where` predicate parses as, and — for the
+   multi-line forms — an underscore-`let` chain.  Tried in the same order as the Racket
+   backend's guards, so the two agree on what a given tree means. *)
+let recognise_sql expr =
+  let first_of options = List.fold_left (fun found next ->
+    match found with Some _ -> found | None -> next ()) None options in
+  match expr with
+  | EApp _ | EBinop _ ->
+    first_of [
+      (fun () -> Option.map (fun (seed, clauses) -> SqlSelect (seed, clauses))
+        (Sql_query.extract_select_query expr));
+      (fun () -> Option.map (fun insert -> SqlInsert insert)
+        (Sql_query.parse_insert_expr expr));
+      (fun () -> Option.map (fun (list_var, entity) -> SqlInsertMany (list_var, entity))
+        (Sql_query.parse_insert_many_expr expr));
+      (fun () -> Option.map (fun (seed, clauses) -> SqlDelete (seed, clauses))
+        (Sql_query.extract_delete_query expr));
+    ]
+  | ELet _ ->
+    first_of [
+      (fun () -> Option.map (fun update -> SqlUpdate update) (Sql_query.extract_update expr));
+      (fun () -> Option.map (fun (seed, clauses) -> SqlDelete (seed, clauses))
+        (Sql_query.extract_delete expr));
+      (fun () -> Option.map (fun (seed, clauses) -> SqlSelect (seed, clauses))
+        (Sql_query.extract_multiline_select_query expr));
+    ]
+  | _ -> None
+
+(* A query names its entity, and the entity carries both its row type and its store.
+   `Tesl.Database`'s own names (`Database`, `Memory`) never reach here — a query's `from`
+   is always a declared entity — so failing to find one is a compile error, not a
+   fallback. *)
+let entity_of_query loc name =
+  match Option.bind !current_types (fun types -> Hashtbl.find_opt types.entities name) with
+  | Some info -> info
+  | None -> unsupported loc "Go backend cannot resolve entity `%s`" name
+
+let entity_column loc (info : entity_info) field =
+  match List.assoc_opt field info.ent_row.rec_fields with
+  | Some ty -> ty
+  | None -> unsupported loc "Go backend: entity `%s` has no column `%s`"
+    info.ent_tesl_name field
+
 (* The tag is EXPORTED: an ADT provided by the runtime (or, later, by another
    emitted module) is matched from a different package, where an unexported field
    would be invisible. *)
@@ -1031,6 +1131,67 @@ let bool_literal_value = function
   | EConstructor { name = "False"; args = []; _ } -> Some false
   | _ -> None
 
+(* `check f a b` — a CHECK APPLICATION.  Two things depend on telling one apart from an
+   ordinary call: its type (the check's value, not its `Check`), and — inside another
+   check — that a rejection must PROPAGATE rather than trap. *)
+let check_application signatures expr =
+  match expr with
+  | EApp _ ->
+    let rec flatten acc = function
+      | EApp { fn; arg; _ } -> flatten (arg :: acc) fn
+      | head -> head, acc
+    in
+    (match flatten [] expr with
+     | EVar { name = "check"; _ }, (callee :: args) ->
+       (match callee with
+        | EVar { name; _ } ->
+          (match Hashtbl.find_opt signatures name with
+           | Some ({ result = TCheck _; _ } as signature)
+             when List.length args = List.length signature.params -> Some (signature, args)
+           | _ -> None)
+        | _ -> None)
+     | _ -> None)
+  | _ -> None
+
+(* The type of a query.  A `select` yields rows, `selectOne` a `Maybe` row, and the
+   write forms yield either the row they wrote or nothing at all — which is Tesl's `Unit`
+   and Go's empty struct.  The aggregate and grouped forms are refused rather than
+   guessed: each needs its own comparison or arithmetic over a column type. *)
+let type_of_sql_form signatures loc form =
+  let maybe_of inner =
+    match adt_ctor_of_signature signatures "Nothing" with
+    | Some (info, _) -> TAdt (info, [inner])
+    | None -> unsupported loc
+      "Go backend `selectOne` yields a Maybe; import `Tesl.Maybe`"
+  in
+  match form with
+  | SqlSelect (seed, _) ->
+    let info = entity_of_query loc seed.entity in
+    let row = TRecord info.ent_row in
+    (match seed.kind with
+     | SelectMany -> TList row
+     | SelectOne -> maybe_of row
+     | SelectCount -> TInt
+     (* A scalar aggregate speaks in its COLUMN's type — a sum of Money is Money — which is
+        what the checker infers too (select_aggregate_field_type).  MAX/MIN are OPTIONAL:
+        over no matching row they have no value of that type, and SUM does (zero). *)
+     | SelectSum field -> entity_column loc info field
+     | SelectMax field | SelectMin field -> maybe_of (entity_column loc info field)
+     | SelectCountBy -> unsupported loc "Go backend does not support `selectCountBy` yet"
+     | SelectSumBy _ -> unsupported loc "Go backend does not support `selectSumBy` yet")
+  | SqlInsert insert -> TRecord (entity_of_query loc insert.entity).ent_row
+  (* `insertMany` is typed as the entity by the checker but RETURNS nothing on Racket
+     (`insert-many!` ends in `(void)`), so the only sound reading of its result here is
+     `Unit`: a program that bound and used it would be broken on the other backend. *)
+  | SqlInsertMany (_, entity) -> ignore (entity_of_query loc entity); TUnit
+  | SqlUpdate update ->
+    if update.returning_one then TRecord (entity_of_query loc update.entity).ent_row
+    else TUnit
+  | SqlDelete (seed, _) ->
+    if seed.with_result then unsupported loc
+      "Go backend does not support `deleteAndReturnResult` yet"
+    else begin ignore (entity_of_query loc seed.entity); TUnit end
+
 let rec type_of_expr signatures env expr =
   match expr with
   | ELit { lit = LInt _ | LBigInt _; _ } -> TInt
@@ -1070,6 +1231,13 @@ let rec type_of_expr signatures env expr =
         | [_] -> unsupported loc "Go backend newtype constructor `%s` argument type mismatch" name
         | _ -> unsupported loc "Go backend requires a fully-applied newtype constructor `%s`" name)
      | _ -> unsupported loc "Go backend does not support constructor `%s` yet" name)
+  (* A query's type comes from its ENTITY and its form, not from a signature: `select`
+     and friends are surface syntax rather than functions. *)
+  | (EApp _ | EBinop _ | ELet _) as sql when recognise_sql sql <> None ->
+    let loc = Checker.expr_loc sql in
+    (match recognise_sql sql with
+     | Some form -> type_of_sql_form signatures loc form
+     | None -> assert false)
   | EApp { loc; _ } as app ->
     let head, args = flatten_app [] app in
     let head = normalize_call_head head in
@@ -1406,10 +1574,14 @@ let rec type_of_expr signatures env expr =
     if type_of_expr signatures env message <> TString then
       unsupported loc "Go backend check failure message must be String";
     TFailure
+  (* `with database D { … }` names the store the body's queries run against.  With
+     `backend: Memory` that store IS the entity's table variable, so the block adds
+     nothing at run time and types as its body. *)
+  | EWithDatabase { body; _ } -> type_of_expr signatures env body
   | ETelemetry { loc; _ } | EEnqueue { loc; _ } | EPublish { loc; _ }
   | EStartWorkers { loc; _ } | ECacheGet { loc; _ } | ECacheSet { loc; _ }
   | ECacheDelete { loc; _ } | ECacheInvalidate { loc; _ } | ESendEmail { loc; _ }
-  | EStartEmailWorker { loc; _ } | EWithDatabase { loc; _ }
+  | EStartEmailWorker { loc; _ }
   | EWithCapabilities { loc; _ } | EWithTransaction { loc; _ } | EServe { loc; _ } ->
     unsupported loc "Go backend does not support effects yet"
   | ELambda { loc; _ } -> unsupported loc "Go backend does not support lambdas yet"
@@ -1787,6 +1959,14 @@ and type_of_dict_leaf signatures env loc leaf args =
 
 and type_of_arg signatures env want arg =
   match arg with
+  (* A check may DELEGATE to another check in tail position: `check parseAge raw = … check
+     checkAge parsed`.  The delegate's own `Check` IS this check's result — that is what
+     Racket's `let/check`-based lowering does when the tail is the inner call — so the
+     expectation is satisfied by the check's VALUE type. *)
+  | _ when (match check_application signatures arg, want with
+            | Some ({ result = TCheck inner; _ }, _), TCheck expected_inner ->
+              inner = expected_inner
+            | _ -> false) -> want
   (* `f <| value ::: pf` attaches a detached proof at the call site.  It parses as the same
      node as a check's `ok value ::: P`, and the two are told apart by what is EXPECTED: a
      check's tail wants a `Check`, an ordinary parameter wants the value.  The proof erases,
@@ -2026,6 +2206,10 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
           Printf.sprintf "%s{Value: %s}" (go_type result) (emit arg)
         | _ -> unsupported loc "Go backend requires a fully-applied newtype constructor `%s`" name)
      | _ -> unsupported loc "Go backend cannot emit constructor `%s`" name)
+  | (EApp _ | EBinop _ | ELet _) as sql when recognise_sql sql <> None ->
+    (match recognise_sql sql with
+     | Some form -> emit_sql_form ~indent signatures env (Checker.expr_loc sql) form
+     | None -> assert false)
   | EApp { loc; _ } as app ->
     let head, args = flatten_app [] app in
     let head = normalize_call_head head in
@@ -2067,7 +2251,8 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
              | Some signature -> signature
              | None -> unsupported loc "Go backend cannot resolve check `%s`" name
            in
-           Printf.sprintf "teslrt.MustCheck(%s(%s))"
+           Printf.sprintf "teslrt.%s(%s(%s))"
+             (if !current_handler_body then "MustCheckRequest" else "MustCheck")
              (qualified signature.sig_owner signature.go_name)
               (String.concat ", " (List.map emit call_args))
          | _ -> unsupported loc "Go backend requires a named check function")
@@ -2232,11 +2417,27 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
      | BConcat -> Printf.sprintf "(%s + %s)" emitted_left emitted_right
      | BAnd -> Printf.sprintf "(%s && %s)" emitted_left emitted_right
      | BOr -> Printf.sprintf "(%s || %s)" emitted_left emitted_right
-     | BEq -> equal_expr ty emitted_left emitted_right
-     | BNeq -> unequal_expr ty emitted_left emitted_right
-     | BLt | BLe | BGt | BGe ->
-       let op = match op with BLt -> "<" | BLe -> "<=" | BGt -> ">" | BGe -> ">=" | _ -> assert false in
-       ordered_expr ty op emitted_left emitted_right)
+     | BEq | BNeq | BLt | BLe | BGt | BGe ->
+       let compare left right = match op with
+         | BEq -> equal_expr ty left right
+         | BNeq -> unequal_expr ty left right
+         | _ ->
+           let symbol = match op with
+             | BLt -> "<" | BLe -> "<=" | BGt -> ">" | _ -> ">=" in
+           ordered_expr ty symbol left right
+       in
+       (* Two operands that EMIT THE SAME TEXT are a staticcheck finding (SA4000,
+          "identical expressions on both sides"), and a lint finding on emitted code is an
+          emitter bug by contract.  It is reachable from ordinary Tesl: comparing two calls
+          of one effectful function — `generateId () != generateId ()` — is textually
+          identical and semantically nothing of the kind.  Each side is bound first, which
+          also fixes the evaluation ORDER at exactly what the source says. *)
+       if emitted_left = emitted_right && String.contains emitted_left '(' then
+         Printf.sprintf
+           "(func() bool {\n%s\tteslLeft := %s\n%s\tteslRight := %s\n%s\treturn %s\n%s}())"
+           indent emitted_left indent emitted_right indent
+           (compare "teslLeft" "teslRight") indent
+       else compare emitted_left emitted_right)
   (* Negating a LITERAL folds into the literal rather than emitting `-float64(0)`, which
      in Go is POSITIVE zero — the negation is applied to the already-typed value, so it
      cannot produce a negative zero (staticcheck SA4026 says exactly this).  Racket's
@@ -2318,10 +2519,11 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
        Printf.sprintf "teslrt.Reject[%s](%d, %s)" (go_type result) status
           (emit message)
      | _ -> unsupported loc "Go backend can emit fail only in a check tail")
+  | EWithDatabase { body; _ } -> emit_expr ?expected ~indent signatures env body
   | ETelemetry { loc; _ } | EEnqueue { loc; _ } | EPublish { loc; _ }
   | EStartWorkers { loc; _ } | ECacheGet { loc; _ } | ECacheSet { loc; _ }
   | ECacheDelete { loc; _ } | ECacheInvalidate { loc; _ } | ESendEmail { loc; _ }
-  | EStartEmailWorker { loc; _ } | EWithDatabase { loc; _ }
+  | EStartEmailWorker { loc; _ }
   | EWithCapabilities { loc; _ } | EWithTransaction { loc; _ } | EServe { loc; _ }
   | ELambda { loc; _ } ->
     unsupported loc "Go backend cannot emit this expression yet"
@@ -2947,6 +3149,277 @@ and emit_record_update ?(indent="") signatures env loc fields =
     unsupported loc "Go backend record update requires a bound record value";
   literal indent (selector_operand (emit_expr ~indent signatures env base))
 
+(* ─── Queries ─────────────────────────────────────────────────────────────────
+   The `backend: Memory` store has no query planner: a clause is the same comparison
+   the Racket runtime performs row by row, so a query becomes a table call plus a Go
+   PREDICATE over the row.  The binder is the one the query itself named, which is what
+   lets a `set` value or a column-to-column comparison read as written. *)
+and sql_table_ref (info : entity_info) = qualified info.ent_owner info.ent_table_var
+
+and sql_row_type (info : entity_info) = go_type (TRecord info.ent_row)
+
+and sql_column_value ~indent signatures row_env loc (info : entity_info) field expr =
+  let want = entity_column loc info field in
+  let got = type_of_expr signatures row_env expr in
+  if got <> want then unsupported (Checker.expr_loc expr)
+    "Go backend: the value written to `%s.%s` has a different type than the column"
+    info.ent_tesl_name field;
+  emit_expr ~expected:want ~indent signatures row_env expr
+
+and emit_sql_predicate ~indent signatures env loc (info : entity_info) binder clauses =
+  let row_env = (binder, TRecord info.ent_row) :: env in
+  let column_ref field =
+    Printf.sprintf "%s.%s" (local_ident binder) (record_field_go_name field) in
+  let compare_op field op expr =
+    let ty = entity_column loc info field in
+    let left = column_ref field in
+    let right = sql_column_value ~indent signatures row_env loc info field expr in
+    match op with
+    | BEq -> equal_expr ty left right
+    | BNeq -> unequal_expr ty left right
+    | BLt | BLe | BGt | BGe ->
+      if not (supports_ordering ty) then unsupported loc
+        "Go backend cannot order column `%s.%s`" info.ent_tesl_name field;
+      let symbol = match op with
+        | BLt -> "<" | BLe -> "<=" | BGt -> ">" | _ -> ">=" in
+      ordered_expr ty symbol left right
+    | _ -> unsupported loc
+      "Go backend does not support this operator in a `where` clause yet"
+  in
+  (* `like` / `ilike` are String-only, as they are on the Racket side (which rejects a
+     Money column outright and answers false for any non-string value). *)
+  let like field pattern fold_case =
+    let ty = entity_column loc info field in
+    let text = match ty with
+      | TString -> column_ref field
+      | TNewtype newtype when newtype.base = TString ->
+        Printf.sprintf "%s.Value" (column_ref field)
+      | _ -> unsupported loc
+        "Go backend supports `like`/`ilike` on a String column only, and `%s.%s` is not one"
+        info.ent_tesl_name field
+    in
+    let pattern_ty = type_of_expr signatures row_env pattern in
+    if pattern_ty <> TString then unsupported (Checker.expr_loc pattern)
+      "Go backend `like`/`ilike` needs a String pattern";
+    Printf.sprintf "teslrt.SqlLike(%s, %s, %b)" text
+      (emit_expr ~expected:TString ~indent signatures row_env pattern) fold_case
+  in
+  let rec clause (c : Sql_query.sql_clause) =
+    match c with
+    | SqlPred { field; op; value } -> compare_op field op value
+    | SqlOr parts ->
+      (* An empty disjunction matches nothing, which is what the SQL `false` it would
+         render to does.  It is not reachable from source; the case exists so the
+         renderer is total. *)
+      (match List.map clause parts with
+       | [] -> "false"
+       | rendered -> "(" ^ String.concat " || " rendered ^ ")")
+    | SqlIn { field; values } ->
+      (match List.map (fun value -> compare_op field BEq value) values with
+       | [] -> "false"
+       | rendered -> "(" ^ String.concat " || " rendered ^ ")")
+    | SqlNotIn { field; values } ->
+      (match List.map (fun value -> compare_op field BNeq value) values with
+       | [] -> "true"
+       | rendered -> "(" ^ String.concat " && " rendered ^ ")")
+    | SqlIsNull { field } -> unsupported loc
+      "Go backend does not support `where isNull %s.%s` yet" binder field
+    | SqlIsNotNull { field } -> unsupported loc
+      "Go backend does not support `where isNotNull %s.%s` yet" binder field
+    | SqlLike { field; pattern } -> like field pattern false
+    | SqlILike { field; pattern } -> like field pattern true
+  in
+  match clauses with
+  (* No clause means every row, and naming the row would leave an unused parameter. *)
+  | [] -> Printf.sprintf "func(_ %s) bool { return true }" (sql_row_type info)
+  | _ ->
+    Printf.sprintf "func(%s %s) bool { return %s }" (local_ident binder)
+      (sql_row_type info) (String.concat " && " (List.map clause clauses))
+
+(* `where_field` is the field the RECOVERY saw first; every supported form also produces
+   a clause for it.  One left over means the predicate was written in a shape this
+   backend does not render, and emitting the query without it would silently read or
+   write the wrong rows. *)
+and sql_check_where_field loc where_field clauses =
+  let rec mentions field (c : Sql_query.sql_clause) =
+    match c with
+    | SqlPred { field = other; _ } | SqlIsNull { field = other }
+    | SqlIsNotNull { field = other } | SqlIn { field = other; _ }
+    | SqlNotIn { field = other; _ } | SqlLike { field = other; _ }
+    | SqlILike { field = other; _ } -> other = field
+    | SqlOr parts -> List.exists (mentions field) parts
+  in
+  match where_field with
+  | Some field when not (List.exists (mentions field) clauses) ->
+    unsupported loc
+      "Go backend does not support this `where` clause shape (on `%s`) yet" field
+  | _ -> ()
+
+(* The duplicate-primary-key test an insert carries: the same comparison the Racket
+   memory backend performs by keying its store on the primary key. *)
+and sql_key_conflict loc (info : entity_info) =
+  let key = info.ent_primary_key in
+  let key_type = entity_column loc info key in
+  let field name = Printf.sprintf "%s.%s" name (record_field_go_name key) in
+  Printf.sprintf "func(teslRow, teslNew %s) bool { return %s }" (sql_row_type info)
+    (equal_expr key_type (field "teslRow") (field "teslNew"))
+
+and emit_sql_form ?(indent="") signatures env loc form =
+  match form with
+  | SqlSelect (seed, clauses) ->
+    let info = entity_of_query loc seed.entity in
+    let all_clauses = seed.static_clauses @ clauses in
+    sql_check_where_field loc seed.where_field all_clauses;
+    if seed.joins <> [] then unsupported loc
+      "Go backend does not support `innerJoin` yet";
+    if seed.group_by <> [] then unsupported loc
+      "Go backend does not support `groupBy` yet";
+    let predicate =
+      emit_sql_predicate ~indent signatures env loc info seed.binder all_clauses in
+    (* `order p.field asc|desc` becomes the STRICTLY-BEFORE comparison on that column;
+       `desc` is the same comparison with its operands swapped, which keeps the sort
+       stable in the direction Racket's ordering does. *)
+    let ordering () = match seed.order with
+      | None -> None
+      | Some (field, direction) ->
+        let ty = entity_column loc info field in
+        if not (supports_ordering ty) then unsupported loc
+          "Go backend cannot order by column `%s.%s`" info.ent_tesl_name field;
+        let column name = Printf.sprintf "%s.%s" name (record_field_go_name field) in
+        let left, right = match direction with
+          | "desc" -> column "teslRight", column "teslLeft"
+          | _ -> column "teslLeft", column "teslRight"
+        in
+        Some (Printf.sprintf "func(teslLeft, teslRight %s) bool { return %s }"
+                (sql_row_type info) (ordered_expr ty "<" left right))
+    in
+    let range () =
+      (* A missing `limit` is "every row", spelled as a negative count. *)
+      Printf.sprintf "%d, %d" (Option.value seed.offset ~default:0)
+        (Option.value seed.limit ~default:(-1))
+    in
+    let table = sql_table_ref info in
+    (match seed.kind with
+     | SelectMany ->
+       (match ordering (), seed.limit, seed.offset with
+        | None, None, None -> Printf.sprintf "teslrt.TableSelect(%s, %s)" table predicate
+        | None, _, _ ->
+          Printf.sprintf "teslrt.TableSelectRange(%s, %s, %s)" table predicate (range ())
+        | Some less, _, _ ->
+          Printf.sprintf "teslrt.TableSelectSorted(%s, %s, %s, %s)"
+            table predicate less (range ()))
+     | SelectOne ->
+       (* `limit`/`offset` on a `selectOne` would change WHICH row it is, so they are
+          refused rather than dropped; `order` decides it and is supported. *)
+       if seed.limit <> None || seed.offset <> None then unsupported loc
+         "Go backend does not support `limit`/`offset` on `selectOne` yet";
+       (match ordering () with
+        | None -> Printf.sprintf "teslrt.TableSelectOne(%s, %s)" table predicate
+        | Some less ->
+          Printf.sprintf "teslrt.TableSelectOneSorted(%s, %s, %s)" table predicate less)
+     | SelectCount ->
+       if seed.order <> None || seed.limit <> None || seed.offset <> None then
+         unsupported loc "Go backend does not support `order`/`limit`/`offset` on \
+                          `selectCount` yet";
+       Printf.sprintf "teslrt.TableCount(%s, %s)" table predicate
+     | SelectSum field ->
+       if seed.order <> None || seed.limit <> None || seed.offset <> None then
+         unsupported loc "Go backend does not support `order`/`limit`/`offset` on \
+                          `selectSum` yet";
+       let ty = entity_column loc info field in
+       let column = Printf.sprintf "teslRow.%s" (record_field_go_name field) in
+       let project = Printf.sprintf "func(teslRow %s) %s { return %s }"
+         (sql_row_type info) (go_type ty) column in
+       (* The SUM is over the column's OWN type, so a newtype column sums to that
+          newtype and a Float column to a Float — no unwrapping at the boundary. *)
+       let combine, zero = match ty with
+         | TInt -> "teslrt.Add", "teslrt.FromInt64(0)"
+         | TFloat ->
+           Printf.sprintf "func(teslLeft, teslRight float64) float64 { return teslLeft + teslRight }",
+           "float64(0)"
+         | TNewtype newtype when newtype.base = TInt ->
+           Printf.sprintf
+             "func(teslLeft, teslRight %s) %s { return %s{Value: teslrt.Add(teslLeft.Value, teslRight.Value)} }"
+             (go_type ty) (go_type ty) (go_type ty),
+           Printf.sprintf "%s{Value: teslrt.FromInt64(0)}" (go_type ty)
+         | TNewtype newtype when newtype.base = TFloat ->
+           Printf.sprintf
+             "func(teslLeft, teslRight %s) %s { return %s{Value: teslLeft.Value + teslRight.Value} }"
+             (go_type ty) (go_type ty) (go_type ty),
+           Printf.sprintf "%s{Value: float64(0)}" (go_type ty)
+         | _ -> unsupported loc
+           "Go backend cannot sum column `%s.%s`" info.ent_tesl_name field
+       in
+       Printf.sprintf "teslrt.TableFold(%s, %s, %s, %s, %s)"
+         table predicate project combine zero
+     (* `selectMax`/`selectMin` answer a `Maybe`: no matching row is `Nothing`, not a trap
+        and not a fabricated zero. *)
+     | SelectMax field | SelectMin field ->
+       if seed.order <> None || seed.limit <> None || seed.offset <> None then
+         unsupported loc "Go backend does not support `order`/`limit`/`offset` on \
+                          `selectMax`/`selectMin` yet";
+       let biggest = match seed.kind with SelectMax _ -> true | _ -> false in
+       let ty = entity_column loc info field in
+       if not (supports_ordering ty) then unsupported loc
+         "Go backend cannot compare column `%s.%s`" info.ent_tesl_name field;
+       let project = Printf.sprintf "func(teslRow %s) %s { return teslRow.%s }"
+         (sql_row_type info) (go_type ty) (record_field_go_name field) in
+       let better =
+         Printf.sprintf "func(teslLeft, teslRight %s) bool { return %s }" (go_type ty)
+           (ordered_expr ty (if biggest then ">" else "<") "teslLeft" "teslRight") in
+       Printf.sprintf "teslrt.TableExtreme(%s, %s, %s, %s)"
+         table predicate project better
+     | SelectCountBy -> unsupported loc "Go backend does not support `selectCountBy` yet"
+     | SelectSumBy _ -> unsupported loc "Go backend does not support `selectSumBy` yet")
+  | SqlInsert insert ->
+    let info = entity_of_query loc insert.entity in
+    check_record_literal signatures env loc info.ent_row insert.fields;
+    Printf.sprintf "teslrt.TableInsert(%s, %s, %s, %s)"
+      (sql_table_ref info) (go_quote info.ent_tesl_name)
+      (emit_record_literal ~indent signatures env info.ent_row insert.fields)
+      (sql_key_conflict loc info)
+  | SqlInsertMany (list_var, entity) ->
+    let info = entity_of_query loc entity in
+    let rows = match List.assoc_opt list_var env with
+      | Some (TList (TRecord row)) when row == info.ent_row -> local_ident list_var
+      | Some _ -> unsupported loc
+        "Go backend: `insertMany %s in %s` needs a list of `%s` rows"
+        list_var entity entity
+      | None -> unsupported loc "Go backend cannot resolve value `%s`" list_var
+    in
+    Printf.sprintf "teslrt.TableInsertMany(%s, %s, %s, %s)"
+      (sql_table_ref info) (go_quote info.ent_tesl_name) rows (sql_key_conflict loc info)
+  | SqlUpdate update ->
+    let info = entity_of_query loc update.entity in
+    sql_check_where_field loc None update.clauses;
+    let row_env = (update.binder, TRecord info.ent_row) :: env in
+    let predicate =
+      emit_sql_predicate ~indent signatures env loc info update.binder update.clauses in
+    let inner = indent ^ "\t" in
+    let assignments = List.map (fun (field, value) ->
+      Printf.sprintf "%steslNext.%s = %s\n" inner (record_field_go_name field)
+        (sql_column_value ~indent:inner signatures row_env loc info field value))
+      update.updates in
+    (* Every `set` value reads the row as it was: SQL evaluates the whole SET list
+       against the old row, so assigning into a COPY is the parity-preserving shape —
+       assigning in place would let one `set` feed the next. *)
+    let apply =
+      Printf.sprintf "func(%s %s) %s {\n%steslNext := %s\n%s%sreturn teslNext\n%s}"
+        (local_ident update.binder) (sql_row_type info) (sql_row_type info)
+        inner (local_ident update.binder)
+        (String.concat "" assignments) inner indent
+    in
+    Printf.sprintf "teslrt.%s(%s, %s, %s)"
+      (if update.returning_one then "TableUpdateReturnOne" else "TableUpdate")
+      (sql_table_ref info) predicate apply
+  | SqlDelete (seed, clauses) ->
+    let info = entity_of_query loc seed.entity in
+    sql_check_where_field loc seed.where_field clauses;
+    if seed.with_result then unsupported loc
+      "Go backend does not support `deleteAndReturnResult` yet";
+    Printf.sprintf "teslrt.TableDelete(%s, %s)" (sql_table_ref info)
+      (emit_sql_predicate ~indent signatures env loc info seed.binder clauses)
+
 and emit_interp ?(indent="") signatures env segments =
   let parts = List.map (function
     | ILiteral value -> go_quote value
@@ -2992,9 +3465,15 @@ and emit_let_expr ?expected ?(indent="") signatures env expr =
     | ELet { name; value; body; _ } ->
       let inferred_value_ty = type_of_expr signatures env value in
       let value_ty = if inferred_value_ty = TFailure then result else inferred_value_ty in
-      let go_name = local_ident name in
-      Printf.bprintf buffer "%s\t%s := %s\n%s\t_ = %s\n" indent go_name
-        (emit_expr ~expected:value_ty ~indent:(indent ^ "\t") signatures env value) indent go_name;
+      let emitted =
+        emit_expr ~expected:value_ty ~indent:(indent ^ "\t") signatures env value in
+      (* `let _ = expr` is written for its EFFECT and discards the value; `_ := expr` is
+         not legal Go, so it becomes a plain discard (as in the statement emitter). *)
+      if name = "_" then Printf.bprintf buffer "%s\t_ = %s\n" indent emitted
+      else begin
+        let go_name = local_ident name in
+        Printf.bprintf buffer "%s\t%s := %s\n%s\t_ = %s\n" indent go_name emitted indent go_name
+      end;
       emit_bindings ((name, value_ty) :: env) body
     | body ->
       Printf.bprintf buffer "%s\treturn %s\n" indent
@@ -3063,6 +3542,54 @@ let emit_tail ?self buffer signatures env expected indent expr =
     | _ -> go_shape env indent expr
   and go_shape env indent expr =
     match expr with
+    (* `with database D { … }` adds nothing at run time on the Memory backend, so its body
+       is emitted in TAIL position — the block keeps statement form instead of collapsing
+       into an immediately-called closure. *)
+    | EWithDatabase { body; _ } -> go env indent body
+    (* `let v = check g x` inside another CHECK: a rejection PROPAGATES — it becomes this
+       check's own result, carrying the inner status and message.  Racket's `let/check`
+       does exactly this (`(if (check-fail? result) result …)`), and the emitter used to
+       reach for `MustCheck` here, which PANICS: a handler that should have answered 422
+       crashed the request instead.  In a plain `fn` the trap is correct and stays — Racket
+       raises there too, since `define/pow` installs a raising handler rather than letting a
+       failure leak out as a value. *)
+    | ELet { name; value; body; loc; _ }
+      when (match check_application signatures value, expected with
+            | Some _, TCheck _ -> true
+            | _ -> false) ->
+      let signature, args = match check_application signatures value with
+        | Some pair -> pair
+        | None -> assert false
+      in
+      let inner = match signature.result with
+        | TCheck inner -> inner
+        | _ -> assert false
+      in
+      (* Runs the ordinary check-call validation (arity, argument types) — the same one the
+         non-propagating path gets — so this branch cannot accept a call the other rejects. *)
+      ignore (type_of_expr signatures env value);
+      Printf.bprintf buffer "%s{\n" indent;
+      Buffer.add_string buffer (line_directive loc);
+      let temporary = Printf.sprintf "teslDelegated%d" (String.length indent) in
+      Printf.bprintf buffer "%s\t%s := %s(%s)\n" indent temporary
+        (qualified signature.sig_owner signature.go_name)
+        (String.concat ", " (List.map2 (fun arg want ->
+           emit_expr ~expected:want ~indent:(indent ^ "\t") signatures env arg)
+           args signature.params));
+      Printf.bprintf buffer "%s\tif !%s.OK() {\n%s\t\treturn teslrt.Reject[%s](%s.Status(), %s.Message())\n%s\t}\n"
+        indent temporary indent (go_type (match expected with TCheck ty -> ty | ty -> ty))
+        temporary temporary indent;
+      (* Past the propagation guard the check cannot be a rejection, so unwrapping is
+         total; `MustCheck` states that rather than ignoring a second return value. *)
+      if name = "_" then
+        Printf.bprintf buffer "%s\t_ = teslrt.MustCheck(%s)\n" indent temporary
+      else begin
+        Printf.bprintf buffer "%s\t%s := teslrt.MustCheck(%s)\n" indent
+          (local_ident name) temporary;
+        Printf.bprintf buffer "%s\t_ = %s\n" indent (local_ident name)
+      end;
+      go (if name = "_" then env else (name, inner) :: env) (indent ^ "\t") body;
+      Printf.bprintf buffer "%s}\n" indent
     | ELet { name; value; body; loc; _ } ->
       let inferred = type_of_expr signatures env value in
       let ty = if inferred = TFailure then expected else inferred in
@@ -3095,10 +3622,29 @@ let emit_tail ?self buffer signatures env expected indent expr =
       go env (indent ^ "\t") else_;
       Printf.bprintf buffer "%s}\n" indent
     | ECase { scrut; arms; loc } ->
-      ignore (type_of_expr signatures env expr);
+      (* Checked against the EXPECTED type, arm by arm, for the same reason the plain
+         tail below is: an arm is exactly where an under-constrained constructor sits.
+         `Err "no"` cannot infer the `ok` half of `Result Int String` from its own
+         argument — only the return type says what it is — and typing the `case` without
+         the expectation rejected that shape outright. *)
+      ignore (type_of_arg signatures env expected expr);
       Buffer.add_string buffer (line_directive loc);
       emit_case_statements ~indent signatures env buffer
         (fun arm_env body_indent body -> go arm_env body_indent body) scrut arms
+    (* A check whose TAIL is another check hands that check's result straight back: the
+       delegate's status and message are this check's, and no unwrapping happens at all. *)
+    | _ when (match check_application signatures expr, expected with
+              | Some ({ result = TCheck inner; _ }, _), TCheck outer -> inner = outer
+              | _ -> false) ->
+      let signature, args = match check_application signatures expr with
+        | Some pair -> pair
+        | None -> assert false
+      in
+      Buffer.add_string buffer (line_directive (Checker.expr_loc expr));
+      Printf.bprintf buffer "%sreturn %s(%s)\n" indent
+        (qualified signature.sig_owner signature.go_name)
+        (String.concat ", " (List.map2 (fun arg want ->
+           emit_expr ~expected:want ~indent signatures env arg) args signature.params))
     | _ ->
       (* The tail is checked against the EXPECTED type so a bare nullary constructor
          of a generic ADT (`Nothing`) is instantiated by the return type. *)
@@ -3230,6 +3776,69 @@ let primitive_codec = function
   | "floatCodec" -> Some `Float
   | _ -> None
 
+(* The wire shape of a response value, mirroring `runtime-value->jsexpr` in dsl/types.rkt:
+   a type with its own codec encodes through it; a record without one becomes an object of
+   its fields; an ADT without one becomes a TAGGED object — `{"tag":"Nothing"}`, or
+   `{"tag":"Something","fields":{…}}` when the variant carries payload.  That is why a
+   handler returning `Maybe Task` works without a codec for `Maybe`: the tagged shape is
+   the fallback, not an error.  A newtype unwraps, matching Racket.
+
+   Each encoder is hoisted into a named function, so the call site stays a plain call and
+   the same type is encoded one way everywhere. *)
+let rec value_encoder ty =
+  let encoded_field operand field_ty =
+    Printf.sprintf "%s(%s)" (value_encoder field_ty) operand in
+  match ty with
+  | TInt | TString | TBool | TFloat | TUnit ->
+    remember_helper ~prefix:"teslEncode"
+      ~signature:(Printf.sprintf "(teslValue %s) any" (go_type ty))
+      ~body:"teslValue"
+  | TNewtype info ->
+    remember_helper ~prefix:"teslEncode"
+      ~signature:(Printf.sprintf "(teslValue %s) any" (go_type ty))
+      ~body:(encoded_field "teslValue.Value" info.base)
+  | TRecord info when List.mem info.rec_tesl_name !current_codec_types ->
+    codec_encode_name info.rec_tesl_name
+  | TAdt (info, _) when List.mem info.adt_tesl_name !current_codec_types ->
+    codec_encode_name info.adt_tesl_name
+  | TRecord info ->
+    let fields = List.map (fun (name, field_ty) ->
+      Printf.sprintf "\t\t%S: %s," name
+        (encoded_field ("teslValue." ^ record_field_go_name name) field_ty))
+      info.rec_fields in
+    remember_helper ~prefix:"teslEncode"
+      ~signature:(Printf.sprintf "(teslValue %s) any" (go_type ty))
+      ~body:(Printf.sprintf "map[string]any{\n%s\n\t}" (String.concat "\n" fields))
+  | TAdt (info, args) ->
+    let arms = List.map (fun variant ->
+      let fields = variant_field_types info args variant in
+      let payload = match fields with
+        | [] -> Printf.sprintf "map[string]any{\"tag\": %S}" variant.var_ctor
+        | _ ->
+          let entries = List.map (fun (name, field_ty) ->
+            Printf.sprintf "\t\t\t\t%S: %s," name
+              (encoded_field ("teslValue." ^ variant_field_go_name variant name) field_ty))
+            fields in
+          Printf.sprintf
+            "map[string]any{\"tag\": %S, \"fields\": map[string]any{\n%s\n\t\t\t}}"
+            variant.var_ctor (String.concat "\n" entries)
+      in
+      Printf.sprintf "\t\tcase %s:\n\t\t\treturn %s"
+        (qualified info.adt_owner variant.var_tag) payload) info.adt_variants in
+    remember_helper ~prefix:"teslEncode"
+      ~signature:(Printf.sprintf "(teslValue %s) any" (go_type ty))
+      ~body:(Printf.sprintf
+        "func() any {\n\t\tswitch teslValue.%s {\n%s\n\t\t}\n\t\tpanic(\"unreachable: checker guarantees case exhaustiveness\")\n\t}()"
+        adt_tag_field (String.concat "\n" arms))
+  | TList element ->
+    remember_helper ~prefix:"teslEncode"
+      ~signature:(Printf.sprintf "(teslValue %s) any" (go_type ty))
+      ~body:(Printf.sprintf
+        "func() any {\n\t\tteslOut := make([]any, len(teslValue))\n\t\tfor teslAt, teslItem := range teslValue {\n\t\t\tteslOut[teslAt] = %s(teslItem)\n\t\t}\n\t\treturn teslOut\n\t}()"
+        (value_encoder element))
+  | TDict _ | TSet _ | TParam _ | TCheck _ | TFailure ->
+    invalid_arg "Go response encoding for this type is rejected before emission"
+
 (* ── HTTP: `api` routes and the `server` that binds them ──────────────────────
    An `api` declares endpoints; a `server` binds handler functions to them POSITIONALLY in
    declaration order (the endpoint's own `name` is a parser-assigned placeholder, and the
@@ -3284,6 +3893,18 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
   |> List.iter (fun info ->
     if not info.adt_builtin && declared_here info.adt_owner then
       Buffer.add_string body (adt_source info));
+  (* The store for a `backend: Memory` entity.  One variable per entity, initialised at
+     package level: an entity belongs to exactly one database, and the table itself is
+     what carries the lock, so nothing has to be threaded through call sites. *)
+  Hashtbl.to_seq_values types.entities
+  |> List.of_seq
+  |> List.sort (fun left right -> String.compare left.ent_tesl_name right.ent_tesl_name)
+  |> List.filter (fun info -> declared_here info.ent_owner)
+  |> List.iter (fun info ->
+    Buffer.add_char body '\n';
+    Buffer.add_string body (line_directive info.ent_loc);
+    Printf.bprintf body "var %s = teslrt.NewTable[%s]()\n"
+      info.ent_table_var info.ent_row.rec_go_name);
   List.iter (fun (fd : func_decl) ->
     (* `establish` returns a detached proof, which erases — so the function body computes
        nothing observable and the emitted function returns the zero-size proof value.  It
@@ -3300,9 +3921,12 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
        write to the response, so it receives the request scope.  That marker is the
        `requires` clause itself; no call-graph analysis is needed. *)
     let needs_scope = List.mem "cookieCap" fd.capabilities in
-    List.iter (fun capability ->
-      if capability <> "cookieCap" then unsupported fd.loc
-        "Go backend does not support the capability `%s` yet" capability) fd.capabilities;
+    (* No capability is checked against a list any more.  A capability is a COMPILE-TIME
+       grant with no runtime form, and a capability naming a subsystem this backend does
+       not implement cannot be exercised anyway — its functions are what fail closed, at
+       the import.  `cookieCap` is the one exception, handled above, and only because it
+       says "this function may write to the response". *)
+    ignore fd.capabilities;
     let signature = Hashtbl.find signatures fd.name in
     let params = List.map2 (fun (binding : binding) ty -> binding.name, ty)
       fd.params signature.params in
@@ -3339,6 +3963,7 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
       Printf.bprintf body "\treturn struct{}{}\n}\n"
     end else begin
     let self = fd.name, List.map (fun (name, _) -> local_ident name) params in
+    current_handler_body := (fd.kind = HandlerKind);
     let looped = Buffer.create 256 in
     emit_tail ~self looped signatures env result "\t\t" fd.body;
     if contains_go_code (Buffer.contents looped) ("continue " ^ loop_label) then begin
@@ -3347,8 +3972,12 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
       Buffer.add_string body "\t}\n"
     end else
       emit_tail body signatures env result "\t" fd.body;
+    current_handler_body := false;
     Buffer.add_string body "}\n" end) funcs;
   (* ── Codecs ─────────────────────────────────────────────────────────────── *)
+  (* Which types have their own codec, for the response encoder above. *)
+  current_codec_types :=
+    List.map (fun (codec : codec_form) -> codec.type_name) codecs;
   List.iter (fun (codec : codec_form) ->
     let type_name = codec.type_name in
     let go_ty =
@@ -3561,10 +4190,10 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
       (* The response goes through the result type's own codec, so the body bytes are the
          ones the codec layer already agrees with Racket on. *)
       let encoder = match signature.result with
-        | TRecord info -> codec_encode_name info.rec_tesl_name
-        | TAdt (info, _) -> codec_encode_name info.adt_tesl_name
-        | _ -> unsupported server.loc
-          "Go backend handler `%s` must return a type with a codec" handler
+        | TDict _ | TSet _ | TParam _ | TCheck _ | TFailure ->
+          unsupported server.loc
+            "Go backend cannot encode handler `%s`'s response type" handler
+        | result -> value_encoder result
       in
       Printf.bprintf body
         "\t\t%S: func(teslScope *teslrt.RequestScope, teslRequest *http.Request) teslrt.Response {\n\t\t\t_ = teslScope\n"
@@ -3709,10 +4338,15 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) module_path package sign
       let ty = type_of_expr signatures env value in
       Printf.bprintf body "%s{\n" indent;
       Buffer.add_string body (line_directive loc);
-      Printf.bprintf body "%s\t%s := %s\n" indent (local_ident name)
-        (emit_expr ~indent:(indent ^ "\t") signatures env value);
-      Printf.bprintf body "%s\t_ = %s\n" indent (local_ident name);
-      emit_stmts ((name, ty) :: env) (indent ^ "\t") rest;
+      let emitted = emit_expr ~indent:(indent ^ "\t") signatures env value in
+      (* `let _ = …` runs the statement and DISCARDS the result — Go's `_` is not a
+         variable, so it can neither be declared with `:=` nor read back. *)
+      if name = "_" then Printf.bprintf body "%s\t_ = %s\n" indent emitted
+      else begin
+        Printf.bprintf body "%s\t%s := %s\n" indent (local_ident name) emitted;
+        Printf.bprintf body "%s\t_ = %s\n" indent (local_ident name)
+      end;
+      emit_stmts (if name = "_" then env else (name, ty) :: env) (indent ^ "\t") rest;
       Printf.bprintf body "%s}\n" indent
     | TsExpect { left; right; loc } :: rest ->
       (* Each side may be the one that supplies the other's type: `expect xs == []`
@@ -3810,8 +4444,16 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) module_path package sign
       unsupported loc "Go backend does not support this test statement yet"
   in
   List.iteri (fun index (test : test_form) ->
-    if test.runs <> None || test.capabilities <> [] || test.database <> None then
+    (* `runs` is a property test's repetition count, which needs generators.  The
+       capabilities and the `with database X` header, by contrast, are compile-time
+       grants: with `backend: Memory` the store a test writes to is the entity's own
+       table variable, exactly as in a function body. *)
+    if test.runs <> None then
       unsupported test.loc "Go backend supports plain deterministic tests only";
+    ignore test.capabilities;
+    (* The header names a database the checker has already resolved, and every database
+       this backend accepts is a Memory one, so there is nothing to bind. *)
+    ignore test.database;
     Buffer.add_char body '\n';
     Printf.bprintf body "func TestTesl%d(teslT *testing.T) {\n" index;
     emit_stmts [] "\t" test.stmts;
@@ -3881,7 +4523,14 @@ let register_imported_module ~loc ~exposed types signatures (exports : module_ex
             Hashtbl.find_opt exports.ex_types.records name,
             Hashtbl.find_opt exports.ex_types.adts name with
       | Some info, _, _ -> Hashtbl.replace types.newtypes name info; true
-      | None, Some info, _ -> Hashtbl.replace types.records name info; true
+      | None, Some info, _ ->
+        Hashtbl.replace types.records name info;
+        (* An exposed ENTITY brings its table along with its row type: a query in this
+           module reads the other package's store, so the two must be the same table. *)
+        (match Hashtbl.find_opt exports.ex_types.entities name with
+         | Some entity -> Hashtbl.replace types.entities name entity
+         | None -> ());
+        true
       | None, None, Some info -> Hashtbl.replace types.adts name info; true
       | None, None, None -> false
     in
@@ -3968,8 +4617,30 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | "HttpRequest" | "cookieCap" | "Http.clearSessionCookie" -> ()
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.Http` export `%s` yet" other) exposed
+      (* `Tesl.DB` exports the two database CAPABILITIES, which the checker enforces and
+         which have no runtime form, plus the `delete … returning result` ADT — refused
+         while `deleteAndReturnResult` is. *)
+      | "Tesl.DB" ->
+        List.iter (fun name ->
+          match name with
+          | "dbRead" | "dbWrite" -> ()
+          | other -> unsupported import.loc
+            "Go backend does not support `Tesl.DB` export `%s` yet" other) exposed
+      (* `Tesl.Database` names the DECLARATION form (`= Database { entities: … backend:
+         Memory }`); the declaration itself is where the backend is checked. *)
+      | "Tesl.Database" ->
+        List.iter (fun name ->
+          match name with
+          (* The Postgres names are accepted as NAMES — they are only meaningful inside a
+             `database` declaration, and a declaration that selects that backend is
+             refused there. *)
+          | "Database" | "Memory" | "DatabaseBackend" | "Postgres" | "PostgresConfig"
+          | "PostgresConnection" | "TcpConnection" | "SocketConnection" -> ()
+          | other -> unsupported import.loc
+            "Go backend does not support `Tesl.Database` export `%s` yet" other) exposed
       | "Tesl.String" | "Tesl.List" | "Tesl.Int" | "Tesl.Tuple" | "Tesl.Dict"
-      | "Tesl.Set" | "Tesl.Float" | "Tesl.Either" | "Tesl.EitherPrim" -> ()
+      | "Tesl.Set" | "Tesl.Float" | "Tesl.Either" | "Tesl.EitherPrim"
+      | "Tesl.Time" | "Tesl.Env" | "Tesl.Random" | "Tesl.Id" | "Tesl.Result" -> ()
         (* validated against the leaf/type tables below *)
       | other when List.exists (fun (dependency : module_exports) ->
                      dependency.ex_module = other) dependencies ->
@@ -3989,6 +4660,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       newtypes = Hashtbl.create 8;
       records = Hashtbl.create 8;
       adts = Hashtbl.create 8;
+      entities = Hashtbl.create 8;
     } in
     (* Every package-level Go name is minted here, in declaration order, so the
        emitted names are deterministic and provably distinct. *)
@@ -4033,6 +4705,48 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         rec_fields = [];
         rec_loc = r.loc;
       }) record_forms;
+    (* An entity's ROW type is registered exactly like a record — a query result and an
+       `insert` argument are ordinary struct values — and its store is one package-level
+       table variable. *)
+    let entity_forms = List.filter_map (function DEntity e -> Some e | _ -> None) m.decls in
+    List.iter (fun (e : entity_form) ->
+      if e.fields = [] then unsupported e.loc
+        "Go backend does not support the field-less entity `%s`" e.name;
+      List.iter (fun (field : field_def) ->
+        ignore field.proof_ann;
+        if field.checker <> None then unsupported field.loc
+          "Go backend does not support `via` on entity field `%s.%s` yet" e.name field.name)
+        e.fields;
+      if not (List.exists (fun (field : field_def) -> field.name = e.primary_key) e.fields) then
+        unsupported e.loc
+          "Go backend cannot find the primary key `%s` among the fields of entity `%s`"
+          e.primary_key e.name;
+      (* A UNIQUE index is a constraint the Memory backend ENFORCES on Racket (an insert
+         that violates it raises), so accepting one here without enforcing it would make
+         the two backends disagree about which programs run.  A plain index is a
+         performance hint with no observable effect, so it is simply ignored. *)
+      List.iter (fun (index : entity_index) ->
+        if index.ix_unique then unsupported index.ix_loc
+          "Go backend does not support `unique index` on entity `%s` yet" e.name)
+        e.indexes;
+      if Hashtbl.mem types.newtypes e.name || Hashtbl.mem types.records e.name then
+        unsupported e.loc "Go backend generated type name collision for `%s`" e.name;
+      let row = {
+        rec_tesl_name = e.name;
+        rec_owner = package;
+        rec_go_name = package_ident e.name;
+        rec_fields = [];
+        rec_loc = e.loc;
+      } in
+      Hashtbl.replace types.records e.name row;
+      Hashtbl.replace types.entities e.name {
+        ent_tesl_name = e.name;
+        ent_row = row;
+        ent_table_var = package_ident (e.name ^ "Table");
+        ent_owner = package;
+        ent_primary_key = e.primary_key;
+        ent_loc = e.loc;
+      }) entity_forms;
     let tuple_imported = ref false in
     let set_imports = ref [] in
     List.iter (fun (import : import_decl) ->
@@ -4140,6 +4854,12 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       (* `Tesl.Float`.  The transcendentals are absent on purpose: Go's sin/cos/tan
          diverge from Racket on 22-34% of inputs and its math.Log is outright wrong for
          subnormals, so they fail closed rather than emit divergent results. *)
+      (* The named arithmetic surface; `Float.div`'s divisor carries a FloatNonZero proof,
+         which erases like every other proof. *)
+      "Float.add",        [`Float; `Float], `Float, "teslrt.FloatAdd";
+      "Float.sub",        [`Float; `Float], `Float, "teslrt.FloatSub";
+      "Float.mul",        [`Float; `Float], `Float, "teslrt.FloatMul";
+      "Float.div",        [`Float; `Float], `Float, "teslrt.FloatDiv";
       "Float.abs",        [`Float], `Float, "teslrt.FloatAbs";
       "Float.min",        [`Float; `Float], `Float, "teslrt.FloatMin";
       "Float.max",        [`Float; `Float], `Float, "teslrt.FloatMax";
@@ -4166,6 +4886,12 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       (* Racket's `Int.pow` REJECTS a negative exponent rather than returning a
          fraction, so the Go leaf raises there too. *)
       "Int.pow",          [`Int; `Int], `Int, "teslrt.MustPow";
+      (* `Int.parse` is `String.toInt` under another name.  Racket's differ in one corner:
+         `Int.parse` accepts anything `integer?` accepts, so `Int.parse "3.0"` yields
+         `Something 3.0` — a FLOAT where the type says Int — while `String.toInt` demands
+         `exact-integer?`.  Both are strict decimal here; the Racket wart is recorded in
+         roadmap/next/migrate_to_golang.md rather than reproduced. *)
+      "Int.parse",        [`Str], `MaybeInt, "teslrt.StringToInt";
     ] in
     let leaf_names_for prefix =
       List.filter_map (fun (name, _, _, _) ->
@@ -4202,12 +4928,87 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | ImportExposing names -> names
         in
         List.iter (fun name ->
-          if List.mem name int_leaf_names then string_imports := name :: !string_imports
-          else match name with
+          if List.mem name int_leaf_names then begin
+            string_imports := name :: !string_imports;
+            if name = "Int.parse" then maybe_imported := true
+          end else match name with
             (* Proof predicates are compile-time only. *)
             | "IsNonZero" | "IsNonNegative" | "IsPositive" -> ()
             | other -> unsupported import.loc
               "Go backend does not support `Tesl.Int` export `%s` yet" other) exposed
+      end) m.imports;
+    (* ── `Tesl.Env` / `Tesl.Random`: effects with no state of their own ──────
+       Both are gated by a capability the checker enforces (`envRead`, `random`), so what
+       is left at run time is one runtime call.  `requireSecret` is refused with secret
+       newtypes; `envRead`/`random` themselves are capability NAMES. *)
+    let env_leaf_names = ["env"; "envInt"; "envString"; "requireEnv"] in
+    let random_leaf_names = ["randomInt"; "randomFloat"] in
+    let effect_imports = ref [] in
+    List.iter (fun (import : import_decl) ->
+      let exposed = match import.names with
+        | ImportAll -> []
+        | ImportExposing names -> names
+      in
+      match import.module_name with
+      | "Tesl.Env" ->
+        List.iter (fun name ->
+          if List.mem name env_leaf_names then begin
+            effect_imports := name :: !effect_imports;
+            if name = "env" then maybe_imported := true
+          end else match name with
+            | "envRead" -> ()
+            | other -> unsupported import.loc
+              "Go backend does not support `Tesl.Env` export `%s` yet" other) exposed
+      | "Tesl.Random" ->
+        List.iter (fun name ->
+          if List.mem name random_leaf_names then
+            effect_imports := name :: !effect_imports
+          else match name with
+            | "random" -> ()
+            | other -> unsupported import.loc
+              "Go backend does not support `Tesl.Random` export `%s` yet" other) exposed
+      | "Tesl.Id" ->
+        List.iter (fun name ->
+          match name with
+          | "generateId" | "generatePrefixedId" ->
+            effect_imports := name :: !effect_imports
+          | other -> unsupported import.loc
+            "Go backend does not support `Tesl.Id` export `%s` yet" other) exposed
+      | _ -> ()) m.imports;
+    (* ── `Tesl.Time`: the instant, and exact-integer millisecond arithmetic ──
+       `PosixMillis` is runtime-provided for the reason `Maybe` is: an instant crosses
+       module boundaries.  The CALENDAR surface (`formatTime`, the `Time.trunc*` buckets,
+       `TimeZone`/`Time.offsetAt`) is refused — it needs the zone database and the shared
+       bucket engine, which is its own slice — and so is the Duration bridge, which needs
+       `Tesl.Units`. *)
+    let time_leaf_names = [
+      "nowMillis"; "durationMs"; "addMs"; "subtractMs"; "diffMs";
+      "Time.posixToSeconds"; "Time.secondsToPosix";
+    ] in
+    let time_imports = ref [] in
+    List.iter (fun (import : import_decl) ->
+      if import.module_name = "Tesl.Time" then begin
+        let exposed = match import.names with
+          | ImportAll -> []
+          | ImportExposing names -> names
+        in
+        List.iter (fun name ->
+          if List.mem name time_leaf_names then time_imports := name :: !time_imports
+          else match name with
+            (* The type itself, and the `time` CAPABILITY (compile-time, like every
+               other capability). *)
+            | "PosixMillis" | "time" -> ()
+            | other -> unsupported import.loc
+              "Go backend does not support `Tesl.Time` export `%s` yet" other) exposed;
+        (* Registered whenever the module imports Tesl.Time at all: the type is named in
+           signatures and entity columns even when no leaf is exposed. *)
+        Hashtbl.replace types.newtypes "PosixMillis" {
+          tesl_name = "PosixMillis";
+          owner = "";
+          go_name = "teslrt.PosixMillis";
+          base = TInt;
+          loc = import.loc;
+        }
       end) m.imports;
     List.iter (fun (import : import_decl) ->
       if import.module_name = "Tesl.String" then begin
@@ -4320,6 +5121,43 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             "Go backend does not support `%s` export `%s` yet" import.module_name other) exposed;
         either_imported := true
       end) m.imports;
+    (* `Result ok err` is the same runtime-provided shape as `Either`: two variants, one
+       payload each, provided by teslrt so it can cross module boundaries.  Tesl.Result
+       exports the type and its constructors only — there are no `Result.*` functions. *)
+    let result_imported = ref false in
+    List.iter (fun (import : import_decl) ->
+      if import.module_name = "Tesl.Result" then begin
+        let exposed = match import.names with
+          | ImportAll -> []
+          | ImportExposing names -> names
+        in
+        List.iter (fun name ->
+          match name with
+          | "Result" | "Result(..)" | "Ok" | "Err" -> ()
+          | other -> unsupported import.loc
+            "Go backend does not support `Tesl.Result` export `%s` yet" other) exposed;
+        result_imported := true
+      end) m.imports;
+    if !result_imported then begin
+      let loc = Location.dummy_loc m.source_file in
+      Hashtbl.replace types.adts "Result" {
+        adt_tesl_name = "Result";
+        adt_owner = "";
+        adt_go_name = "teslrt.Result";
+        adt_tag_type = "teslrt.ResultTag";
+        adt_params = ["ok", "Ok"; "err", "Err"];
+        adt_variants = [
+          { var_ctor = "Ok"; var_tag = "teslrt.ResultOk";
+            var_fields = ["value", TParam "Ok"];
+            var_go_fields = ["value", "OkValue"]; var_loc = loc };
+          { var_ctor = "Err"; var_tag = "teslrt.ResultErr";
+            var_fields = ["error", TParam "Err"];
+            var_go_fields = ["error", "ErrValue"]; var_loc = loc };
+        ];
+        adt_loc = loc;
+        adt_builtin = true;
+      }
+    end;
     if !either_imported then begin
       let loc = Location.dummy_loc m.source_file in
       Hashtbl.replace types.adts "Either" {
@@ -4403,6 +5241,10 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       let info = Hashtbl.find types.records r.name in
       info.rec_fields <- List.map (fun (field : field_def) ->
         field.name, type_of_type_expr types field.type_expr) r.fields) record_forms;
+    List.iter (fun (e : entity_form) ->
+      let info = Hashtbl.find types.records e.name in
+      info.rec_fields <- List.map (fun (field : field_def) ->
+        field.name, type_of_type_expr types field.type_expr) e.fields) entity_forms;
     List.iter (fun (name, _, variants, _) ->
       let info = Hashtbl.find types.adts name in
       (* The ADT's own type parameters are in scope only here, while resolving the
@@ -4438,6 +5280,11 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       if List.exists (fun (_, field_ty) -> reaches r.name [r.name] field_ty) info.rec_fields then
         unsupported r.loc "Go backend does not support the recursive record `%s`" r.name)
       record_forms;
+    List.iter (fun (e : entity_form) ->
+      let info = Hashtbl.find types.records e.name in
+      if List.exists (fun (_, field_ty) -> reaches e.name [e.name] field_ty) info.rec_fields then
+        unsupported e.loc "Go backend does not support the recursive entity `%s`" e.name)
+      entity_forms;
     List.iter (fun (name, _, _, loc) ->
       let info = Hashtbl.find types.adts name in
       if List.exists (fun variant ->
@@ -4452,11 +5299,32 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       | DType (TypeAlias { loc; _ }) ->
         unsupported loc "Go backend does not support transparent type aliases yet"
       | DType (TypeAdt _) -> ()
-      | DEntity e -> unsupported e.loc "Go backend does not support entities yet"
+      | DEntity _ -> ()
       | DFact _ -> ()
       | DCodec _ -> ()
-      | DDatabase d -> unsupported d.loc "Go backend does not support databases yet"
-      | DCapability c -> unsupported c.loc "Go backend does not support capabilities yet"
+      (* A `database` declaration names a BACKEND and the entities it owns.  With
+         `Memory` the store is the entity's own table variable, so the declaration adds
+         no runtime structure of its own; Postgres would, and is refused until the driver
+         lands rather than silently running against an in-memory store. *)
+      | DDatabase d ->
+        (* The typed form (`= Database { … }`) leaves its fields in `config_expr`; the Go
+           pipeline does not run the desugar pass, so the same lowering the Racket
+           backend gets is applied to this one declaration.  Reusing that function is the
+           point — a second reading of the config block here would be a second place for
+           `backend:` to be misread. *)
+        let d = Desugar.desugar_database_config d in
+        let backend = String.lowercase_ascii d.backend in
+        if backend <> "memory" then unsupported d.loc
+          "Go backend supports `backend: Memory` only, not `%s`"
+          (String.capitalize_ascii (if d.backend = "" then "postgres" else d.backend));
+        List.iter (fun entity ->
+          if not (Hashtbl.mem types.entities entity) then unsupported d.loc
+            "Go backend cannot find entity `%s` listed in database `%s`" entity d.name)
+          d.entities
+      (* A `capability` DECLARATION grants nothing at run time: the checker verifies every
+         call against the declared set and forces the grant to propagate to callers, so the
+         declaration has no emitted form — the same reason a `requires` clause has none. *)
+      | DCapability _ -> ()
       | DConst c -> unsupported c.loc "Go backend does not support constants yet"
       | DQueue q -> unsupported q.loc "Go backend does not support queues yet"
       | DChannel c -> unsupported c.loc "Go backend does not support channels yet"
@@ -4582,6 +5450,50 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       in
       if not (Hashtbl.mem signatures name) then
         Hashtbl.add signatures name { params = List.map shape params; result = shape result; go_name; sig_owner = ""; sig_needs_scope = false }) !string_imports;
+    List.iter (fun name ->
+      let maybe_string () =
+        match Hashtbl.find_opt types.adts "Maybe" with
+        | Some info -> TAdt (info, [TString])
+        | None -> unsupported (Location.dummy_loc m.source_file)
+          "Go backend `env` yields a Maybe; import `Tesl.Maybe`"
+      in
+      let params, result, go_name = match name with
+        | "env" -> [TString], maybe_string (), "teslrt.EnvMaybe"
+        | "envInt" -> [TString; TInt], TInt, "teslrt.EnvInt"
+        | "envString" -> [TString; TString], TString, "teslrt.EnvString"
+        | "requireEnv" -> [TString], TString, "teslrt.RequireEnv"
+        | "randomInt" -> [TInt; TInt], TInt, "teslrt.RandomInt"
+        (* Like `nowMillis`, a VALUE in Tesl's type table, written `randomFloat()`. *)
+        | "randomFloat" -> [], TFloat, "teslrt.RandomFloat"
+        | "generateId" -> [], TString, "teslrt.GenerateId"
+        | "generatePrefixedId" -> [TString], TString, "teslrt.GeneratePrefixedId"
+        | other -> unsupported (Location.dummy_loc m.source_file)
+          "Go backend does not support the effect leaf `%s` yet" other
+      in
+      Hashtbl.replace signatures name
+        { params; result; go_name; sig_owner = ""; sig_needs_scope = false })
+      !effect_imports;
+    List.iter (fun name ->
+      let posix = match Hashtbl.find_opt types.newtypes "PosixMillis" with
+        | Some info -> TNewtype info
+        | None -> assert false
+      in
+      let params, result, go_name = match name with
+        (* `nowMillis` is a VALUE in Tesl's type table, written `nowMillis()`; the
+           empty-argument call normalises to a no-parameter call here. *)
+        | "nowMillis" -> [], posix, "teslrt.NowMillis"
+        | "durationMs" -> [posix], TInt, "teslrt.DurationMs"
+        | "addMs" -> [posix; TInt], posix, "teslrt.AddMs"
+        | "subtractMs" -> [posix; TInt], posix, "teslrt.SubtractMs"
+        | "diffMs" -> [posix; posix], TInt, "teslrt.DiffMs"
+        | "Time.posixToSeconds" -> [posix], TInt, "teslrt.PosixToSeconds"
+        | "Time.secondsToPosix" -> [TInt], posix, "teslrt.SecondsToPosix"
+        | other -> unsupported (Location.dummy_loc m.source_file)
+          "Go backend does not support `Tesl.Time` export `%s` yet" other
+      in
+      Hashtbl.replace signatures name
+        { params; result; go_name; sig_owner = ""; sig_needs_scope = false })
+      !time_imports;
     (* An imported local module contributes its exported functions with the OWNING
        package attached, so every reference to them is qualified. *)
     let imported_packages = ref [] in

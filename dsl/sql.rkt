@@ -2832,6 +2832,10 @@
 ;; value itself (wrapper intact) is returned, exactly like a `select` row
 ;; field read, so the result still satisfies the declared newtype return type.
 ;; operator is '> for MAX, '< for MIN.
+;; MAX/MIN answer a `Maybe`: over no matching row there is NO value of the column's type
+;; to return.  This used to be `#f`, which typechecked as the column type and then failed
+;; wherever it landed — `selectMax`/`selectMin` are typed `Maybe V` (checker
+;; select_aggregate_field_type), and both backends say so here.
 (define (in-memory-extreme who rows field operator)
   (define candidates
     (for*/list ([row (in-list rows)]
@@ -2839,17 +2843,27 @@
                 #:unless (or (not v) (sql-null-value? v)))
       v))
   (if (null? candidates)
-      #f
-      (for/fold ([best (car candidates)])
-                ([v (in-list (cdr candidates))])
-        (if (ordered-comparison-result field operator
-                                       (unwrap-non-null v)
-                                       (unwrap-non-null best)
-                                       who)
-            v
-            best))))
+      Nothing
+      (Something
+       (for/fold ([best (car candidates)])
+                 ([v (in-list (cdr candidates))])
+         (if (ordered-comparison-result field operator
+                                        (unwrap-non-null v)
+                                        (unwrap-non-null best)
+                                        who)
+             v
+             best)))))
 
-;; MAX(field) — returns the maximum value of a numeric field (or #f if no rows).
+;; MAX(field) — `Something max` over the matching rows, `Nothing` when none match.
+;; `select max(col)` over no matching row is SQL NULL, and a sql-null is TRUTHY in Racket —
+;; the previous `(and result (integer? result))` guard therefore handed it back as if it
+;; were a value.  Both empty answers (NULL, #f) become Nothing here.
+(define (postgres-extreme-result result)
+  (cond
+    [(or (not result) (sql-null-value? result)) Nothing]
+    [(integer? result) (Something (inexact->exact result))]
+    [else (Something result)]))
+
 (define (select-max field-accessor source . clauses)
   (require-capabilities! (list db-read))
   (unless (from-clause? source)
@@ -2876,10 +2890,10 @@
           (with-sql-capture sql params (capture-table-name entity) 'select-max
             (lambda () (apply query-value (database-runtime-connection runtime) sql params))
             (lambda (_r) 1)))
-        (if (and result (integer? result)) (inexact->exact result) result))
+        (postgres-extreme-result result))
       (in-memory-extreme 'select-max (in-memory-select-many entity predicates) field '>)))
 
-;; MIN(field) — returns the minimum value of a numeric field (or #f if no rows).
+;; MIN(field) — `Something min` over the matching rows, `Nothing` when none match.
 (define (select-min field-accessor source . clauses)
   (require-capabilities! (list db-read))
   (unless (from-clause? source)
@@ -2906,7 +2920,7 @@
           (with-sql-capture sql params (capture-table-name entity) 'select-min
             (lambda () (apply query-value (database-runtime-connection runtime) sql params))
             (lambda (_r) 1)))
-        (if (and result (integer? result)) (inexact->exact result) result))
+        (postgres-extreme-result result))
       (in-memory-extreme 'select-min (in-memory-select-many entity predicates) field '<)))
 
 

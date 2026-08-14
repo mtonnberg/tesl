@@ -426,19 +426,22 @@ fn helper(n: Int) -> Int = n * 2
 fn twoEntry(n: Int) -> Int = helper n
 |}
 
-let cycle_name_collision_rejected () =
+(* A TWO-member cycle where each module declares its own `helper` is ACCEPTED, because it
+   works: measured 2026-08-14, `A <-> B` with a different `helper` in each keeps them apart
+   from either entry, and tests/tesl-test.rkt pins the runtime answers (for a function and
+   for a `Widget` record reached through qualified annotations).  A shared "two members of a
+   cycle share a name" error was tried and rejected programs the Racket backend runs
+   correctly.  What IS rejected is the shape below, where one member inlines two others that
+   collide. *)
+let cycle_two_member_same_name_accepted () =
   with_temp_project [("CollideA.tesl", collide_a); ("CollideB.tesl", collide_b)]
     (fun dir ->
-       let code, out = run_cc_in dir ["--check"; "CollideA.tesl"] in
-       if code = 0 then
-         failf "a name declared by two members of a cycle must be rejected — the \
-                Racket inliner silently rebinds the second one:\n%s" out;
-       if not (contains "declare `helper`" out) then
-         failf "the collision diagnostic must name the colliding declaration:\n%s" out;
-       (* Reported for either entry, since the collapse happens either way. *)
-       let code, out = run_cc_in dir ["--check"; "CollideB.tesl"] in
-       if code = 0 then
-         failf "the collision must be reported with CollideB as entry too:\n%s" out)
+       List.iter (fun entry ->
+         let code, out = run_cc_in dir ["--check"; entry] in
+         if code <> 0 then
+           failf "a two-member cycle may declare the same name in both members (%s):\n%s"
+             entry out)
+         ["CollideA.tesl"; "CollideB.tesl"])
 
 (* The collision need not be between two modules that sit next to each other on a cycle
    path.  Hub imports both Spoke1 and Spoke2 and both import Hub back, so all three are
@@ -492,6 +495,9 @@ let cycle_collision_across_component_rejected () =
                 they never share a cycle path:\n%s" out;
        if not (contains "declare `shared`" out) then
          failf "the diagnostic must name the colliding declaration:\n%s" out;
+       (* The runtime consequence this guards, measured with the guard removed: `viaTwo 1`
+          answered 7 where the program says 105 — Spoke2's `shared` was dropped and its
+          references rebound to Spoke1's. *)
        if not (contains "Spoke1" out && contains "Spoke2" out) then
          failf "the diagnostic must name both colliding modules:\n%s" out)
 
@@ -858,8 +864,8 @@ let () =
       test_case "self-import rejected" `Quick self_import_rejected;
       test_case "pure fn cycle allowed + inlined from bare CLI spelling" `Quick
         pure_cycle_allowed_and_inlined;
-      test_case "cycle name collision rejected" `Quick
-        cycle_name_collision_rejected;
+      test_case "two-member cycle may share a name" `Quick
+        cycle_two_member_same_name_accepted;
       test_case "cycle name collision across an SCC rejected" `Quick
         cycle_collision_across_component_rejected;
     ];

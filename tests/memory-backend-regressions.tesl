@@ -71,8 +71,14 @@ entity L table "mem_reg_lines" primaryKey id {
   price: Money
 }
 
+# An entity nothing ever writes to, so an aggregate over it has no rows by construction.
+entity Empty table "mem_reg_empty" primaryKey id {
+  id: String
+  qty: Int
+}
+
 database D = Database {
-  entities: [P, L]
+  entities: [P, L, Empty]
   backend: Memory
 }
 
@@ -97,17 +103,44 @@ fn orderedByDone() -> List P requires [dbRead] =
 fn orderedByDoneDesc() -> List P requires [dbRead] =
   with database D { select p from P order p.done desc }
 
+# selectMax/selectMin answer a Maybe: no matching row has no maximum.  These helpers
+# unwrap with a default so the assertions below still speak in plain values, and the
+# newtype-column regression (#2) is unchanged by that.
 fn newest() -> PosixMillis requires [dbRead] =
-  with database D { selectMax p.at from P }
+  with database D {
+    let latest = selectMax p.at from P
+    case latest of
+      Nothing -> Time.secondsToPosix 0
+      Something at -> at
+  }
 
 fn oldest() -> PosixMillis requires [dbRead] =
-  with database D { selectMin p.at from P }
+  with database D {
+    let earliest = selectMin p.at from P
+    case earliest of
+      Nothing -> Time.secondsToPosix 0
+      Something at -> at
+  }
 
 fn maxQty() -> Int requires [dbRead] =
-  with database D { selectMax p.qty from P }
+  with database D {
+    let biggest = selectMax p.qty from P
+    case biggest of
+      Nothing -> 0
+      Something qty -> qty
+  }
 
 fn minCode() -> Code requires [dbRead] =
-  with database D { selectMin p.code from P }
+  with database D {
+    let smallest = selectMin p.code from P
+    case smallest of
+      Nothing -> Code 0
+      Something code -> code
+  }
+
+# The empty answer itself: an entity with no rows yields Nothing, not a zero.
+fn maxOfEmpty() -> Maybe Int requires [dbRead] =
+  with database D { selectMax e.qty from Empty }
 
 test "order by asc/desc is applied on the Memory backend" requires [dbRead, dbWrite] {
   with database D {
@@ -168,6 +201,10 @@ test "selectMax/selectMin over newtype columns on the Memory backend" requires [
   expect Time.posixToSeconds (oldest ()) == 100
   expect minCode () == Code 3
   expect maxQty () == 3
+}
+
+test "selectMax over no matching row is Nothing" requires [dbRead] {
+  expect maxOfEmpty () == Nothing
 }
 
 # ── In-memory queue FIFO (processNextJob must dequeue in enqueue order) ──────

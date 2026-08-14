@@ -8,7 +8,7 @@
  ; fail-closed discipline the proof/validation passes depend on.
  (ocamlopt_flags (:standard -w -50 -warn-error +8))
  (ocamlc_flags (:standard -w -50 -warn-error +8))
- (modules tz_zones currencies units_catalog stdlib_config_names formatter linter ast ast_visitor proof_kernel desugar checker compile diag_fix emit_racket emit_go emit_ts emit_elm error_codes float_fmt import_suggest ir lexer location mutate parser proof_checker proof_discharge source_map token type_system regex_lint validation_common validation_structural validation_sql_codec validation_proof validation_names validation_capabilities validation_advanced validation embedded_docs embedded_go_runtime stdlib_docs stdlib_docs_entries index_lint)
+ (modules tz_zones currencies units_catalog stdlib_config_names formatter linter ast ast_visitor proof_kernel desugar checker compile diag_fix emit_racket emit_go emit_ts emit_elm error_codes float_fmt import_suggest ir lexer location mutate parser proof_checker proof_discharge source_map sql_query token type_system regex_lint validation_common validation_structural validation_sql_codec validation_proof validation_names validation_capabilities validation_advanced validation embedded_docs embedded_go_runtime stdlib_docs stdlib_docs_entries index_lint)
  ; unix: wall-clock timestamps for opt-in per-phase timing (TESL_PHASE_TIMING)
  ;       in compile.ml.  unix ships with the OCaml distribution.
  (libraries str unix))
@@ -36,7 +36,7 @@
 (rule
  (target embedded_go_runtime.ml)
  (mode promote)
- (deps ../../runtime/go/teslrt/apitest.go ../../runtime/go/teslrt/check.go ../../runtime/go/teslrt/control.go ../../runtime/go/teslrt/dict.go ../../runtime/go/teslrt/either.go ../../runtime/go/teslrt/float.go ../../runtime/go/teslrt/int.go ../../runtime/go/teslrt/json.go ../../runtime/go/teslrt/list.go ../../runtime/go/teslrt/maybe.go ../../runtime/go/teslrt/request.go ../../runtime/go/teslrt/server.go ../../runtime/go/teslrt/set.go ../../runtime/go/teslrt/string.go ../../runtime/go/teslrt/tuple.go)
+ (deps ../../runtime/go/teslrt/apitest.go ../../runtime/go/teslrt/check.go ../../runtime/go/teslrt/control.go ../../runtime/go/teslrt/dict.go ../../runtime/go/teslrt/env.go ../../runtime/go/teslrt/either.go ../../runtime/go/teslrt/float.go ../../runtime/go/teslrt/int.go ../../runtime/go/teslrt/json.go ../../runtime/go/teslrt/list.go ../../runtime/go/teslrt/maybe.go ../../runtime/go/teslrt/random.go ../../runtime/go/teslrt/request.go ../../runtime/go/teslrt/result.go ../../runtime/go/teslrt/server.go ../../runtime/go/teslrt/set.go ../../runtime/go/teslrt/string.go ../../runtime/go/teslrt/table.go ../../runtime/go/teslrt/time.go ../../runtime/go/teslrt/tuple.go)
  (action
   (with-stdout-to %{target}
    (run %{exe:../gen/gen_go_runtime.exe}))))

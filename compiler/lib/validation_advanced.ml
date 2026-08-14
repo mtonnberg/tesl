@@ -81,6 +81,59 @@ let build_adt_ctor_field_bindings (decls : top_decl list)
         when `foo` is not bound);
       - a `Maybe T` check for `isNull`/`isNotNull` (rejects these on
         non-nullable columns). *)
+(* A SQL keyword that is not part of a RECOGNISED query shape.
+
+   Tesl writes a query as ordinary application syntax, so `selectOne t frm Task where …`
+   (a typo'd `from`) parses fine, type-checks fine, and only failed when the RACKET
+   emitter reached the leftover `selectOne` as a free variable and raised.  Two problems
+   with that: `tesl --check` — the fast loop, and what the editor runs — said nothing, and
+   the guard lived in one backend, so the Go backend would have had to reimplement it or
+   silently emit a call to a function that does not exist.
+
+   The recognised shapes are the ones {!Sql_query} can recover, so the check is: walk the
+   body, skip any subtree that recovers as a query, and report any SQL builtin still
+   standing.  A user-defined function of the same name shadows the keyword and is fine. *)
+let check_sql_patterns_recognised ?facts ?(extra_funcs=[]) (decls : top_decl list)
+    : validation_error list =
+  ignore (facts_or_compute ?facts ~extra_funcs decls);
+  let declared_functions =
+    List.filter_map (function
+      | DFunc (fd : func_decl) -> Some fd.name
+      | _ -> None) decls
+  in
+  let errors = ref [] in
+  let recognised (e : expr) =
+    Sql_query.extract_select_query e <> None
+    || Sql_query.parse_insert_expr e <> None
+    || Sql_query.parse_insert_many_expr e <> None
+    || Sql_query.parse_upsert_expr e <> None
+    || Sql_query.extract_delete_query e <> None
+    || Sql_query.extract_update e <> None
+    || Sql_query.extract_delete e <> None
+  in
+  let rec walk (bound : string list) (e : expr) =
+    if recognised e then ()      (* the keywords inside belong to the query *)
+    else match e with
+      | EVar { name; loc } ->
+        if Validation_common.is_sql_builtin name
+           && not (List.mem name bound)
+           && not (List.mem name declared_functions) then
+          errors := make_error loc
+            ~hint:"a SQL operation is written in the multi-line form, e.g. `update p in Entity` / `where p.field == value` / `set p.field = value` — check the clause keywords (`from`, `in`, `where`, `set`) for a typo"
+            (Printf.sprintf
+               "`%s` is a SQL operation, but this expression is not a recognised query shape, so it would compile to a call to a function that does not exist"
+               name)
+            :: !errors
+      | ELet { name; value; body; _ } -> walk bound value; walk (name :: bound) body
+      | ELambda { params; body; _ } ->
+        walk (List.map (fun (b : binding) -> b.name) params @ bound) body
+      | _ -> Ast_visitor.iter_children (fun child -> walk bound child) e
+  in
+  List.iter (function
+    | DFunc (fd : func_decl) -> walk [] fd.body
+    | _ -> ()) decls;
+  List.rev !errors
+
 let check_sql_where_clauses
     ?facts
     ?(extra_funcs : (string * func_info) list = [])
@@ -672,19 +725,19 @@ let check_sql_query_shape (decls : top_decl list) : validation_error list =
      the two arities codegen uses it at, so adding an extractor there cannot
      leave this gate behind: a new form is accepted by both or by neither. *)
   let expr_accepted e =
-    Option.is_some (Emit_racket.extract_select_query e)
-    || Option.is_some (Emit_racket.extract_delete_query e)
-    || Option.is_some (Emit_racket.parse_insert_expr e)
-    || Option.is_some (Emit_racket.parse_insert_many_expr e)
-    || Option.is_some (Emit_racket.parse_upsert_expr e)
+    Option.is_some (Sql_query.extract_select_query e)
+    || Option.is_some (Sql_query.extract_delete_query e)
+    || Option.is_some (Sql_query.parse_insert_expr e)
+    || Option.is_some (Sql_query.parse_insert_many_expr e)
+    || Option.is_some (Sql_query.parse_upsert_expr e)
   in
   (* The statement-chain forms: multi-line `update`/`delete`/`select` lower to a
      chain of underscore-lets, so they are recognised at the CHAIN node, one
      level above the spine itself. *)
   let chain_accepted e =
-    Option.is_some (Emit_racket.extract_update e)
-    || Option.is_some (Emit_racket.extract_delete e)
-    || Option.is_some (Emit_racket.extract_multiline_select_query e)
+    Option.is_some (Sql_query.extract_update e)
+    || Option.is_some (Sql_query.extract_delete e)
+    || Option.is_some (Sql_query.extract_multiline_select_query e)
   in
   let sql_spine_head e =
     let rec go = function

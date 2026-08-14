@@ -381,19 +381,29 @@ fn countProducts() -> Int requires [dbRead] =
 fn sumPrices() -> Int requires [dbRead] =
   selectSum p.price from Product
 
-fn maxPrice() -> Int requires [dbRead] =
+# selectMax/selectMin return `Maybe <field type>`: over no matching row there is no
+# maximum, and inventing one (0, or a SQL NULL typed as the column) would be a lie the
+# caller cannot see. selectSum needs no Maybe — zero IS the sum of no rows.
+fn maxPrice() -> Maybe Int requires [dbRead] =
   selectMax p.price from Product
 
-fn minPrice() -> Int requires [dbRead] =
+fn minPrice() -> Maybe Int requires [dbRead] =
   selectMin p.price from Product
 
-fn maxPriceInCategory(cat: String) -> Int requires [dbRead] =
+fn maxPriceInCategory(cat: String) -> Maybe Int requires [dbRead] =
   selectMax p.price from Product
   where p.category == cat
 
-fn minPriceInCategory(cat: String) -> Int requires [dbRead] =
+fn minPriceInCategory(cat: String) -> Maybe Int requires [dbRead] =
   selectMin p.price from Product
   where p.category == cat
+
+# The caller decides what "no rows" means — here, a catalogue with no products has a
+# highest price of 0.
+fn maxPriceOrZero() -> Int requires [dbRead] =
+  case maxPrice () of
+    Nothing -> 0
+    Something price -> price
 
 # GROUPED aggregates (GitHub #29): "selectCountBy"/"selectSumBy … groupBy key"
 # return ONE ROW PER GROUP as a List (Tuple2 key aggregate), ordered by key

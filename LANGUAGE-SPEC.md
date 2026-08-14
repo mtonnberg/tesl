@@ -2781,7 +2781,7 @@ select u from User
   innerJoin Profile on u.profileId Profile.id
 ```
 
-**Aggregate queries.**  All aggregate forms require the `dbRead` capability. `selectCount` always returns `Int`. `selectSum`, `selectMax`, `selectMin` return the same type as the target field (e.g. `Int` for an integer field, `Float` for a float field).
+**Aggregate queries.**  All aggregate forms require the `dbRead` capability. `selectCount` always returns `Int`. `selectSum` returns the same type as the target field (e.g. `Int` for an integer field, `Float` for a float field) — zero is its identity, so no matching row is `0`, not an absence. `selectMax` and `selectMin` return **`Maybe <field type>`**: over no matching row there is no value of the column's type to return, and inventing one (or handing back a SQL `NULL` typed as the column) would be unsound. Callers `case` on the result.
 
 **Grouped aggregates (GitHub #29).** `selectCountBy` / `selectSumBy` return **one row per
 group** as a `List (Tuple2 key aggregate)`, ordered by key ascending, and require exactly
@@ -2829,8 +2829,17 @@ are plain proof-free values (no `FromDb` — no entity row flows out).
 ```tesl
 let total  = selectCount u from User where u.active == True     # Int
 let total  = selectSum   u.score from User                      # Int (or Float)
-let top    = selectMax   u.score from User where u.active == True
-let bottom = selectMin   u.score from User
+let top    = selectMax   u.score from User where u.active == True   # Maybe Int
+let bottom = selectMin   u.score from User                          # Maybe Int
+```
+
+`selectMax`/`selectMin` are optional, so a caller decides what "no rows" means:
+
+```tesl
+fn highestScore() -> Int requires [dbRead] =
+  case selectMax u.score from User of
+    Nothing -> 0
+    Something score -> score
 ```
 
 **`upsert` — INSERT … ON CONFLICT DO UPDATE.**  Inserts a record; if the conflict column(s) already exist, updates only the listed fields.  `onConflict` takes the column(s) to conflict on (usually the unique/PK columns); `doUpdate` lists the columns to overwrite on conflict.

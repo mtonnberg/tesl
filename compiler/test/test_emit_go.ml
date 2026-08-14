@@ -1085,17 +1085,33 @@ let test_maybe_with_go () =
    to reject there.  What must stay closed is the generalisation: `Maybe` is
    whitelisted by name, not "any generic stdlib ADT". *)
 let test_other_stdlib_adts_fail_closed () =
-  let unsupported = {|module ResultUser exposing [firstOr]
+  (* `Result` joined `Maybe` and `Either` as a runtime-provided ADT, so it compiles. *)
+  let supported = {|module ResultUser exposing [firstOr]
 import Tesl.Prelude exposing [Int]
 import Tesl.Result exposing [Result(..)]
-fn firstOr(r: Result Int Int) -> Int = 0
+fn firstOr(r: Result Int Int) -> Int =
+  case r of
+    Ok value -> value
+    Err other -> other
 |} in
-  match Compile.compile_go_source "<go-result>" unsupported with
+  (match Compile.compile_go_source "<go-result>" supported with
+   | Compile.GoSuccess _ -> ()
+   | Compile.GoFailure diagnostics ->
+     failf "Result failed to compile: %s"
+       (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics)));
+  (* The point of this case survives: the runtime ADTs are whitelisted BY NAME, not
+     "any stdlib ADT".  One that has no runtime type behind it still fails closed. *)
+  let unsupported = {|module DeleteResultUser exposing [count]
+import Tesl.Prelude exposing [Int]
+import Tesl.DB exposing [DeleteResult(..)]
+fn count(r: DeleteResult) -> Int = 0
+|} in
+  match Compile.compile_go_source "<go-delete-result>" unsupported with
   | Compile.GoSuccess _ -> fail "an unsupported stdlib ADT emitted Go artifacts"
   | Compile.GoFailure diagnostics ->
-    check bool "only Maybe is whitelisted" true
+    check bool "an unlisted stdlib ADT is refused" true
       (List.exists (fun (d : Compile.diagnostic) ->
-         d.source = "go-emitter" && contains d.message "import `Tesl.Result`") diagnostics)
+         d.source = "go-emitter" && contains d.message "`Tesl.DB` export") diagnostics)
 
 let string_source = {|module GoStrings exposing [size, shout, initial, parsed, found, label, checked]
 import Tesl.Prelude exposing [Bool, Int, String]
@@ -3072,6 +3088,504 @@ let test_go_api_tests () =
   (* `go test` on the emitted tree RUNS these, so a wrong body or status fails here. *)
   gate_emitted "tesl-go-api-test" emitted
 
+
+(* ─── Databases ───────────────────────────────────────────────────────────────
+   The `backend: Memory` slice end to end: an entity's row struct and table, the write
+   forms (insert / insertMany / update … set / delete), and the read forms (select,
+   selectOne, selectCount, selectSum, selectMax/Min, where predicates including `like`,
+   `order`, `limit`).  Racket runs the same source as the oracle. *)
+let db_source = {|module GoDb exposing [orderedNames, titleOf]
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List, Unit]
+import Tesl.List exposing [List.length, List.map, List.head]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Memory]
+
+type Sku = String
+
+entity Item table "probe_items" primaryKey id {
+  id: String
+  sku: Sku
+  name: String
+  qty: Int
+}
+
+database ProbeDb = Database {
+  entities: [Item]
+  backend: Memory
+}
+
+fn titleOf(wanted: String) -> String
+  requires [dbRead] =
+  with database ProbeDb {
+    let found = selectOne i from Item where i.id == wanted
+    case found of
+      Nothing -> "none"
+      Something i -> i.name
+  }
+
+fn orderedNames() -> List String
+  requires [dbRead] =
+  with database ProbeDb {
+    let rows = select i from Item order i.qty desc
+    List.map (fn(i: Item) -> i.name) rows
+  }
+
+fn cheapestName() -> String
+  requires [dbRead] =
+  with database ProbeDb {
+    let rows = select i from Item order i.qty asc limit 1
+    case List.head rows of
+      Nothing -> "none"
+      Something i -> i.name
+  }
+
+fn countAbove(threshold: Int) -> Int
+  requires [dbRead] =
+  with database ProbeDb {
+    selectCount i from Item where i.qty > threshold
+  }
+
+fn totalQty() -> Int
+  requires [dbRead] =
+  with database ProbeDb {
+    selectSum i.qty from Item
+  }
+
+# selectMax/selectMin answer a Maybe: no matching row has no maximum.
+fn biggestQty() -> Int
+  requires [dbRead] =
+  with database ProbeDb {
+    case selectMax i.qty from Item of
+      Nothing -> 0
+      Something qty -> qty
+  }
+
+fn smallestQty() -> Int
+  requires [dbRead] =
+  with database ProbeDb {
+    case selectMin i.qty from Item of
+      Nothing -> 0
+      Something qty -> qty
+  }
+
+# The empty answer itself, over a predicate nothing matches.
+fn biggestQtyNamed(wanted: String) -> Maybe Int
+  requires [dbRead] =
+  with database ProbeDb {
+    selectMax i.qty from Item where i.name == wanted
+  }
+
+fn namesLike(pattern: String) -> Int
+  requires [dbRead] =
+  with database ProbeDb {
+    selectCount i from Item where like i.name pattern
+  }
+
+fn namesILike(pattern: String) -> Int
+  requires [dbRead] =
+  with database ProbeDb {
+    selectCount i from Item where ilike i.name pattern
+  }
+
+fn bySku(raw: String) -> Int
+  requires [dbRead] =
+  with database ProbeDb {
+    selectCount i from Item where i.sku == Sku raw
+  }
+
+fn eitherName(left: String, right: String) -> Int
+  requires [dbRead] =
+  with database ProbeDb {
+    selectCount i from Item where i.name == left || i.name == right
+  }
+
+fn seed() -> Unit
+  requires [dbWrite] =
+  with database ProbeDb {
+    let _ = insert Item { id: "i1", sku: Sku "S-1", name: "alpha", qty: 7 }
+    let rest = [
+      Item { id: "i2", sku: Sku "S-2", name: "beta", qty: 3 },
+      Item { id: "i3", sku: Sku "S-3", name: "Gamma", qty: 5 }
+    ]
+    let _ = insertMany rest in Item
+    Unit
+  }
+
+test "queries read back what was written" requires [dbRead, dbWrite] {
+  let _ = seed ()
+  expect titleOf "i1" == "alpha"
+  expect titleOf "nope" == "none"
+  expect countAbove 4 == 2
+  expect totalQty () == 15
+  expect biggestQty () == 7
+  expect smallestQty () == 3
+  expect bySku "S-2" == 1
+  expect eitherName "alpha" "beta" == 2
+  expect List.length (orderedNames ()) == 3
+  expect orderedNames () == ["alpha", "Gamma", "beta"]
+  expect cheapestName () == "beta"
+  expect namesLike "%a" == 3
+  expect namesLike "gamma" == 0
+  expect namesILike "gamma" == 1
+  expect biggestQtyNamed "alpha" == Something 7
+  expect biggestQtyNamed "no-such-name" == Nothing
+}
+
+# The Memory store is NOT reset between test blocks (it is one process-wide store on
+# both backends), so this test owns its own rows rather than re-seeding the first one's.
+test "update and delete change what queries see" requires [dbRead, dbWrite] {
+  with database ProbeDb {
+    let _ = insert Item { id: "u1", sku: Sku "S-U1", name: "delta", qty: 20 }
+    let _ = insert Item { id: "u2", sku: Sku "S-U2", name: "epsilon", qty: 30 }
+    Unit
+  }
+  with database ProbeDb {
+    update i in Item
+      where i.id == "u1"
+      set i.name = "renamed"
+      set i.qty = 21
+  }
+  expect titleOf "u1" == "renamed"
+  expect biggestQty () == 30
+  expect titleOf "u1" == "renamed"
+  expect countAbove 19 == 2
+  with database ProbeDb {
+    delete i from Item where i.qty > 25
+  }
+  expect countAbove 19 == 1
+  expect titleOf "u2" == "none"
+}
+|}
+
+let test_db_with_go () =
+  let emitted = emit_ok "<go-db>" db_source in
+  let module_go = artifact "internal/teslmodgodb/module.go" emitted in
+  check bool "an entity becomes a row struct" true
+    (contains module_go "type Item struct {");
+  check bool "and one package-level table" true
+    (contains module_go "var ItemTable = teslrt.NewTable[Item]()");
+  (* The duplicate-primary-key check is what keeps the two backends answering the same
+     question: Racket keys its store by the primary key and raises on a duplicate. *)
+  check bool "insert carries the primary-key conflict test" true
+    (contains module_go
+       "teslrt.TableInsert(ItemTable, \"Item\", Item{Id: \"i1\", Sku: Sku{Value: \"S-1\"}, Name: \"alpha\", Qty: teslrt.FromInt64(7)}, func(teslRow, teslNew Item) bool { return (teslRow.Id == teslNew.Id) })");
+  check bool "a where clause becomes a predicate over the row" true
+    (contains module_go
+       "teslrt.TableSelectOne(ItemTable, func(i Item) bool { return (i.Id == wanted) })");
+  check bool "`order … desc` swaps the comparison rather than sorting twice" true
+    (contains module_go
+       "teslrt.TableSelectSorted(ItemTable, func(_ Item) bool { return true }, func(teslLeft, teslRight Item) bool { return (teslrt.Compare(teslRight.Qty, teslLeft.Qty) < 0) }, 0, -1)");
+  check bool "selectSum folds the column with its own addition" true
+    (contains module_go "teslrt.TableFold(ItemTable,");
+  check bool "`like` is a matcher, never a regular expression" true
+    (contains module_go "teslrt.SqlLike(i.Name, pattern, false)");
+  check bool "`ilike` folds case" true
+    (contains module_go "teslrt.SqlLike(i.Name, pattern, true)");
+  (* Every `set` value reads the row as it was, so the update applies to a copy.  The
+     update in this probe lives in a `test` block, hence the test artifact. *)
+  let tests_go = artifact "internal/teslmodgodb/module_test.go" emitted in
+  check bool "update assigns into a copy of the row" true
+    (contains tests_go "teslNext := i");
+  check bool "and reports nothing back, because `update` is a statement" true
+    (contains tests_go "_ = teslrt.TableUpdate(ItemTable,");
+  (* `go test` RUNS the two test blocks, so a wrong answer fails here. *)
+  gate_emitted "tesl-go-db" emitted
+
+let test_unsupported_database_forms_fail_closed () =
+  let expect_go_error name source needle =
+    match Compile.compile_go_source ("<go-" ^ name ^ ">") source with
+    | Compile.GoSuccess _ -> failf "%s emitted instead of failing closed" name
+    | Compile.GoFailure diagnostics ->
+      check bool (name ^ " fails closed") true
+        (List.exists (fun (d : Compile.diagnostic) ->
+           d.source = "go-emitter" && contains d.message needle) diagnostics)
+  in
+  let program ~entity_extra ~backend ~body = Printf.sprintf {|module GoDbBad exposing [probe]
+import Tesl.Prelude exposing [Int, String, List]
+import Tesl.DB exposing [dbRead]
+import Tesl.Database exposing [Database, Memory, Postgres, PostgresConfig, TcpConnection]
+
+entity Item table "bad_items" primaryKey id {
+  id: String
+  qty: Int%s
+}
+
+database BadDb = Database {
+  schema: "public"
+  entities: [Item]
+  backend: %s
+}
+
+fn probe() -> List Item
+  requires [dbRead] =
+  with database BadDb {
+    %s
+  }
+|} entity_extra backend body
+  in
+  (* Postgres needs a driver; running it against an in-memory store instead would be a
+     silent substitution, so it is refused. *)
+  expect_go_error "postgres-backend"
+    (program ~entity_extra:""
+       ~backend:"Postgres (PostgresConfig {\n    dbName: \"x\"\n    user: \"u\"\n    password: \"p\"\n    connection: TcpConnection {\n      host: \"localhost\"\n      port: 5432\n    }\n  })"
+       ~body:"select i from Item")
+    "`backend: Memory` only";
+  (* A UNIQUE index is ENFORCED by the Racket memory backend, so accepting one without
+     enforcing it would make the two backends run different programs. *)
+  expect_go_error "unique-index"
+    (program ~entity_extra:"\n  unique index [qty]" ~backend:"Memory"
+       ~body:"select i from Item")
+    "unique index";
+  expect_go_error "inner-join"
+    (program ~entity_extra:"" ~backend:"Memory"
+       ~body:"select i from Item innerJoin Item on i.id Item.id")
+    "innerJoin"
+
+
+(* ─── Instants, and the effects with no state of their own ────────────────────
+   `PosixMillis` is an exact-integer instant provided by the runtime (an instant crosses
+   module boundaries, so it cannot be emitted per module), and `Tesl.Env`/`Tesl.Random`/
+   `Tesl.Id` are one runtime call each behind a capability the checker enforces.  Racket
+   runs the same sources as the oracle. *)
+let time_source = {|module GoTime exposing [ageMs, roundTripSeconds]
+
+import Tesl.Prelude exposing [Bool(..), Int, String]
+import Tesl.Time exposing [
+  PosixMillis,
+  time,
+  nowMillis,
+  durationMs,
+  addMs,
+  subtractMs,
+  diffMs,
+  Time.posixToSeconds,
+  Time.secondsToPosix,
+]
+
+fn roundTripSeconds(seconds: Int) -> Int =
+  Time.posixToSeconds (Time.secondsToPosix seconds)
+
+fn spanMs(fromSeconds: Int, toSeconds: Int) -> Int =
+  diffMs (Time.secondsToPosix fromSeconds) (Time.secondsToPosix toSeconds)
+
+fn shifted(seconds: Int, deltaMs: Int) -> Int =
+  Time.posixToSeconds (addMs (Time.secondsToPosix seconds) deltaMs)
+
+fn backShifted(seconds: Int, deltaMs: Int) -> Int =
+  Time.posixToSeconds (subtractMs (Time.secondsToPosix seconds) deltaMs)
+
+fn ageMs(past: PosixMillis) -> Int
+  requires [time] =
+  durationMs past
+
+fn nowIsAfterEpoch() -> Bool
+  requires [time] =
+  diffMs (Time.secondsToPosix 0) (nowMillis ()) > 1700000000000
+
+test "seconds and milliseconds convert both ways" {
+  expect roundTripSeconds 7 == 7
+  expect roundTripSeconds 0 == 0
+  expect spanMs 10 12 == 2000
+  expect spanMs 12 10 == -2000
+  expect shifted 10 2500 == 12
+  expect backShifted 10 2500 == 7
+}
+
+test "the clock is read through the time capability" requires [time] {
+  expect nowIsAfterEpoch () == True
+  expect ageMs (addMs (nowMillis ()) 60000) == 0
+}
+|}
+
+let effects_source = {|module GoEffects exposing [portOrDefault, hostOrDefault, requiredName, diceInRange]
+
+import Tesl.Prelude exposing [Bool(..), Int, String]
+import Tesl.String exposing [String.length, String.startsWith]
+import Tesl.Float exposing [Float]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Env exposing [envRead, env, envInt, envString, requireEnv]
+import Tesl.Random exposing [random, randomInt, randomFloat]
+import Tesl.Id exposing [generateId, generatePrefixedId]
+
+fn portOrDefault() -> Int
+  requires [envRead] =
+  envInt "TESL_PROBE_PORT" 8080
+
+fn hostOrDefault() -> String
+  requires [envRead] =
+  envString "TESL_PROBE_HOST" "localhost"
+
+fn requiredName() -> String
+  requires [envRead] =
+  requireEnv "TESL_PROBE_NAME"
+
+fn describeEnv() -> String
+  requires [envRead] =
+  case env "TESL_PROBE_MISSING" of
+    Nothing -> "unset"
+    Something v -> v
+
+fn diceInRange() -> Bool
+  requires [random] =
+  let roll = randomInt 1 7
+  roll >= 1 && roll < 7
+
+fn freshId() -> String
+  requires [random] =
+  generatePrefixedId "task"
+
+fn idsDiffer() -> Bool
+  requires [random] =
+  freshId () != freshId ()
+
+fn bareIdLength() -> Int
+  requires [random] =
+  String.length (generateId ())
+
+fn unitFraction() -> Bool
+  requires [random] =
+  let drawn = randomFloat ()
+  drawn >= 0.0 && drawn < 1.0
+
+test "env reads fall back when a variable is unset" requires [envRead] {
+  expect portOrDefault () == 8080
+  expect hostOrDefault () == "localhost"
+  expect describeEnv () == "unset"
+}
+
+test "randomness stays inside its range" requires [random] {
+  expect diceInRange () == True
+  expect unitFraction () == True
+  expect idsDiffer () == True
+  expect bareIdLength () == 33
+  expect String.startsWith (freshId ()) "task-" == True
+}
+|}
+
+let test_time_with_go () =
+  let emitted = emit_ok "<go-time>" time_source in
+  let module_go = artifact "internal/teslmodgotime/module.go" emitted in
+  check bool "an instant is the runtime's own type" true
+    (contains module_go "func RoundTripSeconds(seconds teslrt.Int) teslrt.Int");
+  check bool "conversions are runtime calls" true
+    (contains module_go "teslrt.PosixToSeconds(teslrt.SecondsToPosix(seconds))");
+  (* The `time` capability is compile-time: nothing is threaded through the call. *)
+  check bool "reading the clock takes no capability argument" true
+    (contains module_go "teslrt.NowMillis()");
+  gate_emitted "tesl-go-time" emitted
+
+let test_effect_leaves_with_go () =
+  let emitted = emit_ok "<go-effects>" effects_source in
+  let module_go = artifact "internal/teslmodgoeffects/module.go" emitted in
+  check bool "env reads are runtime calls with their fallback" true
+    (contains module_go "teslrt.EnvInt(\"TESL_PROBE_PORT\", teslrt.FromInt64(8080))");
+  check bool "`env` yields a Maybe" true
+    (contains module_go "teslrt.EnvMaybe(\"TESL_PROBE_MISSING\")");
+  check bool "randomness comes from the runtime" true
+    (contains module_go "teslrt.RandomInt(teslrt.FromInt64(1), teslrt.FromInt64(7))");
+  check bool "ids come from the runtime" true
+    (contains module_go "teslrt.GeneratePrefixedId(\"task\")");
+  (* Two calls of ONE effectful function are not "identical expressions" (staticcheck
+     SA4000): each side is bound first, which also pins the evaluation order. *)
+  check bool "comparing two calls binds each side" true
+    (contains module_go "teslLeft := freshId()");
+  gate_emitted "tesl-go-effects" emitted
+
+
+(* ─── A rejected check must ANSWER, not crash the request ─────────────────────
+   Three consumption sites, three different obligations, all measured against Racket:
+     • inside another `check` — the rejection PROPAGATES as this check's result
+       (Racket's `let/check`: `(if (check-fail? result) result …)`);
+     • as a check's whole TAIL — the delegate's `Check` IS the result;
+     • inside a HANDLER body — it becomes the response, carrying the check's own status,
+       because `dsl/web.rkt` installs the raise-on-escaping-failure wrapper for every
+       function kind EXCEPT `handler`.
+   Before this, all three emitted `MustCheck`, which TRAPS: a request that should have
+   answered 422 crashed instead. *)
+let check_delegation_source = {|module GoCheckDelegate exposing [DelegateServer]
+
+import Tesl.Prelude exposing [Int, String]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Int exposing [Int.parse]
+import Tesl.Json exposing [stringCodec, intCodec]
+import Tesl.ApiTest exposing [statusOk, statusClientError]
+
+fact ValidAge(n: Int)
+
+check checkAge(n: Int) -> n: Int ::: ValidAge n =
+  if n > 0 then
+    ok n ::: ValidAge n
+  else
+    fail 422 "age must be positive"
+
+# A check that DELEGATES to another check via a let binding: on Racket the inner
+# rejection PROPAGATES (let/check returns the failure), so a handler answers 422.
+check checkTwice(raw: Int) -> n: Int ::: ValidAge n =
+  let n = check checkAge raw
+  ok n ::: ValidAge n
+
+# TAIL delegation: the inner check's result IS this check's result — no unwrapping and
+# no re-attaching, on either backend.
+check parseAge(raw: String) -> n: Int ::: ValidAge n =
+  case Int.parse raw of
+    Nothing -> fail 400 "age must be a number"
+    Something parsed ->
+      check checkAge parsed
+
+record Reply {
+  age: Int
+}
+
+codec Reply {
+  toJson {
+    age -> "age" with_codec intCodec
+  }
+  fromJson_forbidden
+}
+
+handler get show(raw: String) -> Reply =
+  let parsed = check parseAge raw
+  let valid = check checkTwice parsed
+  Reply { age: valid }
+
+api DelegateApi {
+  get "/show/:raw"
+    capture raw: String using stringCodec
+    -> Reply
+}
+
+server DelegateServer for DelegateApi {
+  show
+}
+
+api-test "a delegated rejection answers, rather than crashing the request" for DelegateServer requires [] {
+  let bad = get "/show/-1"
+  expect statusClientError bad.status
+  let unparseable = get "/show/abc"
+  expect statusClientError unparseable.status
+  let good = get "/show/7"
+  expect statusOk good.status
+}
+|}
+
+let test_check_delegation_with_go () =
+  let emitted = emit_ok "<go-check-delegate>" check_delegation_source in
+  let module_go = artifact "internal/teslmodgocheckdelegate/module.go" emitted in
+  check bool "a check's tail delegates by handing back the delegate's own result" true
+    (contains module_go "return checkAge(parsed)");
+  check bool "a delegated rejection inside a check becomes this check's result" true
+    (contains module_go "return teslrt.Reject[teslrt.Int](teslDelegated");
+  (* In a handler the rejection travels to the router, which answers with its status. *)
+  check bool "a handler consumes a check through the request-boundary form" true
+    (contains module_go "teslrt.MustCheckRequest(parseAge(raw))");
+  check bool "and a plain function still traps" true
+    (not (contains module_go "teslrt.MustCheck(parseAge"));
+  (* The api-test RUNS the three paths: 422 for a rejected age, 400 for an unparseable
+     one, 200 with the body for the happy path. *)
+  gate_emitted "tesl-go-check-delegate" emitted
+
 let test_divergent_float_functions_fail_closed () =
   (* Go's sin/cos/tan disagree with Racket on 22-34% of inputs and its math.Log is
      outright wrong for subnormals, so these are rejected rather than emitted
@@ -4197,6 +4711,21 @@ let () =
       test_case "HTTP checked path captures" `Slow test_http_capture_with_go;
       test_case "HTTP cookie writing via requires [cookieCap]" `Slow test_http_cookie_with_go;
       test_case "Tesl api-tests run against the Go server" `Slow test_go_api_tests;
+      test_case "Memory-backend databases" `Slow test_db_with_go;
+      test_case "databases behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-db-oracle>" db_source);
+      test_case "unsupported database forms fail closed" `Quick
+        test_unsupported_database_forms_fail_closed;
+      test_case "a rejected check answers instead of crashing" `Slow
+        test_check_delegation_with_go;
+      test_case "check delegation behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-check-delegate-oracle>" check_delegation_source);
+      test_case "instants (Tesl.Time core)" `Slow test_time_with_go;
+      test_case "instants behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-time-oracle>" time_source);
+      test_case "env, randomness and ids" `Slow test_effect_leaves_with_go;
+      test_case "effect leaves behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-effects-oracle>" effects_source);
       test_case "establish and detached proofs" `Slow test_establish_with_go;
       test_case "detached proofs behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-establish>" establish_source);

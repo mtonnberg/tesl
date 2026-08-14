@@ -122,6 +122,7 @@ let should_pass src =
    tests.  Entity declaration alone compiles (no `database` block needed for
    `--check`). *)
 let note_entity = {|
+import Tesl.Maybe exposing [Maybe(..)]
 entity Note table "notes" primaryKey id {
   id: String @db(text)
   authorId: String @db(text)
@@ -148,8 +149,9 @@ let db_ops = [
   { op_tag = "selectCount"; op_cap = "dbRead";
     op_ret = "Int";
     op_body = "selectCount note from Note where note.id == id" };
+  (* `Maybe Int`, not `Int`: an aggregate over no matching row has no maximum. *)
   { op_tag = "selectMax"; op_cap = "dbRead";
-    op_ret = "Int";
+    op_ret = "Maybe Int";
     op_body = "selectMax note.n from Note where note.id == id" };
   { op_tag = "selectSum"; op_cap = "dbRead";
     op_ret = "Int";
