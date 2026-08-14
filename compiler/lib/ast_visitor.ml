@@ -150,9 +150,9 @@ let map_children (f : expr -> expr) (e : expr) : expr =
   | EList { elems; loc } ->
     let elems' = List.map f elems in
     EList { elems = elems'; loc }
-  | EOk { value; proof; loc } ->
+  | EOk { value; proof; keyword; loc } ->
     let value' = f value in
-    EOk { value = value'; proof; loc }
+    EOk { value = value'; proof; keyword; loc }
   | EFail { status; message; loc } ->
     let message' = f message in
     EFail { status; message = message'; loc }

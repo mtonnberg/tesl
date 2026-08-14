@@ -68,7 +68,7 @@ let sample : expr =
   let e_list = EList { elems = [int_ 42 1; int_ 43 2]; loc = loc_at 44 } in
   let e_ok = EOk { value = var 45 "v";
                    proof = PredApp { pred = "P"; args = ["v"]; loc = loc_at 46 };
-                   loc = loc_at 47 } in
+                   keyword = true; loc = loc_at 47 } in
   let e_fail = EFail { status = 400; message = var 48 "msg"; loc = loc_at 49 } in
   let e_tel = ETelemetry { name = "evt"; fields = [("a", var 50 "x")]; loc = loc_at 51 } in
   let e_enq = EEnqueue { job_type = "j"; payload = var 52 "p"; loc = loc_at 53 } in

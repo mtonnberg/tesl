@@ -1786,7 +1786,7 @@ and parse_ok s =
   let* _ = expect s PROOF_ANNOT in
   let* proof = parse_proof_expr s in
   let loc = span loc0 (current_loc s) in
-  return (EOk { value; proof; loc })
+  return (EOk { value; proof; keyword = true; loc })
 
 and parse_stringish_expr s =
   let loc0 = current_loc s in
@@ -1894,7 +1894,7 @@ and parse_pipe_right s =
       (match parse_proof_expr s with
        | Ok proof ->
          let loc = expr_loc left in
-         return (EOk { value = left; proof; loc })
+         return (EOk { value = left; proof; keyword = false; loc })
        | Err _ -> return left)
     end else return left
   in
@@ -3214,8 +3214,8 @@ let parse_fn_decl_named ?(http_methods = []) kind name loc0 s =
       ELet { name; declared_type; declared_proof; value; body = propagate_return_hint body th; loc }
     | ELetProof { value_name; proof_name; proof_index; value; body; loc } ->
       ELetProof { value_name; proof_name; proof_index; value; body = propagate_return_hint body th; loc }
-    | EOk { value; proof; loc } ->
-      EOk { value = propagate_return_hint value th; proof; loc }
+    | EOk { value; proof; keyword; loc } ->
+      EOk { value = propagate_return_hint value th; proof; keyword; loc }
     | EWithDatabase { database_name; body; loc } ->
       EWithDatabase { database_name; body = propagate_return_hint body th; loc }
     | EWithCapabilities { capabilities; body; loc } ->

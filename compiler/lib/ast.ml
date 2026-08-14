@@ -120,8 +120,14 @@ and expr =
   | ERecord of { fields : (string * expr) list; type_hint : string option; loc : loc }
                (** record literal { k: v, ... } — type_hint from let x: Type = { } *)
   | EList   of { elems : expr list; loc : loc }
-  | EOk     of { value : expr; proof : proof_expr; loc : loc }
-               (** ok expr ::: Proof *)
+  | EOk     of { value : expr; proof : proof_expr; keyword : bool; loc : loc }
+               (** [ok expr ::: Proof] ([keyword = true]) and the bare attachment
+                   [expr ::: proof] ([keyword = false]).  ONE node for both, because they
+                   mean the same thing to the checker — a value carrying a proof — and the
+                   spelling is what tells a CONSUMER whether the result is a check's answer
+                   (a [Check]) or an ordinary value with an erased proof.  The Go backend
+                   needs that distinction: [let outcome = if … then ok n ::: P else fail …]
+                   is a check result, while [let reat = v ::: proof] is just [v]. *)
   | EFail   of { status : int; message : expr; loc : loc }
                (** fail 400 "..." or fail 400 "... ${expr} ..." *)
   | ETelemetry of { name : string; fields : (string * expr) list; loc : loc }

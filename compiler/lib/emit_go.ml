@@ -1393,6 +1393,38 @@ let type_of_sql_form signatures loc form =
       "Go backend does not support `deleteAndReturnResult` yet"
     else begin ignore (entity_of_query loc seed.entity); TUnit end
 
+(* A stand-in for the ADT info a scalar `case` does not have.  The scalar path never reads it;
+   it exists so the two paths can share one `let` binding rather than duplicating every arm
+   walk below. *)
+let adt_placeholder_info = {
+  adt_tesl_name = ""; adt_owner = ""; adt_go_name = ""; adt_tag_type = "";
+  adt_params = []; adt_variants = []; adt_loc = Location.dummy_loc "";
+  adt_builtin = true;
+}
+
+(* A `case` may discriminate a SCALAR as well as an ADT — `case a + b of 0 -> … | _ -> …` — and
+   then the arms are literal patterns plus a catch-all rather than constructors.  Which scalars:
+   the ones with an equality this backend emits (a newtype included, comparing its payload).
+   `Float` is deliberately absent: comparing a float for equality is the bug the Float slice
+   refuses elsewhere, and a `case` over one would hide it behind pattern syntax. *)
+let scalar_case_type = function
+  | TInt | TString | TBool -> true
+  | TNewtype info -> (match info.base with TInt | TString | TBool -> true | _ -> false)
+  | _ -> false
+
+(* Bindings a scalar arm introduces.  A literal binds nothing, a variable binds the scrutinee,
+   and a constructor pattern is refused — there is no ADT here to name a constructor of. *)
+let scalar_pattern_bindings _loc scrut_ty pattern =
+  match pattern with
+  | PWild -> []
+  | PVar name -> [name, scrut_ty]
+  | PLit _ -> []
+  (* `True`/`False` parse as nullary CONSTRUCTORS, but over a Bool scrutinee they are the two
+     literals — Racket matches them the same way. *)
+  | PNullary { ctor = ("True" | "False"); _ } -> []
+  | PNullary { ctor; loc } | PCon { ctor; loc; _ } ->
+    unsupported loc "Go backend `case` over a scalar cannot match constructor `%s`" ctor
+
 let rec type_of_expr signatures env expr =
   match expr with
   | ELit { lit = LInt _ | LBigInt _; _ } -> TInt
@@ -1910,13 +1942,20 @@ let rec type_of_expr signatures env expr =
      | TJson, _ -> TJson
      | _ -> unsupported loc "Go backend does not support field `%s` yet" field)
   | ECase { scrut; arms; loc } ->
-    let info, type_args = match type_of_expr signatures env scrut with
+    let scrut_ty = type_of_expr signatures env scrut in
+    let info, type_args = match scrut_ty with
       | TAdt (info, args) -> info, args
-      | _ -> unsupported loc "Go backend supports `case` over a module ADT only"
+      | ty when scalar_case_type ty ->
+        (* Handled by the scalar path below; these are never read. *)
+        adt_placeholder_info, []
+      | _ -> unsupported loc
+        "Go backend supports `case` over a module ADT or a scalar (Int, String, Bool)"
     in
     if arms = [] then unsupported loc "Go backend requires at least one `case` arm";
     let arm_envs = List.map (fun (arm : case_arm) ->
-      let bindings = pattern_bindings loc info type_args arm.pattern in
+      let bindings =
+        if scalar_case_type scrut_ty then scalar_pattern_bindings loc scrut_ty arm.pattern
+        else pattern_bindings loc info type_args arm.pattern in
       let arm_env = bindings @ env in
       (match arm.guard with
        | None -> ()
@@ -2006,6 +2045,13 @@ let rec type_of_expr signatures env expr =
           "Go backend list literal elements have different types") elems;
     ignore loc;
     TList element
+  (* `ok value ::: P` and the bare attachment `value ::: proof` are the same NODE, and the
+     spelling is what says which is meant: the first is a check's answer (a `Check`), the second
+     an ordinary value whose proof erases.  Reading both as a `Check` made
+     `let reat = v ::: proof` a `Check[Int]` and the next call rejected its own argument;
+     reading both as the value made `let outcome = if … then ok n ::: P else fail …` an `Int`
+     where the check's result type was required.  The parser records the spelling. *)
+  | EOk { value; keyword = false; _ } -> type_of_expr signatures env value
   | EOk { value; _ } -> TCheck (type_of_expr signatures env value)
   | EFail { message; loc; _ } ->
     if type_of_expr signatures env message <> TString then
@@ -2432,6 +2478,11 @@ and type_of_arg signatures env want arg =
      so the argument is just the value. *)
   | EOk { value; _ } when (match want with TCheck _ -> false | _ -> true) ->
     type_of_arg signatures env want value
+  (* A check's tail: the expectation is what says this `ok value ::: P` is a check result. *)
+  | EOk { value; _ } ->
+    (match want with
+     | TCheck inner -> TCheck (type_of_arg signatures env inner value)
+     | _ -> assert false)
   (* An empty list literal has no element to infer from: the expectation supplies it. *)
   | EList { elems = []; _ } when (match want with TList _ -> true | _ -> false) -> want
   (* The expectation belongs to each BRANCH, and a branch is exactly where an
@@ -2461,13 +2512,18 @@ and type_of_arg signatures env want arg =
   (* The expectation belongs to each ARM for the same reason it belongs to each `if`
      branch. *)
   | ECase { scrut; arms; loc } ->
-    let info, type_args = match type_of_expr signatures env scrut with
+    let scrut_ty = type_of_expr signatures env scrut in
+    let info, type_args = match scrut_ty with
       | TAdt (info, args) -> info, args
-      | _ -> unsupported loc "Go backend supports `case` over a module ADT only"
+      | ty when scalar_case_type ty -> adt_placeholder_info, []
+      | _ -> unsupported loc
+        "Go backend supports `case` over a module ADT or a scalar (Int, String, Bool)"
     in
     if arms = [] then unsupported loc "Go backend requires at least one `case` arm";
     List.fold_left (fun acc (arm : case_arm) ->
-      let arm_env = pattern_bindings loc info type_args arm.pattern @ env in
+      let arm_env =
+        (if scalar_case_type scrut_ty then scalar_pattern_bindings loc scrut_ty arm.pattern
+         else pattern_bindings loc info type_args arm.pattern) @ env in
       (match arm.guard with
        | None -> ()
        | Some guard ->
@@ -3342,6 +3398,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
   | ELetProof _ as let_proof -> emit_let_expr ?expected ~indent signatures env let_proof
   | ERecord { loc; _ } ->
     unsupported loc "Go backend cannot emit this expression yet"
+  | EOk { value; keyword = false; _ } -> emit_expr ?expected ~indent signatures env value
   | EOk { value; _ } when (match expected with Some (TCheck _) | None -> false | Some _ -> true) ->
     (* Proof attachment at a call site: the proof has no runtime content. *)
     emit_expr ?expected ~indent signatures env value
@@ -3429,6 +3486,109 @@ and pattern_plan info type_args pattern =
    `case` carries an expr body while a test-block `case` carries a statement list, and the
    discrimination logic is the same for both. *)
 and emit_case_statements ?(indent="") signatures env buffer scrut arms =
+  match type_of_expr signatures env scrut with
+  | scalar_ty when scalar_case_type scalar_ty ->
+    emit_scalar_case_statements ~indent signatures env buffer scrut arms scalar_ty
+  | _ -> emit_adt_case_statements ~indent signatures env buffer scrut arms
+
+(* A `case` over a SCALAR: the arms are literal patterns and at most one catch-all, so the
+   emitted shape is an `if`/`else if` chain over the scrutinee rather than a tag switch — a Go
+   `switch` on the value would not work for `teslrt.Int`, which is deliberately not comparable
+   with `==`.  The scrutinee is bound once, so a non-trivial one is evaluated once.
+   Exhaustiveness is the checker's (Racket requires it too), and the final `panic` says so
+   rather than answering a zero value if a future change ever let a non-exhaustive case
+   through. *)
+and emit_scalar_case_statements ?(indent="") signatures env buffer scrut arms scrut_ty =
+  let scrut_name = Printf.sprintf "teslScrut%d" (String.length indent) in
+  let inner = indent ^ "\t" in
+  Printf.bprintf buffer "%s{\n" indent;
+  Printf.bprintf buffer "%s%s := %s\n" inner scrut_name
+    (emit_expr ~expected:scrut_ty ~indent:inner signatures env scrut);
+  let arm_pattern (pattern, _, _) = pattern in
+  let arm_guard (_, guard, _) = guard in
+  let arm_body (_, _, body) = body in
+  (* A pattern's own condition, and the environment its bindings add. *)
+  let condition_of arm =
+    match arm_pattern arm with
+    | PWild -> None, env
+    | PVar name -> None, (name, scrut_ty) :: env
+    | PLit { value; loc } ->
+      (* A literal pattern compares against the scrutinee's PAYLOAD when that is a newtype: the
+         pattern is written as the base value (`case code of 404 -> …`), so wrapping it would be
+         the wrong shape and reading `.Value` off a bare literal does not compile. *)
+      let compared_ty, compared_scrut = match scrut_ty with
+        | TNewtype info -> info.base, Printf.sprintf "%s.Value" scrut_name
+        | ty -> ty, scrut_name
+      in
+      let literal =
+        emit_expr ~expected:compared_ty ~indent:inner signatures env (ELit { lit = value; loc }) in
+      Some (strip_outer_parens (equal_expr compared_ty compared_scrut literal)), env
+    | PNullary { ctor = ("True" | "False") as ctor; _ } ->
+      (* A Bool literal: the scrutinee itself, or its negation. *)
+      Some (if ctor = "True" then scrut_name else "!" ^ scrut_name), env
+    | PNullary { ctor; loc } | PCon { ctor; loc; _ } ->
+      unsupported loc "Go backend `case` over a scalar cannot match constructor `%s`" ctor
+  in
+  let bind_variable body_indent arm arm_env =
+    match arm_pattern arm with
+    | PVar name ->
+      Printf.bprintf buffer "%s%s := %s\n%s_ = %s\n" body_indent (local_ident name)
+        scrut_name body_indent (local_ident name);
+      arm_env
+    | _ -> arm_env
+  in
+  let rec chain = function
+    | [] ->
+      Printf.bprintf buffer
+        "%spanic(\"unreachable: checker guarantees case exhaustiveness\")\n" inner
+    | arm :: rest ->
+      let condition, arm_env = condition_of arm in
+      let guard = arm_guard arm in
+      let full_condition = match condition, guard with
+        | None, None -> None
+        | Some condition, None -> Some condition
+        | None, Some guard ->
+          Some (strip_outer_parens (emit_expr ~indent:inner signatures arm_env guard))
+        | Some condition, Some guard ->
+          (* The guard may name the variable this arm binds, which is bound INSIDE the branch —
+             so a guarded variable pattern reads the scrutinee directly instead. *)
+          let guard_env = match arm_pattern arm with
+            | PVar name -> (name, scrut_ty) :: env
+            | _ -> env
+          in
+          Some (Printf.sprintf "%s && %s" condition
+                  (strip_outer_parens (emit_expr ~indent:inner signatures guard_env guard)))
+      in
+      (match full_condition with
+       | None ->
+         Printf.bprintf buffer "%s{\n" inner;
+         let body_indent = inner ^ "\t" in
+         let arm_env = bind_variable body_indent arm arm_env in
+         (arm_body arm) arm_env body_indent;
+         Printf.bprintf buffer "%s}\n" inner
+       | Some condition ->
+         (* A variable pattern is bound BEFORE the condition when the guard reads it — the
+            guard is written in terms of the name, not of the scrutinee. *)
+         let binds_variable = match arm_pattern arm with PVar _ -> true | _ -> false in
+         if binds_variable then begin
+           Printf.bprintf buffer "%s{\n" inner;
+           let arm_env = bind_variable (inner ^ "\t") arm arm_env in
+           Printf.bprintf buffer "%s\tif %s {\n" inner condition;
+           (arm_body arm) arm_env (inner ^ "\t\t");
+           Printf.bprintf buffer "%s\t}\n%s}\n" inner inner
+         end else begin
+           Printf.bprintf buffer "%sif %s {\n" inner condition;
+           let body_indent = inner ^ "\t" in
+           let arm_env = bind_variable body_indent arm arm_env in
+           (arm_body arm) arm_env body_indent;
+           Printf.bprintf buffer "%s}\n" inner
+         end;
+         chain rest)
+  in
+  chain arms;
+  Printf.bprintf buffer "%s}\n" indent
+
+and emit_adt_case_statements ?(indent="") signatures env buffer scrut arms =
   let info, type_args = match type_of_expr signatures env scrut with
     | TAdt (info, args) -> info, args
     | _ -> invalid_arg "case scrutinee validated before emission"
@@ -6262,6 +6422,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             if name = "Dict.toList" || name = "Dict.fromList" then tuple_imported := true
           end else match name with
             | "Dict" -> ()
+            (* `HasKey` is the proof `Dict.requireKey` mints, and it erases like every other
+               fact: what it buys is that `Dict.get` does not compile without it. *)
+            | "HasKey" -> ()
             | other -> unsupported import.loc
               "Go backend does not support `Tesl.Dict` export `%s` yet" other) exposed
       end) m.imports;

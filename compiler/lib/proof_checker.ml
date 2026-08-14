@@ -710,7 +710,7 @@ let validate_check_return (all_funcs : func_decl list) (fd : func_decl) : proof_
     ignore param_names; ignore binding_env;
     let rec validate_ok_expr (e : Ast.expr) =
       match e with
-      | EOk { value; proof; loc } ->
+      | EOk { value; proof; loc; _ } ->
         (* Check for dotted paths in proof subjects *)
         errors := check_proof_no_dotted_path proof loc @ !errors;
         (match fd.return_spec with
@@ -2016,10 +2016,10 @@ supplies the wrong arguments (%s); the body must return the declared fact about 
           let init_fact_names = fact_type_params in
           let rec check_gw param_map fact_names e =
             match e with
-            | EOk { value = ERecord { fields; type_hint = Some type_name; _ }; proof; loc }
+            | EOk { value = ERecord { fields; type_hint = Some type_name; _ }; proof; loc; _ }
             | EOk { value = EApp { fn = EConstructor { name = type_name; args = []; _ };
                                    arg = ERecord { fields; _ }; _ };
-                    proof; loc } ->
+                    proof; loc; _ } ->
               (match List.assoc_opt type_name record_inv_map with
                | None -> ()
                | Some (_, inv) ->
@@ -2323,10 +2323,10 @@ supplies the wrong arguments (%s); the body must return the declared fact about 
               |> Option.map fst
             in
             (match value with
-             | EOk { value = ERecord { fields; type_hint; _ }; proof; loc }
+             | EOk { value = ERecord { fields; type_hint; _ }; proof; loc; _ }
              | EOk { value = EApp { fn = EConstructor { name = _; args = []; _ };
                                     arg = ERecord { fields; type_hint; _ }; _ };
-                     proof; loc } ->
+                     proof; loc; _ } ->
                (* Normalize: for EApp case, synthesize type_hint from constructor name *)
                let type_hint_for_app = match value with
                  | EOk { value = EApp { fn = EConstructor { name; _ }; _ }; _ } -> Some name

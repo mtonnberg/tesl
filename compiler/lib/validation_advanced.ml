@@ -1276,8 +1276,10 @@ let check_ghost_witness_predicates
     let resolve_witness_proofs subject_env proof_env (witness : proof_expr) loc
         : proof_expr list =
       let wrapper =
+        (* A synthetic wrapper, only so the witness can be walked: the spelling is irrelevant
+           here, and `keyword` says "written `ok …`" because that is the shape being modelled. *)
         EOk { value = EFail { status = 0; message = ELit { lit = LString ""; loc }; loc };
-              proof = witness; loc }
+              proof = witness; keyword = true; loc }
       in
       match carried_proofs_of_expr ~funcs subject_env proof_env wrapper with
       | Some proofs -> List.map Proof_kernel.fact_of proofs
@@ -1391,7 +1393,7 @@ let check_ghost_witness_predicates
     let rec walk_expr (type_env : type_env) (subject_env : subject_env)
         (proof_env : proof_env) (e : expr) =
       match e with
-      | EOk { value; proof; loc } ->
+      | EOk { value; proof; loc; _ } ->
         (match value with
          | EApp { fn = EConstructor { name = rname; args = []; _ };
                   arg = ERecord { fields = witnessed_fields; _ }; _ }

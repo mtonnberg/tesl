@@ -84,7 +84,7 @@ let sample_expr : expr =
   let e_record = ERecord { fields = [ ("k", int_ 24 1) ]; type_hint = None; loc = loc_at 25 } in
   let e_list = EList { elems = [ int_ 26 1; int_ 27 2 ]; loc = loc_at 28 } in
   let proof = PredApp { pred = "P"; args = []; loc = loc_at 29 } in
-  let e_ok = EOk { value = int_ 30 1; proof; loc = loc_at 31 } in
+  let e_ok = EOk { value = int_ 30 1; proof; keyword = true; loc = loc_at 31 } in
   let e_fail = EFail { status = 400; message = e_lit_interp; loc = loc_at 32 } in
   let e_telemetry = ETelemetry { name = "evt"; fields = [ ("n", int_ 33 1) ]; loc = loc_at 34 } in
   let e_enqueue = mk_enqueue () in

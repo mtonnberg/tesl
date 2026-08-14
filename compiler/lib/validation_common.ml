@@ -2269,7 +2269,7 @@ let expr_of_test_stmts (stmts : test_stmt list) : expr option =
           es rest_e
       in
       (match stmt with
-       | TsLet { name; declared_type; value; declared_proof; loc } ->
+       | TsLet { name; declared_type; value; declared_proof; loc; _ } ->
          let body = match rest_e with Some b -> b | None -> leaf loc in
          Some (ELet { name; declared_type; declared_proof; value; body; loc })
        | TsLetProof { value_name; proof_names; value; loc } ->

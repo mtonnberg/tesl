@@ -3861,6 +3861,107 @@ let test_crypto_with_go () =
     (contains module_go "teslrt.CheckSignature(signingKey(), teslrt.SignatureFromHex(tag), payload)");
   gate_emitted ~env:[ "GOCRYPTO_KEY=test-signing-key" ] "tesl-go-crypto" emitted
 
+(* ─── `case` over a scalar ─────────────────────────────────────────────────────
+   `case a + b of 0 -> … | _ -> …` is ordinary Tesl and was refused outright ("supports `case`
+   over a module ADT only"), which blocked whole files on one line. The emitted shape is an
+   if/else-if chain rather than a Go `switch` on the value, because `teslrt.Int` is deliberately
+   not comparable with `==`; the scrutinee is bound once, so a non-trivial one is evaluated once.
+   `True`/`False` parse as nullary CONSTRUCTORS but over a Bool scrutinee they are the two
+   literals, which is how Racket matches them too. *)
+let scalar_case_source = {|module GoScalarCase exposing [classify, label, flagName, tally]
+
+import Tesl.Prelude exposing [Int, String, Bool(..)]
+
+fn classify(a: Int, b: Int) -> Int =
+  case a + b of
+    0 -> 100
+    1 -> 200
+    _ -> a + b
+
+fn label(text: String) -> Int =
+  case text of
+    "yes" -> 1
+    "no" -> 0
+    _ -> 0 - 1
+
+fn flagName(flag: Bool) -> String =
+  case flag of
+    True -> "on"
+    False -> "off"
+
+# A variable pattern binds the scrutinee, and a guard may read the name it binds.
+fn tally(n: Int) -> String =
+  case n of
+    0 -> "none"
+    other where other > 10 -> "many"
+    other -> "some"
+
+test "a scalar case discriminates by literal" {
+  expect classify 0 0 == 100
+  expect classify 1 0 == 200
+  expect classify 3 4 == 7
+  expect label "yes" == 1
+  expect label "no" == 0
+  expect label "maybe" == 0 - 1
+  expect flagName True == "on"
+  expect flagName False == "off"
+}
+
+test "a variable pattern binds, and a guard filters" {
+  expect tally 0 == "none"
+  expect tally 50 == "many"
+  expect tally 3 == "some"
+}
+|}
+
+let test_scalar_case_with_go () =
+  let emitted = emit_ok "<go-scalar-case>" scalar_case_source in
+  let module_go = artifact "internal/teslmodgoscalarcase/module.go" emitted in
+  (* The scrutinee is bound once — `a + b` is not re-evaluated per arm. *)
+  check bool "the scrutinee is bound once" true
+    (contains module_go "teslScrut1 := teslrt.Add(a, b)");
+  check bool "an Int literal arm compares through the runtime" true
+    (contains module_go "if teslrt.Equal(teslScrut1, teslrt.FromInt64(0)) {");
+  check bool "a String literal arm compares directly" true
+    (contains module_go "if teslScrut1 == \"yes\" {");
+  check bool "a Bool arm is the scrutinee, or its negation" true
+    (contains module_go "if !teslScrut1 {");
+  (* A guarded variable arm binds BEFORE the guard runs: the guard names the variable. *)
+  check bool "a guarded variable pattern binds before its guard" true
+    (contains module_go "other := teslScrut1");
+  check bool "and exhaustiveness is the checker's, stated rather than defaulted" true
+    (contains module_go "panic(\"unreachable: checker guarantees case exhaustiveness\")");
+  gate_emitted "tesl-go-scalar-case" emitted
+
+(* A NEWTYPE scrutinee compares through its payload, since the pattern is written as the base
+   value (`case code of 404 -> …`). This is Go-only on purpose: the same program RAISES on
+   Racket — `=: contract violation … given: (newtype-value … 404)` — a newtype-unwrap gap at the
+   pattern-comparison site, of the same family as the `>=`/`<=` and dot-read gaps fixed earlier.
+   Recorded rather than fixed here; the Go behaviour is the correct one. *)
+let newtype_case_source = {|module GoNewtypeCase exposing [viaNewtype]
+
+import Tesl.Prelude exposing [Int, String]
+
+type Code = Int
+
+fn viaNewtype(code: Code) -> String =
+  case code of
+    404 -> "missing"
+    _ -> "other"
+
+test "a newtype scrutinee compares through its payload" {
+  expect viaNewtype (Code 404) == "missing"
+  expect viaNewtype (Code 200) == "other"
+}
+|}
+
+let test_newtype_case_with_go () =
+  let emitted = emit_ok "<go-newtype-case>" newtype_case_source in
+  let module_go = artifact "internal/teslmodgonewtypecase/module.go" emitted in
+  check bool "the comparison reads the newtype's payload" true
+    (contains module_go "teslrt.Equal(teslScrut1.Value, teslrt.FromInt64(404))");
+  gate_emitted "tesl-go-newtype-case" emitted
+
 (* ─── `Tesl.JWT` and the session cookie ───────────────────────────────────────
    The one blessed session: an HS256 token in one fixed `__Host-`-prefixed cookie, with no
    options anywhere. The signature is `Tesl.Crypto`'s HMAC-SHA256 over `header.payload`, so a
@@ -6122,6 +6223,11 @@ let () =
       test_case "`case` as a test statement" `Slow test_case_statement_with_go;
       test_case "test-statement case behaves the same on Racket" `Slow
         (racket_behavior_oracle "<go-test-case-oracle>" test_case_stmt_source);
+      test_case "`case` over a scalar" `Slow test_scalar_case_with_go;
+      test_case "scalar case behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-scalar-case-oracle>" scalar_case_source);
+      test_case "`case` over a newtype scrutinee (Go-only; Racket raises)" `Slow
+        test_newtype_case_with_go;
       test_case "Tesl.JWT and the session cookie" `Slow test_jwt_with_go;
       test_case "JWT and sessions behave the same on Racket" `Slow
         (racket_behavior_oracle ~env:[ "GOJWT_KEY=test-session-key" ] "<go-jwt-oracle>" jwt_source);

@@ -3753,7 +3753,7 @@ let rec infer_expr ctx (e : expr) : ty =
         ) elems;
         t_list (apply !(ctx.subst) elem_ty))
 
-  | EOk { value; proof; loc } ->
+  | EOk { value; proof; loc; _ } ->
     let ty = infer_expr ctx value in
     (* Verify conjunction proofs against the value's tracked binding meta.
        When the programmer writes ok xs ::: P && Q (or ok xs ::: ForAll (P && Q)),
