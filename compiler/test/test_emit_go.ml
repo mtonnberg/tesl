@@ -3865,6 +3865,130 @@ let test_crypto_with_go () =
     (contains module_go "teslrt.CheckSignature(signingKey(), teslrt.SignatureFromHex(tag), payload)");
   gate_emitted ~env:[ "GOCRYPTO_KEY=test-signing-key" ] "tesl-go-crypto" emitted
 
+(* ─── The check-driven container leaves, and seeded blocks ─────────────────────
+   `List.filterCheck` had a Set counterpart and an empty-list constructor that were refused, and
+   an api-test or load-test could not SEED its store — three gaps that each stopped a whole file
+   on one line. *)
+let check_leaf_source = {|module GoCheckLeaves exposing [positives, uniquePositives, noneYet]
+
+import Tesl.Prelude exposing [Int, List, Bool(..)]
+import Tesl.List exposing [List.filterCheck, List.emptyForAll, List.length]
+import Tesl.Set exposing [Set, Set.filterCheck, Set.fromList, Set.size]
+
+fact Positive (n: Int)
+
+check checkPos(n: Int) -> n: Int ::: Positive n =
+  if n > 0 then
+    ok n ::: Positive n
+  else
+    fail 400 "not positive"
+
+fn positives(ns: List Int) -> List Int ::: ForAll (Positive) =
+  List.filterCheck checkPos ns
+
+fn uniquePositives(s: Set Int) -> Set Int ::: ForAll (Positive) =
+  Set.filterCheck checkPos s
+
+# The EMPTY list carrying the proof the check would have made of every element — vacuously true.
+fn noneYet() -> List Int ::: ForAll (Positive) =
+  List.emptyForAll checkPos
+
+test "filterCheck keeps what the check accepts, in both containers" {
+  expect List.length (positives [1, 0 - 2, 3]) == 2
+  expect Set.size (uniquePositives (Set.fromList [1, 0 - 2, 3, 3])) == 2
+  expect List.length (noneYet()) == 0
+}
+|}
+
+let test_check_leaves_with_go () =
+  let emitted = emit_ok "<go-check-leaves>" check_leaf_source in
+  let module_go = artifact "internal/teslmodgocheckleaves/module.go" emitted in
+  (* The Set version rebuilds a set from the accepted elements, going through the set's own list
+     so ONE traversal rule covers both containers. *)
+  check bool "Set.filterCheck rebuilds a set from the accepted elements" true
+    (contains module_go
+       "teslOut1 = teslrt.SetInsert(teslKept1, teslOut1, teslKeyLessTeslrtInt)");
+  check bool "and it walks the set through its own list" true
+    (contains module_go "range teslrt.SetToList(s)");
+  (* `emptyForAll` is the empty slice: the proof erases, and the check names the element type. *)
+  check bool "emptyForAll is the empty slice" true
+    (contains module_go "return []teslrt.Int{}");
+  gate_emitted "tesl-go-check-leaves" emitted
+
+(* A seeded api-test: rows the block declares, inserted before its own statements — which is what
+   pairs with the per-test reset, since a block that seeds must not inherit another's rows. *)
+let seeded_source = {|module GoSeeded exposing [Widget, listWidgets, SeedApi, SeedServer]
+
+import Tesl.Prelude exposing [Int, String, List]
+import Tesl.Json exposing [intCodec]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.List exposing [List.length]
+import Tesl.ApiTest exposing [statusOk]
+
+entity Widget table "seed_widgets" primaryKey id {
+  id: String
+  label: String
+}
+
+database SeedDb = Database {
+  schema: "goseeded"
+  entities: [Widget]
+  backend: Memory
+}
+
+record Count { widgets: Int }
+
+codec Count {
+  toJson {
+    widgets -> "widgets" with_codec intCodec
+  }
+  fromJson_forbidden
+}
+
+handler get listWidgets() -> Count
+  requires [dbRead] =
+  with database SeedDb {
+    let rows = select w from Widget
+    Count { widgets: List.length rows }
+  }
+
+api SeedApi {
+  get "/widgets"
+    -> Count
+}
+
+server SeedServer for SeedApi {
+  listWidgets
+}
+
+api-test "a seeded block sees the rows it declared" for SeedServer requires [dbRead, dbWrite] {
+  seed {
+    insert Widget { id: "w-1", label: "first" }
+    insert Widget { id: "w-2", label: "second" }
+  }
+  let counted = get "/widgets"
+  expect statusOk counted.status
+  expect counted.body.widgets == 2
+}
+
+api-test "and the next block does not inherit them" for SeedServer requires [dbRead, dbWrite] {
+  let counted = get "/widgets"
+  expect counted.body.widgets == 0
+}
+|}
+
+let test_seeded_api_test_with_go () =
+  let emitted = emit_ok "<go-seeded>" seeded_source in
+  let tests_go = artifact "internal/teslmodgoseeded/module_test.go" emitted in
+  check bool "the seed runs before the block's own statements" true
+    (contains tests_go "_ = teslrt.TableInsert(WidgetTable, \"Widget\"");
+  (* The reset comes FIRST, or the second block would count the first block's rows — which the
+     second api-test asserts at runtime. *)
+  check bool "and after the per-test reset" true
+    (contains tests_go "teslResetTestState()");
+  gate_emitted "tesl-go-seeded" emitted
+
 (* ─── `Tesl.Telemetry`, `Tesl.App`, and load tests ─────────────────────────────
    Three things that arrive together, because a program that reports signals is usually the same
    program that runs as a server and gets load-tested.
@@ -6240,6 +6364,9 @@ let go_corpus = [
      transports, and a stdlib check rejected inside an `auth` propagating as a 401 rather than
      panicking. *)
   "tests/webhook-signature-tests.tesl";
+  (* A 200-element `List String` body decoded through `listCodec`, with a load test over it —
+     the file whose p99 assertion is the regression guard for issue #80. *)
+  "tests/issue-80-list-body-scaling-tests.tesl";
   (* Telemetry, an App that serves, and the metric instruments — the docs-facing shape of a
      program that reports signals and runs. *)
   "example/learn/lesson17-telemetry.tesl";
@@ -6359,6 +6486,12 @@ let () =
       test_case "`case` as a test statement" `Slow test_case_statement_with_go;
       test_case "test-statement case behaves the same on Racket" `Slow
         (racket_behavior_oracle "<go-test-case-oracle>" test_case_stmt_source);
+      test_case "check-driven container leaves" `Slow test_check_leaves_with_go;
+      test_case "check-driven leaves behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-check-leaves-oracle>" check_leaf_source);
+      test_case "a seeded api-test" `Slow test_seeded_api_test_with_go;
+      test_case "seeded api-tests behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-seeded-oracle>" seeded_source);
       test_case "Tesl.Telemetry, Tesl.App and load tests" `Slow test_telemetry_app_with_go;
       test_case "telemetry and App behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-telemetry-app-oracle>" telemetry_app_source);

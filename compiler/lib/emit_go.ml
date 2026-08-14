@@ -239,6 +239,33 @@ let json_float value =
     Printf.sprintf "%.1f" value
   else Printf.sprintf "%.17g" value
 
+(* An api-test JSON TEMPLATE: `{ "k": v }` / `[ … ]` / a scalar written literally.  Answers the
+   JSON text, or None when the expression is not a constant template.  Used both for a request
+   BODY and for a comparison against a response — `expect resp.body == [ { "text": "a" } ]`
+   compares against a template, since a JSON array of objects is not a Tesl value. *)
+let rec literal_json expr =
+    match expr with
+    | ELit { lit = LString text; _ } -> Some (json_quote text)
+    | ELit { lit = LInt n; _ } -> Some (string_of_int n)
+    | ELit { lit = LBigInt text; _ } -> Some text
+    | ELit { lit = LBool b; _ } -> Some (if b then "true" else "false")
+    | ELit { lit = LFloat f; _ } -> Some (json_float f)
+    | EConstructor { name = "True"; args = []; _ } -> Some "true"
+    | EConstructor { name = "False"; args = []; _ } -> Some "false"
+    | EList { elems; _ } ->
+      let rendered = List.map literal_json elems in
+      if List.for_all Option.is_some rendered then
+        Some ("[" ^ String.concat "," (List.map Option.get rendered) ^ "]")
+      else None
+    | ERecord { fields; _ } ->
+      let rendered = List.map (fun (key, field_value) ->
+        Option.map (fun text -> json_quote key ^ ":" ^ text) (literal_json field_value))
+        fields in
+      if List.for_all Option.is_some rendered then
+        Some ("{" ^ String.concat "," (List.map Option.get rendered) ^ "}")
+      else None
+    | _ -> None
+
 let go_quote value =
   let b = Buffer.create (String.length value + 2) in
   Buffer.add_char b '"';
@@ -1251,6 +1278,7 @@ let tuple_accessor = function
 type hof =
   | HofMap | HofFilter | HofFoldl | HofFoldr | HofAny | HofAll | HofFilterCheck
   | HofAllCheck | HofZip | HofFind | HofFilterMap | HofConcatMap | HofSortBy
+  | HofEmptyForAll | HofSetFilterCheck
 
 let higher_order_leaf = function
   | "List.map" -> Some HofMap
@@ -1266,17 +1294,25 @@ let higher_order_leaf = function
   | "List.filterMap" -> Some HofFilterMap
   | "List.concatMap" -> Some HofConcatMap
   | "List.sortBy" -> Some HofSortBy
+  (* `List.emptyForAll check` is the EMPTY list carrying the `ForAll` the check would have
+     proved of every element — vacuously true, and the proof erases, so what is left is an
+     empty slice.  It takes the check only to name the element type. *)
+  | "List.emptyForAll" -> Some HofEmptyForAll
+  (* The Set counterpart of `List.filterCheck`: same rule, rebuilt as a set. *)
+  | "Set.filterCheck" -> Some HofSetFilterCheck
   | _ -> None
 
 let higher_order_leaf_names =
   ["List.map"; "List.filter"; "List.foldl"; "List.foldr"; "List.any"; "List.all";
    "List.filterCheck"; "List.allCheck"; "List.zip"; "List.find"; "List.filterMap";
-   "List.concatMap"; "List.sortBy"]
+   "List.concatMap"; "List.sortBy"; "List.emptyForAll"; "Set.filterCheck"]
 
 let hof_arity = function
   | HofFoldl | HofFoldr -> 3
   | HofFind | HofFilterMap | HofConcatMap | HofSortBy -> 2
-  | HofMap | HofFilter | HofAny | HofAll | HofFilterCheck | HofAllCheck | HofZip -> 2
+  | HofMap | HofFilter | HofAny | HofAll | HofFilterCheck | HofAllCheck | HofZip
+  | HofSetFilterCheck -> 2
+  | HofEmptyForAll -> 1
 
 (* Every constructor is registered in the signature table under its own name, so a
    constructor application resolves without knowing its ADT up front. *)
@@ -2304,6 +2340,29 @@ and type_of_hof signatures env loc what hof args =
      | Some { result = TAdt (info, _); _ } -> TList (TAdt (info, [left; right]))
      | _ -> unsupported loc
        "Go backend needs `Tesl.Tuple` imported for `%s`" what)
+  (* The element type comes from the CHECK, since there is no list to read it from. *)
+  (* The element type is the CHECK's own parameter type: there is no list to read it from, and
+     probing the callable against a made-up argument type would reject the very check that names
+     it.  A lambda is refused for the same reason — its parameter annotation is the only thing
+     that could say, and a `check` cannot be written as one. *)
+  | HofEmptyForAll ->
+    (match normalize_call_head (List.nth args 0) with
+     | EVar { name; _ } ->
+       (match Hashtbl.find_opt signatures name with
+        | Some { params = [element]; result = TCheck checked; _ } when checked = element ->
+          TList element
+        | _ -> unsupported loc
+          "Go backend `%s` takes a named `check` function over the element type" what)
+     | _ -> unsupported loc "Go backend `%s` takes a named `check` function" what)
+  | HofSetFilterCheck ->
+    let element = match type_of_expr signatures env (List.nth args 1) with
+      | TSet element -> element
+      | _ -> unsupported loc "Go backend `%s` requires a Set argument" what
+    in
+    let result = type_of_callable signatures env loc what (List.nth args 0) [element] in
+    if result <> TCheck element then unsupported loc
+      "Go backend `%s` takes a `check` function over the element type" what;
+    TSet element
   | HofFilterCheck | HofAllCheck ->
     let element = list_of 1 in
     let result = type_of_callable signatures env loc what (List.nth args 0) [element] in
@@ -4090,6 +4149,35 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
       inner index out
       body_indent out index pair
       inner inner out indent
+  (* `List.emptyForAll check` is the empty list: the `ForAll` it carries is vacuously true and
+     erases, so the check names the element type and nothing else. *)
+  | HofEmptyForAll ->
+    (match result with
+     | TList element -> Printf.sprintf "[]%s{}" (go_type element)
+     | _ -> invalid_arg "emptyForAll validated before emission")
+  (* The Set counterpart of `filterCheck`: the accepted elements, rebuilt as a set.  Going
+     through the set's own list keeps ONE traversal rule for both containers. *)
+  | HofSetFilterCheck ->
+    let element = match type_of_expr signatures env (List.nth args 1) with
+      | TSet element -> element
+      | _ -> invalid_arg "Set.filterCheck validated before emission"
+    in
+    let value = match callable_binders callable [Printf.sprintf "Value%d" depth] with
+      | [value] -> value
+      | _ -> invalid_arg "higher-order leaf validated before emission"
+    in
+    let checked = emit_applied ~indent:body_indent signatures env callable [element] [value] in
+    let source = emit_expr ~indent:inner signatures env (List.nth args 1) in
+    let out = Printf.sprintf "teslOut%d" depth in
+    let kept = Printf.sprintf "teslKept%d" depth in
+    let ok = Printf.sprintf "teslOK%d" depth in
+    Printf.sprintf
+      "(func() %s {\n%s%s := teslrt.SetEmpty[%s]()\n%sfor _, %s := range teslrt.SetToList(%s) {\n%sif %s, %s := (%s).Value(); %s {\n%s\t%s = teslrt.SetInsert(%s, %s, %s)\n%s}\n%s}\n%sreturn %s\n%s}())"
+      (go_type result) inner out (go_type element)
+      inner value source
+      body_indent kept ok checked ok
+      body_indent out kept out (element_key_less_func element)
+      body_indent inner inner out indent
   | HofFilterCheck | HofAllCheck ->
     let element = element_of 1 in
     let value = match callable_binders callable [Printf.sprintf "Value%d" depth] with
@@ -4748,29 +4836,6 @@ and emit_leaf_argument ?(indent="") signatures env name want arg =
     | _ -> Printf.sprintf "teslrt.MakeSecret(%s)" emitted
 
 and emit_api_test_body ?(indent="") signatures env value =
-  let rec literal_json expr =
-    match expr with
-    | ELit { lit = LString text; _ } -> Some (json_quote text)
-    | ELit { lit = LInt n; _ } -> Some (string_of_int n)
-    | ELit { lit = LBigInt text; _ } -> Some text
-    | ELit { lit = LBool b; _ } -> Some (if b then "true" else "false")
-    | ELit { lit = LFloat f; _ } -> Some (json_float f)
-    | EConstructor { name = "True"; args = []; _ } -> Some "true"
-    | EConstructor { name = "False"; args = []; _ } -> Some "false"
-    | EList { elems; _ } ->
-      let rendered = List.map literal_json elems in
-      if List.for_all Option.is_some rendered then
-        Some ("[" ^ String.concat "," (List.map Option.get rendered) ^ "]")
-      else None
-    | ERecord { fields; _ } ->
-      let rendered = List.map (fun (key, field_value) ->
-        Option.map (fun text -> json_quote key ^ ":" ^ text) (literal_json field_value))
-        fields in
-      if List.for_all Option.is_some rendered then
-        Some ("{" ^ String.concat "," (List.map Option.get rendered) ^ "}")
-      else None
-    | _ -> None
-  in
   match literal_json value with
   | Some json -> go_quote json
   | None ->
@@ -5274,6 +5339,38 @@ let implies_cookie_cap (capabilities : capability_form list) declared =
   in
   List.exists reaches declared
 
+(* The decoder for a JSON value of a given type, as a `func(any) (T, error)`.
+   Shared by the DERIVED record decoder and by a codec field whose `with_codec` names a CONTAINER
+   codec (`listCodec`/`setCodec`/`dictCodec`): those decode by the field's declared type — the
+   element type is what says how to read each element — which is exactly this walk.  Racket
+   routes the same case through its generic type-aware decoder for the same reason: the prim
+   decoder only checks the JSON shape and passes elements through unconverted. *)
+let rec json_value_decoder ~package ~loc ~what ty =
+  match ty with
+  | TString -> "teslrt.DecodeStringValue"
+  | TInt -> "teslrt.DecodeIntValue"
+  | TBool -> "teslrt.DecodeBoolValue"
+  | TFloat -> "teslrt.DecodeFloatValue"
+  | TNewtype info ->
+    let inner = json_value_decoder ~package ~loc ~what info.base in
+    let wrap = if info.secret then "teslrt.MakeSecret(teslBase)" else "teslBase" in
+    Printf.sprintf
+      "func(teslRaw any) (%s, error) {\n\t\tteslBase, teslErr := %s(teslRaw)\n\t\tif teslErr != nil {\n\t\t\treturn %s{}, teslErr\n\t\t}\n\t\treturn %s{Value: %s}, nil\n\t}"
+      (go_type ty) inner (go_type ty) (go_type ty) wrap
+  | TList element ->
+    Printf.sprintf
+      "func(teslRaw any) ([]%s, error) {\n\t\treturn teslrt.DecodeListValue(teslRaw, %s)\n\t}"
+      (go_type element) (json_value_decoder ~package ~loc ~what element)
+  | TRecord nested when nested.rec_owner = package
+                        || List.mem nested.rec_tesl_name !current_codec_types ->
+    (* A nested record decodes through its own decoder — derived or hand-written — and its
+       `Check` becomes an `error` here so one field shape covers both. *)
+    Printf.sprintf
+      "func(teslRaw any) (%s, error) {\n\t\tteslNested := %s(teslRaw)\n\t\tif !teslNested.OK() {\n\t\t\treturn %s{}, errors.New(teslNested.Message())\n\t\t}\n\t\tteslValue, _ := teslNested.Value()\n\t\treturn teslValue, nil\n\t}"
+      (go_type ty) (codec_decode_name nested.rec_tesl_name) (go_type ty)
+  | _ -> unsupported loc
+    "Go backend cannot decode `%s` from JSON; give the type a `codec`" what
+
 let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=[])
     ?(servers=[]) ?(capturers=[]) ?(consts=[]) ?(capabilities=[]) module_path package signatures
     types (funcs : func_decl list) =
@@ -5550,6 +5647,20 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
                 Printf.bprintf body
                   "\t%s, teslErr%s := teslrt.%s(teslJSON, %S)\n\tif teslErr%s != nil {\n\t\treturn teslrt.RejectShape[%s](teslErr%s.Error())\n\t}\n"
                   binder suffix decoder json_key suffix go_type_name suffix
+              (* A CONTAINER codec (`listCodec`/`setCodec`/`dictCodec`) decodes by the FIELD'S
+                 DECLARED TYPE rather than by the codec name: the element type is what says how
+                 to read each element, and the codec name only says "this is a container".
+                 Racket routes it through its generic type-aware decoder for the same reason —
+                 its prim decoder checks the JSON shape and passes elements through unconverted,
+                 which made a declared `List String` accept anything an array held. *)
+              | None when List.mem field_codec ["listCodec"; "setCodec"; "dictCodec"] ->
+                Printf.bprintf body
+                  "\tteslRaw%s, teslErr%s := teslrt.JSONFieldValue(teslJSON, %S)\n\tif teslErr%s != nil {\n\t\treturn teslrt.RejectShape[%s](teslErr%s.Error())\n\t}\n\t%s, teslDecodeErr%s := %s(teslRaw%s)\n\tif teslDecodeErr%s != nil {\n\t\treturn teslrt.RejectShape[%s](teslDecodeErr%s.Error())\n\t}\n"
+                  suffix suffix json_key suffix go_type_name suffix
+                  binder suffix
+                  (json_value_decoder ~package ~loc:codec.loc
+                     ~what:(Printf.sprintf "%s.%s" type_name field_name) (field_type field_name))
+                  suffix suffix go_type_name suffix
               | None ->
                 (* A nested codec decodes the field's own JSON value. *)
                 Printf.bprintf body
@@ -5689,31 +5800,9 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
           let suffix = go_ident ~exported:true name in
           (* Every field decoder is a `func(any) (T, error)`, so a list composes over the
              element's own decoder without the emitter writing the loop. *)
-          let rec value_decoder ty = match ty with
-            | TString -> "teslrt.DecodeStringValue"
-            | TInt -> "teslrt.DecodeIntValue"
-            | TBool -> "teslrt.DecodeBoolValue"
-            | TFloat -> "teslrt.DecodeFloatValue"
-            | TNewtype info ->
-              let inner = value_decoder info.base in
-              let wrap = if info.secret then "teslrt.MakeSecret(teslBase)" else "teslBase" in
-              Printf.sprintf
-                "func(teslRaw any) (%s, error) {\n\t\tteslBase, teslErr := %s(teslRaw)\n\t\tif teslErr != nil {\n\t\t\treturn %s{}, teslErr\n\t\t}\n\t\treturn %s{Value: %s}, nil\n\t}"
-                (go_type ty) inner (go_type ty) (go_type ty) wrap
-            | TList element ->
-              Printf.sprintf
-                "func(teslRaw any) ([]%s, error) {\n\t\treturn teslrt.DecodeListValue(teslRaw, %s)\n\t}"
-                (go_type element) (value_decoder element)
-            | TRecord nested when nested.rec_owner = package
-                                  || List.mem nested.rec_tesl_name !current_codec_types ->
-              (* A nested record decodes through its own decoder — derived or hand-written —
-                 and its `Check` becomes an `error` here so one field shape covers both. *)
-              Printf.sprintf
-                "func(teslRaw any) (%s, error) {\n\t\tteslNested := %s(teslRaw)\n\t\tif !teslNested.OK() {\n\t\t\treturn %s{}, errors.New(teslNested.Message())\n\t\t}\n\t\tteslValue, _ := teslNested.Value()\n\t\treturn teslValue, nil\n\t}"
-                (go_type ty) (codec_decode_name nested.rec_tesl_name) (go_type ty)
-            | _ -> unsupported loc
-              "Go backend cannot derive a decoder for field `%s.%s`; give the type a `codec`"
-              info.rec_tesl_name name
+          let value_decoder ty =
+            json_value_decoder ~package ~loc
+              ~what:(Printf.sprintf "%s.%s" info.rec_tesl_name name) ty
           in
           Printf.bprintf body
             "\tteslField%s, teslErr%s := %s(teslFields[%s])\n\tif teslErr%s != nil {\n\t\treturn teslrt.RejectShape[%s](teslErr%s.Error())\n\t}\n"
@@ -6011,6 +6100,19 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
         | None ->
           if left_ty <> TBool then unsupported loc "Go backend bare expect requires Bool";
           strip_outer_parens (emit_negated ~indent signatures env left)
+        (* One side UNTYPED and the other a JSON TEMPLATE: `expect resp.body == [ { "text": "a" } ]`
+           compares against JSON text, not against a Tesl value — an array of objects has no Tesl
+           type to infer, so this is decided BEFORE the other side is typed. *)
+        | Some right when (left_ty = TJson && literal_json right <> None)
+                          || (literal_json left <> None
+                              && (try type_of_expr signatures env right = TJson
+                                  with Unsupported _ -> false)) ->
+          let json_side, json = if left_ty = TJson
+            then left, (match literal_json right with Some json -> json | None -> assert false)
+            else right, (match literal_json left with Some json -> json | None -> assert false)
+          in
+          Printf.sprintf "!teslrt.JsonEqual(%s, teslrt.JsonParseBody(%s).JsonRaw())"
+            (emit_expr ~indent signatures env json_side) (go_quote json)
         | Some right ->
           let right_ty = type_of_arg signatures env left_ty right in
           (* An UNTYPED api-test value on either side compares structurally through the
@@ -6143,6 +6245,20 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
       | TsProperty { loc; _ } | TsIf { loc; _ }) :: _ ->
       unsupported loc "Go backend does not support this test statement yet"
   in
+  (* `seed { insert … }` runs before a block's own statements: the store starts from the rows the
+     test declares rather than from whatever an earlier block left, which is the point of pairing
+     it with the per-test reset.  The statements are EXPRESSIONS (an `insert` answers the row),
+     so each is emitted and discarded — the shape a `let _ = insert …` already takes. *)
+  let emit_seed loc (seed_stmts : expr list) =
+    if seed_stmts <> [] then begin
+      Buffer.add_string body (line_directive loc);
+      List.iter (fun statement ->
+        ignore (type_of_expr signatures [] statement);
+        Buffer.add_string body (line_directive (Checker.expr_loc statement));
+        Printf.bprintf body "\t_ = %s\n" (emit_expr ~indent:"\t" signatures [] statement))
+        seed_stmts
+    end
+  in
   List.iteri (fun index (test : test_form) ->
     (* `runs` is a property test's repetition count, which needs generators.  The
        capabilities and the `with database X` header, by contrast, are compile-time
@@ -6164,8 +6280,6 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
      layer.  The statements are the same `test_stmt` forms an ordinary `test` block uses,
      so they go through the same emitter; only the request verbs are special. *)
   List.iteri (fun index (api_test : api_test_form) ->
-    if api_test.seed_stmts <> [] then unsupported api_test.loc
-      "Go backend does not support api-test seed statements yet";
     Buffer.add_char body '\n';
     (* The description comment goes BEFORE the line directive: gofmt treats a comment
        directly above a declaration as its doc comment and moves the directive below it. *)
@@ -6175,6 +6289,7 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
     Buffer.add_string body (line_directive api_test.loc);
     Printf.bprintf body "func TestTeslApi%d(teslT *testing.T) {\n" index;
     emit_reset ();
+    emit_seed api_test.loc api_test.seed_stmts;
     current_api_server := Some (go_ident ~exported:true api_test.server_name);
     emit_stmts [] "\t" api_test.stmts;
     current_api_server := None;
@@ -6185,8 +6300,6 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
      socket.  The request statements are ordinary api-test statements, so they go through the
      same emitter; what differs is that they run inside the harness's thunk. *)
   List.iteri (fun index (load_test : load_test_form) ->
-    if load_test.seed_stmts <> [] then unsupported load_test.loc
-      "Go backend does not support load-test seed statements yet";
     if load_test.baseline <> None then unsupported load_test.loc
       "Go backend does not support load-test baselines yet";
     Buffer.add_char body '\n';
@@ -6194,6 +6307,9 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
     Buffer.add_string body (line_directive load_test.loc);
     Printf.bprintf body "func TestTeslLoad%d(teslT *testing.T) {\n" index;
     emit_reset ();
+    (* Seeded ONCE, before the run: every request sees the same state, which is what makes the
+       measurement about the request rather than about a store that keeps growing. *)
+    emit_seed load_test.loc load_test.seed_stmts;
     (* `-short` skips it: a load test takes seconds by construction, and `go test` in a tight
        loop should not pay for it.  The same run WITHOUT `-short` measures. *)
     Buffer.add_string body
@@ -6371,6 +6487,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         List.iter (fun name ->
           match name with
           | "stringCodec" | "intCodec" | "boolCodec" | "floatCodec" -> ()
+          (* A CONTAINER codec names the shape; the field's declared type says how to read each
+             element, which is what the decoder walks. *)
+          | "listCodec" -> ()
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.Json` export `%s` yet" other) exposed
       (* `Tesl.Http`: the request type is runtime-provided (registered above) and
@@ -6684,6 +6803,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       }) entity_forms;
     let tuple_imported = ref false in
     let set_imports = ref [] in
+    (* The Set leaves that are HIGHER-ORDER: registered with the list hofs below, since the
+       machinery is theirs. *)
+    let set_hof_imports = ref [] in
     List.iter (fun (import : import_decl) ->
       if import.module_name = "Tesl.Set" then begin
         let exposed = match import.names with
@@ -6692,6 +6814,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         in
         List.iter (fun name ->
           if set_leaf name <> None then set_imports := name :: !set_imports
+          (* `Set.filterCheck` is a HIGHER-ORDER leaf (it applies a check per element), so it
+             registers with the hof family rather than in the set-leaf table. *)
+          else if higher_order_leaf name <> None then set_hof_imports := name :: !set_hof_imports
           else match name with
             | "Set" -> ()
             | other -> unsupported import.loc
@@ -7562,7 +7687,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       in
       if not (Hashtbl.mem signatures name) then
         Hashtbl.add signatures name
-          { params = []; result = TFailure; go_name; sig_owner = ""; sig_needs_scope = false }) !list_imports;
+          { params = []; result = TFailure; go_name; sig_owner = ""; sig_needs_scope = false })
+      (!list_imports @ !set_hof_imports);
     List.iter (fun name ->
       let params, result, go_name =
         match List.find_opt (fun (leaf, _, _, _) -> leaf = name) string_leaves with
