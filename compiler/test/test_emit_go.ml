@@ -3051,7 +3051,7 @@ let emit_ok label source =
     failf "%s failed to compile: %s" label
       (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
 
-let gate_emitted ?(env=[]) prefix emitted =
+let gate_emitted ?(env=[]) ?(short=false) prefix emitted =
   if Sys.command "go version >/dev/null 2>&1" = 0 then begin
     let root = Filename.temp_dir prefix "" in
     (* A test body may read configuration the emitted program requires — a signing key, say —
@@ -3069,7 +3069,11 @@ let gate_emitted ?(env=[]) prefix emitted =
       if unformatted <> "" then
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
-      ignore (run_command root (with_env "go test -count=1 ./..."));
+      (* `-short` where the emitted tests include a LOAD test: it takes seconds by construction
+         (a warm-up plus a measured window), and its value is in `bench/`, not in this suite. *)
+      ignore (run_command root
+                (with_env (if short then "go test -short -count=1 ./..."
+                           else "go test -count=1 ./...")));
       ignore (run_command root "go vet ./...");
       run_go_gates root)
   end
@@ -3860,6 +3864,131 @@ let test_crypto_with_go () =
   check bool "and the verification itself is the runtime's constant-time one" true
     (contains module_go "teslrt.CheckSignature(signingKey(), teslrt.SignatureFromHex(tag), payload)");
   gate_emitted ~env:[ "GOCRYPTO_KEY=test-signing-key" ] "tesl-go-crypto" emitted
+
+(* ─── `Tesl.Telemetry`, `Tesl.App`, and load tests ─────────────────────────────
+   Three things that arrive together, because a program that reports signals is usually the same
+   program that runs as a server and gets load-tested.
+
+   Telemetry is AMBIENT by design — an observability call that needed a capability would be
+   threaded through every signature or left out of the code that most needs it — so what is left
+   at run time is one recorder call per signal. What this backend does NOT do is export: OTLP, the
+   `/v1/metrics` endpoint and the span tree are the Racket runtime's, and an exporter that
+   silently dropped spans would be worse than an honestly absent one.
+
+   `main() -> App { … }` is CONFIGURATION, not a value: the compiler lowers it into the startup
+   chain it describes (activate each queue's workers, then serve) through the same
+   backend-neutral pass the Racket path uses, and the emitted program gets the one `package main`
+   Go needs to build a binary. *)
+let telemetry_app_source = {|module GoTelemetryApp exposing [greet, TelemetryApi, TelemetryServer]
+
+import Tesl.Prelude exposing [Bool(..), Int, String]
+import Tesl.Float exposing [Float]
+import Tesl.String exposing [String.length]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.App exposing [App]
+import Tesl.Telemetry exposing [initTelemetry, telemetry, counter, histogram, gauge]
+import Tesl.ApiTest exposing [statusOk]
+
+record Greeting { message: String }
+
+codec Greeting {
+  toJson {
+    message -> "message" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+# A telemetry block is a STATEMENT: the function has the type it would have without it, which is
+# what every telemetry test in the corpus asserts.
+fn greet(name: String) -> String =
+  let _ = telemetry "greet.called" { user.name = name, length = String.length name, ok = True }
+  let _ = counter "greetings" 1 []
+  let _ = histogram "greeting.length" 1.5 []
+  let _ = gauge "greeters" 1.0 []
+  name
+
+handler get greeting() -> Greeting =
+  Greeting { message: greet "world" }
+
+api TelemetryApi {
+  get "/greeting"
+    -> Greeting
+}
+
+server TelemetryServer for TelemetryApi {
+  greeting
+}
+
+database TelemetryDb = Database {
+  schema: "gotelemetryapp"
+  entities: []
+  backend: Memory
+}
+
+main() -> App requires [] =
+  let _ = initTelemetry service "go-telemetry-app" endpoint "in-memory" console False
+  App {
+    database: TelemetryDb
+    api: TelemetryServer
+    port: 8099
+  }
+
+test "telemetry does not disturb the function's result" {
+  expect greet "world" == "world"
+}
+
+api-test "an endpoint that reports signals still answers" for TelemetryServer {
+  let response = get "/greeting"
+  expect statusOk response.status
+  expect response.body.message == "world"
+}
+
+load-test "the greeting endpoint under load" for TelemetryServer
+  rate 50rps
+  duration 1s {
+
+  get "/greeting"
+
+  assert errorRate < 0.01
+}
+|}
+
+let test_telemetry_app_with_go () =
+  let emitted = emit_ok "<go-telemetry-app>" telemetry_app_source in
+  let module_go = artifact "internal/teslmodgotelemetryapp/module.go" emitted in
+  (* Each attribute value is rendered to text HERE, where its type is known — the runtime takes
+     one attribute type while a block's values are a mixed bag. *)
+  check bool "a telemetry block is one recorder call with rendered attributes" true
+    (contains module_go
+       "teslrt.Telemetry(\"greet.called\", []teslrt.Tuple2[string, string]{{Tuple2First: \"user.name\", Tuple2Second: name}");
+  check bool "an Int attribute renders through its own String()" true
+    (contains module_go "Tuple2Second: (teslrt.StringLength(name)).String()");
+  (* A secret attribute never gets here at all: the CHECKER refuses one, which is better than
+     redacting — a redacted attribute is useless rather than safe. The emitter's redaction branch
+     is defence in depth behind that. *)
+  check bool "the three instruments are one runtime call each" true
+    (contains module_go "teslrt.Counter(\"greetings\", teslrt.FromInt64(1)");
+  (* `main` lowers into the startup chain; the App record has no runtime form. *)
+  check bool "main serves the declared server on the declared port" true
+    (contains module_go "teslrt.Serve(TelemetryServer, teslrt.ServeOptions{Port: teslrt.PortOf(teslrt.FromInt64(8099))})");
+  check bool "and initTelemetry's keyword surface becomes one call" true
+    (contains module_go
+       "teslrt.InitTelemetry(\"go-telemetry-app\", \"in-memory\", false, true, false, 60000, 1.0)");
+  (* A program gets the one `package main` Go needs to build a binary. *)
+  let main_go = artifact "cmd/app/main.go" emitted in
+  check bool "the entry point calls the module's Main" true
+    (contains main_go "teslmodgotelemetryapp.Main()");
+  (* A load test drives the same in-process dispatch an api-test does, at a fixed arrival rate. *)
+  let tests_go = artifact "internal/teslmodgotelemetryapp/module_test.go" emitted in
+  check bool "a load-test block becomes a Go test over the harness" true
+    (contains tests_go "teslResult := teslrt.RunLoadTest(50, 1, func() int {");
+  check bool "its assertion names the metric and the threshold" true
+    (contains tests_go
+       "teslrt.AssertLoadTest(teslT, teslResult, \"errorRate\", \"<\", float64(0.01))");
+  check bool "and `-short` skips it, so an ordinary test run does not pay for it" true
+    (contains tests_go "if testing.Short() {");
+  gate_emitted ~short:true "tesl-go-telemetry-app" emitted
 
 (* ─── `case` over a scalar ─────────────────────────────────────────────────────
    `case a + b of 0 -> … | _ -> …` is ordinary Tesl and was refused outright ("supports `case`
@@ -6111,6 +6240,9 @@ let go_corpus = [
      transports, and a stdlib check rejected inside an `auth` propagating as a 401 rather than
      panicking. *)
   "tests/webhook-signature-tests.tesl";
+  (* Telemetry, an App that serves, and the metric instruments — the docs-facing shape of a
+     program that reports signals and runs. *)
+  "example/learn/lesson17-telemetry.tesl";
   (* The session transport end to end: the `__Host-` cookie shape, a sliding renewal, a handler
      that sets a cookie and then FAILS (no session may escape on a non-2xx answer), and a
      trapping auth block answering a SANITIZED 500 rather than leaking the trap text. *)
@@ -6227,6 +6359,9 @@ let () =
       test_case "`case` as a test statement" `Slow test_case_statement_with_go;
       test_case "test-statement case behaves the same on Racket" `Slow
         (racket_behavior_oracle "<go-test-case-oracle>" test_case_stmt_source);
+      test_case "Tesl.Telemetry, Tesl.App and load tests" `Slow test_telemetry_app_with_go;
+      test_case "telemetry and App behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-telemetry-app-oracle>" telemetry_app_source);
       test_case "`case` over a scalar" `Slow test_scalar_case_with_go;
       test_case "scalar case behaves the same on Racket" `Slow
         (racket_behavior_oracle "<go-scalar-case-oracle>" scalar_case_source);

@@ -82,6 +82,14 @@ func callHandler(handler HandlerFunc, scope *RequestScope, request *http.Request
 }
 
 func (server Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	// The two request-level refusals the Racket runtime applies to every request (serve.go):
+	// a cross-site state-changing request, and a Host that is not this deployment's. Checked
+	// here rather than in `Serve` so an api-test — which drives this method directly — exercises
+	// them too.
+	if refusal, refused := requestRefusal(request); refused {
+		writeResponse(writer, nil, refusal)
+		return
+	}
 	pathMatched := false
 	for _, route := range server.Routes {
 		if !pathMatches(route.Path, request.URL.Path) {

@@ -200,3 +200,39 @@ func FloatMul(left, right float64) float64 { return left * right }
 // here: adding one would make the emitted program behave differently from `a / b`, and the
 // proof is the enforcement.
 func FloatDiv(left, right float64) float64 { return left / right }
+
+// The predicates. NaN is its own case in every one of them: `Float.isNaN x` is the only way to
+// ask, because every comparison with NaN is false — which is exactly why `isPositive`,
+// `isNegative` and `isZero` all answer false for it rather than one of them accidentally
+// answering true.
+func FloatIsNaN(value float64) bool { return math.IsNaN(value) }
+
+func FloatIsInfinite(value float64) bool { return math.IsInf(value, 0) }
+
+func FloatIsPositive(value float64) bool { return value > 0 }
+
+func FloatIsNegative(value float64) bool { return value < 0 }
+
+func FloatIsZero(value float64) bool { return value == 0 }
+
+// FloatSign answers a FLOAT (1.0, -1.0, 0.0), not an Int: it composes with float arithmetic,
+// which is what a sign is used for. NaN has no sign, and answering 0.0 for it would claim it is
+// zero — so it answers NaN, which propagates the way every other NaN operation does.
+func FloatSign(value float64) float64 {
+	switch {
+	case math.IsNaN(value):
+		return value
+	case value > 0:
+		return 1.0
+	case value < 0:
+		return -1.0
+	default:
+		return 0.0
+	}
+}
+
+// FloatInfinity and FloatNaN are the two named constants. They are functions rather than package
+// variables so nothing can assign to them.
+func FloatInfinity() float64 { return math.Inf(1) }
+
+func FloatNaN() float64 { return math.NaN() }

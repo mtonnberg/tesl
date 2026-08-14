@@ -1,0 +1,152 @@
+module BenchApi exposing [
+  Note,
+  NoteBody,
+  NoteOut,
+  CountOut,
+  createNote,
+  countNotes,
+  BenchServerApi,
+  BenchServer,
+]
+
+# A backend-comparison benchmark: the same program, the same in-process dispatch, run under both
+# runtimes so the numbers differ only by runtime.
+#
+# What each path exercises deliberately:
+#   GET  /count  — routing + a Memory-backend read + response encoding
+#   POST /notes  — routing + JSON DECODE of a body + a String operation + response encoding
+#
+# The load-tested POST does NOT insert: a load-test body is a static template, so every request
+# would carry the same primary key and every insert after the first would fail — the run would
+# measure the duplicate-key path at a 100% error rate rather than the request path. Insert
+# correctness is covered by the api-test below, which is where a one-shot assertion belongs.
+#
+# Both are the shapes an ordinary endpoint is made of, and neither sleeps or calls out, so the
+# measurement is the runtime's own overhead rather than something it waits on.
+
+import Tesl.Prelude exposing [Bool(..), Int, String]
+import Tesl.String exposing [String.length]
+import Tesl.Json exposing [stringCodec, intCodec, boolCodec]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.ApiTest exposing [statusOk]
+
+entity Note table "bench_notes" primaryKey id {
+  id: String
+  title: String
+  pages: Int
+}
+
+database BenchDb = Database {
+  schema: "bench"
+  entities: [Note]
+  backend: Memory
+}
+
+record NoteBody {
+  id: String
+  title: String
+  pages: Int
+}
+
+codec NoteBody {
+  toJson_forbidden
+  fromJson [
+    {
+      id <- "id" with_codec stringCodec
+      title <- "title" with_codec stringCodec
+      pages <- "pages" with_codec intCodec
+    }
+  ]
+}
+
+record NoteOut { stored: Bool }
+
+codec NoteOut {
+  toJson {
+    stored -> "stored" with_codec boolCodec
+  }
+  fromJson_forbidden
+}
+
+record CountOut { notes: Int }
+
+codec CountOut {
+  toJson {
+    notes -> "notes" with_codec intCodec
+  }
+  fromJson_forbidden
+}
+
+handler post createNote(body: NoteBody) -> NoteOut =
+  NoteOut { stored: String.length body.title > 0 }
+
+handler post storeNote(body: NoteBody) -> NoteOut
+  requires [dbWrite] =
+  with database BenchDb {
+    let _ = insert Note { id: body.id, title: body.title, pages: body.pages }
+    NoteOut { stored: True }
+  }
+
+handler get countNotes() -> CountOut
+  requires [dbRead] =
+  with database BenchDb {
+    let rows = select n from Note
+    CountOut { notes: 0 }
+  }
+
+api BenchServerApi {
+  post "/notes"
+    body body: NoteBody
+    -> NoteOut
+
+  post "/store"
+    body body: NoteBody
+    -> NoteOut
+
+  get "/count"
+    -> CountOut
+}
+
+server BenchServer for BenchServerApi {
+  createNote
+  storeNote
+  countNotes
+}
+
+api-test "the decode path answers" for BenchServer requires [dbRead, dbWrite] {
+  let created = post "/notes" body { "id": "n-1", "title": "first", "pages": 12 }
+  expect statusOk created.status
+  expect created.body.stored == True
+}
+
+api-test "the store path inserts" for BenchServer requires [dbRead, dbWrite] {
+  let stored = post "/store" body { "id": "n-1", "title": "first", "pages": 12 }
+  expect statusOk stored.status
+  expect stored.body.stored == True
+}
+
+api-test "the read path answers" for BenchServer requires [dbRead, dbWrite] {
+  let counted = get "/count"
+  expect statusOk counted.status
+}
+
+load-test "read path" for BenchServer
+  rate 200rps
+  duration 3s
+  requires [dbRead, dbWrite] {
+
+  get "/count"
+
+  assert errorRate < 0.01
+}
+
+load-test "decode path with a JSON body" for BenchServer
+  rate 200rps
+  duration 3s
+  requires [dbRead, dbWrite] {
+
+  post "/notes" body { "id": "bench", "title": "a title of ordinary length", "pages": 240 }
+
+  assert errorRate < 0.01
+}

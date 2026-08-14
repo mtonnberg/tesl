@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"sort"
 	"strings"
 )
 
@@ -347,4 +348,61 @@ func JsonListOf[Element any](elements []Element) []any {
 		out[index] = element
 	}
 	return out
+}
+
+// JsonIncludesWhere is `includesWhere { "field": value, … } array`: does SOME element of the
+// array match every field the pattern names? `excludesWhere` is its negation.
+//
+// The pattern is a containment test per element, not equality, so an element with extra fields
+// still matches — an event stream carries ids and timestamps a test has no business pinning.
+// What is NOT tolerated is a pattern field the element does not have at all: that is a typo in
+// the test rather than a non-match, and reporting it as "no element matched" would send the
+// author looking at the program instead of at the assertion.
+func JsonIncludesWhere(pattern any, value JsonValue) bool {
+	return jsonArrayMatches("includesWhere", pattern, value)
+}
+
+func JsonExcludesWhere(pattern any, value JsonValue) bool {
+	return !jsonArrayMatches("excludesWhere", pattern, value)
+}
+
+func jsonArrayMatches(who string, pattern any, value JsonValue) bool {
+	fields, ok := jsonNormalize(pattern).(map[string]any)
+	if !ok {
+		panic(fmt.Sprintf("%s: expected a `{ \"field\": value }` pattern, got %s",
+			who, jsonTypeName(jsonNormalize(pattern))))
+	}
+	elements, ok := value.raw.([]any)
+	if !ok {
+		panic(fmt.Sprintf("%s: expected a JSON array, got %s", who, jsonTypeName(value.raw)))
+	}
+	matched := false
+	for _, element := range elements {
+		object, ok := element.(map[string]any)
+		if !ok {
+			panic(fmt.Sprintf("%s: expected every array element to be a JSON object, got %s",
+				who, jsonTypeName(element)))
+		}
+		elementMatches := true
+		for key, expected := range fields {
+			found, present := object[key]
+			if !present {
+				names := make([]string, 0, len(object))
+				for name := range object {
+					names = append(names, name)
+				}
+				sort.Strings(names)
+				panic(fmt.Sprintf(
+					"%s: looking for field %q but element does not have it\n  element has: %s",
+					who, key, strings.Join(names, ", ")))
+			}
+			if !jsonMatch(expected, found) {
+				elementMatches = false
+			}
+		}
+		if elementMatches {
+			matched = true
+		}
+	}
+	return matched
 }

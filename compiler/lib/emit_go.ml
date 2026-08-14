@@ -1425,6 +1425,16 @@ let scalar_pattern_bindings _loc scrut_ty pattern =
   | PNullary { ctor; loc } | PCon { ctor; loc; _ } ->
     unsupported loc "Go backend `case` over a scalar cannot match constructor `%s`" ctor
 
+(* The known `initTelemetry` keywords.  Named here so a keyword in VALUE position (a user binding
+   spelled `console`, say) is not silently taken as the next keyword — the bug the Racket emitter
+   documents at the same place. *)
+let init_telemetry_keywords =
+  [ "service"; "endpoint"; "console"; "metrics"; "metricsInterval"; "traces"; "traceRatio" ]
+
+let init_telemetry_keyword = function
+  | EVar { name; _ } when List.mem name init_telemetry_keywords -> Some name
+  | _ -> None
+
 let rec type_of_expr signatures env expr =
   match expr with
   | ELit { lit = LInt _ | LBigInt _; _ } -> TInt
@@ -1688,6 +1698,12 @@ let rec type_of_expr signatures env expr =
         | _ -> unsupported (Checker.expr_loc plaintext)
           "Go backend `%s` takes a String or a newtype over String" leaf);
        signature.result
+     (* `initTelemetry service "x" endpoint "y" console True` is a KEYWORD surface that parses as
+        a plain application, so the arguments arrive as an alternating stream of keyword names and
+        values.  It configures the telemetry sink and answers Unit. *)
+     | EVar { name = "initTelemetry"; _ } ->
+       List.iter (fun value -> ignore (init_telemetry_keyword value)) args;
+       TUnit
      | EVar { name = ("HttpClient.bearer" | "HttpClient.secretHeader") as leaf; _ } ->
        let signature = match Hashtbl.find_opt signatures leaf with
          | Some signature -> signature
@@ -1719,7 +1735,8 @@ let rec type_of_expr signatures env expr =
      (* The api-test JSON surface.  Every one of these takes the UNTYPED value, and the
         argument order is Tesl's (needle/index/field first), matching tesl/api-test.rkt. *)
      | EVar { name = ("isNull" | "isNotNull" | "isEmpty" | "isNotEmpty"); _ } -> TBool
-     | EVar { name = ("hasField" | "hasLength" | "jsonContains"); _ } -> TBool
+     | EVar { name = ("hasField" | "hasLength" | "jsonContains"
+                     | "includesWhere" | "excludesWhere"); _ } -> TBool
      | EVar { name = "jsonLength"; _ } -> TInt
      | EVar { name = "jsonInt"; _ } -> TInt
      | EVar { name = "jsonString"; _ } -> TString
@@ -2063,11 +2080,22 @@ let rec type_of_expr signatures env expr =
   | EWithDatabase { body; _ } -> type_of_expr signatures env body
   (* `enqueue` is a statement: the job id stays inside the store, as it does on Racket. *)
   | EEnqueue { payload; _ } -> ignore (type_of_expr signatures env payload); TUnit
-  | ETelemetry { loc; _ } | EPublish { loc; _ }
-  | EStartWorkers { loc; _ } | ECacheGet { loc; _ } | ECacheSet { loc; _ }
+  (* A `telemetry "name" { … }` block is a STATEMENT: it records a signal and answers Unit, so a
+     function carrying one has the type it would have without it — which is the property every
+     telemetry test in the corpus asserts. *)
+  | ETelemetry { fields; _ } ->
+    List.iter (fun (_, value) -> ignore (type_of_expr signatures env value)) fields;
+    TUnit
+  (* The startup chain `main` lowers to.  A capability scope is compile-time only, so it types
+     as its body; `startWorkers` and `serve` are statements. *)
+  | EWithCapabilities { body; _ } -> type_of_expr signatures env body
+  | EStartWorkers _ -> TUnit
+  | EServe { port; _ } -> ignore (type_of_expr signatures env port); TUnit
+  | EPublish { loc; _ }
+  | ECacheGet { loc; _ } | ECacheSet { loc; _ }
   | ECacheDelete { loc; _ } | ECacheInvalidate { loc; _ } | ESendEmail { loc; _ }
   | EStartEmailWorker { loc; _ }
-  | EWithCapabilities { loc; _ } | EWithTransaction { loc; _ } | EServe { loc; _ } ->
+  | EWithTransaction { loc; _ } ->
     unsupported loc "Go backend does not support effects yet"
   (* A LAMBDA's type comes from its annotated parameters plus its inferred body.  Tesl
      requires the annotation, so nothing is guessed. *)
@@ -3021,6 +3049,64 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
              Printf.sprintf "%s\treturn teslrt.JobOk(teslJob)\n" indent;
              Printf.sprintf "%s}())" indent;
            ])
+      (* `initTelemetry` configures the sink, once, from `main`.  Its keyword surface parses as a
+         plain application, so the arguments are folded back into keyword/value pairs here — each
+         keyword's value being every token up to the next KNOWN keyword, so `endpoint ep()` stays
+         the call it is written as rather than binding the function value and dropping the rest
+         (the bug the Racket emitter records at the same place). *)
+      | EVar { name = "initTelemetry"; _ } ->
+        let rec pairs acc = function
+          | [] -> List.rev acc
+          | keyword :: rest ->
+            (match init_telemetry_keyword keyword with
+             | None -> pairs acc rest
+             | Some name ->
+               let rec take value_acc = function
+                 | (next :: _) as more when init_telemetry_keyword next <> None ->
+                   List.rev value_acc, more
+                 | value :: more -> take (value :: value_acc) more
+                 | [] -> List.rev value_acc, []
+               in
+               let values, more = take [] rest in
+               let value = match values with
+                 | [] -> unsupported loc
+                   "Go backend `initTelemetry` keyword `%s` has no value" name
+                 | [ single ] -> single
+                 | fn :: arguments ->
+                   (* `endpoint ep ()` / `service f x` re-folded into the call it spells. *)
+                   List.fold_left (fun applied argument ->
+                     EApp { fn = applied; arg = argument; loc = Checker.expr_loc argument })
+                     fn arguments
+               in
+               pairs ((name, value) :: acc) more)
+        in
+        let settings = pairs [] args in
+        let setting name = List.assoc_opt name settings in
+        let string_of name = match setting name with
+          | None -> go_quote ""
+          | Some value -> emit_expr ~expected:TString ~indent signatures env value
+        in
+        let bool_of name default = match setting name with
+          | None -> if default then "true" else "false"
+          | Some value -> strip_outer_parens (emit_expr ~expected:TBool ~indent signatures env value)
+        in
+        let int_of name default = match setting name with
+          | None -> string_of_int default
+          | Some value ->
+            Printf.sprintf "teslrt.MillisOf(%s)"
+              (emit_expr ~expected:TInt ~indent signatures env value)
+        in
+        let float_of name default = match setting name with
+          | None -> default
+          | Some value -> emit_expr ~expected:TFloat ~indent signatures env value
+        in
+        (* Metrics default ON and traces OFF, matching `init-opentelemetry!`: an aggregated
+           counter is cheap, while spans are per-request and unaggregated, so their volume is
+           opt-in. *)
+        Printf.sprintf "teslrt.InitTelemetry(%s, %s, %s, %s, %s, %s, %s)"
+          (string_of "service") (string_of "endpoint")
+          (bool_of "console" false) (bool_of "metrics" true) (bool_of "traces" false)
+          (int_of "metricsInterval" 60000) (float_of "traceRatio" "1.0")
       (* The secret-accepting header builders.  They are the sanctioned sink for a `secret`,
          so the ARGUMENT is where the unwrapping happens: a secret newtype hands over its
          payload, and a plain String is wrapped on the way in — which is what
@@ -3081,6 +3167,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
       | EVar { name = ("isNull" | "isNotNull" | "isEmpty" | "isNotEmpty" | "jsonLength"
                       | "jsonInt" | "jsonString" | "jsonBool" | "jsonArray" | "jsonObject"
                       | "hasField" | "hasLength" | "arrayAt" | "fieldAt" | "jsonContains"
+                      | "includesWhere" | "excludesWhere"
                       | "bodyField") as verb; _ } ->
         ignore (type_of_expr signatures env app);
         let json_argument index =
@@ -3121,6 +3208,24 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
          | "bodyField" ->
            Printf.sprintf "teslrt.JsonFieldAt(%s, %s.Body)"
              (string_argument 0) (selector_operand (json_argument 1))
+         (* `includesWhere { "field": value } events`: the PATTERN is a template like an
+            api-test body, matched against each element by containment — so an element carrying
+            an id and a timestamp the test does not pin still matches. *)
+         | "includesWhere" | "excludesWhere" ->
+           let pattern = match List.nth_opt args 0 with
+             | Some (ERecord _ as template) ->
+               Printf.sprintf "teslrt.JsonParseBody(%s).JsonRaw()"
+                 (emit_api_test_body ~indent signatures env template)
+             | Some other ->
+               (match type_of_expr signatures env other with
+                | TJson -> Printf.sprintf "%s.JsonRaw()" (selector_operand (emit other))
+                | _ -> unsupported loc
+                  "Go backend `%s` takes a `{ \"field\": value }` pattern" verb)
+             | None -> unsupported loc "Go backend requires `%s` applied to 2 arguments" verb
+           in
+           Printf.sprintf "teslrt.Json%s(%s, %s)"
+             (if verb = "includesWhere" then "IncludesWhere" else "ExcludesWhere")
+             pattern (json_argument 1)
          | _ ->
            (* jsonContains: the needle is an ordinary Tesl value, compared structurally. *)
            let needle = match List.nth_opt args 0 with
@@ -3430,11 +3535,95 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
     Printf.sprintf "teslrt.EnqueueJob(%s, %s)"
       (qualified info.qu_owner info.qu_go_var)
       (emit_expr ~expected:row ~indent signatures env payload)
-  | ETelemetry { loc; _ } | EPublish { loc; _ }
-  | EStartWorkers { loc; _ } | ECacheGet { loc; _ } | ECacheSet { loc; _ }
+  (* `telemetry "name" { user.id = userId, count = n }`.  The attribute VALUES are a mixed bag of
+     types while the runtime takes one attribute type, so each value is rendered to text here,
+     where its type is known — the same rendering an interpolation performs.  A `secret` renders
+     as its REDACTION, never its payload: an attribute walk is exactly where a misplaced secret
+     would otherwise be exported in plaintext, and the Racket runtime redacts at every node of
+     the same walk for that reason. *)
+  | ETelemetry { name; fields; loc } ->
+    let attribute (key, value) =
+      let rendered = match type_of_expr signatures env value with
+        | TString -> emit_expr ~expected:TString ~indent signatures env value
+        | TInt -> Printf.sprintf "(%s).String()" (emit value)
+        | TFloat -> Printf.sprintf "teslrt.FormatFloat(%s)" (emit value)
+        | TBool -> Printf.sprintf "strconv.FormatBool(%s)" (emit value)
+        | TNewtype info when info.secret ->
+          ignore (emit value);
+          "teslrt.SecretRedaction"
+        | TNewtype info ->
+          (match info.base with
+           | TString -> Printf.sprintf "%s.Value" (selector_operand (emit value))
+           | TInt -> Printf.sprintf "%s.Value.String()" (selector_operand (emit value))
+           | TFloat ->
+             Printf.sprintf "teslrt.FormatFloat(%s.Value)" (selector_operand (emit value))
+           | TBool ->
+             Printf.sprintf "strconv.FormatBool(%s.Value)" (selector_operand (emit value))
+           | _ -> unsupported loc
+             "Go backend telemetry attribute `%s` has an unsupported type" key)
+        | _ -> unsupported loc
+          "Go backend telemetry attribute `%s` must be a String, Int, Float or Bool" key
+      in
+      Printf.sprintf "{Tuple2First: %s, Tuple2Second: %s}" (go_quote key) rendered
+    in
+    Printf.sprintf "teslrt.Telemetry(%s, []teslrt.Tuple2[string, string]{%s})"
+      (go_quote name) (String.concat ", " (List.map attribute fields))
+  (* A capability scope adds nothing at run time: the checker has already verified every call in
+     it, so what is left is the body. *)
+  | EWithCapabilities { body; _ } -> emit_expr ?expected ~indent signatures env body
+  (* `startWorkers` activates a queue: N goroutines, each claiming and running one job at a time
+     through the SAME dispatcher an api-test's `processNextJob` builds — so "run one job" and "run
+     them forever" cannot disagree about how a job is dispatched. *)
+  | EStartWorkers { workers_name; concurrency; is_dead; loc; _ } ->
+    let queue_name =
+      (* The lowering names them `<Queue>Workers` / `<Queue>DeadWorkers`. *)
+      let suffix = if is_dead then "DeadWorkers" else "Workers" in
+      if Filename.check_suffix workers_name suffix then
+        Filename.chop_suffix workers_name suffix
+      else workers_name
+    in
+    let info = queue_of_job_type loc queue_name in
+    let queue = qualified info.qu_owner info.qu_go_var in
+    let row_go = match Option.bind !current_types
+                         (fun types -> Hashtbl.find_opt types.records info.qu_job_type) with
+      | Some row -> go_type (TRecord row)
+      | None -> unsupported loc "Go backend cannot resolve job type `%s`" info.qu_job_type
+    in
+    let worker =
+      if is_dead then
+        (match info.qu_dead_worker with
+         | Some dead -> dead
+         | None -> unsupported loc
+           "Go backend: queue `%s` has no dead-letter worker" info.qu_tesl_name)
+      else info.qu_worker
+    in
+    let worker_go = match Hashtbl.find_opt signatures worker with
+      | Some signature -> qualified signature.sig_owner signature.go_name
+      | None -> unsupported loc "Go backend cannot resolve worker `%s`" worker
+    in
+    let inner = indent ^ "\t" in
+    Printf.sprintf
+      "teslrt.StartWorkers(%s, func(teslPayload any) teslrt.JobOutcome {\n%s\tteslJob := teslPayload.(%s)\n%s\t_ = %s(teslJob)\n%s\treturn teslrt.JobOutcome{OK: true}\n%s}, %d, %b)"
+      queue inner row_go inner worker_go inner indent
+      (match concurrency with Some n when n > 0 -> n | _ -> 1) is_dead
+  (* `serve` is the tail of the startup chain: it runs until the process is asked to stop. *)
+  | EServe { server_name; port; static_dir; mount_path; _ } ->
+    let options =
+      String.concat ", "
+        ([ Printf.sprintf "Port: teslrt.PortOf(%s)"
+             (emit_expr ~expected:TInt ~indent signatures env port) ]
+         @ (match static_dir with
+            | Some dir -> [ Printf.sprintf "StaticDir: %s" (go_quote dir) ] | None -> [])
+         @ (match mount_path with
+            | Some mount -> [ Printf.sprintf "MountPath: %s" (go_quote mount) ] | None -> []))
+    in
+    Printf.sprintf "teslrt.Serve(%s, teslrt.ServeOptions{%s})"
+      (go_ident ~exported:true server_name) options
+  | EPublish { loc; _ }
+  | ECacheGet { loc; _ } | ECacheSet { loc; _ }
   | ECacheDelete { loc; _ } | ECacheInvalidate { loc; _ } | ESendEmail { loc; _ }
   | EStartEmailWorker { loc; _ }
-  | EWithCapabilities { loc; _ } | EWithTransaction { loc; _ } | EServe { loc; _ } ->
+  | EWithTransaction { loc; _ } ->
     unsupported loc "Go backend cannot emit this expression yet"
   (* A LAMBDA is a Go function literal.  The body goes through the ordinary TAIL emitter, so
      a `let` chain or an `if` inside it keeps statement form instead of nesting closures. *)
@@ -4728,8 +4917,10 @@ let emit_tail ?self buffer signatures env expected indent expr =
     match expr with
     (* `with database D { … }` adds nothing at run time on the Memory backend, so its body
        is emitted in TAIL position — the block keeps statement form instead of collapsing
-       into an immediately-called closure. *)
+       into an immediately-called closure.  A capability scope is the same: the checker has
+       verified every call in it already, so the scope itself has no runtime form. *)
     | EWithDatabase { body; _ } -> go env indent body
+    | EWithCapabilities { body; _ } -> go env indent body
     (* Proof decomposition in tail position keeps statement form, like an ordinary `let`.
        Either half may be `_`, since the decomposition is often written for one of them. *)
     | ELetProof { value_name; proof_name; value; body; loc; _ } ->
@@ -5181,12 +5372,17 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
        `fail 401 …`, so it emits exactly like a `check`. *)
     (* A `worker` / `deadWorker` is an ordinary function of the job: its `FromQueue` proof
        annotation erases like every other proof, and the queue runtime is what calls it. *)
+    (* `main` is emitted like any other function: by the time it gets here its trailing
+       `App { … }` record has been LOWERED into the startup chain it describes (start each
+       queue's workers, then serve), so there is no App value at run time — the record is
+       configuration the compiler reads, which is what makes it typed rather than a config file. *)
     if fd.kind <> FnKind && fd.kind <> CheckKind && fd.kind <> EstablishKind
        && fd.kind <> HandlerKind && fd.kind <> AuthKind
-       && fd.kind <> WorkerKind && fd.kind <> DeadWorkerKind then
+       && fd.kind <> WorkerKind && fd.kind <> DeadWorkerKind
+       && fd.kind <> MainKind then
       unsupported fd.loc
-        "Go backend supports `fn`, `check`, `auth`, `establish`, `handler`, `worker` and \
-         `deadWorker` declarations only";
+        "Go backend supports `fn`, `check`, `auth`, `establish`, `handler`, `worker`, \
+         `deadWorker` and `main` declarations only";
     (* A capability is a COMPILE-TIME grant: the checker verifies every call against the
        declared set and forces it to propagate to callers, so nothing about it survives to
        run time.  `cookieCap` is the exception in shape only — it says this function may
@@ -5725,8 +5921,8 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
   let header = Printf.sprintf "package %s\n%s" package (import_block imports) in
   header ^ body
 
-let test_source ?(imported_packages=[]) ?(api_tests=[]) module_path package signatures
-    (tests : test_form list) =
+let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_path package
+    signatures (tests : test_form list) =
   Hashtbl.reset pending_helpers;
   Hashtbl.reset helper_names;
   let body = Buffer.create 1024 in
@@ -5768,7 +5964,13 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) module_path package sign
            || Hashtbl.mem signatures "httpCalled" || Hashtbl.mem signatures "httpLastBody"
         then ["teslrt.ResetHttpStubs()"] else []
       in
-      List.sort_uniq String.compare (tables @ queues) @ stubs
+      (* Recorded signals are per-process state too: one block's counter must not be another's. *)
+      let telemetry =
+        if Hashtbl.mem signatures "counter" || Hashtbl.mem signatures "histogram"
+           || Hashtbl.mem signatures "gauge"
+        then ["teslrt.ResetTelemetry()"] else []
+      in
+      List.sort_uniq String.compare (tables @ queues) @ stubs @ telemetry
   in
   let emit_reset () =
     if reset_calls <> [] then Buffer.add_string body "\tteslResetTestState()\n"
@@ -5977,6 +6179,70 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) module_path package sign
     emit_stmts [] "\t" api_test.stmts;
     current_api_server := None;
     Buffer.add_string body "}\n") api_tests;
+  (* A `load-test` block is a Go test too: it drives the same in-process dispatch an api-test
+     uses, at a fixed arrival rate, and asserts on the sample.  Driving the SAME dispatch is what
+     makes the number comparable with the Racket harness's — both measure the program, not a
+     socket.  The request statements are ordinary api-test statements, so they go through the
+     same emitter; what differs is that they run inside the harness's thunk. *)
+  List.iteri (fun index (load_test : load_test_form) ->
+    if load_test.seed_stmts <> [] then unsupported load_test.loc
+      "Go backend does not support load-test seed statements yet";
+    if load_test.baseline <> None then unsupported load_test.loc
+      "Go backend does not support load-test baselines yet";
+    Buffer.add_char body '\n';
+    Printf.bprintf body "// load-test %s\n//\n" (String.escaped load_test.description);
+    Buffer.add_string body (line_directive load_test.loc);
+    Printf.bprintf body "func TestTeslLoad%d(teslT *testing.T) {\n" index;
+    emit_reset ();
+    (* `-short` skips it: a load test takes seconds by construction, and `go test` in a tight
+       loop should not pay for it.  The same run WITHOUT `-short` measures. *)
+    Buffer.add_string body
+      "\tif testing.Short() {\n\t\tteslT.Skip(\"load-test: skipped in -short mode\")\n\t}\n";
+    Printf.bprintf body
+      "\tteslResult := teslrt.RunLoadTest(%d, %d, func() int {\n" load_test.rate
+      load_test.duration;
+    current_api_server := Some (go_ident ~exported:true load_test.server_name);
+    (* The last request statement's status is what the harness counts, so the thunk answers it. *)
+    let statuses = ref [] in
+    List.iteri (fun statement_index (statement : test_stmt) ->
+      match statement with
+      | TsExpr { e; loc } ->
+        let name = Printf.sprintf "teslResponse%d" statement_index in
+        Buffer.add_string body (line_directive loc);
+        Printf.bprintf body "\t\t%s := %s\n" name
+          (emit_expr ~indent:"\t\t" signatures [] e);
+        statuses := name :: !statuses
+      | TsLet { loc; _ } | TsExpect { loc; _ } | TsExpectFail { loc; _ }
+      | TsExpectHasProof { loc; _ } | TsProperty { loc; _ } | TsIf { loc; _ }
+      | TsCase { loc; _ } | TsLetProof { loc; _ } ->
+        unsupported loc
+          "Go backend load-test bodies take request statements only") load_test.request_stmts;
+    (match !statuses with
+     | [] -> unsupported load_test.loc "Go backend load-test needs a request statement"
+     | last :: rest ->
+       List.iter (fun name -> Printf.bprintf body "\t\t_ = %s\n" name) (List.rev rest);
+       Printf.bprintf body "\t\treturn teslrt.LoadTestStatus(%s)\n" last);
+    current_api_server := None;
+    Buffer.add_string body "\t})\n\tteslrt.ReportLoadTest(teslT, teslResult)\n";
+    List.iter (fun assertion ->
+      match assertion with
+      | LtAssertMetric { metric; op; value; unit } ->
+        let metric_name = match metric with
+          | LtP50 -> "p50" | LtP95 -> "p95" | LtP99 -> "p99" | LtP999 -> "p99.9"
+          | LtErrorRate -> "errorRate" | LtThroughput -> "throughput"
+        in
+        let operator = match op with
+          | BLt -> "<" | BLe -> "<=" | BGt -> ">" | BGe -> ">="
+          | _ -> unsupported load_test.loc
+            "Go backend load-test assertions compare with <, <=, > or >="
+        in
+        ignore unit;
+        Printf.bprintf body "\tteslrt.AssertLoadTest(teslT, teslResult, %s, %s, %s)\n"
+          (go_quote metric_name) (go_quote operator) (emit_float_literal value)
+      | LtAssertRegression _ ->
+        unsupported load_test.loc
+          "Go backend does not support load-test regression baselines yet") load_test.assertions;
+    Buffer.add_string body "}\n") load_tests;
   if reset_calls <> [] then begin
     Buffer.add_string body
       "\n// teslResetTestState empties the stores every test block starts from, so no block\n\
@@ -6128,7 +6394,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | "JsonValue" | "JsonNull"
           | "isNull" | "isNotNull" | "isEmpty" | "isNotEmpty" | "hasLength" | "hasField"
           | "jsonInt" | "jsonString" | "jsonBool" | "jsonArray" | "jsonObject" | "jsonLength"
-          | "arrayAt" | "fieldAt" | "bodyField" | "jsonContains" -> ()
+          | "arrayAt" | "fieldAt" | "bodyField" | "jsonContains"
+          | "includesWhere" | "excludesWhere" -> ()
           (* The outbound-HTTP double: statements a test writes before the code under test
              runs, and the assertions that read the call log afterwards. *)
           | "stubHttp" | "stubHttpFailure" | "stubHttpTimeout"
@@ -6165,6 +6432,23 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | "HashFor" | "PasswordVerified" | "Authentic" -> ()
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.Crypto` export `%s` yet" other) exposed
+      (* `Tesl.App`: the DECLARATION vocabulary for `main`.  `App` names the record the compiler
+         lowers into a startup chain, so there is nothing to bind at run time. *)
+      | "Tesl.App" ->
+        List.iter (fun name ->
+          match name with
+          | "App" -> ()
+          | other -> unsupported import.loc
+            "Go backend does not support `Tesl.App` export `%s` yet" other) exposed
+      (* `Tesl.Telemetry`: the ambient signals.  Nothing is gated — an observability call that
+         needed a capability would be threaded through every signature or left out of the code
+         that most needs it — so what is left is one runtime call per signal. *)
+      | "Tesl.Telemetry" ->
+        List.iter (fun name ->
+          match name with
+          | "initTelemetry" | "telemetry" | "counter" | "histogram" | "gauge" -> ()
+          | other -> unsupported import.loc
+            "Go backend does not support `Tesl.Telemetry` export `%s` yet" other) exposed
       (* `Tesl.JWT`: the one blessed session token.  HS256 over `header.payload`, which is
          `Tesl.Crypto`'s own primitive — so a token minted by either backend verifies on the
          other, and a test pins that against a real Racket-minted token. *)
@@ -6241,12 +6525,18 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
        result is `Maybe (Fact P)` answers with `Something (ValidPort port)`, and that Maybe
        is real control flow. *)
     let fact_names = List.filter_map (function DFact f -> Some f.name | _ -> None) m.decls in
+    (* `main`'s trailing `App { … }` record is LOWERED here, through the same backend-neutral
+       pass the Racket path uses (`Desugar.lower_main_app`), rather than being re-read in this
+       emitter: a second reader of a config record is a second place for a field to be misread,
+       which is exactly how `backend: Memory` once looked like Postgres. *)
     let funcs = List.filter_map (function DFunc fd -> Some fd | _ -> None) m.decls in
+    let funcs = List.map (Desugar.lower_main_app m.decls) funcs in
     let codecs = List.filter_map (function DCodec c -> Some c | _ -> None) m.decls in
     let apis = List.filter_map (function DApi a -> Some a | _ -> None) m.decls in
     let servers = List.filter_map (function DServer s -> Some s | _ -> None) m.decls in
     let capturers = List.filter_map (function DCapture c -> Some c | _ -> None) m.decls in
     let api_tests = List.filter_map (function DApiTest t -> Some t | _ -> None) m.decls in
+    let load_tests = List.filter_map (function DLoadTest t -> Some t | _ -> None) m.decls in
     let tests = List.filter_map (function DTest test -> Some test | _ -> None) m.decls in
     let package = package_name m.module_name in
     let types = {
@@ -6519,6 +6809,16 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       "Float.toString",   [`Float], `Str,   "teslrt.FormatFloat";
       "Float.toInt",      [`Float], `Int,   "teslrt.FloatToIntTruncating";
       "Float.parse",      [`Str], `MaybeFloat, "teslrt.ParseFloat";
+      (* The predicates.  NaN is its own case in each: every comparison with NaN is false, so
+         `isPositive`/`isNegative`/`isZero` all answer false for it and `isNaN` is the only way
+         to ask. *)
+      "Float.isNaN",      [`Float], `Bool, "teslrt.FloatIsNaN";
+      "Float.isInfinite", [`Float], `Bool, "teslrt.FloatIsInfinite";
+      "Float.isPositive", [`Float], `Bool, "teslrt.FloatIsPositive";
+      "Float.isNegative", [`Float], `Bool, "teslrt.FloatIsNegative";
+      "Float.isZero",     [`Float], `Bool, "teslrt.FloatIsZero";
+      (* A FLOAT sign (1.0/-1.0/0.0), so it composes with float arithmetic. *)
+      "Float.sign",       [`Float], `Float, "teslrt.FloatSign";
       "Float.requireNonZero", [`Float], `CheckFloat, "teslrt.FloatRequireNonZero";
       "Float.requireNonNegative", [`Float], `CheckFloat, "teslrt.FloatRequireNonNegative";
       "Int.divide",       [`Int; `Int], `Int, "teslrt.MustQuo";
@@ -6683,6 +6983,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       let exposed = match import.names with
         | ImportAll -> [] | ImportExposing names -> names in
       match import.module_name with
+      | "Tesl.Telemetry" -> tuple_imported := true
       | "Tesl.Crypto" ->
         secret_type_needed := true;
         List.iter (fun name ->
@@ -7171,7 +7472,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       | DApi _ -> ()
       | DServer _ -> ()
       | DApiTest _ -> ()
-      | DLoadTest t -> unsupported t.loc "Go backend does not support load-test yet") m.decls;
+      (* Emitted with the tests below. *)
+      | DLoadTest _ -> ()) m.decls;
     let is_exported name = List.exists (function
       | ExportName exported -> exported = name
       | ExportAdt _ -> false) m.exports in
@@ -7397,6 +7699,29 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           { params; result; go_name; sig_owner = ""; sig_needs_scope = false })
         !crypto_imports
     end;
+    (* The metric instruments.  Attributes are a `List (Tuple2 String String)` on the Tesl side
+       already, so these are ordinary leaves; `initTelemetry` is not, because its surface is
+       keyword arguments (`service V endpoint V console V`) rather than a positional call. *)
+    List.iter (fun (import : import_decl) ->
+      if import.module_name = "Tesl.Telemetry" then begin
+        let exposed = match import.names with
+          | ImportAll -> [] | ImportExposing names -> names in
+        let attributes = match Hashtbl.find_opt types.adts "Tuple2" with
+          | Some info -> TList (TAdt (info, [TString; TString]))
+          | None -> unsupported import.loc
+            "Go backend telemetry attributes need `Tuple2`"
+        in
+        List.iter (fun name ->
+          let params, result, go_name = match name with
+            | "counter" -> [TString; TInt; attributes], TUnit, "teslrt.Counter"
+            | "histogram" -> [TString; TFloat; attributes], TUnit, "teslrt.Histogram"
+            | "gauge" -> [TString; TFloat; attributes], TUnit, "teslrt.Gauge"
+            | _ -> [], TUnit, ""
+          in
+          if go_name <> "" then
+            Hashtbl.replace signatures name
+              { params; result; go_name; sig_owner = ""; sig_needs_scope = false }) exposed
+      end) m.imports;
     if !jwt_imports <> [] then begin
       let loc = Location.dummy_loc m.source_file in
       let secret = match Hashtbl.find_opt types.newtypes "Secret" with
@@ -7507,13 +7832,21 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         "Go backend generated name collision for `%s`" fd.name;
       let params = List.map (fun (binding : binding) ->
         type_of_type_expr types binding.type_expr) fd.params in
-      let exported = is_exported fd.name in
+      (* `main` is exported whatever the module's `exposing` list says: the generated
+         `package main` has to call it, and it is the program's entry point rather than part of a
+         library surface. *)
+      let exported = fd.kind = MainKind || is_exported fd.name in
       let go_name = unique_ident taken (go_ident ~exported fd.name) in
       (* `-> n: T ::: P` means different things by KIND: a `check`/`auth` answers a
          `Check T` (it can reject), while a plain `fn`/`worker` answers T carrying a proof —
          and the proof erases, so the result is just T.  Typing every attached return as a
          Check rejected an ordinary proof-passing `fn` as a "result type mismatch". *)
-      let result = match type_of_return_spec types fd.return_spec, fd.kind with
+      (* `main() -> App` is the one signature whose declared type is CONFIGURATION rather than a
+         value: the App record is lowered into the startup chain it describes, so what the
+         emitted function answers is Unit.  Typing `App` as a value type would need a runtime
+         representation for something that has none. *)
+      let result = if fd.kind = MainKind then TUnit else
+        match type_of_return_spec types fd.return_spec, fd.kind with
         (* A `check`/`auth` can REJECT, so whatever its return spec says about the value, the
            result is a `Check` of it: `-> String ? Authenticated` on an `auth` is
            `Check[string]`, not `string`. *)
@@ -7554,9 +7887,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | None -> None) unreachable_private)
         module_path package signatures types funcs in
     let tests_source =
-      if tests = [] && api_tests = [] then None
-      else Some (test_source ~imported_packages:!imported_packages ~api_tests module_path
-                   package signatures tests) in
+      if tests = [] && api_tests = [] && load_tests = [] then None
+      else Some (test_source ~imported_packages:!imported_packages ~api_tests ~load_tests
+                   module_path package signatures tests) in
     let needs_runtime = contains_go_code source "teslrt." ||
       match tests_source with Some text -> contains_go_code text "teslrt." | None -> false in
     (* The lint configuration is part of the emitter contract, versioned with this
@@ -7604,7 +7937,18 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         contents = Printf.sprintf "module %s\n\ngo 1.26\n%s" module_path dependency_requires };
       { path = ".golangci.yml"; contents = lint_config };
       { path = "internal/" ^ package ^ "/module.go"; contents = source };
-    ] @ (if password_runtime then
+    ]
+    (* A module with a `main` is a PROGRAM: it gets the one `package main` Go needs to build a
+       binary.  Emitted as a separate artifact rather than by making the module itself `package
+       main`, so a module can be both a library another package imports and the entry point —
+       which is how the corpus is written (a `main` beside the handlers it serves). *)
+    @ (if List.exists (fun (fd : func_decl) -> fd.kind = MainKind) funcs then
+         [ { path = "cmd/app/main.go";
+             contents = Printf.sprintf
+               "package main\n\nimport (\n\t%s\n)\n\n// The entry point Tesl's `main` describes: its `App { … }` record was lowered into the\n// startup chain (activate each queue's workers, then serve), so this is the whole program.\nfunc main() {\n\t_ = %s.Main()\n}\n"
+               (go_quote (module_path ^ "/internal/" ^ package)) package } ]
+       else [])
+    @ (if password_runtime then
            [ { path = "go.sum"; contents = password_dependency_go_sum } ]
          else []) in
     let artifacts = match tests_source with
@@ -7639,9 +7983,18 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
                  "teslrt.JsonValue"; "teslrt.RequestScope"; "teslrt.Server" ] in
         (* `apitest_json.go` travels with `apitest.go`: the untyped JSON view exists to inspect
            a RESPONSE, so a module that serves no HTTP has no use for it. *)
-        let http_only = [ "server.go"; "request.go"; "apitest.go"; "apitest_json.go" ] in
+        let http_only =
+          [ "serve.go"; "server.go"; "request.go"; "apitest.go"; "apitest_json.go" ] in
+        (* `loadtest.go` imports `testing`, so it ships ONLY with a module that has load tests:
+           the testing package has no place in a production binary. *)
+        let load_test_only = [ "loadtest.go" ] in
+        let has_load_tests = match tests_source with
+          | Some text -> contains_go_code text "teslrt.RunLoadTest"
+          | None -> false
+        in
         artifacts @ List.filter_map (fun (name, contents) ->
           if (not serves_http) && List.mem name http_only then None
+          else if (not has_load_tests) && List.mem name load_test_only then None
           else if name = "password.go" && not password_runtime then None
           else Some { path = "internal/teslrt/" ^ name; contents })
           Embedded_go_runtime.files
