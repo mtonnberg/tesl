@@ -431,7 +431,7 @@ let check_sql_where_clauses
        behaviour is unchanged (no descent). *)
     | ELit _ | EVar _ | EConstructor _ | EFail _ | EStartWorkers _ | EField _
     | ECacheGet _ | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _
-    | ESendEmail _ | EStartEmailWorker _ | ERuntimeCall _ -> ()
+    | ESendEmail _ | EStartEmailWorker _ -> ()
   in
   List.iter (function
     | DFunc fd ->
@@ -1061,8 +1061,6 @@ let check_record_field_proof_construction
         walk_expr type_env subject_env proof_env subject;
         walk_expr type_env subject_env proof_env body
       | EStartEmailWorker _ -> ()
-      | ERuntimeCall { segments; _ } ->
-        List.iter (function RLit _ | RRawVar _ -> () | RArg e -> walk_expr type_env subject_env proof_env e) segments
     in
     List.iter (function
       | DFunc fd ->

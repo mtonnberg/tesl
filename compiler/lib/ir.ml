@@ -551,10 +551,19 @@ let codec_decode_entry_json = function
       json_field "codec" (json_string codec);
       json_field "via" (json_string_array via);
     ]
-  | DecodeDefault { field_name; default_expr; _ } ->
+  | DecodeDefault { field_name; default_lit; _ } ->
+    (* The IR is a backend-neutral interchange format, so the default is rendered as a
+       JSON value rather than the Racket source this used to carry. *)
+    let default_value = match default_lit with
+      | LInt n -> string_of_int n
+      | LBool b -> if b then "true" else "false"
+      | LString str -> json_string str
+      | LFloat f -> Float_fmt.to_faithful_literal f
+      | _ -> "null"
+    in
     json_object [
       json_field "name" (json_string field_name);
-      json_field "default" (json_string default_expr);
+      json_field "default" default_value;
     ]
   | DecodeCrossCheck { checker; _ } ->
     json_object [json_field "checker" (json_string checker)]

@@ -2621,7 +2621,6 @@ and expr_loc = function
   | EConstructor e -> e.loc | ELambda e -> e.loc
   | ECacheGet e -> e.loc | ECacheSet e -> e.loc | ECacheDelete e -> e.loc | ECacheInvalidate e -> e.loc
   | ESendEmail e -> e.loc | EStartEmailWorker e -> e.loc
-  | ERuntimeCall e -> e.loc
 
 (* ── Top-level parsers ────────────────────────────────────────────────────── *)
 
@@ -3843,6 +3842,9 @@ let parse_codec_form s name type_name =
      and a type with neither was silently non-serializable).  Require both. *)
   let to_set = ref false in
   let from_set = ref false in
+  (* An entry inside a `fromJson` alternative that the parser cannot classify.  Reported
+     after the form is parsed, so the loop still makes progress. *)
+  let unknown_entry_name = ref None in
   while peek s <> RBRACE && peek s <> EOF do
     skip_layout s;
     (match peek s with
@@ -3893,11 +3895,13 @@ let parse_codec_form s name type_name =
        if peek s = LBRACKET then begin
          advance s; skip_layout s;
          let alts = ref [] in
+         let unknown_alt_entry = ref None in
          while peek s <> RBRACKET && peek s <> EOF do
            skip_layout s;
            if peek s = LBRACE then begin
              advance s; skip_layout s;
              let entries = ref [] in
+             let unknown_entry = ref None in
              while peek s <> RBRACE && peek s <> EOF do
                skip_layout s;
                if peek s = RBRACE then ()
@@ -3945,15 +3949,15 @@ let parse_codec_form s name type_name =
                             advance s;
                             (match parse_expr s with
                              | Ok lit_e ->
-                               let racket = (match lit_e with
-                                 | ELit { lit = LInt n; _ } -> Some (string_of_int n)
-                                 | ELit { lit = LBool b; _ } -> Some (if b then "#t" else "#f")
-                                 | ELit { lit = LString str; _ } -> Some (Printf.sprintf "%S" str)
-                                 | ELit { lit = LFloat f; _ } -> Some (Float_fmt.to_faithful_literal f)
+                               (* Only a LITERAL may be a default, and it is stored as
+                                  one so each backend renders it in its own syntax. *)
+                               let literal = (match lit_e with
+                                 | ELit { lit = (LInt _ | LBool _ | LString _ | LFloat _) as lit; _ } ->
+                                   Some lit
                                  | _ -> None) in
-                               (match racket with
-                                | Some default_expr ->
-                                  let e = DecodeDefault { field_name = fname; default_expr;
+                               (match literal with
+                                | Some default_lit ->
+                                  let e = DecodeDefault { field_name = fname; default_lit;
                                     loc = span entry_loc0 (current_loc s) } in
                                   entries := e :: !entries;
                                   skip_layout s;
@@ -3982,13 +3986,28 @@ let parse_codec_form s name type_name =
                                 | Err _ -> ())
                              | Err _ -> ())
                           | Err _ -> ()))
-                       | _ -> advance s (* skip unknown *))
+                       | _ ->
+                         (* An entry that is neither `field <- …` nor `via checker` used to
+                            be skipped silently, so a mis-spelled validator simply
+                            DISAPPEARED: `check foo` in place of `via foo` compiled clean
+                            and the validation never ran.  The offender is remembered and
+                            reported once the alternative closes. *)
+                         if !unknown_entry = None then
+                           unknown_entry := Some (fname, current_loc s);
+                         advance s)
                     | Err _ ->
                       (* Not an identifier/keyword name — skip one token to make progress. *)
                       s.pos <- saved; advance s)
                end
              done;
              if peek s = RBRACE then advance s;
+             (* A `fromJson` alternative is a decode CONTRACT, so an entry the parser does
+                not understand has to be reported rather than dropped — dropping one makes
+                a declared validation disappear with no compile-time signal. *)
+             (match !unknown_entry with
+              | Some (name, _) ->
+                unknown_alt_entry := Some name
+              | None -> ());
              (* Check for } via checker — outer cross-check after the alt block *)
              skip_layout s;
              let alt_entries = ref (List.rev !entries) in
@@ -4007,6 +4026,9 @@ let parse_codec_form s name type_name =
             if peek s <> RBRACKET && peek s <> EOF then advance s (* skip *)
          done;
          if peek s = RBRACKET then advance s;
+         (match !unknown_alt_entry with
+          | Some name -> unknown_entry_name := Some name
+          | None -> ());
          from_json := FromJsonAlts (List.rev !alts)
        end
      | FROM_JSON_FORBIDDEN ->
@@ -4026,6 +4048,14 @@ let parse_codec_form s name type_name =
   done;
   let* _ = expect s RBRACE in
   let loc = span loc0 (current_loc s) in
+  match !unknown_entry_name with
+  | Some entry ->
+    err s (Printf.sprintf
+      "codec '%s': `%s` is not a valid entry in a `fromJson` alternative. A field mapping \
+       is `field <- \"key\" with_codec codecName`, and a cross-field validator is \
+       `via checkerName`. (An unrecognised entry used to be dropped silently, which made \
+       the validation it declared disappear.)" name entry)
+  | None ->
   if not !to_set || not !from_set then
     let missing =
       match !to_set, !from_set with

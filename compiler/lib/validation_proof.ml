@@ -668,8 +668,6 @@ let rec check_expr_call_proofs
                  | ECacheGet _ | ECacheDelete _ | ECacheInvalidate _ -> ()
                  | ECacheSet { value; _ } -> visit value
                  | ESendEmail _ | EStartEmailWorker _ -> ()
-                 | ERuntimeCall { segments; _ } ->
-                   List.iter (function RLit _ | RRawVar _ -> () | RArg e -> visit e) segments
                in
                visit body;
                let non_call_errors =
@@ -759,8 +757,6 @@ let rec check_expr_call_proofs
           | ECacheGet _ | ECacheDelete _ | ECacheInvalidate _ -> ()
           | ECacheSet { value; _ } -> visit value
           | ESendEmail _ | EStartEmailWorker _ -> ()
-          | ERuntimeCall { segments; _ } ->
-            List.iter (function RLit _ | RRawVar _ -> () | RArg e -> visit e) segments
         in
         visit body;
         let non_call_errors =
@@ -1826,9 +1822,7 @@ pass a `check` function or a `&&` combination of check functions"
      | ECacheInvalidate { prefix; _ } -> walk prefix
      | ESendEmail { to_; subject; body; _ } ->
        walk to_; walk subject; walk body
-     | EStartEmailWorker _ -> ()
-     | ERuntimeCall { segments; _ } ->
-       List.iter (function RLit _ | RRawVar _ -> () | RArg e -> walk e) segments);
+     | EStartEmailWorker _ -> ())
   in
   List.iter (function
     | DFunc fd -> walk fd.body
@@ -2365,7 +2359,7 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
     | ELit _ | EConstructor _ | EStartWorkers _ | EServe _
     | EBinop _ | EUnop _ | ERecord _ | ETelemetry _ | EOk _ | EEnqueue _
     | EPublish _ | ELambda _ | ECacheGet _ | ECacheSet _ | ECacheDelete _
-    | ECacheInvalidate _ | ESendEmail _ | EStartEmailWorker _ | ERuntimeCall _ -> ()
+    | ECacheInvalidate _ | ESendEmail _ | EStartEmailWorker _ -> ()
   in
   (* A `ForAll (P1 && P2) xs` proof annotation is stored as
      `PredApp { pred="ForAll"; args=["(P1 && P2)"; "xs"] }` — the inner
@@ -2698,10 +2692,6 @@ let rec invalid_packed_value_computation funcs expr =
     invalid_packed_value_computation funcs to_
     || invalid_packed_value_computation funcs subject
     || invalid_packed_value_computation funcs body
-  | ERuntimeCall { segments; _ } ->
-    List.exists (function
-      | RLit _ | RRawVar _ -> false
-      | RArg expr -> invalid_packed_value_computation funcs expr) segments
   | ELit _ | EVar _ | EStartWorkers _ | EStartEmailWorker _ -> false
 
 let rec exact_exists_pack_shape funcs spec env expr =
@@ -3566,5 +3556,3 @@ if every guard fails at runtime, the case has no match"
   | ESendEmail { to_; subject; body; _ } ->
     recurse to_ @ recurse subject @ recurse body
   | EStartEmailWorker _ -> []
-  | ERuntimeCall { segments; _ } ->
-    List.concat_map (function RLit _ | RRawVar _ -> [] | RArg e -> recurse e) segments

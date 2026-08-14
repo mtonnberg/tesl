@@ -4,6 +4,213 @@
 
 I think we should migrate all tests to Go, even for the code that moves into a standard lib. This for two reasons: A. we want to know if these standard libs behaves the same or if we introduce a breaking change with the migration (it is ok but we should know), B. we do not fully just want to take other people's word that the libraries work as intended and have some protection against future updates/malicious updates.
 
+## Status recap (2026-08-13)
+
+**Where the port is.** The Go backend compiles pure Tesl: scalars, records, ADTs
+(monomorphic and generic), `case` with guards, recursion (self tail calls become loops),
+facts/checks/proof erasure, `Maybe`/`Either`/tuples, `List`/`Dict`/`Set`/`String`/`Int`/
+`Float`, higher-order list leaves, multi-module programs and import cycles. Every slice
+lands with runtime Go tests, emitter assertions, a both-backends Racket oracle, and the
+full pinned gate stack (gofmt, build, vet, staticcheck, golangci-lint incl. `unused` and
+`exhaustive`, gosec, govulncheck, nilaway, `go test -race`) run on the EMITTED tree.
+
+**Corpus reach: 14 of 155 gated files.** That number moves slowly and it is the honest
+measure — most remaining files stop on whole subsystems that are not built yet
+(`Tesl.Json` ~30, `Tesl.Http` ~13, `Tesl.DB` ~13), not on missing leaves.
+
+**The recurring result worth naming: this port keeps finding bugs in the SHIPPING Racket
+backend, not in Go.** Five so far, each a legal Tesl program that compiled and then did
+the wrong thing:
+
+1. The SCC inliner silently rebound a cyclic module's references when two members shared
+   a private name — `twoEntry 5` returned 6 instead of 10, and `example/sandbox.tesl` was
+   affected in the shipped corpus.
+2. `Float` keys in `Dict`/`Set` used IEEE `<`, whose equivalence classes are not
+   `FloatEqual`'s: `Set.member NaN {1,2,3}` was TRUE, and `-0.0`/`+0.0` collapsed to one
+   key.
+3. `List.maximum`/`minimum` died at runtime on a `List String` (`tesl-gt?: … This is a
+   compiler bug`) although the signature admits any element type and `List.sort` has
+   always ordered strings.
+4. `List.filterMap` decided by the payload's TRUTHINESS, so `Something False` was silently
+   dropped — three elements in, one out.
+5. A negative-zero Float literal emitted `-float64(0)`, which in Go is POSITIVE zero.
+   (Go-side, but the same class: a value that compiles and is quietly wrong.)
+
+The pattern behind all five: Tesl's checker admits something no backend implements
+correctly, and only a second implementation exposes the gap. That is the migration's main
+non-obvious payoff so far, and it argues for keeping the differential oracle on every
+slice rather than treating it as a formality.
+
+**Deliberate design positions taken (with reasons, so they can be revisited):**
+
+- *The emitter never guesses.* An empty list literal that nothing constrains
+  (`List.reverse [] == []`, `List.head [] == Nothing`) fails closed rather than defaulting
+  its element type. A default would be unobservable in the expression itself and Go's own
+  type checker would catch a wrong pick — but it would trade a clear Tesl diagnostic for a
+  confusing Go one, and hide real inference gaps. **This is the one open call worth a
+  maintainer decision:** it currently blocks lesson25 and lesson47, whose remaining
+  failures are all this single test-only idiom.
+- *A lint finding on emitted code is an emitter bug*, never suppressed — which is why
+  negation is structural (De Morgan), comparators are hoisted when go/printer's size
+  heuristic would reformat them, and an uncalled private function is emitted with a
+  package-level keep-alive rather than refused.
+- *Refusing to emit legal Tesl is a divergence with no upside.* Dead private declarations
+  used to fail closed on lint grounds; that was the wrong conclusion and is now fixed.
+- *Prefer Go where Go is correct*, per the maintainer's Float guidance — hence
+  `Float.sqrt`'s `FloatNonNegative` obligation and the string-ordering fix above.
+
+**Known flakes in the repo's own suite** (not caused by the port, recorded so they are not
+misread as regressions): server-backed suites (`Email-Integration`, `HttpClient-Integration`)
+intermittently fail with "failed to start on port NNNN" and empty stderr under a parallel
+`dune test`, and pass standalone. The Review77 probe flake was a shared-sandbox temp file
+and IS fixed.
+
+**Next, in the order that buys the most:** the higher-order leaves still missing
+(`partition`, `count`, `findIndex`, `zipWith`, `groupBy`), then the decision above, then
+the fold builder-lowering gate, then the first real subsystem — `Tesl.Json`, which is the
+largest single corpus blocker and the first one that is a codec/macro layer rather than a
+library of leaves.
+
+## `Tesl.Json` reconnaissance — unknown unknowns (2026-08-13)
+
+Probed BEFORE implementing, to surface migration blockers early rather than discover them
+mid-slice. Method: read the authoritative codec grammar in the AST, emit the Racket for a
+codec exercising every form, and run precision/ordering experiments on both runtimes.
+
+**The reassuring headline: the codec layer is NOT a Racket macro layer.** The OCaml emitter
+generates plain functions — `tesl-codec-encode-<T>`, `tesl-codec-decode-<T>-<n>` — plus one
+`register-type-codec!` call. Nothing depends on Racket macro expansion, so `emit_go` can
+generate the analogous Go functions with ordinary codegen. The roadmap's "cost center: the
+macro layer" is, for JSON at least, smaller than it reads.
+
+**Feature surface (authoritative, from `Ast.codec_form`):** `toJson` fields / `adtJson`
+(constructor name as a JSON string) / `toJson_forbidden`; `fromJson` alternatives /
+`adtJson` / `fromJson_forbidden`. Each `{ … }` alternative is COMPLETE and tried
+first-success — not merged. A decode entry is a field (`name <- "key" with_codec c via
+check1 via check2`, where `via` CHAINS), a default (`field <- default <literal>`), or a
+cross-field `check <fn>` over the whole record. Corpus: 108 codec declarations; 156
+`stringCodec`, 22 `intCodec`, 8 `boolCodec`, ~8 nested user codecs, 2 `listCodec`, 1
+`posixMillisCodec`; 23 uses of `via`.
+
+**Decode semantics to match:** each field decodes, `via` runs the check, and the FIRST
+failing field short-circuits — its `fail 400 "msg"` becomes the response. The error body is
+`{"ok":false,"error":<msg>,"details":[]}`. A decoded field's proof is attached in Racket
+(`ensure-named`) and simply erases in Go, which is the same rule every other proof follows.
+
+### Four findings, two of them data-correctness risks
+
+1. **JSON integers are arbitrary precision in Racket and float64 in Go by default.**
+   Verified both ways: Racket's reader returns an exact bignum for
+   `{"count": 123456789012345678901234567890}`, while Go's `encoding/json` into `any` gives
+   `1.2345678901234568e+29`. `teslrt.Int` is arbitrary precision, so the Go decoder MUST use
+   `Decoder.UseNumber()` / `json.Number` and parse into `big.Int`. Missing this corrupts
+   data silently, and only for values above 2^53 — i.e. it would pass every small test.
+2. **Encoded object key ORDER is alphabetical in Racket** (`jsexpr->string` sorts; verified
+   stable across runs). Go's `encoding/json` also sorts for a `map`, but a STRUCT with json
+   tags — the idiomatic shape — emits in FIELD DECLARATION order. So the emitter must encode
+   through a sorted map or a manual writer, or accept a byte-level divergence in response
+   bodies. This is a direct, concrete tension with the "emit idiomatic Go" goal, and the
+   corpus does assert raw body strings in places.
+3. **Racket syntax is baked into the shared AST.** `DecodeDefault.default_expr` is a
+   PRE-RENDERED Racket literal (`#t`/`#f`, Racket string escaping, Racket float syntax like
+   `+inf.0`), not a `lit`. The Go backend cannot consume it without re-parsing Racket. Fix is
+   small and clearly right: keep the original literal in the AST and let each backend render
+   it.
+4. **`ERuntimeCall`/`RLit` carried verbatim Racket tokens in the shared AST**, produced by
+   `Desugar` for the effect forms (`enqueue`, `serve`, `startWorkers`, `telemetry`, cache,
+   email). **FIXED (maintainer: "if the compiler hosts literal Racket that should be
+   remedied").** The lowering moved into `Emit_racket` as an internal
+   `lower_effect : expr -> rcall_seg list option`, the `ERuntimeCall` constructor and the
+   `rcall_seg` type are gone from `ast.ml`, and `Desugar` is now identity on the effect
+   forms — so every backend receives the typed SURFACE forms and lowers them its own way.
+   Roughly 40 arms across ten passes disappeared with the constructor; those passes all run
+   BEFORE desugaring anyway, so they already handled the surface forms.
+   **Correctness proof: `regen-rkt-snapshots.sh` reports 0 snapshots updated** — the emitted
+   Racket is byte-identical, which is the strongest available evidence for a pure move.
+   Planning consequence stands: queues, servers, workers and telemetry each still need their
+   own Go lowering, but the Racket one is no longer sitting in the shared pipeline where a
+   future backend could silently inherit it.
+
+### Three more findings, from actually implementing it
+
+5. **An unrecognized entry inside a `fromJson` alternative is SILENTLY SKIPPED.** The
+   cross-field check is spelled `via checkerFn` on its own line; I wrote `check checkerFn`
+   — a natural mistake, since `check` is the keyword for check functions everywhere else —
+   and the parser hit its `| _ -> advance s (* skip unknown *)` branch. The program
+   compiled, `--check` was clean, and the validation simply never ran. A declared
+   validation vanishing at the trust boundary is the worst possible failure mode for this
+   language, and it is a one-token typo away. This deserves a diagnostic in the parser
+   regardless of the Go port.
+6. **The codec cross-check's signature is not validated.** It is called with the decoded
+   FIELDS in declaration order (`(checkComplete _f_name _f_retries _f_role)`), but a
+   checker declared as `check checkComplete(p: Payload)` type-checks fine and then fails at
+   runtime with an arity error — which the registry swallows as "this decoder didn't
+   work", so a VALID payload is rejected as `no decoder succeeded` and the client gets a
+   generic 400. A declared validation silently becomes a blanket rejection.
+7. **Alternative semantics are subtler than "first success wins."** Racket's registry loop
+   treats a raised decode exception as "try the next decoder", but a check FAILURE is
+   remembered (the FIRST one wins) while the search continues, so a later alternative can
+   still succeed. Collapsing the two — as the obvious implementation does — reports the
+   LAST alternative's "required field not found" in place of the real 400 the first
+   alternative's check produced. The Go runtime therefore distinguishes a shape mismatch
+   (`teslrt.RejectShape`, status 0) from a validation failure, and the parity test pins it.
+8. **Proof-carrying record fields had to be un-fail-closed**, because a decoded field IS
+   one. They erase like every other proof; the previous refusal was a not-yet rather than a
+   principled position.
+
+### What is implemented
+
+A codec now emits two exported Go functions per direction (`EncodePayloadJSON`,
+`DecodePayloadJSON`) plus one unexported helper per decode alternative, covering: field
+codecs, `adtJson` (constructor name as a JSON string), nested codecs, `via` chains,
+`default` literals, cross-checks, and multiple alternatives. The probe passes the full gate
+stack, and a parity test pins Go against values taken from driving the RACKET codec for the
+same module: valid decode, `via` failure 400 "name required", cross-check failure 422,
+alternative fallback with a default, no-match rejection, sorted-key encoding, `adtJson`
+round trip, and a bignum surviving both directions.
+
+Not yet covered: `listCodec`/`dictCodec`/`setCodec`, `posixMillisCodec`/`moneyCodec`,
+`*_forbidden` enforcement at use sites, and the registry itself (the Go server layer will
+know its types statically, so a runtime registry may not be needed at all — but capturers
+and api-test resolve codecs dynamically, so that has to be checked before it is assumed).
+
+### Resolved after review (maintainer, 2026-08-13)
+
+- **`via` vs `check` is a deliberate distinction, not a bug.** `via` means "apply this
+  validator at a boundary" and is used consistently for exactly that (`auth … via
+  cookieAuth`, `capture … via todoIdCapture`, `field <- "key" with_codec c via checkSafe`),
+  while `check` declares the function. Overloading them would blur that line. The BUG was
+  only that the parser silently skipped an entry it could not classify — now a compile
+  error naming both valid forms.
+- **The unvalidated cross-check signature is fixed too**, in
+  `check_codec_alt_completeness`: a cross-check must take exactly the fields its
+  alternative decodes, with a hint spelling out the expected signature.
+- **An unconstrained empty list now compiles and runs.** Every propagation path runs first
+  (call argument, return type, `let` tail, `if` branch, `case` arm, sibling element, fold
+  callback, leaf signature); only when nothing at all constrains it does the element type
+  default. A defaulted type never outranks a real one — `if c then [] else ["a"]` is still
+  `List String` — and if the context genuinely demanded another type, Go's own compiler
+  rejects the emitted code at build time, so a wrong choice cannot ship silently.
+  **Corpus reach 14 → 17**: lesson25, lesson47 and tests/lifted-list-tests now pass the
+  full gate stack.
+- **Bignum precision is PARITY, not an improvement.** Racket was already exact; Go's
+  default (float64) would have been worse, and `UseNumber` + `big.Int` only catches it up.
+
+**Known flake left in place deliberately** (maintainer: nice-to-have, not worth blocking
+the migration): the server-backed suites pick a free port by binding to port 0 and closing
+the socket, then COMPILE the Tesl app before it binds that port — a multi-second window in
+which a parallel suite can take it. Cause is understood; the fix is to retry with a fresh
+port, which means threading `make_src : int -> string` through three test files and their
+call sites. Recorded rather than done.
+
+**Verdict: no blocker found — the risks are all "must decide deliberately", not "cannot be
+done".** Two (integer precision, key order) would silently produce wrong bytes if
+implemented naively, so they belong in the first codec slice's tests rather than a later
+hardening pass. The recommended first slice is a PURE one: `encode`/`decode` for a record
+codec with `via`, defaults, a cross-check and two alternatives, as generated Go functions
+with a differential test against Racket — no HTTP, so the codec contract is pinned before
+the server layer depends on it.
+
 ## Requirements (maintainer, 2026-08-04)
 
 Hard requirements for any Go backend, regardless of how the design below evolves:

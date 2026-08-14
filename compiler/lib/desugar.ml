@@ -135,162 +135,19 @@ let provenance_from (surface : Location.loc) : provenance = { desugared_from = s
     (errors on zero or multiple declaring modules).  Every lookup must stay
     PER-CALL: a top-level binding would evaluate at module instantiation,
     before the entrypoint's own define-* has registered. *)
-type lower_tables = {
-  queues : (string, string) Hashtbl.t;  (** job type → declaring queue name *)
-  caches : (string, unit) Hashtbl.t;    (** locally declared cache names *)
-  emails : (string, unit) Hashtbl.t;    (** locally declared email names *)
-}
+(* The fixed-shape effect forms (`enqueue` / `serve` / `startWorkers` / `telemetry` /
+   cache / email) are NOT lowered here.  Their lowering produces Racket source text, so it
+   belongs to the Racket backend (`Emit_racket.lower_effect`) and not to a pass every
+   backend runs — keeping it here put verbatim Racket tokens inside the shared AST.  Each
+   backend lowers these surface forms its own way. *)
 
-let empty_tables () : lower_tables =
-  { queues = Hashtbl.create 1; caches = Hashtbl.create 1; emails = Hashtbl.create 1 }
+(* Nothing to lower any more: the effect forms keep their surface shape all the way to
+   whichever backend emits them.  The parameter and the traversal stay so the pass can grow
+   a genuinely backend-neutral rewrite later without rethreading every call site. *)
+type lower_tables = unit
+let empty_tables () : lower_tables = ()
 
-let queue_ref_of (tables : lower_tables) (job_type : string) : string =
-  match Hashtbl.find_opt tables.queues job_type with
-  | Some q -> q
-  (* NOMINAL miss form (DESIGN-4 Topic B): the macro normalizes the job-type
-     IDENTIFIER at the enqueue site — require-bound there, since the payload
-     construction next to it uses it — so the registry lookup matches by
-     (owner, name) type-ref, not by spelling.  A same-name job record declared
-     by a different module now fails closed at enqueue with both owners
-     instead of silently misrouting into the foreign queue. *)
-  | None -> Printf.sprintf "(queue-for-job-ref %s)" job_type
-
-let cache_ref_of (tables : lower_tables) (cache_name : string) : string =
-  if Hashtbl.mem tables.caches cache_name then cache_name
-  else Printf.sprintf "(cache-for-name '%s)" cache_name
-
-let email_ref_of (tables : lower_tables) (email_name : string) : string =
-  if Hashtbl.mem tables.emails email_name then email_name
-  else Printf.sprintf "(email-for-name '%s)" email_name
-
-(** Per-node lowering.  [tables] holds the module's same-module resolution
-    tables (job-type → queue for [EEnqueue]; local cache/email name sets for
-    the cache/email families).  {!Ast_visitor.map} has already lowered the
-    node's children by the time this is called, so each arm only rewrites the
-    node's own shape and reuses the surface node's own [loc] verbatim
-    (span-preserving). *)
-let lower_expr (tables : lower_tables) (e : expr) : expr =
-  match e with
-  | ETelemetry { name; fields; loc } ->
-    (* (telemetry-event! "NAME" #:attributes ([%S v]...))
-       The former emit arm rendered each field value with a context-FREE rule:
-       a bare [EVar] became the raw value [*name] (the literal surface name, NOT
-       [resolve_name]); every other value went through emit_expr_simple.  So the
-       value operand needs no func-context knowledge — [RRawVar] reproduces the
-       [*name] byte output and [RArg] the emit_expr_simple path, byte-identically. *)
-    let segs = ref [ RLit (Printf.sprintf "(telemetry-event! %S #:attributes (" name) ] in
-    let push s = segs := s :: !segs in
-    List.iteri (fun i (k, v) ->
-      if i > 0 then push (RLit " ");
-      push (RLit (Printf.sprintf "[%S " k));
-      (match v with
-       | EVar { name = vname; _ } -> push (RRawVar vname)
-       | _ -> push (RArg v));
-      push (RLit "]")
-    ) fields;
-    push (RLit "))");
-    ERuntimeCall { segments = List.rev !segs; loc }
-  | EEnqueue { job_type; payload; loc } ->
-    (* (enqueue! QUEUE_REF <payload via emit_expr_simple>) *)
-    let queue_ref = queue_ref_of tables job_type in
-    ERuntimeCall { segments =
-      [ RLit (Printf.sprintf "(enqueue! %s " queue_ref)
-      ; RArg payload
-      ; RLit ")" ]; loc }
-  | EStartWorkers { workers_name; capabilities; concurrency; is_dead; loc } ->
-    (* (start-workers!|start-dead-workers! NAME (list CAP...)[ #:concurrency N]) *)
-    let runtime_fn = if is_dead then "start-dead-workers!" else "start-workers!" in
-    let buf = Buffer.create 64 in
-    Buffer.add_string buf (Printf.sprintf "(%s %s (list" runtime_fn workers_name);
-    List.iter (fun cap -> Buffer.add_string buf (Printf.sprintf " %s" cap)) capabilities;
-    Buffer.add_string buf ")";
-    (* `numberOfWorkers` (concurrency) applies ONLY to the normal worker starter.
-       Dead-letter workers are always single-threaded and `start-dead-workers!`
-       takes no `#:concurrency` keyword — passing it there crashed at App boot on
-       any queue that had BOTH a dead worker and `numberOfWorkers` (issue #15). *)
-    (match concurrency with
-     | Some n when n <> 1 && not is_dead ->
-       Buffer.add_string buf (Printf.sprintf " #:concurrency %d" n)
-     | _ -> ());
-    Buffer.add_string buf ")";
-    ERuntimeCall { segments = [ RLit (Buffer.contents buf) ]; loc }
-  | EServe { server_name; port; capabilities; static_dir; mount_path; loc } ->
-    (* (serve NAME #:port <port via emit_expr_simple> #:capabilities (list CAP...)
-        [ #:static-dir "DIR"] [ #:mount-path "PATH"] #:sse-routes NAME-sse-routes) *)
-    let prefix = Printf.sprintf "(serve %s #:port " server_name in
-    let mid_buf = Buffer.create 64 in
-    Buffer.add_string mid_buf " #:capabilities (list";
-    List.iter (fun cap -> Buffer.add_string mid_buf (Printf.sprintf " %s" cap)) capabilities;
-    Buffer.add_string mid_buf ")";
-    (match static_dir with
-     | Some dir -> Buffer.add_string mid_buf (Printf.sprintf " #:static-dir %S" dir)
-     | None -> ());
-    (match mount_path with
-     | Some path -> Buffer.add_string mid_buf (Printf.sprintf " #:mount-path %S" path)
-     | None -> ());
-    Buffer.add_string mid_buf (Printf.sprintf " #:sse-routes %s-sse-routes)" server_name);
-    ERuntimeCall { segments =
-      [ RLit prefix
-      ; RArg port
-      ; RLit (Buffer.contents mid_buf) ]; loc }
-  (* Cache / email families — also fixed-shape, position-independent runtime
-     calls.  Each former emit arm rendered a constant prefix + keyword tokens and
-     emitted its sub-expressions through [emit_expr_simple]; carrying them as
-     [RArg] re-emits through that SAME path, so the byte output is identical.
-     Byte-gated by the committed lesson59-cache / lesson60-email [.rkt].
-     The NAME operand goes through [cache_ref_of]/[email_ref_of]: a local
-     declaration keeps the bare binding (exact historical bytes), a miss
-     splices the per-call registry lookup — the same #41 rule as [EEnqueue]. *)
-  | ECacheGet { cache_name; key; loc } ->
-    (* (cache-get! CACHE_REF <key>) *)
-    ERuntimeCall { segments =
-      [ RLit (Printf.sprintf "(cache-get! %s " (cache_ref_of tables cache_name))
-      ; RArg key
-      ; RLit ")" ]; loc }
-  | ECacheSet { cache_name; key; value; ttl; loc } ->
-    (* (cache-set! CACHE_REF <key> <value>[ <ttl>]) *)
-    let ttl_segs = match ttl with
-      | Some ttl_expr -> [ RLit " "; RArg ttl_expr ]
-      | None -> [] in
-    ERuntimeCall { segments =
-      [ RLit (Printf.sprintf "(cache-set! %s " (cache_ref_of tables cache_name))
-      ; RArg key
-      ; RLit " "
-      ; RArg value ]
-      @ ttl_segs
-      @ [ RLit ")" ]; loc }
-  | ECacheDelete { cache_name; key; loc } ->
-    (* (cache-delete! CACHE_REF <key>) *)
-    ERuntimeCall { segments =
-      [ RLit (Printf.sprintf "(cache-delete! %s " (cache_ref_of tables cache_name))
-      ; RArg key
-      ; RLit ")" ]; loc }
-  | ECacheInvalidate { cache_name; prefix; loc } ->
-    (* (cache-invalidate-prefix! CACHE_REF <prefix>) *)
-    ERuntimeCall { segments =
-      [ RLit (Printf.sprintf "(cache-invalidate-prefix! %s " (cache_ref_of tables cache_name))
-      ; RArg prefix
-      ; RLit ")" ]; loc }
-  | ESendEmail { email_name; to_; subject; body; loc } ->
-    (* (send-email! EMAIL_REF #:to <to> #:subject <subject> #:body <body>) *)
-    ERuntimeCall { segments =
-      [ RLit (Printf.sprintf "(send-email! %s #:to " (email_ref_of tables email_name))
-      ; RArg to_
-      ; RLit " #:subject "
-      ; RArg subject
-      ; RLit " #:body "
-      ; RArg body
-      ; RLit ")" ]; loc }
-  | EStartEmailWorker { email_name; loc } ->
-    (* (start-email-worker! EMAIL_REF) *)
-    ERuntimeCall { segments =
-      [ RLit (Printf.sprintf "(start-email-worker! %s)" (email_ref_of tables email_name)) ]; loc }
-  | _ -> e
-
-(** Lower a single expression: bottom-up rewrite via the shared traversal
-    framework, so a new {!Ast.expr} variant cannot silently escape the pass. *)
-let desugar_expr (tables : lower_tables) (e : expr) : expr =
-  Ast_visitor.map (lower_expr tables) e
+let desugar_expr (_tables : lower_tables) (e : expr) : expr = e
 
 (** Lower every expression carried by a top-level declaration.  Only [DFunc] and
     [DConst] carry an {!Ast.expr} body reachable from the surface program; the
@@ -773,14 +630,7 @@ let desugar_module (m : module_form) : module_form =
      job-type → queue map from DQueue (same construction as Emit_racket's
      pre-pass), plus the local cache / email name sets (the #41 hit/miss rule
      for the cache and email families — see [lower_tables]). *)
-  let tables = { queues = Hashtbl.create 16;
-                 caches = Hashtbl.create 4;
-                 emails = Hashtbl.create 4 } in
-  List.iter (function
-    | DQueue (q : queue_form) -> List.iter (fun job -> Hashtbl.replace tables.queues job q.name) (queue_job_types q)
-    | DCache (c : cache_form) -> Hashtbl.replace tables.caches c.name ()
-    | DEmail (em : email_form) -> Hashtbl.replace tables.emails em.name ()
-    | _ -> ()) m.decls;
+  let tables = empty_tables () in
   (* First lower inline endpoint captures into synthesized top-level capturers. *)
   let synthetic = ref [] in
   let counter = ref 0 in
@@ -842,14 +692,6 @@ let module_fold_exprs (f : 'a -> expr -> 'a) (init : 'a) (m : module_form) : 'a 
     | _ -> acc
   ) init m.decls
 
-let runtime_call_has_prefix (prefixes : string list) (e : expr) : bool =
-  match e with
-  | ERuntimeCall { segments = RLit s :: _; _ } ->
-    List.exists (fun p ->
-      String.length s >= String.length p && String.sub s 0 (String.length p) = p
-    ) prefixes
-  | _ -> false
-
 (** Does the module use any cache operation (Cache.get/set/delete/invalidate)?
     Also true when a `requires [cacheCap <Name>]` names a NON-local cache: the
     emitter resolves that capability VALUE through [cache-for-name] too, so the
@@ -883,10 +725,7 @@ let module_uses_cache (m : module_form) : bool =
        found
        || (match e with
            | ECacheGet _ | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _ -> true
-           | _ ->
-             runtime_call_has_prefix
-               [ "(cache-get! "; "(cache-set! "; "(cache-delete! ";
-                 "(cache-invalidate-prefix! " ] e)
+           | _ -> false)
      ) false m
 
 (** Does the module use any email operation (Email.send / startEmailWorker)?
@@ -929,7 +768,7 @@ let module_uses_email (m : module_form) : bool =
        found
        || (match e with
            | ESendEmail _ | EStartEmailWorker _ -> true
-           | _ -> runtime_call_has_prefix [ "(send-email! "; "(start-email-worker!" ] e)
+           | _ -> false)
      ) false m
 
 (** {2 Name-wired uses for the whole-program closure diagnostic}

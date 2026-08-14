@@ -156,11 +156,19 @@
   (List.filterCheck check-fn '()))
 
 ;; filterMap: apply f to each element; keep Something results, discard Nothing
+;; List.filterMap keeps an element when f returns Something — decided by the TAG, never
+;; by the payload's truthiness.  The previous `(and (Something? r) (Something-value r))`
+;; fed the payload to `filter-map`, so `Something False` (and any other falsy payload)
+;; was silently dropped: `List.filterMap toFlag [0, 1, 2]` returned ONE element where all
+;; three mapped to Something.
 (define (List.filterMap f xs)
-  (filter-map (lambda (x)
-                (define r (f x))
-                (and (Something? r) (Something-value r)))
-              (rv xs)))
+  (let loop ([rest (rv xs)] [acc '()])
+    (cond
+      [(null? rest) (reverse acc)]
+      [else
+       (define r (f (car rest)))
+       (loop (cdr rest)
+             (if (Something? r) (cons (Something-value r) acc) acc))])))
 
 ;; foldl: (List.foldl f init xs) — strict left fold
 ; (moved) List.foldl

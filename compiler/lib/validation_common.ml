@@ -2541,7 +2541,6 @@ let rec infer_expr_type
   | ECacheGet _ -> Some (mk_app_type (mk_name_type "Maybe") (mk_name_type "a"))
   | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _ -> Some (mk_name_type "Unit")
   | ESendEmail _ | EStartEmailWorker _ -> Some (mk_name_type "Unit")
-  | ERuntimeCall _ -> Some (mk_name_type "Unit")  (* desugar-only infra call → Unit *)
 
 let rec pattern_bindings (scrut_ty : type_expr option) (ctors : ctor_info) (pat : pattern) : type_env =
   match pat with

@@ -1251,10 +1251,10 @@ let test_lists_with_go () =
     (contains test_go "Size([]teslrt.Int{})");
   check bool "equality passes an element comparison" true
     (contains module_go
-       "teslrt.ListMemberBy(teslrt.FromInt64(2), xs, func(teslX, teslY teslrt.Int) bool { return teslrt.Equal(teslX, teslY) })");
+       "teslrt.ListMemberBy(teslrt.FromInt64(2), xs, teslEqualTeslrtInt)");
   check bool "sorting passes an element ordering" true
     (contains module_go
-       "teslrt.ListSortBy(xs, func(teslX, teslY string) bool { return (teslX < teslY) })");
+       "teslrt.ListSortBy(xs, teslLessString)");
   check bool "list equality is element-wise through the runtime" true
     (contains test_go "teslrt.ListEqualBy(");
   check bool "a proof-total count goes through its check" true
@@ -1284,11 +1284,10 @@ let test_unsupported_list_exports_fail_closed () =
   (* `map`/`filter`/`foldl`/`foldr`/`any`/`all` are loops now, so this moved to the next
      unimplemented higher-order leaf: an unimplemented leaf of a SUPPORTED module must
      still fail closed rather than emit something plausible. *)
-  expect_go_error "unimplemented higher-order leaf" "`List.find`" {|module ListFind exposing [firstBig]
+  expect_go_error "unimplemented higher-order leaf" "`List.partition`" {|module ListPartition exposing [split]
 import Tesl.Prelude exposing [Int, List]
-import Tesl.Maybe exposing [Maybe(..)]
-import Tesl.List exposing [List.find]
-fn firstBig(xs: List Int) -> Maybe Int = List.find (fn(x: Int) -> x > 10) xs
+import Tesl.List exposing [List.partition]
+fn split(xs: List Int) -> List (List Int) = List.partition (fn(x: Int) -> x > 10) xs
 |};
   (* `List.sum` on a non-Int list never reaches the emitter — the frontend's own
      signature rejects it — so the emitter's guard is containment, and what this pins
@@ -1763,14 +1762,14 @@ let test_dicts_with_go () =
   (* Tesl puts the dict last; the runtime signatures put it first, so the emitter
      rotates rather than distorting the hand-written Go. *)
   check bool "the dict argument is rotated to the front" true
-    (contains module_go "teslrt.DictInsert(d, key, value, func(teslX, teslY string) bool");
+    (contains module_go "teslrt.DictInsert(d, key, value, teslKeyLessString)");
   check bool "a key-finding leaf carries the key ordering" true
     (contains module_go
-       "teslrt.DictLookup(d, key, func(teslX, teslY string) bool { return (teslX < teslY) })");
+       "teslrt.DictLookup(d, key, teslKeyLessString)");
   check bool "lookup yields a Maybe matched on the runtime tag" true
     (contains module_go "case teslrt.MaybeSomething:");
   check bool "dict equality is one pass with both comparisons supplied" true
-    (contains module_go "teslrt.DictEqualBy(left, right, func(teslX, teslY string) bool");
+    (contains module_go "teslrt.DictEqualBy(left, right, teslEqualString");
   if Sys.command "go version >/dev/null 2>&1" = 0 then
     let root = Filename.temp_dir "tesl-go-dicts" "" in
     Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
@@ -1948,7 +1947,8 @@ let test_float_keys_with_go () =
   in
   let module_go = artifact "internal/teslmodgofloatkeys/module.go" emitted in
   check bool "a Float-keyed Set orders by the KEY comparator" true
-    (contains module_go "teslrt.FloatKeyLess(teslX, teslY)");
+    (contains module_go "func teslKeyLessFloat64(teslX, teslY float64) bool"
+     && contains module_go "teslrt.FloatKeyLess(teslX, teslY)");
   (* The review asked for this explicitly: a Float-backed newtype must inherit it. *)
   check bool "a Float-backed newtype key inherits the key comparator" true
     (contains module_go "teslrt.FloatKeyLess(teslX.Value, teslY.Value)");
@@ -2187,10 +2187,10 @@ let test_list_leaves_with_go () =
   check bool "concat and flatten share one runtime leaf" true
     (contains module_go "teslrt.ListConcat(");
   check bool "maximum takes the ordering the emitter supplies" true
-    (contains module_go "teslrt.ListMaximum(ns, func(teslX, teslY teslrt.Int) bool");
+    (contains module_go "teslrt.ListMaximum(ns, teslLessTeslrtInt)");
   (* The element type is what makes the ordering closure work on a non-Int list. *)
   check bool "ordering follows the element type" true
-    (contains module_go "teslrt.ListMaximum(words, func(teslX, teslY string) bool");
+    (contains module_go "teslrt.ListMaximum(words, teslLessString)");
   if Sys.command "go version >/dev/null 2>&1" = 0 then begin
     let root = Filename.temp_dir "tesl-go-list-leaves" "" in
     Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
@@ -2202,6 +2202,304 @@ let test_list_leaves_with_go () =
       ignore (run_command root "go test -count=1 ./...");
       ignore (run_command root "go vet ./...");
       ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+  end
+
+(* Four more higher-order leaves: `find`, `filterMap`, `concatMap`, `sortBy`.
+   `find` is an early-return loop; `filterMap` and `concatMap` fill a fresh output.
+   `sortBy` orders by a KEY function, and it needed two things the others did not.  A
+   stdlib function passed as the callback (`List.sortBy String.length words`, which is what
+   the corpus writes) parses as a field access over the module name, so the callable is
+   normalised before anything treats it as one.  And a comparator needs the key on BOTH
+   sides, which a lambda body inlined twice cannot supply — its parameter name is bound to
+   neither side — so a lambda key is hoisted into a named function and each side becomes a
+   direct call.  The comparator itself is hoisted too, for the same gofmt size-heuristic
+   reason nested element comparators are.  Helpers are keyed by their own SOURCE rather
+   than a counter: every function body is emitted twice (once assuming it loops, then flat),
+   so a counter minted a second name per pass and left unused functions behind — which the
+   `unused` linter caught. *)
+let higher_order_leaves_source = {|module GoHigherOrder exposing [firstBig, byLength, byLengthLambda, allDigits, evens, keepEven, digitsOf, longest]
+import Tesl.Prelude exposing [Bool(..), Int, List, String]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.List exposing [List.find, List.filterMap, List.concatMap, List.sortBy, List.length, List.maximum]
+import Tesl.String exposing [String.length, String.split]
+
+fn firstBig(ns: List Int) -> Maybe Int =
+  List.find (fn(n: Int) -> n > 10) ns
+
+# A named key function, ordered by Int.
+fn byLength(words: List String) -> List String =
+  List.sortBy String.length words
+
+# A lambda key, and a key type that is not the element type.
+fn byLengthLambda(words: List String) -> List String =
+  List.sortBy (fn(w: String) -> String.length w) words
+
+# sortBy over a String key.
+fn allDigits(words: List String) -> List String =
+  List.sortBy (fn(w: String) -> w) words
+
+fn keepEven(n: Int) -> Maybe Int =
+  if n % 2 == 0 then
+    Something n
+  else
+    Nothing
+
+fn evens(ns: List Int) -> List Int =
+  List.filterMap keepEven ns
+
+fn digitsOf(word: String) -> List String =
+  String.split word ","
+
+fn longest(words: List String) -> List String =
+  List.concatMap digitsOf words
+
+test "higher-order list leaves" {
+  expect firstBig [1, 20, 30] == Something 20
+  expect firstBig [1, 2] == Nothing
+  expect byLength ["ccc", "a", "bb"] == ["a", "bb", "ccc"]
+  expect byLengthLambda ["ccc", "a", "bb"] == ["a", "bb", "ccc"]
+  expect allDigits ["pear", "apple"] == ["apple", "pear"]
+  expect evens [1, 2, 3, 4] == [2, 4]
+  expect longest ["a,b", "c"] == ["a", "b", "c"]
+  # A stable sort keeps equal keys in input order.
+  expect byLength ["bb", "aa"] == ["bb", "aa"]
+}
+|}
+
+let test_higher_order_leaves_with_go () =
+  let emitted = match Compile.compile_go_source "<go-hof-leaves>" higher_order_leaves_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "higher-order leaf compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgohigherorder/module.go" emitted in
+  check bool "find is an early-return loop, not a runtime call" true
+    (contains module_go "return teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething");
+  (* The whole point of the filterMap fix: the TAG decides, never the payload. *)
+  check bool "filterMap keeps an element by its tag" true
+    (contains module_go ".Tag == teslrt.MaybeSomething {");
+  check bool "concatMap appends each result" true
+    (contains module_go "append(teslOut1, ");
+  check bool "a stdlib function works as a sortBy key" true
+    (contains module_go "teslrt.StringLength(teslLeft)");
+  check bool "the comparator is hoisted, not inlined" true
+    (contains module_go "teslrt.ListSortBy(words, teslSortLess");
+  check bool "a lambda key becomes a named function" true
+    (contains module_go "func teslSortKey");
+  (* Hoisted helpers live at package level, so their parameter names are FIXED — a
+     depth-derived name differed between the two emission passes. *)
+  check bool "hoisted helper parameters are not depth-derived" true
+    (contains module_go "func teslSortLess1(teslLeft, teslRight string) bool");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-hof-leaves" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+  end
+
+(* `List.filterMap` over a `Maybe Bool`.  Racket's implementation fed the payload to
+   `filter-map`, so `Something False` was silently DROPPED — `filterMap toFlag [0, 1, 2]`
+   returned one element where all three mapped to Something.  Fixed in tesl/list.rkt; this
+   runs on both backends, so it pins the agreement rather than just the Go side. *)
+let filter_map_bool_source = {|module GoFilterMapBool exposing [flags, evens, toFlag, keepEven]
+import Tesl.Prelude exposing [Bool(..), Int, List]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.List exposing [List.filterMap, List.length]
+
+# Every element maps to Something, so the result must keep all three — including False.
+fn toFlag(n: Int) -> Maybe Bool =
+  if n > 1 then
+    Something True
+  else
+    Something False
+
+fn flags(ns: List Int) -> List Bool =
+  List.filterMap toFlag ns
+
+fn keepEven(n: Int) -> Maybe Int =
+  if n % 2 == 0 then
+    Something n
+  else
+    Nothing
+
+fn evens(ns: List Int) -> List Int =
+  List.filterMap keepEven ns
+
+test "filterMap keeps every Something" {
+  expect List.length (flags [0, 1, 2]) == 3
+  expect flags [0, 1, 2] == [False, False, True]
+  expect evens [1, 2, 3, 4] == [2, 4]
+}
+|}
+
+(* A proof-bearing return (`-> List Int ? IsSorted`) erases to the value's own type: the
+   frontend has discharged the proof, and a proof has no runtime structure in Go.  Racket
+   keeps an `attach-proof-to` wrapper, but every read there goes through `raw-value`, so
+   that wrapper is an implementation detail of that backend rather than part of the value.
+   The parser puts the first `? P` in `entity_proof` whether or not it is provenance, so
+   that field cannot distinguish a FromDb proof — it does not need to, because `entity`
+   and `database` declarations are refused before this point.
+
+   Also here: an `if` BRANCH that is under-constrained alone while the other settles the
+   type (the `concatMap` lambda below), and the two cases where a leaf may take an empty
+   list literal with nothing to infer from — `List.sum` has its element fixed by its own
+   signature, and `List.length`/`List.isEmpty` return an Int/Bool, so the element type is
+   unobservable.  `List.reverse []` is NOT in that set: its result mentions the element, so
+   choosing one would be a guess, and it still fails closed. *)
+let proof_return_source = {|module GoProofReturns exposing [sortInts, tagsOf, sizeOf, totalOf, emptyOf]
+import Tesl.Prelude exposing [Bool(..), Int, List, String]
+import Tesl.List exposing [List.sort, List.concatMap, List.sum, List.isEmpty, List.length, IsSorted]
+import Tesl.String exposing [String.isEmpty]
+
+# A proof-bearing return: the proof erases, so the Go type is the list itself.
+fn sortInts(ns: List Int) -> List Int ? IsSorted =
+  List.sort ns
+
+# The `[]` branch is under-constrained alone; the other branch settles it.
+fn tagsOf(tags: List String) -> List String =
+  List.concatMap (fn(s: String) ->
+    if String.isEmpty s then
+      []
+    else
+      [s]
+  ) tags
+
+# The element type is unobservable here: the result is an Int or a Bool.
+fn sizeOf() -> Int = List.length []
+fn totalOf() -> Int = List.sum []
+fn emptyOf() -> Bool = List.isEmpty []
+
+test "proof-bearing returns and unobservable empties" {
+  expect sortInts [3, 1, 2] == [1, 2, 3]
+  expect tagsOf ["a", "", "b"] == ["a", "b"]
+  expect sizeOf() == 0
+  expect totalOf() == 0
+  expect emptyOf() == True
+}
+|}
+
+let test_proof_bearing_returns_with_go () =
+  let emitted = match Compile.compile_go_source "<go-proof-returns>" proof_return_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "proof-bearing return compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgoproofreturns/module.go" emitted in
+  check bool "the proof erases from the return type" true
+    (contains module_go "func SortInts(ns []teslrt.Int) []teslrt.Int");
+  check bool "an unobservable empty list still emits" true
+    (contains module_go "teslrt.ListLength([]teslrt.Int{})");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-proof-returns" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      run_go_gates root)
+  end
+
+(* An empty list whose element type NOTHING determines — `List.reverse [] == []`, where
+   both sides are empty.  This used to fail closed; it compiles now (maintainer,
+   2026-08-13), because the program is legal Tesl that Racket runs and refusing the whole
+   module over it is a divergence with no upside.  The element type is unobservable in
+   this situation, and a wrong choice cannot ship silently: Go's own compiler rejects the
+   emitted code if the context demanded a different type — which the gate below runs. *)
+let test_unconstrained_empty_list_compiles () =
+  let emitted = match Compile.compile_go_source "<go-empty-unconstrained>" {|module GoEmptyUnconstrained exposing [same, alsoSame]
+import Tesl.Prelude exposing [Bool, List, String]
+import Tesl.List exposing [List.reverse]
+fn same() -> Bool = List.reverse [] == []
+# A real type on either side still wins over the default.
+fn alsoSame(words: List String) -> Bool = List.reverse words == []
+|} with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "an unconstrained empty list must compile: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgoemptyunconstrained/module.go" emitted in
+  check bool "a defaulted empty list picks one element type" true
+    (contains module_go "teslrt.ListReverse([]teslrt.Int{})");
+  (* The default must never outrank a real type. *)
+  check bool "a constrained side still wins" true
+    (contains module_go "teslrt.ListReverse(words)" && contains module_go "[]string{}");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-empty" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      ignore (run_command root "go build ./...");
+      ignore (run_command root "go vet ./..."))
+  end
+
+(* Six more `Tesl.Int` leaves.  `clamp`, `pow`, `isEven` and `isOdd` already existed in the
+   runtime; `sign`, `isEven`/`isOdd` and `toString` needed free-function wrappers because
+   the emitter calls a leaf as `teslrt.Name(args)` while those were methods.  `Int.pow`
+   REJECTS a negative exponent, matching tesl/int.rkt — there is no integer result, and
+   `Float.pow` is the function for a fractional one.  `Int.clamp` keeps Racket's
+   `(max lo (min hi n))` shape, so a `lo` above `hi` yields `lo` rather than being
+   reported. *)
+let int_leaves_source = {|module GoIntLeaves exposing [bounded, parity, oddity, powerOf, signOf, shown]
+import Tesl.Prelude exposing [Bool, Int, String]
+import Tesl.Int exposing [Int.clamp, Int.isEven, Int.isOdd, Int.pow, Int.sign, Int.toString]
+
+fn bounded(n: Int) -> Int = Int.clamp n 0 10
+fn parity(n: Int) -> Bool = Int.isEven n
+fn oddity(n: Int) -> Bool = Int.isOdd n
+fn powerOf(n: Int) -> Int = Int.pow n 3
+fn signOf(n: Int) -> Int = Int.sign n
+fn shown(n: Int) -> String = Int.toString n
+
+test "Tesl.Int leaves" {
+  expect bounded 42 == 10
+  expect bounded (-5) == 0
+  expect bounded 7 == 7
+  expect parity (-4) == True
+  expect oddity (-3) == True
+  expect powerOf 2 == 8
+  expect signOf (-9) == -1
+  expect signOf 0 == 0
+  expect shown (-12) == "-12"
+}
+|}
+
+let test_int_leaves_with_go () =
+  let emitted = match Compile.compile_go_source "<go-int-leaves>" int_leaves_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "Int leaf compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgointleaves/module.go" emitted in
+  check bool "clamp keeps Racket's argument order" true
+    (contains module_go "teslrt.Clamp(n, teslrt.FromInt64(0), teslrt.FromInt64(10))");
+  check bool "pow raises on a negative exponent rather than returning an error" true
+    (contains module_go "teslrt.MustPow(");
+  check bool "method-only leaves get free-function wrappers" true
+    (contains module_go "teslrt.IntSign(n)" && contains module_go "teslrt.IntToString(n)");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-int-leaves" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
       run_go_gates root)
   end
 
@@ -2292,15 +2590,15 @@ let test_sets_with_go () =
     (contains module_go "func Build(s teslrt.Set[string], value string) teslrt.Set[string]");
   check bool "a membership leaf carries the element ordering" true
     (contains module_go
-       "teslrt.SetInsert(value, s, func(teslX, teslY string) bool { return (teslX < teslY) })");
+       "teslrt.SetInsert(value, s, teslKeyLessString)");
   check bool "the algebra keeps its Tesl argument order" true
-    (contains module_go "teslrt.SetUnion(left, right, func(teslX, teslY string) bool");
+    (contains module_go "teslrt.SetUnion(left, right, teslKeyLessString)");
   (* `Set.empty` takes no arguments, so it parses as a bare field access over the module
      name and its type parameter has to be written out. *)
   check bool "Set.empty is instantiated from the expected type" true
     (contains module_go "return teslrt.SetEmpty[string]()");
   check bool "set equality is one ordered pass" true
-    (contains module_go "teslrt.SetEqualBy(left, right, func(teslX, teslY string) bool");
+    (contains module_go "teslrt.SetEqualBy(left, right, teslEqualString)");
   if Sys.command "go version >/dev/null 2>&1" = 0 then
     let root = Filename.temp_dir "tesl-go-sets" "" in
     Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
@@ -3009,14 +3307,24 @@ record Span {
 } ::: Ordered lo hi
 fn width(s: Span) -> Int = s.hi - s.lo
 |};
-  expect_go_error "proof-carrying record field" "proof-carrying record field" {|module ProofFieldRecord exposing [Positive, Box, valueOf]
+  (* A proof-carrying record field used to fail closed here.  It ERASES like every other
+     proof — codecs forced the question, since a decoded field is exactly one — so this is
+     now a positive assertion. *)
+  (match Compile.compile_go_source "<proof-field-record>" {|module ProofFieldRecord exposing [Positive, Box, valueOf]
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 record Box {
   value: Int ::: Positive value
 }
 fn valueOf(b: Box) -> Int = b.value
-|};
+|} with
+   | Compile.GoFailure diagnostics ->
+     failf "a proof-carrying record field must emit: %s"
+       (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+   | Compile.GoSuccess artifacts ->
+     let module_go = artifact "internal/teslmodprooffieldrecord/module.go" artifacts in
+     check bool "the proof erases from the field type" true
+       (contains module_go "Value teslrt.Int"));
   (* Float and Set fields both work now, so the boundary is the one that will outlast
      the collection tier: a FUNCTION-typed field, which needs the calling-convention
      decision function values are waiting on. *)
@@ -3313,6 +3621,19 @@ let () =
       test_case "import cycle across three modules" `Slow test_import_cycle_three_modules_with_go;
       test_case "sets behave the same on Racket" `Slow (racket_behavior_oracle "<go-sets>" set_source);
       test_case "Float behaves the same on Racket" `Slow (racket_behavior_oracle "<go-floats>" float_source);
+      test_case "more Tesl.Int leaves" `Slow test_int_leaves_with_go;
+      test_case "more Tesl.Int leaves behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-int-leaves>" int_leaves_source);
+      test_case "proof-bearing returns" `Slow test_proof_bearing_returns_with_go;
+      test_case "proof-bearing returns behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-proof-returns>" proof_return_source);
+      test_case "an unconstrained empty list compiles" `Slow
+        test_unconstrained_empty_list_compiles;
+      test_case "higher-order Tesl.List leaves" `Slow test_higher_order_leaves_with_go;
+      test_case "higher-order leaves behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-hof-leaves>" higher_order_leaves_source);
+      test_case "filterMap keeps a falsy payload on both backends" `Slow
+        (racket_behavior_oracle "<go-filtermap-bool>" filter_map_bool_source);
       test_case "more Tesl.List leaves" `Slow test_list_leaves_with_go;
       test_case "more Tesl.List leaves behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-list-leaves>" list_leaves_source);

@@ -393,3 +393,35 @@ func IntNonNegative(value Int) Check[Int] {
 	}
 	return Accept(value)
 }
+
+// The Tesl.Int leaves the emitter calls as plain functions. Clamp, Pow, IsEven and IsOdd
+// already exist above; these are the wrappers for what is otherwise only a method, plus
+// the sign and power shapes Tesl's own signatures describe.
+
+// IntSign is -1, 0 or 1, matching Int.sign in tesl/int.rkt.
+func IntSign(value Int) Int {
+	return FromInt64(int64(value.Sign()))
+}
+
+func IntIsEven(value Int) bool {
+	return value.IsEven()
+}
+
+func IntIsOdd(value Int) bool {
+	return value.IsOdd()
+}
+
+func IntToString(value Int) string {
+	return value.String()
+}
+
+// MustPow raises rather than returning an error, matching Int.pow in tesl/int.rkt, which
+// rejects a negative exponent outright: there is no integer result, and Float.pow is the
+// function for a fractional one.
+func MustPow(base, exponent Int) Int {
+	result, err := Pow(base, exponent)
+	if err != nil {
+		panic("Int.pow: " + err.Error())
+	}
+	return result
+}

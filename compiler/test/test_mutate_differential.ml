@@ -45,8 +45,6 @@ let ref_collect body =
     | EServe { port; _ } -> walk port
     | ELit { lit = LInterp segs; _ } ->
       List.iter (function IExpr e -> walk e | ILiteral _ -> ()) segs
-    | ERuntimeCall { segments; _ } ->
-      List.iter (function RLit _ | RRawVar _ -> () | RArg e -> walk e) segments
     | ELit _ | EVar _ | EStartWorkers _
     | ECacheGet _ | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _
     | ESendEmail _ | EStartEmailWorker _ -> ()

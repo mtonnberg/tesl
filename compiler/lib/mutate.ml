@@ -349,7 +349,6 @@ let rec expr_touches_infra ~pg e =
   | EField { obj; _ }              -> expr_touches_infra ~pg obj
   | EConstructor { args; _ }       -> List.exists (expr_touches_infra ~pg) args
   | ELambda { body; _ }            -> expr_touches_infra ~pg body
-  | ERuntimeCall _                 -> true  (* desugar-only infra call (EEnqueue/EStartWorkers/EServe) *)
   | ELit _ | EVar _                -> false
 
 (** [true] when a [test_stmt] (recursively) touches external infrastructure. *)

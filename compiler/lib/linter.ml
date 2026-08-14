@@ -1177,7 +1177,7 @@ let rec collect_start_email_workers (acc : string list) (e : Ast.expr) : string 
   | Ast.ECacheSet _ | Ast.ECacheDelete _ | Ast.ECacheInvalidate _
   | Ast.ELambda _ | Ast.ERecord _ | Ast.EList _ | Ast.EOk _ | Ast.EFail _
   | Ast.EConstructor _ | Ast.EField _ | Ast.EVar _ | Ast.ELit _
-  | Ast.ERuntimeCall _ -> acc
+  -> acc
 
 (** The names a module's own `main` activates under one `App` field.
 

@@ -1390,7 +1390,7 @@ let expr_loc (e : expr) =
   | EWithTransaction { loc; _ } | EServe { loc; _ } | EConstructor { loc; _ } | ELambda { loc; _ }
   | ECacheGet { loc; _ } | ECacheSet { loc; _ } | ECacheDelete { loc; _ } | ECacheInvalidate { loc; _ }
   | ESendEmail { loc; _ } | EStartEmailWorker { loc; _ }
-  | ERuntimeCall { loc; _ } -> loc
+  -> loc
 
 let rec flatten_app_expr acc = function
   | EApp { fn; arg; _ } -> flatten_app_expr (arg :: acc) fn
@@ -3882,11 +3882,6 @@ let rec infer_expr ctx (e : expr) : ty =
     let ctx' = { ctx with env = param_schemes @ ctx.env } in
     let body_ty = infer_expr ctx' body in
     List.fold_right (fun (_, t) acc -> TFun (t, acc)) param_tys body_ty
-  | ERuntimeCall { segments; _ } ->
-    (* Desugar-only node: never present during type-checking (desugar runs
-       AFTER the checker).  Infer children defensively, result is Unit. *)
-    List.iter (function RLit _ | RRawVar _ -> () | RArg e -> ignore (infer_expr ctx e)) segments;
-    t_unit
   in
   let expr_meta = match binding_meta_of_expr ctx e with Some m -> m | None -> PlainBinding in
   record_expr_type_with_meta ctx (expr_loc e) inferred expr_meta;
@@ -6302,8 +6297,6 @@ let collect_bound_names (m : module_form) : (string, unit) Hashtbl.t =
     | ECacheDelete { key; _ } -> walk key
     | ECacheInvalidate { prefix; _ } -> walk prefix
     | ESendEmail { to_; subject; body; _ } -> walk to_; walk subject; walk body
-    | ERuntimeCall { segments; _ } ->
-      List.iter (function RLit _ | RRawVar _ -> () | RArg e -> walk e) segments
     | ELit _ | EVar _ | EStartWorkers _ | EStartEmailWorker _ -> ()
   in
   List.iter (function

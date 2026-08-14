@@ -58,7 +58,7 @@ let dummy_binding name n : binding =
 
 (* Empty resolution tables: every table-driven name takes the MISS (registry
    lookup) path.  A fresh record per call — the tables are mutable. *)
-let empty_tables () : Desugar.lower_tables = Desugar.empty_tables ()
+let empty_tables () : Emit_racket.lower_tables = Emit_racket.empty_tables ()
 
 (* Builders for the three lowered effect forms — used both inside the
    all-constructors bundle and standalone for the lowering assertions. *)
@@ -141,185 +141,193 @@ let sample_module : module_form = {
   source_file = "test.tesl";
 }
 
-(* Expect a single-RLit ERuntimeCall (no RArg) with the given loc & rendering. *)
-let is_rlit_only expected loc = function
-  | ERuntimeCall { segments = [ RLit s ]; loc = l } -> s = expected && l = loc
+(* Expect a single-Emit_racket.RLit lowering (no RArg) with the given rendering.
+   The lowering moved from the shared desugar pass into the Racket backend, because what it
+   produces is Racket source text; these tests moved with it.  A `loc` argument is no longer
+   part of the result — the emitter takes the position from the SURFACE node it is emitting,
+   which is strictly better than carrying one through a lowered node. *)
+let is_rlit_only expected = function
+  | Some [ Emit_racket.RLit s ] -> s = expected
   | _ -> false
 
 let () =
   (* 1. Non-lowered forms are a strict structural identity (loc-preserving). *)
   check "desugar_expr: every non-lowered variant passes through verbatim"
-    (Desugar.desugar_expr (empty_tables ()) sample_expr_no_lowered = sample_expr_no_lowered);
+    (Desugar.desugar_expr (Desugar.empty_tables ()) sample_expr_no_lowered = sample_expr_no_lowered);
+  check "the Racket lowering ignores non-effect forms"
+    (Emit_racket.lower_effect (empty_tables ()) sample_expr_no_lowered = None);
 
-  (* 2. EEnqueue → (enqueue! QUEUE <RArg payload>), surface loc preserved. *)
+  (* 2. EEnqueue → (enqueue! QUEUE <Emit_racket.RArg payload>), position now taken from the surface node. *)
   let tables = empty_tables () in
-  Hashtbl.replace tables.Desugar.queues "J" "MyQueue";
-  (match Desugar.desugar_expr tables (mk_enqueue ()) with
-   | ERuntimeCall { segments = [ RLit "(enqueue! MyQueue "; RArg p; RLit ")" ]; loc } ->
-     check "EEnqueue lowers to ERuntimeCall (resolved queue, RArg payload, loc)"
-       (p = int_ 35 1 && loc = loc_at 36)
-   | _ -> check "EEnqueue lowers to ERuntimeCall (resolved queue, RArg payload, loc)" false);
+  Hashtbl.replace tables.Emit_racket.queues "J" "MyQueue";
+  (match Emit_racket.lower_effect tables (mk_enqueue ()) with
+   | Some [ Emit_racket.RLit "(enqueue! MyQueue "; Emit_racket.RArg p; Emit_racket.RLit ")" ] ->
+     check "EEnqueue lowers to the Racket call (resolved queue, RArg payload)"
+       (p = int_ 35 1)
+   | _ -> check "EEnqueue lowers to the Racket call (resolved queue, RArg payload)" false);
 
   (* 2b. EEnqueue with no same-module queue falls back to the lazy runtime
      registry lookup (cross-module enqueue, issue #41).  The lookup is the
      NOMINAL macro form (queue-for-job-ref J) — the job-type IDENTIFIER, not a
      quoted symbol — so the runtime matches by (owner, name) type-ref and a
      same-name record from another module fails closed (DESIGN-4 Topic B). *)
-  (match Desugar.desugar_expr (empty_tables ()) (mk_enqueue ()) with
-   | ERuntimeCall { segments = [ RLit "(enqueue! (queue-for-job-ref J) "; RArg _; RLit ")" ]; _ } ->
+  (match Emit_racket.lower_effect (empty_tables ()) (mk_enqueue ()) with
+   | Some [ Emit_racket.RLit "(enqueue! (queue-for-job-ref J) "; Emit_racket.RArg _; Emit_racket.RLit ")" ] ->
      check "EEnqueue with no DQueue uses (queue-for-job-ref JobType) fallback" true
    | _ -> check "EEnqueue with no DQueue uses (queue-for-job-ref JobType) fallback" false);
 
-  (* 3. EStartWorkers → single-RLit ERuntimeCall, loc preserved. *)
-  check "EStartWorkers lowers to single-RLit ERuntimeCall (start-workers!, loc)"
-    (is_rlit_only "(start-workers! W (list))" (loc_at 40)
-       (Desugar.desugar_expr (empty_tables ()) (mk_workers ())));
+  (* 3. EStartWorkers → single-Emit_racket.RLit ERuntimeCall, loc preserved. *)
+  check "EStartWorkers lowers to single-Emit_racket.RLit the Racket call (start-workers!)"
+    (is_rlit_only "(start-workers! W (list))"
+       (Emit_racket.lower_effect (empty_tables ()) (mk_workers ())));
 
   (* 3b. dead workers + concurrency render variants. `numberOfWorkers` applies
      ONLY to the normal starter; dead workers are single-threaded and
      start-dead-workers! takes no #:concurrency (issue #15 — passing it crashed
      App boot). *)
   check "EStartWorkers dead + concurrency drops #:concurrency (single-threaded)"
-    (is_rlit_only "(start-dead-workers! W (list ReadCap))" (loc_at 40)
-       (Desugar.desugar_expr (empty_tables ())
+    (is_rlit_only "(start-dead-workers! W (list ReadCap))"
+       (Emit_racket.lower_effect (empty_tables ())
           (EStartWorkers { workers_name = "W"; capabilities = ["ReadCap"];
                            concurrency = Some 4; is_dead = true; loc = loc_at 40 })));
   check "EStartWorkers normal + concurrency keeps #:concurrency"
-    (is_rlit_only "(start-workers! W (list ReadCap) #:concurrency 4)" (loc_at 40)
-       (Desugar.desugar_expr (empty_tables ())
+    (is_rlit_only "(start-workers! W (list ReadCap) #:concurrency 4)"
+       (Emit_racket.lower_effect (empty_tables ())
           (EStartWorkers { workers_name = "W"; capabilities = ["ReadCap"];
                            concurrency = Some 4; is_dead = false; loc = loc_at 40 })));
 
-  (* 4. EServe → (serve NAME #:port <RArg port> ...sse-routes), loc preserved. *)
-  (match Desugar.desugar_expr (empty_tables ()) (mk_serve ()) with
-   | ERuntimeCall { segments =
-       [ RLit "(serve Sv #:port "; RArg port;
-         RLit " #:capabilities (list) #:sse-routes Sv-sse-routes)" ]; loc } ->
-     check "EServe lowers to ERuntimeCall (RArg port, sse-routes suffix, loc)"
-       (port = int_ 60 8080 && loc = loc_at 61)
-   | _ -> check "EServe lowers to ERuntimeCall (RArg port, sse-routes suffix, loc)" false);
+  (* 4. EServe → (serve NAME #:port <Emit_racket.RArg port> ...sse-routes), loc preserved. *)
+  (match Emit_racket.lower_effect (empty_tables ()) (mk_serve ()) with
+   | Some [ Emit_racket.RLit "(serve Sv #:port "; Emit_racket.RArg port;
+         Emit_racket.RLit " #:capabilities (list) #:sse-routes Sv-sse-routes)" ] ->
+     check "EServe lowers to the Racket call (RArg port, sse-routes suffix)"
+       (port = int_ 60 8080)
+   | _ -> check "EServe lowers to the Racket call (RArg port, sse-routes suffix)" false);
 
   (* 4b. EServe with static_dir injects the #:static-dir keyword arg. *)
-  (match Desugar.desugar_expr (empty_tables ())
+  (match Emit_racket.lower_effect (empty_tables ())
            (EServe { server_name = "Sv"; port = int_ 60 8080; capabilities = ["Cap"];
                      static_dir = Some "public"; mount_path = None; loc = loc_at 61 }) with
-   | ERuntimeCall { segments =
-       [ RLit "(serve Sv #:port "; RArg _;
-         RLit " #:capabilities (list Cap) #:static-dir \"public\" #:sse-routes Sv-sse-routes)" ]; _ } ->
+   | Some [ Emit_racket.RLit "(serve Sv #:port "; Emit_racket.RArg _;
+         Emit_racket.RLit " #:capabilities (list Cap) #:static-dir \"public\" #:sse-routes Sv-sse-routes)" ] ->
      check "EServe with static_dir injects #:static-dir" true
    | _ -> check "EServe with static_dir injects #:static-dir" false);
 
   (* 4b'. EServe with mount_path injects the #:mount-path keyword arg, after
      #:static-dir and before #:sse-routes — issue #75. *)
-  (match Desugar.desugar_expr (empty_tables ())
+  (match Emit_racket.lower_effect (empty_tables ())
            (EServe { server_name = "Sv"; port = int_ 60 8080; capabilities = ["Cap"];
                      static_dir = Some "public"; mount_path = Some "/api"; loc = loc_at 61 }) with
-   | ERuntimeCall { segments =
-       [ RLit "(serve Sv #:port "; RArg _;
-         RLit " #:capabilities (list Cap) #:static-dir \"public\" #:mount-path \"/api\" #:sse-routes Sv-sse-routes)" ]; _ } ->
+   | Some [ Emit_racket.RLit "(serve Sv #:port "; Emit_racket.RArg _;
+         Emit_racket.RLit " #:capabilities (list Cap) #:static-dir \"public\" #:mount-path \"/api\" #:sse-routes Sv-sse-routes)" ] ->
      check "EServe with mount_path injects #:mount-path" true
    | _ -> check "EServe with mount_path injects #:mount-path" false);
 
   (* 4c. ETelemetry → (telemetry-event! "NAME" #:attributes ([%S v]...)).  A bare
-     EVar field value becomes the raw [*name] (RRawVar — the literal surface name,
+     EVar field value becomes the raw [*name] (Emit_racket.RRawVar — the literal surface name,
      NOT resolve_name), every other value goes through emit_expr_simple (RArg). *)
-  (match Desugar.desugar_expr (empty_tables ())
+  (match Emit_racket.lower_effect (empty_tables ())
            (ETelemetry { name = "evt";
                          fields = [ ("user.id", var 80 "userId"); ("count", int_ 81 1) ];
                          loc = loc_at 82 }) with
-   | ERuntimeCall { segments =
-       [ RLit "(telemetry-event! \"evt\" #:attributes (";
-         RLit "[\"user.id\" "; RRawVar "userId"; RLit "]";
-         RLit " "; RLit "[\"count\" "; RArg c; RLit "]";
-         RLit "))" ]; loc } ->
-     check "ETelemetry lowers to ERuntimeCall (RRawVar bare-var, RArg otherwise, loc)"
-       (c = int_ 81 1 && loc = loc_at 82)
-   | _ -> check "ETelemetry lowers to ERuntimeCall (RRawVar bare-var, RArg otherwise, loc)" false);
+   | Some [ Emit_racket.RLit "(telemetry-event! \"evt\" #:attributes (";
+         Emit_racket.RLit "[\"user.id\" "; Emit_racket.RRawVar "userId"; Emit_racket.RLit "]";
+         Emit_racket.RLit " "; Emit_racket.RLit "[\"count\" "; Emit_racket.RArg c; Emit_racket.RLit "]";
+         Emit_racket.RLit "))" ] ->
+     check "ETelemetry lowers to the Racket call (RRawVar bare-var, RArg otherwise)"
+       (c = int_ 81 1)
+   | _ -> check "ETelemetry lowers to the Racket call (RRawVar bare-var, RArg otherwise)" false);
 
   (* 4d. Cache family — table HIT keeps the bare local binding (byte-identical
      to the historical output, gated by the committed lesson59-cache golden);
      table MISS (cache declared in another module — the issue-#41 name-wired
      class) splices the per-call registry lookup (cache-for-name 'NAME). *)
   let cache_tables = empty_tables () in
-  Hashtbl.replace cache_tables.Desugar.caches "Ca" ();
-  (match Desugar.desugar_expr cache_tables
+  Hashtbl.replace cache_tables.Emit_racket.caches "Ca" ();
+  (match Emit_racket.lower_effect cache_tables
            (ECacheGet { cache_name = "Ca"; key = var 41 "k"; loc = loc_at 42 }) with
-   | ERuntimeCall { segments = [ RLit "(cache-get! Ca "; RArg k; RLit ")" ]; loc } ->
+   | Some [ Emit_racket.RLit "(cache-get! Ca "; Emit_racket.RArg k; Emit_racket.RLit ")" ] ->
      check "ECacheGet HIT keeps the bare local cache binding"
-       (k = var 41 "k" && loc = loc_at 42)
+       (k = var 41 "k")
    | _ -> check "ECacheGet HIT keeps the bare local cache binding" false);
-  (match Desugar.desugar_expr (empty_tables ())
+  (match Emit_racket.lower_effect (empty_tables ())
            (ECacheGet { cache_name = "Ca"; key = var 41 "k"; loc = loc_at 42 }) with
-   | ERuntimeCall { segments = [ RLit "(cache-get! (cache-for-name 'Ca) "; RArg _; RLit ")" ]; _ } ->
+   | Some [ Emit_racket.RLit "(cache-get! (cache-for-name 'Ca) "; Emit_racket.RArg _; Emit_racket.RLit ")" ] ->
      check "ECacheGet MISS lowers to (cache-for-name 'NAME)" true
    | _ -> check "ECacheGet MISS lowers to (cache-for-name 'NAME)" false);
-  (match Desugar.desugar_expr cache_tables
+  (match Emit_racket.lower_effect cache_tables
            (ECacheSet { cache_name = "Ca"; key = var 43 "k"; value = int_ 44 1;
                         ttl = Some (int_ 45 60); loc = loc_at 46 }) with
-   | ERuntimeCall { segments =
-       [ RLit "(cache-set! Ca "; RArg _; RLit " "; RArg _; RLit " "; RArg _; RLit ")" ]; _ } ->
+   | Some [ Emit_racket.RLit "(cache-set! Ca "; Emit_racket.RArg _; Emit_racket.RLit " "; Emit_racket.RArg _; Emit_racket.RLit " "; Emit_racket.RArg _; Emit_racket.RLit ")" ] ->
      check "ECacheSet HIT keeps the bare local cache binding (with ttl)" true
    | _ -> check "ECacheSet HIT keeps the bare local cache binding (with ttl)" false);
-  (match Desugar.desugar_expr (empty_tables ())
+  (match Emit_racket.lower_effect (empty_tables ())
            (ECacheSet { cache_name = "Ca"; key = var 43 "k"; value = int_ 44 1;
                         ttl = None; loc = loc_at 46 }) with
-   | ERuntimeCall { segments =
-       [ RLit "(cache-set! (cache-for-name 'Ca) "; RArg _; RLit " "; RArg _; RLit ")" ]; _ } ->
+   | Some [ Emit_racket.RLit "(cache-set! (cache-for-name 'Ca) "; Emit_racket.RArg _; Emit_racket.RLit " "; Emit_racket.RArg _; Emit_racket.RLit ")" ] ->
      check "ECacheSet MISS lowers to (cache-for-name 'NAME)" true
    | _ -> check "ECacheSet MISS lowers to (cache-for-name 'NAME)" false);
-  (match Desugar.desugar_expr (empty_tables ())
+  (match Emit_racket.lower_effect (empty_tables ())
            (ECacheDelete { cache_name = "Ca"; key = var 47 "k"; loc = loc_at 48 }) with
-   | ERuntimeCall { segments = [ RLit "(cache-delete! (cache-for-name 'Ca) "; RArg _; RLit ")" ]; _ } ->
+   | Some [ Emit_racket.RLit "(cache-delete! (cache-for-name 'Ca) "; Emit_racket.RArg _; Emit_racket.RLit ")" ] ->
      check "ECacheDelete MISS lowers to (cache-for-name 'NAME)" true
    | _ -> check "ECacheDelete MISS lowers to (cache-for-name 'NAME)" false);
-  (match Desugar.desugar_expr (empty_tables ())
+  (match Emit_racket.lower_effect (empty_tables ())
            (ECacheInvalidate { cache_name = "Ca"; prefix = var 49 "p"; loc = loc_at 50 }) with
-   | ERuntimeCall { segments =
-       [ RLit "(cache-invalidate-prefix! (cache-for-name 'Ca) "; RArg _; RLit ")" ]; _ } ->
+   | Some [ Emit_racket.RLit "(cache-invalidate-prefix! (cache-for-name 'Ca) "; Emit_racket.RArg _; Emit_racket.RLit ")" ] ->
      check "ECacheInvalidate MISS lowers to (cache-for-name 'NAME)" true
    | _ -> check "ECacheInvalidate MISS lowers to (cache-for-name 'NAME)" false);
 
   (* 4e. Email family — same hit/miss twin rule ((email-for-name 'NAME) on a
      miss; byte-identical bare binding on a hit, gated by lesson60-email). *)
   let email_tables = empty_tables () in
-  Hashtbl.replace email_tables.Desugar.emails "Em" ();
-  (match Desugar.desugar_expr email_tables
+  Hashtbl.replace email_tables.Emit_racket.emails "Em" ();
+  (match Emit_racket.lower_effect email_tables
            (ESendEmail { email_name = "Em"; to_ = var 51 "t"; subject = var 52 "s";
                          body = var 53 "b"; loc = loc_at 54 }) with
-   | ERuntimeCall { segments =
-       [ RLit "(send-email! Em #:to "; RArg _; RLit " #:subject "; RArg _;
-         RLit " #:body "; RArg _; RLit ")" ]; _ } ->
+   | Some [ Emit_racket.RLit "(send-email! Em #:to "; Emit_racket.RArg _; Emit_racket.RLit " #:subject "; Emit_racket.RArg _;
+         Emit_racket.RLit " #:body "; Emit_racket.RArg _; Emit_racket.RLit ")" ] ->
      check "ESendEmail HIT keeps the bare local email binding" true
    | _ -> check "ESendEmail HIT keeps the bare local email binding" false);
-  (match Desugar.desugar_expr (empty_tables ())
+  (match Emit_racket.lower_effect (empty_tables ())
            (ESendEmail { email_name = "Em"; to_ = var 51 "t"; subject = var 52 "s";
                          body = var 53 "b"; loc = loc_at 54 }) with
-   | ERuntimeCall { segments =
-       [ RLit "(send-email! (email-for-name 'Em) #:to "; RArg _; RLit " #:subject "; RArg _;
-         RLit " #:body "; RArg _; RLit ")" ]; _ } ->
+   | Some [ Emit_racket.RLit "(send-email! (email-for-name 'Em) #:to "; Emit_racket.RArg _; Emit_racket.RLit " #:subject "; Emit_racket.RArg _;
+         Emit_racket.RLit " #:body "; Emit_racket.RArg _; Emit_racket.RLit ")" ] ->
      check "ESendEmail MISS lowers to (email-for-name 'NAME)" true
    | _ -> check "ESendEmail MISS lowers to (email-for-name 'NAME)" false);
   check "EStartEmailWorker HIT keeps the bare local email binding"
-    (is_rlit_only "(start-email-worker! Em)" (loc_at 53)
-       (Desugar.desugar_expr email_tables
+    (is_rlit_only "(start-email-worker! Em)"
+       (Emit_racket.lower_effect email_tables
           (EStartEmailWorker { email_name = "Em"; loc = loc_at 53 })));
   check "EStartEmailWorker MISS lowers to (email-for-name 'NAME)"
-    (is_rlit_only "(start-email-worker! (email-for-name 'Em))" (loc_at 53)
-       (Desugar.desugar_expr (empty_tables ())
+    (is_rlit_only "(start-email-worker! (email-for-name 'Em))"
+       (Emit_racket.lower_effect (empty_tables ())
           (EStartEmailWorker { email_name = "Em"; loc = loc_at 53 })));
 
-  (* 5. Module-level lowering threads the DQueue table and lowers in place. *)
+  (* 5. The module pass now PRESERVES the effect forms: they must reach whichever backend
+     emits them, since only that backend knows how to lower them.  The Racket lowering is
+     what turns them into runtime calls, and it must cover every one of them. *)
   let out = Desugar.desugar_module sample_module in
-  let lowered_count = ref 0 in
+  let effect_forms = ref 0 in
+  let lowerable = ref 0 in
   (match out.decls with
    | DFunc fd :: _ ->
-     let rec count = function
-       | ERuntimeCall _ -> incr lowered_count
-       | e -> ignore (Ast_visitor.fold_children (fun () e -> count e; ()) () e)
+     let rec count e =
+       (match e with
+        | ETelemetry _ | EEnqueue _ | EStartWorkers _ | EServe _
+        | ECacheGet _ | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _
+        | ESendEmail _ | EStartEmailWorker _ ->
+          incr effect_forms;
+          if Emit_racket.lower_effect (empty_tables ()) e <> None then incr lowerable
+        | _ -> ());
+       ignore (Ast_visitor.fold_children (fun () e -> count e; ()) () e)
      in count fd.body
    | _ -> ());
-  check "desugar_module lowers exactly the 10 fixed-shape forms in the body"
-    (!lowered_count = 10);
+  check "desugar_module leaves all 10 fixed-shape effect forms intact"
+    (!effect_forms = 10);
+  check "the Racket backend lowers every one of them"
+    (!lowerable = 10);
 
   (* 6. Provenance helper records the surface loc verbatim. *)
   let surface = loc_at 200 in
@@ -329,7 +337,7 @@ let () =
   (* 7. Declarations with no expr children pass through untouched. *)
   let ty_decl = DType (TypeNewtype { name = "T"; base_type = TName { name = "String"; loc = loc_at 300 }; secret = false; loc = loc_at 301 }) in
   check "non-expr declaration passes through verbatim"
-    (Desugar.desugar_decl (empty_tables ()) ty_decl = ty_decl);
+    (Desugar.desugar_decl (Desugar.empty_tables ()) ty_decl = ty_decl);
 
   if !failed = 0 then (Printf.printf "\nALL DESUGAR TESTS PASSED\n"; exit 0)
   else (Printf.printf "\n%d DESUGAR TEST(S) FAILED\n" !failed; exit 1)

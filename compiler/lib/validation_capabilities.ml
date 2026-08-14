@@ -1969,8 +1969,6 @@ check your fact declaration or the type of `%s`"
         walk_expr local_env to_; walk_expr local_env subject;
         walk_expr local_env body
       | EStartEmailWorker _ -> ()
-      | ERuntimeCall { segments; _ } ->
-        List.iter (function RLit _ | RRawVar _ -> () | RArg e -> walk_expr local_env e) segments
     in
     List.iter (function
       | DFunc fd ->

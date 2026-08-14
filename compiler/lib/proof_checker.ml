@@ -966,7 +966,7 @@ use the named constructor instead: `ok %s { ... } ::: ...`" b.name } :: !errors
       | EPublish _ | EStartWorkers _ | ECacheGet _ | ECacheSet _
       | ECacheDelete _ | ECacheInvalidate _ | ESendEmail _
       | EStartEmailWorker _ | EServe _ | EConstructor _ | ELambda _
-      | ERuntimeCall _ -> ()
+      -> ()
     in
     validate_ok_expr fd.body;
     List.rev !errors
@@ -1524,8 +1524,6 @@ let check_module (m : module_form) : proof_error list =
     | ECacheGet _ | ECacheDelete _ | ECacheInvalidate _ -> false
     | ECacheSet { value; _ } -> expr_contains_transaction value
     | ESendEmail _ | EStartEmailWorker _ -> false
-    | ERuntimeCall { segments; _ } ->
-      List.exists (function RLit _ | RRawVar _ -> false | RArg e -> expr_contains_transaction e) segments
   in
   let rec expr_called_functions (e : expr) : string list =
     let dedup = List.sort_uniq String.compare in
@@ -1563,8 +1561,6 @@ let check_module (m : module_form) : proof_error list =
     | ECacheGet _ | ECacheDelete _ | ECacheInvalidate _ -> []
     | ECacheSet { value; _ } -> expr_called_functions value
     | ESendEmail _ | EStartEmailWorker _ -> []
-    | ERuntimeCall { segments; _ } ->
-      dedup (List.concat_map (function RLit _ | RRawVar _ -> [] | RArg e -> expr_called_functions e) segments)
   in
   let rec close_transaction_functions txn_funcs =
     let grown =
@@ -1938,8 +1934,6 @@ supplies the wrong arguments (%s); the body must return the declared fact about 
         | ECacheGet _ | ECacheDelete _ | ECacheInvalidate _ -> ()
         | ECacheSet { value; _ } -> check_nested_txn in_txn value
         | ESendEmail _ | EStartEmailWorker _ -> ()
-        | ERuntimeCall { segments; _ } ->
-          List.iter (function RLit _ | RRawVar _ -> () | RArg e -> check_nested_txn in_txn e) segments
       in
       check_nested_txn false fd.body;
 

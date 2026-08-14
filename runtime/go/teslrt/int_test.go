@@ -372,3 +372,45 @@ func TestIntChecksRejectWithTeslStatusAndMessage(t *testing.T) {
 		}
 	}
 }
+
+func TestIntLeafWrappers(t *testing.T) {
+	if got := IntSign(FromInt64(-7)); got.String() != "-1" {
+		t.Errorf("IntSign(-7) = %s", got.String())
+	}
+	if got := IntSign(FromInt64(0)); got.String() != "0" {
+		t.Errorf("IntSign(0) = %s", got.String())
+	}
+	if got := IntSign(FromInt64(9)); got.String() != "1" {
+		t.Errorf("IntSign(9) = %s", got.String())
+	}
+	if !IntIsEven(FromInt64(-4)) || IntIsOdd(FromInt64(-4)) {
+		t.Error("-4 is even")
+	}
+	if !IntIsOdd(FromInt64(-3)) || IntIsEven(FromInt64(-3)) {
+		t.Error("-3 is odd")
+	}
+	if IntToString(FromInt64(-12)) != "-12" {
+		t.Error("IntToString(-12)")
+	}
+	if got := Clamp(FromInt64(9), FromInt64(0), FromInt64(5)); got.String() != "5" {
+		t.Errorf("Clamp(9, 0, 5) = %s", got.String())
+	}
+	if got := Clamp(FromInt64(-9), FromInt64(0), FromInt64(5)); got.String() != "0" {
+		t.Errorf("Clamp(-9, 0, 5) = %s", got.String())
+	}
+	if got := MustPow(FromInt64(2), FromInt64(10)); got.String() != "1024" {
+		t.Errorf("MustPow(2, 10) = %s", got.String())
+	}
+	if got := MustPow(FromInt64(5), FromInt64(0)); got.String() != "1" {
+		t.Errorf("MustPow(5, 0) = %s", got.String())
+	}
+	// Racket's Int.pow rejects a negative exponent rather than returning a fraction.
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("a negative exponent must panic")
+			}
+		}()
+		MustPow(FromInt64(2), FromInt64(-1))
+	}()
+}

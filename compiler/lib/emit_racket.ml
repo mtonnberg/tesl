@@ -1614,6 +1614,170 @@ let rec head_fn_name (e : Ast.expr) : string option =
    proof_carrier_lets / scrut_is_proof_carrier — factored so all four consumer
    sites (plain ELet, raw-tail ELet, debug-stmts ELet, raw-tail ECase
    scrutinee) share one head-name resolution incl. qualified heads. *)
+(* ── Fixed-shape effect forms → Racket runtime calls ──────────────────────────
+   `enqueue` / `serve` / `startWorkers` / `telemetry` / cache / email lower to a fixed
+   Racket call shape.  This lowering lives HERE, in the Racket backend, rather than in the
+   shared `Desugar` pass, because what it produces is Racket SOURCE TEXT: keeping it in a
+   neutral phase put verbatim Racket tokens inside the shared AST, where no other backend
+   could consume them and where a future backend running the "neutral" pass would silently
+   receive Racket.  The Go backend lowers the same surface forms its own way.
+   Byte-identical output to the previous arrangement is the correctness condition, and the
+   exact-match .rkt snapshots are what check it. *)
+type rcall_seg =
+  | RLit of string     (** verbatim Racket tokens *)
+  | RArg of expr       (** argument sub-expression, emitted via emit_expr_simple *)
+  | RRawVar of string  (** a bare-variable operand emitted as the raw value [*name] *)
+
+type lower_tables = {
+  queues : (string, string) Hashtbl.t;  (** job type → declaring queue name *)
+  caches : (string, unit) Hashtbl.t;    (** locally declared cache names *)
+  emails : (string, unit) Hashtbl.t;    (** locally declared email names *)
+}
+
+let empty_tables () : lower_tables =
+  { queues = Hashtbl.create 1; caches = Hashtbl.create 1; emails = Hashtbl.create 1 }
+
+let queue_ref_of (tables : lower_tables) (job_type : string) : string =
+  match Hashtbl.find_opt tables.queues job_type with
+  | Some q -> q
+  (* NOMINAL miss form (DESIGN-4 Topic B): the macro normalizes the job-type
+     IDENTIFIER at the enqueue site — require-bound there, since the payload
+     construction next to it uses it — so the registry lookup matches by
+     (owner, name) type-ref, not by spelling.  A same-name job record declared
+     by a different module now fails closed at enqueue with both owners
+     instead of silently misrouting into the foreign queue. *)
+  | None -> Printf.sprintf "(queue-for-job-ref %s)" job_type
+
+let cache_ref_of (tables : lower_tables) (cache_name : string) : string =
+  if Hashtbl.mem tables.caches cache_name then cache_name
+  else Printf.sprintf "(cache-for-name '%s)" cache_name
+
+let email_ref_of (tables : lower_tables) (email_name : string) : string =
+  if Hashtbl.mem tables.emails email_name then email_name
+  else Printf.sprintf "(email-for-name '%s)" email_name
+
+(** Per-node lowering.  [tables] holds the module's same-module resolution
+    tables (job-type → queue for [EEnqueue]; local cache/email name sets for
+    the cache/email families).  {!Ast_visitor.map} has already lowered the
+    node's children by the time this is called, so each arm only rewrites the
+    node's own shape and reuses the surface node's own [loc] verbatim
+    (span-preserving). *)
+let lower_effect (tables : lower_tables) (e : expr) : rcall_seg list option =
+  match e with
+  | ETelemetry { name; fields; loc } ->
+    (* (telemetry-event! "NAME" #:attributes ([%S v]...))
+       The former emit arm rendered each field value with a context-FREE rule:
+       a bare [EVar] became the raw value [*name] (the literal surface name, NOT
+       [resolve_name]); every other value went through emit_expr_simple.  So the
+       value operand needs no func-context knowledge — [RRawVar] reproduces the
+       [*name] byte output and [RArg] the emit_expr_simple path, byte-identically. *)
+    let segs = ref [ RLit (Printf.sprintf "(telemetry-event! %S #:attributes (" name) ] in
+    let push s = segs := s :: !segs in
+    List.iteri (fun i (k, v) ->
+      if i > 0 then push (RLit " ");
+      push (RLit (Printf.sprintf "[%S " k));
+      (match v with
+       | EVar { name = vname; _ } -> push (RRawVar vname)
+       | _ -> push (RArg v));
+      push (RLit "]")
+    ) fields;
+    push (RLit "))");
+    ignore loc; Some (List.rev !segs)
+  | EEnqueue { job_type; payload; loc } ->
+    (* (enqueue! QUEUE_REF <payload via emit_expr_simple>) *)
+    let queue_ref = queue_ref_of tables job_type in
+    ignore loc; Some ([ RLit (Printf.sprintf "(enqueue! %s " queue_ref)
+      ; RArg payload
+      ; RLit ")" ])
+  | EStartWorkers { workers_name; capabilities; concurrency; is_dead; loc } ->
+    (* (start-workers!|start-dead-workers! NAME (list CAP...)[ #:concurrency N]) *)
+    let runtime_fn = if is_dead then "start-dead-workers!" else "start-workers!" in
+    let buf = Buffer.create 64 in
+    Buffer.add_string buf (Printf.sprintf "(%s %s (list" runtime_fn workers_name);
+    List.iter (fun cap -> Buffer.add_string buf (Printf.sprintf " %s" cap)) capabilities;
+    Buffer.add_string buf ")";
+    (* `numberOfWorkers` (concurrency) applies ONLY to the normal worker starter.
+       Dead-letter workers are always single-threaded and `start-dead-workers!`
+       takes no `#:concurrency` keyword — passing it there crashed at App boot on
+       any queue that had BOTH a dead worker and `numberOfWorkers` (issue #15). *)
+    (match concurrency with
+     | Some n when n <> 1 && not is_dead ->
+       Buffer.add_string buf (Printf.sprintf " #:concurrency %d" n)
+     | _ -> ());
+    Buffer.add_string buf ")";
+    ignore loc; Some ([ RLit (Buffer.contents buf) ])
+  | EServe { server_name; port; capabilities; static_dir; mount_path; loc } ->
+    (* (serve NAME #:port <port via emit_expr_simple> #:capabilities (list CAP...)
+        [ #:static-dir "DIR"] [ #:mount-path "PATH"] #:sse-routes NAME-sse-routes) *)
+    let prefix = Printf.sprintf "(serve %s #:port " server_name in
+    let mid_buf = Buffer.create 64 in
+    Buffer.add_string mid_buf " #:capabilities (list";
+    List.iter (fun cap -> Buffer.add_string mid_buf (Printf.sprintf " %s" cap)) capabilities;
+    Buffer.add_string mid_buf ")";
+    (match static_dir with
+     | Some dir -> Buffer.add_string mid_buf (Printf.sprintf " #:static-dir %S" dir)
+     | None -> ());
+    (match mount_path with
+     | Some path -> Buffer.add_string mid_buf (Printf.sprintf " #:mount-path %S" path)
+     | None -> ());
+    Buffer.add_string mid_buf (Printf.sprintf " #:sse-routes %s-sse-routes)" server_name);
+    ignore loc; Some ([ RLit prefix
+      ; RArg port
+      ; RLit (Buffer.contents mid_buf) ])
+  (* Cache / email families — also fixed-shape, position-independent runtime
+     calls.  Each former emit arm rendered a constant prefix + keyword tokens and
+     emitted its sub-expressions through [emit_expr_simple]; carrying them as
+     [RArg] re-emits through that SAME path, so the byte output is identical.
+     Byte-gated by the committed lesson59-cache / lesson60-email [.rkt].
+     The NAME operand goes through [cache_ref_of]/[email_ref_of]: a local
+     declaration keeps the bare binding (exact historical bytes), a miss
+     splices the per-call registry lookup — the same #41 rule as [EEnqueue]. *)
+  | ECacheGet { cache_name; key; loc } ->
+    (* (cache-get! CACHE_REF <key>) *)
+    ignore loc; Some ([ RLit (Printf.sprintf "(cache-get! %s " (cache_ref_of tables cache_name))
+      ; RArg key
+      ; RLit ")" ])
+  | ECacheSet { cache_name; key; value; ttl; loc } ->
+    (* (cache-set! CACHE_REF <key> <value>[ <ttl>]) *)
+    let ttl_segs = match ttl with
+      | Some ttl_expr -> [ RLit " "; RArg ttl_expr ]
+      | None -> [] in
+    ignore loc; Some ([ RLit (Printf.sprintf "(cache-set! %s " (cache_ref_of tables cache_name))
+      ; RArg key
+      ; RLit " "
+      ; RArg value ]
+      @ ttl_segs
+      @ [ RLit ")" ])
+  | ECacheDelete { cache_name; key; loc } ->
+    (* (cache-delete! CACHE_REF <key>) *)
+    ignore loc; Some ([ RLit (Printf.sprintf "(cache-delete! %s " (cache_ref_of tables cache_name))
+      ; RArg key
+      ; RLit ")" ])
+  | ECacheInvalidate { cache_name; prefix; loc } ->
+    (* (cache-invalidate-prefix! CACHE_REF <prefix>) *)
+    ignore loc; Some ([ RLit (Printf.sprintf "(cache-invalidate-prefix! %s " (cache_ref_of tables cache_name))
+      ; RArg prefix
+      ; RLit ")" ])
+  | ESendEmail { email_name; to_; subject; body; loc } ->
+    (* (send-email! EMAIL_REF #:to <to> #:subject <subject> #:body <body>) *)
+    ignore loc; Some ([ RLit (Printf.sprintf "(send-email! %s #:to " (email_ref_of tables email_name))
+      ; RArg to_
+      ; RLit " #:subject "
+      ; RArg subject
+      ; RLit " #:body "
+      ; RArg body
+      ; RLit ")" ])
+  | EStartEmailWorker { email_name; loc } ->
+    (* (start-email-worker! EMAIL_REF) *)
+    ignore loc; Some ([ RLit (Printf.sprintf "(start-email-worker! %s)" (email_ref_of tables email_name)) ])
+  | _ -> None
+
+(** Lower a single expression: bottom-up rewrite via the shared traversal
+    framework, so a new {!Ast.expr} variant cannot silently escape the pass. *)
+
+(* Populated per module by compile_to_string, like the other per-module tables here. *)
+let effect_tables : lower_tables ref = ref (empty_tables ())
+
 let app_is_proof_carrier ctx (value : Ast.expr) : bool =
   match value with
   | EApp _ ->
@@ -2706,7 +2870,7 @@ let rec emit_expr ctx e =
     (match extract_multiline_select_query seq with
      | Some (seed, clauses) -> emit_sql_select seed clauses
      | None -> failwith "emit_racket: extract_multiline_select_query guard passed but returned None — compiler invariant violation; please report this bug")
-  | ELet { name = "_"; value = ((ETelemetry _ | EEnqueue _ | EPublish _ | EStartWorkers _ | EWithDatabase _ | EWithCapabilities _ | EWithTransaction _ | EServe _ | ECacheGet _ | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _ | ESendEmail _ | EStartEmailWorker _ | ERuntimeCall _) as stmt); body; _ } ->
+  | ELet { name = "_"; value = ((ETelemetry _ | EEnqueue _ | EPublish _ | EStartWorkers _ | EWithDatabase _ | EWithCapabilities _ | EWithTransaction _ | EServe _ | ECacheGet _ | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _ | ESendEmail _ | EStartEmailWorker _) as stmt); body; _ } ->
     (* Runtime statements in sequence lower to begin blocks. *)
     emit ctx "(begin ";
     emit_expr ctx stmt;
@@ -3103,13 +3267,17 @@ let rec emit_expr ctx e =
   | ETelemetry _ | EEnqueue _ | EStartWorkers _ | EServe _
   | ECacheGet _ | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _
   | ESendEmail _ | EStartEmailWorker _ ->
-    (* These fixed-shape effect forms are lowered to [ERuntimeCall] by
-       {!Desugar.desugar_module}, which [compile_to_string] runs before
-       [emit_module].  Reaching emit means the module was not desugared — a
-       pipeline bug — so fail loudly rather than emit malformed Racket. *)
-    failwith "emit_racket: fixed-shape effect form (telemetry/enqueue/workers/\
-              serve/cache/email) reached the emitter un-desugared \
-              (Desugar.desugar_module must run before emit_module)"
+    (* Lowered to its fixed Racket call shape right here.  Literal segments are emitted
+       verbatim; argument sub-expressions go through the context-aware emit_expr_simple
+       path, and a bare-variable operand renders as the raw value [*name]. *)
+    (match lower_effect !effect_tables e with
+     | Some segments ->
+       List.iter (function
+         | RLit text -> emit ctx text
+         | RArg arg -> emit_expr_simple ctx arg
+         | RRawVar name -> emit ctx ("*" ^ name)) segments
+     | None ->
+       failwith "emit_racket: fixed-shape effect form reached the emitter with no lowering")
   | EPublish { channel_name; key; event_ctor; payload; _ } ->
     (* Name-wired channel operand (issue-#41 class): a locally declared
        channel emits its bare define-channel binding (exact historical
@@ -3172,17 +3340,6 @@ let rec emit_expr ctx e =
     emit ctx "(call-with-queue-transaction (lambda () ";
     emit_expr ctx body;
     emit ctx "))"
-  | ERuntimeCall { segments; _ } ->
-    (* Desugar-lowered fixed-shape runtime call (EEnqueue / EStartWorkers /
-       EServe / cache / email families).  Literal segments are emitted verbatim
-       (the call prefix, keyword args and runtime fn names were rendered at
-       desugar time); argument sub-expressions are emitted through the
-       context-aware emit_expr_simple path, exactly as the original effect arms
-       did. *)
-    List.iter (function
-      | RLit s -> emit ctx s
-      | RArg e -> emit_expr_simple ctx e
-      | RRawVar name -> emit ctx ("*" ^ name)) segments
   | EConstructor { name = "Nothing"; args = []; _ } ->
     emit ctx "Nothing"
   | EConstructor { name = "True"; args = []; _ } ->
@@ -3364,7 +3521,7 @@ and emit_expr_simple ctx e =
   | EEnqueue _ | EPublish _ | EStartWorkers _ | EWithDatabase _
   | EWithCapabilities _ | EWithTransaction _ | EServe _ | EConstructor _
   | ECacheGet _ | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _
-  | ESendEmail _ | EStartEmailWorker _ | ERuntimeCall _ -> emit_expr ctx e
+  | ESendEmail _ | EStartEmailWorker _ -> emit_expr ctx e
   | EApp _ as app ->
     (* SQL-like expressions and TypeName { } record construction need the full emit_expr lowering. *)
     let is_typename_record = match app with
@@ -4534,8 +4691,6 @@ let collect_qualified_uses_for_module short_name (m : module_form) : string list
     | ECacheInvalidate { prefix; _ } -> walk_expr prefix
     | ESendEmail { to_; subject; body; _ } ->
       walk_expr to_; walk_expr subject; walk_expr body
-    | ERuntimeCall { segments; _ } ->
-      List.iter (function RLit _ | RRawVar _ -> () | RArg e -> walk_expr e) segments
   in
   List.iter (function
     | DFunc (fd : Ast.func_decl) -> walk_expr fd.body
@@ -5417,7 +5572,7 @@ let emit_func ctx (fd : func_decl) =
       emit ctx ") (lambda () ";
       emit_with_raw_tail body;
       emit ctx "))"
-    | ELet { name = "_"; value = ((ETelemetry _ | EEnqueue _ | EPublish _ | EStartWorkers _ | EWithDatabase _ | EWithCapabilities _ | EServe _ | ERuntimeCall _) as stmt); body; _ } ->
+    | ELet { name = "_"; value = ((ETelemetry _ | EEnqueue _ | EPublish _ | EStartWorkers _ | EWithDatabase _ | EWithCapabilities _ | EServe _) as stmt); body; _ } ->
       (* Runtime statement as statement → (begin stmt body) *)
       emit ctx "(begin ";
       emit_expr ctx stmt;
@@ -5804,7 +5959,7 @@ let emit_func ctx (fd : func_decl) =
          | ETelemetry _ | EEnqueue _ | EPublish _ | EStartWorkers _
          | EWithDatabase _ | EWithCapabilities _ | EWithTransaction _ | EServe _
          | ECacheGet _ | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _
-         | ESendEmail _ | EStartEmailWorker _ | ERuntimeCall _ -> true
+         | ESendEmail _ | EStartEmailWorker _ -> true
          | _ -> false)
       in
       let is_check_call =
@@ -5840,7 +5995,7 @@ let emit_func ctx (fd : func_decl) =
       (match value with
        | ETelemetry _ | EEnqueue _ | EPublish _
        | ECacheGet _ | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _
-       | ESendEmail _ | ERuntimeCall _ -> true
+       | ESendEmail _ -> true
        | _ -> false)
     | _ -> false
   in
@@ -6358,8 +6513,16 @@ let emit_codec ctx (cf : codec_form) =
                 field_name (decode_call field_name json_key codec))
             | Some combined ->
               emit_via_checked_field field_name json_key codec combined)
-         | DecodeDefault { field_name; default_expr; _ } ->
-           emit_line ctx (Printf.sprintf "  (define _f_%s %s)" field_name default_expr)
+         | DecodeDefault { field_name; default_lit; _ } ->
+           (* Racket rendering lives here now, rather than in the parser. *)
+           let rendered = match default_lit with
+             | LInt n -> string_of_int n
+             | LBool b -> if b then "#t" else "#f"
+             | LString str -> Printf.sprintf "%S" str
+             | LFloat f -> Float_fmt.to_faithful_literal f
+             | _ -> "#f"
+           in
+           emit_line ctx (Printf.sprintf "  (define _f_%s %s)" field_name rendered)
          | DecodeCrossCheck _ -> ()  (* handled below *)
        ) alt;
        let cross_checks = List.filter_map (function
@@ -8796,6 +8959,16 @@ let compile_to_string ?(root_path=default_root_path ()) ?(cyclic_local_import_pa
   Hashtbl.clear qualified_imports;
   Hashtbl.clear stdlib_plain_imports;
   Hashtbl.clear job_type_to_queue;
+  (* Same-module resolution tables for the effect lowering, built from this module's own
+     declarations — the construction that used to live in the desugar pass. *)
+  effect_tables := empty_tables ();
+  List.iter (function
+    | DQueue (q : queue_form) ->
+      List.iter (fun job -> Hashtbl.replace (!effect_tables).queues job q.name)
+        (Desugar.queue_job_types q)
+    | DCache (c : cache_form) -> Hashtbl.replace (!effect_tables).caches c.name ()
+    | DEmail (em : email_form) -> Hashtbl.replace (!effect_tables).emails em.name ()
+    | _ -> ()) m.decls;
   Hashtbl.clear cyclic_local_import_table;
   currency_ctors_active :=
     List.exists (fun (i : Ast.import_decl) -> i.module_name = "Tesl.Money")
@@ -8813,7 +8986,7 @@ let compile_to_string ?(root_path=default_root_path ()) ?(cyclic_local_import_pa
   (* Surface-form lowering (reduce_language_size).  Run here, AFTER the type
      checker has seen the surface forms (so [expr_type_tbl] keys/diagnostics are
      unchanged) and immediately BEFORE [emit_module], so the emitter only ever
-     sees the lowered core forms (EEnqueue/EStartWorkers/EServe → ERuntimeCall).
+     keeps the surface effect forms, which this backend lowers itself at emit time.
      Idempotent: re-running on an already-lowered module is the identity, so the
      compile.ml pipeline's own desugar pass and direct callers of this function
      both produce identical output. *)

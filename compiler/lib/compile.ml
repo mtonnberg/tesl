@@ -721,8 +721,6 @@ let rec definition_in_expr env locals line col (expr : Ast.expr) =
        | None ->
          definition_in_expr env locals line col body)
   | Ast.EStartEmailWorker _ -> None
-  | Ast.ERuntimeCall { segments; _ } ->
-    List.find_map (function Ast.RLit _ | Ast.RRawVar _ -> None | Ast.RArg e -> recurse e) segments
   | Ast.EConstructor { name; args; loc } ->
     let ctor_loc = precise_name_loc loc name in
     if loc_contains_position ctor_loc line col then
@@ -1214,8 +1212,6 @@ let rec resolve_symbol_in_expr env locals line col (expr : Ast.expr) =
        | None ->
          resolve_symbol_in_expr env locals line col body)
   | Ast.EStartEmailWorker _ -> None
-  | Ast.ERuntimeCall { segments; _ } ->
-    List.find_map (function Ast.RLit _ | Ast.RRawVar _ -> None | Ast.RArg e -> recurse e) segments
   | Ast.EConstructor { name; args; loc } ->
     let ctor_loc = precise_name_loc loc name in
     if loc_contains_position ctor_loc line col then find_ctor_symbol env.ctor_defs name
@@ -1635,8 +1631,6 @@ let rec collect_occurrences_in_expr env locals target (expr : Ast.expr) =
     @ collect_occurrences_in_expr env locals target subject
     @ collect_occurrences_in_expr env locals target body
   | Ast.EStartEmailWorker _ -> []
-  | Ast.ERuntimeCall { segments; _ } ->
-    List.concat_map (function Ast.RLit _ | Ast.RRawVar _ -> [] | Ast.RArg e -> recurse e) segments
   | Ast.EConstructor { name; args; loc } ->
     (match find_ctor_symbol env.ctor_defs name with
      | Some symbol when symbol_equal symbol target -> loc :: List.concat_map (collect_occurrences_in_expr env locals target) args
@@ -3295,7 +3289,7 @@ let diag_of_go_emit_error (error : Emit_go.emit_error) : diagnostic = {
 }
 
 (** Compile a checked Tesl module into a complete standalone Go module tree.
-    Go receives the surface AST: Racket-specific [Desugar.ERuntimeCall] nodes
+    Go receives the surface AST: Racket-specific lowered nodes
     must never cross this backend boundary. *)
 (* An import CYCLE collapses into ONE Go module: Racket forbids cyclic `require` (hence
    emit_racket's SCC inliner), but Go files in the same package reference each other
