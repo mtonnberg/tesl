@@ -4615,6 +4615,11 @@ let go_corpus = [
   "example/learn/lesson35-list-decomposition.tesl";
   (* First-class detached proofs: `establish` + `f <| value ::: pf`. *)
   "example/learn/lesson53-literal-parametrized-predicates.tesl";
+  (* The compiler's own torture file: a three-module import CYCLE, a qualified-only
+     `import Sandbox3` with qualified type references, proof decomposition
+     (`let (v ::: pf) = y`), applied proof terms, and an `establish` returning
+     `Maybe (Fact P)` whose Maybe is real control flow. *)
+  "example/sandbox.tesl";
   "tests/multiparam_test.tesl";
 ]
 

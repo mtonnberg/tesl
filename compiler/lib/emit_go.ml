@@ -324,6 +324,17 @@ let rec type_of_type_expr ?(params=[]) types ty =
   | TName { name = "Bool"; _ } -> TBool
   | TName { name = "Unit"; _ } -> TUnit
   | TName { name; loc } ->
+    (* A type may be written QUALIFIED (`Sandbox3.S3Record2`), which is how a module
+       imported without an `exposing` list is referred to.  The tables are keyed by the
+       bare Tesl name — the qualification says which module it came from, and the checker
+       has already verified that it is in scope — so the prefix is dropped here. *)
+    let name = match String.rindex_opt name '.' with
+      | Some index
+        when not (Hashtbl.mem types.newtypes name || Hashtbl.mem types.records name
+                  || Hashtbl.mem types.adts name) ->
+        String.sub name (index + 1) (String.length name - index - 1)
+      | _ -> name
+    in
     (match Hashtbl.find_opt types.newtypes name, Hashtbl.find_opt types.records name,
            Hashtbl.find_opt types.adts name with
      | Some info, _, _ -> TNewtype info
@@ -1230,6 +1241,9 @@ let rec type_of_expr signatures env expr =
         | [arg] when type_of_expr signatures env arg = base -> result
         | [_] -> unsupported loc "Go backend newtype constructor `%s` argument type mismatch" name
         | _ -> unsupported loc "Go backend requires a fully-applied newtype constructor `%s`" name)
+     (* A proof term: `ValidPort port` applies a FACT, which erases to the zero-size proof.
+        Its arguments are proof subjects, so nothing is evaluated. *)
+     | Some { params = []; result = TUnit; go_name = "struct{}{}"; _ } -> TUnit
      | _ -> unsupported loc "Go backend does not support constructor `%s` yet" name)
   (* A query's type comes from its ENTITY and its form, not from a signature: `select`
      and friends are surface syntax rather than functions. *)
@@ -1294,6 +1308,8 @@ let rec type_of_expr signatures env expr =
               unsupported loc "Go backend newtype constructor `%s` argument type mismatch" name
             | _ ->
               unsupported loc "Go backend requires a fully-applied newtype constructor `%s`" name)
+         (* An APPLIED fact — the proof term `ValidPort port` — erases to the zero proof. *)
+         | Some { params = []; result = TUnit; go_name = "struct{}{}"; _ } -> TUnit
          | _ -> unsupported loc "Go backend does not support constructor `%s` yet" name)
       | EVar { name; _ } when set_leaf name <> None && Hashtbl.mem signatures name ->
        let leaf = match set_leaf name with Some leaf -> leaf | None -> assert false in
@@ -1520,7 +1536,14 @@ let rec type_of_expr signatures env expr =
          | left, right when left = right -> left
          | _ -> unsupported loc "Go backend `case` arms have different types")
          TFailure types)
-  | ELetProof { loc; _ } -> unsupported loc "Go backend does not support proof decomposition yet"
+  (* `let (v ::: pf) = y` DECOMPOSES a proof-carrying value: `v` is the value and `pf` the
+     proof, which erases like every other proof (LANGUAGE-SPEC 16.9 gives a proof no runtime
+     structure).  So the binding is the value itself and `pf` is the zero-size proof value —
+     it exists because later code names it, e.g. `attachFact x pf`. *)
+  | ELetProof { value_name; proof_name; value; body; _ } ->
+    let value_ty = type_of_expr signatures env value in
+    type_of_expr signatures
+      ((proof_name, TUnit) :: (value_name, value_ty) :: env) body
   | ERecord { type_hint = Some name; fields; loc } ->
     (match record_info_of_signature signatures name with
      | Some info -> check_record_literal signatures env loc info fields; TRecord info
@@ -2205,6 +2228,8 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
         | [arg] ->
           Printf.sprintf "%s{Value: %s}" (go_type result) (emit arg)
         | _ -> unsupported loc "Go backend requires a fully-applied newtype constructor `%s`" name)
+     (* A proof term erases: `ValidPort port` is the zero-size proof value. *)
+     | Some { params = []; result = TUnit; go_name = "struct{}{}"; _ } -> "struct{}{}"
      | _ -> unsupported loc "Go backend cannot emit constructor `%s`" name)
   | (EApp _ | EBinop _ | ELet _) as sql when recognise_sql sql <> None ->
     (match recognise_sql sql with
@@ -2269,6 +2294,8 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
             | [arg] ->
               Printf.sprintf "%s{Value: %s}" (go_type result) (emit arg)
             | _ -> assert false)
+         (* A proof term erases: `ValidPort port` is the zero-size proof value. *)
+         | Some { params = []; result = TUnit; go_name = "struct{}{}"; _ } -> "struct{}{}"
          | _ -> unsupported loc "Go backend cannot emit constructor `%s`" name)
       | EVar { name; _ } when set_leaf name <> None && Hashtbl.mem signatures name ->
        let leaf = match set_leaf name with Some leaf -> leaf | None -> assert false in
@@ -2506,7 +2533,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
     Printf.sprintf "[]%s{%s}" (go_type element)
       (String.concat ", " (List.map (fun elem ->
          emit_expr ~expected:element ~indent signatures env elem) elems))
-  | ELetProof { loc; _ }
+  | ELetProof _ as let_proof -> emit_let_expr ?expected ~indent signatures env let_proof
   | ERecord { loc; _ } ->
     unsupported loc "Go backend cannot emit this expression yet"
   | EOk { value; _ } when (match expected with Some (TCheck _) | None -> false | Some _ -> true) ->
@@ -3462,6 +3489,17 @@ and emit_let_expr ?expected ?(indent="") signatures env expr =
   let buffer = Buffer.create 192 in
   Printf.bprintf buffer "(func() %s {\n" (go_type result);
   let rec emit_bindings env = function
+    (* `let (v ::: pf) = y`: the value binding is `y` itself and the proof binder is the
+       zero-size proof value.  Both are emitted, because later code names both. *)
+    | ELetProof { value_name; proof_name; value; body; _ } ->
+      let value_ty = type_of_expr signatures env value in
+      let emitted =
+        emit_expr ~expected:value_ty ~indent:(indent ^ "\t") signatures env value in
+      Printf.bprintf buffer "%s\t%s := %s\n%s\t_ = %s\n" indent (local_ident value_name)
+        emitted indent (local_ident value_name);
+      Printf.bprintf buffer "%s\t%s := struct{}{}\n%s\t_ = %s\n" indent
+        (local_ident proof_name) indent (local_ident proof_name);
+      emit_bindings ((proof_name, TUnit) :: (value_name, value_ty) :: env) body
     | ELet { name; value; body; _ } ->
       let inferred_value_ty = type_of_expr signatures env value in
       let value_ty = if inferred_value_ty = TFailure then result else inferred_value_ty in
@@ -3546,6 +3584,24 @@ let emit_tail ?self buffer signatures env expected indent expr =
        is emitted in TAIL position — the block keeps statement form instead of collapsing
        into an immediately-called closure. *)
     | EWithDatabase { body; _ } -> go env indent body
+    (* Proof decomposition in tail position keeps statement form, like an ordinary `let`.
+       Either half may be `_`, since the decomposition is often written for one of them. *)
+    | ELetProof { value_name; proof_name; value; body; loc; _ } ->
+      let value_ty = type_of_expr signatures env value in
+      Printf.bprintf buffer "%s{\n" indent;
+      Buffer.add_string buffer (line_directive loc);
+      let emitted =
+        emit_expr ~expected:value_ty ~indent:(indent ^ "\t") signatures env value in
+      if value_name = "_" then
+        Printf.bprintf buffer "%s\t_ = %s\n" indent emitted
+      else
+        Printf.bprintf buffer "%s\t%s := %s\n%s\t_ = %s\n" indent (local_ident value_name)
+          emitted indent (local_ident value_name);
+      if proof_name <> "_" then
+        Printf.bprintf buffer "%s\t%s := struct{}{}\n%s\t_ = %s\n" indent
+          (local_ident proof_name) indent (local_ident proof_name);
+      go ((proof_name, TUnit) :: (value_name, value_ty) :: env) (indent ^ "\t") body;
+      Printf.bprintf buffer "%s}\n" indent
     (* `let v = check g x` inside another CHECK: a rejection PROPAGATES — it becomes this
        check's own result, carrying the inner status and message.  Racket's `let/check`
        does exactly this (`(if (check-fail? result) result …)`), and the emitter used to
@@ -3933,8 +3989,10 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
     let result = signature.result in
     let env = params in
     (* An `establish` body is a proof TERM, not a value expression — it is never typed or
-       emitted, so it is not checked against the result type either. *)
-    if fd.kind <> EstablishKind then begin
+       emitted, so it is not checked against the result type either.  When the result is a
+       CONTAINER of proofs (`Maybe (Fact P)`) the body IS emitted, and then it is checked
+       like any other. *)
+    if fd.kind <> EstablishKind || result <> TUnit then begin
       let body_ty = type_of_arg signatures env result fd.body in
       if body_ty <> result && body_ty <> TFailure then
         unsupported fd.loc "Go backend function result type mismatch"
@@ -3956,8 +4014,12 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
        a function that never tail-calls itself should read as plain Go. *)
     (* An `establish` body constructs a proof TERM (`Named "http" port`), which has no
        runtime content — so the emitted function returns the zero-size proof value and the
-       body is not emitted at all.  Its parameters stay, since callers pass them. *)
-    if fd.kind = EstablishKind then begin
+       body is not emitted at all.  Its parameters stay, since callers pass them.
+       EXCEPT when the result is not the bare proof: `-> Maybe (Fact (ValidPort port))`
+       answers "can this be established?", and the caller CASES on that answer, so the
+       control flow is observable and the body must be emitted (with the proof inside it
+       erased as usual).  Skipping it there emitted `return struct{}{}` for a Maybe. *)
+    if fd.kind = EstablishKind && result = TUnit then begin
       List.iter (fun (name, _) ->
         Printf.bprintf body "\t_ = %s\n" (local_ident name)) params;
       Printf.bprintf body "\treturn struct{}{}\n}\n"
@@ -4648,6 +4710,13 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         ()
       | other ->
         unsupported import.loc "Go backend does not support import `%s` yet" other) m.imports;
+    (* A `fact` is a proof PREDICATE.  Applying it (`ValidPort port`) builds a proof term,
+       which erases — so it is registered like a zero-size constructor: the arguments are
+       typed and then dropped, and the value is the empty struct.  Registered because a
+       proof term can appear in an expression the emitter DOES walk: an `establish` whose
+       result is `Maybe (Fact P)` answers with `Something (ValidPort port)`, and that Maybe
+       is real control flow. *)
+    let fact_names = List.filter_map (function DFact f -> Some f.name | _ -> None) m.decls in
     let funcs = List.filter_map (function DFunc fd -> Some fd | _ -> None) m.decls in
     let codecs = List.filter_map (function DCodec c -> Some c | _ -> None) m.decls in
     let apis = List.filter_map (function DApi a -> Some a | _ -> None) m.decls in
@@ -5371,6 +5440,14 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       if List.mem fd.name reachable_names then None else Some fd.name) funcs in
     let signatures = Hashtbl.create
       (List.length funcs + Hashtbl.length types.newtypes + Hashtbl.length types.records) in
+    (* A fact's own signature: no parameters to type against (a proof term's arguments are
+       proof SUBJECTS, not values the emitter checks) and the zero-size proof as result. *)
+    List.iter (fun name ->
+      if not (Hashtbl.mem signatures name) then
+        Hashtbl.add signatures name {
+          params = []; result = TUnit;
+          go_name = "struct{}{}"; sig_owner = ""; sig_needs_scope = false;
+        }) fact_names;
     Hashtbl.iter (fun name info ->
       Hashtbl.add signatures name {
         params = [info.base];
@@ -5502,11 +5579,18 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
               dependency.ex_module = import.module_name) dependencies with
       | None -> ()
       | Some dependency ->
+        (* `import M` with no `exposing` list is the QUALIFIED-ONLY form: references are
+           written `M.Name`.  Every entry the dependency emitted from is brought in, keyed
+           by its bare name, and the qualified reference resolves through the prefix strip
+           in `type_of_type_expr` / `normalize_call_head`.  Bringing in more than the
+           source names cannot widen what compiles: the checker has already rejected any
+           use of a name this module did not import. *)
         let exposed = match import.names with
           | ImportAll ->
-            unsupported import.loc
-              "Go backend requires `import %s exposing [...]`: a qualified-only import gives the emitter no names to resolve"
-              import.module_name
+            List.of_seq (Hashtbl.to_seq_keys dependency.ex_signatures)
+            @ List.of_seq (Hashtbl.to_seq_keys dependency.ex_types.records)
+            @ List.of_seq (Hashtbl.to_seq_keys dependency.ex_types.newtypes)
+            @ List.of_seq (Hashtbl.to_seq_keys dependency.ex_types.adts)
           | ImportExposing names -> names
         in
         if not (List.mem dependency.ex_package !imported_packages) then
