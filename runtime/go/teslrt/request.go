@@ -88,9 +88,12 @@ const (
 // ClearSessionCookie is the logout half: same cookie, same attributes, empty value and
 // `Max-Age=0`, which is how a browser is told to drop it. It removes the BROWSER's copy
 // and does not invalidate the token — the same documented limitation Racket carries.
-func ClearSessionCookie(scope *RequestScope) {
+// Returns Tesl's Unit (an empty struct), so the emitted code can use it in value
+// position the way a Tesl expression of type Unit is used.
+func ClearSessionCookie(scope *RequestScope) struct{} {
 	scope.SetCookieHeader("Http.clearSessionCookie",
 		fmt.Sprintf("%s=; %s; Max-Age=0", sessionCookieName, sessionCookieAttributes))
+	return struct{}{}
 }
 
 // HttpRequest is what an `auth` function and a handler see of the incoming request.

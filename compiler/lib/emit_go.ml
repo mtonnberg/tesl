@@ -81,6 +81,10 @@ type signature = {
   params : go_type list;
   result : go_type;
   go_name : string;
+  (* True when the function declares `cookieCap`, i.e. it may write to the response and so
+     takes the request scope as its first parameter.  The `requires` clause IS the marker:
+     the checker forces it to propagate to every caller, so no call-graph pass is needed. *)
+  sig_needs_scope : bool;
   (* Empty for a runtime function (already spelled `teslrt.X`) and for the module being
      emitted; otherwise the package that declares it. *)
   sig_owner : string;
@@ -244,6 +248,11 @@ type type_table = {
    xs`, the idiomatic list-rebuilding fold.  Set once per module beside
    `current_package`. *)
 let current_types : type_table option ref = ref None
+
+(* The server an `api-test` block drives, while its statements are being emitted.  A
+   request verb (`get "/path"`) only means something inside such a block, and this is what
+   tells the emitter which server it addresses. *)
+let current_api_server : string option ref = ref None
 
 (* Set when an empty list literal fell back to its DEFAULT element type because nothing
    constrained it.  The tolerance paths (an `if` branch, a `case` arm, a sibling element)
@@ -1148,6 +1157,19 @@ let rec type_of_expr signatures env expr =
          `andLeft`/`andRight` produce the zero-size proof value. *)
       | EVar { name = ("forgetFact" | "attachFact") ; _ } when args <> [] ->
         type_of_expr signatures env (List.hd args)
+      (* A request verb inside an `api-test` drives the server under test. *)
+      | EVar { name = ("get" | "post" | "put" | "delete" | "patch"); _ }
+        when !current_api_server <> None ->
+        (match !current_types with
+         | Some types ->
+           (match Hashtbl.find_opt types.records "HttpResponse" with
+            | Some info -> TRecord info
+            | None -> unsupported loc
+              "Go backend needs `Tesl.ApiTest` imported for a request in an api-test")
+         | None -> unsupported loc "Go backend cannot resolve the api-test response type")
+      | EVar { name = ("statusOk" | "statusClientError" | "statusServerError"); _ } -> TBool
+      (* `Http.clearSessionCookie()` returns Unit and writes to the response. *)
+      | EVar { name = "Http.clearSessionCookie"; _ } -> TUnit
       | EVar { name = ("detachFact" | "introAnd" | "andLeft" | "andRight"); _ } -> TUnit
       | EVar { name; _ } when higher_order_leaf name <> None && Hashtbl.mem signatures name ->
        let hof = match higher_order_leaf name with Some hof -> hof | None -> assert false in
@@ -2092,6 +2114,33 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
       | EVar { name = ("forgetFact" | "attachFact"); _ } when args <> [] ->
         (* The value passes through; the proof operand disappears with the proof. *)
         emit (List.hd args)
+      | EVar { name = ("get" | "post" | "put" | "delete" | "patch") as verb; _ }
+        when !current_api_server <> None ->
+        let server = match !current_api_server with Some s -> s | None -> assert false in
+        let path, request_body = match args with
+          | [ path ] -> path, None
+          | [ path; request_body ] -> path, Some request_body
+          | _ -> unsupported loc
+            "Go backend api-test request takes a path and an optional body"
+        in
+        Printf.sprintf "teslrt.ApiRequest(%s, %S, %s, %s)" server
+          (String.uppercase_ascii verb)
+          (emit_expr ~expected:TString ~indent signatures env path)
+          (match request_body with
+           | None -> "\"\""
+           | Some value -> emit_expr ~expected:TString ~indent signatures env value)
+      | EVar { name = ("statusOk" | "statusClientError" | "statusServerError") as predicate; _ } ->
+        let go_name = match predicate with
+          | "statusOk" -> "StatusOk"
+          | "statusClientError" -> "StatusClientError"
+          | _ -> "StatusServerError"
+        in
+        Printf.sprintf "teslrt.%s(%s)" go_name
+          (String.concat ", " (List.map (fun arg ->
+             emit_expr ~expected:TInt ~indent signatures env arg) args))
+      (* The cookie writer targets the response the scope owns. *)
+      | EVar { name = "Http.clearSessionCookie"; _ } ->
+        "teslrt.ClearSessionCookie(teslScope)"
       | EVar { name = ("detachFact" | "introAnd" | "andLeft" | "andRight"); _ } ->
         List.iter (fun arg -> ignore (type_of_expr signatures env arg)) args;
         "struct{}{}"
@@ -2134,8 +2183,12 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
        in
        let args = normalize_call_args signature.params args in
        ignore (type_of_expr signatures env app);
+       (* A callee that may write to the response takes the request scope FIRST.  The
+          caller always has one to pass: the checker requires it to declare `cookieCap`
+          too, which is what gave the caller its own scope parameter. *)
+       let scope_argument = if signature.sig_needs_scope then [ "teslScope" ] else [] in
        Printf.sprintf "%s(%s)" (qualified signature.sig_owner signature.go_name)
-          (String.concat ", " (List.map2 (fun arg want ->
+          (String.concat ", " (scope_argument @ List.map2 (fun arg want ->
              emit_expr ~expected:want ~indent signatures env arg) args signature.params))
      | _ -> unsupported loc "Go backend supports calls to named functions only")
   | EBinop { op; left; right; _ } ->
@@ -3015,9 +3068,17 @@ let emit_tail ?self buffer signatures env expected indent expr =
       let ty = if inferred = TFailure then expected else inferred in
       Printf.bprintf buffer "%s{\n" indent;
       Buffer.add_string buffer (line_directive loc);
-      Printf.bprintf buffer "%s\t%s := %s\n" indent (local_ident name)
-        (emit_expr ~expected:ty ~indent:(indent ^ "\t") signatures env value);
-      Printf.bprintf buffer "%s\t_ = %s\n" indent (local_ident name);
+      let emitted_value =
+        emit_expr ~expected:ty ~indent:(indent ^ "\t") signatures env value in
+      (* `let _ = expr` discards its value — it is written for the EFFECT.  `_ := expr`
+         is not legal Go ("no new variables on left side of :="), so it becomes a plain
+         discard. *)
+      if name = "_" then
+        Printf.bprintf buffer "%s\t_ = %s\n" indent emitted_value
+      else begin
+        Printf.bprintf buffer "%s\t%s := %s\n" indent (local_ident name) emitted_value;
+        Printf.bprintf buffer "%s\t_ = %s\n" indent (local_ident name)
+      end;
       go ((name, ty) :: env) (indent ^ "\t") body;
       Printf.bprintf buffer "%s}\n" indent
     | EIf { cond; then_; else_; loc } ->
@@ -3180,7 +3241,8 @@ let http_method_name = function
   | DELETE -> "DELETE" | PATCH -> "PATCH" | SSE -> "SSE"
 
 let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=[])
-    ?(servers=[]) module_path package signatures types (funcs : func_decl list) =
+    ?(servers=[]) ?(capturers=[]) module_path package signatures types
+    (funcs : func_decl list) =
   Hashtbl.reset pending_helpers;
   Hashtbl.reset helper_names;
   Hashtbl.reset module_helpers;
@@ -3232,8 +3294,15 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
        && fd.kind <> HandlerKind && fd.kind <> AuthKind then
       unsupported fd.loc
         "Go backend supports `fn`, `check`, `auth`, `establish` and `handler` declarations only";
-    if fd.capabilities <> [] then unsupported fd.loc
-      "Go backend does not support capabilities yet";
+    (* A capability is a COMPILE-TIME grant: the checker verifies every call against the
+       declared set and forces it to propagate to callers, so nothing about it survives to
+       run time.  `cookieCap` is the exception in shape only — it says this function may
+       write to the response, so it receives the request scope.  That marker is the
+       `requires` clause itself; no call-graph analysis is needed. *)
+    let needs_scope = List.mem "cookieCap" fd.capabilities in
+    List.iter (fun capability ->
+      if capability <> "cookieCap" then unsupported fd.loc
+        "Go backend does not support the capability `%s` yet" capability) fd.capabilities;
     let signature = Hashtbl.find signatures fd.name in
     let params = List.map2 (fun (binding : binding) ty -> binding.name, ty)
       fd.params signature.params in
@@ -3248,9 +3317,15 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
     end;
     Buffer.add_char body '\n';
     Buffer.add_string body (line_directive fd.loc);
+    (* A function that may write to the response takes the request scope as its FIRST
+       parameter.  Nothing else gains one, so ordinary functions keep plain signatures. *)
+    let scope_parameter =
+      if needs_scope then [ "teslScope *teslrt.RequestScope" ] else [] in
     Printf.bprintf body "func %s(%s) %s {\n"
       signature.go_name
-      (String.concat ", " (List.map (fun (name, ty) -> local_ident name ^ " " ^ go_type ty) params))
+      (String.concat ", "
+         (scope_parameter
+          @ List.map (fun (name, ty) -> local_ident name ^ " " ^ go_type ty) params))
       (go_type result);
     (* Emit the body once assuming it may loop.  If no self tail call actually turned
        into a `continue`, re-emit it flat: an unused label is a Go compile error, and
@@ -3466,11 +3541,7 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
         server.api_name (List.length endpoints) (List.length server.handlers);
     let bound = List.combine endpoints server.handlers in
     List.iter (fun ((ep : api_endpoint), _) ->
-      (* A capture that runs a CHECK mints a proof at the boundary; that arrives with the
-         auth slice, since both are the same "prove before the body runs" machinery. *)
-      List.iter (fun (capture : api_capture) ->
-        if capture.inline_check <> None || capture.via_fn <> "" then unsupported ep.loc
-          "Go backend does not support a capture with a check yet") ep.captures) bound;
+      ignore ep) bound;
     let server_name = go_ident ~exported:true server.name in
     Printf.bprintf body "\nvar %s = teslrt.Server{\n\tRoutes: []teslrt.Route{\n" server_name;
     List.iter (fun ((ep : api_endpoint), handler) ->
@@ -3520,14 +3591,40 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
          arguments := !arguments @ [binder]);
       List.iter (fun (capture : api_capture) ->
         let name = capture.binding.name in
+        let suffix = go_ident ~exported:true name in
+        (* The capturer names how the segment is parsed and, optionally, a CHECK that
+           mints a proof on it — the same "prove before the body runs" rule auth follows,
+           applied to a path segment. *)
+        let parser, checker = match capture.via_fn with
+          | "" -> (match capture.inline_codec with Some c -> c | None -> "stringCodec"),
+                  capture.inline_check
+          | via ->
+            (match List.find_opt (fun (c : capture_form) -> c.name = via) capturers with
+             | Some form -> form.parser, form.checker
+             | None -> unsupported endpoint_loc
+               "Go backend cannot resolve capturer `%s`" via)
+        in
+        if parser <> "stringCodec" then unsupported endpoint_loc
+          "Go backend supports `stringCodec` path captures only for now (`%s`)" parser;
         (match type_of_type_expr types capture.binding.type_expr with
          | TString -> ()
          | _ -> unsupported endpoint_loc
            "Go backend supports String path captures only for now");
         Printf.bprintf body
           "\t\t\t%s, teslFound%s := teslrt.PathParam(%S, teslRequest.URL.Path, %S)\n\t\t\tif !teslFound%s {\n\t\t\t\treturn teslrt.Fail(404, \"not found\")\n\t\t\t}\n"
-          (local_ident name) (go_ident ~exported:true name) endpoint_path name
-          (go_ident ~exported:true name);
+          (local_ident name) suffix endpoint_path name suffix;
+        (match checker with
+         | None -> ()
+         | Some check_fn ->
+           let signature = match Hashtbl.find_opt signatures check_fn with
+             | Some signature -> signature
+             | None -> unsupported endpoint_loc
+               "Go backend cannot resolve capture check `%s`" check_fn
+           in
+           Printf.bprintf body
+             "\t\t\tteslCaptured%s := %s(%s)\n\t\t\tif !teslCaptured%s.OK() {\n\t\t\t\treturn teslrt.Fail(teslCaptured%s.Status(), teslCaptured%s.Message())\n\t\t\t}\n\t\t\t%s, _ = teslCaptured%s.Value()\n"
+             suffix (qualified signature.sig_owner signature.go_name) (local_ident name)
+             suffix suffix suffix (local_ident name) suffix);
         arguments := !arguments @ [local_ident name]) endpoint_captures;
       (match endpoint_body with
        | None -> Buffer.add_string body "\t\t\t_ = teslRequest\n"
@@ -3544,10 +3641,13 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
            "\t\t\tteslBodyBytes, teslBodyErr := io.ReadAll(teslRequest.Body)\n\t\t\tif teslBodyErr != nil {\n\t\t\t\treturn teslrt.Fail(400, \"Missing JSON payload\")\n\t\t\t}\n\t\t\tteslParsed, teslParseErr := teslrt.ParseJSON(teslBodyBytes)\n\t\t\tif teslParseErr != nil {\n\t\t\t\treturn teslrt.Fail(400, \"Malformed JSON payload\")\n\t\t\t}\n\t\t\tteslDecoded := %s(teslParsed)\n\t\t\tif !teslDecoded.OK() {\n\t\t\t\treturn teslrt.Fail(teslDecoded.Status(), teslDecoded.Message())\n\t\t\t}\n\t\t\tteslBody, _ := teslDecoded.Value()\n"
            decoder;
          arguments := !arguments @ ["teslBody"]);
+      (* A handler that may write cookies receives the scope the dispatcher created. *)
+      let call_arguments =
+        if signature.sig_needs_scope then "teslScope" :: !arguments else !arguments in
       Printf.bprintf body
         "\t\t\treturn teslrt.Response{Status: 200, Body: %s(%s(%s))}\n\t\t},\n"
         encoder (qualified signature.sig_owner signature.go_name)
-        (String.concat ", " !arguments)) bound;
+        (String.concat ", " call_arguments)) bound;
     Buffer.add_string body "\t},\n}\n") servers;
   (* Comparator helpers the body referenced, in name order so the output is
      deterministic. *)
@@ -3596,7 +3696,7 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
   let header = Printf.sprintf "package %s\n%s" package (import_block imports) in
   header ^ body
 
-let test_source ?(imported_packages=[]) module_path package signatures
+let test_source ?(imported_packages=[]) ?(api_tests=[]) module_path package signatures
     (tests : test_form list) =
   Hashtbl.reset pending_helpers;
   Hashtbl.reset helper_names;
@@ -3716,6 +3816,25 @@ let test_source ?(imported_packages=[]) module_path package signatures
     Printf.bprintf body "func TestTesl%d(teslT *testing.T) {\n" index;
     emit_stmts [] "\t" test.stmts;
     Buffer.add_string body "}\n") tests;
+  (* An `api-test` drives the emitted server IN PROCESS — no socket, so it is an ordinary
+     `go test` case.  Racket dispatches the same way, so both backends exercise the same
+     layer.  The statements are the same `test_stmt` forms an ordinary `test` block uses,
+     so they go through the same emitter; only the request verbs are special. *)
+  List.iteri (fun index (api_test : api_test_form) ->
+    if api_test.seed_stmts <> [] then unsupported api_test.loc
+      "Go backend does not support api-test seed statements yet";
+    Buffer.add_char body '\n';
+    (* The description comment goes BEFORE the line directive: gofmt treats a comment
+       directly above a declaration as its doc comment and moves the directive below it. *)
+    (* gofmt separates a doc comment from a following `//line` directive with a bare `//`
+       line, so it is emitted that way rather than left for gofmt to add. *)
+    Printf.bprintf body "// api-test %s\n//\n" (String.escaped api_test.description);
+    Buffer.add_string body (line_directive api_test.loc);
+    Printf.bprintf body "func TestTeslApi%d(teslT *testing.T) {\n" index;
+    current_api_server := Some (go_ident ~exported:true api_test.server_name);
+    emit_stmts [] "\t" api_test.stmts;
+    current_api_server := None;
+    Buffer.add_string body "}\n") api_tests;
   let body = Buffer.contents body in
   let expect_failure_helper =
     if contains_go_code body "teslExpectFailure(" then
@@ -3834,10 +3953,19 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       (* `Tesl.Http`: the request type is runtime-provided (registered above) and
          `cookieCap` is a capability name the checker enforces — neither needs anything at
          run time.  The cookie WRITERS arrive with the session slice. *)
+      (* `Tesl.ApiTest`: the response type is runtime-provided; the status predicates are
+         runtime leaves.  A request verb is only meaningful inside an `api-test` block. *)
+      | "Tesl.ApiTest" ->
+        List.iter (fun name ->
+          match name with
+          | "HttpResponse" | "statusOk" | "statusClientError" | "statusServerError"
+          | "get" | "post" | "put" | "delete" | "patch" -> ()
+          | other -> unsupported import.loc
+            "Go backend does not support `Tesl.ApiTest` export `%s` yet" other) exposed
       | "Tesl.Http" ->
         List.iter (fun name ->
           match name with
-          | "HttpRequest" | "cookieCap" -> ()
+          | "HttpRequest" | "cookieCap" | "Http.clearSessionCookie" -> ()
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.Http` export `%s` yet" other) exposed
       | "Tesl.String" | "Tesl.List" | "Tesl.Int" | "Tesl.Tuple" | "Tesl.Dict"
@@ -3853,6 +3981,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
     let codecs = List.filter_map (function DCodec c -> Some c | _ -> None) m.decls in
     let apis = List.filter_map (function DApi a -> Some a | _ -> None) m.decls in
     let servers = List.filter_map (function DServer s -> Some s | _ -> None) m.decls in
+    let capturers = List.filter_map (function DCapture c -> Some c | _ -> None) m.decls in
+    let api_tests = List.filter_map (function DApiTest t -> Some t | _ -> None) m.decls in
     let tests = List.filter_map (function DTest test -> Some test | _ -> None) m.decls in
     let package = package_name m.module_name in
     let types = {
@@ -4140,9 +4270,19 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
        request.  Only the fields Tesl exposes are present, so an ejecting author is not
        handed the whole net/http surface. *)
     List.iter (fun (import : import_decl) ->
-      if import.module_name = "Tesl.Http" then begin
+      if import.module_name = "Tesl.Http" || import.module_name = "Tesl.ApiTest" then begin
         let exposed = match import.names with
           | ImportAll -> [] | ImportExposing names -> names in
+        if List.mem "HttpResponse" exposed then
+          Hashtbl.replace types.records "HttpResponse" {
+            rec_tesl_name = "HttpResponse";
+            rec_owner = "";
+            rec_go_name = "teslrt.ApiResponse";
+            rec_fields = [
+              "status", TInt; "body", TString; "headers", TDict (TString, TString);
+            ];
+            rec_loc = import.loc;
+          };
         if List.mem "HttpRequest" exposed then begin
           let string_dict = TDict (TString, TString) in
           (* No explicit Go field names are needed: `record_field_go_name` capitalises, and
@@ -4321,10 +4461,12 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       | DCache c -> unsupported c.loc "Go backend does not support caches yet"
       | DAgent a -> unsupported a.loc "Go backend does not support agents yet"
       | DEmail e -> unsupported e.loc "Go backend does not support email yet"
-      | DCapture c -> unsupported c.loc "Go backend does not support captures yet"
+      (* A `capturer` is metadata about how a path segment is parsed and checked; the
+         check function it names is an ordinary `check` the emitter already handles. *)
+      | DCapture _ -> ()
       | DApi _ -> ()
       | DServer _ -> ()
-      | DApiTest t -> unsupported t.loc "Go backend does not support api-test yet"
+      | DApiTest _ -> ()
       | DLoadTest t -> unsupported t.loc "Go backend does not support load-test yet") m.decls;
     let is_exported name = List.exists (function
       | ExportName exported -> exported = name
@@ -4362,13 +4504,13 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       Hashtbl.add signatures name {
         params = [info.base];
         result = TNewtype info;
-        go_name = info.go_name; sig_owner = info.owner;
+        go_name = info.go_name; sig_owner = info.owner; sig_needs_scope = false;
       }) types.newtypes;
     Hashtbl.iter (fun name info ->
       Hashtbl.add signatures name {
         params = List.map snd info.rec_fields;
         result = TRecord info;
-        go_name = info.rec_go_name; sig_owner = info.rec_owner;
+        go_name = info.rec_go_name; sig_owner = info.rec_owner; sig_needs_scope = false;
       }) types.records;
     (* Each constructor is its own signature entry: the surface syntax names the
        constructor, and the variant it belongs to is recovered from the result type. *)
@@ -4381,7 +4523,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         Hashtbl.add signatures variant.var_ctor {
           params = List.map snd variant.var_fields;
           result = TAdt (info, []);
-          go_name = variant.var_tag; sig_owner = info.adt_owner;
+          go_name = variant.var_tag; sig_owner = info.adt_owner; sig_needs_scope = false;
         }) info.adt_variants) types.adts;
     (* Imported stdlib leaves are ordinary signatures whose Go name is a runtime
        function, so the existing call machinery emits them with no special case. *)
@@ -4391,12 +4533,12 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       let leaf = match set_leaf name with Some leaf -> leaf | None -> assert false in
       if not (Hashtbl.mem signatures name) then
         Hashtbl.add signatures name
-          { params = []; result = TFailure; go_name = leaf.set_go; sig_owner = "" }) !set_imports;
+          { params = []; result = TFailure; go_name = leaf.set_go; sig_owner = ""; sig_needs_scope = false }) !set_imports;
     List.iter (fun name ->
       let leaf = match dict_leaf name with Some leaf -> leaf | None -> assert false in
       if not (Hashtbl.mem signatures name) then
         Hashtbl.add signatures name
-          { params = []; result = TFailure; go_name = leaf.dict_go; sig_owner = "" }) !dict_imports;
+          { params = []; result = TFailure; go_name = leaf.dict_go; sig_owner = ""; sig_needs_scope = false }) !dict_imports;
     List.iter (fun name ->
       (* A higher-order leaf has no runtime function at all — it lowers to a loop — so
          its entry exists only to mark the name as imported. *)
@@ -4406,7 +4548,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       in
       if not (Hashtbl.mem signatures name) then
         Hashtbl.add signatures name
-          { params = []; result = TFailure; go_name; sig_owner = "" }) !list_imports;
+          { params = []; result = TFailure; go_name; sig_owner = ""; sig_needs_scope = false }) !list_imports;
     List.iter (fun name ->
       let params, result, go_name =
         match List.find_opt (fun (leaf, _, _, _) -> leaf = name) string_leaves with
@@ -4436,7 +4578,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         | `CheckInt -> TCheck TInt
       in
       if not (Hashtbl.mem signatures name) then
-        Hashtbl.add signatures name { params = List.map shape params; result = shape result; go_name; sig_owner = "" }) !string_imports;
+        Hashtbl.add signatures name { params = List.map shape params; result = shape result; go_name; sig_owner = ""; sig_needs_scope = false }) !string_imports;
     (* An imported local module contributes its exported functions with the OWNING
        package attached, so every reference to them is qualified. *)
     let imported_packages = ref [] in
@@ -4468,6 +4610,10 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         result = type_of_return_spec types fd.return_spec;
         go_name;
         sig_owner = package;
+        (* The `requires` clause is the marker: a function that may write to the response
+           takes the request scope, and the checker guarantees its callers declare the same
+           capability — so the scope reaches it without any call-graph analysis. *)
+        sig_needs_scope = List.mem "cookieCap" fd.capabilities;
       }) funcs;
     (* Every package in a multi-module program lives under ONE Go module path, so an
        importer and its dependency agree on the import path. *)
@@ -4478,16 +4624,16 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
     current_package := package;
     current_types := Some types;
     let source =
-      module_source ~imported_packages:!imported_packages ~codecs ~apis ~servers
+      module_source ~imported_packages:!imported_packages ~codecs ~apis ~servers ~capturers
         ~unreachable:(List.filter_map (fun name ->
           match Hashtbl.find_opt signatures name with
           | Some signature -> Some signature.go_name
           | None -> None) unreachable_private)
         module_path package signatures types funcs in
     let tests_source =
-      if tests = [] then None
-      else Some (test_source ~imported_packages:!imported_packages module_path package
-                   signatures tests) in
+      if tests = [] && api_tests = [] then None
+      else Some (test_source ~imported_packages:!imported_packages ~api_tests module_path
+                   package signatures tests) in
     let needs_runtime = contains_go_code source "teslrt." ||
       match tests_source with Some text -> contains_go_code text "teslrt." | None -> false in
     (* The lint configuration is part of the emitter contract, versioned with this
@@ -4527,7 +4673,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
            a socket.  A dependency a program does not use should not be in it, for
            vulnerability surface as much as for the eject story. *)
         let serves_http = servers <> [] in
-        let http_only = [ "server.go"; "request.go" ] in
+        let http_only = [ "server.go"; "request.go"; "apitest.go" ] in
         artifacts @ List.filter_map (fun (name, contents) ->
           if (not serves_http) && List.mem name http_only then None
           else Some { path = "internal/teslrt/" ^ name; contents })

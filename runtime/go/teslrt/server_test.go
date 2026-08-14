@@ -18,7 +18,7 @@ func testServer() Server {
 		},
 		Handlers: map[string]HandlerFunc{
 			"hello": func(scope *RequestScope, _ *http.Request) Response {
-				ClearSessionCookie(scope)
+				_ = ClearSessionCookie(scope)
 				return Response{Status: 200, Body: map[string]any{"message": "hi"}}
 			},
 			"shout": func(_ *RequestScope, _ *http.Request) Response {
@@ -30,7 +30,7 @@ func testServer() Server {
 			},
 			"boom": func(scope *RequestScope, _ *http.Request) Response {
 				// A handler that sets a cookie and then fails mints no session.
-				ClearSessionCookie(scope)
+				_ = ClearSessionCookie(scope)
 				return Fail(400, "nope")
 			},
 		},

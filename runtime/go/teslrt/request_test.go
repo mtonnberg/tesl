@@ -22,7 +22,7 @@ func TestRequestScopeCookies(t *testing.T) {
 
 func TestClearSessionCookieMatchesRacket(t *testing.T) {
 	scope := NewRequestScope()
-	ClearSessionCookie(scope)
+	_ = ClearSessionCookie(scope)
 	got := scope.CookieHeaders()
 	want := "__Host-session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0"
 	if len(got) != 1 || got[0] != want {
@@ -38,5 +38,5 @@ func TestNilScopePanics(t *testing.T) {
 			t.Error("a nil scope must panic rather than silently drop the cookie")
 		}
 	}()
-	ClearSessionCookie(nil)
+	_ = ClearSessionCookie(nil)
 }
