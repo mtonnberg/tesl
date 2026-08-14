@@ -1306,7 +1306,13 @@ let check_application signatures expr =
     in
     (match flatten [] expr with
      | EVar { name = "check"; _ }, (callee :: args) ->
-       (match callee with
+       (* The callee is NORMALISED first: a stdlib name is written `Crypto.checkSignature`,
+          which parses as a field read on a constructor rather than as one identifier.  Without
+          this, `let v = check Crypto.checkSignature …` inside a check or an `auth` fell through
+          to the non-propagating path and emitted `MustCheck` — a PANIC where the request should
+          have answered 401, i.e. a verification failure crashed the request instead of
+          rejecting it. *)
+       (match normalize_call_head callee with
         | EVar { name; _ } ->
           (match Hashtbl.find_opt signatures name with
            | Some ({ result = TCheck _; _ } as signature)
@@ -2735,25 +2741,51 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
         (* `post "/p" body { … } cookie c headers { … }` — the modifiers arrive as
            keyword/value pairs in the flat argument list, the same shape the Racket api-test
            emitter scans for. *)
-        let path, request_body = match args with
+        let path, request_body, cookie, request_headers = match args with
           | path :: rest ->
-            let rec scan body = function
-              | EVar { name = "body"; _ } :: value :: more -> scan (Some value) more
-              | EVar { name = ("cookie" | "headers") as modifier; _ } :: _ :: _ ->
-                unsupported loc
-                  "Go backend does not support the api-test `%s` modifier yet" modifier
-              | _ :: more -> scan body more
-              | [] -> body
+            let rec scan body cookie headers = function
+              | EVar { name = "body"; _ } :: value :: more -> scan (Some value) cookie headers more
+              | EVar { name = "cookie"; _ } :: value :: more -> scan body (Some value) headers more
+              | EVar { name = "headers"; _ } :: value :: more -> scan body cookie (Some value) more
+              | _ :: more -> scan body cookie headers more
+              | [] -> body, cookie, headers
             in
-            path, scan None rest
+            let body, cookie, headers = scan None None None rest in
+            path, body, cookie, headers
           | [] -> unsupported loc "Go backend api-test request needs a path"
         in
-        Printf.sprintf "teslrt.ApiRequest(%s, %S, %s, %s)" server
+        (* `cookie` is one `name=value` string — the wire form, since a REQUEST cookie carries
+           none of the attributes a response cookie does — and `headers { … }` is a template
+           whose values are Strings rather than JSON: they go on the wire as written. *)
+        let cookies = match cookie with
+          | None -> "nil"
+          | Some value ->
+            Printf.sprintf "[]string{%s}"
+              (emit_expr ~expected:TString ~indent signatures env value)
+        in
+        let headers = match request_headers with
+          | None -> "nil"
+          | Some (ERecord { fields; _ }) ->
+            Printf.sprintf "[]teslrt.Tuple2[string, string]{%s}"
+              (String.concat ", " (List.map (fun (name, value) ->
+                 let emitted =
+                   if type_of_expr signatures env value = TString then
+                     emit_expr ~expected:TString ~indent signatures env value
+                   else unsupported (Checker.expr_loc value)
+                     "Go backend api-test header `%s` must be a String" name
+                 in
+                 Printf.sprintf "{Tuple2First: %s, Tuple2Second: %s}" (go_quote name) emitted)
+                 fields))
+          | Some other -> unsupported (Checker.expr_loc other)
+            "Go backend api-test `headers` must be a `{ \"name\": value }` template"
+        in
+        Printf.sprintf "teslrt.ApiRequest(%s, %S, %s, %s, %s, %s)" server
           (String.uppercase_ascii verb)
           (emit_expr ~expected:TString ~indent signatures env path)
           (match request_body with
            | None -> "\"\""
            | Some value -> emit_api_test_body ~indent signatures env value)
+          cookies headers
       (* The api-test queue verbs.  The worker runs through a DISPATCHER closure: the store
          holds payloads as `any` because a queue may carry several job types, and the emitter
          is what knows which one this queue carries. *)
@@ -5164,6 +5196,18 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
          is rejected before anything else about it is examined.  Its result carries the
          proven value the handler's proof-annotated parameter requires; the proof itself
          erases, so what the handler receives is the value. *)
+      (* The request body is read ONCE, before anything examines the request: an `auth` may
+         verify a MAC over the RAW bytes (every webhook scheme does), and the decoder needs the
+         same bytes — `teslRequest.Body` is a stream that can only be read once, so reading it
+         twice gave the auth an empty body and made it verify a tag over "". Racket reads
+         `request-post-data/raw` once for exactly this reason. *)
+      let reads_body = endpoint_auth <> None || endpoint_body <> None in
+      if reads_body then
+        Buffer.add_string body
+          (if endpoint_auth <> None then
+             "\t\t\tteslBodyBytes, teslBodyErr := io.ReadAll(teslRequest.Body)\n\t\t\tif teslBodyErr != nil {\n\t\t\t\treturn teslrt.Fail(400, \"Missing JSON payload\")\n\t\t\t}\n\t\t\tteslBodyText := string(teslBodyBytes)\n"
+           else
+             "\t\t\tteslBodyBytes, teslBodyErr := io.ReadAll(teslRequest.Body)\n\t\t\tif teslBodyErr != nil {\n\t\t\t\treturn teslrt.Fail(400, \"Missing JSON payload\")\n\t\t\t}\n");
       (match endpoint_auth with
        | None -> ()
        | Some (auth : api_auth) ->
@@ -5174,7 +5218,7 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
          in
          let binder = local_ident auth.binding.name in
          Printf.bprintf body
-           "\t\t\tteslAuth := %s(teslrt.NewHttpRequest(teslRequest, \"\"))\n\t\t\tif !teslAuth.OK() {\n\t\t\t\treturn teslrt.Fail(teslAuth.Status(), teslAuth.Message())\n\t\t\t}\n\t\t\t%s, _ := teslAuth.Value()\n"
+           "\t\t\tteslAuth := %s(teslrt.NewHttpRequest(teslRequest, teslBodyText))\n\t\t\tif !teslAuth.OK() {\n\t\t\t\treturn teslrt.Fail(teslAuth.Status(), teslAuth.Message())\n\t\t\t}\n\t\t\t%s, _ := teslAuth.Value()\n"
            (qualified signature.sig_owner signature.go_name) binder;
          arguments := !arguments @ [binder]);
       List.iter (fun (capture : api_capture) ->
@@ -5215,7 +5259,7 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
              suffix suffix suffix (local_ident name) suffix);
         arguments := !arguments @ [local_ident name]) endpoint_captures;
       (match endpoint_body with
-       | None -> Buffer.add_string body "\t\t\t_ = teslRequest\n"
+       | None -> if not reads_body then Buffer.add_string body "\t\t\t_ = teslRequest\n"
        | Some (binding : binding) ->
          let decoder = match type_of_type_expr types binding.type_expr with
            | TRecord info -> codec_decode_name info.rec_tesl_name
@@ -5226,7 +5270,7 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
          (* The two failure strings are the ones the Racket server sends, so a client sees
             the same 400 either way. *)
          Printf.bprintf body
-           "\t\t\tteslBodyBytes, teslBodyErr := io.ReadAll(teslRequest.Body)\n\t\t\tif teslBodyErr != nil {\n\t\t\t\treturn teslrt.Fail(400, \"Missing JSON payload\")\n\t\t\t}\n\t\t\tteslParsed, teslParseErr := teslrt.ParseJSON(teslBodyBytes)\n\t\t\tif teslParseErr != nil {\n\t\t\t\treturn teslrt.Fail(400, \"Malformed JSON payload\")\n\t\t\t}\n\t\t\tteslDecoded := %s(teslParsed)\n\t\t\tif !teslDecoded.OK() {\n\t\t\t\treturn teslrt.Fail(teslDecoded.Status(), teslDecoded.Message())\n\t\t\t}\n\t\t\tteslBody, _ := teslDecoded.Value()\n"
+           "\t\t\tteslParsed, teslParseErr := teslrt.ParseJSON(teslBodyBytes)\n\t\t\tif teslParseErr != nil {\n\t\t\t\treturn teslrt.Fail(400, \"Malformed JSON payload\")\n\t\t\t}\n\t\t\tteslDecoded := %s(teslParsed)\n\t\t\tif !teslDecoded.OK() {\n\t\t\t\treturn teslrt.Fail(teslDecoded.Status(), teslDecoded.Message())\n\t\t\t}\n\t\t\tteslBody, _ := teslDecoded.Value()\n"
            decoder;
          arguments := !arguments @ ["teslBody"]);
       (* A handler that may write cookies receives the scope the dispatcher created. *)
@@ -5702,6 +5746,33 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | "HttpRequest" | "cookieCap" | "Http.clearSessionCookie" -> ()
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.Http` export `%s` yet" other) exposed
+      (* `Tesl.Crypto`: message authentication, digests and tokens are runtime leaves over Go's
+         standard library — the same primitives the Racket runtime reaches for in libsodium, so
+         a tag or a fingerprint produced by one backend verifies on the other.  PASSWORD
+         STORAGE is refused by name: Racket uses libsodium's Argon2id and Go's standard library
+         has no Argon2, so matching it takes a dependency (`golang.org/x/crypto/argon2`) rather
+         than an implementation — and a PBKDF2 substitute would mint hashes the Racket side
+         cannot verify, which is worse than not having it. *)
+      | "Tesl.Crypto" ->
+        List.iter (fun name ->
+          match name with
+          | "Secret" | "Signature"
+          | "Crypto.signWith" | "Crypto.hmacSha256" | "Crypto.checkSignature"
+          | "Crypto.signatureHex" | "Crypto.signatureFromHex"
+          | "Crypto.signatureBase64" | "Crypto.signatureFromBase64"
+          | "Crypto.fingerprint" | "Crypto.keyFingerprint" | "Crypto.randomToken"
+          | "Crypto.sha256" | "Crypto.sha512" -> ()
+          (* The proof predicates erase, like every other fact. *)
+          | "HashFor" | "PasswordVerified" | "Authentic" -> ()
+          | ("PasswordHash" | "Crypto.hashPassword" | "Crypto.checkPassword"
+            | "Crypto.needsRehash") as password ->
+            unsupported import.loc
+              "Go backend does not support `%s` yet: password storage is Argon2id on the \
+               Racket runtime, and matching it needs an approved dependency \
+               (`golang.org/x/crypto/argon2`) — a weaker substitute would mint hashes the \
+               other backend cannot verify" password
+          | other -> unsupported import.loc
+            "Go backend does not support `Tesl.Crypto` export `%s` yet" other) exposed
       (* `Tesl.HttpClient`: the four verbs and the two secret-accepting header builders are
          runtime leaves (registered below); `HttpResponse` is the runtime-provided record
          they answer with, and `httpClient` is the capability the checker enforces. *)
@@ -6105,9 +6176,10 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       end) m.imports;
     (* ── `Tesl.Env` / `Tesl.Random`: effects with no state of their own ──────
        Both are gated by a capability the checker enforces (`envRead`, `random`), so what
-       is left at run time is one runtime call.  `requireSecret` is refused with secret
-       newtypes; `envRead`/`random` themselves are capability NAMES. *)
-    let env_leaf_names = ["env"; "envInt"; "envString"; "requireEnv"] in
+       is left at run time is one runtime call.  `requireSecret` answers the stdlib's own secret
+       newtype (registered with `Tesl.Crypto`'s types); `envRead`/`random` themselves are
+       capability NAMES. *)
+    let env_leaf_names = ["env"; "envInt"; "envString"; "requireEnv"; "requireSecret"] in
     let random_leaf_names = ["randomInt"; "randomFloat"] in
     let effect_imports = ref [] in
     List.iter (fun (import : import_decl) ->
@@ -6177,6 +6249,45 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           loc = import.loc;
         }
       end) m.imports;
+    (* ── `Tesl.Crypto`, and the `Secret` its functions take ──────────────────
+       `Secret` is registered whenever it can appear — `requireSecret` answers one, and every
+       Crypto function that takes a key takes one — because it is a runtime-provided SECRET
+       newtype: it redacts when printed, compares in constant time, and reaches an outbound
+       header only through `HttpClient.bearer`.  `Signature` is a newtype over the hex tag,
+       which is the representation the Racket runtime keeps, so a tag crossing between the two
+       is the same string. *)
+    let crypto_leaf_names = [
+      "Crypto.signWith"; "Crypto.hmacSha256"; "Crypto.checkSignature";
+      "Crypto.signatureHex"; "Crypto.signatureFromHex";
+      "Crypto.signatureBase64"; "Crypto.signatureFromBase64";
+      "Crypto.fingerprint"; "Crypto.keyFingerprint"; "Crypto.randomToken";
+      "Crypto.sha256"; "Crypto.sha512";
+    ] in
+    let crypto_imports = ref [] in
+    let secret_type_needed = ref false in
+    List.iter (fun (import : import_decl) ->
+      let exposed = match import.names with
+        | ImportAll -> [] | ImportExposing names -> names in
+      match import.module_name with
+      | "Tesl.Crypto" ->
+        secret_type_needed := true;
+        List.iter (fun name ->
+          if List.mem name crypto_leaf_names then crypto_imports := name :: !crypto_imports)
+          exposed
+      | "Tesl.Env" ->
+        if List.mem "requireSecret" exposed then secret_type_needed := true
+      | _ -> ()) m.imports;
+    if !secret_type_needed then begin
+      let loc = Location.dummy_loc m.source_file in
+      Hashtbl.replace types.newtypes "Secret" {
+        tesl_name = "Secret"; owner = ""; go_name = "teslrt.Secret";
+        base = TString; secret = true; loc;
+      };
+      Hashtbl.replace types.newtypes "Signature" {
+        tesl_name = "Signature"; owner = ""; go_name = "teslrt.Signature";
+        base = TString; secret = false; loc;
+      }
+    end;
     (* ── `Tesl.HttpClient`: the outbound verbs ───────────────────────────────
        The `httpClient` capability erases with every other one; what the emitter needs is the
        four verbs, the two secret-accepting header builders, and the response record.
@@ -6753,6 +6864,14 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         | "envInt" -> [TString; TInt], TInt, "teslrt.EnvInt"
         | "envString" -> [TString; TString], TString, "teslrt.EnvString"
         | "requireEnv" -> [TString], TString, "teslrt.RequireEnv"
+        (* `requireSecret` answers the stdlib's own SECRET newtype rather than a String: that is
+           the whole point of it over `Secret (requireEnv …)` — the value redacts, compares in
+           constant time, and can only reach a header through `HttpClient.bearer`. *)
+        | "requireSecret" ->
+          (match Hashtbl.find_opt types.newtypes "Secret" with
+           | Some info -> [TString], TNewtype info, "teslrt.RequireSecret"
+           | None -> unsupported (Location.dummy_loc m.source_file)
+             "Go backend `requireSecret` needs the `Secret` type")
         | "randomInt" -> [TInt; TInt], TInt, "teslrt.RandomInt"
         (* Like `nowMillis`, a VALUE in Tesl's type table, written `randomFloat()`. *)
         | "randomFloat" -> [], TFloat, "teslrt.RandomFloat"
@@ -6785,6 +6904,43 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       Hashtbl.replace signatures name
         { params; result; go_name; sig_owner = ""; sig_needs_scope = false })
       !time_imports;
+    if !crypto_imports <> [] then begin
+      let loc = Location.dummy_loc m.source_file in
+      let secret = match Hashtbl.find_opt types.newtypes "Secret" with
+        | Some info -> TNewtype info
+        | None -> unsupported loc "Go backend `Tesl.Crypto` needs its `Secret` type"
+      in
+      let signature = match Hashtbl.find_opt types.newtypes "Signature" with
+        | Some info -> TNewtype info
+        | None -> unsupported loc "Go backend `Tesl.Crypto` needs its `Signature` type"
+      in
+      List.iter (fun name ->
+        let params, result, go_name = match name with
+          (* `hmacSha256` is the expert alias for the same function. *)
+          | "Crypto.signWith" | "Crypto.hmacSha256" ->
+            [secret; TString], signature, "teslrt.SignWith"
+          (* A verification is a CHECK: it answers the verified payload or fails 401, and the
+             constant-time compare lives inside it — which is why there is no
+             `constantTimeEquals` on the surface to get wrong. *)
+          | "Crypto.checkSignature" ->
+            [secret; signature; TString], TCheck TString, "teslrt.CheckSignature"
+          | "Crypto.signatureHex" -> [signature], TString, "teslrt.SignatureHex"
+          | "Crypto.signatureFromHex" -> [TString], signature, "teslrt.SignatureFromHex"
+          | "Crypto.signatureBase64" -> [signature], TString, "teslrt.SignatureBase64"
+          | "Crypto.signatureFromBase64" -> [TString], signature, "teslrt.SignatureFromBase64"
+          | "Crypto.fingerprint" -> [TString], TString, "teslrt.Fingerprint"
+          | "Crypto.keyFingerprint" -> [secret], TString, "teslrt.KeyFingerprint"
+          (* A VALUE in Tesl's type table, written `randomToken()`. *)
+          | "Crypto.randomToken" -> [], TString, "teslrt.RandomToken"
+          | "Crypto.sha256" -> [TString], TString, "teslrt.Sha256Hex"
+          | "Crypto.sha512" -> [TString], TString, "teslrt.Sha512Hex"
+          | other -> unsupported loc
+            "Go backend does not support `Tesl.Crypto` export `%s` yet" other
+        in
+        Hashtbl.replace signatures name
+          { params; result; go_name; sig_owner = ""; sig_needs_scope = false })
+        !crypto_imports
+    end;
     (* The outbound verbs.  A header list is `List (Tuple2 String String)`; the response is
        the record registered above.  `bearer`/`secretHeader` take a `Secret String`, which is
        a secret newtype — its Go type comes from the argument, so the parameter is typed as

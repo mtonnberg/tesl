@@ -190,7 +190,7 @@ let test_racket_default_unchanged () =
 
 (* The same Tesl source must pass its own `test` blocks on BOTH backends: the Go
    side runs them as Go tests, this runs them under Racket. *)
-let racket_behavior_oracle label source () =
+let racket_behavior_oracle ?(env=[]) label source () =
   if Sys.command "raco help >/dev/null 2>&1" <> 0 then
     Printf.printf "SKIP: raco not on PATH\n%!"
   else
@@ -202,7 +202,8 @@ let racket_behavior_oracle label source () =
       let path = Filename.temp_file "tesl-go-racket-oracle" ".rkt" in
       Fun.protect ~finally:(fun () -> Sys.remove path) (fun () ->
         Out_channel.with_open_bin path (fun channel -> output_string channel racket);
-        let command = Printf.sprintf "TESL_REPO_ROOT=%s raco test %s 2>&1"
+        let command = Printf.sprintf "env %s TESL_REPO_ROOT=%s raco test %s 2>&1"
+          (String.concat " " (List.map Filename.quote env))
           (Filename.quote (Compile.default_root_path ())) (Filename.quote path) in
         let channel = Unix.open_process_in command in
         let output = In_channel.input_all channel in
@@ -3046,16 +3047,25 @@ let emit_ok label source =
     failf "%s failed to compile: %s" label
       (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
 
-let gate_emitted prefix emitted =
+let gate_emitted ?(env=[]) prefix emitted =
   if Sys.command "go version >/dev/null 2>&1" = 0 then begin
     let root = Filename.temp_dir prefix "" in
+    (* A test body may read configuration the emitted program requires — a signing key, say —
+       so the environment travels with the gate rather than being global to the suite. *)
+    let with_env command =
+      match env with
+      | [] -> command
+      (* Through `env`: a quoted `NAME=value` word is a COMMAND to the shell, not an
+         assignment, so prefixing directly runs the assignment as a program. *)
+      | bindings -> "env " ^ String.concat " " (List.map Filename.quote bindings) ^ " " ^ command
+    in
     Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
       write_artifacts root emitted;
       let unformatted = run_command root "gofmt -l ." |> String.trim in
       if unformatted <> "" then
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
-      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root (with_env "go test -count=1 ./..."));
       ignore (run_command root "go vet ./...");
       run_go_gates root)
   end
@@ -3732,6 +3742,141 @@ let test_queue_with_go () =
   (* `go test` RUNS the api-test: FIFO order and the pending count are asserted there. *)
   gate_emitted "tesl-go-queue" emitted
 
+
+(* ─── `Tesl.Crypto`: message authentication, digests, tokens ──────────────────
+   Every primitive is Go's standard library, and each is the same primitive the Racket runtime
+   reaches for in libsodium — so a tag, a fingerprint or a session value produced by one backend
+   verifies on the other (the runtime suite asserts the actual digests against Racket's).  What
+   is REFUSED is password storage: Racket uses libsodium's Argon2id, Go's standard library has no
+   Argon2, and a PBKDF2 substitute would mint hashes the other backend cannot verify — so it
+   waits on a dependency decision rather than shipping a divergence. *)
+let crypto_source = {|module GoCrypto exposing [signPayload, verifyPayload, contentTag, keyId]
+
+import Tesl.Prelude exposing [Bool, String]
+import Tesl.String exposing [String.length]
+import Tesl.Env exposing [requireSecret, envRead]
+import Tesl.Random exposing [random]
+import Tesl.Crypto exposing [
+  Secret,
+  Signature,
+  Crypto.signWith,
+  Crypto.checkSignature,
+  Crypto.signatureHex,
+  Crypto.signatureFromHex,
+  Crypto.signatureBase64,
+  Crypto.signatureFromBase64,
+  Crypto.fingerprint,
+  Crypto.keyFingerprint,
+  Crypto.sha256,
+  Crypto.sha512,
+  Crypto.randomToken,
+]
+
+capability signing implies envRead, random
+
+fact Trusted (payload: String)
+
+fn signingKey() -> Secret
+  requires [signing] =
+  requireSecret "GOCRYPTO_KEY"
+
+fn signPayload(payload: String) -> String
+  requires [signing] =
+  Crypto.signatureHex (Crypto.signWith (signingKey()) payload)
+
+fn base64Payload(payload: String) -> String
+  requires [signing] =
+  Crypto.signatureBase64 (Crypto.signWith (signingKey()) payload)
+
+# A verification is a CHECK: it answers the verified payload or fails 401, and the
+# constant-time compare lives inside it.
+check verifyPayload(payload: String, tag: String) -> verified: String ::: Trusted verified
+  requires [signing] =
+  let verified = check Crypto.checkSignature (signingKey()) (Crypto.signatureFromHex tag) payload
+  ok verified ::: Trusted verified
+
+fn contentTag(content: String) -> String =
+  Crypto.fingerprint content
+
+fn keyId() -> String
+  requires [signing] =
+  Crypto.keyFingerprint (signingKey())
+
+test "a tag verifies against the payload it was made for" requires [signing] {
+  let payload = "{\"event\":\"ping\"}"
+  let tag = signPayload payload
+  # 32 bytes as hex.
+  expect String.length tag == 64
+  let verified = check verifyPayload payload tag
+  expect verified == payload
+}
+
+test "a tampered payload does not verify" requires [signing] {
+  let tag = signPayload "{\"event\":\"ping\"}"
+  expectFail check verifyPayload "{\"event\":\"pong\"}" tag
+}
+
+test "the base64 transport carries the same tag" requires [signing] {
+  let payload = "p"
+  let hex = signPayload payload
+  let b64 = base64Payload payload
+  expect hex != b64
+  expect Crypto.signatureHex (Crypto.signatureFromBase64 b64) == hex
+  expect String.length b64 < String.length hex
+}
+
+test "digests are stable, and a key fingerprint is short and domain-separated" requires [signing] {
+  expect contentTag "hello" == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+  expect Crypto.sha256 "hello" == contentTag "hello"
+  expect String.length (Crypto.sha512 "hello") == 128
+  expect String.length (keyId()) == 16
+  expect keyId() != contentTag "hello"
+}
+
+test "a random token is 256 bits of URL-safe text" requires [signing] {
+  let token = Crypto.randomToken()
+  expect String.length token == 43
+  expect token != Crypto.randomToken()
+}
+|}
+
+let test_crypto_with_go () =
+  let emitted = emit_ok "<go-crypto>" crypto_source in
+  let module_go = artifact "internal/teslmodgocrypto/module.go" emitted in
+  check bool "a Secret is the runtime's own secret newtype" true
+    (contains module_go "func signingKey() teslrt.Secret");
+  check bool "signing is one runtime call over the key" true
+    (contains module_go "teslrt.SignatureHex(teslrt.SignWith(signingKey(), payload))");
+  (* The important one: a verification rejected inside a `check` must PROPAGATE, not panic.
+     `Crypto.checkSignature` parses as a field read on a constructor rather than as one
+     identifier, which is how it slipped past the delegation path and emitted `MustCheck` — a
+     panic where the request should have answered 401. *)
+  check bool "a rejected verification propagates rather than panicking" true
+    (contains module_go "return teslrt.Reject[string](teslDelegated1.Status(), teslDelegated1.Message())");
+  check bool "and the verification itself is the runtime's constant-time one" true
+    (contains module_go "teslrt.CheckSignature(signingKey(), teslrt.SignatureFromHex(tag), payload)");
+  gate_emitted ~env:[ "GOCRYPTO_KEY=test-signing-key" ] "tesl-go-crypto" emitted
+
+(* Password storage is refused BY NAME, with the reason: it is a dependency decision, and a
+   substitute would mint hashes the Racket side cannot verify. *)
+let test_password_storage_fails_closed () =
+  let source = {|module GoPassword exposing [store]
+
+import Tesl.Prelude exposing [String]
+import Tesl.Crypto exposing [PasswordHash, Crypto.hashPassword]
+import Tesl.Random exposing [random]
+
+fn store(plaintext: String) -> PasswordHash
+  requires [random] =
+  Crypto.hashPassword plaintext
+|} in
+  match Compile.compile_go_source "<go-password>" source with
+  | Compile.GoSuccess _ -> fail "password storage emitted Go"
+  | Compile.GoFailure diagnostics ->
+    let message = String.concat "; "
+      (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics) in
+    check bool "the refusal names the dependency it waits on" true
+      (contains message "golang.org/x/crypto/argon2")
 
 (* ─── Derived decoders, and the near-miss batch they came from ────────────────
    A request-body record needs no `codec` block: Racket decodes it generically from the record
@@ -5606,6 +5751,12 @@ let go_corpus = [
      nobody wrote), and both are cheap to keep pinned end to end. *)
   "tests/query-parameters-tests.tesl";
   "tests/secret-inbound-tests.tesl";
+  (* Four things at once, all of which were broken and are now pinned at RUNTIME: an api-test
+     `headers { … }` modifier, an `auth` that verifies a MAC over the RAW body (the body must be
+     read once and handed to both the auth and the decoder), `Tesl.Crypto`'s HMAC in both
+     transports, and a stdlib check rejected inside an `auth` propagating as a 401 rather than
+     panicking. *)
+  "tests/webhook-signature-tests.tesl";
 ]
 
 let test_go_corpus_with_go () =
@@ -5718,6 +5869,11 @@ let () =
       test_case "`case` as a test statement" `Slow test_case_statement_with_go;
       test_case "test-statement case behaves the same on Racket" `Slow
         (racket_behavior_oracle "<go-test-case-oracle>" test_case_stmt_source);
+      test_case "Tesl.Crypto: MACs, digests, tokens" `Slow test_crypto_with_go;
+      test_case "Tesl.Crypto behaves the same on Racket" `Slow
+        (racket_behavior_oracle ~env:[ "GOCRYPTO_KEY=test-signing-key" ]
+           "<go-crypto-oracle>" crypto_source);
+      test_case "password storage fails closed" `Quick test_password_storage_fails_closed;
       test_case "derived decoders for a body with no codec" `Slow test_derived_body_with_go;
       test_case "derived decoders behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-derived-body-oracle>" derived_body_source);

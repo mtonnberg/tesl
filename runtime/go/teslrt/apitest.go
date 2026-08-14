@@ -24,8 +24,11 @@ type ApiResponse struct {
 }
 
 // ApiRequest dispatches one request and captures the response. `body` is sent as-is;
-// `cookies` are `name=value` pairs.
-func ApiRequest(server Server, method, path, body string, cookies ...string) ApiResponse {
+// `cookies` are `name=value` pairs; `headers` are sent as written, which is what the
+// `headers { … }` modifier means — a test signing its own payload puts the tag in a header, and
+// a header value is transport text, not JSON.
+func ApiRequest(server Server, method, path, body string, cookies []string,
+	headers []Tuple2[string, string]) ApiResponse {
 	request := httptest.NewRequest(method, path, strings.NewReader(body))
 	// A REQUEST cookie is just `name=value` on the wire — it carries none of the
 	// Secure/HttpOnly/SameSite attributes a response cookie does, so the header is built
@@ -34,20 +37,28 @@ func ApiRequest(server Server, method, path, body string, cookies ...string) Api
 	if len(cookies) > 0 {
 		request.Header.Set("Cookie", strings.Join(cookies, "; "))
 	}
+	for _, header := range headers {
+		// Added rather than set: a test may send the same header twice deliberately, and the
+		// server side is what decides which value wins.
+		request.Header.Add(header.Tuple2First, header.Tuple2Second)
+	}
 	recorder := httptest.NewRecorder()
 	server.ServeHTTP(recorder, request)
 	result := recorder.Result()
 	raw, _ := io.ReadAll(result.Body)
-	headers := DictEmpty[string, string]()
+	// The RESPONSE headers, as the Dict an api-test reads: last-wins on a repeated name, the
+	// same rule NewHttpRequest applies inbound.
+	responseHeaders := DictEmpty[string, string]()
 	for name, values := range result.Header {
 		if len(values) > 0 {
-			headers = DictInsert(headers, strings.ToLower(name), values[0], stringKeyLess)
+			responseHeaders = DictInsert(responseHeaders, strings.ToLower(name),
+				values[len(values)-1], stringKeyLess)
 		}
 	}
 	return ApiResponse{
 		Status:  FromInt64(int64(result.StatusCode)),
 		Body:    JsonParseBody(string(raw)),
-		Headers: headers,
+		Headers: responseHeaders,
 	}
 }
 
