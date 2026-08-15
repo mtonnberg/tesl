@@ -1083,6 +1083,28 @@ if ! wait_for_shared_postgres; then
     printf "  %s⚠%s  Shared PostgreSQL warm-up failed; continuing without a preconfigured cluster\n" "$C_YELLOW" "$C_RESET"
 fi
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  Go runtime — PostgreSQL backend (needs the shared cluster)
+# ══════════════════════════════════════════════════════════════════════════════
+# The rest of the Go gates run in phase 2a, well before the cluster is up; these
+# tests need it, so they run HERE, after the warm-up has been joined.  They skip
+# themselves when no cluster is configured, which is what a machine without
+# initdb/pg_ctl gets.
+phase_begin "Go runtime PostgreSQL backend (live cluster)"
+if ! command -v go >/dev/null 2>&1; then
+    printf "  %s⚠%s  go not on PATH — skipping\n" "$C_YELLOW" "$C_RESET"
+    phase_end SKIP
+elif [ "$shared_postgres_configured" -eq 0 ]; then
+    printf "  %s⚠%s  no shared PostgreSQL cluster — skipping\n" "$C_YELLOW" "$C_RESET"
+    phase_end SKIP
+else
+    if ( cd "$SCRIPT_DIR/runtime/go" && go test -count=1 ./teslrt -run 'Postgres|OpenPostgres' ); then
+        phase_end OK
+    else
+        phase_end FAIL
+    fi
+fi
+
 phase_begin "Tesl test files (batch runner)"
 tesl_files_fail=0
 if ! command -v racket >/dev/null 2>&1; then

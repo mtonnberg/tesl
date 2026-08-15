@@ -266,6 +266,14 @@ let rec literal_json expr =
       else None
     | _ -> None
 
+(* The comparison half of the template rule: only a CONTAINER literal is a template, since a
+   scalar one is an ordinary Tesl value and compares as one.  A request BODY still renders any
+   literal, scalar included — there the whole body IS the JSON text being sent. *)
+let template_json expr =
+  match expr with
+  | EList _ | ERecord _ -> literal_json expr
+  | _ -> None
+
 let go_quote value =
   let b = Buffer.create (String.length value + 2) in
   Buffer.add_char b '"';
@@ -346,6 +354,12 @@ type type_table = {
      APPLIED, and a const that resolved through that table would be indistinguishable from a
      nullary function — whose bare mention is a partial application the emitter refuses. *)
   consts : (string, go_type * string) Hashtbl.t;
+  (* A `database` declaration by NAME, with the backend it selects ("memory" | "postgres")
+     and where it was written.  The declaration has no emitted form on either backend — a
+     Racket `define-database` is inert until something CONNECTS to it — so what this table
+     is for is the one place the backend becomes observable: `with database D`, which is
+     what binds the store the body's queries run against. *)
+  databases : (string, string * Location.loc) Hashtbl.t;
 }
 
 (* The table for the module being emitted.  A ref for the same reason `current_package`
@@ -355,6 +369,26 @@ type type_table = {
    xs`, the idiomatic list-rebuilding fold.  Set once per module beside
    `current_package`. *)
 let current_types : type_table option ref = ref None
+
+(* `with database D { … }` is the only place a database DECLARATION becomes observable: it
+   binds the store the body's queries run against.  On the Memory backend that store IS the
+   entity's table variable, so the block adds nothing at run time and the body is emitted as
+   it stands.  A Postgres-backed database is a different store, and emitting the body
+   unchanged would read the in-memory table while the same program on Racket reads the
+   server — the two backends would then disagree about what a query ANSWERS, which is worse
+   than not compiling.  So it is refused, and the whole corpus is unaffected: every
+   `with database` in it names a Memory-backed database.
+   Only databases declared in the module being emitted are known here; one reached across a
+   module boundary is not, and it is also not something the corpus does. *)
+let check_with_database loc database_name =
+  match !current_types with
+  | None -> ()
+  | Some types ->
+    (match Hashtbl.find_opt types.databases database_name with
+     | Some ("postgres", _) -> unsupported loc
+       "Go backend does not support `with database %s` on a Postgres-backed database yet"
+       database_name
+     | _ -> ())
 
 (* The server an `api-test` block drives, while its statements are being emitted.  A
    request verb (`get "/path"`) only means something inside such a block, and this is what
@@ -2113,7 +2147,8 @@ let rec type_of_expr signatures env expr =
   (* `with database D { … }` names the store the body's queries run against.  With
      `backend: Memory` that store IS the entity's table variable, so the block adds
      nothing at run time and types as its body. *)
-  | EWithDatabase { body; _ } -> type_of_expr signatures env body
+  | EWithDatabase { database_name; body; loc } ->
+    check_with_database loc database_name; type_of_expr signatures env body
   (* `enqueue` is a statement: the job id stays inside the store, as it does on Racket. *)
   | EEnqueue { payload; _ } -> ignore (type_of_expr signatures env payload); TUnit
   (* A `telemetry "name" { … }` block is a STATEMENT: it records a signal and answers Unit, so a
@@ -3583,7 +3618,9 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
          (match expected with Some ty -> go_type ty | None -> "struct{}{}")
          status (emit message)
      | _ -> unsupported loc "Go backend can emit fail only in a check tail")
-  | EWithDatabase { body; _ } -> emit_expr ?expected ~indent signatures env body
+  | EWithDatabase { database_name; body; loc } ->
+    check_with_database loc database_name;
+    emit_expr ?expected ~indent signatures env body
   | EEnqueue { job_type; payload; loc } ->
     let info = queue_of_job_type loc job_type in
     let row = match Option.bind !current_types
@@ -4984,7 +5021,8 @@ let emit_tail ?self buffer signatures env expected indent expr =
        is emitted in TAIL position — the block keeps statement form instead of collapsing
        into an immediately-called closure.  A capability scope is the same: the checker has
        verified every call in it already, so the scope itself has no runtime form. *)
-    | EWithDatabase { body; _ } -> go env indent body
+    | EWithDatabase { database_name; body; loc } ->
+      check_with_database loc database_name; go env indent body
     | EWithCapabilities { body; _ } -> go env indent body
     (* Proof decomposition in tail position keeps statement form, like an ordinary `let`.
        Either half may be `_`, since the decomposition is often written for one of them. *)
@@ -5257,6 +5295,18 @@ let primitive_codec = function
 
    Each encoder is hoisted into a named function, so the call site stays a plain call and
    the same type is encoded one way everywhere. *)
+(* gofmt ALIGNS the values in a map literal, so the padding is part of the emitted text
+   rather than something a formatter run would add: every entry's value starts at the same
+   column, one past the longest `"key":`.  The codec-driven encoder computes the same
+   padding for the same reason. *)
+let aligned_map_entries indent entries =
+  let width = List.fold_left (fun width (key, _) ->
+    max width (String.length key + 3)) 0 entries in
+  String.concat "\n" (List.map (fun (key, value) ->
+    let key = Printf.sprintf "%S:" key in
+    Printf.sprintf "%s%s%s %s," indent key
+      (String.make (width - String.length key) ' ') value) entries)
+
 let rec value_encoder ty =
   let encoded_field operand field_ty =
     Printf.sprintf "%s(%s)" (value_encoder field_ty) operand in
@@ -5274,26 +5324,24 @@ let rec value_encoder ty =
   | TAdt (info, _) when List.mem info.adt_tesl_name !current_codec_types ->
     codec_encode_name info.adt_tesl_name
   | TRecord info ->
-    let fields = List.map (fun (name, field_ty) ->
-      Printf.sprintf "\t\t%S: %s," name
-        (encoded_field ("teslValue." ^ record_field_go_name name) field_ty))
-      info.rec_fields in
+    let fields = aligned_map_entries "\t\t" (List.map (fun (name, field_ty) ->
+      (name, encoded_field ("teslValue." ^ record_field_go_name name) field_ty))
+      info.rec_fields) in
     remember_helper ~prefix:"teslEncode"
       ~signature:(Printf.sprintf "(teslValue %s) any" (go_type ty))
-      ~body:(Printf.sprintf "map[string]any{\n%s\n\t}" (String.concat "\n" fields))
+      ~body:(Printf.sprintf "map[string]any{\n%s\n\t}" fields)
   | TAdt (info, args) ->
     let arms = List.map (fun variant ->
       let fields = variant_field_types info args variant in
       let payload = match fields with
         | [] -> Printf.sprintf "map[string]any{\"tag\": %S}" variant.var_ctor
         | _ ->
-          let entries = List.map (fun (name, field_ty) ->
-            Printf.sprintf "\t\t\t\t%S: %s," name
-              (encoded_field ("teslValue." ^ variant_field_go_name variant name) field_ty))
-            fields in
+          let entries = aligned_map_entries "\t\t\t\t" (List.map (fun (name, field_ty) ->
+            (name, encoded_field ("teslValue." ^ variant_field_go_name variant name) field_ty))
+            fields) in
           Printf.sprintf
             "map[string]any{\"tag\": %S, \"fields\": map[string]any{\n%s\n\t\t\t}}"
-            variant.var_ctor (String.concat "\n" entries)
+            variant.var_ctor entries
       in
       Printf.sprintf "\t\tcase %s:\n\t\t\treturn %s"
         (qualified info.adt_owner variant.var_tag) payload) info.adt_variants in
@@ -5596,19 +5644,14 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
      | ToJsonFields entries ->
        Printf.bprintf body "\nfunc %s(teslValue %s) any {\n\treturn map[string]any{\n"
          (codec_encode_name type_name) (go_type go_ty);
-       (* gofmt aligns the values in a map literal, so the padding is computed here. *)
-       let width = List.fold_left (fun width (entry : codec_encode_entry) ->
-         max width (String.length entry.json_key + 3)) 0 entries in
-       List.iter (fun (entry : codec_encode_entry) ->
-         let value = Printf.sprintf "teslValue.%s" (field_go entry.field_name) in
-         let encoded = match primitive_codec entry.codec with
-           | Some _ -> value
-           | None -> Printf.sprintf "%s(%s)" (codec_encode_name entry.codec) value
-         in
-         let key = Printf.sprintf "%S:" entry.json_key in
-         Printf.bprintf body "\t\t%s%s %s,\n" key
-           (String.make (width - String.length key) ' ') encoded) entries;
-       Buffer.add_string body "\t}\n}\n");
+       Buffer.add_string body (aligned_map_entries "\t\t"
+         (List.map (fun (entry : codec_encode_entry) ->
+            let value = Printf.sprintf "teslValue.%s" (field_go entry.field_name) in
+            (entry.json_key, match primitive_codec entry.codec with
+              | Some _ -> value
+              | None -> Printf.sprintf "%s(%s)" (codec_encode_name entry.codec) value))
+            entries));
+       Buffer.add_string body "\n\t}\n}\n");
     (* Decode: each alternative is COMPLETE and they are tried in order, first success
        winning — the same rule the Racket decoder list follows. *)
     (match codec.from_json with
@@ -6100,16 +6143,20 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
         | None ->
           if left_ty <> TBool then unsupported loc "Go backend bare expect requires Bool";
           strip_outer_parens (emit_negated ~indent signatures env left)
-        (* One side UNTYPED and the other a JSON TEMPLATE: `expect resp.body == [ { "text": "a" } ]`
-           compares against JSON text, not against a Tesl value — an array of objects has no Tesl
-           type to infer, so this is decided BEFORE the other side is typed. *)
-        | Some right when (left_ty = TJson && literal_json right <> None)
-                          || (literal_json left <> None
+        (* One side UNTYPED and the other a CONTAINER JSON template:
+           `expect resp.body == [ { "text": "a" } ]` compares against JSON text, not against a
+           Tesl value — an array of objects has no Tesl type to infer, so this is decided BEFORE
+           the other side is typed.  A SCALAR literal is not routed here even though it is a
+           valid template: `expect r.body.count == 3` has a perfectly good Tesl value on one
+           side, and sending it through a JSON parse-and-render round trip would compare the two
+           by their spelling rather than by their value. *)
+        | Some right when (left_ty = TJson && template_json right <> None)
+                          || (template_json left <> None
                               && (try type_of_expr signatures env right = TJson
                                   with Unsupported _ -> false)) ->
           let json_side, json = if left_ty = TJson
-            then left, (match literal_json right with Some json -> json | None -> assert false)
-            else right, (match literal_json left with Some json -> json | None -> assert false)
+            then left, (match template_json right with Some json -> json | None -> assert false)
+            else right, (match template_json left with Some json -> json | None -> assert false)
           in
           Printf.sprintf "!teslrt.JsonEqual(%s, teslrt.JsonParseBody(%s).JsonRaw())"
             (emit_expr ~indent signatures env json_side) (go_quote json)
@@ -6665,7 +6712,20 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       entities = Hashtbl.create 8;
       queues = Hashtbl.create 8;
       consts = Hashtbl.create 8;
+      databases = Hashtbl.create 4;
     } in
+    (* Databases are registered BEFORE anything is emitted, because `with database D` may
+       be written above D's own declaration. *)
+    List.iter (function
+      | DDatabase d ->
+        let d = Desugar.desugar_database_config d in
+        let backend =
+          match String.lowercase_ascii d.backend with
+          | "" | "postgres" -> "postgres"
+          | other -> other
+        in
+        Hashtbl.replace types.databases d.name (backend, d.loc)
+      | _ -> ()) m.decls;
     (* Every package-level Go name is minted here, in declaration order, so the
        emitted names are deterministic and provably distinct. *)
     let taken : (string, unit) Hashtbl.t = Hashtbl.create 32 in
@@ -7554,10 +7614,13 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       | DEntity _ -> ()
       | DFact _ -> ()
       | DCodec _ -> ()
-      (* A `database` declaration names a BACKEND and the entities it owns.  With
-         `Memory` the store is the entity's own table variable, so the declaration adds
-         no runtime structure of its own; Postgres would, and is refused until the driver
-         lands rather than silently running against an in-memory store. *)
+      (* A `database` declaration names a BACKEND and the entities it owns, and on BOTH
+         backends it is inert: a query reaches a declared database only inside `with
+         database D`, and everything outside one runs against the entity's own store
+         (Racket's `current-database-runtime` is #f until `call-with-database` binds it,
+         and its emitted `define-database` connects to nothing before that).  So the
+         declaration itself emits nothing here, whichever backend it selects, and the one
+         place the choice becomes observable is `with database` — see the refusal there. *)
       | DDatabase d ->
         (* The typed form (`= Database { … }`) leaves its fields in `config_expr`; the Go
            pipeline does not run the desugar pass, so the same lowering the Racket
@@ -7566,9 +7629,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
            `backend:` to be misread. *)
         let d = Desugar.desugar_database_config d in
         let backend = String.lowercase_ascii d.backend in
-        if backend <> "memory" then unsupported d.loc
-          "Go backend supports `backend: Memory` only, not `%s`"
-          (String.capitalize_ascii (if d.backend = "" then "postgres" else d.backend));
+        if backend <> "memory" && backend <> "postgres" && backend <> "" then
+          unsupported d.loc "Go backend does not know the database backend `%s`"
+            (String.capitalize_ascii d.backend);
         List.iter (fun entity ->
           if not (Hashtbl.mem types.entities entity) then unsupported d.loc
             "Go backend cannot find entity `%s` listed in database `%s`" entity d.name)

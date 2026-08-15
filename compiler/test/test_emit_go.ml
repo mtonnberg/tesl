@@ -3324,6 +3324,87 @@ let test_db_with_go () =
   (* `go test` RUNS the two test blocks, so a wrong answer fails here. *)
   gate_emitted "tesl-go-db" emitted
 
+(* A `database` declaration is INERT on both backends: a query reaches a declared database
+   only inside `with database D`, and everything outside one runs against the entity's own
+   store (Racket binds `current-database-runtime` in `call-with-database` and nowhere else,
+   so its emitted `define-database` connects to nothing until then).  A Postgres-backed
+   declaration therefore has to COMPILE and answer from the in-memory store — which is what
+   the corpus's Postgres files do, `example/learn/lesson41-load-tests.tesl` included — and
+   the Racket oracle on the same source is what proves the two agree.  The refusal that
+   guards the other half is `with database` on such a database, above. *)
+let postgres_declaration_source = {|module GoPostgresDeclaration exposing [titleOf, countBooks]
+
+import Tesl.Prelude exposing [Int, String, Unit]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [
+  Database,
+  DatabaseBackend,
+  Postgres,
+  Memory,
+  PostgresConfig,
+  TcpConnection,
+  SocketConnection,
+]
+
+entity Book table "pg_books" primaryKey id {
+  id: String
+  title: String
+  pages: Int
+}
+
+database Shelf = Database {
+  schema: "gopgdecl"
+  entities: [Book]
+  backend: Postgres (PostgresConfig {
+    dbName: "shelf"
+    user: "shelf"
+    password: "shelf"
+    connection: TcpConnection {
+      host: "localhost"
+      port: 5432
+    }
+  })
+}
+
+fn shelve(id: String, title: String, pages: Int) -> Book
+  requires [dbWrite] =
+  insert Book { id: id, title: title, pages: pages }
+
+fn titleOf(wanted: String) -> String
+  requires [dbRead] =
+  case selectOne b from Book where b.id == wanted of
+    Nothing -> "none"
+    Something b -> b.title
+
+fn countBooks() -> Int
+  requires [dbRead] =
+  selectCount b from Book
+
+test "a Postgres declaration leaves the store where it was" requires [dbRead, dbWrite] {
+  let _ = shelve "b-1" "The Art of Tesl" 320
+  let _ = shelve "b-2" "Proofs in Practice" 210
+  expect titleOf "b-1" == "The Art of Tesl"
+  expect titleOf "b-404" == "none"
+  expect countBooks () == 2
+}
+|}
+
+let test_postgres_declaration_with_go () =
+  let emitted = emit_ok "<go-pg-decl>" postgres_declaration_source in
+  let module_go = artifact "internal/teslmodgopostgresdeclaration/module.go" emitted in
+  (* The declaration emits nothing of its own: the store is still the entity's table, and no
+     connection is opened for a database nothing connects to. *)
+  check bool "the entity still keeps its in-memory table" true
+    (contains module_go "var BookTable = teslrt.NewTable[Book]()");
+  check bool "and no connection is opened" false
+    (contains module_go "OpenPostgres" || contains module_go "pgx");
+  List.iter (fun (artifact_path, contents) ->
+    if artifact_path = "go.mod" && contains contents "pgx" then
+      failf "a program that connects to nothing required the Postgres driver")
+    (List.map (fun (a : Emit_go.artifact) -> (a.path, a.contents)) emitted);
+  gate_emitted "tesl-go-pg-decl" emitted
+
 let test_unsupported_database_forms_fail_closed () =
   let expect_go_error name source needle =
     match Compile.compile_go_source ("<go-" ^ name ^ ">") source with
@@ -3356,13 +3437,15 @@ fn probe() -> List Item
   }
 |} entity_extra backend body
   in
-  (* Postgres needs a driver; running it against an in-memory store instead would be a
-     silent substitution, so it is refused. *)
-  expect_go_error "postgres-backend"
+  (* The DECLARATION of a Postgres database is fine — it is inert on both backends, see the
+     case below — but `with database` is where the backend becomes observable: running that
+     body against the in-memory store would answer from a different store than the same
+     program does on Racket, which is a silent substitution rather than a missing feature. *)
+  expect_go_error "postgres-with-database"
     (program ~entity_extra:""
        ~backend:"Postgres (PostgresConfig {\n    dbName: \"x\"\n    user: \"u\"\n    password: \"p\"\n    connection: TcpConnection {\n      host: \"localhost\"\n      port: 5432\n    }\n  })"
        ~body:"select i from Item")
-    "`backend: Memory` only";
+    "`with database BadDb` on a Postgres-backed database";
   (* A UNIQUE index is ENFORCED by the Racket memory backend, so accepting one without
      enforcing it would make the two backends run different programs. *)
   expect_go_error "unique-index"
@@ -6374,6 +6457,12 @@ let go_corpus = [
      that sets a cookie and then FAILS (no session may escape on a non-2xx answer), and a
      trapping auth block answering a SANITIZED 500 rather than leaking the trap text. *)
   "tests/session-cookie-tests.tesl";
+  (* The load-test surface as the lessons teach it: an open-model rate, a seeded run, and a
+     `backend: Postgres` declaration nothing connects to — which is exactly the shape that
+     used to be refused outright.  It is the slowest file here (each block warms up until its
+     p99 is steady, up to 30s, on either backend), and it is worth that: it is the one place
+     the harness's own numbers are asserted end to end. *)
+  "example/learn/lesson41-load-tests.tesl";
 ]
 
 let test_go_corpus_with_go () =
@@ -6537,6 +6626,9 @@ let () =
       test_case "Memory-backend databases" `Slow test_db_with_go;
       test_case "databases behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-db-oracle>" db_source);
+      test_case "a Postgres declaration is inert" `Slow test_postgres_declaration_with_go;
+      test_case "an inert Postgres declaration behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-pg-decl-oracle>" postgres_declaration_source);
       test_case "unsupported database forms fail closed" `Quick
         test_unsupported_database_forms_fail_closed;
       test_case "a rejected check answers instead of crashing" `Slow
