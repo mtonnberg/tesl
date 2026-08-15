@@ -6686,6 +6686,97 @@ let test_recursive_adt_with_go () =
   (* `go test` RUNS the block, so a wrong answer — or a nil deref — fails here. *)
   gate_emitted "tesl-go-recursive" emitted
 
+(* NESTED constructor patterns: `Neg (Lit n)`, `Wrapped Nothing`, and the labeled literal
+   form `RGB { r = 255, … }`.  An arm like that tests more than its own tag, so it cannot be
+   a `switch` case — the emitter falls back to the if-chain the guarded form already uses,
+   and the tag test and the nested tests are ONE `&&` condition so the nested read only
+   happens once the tag says the payload is there. *)
+let nested_pattern_source = {|module GoNestedPatterns exposing [evalExpr, describeShape, describeColor, firstOf]
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.String exposing [String.fromInt]
+
+# A nested pattern over a RECURSIVE type: the inner test reads through the pointer.
+type Expr
+  = Lit value: Int
+  | Neg inner: Expr
+  | Add left: Expr right: Expr
+
+fn evalExpr(e: Expr) -> Int =
+  case e of
+    Lit value -> value
+    Neg (Lit n) -> 0 - n
+    Neg inner -> 0 - evalExpr(inner)
+    Add (Lit 0) right -> evalExpr(right)
+    Add left right -> evalExpr(left) + evalExpr(right)
+
+# A nested NULLARY constructor, and a nested one that binds.
+type Shape
+  = Circle radius: Int
+  | Wrapped inner: Maybe Int
+
+fn describeShape(s: Shape) -> String =
+  case s of
+    Circle radius -> "circle r=${String.fromInt radius}"
+    Wrapped Nothing -> "empty wrapper"
+    Wrapped (Something value) -> "wrapped ${String.fromInt value}"
+
+# Labeled LITERAL sub-patterns, and a flat arm after them.
+type Color = RGB r: Int g: Int b: Int
+
+fn describeColor(c: Color) -> String =
+  case c of
+    RGB { r = 255, g = 255, b = 255 } -> "white"
+    RGB { r = 0, g = 0, b = 0 } -> "black"
+    RGB r g _ -> "r=${String.fromInt r} g=${String.fromInt g}"
+
+# A nested pattern alongside a GUARD on the same arm.
+fn firstOf(m: Maybe Int) -> Int =
+  case m of
+    Something value where value > 10 -> value
+    Something _ -> 0
+    Nothing -> 0 - 1
+
+test "nested patterns discriminate and bind" {
+  expect evalExpr (Lit 7) == 7
+  expect evalExpr (Neg (Lit 3)) == 0 - 3
+  expect evalExpr (Neg (Add (Lit 1) (Lit 2))) == 0 - 3
+  expect evalExpr (Add (Lit 0) (Lit 9)) == 9
+  expect evalExpr (Add (Lit 4) (Lit 5)) == 9
+  expect describeShape (Circle 5) == "circle r=5"
+  expect describeShape (Wrapped Nothing) == "empty wrapper"
+  expect describeShape (Wrapped (Something 42)) == "wrapped 42"
+  expect describeColor (RGB 255 255 255) == "white"
+  expect describeColor (RGB 0 0 0) == "black"
+  expect describeColor (RGB 1 2 3) == "r=1 g=2"
+  expect firstOf (Something 42) == 42
+  expect firstOf (Something 1) == 0
+  expect firstOf Nothing == 0 - 1
+}
+|}
+
+let test_nested_patterns_with_go () =
+  let emitted = emit_ok "<go-nested>" nested_pattern_source in
+  let module_go = artifact "internal/teslmodgonestedpatterns/module.go" emitted in
+  (* The tag test and the nested test are one condition, left to right. *)
+  (* The scrutinee's temporary is numbered by nesting depth, so the assertions name the
+     shape rather than the number. *)
+  check bool "a nested pattern tests through the payload" true
+    (contains module_go ".Tag == ExprNeg && teslrt.Unboxed("
+     && contains module_go ".NegInner).Tag == ExprLit {");
+  check bool "and binds two levels down" true
+    (contains module_go "n := teslrt.Unboxed("
+     && contains module_go ".NegInner).LitValue");
+  (* A literal sub-pattern compares through the same equality a value comparison uses. *)
+  check bool "a literal sub-pattern compares as a value" true
+    (contains module_go ".RGBR, teslrt.FromInt64(255))");
+  (* A nullary sub-pattern over a runtime ADT reads its tag. *)
+  check bool "a nested nullary constructor tests its tag" true
+    (contains module_go ".WrappedInner.Tag == teslrt.MaybeNothing");
+  (* `go test` RUNS the block, so a wrong arm order or a wrong binding fails here. *)
+  gate_emitted "tesl-go-nested" emitted
+
 let go_corpus = [
   "example/learn/lesson00-hello-world.tesl";
   "example/learn/lesson03-records.tesl";
@@ -6753,6 +6844,11 @@ let go_corpus = [
      walked recursively and compared structurally. *)
   "tests/critical-review-26-tests.tesl";
   "tests/critical-review62-tests.tesl";
+  (* The nested-pattern files: the lesson that teaches the form, a generic recursive tree,
+     and a review suite that mixes nested arms with flat ones. *)
+  "example/learn/lesson50-nested-constructor-patterns.tesl";
+  "tests/critical-review-51-tests.tesl";
+  "tests/critical-review63-tests.tesl";
 ]
 
 let test_go_corpus_with_go () =
@@ -6916,6 +7012,9 @@ let () =
       test_case "Memory-backend databases" `Slow test_db_with_go;
       test_case "databases behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-db-oracle>" db_source);
+      test_case "nested constructor patterns" `Slow test_nested_patterns_with_go;
+      test_case "nested patterns behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-nested-oracle>" nested_pattern_source);
       test_case "recursive ADTs" `Slow test_recursive_adt_with_go;
       test_case "recursive ADTs behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-recursive-oracle>" recursive_adt_source);

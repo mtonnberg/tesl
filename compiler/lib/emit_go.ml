@@ -746,8 +746,24 @@ let adt_tag_field = "Tag"
    would need the indirection inside the other type's own layout. *)
 let adt_self_field (info : adt_info) field_ty =
   match field_ty with
-  | TAdt (other, _) -> other.adt_go_name = info.adt_go_name
+  | TAdt (other, args) when other.adt_go_name = info.adt_go_name ->
+    (* At the DECLARATION's own instantiation only.  `Maybe (Maybe Int)` mentions Maybe
+       inside Maybe, and that is finite in Go (`Maybe[Maybe[Int]]`) — it is a self-reference
+       at a DIFFERENT instantiation, which needs no indirection and must not get one. *)
+    List.length args = List.length info.adt_params
+    && List.for_all2 (fun arg (_, go_param) ->
+         match arg with TParam name -> name = go_param | _ -> false) args info.adt_params
   | _ -> false
+
+(* Whether a variant's payload field is boxed, asked by NAME.  A value site sees the field
+   type with the ADT's type arguments SUBSTITUTED IN (`MyTree Int` rather than `MyTree a`),
+   and that substituted type no longer looks like the declaration's own instantiation — so
+   the question has to be asked of the DECLARED field, which is where the pointer was
+   decided. *)
+let adt_self_payload (info : adt_info) variant field_name =
+  match List.assoc_opt field_name variant.var_fields with
+  | Some declared_ty -> adt_self_field info declared_ty
+  | None -> false
 
 let variant_field_go_name variant name =
   match List.assoc_opt name variant.var_go_fields with
@@ -2889,6 +2905,17 @@ and type_of_arg signatures env want arg =
      | _ -> assert false)
   (* An empty list literal has no element to infer from: the expectation supplies it. *)
   | EList { elems = []; _ } when (match want with TList _ -> true | _ -> false) -> want
+  (* Neither does a list whose elements are ALL under-constrained (`[Nothing, Nothing]`):
+     the expectation belongs to each element, exactly as it belongs to each `if` branch. *)
+  | EList { elems; _ } when (match want with TList _ -> true | _ -> false) ->
+    (match want with
+     | TList element ->
+       List.iter (fun elem ->
+         if type_unequal (type_of_arg signatures env element elem) element then
+           unsupported (Checker.expr_loc elem)
+             "Go backend list element has an unsupported type") elems;
+       want
+     | _ -> assert false)
   (* The expectation belongs to each BRANCH, and a branch is exactly where an
      under-constrained constructor sits. *)
   (* `Set.empty` and `Dict.empty` have no argument to infer an element type from, so the
@@ -2967,7 +2994,16 @@ and type_of_variant_application signatures env loc info variant args =
   if List.length args <> List.length variant.var_fields then
     unsupported loc "Go backend requires constructor `%s.%s` applied to %d argument(s)"
       info.adt_tesl_name variant.var_ctor (List.length variant.var_fields);
-  let arg_types = List.map (type_of_expr signatures env) args in
+  (* For a NON-generic ADT the field types are known before the arguments are typed, so
+     each argument is typed AGAINST its field — which is what lets an under-constrained
+     argument (`Wrapped Nothing`, `Wrapped []`) take its type from the field it fills
+     rather than having to carry one of its own. *)
+  let declared_fields = variant_field_types info [] variant in
+  let arg_types =
+    if info.adt_params = [] then
+      List.map2 (fun arg (_, field_ty) -> type_of_arg signatures env field_ty arg)
+        args declared_fields
+    else List.map (type_of_expr signatures env) args in
   let type_args = List.map (fun (tesl_param, go_param) ->
     let rec find fields types =
       match fields, types with
@@ -3016,15 +3052,56 @@ and pattern_bindings _loc info type_args pattern =
            ctor (List.length variant.var_fields);
        (* Sub-patterns bind POSITIONALLY, matching the Racket backend: the pattern's
           own key is a binder name, not necessarily the declared field name. *)
-       List.concat (List.mapi (fun index (_key, sub) ->
-         let _, field_ty = List.nth (variant_field_types info type_args variant) index in
+       (* A sub-pattern may itself be a constructor (`Neg (Lit n)`) or a literal
+          (`RGB { r = 255, … }`): what it BINDS is whatever its own sub-patterns bind, and
+          what it TESTS is settled at emission.  So this walks the nesting and collects the
+          binders; the shapes it cannot type — a constructor pattern over something that is
+          not an ADT, a literal over a type with no literal form — fail closed here. *)
+       let rec sub_bindings field_ty sub =
          match sub with
          | PWild -> []
          | PVar name -> [name, field_ty]
-         | PNullary { loc; _ } | PCon { loc; _ } ->
-           unsupported loc "Go backend does not support nested constructor patterns yet"
-         | PLit { loc; _ } ->
-           unsupported loc "Go backend does not support literal sub-patterns yet") fields))
+         | PNullary { ctor; loc } ->
+           (match field_ty with
+            | TAdt (sub_info, _) ->
+              (match find_variant sub_info ctor with
+               | Some sub_variant ->
+                 if sub_variant.var_fields <> [] then unsupported loc
+                   "Go backend requires constructor pattern `%s` to bind its %d field(s)"
+                   ctor (List.length sub_variant.var_fields);
+                 []
+               | None -> unsupported loc
+                 "Go backend cannot resolve constructor `%s` of `%s`" ctor
+                 sub_info.adt_tesl_name)
+            | _ -> unsupported loc
+              "Go backend cannot match constructor `%s` against a non-ADT field" ctor)
+         | PCon { ctor; fields = sub_fields; loc } ->
+           (match field_ty with
+            | TAdt (sub_info, sub_args) ->
+              (match find_variant sub_info ctor with
+               | Some sub_variant ->
+                 if List.length sub_fields <> List.length sub_variant.var_fields then
+                   unsupported loc
+                     "Go backend requires constructor pattern `%s` to bind its %d field(s)"
+                     ctor (List.length sub_variant.var_fields);
+                 List.concat (List.mapi (fun sub_index (_, deeper) ->
+                   let _, deeper_ty =
+                     List.nth (variant_field_types sub_info sub_args sub_variant) sub_index in
+                   sub_bindings deeper_ty deeper) sub_fields)
+               | None -> unsupported loc
+                 "Go backend cannot resolve constructor `%s` of `%s`" ctor
+                 sub_info.adt_tesl_name)
+            | _ -> unsupported loc
+              "Go backend cannot match constructor `%s` against a non-ADT field" ctor)
+         | PLit { value; loc } ->
+           (match field_ty, value with
+            | TInt, (LInt _ | LBigInt _) | TString, LString _ | TBool, LBool _ -> []
+            | _ ->
+              unsupported loc "Go backend cannot match this literal against the field type")
+       in
+       List.concat (List.mapi (fun index (_key, sub) ->
+         let _, field_ty = List.nth (variant_field_types info type_args variant) index in
+         sub_bindings field_ty sub) fields))
 
 and record_field_type loc info field =
   match List.assoc_opt field info.rec_fields with
@@ -3935,8 +4012,10 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
          arms);
     Printf.sprintf "(func() %s {\n%s%s}())" (go_type result) (Buffer.contents buffer) indent
   | EList { elems; _ } ->
+    (* The EXPECTATION settles the element type whenever there is one — not only for an
+       empty list: `[Nothing, Nothing]` has no element that types on its own either. *)
     let element = match expected, elems with
-      | Some (TList element), [] -> element
+      | Some (TList element), _ -> element
       | _ ->
         (match type_of_expr signatures env expr with
          | TList element -> element
@@ -4096,23 +4175,76 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
 
 (* What one arm has to test and bind, resolved once so the type rule and the
    emitter cannot disagree about which payload field a binder refers to. *)
-and pattern_plan info type_args pattern =
+(* A literal SUB-pattern (`RGB { r = 255, … }`): the comparison the arm has to make.  It
+   goes through the same `equal_expr` a value comparison does, so an Int compares as an
+   arbitrary-precision Int rather than as a Go int. *)
+and literal_pattern_test access field_ty value =
+  let literal = match field_ty, value with
+    | TInt, LInt n -> Printf.sprintf "teslrt.FromInt64(%d)" n
+    | TInt, LBigInt text -> Printf.sprintf "teslrt.MustParseDecimal(%s)" (go_quote text)
+    | TString, LString text -> go_quote text
+    | TBool, LBool b -> if b then "true" else "false"
+    | _ -> invalid_arg "literal sub-pattern validated before emission"
+  in
+  strip_outer_parens (equal_expr field_ty access literal)
+
+and pattern_plan ~scrut info type_args pattern =
+  (* Answers what the arm TESTS beyond its own tag, what it BINDS (each binder paired with
+     the Go expression that reads it), and the whole-value binder if the pattern is one.
+     A nested pattern (`Neg (Lit n)`) contributes both: a test on the inner tag, and a
+     binder that reads two levels down. *)
+  let field_access base (owner : adt_info) variant field_name field_ty =
+    ignore field_ty;
+    let read = Printf.sprintf "%s.%s" base (variant_field_go_name variant field_name) in
+    (* A self-referential payload is behind a pointer, so reading it — to test it or to
+       bind it — goes through `teslrt.Unboxed`, exactly as a top-level binding does. *)
+    if adt_self_payload owner variant field_name then Printf.sprintf "teslrt.Unboxed(%s)" read
+    else read
+  in
+  let rec sub_plan access field_ty sub =
+    match sub with
+    | PWild -> [], []
+    | PVar name -> [name, access, field_ty], []
+    | PNullary { ctor; _ } ->
+      (match field_ty with
+       | TAdt (sub_info, _) ->
+         (match find_variant sub_info ctor with
+          | Some sub_variant ->
+            [], [Printf.sprintf "%s.%s == %s" access adt_tag_field
+                   (qualified sub_info.adt_owner sub_variant.var_tag)]
+          | None -> invalid_arg "case pattern validated before emission")
+       | _ -> invalid_arg "case pattern validated before emission")
+    | PCon { ctor; fields = sub_fields; _ } ->
+      (match field_ty with
+       | TAdt (sub_info, sub_args) ->
+         (match find_variant sub_info ctor with
+          | Some sub_variant ->
+            let tag_test = Printf.sprintf "%s.%s == %s" access adt_tag_field
+              (qualified sub_info.adt_owner sub_variant.var_tag) in
+            let deeper = List.mapi (fun index (_, deeper) ->
+              let deeper_name, deeper_ty =
+                List.nth (variant_field_types sub_info sub_args sub_variant) index in
+              sub_plan (field_access access sub_info sub_variant deeper_name deeper_ty)
+                deeper_ty deeper) sub_fields in
+            List.concat_map fst deeper, tag_test :: List.concat_map snd deeper
+          | None -> invalid_arg "case pattern validated before emission")
+       | _ -> invalid_arg "case pattern validated before emission")
+    | PLit { value; _ } -> [], [literal_pattern_test access field_ty value]
+  in
   match pattern with
-  | PWild -> None, None, []
-  | PVar name -> None, Some name, []
-  | PNullary { ctor; _ } -> find_variant info ctor, None, []
+  | PWild -> None, None, [], []
+  | PVar name -> None, Some name, [], []
+  | PNullary { ctor; _ } -> find_variant info ctor, None, [], []
   | PCon { ctor; fields; _ } ->
     let variant = match find_variant info ctor with
       | Some variant -> variant
       | None -> invalid_arg "case pattern validated before emission"
     in
-    let bindings = List.concat (List.mapi (fun index (_key, sub) ->
+    let planned = List.mapi (fun index (_key, sub) ->
       let field_name, field_ty =
         List.nth (variant_field_types info type_args variant) index in
-      match sub with
-      | PVar name -> [name, variant_field_go_name variant field_name, field_ty]
-      | _ -> []) fields) in
-    Some variant, None, bindings
+      sub_plan (field_access scrut info variant field_name field_ty) field_ty sub) fields in
+    Some variant, None, List.concat_map fst planned, List.concat_map snd planned
   | PLit _ -> invalid_arg "case pattern validated before emission"
 
 (* `case` lowers to statements, not an expression: a tag switch when no arm has a
@@ -4238,8 +4370,12 @@ and emit_adt_case_statements ?(indent="") signatures env buffer scrut arms =
   let plans =
     List.map (fun ((pattern, guard, body) as arm) ->
       ignore guard; ignore body;
-      arm, pattern_plan info type_args pattern) arms in
-  let guarded = List.exists (fun (_, guard, _) -> guard <> None) arms in
+      arm, pattern_plan ~scrut:scrut_name info type_args pattern) arms in
+  (* A NESTED pattern tests more than its own tag, so the arm cannot be a `switch` case:
+     the chain form is the one that can carry an extra condition, and it is the same shape
+     a guard already takes. *)
+  let nested = List.exists (fun (_, (_, _, _, conditions)) -> conditions <> []) plans in
+  let guarded = nested || List.exists (fun (_, guard, _) -> guard <> None) arms in
   (* A single-variant ADT (a tuple) has nothing to discriminate: the first arm always
      matches, so binding its payload IS the match.  A switch would need a tag the type
      does not carry. *)
@@ -4252,15 +4388,10 @@ and emit_adt_case_statements ?(indent="") signatures env buffer scrut arms =
        Printf.bprintf buffer "%s%s := %s\n%s_ = %s\n" body_indent (local_ident name)
          scrut_name body_indent (local_ident name);
        env := (name, scrut_ty) :: !env);
-    List.iter (fun (name, go_field, field_ty) ->
-      (* A self-referential payload is held behind a pointer, so the binder reads through
-         `teslrt.Unboxed` — one call, and a nil (which nothing the emitter builds can
-         produce) traps there rather than binding a fabricated zero value. *)
-      let read =
-        if adt_self_field info field_ty then
-          Printf.sprintf "teslrt.Unboxed(%s.%s)" scrut_name go_field
-        else Printf.sprintf "%s.%s" scrut_name go_field
-      in
+    (* The plan already carries the expression each binder reads — a field of the
+       scrutinee, or a path through a nested pattern, unboxed wherever the payload is a
+       pointer. *)
+    List.iter (fun (name, read, field_ty) ->
       Printf.bprintf buffer "%s%s := %s\n%s_ = %s\n" body_indent (local_ident name)
         read body_indent (local_ident name);
       env := (name, field_ty) :: !env) bindings;
@@ -4272,7 +4403,7 @@ and emit_adt_case_statements ?(indent="") signatures env buffer scrut arms =
   in
   if single then begin
     match plans with
-    | (arm, (_, whole, bindings)) :: _ ->
+    | (arm, (_, whole, bindings, _)) :: _ ->
       let arm_env = bind_arm inner (whole, bindings) in
       (arm_body arm) arm_env inner
     | [] -> invalid_arg "case validated before emission"
@@ -4281,13 +4412,19 @@ and emit_adt_case_statements ?(indent="") signatures env buffer scrut arms =
        it is dead code, which `go vet` rejects. *)
     let rec chain = function
       | [] -> unreachable_default inner
-      | (arm, (variant, whole, bindings)) :: rest ->
+      | (arm, (variant, whole, bindings, conditions)) :: rest ->
         let body_indent = inner ^ "\t" in
-        (match variant with
-         | Some variant ->
-           Printf.bprintf buffer "%sif %s.%s == %s {\n" inner scrut_name adt_tag_field
-             (qualified info.adt_owner variant.var_tag)
-         | None -> Printf.bprintf buffer "%s{\n" inner);
+        (* The arm's own tag and its nested tests are ONE condition: a nested test reads
+           through the payload, so it may only be evaluated once the tag says the payload
+           is there — `&&` short-circuits left to right, which is exactly that order. *)
+        let tests = (match variant with
+          | Some variant ->
+            [Printf.sprintf "%s.%s == %s" scrut_name adt_tag_field
+               (qualified info.adt_owner variant.var_tag)]
+          | None -> []) @ conditions in
+        (match tests with
+         | [] -> Printf.bprintf buffer "%s{\n" inner
+         | _ -> Printf.bprintf buffer "%sif %s {\n" inner (String.concat " && " tests));
         let arm_env = bind_arm body_indent (whole, bindings) in
         (match arm_guard arm with
          | None -> (arm_body arm) arm_env body_indent
@@ -4297,7 +4434,7 @@ and emit_adt_case_statements ?(indent="") signatures env buffer scrut arms =
            (arm_body arm) arm_env (body_indent ^ "\t");
            Printf.bprintf buffer "%s}\n" body_indent);
         Printf.bprintf buffer "%s}\n" inner;
-        if variant = None && arm_guard arm = None then () else chain rest
+        if tests = [] && arm_guard arm = None then () else chain rest
     in
     chain plans
   end else begin
@@ -4313,7 +4450,7 @@ and emit_adt_case_statements ?(indent="") signatures env buffer scrut arms =
     in
     let rec cases seen = function
       | [] -> containment_default ()
-      | (arm, (variant, whole, bindings)) :: rest ->
+      | (arm, (variant, whole, bindings, _)) :: rest ->
         (match variant with
          | Some variant ->
            let tag = qualified info.adt_owner variant.var_tag in
@@ -4923,7 +5060,7 @@ and emit_variant_literal ?(indent="") signatures env result variant args =
        the operand needs no address of its own — a composite literal's field is not
        addressable, which is why this is a call rather than an `&`. *)
     let value =
-      if adt_self_field info field_ty then Printf.sprintf "teslrt.Boxed(%s)" value
+      if adt_self_payload info variant name then Printf.sprintf "teslrt.Boxed(%s)" value
       else value
     in
     Printf.sprintf "%s: %s" (variant_field_go_name variant name) value) args payload in
@@ -8172,6 +8309,17 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         | TList _ | TSet _ | TDict _ | TFunc _ -> false
         | TInt | TFloat | TString | TBool | TUnit | TJson | TParam _ | TFailure -> false
       in
+      (* A GENERIC type naming ITSELF at another instantiation gets its own message: it is
+         not "reached through another type", it is the instantiation cycle Go rejects. *)
+      let self_at_other_instantiation =
+        info.adt_params <> []
+        && List.exists (fun variant ->
+             List.exists (fun (_, field_ty) ->
+               (not (adt_self_field info field_ty))
+               && (match field_ty with
+                   | TAdt (other, _) -> other.adt_go_name = info.adt_go_name
+                   | _ -> false)) variant.var_fields) info.adt_variants
+      in
       let indirectly_recursive =
         List.exists (fun variant ->
           List.exists (fun (_, field_ty) ->
@@ -8184,7 +8332,11 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           List.exists (fun (_, field_ty) -> adt_self_field info field_ty) variant.var_fields)
           info.adt_variants
       in
-      if indirectly_recursive then
+      if self_at_other_instantiation then
+        unsupported loc
+          "Go backend supports a recursive GENERIC type only where it refers to ITSELF \
+           (`%s a`), not to another instantiation" name
+      else if indirectly_recursive then
         unsupported loc
           "Go backend supports a recursive type only where the payload field IS the type \
            itself (`%s`)" name
@@ -8193,21 +8345,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
          DIFFERENT instantiation (`left: (Tree Int)` inside `Tree a`) Go rejects the
          declaration as an instantiation cycle, so that shape is refused here instead of
          being emitted as something that does not compile. *)
-      else if directly_recursive && info.adt_params <> []
-              && List.exists (fun variant ->
-                   List.exists (fun (_, field_ty) ->
-                     adt_self_field info field_ty
-                     && (match field_ty with
-                         | TAdt (_, args) ->
-                           List.length args <> List.length info.adt_params
-                           || not (List.for_all2 (fun arg (_, go_param) ->
-                                     match arg with
-                                     | TParam name -> name = go_param
-                                     | _ -> false) args info.adt_params)
-                         | _ -> false)) variant.var_fields) info.adt_variants then
-        unsupported loc
-          "Go backend supports a recursive GENERIC type only where it refers to ITSELF \
-           (`%s a`), not to another instantiation" name)
+      else ignore directly_recursive)
       adt_forms;
     List.iter (function
       | DFunc _ | DTest _ -> ()
