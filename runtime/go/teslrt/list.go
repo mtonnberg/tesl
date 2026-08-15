@@ -130,6 +130,17 @@ func ListSum(xs []Int) Int {
 	return total
 }
 
+// ListProduct is the product of every element, and of NO element it is 1 — the identity, which
+// is what `(apply * '())` answers in tesl/list.rkt. Answering 0 for the empty list would make
+// `product (xs ++ ys)` stop agreeing with `product xs * product ys`.
+func ListProduct(xs []Int) Int {
+	total := FromInt64(1)
+	for _, value := range xs {
+		total = Mul(total, value)
+	}
+	return total
+}
+
 func ListMemberBy[T any](needle T, xs []T, equal func(T, T) bool) bool {
 	for _, value := range xs {
 		if equal(needle, value) {

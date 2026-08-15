@@ -370,6 +370,13 @@ type type_table = {
    `current_package`. *)
 let current_types : type_table option ref = ref None
 
+(* Module functions whose body performs a PROOF OPERATION (`detachFact` and friends), by
+   name.  Those operations erase here, so nothing in them can fail at run time — which
+   matters for exactly one shape: a test asserting that calling such a function FAILS, as
+   Racket's runtime does when a value carries more than one proof.  Populated per module,
+   read where that assertion is emitted. *)
+let proof_op_functions : (string, string) Hashtbl.t = Hashtbl.create 8
+
 (* `with database D { … }` is the only place a database DECLARATION becomes observable: it
    binds the store the body's queries run against.  On the Memory backend that store IS the
    entity's table variable, so the block adds nothing at run time and the body is emitted as
@@ -1121,6 +1128,35 @@ let job_result_type signatures loc (info : queue_info) =
   | _ -> unsupported loc
     "Go backend needs `JobResult` imported from `Tesl.ApiTest` for `processNextJob`"
 
+(* The Go form of a combined check: one helper that runs the conjuncts in order, stops at the
+   first rejection and passes each checked value to the next — Racket's `check-and`, minus the
+   fact merging, which erases.  Minted once and shared by both positions a conjunction can be
+   written in: applied to a value (`check (a && b) x`) and passed as a callback
+   (`List.allCheck (a && b) xs`). *)
+let combined_check_helper signatures element names =
+  let go_of name = match Hashtbl.find_opt signatures name with
+    | Some (signature : signature) -> qualified signature.sig_owner signature.go_name
+    | None -> invalid_arg "combined check validated before emission"
+  in
+  let checked = go_type element in
+  let body = Buffer.create 256 in
+  List.iteri (fun index name ->
+    let temporary = Printf.sprintf "teslStep%d" index in
+    if index = 0 then
+      Printf.bprintf body "\t%s := %s(teslValue)\n" temporary (go_of name)
+    else
+      Printf.bprintf body "\t%s := %s(teslrt.MustCheck(teslStep%d))\n"
+        temporary (go_of name) (index - 1);
+    if index < List.length names - 1 then
+      Printf.bprintf body
+        "\tif !%s.OK() {\n\t\treturn teslrt.Reject[%s](%s.Status(), %s.Message())\n\t}\n"
+        temporary checked temporary temporary
+    else
+      Printf.bprintf body "\treturn %s\n" temporary) names;
+  remember_helper_stmts ~prefix:"teslCheckAll"
+    ~signature:(Printf.sprintf "(teslValue %s) teslrt.Check[%s]" checked checked)
+    ~body:(Buffer.contents body)
+
 (* `check (checkA && checkB) x` — a COMBINED check.  Racket's `check-and` runs the first,
    short-circuits on rejection, and passes the checked value to the next; the facts are
    merged into one conjunction.  Here the facts erase, so what is left is the sequencing. *)
@@ -1172,6 +1208,10 @@ let list_leaves = [
   { leaf_name = "List.reverse"; leaf_go = "teslrt.ListReverse"; leaf_arity = 1;
     leaf_result = `Same; leaf_closure = `None; leaf_list_index = 0 };
   { leaf_name = "List.sum"; leaf_go = "teslrt.ListSum"; leaf_arity = 1;
+    leaf_result = `Int; leaf_closure = `None; leaf_list_index = 0 };
+  (* Of NO element the product is 1, not 0 — `(apply * '())` — so the empty list is the
+     identity here the way it is the zero for `sum`. *)
+  { leaf_name = "List.product"; leaf_go = "teslrt.ListProduct"; leaf_arity = 1;
     leaf_result = `Int; leaf_closure = `None; leaf_list_index = 0 };
   { leaf_name = "List.append"; leaf_go = "teslrt.ListAppend"; leaf_arity = 2;
     leaf_result = `Same; leaf_closure = `None; leaf_list_index = 0 };
@@ -1231,6 +1271,15 @@ let dict_leaves = [
   { dict_name = "Dict.member"; dict_go = "teslrt.DictMember"; dict_arity = 2;
     dict_result = `Bool; dict_needs_order = true };
   { dict_name = "Dict.remove"; dict_go = "teslrt.DictRemove"; dict_arity = 2;
+    dict_result = `Dict; dict_needs_order = true };
+  (* `Dict.delete` is `Dict.remove` under another name — tesl/dict.rkt defines it as
+     exactly that, so both spellings reach one implementation here too. *)
+  { dict_name = "Dict.delete"; dict_go = "teslrt.DictRemove"; dict_arity = 2;
+    dict_result = `Dict; dict_needs_order = true };
+  (* LEFT-BIASED: a key in both keeps the FIRST dict's value.  It is also the one leaf whose
+     arguments are two dicts, so the rotation below leaves it alone — swapping them would
+     silently reverse the bias. *)
+  { dict_name = "Dict.union"; dict_go = "teslrt.DictUnion"; dict_arity = 2;
     dict_result = `Dict; dict_needs_order = true };
   { dict_name = "Dict.size"; dict_go = "teslrt.DictSize"; dict_arity = 1;
     dict_result = `Int; dict_needs_order = false };
@@ -1312,7 +1361,8 @@ let tuple_accessor = function
 type hof =
   | HofMap | HofFilter | HofFoldl | HofFoldr | HofAny | HofAll | HofFilterCheck
   | HofAllCheck | HofZip | HofFind | HofFilterMap | HofConcatMap | HofSortBy
-  | HofEmptyForAll | HofSetFilterCheck
+  | HofEmptyForAll | HofSetFilterCheck | HofSetAllCheck | HofDictFilterCheckValues
+  | HofDictFilterCheckKeys | HofCount
 
 let higher_order_leaf = function
   | "List.map" -> Some HofMap
@@ -1332,20 +1382,29 @@ let higher_order_leaf = function
      proved of every element — vacuously true, and the proof erases, so what is left is an
      empty slice.  It takes the check only to name the element type. *)
   | "List.emptyForAll" -> Some HofEmptyForAll
-  (* The Set counterpart of `List.filterCheck`: same rule, rebuilt as a set. *)
+  (* `List.count p xs` is `List.filter` that keeps only the TALLY, so it allocates nothing. *)
+  | "List.count" -> Some HofCount
+  (* The Set counterparts of `List.filterCheck`/`List.allCheck`: the same rules, rebuilt as a
+     set. *)
   | "Set.filterCheck" -> Some HofSetFilterCheck
+  | "Set.allCheck" -> Some HofSetAllCheck
+  (* The Dict counterparts: the entries whose VALUE — or whose KEY — passes the check. *)
+  | "Dict.filterCheckValues" -> Some HofDictFilterCheckValues
+  | "Dict.filterCheckKeys" -> Some HofDictFilterCheckKeys
   | _ -> None
 
 let higher_order_leaf_names =
   ["List.map"; "List.filter"; "List.foldl"; "List.foldr"; "List.any"; "List.all";
    "List.filterCheck"; "List.allCheck"; "List.zip"; "List.find"; "List.filterMap";
-   "List.concatMap"; "List.sortBy"; "List.emptyForAll"; "Set.filterCheck"]
+   "List.concatMap"; "List.sortBy"; "List.emptyForAll"; "List.count";
+   "Set.filterCheck"; "Set.allCheck"; "Dict.filterCheckValues"; "Dict.filterCheckKeys"]
 
 let hof_arity = function
   | HofFoldl | HofFoldr -> 3
   | HofFind | HofFilterMap | HofConcatMap | HofSortBy -> 2
   | HofMap | HofFilter | HofAny | HofAll | HofFilterCheck | HofAllCheck | HofZip
-  | HofSetFilterCheck -> 2
+  | HofSetFilterCheck | HofSetAllCheck | HofDictFilterCheckValues
+  | HofDictFilterCheckKeys | HofCount -> 2
   | HofEmptyForAll -> 1
 
 (* Every constructor is registered in the signature table under its own name, so a
@@ -1655,6 +1714,14 @@ let rec type_of_expr signatures env expr =
                  unsupported (Checker.expr_loc arg) "Go backend check `%s` argument type mismatch" name)
                call_args params;
              result
+           (* A stdlib leaf that IS a check — `check Dict.requireKey key d`.  Its signature is
+              a placeholder, since a container leaf is typed per call site, so the leaf's own
+              type rule decides whether this is a check at all. *)
+           | Some _ when dict_leaf name <> None ->
+             let leaf = match dict_leaf name with Some leaf -> leaf | None -> assert false in
+             (match type_of_dict_leaf signatures env loc leaf call_args with
+              | TCheck result -> result
+              | _ -> unsupported loc "`%s` is not a check" name)
            | Some _ -> unsupported loc "`%s` is not a check" name
            | None -> unsupported loc "Go backend cannot resolve check `%s`" name)
          | _ -> unsupported loc "Go backend requires `check` followed by a named check function")
@@ -1853,6 +1920,83 @@ let rec type_of_expr signatures env expr =
           if type_of_expr signatures env arg <> TInt then
             unsupported loc "Go backend `List.range` takes two Ints") args;
         TList TInt
+      (* The `Tesl.Either` combinators.  Each is typed from its Either argument's two
+         payloads; the three that take a FUNCTION are typed through the same
+         `type_of_callable` every higher-order leaf uses. *)
+      | EVar { name = ("Either.isLeft" | "Either.isRight" | "Either.fromLeft"
+                      | "Either.fromRight" | "Either.toMaybe" | "Either.withDefault"
+                      | "Either.fromMaybe" | "Either.map" | "Either.mapLeft"
+                      | "Either.andThen") as name; _ } when Hashtbl.mem signatures name ->
+        let arity = match name with
+          | "Either.isLeft" | "Either.isRight" | "Either.fromLeft" | "Either.fromRight"
+          | "Either.toMaybe" -> 1
+          | _ -> 2
+        in
+        if List.length args <> arity then
+          unsupported loc "Go backend requires `%s` applied to %d argument(s)" name arity;
+        let maybe_of inner =
+          match adt_ctor_of_signature signatures "Nothing" with
+          | Some (info, _) -> TAdt (info, [inner])
+          | None -> unsupported loc
+            "Go backend `%s` returns a Maybe; import `Tesl.Maybe`" name
+        in
+        let either_of left right =
+          match adt_ctor_of_signature signatures "Left" with
+          | Some (info, _) -> TAdt (info, [left; right])
+          | None -> unsupported loc
+            "Go backend `%s` returns an Either; import `Tesl.Either`" name
+        in
+        let payloads index =
+          match type_of_expr signatures env (List.nth args index) with
+          | TAdt (info, [left; right]) when info.adt_tesl_name = "Either" -> left, right
+          | _ -> unsupported loc "Go backend `%s` requires an Either argument" name
+        in
+        (match name with
+         | "Either.isLeft" | "Either.isRight" -> ignore (payloads 0); TBool
+         | "Either.fromLeft" -> maybe_of (fst (payloads 0))
+         | "Either.fromRight" | "Either.toMaybe" -> maybe_of (snd (payloads 0))
+         | "Either.withDefault" ->
+           let _, right = payloads 1 in
+           if type_of_arg signatures env right (List.nth args 0) <> right then
+             unsupported loc "Go backend `%s` default has an unsupported type" name;
+           right
+         (* The one that takes a Maybe rather than an Either: the left value is what a
+            Nothing has none of. *)
+         | "Either.fromMaybe" ->
+           (match type_of_expr signatures env (List.nth args 1) with
+            | TAdt (info, [right]) when info.adt_tesl_name = "Maybe" ->
+              either_of (type_of_expr signatures env (List.nth args 0)) right
+            | _ -> unsupported loc "Go backend `%s` requires a Maybe argument" name)
+         | "Either.map" ->
+           let left, right = payloads 1 in
+           either_of left (type_of_callable signatures env loc name (List.nth args 0) [right])
+         | "Either.mapLeft" ->
+           let left, right = payloads 1 in
+           either_of (type_of_callable signatures env loc name (List.nth args 0) [left]) right
+         | _ ->
+           let left, right = payloads 1 in
+           (match type_of_callable signatures env loc name (List.nth args 0) [right] with
+            | TAdt (info, [inner_left; inner_right])
+              when info.adt_tesl_name = "Either" && inner_left = left ->
+              either_of left inner_right
+            | _ -> unsupported loc
+              "Go backend `%s` needs a function returning an Either with the same Left type"
+              name))
+      (* `Either.partition` consumes a list of Either and answers BOTH sides as a Tuple2, so
+         its result mentions two element types rather than one — which is why it is not a
+         list-leaf-table entry. *)
+      | EVar { name = "Either.partition"; _ } when Hashtbl.mem signatures "Either.partition" ->
+        if List.length args <> 1 then
+          unsupported loc "Go backend requires `Either.partition` applied to 1 argument(s)";
+        (match type_of_expr signatures env (List.nth args 0) with
+         | TList (TAdt (info, [left; right])) when info.adt_tesl_name = "Either" ->
+           (match Hashtbl.find_opt signatures "Tuple2" with
+            | Some { result = TAdt (tuple, _); _ } ->
+              TAdt (tuple, [TList left; TList right])
+            | _ -> unsupported loc
+              "Go backend needs `Tesl.Tuple` imported for `Either.partition`")
+         | _ -> unsupported loc
+           "Go backend `Either.partition` requires a List (Either a b) argument")
       | EVar { name = "List.repeat"; _ } when Hashtbl.mem signatures "List.repeat" ->
         if List.length args <> 2 then
           unsupported loc "Go backend requires `List.repeat` applied to 2 argument(s)";
@@ -2197,7 +2341,7 @@ and type_of_list_leaf signatures env loc leaf args =
      A leaf whose result mentions the element (`List.reverse []`) is NOT in this set — there
      the choice would be a guess, so it still fails closed. *)
   let fixed_element = match leaf.leaf_name, leaf.leaf_result with
-    | ("List.sum" | "List.isEmpty" | "List.length"), _ -> Some TInt
+    | ("List.sum" | "List.product" | "List.isEmpty" | "List.length"), _ -> Some TInt
     (* `concat []`/`flatten []` take a list OF LISTS, so the default has to be one. *)
     | _, `Inner -> Some (TList TInt)
     | _ -> None
@@ -2221,8 +2365,8 @@ and type_of_list_leaf signatures env loc leaf args =
       if arg_ty <> want then unsupported loc
         "Go backend `%s` argument %d has an unsupported type" leaf.leaf_name (index + 1)
     end) arg_types;
-  if leaf.leaf_name = "List.sum" && element <> TInt then
-    unsupported loc "Go backend `List.sum` requires a List Int";
+  if (leaf.leaf_name = "List.sum" || leaf.leaf_name = "List.product") && element <> TInt then
+    unsupported loc "Go backend `%s` requires a List Int" leaf.leaf_name;
   (match leaf.leaf_closure with
    | `Equal ->
      if not (supports_equality element) then unsupported loc
@@ -2252,6 +2396,25 @@ and type_of_list_leaf signatures env loc leaf args =
    site, so the declared annotations need no resolving here) or a named function. *)
 and type_of_callable signatures env loc what callable param_types =
   match callable with
+  (* A COMBINED check passed as the callback: `List.allCheck (isPositive && isSmall) xs`.
+     Every conjunct checks the same type and the result is that type's `Check`, exactly as
+     for `check (a && b) x` — the difference is only where it is applied. *)
+  | EBinop { op = BAnd; _ } when (match check_conjuncts callable with
+                                  | Some (_ :: _ :: _) -> true | _ -> false) ->
+    let names = Option.value (check_conjuncts callable) ~default:[] in
+    let element = match param_types with
+      | [element] -> element
+      | _ -> unsupported loc "Go backend `%s` applies a combined check to one value" what
+    in
+    List.iter (fun name ->
+      match Hashtbl.find_opt signatures name with
+      | Some { params = [param]; result = TCheck result; _ }
+        when param = element && result = element -> ()
+      | Some { params = [_]; result = TCheck _; _ } -> unsupported loc
+        "Go backend combined check `%s` does not check the same type as the others" name
+      | Some _ -> unsupported loc "`%s` is not a check" name
+      | None -> unsupported loc "Go backend cannot resolve check `%s`" name) names;
+    TCheck element
   | ELambda { params; body; _ } ->
     if List.length params <> List.length param_types then
       unsupported loc "Go backend `%s` needs a %d-parameter function" what
@@ -2389,7 +2552,14 @@ and type_of_hof signatures env loc what hof args =
         | _ -> unsupported loc
           "Go backend `%s` takes a named `check` function over the element type" what)
      | _ -> unsupported loc "Go backend `%s` takes a named `check` function" what)
-  | HofSetFilterCheck ->
+  (* `List.count p xs` answers how many elements satisfy p — a Bool-returning function, like
+     `filter`, but nothing is kept. *)
+  | HofCount ->
+    let element = list_of 1 in
+    if type_of_callable signatures env loc what (List.nth args 0) [element] <> TBool then
+      unsupported loc "Go backend `%s` needs a Bool-returning function" what;
+    TInt
+  | HofSetFilterCheck | HofSetAllCheck ->
     let element = match type_of_expr signatures env (List.nth args 1) with
       | TSet element -> element
       | _ -> unsupported loc "Go backend `%s` requires a Set argument" what
@@ -2397,7 +2567,29 @@ and type_of_hof signatures env loc what hof args =
     let result = type_of_callable signatures env loc what (List.nth args 0) [element] in
     if result <> TCheck element then unsupported loc
       "Go backend `%s` takes a `check` function over the element type" what;
-    TSet element
+    (match hof with
+     | HofSetFilterCheck -> TSet element
+     (* `allCheck` answers the whole set or nothing at all — the Maybe IS the verdict. *)
+     | _ ->
+       (match adt_ctor_of_signature signatures "Nothing" with
+        | Some (info, _) -> TAdt (info, [TSet element])
+        | None -> unsupported loc
+          "Go backend `%s` returns a Maybe; import `Tesl.Maybe`" what))
+  (* The check runs on the VALUE; the key rides along untouched, so the result is a dict of
+     the same type. *)
+  | HofDictFilterCheckValues | HofDictFilterCheckKeys ->
+    let key, value = match type_of_expr signatures env (List.nth args 1) with
+      | TDict (key, value) -> key, value
+      | _ -> unsupported loc "Go backend `%s` requires a Dict argument" what
+    in
+    let checked = match hof with HofDictFilterCheckKeys -> key | _ -> value in
+    let result = type_of_callable signatures env loc what (List.nth args 0) [checked] in
+    if result <> TCheck checked then unsupported loc
+      "Go backend `%s` takes a `check` function over the %s type" what
+      (match hof with HofDictFilterCheckKeys -> "key" | _ -> "value");
+    if not (supports_ordering key) then unsupported loc
+      "Go backend `%s` needs ordered keys" what;
+    TDict (key, value)
   | HofFilterCheck | HofAllCheck ->
     let element = list_of 1 in
     let result = type_of_callable signatures env loc what (List.nth args 0) [element] in
@@ -2444,15 +2636,23 @@ and type_of_hof signatures env loc what hof args =
          | None -> None)
       | _ -> None
     in
-    let accumulator = match List.nth args 1 with
-      | EList { elems = []; _ } ->
+    (* `Dict.empty`/`Set.empty` as the init are the same case as `[]`: an empty container
+       written in place carries no key/element type, and the callback's accumulator is what
+       says what it would have held. *)
+    let untyped_init = match normalize_call_head (List.nth args 1) with
+      | EList { elems = []; _ } -> true
+      | EVar { name = ("Dict.empty" | "Set.empty"); _ } -> true
+      | _ -> false
+    in
+    let accumulator =
+      if untyped_init then
         (match declared_accumulator () with
          | Some ty -> ty
          | None ->
            (match annotated_accumulator () with
             | Some ty -> ty
             | None -> type_of_expr signatures env (List.nth args 1)))
-      | _ -> type_of_expr signatures env (List.nth args 1)
+      else type_of_expr signatures env (List.nth args 1)
     in
     (* `foldl`'s callback takes (accumulator, element); `foldr`'s takes them the other way
        round, per the stdlib signatures. *)
@@ -2482,11 +2682,19 @@ and type_of_set_leaf signatures env loc leaf args expected =
   if List.length args <> leaf.set_arity then
     unsupported loc "Go backend requires `%s` applied to %d argument(s)"
       leaf.set_name leaf.set_arity;
+  (* `Set.insert x Set.empty`: the empty set carries no element type, and the value being
+     inserted is what says what it would have held — the same rule `Dict.insert` gets. *)
+  let is_set_empty expr =
+    match normalize_call_head expr with EVar { name = "Set.empty"; _ } -> true | _ -> false in
   let element =
     if leaf.set_index >= 0 then
-      match type_of_expr signatures env (List.nth args leaf.set_index) with
-      | TSet element -> element
-      | _ -> unsupported loc "Go backend `%s` requires a Set argument" leaf.set_name
+      match List.nth args leaf.set_index with
+      | argument when is_set_empty argument && leaf.set_index = 1 ->
+        type_of_expr signatures env (List.nth args 0)
+      | argument ->
+        (match type_of_expr signatures env argument with
+         | TSet element -> element
+         | _ -> unsupported loc "Go backend `%s` requires a Set argument" leaf.set_name)
     else match leaf.set_name, expected with
       | "Set.empty", Some (TSet element) -> element
       | "Set.empty", _ ->
@@ -2525,10 +2733,20 @@ and type_of_dict_leaf signatures env loc leaf args =
   if List.length args <> leaf.dict_arity then
     unsupported loc "Go backend requires `%s` applied to %d argument(s)"
       leaf.dict_name leaf.dict_arity;
+  (* `Dict.insert k v Dict.empty`: the empty dict carries no key or value type of its own,
+     and the OTHER two arguments are exactly what say what it would have held.  This is the
+     same rule an empty list literal gets from a callback's parameter. *)
+  let is_dict_empty expr =
+    match normalize_call_head expr with EVar { name = "Dict.empty"; _ } -> true | _ -> false in
   let pair_of index =
-    match type_of_expr signatures env (List.nth args index) with
-    | TDict (key, value) -> key, value
-    | _ -> unsupported loc "Go backend `%s` requires a Dict argument" leaf.dict_name
+    match leaf.dict_name, List.nth args index with
+    | "Dict.insert", argument when is_dict_empty argument && index = 2 ->
+      type_of_expr signatures env (List.nth args 0),
+      type_of_expr signatures env (List.nth args 1)
+    | _ ->
+      (match type_of_expr signatures env (List.nth args index) with
+       | TDict (key, value) -> key, value
+       | _ -> unsupported loc "Go backend `%s` requires a Dict argument" leaf.dict_name)
   in
   let maybe_of inner =
     match adt_ctor_of_signature signatures "Nothing" with
@@ -2565,9 +2783,16 @@ and type_of_dict_leaf signatures env loc leaf args =
          "Go backend `%s` key has an unsupported type" leaf.dict_name;
        if type_of_arg signatures env value (List.nth args 1) <> value then unsupported loc
          "Go backend `%s` value has an unsupported type" leaf.dict_name
-     | "Dict.lookup" | "Dict.member" | "Dict.remove" | "Dict.requireKey" | "Dict.get" ->
+     | "Dict.lookup" | "Dict.member" | "Dict.remove" | "Dict.delete" | "Dict.requireKey"
+     | "Dict.get" ->
        if type_of_arg signatures env key (List.nth args 0) <> key then unsupported loc
          "Go backend `%s` key has an unsupported type" leaf.dict_name
+     (* Both operands are dicts, and they must be the SAME dict type: a union of
+        `Dict String Int` with `Dict String Bool` has no value type to answer with. *)
+     | "Dict.union" ->
+       if pair_of 0 <> (key, value) then unsupported loc
+         "Go backend `%s` needs both dicts to have the same key and value types"
+         leaf.dict_name
      | _ -> ());
     (match leaf.dict_result with
      | `Dict -> TDict (key, value)
@@ -2929,28 +3154,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
          | conjunction :: _ -> Option.value (check_conjuncts conjunction) ~default:[]
          | [] -> []
        in
-       let go_of name = match Hashtbl.find_opt signatures name with
-         | Some signature -> qualified signature.sig_owner signature.go_name
-         | None -> unsupported loc "Go backend cannot resolve check `%s`" name
-       in
-       let checked = go_type value_ty in
-       let body = Buffer.create 256 in
-       List.iteri (fun index name ->
-         let temporary = Printf.sprintf "teslStep%d" index in
-         if index = 0 then
-           Printf.bprintf body "\t%s := %s(teslValue)\n" temporary (go_of name)
-         else
-           Printf.bprintf body "\t%s := %s(teslrt.MustCheck(teslStep%d))\n"
-             temporary (go_of name) (index - 1);
-         if index < List.length names - 1 then
-           Printf.bprintf body
-             "\tif !%s.OK() {\n\t\treturn teslrt.Reject[%s](%s.Status(), %s.Message())\n\t}\n"
-             temporary checked temporary temporary
-         else
-           Printf.bprintf body "\treturn %s\n" temporary) names;
-       let helper = remember_helper_stmts ~prefix:"teslCheckAll"
-         ~signature:(Printf.sprintf "(teslValue %s) teslrt.Check[%s]" checked checked)
-         ~body:(Buffer.contents body) in
+       let helper = combined_check_helper signatures value_ty names in
        let argument = match args with
          | [_; argument] -> argument
          | _ -> unsupported loc
@@ -2959,6 +3163,27 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
        Printf.sprintf "teslrt.%s(%s(%s))"
          (if !current_handler_body then "MustCheckRequest" else "MustCheck")
          helper (emit_expr ~expected:value_ty ~indent signatures env argument)
+     | EVar { name = "check"; _ } when (match List.map normalize_call_head args with
+                                         | EVar { name; _ } :: _ ->
+                                           dict_leaf name <> None
+                                           && (match Hashtbl.find_opt signatures name with
+                                               | Some { result = TCheck _; _ } -> false
+                                               | Some _ -> true | None -> false)
+                                         | _ -> false) ->
+       (* `check Dict.requireKey key d`: the leaf builds the Check, and `check` is what turns
+          a rejection into the request's answer — the same two halves as a named check. *)
+       let call_args = match List.map normalize_call_head args with
+         | _ :: call_args -> call_args
+         | [] -> []
+       in
+       let leaf = match List.map normalize_call_head args with
+         | EVar { name; _ } :: _ ->
+           (match dict_leaf name with Some leaf -> leaf | None -> assert false)
+         | _ -> assert false in
+       let checked = type_of_dict_leaf signatures env loc leaf call_args in
+       Printf.sprintf "teslrt.%s(%s)"
+         (if !current_handler_body then "MustCheckRequest" else "MustCheck")
+         (emit_dict_leaf ~indent signatures env loc leaf call_args checked None)
      | EVar { name = "check"; _ } ->
        (match List.map normalize_call_head args with
         | EVar { name; _ } :: call_args ->
@@ -3359,6 +3584,74 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
        let hof = match higher_order_leaf name with Some hof -> hof | None -> assert false in
        emit_hof ~indent signatures env loc name hof args
          (type_of_expr signatures env app)
+      (* The Either combinators.  The plain ones are runtime calls; the three that take a
+         function are emitted INLINE — a callback is inlined rather than passed as a Go func
+         value, the same rule the list leaves follow, and an Either has one payload so there
+         is no loop, only the two arms. *)
+      | EVar { name = ("Either.isLeft" | "Either.isRight" | "Either.fromLeft"
+                      | "Either.fromRight" | "Either.toMaybe" | "Either.withDefault"
+                      | "Either.fromMaybe") as name; _ } when Hashtbl.mem signatures name ->
+        ignore (type_of_expr signatures env app);
+        let go = match name with
+          | "Either.isLeft" -> "teslrt.EitherIsLeft"
+          | "Either.isRight" -> "teslrt.EitherIsRight"
+          | "Either.fromLeft" -> "teslrt.EitherFromLeft"
+          | "Either.fromRight" -> "teslrt.EitherFromRight"
+          | "Either.toMaybe" -> "teslrt.EitherToMaybe"
+          | "Either.withDefault" -> "teslrt.EitherWithDefault"
+          | _ -> "teslrt.EitherFromMaybe"
+        in
+        Printf.sprintf "%s(%s)" go (String.concat ", " (List.map emit args))
+      | EVar { name = ("Either.map" | "Either.mapLeft" | "Either.andThen") as name; _ }
+        when Hashtbl.mem signatures name ->
+        let result = type_of_expr signatures env app in
+        let left_type, right_type = match result with
+          | TAdt (_, [left; right]) -> go_type left, go_type right
+          | _ -> invalid_arg "Either combinator validated before emission"
+        in
+        let callable = normalize_call_head (List.nth args 0) in
+        let payload = match type_of_expr signatures env (List.nth args 1) with
+          | TAdt (_, [left; right]) -> if name = "Either.mapLeft" then left else right
+          | _ -> invalid_arg "Either combinator validated before emission"
+        in
+        let depth = String.length indent in
+        let inner = indent ^ "\t" in
+        let body_indent = inner ^ "\t" in
+        let subject = Printf.sprintf "teslEither%d" depth in
+        let binder = match callable_binders callable [Printf.sprintf "teslValue%d" depth] with
+          | [binder] -> binder
+          | _ -> invalid_arg "Either combinator validated before emission"
+        in
+        (* `mapLeft` transforms the LEFT arm and passes the right through; the other two are
+           the mirror image. *)
+        let left_side = name = "Either.mapLeft" in
+        let transformed_tag = if left_side then "EitherLeft" else "EitherRight" in
+        let transformed_field = if left_side then "LeftValue" else "RightValue" in
+        let passthrough_field = if left_side then "RightValue" else "LeftValue" in
+        let applied =
+          emit_applied ~indent:body_indent signatures env callable [payload] [binder] in
+        (* `andThen`'s function already answers an Either, so its arm returns it as it is. *)
+        let rebuilt =
+          if name = "Either.andThen" then applied
+          else Printf.sprintf "teslrt.%s[%s, %s](%s)"
+            (if left_side then "Left" else "Right") left_type right_type applied
+        in
+        let passthrough = Printf.sprintf "teslrt.%s[%s, %s](%s.%s)"
+          (if left_side then "Right" else "Left") left_type right_type subject passthrough_field in
+        let bind = if binder = "_"
+          then Printf.sprintf "%s_ = %s.%s\n" body_indent subject transformed_field
+          else Printf.sprintf "%s%s := %s.%s\n" body_indent binder subject transformed_field in
+        Printf.sprintf
+          "(func() %s {\n%s%s := %s\n%sif %s.Tag == teslrt.%s {\n%s%sreturn %s\n%s}\n%sreturn %s\n%s}())"
+          (go_type result) inner subject
+          (emit_expr ~indent:inner signatures env (List.nth args 1))
+          inner subject transformed_tag
+          bind body_indent rebuilt
+          inner
+          inner passthrough indent
+      | EVar { name = "Either.partition"; _ } when Hashtbl.mem signatures "Either.partition" ->
+        ignore (type_of_expr signatures env app);
+        Printf.sprintf "teslrt.EitherPartition(%s)" (emit (List.nth args 0))
       | EVar { name = ("List.range" | "List.repeat") as name; _ }
         when Hashtbl.mem signatures name ->
         ignore (type_of_expr signatures env app);
@@ -3370,7 +3663,8 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
        let element = match List.nth args leaf.leaf_list_index with
          | EList { elems = []; _ } when leaf.leaf_result = `Inner -> TList TInt
          | EList { elems = []; _ }
-           when List.mem leaf.leaf_name ["List.sum"; "List.isEmpty"; "List.length"] -> TInt
+           when List.mem leaf.leaf_name
+                  ["List.sum"; "List.product"; "List.isEmpty"; "List.length"] -> TInt
          | arg ->
            (match type_of_expr signatures env arg with
             | TList element -> element
@@ -4046,6 +4340,18 @@ and emit_applied ?(indent="") signatures env callable params bound =
     in
     let supplied = List.map (emit_expr ~indent signatures env) supplied in
     Printf.sprintf "%s(%s)" go_name (String.concat ", " (supplied @ bound))
+  (* A combined check as the callback: the SAME sequencing helper `check (a && b) x` mints,
+     called with the loop's element.  Sharing the helper is the point — one rule for what a
+     conjunction means, whichever position it is written in. *)
+  | EBinop { op = BAnd; _ } when (match check_conjuncts callable with
+                                  | Some (_ :: _ :: _) -> true | _ -> false) ->
+    let names = Option.value (check_conjuncts callable) ~default:[] in
+    let element = match params with
+      | [element] -> element
+      | _ -> invalid_arg "combined check callback validated before emission"
+    in
+    Printf.sprintf "%s(%s)" (combined_check_helper signatures element names)
+      (String.concat ", " bound)
   | _ -> invalid_arg "function argument validated before emission"
 
 and callable_binders callable fallback =
@@ -4194,10 +4500,10 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
      | _ -> invalid_arg "emptyForAll validated before emission")
   (* The Set counterpart of `filterCheck`: the accepted elements, rebuilt as a set.  Going
      through the set's own list keeps ONE traversal rule for both containers. *)
-  | HofSetFilterCheck ->
+  | HofSetFilterCheck | HofSetAllCheck ->
     let element = match type_of_expr signatures env (List.nth args 1) with
       | TSet element -> element
-      | _ -> invalid_arg "Set.filterCheck validated before emission"
+      | _ -> invalid_arg "Set check leaf validated before emission"
     in
     let value = match callable_binders callable [Printf.sprintf "Value%d" depth] with
       | [value] -> value
@@ -4208,13 +4514,78 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
     let out = Printf.sprintf "teslOut%d" depth in
     let kept = Printf.sprintf "teslKept%d" depth in
     let ok = Printf.sprintf "teslOK%d" depth in
+    let all_ok = Printf.sprintf "teslAll%d" depth in
+    (match hof with
+     | HofSetFilterCheck ->
+       Printf.sprintf
+         "(func() %s {\n%s%s := teslrt.SetEmpty[%s]()\n%sfor _, %s := range teslrt.SetToList(%s) {\n%sif %s, %s := (%s).Value(); %s {\n%s\t%s = teslrt.SetInsert(%s, %s, %s)\n%s}\n%s}\n%sreturn %s\n%s}())"
+         (go_type result) inner out (go_type element)
+         inner value source
+         body_indent kept ok checked ok
+         body_indent out kept out (element_key_less_func element)
+         body_indent inner inner out indent
+     (* Like `List.allCheck`, the check runs on EVERY element before the verdict is taken:
+        an early return would skip checks the Racket backend performs. *)
+     | _ ->
+       Printf.sprintf
+         "(func() %s {\n%s%s := true\n%s%s := teslrt.SetEmpty[%s]()\n%sfor _, %s := range teslrt.SetToList(%s) {\n%sif %s, %s := (%s).Value(); %s {\n%s\t%s = teslrt.SetInsert(%s, %s, %s)\n%s} else {\n%s\t%s = false\n%s}\n%s}\n%sif %s {\n%s\treturn %s{%s: %s, %s: %s}\n%s}\n%sreturn %s{%s: %s}\n%s}())"
+         (go_type result) inner all_ok
+         inner out (go_type element)
+         inner value source
+         body_indent kept ok checked ok
+         body_indent out kept out (element_key_less_func element)
+         body_indent body_indent all_ok body_indent
+         inner
+         inner all_ok inner (go_type result) adt_tag_field "teslrt.MaybeSomething"
+         "SomethingValue" out inner
+         inner (go_type result) adt_tag_field "teslrt.MaybeNothing" indent)
+  (* The dict counterpart: the check runs on each VALUE, and a passing entry is rebuilt with
+     its key.  Iterating the dict's own pair list keeps one traversal rule for every
+     container. *)
+  | HofDictFilterCheckValues | HofDictFilterCheckKeys ->
+    let key_type, value_type = match type_of_expr signatures env (List.nth args 1) with
+      | TDict (key, value) -> key, value
+      | _ -> invalid_arg "Dict check leaf validated before emission"
+    in
+    let keys = hof = HofDictFilterCheckKeys in
+    let pair = Printf.sprintf "teslPair%d" depth in
+    let subject = Printf.sprintf "%s.%s" pair
+      (if keys then "Tuple2First" else "Tuple2Second") in
+    let checked = emit_applied ~indent:body_indent signatures env callable
+      [if keys then key_type else value_type] [subject] in
+    let source = emit_expr ~indent:inner signatures env (List.nth args 1) in
+    let out = Printf.sprintf "teslOut%d" depth in
+    let kept = Printf.sprintf "teslKept%d" depth in
+    let ok = Printf.sprintf "teslOK%d" depth in
+    (* The CHECKED value is what goes back in — a check may answer a different value than it
+       was given (a normalising check does), and Racket stores `check-ok-value` too. *)
+    let entry_key = if keys then kept else Printf.sprintf "%s.Tuple2First" pair in
+    let entry_value = if keys then Printf.sprintf "%s.Tuple2Second" pair else kept in
     Printf.sprintf
-      "(func() %s {\n%s%s := teslrt.SetEmpty[%s]()\n%sfor _, %s := range teslrt.SetToList(%s) {\n%sif %s, %s := (%s).Value(); %s {\n%s\t%s = teslrt.SetInsert(%s, %s, %s)\n%s}\n%s}\n%sreturn %s\n%s}())"
-      (go_type result) inner out (go_type element)
-      inner value source
+      "(func() %s {\n%s%s := teslrt.DictEmpty[%s, %s]()\n%sfor _, %s := range teslrt.DictToList(%s) {\n%sif %s, %s := (%s).Value(); %s {\n%s\t%s = teslrt.DictInsert(%s, %s, %s, %s)\n%s}\n%s}\n%sreturn %s\n%s}())"
+      (go_type result) inner out (go_type key_type) (go_type value_type)
+      inner pair source
       body_indent kept ok checked ok
-      body_indent out kept out (element_key_less_func element)
+      body_indent out out entry_key entry_value (element_key_less_func key_type)
       body_indent inner inner out indent
+  (* `count` is `filter` that keeps the tally instead of the elements. *)
+  | HofCount ->
+    let element = element_of 1 in
+    let value = match callable_binders callable [Printf.sprintf "Value%d" depth] with
+      | [value] -> value
+      | _ -> invalid_arg "higher-order leaf validated before emission"
+    in
+    let applied = emit_applied ~indent:body_indent signatures env callable [element] [value] in
+    let source, bind_source = source_binding 1 in
+    let out = Printf.sprintf "teslOut%d" depth in
+    Printf.sprintf
+      "(func() teslrt.Int {\n%s%s%s := 0\n%sfor _, %s := range %s {\n%sif %s {\n%s\t%s++\n%s}\n%s}\n%sreturn teslrt.FromInt64(int64(%s))\n%s}())"
+      bind_source inner out
+      inner value source
+      body_indent (strip_outer_parens applied)
+      body_indent out body_indent
+      inner
+      inner out indent
   | HofFilterCheck | HofAllCheck ->
     let element = element_of 1 in
     let value = match callable_binders callable [Printf.sprintf "Value%d" depth] with
@@ -4416,14 +4787,24 @@ and emit_dict_leaf ?(indent="") signatures env loc leaf args result expected =
       | _ -> unsupported loc
         "Go backend cannot infer the key and value types of `Dict.empty`"
   in
-  let emitted = List.map (emit_expr ~indent signatures env) args in
+  (* The dict argument is emitted with its type EXPECTED, so an empty dict written in place
+     (`Dict.insert k v Dict.empty`) knows what to instantiate. *)
+  let emitted = List.mapi (fun index argument ->
+    if index = leaf.dict_arity - 1 && leaf.dict_name <> "Dict.singleton"
+       && leaf.dict_name <> "Dict.empty" && result <> TFailure then
+      match result, key with
+      | TDict (_, value), Some key ->
+        emit_expr ~expected:(TDict (key, value)) ~indent signatures env argument
+      | _ -> emit_expr ~indent signatures env argument
+    else emit_expr ~indent signatures env argument) args in
   (* Tesl puts the dict LAST (`Dict.insert key value d`); the runtime signatures put it
      first, which is what a Go author expects.  The emitter rotates rather than
      distorting the hand-written runtime.  `Dict.singleton` is the exception: it BUILDS a
      dict from a key and a value, so its last argument is not one to move to the front —
      rotating it silently swapped the pair. *)
   let emitted =
-    if leaf.dict_arity > 1 && leaf.dict_name <> "Dict.singleton" then
+    if leaf.dict_arity > 1 && leaf.dict_name <> "Dict.singleton"
+       && leaf.dict_name <> "Dict.union" then
       match List.rev emitted with
       | dict :: rest -> dict :: List.rev rest
       | [] -> emitted
@@ -4455,7 +4836,10 @@ and emit_set_leaf ?(indent="") signatures env loc leaf args result expected =
     if leaf.set_name <> "Set.empty" then ""
     else Printf.sprintf "[%s]" (go_type element)
   in
-  let emitted = List.map (emit_expr ~indent signatures env) args in
+  let emitted = List.mapi (fun index argument ->
+    if index = leaf.set_index then
+      emit_expr ~expected:(TSet element) ~indent signatures env argument
+    else emit_expr ~indent signatures env argument) args in
   let emitted =
     if not leaf.set_needs_order then emitted
     else emitted @ [element_key_less_func element]
@@ -6240,10 +6624,48 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
       Printf.bprintf body "%sif (%s).OK() {\n%s\tteslT.Fatal(\"expected Tesl check failure\")\n%s}\n"
         indent (emit_expr ~indent signatures env arg) indent indent;
       emit_stmts env indent rest
-    | TsExpectFail { fn = (EVar _ as fn); arg; loc } :: rest ->
+    (* `expectFail (f x)` parenthesises the whole call, so the "function" is already an
+       application and there are no further arguments — `expect_fail_call` answers it
+       unchanged.  Both spellings reach the same emission. *)
+    | TsExpectFail { fn; arg; loc } :: rest ->
       let call = expect_fail_call fn arg loc in
+      (* `expectFail (fn () -> f x)` names a THUNK, and what is expected to fail is running
+         it — emitting the closure itself would define a function and assert nothing.  So a
+         zero-parameter lambda is unwrapped to its body, which is the expression the test is
+         about. *)
+      let call = match call with
+        | ELambda { params = []; body; _ } -> body
+        | _ -> call
+      in
+      (* A proof operation ERASES here, so it cannot be what fails: `expectFail (fn () ->
+         detachFact …)` asserts a Racket RUNTIME restriction (its `detachFact` raises when a
+         value carries more than one proof), and a program built on that assertion would run
+         to completion on Go and fail the test.  Refusing says so, instead of emitting a test
+         that cannot pass. *)
+      let rec proof_operation expr =
+        match normalize_call_head expr with
+        | EVar { name = ("detachFact" | "introAnd" | "andLeft" | "andRight") as name; _ } ->
+          Some name
+        (* …including one reached through a call: the operation is in the CALLEE's body,
+           which is where `multiProofDetach` puts it. *)
+        | EVar { name; _ } when Hashtbl.mem proof_op_functions name ->
+          Hashtbl.find_opt proof_op_functions name
+        | _ -> Ast_visitor.fold_children (fun found child ->
+                 match found with Some _ -> found | None -> proof_operation child) None expr
+      in
+      (match proof_operation call with
+       | Some name -> unsupported loc
+         "Go backend erases proofs, so `%s` cannot fail — this expectation is specific to \
+          the Racket runtime" name
+       | None -> ());
       let result_ty = type_of_expr signatures env call in
-      let emitted = emit_expr ~indent signatures env call in
+      (* A non-check target is wrapped in `teslExpectFailure(teslT, func() { … })`, so its
+         value is emitted one level deeper than the statement — a multi-line expression laid
+         out at the statement's indent is what gofmt then reflows. *)
+      let emitted = match result_ty with
+        | TCheck _ -> emit_expr ~indent signatures env call
+        | _ -> emit_expr ~indent:(indent ^ "\t") signatures env call
+      in
       Buffer.add_string body (line_directive loc);
       (match result_ty with
        | TCheck _ ->
@@ -6288,7 +6710,7 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
         @ env in
       emit_stmts env (indent ^ "\t") rest;
       Printf.bprintf body "%s}\n" indent
-    | (TsExpectFail { loc; _ } | TsExpectHasProof { loc; _ }
+    | (TsExpectHasProof { loc; _ }
       | TsProperty { loc; _ } | TsIf { loc; _ }) :: _ ->
       unsupported loc "Go backend does not support this test statement yet"
   in
@@ -6307,11 +6729,16 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
     end
   in
   List.iteri (fun index (test : test_form) ->
-    (* `runs` is a property test's repetition count, which needs generators.  The
-       capabilities and the `with database X` header, by contrast, are compile-time
+    (* `runs` is a PROPERTY test's repetition count: emit_racket reads it only where a
+       `property` statement is emitted, so on a test with no property statement it changes
+       nothing on either backend — and refusing it here made a test Racket runs fine
+       uncompilable.  A test that DOES carry a property statement is still refused, by the
+       statement itself, which is where the generators are missing.
+       The capabilities and the `with database X` header, by contrast, are compile-time
        grants: with `backend: Memory` the store a test writes to is the entity's own
        table variable, exactly as in a function body. *)
-    if test.runs <> None then
+    if test.runs <> None
+       && List.exists (function TsProperty _ -> true | _ -> false) test.stmts then
       unsupported test.loc "Go backend supports plain deterministic tests only";
     ignore test.capabilities;
     (* The header names a database the checker has already resolved, and every database
@@ -6714,6 +7141,22 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       consts = Hashtbl.create 8;
       databases = Hashtbl.create 4;
     } in
+    (* Which functions perform a proof operation, for the one assertion that depends on it
+       (see the `expectFail` emission).  Computed here, where the bodies are in hand. *)
+    Hashtbl.reset proof_op_functions;
+    let rec proof_op_in expr =
+      match expr with
+      | EVar { name = ("detachFact" | "introAnd" | "andLeft" | "andRight") as name; _ } ->
+        Some name
+      | _ -> Ast_visitor.fold_children (fun found child ->
+               match found with Some _ -> found | None -> proof_op_in child) None expr
+    in
+    List.iter (function
+      | DFunc f ->
+        (match proof_op_in f.body with
+         | Some op -> Hashtbl.replace proof_op_functions f.name op
+         | None -> ())
+      | _ -> ()) m.decls;
     (* Databases are registered BEFORE anything is emitted, because `with database D` may
        be written above D's own declaration. *)
     List.iter (function
@@ -6876,7 +7319,11 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           if set_leaf name <> None then set_imports := name :: !set_imports
           (* `Set.filterCheck` is a HIGHER-ORDER leaf (it applies a check per element), so it
              registers with the hof family rather than in the set-leaf table. *)
-          else if higher_order_leaf name <> None then set_hof_imports := name :: !set_hof_imports
+          else if higher_order_leaf name <> None then begin
+            set_hof_imports := name :: !set_hof_imports;
+            (* `Set.allCheck` answers a Maybe — the whole set or nothing at all. *)
+            if name = "Set.allCheck" then maybe_imported := true
+          end
           else match name with
             | "Set" -> ()
             | other -> unsupported import.loc
@@ -6895,6 +7342,13 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             (* lookup returns a Maybe; toList/fromList speak in tuples. *)
             if name = "Dict.lookup" then maybe_imported := true;
             if name = "Dict.toList" || name = "Dict.fromList" then tuple_imported := true
+          end
+          (* `Dict.filterCheckValues` is HIGHER-ORDER (a check per value), so it registers with
+             the hof family rather than in the dict-leaf table; it walks the dict's own pair
+             list, which is what brings the runtime tuple in. *)
+          else if higher_order_leaf name <> None then begin
+            set_hof_imports := name :: !set_hof_imports;
+            tuple_imported := true
           end else match name with
             | "Dict" -> ()
             (* `HasKey` is the proof `Dict.requireKey` mints, and it erases like every other
@@ -6908,7 +7362,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
        element type, and `emit_go` builds the argument list the same way. *)
     let list_leaf_names = [
       "List.length"; "List.isEmpty"; "List.head"; "List.tail"; "List.last";
-      "List.append"; "List.take"; "List.drop"; "List.reverse"; "List.sum";
+      "List.append"; "List.take"; "List.drop"; "List.reverse"; "List.sum"; "List.product";
       "List.member"; "List.contains"; "List.unique"; "List.sort";
       "List.concat"; "List.flatten"; "List.maximum"; "List.minimum";
       "List.range"; "List.repeat";
@@ -6971,6 +7425,10 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       "Int.nonNegative",  [`Int], `CheckInt, "teslrt.IntNonNegative";
       "Int.abs",          [`Int], `Int,      "teslrt.Abs";
       "Int.min",          [`Int; `Int], `Int, "teslrt.Min";
+      (* Both are Racket's, so both are NON-NEGATIVE whatever the operands' signs are, and
+         `lcm` with a zero operand is zero rather than a division by the gcd of two zeros. *)
+      "Int.gcd",          [`Int; `Int], `Int, "teslrt.IntGcd";
+      "Int.lcm",          [`Int; `Int], `Int, "teslrt.IntLcm";
       "Int.max",          [`Int; `Int], `Int, "teslrt.Max";
       (* Proof-total: the divisor carries `IsNonZero`, so the runtime guard is
          containment rather than the primary check. *)
@@ -7396,6 +7854,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
     (* `Either` is the same runtime-provided shape as `Maybe`: two variants, one
        payload each, provided by teslrt so it can cross module boundaries. *)
     let either_imported = ref false in
+    (* The `Either.*` FUNCTIONS a module imported.  Like the container leaves they are typed
+       per call site, so the entry only marks the name as available. *)
+    let either_fn_imports = ref [] in
     List.iter (fun (import : import_decl) ->
       if import.module_name = "Tesl.Either" || import.module_name = "Tesl.EitherPrim" then begin
         let exposed = match import.names with
@@ -7405,6 +7866,16 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         List.iter (fun name ->
           match name with
           | "Either" | "Either(..)" | "Left" | "Right" -> ()
+          (* `partition` answers the two sides as a tuple, so importing it brings the runtime
+             tuple in even when the module never names Tuple2; the four that answer a Maybe
+             bring that in for the same reason. *)
+          | "Either.partition" ->
+            tuple_imported := true; either_fn_imports := name :: !either_fn_imports
+          | "Either.fromLeft" | "Either.fromRight" | "Either.toMaybe" | "Either.fromMaybe" ->
+            maybe_imported := true; either_fn_imports := name :: !either_fn_imports
+          | "Either.isLeft" | "Either.isRight" | "Either.withDefault"
+          | "Either.map" | "Either.mapLeft" | "Either.andThen" ->
+            either_fn_imports := name :: !either_fn_imports
           | other -> unsupported import.loc
             "Go backend does not support `%s` export `%s` yet" import.module_name other) exposed;
         either_imported := true
@@ -7741,6 +8212,11 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       if not (Hashtbl.mem signatures name) then
         Hashtbl.add signatures name
           { params = []; result = TFailure; go_name = leaf.dict_go; sig_owner = ""; sig_needs_scope = false }) !dict_imports;
+    List.iter (fun name ->
+      if not (Hashtbl.mem signatures name) then
+        Hashtbl.add signatures name
+          { params = []; result = TFailure; go_name = "teslrt.EitherCombinator";
+            sig_owner = ""; sig_needs_scope = false }) !either_fn_imports;
     List.iter (fun name ->
       (* A higher-order leaf has no runtime function at all — it lowers to a loop — so
          its entry exists only to mark the name as imported. *)

@@ -100,6 +100,34 @@ func DictRemove[K any, V any](d Dict[K, V], key K, less func(K, K) bool) Dict[K,
 	return Dict[K, V]{Entries: entries}
 }
 
+// DictUnion is LEFT-BIASED: a key in both dicts keeps the left dict's value, which is what
+// `hash-union #:combine (lambda (_v2 v1) v1)` does in tesl/dict.rkt. Both operands are already
+// in key order, so this is a merge rather than a series of inserts — O(n+m) against O(n log m).
+func DictUnion[K any, V any](left, right Dict[K, V], less func(K, K) bool) Dict[K, V] {
+	entries := make([]DictEntry[K, V], 0, len(left.Entries)+len(right.Entries))
+	leftAt, rightAt := 0, 0
+	for leftAt < len(left.Entries) && rightAt < len(right.Entries) {
+		leftKey := left.Entries[leftAt].Key
+		rightKey := right.Entries[rightAt].Key
+		switch {
+		case less(leftKey, rightKey):
+			entries = append(entries, left.Entries[leftAt])
+			leftAt++
+		case less(rightKey, leftKey):
+			entries = append(entries, right.Entries[rightAt])
+			rightAt++
+		default:
+			// The same key on both sides: the left value wins, and the right one is dropped.
+			entries = append(entries, left.Entries[leftAt])
+			leftAt++
+			rightAt++
+		}
+	}
+	entries = append(entries, left.Entries[leftAt:]...)
+	entries = append(entries, right.Entries[rightAt:]...)
+	return Dict[K, V]{Entries: entries}
+}
+
 // sameKey is equality derived from the ordering the emitter supplies: neither key
 // orders before the other.
 func sameKey[K any](left, right K, less func(K, K) bool) bool {

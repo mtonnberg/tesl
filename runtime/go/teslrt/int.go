@@ -145,6 +145,26 @@ func Neg(value Int) Int {
 	return fromBig(new(big.Int).Neg(value.bigInt()))
 }
 
+// IntGcd is Racket's `gcd`: always NON-NEGATIVE, and gcd(0, 0) is 0. The sign of either
+// operand does not reach the answer, which is what makes `gcd a b == gcd (-a) b` hold.
+func IntGcd(left, right Int) Int {
+	first := new(big.Int).Abs(left.bigInt())
+	second := new(big.Int).Abs(right.bigInt())
+	return fromBig(new(big.Int).GCD(nil, nil, first, second))
+}
+
+// IntLcm is Racket's `lcm`: non-negative, and 0 whenever either operand is 0 (there is no
+// smaller common multiple than 0 in that case, and dividing by gcd(0,0) would trap).
+func IntLcm(left, right Int) Int {
+	first := new(big.Int).Abs(left.bigInt())
+	second := new(big.Int).Abs(right.bigInt())
+	if first.Sign() == 0 || second.Sign() == 0 {
+		return FromInt64(0)
+	}
+	divisor := new(big.Int).GCD(nil, nil, first, second)
+	return fromBig(new(big.Int).Div(new(big.Int).Mul(first, second), divisor))
+}
+
 func Abs(value Int) Int {
 	if value.Sign() >= 0 {
 		return value

@@ -6407,6 +6407,188 @@ let test_string_bool_proof_consumers_with_go () =
       write_artifacts root emitted;
       ignore (run_command root "go test -count=1 ./..."))
 
+(* The container and Either LEAVES added after the Postgres slice, each of which stopped a
+   corpus file on one line: `Dict.union`/`delete`/`filterCheckValues`/`filterCheckKeys`,
+   `Set.allCheck`, `List.count`/`product`, `Int.gcd`/`lcm`, and the whole `Either` combinator
+   family.  Also here: an EMPTY container written in place as an argument or a fold's init
+   (`Dict.insert k v Dict.empty`, `List.foldl f Dict.empty xs`), which carries no key or
+   element type of its own and takes one from what surrounds it. *)
+let leaves2_source = {|module GoLeaves2 exposing [countBig, tally, verified, keyed, splitSides, categorise]
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List, Unit]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Either exposing [
+  Either(..),
+  Either.isLeft,
+  Either.isRight,
+  Either.fromLeft,
+  Either.fromRight,
+  Either.map,
+  Either.mapLeft,
+  Either.andThen,
+  Either.withDefault,
+  Either.toMaybe,
+  Either.fromMaybe,
+  Either.partition,
+]
+import Tesl.List exposing [List.count, List.product, List.length]
+import Tesl.Dict exposing [
+  Dict,
+  Dict.empty,
+  Dict.insert,
+  Dict.delete,
+  Dict.union,
+  Dict.member,
+  Dict.size,
+  Dict.lookup,
+  Dict.filterCheckValues,
+  Dict.filterCheckKeys,
+]
+import Tesl.Set exposing [Set, Set.empty, Set.insert, Set.delete, Set.member, Set.size, Set.allCheck, Set.fromList]
+import Tesl.Int exposing [Int.gcd, Int.lcm]
+import Tesl.Tuple exposing [Tuple2, Tuple2.first, Tuple2.second]
+
+fact IsPositive (n: Int)
+fact HasText (s: String)
+
+check positive(n: Int) -> n: Int ::: IsPositive n =
+  if n > 0 then
+    ok n ::: IsPositive n
+  else
+    fail 422 "must be positive"
+
+check nonEmptyKey(s: String) -> s: String ::: HasText s =
+  if s != "" then
+    ok s ::: HasText s
+  else
+    fail 422 "must not be empty"
+
+fn isBig(n: Int) -> Bool =
+  n > 10
+
+fn countBig(ns: List Int) -> Int =
+  List.count isBig ns
+
+fn tally(ns: List Int) -> Int =
+  List.product ns
+
+# A dict built from an empty one written in place, then merged left-biased.
+fn merged() -> Int =
+  let left = Dict.insert "a" 1 (Dict.insert "b" 2 Dict.empty)
+  let right = Dict.insert "b" 99 (Dict.insert "c" 3 Dict.empty)
+  let both = Dict.union left right
+  case Dict.lookup "b" both of
+    Nothing -> 0
+    Something v -> v + Dict.size both
+
+fn dropped() -> Bool =
+  let d = Dict.insert "k" 1 Dict.empty
+  Dict.member "k" (Dict.delete "k" d)
+
+fn verified(d: Dict String Int) -> Int =
+  Dict.size (Dict.filterCheckValues positive d)
+
+fn keyed(d: Dict String Int) -> Int =
+  Dict.size (Dict.filterCheckKeys nonEmptyKey d)
+
+fn setDropped() -> Bool =
+  let s = Set.insert 7 Set.empty
+  Set.member 7 (Set.delete 7 s)
+
+fn allPositive(ns: List Int) -> Int =
+  case Set.allCheck positive (Set.fromList ns) of
+    Nothing -> 0 - 1
+    Something s -> Set.size s
+
+fn categorise(n: Int) -> String =
+  if n > 10 then
+    "big"
+  else
+    "small"
+
+fn parse(raw: Int) -> Either String Int =
+  if raw > 0 then
+    Right raw
+  else
+    Left "not positive"
+
+fn described(raw: Int) -> Either String String =
+  Either.map categorise (parse raw)
+
+fn label(reason: String) -> String =
+  "error: " ++ reason
+
+fn shouted(raw: Int) -> Either String Int =
+  Either.mapLeft label (parse raw)
+
+fn chained(raw: Int) -> Either String Int =
+  Either.andThen parse (parse raw)
+
+fn sides() -> List (Either String Int) =
+  [parse 1, parse (0 - 1), parse 2]
+
+fn splitSides(values: List (Either String Int)) -> Int =
+  let parts = Either.partition values
+  List.length (Tuple2.first parts) + List.length (Tuple2.second parts)
+
+test "the container leaves answer what Racket answers" {
+  expect countBig [1, 20, 30] == 2
+  expect tally [2, 3, 4] == 24
+  expect tally [] == 1
+  expect merged () == 5
+  expect dropped () == False
+  expect setDropped () == False
+  expect allPositive [1, 2, 3] == 3
+  expect allPositive [1, 0 - 2, 3] == 0 - 1
+  expect Int.gcd 12 18 == 6
+  expect Int.gcd (0 - 12) 18 == 6
+  expect Int.lcm 4 6 == 12
+  expect Int.lcm 0 6 == 0
+}
+
+test "the Either combinators answer what Racket answers" {
+  expect Either.isLeft (parse (0 - 1)) == True
+  expect Either.isRight (parse 5) == True
+  expect Either.withDefault 0 (parse 5) == 5
+  expect Either.withDefault 0 (parse (0 - 1)) == 0
+  expect Either.fromRight (parse 5) == Something 5
+  expect Either.fromLeft (parse 5) == Nothing
+  expect Either.toMaybe (parse (0 - 1)) == Nothing
+  expect Either.fromMaybe "none" (Something 7) == Right 7
+  expect described 20 == Right "big"
+  expect described (0 - 1) == Left "not positive"
+  expect shouted (0 - 1) == Left "error: not positive"
+  expect chained 5 == Right 5
+  expect splitSides (sides ()) == 3
+}
+
+test "dict checks keep the entries that pass" {
+  let d = Dict.insert "a" 5 (Dict.insert "b" (0 - 1) Dict.empty)
+  expect verified d == 1
+  expect keyed d == 2
+}
+|}
+
+let test_leaves2_with_go () =
+  let emitted = emit_ok "<go-leaves2>" leaves2_source in
+  let module_go = artifact "internal/teslmodgoleaves2/module.go" emitted in
+  (* `Dict.union` is the one dict leaf that is NOT rotated: both operands are dicts, and
+     swapping them would silently reverse the left bias. *)
+  check bool "union keeps its operand order" true
+    (contains module_go "teslrt.DictUnion(left, right, teslKeyLessString)");
+  check bool "an empty dict written in place is instantiated" true
+    (contains module_go "teslrt.DictEmpty[string, teslrt.Int]()");
+  check bool "delete is remove under another name" true
+    (contains module_go "teslrt.DictRemove(d, \"k\", teslKeyLessString)");
+  (* The Either combinators that take a function are emitted INLINE, like every other
+     callback — no Go func value is passed. *)
+  check bool "Either.map inlines its callback" true
+    (contains module_go "if teslEither1.Tag == teslrt.EitherRight {");
+  check bool "and rebuilds the other side unchanged" true
+    (contains module_go "return teslrt.Left[string, string](teslEither1.LeftValue)");
+  (* `go test` RUNS all three blocks, so a wrong answer fails here. *)
+  gate_emitted "tesl-go-leaves2" emitted
+
 let go_corpus = [
   "example/learn/lesson00-hello-world.tesl";
   "example/learn/lesson03-records.tesl";
@@ -6463,6 +6645,13 @@ let go_corpus = [
      p99 is steady, up to 30s, on either backend), and it is worth that: it is the one place
      the harness's own numbers are asserted end to end. *)
   "example/learn/lesson41-load-tests.tesl";
+  (* The files the container/Either leaf wave unblocked, each pinned end to end: a Set
+     check-leaf lesson, two review suites whose checks are written as CONJUNCTIONS
+     (`List.allCheck (a && b) xs`), and the delete/empty-container suite. *)
+  "example/learn/lesson30-forall-set-proofs.tesl";
+  "tests/critical-review61-tests.tesl";
+  "tests/critical-review64-tests.tesl";
+  "tests/stdlib-delete-tests.tesl";
 ]
 
 let test_go_corpus_with_go () =
@@ -6626,6 +6815,9 @@ let () =
       test_case "Memory-backend databases" `Slow test_db_with_go;
       test_case "databases behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-db-oracle>" db_source);
+      test_case "container and Either leaves" `Slow test_leaves2_with_go;
+      test_case "container and Either leaves behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-leaves2-oracle>" leaves2_source);
       test_case "a Postgres declaration is inert" `Slow test_postgres_declaration_with_go;
       test_case "an inert Postgres declaration behaves the same on Racket" `Slow
         (racket_behavior_oracle "<go-pg-decl-oracle>" postgres_declaration_source);
