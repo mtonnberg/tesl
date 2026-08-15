@@ -31,3 +31,12 @@ func Unboxed[T any](boxed *T) T {
 	}
 	return *boxed
 }
+
+// BoolRank orders a Bool: false before true, which is how Racket sorts `#f` and `#t`. It
+// exists because Go has no `<` on bools and an `order p.done asc` column needs one.
+func BoolRank(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}

@@ -142,6 +142,43 @@ func TableFold[Row any, Value any](table *Table[Row], match func(Row) bool, proj
 	return total
 }
 
+// TableSumMoney is `selectSum` over a MONEY column. It is not a `TableFold` because the fold's
+// zero would need a currency before any row has been seen; instead the currency is adopted from
+// the first matching row and every later row is checked against it, in ONE pass over the same
+// rows under the same read lock — nothing is materialised.
+//
+// The two refusals are Racket's (`money-sum-result`), and both are about answering honestly
+// rather than plausibly: a total over no rows has no currency to carry (`$0.00` would be a
+// guess), and a total across currencies needs a rate, which is dated data a SUM may not invent.
+func TableSumMoney[Row any](table *Table[Row], match func(Row) bool, project func(Row) Money,
+	entity, field string) Money {
+	table.mutex.RLock()
+	defer table.mutex.RUnlock()
+	total := FromInt64(0)
+	var currency Currency
+	matched := false
+	for _, row := range table.rows {
+		if !match(row) {
+			continue
+		}
+		amount := project(row)
+		if !matched {
+			currency = amount.Currency
+			matched = true
+		} else if amount.Currency.Code != currency.Code {
+			panic("field " + field + " on entity " + entity +
+				": cannot sum Money across mixed currencies; filter by currency first")
+		}
+		total = Add(total, amount.MinorUnits)
+	}
+	if !matched {
+		panic("field " + field + " on entity " + entity +
+			": cannot sum Money over an empty row set (no currency for the zero total);" +
+			" guard with a count first")
+	}
+	return Money{MinorUnits: total, Currency: currency}
+}
+
 // TableExtreme is `selectMax` / `selectMin`: the projection of the matching rows that no
 // other beats, where `better(candidate, best)` reports that the candidate wins.
 //

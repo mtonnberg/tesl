@@ -37,6 +37,12 @@ type go_type =
      types it as a fresh variable so the assertion reads like the JSON it checks.  That
      ergonomics is by design, so the emitter carries a dynamic value here rather than
      inventing a typed view the source never asked for. *)
+  (* A DIMENSIONED quantity.  It renders as `float64` — the dimension lives in the compiler's
+     type layer and erases — but it is a distinct type HERE, because that is the only thing
+     that tells `rate * quantity` (a rate materialising into money) from `rate * scalar` (a
+     rate rescaled): at run time both are floats, and Racket tells them apart by consulting the
+     type its checker recorded. *)
+  | TQuantity
   | TJson
   (* The api-test handle on an SSE subscription: `let stream = subscribe "/events/ada"`.  It
      is a live connection to the emitted server, not a value the program could construct, so
@@ -121,6 +127,30 @@ let current_package = ref ""
 
 let qualified owner name =
   if owner = "" || owner = !current_package then name else owner ^ "." ^ name
+
+(* A stdlib leaf whose Go function takes CONSTANTS the source does not write — the ISO code
+   behind `Money.usd`, the label behind `MoneyRate.perHour`.  The constants ride on the
+   signature's Go name after a `#`, and are appended to the call in the order they were
+   registered: argument first, then what the declaration decided.  Rendered as an integer when
+   they read as one and as a Go string otherwise, which is the whole vocabulary this needs
+   (a numerator, a denominator, a currency code, a unit label). *)
+let baked_call go_name arguments =
+  match String.split_on_char '#' go_name with
+  | [] -> invalid_arg "empty Go call name"
+  | base :: [] -> Printf.sprintf "%s(%s)" base (String.concat ", " arguments)
+  | base :: baked ->
+    let literal text =
+      let numeric =
+        text <> ""
+        && (let ok = ref true in
+            String.iteri (fun index c ->
+              if not ((c >= '0' && c <= '9') || (c = '-' && index = 0)) then ok := false) text;
+            !ok)
+      in
+      if numeric then text else Printf.sprintf "%S" text
+    in
+    Printf.sprintf "%s(%s)" base
+      (String.concat ", " (arguments @ List.map literal baked))
 
 exception Unsupported of emit_error
 
@@ -473,6 +503,12 @@ type type_table = {
      is for is the one place the backend becomes observable: `with database D`, which is
      what binds the store the body's queries run against. *)
   databases : (string, string * Location.loc) Hashtbl.t;
+  (* Type names that stand for another type OUTRIGHT, with no wrapper of their own: a
+     dimensioned quantity is a Float (the dimension lives in the compiler's type layer and
+     erases there), and `MoneyPerDuration` is the runtime's one rate type under a name that
+     says which denominator it carries.  Consulted before the nominal tables, so an alias
+     never needs a Go declaration of its own. *)
+  aliases : (string, go_type) Hashtbl.t;
 }
 
 (* The table for the module being emitted.  A ref for the same reason `current_package`
@@ -634,6 +670,9 @@ let rec flatten_type_app args = function
 let rec type_of_type_expr ?(params=[]) types ty =
   let recur = type_of_type_expr ~params types in
   match ty with
+  (* An ALIAS resolves first: it is not a type of its own, so nothing downstream should see
+     the name. *)
+  | TName { name; _ } when Hashtbl.mem types.aliases name -> Hashtbl.find types.aliases name
   | TName { name = "Int"; _ } -> TInt
   | TName { name = "Float"; _ } -> TFloat
   | TName { name = "String"; _ } -> TString
@@ -782,6 +821,7 @@ let rec go_type = function
        so a function value and a named function agree on shape. *)
     Printf.sprintf "func(%s) %s"
       (String.concat ", " (List.map go_type params)) (go_type result)
+  | TQuantity -> "float64"
   | TJson -> "teslrt.JsonValue"
   | TStream -> "*teslrt.SseTestStream"
   | TCheck ty -> Printf.sprintf "teslrt.Check[%s]" (go_type ty)
@@ -815,7 +855,13 @@ let rec type_equal left right =
     && type_equal left_result right_result
   | TParam left, TParam right -> left = right
   | TInt, TInt | TFloat, TFloat | TString, TString | TBool, TBool | TUnit, TUnit
-  | TJson, TJson | TStream, TStream | TFailure, TFailure -> true
+  | TQuantity, TQuantity | TJson, TJson | TStream, TStream | TFailure, TFailure -> true
+  (* A QUANTITY and a Float are the same Go type, and the checker has already decided which
+     dimensions a program's arithmetic produces — a dimensionless ratio IS a Float there. So
+     they are interchangeable where a type is CHECKED; they stay distinct where one is
+     INFERRED, which is what keeps `rate * quantity` and `rate * scalar` different
+     operations. *)
+  | TQuantity, TFloat | TFloat, TQuantity -> true
   | _ -> false
 
 let type_unequal left right = not (type_equal left right)
@@ -949,7 +995,7 @@ let rec substitute_type bindings ty =
   | TSet element -> TSet (substitute_type bindings element)
   | TFunc (params, result) ->
     TFunc (List.map (substitute_type bindings) params, substitute_type bindings result)
-  | TJson | TStream -> ty
+  | TJson | TStream | TQuantity -> ty
   | TInt | TFloat | TString | TBool | TUnit | TNewtype _ | TRecord _ | TFailure -> ty
 
 (** A variant's payload types with the ADT's type arguments substituted in. *)
@@ -1068,7 +1114,7 @@ and element_key_less_func element =
 
 and ordered_key_expr ty left right =
   match ty with
-  | TFloat -> Printf.sprintf "teslrt.FloatKeyLess(%s, %s)" left right
+  | TFloat | TQuantity -> Printf.sprintf "teslrt.FloatKeyLess(%s, %s)" left right
   (* A Float-backed newtype inherits the key comparator, so it must be unwrapped here
      rather than delegated to `ordered_expr`. *)
   | TNewtype info ->
@@ -1081,7 +1127,7 @@ and equal_expr ty left right =
   | TInt -> Printf.sprintf "teslrt.Equal(%s, %s)" left right
   (* Float equality is Racket `equal?`, not IEEE `==`: NaN equals NaN and 0.0 does not
      equal -0.0.  Both are inverted from Go's `==`, so `==` is never emitted. *)
-  | TFloat -> Printf.sprintf "teslrt.FloatEqual(%s, %s)" left right
+  | TFloat | TQuantity -> Printf.sprintf "teslrt.FloatEqual(%s, %s)" left right
   (* A Bool compared with a LITERAL is the value itself, or its negation: `p.Archived ==
      false` is a staticcheck finding (S1002), and a lint finding on emitted code is an
      emitter bug rather than something to suppress.  Written this way the emitted predicate
@@ -1164,7 +1210,7 @@ and equal_expr ty left right =
 and unequal_expr ty left right =
   match ty with
   | TInt -> Printf.sprintf "!teslrt.Equal(%s, %s)" left right
-  | TFloat -> Printf.sprintf "!teslrt.FloatEqual(%s, %s)" left right
+  | TFloat | TQuantity -> Printf.sprintf "!teslrt.FloatEqual(%s, %s)" left right
   | TString | TBool | TUnit -> Printf.sprintf "(%s != %s)" left right
   | TNewtype info when info.secret ->
     Printf.sprintf "!teslrt.SecretEqual(%s.Value, %s.Value)"
@@ -1235,20 +1281,25 @@ and ordered_expr ty op left right =
   match ty with
   | TInt -> Printf.sprintf "(teslrt.Compare(%s, %s) %s 0)" left right op
   (* Ordering, unlike equality, IS plain IEEE in both backends. *)
-  | TFloat | TString -> Printf.sprintf "(%s %s %s)" left op right
+  | TFloat | TQuantity | TString -> Printf.sprintf "(%s %s %s)" left op right
+  (* A BOOL orders false before true — Racket sorts `#f` first, and a `order p.done asc`
+     column is exactly the shape that asks. *)
+  | TBool ->
+    let rank value = Printf.sprintf "teslrt.BoolRank(%s)" value in
+    Printf.sprintf "(%s %s %s)" (rank left) op (rank right)
   | TNewtype info ->
     ordered_expr info.base op (Printf.sprintf "%s.Value" (selector_operand left))
       (Printf.sprintf "%s.Value" (selector_operand right))
-  | TBool | TUnit | TRecord _ | TAdt _ | TList _ | TDict _ | TSet _ | TParam _
+  | TUnit | TRecord _ | TAdt _ | TList _ | TDict _ | TSet _ | TParam _
   | TFunc _ | TJson | TStream | TCheck _ | TFailure ->
     invalid_arg "Go ordering requires an ordered scalar type"
 
 let rec supports_ordering = function
-  | TInt | TFloat | TString -> true
+  | TInt | TFloat | TQuantity | TString | TBool -> true
   (* A secret must not be ORDERED: sorting or comparing them leaks their relative values,
      and there is no use for it. *)
   | TNewtype info -> (not info.secret) && supports_ordering info.base
-  | TBool | TUnit | TRecord _ | TAdt _ | TList _ | TDict _ | TSet _ | TParam _
+  | TUnit | TRecord _ | TAdt _ | TList _ | TDict _ | TSet _ | TParam _
   | TFunc _ | TJson | TStream | TCheck _ | TFailure -> false
 
 (* A generic ADT has no comparable Go form: `TeslEqual` would have to dispatch
@@ -1261,7 +1312,7 @@ let rec supports_ordering = function
 let rec supports_equality_seen seen ty =
   let supports_equality ty = supports_equality_seen seen ty in
   match ty with
-  | TInt | TFloat | TString | TBool | TUnit -> true
+  | TInt | TFloat | TQuantity | TString | TBool | TUnit -> true
   | TNewtype info -> supports_equality info.base
   | TRecord info -> List.for_all (fun (_, ty) -> supports_equality ty) info.rec_fields
   | TAdt (info, _) when List.mem info.adt_go_name seen -> true
@@ -1666,6 +1717,48 @@ let adt_ctor_of_signature signatures name =
    POSITIONALLY, so the literal's fields are reordered into the variant's declared order — the
    labels are the author's documentation, and the constructor's own order is what decides which
    payload slot each value lands in. *)
+(* Is this Go type the runtime's MONEY RATE — money per quantity?  Every rate alias registers
+   the same runtime type under its own name, so the NAME is what says which denominator the
+   rate carries, and the type is what says it is a rate at all. *)
+let is_money_rate = function
+  | TRecord info -> info.rec_go_name = "teslrt.MoneyRate"
+  | _ -> false
+
+let is_money = function
+  | TRecord info -> info.rec_tesl_name = "Money" && info.rec_go_name = "teslrt.Money"
+  | _ -> false
+
+(* The rate algebra, decided from the operand types:
+     money / quantity  → a RATE, whose denominator the expectation names;
+     rate  * quantity  → MONEY, the one place a rate materialises (and so the one rounding);
+     rate  * scalar    → a rate, rescaled exactly.
+   `rate * float` is ambiguous between the last two — both are a rate and a float at run time —
+   so it is settled the way Racket settles it: by what the RESULT is expected to be. *)
+let money_rate_binop ?expected op left_ty right_ty =
+  ignore expected;
+  match op with
+  | BMul when is_money_rate left_ty && right_ty = TQuantity -> Some `Consume
+  | BMul when left_ty = TQuantity && is_money_rate right_ty -> Some `ConsumeFlipped
+  | BMul when is_money_rate left_ty && right_ty = TFloat -> Some `Scale
+  | BMul when left_ty = TFloat && is_money_rate right_ty -> Some `ScaleFlipped
+  | BDiv when is_money left_ty && right_ty = TQuantity -> Some `Divide
+  | _ -> None
+
+(* Arithmetic on DIMENSIONED quantities.  The dimensions themselves are the checker's business
+   — it is what rejects `length + mass` and what makes `length / duration` a speed — so what is
+   decided here is only which operand shapes are arithmetic at all: quantity with quantity, and
+   quantity scaled by a plain number. *)
+let quantity_binop op left_ty right_ty =
+  let quantity ty = ty = TQuantity in
+  match op with
+  | BAdd | BSub when quantity left_ty && quantity right_ty -> true
+  | BMul | BDiv when quantity left_ty && (quantity right_ty || right_ty = TFloat) -> true
+  | BMul when left_ty = TFloat && quantity right_ty -> true
+  (* A scalar over a quantity INVERTS the dimension — `1.0 / period` is a frequency — which
+     the checker works out; here it is the same float division. *)
+  | BDiv when left_ty = TFloat && quantity right_ty -> true
+  | _ -> false
+
 let publish_payload_expr signatures loc ctor payload =
   match payload, adt_ctor_of_signature signatures ctor with
   | ERecord { fields; _ }, Some (_, variant) ->
@@ -1867,6 +1960,13 @@ let rec type_of_expr signatures env expr =
      | None, None -> lookup_env loc name env)
   | EConstructor { name = "True" | "False"; args = []; _ } -> TBool
   | EConstructor { name = "Unit"; args = []; _ } -> TUnit
+  (* A bare capitalised name that resolves to a CONSTANT — a currency (`Usd`) is spelled like
+     a constructor and is a value, not a call. *)
+  | EConstructor { name; args = []; _ }
+    when Option.bind !current_types (fun types -> Hashtbl.find_opt types.consts name) <> None ->
+    (match Option.bind !current_types (fun types -> Hashtbl.find_opt types.consts name) with
+     | Some (ty, _) -> ty
+     | None -> assert false)
   | EConstructor { name; args; loc } when adt_ctor_of_signature signatures name <> None ->
     let info, variant = match adt_ctor_of_signature signatures name with
       | Some pair -> pair
@@ -2352,6 +2452,27 @@ let rec type_of_expr signatures env expr =
         (* Nothing to reconcile: re-type so the original error is reported. *)
         type_of_expr signatures env left, type_of_expr signatures env right
     in
+    (* The MONEY-RATE algebra is the one place two different types multiply or divide, so it
+       answers before the same-type rule below.  `money / quantity` needs its denominator
+       named by the expectation, since a quantity is a Float here and carries no dimension —
+       that is what a rate's declared type (`MoneyPerDuration`) is for. *)
+    (* Quantity arithmetic answers a quantity, whatever mix of quantity and scalar it took. *)
+    begin if quantity_binop op left_ty right_ty then TQuantity else
+    match money_rate_binop op left_ty right_ty with
+     | Some (`Consume | `ConsumeFlipped) ->
+       (match Option.bind !current_types (fun types ->
+                Hashtbl.find_opt types.records "Money") with
+        | Some money -> TRecord money
+        | None -> unsupported loc "Go backend needs `Money`; import `Tesl.Money`")
+     | Some (`Scale | `ScaleFlipped) ->
+       if is_money_rate left_ty then left_ty else right_ty
+     | Some `Divide ->
+       (* A quantity is a Float at run time and carries no dimension, so only the DECLARED
+          type of the result says which unit the rate is per — which is what makes an
+          unannotated `money / quantity` unemittable rather than merely unchecked. *)
+       unsupported loc
+         "Go backend needs the rate's declared type here (`MoneyPerDuration` and friends)"
+     | None ->
     (* An UNTYPED api-test value compares against anything: `expect resp.body.age == 7` is
        the point of the dynamic view, and on Racket both sides are ordinary values by then.
        Only equality is allowed — ordering an untyped value has no meaning the source can
@@ -2396,6 +2517,7 @@ let rec type_of_expr signatures env expr =
         if not (supports_ordering left_ty) then
           unsupported loc "Go backend ordering supports Int, String, and their scalar newtypes only";
         TBool)
+    end
   | EUnop { op; arg; loc } ->
     let arg_ty = type_of_expr signatures env arg in
     (match op with
@@ -2403,6 +2525,8 @@ let rec type_of_expr signatures env expr =
        (match arg_ty with
         | TInt -> TInt
         | TFloat -> TFloat
+        (* Negating a quantity keeps its dimension: -length is a length. *)
+        | TQuantity -> TQuantity
         | _ -> unsupported loc "Go backend unary - requires Int or Float")
      | UNot -> if arg_ty <> TBool then unsupported loc "Go backend ! requires Bool"; TBool)
   | EIf { cond; then_; else_; loc } ->
@@ -3231,6 +3355,24 @@ and type_of_arg signatures env want arg =
      | TFailure, ty | ty, TFailure -> ty
      | left, right when type_equal left right -> left
      | _ -> unsupported loc "Go backend if branches have different types")
+  (* The money-rate algebra, where the EXPECTATION is what settles it: `money / quantity` has
+     no denominator without the declared rate type, and `rate * float` is a rescale when a rate
+     is expected and a materialised amount when money is.  Racket settles both the same way,
+     from the result type its checker recorded. *)
+  | EBinop { op; left; right; _ }
+    when (match money_rate_binop ~expected:want op
+                  (try type_of_expr signatures env left with Unsupported _ -> TFailure)
+                  (try type_of_expr signatures env right with Unsupported _ -> TFailure) with
+          | Some _ -> true | None -> false) ->
+    let left_ty = type_of_expr signatures env left in
+    let right_ty = type_of_expr signatures env right in
+    (match money_rate_binop ~expected:want op left_ty right_ty with
+     | Some (`Scale | `ScaleFlipped) -> if is_money_rate left_ty then left_ty else right_ty
+     | Some `Divide ->
+       if not (is_money_rate want) then unsupported (Checker.expr_loc left)
+         "Go backend `money / quantity` answers a rate; annotate the result";
+       want
+     | Some (`Consume | `ConsumeFlipped) | None -> type_of_expr signatures env arg)
   (* A MULTI-LINE query is an underscore-`let` chain, so it must be recognised BEFORE the
      chain is peeled: typing the first link on its own reads `update p in E` as a call to a
      function named `update`, which is what it looked like to the emitter for as long as the
@@ -3504,6 +3646,11 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
   | EConstructor { name = "True"; args = []; _ } -> "true"
   | EConstructor { name = "False"; args = []; _ } -> "false"
   | EConstructor { name = "Unit"; args = []; _ } -> "struct{}{}"
+  | EConstructor { name; args = []; _ }
+    when Option.bind !current_types (fun types -> Hashtbl.find_opt types.consts name) <> None ->
+    (match Option.bind !current_types (fun types -> Hashtbl.find_opt types.consts name) with
+     | Some (_, go_name) -> go_name
+     | None -> assert false)
   | EConstructor { name; args; _ } when adt_ctor_of_signature signatures name <> None ->
     let owner, variant = match adt_ctor_of_signature signatures name with
       | Some pair -> pair
@@ -4233,9 +4380,9 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
          if not signature.sig_needs_scope then []
          else if !current_scope_in_hand then [ "teslScope" ] else [ "nil" ]
        in
-       Printf.sprintf "%s(%s)" (qualified signature.sig_owner signature.go_name)
-          (String.concat ", " (scope_argument @ List.map2 (fun arg want ->
-             emit_expr ~expected:want ~indent signatures env arg) args signature.params))
+       baked_call (qualified signature.sig_owner signature.go_name)
+          (scope_argument @ List.map2 (fun arg want ->
+             emit_expr ~expected:want ~indent signatures env arg) args signature.params)
       (* The same call, emitted: the head is an expression of func type. *)
       | head when (match type_of_expr signatures env head with TFunc _ -> true | _ -> false) ->
         let params = match type_of_expr signatures env head with
@@ -4278,6 +4425,48 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
     Printf.sprintf "%steslrt.JsonEqual(%s, %s)"
       (if op = BNeq then "!" else "")
       (emit_expr ~indent signatures env json_side) encoded
+  (* The money-rate algebra: a rate materialising into an amount, a rate rescaled, or an
+     amount divided by a quantity.  Each is one runtime call rather than an operator, because
+     each is a different operation on the exact rational inside the rate — and the one that
+     ROUNDS (a rate becoming money) is named so it cannot happen by accident. *)
+  | EBinop { op; left; right; loc; _ }
+    when (match money_rate_binop ?expected op
+                  (try type_of_expr signatures env left with Unsupported _ -> TFailure)
+                  (try type_of_expr signatures env right with Unsupported _ -> TFailure) with
+          | Some _ -> true | None -> false) ->
+    let left_ty = type_of_expr signatures env left in
+    let right_ty = type_of_expr signatures env right in
+    let rate, quantity = if is_money_rate left_ty then left, right else right, left in
+    let rendered side ty = emit_expr ~expected:ty ~indent signatures env side in
+    (match money_rate_binop ?expected op left_ty right_ty with
+     | Some (`Consume | `ConsumeFlipped) ->
+       Printf.sprintf "teslrt.MoneyRateMul(%s, %s)"
+         (rendered rate (if is_money_rate left_ty then left_ty else right_ty))
+         (rendered quantity TQuantity)
+     | Some (`Scale | `ScaleFlipped) ->
+       Printf.sprintf "teslrt.MoneyRateScale(%s, %s)"
+         (rendered rate (if is_money_rate left_ty then left_ty else right_ty))
+         (rendered quantity TFloat)
+     | Some `Divide ->
+       (* The DECLARED rate type names the denominator, and the catalog turns that into the
+          label a rate displays and quantizes per — per hour rather than per second, so a
+          realistic hourly rate does not quantize to zero at a boundary. *)
+       let alias = match expected with
+         | Some (TRecord info) when is_money_rate (TRecord info) -> info.rec_tesl_name
+         | _ -> unsupported loc
+           "Go backend needs the rate's declared type here (`MoneyPerDuration` and friends)"
+       in
+       let label, (num, den) =
+         match Units_catalog.dim_of_money_rate_alias alias with
+         | Some dim ->
+           (match Units_catalog.default_rate_label_of_dim dim with
+            | Some pair -> pair
+            | None -> unsupported loc "Go backend has no boundary unit for `%s`" alias)
+         | None -> unsupported loc "Go backend does not know the rate type `%s`" alias
+       in
+       Printf.sprintf "teslrt.MoneyRateDivLabel(%s, %s, %d, %d, %s)"
+         (rendered left left_ty) (rendered right TQuantity) num den (go_quote label)
+     | None -> assert false)
   | EBinop { op; left; right; _ } ->
     let expr_binop_operand_source =
       match left, right with
@@ -4305,12 +4494,16 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
     (match op with
      | BEq when ty = TBool -> emit_bool_literal_comparison true
      | BNeq when ty = TBool -> emit_bool_literal_comparison false
-     | BAdd when ty = TFloat -> Printf.sprintf "(%s + %s)" emitted_left emitted_right
-     | BSub when ty = TFloat -> Printf.sprintf "(%s - %s)" emitted_left emitted_right
-     | BMul when ty = TFloat -> Printf.sprintf "(%s * %s)" emitted_left emitted_right
+     | BAdd when ty = TFloat || ty = TQuantity ->
+       Printf.sprintf "(%s + %s)" emitted_left emitted_right
+     | BSub when ty = TFloat || ty = TQuantity ->
+       Printf.sprintf "(%s - %s)" emitted_left emitted_right
+     | BMul when ty = TFloat || ty = TQuantity ->
+       Printf.sprintf "(%s * %s)" emitted_left emitted_right
      (* No zero guard: IEEE division by zero yields ±Inf, which is what Racket's `/` on
         a flonum does too. *)
-     | BDiv when ty = TFloat -> Printf.sprintf "(%s / %s)" emitted_left emitted_right
+     | BDiv when ty = TFloat || ty = TQuantity ->
+       Printf.sprintf "(%s / %s)" emitted_left emitted_right
      | BAdd -> Printf.sprintf "teslrt.Add(%s, %s)" emitted_left emitted_right
      | BSub -> Printf.sprintf "teslrt.Sub(%s, %s)" emitted_left emitted_right
      | BMul -> Printf.sprintf "teslrt.Mul(%s, %s)" emitted_left emitted_right
@@ -4355,7 +4548,8 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
      this was a wrong answer and not only a lint finding. *)
   | EUnop { op = UNeg; arg = ELit { lit = LFloat value; _ }; _ } ->
     emit_float_literal (-.value)
-  | EUnop { op = UNeg; arg; _ } when type_of_expr signatures env arg = TFloat ->
+  | EUnop { op = UNeg; arg; _ }
+    when (match type_of_expr signatures env arg with TFloat | TQuantity -> true | _ -> false) ->
     Printf.sprintf "(-%s)" (emit arg)
   | EUnop { op = UNeg; arg; _ } -> Printf.sprintf "teslrt.Neg(%s)" (emit arg)
   | EUnop { op = UNot; arg; _ } -> emit_negated ~indent signatures env arg
@@ -4987,7 +5181,7 @@ and emit_applied ?(indent="") signatures env callable params bound =
       | Some signature -> qualified signature.sig_owner signature.go_name
       | None -> invalid_arg "function argument validated before emission"
     in
-    Printf.sprintf "%s(%s)" go_name (String.concat ", " bound)
+    baked_call go_name bound
   | EApp _ ->
     let head, supplied = flatten_app [] callable in
     let go_name = match normalize_call_head head with
@@ -4998,7 +5192,7 @@ and emit_applied ?(indent="") signatures env callable params bound =
       | _ -> invalid_arg "function argument validated before emission"
     in
     let supplied = List.map (emit_expr ~indent signatures env) supplied in
-    Printf.sprintf "%s(%s)" go_name (String.concat ", " (supplied @ bound))
+    baked_call go_name (supplied @ bound)
   (* A combined check as the callback: the SAME sequencing helper `check (a && b) x` mints,
      called with the loop's element.  Sharing the helper is the point — one rule for what a
      conjunction means, whichever position it is written in. *)
@@ -5763,8 +5957,12 @@ and emit_sql_form ?(indent="") signatures env loc form =
           | "desc" -> column "teslRight", column "teslLeft"
           | _ -> column "teslLeft", column "teslRight"
         in
-        Some (Printf.sprintf "func(teslLeft, teslRight %s) bool { return %s }"
-                (sql_row_type info) (ordered_expr ty "<" left right))
+        (* SPLIT rather than one line, for the reason the predicate is: gofmt keeps a func
+           literal on one line only while it fits, and a comparator over a Bool column (which
+           ranks each side) is already past that — so the split form is the stable one at every
+           size. *)
+        Some (Printf.sprintf "func(teslLeft, teslRight %s) bool {\n%s\treturn %s\n%s}"
+                (sql_row_type info) indent (ordered_expr ty "<" left right) indent)
     in
     let range () =
       (* A missing `limit` is "every row", spelled as a negative count. *)
@@ -5805,7 +6003,8 @@ and emit_sql_form ?(indent="") signatures env loc form =
          (sql_row_type info) (go_type ty) column in
        (* The SUM is over the column's OWN type, so a newtype column sums to that
           newtype and a Float column to a Float — no unwrapping at the boundary. *)
-       let combine, zero = match ty with
+       let fold_sum () =
+         let combine, zero = match ty with
          | TInt -> "teslrt.Add", "teslrt.FromInt64(0)"
          | TFloat ->
            Printf.sprintf "func(teslLeft, teslRight float64) float64 { return teslLeft + teslRight }",
@@ -5822,9 +6021,19 @@ and emit_sql_form ?(indent="") signatures env loc form =
            Printf.sprintf "%s{Value: float64(0)}" (go_type ty)
          | _ -> unsupported loc
            "Go backend cannot sum column `%s.%s`" info.ent_tesl_name field
+         in
+         Printf.sprintf "teslrt.TableFold(%s, %s, %s, %s, %s)"
+           table predicate project combine zero
        in
-       Printf.sprintf "teslrt.TableFold(%s, %s, %s, %s, %s)"
-         table predicate project combine zero
+       (* A MONEY column cannot FOLD: the currency rule needs the whole set — an empty one has
+          no currency to carry its zero, and two currencies have no common total — so the
+          amounts are collected and totalled in one place, where both refusals live.  They are
+          Racket's refusals, word for word. *)
+       (match ty with
+        | TRecord money when money.rec_tesl_name = "Money" ->
+          Printf.sprintf "teslrt.TableSumMoney(%s, %s, %s, %s, %s)"
+            table predicate project (go_quote info.ent_tesl_name) (go_quote field)
+        | _ -> fold_sum ())
      (* `selectMax`/`selectMin` answer a `Maybe`: no matching row is `Nothing`, not a trap
         and not a fabricated zero. *)
      | SelectMax field | SelectMin field ->
@@ -5837,9 +6046,12 @@ and emit_sql_form ?(indent="") signatures env loc form =
          "Go backend cannot compare column `%s.%s`" info.ent_tesl_name field;
        let project = Printf.sprintf "func(teslRow %s) %s { return teslRow.%s }"
          (sql_row_type info) (go_type ty) (record_field_go_name field) in
+       (* Split, like the other comparators: a one-line func literal is gofmt-stable only
+          while it fits, and this one sits at the end of a four-argument call. *)
        let better =
-         Printf.sprintf "func(teslLeft, teslRight %s) bool { return %s }" (go_type ty)
-           (ordered_expr ty (if biggest then ">" else "<") "teslLeft" "teslRight") in
+         Printf.sprintf "func(teslLeft, teslRight %s) bool {\n%s\treturn %s\n%s}" (go_type ty)
+           indent (ordered_expr ty (if biggest then ">" else "<") "teslLeft" "teslRight")
+           indent in
        Printf.sprintf "teslrt.TableExtreme(%s, %s, %s, %s)"
          table predicate project better
      | SelectCountBy -> unsupported loc "Go backend does not support `selectCountBy` yet"
@@ -6404,7 +6616,7 @@ let rec value_encoder ty =
   let encoded_field operand field_ty =
     Printf.sprintf "%s(%s)" (value_encoder field_ty) operand in
   match ty with
-  | TInt | TString | TBool | TFloat | TUnit ->
+  | TInt | TString | TBool | TFloat | TQuantity | TUnit ->
     remember_helper ~prefix:"teslEncode"
       ~signature:(Printf.sprintf "(teslValue %s) any" (go_type ty))
       ~body:"teslValue"
@@ -7625,8 +7837,8 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
        | TCheck _ ->
          Printf.bprintf body "%sif (%s).OK() {\n%s\tteslT.Fatal(\"expected Tesl check failure\")\n%s}\n"
            indent emitted indent indent
-       | TInt | TFloat | TString | TBool | TUnit | TNewtype _ | TRecord _ | TAdt _
-       | TList _ | TDict _ | TSet _ | TParam _ | TFunc _ | TJson | TStream ->
+       | TInt | TFloat | TQuantity | TString | TBool | TUnit | TNewtype _ | TRecord _
+       | TAdt _ | TList _ | TDict _ | TSet _ | TParam _ | TFunc _ | TJson | TStream ->
          Printf.bprintf body "%steslExpectFailure(teslT, func() {\n%s\t_ = %s\n%s})\n"
            indent indent emitted indent
        | TFailure -> unsupported loc "Go backend expectFail target has no result type");
@@ -8179,6 +8391,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | "EmailBody" | "EmailBody(..)" | "TextBody" | "HtmlBody" | "RichBody" -> ()
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.Email` export `%s` yet" other) exposed
+      (* `Tesl.Money` and `Tesl.Units` are validated where their types and leaves are
+         registered, against the compiler's own catalogs. *)
+      | "Tesl.Money" | "Tesl.Units"
       | "Tesl.String" | "Tesl.List" | "Tesl.Int" | "Tesl.Tuple" | "Tesl.Dict"
       | "Tesl.Set" | "Tesl.Float" | "Tesl.Either" | "Tesl.EitherPrim"
       | "Tesl.Time" | "Tesl.Env" | "Tesl.Random" | "Tesl.Id" | "Tesl.Result"
@@ -8238,6 +8453,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       emails = Hashtbl.create 4;
       channels = Hashtbl.create 4;
       codecs = Hashtbl.create 8;
+      aliases = Hashtbl.create 8;
       consts = Hashtbl.create 8;
       databases = Hashtbl.create 4;
     } in
@@ -8708,6 +8924,10 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
     let time_leaf_names = [
       "nowMillis"; "durationMs"; "addMs"; "subtractMs"; "diffMs";
       "Time.posixToSeconds"; "Time.secondsToPosix";
+      (* The units-typed instant surface: `Time.add ts (Duration.hours 2.0)`.  The
+         millisecond forms above stay canonical — they are exact integer arithmetic — and
+         these take a Duration, converting SI seconds to that exact count. *)
+      "Time.add"; "Time.subtract"; "Time.diff";
     ] in
     let time_imports = ref [] in
     List.iter (fun (import : import_decl) ->
@@ -8836,6 +9056,103 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           if List.mem name http_stub_leaf_names then
             http_stub_imports := name :: !http_stub_imports) exposed
       end) m.imports;
+    (* ── `Tesl.Money` and `Tesl.Units` ──────────────────────────────────────
+       Money is EXACT MINOR UNITS plus a currency, never a float; a dimensioned QUANTITY is
+       the opposite — it erases to a plain Float, because its dimension lives in the compiler's
+       type layer and is checked there.  Both are runtime-provided types: an amount and a
+       quantity cross module boundaries, and two packages declaring their own would be
+       different Go types.
+
+       The NAMES come from the compiler's own catalogs (`Units_catalog`, `Currencies`) rather
+       than a list retyped here, so a unit or a currency added there reaches this backend
+       without a second edit — and the conversion FACTORS live only in `tesl/units.rkt`, from
+       which `runtime/go/teslrt/units_data.go` is generated. *)
+    let money_imported = ref false in
+    let units_imported = ref false in
+    let money_leaf_imports = ref [] in
+    let dummy = Location.dummy_loc m.source_file in
+    let runtime_record name go_name fields = {
+      rec_tesl_name = name;
+      rec_owner = "";
+      rec_go_name = go_name;
+      rec_proof_fields = false;
+      rec_fields = fields;
+      rec_loc = dummy;
+    } in
+    (* The currency a `Usd` / `Money.usd` constructor names, by its Tesl constructor name. *)
+    let currency_of_ctor ctor =
+      List.find_map (fun (c, iso, _, digits) ->
+        if c = ctor then Some (iso, digits) else None) Currencies.currencies
+    in
+    let money_ctor_currency name =
+      (* `Money.usd` — the lower-cased ISO code after the dot. *)
+      match String.index_opt name '.' with
+      | Some index ->
+        let code = String.uppercase_ascii
+          (String.sub name (index + 1) (String.length name - index - 1)) in
+        List.find_map (fun (_, iso, _, digits) ->
+          if iso = code then Some (iso, digits) else None) Currencies.currencies
+      | None -> None
+    in
+    List.iter (fun (import : import_decl) ->
+      let exposed = match import.names with
+        | ImportAll -> [] | ImportExposing names -> names in
+      match import.module_name with
+      | "Tesl.Money" ->
+        money_imported := true;
+        List.iter (fun name ->
+          if List.mem name Currencies.ctor_names
+             || List.mem name Currencies.money_ctor_names
+             || List.mem_assoc name Units_catalog.money_rate_aliases
+          then ()
+          else match name with
+            | "Money" | "Currency" | "ExchangeRate" -> ()
+            (* The proof predicates this module owns are compile-time, like every other. *)
+            | "SameCurrency" | "NonNegativeMoney" | "RateFor" -> ()
+            | leaf when String.length leaf > 6
+                        && (String.sub leaf 0 6 = "Money." || String.sub leaf 0 9 = "Currency."
+                            || String.sub leaf 0 13 = "ExchangeRate."
+                            || String.sub leaf 0 10 = "MoneyRate.") ->
+              money_leaf_imports := leaf :: !money_leaf_imports
+            | other -> unsupported import.loc
+              "Go backend does not support `Tesl.Money` export `%s` yet" other) exposed
+      | "Tesl.Units" ->
+        units_imported := true;
+        List.iter (fun name ->
+          if List.mem name Units_catalog.exported_names then begin
+            (* An alias is a TYPE name; the rest are leaves the emitter binds below. *)
+            if not (List.mem_assoc name Units_catalog.aliases) then
+              money_leaf_imports := name :: !money_leaf_imports
+          end else match name with
+            | "FloatNonZero" -> ()
+            | other -> unsupported import.loc
+              "Go backend does not support `Tesl.Units` export `%s` yet" other) exposed
+      | _ -> ()) m.imports;
+    if !money_imported then begin
+      let currency_record = runtime_record "Currency" "teslrt.Currency"
+        [ "code", TString; "minorDigits", TInt ] in
+      Hashtbl.replace types.records "Currency" currency_record;
+      Hashtbl.replace types.records "Money"
+        (runtime_record "Money" "teslrt.Money"
+           [ "minorUnits", TInt; "currency", TRecord currency_record ]);
+      (* An exchange rate holds an exact RATIONAL, which has no Tesl type — so it is opaque
+         here: a program reads it through the accessors and never through a field. *)
+      Hashtbl.replace types.records "ExchangeRate"
+        (runtime_record "ExchangeRate" "teslrt.ExchangeRate" []);
+      (* One rate ALIAS per denominator dimension.  They share the runtime type and differ in
+         name, which is what lets a `/` know which unit its result displays and quantizes
+         per — the dimension is not recoverable from a float. *)
+      List.iter (fun (alias, _) ->
+        Hashtbl.replace types.aliases alias
+          (TRecord (runtime_record alias "teslrt.MoneyRate" [])))
+        Units_catalog.money_rate_aliases
+    end;
+    if !units_imported then
+      (* Every quantity alias is the QUANTITY type: a float64 in the emitted code, distinct in
+         the emitter so a rate times a quantity and a rate times a scalar stay different
+         operations. *)
+      List.iter (fun (alias, _) -> Hashtbl.replace types.aliases alias TQuantity)
+        Units_catalog.aliases;
     (* `deadJobs` answers the dead-letter contents of a queue.  Its element type is opaque
        (`DeadJob`), so what a test can do with the list is count it or requeue from it — which
        is what the Racket surface allows too. *)
@@ -9330,7 +9647,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         | TNewtype newtype -> contains_self newtype.base
         | TCheck inner -> contains_self inner
         | TList _ | TSet _ | TDict _ | TFunc _ -> false
-        | TInt | TFloat | TString | TBool | TUnit | TJson | TStream | TParam _
+        | TInt | TFloat | TQuantity | TString | TBool | TUnit | TJson | TStream | TParam _
         | TFailure -> false
       in
       (* A GENERIC type naming ITSELF at another instantiation gets its own message: it is
@@ -9560,6 +9877,164 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       in
       if not (Hashtbl.mem signatures name) then
         Hashtbl.add signatures name { params = List.map shape params; result = shape result; go_name; sig_owner = ""; sig_needs_scope = false }) !string_imports;
+    (* ── `Tesl.Money` / `Tesl.Units` leaves ─────────────────────────────────
+       Registered here rather than with the shape-tagged string leaves because their types
+       name RUNTIME RECORDS (a Money, a Currency, a rate) the table above cannot spell. *)
+    if !money_imported || !units_imported then begin
+      let record name = match Hashtbl.find_opt types.records name with
+        | Some info -> TRecord info
+        | None -> unsupported (Location.dummy_loc m.source_file)
+          "Go backend needs `%s` for this module; import `Tesl.Money`" name
+      in
+      let rate_type alias = match Hashtbl.find_opt types.aliases alias with
+        | Some ty -> ty
+        | None -> unsupported (Location.dummy_loc m.source_file)
+          "Go backend needs the rate type `%s`; import `Tesl.Money`" alias
+      in
+      let maybe_of ty = match Hashtbl.find_opt types.adts "Maybe" with
+        | Some info -> TAdt (info, [ty])
+        | None -> unsupported (Location.dummy_loc m.source_file)
+          "Go backend `Currency.fromCode` answers a Maybe; import `Tesl.Maybe`"
+      in
+      let result_of ok err = match Hashtbl.find_opt types.adts "Result" with
+        | Some info -> TAdt (info, [ok; err])
+        | None -> unsupported (Location.dummy_loc m.source_file)
+          "Go backend `Money.convert` answers a Result; import `Tesl.Result`"
+      in
+      let posix () = match Hashtbl.find_opt types.newtypes "PosixMillis" with
+        | Some info -> TNewtype info
+        | None -> unsupported (Location.dummy_loc m.source_file)
+          "Go backend `ExchangeRate` carries a PosixMillis; import `Tesl.Time`"
+      in
+      let bind name params result go_name =
+        if not (Hashtbl.mem signatures name) then
+          Hashtbl.add signatures name
+            { params; result; go_name; sig_owner = ""; sig_needs_scope = false }
+      in
+      let money () = record "Money" in
+      let currency () = record "Currency" in
+      let exchange () = record "ExchangeRate" in
+      (* A rate CONSTRUCTOR answers the alias for its own denominator dimension. *)
+      let rate_of_dim dim =
+        match Units_catalog.money_rate_alias_of_dim dim with
+        | Some alias -> rate_type alias
+        | None -> unsupported (Location.dummy_loc m.source_file)
+          "Go backend has no rate type for this denominator"
+      in
+      List.iter (fun name ->
+        match name with
+        | "Money.fromMinorUnits" -> bind name [currency (); TInt] (money ()) "teslrt.MoneyFromMinorUnits"
+        | "Money.minorUnits" -> bind name [money ()] TInt "teslrt.MoneyMinorUnits"
+        | "Money.currency" -> bind name [money ()] (currency ()) "teslrt.MoneyCurrency"
+        | "Money.scale" -> bind name [money (); TInt] (money ()) "teslrt.MoneyScale"
+        | "Money.scaleBy" -> bind name [money (); TFloat] (money ()) "teslrt.MoneyScaleBy"
+        | "Money.negate" -> bind name [money ()] (money ()) "teslrt.MoneyNegate"
+        | "Money.abs" -> bind name [money ()] (money ()) "teslrt.MoneyAbs"
+        | "Money.isZero" -> bind name [money ()] TBool "teslrt.MoneyIsZero"
+        | "Money.isNegative" -> bind name [money ()] TBool "teslrt.MoneyIsNegative"
+        | "Money.display" -> bind name [money ()] TString "teslrt.MoneyDisplay"
+        | "Money.add" -> bind name [money (); money ()] (money ()) "teslrt.MoneyAdd"
+        | "Money.subtract" -> bind name [money (); money ()] (money ()) "teslrt.MoneySubtract"
+        | "Money.compare" -> bind name [money (); money ()] TInt "teslrt.MoneyCompare"
+        | "Money.requireSameCurrency" ->
+          bind name [money (); money ()] (TCheck (money ())) "teslrt.MoneyRequireSameCurrency"
+        | "Money.requireNonNegative" ->
+          bind name [money ()] (TCheck (money ())) "teslrt.MoneyRequireNonNegative"
+        | "Money.requireRateFor" ->
+          bind name [exchange (); money ()] (TCheck (money ())) "teslrt.MoneyRequireRateFor"
+        | "Money.convert" ->
+          bind name [exchange (); money ()] (result_of (money ()) TString) "teslrt.MoneyConvert"
+        | "Money.convertChecked" ->
+          bind name [exchange (); money ()] (money ()) "teslrt.MoneyConvertChecked"
+        | "Currency.code" -> bind name [currency ()] TString "teslrt.CurrencyCode"
+        | "Currency.minorDigits" -> bind name [currency ()] TInt "teslrt.CurrencyMinorDigits"
+        | "Currency.fromCode" -> bind name [TString] (maybe_of (currency ())) "teslrt.CurrencyFromCode"
+        | "ExchangeRate.make" ->
+          bind name [currency (); currency (); TFloat; posix ()] (exchange ()) "teslrt.ExchangeRateMake"
+        | "ExchangeRate.fromCurrency" ->
+          bind name [exchange ()] (currency ()) "teslrt.ExchangeRateFromCurrency"
+        | "ExchangeRate.toCurrency" ->
+          bind name [exchange ()] (currency ()) "teslrt.ExchangeRateToCurrency"
+        | "ExchangeRate.rate" -> bind name [exchange ()] TFloat "teslrt.ExchangeRateRate"
+        | "ExchangeRate.asOf" -> bind name [exchange ()] (posix ()) "teslrt.ExchangeRateAsOf"
+        (* A fixed-denominator rate constructor bakes its label: the amount IS the price per
+           that unit, and the label is what the rate displays and quantizes per. *)
+        | "MoneyRate.perHour" ->
+          bind name [money ()] (rate_of_dim Units_catalog.d_duration)
+            "teslrt.MoneyRateOfLabel#3600#1#h"
+        | "MoneyRate.perDay" ->
+          bind name [money ()] (rate_of_dim Units_catalog.d_duration)
+            "teslrt.MoneyRateOfLabel#86400#1#day"
+        | "MoneyRate.perKilogram" ->
+          bind name [money ()] (rate_of_dim Units_catalog.d_mass)
+            "teslrt.MoneyRateOfLabel#1#1#kg"
+        | "MoneyRate.perLiter" ->
+          bind name [money ()] (rate_of_dim Units_catalog.d_volume)
+            "teslrt.MoneyRateOfLabel#1#1000#L"
+        | "MoneyRate.perSquareMeter" ->
+          bind name [money ()] (rate_of_dim Units_catalog.d_area)
+            "teslrt.MoneyRateOfLabel#1#1#m^2"
+        (* `MoneyRate.currency` / `.display` are dimension-polymorphic: every rate is the same
+           runtime value, so one binding serves them all. *)
+        | "MoneyRate.currency" ->
+          bind name [rate_of_dim Units_catalog.d_duration] (currency ()) "teslrt.MoneyRateCurrency"
+        | "MoneyRate.display" ->
+          bind name [rate_of_dim Units_catalog.d_duration] TString "teslrt.MoneyRateDisplay"
+        | "Units.mul" -> bind name [TQuantity; TQuantity] TQuantity "teslrt.UnitsMul"
+        | "Units.div" -> bind name [TQuantity; TQuantity] TQuantity "teslrt.UnitsDiv"
+        | "Units.min" -> bind name [TQuantity; TQuantity] TQuantity "teslrt.UnitsMin"
+        | "Units.max" -> bind name [TQuantity; TQuantity] TQuantity "teslrt.UnitsMax"
+        | "Units.square" -> bind name [TQuantity] TQuantity "teslrt.UnitsSquare"
+        | "Units.sqrt" -> bind name [TQuantity] TQuantity "teslrt.UnitsSqrt"
+        | "Units.abs" -> bind name [TQuantity] TQuantity "teslrt.UnitsAbs"
+        | "Units.negate" -> bind name [TQuantity] TQuantity "teslrt.UnitsNegate"
+        | "Units.sum" -> bind name [TList TQuantity] TQuantity "teslrt.UnitsSum"
+        | "Units.requireNonZero" ->
+          bind name [TQuantity] (TCheck TQuantity) "teslrt.UnitsRequireNonZero"
+        | "Duration.toMillis" -> bind name [TQuantity] TInt "teslrt.DurationToMillis"
+        | "Duration.fromMillis" -> bind name [TInt] TQuantity "teslrt.DurationFromMillis"
+        | unit_leaf ->
+          (* Everything else is a unit CONSTRUCTOR or ACCESSOR: a Float in, a Float out, and
+             the Go name is the dimension and the unit joined — the same derivation
+             `scripts/gen-go-units.py` uses to write them. *)
+          (match String.index_opt unit_leaf '.' with
+           | Some index ->
+             let dimension = String.sub unit_leaf 0 index in
+             let unit = String.sub unit_leaf (index + 1)
+               (String.length unit_leaf - index - 1) in
+             (* A CONSTRUCTOR takes a plain number and answers a quantity; an ACCESSOR (the
+                `in…` half) takes the quantity and answers the number. *)
+             let is_accessor =
+               String.length unit >= 3 && String.sub unit 0 2 = "in"
+               && unit.[2] >= 'A' && unit.[2] <= 'Z'
+             in
+             let params, result =
+               if is_accessor then [TQuantity], TFloat else [TFloat], TQuantity in
+             bind unit_leaf params result
+               (Printf.sprintf "teslrt.%s%s" dimension (go_ident ~exported:true unit))
+           | None -> unsupported (Location.dummy_loc m.source_file)
+             "Go backend cannot resolve the unit leaf `%s`" unit_leaf))
+        !money_leaf_imports;
+      (* The per-currency constructors: `Money.usd 1000` and the bare `Usd`.  The ISO code and
+         the digit count are baked from the compiler's own currency table, so the runtime needs
+         no lookup for a currency the source names. *)
+      List.iter (fun (import : import_decl) ->
+        if import.module_name = "Tesl.Money" then begin
+          let exposed = match import.names with
+            | ImportAll -> [] | ImportExposing names -> names in
+          List.iter (fun name ->
+            match money_ctor_currency name, currency_of_ctor name with
+            | Some (iso, digits), _ when List.mem name Currencies.money_ctor_names ->
+              bind name [TInt] (money ())
+                (Printf.sprintf "teslrt.MoneyOf#%s#%d" iso digits)
+            | _, Some (iso, digits) when List.mem name Currencies.ctor_names ->
+              (* A bare `Usd` is a VALUE, not a nullary call: it goes in the const table, which
+                 is what the emitter consults for a name mentioned without arguments. *)
+              Hashtbl.replace types.consts name
+                (currency (), Printf.sprintf "teslrt.CurrencyOf(%S, %d)" iso digits)
+            | _ -> ()) exposed
+        end) m.imports
+    end;
     List.iter (fun name ->
       let maybe_string () =
         match Hashtbl.find_opt types.adts "Maybe" with
@@ -9615,6 +10090,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         | "diffMs" -> [posix; posix], TInt, "teslrt.DiffMs"
         | "Time.posixToSeconds" -> [posix], TInt, "teslrt.PosixToSeconds"
         | "Time.secondsToPosix" -> [TInt], posix, "teslrt.SecondsToPosix"
+        | "Time.add" -> [posix; TQuantity], posix, "teslrt.TimeAdd"
+        | "Time.subtract" -> [posix; TQuantity], posix, "teslrt.TimeSubtract"
+        | "Time.diff" -> [posix; posix], TQuantity, "teslrt.TimeDiff"
         | other -> unsupported (Location.dummy_loc m.source_file)
           "Go backend does not support `Tesl.Time` export `%s` yet" other
       in

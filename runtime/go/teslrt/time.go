@@ -1,6 +1,9 @@
 package teslrt
 
-import "time"
+import (
+	"math/big"
+	"time"
+)
 
 // PosixMillis is Tesl's canonical instant: milliseconds since the Unix epoch, UTC.
 //
@@ -50,4 +53,26 @@ func DurationMs(past PosixMillis) Int {
 		return FromInt64(0)
 	}
 	return elapsed
+}
+
+// The units-typed instant surface: `Time.add ts (Duration.hours 2.0)`. The millisecond forms
+// (`addMs`, `diffMs`) stay canonical — they are exact integer arithmetic — and these convert a
+// Duration, which is SI SECONDS as a float, into that exact millisecond count.
+//
+// Seconds → milliseconds rounds HALF-EVEN on the exact rational, the same stance Money takes,
+// so an instant cannot drift by a millisecond over a long series of additions.
+func TimeAdd(instant PosixMillis, duration float64) PosixMillis {
+	return PosixMillis{Value: Add(instant.Value, DurationToMillis(duration))}
+}
+
+func TimeSubtract(instant PosixMillis, duration float64) PosixMillis {
+	return PosixMillis{Value: Sub(instant.Value, DurationToMillis(duration))}
+}
+
+// TimeDiff answers (later - earlier) as a Duration in seconds — the typed counterpart of
+// `diffMs`.
+func TimeDiff(earlier, later PosixMillis) float64 {
+	difference := Sub(later.Value, earlier.Value)
+	value, _ := new(big.Rat).SetInt(difference.bigInt()).Float64()
+	return value / 1000.0
 }

@@ -6980,6 +6980,132 @@ let test_cache_with_go () =
      the literal-prefix rule, and the reset. *)
   gate_emitted "tesl-go-cache" emitted
 
+let money_source = {|module GoMoney exposing [invoiceTotal, discounted, converted, hourlyFee, pace]
+
+import Tesl.Prelude exposing [Bool(..), Int, String, Unit]
+import Tesl.Float exposing [Float]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Money exposing [
+  Money,
+  Currency,
+  ExchangeRate,
+  MoneyPerDuration,
+  Usd,
+  Sek,
+  Money.usd,
+  Money.sek,
+  Money.minorUnits,
+  Money.display,
+  Money.scale,
+  Money.scaleBy,
+  Money.add,
+  Money.convertChecked,
+  Money.requireRateFor,
+  Money.requireSameCurrency,
+  Currency.code,
+  Currency.fromCode,
+  ExchangeRate.make,
+  MoneyRate.perHour,
+  MoneyRate.display,
+]
+import Tesl.Time exposing [PosixMillis, Time.secondsToPosix]
+import Tesl.Units exposing [
+  Length,
+  Duration,
+  Speed,
+  Length.kilometers,
+  Length.inMeters,
+  Duration.hours,
+  Duration.minutes,
+  Speed.inKilometersPerHour,
+  Units.requireNonZero,
+]
+
+# An integer scale is EXACT — quantity times unit price never rounds.
+fn invoiceTotal(unitPrice: Money, quantity: Int) -> Money =
+  Money.scale unitPrice quantity
+
+# A fractional scale ROUNDS, half-even, which is why it has its own name.
+fn discounted(amount: Money) -> Money =
+  Money.scaleBy amount 0.9
+
+# The sanctioned conversion flow: mint the RateFor proof, then convert under it.
+fn converted(amount: Money) -> Money =
+  let rate = ExchangeRate.make Usd Sek 0.9155 (Time.secondsToPosix 0)
+  let checked = check Money.requireRateFor rate amount
+  Money.convertChecked rate checked
+
+fn hourlyFee(rate: MoneyPerDuration, worked: Duration) -> Money =
+  rate * worked
+
+fn pace(distance: Length, elapsed: Duration) -> Speed =
+  let elapsedNonZero = check Units.requireNonZero elapsed
+  distance / elapsedNonZero
+
+test "an exact scale and a rounding one" {
+  expect Money.display (invoiceTotal (Money.usd 1999) 3) == "$59.97"
+  # 1005 × 0.9 = 904.5, and half-even sends a tie to the EVEN neighbour.
+  expect Money.minorUnits (discounted (Money.usd 1005)) == 904
+  let first = Money.usd 1000
+  let second = Money.usd 250
+  let sameCurrency = check Money.requireSameCurrency first second
+  expect Money.display (Money.add first sameCurrency) == "$12.50"
+}
+
+test "a conversion rounds half-even on the exact rate" {
+  expect Money.minorUnits (converted (Money.usd 1000)) == 916
+  expect Money.display (converted (Money.usd 1000)) == "9.16 SEK"
+}
+
+test "a currency resolves from its ISO code" {
+  expect (case Currency.fromCode "SEK" of
+    Something c -> Currency.code c
+    Nothing -> "none") == "SEK"
+  expect (case Currency.fromCode "ZZZ" of
+    Something c -> Currency.code c
+    Nothing -> "none") == "none"
+}
+
+test "a rate displays per its own unit and materializes once" {
+  let hourly = MoneyRate.perHour (Money.sek 95000)
+  expect MoneyRate.display hourly == "950.00 SEK/h"
+  expect Money.display (hourlyFee hourly (Duration.hours 1.5)) == "1425.00 SEK"
+  expect Money.display (hourlyFee hourly (Duration.minutes 30.0)) == "475.00 SEK"
+}
+
+test "quantities convert and divide" {
+  expect Length.inMeters (Length.kilometers 2.0) == 2000.0
+  expect Speed.inKilometersPerHour (pace (Length.kilometers 10.0) (Duration.hours 0.5)) == 20.0
+}
+|}
+
+let test_money_with_go () =
+  let emitted = emit_ok "<go-money>" money_source in
+  let module_go = artifact "internal/teslmodgomoney/module.go" emitted in
+  (* A per-currency constructor bakes its ISO code and its minor-digit count, both read from
+     the compiler's own currency table — the runtime looks nothing up. *)
+  check bool "a money constructor bakes its currency" true
+    (contains module_go "teslrt.MoneyOf(teslrt.FromInt64(1999), \"USD\", 2)");
+  check bool "and a bare currency is a value, not a call" true
+    (contains module_go "teslrt.CurrencyOf(\"USD\", 2)");
+  (* An integer scale is exact; a fractional one rounds and is a different function. *)
+  check bool "an exact scale stays exact" true (contains module_go "teslrt.MoneyScale(");
+  check bool "a fractional scale is the rounding one" true
+    (contains module_go "teslrt.MoneyScaleBy(");
+  (* `rate * quantity` is the one place a rate materialises, so it is a named call rather
+     than a `*`: at run time both operands are floats, and only the TYPES tell it from a
+     rescale. *)
+  check bool "a rate times a quantity materialises money" true
+    (contains module_go "teslrt.MoneyRateMul(");
+  check bool "a per-hour rate bakes its label" true
+    (contains module_go "teslrt.MoneyRateOfLabel(");
+  (* A quantity is a float64 with a dimension the compiler kept: the arithmetic is ordinary. *)
+  check bool "quantity division is plain float arithmetic" true
+    (contains module_go "(distance / elapsedNonZero)");
+  (* `go test` RUNS the blocks: the scales, the conversion, the ISO lookup, the rate, and the
+     unit conversions. *)
+  gate_emitted "tesl-go-money" emitted
+
 let property_source = {|module GoProperty exposing [clamp, evenDouble, lengthOf, smallInt]
 
 import Tesl.Prelude exposing [Bool(..), Int, String, List, Unit]
@@ -7501,6 +7627,13 @@ let go_corpus = [
      suite whose properties run beside ordinary SQL assertions. *)
   "example/learn/lesson14-test-blocks.tesl";
   "tests/sql-clause-placement-tests.tesl";
+  (* Money and Units: exact minor units with half-even rounding at every edge, the ISO
+     currency table, money PER quantity, and the dimensioned-quantity algebra. *)
+  "tests/money-tests.tesl";
+  "tests/units-tests.tesl";
+  "example/learn/lesson71-money.tesl";
+  "example/learn/lesson72-units.tesl";
+  "tests/memory-backend-regressions.tesl";
 ]
 
 let test_go_corpus_with_go () =
@@ -7667,6 +7800,9 @@ let () =
       test_case "Tesl.Cache" `Slow test_cache_with_go;
       test_case "caches behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-cache-oracle>" cache_source);
+      test_case "Tesl.Money and Tesl.Units" `Slow test_money_with_go;
+      test_case "money and units behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-money-oracle>" money_source);
       test_case "property tests" `Slow test_property_with_go;
       test_case "properties behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-property-oracle>" property_source);
