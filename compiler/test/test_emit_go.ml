@@ -6840,6 +6840,126 @@ let test_uuid_with_go () =
   (* `go test` RUNS the blocks: shape, version digit, and every rejection. *)
   gate_emitted "tesl-go-uuid" emitted
 
+(* `Tesl.Cache`: a declared cache is one package-level store, TYPED by its `valueType:` — so a
+   hit needs no decode and cannot answer the wrong shape, which is where this departs from
+   Racket (whose PostgreSQL path stores JSON text because a column has to hold something).
+   Expiry is noticed on READ, so a stale value is never answered and no sweeper runs; the
+   default TTL is baked into the store because it belongs to the declaration, and an explicit
+   TTL on a `Cache.set` overrides it.  `invalidate` matches a LITERAL prefix — Racket spells
+   that `left(key, length($1)) = $1` precisely so a `%` cannot behave as a wildcard. *)
+let cache_source = {|module GoCache exposing [lookup, remember, rememberBriefly, forget, forgetAll, counterOf]
+
+import Tesl.Prelude exposing [Bool(..), Int, String, Unit]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.Cache exposing [Cache]
+
+database Store = Database {
+  schema: "gocache"
+  entities: []
+  backend: Memory
+}
+
+cache ProfileCache = Cache {
+  database: Store
+  defaultTtl: 3600
+  valueType: String
+}
+
+cache CounterCache = Cache {
+  database: Store
+  valueType: Int
+}
+
+fn lookup(key: String) -> Maybe String requires [cacheCap ProfileCache] =
+  Cache.get ProfileCache (key)
+
+fn remember(key: String, value: String) -> Unit requires [cacheCap ProfileCache] =
+  Cache.set ProfileCache (key) value
+
+fn rememberBriefly(key: String, value: String) -> Unit requires [cacheCap ProfileCache] =
+  Cache.set ProfileCache (key) value 60
+
+fn forget(key: String) -> Unit requires [cacheCap ProfileCache] =
+  Cache.delete ProfileCache (key)
+
+fn forgetAll(prefix: String) -> Unit requires [cacheCap ProfileCache] =
+  Cache.invalidate ProfileCache (prefix)
+
+fn bump(key: String, value: Int) -> Unit requires [cacheCap CounterCache] =
+  Cache.set CounterCache (key) value
+
+fn counterOf(key: String) -> Int requires [cacheCap CounterCache] =
+  case Cache.get CounterCache (key) of
+    Nothing -> 0 - 1
+    Something n -> n
+
+test "a miss, a hit, and an overwrite" requires [cacheCap ProfileCache] {
+  expect lookup "profile:1" == Nothing
+  let _ = remember "profile:1" "ada"
+  expect lookup "profile:1" == Something "ada"
+  let _ = remember "profile:1" "grace"
+  expect lookup "profile:1" == Something "grace"
+}
+
+test "each cache keeps its own declared value type" requires [cacheCap CounterCache] {
+  expect counterOf "hits" == 0 - 1
+  let _ = bump "hits" 41
+  expect counterOf "hits" == 41
+}
+
+test "delete takes one key, invalidate takes a namespace" requires [cacheCap ProfileCache] {
+  let _ = remember "profile:1" "ada"
+  let _ = remember "profile:2" "grace"
+  let _ = remember "session:1" "token"
+  let _ = forget "profile:1"
+  expect lookup "profile:1" == Nothing
+  expect lookup "profile:2" == Something "grace"
+  let _ = forgetAll "profile:"
+  expect lookup "profile:2" == Nothing
+  expect lookup "session:1" == Something "token"
+}
+
+test "a prefix is literal, not a pattern" requires [cacheCap ProfileCache] {
+  let _ = remember "100%sure" "yes"
+  let _ = remember "unrelated" "no"
+  let _ = forgetAll "%"
+  expect lookup "unrelated" == Something "no"
+  let _ = forgetAll "100%"
+  expect lookup "100%sure" == Nothing
+}
+
+test "an explicit TTL is accepted and the entry is live inside it" requires [cacheCap ProfileCache] {
+  let _ = rememberBriefly "profile:9" "live"
+  expect lookup "profile:9" == Something "live"
+}
+
+test "each block starts from an empty cache" requires [cacheCap ProfileCache] {
+  expect lookup "profile:1" == Nothing
+  expect lookup "profile:9" == Nothing
+}
+|}
+
+let test_cache_with_go () =
+  let emitted = emit_ok "<go-cache>" cache_source in
+  let module_go = artifact "internal/teslmodgocache/module.go" emitted in
+  check bool "a declaration becomes one typed store" true
+    (contains module_go "var ProfileCacheStore = teslrt.NewCache[string](3600)");
+  check bool "and a cache with no defaultTtl gets none" true
+    (contains module_go "var CounterCacheStore = teslrt.NewCache[teslrt.Int](0)");
+  check bool "an explicit TTL takes the other setter" true
+    (contains module_go "teslrt.CacheSetTTL(ProfileCacheStore, key, value, teslrt.FromInt64(60))");
+  check bool "invalidate is a prefix, not a key" true
+    (contains module_go "teslrt.CacheInvalidatePrefix(ProfileCacheStore, prefix)");
+  (* Per-test isolation: one block's entries must not be another's, the same rule tables and
+     queues follow. *)
+  let tests_go = artifact "internal/teslmodgocache/module_test.go" emitted in
+  check bool "each test block starts from an empty cache" true
+    (contains tests_go "teslrt.CacheReset(ProfileCacheStore)");
+  (* `go test` RUNS the blocks: miss/hit, overwrite, per-cache typing, delete vs invalidate,
+     the literal-prefix rule, and the reset. *)
+  gate_emitted "tesl-go-cache" emitted
+
 let go_corpus = [
   "example/learn/lesson00-hello-world.tesl";
   "example/learn/lesson03-records.tesl";
@@ -6914,6 +7034,10 @@ let go_corpus = [
   "tests/critical-review63-tests.tesl";
   (* The UUID lesson: generation under the capability, and validation as a check. *)
   "example/learn/lesson56-uuid.tesl";
+  (* The cache files: the lesson that teaches the surface, and the suite that pins the
+     operations one by one. *)
+  "example/learn/lesson59-cache.tesl";
+  "tests/cache-tests.tesl";
 ]
 
 let test_go_corpus_with_go () =
@@ -7077,6 +7201,9 @@ let () =
       test_case "Memory-backend databases" `Slow test_db_with_go;
       test_case "databases behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-db-oracle>" db_source);
+      test_case "Tesl.Cache" `Slow test_cache_with_go;
+      test_case "caches behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-cache-oracle>" cache_source);
       test_case "Tesl.UUID" `Slow test_uuid_with_go;
       test_case "UUIDs behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-uuid-oracle>" uuid_source);

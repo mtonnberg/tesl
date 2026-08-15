@@ -340,6 +340,22 @@ type queue_info = {
   qu_loc : Location.loc;
 }
 
+(* A `cache C = Cache { … }` is one package-level store plus the type of what it holds.
+   The DATABASE it names is inert here for the same reason a `database` declaration is: the
+   Racket cache reads its own in-memory hash until something binds a PostgreSQL runtime, and
+   nothing does that without `with database`. *)
+type cache_info = {
+  ca_tesl_name : string;
+  ca_go_var : string;
+  ca_owner : string;
+  ca_value : go_type;
+  (* `defaultTtl:` in seconds, or 0 when the declaration omits one — baked in for the reason
+     a queue's `maxAttempts` is: the expiry rule belongs to the declaration, and a `Cache.set`
+     with no TTL of its own is exactly the call that asks for it. *)
+  ca_default_ttl : int;
+  ca_loc : Location.loc;
+}
+
 (** Named nominal types the emitter can resolve: scalar newtypes and records. *)
 type type_table = {
   newtypes : (string, newtype_info) Hashtbl.t;
@@ -349,6 +365,8 @@ type type_table = {
   (* Keyed by the QUEUE's name and again by its job type: `enqueue` names the job type,
      while an api-test verb names the queue. *)
   queues : (string, queue_info) Hashtbl.t;
+  (* Declared caches, by name — the four `Cache.*` leaves all name one. *)
+  caches : (string, cache_info) Hashtbl.t;
   (* Module-level constants: a NAME and its Go spelling, referenced bare rather than called.
      They live here rather than in `signatures` because a signature describes something that is
      APPLIED, and a const that resolved through that table would be indistinguishable from a
@@ -376,6 +394,13 @@ let current_types : type_table option ref = ref None
    Racket's runtime does when a value carries more than one proof.  Populated per module,
    read where that assertion is emitted. *)
 let proof_op_functions : (string, string) Hashtbl.t = Hashtbl.create 8
+
+(* A cache by NAME.  Every `Cache.*` operation names a declared cache, and the declaration is
+   where the value type and the store live. *)
+let cache_of_name loc name =
+  match Option.bind !current_types (fun types -> Hashtbl.find_opt types.caches name) with
+  | Some info -> info
+  | None -> unsupported loc "Go backend cannot resolve cache `%s`" name
 
 (* `with database D { … }` is the only place a database DECLARATION becomes observable: it
    binds the store the body's queries run against.  On the Memory backend that store IS the
@@ -2379,9 +2404,41 @@ let rec type_of_expr signatures env expr =
   | EWithCapabilities { body; _ } -> type_of_expr signatures env body
   | EStartWorkers _ -> TUnit
   | EServe { port; _ } -> ignore (type_of_expr signatures env port); TUnit
+  (* The `Tesl.Cache` operations.  Each names a DECLARED cache, so the value type comes from
+     the declaration rather than from the call site: `Cache.get C k` answers
+     `Maybe <valueType>` whatever the caller expected, which is what keeps a miss and a
+     wrong-shaped hit different things. *)
+  | ECacheGet { cache_name; key; loc } ->
+    let info = cache_of_name loc cache_name in
+    if type_of_expr signatures env key <> TString then
+      unsupported loc "Go backend `Cache.get` takes a String key";
+    (match adt_ctor_of_signature signatures "Nothing" with
+     | Some (maybe, _) -> TAdt (maybe, [info.ca_value])
+     | None -> unsupported loc "Go backend `Cache.get` answers a Maybe; import `Tesl.Maybe`")
+  | ECacheSet { cache_name; key; value; ttl; loc } ->
+    let info = cache_of_name loc cache_name in
+    if type_of_expr signatures env key <> TString then
+      unsupported loc "Go backend `Cache.set` takes a String key";
+    if type_unequal (type_of_arg signatures env info.ca_value value) info.ca_value then
+      unsupported loc "Go backend `Cache.set` value does not match cache `%s`'s declared type"
+        cache_name;
+    (match ttl with
+     | Some ttl when type_of_expr signatures env ttl <> TInt ->
+       unsupported loc "Go backend `Cache.set` takes a TTL in whole seconds"
+     | _ -> ());
+    TUnit
+  | ECacheDelete { cache_name; key; loc } ->
+    ignore (cache_of_name loc cache_name);
+    if type_of_expr signatures env key <> TString then
+      unsupported loc "Go backend `Cache.delete` takes a String key";
+    TUnit
+  | ECacheInvalidate { cache_name; prefix; loc } ->
+    ignore (cache_of_name loc cache_name);
+    if type_of_expr signatures env prefix <> TString then
+      unsupported loc "Go backend `Cache.invalidate` takes a String prefix";
+    TUnit
   | EPublish { loc; _ }
-  | ECacheGet { loc; _ } | ECacheSet { loc; _ }
-  | ECacheDelete { loc; _ } | ECacheInvalidate { loc; _ } | ESendEmail { loc; _ }
+  | ESendEmail { loc; _ }
   | EStartEmailWorker { loc; _ }
   | EWithTransaction { loc; _ } ->
     unsupported loc "Go backend does not support effects yet"
@@ -4163,9 +4220,30 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
     in
     Printf.sprintf "teslrt.Serve(%s, teslrt.ServeOptions{%s})"
       (go_ident ~exported:true server_name) options
+  (* The cache operations: one runtime call each, on the store the declaration emitted.  The
+     cache NAME is not a value — it resolves to that store. *)
+  | ECacheGet { cache_name; key; loc } ->
+    let info = cache_of_name loc cache_name in
+    Printf.sprintf "teslrt.CacheGet(%s, %s)"
+      (qualified info.ca_owner info.ca_go_var) (emit key)
+  | ECacheSet { cache_name; key; value; ttl; loc } ->
+    let info = cache_of_name loc cache_name in
+    let store = qualified info.ca_owner info.ca_go_var in
+    let value = emit_expr ~expected:info.ca_value ~indent signatures env value in
+    (match ttl with
+     | None -> Printf.sprintf "teslrt.CacheSet(%s, %s, %s)" store (emit key) value
+     | Some ttl ->
+       Printf.sprintf "teslrt.CacheSetTTL(%s, %s, %s, %s)" store (emit key) value (emit ttl))
+  | ECacheDelete { cache_name; key; loc } ->
+    let info = cache_of_name loc cache_name in
+    Printf.sprintf "teslrt.CacheDelete(%s, %s)"
+      (qualified info.ca_owner info.ca_go_var) (emit key)
+  | ECacheInvalidate { cache_name; prefix; loc } ->
+    let info = cache_of_name loc cache_name in
+    Printf.sprintf "teslrt.CacheInvalidatePrefix(%s, %s)"
+      (qualified info.ca_owner info.ca_go_var) (emit prefix)
   | EPublish { loc; _ }
-  | ECacheGet { loc; _ } | ECacheSet { loc; _ }
-  | ECacheDelete { loc; _ } | ECacheInvalidate { loc; _ } | ESendEmail { loc; _ }
+  | ESendEmail { loc; _ }
   | EStartEmailWorker { loc; _ }
   | EWithTransaction { loc; _ } ->
     unsupported loc "Go backend cannot emit this expression yet"
@@ -6103,6 +6181,18 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
     Buffer.add_string body (line_directive info.qu_loc);
     Printf.bprintf body "var %s = teslrt.NewQueue(%s, %d)\n"
       info.qu_go_var (go_quote info.qu_tesl_name) info.qu_max_attempts);
+  (* The store for a `cache` declaration.  `defaultTtl:` is baked in for the reason
+     `maxAttempts` is: the expiry rule belongs to the declaration, not to any call site, and a
+     `Cache.set` with no TTL of its own is exactly the one that asks for it. *)
+  Hashtbl.to_seq_values types.caches
+  |> List.of_seq
+  |> List.sort (fun left right -> String.compare left.ca_tesl_name right.ca_tesl_name)
+  |> List.filter (fun info -> declared_here info.ca_owner)
+  |> List.iter (fun info ->
+    Buffer.add_char body '\n';
+    Buffer.add_string body (line_directive info.ca_loc);
+    Printf.bprintf body "var %s = teslrt.NewCache[%s](%d)\n"
+      info.ca_go_var (go_type info.ca_value) info.ca_default_ttl);
   (* The store for a `backend: Memory` entity.  One variable per entity, initialised at
      package level: an entity belongs to exactly one database, and the table itself is
      what carries the lock, so nothing has to be threaded through call sites. *)
@@ -6707,6 +6797,12 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
         |> List.filter (fun info -> owned info.qu_owner)
         |> List.map (fun info ->
              Printf.sprintf "teslrt.ResetQueue(%s)" (qualified info.qu_owner info.qu_go_var))
+      and caches =
+        Hashtbl.to_seq_values types.caches
+        |> List.of_seq
+        |> List.filter (fun info -> owned info.ca_owner)
+        |> List.map (fun info ->
+             Printf.sprintf "teslrt.CacheReset(%s)" (qualified info.ca_owner info.ca_go_var))
       in
       (* The stub table is only reset when the module can stub at all: `stubHttp` is in
          `signatures` exactly when `Tesl.ApiTest` exposed it. *)
@@ -6721,7 +6817,7 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
            || Hashtbl.mem signatures "gauge"
         then ["teslrt.ResetTelemetry()"] else []
       in
-      List.sort_uniq String.compare (tables @ queues) @ stubs @ telemetry
+      List.sort_uniq String.compare (tables @ queues @ caches) @ stubs @ telemetry
   in
   let emit_reset () =
     if reset_calls <> [] then Buffer.add_string body "\tteslResetTestState()\n"
@@ -7322,7 +7418,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       | "Tesl.String" | "Tesl.List" | "Tesl.Int" | "Tesl.Tuple" | "Tesl.Dict"
       | "Tesl.Set" | "Tesl.Float" | "Tesl.Either" | "Tesl.EitherPrim"
       | "Tesl.Time" | "Tesl.Env" | "Tesl.Random" | "Tesl.Id" | "Tesl.Result"
-      | "Tesl.UUID" -> ()
+      | "Tesl.UUID" | "Tesl.Cache" -> ()
       (* `Tesl.Queue` exports the DECLARATION vocabulary (`Queue`, the retry strategy and
          its backoff constructors), two capabilities, and the `FromQueue`/`FromDeadQueue`
          provenance proofs — which erase.  None of it needs a runtime binding: the store is
@@ -7374,6 +7470,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       adts = Hashtbl.create 8;
       entities = Hashtbl.create 8;
       queues = Hashtbl.create 8;
+      caches = Hashtbl.create 4;
       consts = Hashtbl.create 8;
       databases = Hashtbl.create 4;
     } in
@@ -7498,6 +7595,23 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
          (* Also by job type, since `enqueue` names the JOB and not the queue. *)
          Hashtbl.replace types.queues job_type info;
          ignore lowered)) queue_forms;
+    (* A `cache` declaration is one package-level store, typed by `valueType:`. *)
+    List.iter (fun (c : cache_form) ->
+      let c = Desugar.desugar_cache_config c in
+      let value =
+        try type_of_type_expr types c.value_type
+        with Unsupported _ ->
+          unsupported c.loc "Go backend cannot resolve the value type of cache `%s`" c.name
+      in
+      Hashtbl.replace types.caches c.name {
+        ca_tesl_name = c.name;
+        ca_go_var = package_ident (c.name ^ "Store");
+        ca_owner = package;
+        ca_value = value;
+        ca_default_ttl = Option.value c.default_ttl ~default:0;
+        ca_loc = c.loc;
+      })
+      (List.filter_map (function DCache c -> Some c | _ -> None) m.decls);
     (* An entity's ROW type is registered exactly like a record — a query result and an
        `insert` argument are ordinary struct values — and its store is one package-level
        table variable. *)
@@ -7802,6 +7916,18 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             effect_imports := name :: !effect_imports
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.Id` export `%s` yet" other) exposed
+      (* `Tesl.Cache` exposes the TYPE (the declaration's `= Cache { … }` head) and the four
+         operations; `cacheCap` is a capability the checker enforces, so it has no emitted
+         form. *)
+      | "Tesl.Cache" ->
+        List.iter (fun name ->
+          match name with
+          | "Cache.get" | "Cache.set" | "Cache.delete" | "Cache.invalidate" ->
+            effect_imports := name :: !effect_imports;
+            if name = "Cache.get" then maybe_imported := true
+          | "Cache" | "cacheCap" -> ()
+          | other -> unsupported import.loc
+            "Go backend does not support `Tesl.Cache` export `%s` yet" other) exposed
       (* `Tesl.UUID`.  Generation is gated by the `uuid` capability (the checker enforces
          it, so nothing survives here), and `UUID.validate` is a CHECK — an invalid string
          is the 400 the request answers with, not a trap.  `IsUuid` is the fact it mints,
@@ -8425,7 +8551,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
          form the wiring is already on the queue, and the workers only RUN on App
          activation, which is its own slice — so the declaration itself adds nothing. *)
       | DWorkers _ -> ()
-      | DCache c -> unsupported c.loc "Go backend does not support caches yet"
+      (* A `cache` declaration emits its store above, with the other package-level state; the
+         capability it mints (`cacheCap C`) is compile-time, like every other. *)
+      | DCache _ -> ()
       | DAgent a -> unsupported a.loc "Go backend does not support agents yet"
       | DEmail e -> unsupported e.loc "Go backend does not support email yet"
       (* A `capturer` is metadata about how a path segment is parsed and checked; the
@@ -8586,6 +8714,11 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         | "randomFloat" -> [], TFloat, "teslrt.RandomFloat"
         | "generateId" -> [], TString, "teslrt.GenerateId"
         (* Both generators are VALUES in Tesl's type table, written `UUID.v4()`. *)
+        (* The cache operations are typed per CALL SITE, from the cache the call names, so
+           the entry only marks the name as available — the same placeholder a container leaf
+           gets. *)
+        | "Cache.get" | "Cache.set" | "Cache.delete" | "Cache.invalidate" ->
+          [], TFailure, "teslrt.CacheOperation"
         | "UUID.v4" -> [], TString, "teslrt.UUIDv4"
         | "UUID.v7" -> [], TString, "teslrt.UUIDv7"
         | "UUID.validate" -> [TString], TCheck TString, "teslrt.UUIDValidate"
