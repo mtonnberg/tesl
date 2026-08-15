@@ -2903,6 +2903,11 @@ and type_of_arg signatures env want arg =
     (match want with
      | TCheck inner -> TCheck (type_of_arg signatures env inner value)
      | _ -> assert false)
+  (* A check's VALUE satisfies an expectation of its base type: the rejection becomes a
+     failure at the point of use (see the `MustCheck` emission). *)
+  | EApp _ when (match want with TCheck _ -> false | _ -> true)
+                && (try type_equal (type_of_expr signatures env arg) (TCheck want)
+                    with Unsupported _ -> false) -> want
   (* An empty list literal has no element to infer from: the expectation supplies it. *)
   | EList { elems = []; _ } when (match want with TList _ -> true | _ -> false) -> want
   (* Neither does a list whose elements are ALL under-constrained (`[Nothing, Nothing]`):
@@ -3232,6 +3237,19 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
     (match recognise_sql sql with
      | Some form -> emit_sql_form ~indent signatures env (Checker.expr_loc sql) form
      | None -> assert false)
+  (* A CHECK's value used where its base type is expected — `fn validateId(s: String) ->
+     String = UUID.validate s`.  The check is the only thing that can answer here, so its
+     rejection has to be the failure: `MustCheck` traps, which is what the same program does
+     on Racket (its `expectFail` on this shape catches a failure, not a returned record).
+     Inside a HANDLER body the rejection becomes the request's own answer instead. *)
+  | EApp _ when (match expected with
+                 | Some want when (match want with TCheck _ -> false | _ -> true) ->
+                   (try type_equal (type_of_expr signatures env expr) (TCheck want)
+                    with Unsupported _ -> false)
+                 | _ -> false) ->
+    Printf.sprintf "teslrt.%s(%s)"
+      (if !current_handler_body then "MustCheckRequest" else "MustCheck")
+      (emit_expr ~indent signatures env expr)
   | EApp { loc; _ } as app ->
     let head, args = flatten_app [] app in
     let head = normalize_call_head head in
@@ -7303,7 +7321,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             "Go backend does not support `Tesl.Database` export `%s` yet" other) exposed
       | "Tesl.String" | "Tesl.List" | "Tesl.Int" | "Tesl.Tuple" | "Tesl.Dict"
       | "Tesl.Set" | "Tesl.Float" | "Tesl.Either" | "Tesl.EitherPrim"
-      | "Tesl.Time" | "Tesl.Env" | "Tesl.Random" | "Tesl.Id" | "Tesl.Result" -> ()
+      | "Tesl.Time" | "Tesl.Env" | "Tesl.Random" | "Tesl.Id" | "Tesl.Result"
+      | "Tesl.UUID" -> ()
       (* `Tesl.Queue` exports the DECLARATION vocabulary (`Queue`, the retry strategy and
          its backoff constructors), two capabilities, and the `FromQueue`/`FromDeadQueue`
          provenance proofs — which erase.  None of it needs a runtime binding: the store is
@@ -7783,6 +7802,18 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             effect_imports := name :: !effect_imports
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.Id` export `%s` yet" other) exposed
+      (* `Tesl.UUID`.  Generation is gated by the `uuid` capability (the checker enforces
+         it, so nothing survives here), and `UUID.validate` is a CHECK — an invalid string
+         is the 400 the request answers with, not a trap.  `IsUuid` is the fact it mints,
+         and a fact erases. *)
+      | "Tesl.UUID" ->
+        List.iter (fun name ->
+          match name with
+          | "UUID.v4" | "UUID.v7" | "UUID.validate" ->
+            effect_imports := name :: !effect_imports
+          | "uuid" | "IsUuid" -> ()
+          | other -> unsupported import.loc
+            "Go backend does not support `Tesl.UUID` export `%s` yet" other) exposed
       | _ -> ()) m.imports;
     (* ── `Tesl.Time`: the instant, and exact-integer millisecond arithmetic ──
        `PosixMillis` is runtime-provided for the reason `Maybe` is: an instant crosses
@@ -8554,6 +8585,10 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         (* Like `nowMillis`, a VALUE in Tesl's type table, written `randomFloat()`. *)
         | "randomFloat" -> [], TFloat, "teslrt.RandomFloat"
         | "generateId" -> [], TString, "teslrt.GenerateId"
+        (* Both generators are VALUES in Tesl's type table, written `UUID.v4()`. *)
+        | "UUID.v4" -> [], TString, "teslrt.UUIDv4"
+        | "UUID.v7" -> [], TString, "teslrt.UUIDv7"
+        | "UUID.validate" -> [TString], TCheck TString, "teslrt.UUIDValidate"
         | "generatePrefixedId" -> [TString], TString, "teslrt.GeneratePrefixedId"
         | other -> unsupported (Location.dummy_loc m.source_file)
           "Go backend does not support the effect leaf `%s` yet" other

@@ -78,3 +78,77 @@ func TestGeneratedIdsAreUnguessableAndShaped(t *testing.T) {
 		t.Errorf("generateId = %q", bare)
 	}
 }
+
+// A v4 UUID is random; what is fixed is its SHAPE and its version/variant nibbles, which is
+// what every reader of one relies on.
+func TestUUIDv4Shape(t *testing.T) {
+	seen := map[string]bool{}
+	for range 64 {
+		id := UUIDv4()
+		if !ValidUUID(id) {
+			t.Fatalf("UUIDv4 produced %q", id)
+		}
+		if id[14] != '4' {
+			t.Fatalf("version digit = %q in %q", id[14], id)
+		}
+		if variant := id[19]; variant != '8' && variant != '9' && variant != 'a' && variant != 'b' {
+			t.Fatalf("variant digit = %q in %q", variant, id)
+		}
+		if seen[id] {
+			t.Fatalf("UUIDv4 repeated %q", id)
+		}
+		seen[id] = true
+	}
+}
+
+func TestUUIDv7IsTimeOrdered(t *testing.T) {
+	first := UUIDv7()
+	second := UUIDv7()
+	if !ValidUUID(first) || first[14] != '7' {
+		t.Fatalf("UUIDv7 produced %q", first)
+	}
+	// Time-ordered means the 48-bit millisecond PREFIX never goes backwards — that is what
+	// makes "oldest job first" recoverable from the id alone. Within one millisecond the
+	// remaining bits are random, so the whole strings need not be ordered, and asserting
+	// that they are would be a flake waiting for two ids minted in the same tick.
+	if first[:13] > second[:13] {
+		t.Fatalf("%q has a later timestamp than %q", first, second)
+	}
+}
+
+func TestValidUUIDAcceptsEitherCase(t *testing.T) {
+	for _, valid := range []string{
+		"a8098c1a-f86e-4f11-8d1c-6e9e14b9d8e2",
+		"A8098C1A-F86E-4F11-8D1C-6E9E14B9D8E2",
+		"00000000-0000-0000-0000-000000000000",
+	} {
+		if !ValidUUID(valid) {
+			t.Fatalf("rejected %q", valid)
+		}
+	}
+	for _, invalid := range []string{
+		"", "not-a-uuid", "a8098c1a-f86e-4f11-8d1c",
+		"a8098c1a-f86e-4f11-8d1c-6e9e14b9d8e2-extra",
+		"g8098c1a-f86e-4f11-8d1c-6e9e14b9d8e2",
+		"a8098c1a f86e-4f11-8d1c-6e9e14b9d8e2",
+	} {
+		if ValidUUID(invalid) {
+			t.Fatalf("accepted %q", invalid)
+		}
+	}
+}
+
+// The validator is a CHECK: a rejection carries the 400 the request answers with.
+func TestUUIDValidateRejectsWith400(t *testing.T) {
+	ok := UUIDValidate("a8098c1a-f86e-4f11-8d1c-6e9e14b9d8e2")
+	if value, fine := ok.Value(); !fine || value != "a8098c1a-f86e-4f11-8d1c-6e9e14b9d8e2" {
+		t.Fatalf("accepted check gave %q, %v", value, fine)
+	}
+	rejected := UUIDValidate("nope")
+	if rejected.OK() {
+		t.Fatal("an invalid UUID was accepted")
+	}
+	if rejected.Status() != 400 {
+		t.Fatalf("rejection status = %d", rejected.Status())
+	}
+}

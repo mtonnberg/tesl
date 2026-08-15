@@ -6777,6 +6777,69 @@ let test_nested_patterns_with_go () =
   (* `go test` RUNS the block, so a wrong arm order or a wrong binding fails here. *)
   gate_emitted "tesl-go-nested" emitted
 
+(* `Tesl.UUID`: two generators gated by the `uuid` capability, and a validate that is a
+   CHECK.  The v7 layout was already in the runtime (a queue job id is one, and it has to
+   sort the same on both backends); v4 and the validator join it.  Also pinned here: a
+   check's VALUE used where its base type is expected (`fn validated(s) -> String =
+   UUID.validate s`), which traps on rejection — the same verdict `expectFail` sees on
+   Racket. *)
+let uuid_source = {|module GoUuid exposing [mintV4, mintV7, validated, versionDigit]
+
+import Tesl.Prelude exposing [Bool(..), Int, String]
+import Tesl.String exposing [String.length, String.slice]
+import Tesl.UUID exposing [uuid, IsUuid, UUID.v4, UUID.v7, UUID.validate]
+
+fn mintV4() -> String requires [uuid] =
+  UUID.v4()
+
+fn mintV7() -> String requires [uuid] =
+  UUID.v7()
+
+# A check used where its VALUE is expected: the rejection is the failure.
+fn validated(s: String) -> String =
+  UUID.validate s
+
+fn versionDigit(s: String) -> String =
+  String.slice s 14 15
+
+test "a minted UUID has the shape both backends agree on" requires [uuid] {
+  let v4 = mintV4()
+  let v7 = mintV7()
+  expect String.length v4 == 36
+  expect String.length v7 == 36
+  expect versionDigit v4 == "4"
+  expect versionDigit v7 == "7"
+  expect String.slice v4 8 9 == "-"
+  expect String.slice v4 23 24 == "-"
+  expect v4 != v7
+}
+
+test "validate accepts a well-formed UUID in either case" {
+  expect validated "a8098c1a-f86e-4f11-8d1c-6e9e14b9d8e2" == "a8098c1a-f86e-4f11-8d1c-6e9e14b9d8e2"
+  expect String.length (validated "A8098C1A-F86E-4F11-8D1C-6E9E14B9D8E2") == 36
+  expect String.length (validated "00000000-0000-0000-0000-000000000000") == 36
+}
+
+test "validate rejects anything else" {
+  expectFail (validated "not-a-uuid")
+  expectFail (validated "")
+  expectFail (validated "a8098c1a-f86e-4f11-8d1c")
+  expectFail (validated "a8098c1a-f86e-4f11-8d1c-6e9e14b9d8e2-extra")
+  expectFail (validated "g8098c1a-f86e-4f11-8d1c-6e9e14b9d8e2")
+}
+|}
+
+let test_uuid_with_go () =
+  let emitted = emit_ok "<go-uuid>" uuid_source in
+  let module_go = artifact "internal/teslmodgouuid/module.go" emitted in
+  check bool "generation is one runtime call" true
+    (contains module_go "return teslrt.UUIDv4()" && contains module_go "return teslrt.UUIDv7()");
+  (* The check's rejection is the failure at the point of use. *)
+  check bool "a check used as a value must succeed" true
+    (contains module_go "return teslrt.MustCheck(teslrt.UUIDValidate(s))");
+  (* `go test` RUNS the blocks: shape, version digit, and every rejection. *)
+  gate_emitted "tesl-go-uuid" emitted
+
 let go_corpus = [
   "example/learn/lesson00-hello-world.tesl";
   "example/learn/lesson03-records.tesl";
@@ -6849,6 +6912,8 @@ let go_corpus = [
   "example/learn/lesson50-nested-constructor-patterns.tesl";
   "tests/critical-review-51-tests.tesl";
   "tests/critical-review63-tests.tesl";
+  (* The UUID lesson: generation under the capability, and validation as a check. *)
+  "example/learn/lesson56-uuid.tesl";
 ]
 
 let test_go_corpus_with_go () =
@@ -7012,6 +7077,9 @@ let () =
       test_case "Memory-backend databases" `Slow test_db_with_go;
       test_case "databases behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-db-oracle>" db_source);
+      test_case "Tesl.UUID" `Slow test_uuid_with_go;
+      test_case "UUIDs behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-uuid-oracle>" uuid_source);
       test_case "nested constructor patterns" `Slow test_nested_patterns_with_go;
       test_case "nested patterns behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-nested-oracle>" nested_pattern_source);

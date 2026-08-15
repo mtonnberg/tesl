@@ -88,3 +88,55 @@ func UUIDv7() string {
 	raw[8] = 0x80 | (raw[8] & 0x3f)
 	return fmt.Sprintf("%x-%x-%x-%x-%x", raw[0:4], raw[4:6], raw[6:8], raw[8:10], raw[10:16])
 }
+
+// UUIDv4 is a RANDOM UUID: 122 random bits with the version and variant nibbles set
+// (RFC 9562), the same layout `uuid-v4-string` writes in tesl/private/uuid-gen.rkt.
+//
+// Randomness comes from crypto/rand, not math/rand, for the reason every id in this file
+// does: a UUID is routinely used as an unguessable handle, and a predictable one is a
+// vulnerability rather than a collision.
+func UUIDv4() string {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		panic("UUID.v4: no randomness available: " + err.Error())
+	}
+	raw[6] = 0x40 | (raw[6] & 0x0f)
+	raw[8] = 0x80 | (raw[8] & 0x3f)
+	return fmt.Sprintf("%x-%x-%x-%x-%x", raw[0:4], raw[4:6], raw[6:8], raw[8:10], raw[10:16])
+}
+
+// ValidUUID reports the 8-4-4-4-12 hex shape, in either case — the same set
+// `uuid-regexp` accepts in tesl/uuid.rkt. It is written as a scan rather than as a regular
+// expression so the runtime carries no regexp engine for one shape.
+func ValidUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		switch index {
+		case 8, 13, 18, 23:
+			if character != '-' {
+				return false
+			}
+		default:
+			isDigit := character >= '0' && character <= '9'
+			isLower := character >= 'a' && character <= 'f'
+			isUpper := character >= 'A' && character <= 'F'
+			if !isDigit && !isLower && !isUpper {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// UUIDValidate is `UUID.validate`: a CHECK, so an invalid string is a 400 the request
+// answers with rather than a trap. The proof it mints (`IsUuid`) erases, so what survives
+// is the string it verified.
+func UUIDValidate(value string) Check[string] {
+	if !ValidUUID(value) {
+		return Reject[string](400, "not a valid UUID")
+	}
+	return Accept(value)
+}
