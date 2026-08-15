@@ -6360,12 +6360,27 @@ let test_unsupported_adts_fail_closed () =
 import Tesl.Prelude exposing []
 fn identity(value: a) -> a = value
 |};
-  expect_go_error "recursive ADT" "recursive type" {|module RecursiveAdt exposing [Chain, depth]
+  (* A DIRECT self-reference is supported now (see the recursive-ADT case): the field is a
+     pointer.  A self-reference reached through another VALUE type is not — the indirection
+     would have to live inside that type's own layout — and neither is a GENERIC type
+     referring to itself at a DIFFERENT instantiation, which Go rejects as an instantiation
+     cycle rather than compiling to anything. *)
+  expect_go_error "indirectly recursive ADT" "the payload field IS the type"
+    {|module RecursiveAdt exposing [Chain, depth]
 import Tesl.Prelude exposing [Int]
+import Tesl.Maybe exposing [Maybe(..)]
 type Chain
   = Stop
-  | Link (next: Chain)
+  | Link (next: Maybe Chain)
 fn depth(c: Chain) -> Int = 0
+|};
+  expect_go_error "recursive generic ADT at another instantiation" "not to another instantiation"
+    {|module RecursiveGeneric exposing [Tree, size]
+import Tesl.Prelude exposing [Int]
+type Tree a
+  = Leaf
+  | Node (left: (Tree Int)) (value: a) (right: (Tree Int))
+fn size(t: Tree Int) -> Int = 0
 |};
   (* A `case` over Int, String or Bool IS supported now; anything with no equality this backend
      emits — a record here, and a Float, which cannot even be written as a pattern — still fails
@@ -6589,6 +6604,88 @@ let test_leaves2_with_go () =
   (* `go test` RUNS all three blocks, so a wrong answer fails here. *)
   gate_emitted "tesl-go-leaves2" emitted
 
+(* A RECURSIVE ADT: a payload field that IS the type it belongs to.  Go has no such value —
+   a struct containing itself has no finite size — so the field is a POINTER, filled through
+   `teslrt.Boxed` at construction and read through `teslrt.Unboxed` at every binding and
+   comparison.  What made this more than a representation change is that a recursive type
+   makes the emitter's own type values CYCLIC, and OCaml's `=` walks a cycle forever: type
+   comparisons go through `type_equal`, which compares an ADT by its declaration. *)
+let recursive_adt_source = {|module GoRecursive exposing [evaluate, treeSum, treeDepth, sameTree]
+
+import Tesl.Prelude exposing [Bool(..), Int, String]
+
+# A self-referential ADT: each payload field that IS the type becomes a Go pointer.
+type Expr
+  = Lit value: Int
+  | Neg inner: Expr
+  | Add left: Expr right: Expr
+
+type Tree
+  = Leaf
+  | Node left: Tree value: Int right: Tree
+
+fn evaluate(e: Expr) -> Int =
+  case e of
+    Lit value -> value
+    Neg inner -> 0 - evaluate(inner)
+    Add left right -> evaluate(left) + evaluate(right)
+
+fn treeSum(t: Tree) -> Int =
+  case t of
+    Leaf -> 0
+    Node left value right -> treeSum(left) + value + treeSum(right)
+
+fn treeDepth(t: Tree) -> Int =
+  case t of
+    Leaf -> 0
+    Node left value right ->
+      let ld = treeDepth(left)
+      let rd = treeDepth(right)
+      if ld > rd then
+        1 + ld
+      else
+        1 + rd
+
+fn sameTree(a: Tree, b: Tree) -> Bool =
+  a == b
+
+fn sample() -> Tree =
+  let leftChild = Node Leaf 1 Leaf
+  let rightChild = Node Leaf 3 Leaf
+  Node leftChild 2 rightChild
+
+fn expression() -> Expr =
+  let three = Lit 3
+  let four = Lit 4
+  Add three (Neg four)
+
+test "a recursive value is built, walked and compared" {
+  expect evaluate (expression ()) == 0 - 1
+  expect treeSum (sample ()) == 6
+  expect treeDepth (sample ()) == 2
+  expect sameTree (sample ()) (sample ()) == True
+  expect sameTree (sample ()) Leaf == False
+  expect treeSum Leaf == 0
+}
+|}
+
+let test_recursive_adt_with_go () =
+  let emitted = emit_ok "<go-recursive>" recursive_adt_source in
+  let module_go = artifact "internal/teslmodgorecursive/module.go" emitted in
+  check bool "a self-referential payload is a pointer" true
+    (contains module_go "NodeLeft  *Tree");
+  check bool "construction boxes it" true
+    (contains module_go "NodeLeft: teslrt.Boxed(leftChild)");
+  check bool "a pattern binding unboxes it" true
+    (contains module_go "left := teslrt.Unboxed(teslScrut1.NodeLeft)");
+  (* Equality walks the pointers rather than comparing them: two trees with the same shape
+     and the same values are equal, whoever built them. *)
+  check bool "equality compares through the pointer" true
+    (contains module_go
+       "(teslrt.Unboxed(teslLeft.NodeLeft)).TeslEqual(teslrt.Unboxed(teslRight.NodeLeft))");
+  (* `go test` RUNS the block, so a wrong answer — or a nil deref — fails here. *)
+  gate_emitted "tesl-go-recursive" emitted
+
 let go_corpus = [
   "example/learn/lesson00-hello-world.tesl";
   "example/learn/lesson03-records.tesl";
@@ -6652,6 +6749,10 @@ let go_corpus = [
   "tests/critical-review61-tests.tesl";
   "tests/critical-review64-tests.tesl";
   "tests/stdlib-delete-tests.tesl";
+  (* The recursive-ADT files: an arithmetic `Expr` interpreter and a binary `Tree`, both
+     walked recursively and compared structurally. *)
+  "tests/critical-review-26-tests.tesl";
+  "tests/critical-review62-tests.tesl";
 ]
 
 let test_go_corpus_with_go () =
@@ -6815,6 +6916,9 @@ let () =
       test_case "Memory-backend databases" `Slow test_db_with_go;
       test_case "databases behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-db-oracle>" db_source);
+      test_case "recursive ADTs" `Slow test_recursive_adt_with_go;
+      test_case "recursive ADTs behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-recursive-oracle>" recursive_adt_source);
       test_case "container and Either leaves" `Slow test_leaves2_with_go;
       test_case "container and Either leaves behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-leaves2-oracle>" leaves2_source);

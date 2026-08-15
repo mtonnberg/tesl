@@ -628,6 +628,39 @@ let rec go_type = function
   | TCheck ty -> Printf.sprintf "teslrt.Check[%s]" (go_type ty)
   | TFailure -> invalid_arg "Go failure has no standalone type"
 
+(* Type equality that TERMINATES on a RECURSIVE ADT.  `=` cannot: a recursive type's
+   `adt_info` contains field types that point back at it, and OCaml's structural equality
+   walks a cycle forever (it must honour NaN, so it cannot take the physical-equality
+   shortcut `compare` takes).  Two ADTs are the same type when they are the same
+   DECLARATION — the emitter shares one `adt_info` per declaration, and the Go name is that
+   record's identity — applied to the same arguments. *)
+let rec type_equal left right =
+  match left, right with
+  | TAdt (left_info, left_args), TAdt (right_info, right_args) ->
+    left_info.adt_go_name = right_info.adt_go_name
+    && left_info.adt_owner = right_info.adt_owner
+    && List.length left_args = List.length right_args
+    && List.for_all2 type_equal left_args right_args
+  | TRecord left_info, TRecord right_info ->
+    left_info.rec_go_name = right_info.rec_go_name
+    && left_info.rec_owner = right_info.rec_owner
+  | TNewtype left_info, TNewtype right_info ->
+    left_info.go_name = right_info.go_name && left_info.owner = right_info.owner
+  | TList left, TList right | TSet left, TSet right | TCheck left, TCheck right ->
+    type_equal left right
+  | TDict (left_key, left_value), TDict (right_key, right_value) ->
+    type_equal left_key right_key && type_equal left_value right_value
+  | TFunc (left_params, left_result), TFunc (right_params, right_result) ->
+    List.length left_params = List.length right_params
+    && List.for_all2 type_equal left_params right_params
+    && type_equal left_result right_result
+  | TParam left, TParam right -> left = right
+  | TInt, TInt | TFloat, TFloat | TString, TString | TBool, TBool | TUnit, TUnit
+  | TJson, TJson | TFailure, TFailure -> true
+  | _ -> false
+
+let type_unequal left right = not (type_equal left right)
+
 let record_field_go_name name = go_ident ~exported:true name
 
 (* `!(!(x))` is a staticcheck finding (SA4013) on emitted code, so negation
@@ -702,6 +735,20 @@ let adt_tag_field = "Tag"
 
 (* Every variant's payload lives in one flat struct, so a payload field is named
    after its constructor: `Pending (reason: String)` becomes `PendingReason`. *)
+(* A RECURSIVE payload field — `Add left: Expr right: Expr` inside `Expr` — cannot be held
+   by value: a Go struct containing itself has no finite size.  Such a field is declared as a
+   POINTER, filled through `teslrt.Boxed` at construction and read through `teslrt.Unboxed`
+   everywhere else, so the indirection lives in two named calls rather than in the shape of
+   every emitted expression.
+   Only a DIRECT self-reference needs it.  `children: List Expr` does not — a slice is
+   already a reference — and neither does a Dict or Set of them.  A self-reference nested
+   inside another VALUE type (`inner: Maybe Expr`) would, and is refused instead: boxing it
+   would need the indirection inside the other type's own layout. *)
+let adt_self_field (info : adt_info) field_ty =
+  match field_ty with
+  | TAdt (other, _) -> other.adt_go_name = info.adt_go_name
+  | _ -> false
+
 let variant_field_go_name variant name =
   match List.assoc_opt name variant.var_go_fields with
   | Some go_name -> go_name
@@ -1025,11 +1072,19 @@ let rec supports_ordering = function
    `teslrt.Equal` for whatever the type parameter was instantiated with, which Go
    generics cannot express without an interface the thin-runtime invariant forbids.
    Equality on such a type is therefore rejected before emission. *)
-let rec supports_equality = function
+(* `seen` carries the ADTs already being answered for, so a RECURSIVE type terminates:
+   `Expr` is comparable exactly when its non-recursive payloads are, and asking the same
+   question about the same type again cannot change that answer. *)
+let rec supports_equality_seen seen ty =
+  let supports_equality ty = supports_equality_seen seen ty in
+  match ty with
   | TInt | TFloat | TString | TBool | TUnit -> true
   | TNewtype info -> supports_equality info.base
   | TRecord info -> List.for_all (fun (_, ty) -> supports_equality ty) info.rec_fields
+  | TAdt (info, _) when List.mem info.adt_go_name seen -> true
   | TAdt (info, args) ->
+    let seen = info.adt_go_name :: seen in
+    let supports_equality ty = supports_equality_seen seen ty in
     (match single_variant info with
      (* A single-variant type compares field-wise, so it stays comparable even when
         generic: the emitter knows the instantiation at the comparison site. *)
@@ -1046,6 +1101,8 @@ let rec supports_equality = function
   | TDict (key, value) -> supports_equality key && supports_equality value
   | TSet element -> supports_equality element
   | TFunc _ | TJson | TParam _ | TCheck _ | TFailure -> false
+
+let supports_equality ty = supports_equality_seen [] ty
 
 let record_info_of_signature signatures name =
   match Hashtbl.find_opt signatures name with
@@ -1685,7 +1742,7 @@ let rec type_of_expr signatures env expr =
        in
        (match value_ty, args with
         | Some want, [_; argument] ->
-          if type_of_arg signatures env want argument <> want then
+          if type_unequal (type_of_arg signatures env want argument) want then
             unsupported (Checker.expr_loc argument)
               "Go backend combined check argument type mismatch";
           want
@@ -1710,7 +1767,7 @@ let rec type_of_expr signatures env expr =
                  name = "Crypto.checkPassword" && want = TString
                  && (match got with TNewtype info -> info.base = TString | _ -> false)
                in
-               if got <> want && not password_plaintext then
+               if type_unequal got want && not password_plaintext then
                  unsupported (Checker.expr_loc arg) "Go backend check `%s` argument type mismatch" name)
                call_args params;
              result
@@ -1822,7 +1879,7 @@ let rec type_of_expr signatures env expr =
          | "Crypto.checkPassword", [stored; plaintext] ->
            (match signature.params with
             | want :: _ ->
-              if type_of_arg signatures env want stored <> want then
+              if type_unequal (type_of_arg signatures env want stored) want then
                 unsupported (Checker.expr_loc stored)
                   "Go backend `Crypto.checkPassword` takes a `Maybe PasswordHash`"
             | [] -> ());
@@ -2020,7 +2077,7 @@ let rec type_of_expr signatures env expr =
             "Go backend requires the function value `%s` applied to %d argument(s)"
             name (List.length params);
         List.iter2 (fun arg want ->
-          if type_of_arg signatures env want arg <> want then
+          if type_unequal (type_of_arg signatures env want arg) want then
             unsupported (Checker.expr_loc arg)
               "Go backend call through `%s` has an unsupported argument type" name)
           args params;
@@ -2034,7 +2091,7 @@ let rec type_of_expr signatures env expr =
             unsupported loc "Go backend requires a fully-applied call to `%s`" name;
           List.iter2 (fun arg want ->
             let got = type_of_arg signatures env want arg in
-            if got <> want then unsupported (Checker.expr_loc arg)
+            if type_unequal got want then unsupported (Checker.expr_loc arg)
               "Go backend call to `%s` has an unsupported argument type" name)
             args signature.params;
           signature.result)
@@ -2049,7 +2106,7 @@ let rec type_of_expr signatures env expr =
          unsupported loc "Go backend requires this function value applied to %d argument(s)"
            (List.length params);
        List.iter2 (fun arg want ->
-         if type_of_arg signatures env want arg <> want then
+         if type_unequal (type_of_arg signatures env want arg) want then
            unsupported (Checker.expr_loc arg)
              "Go backend call through a function value has an unsupported argument type")
          args params;
@@ -2074,13 +2131,13 @@ let rec type_of_expr signatures env expr =
        the point of the dynamic view, and on Racket both sides are ordinary values by then.
        Only equality is allowed — ordering an untyped value has no meaning the source can
        rely on. *)
-    if (left_ty = TJson || right_ty = TJson) && left_ty <> right_ty then begin
+    if (left_ty = TJson || right_ty = TJson) && type_unequal left_ty right_ty then begin
       match op with
       | BEq | BNeq -> ()
       | _ -> unsupported loc
         "Go backend supports `==` / `!=` on an api-test JSON value, not this operator"
     end
-    else if left_ty <> right_ty then
+    else if type_unequal left_ty right_ty then
       unsupported loc "Go backend binary operands have different types";
     (match op with
      | BAdd | BSub | BMul | BDiv ->
@@ -2136,11 +2193,11 @@ let rec type_of_expr signatures env expr =
      (* A DEFAULTED branch yields to a real type: `if c then [] else ["a"]`. *)
      | Some _, Some ty when then_defaulted && not else_defaulted -> ty
      | Some ty, Some _ when else_defaulted && not then_defaulted -> ty
-     | Some left, Some right when left = right -> left
+     | Some left, Some right when type_equal left right -> left
      | Some _, Some _ -> unsupported loc "Go backend if branches have different types"
      | Some ty, None | None, Some ty ->
        let other = if then_result = None then then_ else else_ in
-       if type_of_arg signatures env ty other <> ty then
+       if type_unequal (type_of_arg signatures env ty other) ty then
          unsupported loc "Go backend if branches have different types";
        ty
      | None, None -> type_of_expr signatures env then_)
@@ -2217,7 +2274,7 @@ let rec type_of_expr signatures env expr =
        List.fold_left (fun acc ty ->
          match acc, ty with
          | TFailure, ty | ty, TFailure -> ty
-         | left, right when left = right -> left
+         | left, right when type_equal left right -> left
          | _ -> unsupported loc "Go backend `case` arms have different types")
          TFailure types)
   (* `let (v ::: pf) = y` DECOMPOSES a proof-carrying value: `v` is the value and `pf` the
@@ -2271,7 +2328,7 @@ let rec type_of_expr signatures env expr =
       | None -> type_of_expr signatures env (List.hd elems)
     in
     List.iter (fun elem ->
-      if type_of_arg signatures env element elem <> element then
+      if type_unequal (type_of_arg signatures env element elem) element then
         unsupported (Checker.expr_loc elem)
           "Go backend list literal elements have different types") elems;
     ignore loc;
@@ -2362,7 +2419,7 @@ and type_of_list_leaf signatures env loc leaf args =
         | "List.append" -> TList element
         | _ -> element
       in
-      if arg_ty <> want then unsupported loc
+      if type_unequal arg_ty want then unsupported loc
         "Go backend `%s` argument %d has an unsupported type" leaf.leaf_name (index + 1)
     end) arg_types;
   if (leaf.leaf_name = "List.sum" || leaf.leaf_name = "List.product") && element <> TInt then
@@ -2444,7 +2501,7 @@ and type_of_callable signatures env loc what callable param_types =
           let prefix = List.filteri (fun index _ -> index < count) signature.params in
           let rest = List.filteri (fun index _ -> index >= count) signature.params in
           List.iter2 (fun arg want ->
-            if type_of_expr signatures env arg <> want then unsupported loc
+            if type_unequal (type_of_expr signatures env arg) want then unsupported loc
               "Go backend `%s` partial application argument type mismatch" what)
             supplied prefix;
           if rest <> param_types then unsupported loc
@@ -2661,7 +2718,7 @@ and type_of_hof signatures env loc what hof args =
       | _ -> [accumulator; element]
     in
     let result = type_of_callable signatures env loc what (List.nth args 0) params in
-    if result <> accumulator then unsupported loc
+    if type_unequal result accumulator then unsupported loc
       "Go backend `%s` must return its accumulator type" what;
     accumulator
 
@@ -2717,7 +2774,7 @@ and type_of_set_leaf signatures env loc leaf args expected =
         | "Set.fromList" -> TList element
         | _ -> element
       in
-      if type_of_arg signatures env want arg <> want then unsupported loc
+      if type_unequal (type_of_arg signatures env want arg) want then unsupported loc
         "Go backend `%s` argument %d has an unsupported type" leaf.set_name (index + 1)
     end) args;
   (match leaf.set_result with
@@ -2846,7 +2903,7 @@ and type_of_arg signatures env want arg =
       unsupported loc "Go backend if condition must be Bool";
     (match type_of_arg signatures env want then_, type_of_arg signatures env want else_ with
      | TFailure, ty | ty, TFailure -> ty
-     | left, right when left = right -> left
+     | left, right when type_equal left right -> left
      | _ -> unsupported loc "Go backend if branches have different types")
   (* A `let` chain passes the expectation THROUGH to its tail, the same way the tail
      emitter does.  Without this, one `let` before an `if` was enough to lose it, and an
@@ -2878,7 +2935,7 @@ and type_of_arg signatures env want arg =
            unsupported (Checker.expr_loc guard) "Go backend `case` guard must be Bool");
       match acc, type_of_arg signatures arm_env want arm.body with
       | TFailure, ty | ty, TFailure -> ty
-      | left, right when left = right -> left
+      | left, right when type_equal left right -> left
       | _ -> unsupported loc "Go backend `case` arms have different types") TFailure arms
   | _ ->
     (* A constructor cannot always infer its ADT's type arguments from its own
@@ -2894,7 +2951,7 @@ and type_of_arg signatures env want arg =
               "Go backend requires constructor `%s.%s` applied to %d argument(s)"
               info.adt_tesl_name variant.var_ctor (List.length expected);
           List.iter2 (fun value (field, field_ty) ->
-            if type_of_arg signatures env field_ty value <> field_ty then
+            if type_unequal (type_of_arg signatures env field_ty value) field_ty then
               unsupported (Checker.expr_loc value)
                 "Go backend constructor field `%s.%s` has an unsupported value type"
                 variant.var_ctor field) supplied expected;
@@ -2926,7 +2983,7 @@ and type_of_variant_application signatures env loc info variant args =
         tesl_param info.adt_tesl_name variant.var_ctor) info.adt_params in
   let expected = variant_field_types info type_args variant in
   List.iter2 (fun got (name, want) ->
-    if got <> want then
+    if type_unequal got want then
       unsupported loc "Go backend constructor field `%s.%s` has an unsupported value type"
         variant.var_ctor name) arg_types expected;
   TAdt (info, type_args)
@@ -3000,7 +3057,7 @@ and check_record_literal signatures env loc info fields =
         info.rec_tesl_name name
     | Some value ->
       let got = type_of_arg signatures env want value in
-      if got <> want then
+      if type_unequal got want then
         unsupported (Checker.expr_loc value)
           "Go backend record field `%s.%s` has an unsupported value type"
           info.rec_tesl_name name)
@@ -3022,7 +3079,7 @@ and type_of_record_update signatures env loc fields =
     List.iter (fun (name, value) ->
       let want = record_field_type loc info name in
       let got = type_of_expr signatures env value in
-      if got <> want then
+      if type_unequal got want then
         unsupported (Checker.expr_loc value)
           "Go backend record update `%s.%s` has an unsupported value type"
           info.rec_tesl_name name) updates;
@@ -4196,8 +4253,16 @@ and emit_adt_case_statements ?(indent="") signatures env buffer scrut arms =
          scrut_name body_indent (local_ident name);
        env := (name, scrut_ty) :: !env);
     List.iter (fun (name, go_field, field_ty) ->
-      Printf.bprintf buffer "%s%s := %s.%s\n%s_ = %s\n" body_indent (local_ident name)
-        scrut_name go_field body_indent (local_ident name);
+      (* A self-referential payload is held behind a pointer, so the binder reads through
+         `teslrt.Unboxed` — one call, and a nil (which nothing the emitter builds can
+         produce) traps there rather than binding a fabricated zero value. *)
+      let read =
+        if adt_self_field info field_ty then
+          Printf.sprintf "teslrt.Unboxed(%s.%s)" scrut_name go_field
+        else Printf.sprintf "%s.%s" scrut_name go_field
+      in
+      Printf.bprintf buffer "%s%s := %s\n%s_ = %s\n" body_indent (local_ident name)
+        read body_indent (local_ident name);
       env := (name, field_ty) :: !env) bindings;
     !env
   in
@@ -4853,8 +4918,15 @@ and emit_variant_literal ?(indent="") signatures env result variant args =
   in
   let payload = variant_field_types info type_args variant in
   let parts = List.map2 (fun arg (name, field_ty) ->
-    Printf.sprintf "%s: %s" (variant_field_go_name variant name)
-      (emit_expr ~expected:field_ty ~indent signatures env arg)) args payload in
+    let value = emit_expr ~expected:field_ty ~indent signatures env arg in
+    (* A self-referential payload is boxed: `teslrt.Boxed` takes its argument by value, so
+       the operand needs no address of its own — a composite literal's field is not
+       addressable, which is why this is a call rather than an `&`. *)
+    let value =
+      if adt_self_field info field_ty then Printf.sprintf "teslrt.Boxed(%s)" value
+      else value
+    in
+    Printf.sprintf "%s: %s" (variant_field_go_name variant name) value) args payload in
   let fields =
     if single_variant info <> None then parts
     else (adt_tag_field ^ ": " ^ qualified info.adt_owner variant.var_tag) :: parts
@@ -4892,7 +4964,7 @@ and emit_record_literal ?(indent="") signatures env info fields =
               when source.rec_go_name <> info.rec_go_name
                 && List.length source.rec_fields = List.length info.rec_fields
                 && List.for_all2 (fun (left, left_ty) (right, right_ty) ->
-                     left = right && left_ty = right_ty)
+                     left = right && type_equal left_ty right_ty)
                      source.rec_fields info.rec_fields ->
               Some (local_ident binder)
             | _ -> None))
@@ -4958,7 +5030,7 @@ and sql_row_type (info : entity_info) = go_type (TRecord info.ent_row)
 and sql_column_value ~indent signatures row_env loc (info : entity_info) field expr =
   let want = entity_column loc info field in
   let got = type_of_expr signatures row_env expr in
-  if got <> want then unsupported (Checker.expr_loc expr)
+  if type_unequal got want then unsupported (Checker.expr_loc expr)
     "Go backend: the value written to `%s.%s` has a different type than the column"
     info.ent_tesl_name field;
   emit_expr ~expected:want ~indent signatures row_env expr
@@ -5599,7 +5671,11 @@ let adt_source info =
   let fields = (adt_tag_field, info.adt_tag_type)
     :: List.concat_map (fun variant ->
          List.map (fun (name, field_ty) ->
-           variant_field_go_name variant name, go_type field_ty) variant.var_fields)
+           variant_field_go_name variant name,
+           (* A self-referential payload is a POINTER: a struct holding itself by value has
+              no finite size.  Every read goes through `teslrt.Unboxed`. *)
+           (if adt_self_field info field_ty then "*" else "") ^ go_type field_ty)
+           variant.var_fields)
          info.adt_variants in
   let width = List.fold_left (fun width (name, _) -> max width (String.length name)) 0 fields in
   Printf.bprintf body "type %s%s struct {\n" info.adt_go_name type_params;
@@ -5625,8 +5701,12 @@ let adt_source info =
       Printf.bprintf body "\tcase %s:\n" variant.var_tag;
       let parts = List.map (fun (name, field_ty) ->
         let field = variant_field_go_name variant name in
-        equal_expr field_ty (Printf.sprintf "teslLeft.%s" field)
-          (Printf.sprintf "teslRight.%s" field)) variant.var_fields in
+        let operand side =
+          if adt_self_field info field_ty then
+            Printf.sprintf "teslrt.Unboxed(tesl%s.%s)" side field
+          else Printf.sprintf "tesl%s.%s" side field
+        in
+        equal_expr field_ty (operand "Left") (operand "Right")) variant.var_fields in
       Printf.bprintf body "\t\treturn %s\n" (String.concat " && " parts)) payload_variants;
     (* The payload-free tags are listed too: equal tags with no payload are equal, and
        naming them keeps the switch verifiable by the `exhaustive` linter. *)
@@ -5935,7 +6015,7 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
        like any other. *)
     if fd.kind <> EstablishKind || result <> TUnit then begin
       let body_ty = type_of_arg signatures env result fd.body in
-      if body_ty <> result && body_ty <> TFailure then
+      if type_unequal body_ty result && body_ty <> TFailure then
         unsupported fd.loc "Go backend function result type mismatch"
     end;
     Buffer.add_char body '\n';
@@ -8068,12 +8148,66 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       if List.exists (fun (_, field_ty) -> reaches e.name [e.name] field_ty) info.rec_fields then
         unsupported e.loc "Go backend does not support the recursive entity `%s`" e.name)
       entity_forms;
+    (* A DIRECT self-reference in a payload field (`Add left: Expr right: Expr`) is
+       supported: the field is a pointer, boxed at construction and unboxed at every read.
+       Everything else still fails closed — a self-reference reached THROUGH another value
+       type (`inner: Maybe Expr`) would need the indirection inside that type's layout, and
+       a generic ADT's self-reference is refused because the corpus spells it at a different
+       instantiation (`type Tree a = … left: (Tree Int)`), which Go rejects as an
+       instantiation cycle rather than compiling to anything. *)
     List.iter (fun (name, _, _, loc) ->
       let info = Hashtbl.find types.adts name in
-      if List.exists (fun variant ->
-           List.exists (fun (_, field_ty) -> reaches name [name] field_ty) variant.var_fields)
-           info.adt_variants then
-        unsupported loc "Go backend does not support the recursive type `%s` yet" name)
+      (* Containment BY VALUE is what makes a Go type infinite: `Maybe Chain` holds a Chain
+         inside its own struct, and so does a record field, while a `List Chain` does not — a
+         slice is a reference and has a fixed size whatever it points at.  So the refusal is
+         about value containment, not about mentioning the type. *)
+      let rec contains_self ty =
+        match ty with
+        | TAdt (other, args) ->
+          other.adt_go_name = info.adt_go_name || List.exists contains_self args
+        | TRecord record -> List.exists (fun (_, field_ty) -> contains_self field_ty)
+                              record.rec_fields
+        | TNewtype newtype -> contains_self newtype.base
+        | TCheck inner -> contains_self inner
+        | TList _ | TSet _ | TDict _ | TFunc _ -> false
+        | TInt | TFloat | TString | TBool | TUnit | TJson | TParam _ | TFailure -> false
+      in
+      let indirectly_recursive =
+        List.exists (fun variant ->
+          List.exists (fun (_, field_ty) ->
+            (not (adt_self_field info field_ty))
+            && (contains_self field_ty || reaches name [name] field_ty))
+            variant.var_fields) info.adt_variants
+      in
+      let directly_recursive =
+        List.exists (fun variant ->
+          List.exists (fun (_, field_ty) -> adt_self_field info field_ty) variant.var_fields)
+          info.adt_variants
+      in
+      if indirectly_recursive then
+        unsupported loc
+          "Go backend supports a recursive type only where the payload field IS the type \
+           itself (`%s`)" name
+      (* A GENERIC type may refer to itself at its OWN instantiation (`MkNode left:
+         (MyTree a) …` inside `MyTree a`), which Go expresses as `*MyTree[A]`.  At a
+         DIFFERENT instantiation (`left: (Tree Int)` inside `Tree a`) Go rejects the
+         declaration as an instantiation cycle, so that shape is refused here instead of
+         being emitted as something that does not compile. *)
+      else if directly_recursive && info.adt_params <> []
+              && List.exists (fun variant ->
+                   List.exists (fun (_, field_ty) ->
+                     adt_self_field info field_ty
+                     && (match field_ty with
+                         | TAdt (_, args) ->
+                           List.length args <> List.length info.adt_params
+                           || not (List.for_all2 (fun arg (_, go_param) ->
+                                     match arg with
+                                     | TParam name -> name = go_param
+                                     | _ -> false) args info.adt_params)
+                         | _ -> false)) variant.var_fields) info.adt_variants then
+        unsupported loc
+          "Go backend supports a recursive GENERIC type only where it refers to ITSELF \
+           (`%s a`), not to another instantiation" name)
       adt_forms;
     List.iter (function
       | DFunc _ | DTest _ -> ()
