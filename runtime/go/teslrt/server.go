@@ -46,9 +46,17 @@ func Fail(status int, message string) Response {
 	}
 }
 
+// StreamFunc is an endpoint that STREAMS rather than answering once: an `sse` route. It takes
+// the writer directly, because its response is written over the life of the connection instead
+// of being built and then sent.
+type StreamFunc func(writer http.ResponseWriter, request *http.Request)
+
 type Server struct {
 	Routes   []Route
 	Handlers map[string]HandlerFunc
+	// Streams holds the SSE endpoints, keyed like Handlers. A route resolves to one or the
+	// other, never both: `sse` and the request/response methods are different declarations.
+	Streams map[string]StreamFunc
 }
 
 // ServeHTTP dispatches by method and path. A path segment written `:name` in the route
@@ -98,6 +106,12 @@ func (server Server) ServeHTTP(writer http.ResponseWriter, request *http.Request
 		pathMatched = true
 		if route.Method != request.Method {
 			continue
+		}
+		if stream, streams := server.Streams[route.Endpoint]; streams {
+			// A stream owns its own response: status, headers and body are written by the
+			// handler over the life of the connection, so nothing is wrapped around it here.
+			stream(writer, request)
+			return
 		}
 		handler, found := server.Handlers[route.Endpoint]
 		if !found {

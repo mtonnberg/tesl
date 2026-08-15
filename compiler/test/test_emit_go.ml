@@ -4561,8 +4561,25 @@ let test_dependency_pin_matches_the_runtime_module () =
     check bool (requirement ^ " is the runtime module's version") true
       (contains runtime_go_mod requirement && contains go_mod requirement))
     [ "golang.org/x/crypto v0.55.0"; "golang.org/x/sys v0.47.0" ];
-  check string "the emitted go.sum is the runtime module's" runtime_go_sum
-    (artifact "go.sum" emitted)
+  (* The emitted go.sum is a SUBSET of the runtime module's, not a copy of it: this repo's
+     module also builds `postgres.go`, whose pgx dependency emitted code never sees (the file
+     is deliberately outside the embedded runtime).  What must hold is that every line the
+     emitter pins is the runtime module's line for that module — a hash that drifted would let
+     an emitted project build against a dependency this repo never verified — and that the pin
+     covers everything the emitted go.mod requires. *)
+  let lines text =
+    String.split_on_char '\n' text
+    |> List.filter (fun line -> String.trim line <> "") in
+  let emitted_sum = artifact "go.sum" emitted in
+  List.iter (fun line ->
+    check bool ("pinned line is the runtime module's: " ^ line) true
+      (List.mem line (lines runtime_go_sum))) (lines emitted_sum);
+  List.iter (fun dependency ->
+    check bool (dependency ^ " is pinned in the emitted go.sum") true
+      (List.exists (fun line ->
+         String.length line > String.length dependency
+         && String.sub line 0 (String.length dependency) = dependency) (lines emitted_sum)))
+    [ "golang.org/x/crypto"; "golang.org/x/sys" ]
 
 (* ─── Derived decoders, and the near-miss batch they came from ────────────────
    A request-body record needs no `codec` block: Racket decodes it generically from the record
@@ -6938,6 +6955,7 @@ test "each block starts from an empty cache" requires [cacheCap ProfileCache] {
   expect lookup "profile:1" == Nothing
   expect lookup "profile:9" == Nothing
 }
+
 |}
 
 let test_cache_with_go () =
@@ -6952,13 +6970,432 @@ let test_cache_with_go () =
   check bool "invalidate is a prefix, not a key" true
     (contains module_go "teslrt.CacheInvalidatePrefix(ProfileCacheStore, prefix)");
   (* Per-test isolation: one block's entries must not be another's, the same rule tables and
-     queues follow. *)
+     queues follow.  The Racket runtime did NOT clear its cache store between blocks until the
+     oracle for this case caught it (dsl/test-support.rkt), which is the bug an oracle exists
+     to find: a program's tests would have passed in one order and failed in another. *)
   let tests_go = artifact "internal/teslmodgocache/module_test.go" emitted in
   check bool "each test block starts from an empty cache" true
     (contains tests_go "teslrt.CacheReset(ProfileCacheStore)");
   (* `go test` RUNS the blocks: miss/hit, overwrite, per-cache typing, delete vs invalidate,
      the literal-prefix rule, and the reset. *)
   gate_emitted "tesl-go-cache" emitted
+
+let property_source = {|module GoProperty exposing [clamp, evenDouble, lengthOf, smallInt]
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List, Unit]
+import Tesl.List exposing [List.length, List.append]
+import Tesl.Maybe exposing [Maybe(..)]
+
+fn clamp(low: Int, high: Int, value: Int) -> Int =
+  if value < low then
+    low
+  else
+    if value > high then
+      high
+    else
+      value
+
+fn evenDouble(n: Int) -> Int =
+  n * 2
+
+fn lengthOf(xs: List Int) -> Int =
+  List.length xs
+
+# A custom generator is a function of the RUN INDEX, so it can walk a space rather than
+# sample it — the same shape Racket's `via` generator has.
+fn smallInt(run: Int) -> Int =
+  run % 10
+
+test "arithmetic properties hold over generated values" {
+  property "addition commutes" (x: Int, y: Int) { x + y == y + x }
+  property "doubling is even" (n: Int) { evenDouble n % 2 == 0 }
+}
+
+test "a where clause says which values the property is about" {
+  property "clamping lands inside the range" (low: Int, high: Int where low <= high, value: Int) {
+    clamp low high value >= low && clamp low high value <= high
+  }
+}
+
+test "generated containers" with 50 runs {
+  property "length is never negative" (xs: List Int) { lengthOf xs >= 0 }
+  property "appending adds the lengths" (xs: List Int, ys: List Int) {
+    lengthOf (List.append xs ys) == lengthOf xs + lengthOf ys
+  }
+}
+
+test "a custom generator supplies the values" with 20 runs {
+  property "the generator stays under ten" (n: Int via smallInt) { n < 10 && n >= 0 }
+}
+|}
+
+let test_property_with_go () =
+  let emitted = emit_ok "<go-property>" property_source in
+  let tests_go = artifact "internal/teslmodgoproperty/module_test.go" emitted in
+  (* 200 runs unless the block says otherwise, which is Racket's default. *)
+  check bool "a property runs 200 times by default" true
+    (contains tests_go "< 200;");
+  check bool "and `with N runs` sets the count" true
+    (contains tests_go "< 50;");
+  check bool "an Int parameter is generated" true (contains tests_go "teslrt.PropInt()");
+  check bool "a List parameter generates its elements" true
+    (contains tests_go "teslrt.PropList(func() teslrt.Int { return teslrt.PropInt() })");
+  (* A custom generator takes the RUN INDEX, so it can walk a space rather than sample it. *)
+  check bool "a custom generator is called with the run index" true
+    (contains tests_go "SmallInt(teslrt.FromInt64(int64(teslPropRun");
+  (* A `where` clause SKIPS the run rather than failing it: the guard says which values the
+     property is about, so a value outside it is not a counterexample. *)
+  check bool "a where clause guards the check" true (contains tests_go "\tif (low <= high)");
+  (* The failing BINDING is reported, not just the property's name. *)
+  check bool "a failure names the values it failed on" true
+    (contains tests_go "failed (x=%v, y=%v)");
+  (* `go test` RUNS the properties: 200 draws each, plus the guarded and generated ones. *)
+  gate_emitted "tesl-go-property" emitted
+
+let sse_source = {|module GoSse exposing [MainServer, triggerRun, notifyUser]
+
+import Tesl.Prelude exposing [Bool(..), Int, String, Unit]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Queue exposing [pubsub]
+import Tesl.ApiTest exposing [statusOk, isNotEmpty, includesWhere, subscribe, collect]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.SSE exposing [SseChannel]
+
+database GoSseDb = Database {
+  schema: "go_sse"
+  entities: []
+  backend: Memory
+}
+
+record RunQueued {
+  runId: String
+}
+
+codec RunQueued {
+  toJson {
+    runId -> "runId" with_codec stringCodec
+  }
+  fromJson [
+    {
+      runId <- "runId" with_codec stringCodec
+    }
+  ]
+}
+
+sseChannel RunEvents(scope: String) = SseChannel {
+  database: GoSseDb
+  payload: RunQueued
+}
+
+sseChannel UserNotices(userId: String) = SseChannel {
+  database: GoSseDb
+  payload: RunQueued
+}
+
+handler post triggerRun(runId: String) -> String
+  requires [pubsub] =
+  publish RunEvents("all") RunQueued { runId: runId }
+  "ok"
+
+handler post notifyUser(userId: String) -> String
+  requires [pubsub] =
+  publish UserNotices(userId) RunQueued { runId: userId }
+  "ok"
+
+api MainApi {
+  post "/trigger"
+    body runId: String
+    -> String
+
+  post "/notify/:userId"
+    capture userId: String using stringCodec
+    -> String
+
+  sse "/runs/stream"
+    subscribe RunEvents("all")
+
+  sse "/events/:userId"
+    capture userId: String using stringCodec
+    subscribe UserNotices(userId)
+}
+
+server MainServer for MainApi {
+  triggerRun
+  notifyUser
+}
+
+api-test "a publish reaches a broadcast subscriber" for MainServer requires [pubsub] {
+  let stream = subscribe "/runs/stream"
+  let resp = post "/trigger" body "run-abc"
+  expect statusOk resp.status
+  let events = collect stream count 1 timeout 2000ms
+  expect isNotEmpty events
+  expect includesWhere { "runId": "run-abc" } events
+}
+
+api-test "a keyed publish reaches that key only" for MainServer requires [pubsub] {
+  let ada = subscribe "/events/ada"
+  let resp = post "/notify/ada"
+  expect statusOk resp.status
+  let events = collect ada count 1 timeout 2000ms
+  expect includesWhere { "runId": "ada" } events
+}
+|}
+
+let test_sse_with_go () =
+  let emitted = emit_ok "<go-sse>" sse_source in
+  let module_go = artifact "internal/teslmodgosse/module.go" emitted in
+  check bool "a declaration becomes one channel" true
+    (contains module_go "var RunEventsChannel = teslrt.NewSseChannel(\"RunEvents\")");
+  (* A publish encodes through the payload type's own codec — the same encoder a response
+     body goes through, so a subscriber and a caller read the same shape. *)
+  check bool "a publish names its channel, key and encoded payload" true
+    (contains module_go "teslrt.Publish(RunEventsChannel, \"all\", EncodeRunQueuedJSON(");
+  check bool "a keyed publish carries the key it was given" true
+    (contains module_go "teslrt.Publish(UserNoticesChannel, userId, ");
+  (* The route: a GET whose endpoint name is the path, and a stream rather than a handler. *)
+  check bool "an sse route is a stream, not a handler" true
+    (contains module_go "Streams: map[string]teslrt.StreamFunc{");
+  check bool "a literal-keyed route streams that key" true
+    (contains module_go "teslrt.SseStream(RunEventsChannel, \"all\")");
+  check bool "a param-keyed route keys on its own segment" true
+    (contains module_go "teslrt.SseStreamParam(UserNoticesChannel, \"/events/:userId\", \"userId\")");
+  let tests_go = artifact "internal/teslmodgosse/module_test.go" emitted in
+  check bool "subscribe opens a stream against the server under test" true
+    (contains tests_go "teslrt.SubscribeStream(MainServer, \"/runs/stream\", nil)");
+  check bool "collect waits for the count it was given" true
+    (contains tests_go "teslrt.CollectCount(");
+  (* A SUBSCRIPTION is per-block state on both backends — Racket's api-test cleanups
+     unregister the listener when the block ends — so the emitted block closes its stream. *)
+  check bool "a block closes the stream it opened" true
+    (contains tests_go "defer teslrt.UnsubscribeStream(stream)");
+  check bool "and a block starts from a channel nobody is on" true
+    (contains tests_go "teslrt.ResetChannel(RunEventsChannel)");
+  (* `go test` RUNS the blocks: a published event reaches the subscriber over a real
+     connection, and a keyed publish reaches that key only. *)
+  gate_emitted "tesl-go-sse" emitted
+
+let transaction_source = {|module GoTransaction exposing [addEntry, totalFor, entriesFor]
+
+import Tesl.Prelude exposing [Bool(..), Int, String, Unit]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Memory]
+
+entity Ledger table "txn_ledger" primaryKey id {
+  id: String
+  account: String
+  amount: Int
+}
+
+database TxnDb = Database {
+  entities: [Ledger]
+  backend: Memory
+}
+
+fn addEntry(id: String, account: String, amount: Int) -> Int
+  requires [dbRead, dbWrite] =
+  with database TxnDb {
+    transaction {
+      insert Ledger { id: id, account: account, amount: amount }
+      selectCount l from Ledger where l.account == account
+    }
+  }
+
+fn totalFor(account: String) -> Int
+  requires [dbRead] =
+  with database TxnDb {
+    selectSum l.amount from Ledger where l.account == account
+  }
+
+fn entriesFor(account: String) -> Int
+  requires [dbRead] =
+  with database TxnDb {
+    selectCount l from Ledger where l.account == account
+  }
+
+test "a transaction groups its writes and answers its tail" requires [dbRead, dbWrite] {
+  expect addEntry "1" "ada" 100 == 1
+  expect addEntry "2" "ada" 50 == 2
+  expect addEntry "3" "grace" 10 == 1
+  expect totalFor "ada" == 150
+  expect entriesFor "grace" == 1
+}
+
+test "each block starts from an empty table" requires [dbRead] {
+  expect entriesFor "ada" == 0
+}
+|}
+
+let test_transaction_with_go () =
+  let emitted = emit_ok "<go-transaction>" transaction_source in
+  let module_go = artifact "internal/teslmodgotransaction/module.go" emitted in
+  (* On the Memory backend a transaction has NO runtime form — Racket's
+     `call-with-queue-transaction` is `(thunk)` unless a PostgreSQL connection is active — so
+     the body keeps statement form rather than collapsing into a closure. *)
+  check bool "the grouped write is an ordinary statement" true
+    (contains module_go "_ = teslrt.TableInsert(");
+  check bool "and the block's tail is the function's answer" true
+    (contains module_go "return teslrt.TableCount(");
+  (* `go test` RUNS the blocks: the writes land, the tail answers, and the second block sees
+     an empty table. *)
+  gate_emitted "tesl-go-transaction" emitted
+
+let fail_source = {|module GoFail exposing [nameOf, greet, attempts]
+
+import Tesl.Prelude exposing [Bool(..), Int, String, Unit]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.String exposing [String.length]
+
+fn nameOf(row: Maybe String) -> String =
+  case row of
+    Something n -> n
+    Nothing -> fail 404 "row not found"
+
+fn greet(row: Maybe String) -> String =
+  let n = nameOf row
+  "hello ${n}"
+
+fn attempts(row: Maybe String) -> Int =
+  case row of
+    Something n -> String.length n
+    Nothing -> fail 422 "nothing to count"
+
+test "a plain function may answer with a failure" {
+  expect nameOf (Something "ada") == "ada"
+  expect greet (Something "ada") == "hello ada"
+  expect attempts (Something "ada") == 3
+  expectFail (greet Nothing)
+  expectFail (attempts Nothing)
+}
+|}
+
+let test_fail_in_a_function_with_go () =
+  let emitted = emit_ok "<go-fail>" fail_source in
+  let module_go = artifact "internal/teslmodgofail/module.go" emitted in
+  (* A `fail` outside a check has nowhere to go in the Go signature, so it travels as the
+     rejection a rejected check uses — and it is a STATEMENT, since panic terminates. *)
+  check bool "a fn's fail is the request rejection" true
+    (contains module_go "panic(teslrt.RequestRejection{Status: 404, Message: \"row not found\"})");
+  check bool "and it keeps the status the source chose" true
+    (contains module_go "Status: 422");
+  (* `go test` RUNS the block: the succeeding paths answer, and the failing one is caught by
+     the same `expectFail` that catches it on Racket — where the failure surfaces at the
+     caller's `let` rather than at the `fail` itself. *)
+  gate_emitted "tesl-go-fail" emitted
+
+let email_source = {|module GoEmail exposing [welcome, notify, bodyKind, startMail]
+
+import Tesl.Prelude exposing [Bool(..), Int, String, Unit]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.Email exposing [Email, SmtpConfig, emailCap, EmailBody(..)]
+
+database Store = Database {
+  schema: "goemail"
+  entities: []
+  backend: Memory
+}
+
+email AppMail = Email {
+  database: Store
+  smtp: SmtpConfig {
+    host: env "TESL_GO_SMTP_HOST"
+    port: 2525
+    username: "sender@example.com"
+    password: env "TESL_GO_SMTP_PASS"
+    tls: true
+  }
+}
+
+email MarketingMail = Email {
+  database: Store
+  smtp: SmtpConfig {
+    host: "mail.example.com"
+    port: 25
+    username: "marketing@example.com"
+    password: "hunter2"
+    tls: false
+  }
+}
+
+fn welcome(addr: String, name: String) -> Unit requires [emailCap] =
+  Email.send AppMail {
+    to: addr
+    subject: "Welcome, ${name}"
+    body: RichBody "Hello ${name}" "<h1>Hello ${name}</h1>"
+  }
+
+fn notify(addr: String, message: String) -> Unit requires [emailCap] =
+  Email.send MarketingMail {
+    to: addr
+    subject: "Notice"
+    body: TextBody message
+  }
+
+fn announce(addr: String, html: String) -> Unit requires [emailCap] =
+  let _ = notify addr "an announcement is coming"
+  Email.send AppMail {
+    to: addr
+    subject: "Announcement"
+    body: HtmlBody html
+  }
+
+fn bodyKind(body: EmailBody) -> String =
+  case body of
+    TextBody t -> "text:${t}"
+    HtmlBody h -> "html:${h}"
+    RichBody t h -> "rich:${t}|${h}"
+
+fn startMail() -> Unit requires [emailCap] =
+  startEmailWorker AppMail
+
+test "a body carries the half its variant names" {
+  expect bodyKind (TextBody "plain") == "text:plain"
+  expect bodyKind (HtmlBody "<b>x</b>") == "html:<b>x</b>"
+  expect bodyKind (RichBody "plain" "<b>x</b>") == "rich:plain|<b>x</b>"
+}
+
+test "sending enqueues against every declared email" requires [emailCap] {
+  let _ = welcome "ada@example.com" "Ada"
+  let _ = notify "grace@example.com" "hello"
+  let _ = announce "ada@example.com" "<p>news</p>"
+  expect bodyKind (TextBody "sent") == "text:sent"
+}
+|}
+
+let test_email_with_go () =
+  let emitted = emit_ok "<go-email>" email_source in
+  let module_go = artifact "internal/teslmodgoemail/module.go" emitted in
+  check bool "a declaration becomes one outbox" true
+    (contains module_go "var AppMailOutbox = teslrt.NewOutbox(teslrt.SmtpSettings{");
+  (* An `env` in the declaration is a READ at start-up, not a string baked in at build
+     time: the variable belongs to the deployment. *)
+  check bool "an env setting stays a read" true
+    (contains module_go "teslrt.EnvString(\"TESL_GO_SMTP_HOST\", \"\")");
+  check bool "and a literal setting stays a literal" true
+    (contains module_go "\"mail.example.com\"");
+  check bool "each declaration gets its own outbox" true
+    (contains module_go "var MarketingMailOutbox = teslrt.NewOutbox(");
+  (* Sending is ENQUEUEING against the named email's outbox. *)
+  check bool "a send names its own outbox" true
+    (contains module_go "teslrt.SendEmail(AppMailOutbox, addr, ");
+  check bool "and a second email is a different one" true
+    (contains module_go "teslrt.SendEmail(MarketingMailOutbox, addr, ");
+  check bool "the worker runs against the same outbox" true
+    (contains module_go "teslrt.StartEmailWorker(AppMailOutbox)");
+  (* The body is the runtime ADT, so `RichBody` fills both halves and `HtmlBody` only the
+     one it names — which is what decides whether the message is delivered as HTML. *)
+  check bool "a rich body carries both halves" true
+    (contains module_go "teslrt.EmailBody{Tag: teslrt.EmailBodyRich, Text: ");
+  check bool "an HTML body carries only the HTML" true
+    (contains module_go "teslrt.EmailBody{Tag: teslrt.EmailBodyHTML, HTML: html}");
+  (* Per-test isolation: one block's outbox must not be another's, the same rule tables,
+     queues and caches follow — on both backends (see the cache case). *)
+  let tests_go = artifact "internal/teslmodgoemail/module_test.go" emitted in
+  check bool "each test block starts from an empty outbox" true
+    (contains tests_go "teslrt.ResetOutbox(AppMailOutbox)");
+  (* `go test` RUNS the blocks: the variant-to-half mapping and three sends across two
+     declared emails. *)
+  gate_emitted "tesl-go-email" emitted
 
 let go_corpus = [
   "example/learn/lesson00-hello-world.tesl";
@@ -7038,6 +7475,32 @@ let go_corpus = [
      operations one by one. *)
   "example/learn/lesson59-cache.tesl";
   "tests/cache-tests.tesl";
+  (* The email files: the lesson, the suite that pins the declaration and the send shapes,
+     and a sessions lesson that was blocked on nothing but the `email` declaration. *)
+  "example/learn/lesson60-email.tesl";
+  "tests/email-tests.tesl";
+  "example/learn/lesson76-sessions.tesl";
+  (* A `fail` in a plain `fn` (`Nothing -> fail 404 "task not found"`), which is the shape
+     every db-lookup helper in the corpus has. *)
+  "example/learn/lesson20-named-db-results.tesl";
+  (* The Kanel application: three modules of a real multi-module program, reached by the
+     transaction slice.  Between them they carry a `transaction` block grouping writes, a
+     multi-line `update … set …` in a `fn` body, an imported ADT used as a record field
+     type, and a codec declared in another module — each of which was its own refusal. *)
+  "example/kanel/KanelOrg.tesl";
+  "example/kanel/KanelBilling.tesl";
+  "example/kanel/KanelIssues.tesl";
+  (* SSE: a broadcast channel keyed on a literal, a per-entity channel keyed on a path
+     segment, an ADT-variant payload published from a worker, and a path built out of a
+     previous response's body. *)
+  "tests/sse-literal-subscribe-key-tests.tesl";
+  "tests/publish-record-payload-tests.tesl";
+  "example/learn/lesson33-sse-and-queue-tests.tesl";
+  "tests/api-test-computed-path-tests.tesl";
+  (* Property tests: the lesson that teaches them (generators, `where`, custom `via`) and a
+     suite whose properties run beside ordinary SQL assertions. *)
+  "example/learn/lesson14-test-blocks.tesl";
+  "tests/sql-clause-placement-tests.tesl";
 ]
 
 let test_go_corpus_with_go () =
@@ -7204,6 +7667,21 @@ let () =
       test_case "Tesl.Cache" `Slow test_cache_with_go;
       test_case "caches behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-cache-oracle>" cache_source);
+      test_case "property tests" `Slow test_property_with_go;
+      test_case "properties behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-property-oracle>" property_source);
+      test_case "SSE channels, publish and subscribe" `Slow test_sse_with_go;
+      test_case "SSE behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-sse-oracle>" sse_source);
+      test_case "a Memory-backend transaction" `Slow test_transaction_with_go;
+      test_case "transactions behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-transaction-oracle>" transaction_source);
+      test_case "a fail in a plain function" `Slow test_fail_in_a_function_with_go;
+      test_case "a failing function behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-fail-oracle>" fail_source);
+      test_case "Tesl.Email" `Slow test_email_with_go;
+      test_case "email behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-email-oracle>" email_source);
       test_case "Tesl.UUID" `Slow test_uuid_with_go;
       test_case "UUIDs behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-uuid-oracle>" uuid_source);

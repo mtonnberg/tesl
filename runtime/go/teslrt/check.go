@@ -63,6 +63,14 @@ type RequestRejection struct {
 	Message string
 }
 
+// Error makes a rejection print as its MESSAGE wherever a panic value is formatted — which is
+// what a failed job records (`runJob` keeps `fmt.Sprint(recovered)` as the attempt's error).
+// Racket records `check-fail-message` there, the bare text, so a struct dump would be a
+// different string on the two backends for the same program.
+func (rejection RequestRejection) Error() string {
+	return rejection.Message
+}
+
 // MustCheckRequest is `MustCheck` at the request boundary: same unwrapping, but a rejection
 // answers the client instead of crashing the request.
 func MustCheckRequest[T any](result Check[T]) T {

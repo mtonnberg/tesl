@@ -15,6 +15,9 @@
                   channel-spec-listeners
                   channel-for-name
                   queue-spec-store)
+         (only-in "../tesl/cache.rkt" cache-spec-store)
+         (only-in "../tesl/email.rkt" email-spec-store)
+         (only-in "private/domain-registry.rkt" domain-registry-of-kind)
          (only-in "../tesl/private/http-stub.rkt" current-outbound-http-hook)
          (only-in "../tesl/http-client.rkt"
                   http-read-timeout-ms
@@ -401,7 +404,17 @@
                              (append (hash-keys api-test-worker-registry)
                                      (hash-keys api-test-dead-worker-registry))
                              eq?))])
-      (clear-api-test-queue! queue-s)))
+      (clear-api-test-queue! queue-s))
+    ;; A CACHE and an email OUTBOX are per-process stores like the entity tables, and they
+    ;; leaked across test blocks for the same reason imported databases once did: nothing
+    ;; cleared them.  A block that reads what an earlier block cached passes or fails
+    ;; depending on the order the blocks run in, which is exactly what this wrapper exists to
+    ;; prevent.  Both registries are process-wide (domain-registry), so an imported
+    ;; declaration is covered without the emitter naming it.
+    (for ([cache-s (in-list (domain-registry-of-kind 'caches))])
+      (hash-clear! (cache-spec-store cache-s)))
+    (for ([email-s (in-list (domain-registry-of-kind 'emails))])
+      (set-box! (email-spec-store email-s) '())))
   ;; The outbound-HTTP stub scope rides along here rather than in
   ;; call-with-api-test-subscriptions because THIS wrapper is the one every
   ;; `test`, `api-test`, and `load-test` body already goes through — so plain

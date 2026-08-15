@@ -38,6 +38,10 @@ type go_type =
      ergonomics is by design, so the emitter carries a dynamic value here rather than
      inventing a typed view the source never asked for. *)
   | TJson
+  (* The api-test handle on an SSE subscription: `let stream = subscribe "/events/ada"`.  It
+     is a live connection to the emitted server, not a value the program could construct, so
+     the only things it supports are the `collect` verbs. *)
+  | TStream
   | TCheck of go_type
   | TFailure
 
@@ -60,6 +64,10 @@ and record_info = {
   rec_owner : string;
   rec_go_name : string;
   mutable rec_fields : (string * go_type) list;
+  (* True when some field carries a PROOF annotation.  Proofs erase, so this changes nothing
+     about the emitted struct — it matters in exactly one place: a property test's generator,
+     which must not fabricate a value the field's proof claims something about. *)
+  rec_proof_fields : bool;
   rec_loc : Location.loc;
 }
 
@@ -290,6 +298,45 @@ let go_quote value =
   Buffer.add_char b '"';
   Buffer.contents b
 
+(* A DECLARATION-config scalar, as the desugar leaves it: either a literal, or one of the
+   three environment reads rendered into an intermediate spelling (`env("SMTP_HOST")`).  The
+   read has to survive to run time — a deployment sets those variables, and a value baked in
+   at compile time would be the build machine's — so it becomes the runtime call.
+
+   An `env` with nothing set answers "", which is the same absent-is-empty rule
+   `tesl/private/runtime.rkt` applies (`empty-string->false`, then `(or … "")` at the use). *)
+let go_config_value loc value =
+  let unquote s =
+    let n = String.length s in
+    if n >= 2 && s.[0] = '"' && s.[n - 1] = '"' then String.sub s 1 (n - 2) else s
+  in
+  let prefixed prefix =
+    String.length value > String.length prefix
+    && String.sub value 0 (String.length prefix) = prefix
+    && value.[String.length value - 1] = ')'
+  in
+  let inner prefix =
+    String.sub value (String.length prefix)
+      (String.length value - String.length prefix - 1)
+  in
+  if prefixed "env(" then
+    Printf.sprintf "teslrt.EnvString(%s, \"\")" (go_quote (unquote (inner "env(")))
+  else if prefixed "envString(" then
+    (match String.index_opt (inner "envString(") ',' with
+     | Some comma ->
+       let raw = inner "envString(" in
+       let name = unquote (String.trim (String.sub raw 0 comma)) in
+       let fallback =
+         unquote (String.trim (String.sub raw (comma + 1) (String.length raw - comma - 1)))
+       in
+       Printf.sprintf "teslrt.EnvString(%s, %s)" (go_quote name) (go_quote fallback)
+     | None -> Printf.sprintf "teslrt.EnvString(%s, \"\")" (go_quote (inner "envString(")))
+  (* An INTEGER read in a string-valued config field: the desugar only produces this
+     spelling for a numeric field, so reaching it here means the field was misread. *)
+  else if prefixed "envInt(" then
+    unsupported loc "Go backend cannot read `%s` as a text configuration value" value
+  else go_quote value
+
 let directive_file file =
   let file = if file = "" then "generated.tesl" else Filename.basename file in
   String.map (function '\n' | '\r' -> '_' | c -> c) file
@@ -356,6 +403,45 @@ type cache_info = {
   ca_loc : Location.loc;
 }
 
+(* An `email E = Email { … }` is one package-level OUTBOX plus the SMTP settings to deliver
+   from it.  The settings are strings the DECLARATION fixed — a literal, or an `env "…"` read
+   that happens at start-up — so they are baked into the store's initialiser exactly as a
+   queue's `maxAttempts` is.
+
+   The database it names is inert here for the reason a cache's is: the Racket runtime keeps
+   its outbox in memory until something binds a PostgreSQL runtime, and nothing does that
+   without `with database`. *)
+type email_info = {
+  em_tesl_name : string;
+  em_go_var : string;
+  em_owner : string;
+  (* Already rendered as Go expressions, since a config value may be an `env` read. *)
+  em_host : string;
+  em_port : int;
+  em_username : string;
+  em_password : string;
+  em_tls : bool;
+  em_loc : Location.loc;
+}
+
+(* An `sseChannel C(key: String) = SseChannel { … }` is one package-level channel: the
+   listeners currently registered, keyed by the channel KEY.  The key is what makes a channel
+   per-entity — `RunEvents(runId)` reaches the subscribers of that run and no others — and a
+   channel declared with no key parameter is the broadcast case of the same rule.
+
+   The DATABASE it names is inert here for the reason a cache's is: the Racket channel keeps its
+   listeners in memory, and the PostgreSQL fan-out only exists to reach OTHER processes. *)
+type channel_info = {
+  ch_tesl_name : string;
+  ch_go_var : string;
+  ch_owner : string;
+  ch_payload : go_type;
+  (* The declaration's key parameters.  Zero or one today; more would need a composite key,
+     which the surface has no syntax for. *)
+  ch_key_params : int;
+  ch_loc : Location.loc;
+}
+
 (** Named nominal types the emitter can resolve: scalar newtypes and records. *)
 type type_table = {
   newtypes : (string, newtype_info) Hashtbl.t;
@@ -367,6 +453,15 @@ type type_table = {
   queues : (string, queue_info) Hashtbl.t;
   (* Declared caches, by name — the four `Cache.*` leaves all name one. *)
   caches : (string, cache_info) Hashtbl.t;
+  (* Declared emails, by name — `Email.send E { … }` and `startEmailWorker E` both name one. *)
+  emails : (string, email_info) Hashtbl.t;
+  (* Declared SSE channels, by name — `publish C(key) …` and an `sse` route both name one. *)
+  channels : (string, channel_info) Hashtbl.t;
+  (* Types with a hand-written `codec` block, and the PACKAGE whose file emits it.  A codec
+     is emitted once, by the module that declares it, so a reference from another package has
+     to be qualified — and a type with no entry here has no hand-written codec, which is what
+     says the decoder is derived locally instead. *)
+  codecs : (string, string) Hashtbl.t;
   (* Module-level constants: a NAME and its Go spelling, referenced bare rather than called.
      They live here rather than in `signatures` because a signature describes something that is
      APPLIED, and a const that resolved through that table would be indistinguishable from a
@@ -402,6 +497,20 @@ let cache_of_name loc name =
   | Some info -> info
   | None -> unsupported loc "Go backend cannot resolve cache `%s`" name
 
+(* A channel by NAME.  `publish` and an `sse` route both name a declared one, and the
+   declaration is where the listener registry and the payload type live. *)
+let channel_of_name loc name =
+  match Option.bind !current_types (fun types -> Hashtbl.find_opt types.channels name) with
+  | Some info -> info
+  | None -> unsupported loc "Go backend cannot resolve sse channel `%s`" name
+
+(* An email by NAME.  `Email.send` and `startEmailWorker` both name a declared one, and the
+   declaration is where the outbox and the SMTP settings live. *)
+let email_of_name loc name =
+  match Option.bind !current_types (fun types -> Hashtbl.find_opt types.emails name) with
+  | Some info -> info
+  | None -> unsupported loc "Go backend cannot resolve email `%s`" name
+
 (* `with database D { … }` is the only place a database DECLARATION becomes observable: it
    binds the store the body's queries run against.  On the Memory backend that store IS the
    entity's table variable, so the block adds nothing at run time and the body is emitted as
@@ -421,6 +530,23 @@ let check_with_database loc database_name =
        "Go backend does not support `with database %s` on a Postgres-backed database yet"
        database_name
      | _ -> ())
+
+(* `transaction { … }` groups statements that must commit together.  On the Memory backend it
+   adds NOTHING at run time — Racket's `call-with-queue-transaction` is `(thunk)` unless a
+   PostgreSQL connection is active — so the body is emitted as it stands.
+
+   Against a Postgres-backed database it is a real `BEGIN`/`COMMIT` and inlining the body would
+   silently drop atomicity: a failure halfway through would leave the earlier writes committed
+   where the same program on Racket rolls them back.  So the block is refused there, exactly as
+   `with database D` is, rather than emitted as something weaker than it claims. *)
+let check_transaction loc =
+  match !current_types with
+  | None -> ()
+  | Some types ->
+    Hashtbl.iter (fun name (backend, _) ->
+      if backend = "postgres" then unsupported loc
+        "Go backend does not support `transaction` against Postgres-backed database `%s` yet"
+        name) types.databases
 
 (* The server an `api-test` block drives, while its statements are being emitted.  A
    request verb (`get "/path"`) only means something inside such a block, and this is what
@@ -444,6 +570,13 @@ let password_dependency_go_sum =
    golang.org/x/sys v0.47.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=\n"
 
 let api_response_key = "HttpResponse (api-test)"
+
+(* The JSON encoder for a value of a given type, as a Go function NAME.  A forward reference
+   because the encoder machinery is defined with the codecs, far below the expression emitter —
+   and one expression needs it: `publish`, whose payload crosses the wire as JSON exactly as a
+   response body does.  Assigned once, where `value_encoder` is defined. *)
+let value_encoder_hook : (go_type -> string) ref =
+  ref (fun _ -> invalid_arg "value encoder used before the codec layer was ready")
 
 (* Tesl type names that have their OWN codec in the module being emitted.  A value with a
    codec encodes through it; anything else falls back to the generic wire shape below. *)
@@ -650,6 +783,7 @@ let rec go_type = function
     Printf.sprintf "func(%s) %s"
       (String.concat ", " (List.map go_type params)) (go_type result)
   | TJson -> "teslrt.JsonValue"
+  | TStream -> "*teslrt.SseTestStream"
   | TCheck ty -> Printf.sprintf "teslrt.Check[%s]" (go_type ty)
   | TFailure -> invalid_arg "Go failure has no standalone type"
 
@@ -681,7 +815,7 @@ let rec type_equal left right =
     && type_equal left_result right_result
   | TParam left, TParam right -> left = right
   | TInt, TInt | TFloat, TFloat | TString, TString | TBool, TBool | TUnit, TUnit
-  | TJson, TJson | TFailure, TFailure -> true
+  | TJson, TJson | TStream, TStream | TFailure, TFailure -> true
   | _ -> false
 
 let type_unequal left right = not (type_equal left right)
@@ -815,7 +949,7 @@ let rec substitute_type bindings ty =
   | TSet element -> TSet (substitute_type bindings element)
   | TFunc (params, result) ->
     TFunc (List.map (substitute_type bindings) params, substitute_type bindings result)
-  | TJson -> ty
+  | TJson | TStream -> ty
   | TInt | TFloat | TString | TBool | TUnit | TNewtype _ | TRecord _ | TFailure -> ty
 
 (** A variant's payload types with the ADT's type arguments substituted in. *)
@@ -948,6 +1082,14 @@ and equal_expr ty left right =
   (* Float equality is Racket `equal?`, not IEEE `==`: NaN equals NaN and 0.0 does not
      equal -0.0.  Both are inverted from Go's `==`, so `==` is never emitted. *)
   | TFloat -> Printf.sprintf "teslrt.FloatEqual(%s, %s)" left right
+  (* A Bool compared with a LITERAL is the value itself, or its negation: `p.Archived ==
+     false` is a staticcheck finding (S1002), and a lint finding on emitted code is an
+     emitter bug rather than something to suppress.  Written this way the emitted predicate
+     also reads the way a Go author would have written it. *)
+  | TBool when right = "true" -> left
+  | TBool when left = "true" -> right
+  | TBool when right = "false" -> "!" ^ selector_operand left
+  | TBool when left = "false" -> "!" ^ selector_operand right
   | TString | TBool | TUnit -> Printf.sprintf "(%s == %s)" left right
   (* A SECRET compares in CONSTANT TIME: comparing its payload with `==` would leak a prefix
      through how long the comparison took, which is the classic way a token check betrays the
@@ -1015,7 +1157,7 @@ and equal_expr ty left right =
       (element_equal_func key) (element_equal_func value)
   | TSet element ->
     Printf.sprintf "teslrt.SetEqualBy(%s, %s, %s)" left right (element_equal_func element)
-  | TFunc _ | TParam _ | TCheck _ | TFailure ->
+  | TFunc _ | TParam _ | TCheck _ | TFailure | TStream ->
     invalid_arg "Go equality on this type is rejected before emission"
   | TJson -> invalid_arg "Go api-test JSON equality goes through JsonEqual"
 
@@ -1085,7 +1227,7 @@ and unequal_expr ty left right =
       (element_equal_func key) (element_equal_func value)
   | TSet element ->
     Printf.sprintf "!teslrt.SetEqualBy(%s, %s, %s)" left right (element_equal_func element)
-  | TFunc _ | TParam _ | TCheck _ | TFailure ->
+  | TFunc _ | TParam _ | TCheck _ | TFailure | TStream ->
     invalid_arg "Go equality on this type is rejected before emission"
   | TJson -> invalid_arg "Go api-test JSON equality goes through JsonEqual"
 
@@ -1098,7 +1240,7 @@ and ordered_expr ty op left right =
     ordered_expr info.base op (Printf.sprintf "%s.Value" (selector_operand left))
       (Printf.sprintf "%s.Value" (selector_operand right))
   | TBool | TUnit | TRecord _ | TAdt _ | TList _ | TDict _ | TSet _ | TParam _
-  | TFunc _ | TJson | TCheck _ | TFailure ->
+  | TFunc _ | TJson | TStream | TCheck _ | TFailure ->
     invalid_arg "Go ordering requires an ordered scalar type"
 
 let rec supports_ordering = function
@@ -1107,7 +1249,7 @@ let rec supports_ordering = function
      and there is no use for it. *)
   | TNewtype info -> (not info.secret) && supports_ordering info.base
   | TBool | TUnit | TRecord _ | TAdt _ | TList _ | TDict _ | TSet _ | TParam _
-  | TFunc _ | TJson | TCheck _ | TFailure -> false
+  | TFunc _ | TJson | TStream | TCheck _ | TFailure -> false
 
 (* A generic ADT has no comparable Go form: `TeslEqual` would have to dispatch
    `teslrt.Equal` for whatever the type parameter was instantiated with, which Go
@@ -1141,7 +1283,7 @@ let rec supports_equality_seen seen ty =
   | TList element -> supports_equality element
   | TDict (key, value) -> supports_equality key && supports_equality value
   | TSet element -> supports_equality element
-  | TFunc _ | TJson | TParam _ | TCheck _ | TFailure -> false
+  | TFunc _ | TJson | TStream | TParam _ | TCheck _ | TFailure -> false
 
 let supports_equality ty = supports_equality_seen [] ty
 
@@ -1515,6 +1657,30 @@ let adt_ctor_of_signature signatures name =
      | None -> None)
   | _ -> None
 
+(* The payload of a `publish C(key) Ctor { … }`: the parser splits the constructor from its
+   literal, and rebuilding the application is what lets the ordinary paths emit it — the same
+   reason the Racket emitter rebuilds it there.
+
+   Which application depends on what the constructor IS.  A record type takes the literal as it
+   stands (`Notice { message: … }` is a record construction).  An ADT VARIANT takes its payload
+   POSITIONALLY, so the literal's fields are reordered into the variant's declared order — the
+   labels are the author's documentation, and the constructor's own order is what decides which
+   payload slot each value lands in. *)
+let publish_payload_expr signatures loc ctor payload =
+  match payload, adt_ctor_of_signature signatures ctor with
+  | ERecord { fields; _ }, Some (_, variant) ->
+    let argument name = match List.assoc_opt name fields with
+      | Some value -> value
+      | None -> unsupported loc "Go backend `%s` has no value for field `%s`" ctor name
+    in
+    List.fold_left (fun applied (name, _) ->
+      EApp { fn = applied; arg = argument name; loc })
+      (EConstructor { name = ctor; args = []; loc })
+      variant.var_fields
+  | ERecord _, None ->
+    EApp { fn = EConstructor { name = ctor; args = []; loc }; arg = payload; loc }
+  | _ -> payload
+
 let lookup_env loc name env =
   match List.assoc_opt name env with
   | Some ty -> ty
@@ -1881,6 +2047,24 @@ let rec type_of_expr signatures env expr =
             | None -> unsupported loc
               "Go backend needs `Tesl.ApiTest` imported for a request in an api-test")
          | None -> unsupported loc "Go backend cannot resolve the api-test response type")
+      (* `subscribe "/path"` opens a live stream against the server under test; the handle it
+         answers supports nothing but `collect`. *)
+      | EVar { name = "subscribe"; _ } when !current_api_server <> None ->
+        (match args with
+         | path :: _ ->
+           if type_of_expr signatures env path <> TString then
+             unsupported loc "Go backend api-test `subscribe` takes a String path";
+           TStream
+         | [] -> unsupported loc "Go backend api-test `subscribe` needs a path")
+      (* `collect stream count N timeout Tms` answers the events as an untyped JSON array, so
+         the same `isNotEmpty`/`includesWhere` assertions a body gets apply to it. *)
+      | EVar { name = "collect"; _ } ->
+        (match args with
+         | stream :: _ ->
+           if type_of_expr signatures env stream <> TStream then
+             unsupported loc "Go backend `collect` takes a stream from `subscribe`";
+           TJson
+         | [] -> unsupported loc "Go backend `collect` needs a stream")
       (* The api-test queue verbs name a QUEUE, which the emitter resolves statically; their
         result types come from the queue's job type. *)
      | EVar { name = ("pendingJobCount" | "drainQueue" | "processNextJob"
@@ -2192,7 +2376,12 @@ let rec type_of_expr signatures env expr =
        if left_ty <> TInt then unsupported loc "Go backend `%%` requires Int";
        TInt
      | BConcat ->
-       if left_ty <> TString then unsupported loc "Go backend ++ requires String";
+       (* An api-test may build a path out of a value read from a previous RESPONSE
+          (`"/things/" ++ created.body.id`).  That side is untyped JSON by design, and it is
+          the STRING it holds that belongs in the path — the same coercion Racket applies when
+          it splices a body field into a path. *)
+       if left_ty <> TString && left_ty <> TJson then
+         unsupported loc "Go backend ++ requires String";
        TString
      | BAnd | BOr ->
        if left_ty <> TBool then unsupported loc "Go backend boolean operator requires Bool";
@@ -2437,11 +2626,48 @@ let rec type_of_expr signatures env expr =
     if type_of_expr signatures env prefix <> TString then
       unsupported loc "Go backend `Cache.invalidate` takes a String prefix";
     TUnit
-  | EPublish { loc; _ }
-  | ESendEmail { loc; _ }
-  | EStartEmailWorker { loc; _ }
-  | EWithTransaction { loc; _ } ->
-    unsupported loc "Go backend does not support effects yet"
+  (* `Email.send E { to: … subject: … body: … }` ENQUEUES: it answers Unit, and the worker is
+     what delivers.  The recipient and the subject are header-bound, so both are Strings and
+     nothing else — a value that had to be rendered first would be rendered by whose rules? *)
+  | ESendEmail { email_name; to_; subject; body; loc } ->
+    ignore (email_of_name loc email_name);
+    if type_of_expr signatures env to_ <> TString then
+      unsupported loc "Go backend `Email.send` takes a String recipient";
+    if type_of_expr signatures env subject <> TString then
+      unsupported loc "Go backend `Email.send` takes a String subject";
+    (match type_of_expr signatures env body with
+     | TAdt (info, []) when info.adt_tesl_name = "EmailBody" -> ()
+     | _ -> unsupported loc
+       "Go backend `Email.send` takes an `EmailBody`; import `Tesl.Email exposing [EmailBody(..)]`");
+    TUnit
+  | EStartEmailWorker { email_name; loc } ->
+    ignore (email_of_name loc email_name);
+    TUnit
+  (* `transaction { … }` types as its body: on the Memory backend the block has no runtime
+     form at all (see `check_transaction`). *)
+  | EWithTransaction { body; loc } ->
+    check_transaction loc; type_of_expr signatures env body
+  (* `publish C(key) Payload { … }` answers Unit: it hands the event to the listeners on that
+     key and returns, which is what keeps a handler's latency independent of its subscribers. *)
+  | EPublish { channel_name; key; event_ctor; payload; loc } ->
+    let info = channel_of_name loc channel_name in
+    (match key with
+     | Some key_expr ->
+       if info.ch_key_params = 0 then unsupported loc
+         "Go backend channel `%s` takes no key" channel_name;
+       if type_of_expr signatures env key_expr <> TString then unsupported loc
+         "Go backend channel key must be a String"
+     | None ->
+       if info.ch_key_params <> 0 then unsupported loc
+         "Go backend channel `%s` needs its key" channel_name);
+    (match payload with
+     | Some payload_expr ->
+       let built = publish_payload_expr signatures loc event_ctor payload_expr in
+       if type_unequal (type_of_arg signatures env info.ch_payload built) info.ch_payload then
+         unsupported loc "Go backend payload does not match channel `%s`'s declared type"
+           channel_name
+     | None -> unsupported loc "Go backend requires a payload for `publish %s`" channel_name);
+    TUnit
   (* A LAMBDA's type comes from its annotated parameters plus its inferred body.  Tesl
      requires the annotation, so nothing is guessed. *)
   | ELambda { params; body; loc } ->
@@ -2949,6 +3175,17 @@ and type_of_arg signatures env want arg =
             | Some ({ result = TCheck inner; _ }, _), TCheck expected_inner ->
               inner = expected_inner
             | _ -> false) -> want
+  (* A COMBINED check delegates the same way: `check checkBoth(n) -> … = check (checkA &&
+     checkB) n` hands back the conjunction's own `Check`.  Typed here rather than in
+     `type_of_expr` for the reason the single-check case is: only the EXPECTATION says whether
+     this position wants the check or its value. *)
+  | _ when (match want, flatten_app [] arg with
+            | TCheck inner, (EVar { name = "check"; _ }, (conjunction :: _)) ->
+              (match check_conjuncts conjunction with
+               | Some (_ :: _ :: _) ->
+                 not (type_unequal (type_of_expr signatures env arg) inner)
+               | _ -> false)
+            | _ -> false) -> want
   (* `f <| value ::: pf` attaches a detached proof at the call site.  It parses as the same
      node as a check's `ok value ::: P`, and the two are told apart by what is EXPECTED: a
      check's tail wants a `Check`, an ordinary parameter wants the value.  The proof erases,
@@ -2994,6 +3231,12 @@ and type_of_arg signatures env want arg =
      | TFailure, ty | ty, TFailure -> ty
      | left, right when type_equal left right -> left
      | _ -> unsupported loc "Go backend if branches have different types")
+  (* A MULTI-LINE query is an underscore-`let` chain, so it must be recognised BEFORE the
+     chain is peeled: typing the first link on its own reads `update p in E` as a call to a
+     function named `update`, which is what it looked like to the emitter for as long as the
+     query was written in a `fn` body rather than a test block. *)
+  | (ELet _ | EApp _ | EBinop _) when recognise_sql arg <> None ->
+    type_of_expr signatures env arg
   (* A `let` chain passes the expectation THROUGH to its tail, the same way the tail
      emitter does.  Without this, one `let` before an `if` was enough to lose it, and an
      under-constrained tail (`[]`, `Nothing`, `Set.empty`) failed for no reason the author
@@ -3369,9 +3612,19 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
          | _ -> unsupported loc
            "Go backend requires a combined check applied to exactly one value"
        in
-       Printf.sprintf "teslrt.%s(%s(%s))"
-         (if !current_handler_body then "MustCheckRequest" else "MustCheck")
-         helper (emit_expr ~expected:value_ty ~indent signatures env argument)
+       let applied =
+         Printf.sprintf "%s(%s)" helper
+           (emit_expr ~expected:value_ty ~indent signatures env argument)
+       in
+       (match expected with
+        (* A CHECK's tail: the combined check's own `Check` IS this check's result, so it is
+           handed straight back — the same delegation a single-check tail performs.  Unwrapping
+           here would turn a rejection into a trap, and the caller would never see the status
+           the conjunct chose. *)
+        | Some (TCheck inner) when not (type_unequal inner value_ty) -> applied
+        | _ ->
+          Printf.sprintf "teslrt.%s(%s)"
+            (if !current_handler_body then "MustCheckRequest" else "MustCheck") applied)
      | EVar { name = "check"; _ } when (match List.map normalize_call_head args with
                                          | EVar { name; _ } :: _ ->
                                            dict_leaf name <> None
@@ -3511,6 +3764,71 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
            | None -> "\"\""
            | Some value -> emit_api_test_body ~indent signatures env value)
           cookies headers
+      (* `subscribe "/path"` opens a real connection to the server under test and reads the
+         stream — the route lookup, the auth check and every declared capture check run, which
+         is what makes a refused subscription fail the test where it is written. *)
+      | EVar { name = "subscribe"; _ } when !current_api_server <> None ->
+        let server = match !current_api_server with Some s -> s | None -> assert false in
+        let path, cookie = match args with
+          | path :: rest ->
+            let rec scan cookie = function
+              | EVar { name = "cookie"; _ } :: value :: more -> scan (Some value) more
+              | _ :: more -> scan cookie more
+              | [] -> cookie
+            in
+            path, scan None rest
+          | [] -> unsupported loc "Go backend api-test `subscribe` needs a path"
+        in
+        let cookies = match cookie with
+          | None -> "nil"
+          | Some value ->
+            Printf.sprintf "[]string{%s}"
+              (emit_expr ~expected:TString ~indent signatures env value)
+        in
+        Printf.sprintf "teslrt.SubscribeStream(%s, %s, %s)" server
+          (emit_expr ~expected:TString ~indent signatures env path) cookies
+      (* `collect stream …` — the three shapes Racket's `api-test-collect` implements: wait for
+         a COUNT, wait UNTIL a matching event, or take whatever arrives within the timeout. The
+         first two treat a timeout as a test failure; the third does not, since "nothing was
+         published" is exactly what it may be asserting. *)
+      | EVar { name = "collect"; _ } ->
+        let stream, count, until, timeout = match args with
+          | stream :: rest ->
+            let rec scan count until timeout = function
+              | EVar { name = "count"; _ } :: value :: more -> scan (Some value) until timeout more
+              | EVar { name = "until"; _ } :: value :: more -> scan count (Some value) timeout more
+              | EVar { name = "timeout"; _ } :: value :: more -> scan count until (Some value) more
+              | _ :: more -> scan count until timeout more
+              | [] -> count, until, timeout
+            in
+            let count, until, timeout = scan None None None rest in
+            stream, count, until, timeout
+          | [] -> unsupported loc "Go backend `collect` needs a stream"
+        in
+        ignore (type_of_expr signatures env app);
+        let stream = emit_expr ~expected:TStream ~indent signatures env stream in
+        let millis = match timeout with
+          | Some value -> emit_expr ~expected:TInt ~indent signatures env value
+          | None -> unsupported loc "Go backend `collect` needs a `timeout`"
+        in
+        (match count, until with
+         | Some _, Some _ -> unsupported loc
+           "Go backend `collect` takes `count` or `until`, not both"
+         | Some count, None ->
+           Printf.sprintf "teslrt.CollectCount(%s, %s, %s)" stream
+             (emit_expr ~expected:TInt ~indent signatures env count) millis
+         | None, Some until ->
+           (* The `until` pattern is a template like an api-test body, matched by containment
+              against each event — the same rule `includesWhere` follows. *)
+           let pattern = match until with
+             | ERecord _ as template ->
+               Printf.sprintf "teslrt.JsonParseBody(%s).JsonRaw()"
+                 (emit_api_test_body ~indent signatures env template)
+             | other -> unsupported (Checker.expr_loc other)
+               "Go backend `collect … until` takes a `{ \"field\": value }` pattern"
+           in
+           Printf.sprintf "teslrt.CollectUntil(%s, %s, %s)" stream pattern millis
+         | None, None -> Printf.sprintf "teslrt.CollectWithin(%s, %s)" stream millis)
       (* The api-test queue verbs.  The worker runs through a DISPATCHER closure: the store
          holds payloads as `any` because a queue may carry several job types, and the emitter
          is what knows which one this queue carries. *)
@@ -3998,7 +4316,15 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
      | BMul -> Printf.sprintf "teslrt.Mul(%s, %s)" emitted_left emitted_right
      | BDiv -> Printf.sprintf "teslrt.MustQuo(%s, %s)" emitted_left emitted_right
      | BMod -> Printf.sprintf "teslrt.MustRem(%s, %s)" emitted_left emitted_right
-     | BConcat -> Printf.sprintf "(%s + %s)" emitted_left emitted_right
+     | BConcat ->
+       (* Either side may be an untyped JSON value; what concatenates is the string it holds,
+          and a value that is not a string traps there rather than rendering as `<nil>`. *)
+       let text side emitted =
+         if (try type_of_expr signatures env side = TJson with Unsupported _ -> false) then
+           Printf.sprintf "teslrt.JsonAsString(%s)" emitted
+         else emitted
+       in
+       Printf.sprintf "(%s + %s)" (text left emitted_left) (text right emitted_right)
      | BAnd -> Printf.sprintf "(%s && %s)" emitted_left emitted_right
      | BOr -> Printf.sprintf "(%s || %s)" emitted_left emitted_right
      | BEq | BNeq | BLt | BLe | BGt | BGe ->
@@ -4112,17 +4438,26 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
      | Some (TCheck result) ->
        Printf.sprintf "teslrt.Reject[%s](%d, %s)" (go_type result) status
           (emit message)
-     (* A HANDLER may fail too — `fail 403 "second factor required"` is an ordinary answer, not
-        an error — but its Go signature returns the handler's own type, with nowhere to put a
-        failure.  So it travels as the same `RequestRejection` a rejected check uses, and the
-        router turns it back into a response carrying this status.  A cookie written before the
-        failure is NOT sent: `writeResponse` attaches cookies to 2xx only, which is the rule
-        `dsl/web.rkt` states and what keeps a session from escaping on a non-2xx answer. *)
-     | _ when !current_handler_body ->
+     (* A `fail` in a position whose type is an ordinary VALUE — a handler's `fail 403
+        "second factor required"`, a `fn`'s `fail 404 "task not found"`, a worker's `fail 500
+        "…"` — has nowhere to put a failure in the Go signature, so it travels as the same
+        `RequestRejection` a rejected check uses.
+
+        What catches it is what makes the two backends agree:
+        - inside a REQUEST, the router turns it back into a response carrying this status,
+          which is `dsl/web.rkt`'s rule.  A cookie written before the failure is NOT sent:
+          `writeResponse` attaches cookies to 2xx only, so a session cannot escape on a
+          non-2xx answer;
+        - inside a WORKER, `runJob` records it as a failed ATTEMPT, so retry and dead-lettering
+          run — the Racket worker loop reads the same check-fail and calls `fail-job!`;
+        - anywhere else it terminates the program, which is what Racket does too: a check-fail
+          escaping a non-handler `fn` raises (`current-let-check-fail-behavior`), and a test
+          asserting the failure recovers it either way. *)
+     | _ ->
+       ignore loc;
        Printf.sprintf "func() %s { panic(teslrt.RequestRejection{Status: %d, Message: %s}) }()"
          (match expected with Some ty -> go_type ty | None -> "struct{}{}")
-         status (emit message)
-     | _ -> unsupported loc "Go backend can emit fail only in a check tail")
+         status (emit message))
   | EWithDatabase { database_name; body; loc } ->
     check_with_database loc database_name;
     emit_expr ?expected ~indent signatures env body
@@ -4242,11 +4577,37 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
     let info = cache_of_name loc cache_name in
     Printf.sprintf "teslrt.CacheInvalidatePrefix(%s, %s)"
       (qualified info.ca_owner info.ca_go_var) (emit prefix)
-  | EPublish { loc; _ }
-  | ESendEmail { loc; _ }
-  | EStartEmailWorker { loc; _ }
-  | EWithTransaction { loc; _ } ->
-    unsupported loc "Go backend cannot emit this expression yet"
+  (* The email operations, on the outbox the declaration emitted.  The email NAME is not a
+     value — it resolves to that store, exactly as a cache's does. *)
+  | ESendEmail { email_name; to_; subject; body; loc } ->
+    let info = email_of_name loc email_name in
+    Printf.sprintf "teslrt.SendEmail(%s, %s, %s, %s)"
+      (qualified info.em_owner info.em_go_var) (emit to_) (emit subject) (emit body)
+  | EStartEmailWorker { email_name; loc } ->
+    let info = email_of_name loc email_name in
+    Printf.sprintf "teslrt.StartEmailWorker(%s)" (qualified info.em_owner info.em_go_var)
+  | EWithTransaction { body; loc } ->
+    check_transaction loc; emit_expr ?expected ~indent signatures env body
+  | EPublish { channel_name; key; event_ctor; payload; loc } ->
+    let info = channel_of_name loc channel_name in
+    ignore (type_of_expr signatures env expr);
+    let key = match key with
+      | Some key_expr -> emit_expr ~expected:TString ~indent signatures env key_expr
+      (* A channel with no key parameter keys every listener on the same empty string, which
+         is what the Racket publish does when the declaration has no key. *)
+      | None -> "\"\""
+    in
+    let payload = match payload with
+      | Some payload_expr ->
+        emit_expr ~expected:info.ch_payload ~indent signatures env
+          (publish_payload_expr signatures loc event_ctor payload_expr)
+      | None -> unsupported loc "Go backend requires a payload for `publish %s`" channel_name
+    in
+    (* The event crosses the wire as JSON, encoded by the payload type's own codec — the same
+       encoder a response body goes through, so a subscriber and a caller read the same shape. *)
+    Printf.sprintf "teslrt.Publish(%s, %s, %s(%s))"
+      (qualified info.ch_owner info.ch_go_var) key
+      (!value_encoder_hook info.ch_payload) payload
   (* A LAMBDA is a Go function literal.  The body goes through the ordinary TAIL emitter, so
      a `let` chain or an `if` inside it keeps statement form instead of nesting closures. *)
   | ELambda { params; body; loc } ->
@@ -5706,12 +6067,28 @@ let emit_tail ?self buffer signatures env expected indent expr =
     | _ -> go_shape env indent expr
   and go_shape env indent expr =
     match expr with
+    (* A MULTI-LINE query — `update p in E` / `delete p in E` / a `select` with its clauses
+       on their own lines — is an underscore-`let` CHAIN in the surface tree, so it arrives
+       here looking like an ordinary `let`.  Emitting it as one would take the row binder and
+       the clause keywords for values and try to call a function named `update`.
+       Recognised FIRST, which is what a test-block statement already does; the two positions
+       must read the same tree the same way. *)
+    | (ELet _ | EApp _ | EBinop _) when recognise_sql expr <> None ->
+      ignore (type_of_arg signatures env expected expr);
+      Buffer.add_string buffer (line_directive (Checker.expr_loc expr));
+      Printf.bprintf buffer "%sreturn %s\n" indent
+        (emit_expr ~expected ~indent signatures env expr)
     (* `with database D { … }` adds nothing at run time on the Memory backend, so its body
        is emitted in TAIL position — the block keeps statement form instead of collapsing
        into an immediately-called closure.  A capability scope is the same: the checker has
        verified every call in it already, so the scope itself has no runtime form. *)
     | EWithDatabase { database_name; body; loc } ->
       check_with_database loc database_name; go env indent body
+    (* A `transaction` block is its body on the Memory backend, so it keeps STATEMENT form:
+       the writes it groups are ordinary statements, and wrapping them in a closure would
+       change nothing but the shape of the emitted code. *)
+    | EWithTransaction { body; loc } ->
+      check_transaction loc; go env indent body
     | EWithCapabilities { body; _ } -> go env indent body
     (* Proof decomposition in tail position keeps statement form, like an ordinary `let`.
        Either half may be `_`, since the decomposition is often written for one of them. *)
@@ -5820,11 +6197,11 @@ let emit_tail ?self buffer signatures env expected indent expr =
         (List.map (fun (arm : case_arm) ->
            arm.pattern, arm.guard,
            (fun arm_env body_indent -> go arm_env body_indent arm.body)) arms)
-    (* A HANDLER's `fail` in tail position: `panic` terminates the function, so this is a
-       statement rather than a returned expression — which is also what keeps it gofmt-stable
-       (a one-line `func() T { panic(…) }()` is reflowed once the message is long). *)
-    | EFail { status; message; loc } when !current_handler_body
-                                          && (match expected with TCheck _ -> false | _ -> true) ->
+    (* A `fail` in TAIL position: `panic` terminates the function, so this is a statement
+       rather than a returned expression — which is also what keeps it gofmt-stable (a
+       one-line `func() T { panic(…) }()` is reflowed once the message is long).  Who catches
+       it is documented at the expression form. *)
+    | EFail { status; message; loc } when (match expected with TCheck _ -> false | _ -> true) ->
       Buffer.add_string buffer (line_directive loc);
       Printf.bprintf buffer "%spanic(teslrt.RequestRejection{Status: %d, Message: %s})\n"
         indent status (emit_expr ~expected:TString ~indent signatures env message)
@@ -5970,7 +6347,26 @@ let adt_source info =
    them, and a user who ejects Tesl calls them directly.  They would also read as unused
    in a module that only declares codecs, which the `unused` linter rightly rejects. *)
 let codec_encode_name type_name = "Encode" ^ go_ident ~exported:true type_name ^ "JSON"
+
+(* A codec REFERENCE, as opposed to its definition: the codec lives in the package that
+   declared it, so a use from another package carries that package's prefix.  A type with no
+   hand-written codec answers its bare name — that decoder is derived into the using package,
+   which is where the reference is. *)
+let codec_owner name =
+  match !current_types with
+  | Some types -> Hashtbl.find_opt types.codecs name
+  | None -> None
 let codec_decode_name type_name = "Decode" ^ go_ident ~exported:true type_name ^ "JSON"
+
+let codec_encode_ref type_name =
+  match codec_owner type_name with
+  | Some owner -> qualified owner (codec_encode_name type_name)
+  | None -> codec_encode_name type_name
+
+let codec_decode_ref type_name =
+  match codec_owner type_name with
+  | Some owner -> qualified owner (codec_decode_name type_name)
+  | None -> codec_decode_name type_name
 let codec_alt_name type_name index =
   Printf.sprintf "teslDecode%sAlt%d" (go_ident ~exported:true type_name) index
 
@@ -6016,10 +6412,12 @@ let rec value_encoder ty =
     remember_helper ~prefix:"teslEncode"
       ~signature:(Printf.sprintf "(teslValue %s) any" (go_type ty))
       ~body:(encoded_field "teslValue.Value" info.base)
-  | TRecord info when List.mem info.rec_tesl_name !current_codec_types ->
-    codec_encode_name info.rec_tesl_name
-  | TAdt (info, _) when List.mem info.adt_tesl_name !current_codec_types ->
-    codec_encode_name info.adt_tesl_name
+  | TRecord info when List.mem info.rec_tesl_name !current_codec_types
+                      || codec_owner info.rec_tesl_name <> None ->
+    codec_encode_ref info.rec_tesl_name
+  | TAdt (info, _) when List.mem info.adt_tesl_name !current_codec_types
+                        || codec_owner info.adt_tesl_name <> None ->
+    codec_encode_ref info.adt_tesl_name
   | TRecord info ->
     let fields = aligned_map_entries "\t\t" (List.map (fun (name, field_ty) ->
       (name, encoded_field ("teslValue." ^ record_field_go_name name) field_ty))
@@ -6053,7 +6451,7 @@ let rec value_encoder ty =
       ~body:(Printf.sprintf
         "func() any {\n\t\tteslOut := make([]any, len(teslValue))\n\t\tfor teslAt, teslItem := range teslValue {\n\t\t\tteslOut[teslAt] = %s(teslItem)\n\t\t}\n\t\treturn teslOut\n\t}()"
         (value_encoder element))
-  | TDict _ | TSet _ | TParam _ | TFunc _ | TJson | TCheck _ | TFailure ->
+  | TDict _ | TSet _ | TParam _ | TFunc _ | TJson | TStream | TCheck _ | TFailure ->
     invalid_arg "Go response encoding for this type is rejected before emission"
 
 (* ── HTTP: `api` routes and the `server` that binds them ──────────────────────
@@ -6062,6 +6460,10 @@ let rec value_encoder ty =
    syntax used to carry a name-keyed-looking prefix that was always matched by position).
    Both become ordinary Go values, so someone who sheds Tesl can read the routing table,
    call a handler directly, or mount the server on any net/http mux. *)
+
+(* The expression emitter reaches the encoder through this cell; see its declaration. *)
+let () = value_encoder_hook := value_encoder
+
 let http_method_name = function
   | GET -> "GET" | POST -> "POST" | PUT -> "PUT"
   | DELETE -> "DELETE" | PATCH -> "PATCH" | SSE -> "SSE"
@@ -6107,12 +6509,13 @@ let rec json_value_decoder ~package ~loc ~what ty =
       "func(teslRaw any) ([]%s, error) {\n\t\treturn teslrt.DecodeListValue(teslRaw, %s)\n\t}"
       (go_type element) (json_value_decoder ~package ~loc ~what element)
   | TRecord nested when nested.rec_owner = package
-                        || List.mem nested.rec_tesl_name !current_codec_types ->
+                        || List.mem nested.rec_tesl_name !current_codec_types
+                        || codec_owner nested.rec_tesl_name <> None ->
     (* A nested record decodes through its own decoder — derived or hand-written — and its
        `Check` becomes an `error` here so one field shape covers both. *)
     Printf.sprintf
       "func(teslRaw any) (%s, error) {\n\t\tteslNested := %s(teslRaw)\n\t\tif !teslNested.OK() {\n\t\t\treturn %s{}, errors.New(teslNested.Message())\n\t\t}\n\t\tteslValue, _ := teslNested.Value()\n\t\treturn teslValue, nil\n\t}"
-      (go_type ty) (codec_decode_name nested.rec_tesl_name) (go_type ty)
+      (go_type ty) (codec_decode_ref nested.rec_tesl_name) (go_type ty)
   | _ -> unsupported loc
     "Go backend cannot decode `%s` from JSON; give the type a `codec`" what
 
@@ -6193,6 +6596,30 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
     Buffer.add_string body (line_directive info.ca_loc);
     Printf.bprintf body "var %s = teslrt.NewCache[%s](%d)\n"
       info.ca_go_var (go_type info.ca_value) info.ca_default_ttl);
+  (* The outbox for an `email` declaration.  Its SMTP settings are the declaration's, and an
+     `env` among them is a call here rather than a baked-in string: the variable belongs to
+     the deployment, not to the build. *)
+  Hashtbl.to_seq_values types.emails
+  |> List.of_seq
+  |> List.sort (fun left right -> String.compare left.em_tesl_name right.em_tesl_name)
+  |> List.filter (fun info -> declared_here info.em_owner)
+  |> List.iter (fun info ->
+    Buffer.add_char body '\n';
+    Buffer.add_string body (line_directive info.em_loc);
+    Printf.bprintf body
+      "var %s = teslrt.NewOutbox(teslrt.SmtpSettings{\n\tHost:     %s,\n\tPort:     %d,\n\tUsername: %s,\n\tPassword: %s,\n\tTLS:      %b,\n})\n"
+      info.em_go_var info.em_host info.em_port info.em_username info.em_password info.em_tls);
+  (* The channel a `sseChannel` declaration becomes: one registry per declaration, named so a
+     reader can see which channel a `publish` reaches. *)
+  Hashtbl.to_seq_values types.channels
+  |> List.of_seq
+  |> List.sort (fun left right -> String.compare left.ch_tesl_name right.ch_tesl_name)
+  |> List.filter (fun info -> declared_here info.ch_owner)
+  |> List.iter (fun info ->
+    Buffer.add_char body '\n';
+    Buffer.add_string body (line_directive info.ch_loc);
+    Printf.bprintf body "var %s = teslrt.NewSseChannel(%s)\n"
+      info.ch_go_var (go_quote info.ch_tesl_name));
   (* The store for a `backend: Memory` entity.  One variable per entity, initialised at
      package level: an entity belongs to exactly one database, and the table itself is
      what carries the lock, so nothing has to be threaded through call sites. *)
@@ -6358,7 +6785,7 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
             let value = Printf.sprintf "teslValue.%s" (field_go entry.field_name) in
             (entry.json_key, match primitive_codec entry.codec with
               | Some _ -> value
-              | None -> Printf.sprintf "%s(%s)" (codec_encode_name entry.codec) value))
+              | None -> Printf.sprintf "%s(%s)" (codec_encode_ref entry.codec) value))
             entries));
        Buffer.add_string body "\n\t}\n}\n");
     (* Decode: each alternative is COMPLETE and they are tried in order, first success
@@ -6418,7 +6845,7 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
                 Printf.bprintf body
                   "\tteslRaw%s, teslErr%s := teslrt.JSONFieldValue(teslJSON, %S)\n\tif teslErr%s != nil {\n\t\treturn teslrt.RejectShape[%s](teslErr%s.Error())\n\t}\n\tteslNested%s := %s(teslRaw%s)\n\tif !teslNested%s.OK() {\n\t\treturn teslrt.Reject[%s](teslNested%s.Status(), teslNested%s.Message())\n\t}\n\t%s, _ := teslNested%s.Value()\n"
                   suffix suffix json_key suffix go_type_name suffix
-                  suffix (codec_decode_name field_codec) suffix
+                  suffix (codec_decode_ref field_codec) suffix
                   suffix go_type_name suffix suffix
                   binder suffix);
              (* `via` CHAINS: each checker runs on the value the previous one accepted. *)
@@ -6579,9 +7006,12 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
       | Some api -> api
       | None -> unsupported server.loc "Go backend cannot resolve api `%s`" server.api_name
     in
-    (* SSE endpoints are a different transport and are not bound here. *)
+    (* SSE endpoints are a different transport: they carry no handler (there is no
+       request/response pair to bind), and they are emitted as STREAMS below. *)
     let endpoints = List.filter (fun (ep : api_endpoint) ->
       match ep.kind with Http _ -> true | Sse _ -> false) api.endpoints in
+    let sse_endpoints = List.filter (fun (ep : api_endpoint) ->
+      match ep.kind with Sse _ -> true | Http _ -> false) api.endpoints in
     if List.length endpoints <> List.length server.handlers then
       unsupported server.loc
         "Go backend needs one handler per endpoint in `%s` (%d endpoint(s), %d handler(s))"
@@ -6594,6 +7024,11 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
     List.iter (fun ((ep : api_endpoint), handler) ->
       Printf.bprintf body "\t\t{Method: %S, Path: %S, Endpoint: %S},\n"
         (http_method_name ep.method_) ep.path handler) bound;
+    (* An SSE route is a GET whose endpoint name is the PATH: it has no handler to name it
+       after, and a path is what a subscriber addresses. *)
+    List.iter (fun (ep : api_endpoint) ->
+      Printf.bprintf body "\t\t{Method: \"GET\", Path: %S, Endpoint: %S},\n"
+        ep.path ("sse:" ^ ep.path)) sse_endpoints;
     Buffer.add_string body "\t},\n\tHandlers: map[string]teslrt.HandlerFunc{\n";
     List.iter (fun ((endpoint : api_endpoint), handler) ->
       let endpoint_loc = endpoint.loc in
@@ -6684,25 +7119,54 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
              | None -> unsupported endpoint_loc
                "Go backend cannot resolve capture check `%s`" check_fn
            in
-           Printf.bprintf body
-             "\t\t\tteslCaptured%s := %s(%s)\n\t\t\tif !teslCaptured%s.OK() {\n\t\t\t\treturn teslrt.Fail(teslCaptured%s.Status(), teslCaptured%s.Message())\n\t\t\t}\n\t\t\t%s, _ = teslCaptured%s.Value()\n"
-             suffix (qualified signature.sig_owner signature.go_name) (local_ident name)
-             suffix suffix suffix (local_ident name) suffix);
+           (* A capturer's `via` names either a CHECK — which may reject the segment, and then
+              the request is answered with the status it chose — or a plain `fn` that NORMALISES
+              it (`parseUserId`).  Racket tells them apart the same way: it calls the function
+              and only treats a `check-fail` as a rejection. *)
+           (match signature.result with
+            | TCheck _ ->
+              Printf.bprintf body
+                "\t\t\tteslCaptured%s := %s(%s)\n\t\t\tif !teslCaptured%s.OK() {\n\t\t\t\treturn teslrt.Fail(teslCaptured%s.Status(), teslCaptured%s.Message())\n\t\t\t}\n\t\t\t%s, _ = teslCaptured%s.Value()\n"
+                suffix (qualified signature.sig_owner signature.go_name) (local_ident name)
+                suffix suffix suffix (local_ident name) suffix
+            | _ ->
+              Printf.bprintf body "\t\t\t%s = %s(%s)\n"
+                (local_ident name) (qualified signature.sig_owner signature.go_name)
+                (local_ident name)));
         arguments := !arguments @ [local_ident name]) endpoint_captures;
       (match endpoint_body with
        | None -> if not reads_body then Buffer.add_string body "\t\t\t_ = teslRequest\n"
        | Some (binding : binding) ->
-         let decoder = match type_of_type_expr types binding.type_expr with
-           | TRecord info -> codec_decode_name info.rec_tesl_name
-           | TAdt (info, _) -> codec_decode_name info.adt_tesl_name
+         (* A SCALAR body is the whole JSON value — `body runId: String` receives the string
+            that was sent, not a field of an object — so it decodes through the scalar reader
+            rather than a codec.  Racket does the same: its generic decoder reads the body
+            value at the declared type. *)
+         let body_type = type_of_type_expr types binding.type_expr in
+         let scalar_reader = match body_type with
+           | TString -> Some "teslrt.DecodeStringValue"
+           | TInt -> Some "teslrt.DecodeIntValue"
+           | TBool -> Some "teslrt.DecodeBoolValue"
+           | TFloat -> Some "teslrt.DecodeFloatValue"
+           | _ -> None
+         in
+         let decoder = match body_type, scalar_reader with
+           | _, Some _ -> ""
+           | TRecord info, None -> codec_decode_ref info.rec_tesl_name
+           | TAdt (info, _), None -> codec_decode_ref info.adt_tesl_name
            | _ -> unsupported endpoint_loc
              "Go backend request body needs a type with a codec"
          in
          (* The two failure strings are the ones the Racket server sends, so a client sees
             the same 400 either way. *)
-         Printf.bprintf body
-           "\t\t\tteslParsed, teslParseErr := teslrt.ParseJSON(teslBodyBytes)\n\t\t\tif teslParseErr != nil {\n\t\t\t\treturn teslrt.Fail(400, \"Malformed JSON payload\")\n\t\t\t}\n\t\t\tteslDecoded := %s(teslParsed)\n\t\t\tif !teslDecoded.OK() {\n\t\t\t\treturn teslrt.Fail(teslDecoded.Status(), teslDecoded.Message())\n\t\t\t}\n\t\t\tteslBody, _ := teslDecoded.Value()\n"
-           decoder;
+         (match scalar_reader with
+          | Some reader ->
+            Printf.bprintf body
+              "\t\t\tteslParsed, teslParseErr := teslrt.ParseJSON(teslBodyBytes)\n\t\t\tif teslParseErr != nil {\n\t\t\t\treturn teslrt.Fail(400, \"Malformed JSON payload\")\n\t\t\t}\n\t\t\tteslBody, teslBodyDecodeErr := %s(teslParsed)\n\t\t\tif teslBodyDecodeErr != nil {\n\t\t\t\treturn teslrt.Fail(400, teslBodyDecodeErr.Error())\n\t\t\t}\n"
+              reader
+          | None ->
+            Printf.bprintf body
+              "\t\t\tteslParsed, teslParseErr := teslrt.ParseJSON(teslBodyBytes)\n\t\t\tif teslParseErr != nil {\n\t\t\t\treturn teslrt.Fail(400, \"Malformed JSON payload\")\n\t\t\t}\n\t\t\tteslDecoded := %s(teslParsed)\n\t\t\tif !teslDecoded.OK() {\n\t\t\t\treturn teslrt.Fail(teslDecoded.Status(), teslDecoded.Message())\n\t\t\t}\n\t\t\tteslBody, _ := teslDecoded.Value()\n"
+              decoder);
          arguments := !arguments @ ["teslBody"]);
       (* A handler that may write cookies receives the scope the dispatcher created. *)
       let call_arguments =
@@ -6711,7 +7175,103 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
         "\t\t\treturn teslrt.Response{Status: 200, Body: %s(%s(%s))}\n\t\t},\n"
         encoder (qualified signature.sig_owner signature.go_name)
         (String.concat ", " call_arguments)) bound;
-    Buffer.add_string body "\t},\n}\n";
+    Buffer.add_string body "\t},\n";
+    (* ── SSE streams ─────────────────────────────────────────────────────────
+       A stream owns its response for the life of the connection, so it is not a
+       `HandlerFunc`.  What runs BEFORE the stream opens is the same gate a request meets:
+       the auth check, then every declared capture check — a subscriber must not be able to
+       reach an entity's events by asking for a path a request would be refused. *)
+    if sse_endpoints <> [] then begin
+      Buffer.add_string body "\tStreams: map[string]teslrt.StreamFunc{\n";
+      List.iter (fun (endpoint : api_endpoint) ->
+        let endpoint_loc = endpoint.loc in
+        let endpoint_path = endpoint.path in
+        let channel_name = match ep_subscribes endpoint with
+          | [name] -> name
+          | [] -> unsupported endpoint_loc
+            "Go backend needs an `sse` route to subscribe to a channel"
+          | _ -> unsupported endpoint_loc
+            "Go backend supports one channel per `sse` route"
+        in
+        let info = channel_of_name endpoint_loc channel_name in
+        Printf.bprintf body
+          "\t\t%S: func(teslWriter http.ResponseWriter, teslRequest *http.Request) {\n"
+          ("sse:" ^ endpoint_path);
+        (match endpoint.auth with
+         | None -> ()
+         | Some (auth : api_auth) ->
+           let signature = match Hashtbl.find_opt signatures auth.via_fn with
+             | Some signature -> signature
+             | None -> unsupported endpoint_loc
+               "Go backend cannot resolve auth function `%s`" auth.via_fn
+           in
+           (* A stream has no response to attach a cookie to, so a sliding-session `auth`
+              writes into a scope nothing sends — the check still runs, which is the part
+              that decides whether this subscriber may listen at all. *)
+           let scope_argument =
+             if signature.sig_needs_scope then "teslrt.NewRequestScope(), " else "" in
+           Printf.bprintf body
+             "\t\t\tteslAuth := %s(%steslrt.NewHttpRequest(teslRequest, \"\"))\n\t\t\tif !teslAuth.OK() {\n\t\t\t\thttp.Error(teslWriter, teslAuth.Message(), teslAuth.Status())\n\t\t\t\treturn\n\t\t\t}\n"
+             (qualified signature.sig_owner signature.go_name) scope_argument);
+        List.iter (fun (capture : api_capture) ->
+          let name = capture.binding.name in
+          let suffix = go_ident ~exported:true name in
+          let parser, checker = match capture.via_fn with
+            | "" -> (match capture.inline_codec with Some c -> c | None -> "stringCodec"),
+                    capture.inline_check
+            | via ->
+              (match List.find_opt (fun (c : capture_form) -> c.name = via) capturers with
+               | Some form -> form.parser, form.checker
+               | None -> unsupported endpoint_loc
+                 "Go backend cannot resolve capturer `%s`" via)
+          in
+          if parser <> "stringCodec" then unsupported endpoint_loc
+            "Go backend supports `stringCodec` path captures only for now (`%s`)" parser;
+          (match type_of_type_expr types capture.binding.type_expr with
+           | TString -> ()
+           | _ -> unsupported endpoint_loc
+             "Go backend supports String path captures only for now");
+          Printf.bprintf body
+            "\t\t\tteslSegment%s, teslFound%s := teslrt.PathParam(%S, teslRequest.URL.Path, %S)\n\t\t\tif !teslFound%s {\n\t\t\t\thttp.Error(teslWriter, \"not found\", 404)\n\t\t\t\treturn\n\t\t\t}\n"
+            suffix suffix endpoint_path name suffix;
+          (match checker with
+           | None -> Printf.bprintf body "\t\t\t_ = teslSegment%s\n" suffix
+           | Some check_fn ->
+             let signature = match Hashtbl.find_opt signatures check_fn with
+               | Some signature -> signature
+               | None -> unsupported endpoint_loc
+                 "Go backend cannot resolve capture check `%s`" check_fn
+             in
+             (* Same two shapes as the request path: a CHECK may refuse the subscription, a
+                plain `fn` only normalises the segment. *)
+             (match signature.result with
+              | TCheck _ ->
+                Printf.bprintf body
+                  "\t\t\tteslCaptured%s := %s(teslSegment%s)\n\t\t\tif !teslCaptured%s.OK() {\n\t\t\t\thttp.Error(teslWriter, teslCaptured%s.Message(), teslCaptured%s.Status())\n\t\t\t\treturn\n\t\t\t}\n"
+                  suffix (qualified signature.sig_owner signature.go_name) suffix
+                  suffix suffix suffix
+              | _ ->
+                Printf.bprintf body "\t\t\t_ = %s(teslSegment%s)\n"
+                  (qualified signature.sig_owner signature.go_name) suffix)))
+           endpoint.captures;
+        let stream = match ep_subscribe_key endpoint with
+          | Some (SubscribeKeyLiteral key) ->
+            Printf.sprintf "teslrt.SseStream(%s, %s)"
+              (qualified info.ch_owner info.ch_go_var) (go_quote key)
+          | Some (SubscribeKeyParam param) ->
+            Printf.sprintf "teslrt.SseStreamParam(%s, %S, %S)"
+              (qualified info.ch_owner info.ch_go_var) endpoint_path param
+          (* No key argument: every connection lands on the one key the declaration has,
+             which is the empty string a keyless `publish` uses. *)
+          | None ->
+            Printf.sprintf "teslrt.SseStream(%s, \"\")"
+              (qualified info.ch_owner info.ch_go_var)
+        in
+        Printf.bprintf body "\t\t\t%s(teslWriter, teslRequest)\n\t\t},\n" stream)
+        sse_endpoints;
+      Buffer.add_string body "\t},\n"
+    end;
+    Buffer.add_string body "}\n";
     current_scope_in_hand := false) servers;
   (* Comparator helpers the body referenced, in name order so the output is
      deterministic. *)
@@ -6797,12 +7357,32 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
         |> List.filter (fun info -> owned info.qu_owner)
         |> List.map (fun info ->
              Printf.sprintf "teslrt.ResetQueue(%s)" (qualified info.qu_owner info.qu_go_var))
+      (* A CACHE and an email OUTBOX are reset for the same reason the tables are: one block's
+         entries must not be another's.  Racket resets both too — `call-with-fresh-memory-db`
+         clears them from the process-wide registry, which this slice fixed after the oracle
+         caught the two backends disagreeing about what a second block sees. *)
       and caches =
         Hashtbl.to_seq_values types.caches
         |> List.of_seq
         |> List.filter (fun info -> owned info.ca_owner)
         |> List.map (fun info ->
              Printf.sprintf "teslrt.CacheReset(%s)" (qualified info.ca_owner info.ca_go_var))
+      and outboxes =
+        Hashtbl.to_seq_values types.emails
+        |> List.of_seq
+        |> List.filter (fun info -> owned info.em_owner)
+        |> List.map (fun info ->
+             Printf.sprintf "teslrt.ResetOutbox(%s)" (qualified info.em_owner info.em_go_var))
+      (* A channel's LISTENERS are per-block state on both backends: Racket's api-test
+         cleanups unregister the block's subscription when it ends, and the emitted block
+         closes its stream at the same point (the `defer` at the subscribe).  Clearing the
+         registry here covers a listener no `subscribe` opened. *)
+      and channels =
+        Hashtbl.to_seq_values types.channels
+        |> List.of_seq
+        |> List.filter (fun info -> owned info.ch_owner)
+        |> List.map (fun info ->
+             Printf.sprintf "teslrt.ResetChannel(%s)" (qualified info.ch_owner info.ch_go_var))
       in
       (* The stub table is only reset when the module can stub at all: `stubHttp` is in
          `signatures` exactly when `Tesl.ApiTest` exposed it. *)
@@ -6817,10 +7397,47 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
            || Hashtbl.mem signatures "gauge"
         then ["teslrt.ResetTelemetry()"] else []
       in
-      List.sort_uniq String.compare (tables @ queues @ caches) @ stubs @ telemetry
+      List.sort_uniq String.compare (tables @ queues @ caches @ outboxes @ channels)
+      @ stubs @ telemetry
   in
   let emit_reset () =
     if reset_calls <> [] then Buffer.add_string body "\tteslResetTestState()\n"
+  in
+  (* A `property` block's repetition count, from the test header's `with N runs` (200 when it
+     says nothing, which is Racket's default).  A ref because the statement emitter is one
+     closure shared by every block. *)
+  let property_runs = ref 200 in
+  (* The generator for one property parameter, by TYPE — the same values Racket's
+     `random_expr_for_type` produces, so a property searches the same space on both backends.
+     A type Racket has no generator for falls back to `0` there; here it is refused, because a
+     property that ran 200 times over the same wrong-typed value would report success without
+     having tested anything. *)
+  let rec property_generator loc ty =
+    match ty with
+    | TInt -> "teslrt.PropInt()"
+    | TBool -> "teslrt.PropBool()"
+    | TString -> "teslrt.PropString()"
+    | TList element ->
+      Printf.sprintf "teslrt.PropList(func() %s { return %s })"
+        (go_type element) (property_generator loc element)
+    | TAdt (info, [element]) when info.adt_tesl_name = "Maybe" ->
+      Printf.sprintf "teslrt.PropMaybe(func() %s { return %s })"
+        (go_type element) (property_generator loc element)
+    (* A RECORD generates fieldwise, which is what Racket does — and a record whose fields
+       carry PROOF annotations is refused instead: Racket has proof-aware generators there
+       (`IsPositive` draws a positive), and a fieldwise draw would hand the property a value
+       its own annotation says is impossible. *)
+    | TRecord info when not info.rec_proof_fields ->
+      Printf.sprintf "%s{%s}" (go_type ty)
+        (String.concat ", " (List.map (fun (name, field_ty) ->
+           Printf.sprintf "%s: %s" (record_field_go_name name)
+             (property_generator loc field_ty)) info.rec_fields))
+    | TRecord info ->
+      unsupported loc
+        "Go backend has no property generator for `%s`: its fields carry proofs"
+        info.rec_tesl_name
+    | _ -> unsupported loc
+      "Go backend has no property generator for `%s`" (go_type ty)
   in
   let rec emit_stmts env indent = function
     | [] -> ()
@@ -6834,7 +7451,13 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
       if name = "_" then Printf.bprintf body "%s\t_ = %s\n" indent emitted
       else begin
         Printf.bprintf body "%s\t%s := %s\n" indent (local_ident name) emitted;
-        Printf.bprintf body "%s\t_ = %s\n" indent (local_ident name)
+        Printf.bprintf body "%s\t_ = %s\n" indent (local_ident name);
+        (* A SUBSCRIPTION holds a live connection and the test server behind it, so the block
+           that opened it closes it — otherwise one block's stream would still be reading while
+           the next runs, which is the same reason every other store is reset per block. *)
+        if ty = TStream then
+          Printf.bprintf body "%s\tdefer teslrt.UnsubscribeStream(%s)\n" indent
+            (local_ident name)
       end;
       emit_stmts (if name = "_" then env else (name, ty) :: env) (indent ^ "\t") rest;
       Printf.bprintf body "%s}\n" indent
@@ -7003,7 +7626,7 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
          Printf.bprintf body "%sif (%s).OK() {\n%s\tteslT.Fatal(\"expected Tesl check failure\")\n%s}\n"
            indent emitted indent indent
        | TInt | TFloat | TString | TBool | TUnit | TNewtype _ | TRecord _ | TAdt _
-       | TList _ | TDict _ | TSet _ | TParam _ | TFunc _ | TJson ->
+       | TList _ | TDict _ | TSet _ | TParam _ | TFunc _ | TJson | TStream ->
          Printf.bprintf body "%steslExpectFailure(teslT, func() {\n%s\t_ = %s\n%s})\n"
            indent indent emitted indent
        | TFailure -> unsupported loc "Go backend expectFail target has no result type");
@@ -7041,8 +7664,80 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
         @ env in
       emit_stmts env (indent ^ "\t") rest;
       Printf.bprintf body "%s}\n" indent
-    | (TsExpectHasProof { loc; _ }
-      | TsProperty { loc; _ } | TsIf { loc; _ }) :: _ ->
+    (* `property "name" (x: T, y: U where …) { body }` — the body must hold for every generated
+       binding.  A `where` clause SKIPS the run rather than failing it, which is what Racket's
+       `(when guard (check-true …))` does: the guard describes which values the property is
+       about, so a value outside it is not a counterexample. *)
+    | TsProperty { description; params; body = property_body; loc } :: rest ->
+      let types = match !current_types with
+        | Some types -> types
+        | None -> unsupported loc "Go backend cannot resolve property parameter types here"
+      in
+      let bindings = List.map (fun (param : property_param) ->
+        param.binding.name, type_of_type_expr types param.binding.type_expr) params in
+      let property_env = bindings @ env in
+      let run = Printf.sprintf "teslPropRun%d" (String.length indent) in
+      Printf.bprintf body "%sfor %s := 0; %s < %d; %s++ {\n"
+        indent run run !property_runs run;
+      Buffer.add_string body (line_directive loc);
+      List.iter2 (fun (param : property_param) (name, ty) ->
+        let generated = match param.generator with
+          | Some generator ->
+            (* A custom generator is a function of the RUN INDEX, so it can walk a space
+               rather than sample it — `(gen tesl-prop-i)` on the Racket side. *)
+            let signature = match Hashtbl.find_opt signatures generator with
+              | Some signature -> signature
+              | None -> unsupported loc
+                "Go backend cannot resolve property generator `%s`" generator
+            in
+            (match signature.params with
+             | [TInt] -> ()
+             | _ -> unsupported loc
+               "Go backend property generator `%s` must take the run index (an Int)" generator);
+            if type_unequal signature.result ty then unsupported loc
+              "Go backend property generator `%s` does not produce `%s`" generator (go_type ty);
+            Printf.sprintf "%s(teslrt.FromInt64(int64(%s)))"
+              (qualified signature.sig_owner signature.go_name) run
+          | None -> property_generator loc ty
+        in
+        Printf.bprintf body "%s\t%s := %s\n%s\t_ = %s\n" indent (local_ident name) generated
+          indent (local_ident name)) params bindings;
+      let guards = List.filter_map (fun (param : property_param) -> param.where_clause) params in
+      let inner = if guards = [] then indent ^ "\t" else indent ^ "\t\t" in
+      if guards <> [] then begin
+        List.iter (fun guard ->
+          if type_of_expr signatures property_env guard <> TBool then
+            unsupported (Checker.expr_loc guard)
+              "Go backend property `where` clause must be Bool") guards;
+        (* A SINGLE guard needs no parentheses of its own — gofmt strips them, and emitted
+           code that gofmt would reformat is an emitter bug. *)
+        let rendered = List.map (fun guard ->
+          emit_expr ~expected:TBool ~indent:(indent ^ "\t") signatures property_env guard)
+          guards in
+        Printf.bprintf body "%s\tif %s {\n" indent
+          (match rendered with
+           | [only] -> strip_outer_parens only
+           | several -> String.concat " && " several)
+      end;
+      if type_of_expr signatures property_env property_body <> TBool then
+        unsupported loc "Go backend property body must be Bool";
+      (* The failing BINDING is reported, not just the property's name: a counterexample the
+         author cannot see is a test that only says "somewhere in 200 runs". *)
+      let reported = List.map (fun (name, _) ->
+        Printf.sprintf "%s=%%v" name) bindings in
+      Printf.bprintf body "%sif %s {\n%s\tteslT.Fatalf(%s, %s)\n%s}\n"
+        inner
+        (strip_outer_parens
+           (emit_negated ~indent:inner signatures property_env property_body))
+        inner
+        (go_quote (Printf.sprintf "property %s failed (%s)"
+                     (Printf.sprintf "%S" description) (String.concat ", " reported)))
+        (String.concat ", " (List.map (fun (name, _) -> local_ident name) bindings))
+        inner;
+      if guards <> [] then Printf.bprintf body "%s\t}\n" indent;
+      Printf.bprintf body "%s}\n" indent;
+      emit_stmts env indent rest
+    | (TsExpectHasProof { loc; _ } | TsIf { loc; _ }) :: _ ->
       unsupported loc "Go backend does not support this test statement yet"
   in
   (* `seed { insert … }` runs before a block's own statements: the store starts from the rows the
@@ -7068,9 +7763,9 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
        The capabilities and the `with database X` header, by contrast, are compile-time
        grants: with `backend: Memory` the store a test writes to is the entity's own
        table variable, exactly as in a function body. *)
-    if test.runs <> None
-       && List.exists (function TsProperty _ -> true | _ -> false) test.stmts then
-      unsupported test.loc "Go backend supports plain deterministic tests only";
+    (* `with N runs` is a PROPERTY block's repetition count; a test with no property statement
+       is unaffected, on either backend. *)
+    property_runs := Option.value test.runs ~default:200;
     ignore test.capabilities;
     (* The header names a database the checker has already resolved, and every database
        this backend accepts is a Memory one, so there is nothing to bind. *)
@@ -7211,6 +7906,43 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
    structural), so a value crossing the boundary would look like a different type.
    Facts are absent from these tables by design — a fact erases entirely, so an exposed
    name that resolves to nothing is not an error. *)
+(* The TYPES a module imports, registered before this module's own field types are
+   resolved.  A record field may name an imported ADT (`role: OrgRole`), and the full
+   import registration below runs after that resolution — so without this pass the field
+   type is unresolvable and a perfectly ordinary cross-module record is refused.
+
+   Add-if-absent, never replace: a local declaration of the same name is this module's own,
+   and an import must not silently take its place. *)
+let register_imported_types ~exposed types (exports : module_exports) =
+  let add table name info = if not (Hashtbl.mem table name) then Hashtbl.replace table name info in
+  List.iter (fun name ->
+    let base = match String.index_opt name '(' with
+      | Some index -> String.sub name 0 index
+      | None -> name
+    in
+    List.iter (fun name ->
+      (match Hashtbl.find_opt exports.ex_types.newtypes name with
+       | Some info -> add types.newtypes name info
+       | None -> ());
+      (match Hashtbl.find_opt exports.ex_types.records name with
+       | Some info ->
+         add types.records name info;
+         (* An exposed ENTITY brings its table along with its row type: a query here reads
+            the other package's store, so the two must name the same table. *)
+         (match Hashtbl.find_opt exports.ex_types.entities name with
+          | Some entity -> add types.entities name entity
+          | None -> ())
+       | None -> ());
+      (match Hashtbl.find_opt exports.ex_types.adts name with
+       | Some info -> add types.adts name info
+       | None -> ());
+      (* And where the type's codec is emitted, if it has one: a reference from here has to
+         name that package. *)
+      (match Hashtbl.find_opt exports.ex_types.codecs name with
+       | Some owner -> add types.codecs name owner
+       | None -> ())) (if base = name then [name] else [name; base]))
+    exposed
+
 let register_imported_module ~loc ~exposed types signatures (exports : module_exports) =
   List.iter (fun name ->
     let copy_type () =
@@ -7229,6 +7961,11 @@ let register_imported_module ~loc ~exposed types signatures (exports : module_ex
       | None, None, Some info -> Hashtbl.replace types.adts name info; true
       | None, None, None -> false
     in
+    let copy_codec name =
+      match Hashtbl.find_opt exports.ex_types.codecs name with
+      | Some owner -> Hashtbl.replace types.codecs name owner
+      | None -> ()
+    in
     (* An ADT exposed as `Colour(..)` brings its constructors; the bare name is also
        accepted, since the constructors live in the signature table either way. *)
     let base = match String.index_opt name '(' with
@@ -7239,6 +7976,8 @@ let register_imported_module ~loc ~exposed types signatures (exports : module_ex
       (match Hashtbl.find_opt exports.ex_types.adts base with
        | Some info -> Hashtbl.replace types.adts base info; true
        | None -> false)) in
+    copy_codec name;
+    if base <> name then copy_codec base;
     let found_value = match Hashtbl.find_opt exports.ex_signatures name with
       | Some signature -> Hashtbl.replace signatures name signature; true
       | None -> false
@@ -7326,6 +8065,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | "httpCalled" | "httpCallCount" | "httpLastBody" -> ()
           (* The session cookie a response set, for a round-trip test. *)
           | "responseCookie" -> ()
+          (* The SSE surface: `subscribe` opens a stream against the emitted server and
+             `collect` waits on it.  Both are statement shapes the emitter renders directly. *)
+          | "subscribe" | "collect" -> ()
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.ApiTest` export `%s` yet" other) exposed
       | "Tesl.Http" ->
@@ -7415,6 +8157,28 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | "PostgresConnection" | "TcpConnection" | "SocketConnection" -> ()
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.Database` export `%s` yet" other) exposed
+      (* `Tesl.Email` exposes the DECLARATION vocabulary (`Email`, `SmtpConfig`), the
+         `EmailBody` ADT its `body:` field takes, and `emailCap` — a capability the checker
+         enforces, so it has no emitted form.  The two OPERATIONS (`Email.send`,
+         `startEmailWorker`) are surface syntax over a declared email rather than imported
+         names, which is why neither appears here. *)
+      (* `Tesl.SSE` exposes the DECLARATION form (`= SseChannel { … }`).  Publishing and
+         subscribing are surface syntax over a declared channel rather than imported names,
+         which is why neither appears here; `pubsub` is a capability, and capabilities are
+         compile-time. *)
+      | "Tesl.SSE" ->
+        List.iter (fun name ->
+          match name with
+          | "SseChannel" | "pubsub" -> ()
+          | other -> unsupported import.loc
+            "Go backend does not support `Tesl.SSE` export `%s` yet" other) exposed
+      | "Tesl.Email" ->
+        List.iter (fun name ->
+          match name with
+          | "Email" | "SmtpConfig" | "emailCap"
+          | "EmailBody" | "EmailBody(..)" | "TextBody" | "HtmlBody" | "RichBody" -> ()
+          | other -> unsupported import.loc
+            "Go backend does not support `Tesl.Email` export `%s` yet" other) exposed
       | "Tesl.String" | "Tesl.List" | "Tesl.Int" | "Tesl.Tuple" | "Tesl.Dict"
       | "Tesl.Set" | "Tesl.Float" | "Tesl.Either" | "Tesl.EitherPrim"
       | "Tesl.Time" | "Tesl.Env" | "Tesl.Random" | "Tesl.Id" | "Tesl.Result"
@@ -7471,9 +8235,16 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       entities = Hashtbl.create 8;
       queues = Hashtbl.create 8;
       caches = Hashtbl.create 4;
+      emails = Hashtbl.create 4;
+      channels = Hashtbl.create 4;
+      codecs = Hashtbl.create 8;
       consts = Hashtbl.create 8;
       databases = Hashtbl.create 4;
     } in
+    (* A hand-written codec is emitted by THIS package, once; a use from another package is
+       qualified with it (see `codec_decode_ref`). *)
+    List.iter (fun (codec : codec_form) ->
+      Hashtbl.replace types.codecs codec.type_name package) codecs;
     (* Which functions perform a proof operation, for the one assertion that depends on it
        (see the `expectFail` emission).  Computed here, where the bodies are in hand. *)
     Hashtbl.reset proof_op_functions;
@@ -7556,6 +8327,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         rec_owner = package;
         rec_go_name = package_ident r.name;
         rec_fields = [];
+        rec_proof_fields =
+          List.exists (fun (field : field_def) -> field.proof_ann <> None) r.fields;
         rec_loc = r.loc;
       }) record_forms;
     (* A `queue` declaration: one store variable plus the job-type → worker wiring.  The
@@ -7595,23 +8368,6 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
          (* Also by job type, since `enqueue` names the JOB and not the queue. *)
          Hashtbl.replace types.queues job_type info;
          ignore lowered)) queue_forms;
-    (* A `cache` declaration is one package-level store, typed by `valueType:`. *)
-    List.iter (fun (c : cache_form) ->
-      let c = Desugar.desugar_cache_config c in
-      let value =
-        try type_of_type_expr types c.value_type
-        with Unsupported _ ->
-          unsupported c.loc "Go backend cannot resolve the value type of cache `%s`" c.name
-      in
-      Hashtbl.replace types.caches c.name {
-        ca_tesl_name = c.name;
-        ca_go_var = package_ident (c.name ^ "Store");
-        ca_owner = package;
-        ca_value = value;
-        ca_default_ttl = Option.value c.default_ttl ~default:0;
-        ca_loc = c.loc;
-      })
-      (List.filter_map (function DCache c -> Some c | _ -> None) m.decls);
     (* An entity's ROW type is registered exactly like a record — a query result and an
        `insert` argument are ordinary struct values — and its store is one package-level
        table variable. *)
@@ -7643,6 +8399,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         rec_owner = package;
         rec_go_name = package_ident e.name;
         rec_fields = [];
+        rec_proof_fields =
+          List.exists (fun (field : field_def) -> field.proof_ann <> None) e.fields;
         rec_loc = e.loc;
       } in
       Hashtbl.replace types.records e.name row;
@@ -8159,6 +8917,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         rec_tesl_name = "HttpResponse";
         rec_owner = "";
         rec_go_name = "teslrt.HttpResponse";
+        rec_proof_fields = false;
         rec_fields = [ "status", TInt; "body", TString; "headers", TList header_pair ];
         rec_loc = loc;
       }
@@ -8170,6 +8929,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         rec_tesl_name = "DeadJob";
         rec_owner = "";
         rec_go_name = "teslrt.DeadJob";
+        rec_proof_fields = false;
         rec_fields = [];
         rec_loc = Location.dummy_loc m.source_file;
       };
@@ -8188,7 +8948,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             rec_tesl_name = "HttpResponse";
             rec_owner = "";
             rec_go_name = "teslrt.ApiResponse";
-            rec_fields = [
+            rec_proof_fields = false;
+        rec_fields = [
               (* `body` is a PARSED JSON value, matching Racket: `api-test-field-access-ref`
                  normalises the response and hands back the parsed body, which is why
                  `resp.body.userId` reads like the JSON it checks. *)
@@ -8216,7 +8977,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             rec_tesl_name = "HttpRequest";
             rec_owner = "";
             rec_go_name = "teslrt.HttpRequest";
-            rec_fields = [
+            rec_proof_fields = false;
+        rec_fields = [
               "method", TString; "path", TString;
               "cookies", string_dict; "headers", string_dict;
               "queryParameters", string_dict; "body", TString;
@@ -8315,6 +9077,34 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         adt_builtin = true;
       }
     end;
+    (* `EmailBody` is runtime-provided for the reason `Maybe` is: a `fn … -> EmailBody`
+       crosses module boundaries, and two packages declaring their own would be different Go
+       types.  Three variants, and no fourth for "no body" — which is the point of the ADT:
+       a body-less email is unconstructible. *)
+    List.iter (fun (import : import_decl) ->
+      if import.module_name = "Tesl.Email" then begin
+        let loc = import.loc in
+        Hashtbl.replace types.adts "EmailBody" {
+          adt_tesl_name = "EmailBody";
+          adt_owner = "";
+          adt_go_name = "teslrt.EmailBody";
+          adt_tag_type = "teslrt.EmailBodyTag";
+          adt_params = [];
+          adt_variants = [
+            { var_ctor = "TextBody"; var_tag = "teslrt.EmailBodyText";
+              var_fields = ["content", TString];
+              var_go_fields = ["content", "Text"]; var_loc = loc };
+            { var_ctor = "HtmlBody"; var_tag = "teslrt.EmailBodyHTML";
+              var_fields = ["content", TString];
+              var_go_fields = ["content", "HTML"]; var_loc = loc };
+            { var_ctor = "RichBody"; var_tag = "teslrt.EmailBodyRich";
+              var_fields = ["text", TString; "html", TString];
+              var_go_fields = ["text", "Text"; "html", "HTML"]; var_loc = loc };
+          ];
+          adt_loc = loc;
+          adt_builtin = true;
+        }
+      end) m.imports;
     if !either_imported then begin
       let loc = Location.dummy_loc m.source_file in
       Hashtbl.replace types.adts "Either" {
@@ -8391,6 +9181,23 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         adt_loc = loc;
         adt_builtin = false;
       }) adt_forms;
+    (* An imported TYPE is registered here, before any field type is resolved: a record
+       field may name one (`role: OrgRole`), and the full import registration — which also
+       brings the values across — runs later, once the signature table exists. *)
+    List.iter (fun (import : import_decl) ->
+      match List.find_opt (fun (dependency : module_exports) ->
+              dependency.ex_module = import.module_name) dependencies with
+      | None -> ()
+      | Some dependency ->
+        let exposed = match import.names with
+          | ImportAll ->
+            List.of_seq (Hashtbl.to_seq_keys dependency.ex_types.records)
+            @ List.of_seq (Hashtbl.to_seq_keys dependency.ex_types.newtypes)
+            @ List.of_seq (Hashtbl.to_seq_keys dependency.ex_types.adts)
+          | ImportExposing names -> names
+        in
+        register_imported_types ~exposed types dependency)
+      m.imports;
     (* Field types resolve only after every named type is registered, so records and
        ADTs may reference each other; a cycle would be an infinitely sized Go value
        and is rejected below. *)
@@ -8402,6 +9209,65 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       let info = Hashtbl.find types.records e.name in
       info.rec_fields <- List.map (fun (field : field_def) ->
         field.name, type_of_type_expr types field.type_expr) e.fields) entity_forms;
+    (* Registered HERE rather than with the other declarations: a cache's `valueType:` may
+       name an ENTITY (`valueType: User`), whose row type exists only once the entity fields
+       above are resolved. *)
+    (* A `cache` declaration is one package-level store, typed by `valueType:`. *)
+    List.iter (fun (c : cache_form) ->
+      let c = Desugar.desugar_cache_config c in
+      let value =
+        try type_of_type_expr types c.value_type
+        with Unsupported _ ->
+          unsupported c.loc "Go backend cannot resolve the value type of cache `%s`" c.name
+      in
+      Hashtbl.replace types.caches c.name {
+        ca_tesl_name = c.name;
+        ca_go_var = package_ident (c.name ^ "Store");
+        ca_owner = package;
+        ca_value = value;
+        ca_default_ttl = Option.value c.default_ttl ~default:0;
+        ca_loc = c.loc;
+      })
+      (List.filter_map (function DCache c -> Some c | _ -> None) m.decls);
+    (* An `email` declaration is one package-level outbox, carrying the SMTP settings the
+       declaration fixed. *)
+    List.iter (fun (e : email_form) ->
+      let e = Desugar.desugar_email_config e in
+      Hashtbl.replace types.emails e.name {
+        em_tesl_name = e.name;
+        em_go_var = package_ident (e.name ^ "Outbox");
+        em_owner = package;
+        em_host = go_config_value e.loc e.smtp.host;
+        em_port = e.smtp.port;
+        em_username = go_config_value e.loc e.smtp.username;
+        em_password = go_config_value e.loc e.smtp.password;
+        em_tls = e.smtp.tls;
+        em_loc = e.loc;
+      })
+      (List.filter_map (function DEmail e -> Some e | _ -> None) m.decls);
+    (* An `sseChannel` declaration is one package-level channel, typed by `payload:`. *)
+    List.iter (fun (c : channel_form) ->
+      let c = Desugar.desugar_channel_config c in
+      let payload =
+        try type_of_type_expr types c.payload
+        with Unsupported _ ->
+          unsupported c.loc "Go backend cannot resolve the payload type of channel `%s`" c.name
+      in
+      if List.length c.key_params > 1 then unsupported c.loc
+        "Go backend supports a channel with at most one key parameter (`%s`)" c.name;
+      List.iter (fun (binding : binding) ->
+        if type_of_type_expr types binding.type_expr <> TString then unsupported c.loc
+          "Go backend channel key `%s.%s` must be a String" c.name binding.name)
+        c.key_params;
+      Hashtbl.replace types.channels c.name {
+        ch_tesl_name = c.name;
+        ch_go_var = package_ident (c.name ^ "Channel");
+        ch_owner = package;
+        ch_payload = payload;
+        ch_key_params = List.length c.key_params;
+        ch_loc = c.loc;
+      })
+      (List.filter_map (function DChannel c -> Some c | _ -> None) m.decls);
     List.iter (fun (name, _, variants, _) ->
       let info = Hashtbl.find types.adts name in
       (* The ADT's own type parameters are in scope only here, while resolving the
@@ -8464,7 +9330,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         | TNewtype newtype -> contains_self newtype.base
         | TCheck inner -> contains_self inner
         | TList _ | TSet _ | TDict _ | TFunc _ -> false
-        | TInt | TFloat | TString | TBool | TUnit | TJson | TParam _ | TFailure -> false
+        | TInt | TFloat | TString | TBool | TUnit | TJson | TStream | TParam _
+        | TFailure -> false
       in
       (* A GENERIC type naming ITSELF at another instantiation gets its own message: it is
          not "reached through another type", it is the instantiation cycle Go rejects. *)
@@ -8546,7 +9413,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       | DConst _ -> ()
       (* Validated and registered above; the store variable is emitted with the tables. *)
       | DQueue _ -> ()
-      | DChannel c -> unsupported c.loc "Go backend does not support channels yet"
+      (* An `sseChannel` declaration emits its channel above, with the other package-level
+         state; the capability it needs (`pubsub`) is compile-time, like every other. *)
+      | DChannel _ -> ()
       (* A `workers` block wires job types to worker functions.  With the folded `jobs:`
          form the wiring is already on the queue, and the workers only RUN on App
          activation, which is its own slice — so the declaration itself adds nothing. *)
@@ -8555,7 +9424,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
          capability it mints (`cacheCap C`) is compile-time, like every other. *)
       | DCache _ -> ()
       | DAgent a -> unsupported a.loc "Go backend does not support agents yet"
-      | DEmail e -> unsupported e.loc "Go backend does not support email yet"
+      (* An `email` declaration emits its outbox above, with the other package-level state;
+         `emailCap` is compile-time, like every other capability. *)
+      | DEmail _ -> ()
       (* A `capturer` is metadata about how a path segment is parsed and checked; the
          check function it names is an ordinary `check` the emitter already handles. *)
       | DCapture _ -> ()
@@ -9089,7 +9960,11 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         (* `apitest_json.go` travels with `apitest.go`: the untyped JSON view exists to inspect
            a RESPONSE, so a module that serves no HTTP has no use for it. *)
         let http_only =
-          [ "serve.go"; "server.go"; "request.go"; "apitest.go"; "apitest_json.go" ] in
+          [ "serve.go"; "server.go"; "request.go"; "apitest.go"; "apitest_json.go";
+            (* The SSE ROUTE and the api-test subscription need the server and the JSON view;
+               the channel itself (sse.go) does not, so a module that only publishes ships
+               no HTTP runtime. *)
+            "sse_http.go" ] in
         (* `loadtest.go` imports `testing`, so it ships ONLY with a module that has load tests:
            the testing package has no place in a production binary. *)
         let load_test_only = [ "loadtest.go" ] in

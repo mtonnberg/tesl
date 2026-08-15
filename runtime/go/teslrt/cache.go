@@ -34,8 +34,8 @@ type cacheEntry[V any] struct {
 
 type Cache[V any] struct {
 	mutex sync.Mutex
-	// entries is nil until first use: a declared cache that is never written costs a struct
-	// and nothing more.
+	// entries is allocated with the cache and never becomes nil again — a nil map here would
+	// be a nil flow into every operation that reads or writes it.
 	entries map[string]cacheEntry[V]
 	// defaultTTL is `defaultTtl:` in seconds, or 0 when the declaration omits it.
 	defaultTTL int64
@@ -43,7 +43,7 @@ type Cache[V any] struct {
 
 // NewCache is what a `cache` declaration becomes: one package-level value per declaration.
 func NewCache[V any](defaultTTLSeconds int64) *Cache[V] {
-	return &Cache[V]{defaultTTL: defaultTTLSeconds}
+	return &Cache[V]{entries: map[string]cacheEntry[V]{}, defaultTTL: defaultTTLSeconds}
 }
 
 // CacheGet answers the live value, or Nothing on a miss OR an expired entry — and removes the
@@ -79,9 +79,6 @@ func CacheSetTTL[V any](cache *Cache[V], key string, value V, ttlSeconds Int) st
 func cacheStore[V any](cache *Cache[V], key string, value V, ttlSeconds int64) struct{} {
 	cache.mutex.Lock()
 	defer cache.mutex.Unlock()
-	if cache.entries == nil {
-		cache.entries = map[string]cacheEntry[V]{}
-	}
 	expiresAt := int64(0)
 	if ttlSeconds > 0 {
 		expiresAt = time.Now().Unix() + ttlSeconds
@@ -117,5 +114,5 @@ func CacheInvalidatePrefix[V any](cache *Cache[V], prefix string) struct{} {
 func CacheReset[V any](cache *Cache[V]) {
 	cache.mutex.Lock()
 	defer cache.mutex.Unlock()
-	cache.entries = nil
+	cache.entries = map[string]cacheEntry[V]{}
 }
