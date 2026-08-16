@@ -10882,8 +10882,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
          registered, against the compiler's own catalogs.  `Tesl.Agent` is validated the same
          way: its types and its leaves are registered together, so one list decides what the
          module offers rather than a second list here that could drift from it. *)
-      (* `Tesl.Regex` is validated where its leaves are registered, like the catalogs. *)
-      | "Tesl.Regex"
+      (* `Tesl.Regex`, `Tesl.Url` and `Tesl.Net` are validated where their types and leaves
+         are registered, like the catalogs. *)
+      | "Tesl.Regex" | "Tesl.Url" | "Tesl.Net"
       | "Tesl.Agent"
       | "Tesl.Money" | "Tesl.Units"
       | "Tesl.String" | "Tesl.List" | "Tesl.Int" | "Tesl.Tuple" | "Tesl.Dict"
@@ -11956,6 +11957,42 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
          operations. *)
       List.iter (fun (alias, _) -> Hashtbl.replace types.aliases alias TQuantity)
         Units_catalog.aliases;
+    (* ── `Tesl.Url` and `Tesl.Net` ───────────────────────────────────────────
+       `Url` is OPAQUE: `Url.parse` is the only way in, so a program cannot hand-build one
+       whose host never went through the canonicaliser — which is what makes a check on a
+       parsed URL a check on the URL a caller will then use.  `HostClass` is a real ADT: a
+       program `case`s over a classification exhaustively, and the compiler is what makes
+       "did you handle link-local?" a question with an answer. *)
+    let url_imported = ref false in
+    let net_imported = ref false in
+    List.iter (fun (import : import_decl) ->
+      if import.module_name = "Tesl.Url" then url_imported := true;
+      if import.module_name = "Tesl.Net" then net_imported := true) m.imports;
+    if !url_imported then
+      Hashtbl.replace types.records "Url"
+        (runtime_record "Url" "teslrt.Url" []);
+    if !net_imported then begin
+      let loc = Location.dummy_loc m.source_file in
+      Hashtbl.replace types.adts "HostClass" {
+        adt_tesl_name = "HostClass";
+        adt_owner = "";
+        adt_go_name = "teslrt.HostClass";
+        adt_tag_type = "teslrt.HostClassTag";
+        adt_params = [];
+        adt_variants = List.map (fun ctor ->
+          { var_ctor = ctor; var_tag = Printf.sprintf "teslrt.HostClass%s"
+              (match ctor with
+               (* The three Go names that are not the constructor spelled straight: the
+                  runtime calls them by their range, the surface by their address family. *)
+               | "PrivateIp" -> "Private" | "PublicIp" -> "Public"
+               | "InvalidHost" -> "Invalid" | other -> other);
+            var_fields = []; var_go_fields = []; var_loc = loc })
+          [ "Loopback"; "PrivateIp"; "LinkLocal"; "Cgnat"; "Multicast";
+            "Unspecified"; "PublicIp"; "DomainName"; "InvalidHost" ];
+        adt_loc = loc;
+        adt_builtin = true;
+      }
+    end;
     (* ── `Tesl.Agent` ────────────────────────────────────────────────────────
        The agent SPEC is written as a record literal — `Agent { provider: …, systemPrompt: …,
        maxTokens: …, tools: … }` — so it registers with its fields and reaches the ordinary
@@ -13169,6 +13206,62 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           Hashtbl.replace signatures name
             { params; result; go_name; sig_owner = ""; sig_needs_scope = false }) exposed
       end) m.imports;
+    (* ── `Tesl.Url` and `Tesl.Net`: the leaves ───────────────────────────────
+       Pure, both of them: a classification is arithmetic over an address and a parse is
+       arithmetic over text.  Neither RESOLVES a name — that is the HTTP client's job, and
+       keeping it out of here is what makes these callable from a `check`. *)
+    List.iter (fun (import : import_decl) ->
+      if import.module_name = "Tesl.Url" || import.module_name = "Tesl.Net" then begin
+        let loc = import.loc in
+        let exposed = match import.names with
+          | ImportAll -> [] | ImportExposing names -> names in
+        let maybe_of inner = match Hashtbl.find_opt types.adts "Maybe" with
+          | Some info -> TAdt (info, [inner])
+          | None -> unsupported loc
+            "Go backend `%s` answers a Maybe; import `Tesl.Maybe`" import.module_name
+        in
+        let url () = match Hashtbl.find_opt types.records "Url" with
+          | Some info -> TRecord info
+          | None -> unsupported loc "Go backend `Tesl.Url` needs its `Url` type"
+        in
+        let host_class () = match Hashtbl.find_opt types.adts "HostClass" with
+          | Some info -> TAdt (info, [])
+          | None -> unsupported loc "Go backend `Tesl.Net` needs its `HostClass` type"
+        in
+        List.iter (fun name ->
+          let params, result, go_name = match name with
+            (* These name the TYPES, which were registered above.  `HostClass(..)` is the
+               spelling that brings the constructors along, and the constructors are what a
+               `case` over a classification matches on. *)
+            | "Url" | "HostClass" | "HostClass(..)" -> [], TUnit, ""
+            | "Url.parse" -> [TString], maybe_of (url ()), "teslrt.UrlParse"
+            | "Url.scheme" -> [url ()], TString, "teslrt.UrlScheme"
+            | "Url.host" -> [url ()], TString, "teslrt.UrlHost"
+            | "Url.port" -> [url ()], maybe_of TInt, "teslrt.UrlPort"
+            | "Url.effectivePort" -> [url ()], maybe_of TInt, "teslrt.UrlEffectivePort"
+            | "Url.path" -> [url ()], TString, "teslrt.UrlPath"
+            | "Url.query" -> [url ()], maybe_of TString, "teslrt.UrlQuery"
+            | "Url.fragment" -> [url ()], maybe_of TString, "teslrt.UrlFragment"
+            | "Url.userInfo" -> [url ()], maybe_of TString, "teslrt.UrlUserInfo"
+            | "Url.toString" -> [url ()], TString, "teslrt.UrlToString"
+            | "Net.classifyHost" -> [TString], host_class (), "teslrt.ClassifyHost"
+            | "Net.normalizeHost" ->
+              [TString], maybe_of TString, "teslrt.NormalizeHostMaybe"
+            | "Net.isLoopback" -> [TString], TBool, "teslrt.NetIsLoopback"
+            | "Net.isPrivate" -> [TString], TBool, "teslrt.NetIsPrivate"
+            | "Net.isLinkLocal" -> [TString], TBool, "teslrt.NetIsLinkLocal"
+            | "Net.isCgnat" -> [TString], TBool, "teslrt.NetIsCgnat"
+            | "Net.isMulticast" -> [TString], TBool, "teslrt.NetIsMulticast"
+            | "Net.isIpLiteral" -> [TString], TBool, "teslrt.NetIsIPLiteral"
+            | "Net.isIpv4Mapped" -> [TString], TBool, "teslrt.NetIsIPv4Mapped"
+            | "Net.isForbiddenHost" -> [TString], TBool, "teslrt.NetIsForbiddenHost"
+            | other -> unsupported loc
+              "Go backend does not support `%s` export `%s` yet" import.module_name other
+          in
+          if go_name <> "" then
+            Hashtbl.replace signatures name
+              { params; result; go_name; sig_owner = ""; sig_needs_scope = false }) exposed
+      end) m.imports;
     (* ── `Tesl.Agent`: the inference and conversation leaves ─────────────────
        This match is the module's export list for this backend: a name that reaches its
        fallthrough is one the Go runtime does not offer yet, and the message says so with the
@@ -13488,6 +13581,12 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
            carry it. *)
         let regex_only = [ "regex.go" ] in
         let uses_regex = mentions "teslrt.Regex" in
+        (* `Tesl.Url` and `Tesl.Net` travel TOGETHER: a URL's host is canonicalised by the
+           classifier, so shipping the parser without it does not build.  They are gated only
+           because a program that parses no URLs has no use for either. *)
+        let url_net_only = [ "hostname.go"; "url.go" ] in
+        let uses_url_net = List.exists mentions
+          [ "teslrt.Url"; "teslrt.ClassifyHost"; "teslrt.NormalizeHost"; "teslrt.NetIs" ] in
         let timezone_only = [ "timezone.go" ] in
         let uses_timezone = mentions "teslrt.FormatTime" in
         let uses_agent = List.exists mentions
@@ -13504,6 +13603,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           else if (not uses_agent) && List.mem name agent_only then None
           else if (not uses_timezone) && List.mem name timezone_only then None
           else if (not uses_regex) && List.mem name regex_only then None
+          else if (not uses_url_net) && List.mem name url_net_only then None
           else if name = "password.go" && not password_runtime then None
           else Some { path = "internal/teslrt/" ^ name; contents })
           Embedded_go_runtime.files

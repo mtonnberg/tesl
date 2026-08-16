@@ -10493,6 +10493,254 @@ fn twice(n: Int) -> Int = n * 2
     check bool "no regex runtime in a module that matches nothing" false
       (List.exists (fun (a : Emit_go.artifact) -> a.path = "internal/teslrt/regex.go") artifacts)
 
+(* ── `Tesl.Url` and `Tesl.Net` ───────────────────────────────────────────────
+   The Go half is a rule-for-rule port of `dsl/private/url-parse.rkt` and
+   `dsl/private/host-classify.rkt`, NOT a wrapper over `net/url` and `net.ParseIP`, and the
+   difference is the whole point of the module: `net.ParseIP` accepts the strict dotted quad
+   and nothing else, while a resolver — and therefore curl, and therefore an attacker's URL —
+   also accepts `2130706433`, `0x7f.0.0.1` and `127.1`, all of which are 127.0.0.1.  A
+   classifier that does not know those spellings answers "public" for the loopback address.
+
+   Two shapes below are the ones a hand-rolled guard gets wrong, and both are here because
+   the Racket oracle beside this test agrees on them:
+     - the userinfo cut is at the LAST `@`, so `https://a@trusted.example.com@127.0.0.1/`
+       has host 127.0.0.1 rather than the trusted-looking name;
+     - an unbracketed IPv6 literal is REFUSED rather than guessed at, because it is
+       indistinguishable from a host with a bad port.
+
+   `HostClass` is a real ADT rather than a string: a `case` over a classification is
+   exhaustive, which is what makes "did you handle link-local?" a question the compiler
+   answers. *)
+let url_net_source = {|module GoUrlNet exposing [hostOf, allowed, describe, effectivePortOf]
+
+import Tesl.Prelude exposing [Bool(..), String, Int]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Url exposing [
+  Url,
+  Url.parse,
+  Url.scheme,
+  Url.host,
+  Url.port,
+  Url.effectivePort,
+  Url.path,
+  Url.query,
+  Url.fragment,
+  Url.userInfo,
+  Url.toString,
+]
+import Tesl.Net exposing [
+  HostClass(..),
+  Net.classifyHost,
+  Net.normalizeHost,
+  Net.isLoopback,
+  Net.isPrivate,
+  Net.isLinkLocal,
+  Net.isCgnat,
+  Net.isMulticast,
+  Net.isIpLiteral,
+  Net.isIpv4Mapped,
+  Net.isForbiddenHost,
+]
+
+# Fail-closed: an unparseable URL yields a host that matches no allowlist.
+fn hostOf(raw: String) -> String =
+  case Url.parse raw of
+    Nothing -> ""
+    Something u -> Url.host u
+
+fn allowed(raw: String) -> Bool =
+  case Url.parse raw of
+    Nothing -> False
+    Something u -> !(Net.isForbiddenHost (Url.host u))
+
+# Exhaustive over the classification: adding a class to the ADT would break this.
+fn describe(host: String) -> String =
+  case Net.classifyHost host of
+    Loopback -> "loopback"
+    PrivateIp -> "private"
+    LinkLocal -> "link-local"
+    Cgnat -> "cgnat"
+    Multicast -> "multicast"
+    Unspecified -> "unspecified"
+    PublicIp -> "public"
+    DomainName -> "domain"
+    InvalidHost -> "invalid"
+
+fn effectivePortOf(raw: String) -> Int =
+  case Url.parse raw of
+    Nothing -> 0
+    Something u ->
+      case Url.effectivePort u of
+        Nothing -> 0
+        Something p -> p
+
+test "the inet_aton spellings are all 127.0.0.1" {
+  expect describe "127.0.0.1" == "loopback"
+  expect describe "127.1" == "loopback"
+  expect describe "2130706433" == "loopback"
+  expect describe "0x7f.0.0.1" == "loopback"
+  expect describe "017700000001" == "loopback"
+  expect Net.normalizeHost "0x7f.0.0.1" == Something "127.0.0.1"
+  expect Net.normalizeHost "2130706433" == Something "127.0.0.1"
+}
+
+test "each private range is its own class" {
+  expect describe "10.0.0.1" == "private"
+  expect describe "172.16.0.1" == "private"
+  expect describe "172.32.0.1" == "public"
+  expect describe "169.254.169.254" == "link-local"
+  expect describe "100.64.0.1" == "cgnat"
+  expect describe "100.128.0.1" == "public"
+  expect describe "224.0.0.1" == "multicast"
+  expect describe "0.0.0.0" == "unspecified"
+  expect describe "8.8.8.8" == "public"
+}
+
+test "localhost is loopback by RFC 6761, and a name that merely contains it is not" {
+  expect describe "localhost" == "loopback"
+  expect describe "LOCALHOST" == "loopback"
+  expect describe "foo.localhost" == "loopback"
+  expect describe "notlocalhost" == "domain"
+  expect Net.isLoopback "foo.localhost"
+  expect Net.isIpLiteral "localhost" == False
+}
+
+# An IPv6 literal needs its brackets: unbracketed, it is indistinguishable from a
+# host with a bad port, so it is refused rather than guessed at.
+test "IPv6 is classified in brackets and refused without them" {
+  expect describe "[::1]" == "loopback"
+  expect describe "::1" == "invalid"
+  expect describe "[fe80::1]" == "link-local"
+  expect describe "[::ffff:169.254.169.254]" == "link-local"
+  expect describe "[2001:db8::1]" == "public"
+  expect Net.isIpv4Mapped "[::ffff:169.254.169.254]"
+  expect Net.isIpv4Mapped "[2001:db8::1]" == False
+}
+
+test "the classification predicates agree with the classification" {
+  expect Net.isPrivate "10.0.0.1"
+  expect Net.isLinkLocal "169.254.169.254"
+  expect Net.isCgnat "100.64.0.1"
+  expect Net.isMulticast "224.0.0.1"
+  expect Net.isForbiddenHost "2130706433"
+  expect Net.isForbiddenHost "example.com" == False
+}
+
+# The bypass: taking the FIRST `@` puts a trusted-looking name in the host slot.
+test "userinfo is cut at the last @" {
+  expect hostOf "https://a@trusted.example.com@127.0.0.1/" == "127.0.0.1"
+  expect allowed "https://a@trusted.example.com@127.0.0.1/" == False
+  expect hostOf "https://user:pass@example.com/" == "example.com"
+}
+
+test "the parts of a URL are the parts a check examines" {
+  expect hostOf "HTTPS://Example.COM:8443/a/b?x=1#frag" == "example.com"
+  expect effectivePortOf "https://example.com/" == 443
+  expect effectivePortOf "http://example.com/" == 80
+  expect effectivePortOf "ws://example.com/" == 80
+  expect effectivePortOf "gopher://example.com/" == 0
+  expect hostOf "http://example.com" == "example.com"
+  expect hostOf "http://example.com:65536/" == ""
+  expect hostOf "http://example.com:0/" == ""
+  expect hostOf "http://example.com:abc/" == ""
+}
+
+# A backslash is a path separator to some clients and an ordinary character to
+# others, so it is refused anywhere rather than read either way.
+test "a URL that is not authority-based, or holds a backslash, does not parse" {
+  expect hostOf "example.com" == ""
+  expect hostOf "//example.com/" == ""
+  expect hostOf "http:/example.com/" == ""
+  expect hostOf "http://exam ple.com/" == ""
+  expect hostOf "http://example.com\\@evil.com/" == ""
+  expect hostOf "http://" == ""
+}
+
+test "toString rebuilds from the canonical parts, not from the input text" {
+  case Url.parse "HTTPS://Example.COM:8443/a/b?x=1#frag" of
+    Nothing -> expect False
+    Something u -> {
+      expect Url.scheme u == "https"
+      expect Url.path u == "/a/b"
+      expect Url.query u == Something "x=1"
+      expect Url.fragment u == Something "frag"
+      expect Url.userInfo u == Nothing
+      expect Url.port u == Something 8443
+      expect Url.toString u == "https://example.com:8443/a/b?x=1#frag"
+    }
+}
+
+# `?` with nothing after it is not the same URL as no `?` at all, which is why
+# these answer a Maybe rather than a String.
+test "a written-but-empty query is not an absent query" {
+  case Url.parse "http://example.com?" of
+    Nothing -> expect False
+    Something u -> {
+      expect Url.query u == Something ""
+      expect Url.path u == "/"
+    }
+  case Url.parse "http://example.com" of
+    Nothing -> expect False
+    Something u -> expect Url.query u == Nothing
+}
+|}
+
+let test_url_net_with_go () =
+  let emitted = match Compile.compile_go_source "<go-url-net>" url_net_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "Url/Net compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgourlnet/module.go" emitted in
+  check bool "parse answers a Maybe of the opaque value" true
+    (contains module_go "teslrt.UrlParse(raw)");
+  check bool "the accessors are the runtime's" true
+    (contains module_go "teslrt.UrlHost(u)");
+  (* A classification is a tag switch, which is what makes the `case` exhaustive. *)
+  check bool "HostClass switches on the runtime tag" true
+    (contains module_go "teslrt.HostClassLinkLocal");
+  check bool "the classifier is the runtime's" true
+    (contains module_go "teslrt.ClassifyHost(host)");
+  let hostname_go = artifact "internal/teslrt/hostname.go" emitted in
+  (* The reason this file exists rather than a `net.ParseIP` call. *)
+  check bool "the inet_aton spellings are parsed here" true
+    (contains hostname_go "parseIPv4Any");
+  let url_go = artifact "internal/teslrt/url.go" emitted in
+  check bool "the userinfo cut is at the last @" true
+    (contains url_go "LastIndexByte(authority, '@')");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-url-net" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+  end
+
+(* A program that parses no URLs must not carry either file — and they travel together,
+   because a URL's host is canonicalised by the classifier. *)
+let test_url_net_runtime_ships_only_where_used () =
+  let plain = {|module GoNoUrl exposing [twice]
+import Tesl.Prelude exposing [Int]
+
+fn twice(n: Int) -> Int = n * 2
+|} in
+  match Compile.compile_go_source "<go-no-url>" plain with
+  | Compile.GoFailure diagnostics ->
+    failf "plain module failed: %s"
+      (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  | Compile.GoSuccess artifacts ->
+    List.iter (fun path ->
+      check bool ("no " ^ path ^ " in a module that parses no URLs") false
+        (List.exists (fun (a : Emit_go.artifact) -> a.path = path) artifacts))
+      [ "internal/teslrt/url.go"; "internal/teslrt/hostname.go" ]
+
 let () =
   run "emit_go" [
     "emission", [
@@ -10696,6 +10944,11 @@ let () =
         (racket_behavior_oracle "<go-regex>" regex_source);
       test_case "the regex runtime ships only where used" `Quick
         test_regex_runtime_ships_only_where_used;
+      test_case "Tesl.Url and Tesl.Net" `Slow test_url_net_with_go;
+      test_case "Tesl.Url and Tesl.Net behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-url-net>" url_net_source);
+      test_case "the url/net runtime ships only where used" `Quick
+        test_url_net_runtime_ships_only_where_used;
       test_case "property generators over proof-carrying records" `Slow
         test_property_generators_with_go;
       test_case "proof-aware generators behave the same on Racket" `Slow
