@@ -468,6 +468,18 @@ type entity_info = {
      "declared in a Memory database" and "declared in none": either way the rows live in the
      table variable and nothing else, which is the emission that has always been produced. *)
   ent_database : database_info option;
+  (* Whether some `database` block NAMES this entity.  It decides ONE thing: whether a test
+     block starts from an empty table.  Racket clears the stores of REGISTERED databases —
+     an entity in no `database` declaration is in none of them — so a file without a
+     declaration shares one store across its test blocks, which is documented behaviour a
+     corpus lesson relies on (`unique index [name]` refusing a second row inserted by a later
+     block).  The Go side truncated every table unconditionally, so the same program's tests
+     passed here and failed there; this flag is what makes the two agree.
+
+     Mutable because a `database` block may name an entity DECLARED in another module, and
+     the entity records are shared by reference across packages — the flag then travels with
+     the entity rather than having to be recovered from the declaration. *)
+  mutable ent_in_database : bool;
   ent_loc : Location.loc;
 }
 
@@ -871,6 +883,19 @@ type module_exports = {
   ex_signatures : (string, signature) Hashtbl.t;
 }
 
+(* Whether a compiled dependency is the module an import names.
+
+   A LIFTED stdlib module is the one case where the two spellings differ: it is imported by
+   its full dotted name (`import Tesl.CivilTime`) and DECLARES itself by the trailing segment
+   (`module CivilTime`), which is also how every call site spells it
+   (`CivilTime.fromParts`).  So they match on that segment — and only under the `Tesl.`
+   prefix, so no local module can be picked up by a partial name. *)
+let dependency_named (dependency : module_exports) import_name =
+  dependency.ex_module = import_name
+  || (String.length import_name > 5 && String.sub import_name 0 5 = "Tesl."
+      && dependency.ex_module = String.sub import_name 5 (String.length import_name - 5)
+      && not (String.contains dependency.ex_module '.'))
+
 let rec flatten_type_app args = function
   | TApp { head; arg; _ } -> flatten_type_app (arg :: args) head
   | head -> head, args
@@ -1087,6 +1112,28 @@ let rec type_equal left right =
   | _ -> false
 
 let type_unequal left right = not (type_equal left right)
+
+(* How to compare an OPAQUE runtime record — one this backend sees no fields of.  Walking
+   its zero visible fields would answer `true` for ANY two of them, which is not "equal" but
+   "nothing was compared", so a record that is not on this list is REFUSED rather than
+   answered.  (That refusal found a real one: `zone a == zone b` inside `Tesl.CivilTime` was
+   a tautology, and two dates read in different calendars passed for the same one.)
+
+   `Value` means Go's own `==` says what "the same" means.  A `Func` names a runtime
+   comparison, which is what a record holding a `teslrt.Int` needs: an Int holds a `*big.Int`
+   and is deliberately not comparable — it carries a `[0]func()` so Go says so. *)
+type runtime_equality = EqualByValue | EqualByFunc of string
+
+let runtime_record_equality go_name =
+  match go_name with
+  (* A name, an offset and a flag: two of them are the same zone exactly when those agree. *)
+  | "teslrt.TimeZone" -> Some EqualByValue
+  (* A URL's port is an Int, so its parts are compared by the runtime. *)
+  | "teslrt.Url" -> Some (EqualByFunc "teslrt.UrlEqual")
+  | _ -> None
+
+let comparable_runtime_record go_name = runtime_record_equality go_name <> None
+
 
 (* Whether a type still has an ANONYMOUS argument in it — one no value has settled. *)
 let rec has_anon ty =
@@ -1399,7 +1446,16 @@ and equal_expr ty left right =
       (Printf.sprintf "%s.Value" (selector_operand right))
   | TRecord info ->
     (match info.rec_fields with
-     | [] -> "true"
+     (* An OPAQUE record is compared as a Go VALUE.  Walking its zero visible fields would
+        answer `true` for any two of them — which is how `zone a == zone b` became a
+        tautology and let two dates in different calendars pass for the same one. *)
+     | [] when runtime_record_equality info.rec_go_name = Some EqualByValue ->
+       Printf.sprintf "(%s == %s)" left right
+     | [] when comparable_runtime_record info.rec_go_name ->
+       (match runtime_record_equality info.rec_go_name with
+        | Some (EqualByFunc go) -> Printf.sprintf "%s(%s, %s)" go left right
+        | _ -> invalid_arg "Go opaque-record equality validated before emission")
+     | [] -> invalid_arg "Go equality on an opaque record is rejected before emission"
      | fields ->
        let parts = List.map (fun (name, field_ty) ->
          let field = record_field_go_name name in
@@ -1473,7 +1529,13 @@ and unequal_expr ty left right =
     (* De Morgan is applied here rather than negating the conjunction: emitted
        `!(a && b)` is a golangci-lint finding (staticcheck QF1001). *)
     (match info.rec_fields with
-     | [] -> "false"
+     | [] when runtime_record_equality info.rec_go_name = Some EqualByValue ->
+       Printf.sprintf "(%s != %s)" left right
+     | [] when comparable_runtime_record info.rec_go_name ->
+       (match runtime_record_equality info.rec_go_name with
+        | Some (EqualByFunc go) -> Printf.sprintf "!%s(%s, %s)" go left right
+        | _ -> invalid_arg "Go opaque-record equality validated before emission")
+     | [] -> invalid_arg "Go equality on an opaque record is rejected before emission"
      | fields ->
        let parts = List.map (fun (name, field_ty) ->
          let field = record_field_go_name name in
@@ -1575,6 +1637,9 @@ let rec supports_equality_seen seen ty =
   match ty with
   | TInt | TFloat | TQuantity | TString | TBool | TUnit | TAnon -> true
   | TNewtype info -> supports_equality info.base
+  (* NO fields here means OPAQUE, not empty: comparing zero fields would answer `true`,
+     which is not "equal" but "nothing was compared". *)
+  | TRecord { rec_fields = []; rec_go_name; _ } -> comparable_runtime_record rec_go_name
   | TRecord info -> List.for_all (fun (_, ty) -> supports_equality ty) info.rec_fields
   | TAdt (info, _) when List.mem info.adt_go_name seen -> true
   | TAdt (info, args) ->
@@ -1601,7 +1666,11 @@ let supports_equality ty = supports_equality_seen [] ty
 
 let record_info_of_signature signatures name =
   match Hashtbl.find_opt signatures name with
-  | Some { result = TRecord info; _ } -> Some info
+  (* A record LITERAL is written with the TYPE's own name.  A capitalised function that
+     merely ANSWERS a record — `FixedOffset 60` answers a `TimeZone` — parses as a
+     constructor too, and reading it as a literal would demand `FixedOffset { … }` of a
+     program that is already right. *)
+  | Some { result = TRecord info; _ } when info.rec_tesl_name = name -> Some info
   | _ -> None
 
 (* ─── SQL ──────────────────────────────────────────────────────────────────────
@@ -1613,6 +1682,7 @@ type sql_form =
   | SqlSelect of Sql_query.sql_select_seed * Sql_query.sql_clause list
   | SqlInsert of Sql_query.sql_insert
   | SqlInsertMany of string * string            (* list binding, entity *)
+  | SqlUpsert of Sql_query.sql_upsert
   | SqlUpdate of Sql_query.sql_update
   | SqlDelete of Sql_query.sql_delete_seed * Sql_query.sql_clause list
 
@@ -1632,6 +1702,8 @@ let recognise_sql expr =
         (Sql_query.parse_insert_expr expr));
       (fun () -> Option.map (fun (list_var, entity) -> SqlInsertMany (list_var, entity))
         (Sql_query.parse_insert_many_expr expr));
+      (fun () -> Option.map (fun upsert -> SqlUpsert upsert)
+        (Sql_query.parse_upsert_expr expr));
       (fun () -> Option.map (fun (seed, clauses) -> SqlDelete (seed, clauses))
         (Sql_query.extract_delete_query expr));
     ]
@@ -2295,13 +2367,33 @@ let type_of_sql_form signatures loc form =
         over no matching row they have no value of that type, and SUM does (zero). *)
      | SelectSum field -> entity_column loc info field
      | SelectMax field | SelectMin field -> maybe_of (entity_column loc info field)
-     | SelectCountBy -> unsupported loc "Go backend does not support `selectCountBy` yet"
-     | SelectSumBy _ -> unsupported loc "Go backend does not support `selectSumBy` yet")
+     (* A GROUPED aggregate answers one (bucket, value) pair per group.  The bucket's type is
+        the key's: a plain column groups by that column, and a `Time.trunc*` bucket by the
+        instant the bucket starts at, which is the same `PosixMillis` the column holds. *)
+     | SelectCountBy | SelectSumBy _ ->
+       let key = match seed.group_by with
+         | [GField field] | [GTimeTrunc (_, _, field)] -> entity_column loc info field
+         | [] -> unsupported loc "Go backend requires `groupBy` on a grouped aggregate"
+         | _ -> unsupported loc
+           "Go backend does not support `groupBy` on more than one key yet"
+       in
+       let value = match seed.kind with
+         | SelectSumBy field -> entity_column loc info field
+         | _ -> TInt
+       in
+       (match Hashtbl.find_opt signatures "Tuple2" with
+        | Some { result = TAdt (tuple, _); _ } -> TList (TAdt (tuple, [key; value]))
+        | _ -> unsupported loc
+          "Go backend needs `Tesl.Tuple` imported for a grouped aggregate"))
   | SqlInsert insert -> TRecord (entity_of_query loc insert.entity).ent_row
   (* `insertMany` is typed as the entity by the checker but RETURNS nothing on Racket
      (`insert-many!` ends in `(void)`), so the only sound reading of its result here is
      `Unit`: a program that bound and used it would be broken on the other backend. *)
   | SqlInsertMany (_, entity) -> ignore (entity_of_query loc entity); TUnit
+  (* An `upsert` is typed UNIT, which is what the checker types it as: the Racket form
+     answers the stored row, but a program that bound and used it would not type-check, so
+     the only reading both backends agree on is that it answers nothing. *)
+  | SqlUpsert upsert -> ignore (entity_of_query loc upsert.entity); TUnit
   | SqlUpdate update ->
     if update.returning_one then TRecord (entity_of_query loc update.entity).ent_row
     else TUnit
@@ -2519,6 +2611,17 @@ let rec type_of_expr signatures env expr =
         | [arg] when type_of_expr signatures env arg = base -> result
         | [_] -> unsupported loc "Go backend newtype constructor `%s` argument type mismatch" name
         | _ -> unsupported loc "Go backend requires a fully-applied newtype constructor `%s`" name)
+     (* A capitalised name whose signature ANSWERS a record it does not NAME: `FixedOffset 60`
+        answers a `TimeZone`.  The surface spells a zone constructor that way, so it parses as
+        a constructor, but it is an ordinary call. *)
+     | Some ({ result = TRecord record; _ } as signature)
+       when record.rec_tesl_name <> name
+            && List.length signature.params = List.length args ->
+       List.iter2 (fun arg want ->
+         if type_unequal (type_of_arg signatures env want arg) want then
+           unsupported loc "Go backend constructor `%s` argument type mismatch" name)
+         args signature.params;
+       signature.result
      (* A proof term: `ValidPort port` applies a FACT, which erases to the zero-size proof.
         Its arguments are proof subjects, so nothing is evaluated. *)
      | Some { params = []; result = TUnit; go_name = "struct{}{}"; _ } -> TUnit
@@ -2650,6 +2753,14 @@ let rec type_of_expr signatures env expr =
               unsupported loc "Go backend newtype constructor `%s` argument type mismatch" name
             | _ ->
               unsupported loc "Go backend requires a fully-applied newtype constructor `%s`" name)
+         | Some ({ result = TRecord record; _ } as signature)
+           when record.rec_tesl_name <> name
+                && List.length signature.params = List.length (constructor_args @ args) ->
+           List.iter2 (fun arg want ->
+             if type_unequal (type_of_arg signatures env want arg) want then
+               unsupported loc "Go backend constructor `%s` argument type mismatch" name)
+             (constructor_args @ args) signature.params;
+           signature.result
          (* An APPLIED fact — the proof term `ValidPort port` — erases to the zero proof. *)
          | Some { params = []; result = TUnit; go_name = "struct{}{}"; _ } -> TUnit
          | _ -> unsupported loc "Go backend does not support constructor `%s` yet" name)
@@ -4657,6 +4768,14 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
           in
           Printf.sprintf "%s{Value: %s}" (go_type result) payload
         | _ -> unsupported loc "Go backend requires a fully-applied newtype constructor `%s`" name)
+     (* The capitalised call: an ordinary call, emitted as one. *)
+     | Some ({ result = TRecord record; go_name; _ } as signature)
+       when record.rec_tesl_name <> name
+            && List.length signature.params = List.length args ->
+       ignore (type_of_expr signatures env expr);
+       Printf.sprintf "%s(%s)" go_name
+         (String.concat ", " (List.map2 (fun arg want ->
+            emit_expr ~expected:want ~indent signatures env arg) args signature.params))
      (* A proof term erases: `ValidPort port` is the zero-size proof value. *)
      | Some { params = []; result = TUnit; go_name = "struct{}{}"; _ } -> "struct{}{}"
      | _ -> unsupported loc "Go backend cannot emit constructor `%s`" name)
@@ -4822,6 +4941,15 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
               in
               Printf.sprintf "%s{Value: %s}" (go_type result) payload
             | _ -> assert false)
+         | Some ({ result = TRecord record; go_name; _ } as signature)
+           when record.rec_tesl_name <> name
+                && List.length signature.params
+                   = List.length (constructor_args @ args) ->
+           ignore (type_of_expr signatures env app);
+           Printf.sprintf "%s(%s)" go_name
+             (String.concat ", " (List.map2 (fun arg want ->
+                emit_expr ~expected:want ~indent signatures env arg)
+                (constructor_args @ args) signature.params))
          (* A proof term erases: `ValidPort port` is the zero-size proof value. *)
          | Some { params = []; result = TUnit; go_name = "struct{}{}"; _ } -> "struct{}{}"
          | _ -> unsupported loc "Go backend cannot emit constructor `%s`" name)
@@ -7766,8 +7894,12 @@ and emit_sql_form ?(indent="") signatures env loc form =
     let info = entity_of_query loc seed.entity in
     let all_clauses = seed.static_clauses @ clauses in
     sql_check_where_field loc seed.where_field all_clauses;
-    if seed.group_by <> [] then unsupported loc
-      "Go backend does not support `groupBy` yet";
+    (* `groupBy` belongs to the GROUPED aggregates and to nothing else: on a plain `select`
+       it would silently change what the query answers. *)
+    (match seed.group_by, seed.kind with
+     | [], _ | _, (SelectCountBy | SelectSumBy _) -> ()
+     | _ :: _, _ -> unsupported loc
+       "Go backend supports `groupBy` only on `selectCountBy`/`selectSumBy`");
     (* One level deeper: the semi-join literal sits inside the predicate's own body, whose
        return line the `split` below writes at `indent + 1`. *)
     let join_predicates =
@@ -7952,8 +8084,101 @@ and emit_sql_form ?(indent="") signatures env loc form =
         | None ->
           Printf.sprintf "teslrt.TableExtreme(%s, %s, %s, %s)"
             table predicate project better)
-     | SelectCountBy -> unsupported loc "Go backend does not support `selectCountBy` yet"
-     | SelectSumBy _ -> unsupported loc "Go backend does not support `selectSumBy` yet")
+     (* ── The GROUPED aggregates ────────────────────────────────────────────
+        One (bucket, value) pair per group, ORDERED BY KEY ASCENDING — which is the contract
+        rather than an accident of iteration: the Racket memory backend sorts its buckets and
+        PostgreSQL's `GROUP BY … ORDER BY 1` does the same, and a series a chart draws is
+        only a series if its points are in order.
+
+        The bucket key is either a plain column or one of the five `Time.trunc*` calendar
+        buckets, and the truncation goes through the SAME engine the surface functions call,
+        so `Time.truncDay zone e.startedAt` as a group key and as an expression cannot
+        disagree about where a day starts. *)
+     | SelectCountBy | SelectSumBy _ ->
+       if seed.order <> None || seed.limit <> None || seed.offset <> None then
+         unsupported loc "Go backend does not support `order`/`limit`/`offset` on a \
+                          grouped aggregate yet";
+       let key_field = match seed.group_by with
+         | [GField field] | [GTimeTrunc (_, _, field)] -> field
+         | [] -> unsupported loc "Go backend requires `groupBy` on a grouped aggregate"
+         | _ -> unsupported loc
+           "Go backend does not support `groupBy` on more than one key yet"
+       in
+       let key_ty = entity_column loc info key_field in
+       if not (supports_column_ordering key_ty) then unsupported loc
+         "Go backend cannot group by column `%s.%s`" info.ent_tesl_name key_field;
+       let column = Printf.sprintf "teslRow.%s" (record_field_go_name key_field) in
+       let key_of_row = match seed.group_by with
+         | [GTimeTrunc (unit, zone, _)] ->
+           let unit = String.capitalize_ascii unit in
+           Printf.sprintf "teslrt.TimeTrunc%s(%s, %s)" unit
+             (emit_expr ~indent signatures env zone) column
+         | _ -> column
+       in
+       (* Split across lines, like every other func literal the emitter writes into a long
+          argument list: gofmt keeps a one-line literal only while go/printer judges it short
+          enough, and it never JOINS a split one — so the split form is stable at every
+          size, and this call takes seven arguments. *)
+       let key = Printf.sprintf "func(teslRow %s) %s {\n%s\treturn %s\n%s}"
+         (sql_row_type info) (go_type key_ty) indent key_of_row indent in
+       let less =
+         Printf.sprintf "func(teslLeft, teslRight %s) bool {\n%s\treturn %s\n%s}"
+           (go_type key_ty) indent (ordered_expr key_ty "<" "teslLeft" "teslRight") indent in
+       let equal =
+         Printf.sprintf "func(teslLeft, teslRight %s) bool {\n%s\treturn %s\n%s}"
+           (go_type key_ty) indent (equal_expr key_ty "teslLeft" "teslRight") indent in
+       let value_ty, step, zero = match seed.kind with
+         | SelectSumBy field ->
+           let ty = entity_column loc info field in
+           let cell = Printf.sprintf "teslRow.%s" (record_field_go_name field) in
+           let row = sql_row_type info in
+           (match ty with
+            | TInt ->
+              ty,
+              Printf.sprintf
+                "func(teslTotal teslrt.Int, teslRow %s) teslrt.Int {\n%s\treturn teslrt.Add(teslTotal, %s)\n%s}"
+                row indent cell indent,
+              "teslrt.FromInt64(0)"
+            | TFloat ->
+              ty,
+              Printf.sprintf
+                "func(teslTotal float64, teslRow %s) float64 {\n%s\treturn teslTotal + %s\n%s}"
+                row indent cell indent,
+              "float64(0)"
+            | TNewtype newtype when newtype.base = TInt ->
+              ty,
+              Printf.sprintf
+                "func(teslTotal %s, teslRow %s) %s {\n%s\treturn %s{Value: teslrt.Add(teslTotal.Value, %s.Value)}\n%s}"
+                (go_type ty) row (go_type ty) indent (go_type ty) cell indent,
+              Printf.sprintf "%s{Value: teslrt.FromInt64(0)}" (go_type ty)
+            | TNewtype newtype when newtype.base = TFloat ->
+              ty,
+              Printf.sprintf
+                "func(teslTotal %s, teslRow %s) %s {\n%s\treturn %s{Value: teslTotal.Value + %s.Value}\n%s}"
+                (go_type ty) row (go_type ty) indent (go_type ty) cell indent,
+              Printf.sprintf "%s{Value: float64(0)}" (go_type ty)
+            (* A Money column has no fold: an empty group has no currency to carry its zero,
+               and the whole-set rule the scalar `selectSum` applies has no per-group form
+               here.  Refused rather than summed in some currency the rows did not agree on. *)
+            | _ -> unsupported loc
+              "Go backend cannot sum column `%s.%s` in a grouped aggregate"
+              info.ent_tesl_name field)
+         (* A COUNT does not read the row, so the parameter is `_` rather than a name and a
+            discard — the same count, with nothing to explain. *)
+         | _ ->
+           TInt,
+           Printf.sprintf
+             "func(teslTotal teslrt.Int, _ %s) teslrt.Int {\n%s\treturn teslrt.Add(teslTotal, teslrt.FromInt64(1))\n%s}"
+             (sql_row_type info) indent indent,
+           "teslrt.FromInt64(0)"
+       in
+       ignore value_ty;
+       (match pg with
+        | Some _ -> unsupported loc
+          "Go backend does not support a grouped aggregate on a PostgreSQL-backed database yet"
+        | None ->
+          Printf.sprintf "teslrt.TableGroupFold(%s, %s, %s, %s, %s, %s, %s)"
+            table predicate key less equal step zero))
   | SqlInsert insert ->
     let info = entity_of_query loc insert.entity in
     check_record_literal signatures env loc info.ent_row insert.fields;
@@ -7985,6 +8210,55 @@ and emit_sql_form ?(indent="") signatures env loc form =
          (go_quote info.ent_tesl_name) row (sql_key_conflict loc info)
          (go_quote statement) (sql_row_binder loc indent info columns)
          (sql_unique_arguments ~indent loc info))
+  (* ── `upsert … onConflict [c] doUpdate [u]` ──────────────────────────────
+     Insert the row, unless one already matches on the CONFLICT columns — in which case only
+     the UPDATE columns of that row are overwritten.  The conflict target is a unique index
+     rather than necessarily the primary key, which is why the match is its own comparison
+     and not `sql_key_conflict`. *)
+  | SqlUpsert upsert ->
+    let info = entity_of_query loc upsert.entity in
+    check_record_literal signatures env loc info.ent_row upsert.fields;
+    let row_type = sql_row_type info in
+    let row = emit_record_literal ~indent signatures env info.ent_row upsert.fields in
+    let column_field name =
+      (* The field must be a real column: an `onConflict` naming something the entity does
+         not have would compare nothing and upsert every row. *)
+      ignore (entity_column loc info name);
+      record_field_go_name name
+    in
+    if upsert.conflict = [] then unsupported loc
+      "Go backend requires `upsert` to name its `onConflict` columns";
+    let matches =
+      Printf.sprintf "func(teslExisting, teslRow %s) bool {\n%s\treturn %s\n%s}"
+        row_type indent
+        (String.concat " && " (List.map (fun field ->
+           let ty = entity_column loc info field in
+           let side name = Printf.sprintf "%s.%s" name (column_field field) in
+           equal_expr ty (side "teslExisting") (side "teslRow")) upsert.conflict))
+        indent in
+    (* The merged row is the EXISTING one with the update columns taken from the new one:
+       every other column keeps what was stored, which is what makes an upsert different
+       from an insert that replaces. *)
+    let merge =
+      let assignments = List.map (fun field ->
+        ignore (entity_column loc info field);
+        Printf.sprintf "%s\tteslMerged.%s = teslRow.%s" indent
+          (column_field field) (column_field field)) upsert.do_update in
+      Printf.sprintf "func(teslExisting, teslRow %s) %s {\n%s\tteslMerged := teslExisting\n%s\n%s\treturn teslMerged\n%s}"
+        row_type row_type indent
+        (if assignments = [] then Printf.sprintf "%s\t_ = teslRow" indent
+         else String.concat "\n" assignments)
+        indent indent in
+    (match info.ent_database with
+     | None ->
+       (* The stored row is discarded here for the reason the typing gives: the form answers
+          Unit, and `teslrt.Discard` is how a value-returning runtime call reaches a
+          Unit-typed position without a statement. *)
+       Printf.sprintf "teslrt.Discard(teslrt.TableUpsert(%s, %s, %s, %s, %s, %s%s))"
+         (sql_table_ref info) (go_quote info.ent_tesl_name) row matches merge
+         (sql_key_conflict loc info) (sql_unique_arguments ~indent loc info)
+     | Some _ -> unsupported loc
+       "Go backend does not support `upsert` on a PostgreSQL-backed database yet")
   | SqlInsertMany (list_var, entity) ->
     let info = entity_of_query loc entity in
     let rows = match List.assoc_opt list_var env with
@@ -10028,7 +10302,12 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
       let tables =
         Hashtbl.to_seq_values types.entities
         |> List.of_seq
-        |> List.filter (fun info -> owned info.ent_owner)
+        (* Only an entity some `database` block NAMES: Racket clears the stores of REGISTERED
+           databases, and an entity in no declaration is in none of them, so its rows survive
+           from one test block to the next.  Truncating it here made the same program's tests
+           pass on Go and fail on Racket — a file with no `database` declaration shares one
+           store on purpose, and a corpus lesson relies on it. *)
+        |> List.filter (fun info -> owned info.ent_owner && info.ent_in_database)
         |> List.map (fun info ->
              Printf.sprintf "teslrt.TableTruncate(%s)"
                (qualified info.ent_owner info.ent_table_var))
@@ -10333,6 +10612,18 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
          about. *)
       let call = match call with
         | ELambda { params = []; body; _ } -> body
+        | _ -> call
+      in
+      (* `expectFail f ()` passes NO argument — `()` is the empty argument list, not a value —
+         so what is left after the fold is the function's NAME.  A name is not what is
+         expected to fail; RUNNING it is, so a zero-parameter function is applied here.  The
+         parenthesised spelling `expectFail (f ())` already arrives applied. *)
+      let call = match normalize_call_head call with
+        | EVar { name; _ }
+          when (match Hashtbl.find_opt signatures name with
+                | Some { params = []; _ } -> true
+                | _ -> false) ->
+          EApp { fn = call; arg = EConstructor { name = "Unit"; args = []; loc }; loc }
         | _ -> call
       in
       (* A proof operation ERASES here, so it cannot be what fails: `expectFail (fn () ->
@@ -10750,6 +11041,17 @@ let register_imported_types ~exposed types (exports : module_exports) =
     exposed
 
 let register_imported_module ~loc ~exposed types signatures (exports : module_exports) =
+  (* A LIFTED module's members are DECLARED bare (`fn fromParts`) and WRITTEN qualified at
+     every call site (`CivilTime.fromParts`), which is also how the import list spells them.
+     So the lookup strips the qualifier while the key keeps it: `normalize_call_head` turns
+     the call site into the dotted name, and that is what has to resolve. *)
+  let unqualified name =
+    let prefix = exports.ex_module ^ "." in
+    let cut = String.length prefix in
+    if String.length name > cut && String.sub name 0 cut = prefix
+    then Some (String.sub name cut (String.length name - cut))
+    else None
+  in
   List.iter (fun name ->
     let copy_type () =
       match Hashtbl.find_opt exports.ex_types.newtypes name,
@@ -10778,7 +11080,18 @@ let register_imported_module ~loc ~exposed types signatures (exports : module_ex
       | Some index -> String.sub name 0 index
       | None -> name
     in
-    let found_type = copy_type () || (base <> name &&
+    let found_type = copy_type () ||
+      (match unqualified base with
+       | Some bare ->
+         (match Hashtbl.find_opt exports.ex_types.newtypes bare,
+                Hashtbl.find_opt exports.ex_types.records bare,
+                Hashtbl.find_opt exports.ex_types.adts bare with
+          | Some info, _, _ -> Hashtbl.replace types.newtypes bare info; true
+          | None, Some info, _ -> Hashtbl.replace types.records bare info; true
+          | None, None, Some info -> Hashtbl.replace types.adts bare info; true
+          | None, None, None -> false)
+       | None -> false)
+      || (base <> name &&
       (match Hashtbl.find_opt exports.ex_types.adts base with
        | Some info -> Hashtbl.replace types.adts base info; true
        | None -> false)) in
@@ -10786,7 +11099,10 @@ let register_imported_module ~loc ~exposed types signatures (exports : module_ex
     if base <> name then copy_codec base;
     let found_value = match Hashtbl.find_opt exports.ex_signatures name with
       | Some signature -> Hashtbl.replace signatures name signature; true
-      | None -> false
+      | None ->
+        (match Option.bind (unqualified name) (Hashtbl.find_opt exports.ex_signatures) with
+         | Some signature -> Hashtbl.replace signatures name signature; true
+         | None -> false)
     in
     (* A constructor of an exposed ADT is itself a signature entry. *)
     if found_type then
@@ -11031,8 +11347,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.Queue` export `%s` yet" other) exposed
         (* validated against the leaf/type tables below *)
-      | other when List.exists (fun (dependency : module_exports) ->
-                     dependency.ex_module = other) dependencies ->
+      | other when List.exists (fun dependency ->
+                     dependency_named dependency other) dependencies ->
         (* A LOCAL module: registered below, once the type tables exist. *)
         ()
       | other ->
@@ -11439,6 +11755,10 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             then Some database else None)
           types.databases None
       in
+      (* Named by SOME database, whatever its backend: that is what decides whether a test
+         block starts from an empty table (see `ent_in_database`). *)
+      let declared = Hashtbl.fold (fun _ (database : database_info) found ->
+        found || List.mem e.name database.db_entities) types.databases false in
       Hashtbl.replace types.entities e.name {
         ent_tesl_name = e.name;
         ent_row = row;
@@ -11451,6 +11771,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           List.filter_map (fun (field : field_def) ->
             Option.map (fun ty -> (field.name, ty)) field.db_type) e.fields;
         ent_database = managing;
+        ent_in_database = declared;
         ent_loc = e.loc;
       }) entity_forms;
     let tuple_imported = ref false in
@@ -11833,11 +12154,13 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
          millisecond forms above stay canonical — they are exact integer arithmetic — and
          these take a Duration, converting SI seconds to that exact count. *)
       "Time.add"; "Time.subtract"; "Time.diff";
-      (* The calendar half.  Only rendering so far: the truncation family needs the
-         `TimeZone` value, which is its own slice. *)
+      (* The calendar half: rendering, the bucket family, and the per-instant offset. *)
       "formatTime";
+      "Time.truncHour"; "Time.truncDay"; "Time.truncWeek"; "Time.truncMonth";
+      "Time.truncYear"; "Time.offsetAt";
     ] in
     let time_imports = ref [] in
+    let zone_type_needed = ref false in
     List.iter (fun (import : import_decl) ->
       if import.module_name = "Tesl.Time" then begin
         let exposed = match import.names with
@@ -11850,6 +12173,12 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             (* The type itself, and the `time` CAPABILITY (compile-time, like every
                other capability). *)
             | "PosixMillis" | "time" -> ()
+            (* The `TimeZone` constructors.  A zone is one of a FIXED set — `Utc`, a fixed
+               offset, or one of the 489 baked IANA zones — so a program cannot name a zone
+               by a string it composed, and there is no zone-name typo to make at run time.
+               They register below, where the type is in hand. *)
+            | "TimeZone" | "Utc" | "FixedOffset" -> zone_type_needed := true
+            | other when List.mem_assoc other Tz_zones.zones -> zone_type_needed := true
             | other -> unsupported import.loc
               "Go backend does not support `Tesl.Time` export `%s` yet" other) exposed;
         (* Registered whenever the module imports Tesl.Time at all: the type is named in
@@ -11861,7 +12190,28 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           base = TInt;
           secret = false;
           loc = import.loc;
-        }
+        };
+        (* `TimeZone` is OPAQUE: a program passes one and never takes it apart, which is what
+           lets the runtime carry a zone NAME and resolve the offset per instant.  `Utc` and
+           each named zone are VALUES rather than calls, so they resolve through the constant
+           table the way a bare currency name does; `FixedOffset` takes its minutes and is a
+           signature. *)
+        if !zone_type_needed then begin
+          let zone = {
+            rec_tesl_name = "TimeZone";
+            rec_owner = "";
+            rec_go_name = "teslrt.TimeZone";
+            rec_proof_fields = false;
+            rec_fields = [];
+            rec_loc = import.loc;
+          } in
+          Hashtbl.replace types.records "TimeZone" zone;
+          Hashtbl.replace types.consts "Utc" (TRecord zone, "teslrt.UtcZone()");
+          List.iter (fun (ctor, iana) ->
+            Hashtbl.replace types.consts ctor
+              (TRecord zone, Printf.sprintf "teslrt.NamedZone(%s)" (go_quote iana)))
+            Tz_zones.zones
+        end
       end) m.imports;
     (* ── `Tesl.Crypto`, and the `Secret` its functions take ──────────────────
        `Secret` is registered whenever it can appear — `requireSecret` answers one, and every
@@ -12527,8 +12877,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
        field may name one (`role: OrgRole`), and the full import registration — which also
        brings the values across — runs later, once the signature table exists. *)
     List.iter (fun (import : import_decl) ->
-      match List.find_opt (fun (dependency : module_exports) ->
-              dependency.ex_module = import.module_name) dependencies with
+      match List.find_opt (fun dependency ->
+              dependency_named dependency import.module_name) dependencies with
       | None -> ()
       | Some dependency ->
         let exposed = match import.names with
@@ -13124,6 +13474,15 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
        | None -> unsupported (Location.dummy_loc m.source_file)
          "Go backend `requeue` needs `DeadJob` from `Tesl.Queue`");
 
+    (* `FixedOffset minutes` is the one zone constructor that takes an argument, so it is a
+       signature where the others are constants. *)
+    if !zone_type_needed then
+      (match Hashtbl.find_opt types.records "TimeZone" with
+       | Some zone ->
+         Hashtbl.replace signatures "FixedOffset"
+           { params = [TInt]; result = TRecord zone; go_name = "teslrt.FixedOffsetZone";
+             sig_owner = ""; sig_needs_scope = false }
+       | None -> ());
     List.iter (fun name ->
       let posix = match Hashtbl.find_opt types.newtypes "PosixMillis" with
         | Some info -> TNewtype info
@@ -13147,6 +13506,20 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
            rather than Go's reference layout, because the two backends have to render the
            same instant identically. *)
         | "formatTime" -> [posix; TString; TString], TString, "teslrt.FormatTime"
+        (* The bucket family and the offset.  Every one takes the ZONE first, which is the
+           order the surface reads in: `Time.truncDay Utc e.startedAt`. *)
+        | "Time.truncHour" | "Time.truncDay" | "Time.truncWeek" | "Time.truncMonth"
+        | "Time.truncYear" | "Time.offsetAt" ->
+          let zone = match Hashtbl.find_opt types.records "TimeZone" with
+            | Some info -> TRecord info
+            | None -> unsupported (Location.dummy_loc m.source_file)
+              "Go backend `%s` takes a TimeZone; add `TimeZone` to the import" name
+          in
+          (match name with
+           | "Time.offsetAt" -> [zone; posix], TInt, "teslrt.TimeOffsetAt"
+           | _ ->
+             let unit = String.sub name 10 (String.length name - 10) in
+             [zone; posix], posix, "teslrt.TimeTrunc" ^ unit)
         | other -> unsupported (Location.dummy_loc m.source_file)
           "Go backend does not support `Tesl.Time` export `%s` yet" other
       in
@@ -13482,8 +13855,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
        package attached, so every reference to them is qualified. *)
     let imported_packages = ref [] in
     List.iter (fun (import : import_decl) ->
-      match List.find_opt (fun (dependency : module_exports) ->
-              dependency.ex_module = import.module_name) dependencies with
+      match List.find_opt (fun dependency ->
+              dependency_named dependency import.module_name) dependencies with
       | None -> ()
       | Some dependency ->
         (* `import M` with no `exposing` list is the QUALIFIED-ONLY form: references are
@@ -13504,6 +13877,15 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           imported_packages := dependency.ex_package :: !imported_packages;
         register_imported_module ~loc:import.loc ~exposed types signatures dependency)
       m.imports;
+    (* A `database` block may name an entity DECLARED in another module, and that entity's
+       record only arrives with the import — so the flag is set again here, now that both are
+       in hand.  The record is shared by reference, so marking it marks it for its own
+       package too, which is what Racket's process-wide registry does. *)
+    Hashtbl.iter (fun _ (database : database_info) ->
+      List.iter (fun name ->
+        match Hashtbl.find_opt types.entities name with
+        | Some entity -> entity.ent_in_database <- true
+        | None -> ()) database.db_entities) types.databases;
     List.iter (fun (fd : func_decl) ->
       if Hashtbl.mem signatures fd.name then unsupported fd.loc
         "Go backend generated name collision for `%s`" fd.name;
@@ -13707,8 +14089,14 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         let url_net_only = [ "hostname.go"; "url.go" ] in
         let uses_url_net = List.exists mentions
           [ "teslrt.Url"; "teslrt.ClassifyHost"; "teslrt.NormalizeHost"; "teslrt.NetIs" ] in
-        let timezone_only = [ "timezone.go" ] in
-        let uses_timezone = mentions "teslrt.FormatTime" in
+        (* `timezone.go` and `timetrunc.go` travel TOGETHER: the truncation engine resolves a
+           named zone through the same embedded database formatting uses, and a bucket that
+           silently fell back to UTC would be the exact bug the embedding prevents. *)
+        let timezone_only = [ "timezone.go"; "timetrunc.go" ] in
+        let uses_timezone = List.exists mentions
+          [ "teslrt.FormatTime"; "teslrt.TimeTrunc"; "teslrt.TimeOffsetAt";
+            "teslrt.TimeZone"; "teslrt.UtcZone"; "teslrt.NamedZone";
+            "teslrt.FixedOffsetZone" ] in
         let uses_agent = List.exists mentions
           [ "teslrt.Agent"; "teslrt.LlmProvider"; "teslrt.LlmResponse"; "teslrt.Tool";
             "teslrt.Conversation"; "teslrt.Ask"; "teslrt.MockProvider" ] in
@@ -13745,10 +14133,18 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
 let compile_project ?(mode=Release) ~(entry : module_form) (modules : module_form list) =
   let project_path = "tesl.generated/" ^ package_name entry.module_name in
   let local_names = List.map (fun (m : module_form) -> m.module_name) modules in
+  (* The name a local module answers to, which is not always the name the import writes:
+     a LIFTED stdlib module is imported as `Tesl.CivilTime` and declares itself `CivilTime`. *)
+  let local_named import_name =
+    List.find_opt (fun name ->
+      name = import_name
+      || (String.length import_name > 5 && String.sub import_name 0 5 = "Tesl."
+          && name = String.sub import_name 5 (String.length import_name - 5)
+          && not (String.contains name '.')))
+      local_names
+  in
   let dependencies_of (m : module_form) =
-    List.filter_map (fun (import : import_decl) ->
-      if List.mem import.module_name local_names then Some import.module_name else None)
-      m.imports
+    List.filter_map (fun (import : import_decl) -> local_named import.module_name) m.imports
   in
   (* Topological order.  A cycle cannot appear here — compile.ml rejects one before this
      point — but the counter keeps a malformed graph from looping forever rather than

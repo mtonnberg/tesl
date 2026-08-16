@@ -2608,7 +2608,16 @@ let parse_module_file path =
    died with a raw "cycle in loading" (2026-07-08 audit). *)
 let canonical_import_path = Validation_common.canonical_import_path
 
-let build_local_import_graph entry_path =
+(* The ONE lifted stdlib module the Go backend compiles from its Tesl SOURCE rather than
+   binding to a runtime file.  `Tesl.CivilTime` has no Go runtime of its own and is ordinary
+   Tesl — ADTs, opaque types, checks, proof-carrying returns — so compiling it is both the
+   smallest way to have it and the most demanding thing the backend is asked to do.
+
+   `Tesl.List` and `Tesl.Either` are lifted too and are deliberately NOT here: their leaves
+   bind to `teslrt` functions, and compiling them as well would give a program two of each. *)
+let go_lifted_module_names = ["Tesl.CivilTime"]
+
+let build_local_import_graph ?(lifted=[]) entry_path =
   let graph : (string, string list) Hashtbl.t = Hashtbl.create 16 in
   let rec visit path =
     if Hashtbl.mem graph path then ()
@@ -2618,7 +2627,10 @@ let build_local_import_graph entry_path =
         | None -> []
         | Some m ->
           List.filter_map (fun (imp : Ast.import_decl) ->
-            if is_tesl_stdlib_module_name imp.module_name then None
+            if List.mem imp.module_name lifted then
+              Option.map canonical_import_path
+                (Validation_common.lifted_stdlib_source_path imp.module_name)
+            else if is_tesl_stdlib_module_name imp.module_name then None
             else Some (canonical_import_path
                          (resolve_local_import_path m.source_file imp.module_name))
           ) m.imports
@@ -3406,7 +3418,7 @@ type go_dependencies =
 let local_dependency_modules entry_path (entry : Ast.module_form) =
   if entry_path = "" || Filename.check_suffix entry_path ">" then GoDeps { emit = [entry]; originals = [entry]; entry_emit = entry }
   else
-    let graph = build_local_import_graph entry_path in
+    let graph = build_local_import_graph ~lifted:go_lifted_module_names entry_path in
     let entry_canon = canonical_import_path entry_path in
     (* One node per SCC: a cycle becomes ONE Go package, so the emitter never sees the
        members separately. *)

@@ -300,3 +300,22 @@ func UrlToString(url Url) string {
 	}
 	return out.String()
 }
+
+// UrlEqual compares two parsed URLs part by part.
+//
+// Part by part rather than by their text: a URL's parts include whether a delimiter was
+// WRITTEN, and `http://h/?` and `http://h/` are not the same URL even though everything they
+// hold is equal. Comparing the canonical text would say the same thing, and this says it
+// without building two strings to throw away.
+//
+// It exists at all because a `Url` is OPAQUE to the emitter — it sees no fields to walk —
+// and because the port is a `teslrt.Int`, which is deliberately not comparable with `==`.
+func UrlEqual(left, right Url) bool {
+	return left.Scheme == right.Scheme &&
+		left.HasUserInfo == right.HasUserInfo && left.UserInfo == right.UserInfo &&
+		left.Host == right.Host &&
+		left.HasPort == right.HasPort && Equal(left.Port, right.Port) &&
+		left.Path == right.Path &&
+		left.HasQuery == right.HasQuery && left.Query == right.Query &&
+		left.HasFragment == right.HasFragment && left.Fragment == right.Fragment
+}

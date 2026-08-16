@@ -449,3 +449,93 @@ func TableAny[Row any](table *Table[Row], match func(Row) bool) bool {
 	}
 	return false
 }
+
+// TableGroupFold is the grouped aggregate: it buckets the matching rows by a key, folds
+// each bucket, and answers one (key, value) pair per bucket, ORDERED BY KEY ASCENDING.
+//
+// The order is part of the contract rather than an accident of iteration: the Racket memory
+// backend sorts its buckets and PostgreSQL's `GROUP BY … ORDER BY 1` does the same, and a
+// series a chart draws is only a series if its points are in order.
+//
+// The key is compared through the two functions the emitter supplies rather than being used
+// as a Go map key: a bucket key can be a `PosixMillis`, whose value is an arbitrary-precision
+// integer and therefore not comparable with `==`. Rows are sorted by key and folded in runs,
+// so no key is compared more than the sort needs.
+func TableGroupFold[Row any, Key any, Value any](
+	table *Table[Row],
+	match func(Row) bool,
+	key func(Row) Key,
+	less func(Key, Key) bool,
+	equal func(Key, Key) bool,
+	step func(Value, Row) Value,
+	zero Value,
+) []Tuple2[Key, Value] {
+	table.mutex.RLock()
+	type keyed struct {
+		key Key
+		row Row
+	}
+	matched := make([]keyed, 0, len(table.rows))
+	for _, row := range table.rows {
+		if match(row) {
+			matched = append(matched, keyed{key: key(row), row: row})
+		}
+	}
+	table.mutex.RUnlock()
+	sort.SliceStable(matched, func(left, right int) bool {
+		return less(matched[left].key, matched[right].key)
+	})
+	out := []Tuple2[Key, Value]{}
+	for index := 0; index < len(matched); {
+		bucket := zero
+		at := index
+		for ; at < len(matched) && equal(matched[at].key, matched[index].key); at++ {
+			bucket = step(bucket, matched[at].row)
+		}
+		out = append(out, Tuple2[Key, Value]{Tuple2First: matched[index].key, Tuple2Second: bucket})
+		index = at
+	}
+	return out
+}
+
+// TableUpsert is `upsert … onConflict [c] doUpdate [u]`: the row is inserted, unless one
+// already matches on the CONFLICT columns, in which case only the UPDATE columns of that row
+// are overwritten.
+//
+// The two halves are the Racket memory backend's, rule for rule: an existing row is found by
+// its conflict columns (not by its primary key — the conflict target may be any unique
+// index), the merged row is checked against the unique indexes with ITS OWN position skipped
+// (updating a row must not collide with itself), and the insert path checks them with nothing
+// skipped. The row that ends up stored is the answer, so a caller reads back what was
+// written rather than what it asked for.
+func TableUpsert[Row any](
+	table *Table[Row],
+	entity string,
+	row Row,
+	matches func(Row, Row) bool,
+	merge func(Row, Row) Row,
+	conflicts func(Row, Row) bool,
+	unique ...UniqueIndex[Row],
+) Row {
+	table.mutex.Lock()
+	defer table.mutex.Unlock()
+	for position, existing := range table.rows {
+		if !matches(existing, row) {
+			continue
+		}
+		merged := merge(existing, row)
+		table.checkUniqueLocked(entity, merged, unique, position)
+		table.rows[position] = merged
+		return merged
+	}
+	table.checkUniqueLocked(entity, row, unique, -1)
+	table.insertLocked(entity, row, conflicts)
+	return row
+}
+
+// Discard turns a value-returning call into Tesl's `Unit`. It exists for the forms the
+// checker types as Unit while the runtime call still answers something — `upsert` is the
+// one: the stored row is a useful thing for the runtime to hand back and a thing no Tesl
+// program can name, so it is dropped here rather than in a statement the emitter would
+// otherwise have to invent.
+func Discard[A any](A) struct{} { return struct{}{} }

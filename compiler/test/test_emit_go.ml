@@ -10493,6 +10493,298 @@ fn twice(n: Int) -> Int = n * 2
     check bool "no regex runtime in a module that matches nothing" false
       (List.exists (fun (a : Emit_go.artifact) -> a.path = "internal/teslrt/regex.go") artifacts)
 
+(* ── The calendar half of `Tesl.Time`: `TimeZone` and the bucket family ──────
+   `Time.truncDay zone ts` is the bucket-START instant for the wall clock in a zone, and the
+   engine behind it is a rule-for-rule port of `dsl/private/time-trunc.rkt` — deliberately
+   dependency-free there for the same reason it is self-contained here: THREE consumers have
+   to agree about where a bucket starts (the surface functions, the query DSL's grouped
+   aggregates, and the PostgreSQL expressions), and they agree by calling one engine rather
+   than by three implementations happening to match.
+
+   The two things that are easy to get wrong, and are asserted below:
+     - FLOOR division, not Go's truncate-toward-zero, which is only visible before 1970 —
+       exactly where a truncating division puts an instant in the wrong bucket;
+     - a named zone resolves its offset PER INSTANT, so one `EuropeStockholm` value buckets
+       correctly on both sides of a DST transition, and a bucket that straddles one still
+       starts at the true local midnight.
+
+   The IANA database is compiled into the binary, so a container with no /usr/share/zoneinfo
+   renders the same instants rather than silently falling back to UTC. *)
+let time_zone_source = {|module GoTimeZone exposing [dayOf, hourOf, offsetOf, weekOf]
+
+import Tesl.Prelude exposing [Bool(..), Int, String]
+import Tesl.Time exposing [
+  PosixMillis,
+  TimeZone,
+  Utc,
+  FixedOffset,
+  EuropeStockholm,
+  Time.secondsToPosix,
+  Time.posixToSeconds,
+  Time.truncHour,
+  Time.truncDay,
+  Time.truncWeek,
+  Time.truncMonth,
+  Time.truncYear,
+  Time.offsetAt,
+]
+
+fn dayOf(zone: TimeZone, seconds: Int) -> Int =
+  Time.posixToSeconds (Time.truncDay zone (Time.secondsToPosix seconds))
+
+fn hourOf(zone: TimeZone, seconds: Int) -> Int =
+  Time.posixToSeconds (Time.truncHour zone (Time.secondsToPosix seconds))
+
+fn weekOf(zone: TimeZone, seconds: Int) -> Int =
+  Time.posixToSeconds (Time.truncWeek zone (Time.secondsToPosix seconds))
+
+fn offsetOf(zone: TimeZone, seconds: Int) -> Int =
+  Time.offsetAt zone (Time.secondsToPosix seconds)
+
+# 2026-03-01T10:00:00Z, a Sunday.
+test "the UTC buckets are the civil calendar" {
+  expect dayOf Utc 1772359200 == 1772323200
+  expect hourOf Utc 1772409000 == 1772406000
+  expect weekOf Utc 1772359200 == 1771804800
+  expect Time.posixToSeconds (Time.truncMonth Utc (Time.secondsToPosix 1772359200)) == 1772323200
+  expect Time.posixToSeconds (Time.truncYear Utc (Time.secondsToPosix 1772359200)) == 1767225600
+}
+
+# Floor, not truncate-toward-zero: -1 s is 1969-12-31, not 1970-01-01.
+test "an instant before the epoch buckets downwards" {
+  expect dayOf Utc -1 == -86400
+  expect Time.posixToSeconds (Time.truncYear Utc (Time.secondsToPosix -1)) == -31536000
+  expect Time.posixToSeconds (Time.truncMonth Utc (Time.secondsToPosix -14182980)) == -15897600
+}
+
+# A fixed offset does not know about summer time, which is why it is its own
+# constructor: its buckets shift by exactly the offset, always.
+test "a fixed offset shifts every bucket by itself" {
+  expect dayOf (FixedOffset 60) 1772359200 == 1772319600
+  expect dayOf (FixedOffset -330) 1772359200 == 1772343000
+  expect offsetOf (FixedOffset -330) 1772359200 == -330
+}
+
+# One zone VALUE, both sides of the transition.
+test "a named zone resolves its offset per instant" {
+  expect offsetOf EuropeStockholm 1768478400 == 60
+  expect offsetOf EuropeStockholm 1784116800 == 120
+  expect dayOf EuropeStockholm 1768478400 == 1768431600
+  expect dayOf EuropeStockholm 1784116800 == 1784066400
+  # 2026-03-29, the spring-forward day: an instant that afternoon still buckets
+  # to local midnight, 2026-03-28T23:00:00Z.
+  expect dayOf EuropeStockholm 1774792800 == 1774738800
+}
+
+test "a zone is the same zone as itself and not as another" {
+  expect Utc == Utc
+  expect EuropeStockholm == EuropeStockholm
+  expect (Utc == EuropeStockholm) == False
+  expect (FixedOffset 60 == FixedOffset 120) == False
+  expect FixedOffset 60 == FixedOffset 60
+}
+|}
+
+let test_time_zone_with_go () =
+  let emitted = match Compile.compile_go_source "<go-timezone>" time_zone_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "TimeZone compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgotimezone/module.go" emitted in
+  (* A named zone is one of a FIXED set, resolved from the compiler's own catalogue — there
+     is no zone-name string for a program to get wrong. *)
+  let tests_go = artifact "internal/teslmodgotimezone/module_test.go" emitted in
+  check bool "a named zone carries its IANA name" true
+    (contains tests_go "teslrt.NamedZone(\"Europe/Stockholm\")");
+  check bool "Utc is a value, not a call the source wrote" true
+    (contains tests_go "teslrt.UtcZone()");
+  check bool "each bucket is its own runtime call" true
+    (contains module_go "teslrt.TimeTruncDay(");
+  (* A zone is COMPARED as a Go value: it is a name, an offset and a flag, and Go's `==`
+     says exactly what "the same zone" means. *)
+  check bool "zone equality is value equality" true
+    (contains tests_go "teslrt.UtcZone() == teslrt.NamedZone(\"Europe/Stockholm\")");
+  let runtime_go = artifact "internal/teslrt/timetrunc.go" emitted in
+  check bool "the truncation floors rather than truncating" true
+    (contains runtime_go "func floorDiv");
+  let zone_go = artifact "internal/teslrt/timezone.go" emitted in
+  check bool "the zone database is compiled in" true (contains zone_go "time/tzdata");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-timezone" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      run_go_gates root)
+  end
+
+(* ── The grouped aggregates, and `upsert` ────────────────────────────────────
+   `selectSumBy … groupBy` answers one (bucket, value) pair per group, ORDERED BY KEY
+   ASCENDING — the contract rather than an accident of iteration, since the Racket memory
+   backend sorts its buckets and PostgreSQL's `GROUP BY … ORDER BY 1` does too, and a series
+   a chart draws is only a series if its points are in order.
+
+   A calendar bucket key goes through the SAME truncation engine `Time.truncDay` does, so
+   the group key and the expression cannot disagree about where a day starts.
+
+   `upsert … onConflict [c] doUpdate [u]` is here beside it because the two meet in the same
+   store: the conflict target is a UNIQUE INDEX rather than necessarily the primary key, and
+   the merged row keeps every column the `doUpdate` list does not name. *)
+let group_by_source = {|module GoGroupBy exposing [minutesPerDay, entriesPerOrg, seed, touch]
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List, Unit]
+import Tesl.Time exposing [
+  PosixMillis, TimeZone, Utc, Time.secondsToPosix, Time.posixToSeconds, Time.truncDay,
+]
+import Tesl.Tuple exposing [Tuple2, Tuple2.first, Tuple2.second]
+import Tesl.List exposing [List.length, List.map]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, DatabaseBackend, Memory]
+
+entity Entry table "entries" primaryKey id {
+  id: String
+  orgId: String
+  minutes: Int
+  startedAt: PosixMillis
+}
+
+# Declared, so each test block starts from an empty table — which is what a
+# `database` block buys and what a file without one does not get.
+database GroupByDb = Database {
+  schema: "go_group_by"
+  entities: [Entry]
+  backend: Memory
+}
+
+fn minutesPerDay(zone: TimeZone) -> List (Tuple2 PosixMillis Int) requires [dbRead] =
+  selectSumBy e.minutes from Entry
+    groupBy (Time.truncDay zone e.startedAt)
+
+fn entriesPerOrg() -> List (Tuple2 String Int) requires [dbRead] =
+  selectCountBy e from Entry
+    groupBy e.orgId
+
+fn add(id: String, org: String, minutes: Int, seconds: Int) -> Entry requires [dbWrite] =
+  insert Entry {
+    id: id, orgId: org, minutes: minutes, startedAt: Time.secondsToPosix seconds
+  }
+
+# 2026-03-01 10:00 and 23:30 UTC, then 2026-03-02 01:00 UTC.
+fn seed() -> Int requires [dbWrite] =
+  let _ = add "e1" "acme" 60 1772359200
+  let _ = add "e2" "acme" 30 1772407800
+  let _ = add "e3" "acme" 15 1772413200
+  let _ = add "e4" "other" 5 1772359200
+  4
+
+fn touch(id: String, minutes: Int) -> Unit requires [dbWrite] =
+  upsert Entry {
+    id: id, orgId: "acme", minutes: minutes, startedAt: Time.secondsToPosix 0
+  } onConflict [id] doUpdate [minutes]
+
+fn dayMinutes(zone: TimeZone) -> List Int requires [dbRead] =
+  List.map minutesOfRow (minutesPerDay zone)
+
+fn minutesOfRow(row: Tuple2 PosixMillis Int) -> Int = Tuple2.second row
+
+fn dayStarts(zone: TimeZone) -> List Int requires [dbRead] =
+  List.map startOfRow (minutesPerDay zone)
+
+fn startOfRow(row: Tuple2 PosixMillis Int) -> Int =
+  Time.posixToSeconds (Tuple2.first row)
+
+fn orgNames() -> List String requires [dbRead] = List.map nameOfRow (entriesPerOrg ())
+
+fn nameOfRow(row: Tuple2 String Int) -> String = Tuple2.first row
+
+fn orgCounts() -> List Int requires [dbRead] = List.map countOfRow (entriesPerOrg ())
+
+fn countOfRow(row: Tuple2 String Int) -> Int = Tuple2.second row
+
+test "the day buckets are one row each, in ascending key order" requires [dbRead, dbWrite] {
+  let _ = seed ()
+  expect List.length (minutesPerDay Utc) == 2
+  expect dayMinutes Utc == [95, 15]
+  expect dayStarts Utc == [1772323200, 1772409600]
+}
+
+test "a plain column groups too" requires [dbRead, dbWrite] {
+  let _ = seed ()
+  expect orgNames () == ["acme", "other"]
+  expect orgCounts () == [3, 1]
+}
+
+# The row already there keeps its other columns; a row that is not there is inserted.
+test "upsert updates only the columns it names" requires [dbRead, dbWrite] {
+  let _ = seed ()
+  let _ = touch "e1" 999
+  expect orgNames () == ["acme", "other"]
+  # e1 kept its startedAt — it is still in the first day's bucket, now at 999.
+  expect dayMinutes Utc == [1034, 15]
+}
+
+test "upsert inserts when nothing conflicts" requires [dbRead, dbWrite] {
+  let _ = touch "fresh" 7
+  expect orgNames () == ["acme"]
+  expect orgCounts () == [1]
+}
+|}
+
+let test_group_by_with_go () =
+  let emitted = match Compile.compile_go_source "<go-group-by>" group_by_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "grouped aggregate compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgogroupby/module.go" emitted in
+  check bool "the grouped aggregate is one runtime call" true
+    (contains module_go "teslrt.TableGroupFold(");
+  (* The group key goes through the truncation engine, not a hand-rolled day division. *)
+  check bool "a calendar key uses the truncation engine" true
+    (contains module_go "teslrt.TimeTruncDay(");
+  check bool "upsert is its own runtime call" true (contains module_go "teslrt.TableUpsert(");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-group-by" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      run_go_gates root)
+  end
+
+(* An OPAQUE record has no fields HERE, and comparing zero fields answers `true` for any two
+   of them — which is not "equal" but "nothing was compared".  It made `zone a == zone b`
+   inside `Tesl.CivilTime` a tautology, so two dates read in different calendars passed for
+   the same one and a check that exists to refuse them accepted.  A record that the runtime
+   does not say how to compare is now REFUSED rather than answered. *)
+let test_opaque_record_equality_is_not_vacuous () =
+  let source = {|module GoOpaqueEq exposing [sameProvider]
+
+import Tesl.Prelude exposing [Bool, List, String]
+import Tesl.Agent exposing [LlmProvider, mockProvider]
+
+fn sameProvider(left: List String, right: List String) -> Bool =
+  mockProvider left == mockProvider right
+|} in
+  match Compile.compile_go_source "<go-opaque-eq>" source with
+  | Compile.GoSuccess _ ->
+    fail "equality on an opaque record was answered instead of refused"
+  | Compile.GoFailure diagnostics ->
+    check bool "the refusal comes from the go emitter" true
+      (List.exists (fun (d : Compile.diagnostic) -> d.source = "go-emitter") diagnostics)
+
 (* ── An ADT type argument nothing constrains ──────────────────────────────────
    `Left "err"` says what its Left payload is and says NOTHING about the Right one, and a
    value written that way may never meet a context that settles it: `Either.withDefault 99
@@ -11062,6 +11354,14 @@ let () =
         (racket_behavior_oracle "<go-regex>" regex_source);
       test_case "the regex runtime ships only where used" `Quick
         test_regex_runtime_ships_only_where_used;
+      test_case "the calendar half of Tesl.Time" `Slow test_time_zone_with_go;
+      test_case "the calendar half of Tesl.Time behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-timezone>" time_zone_source);
+      test_case "grouped aggregates and upsert" `Slow test_group_by_with_go;
+      test_case "grouped aggregates and upsert behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-group-by>" group_by_source);
+      test_case "equality on an opaque record is refused, not vacuous" `Quick
+        test_opaque_record_equality_is_not_vacuous;
       test_case "an ADT type argument nothing constrains" `Slow
         test_anon_type_argument_with_go;
       test_case "an ADT type argument nothing constrains behaves the same on Racket" `Slow
