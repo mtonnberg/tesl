@@ -3811,6 +3811,101 @@ codec Stamp {
   (* `go test` RUNS the api-test: the wire number is asserted there. *)
   gate_emitted "tesl-go-posix-codec" emitted
 
+
+(* `Tesl.Int32` is NOMINAL for the checker and IS its integer at run time, which is what
+   `tesl/int32.rkt` says — so the emitted type is `teslrt.Int` with no wrapper, and an Int32
+   crossing into `Int` arithmetic costs nothing.  What the type buys is in the SIGNATURES: an
+   operation that cannot leave [-2^31, 2^31) answers the value, one that can answers a `Maybe`,
+   and that is a property of the operation rather than of the inputs. *)
+let int32_source = {|module GoInt32 exposing [narrow, widen, saturate, half]
+
+import Tesl.Prelude exposing [Bool(..), Int, String]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Int32 exposing [
+  Int32,
+  IsNonZero,
+  Int32.fromInt,
+  Int32.toInt,
+  Int32.fromIntClamped,
+  Int32.add,
+  Int32.divide,
+  Int32.negate,
+  Int32.pow,
+  Int32.digits,
+  Int32.minValue,
+  Int32.maxValue,
+  Int32.nonZero,
+]
+
+fn narrow(n: Int) -> Maybe Int32 =
+  Int32.fromInt n
+
+fn widen(x: Int32) -> Int =
+  Int32.toInt x
+
+# Saturating narrowing is how a literal becomes an Int32: the type is NOMINAL, so an `Int`
+# never is one by accident.
+fn saturate(n: Int) -> Int32 =
+  Int32.fromIntClamped n
+
+fn half(n: Int32, divisor: Int32 ::: IsNonZero divisor) -> Maybe Int32 =
+  Int32.divide n divisor
+
+test "the range boundary is inclusive at both ends" {
+  expect narrow 2147483647 == Something (saturate 2147483647)
+  expect narrow 2147483648 == Nothing
+  expect narrow (0 - 2147483648) == Something (saturate (0 - 2147483648))
+  expect narrow (0 - 2147483649) == Nothing
+  expect widen Int32.minValue == (0 - 2147483648)
+  expect widen Int32.maxValue == 2147483647
+}
+
+test "an operation that can overflow answers a Maybe" {
+  expect Int32.add Int32.maxValue (saturate 1) == Nothing
+  expect Int32.add (saturate 1) (saturate 1) == Something (saturate 2)
+  # -2^31 has no positive counterpart, so negating it leaves the range.
+  expect Int32.negate Int32.minValue == Nothing
+  # The exponent is bounded BEFORE the power is taken, so a huge one is Nothing rather than
+  # a bignum the size of memory.
+  expect Int32.pow (saturate 2) (saturate 31) == Nothing
+  expect Int32.pow (saturate 2) (saturate 30) == Something (saturate 1073741824)
+  expect Int32.pow (saturate 2) (saturate (0 - 1)) == Nothing
+}
+
+test "clamping saturates and never fails" {
+  expect widen (saturate 99999999999) == 2147483647
+  expect widen (saturate (0 - 99999999999)) == (0 - 2147483648)
+  expect Int32.digits (saturate 0) == 1
+  expect Int32.digits (saturate (0 - 1234)) == 4
+}
+
+test "division needs a non-zero divisor and can still overflow" {
+  let two = saturate 2
+  let d = check Int32.nonZero two
+  expect half (saturate 7) d == Something (saturate 3)
+  # Truncation is toward zero, so -7/2 is -3.
+  expect half (saturate (0 - 7)) d == Something (saturate (0 - 3))
+  let negativeOne = saturate (0 - 1)
+  let minusOne = check Int32.nonZero negativeOne
+  expect half Int32.minValue minusOne == Nothing
+}
+|}
+
+let test_int32_with_go () =
+  let emitted = emit_ok "<go-int32>" int32_source in
+  let module_go = artifact "internal/teslmodgoint32/module.go" emitted in
+  (* No wrapper: the nominal distinction is the checker's and does not survive here. *)
+  check bool "an Int32 IS its integer" true
+    (contains module_go "func Widen(x teslrt.Int) teslrt.Int {");
+  (* The bounds are VALUES, not calls — they are written bare, so they land wherever they are
+     used, which in this module is the test block. *)
+  check bool "the bounds are values, not calls" true
+    (contains (artifact "internal/teslmodgoint32/module_test.go" emitted) "teslrt.Int32MinValue");
+  check bool "a narrowing answers a Maybe" true
+    (contains module_go "teslrt.Int32FromInt(");
+  (* `go test` RUNS the four blocks: every boundary above is asserted there. *)
+  gate_emitted "tesl-go-int32" emitted
+
 let test_unsupported_database_forms_fail_closed () =
   let expect_go_error name source needle =
     match Compile.compile_go_source ("<go-" ^ name ^ ">") source with
@@ -8253,6 +8348,9 @@ let () =
       test_case "Memory-backend databases" `Slow test_db_with_go;
       test_case "databases behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-db-oracle>" db_source);
+      test_case "Tesl.Int32" `Slow test_int32_with_go;
+      test_case "Int32 behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-int32-oracle>" int32_source);
       test_case "a declared unique index" `Slow test_unique_index_with_go;
       test_case "a unique index behaves the same on Racket" `Slow
         (racket_behavior_oracle "<go-unique-index-oracle>" unique_index_source);

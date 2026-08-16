@@ -2811,6 +2811,16 @@ let rec type_of_expr signatures env expr =
         | _, Some leaf -> type_of_dict_leaf signatures env loc leaf []
         | None, None -> assert false)
      | _ -> assert false)
+  (* `Int32.minValue` is a stdlib VALUE written with a dot, so it parses as a field read over
+     the module name — the same shape `normalize_call_head` fixes in call position.  Nothing
+     else reaches here with a bare module name as the object. *)
+  | EField { obj = EConstructor { name = module_name; args = []; _ }; field; _ }
+    when Option.bind !current_types (fun types ->
+           Hashtbl.find_opt types.consts (module_name ^ "." ^ field)) <> None ->
+    (match Option.bind !current_types (fun types ->
+             Hashtbl.find_opt types.consts (module_name ^ "." ^ field)) with
+     | Some (ty, _) -> ty
+     | None -> assert false)
   | EField { obj; field; loc } ->
     (match type_of_expr signatures env obj, field with
      | TNewtype info, "value" -> info.base
@@ -4808,6 +4818,13 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
             (match expected with Some want -> want | None -> TFailure) expected
         | None, None -> assert false)
      | _ -> assert false)
+  | EField { obj = EConstructor { name = module_name; args = []; _ }; field; _ }
+    when Option.bind !current_types (fun types ->
+           Hashtbl.find_opt types.consts (module_name ^ "." ^ field)) <> None ->
+    (match Option.bind !current_types (fun types ->
+             Hashtbl.find_opt types.consts (module_name ^ "." ^ field)) with
+     | Some (_, go_name) -> go_name
+     | None -> assert false)
   | EField { obj; field; _ } ->
     (match type_of_expr signatures env obj with
      | TNewtype _ ->
@@ -9278,7 +9295,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       | "Tesl.String" | "Tesl.List" | "Tesl.Int" | "Tesl.Tuple" | "Tesl.Dict"
       | "Tesl.Set" | "Tesl.Float" | "Tesl.Either" | "Tesl.EitherPrim"
       | "Tesl.Time" | "Tesl.Env" | "Tesl.Random" | "Tesl.Id" | "Tesl.Result"
-      | "Tesl.UUID" | "Tesl.Cache" -> ()
+      | "Tesl.UUID" | "Tesl.Cache" | "Tesl.Int32" -> ()
       (* `Tesl.Queue` exports the DECLARATION vocabulary (`Queue`, the retry strategy and
          its backoff constructors), two capabilities, and the `FromQueue`/`FromDeadQueue`
          provenance proofs — which erase.  None of it needs a runtime binding: the store is
@@ -9721,6 +9738,38 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
          `exact-integer?`.  Both are strict decimal here; the Racket wart is recorded in
          roadmap/next/migrate_to_golang.md rather than reproduced. *)
       "Int.parse",        [`Str], `MaybeInt, "teslrt.StringToInt";
+      (* `Tesl.Int32` — the same shapes, over a value that IS its integer at run time.  The
+         split worth reading in the signatures: an operation that CANNOT leave
+         [-2^31, 2^31) answers the value, one that CAN answers a `Maybe`. *)
+      "Int32.fromInt",       [`Int], `MaybeInt, "teslrt.Int32FromInt";
+      "Int32.toInt",         [`Int], `Int, "teslrt.Int32ToInt";
+      "Int32.fromIntClamped", [`Int], `Int, "teslrt.Int32FromIntClamped";
+      "Int32.parse",         [`Str], `MaybeInt, "teslrt.Int32Parse";
+      "Int32.fromFloat",     [`Float], `MaybeInt, "teslrt.Int32FromFloat";
+      "Int32.toFloat",       [`Int], `Float, "teslrt.Int32ToFloat";
+      "Int32.toString",      [`Int], `Str, "teslrt.Int32ToString";
+      "Int32.min",           [`Int; `Int], `Int, "teslrt.Int32Min";
+      "Int32.max",           [`Int; `Int], `Int, "teslrt.Int32Max";
+      "Int32.clamp",         [`Int; `Int; `Int], `Int, "teslrt.Int32Clamp";
+      "Int32.modulo",        [`Int; `Int], `Int, "teslrt.Int32Modulo";
+      "Int32.add",           [`Int; `Int], `MaybeInt, "teslrt.Int32Add";
+      "Int32.subtract",      [`Int; `Int], `MaybeInt, "teslrt.Int32Subtract";
+      "Int32.multiply",      [`Int; `Int], `MaybeInt, "teslrt.Int32Multiply";
+      "Int32.negate",        [`Int], `MaybeInt, "teslrt.Int32Negate";
+      "Int32.abs",           [`Int], `MaybeInt, "teslrt.Int32Abs";
+      "Int32.pow",           [`Int; `Int], `MaybeInt, "teslrt.Int32Pow";
+      "Int32.divide",        [`Int; `Int], `MaybeInt, "teslrt.Int32Divide";
+      "Int32.isPositive",    [`Int], `Bool, "teslrt.Int32IsPositive";
+      "Int32.isNegative",    [`Int], `Bool, "teslrt.Int32IsNegative";
+      "Int32.isZero",        [`Int], `Bool, "teslrt.Int32IsZero";
+      "Int32.isEven",        [`Int], `Bool, "teslrt.Int32IsEven";
+      "Int32.isOdd",         [`Int], `Bool, "teslrt.Int32IsOdd";
+      (* `sign` answers an `Int`, not an Int32, so it composes with Int arithmetic — the
+         shape `Int.sign` has. *)
+      "Int32.sign",          [`Int], `Int, "teslrt.Int32Sign";
+      "Int32.digits",        [`Int], `Int, "teslrt.Int32Digits";
+      "Int32.nonZero",       [`Int], `CheckInt, "teslrt.Int32NonZero";
+      "Int32.nonNegative",   [`Int], `CheckInt, "teslrt.Int32NonNegative";
     ] in
     let leaf_names_for prefix =
       List.filter_map (fun (name, _, _, _) ->
@@ -9765,6 +9814,37 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             | "IsNonZero" | "IsNonNegative" | "IsPositive" -> ()
             | other -> unsupported import.loc
               "Go backend does not support `Tesl.Int` export `%s` yet" other) exposed
+      end) m.imports;
+    (* `Tesl.Int32` (NT-07): a 32-bit-bounded integer for wire and storage boundaries.  The
+       type is NOMINAL for the checker and IS its integer at run time, so it registers as an
+       ALIAS for `Int` rather than as a type of its own — `tesl/int32.rkt` says the same, and a
+       wrapper here would put a struct where both backends store a number. *)
+    let int32_leaf_names = leaf_names_for "Int32." in
+    let int32_imported = ref false in
+    List.iter (fun (import : import_decl) ->
+      if import.module_name = "Tesl.Int32" then begin
+        int32_imported := true;
+        let exposed = match import.names with
+          | ImportAll -> []
+          | ImportExposing names -> names
+        in
+        List.iter (fun name ->
+          if List.mem name int32_leaf_names then begin
+            string_imports := name :: !string_imports;
+            (* Every narrowing answers a `Maybe`, so importing one brings the runtime Maybe
+               in even where the module never names it. *)
+            match name with
+            | "Int32.fromInt" | "Int32.parse" | "Int32.fromFloat" | "Int32.add"
+            | "Int32.subtract" | "Int32.multiply" | "Int32.negate" | "Int32.abs"
+            | "Int32.pow" | "Int32.divide" -> maybe_imported := true
+            | _ -> ()
+          end else match name with
+            (* The type name, and the two proof predicates, which erase. *)
+            | "Int32" | "IsNonZero" | "IsNonNegative" -> ()
+            (* The bounds are VALUES, not calls; registered as constants below. *)
+            | "Int32.minValue" | "Int32.maxValue" -> ()
+            | other -> unsupported import.loc
+              "Go backend does not support `Tesl.Int32` export `%s` yet" other) exposed
       end) m.imports;
     (* ── `Tesl.Env` / `Tesl.Random`: effects with no state of their own ──────
        Both are gated by a capability the checker enforces (`envRead`, `random`), so what
@@ -10060,6 +10140,15 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         Hashtbl.replace types.aliases alias
           (TRecord (runtime_record alias "teslrt.MoneyRate" [])))
         Units_catalog.money_rate_aliases
+    end;
+    (* `Int32` IS its integer at run time, so it is an alias rather than a type of its own.
+       The nominal distinction is the checker's and does not survive here. *)
+    if !int32_imported then begin
+      Hashtbl.replace types.aliases "Int32" TInt;
+      (* The bounds are VALUES rather than calls, so they resolve through the constant table —
+         the same path a bare currency name (`Usd`) takes. *)
+      Hashtbl.replace types.consts "Int32.minValue" (TInt, "teslrt.Int32MinValue");
+      Hashtbl.replace types.consts "Int32.maxValue" (TInt, "teslrt.Int32MaxValue")
     end;
     if !units_imported then
       (* Every quantity alias is the QUANTITY type: a float64 in the emitted code, distinct in

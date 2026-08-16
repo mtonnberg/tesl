@@ -10,7 +10,7 @@ I think we should migrate all tests to Go, even for the code that moves into a s
 
 ## Status recap (2026-08-17) — the PostgreSQL backend
 
-**Corpus reach: 115 of 181 files** through the full pinned gate stack. The count moved by three
+**Corpus reach: 117 of 181 files** through the full pinned gate stack. The count moved by three
 on this slice and then stopped: the Postgres, ADT-column, `deleteAndReturnResult`, `unique index`
 and `Float.pow` work moved a dozen more files PAST their first blocker onto their second, which
 is progress the count does not show. The census below lists what each now stops on.
@@ -53,7 +53,10 @@ most of the corpus's Postgres files do.
   `runtime/go/go.sum` by a seam test, and `postgres.go`/`database.go`/`dbquery.go` gated out of
   every other program.
 
-**Also landed with it:** `Queue.requeue` (a `DeadJob` carries the queue it came out of, since
+**Also landed with it:** `Tesl.Int32` (nominal for the checker, its own integer at run time —
+so it registers as an ALIAS for `Int` and carries no wrapper, which is what `tesl/int32.rkt`
+says; the split worth reading is in the signatures, where an operation that cannot leave
+[-2^31, 2^31) answers the value and one that can answers a `Maybe`), `Queue.requeue` (a `DeadJob` carries the queue it came out of, since
 the call names none — Racket's dead-job carries its queue-spec for the same reason),
 `posixMillisCodec` in the encode direction, `deleteAndReturnResult` (its `DeleteResult` is runtime-provided like
 `Maybe`, since it crosses module boundaries), `unique index` (an INVARIANT, not a hint: the
