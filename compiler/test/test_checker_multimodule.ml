@@ -115,7 +115,7 @@ database D = Database {
 }
 
 fn sumIn(c: String) -> %s requires [dbRead] =
-  with database D { selectSum l.price from L where l.cat == c }
+  selectSum l.price from L where l.cat == c
 |} ret
 
 let bug1_money_annotation_accepted () =
@@ -153,7 +153,7 @@ import Tesl.DB exposing [dbRead]
 import Lib exposing [Item, Store]
 
 fn countsPerCategory() -> List (Tuple2 String Int) requires [dbRead] =
-  with database Store { selectCountBy i from Item groupBy i.category }
+  selectCountBy i from Item groupBy i.category
 |}
 
 let bug2_groupby_imported_entity () =

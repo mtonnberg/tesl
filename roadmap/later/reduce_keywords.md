@@ -1,0 +1,1 @@
+Can we reduce the number of keywords by leveraging normal types/records instead? That would also make the language more discoverable and allow for easy hints via the compiler etc

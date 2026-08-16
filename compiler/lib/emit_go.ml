@@ -3331,12 +3331,19 @@ let rec type_of_expr signatures env expr =
         ignore left_ty; right_ty, right_ty
       | Some left_ty, Some right_ty when right_defaulted && not left_defaulted ->
         ignore right_ty; left_ty, left_ty
+      (* One side settled a type but left an ADT argument ANONYMOUS — a bare `Nothing` says
+         it is a Maybe and nothing about what of — so the OTHER side settles it.  Both sides
+         are then the same Go type, which is what the comparison is emitted at. *)
+      | Some left_ty, Some right_ty when has_anon left_ty && not (has_anon right_ty) ->
+        right_ty, right_ty
+      | Some left_ty, Some right_ty when has_anon right_ty && not (has_anon left_ty) ->
+        left_ty, left_ty
       | Some left_ty, Some right_ty -> left_ty, right_ty
-      (* One side carries no type of its OWN — a bare `Nothing`, a nullary constructor of a
-         generic ADT — so the other side's type instantiates it, the same rule an expectation
-         applies at a call argument.  Without this, `maybeThing != Nothing` was refused while
-         `maybeThing == Nothing` compiled, because only the `==` path routed the operands
-         through the expectation. *)
+      (* One side carries no type of its OWN — a nullary constructor whose ADT this module
+         cannot even name — so the other side's type instantiates it, the same rule an
+         expectation applies at a call argument.  Without this, `maybeThing != Nothing` was
+         refused while `maybeThing == Nothing` compiled, because only the `==` path routed
+         the operands through the expectation. *)
       | Some left_ty, None -> left_ty, type_of_arg signatures env left_ty right
       | None, Some right_ty -> type_of_arg signatures env right_ty left, right_ty
       | _ ->
@@ -5923,8 +5930,19 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
     in
     (* The operand type is the one the TYPE rule settled on, which may come from the other
        side when this one is a defaulted empty list — so both operands are emitted against
-       it rather than against whatever each infers alone. *)
-    let ty = type_of_expr signatures env expr_binop_operand_source in
+       it rather than against whatever each infers alone.  Same for a side that left an ADT
+       argument ANONYMOUS: `Nothing != some` types its left operand as a `Maybe` of nothing
+       in particular, and emitting the two at their own types compares a `Maybe[struct{}]`
+       with a `Maybe[teslrt.Int]`. *)
+    let ty =
+      let chosen = type_of_expr signatures env expr_binop_operand_source in
+      if not (has_anon chosen) then chosen
+      else
+        let other = if expr_binop_operand_source == left then right else left in
+        match typed_with_default (type_of_expr signatures env) other with
+        | Some other_ty, false when not (has_anon other_ty) -> other_ty
+        | _ -> chosen
+    in
     let emitted_left = emit_expr ~expected:ty ~indent signatures env left in
     let emitted_right = emit_expr ~expected:ty ~indent signatures env right in
     let emit_bool_literal_comparison equal =
@@ -6622,74 +6640,115 @@ and emit_scalar_case_statements ?(indent="") signatures env buffer scrut arms sc
     | PNullary { ctor; loc } | PCon { ctor; loc; _ } ->
       unsupported loc "Go backend `case` over a scalar cannot match constructor `%s`" ctor
   in
-  (* An arm that BINDS the scrutinee declares its name as the first statement of its own
-     body: with the `if init; cond` form below the declaration is in the `if` header, and Go
-     rejects a declared-and-unused variable, so the discard has to be inside. *)
-  let discard_variable body_indent arm arm_env =
-    match arm_pattern arm with
-    | PVar name ->
-      Printf.bprintf buffer "%s_ = %s\n" body_indent (local_ident name);
-      arm_env
-    | _ -> arm_env
+  (* An arm whose pattern BINDS the scrutinee — `case n of v -> …`, possibly with a guard —
+     declares its name BEFORE the switch, because a guard is written in terms of that name
+     and a case's own condition is evaluated before its body runs.  One declaration per
+     distinct name: two arms binding the same one would be a redeclaration. *)
+  let bound_names =
+    List.fold_left (fun found arm ->
+      match arm_pattern arm with
+      | PVar name when not (List.mem name found) -> found @ [name]
+      | _ -> found) [] arms
   in
-  (* The arms are ONE if/else-if chain, not a run of independent `if`s.  In expression
-     position every arm ends in a `return`, so a missing `else` was invisible; as STATEMENTS
-     — a `case` in a test block — it meant the arms after a matching one ran as well, and a
-     `case label of "hello" -> … _ -> …` executed BOTH.  A chain also says what the code
-     means: at most one arm runs. *)
-  let rec chain ~first = function
+  List.iter (fun name ->
+    Printf.bprintf buffer "%s%s := %s\n%s_ = %s\n" inner (local_ident name) scrut_name
+      inner (local_ident name)) bound_names;
+  let arm_env_of arm =
+    match arm_pattern arm with
+    | PVar name -> (name, scrut_ty) :: env
+    | _ -> env
+  in
+  (* The arms are ONE expressionless `switch`, not a run of independent `if`s.  In expression
+     position every arm ends in a `return`, so a missing `else` was invisible; as STATEMENTS —
+     a `case` in a test block — it meant the arms after a matching one ran as well, and a
+     `case label of "hello" -> … _ -> …` executed BOTH.
+
+     A `switch` rather than an if/else chain because that is what the shape IS: first match
+     wins, no fallthrough, at most one arm.  It is also what staticcheck asks for — an
+     if/else chain of equality tests against one value is QF1003 — and emitted code a linter
+     would rewrite is an emitter bug by contract. *)
+  (* A TAGGED switch where the arms allow one: every arm a literal, at most a trailing
+     catch-all, and a compared type Go's own `==` decides (a String or a Float — an `Int` is
+     `teslrt.Int` and compares through the runtime, so its cases stay expressions).  That is
+     the form staticcheck asks for (QF1002/QF1003 both fire on the alternatives), and it is
+     also the one a reader recognises fastest. *)
+  let compared_ty, compared_scrut = match scrut_ty with
+    | TNewtype info -> info.base, Printf.sprintf "%s.Value" scrut_name
+    | ty -> ty, scrut_name
+  in
+  let literal_of arm = match arm_pattern arm, arm_guard arm with
+    | PLit { value; loc }, None ->
+      Some (emit_expr ~expected:compared_ty ~indent:inner signatures env
+              (ELit { lit = value; loc }))
+    | _ -> None
+  in
+  let tagged =
+    (compared_ty = TString || compared_ty = TFloat)
+    && (let rec walk = function
+          | [] -> true
+          (* A trailing catch-all is the `default`; anything else must be a literal. *)
+          | [arm] when arm_guard arm = None ->
+            (match arm_pattern arm with
+             | PWild | PVar _ -> true
+             | _ -> literal_of arm <> None)
+          | arm :: rest -> literal_of arm <> None && walk rest
+        in
+        walk arms)
+  in
+  let body_indent = inner ^ "\t" in
+  if tagged then begin
+    Printf.bprintf buffer "%sswitch %s {\n" inner compared_scrut;
+    let rec tagged_cases = function
+      | [] ->
+        Printf.bprintf buffer "%sdefault:\n%spanic(\"unreachable: checker guarantees case \
+                               exhaustiveness\")\n" inner body_indent
+      | arm :: rest ->
+        (match literal_of arm with
+         | Some literal ->
+           Printf.bprintf buffer "%scase %s:\n" inner literal;
+           (arm_body arm) (arm_env_of arm) body_indent;
+           tagged_cases rest
+         | None ->
+           Printf.bprintf buffer "%sdefault:\n" inner;
+           (arm_body arm) (arm_env_of arm) body_indent)
+    in
+    tagged_cases arms;
+    Printf.bprintf buffer "%s}\n" inner;
+    Printf.bprintf buffer "%s}\n" indent
+  end else begin
+  Printf.bprintf buffer "%sswitch {\n" inner;
+  let rec cases = function
     | [] ->
-      if first then
-        Printf.bprintf buffer
-          "%spanic(\"unreachable: checker guarantees case exhaustiveness\")\n" inner
-      else
-        Printf.bprintf buffer " else {\n%s\tpanic(\"unreachable: checker guarantees case \
-                               exhaustiveness\")\n%s}\n" inner inner
+      Printf.bprintf buffer "%sdefault:\n%spanic(\"unreachable: checker guarantees case \
+                             exhaustiveness\")\n" inner body_indent
     | arm :: rest ->
-      let condition, arm_env = condition_of arm in
+      let condition, _ = condition_of arm in
+      let arm_env = arm_env_of arm in
       let guard = arm_guard arm in
-      (* A guard on a VARIABLE pattern reads the name the arm binds, so the binding is
-         declared in the `if`'s own init statement — where it is in scope for the condition
-         and for the body, and for nothing else. *)
-      let initialiser = match arm_pattern arm, guard with
-        | PVar name, Some _ ->
-          Printf.sprintf "%s := %s; " (local_ident name) scrut_name
-        | _ -> ""
-      in
       let full_condition = match condition, guard with
         | None, None -> None
         | Some condition, None -> Some condition
         | None, Some guard ->
-          Some (strip_outer_parens (emit_expr ~indent:inner signatures arm_env guard))
+          Some (strip_outer_parens (emit_expr ~indent:body_indent signatures arm_env guard))
         | Some condition, Some guard ->
           Some (Printf.sprintf "%s && %s" condition
-                  (strip_outer_parens (emit_expr ~indent:inner signatures arm_env guard)))
+                  (strip_outer_parens (emit_expr ~indent:body_indent signatures arm_env guard)))
       in
       (match full_condition with
+       (* An unconditional arm is the DEFAULT, and it closes the switch: everything after it
+          is unreachable, which the checker's exhaustiveness rule already says. *)
        | None ->
-         (* An unconditional arm CLOSES the chain: everything after it is unreachable, which
-            the checker's exhaustiveness rule already says. *)
-         let body_indent = inner ^ "\t" in
-         if first then Printf.bprintf buffer "%s{\n" inner
-         else Printf.bprintf buffer " else {\n";
-         (match arm_pattern arm with
-          | PVar name ->
-            Printf.bprintf buffer "%s%s := %s\n%s_ = %s\n" body_indent (local_ident name)
-              scrut_name body_indent (local_ident name)
-          | _ -> ());
-         (arm_body arm) arm_env body_indent;
-         Printf.bprintf buffer "%s}\n" inner
+         Printf.bprintf buffer "%sdefault:\n" inner;
+         (arm_body arm) arm_env body_indent
        | Some condition ->
-         if first then Printf.bprintf buffer "%sif %s%s {\n" inner initialiser condition
-         else Printf.bprintf buffer " else if %s%s {\n" initialiser condition;
-         let body_indent = inner ^ "\t" in
-         let arm_env = discard_variable body_indent arm arm_env in
+         Printf.bprintf buffer "%scase %s:\n" inner condition;
          (arm_body arm) arm_env body_indent;
-         Printf.bprintf buffer "%s}" inner;
-         chain ~first:false rest)
+         cases rest)
   in
-  chain ~first:true arms;
+  cases arms;
+  Printf.bprintf buffer "%s}\n" inner;
   Printf.bprintf buffer "%s}\n" indent
+  end
 
 and emit_adt_case_statements ?(indent="") ?(terminating=true) signatures env buffer scrut arms =
   let info, type_args = match type_of_expr signatures env scrut with
@@ -6861,7 +6920,12 @@ and emit_negated ?(indent="") signatures env expr =
     (* The operand type comes from whichever side HAS one, whether the other is a defaulted
        empty list or an under-constrained constructor. *)
     let ty = match typed_with_default (type_of_expr signatures env) left with
-      | Some left_ty, false -> left_ty
+      | Some left_ty, false when not (has_anon left_ty) -> left_ty
+      (* An anonymous argument yields to the other side, as a defaulted empty list does. *)
+      | Some left_ty, false ->
+        (match typed_with_default (type_of_expr signatures env) right with
+         | Some right_ty, false when not (has_anon right_ty) -> right_ty
+         | _ -> left_ty)
       | _ -> type_of_expr signatures env right
     in
     let emitted_left = emit_expr ~expected:ty ~indent signatures env left
@@ -10903,7 +10967,7 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
          so what is left after the fold is the function's NAME.  A name is not what is
          expected to fail; RUNNING it is, so a zero-parameter function is applied here.  The
          parenthesised spelling `expectFail (f ())` already arrives applied. *)
-      let call = match normalize_call_head call with
+      let applied_call = match normalize_call_head call with
         | EVar { name; _ }
           when (match Hashtbl.find_opt signatures name with
                 | Some { params = []; _ } -> true
@@ -10911,6 +10975,15 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
           EApp { fn = call; arg = EConstructor { name = "Unit"; args = []; loc }; loc }
         | _ -> call
       in
+      let call = applied_call in
+      (* What is expected to fail has to be something that RUNS.  A partially applied
+         function is a VALUE — `expectFail add 1` builds a function of the rest and evaluates
+         nothing — so it is refused rather than passing vacuously. *)
+      (match type_of_expr signatures env call with
+       | TFunc _ -> unsupported loc
+         "Go backend requires a fully-applied call in `expectFail`: a partially applied \
+          function is a value, and a value cannot fail"
+       | _ -> ());
       (* A proof operation ERASES here, so it cannot be what fails: `expectFail (fn () ->
          detachFact …)` asserts a Racket RUNTIME restriction (its `detachFact` raises when a
          value carries more than one proof), and a program built on that assertion would run
@@ -11698,6 +11771,11 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
        (see the `expectFail` emission).  Computed here, where the bodies are in hand. *)
     Hashtbl.reset proof_op_functions;
     Hashtbl.reset current_functions;
+    (* Per MODULE, like the tables above: a whole program is compiled in one process, and a
+       generic `fn swap` in one module left its type parameters attached to the NAME — so a
+       monomorphic `swap` in the next module was read as generic and its call refused for a
+       type argument it does not have. *)
+    Hashtbl.reset current_type_params;
     List.iter (function
       | DFunc f -> Hashtbl.replace current_functions f.name f
       | _ -> ()) m.decls;

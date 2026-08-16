@@ -128,60 +128,30 @@ fn readOne() -> Int requires [dbRead] =
   1
 
 fn writeOne() -> Int requires [dbWrite] =
-  with database D {
-    let _ = insert Row { id: "r1", name: "ada" }
-    1
-  }
+  let _ = insert Row { id: "r1", name: "ada" }
+  1
 |})
 
-let t_read_and_write_in_one_block_is_not_listed () =
-  (* A block that both reads and writes has its HEAD excluded: a breakpoint there
-     must stop before the world changes, even though the block also reads.  The
-     inner read's own line stays listed — pausing after a read is safe whatever
-     else the block does — so the expectation names the inner line (24) and the
-     point of the test is that the head (22) is absent. *)
-  check_lines ~expected:[ 24 ]
+let t_read_and_write_in_one_function_lists_only_the_read () =
+  (* A function that both writes and reads lists the READ line and not the write:
+     pausing after a read is safe whatever else the function does, and a breakpoint
+     on a mutation must still stop before the world changes. *)
+  check_lines ~expected:[ 23 ]
     (db_prelude ^ {|
 fn readOne() -> Int requires [dbRead] =
   1
 
 fn writeOne() -> Int requires [dbRead, dbWrite] =
-  with database D {
-    let _ = insert Row { id: "r1", name: "ada" }
-    let rows = select r from Row
-    List.length rows
-  }
+  let _ = insert Row { id: "r1", name: "ada" }
+  let rows = select r from Row
+  List.length rows
 |})
 
-(* ── `with database` blocks: the head line carries the block ─────────────── *)
-
-let t_read_only_with_database_head_is_listed () =
-  (* 19 = `with database D {`, 20 = the select inside it (no checkpoint of its
-     own — the block is one statement, so the head must be the read line). *)
-  check_lines ~expected:[ 19; 20 ]
-    (db_prelude ^ {|
-fn readOne() -> Int requires [dbRead] =
-  with database D {
-    let rows = select r from Row where r.name == "ada"
-    List.length rows
-  }
-
-fn writeOne() -> Int requires [dbWrite] =
-  1
-|})
-
-let t_with_database_containing_a_write_is_not_listed () =
-  check_lines ~expected:[]
-    (db_prelude ^ {|
-fn readOne() -> Int requires [dbRead] =
-  1
-
-fn writeOne() -> Int requires [dbWrite] =
-  with database D {
-    let _ = insert Row { id: "r1", name: "ada" }
-    1
-  }
-|})
+(* The free-floating `with database D { … }` BLOCK is gone from the language — a database is
+   connected by `main`, and a test binds one in its own header — so the two cases that pinned
+   "the block is one statement, and its head line carries it" have no subject. What they were
+   really about, that a read line is listed and a write line is not, is pinned by the two
+   cases above on ordinary statements. *)
 
 (* ── No query → no table ─────────────────────────────────────────────────── *)
 
@@ -228,14 +198,8 @@ let () =
     ];
     "writes", [
       test_case "a write line is not listed" `Quick t_write_line_is_not_listed;
-      test_case "a block that both reads and writes is not listed" `Quick
-        t_read_and_write_in_one_block_is_not_listed;
-    ];
-    "with-database", [
-      test_case "a read-only block's head line is listed" `Quick
-        t_read_only_with_database_head_is_listed;
-      test_case "a block containing a write is not listed" `Quick
-        t_with_database_containing_a_write_is_not_listed;
+      test_case "a function that both reads and writes lists only the read" `Quick
+        t_read_and_write_in_one_function_lists_only_the_read;
     ];
     "shape", [
       test_case "a module with no query emits no table" `Quick

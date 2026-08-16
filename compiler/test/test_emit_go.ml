@@ -955,14 +955,6 @@ let test_generics_with_go () =
       run_go_gates root)
 
 let test_generic_limits_fail_closed () =
-  let expect_go_error label needle source =
-    match Compile.compile_go_source ("<" ^ label ^ ">") source with
-    | Compile.GoSuccess _ -> failf "%s emitted unsupported Go artifacts" label
-    | Compile.GoFailure diagnostics ->
-      check bool label true
-        (List.exists (fun (d : Compile.diagnostic) ->
-           d.source = "go-emitter" && contains d.message needle) diagnostics)
-  in
   (* Equality on a generic ADT USED to be rejected — a `TeslEqual` method cannot
      dispatch `teslrt.Equal` for an unknown instantiation.  It is supported now,
      because a payload comparison needs no tag switch: "same tag, and for each variant
@@ -996,10 +988,12 @@ fn unbox(b: Boxed) -> Int = 0
      check bool "unapplied generic type rejected before emission" true
        (List.exists (fun (d : Compile.diagnostic) ->
           d.source <> "go-emitter" && contains d.message "type argument") diagnostics));
-  (* A nullary constructor outside an expected-type position has nothing to
-     instantiate it. *)
-  expect_go_error "uninstantiated nullary constructor" "cannot infer type argument"
-    {|module LooseNullary exposing [Boxed, make]
+  (* A nullary constructor outside an expected-type position has nothing to instantiate it,
+     and that is no longer a refusal: the parameter has NO INHABITANTS there — the variant
+     that would carry one is not the variant in hand — so it renders as the empty struct.
+     It cannot widen a declared type; that is asserted separately ("an anonymous type
+     argument does not widen a declared type"). *)
+  (match Compile.compile_go_source "<loose-nullary>" {|module LooseNullary exposing [Boxed, make]
 import Tesl.Prelude exposing [Int]
 type Boxed a
   = Box value: a
@@ -1007,7 +1001,14 @@ type Boxed a
 fn make() -> Int =
   let b = None_
   0
-|}
+|} with
+   | Compile.GoFailure diagnostics ->
+     failf "an unconstrained nullary constructor was refused: %s"
+       (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+   | Compile.GoSuccess artifacts ->
+     let module_go = artifact "internal/teslmodloosenullary/module.go" artifacts in
+     check bool "an unsettled type argument is the empty struct" true
+       (contains module_go "Boxed[struct{}]{Tag: BoxedNone_}"))
 
 let maybe_source = {|module GoMaybe exposing [Slot, describe, orZero, wrap, none, emptySlot, slotValue]
 import Tesl.Prelude exposing [Int, String]
@@ -1126,19 +1127,21 @@ fn count(r: DeleteResult) -> Int =
      failf "DeleteResult failed to compile: %s"
        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics)));
   (* The point of this case survives: the runtime ADTs are whitelisted BY NAME, not
-     "any stdlib ADT".  One that has no runtime type behind it still fails closed —
-     `TimeZone` is 489 IANA constructors and its own TZif reader, and none of it is built. *)
-  let unsupported = {|module ZoneUser exposing [zoneName]
+     "any stdlib ADT".  One that has no runtime type behind it still fails closed.
+     `TimeZone` used to be the example and is now BUILT (489 IANA constructors through the
+     compiler's own catalogue), so the example is a type that still has nothing behind it —
+     which is the point: the list is a list, and a name not on it is refused. *)
+  let unsupported = {|module SpanUser exposing [spanName]
 import Tesl.Prelude exposing [String]
-import Tesl.Time exposing [TimeZone]
-fn zoneName(z: TimeZone) -> String = "z"
+import Tesl.Telemetry exposing [Span]
+fn spanName(s: Span) -> String = "s"
 |} in
-  match Compile.compile_go_source "<go-time-zone>" unsupported with
+  match Compile.compile_go_source "<go-span>" unsupported with
   | Compile.GoSuccess _ -> fail "an unsupported stdlib ADT emitted Go artifacts"
   | Compile.GoFailure diagnostics ->
     check bool "an unlisted stdlib ADT is refused" true
       (List.exists (fun (d : Compile.diagnostic) ->
-         d.source = "go-emitter" && contains d.message "`Tesl.Time` export `TimeZone`")
+         d.source = "go-emitter" && contains d.message "`Tesl.Telemetry` export `Span`")
         diagnostics)
 
 let string_source = {|module GoStrings exposing [size, shout, initial, parsed, found, label, checked]
@@ -1479,36 +1482,11 @@ let test_higher_order_lists_with_go () =
       ignore (run_command root "go test -race -count=1 ./...");
       run_go_gates root)
 
-(* Tesl functions are curried and lambdas are real closures, so a function VALUE is a
-   language feature rather than a corner case — and it needs a calling-convention
-   decision the backend has not made.  Until then it must fail closed rather than
-   emit something that only works for the fully-applied shape. *)
-let test_function_values_fail_closed () =
-  let expect_failure label source =
-    match Compile.compile_go_source ("<" ^ label ^ ">") source with
-    | Compile.GoSuccess _ -> failf "%s emitted Go artifacts" label
-    | Compile.GoFailure diagnostics ->
-      check bool label true
-        (List.exists (fun (d : Compile.diagnostic) ->
-           d.source = "go-emitter") diagnostics)
-  in
-  expect_failure "let-bound lambda as a function value" {|module LambdaValue exposing [doubled]
-import Tesl.Prelude exposing [Int, List]
-import Tesl.List exposing [List.map]
-fn doubled(xs: List Int) -> List Int =
-  let twice = fn(x: Int) -> x * 2
-  List.map twice xs
-|};
-  (* A partial application AT a higher-order argument is supported — it emits fully
-     applied — so the boundary is a partial application used as a VALUE. *)
-  expect_failure "let-bound partial application" {|module PartialValue exposing [shifted]
-import Tesl.Prelude exposing [Int, List]
-import Tesl.List exposing [List.map]
-fn add(a: Int, b: Int) -> Int = a + b
-fn shifted(xs: List Int) -> List Int =
-  let bump = add 1
-  List.map bump xs
-|}
+(* Function VALUES — a `let`-bound lambda, and a `let`-bound partial application — used to
+   fail closed here for want of a calling convention. Both emit now: a lambda becomes a Go
+   func literal and a partial application the runtime combinator that closes over what was
+   given. What they do is tested where the feature lives ("function values and lambdas",
+   with its Racket oracle), so this file no longer states the refusal. *)
 
 let check_list_source = {|module GoCheckLists exposing [Small, checkSmall, checkBelow, kept, keptBelow, allKept, sizeOfKept]
 import Tesl.Prelude exposing [Int, List]
@@ -4754,12 +4732,15 @@ let test_scalar_case_with_go () =
   (* The scrutinee is bound once — `a + b` is not re-evaluated per arm. *)
   check bool "the scrutinee is bound once" true
     (contains module_go "teslScrut1 := teslrt.Add(a, b)");
+  (* The arms are ONE expressionless switch: first match wins, no fallthrough, at most one
+     arm — which is what a `case` means, and what an if/else chain of equality tests against
+     one value is only by convention (staticcheck asks for the switch: QF1003). *)
   check bool "an Int literal arm compares through the runtime" true
-    (contains module_go "if teslrt.Equal(teslScrut1, teslrt.FromInt64(0)) {");
+    (contains module_go "case teslrt.Equal(teslScrut1, teslrt.FromInt64(0)):");
   check bool "a String literal arm compares directly" true
-    (contains module_go "if teslScrut1 == \"yes\" {");
+    (contains module_go "switch teslScrut1 {") ;
   check bool "a Bool arm is the scrutinee, or its negation" true
-    (contains module_go "if !teslScrut1 {");
+    (contains module_go "case !teslScrut1:");
   (* A guarded variable arm binds BEFORE the guard runs: the guard names the variable. *)
   check bool "a guarded variable pattern binds before its guard" true
     (contains module_go "other := teslScrut1");
@@ -5888,23 +5869,13 @@ let test_api_test_json_with_go () =
      response. *)
   gate_emitted "tesl-go-api-json" emitted
 
-let test_divergent_float_functions_fail_closed () =
-  (* Go's sin/cos/tan disagree with Racket on 22-34% of inputs and its math.Log is
-     outright wrong for subnormals, so these are rejected rather than emitted
-     divergent.  sqrt is the one that is bit-identical, and it IS supported. *)
-  let expect_go_error name source =
-    match Compile.compile_go_source ("<go-" ^ name ^ ">") source with
-    | Compile.GoSuccess _ -> failf "%s emitted Go artifacts" name
-    | Compile.GoFailure diagnostics ->
-      check bool name true
-        (List.exists (fun (d : Compile.diagnostic) ->
-           d.source = "go-emitter" && contains d.message ("`" ^ name ^ "`")) diagnostics)
-  in
-  List.iter (fun name ->
-    expect_go_error name (Printf.sprintf {|module Divergent exposing [apply]
-import Tesl.Float exposing [Float, %s]
-fn apply(x: Float) -> Float = %s x
-|} name name)) ["Float.log"; "Float.exp"; "Float.sin"; "Float.cos"; "Float.tan"]
+(* The transcendentals used to fail closed here: Go's sin/cos/tan disagree with Racket on
+   22-34% of inputs and its math.Log is outright wrong for subnormals. They are SUPPORTED
+   now — the maintainer's recorded call (2026-08-12) is that a divergence of up to an ulp on
+   the transcendentals is acceptable, and `Float.log` no longer diverges at all (the runtime
+   scales a subnormal into the normal range rather than forwarding to math.Log). What they
+   emit and what they answer is pinned where the feature lives ("a plain-value check tail,
+   and the Float transcendentals"), so this file no longer states the refusal. *)
 
 let set_source = {|module GoSets exposing [build, has, size, without, both, common, only, subset, listed, sameSet, emptyOf]
 import Tesl.Prelude exposing [Bool(..), Int, List, String]
@@ -6551,14 +6522,13 @@ let test_unsupported_newtypes_fail_closed () =
         (List.exists (fun (d : Compile.diagnostic) ->
            d.source = "go-emitter" && contains d.message needle) diagnostics)
   in
+  (* A newtype over a NEWTYPE is SUPPORTED — `type WrappedUserId = UserId` nests exactly as
+     Racket nests it — so it is no longer a case here; see "a newtype over a newtype, and
+     unobservable containers" for what it emits and its Racket oracle. What stays refused is
+     a base that is not a type at all in this position: an APPLIED one. *)
   expect_go_error "applied newtype base" "applied types" {|module AppliedNewtype exposing [Counts]
 import Tesl.Prelude exposing [Int, List]
 type Counts = (List Int)
-|};
-  expect_go_error "transitive newtype base" "not a direct scalar type" {|module TransitiveNewtype exposing [UserId, WrappedUserId]
-import Tesl.Prelude exposing [String]
-type UserId = String
-type WrappedUserId = UserId
 |}
 
 let record_source = {|module GoRecords exposing [Slug, Point, Line, makePoint, moveTo, retarget, sameSpot, slugOf, describeX]
@@ -6869,17 +6839,14 @@ let test_unsupported_adts_fail_closed () =
         (List.exists (fun (d : Compile.diagnostic) ->
            d.source = "go-emitter" && contains d.message needle) diagnostics)
   in
-  (* Generic ADTs themselves are supported (see the generic-ADT cases); a type
-     parameter the emitter cannot resolve to a Go type still fails closed. *)
-  expect_go_error "generic function signature" "type variable" {|module GenericFn exposing [identity]
-import Tesl.Prelude exposing []
-fn identity(value: a) -> a = value
-|};
-  (* A DIRECT self-reference is supported now (see the recursive-ADT case): the field is a
-     pointer.  A self-reference reached through another VALUE type is not — the indirection
-     would have to live inside that type's own layout — and neither is a GENERIC type
-     referring to itself at a DIFFERENT instantiation, which Go rejects as an instantiation
-     cycle rather than compiling to anything. *)
+  (* A GENERIC FUNCTION is supported now — `fn identity(value: a) -> a` becomes
+     `func Identity[A any](value A) A`, and a call reads its type argument off what it is
+     applied to (see "a generic function", with its Racket oracle). What still fails closed
+     is a type parameter nothing can settle AT THE CALL, which that test states.
+
+     A DIRECT self-reference is supported too: the field is a pointer. A self-reference
+     reached through another VALUE type is not — the indirection would have to live inside
+     that type's own layout. *)
   expect_go_error "indirectly recursive ADT" "the payload field IS the type"
     {|module RecursiveAdt exposing [Chain, depth]
 import Tesl.Prelude exposing [Int]
@@ -6889,14 +6856,11 @@ type Chain
   | Link (next: Maybe Chain)
 fn depth(c: Chain) -> Int = 0
 |};
-  expect_go_error "recursive generic ADT at another instantiation" "not to another instantiation"
-    {|module RecursiveGeneric exposing [Tree, size]
-import Tesl.Prelude exposing [Int]
-type Tree a
-  = Leaf
-  | Node (left: (Tree Int)) (value: a) (right: (Tree Int))
-fn size(t: Tree Int) -> Int = 0
-|};
+  (* A generic type naming itself at ANOTHER instantiation (`Node left: (Tree Int)` inside
+     `Tree a`) is supported now: the field takes the same pointer a self-reference at its own
+     instantiation gets, and Go accepts the declaration — the instantiation cycle it rejects
+     is the one whose type ARGUMENT grows. See "a recursive generic at another
+     instantiation". *)
   (* A `case` over Int, String or Bool IS supported now; anything with no equality this backend
      emits — a record here, and a Float, which cannot even be written as a pattern — still fails
      closed rather than being guessed at. *)
@@ -6907,17 +6871,10 @@ record Point { x: Int }
 fn classify(p: Point) -> String =
   case p of
     _ -> "other"
-|};
-  expect_go_error "proof-carrying constructor field" "proof-carrying constructor field"
-    {|module ProofVariant exposing [Positive, Wrapped, unwrap]
-import Tesl.Prelude exposing [Int]
-fact Positive (n: Int)
-type Wrapped
-  = Wrap (value: Int ::: Positive value)
-fn unwrap(w: Wrapped) -> Int =
-  case w of
-    Wrap value -> value
 |}
+  (* A proof-carrying CONSTRUCTOR field is supported now: the annotation is a type-level
+     contract with no runtime structure, so the field is its own type and the proof erases —
+     the same rule a record field follows. See "proof shapes at the edges of erasure". *)
 
 let test_string_bool_proof_consumers_with_go () =
   let emitted = match Compile.compile_go_source "<go-proof-scalars>" proof_scalar_source with
@@ -11094,9 +11051,14 @@ let test_case_statement_chain_with_go () =
         (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
   in
   let tests_go = artifact "internal/teslmodgocasestmt/module_test.go" emitted in
-  (* The scalar arms are ONE chain: an `else` is what says at most one runs. *)
-  check bool "a scalar case is an if/else chain" true (contains tests_go "} else if ");
-  check bool "a scalar catch-all is the chain's else" true (contains tests_go "} else {");
+  (* The scalar arms are ONE switch: first match wins, no fallthrough, at most one arm — and
+     a TAGGED one where every arm is a literal Go's `==` decides, which is the form
+     staticcheck asks for and the one a reader recognises. *)
+  check bool "a String case is a tagged switch" true (contains tests_go "switch teslScrut2 {");
+  check bool "its catch-all is the default" true (contains tests_go "default:");
+  (* An Int compares through the runtime, so its cases stay expressions. *)
+  check bool "an Int case switches on expressions" true
+    (contains tests_go "case teslrt.Equal(");
   (* A guarded ADT arm cannot be an `else if` — its guard reads bindings that only exist
      once the tag matched — so a flag carries "an arm already ran". *)
   check bool "a guarded ADT case carries a matched flag" true (contains tests_go "teslMatched");
@@ -12067,14 +12029,12 @@ let () =
       test_case "Float keys in Dict and Set" `Slow test_float_keys_with_go;
       test_case "Float keys behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-float-keys>" float_key_source);
-      test_case "divergent Float functions fail closed" `Quick test_divergent_float_functions_fail_closed;
       test_case "dicts behave the same on Racket" `Slow (racket_behavior_oracle "<go-dicts>" dict_source);
       test_case "unordered dict keys fail closed" `Quick test_unordered_dict_keys_fail_closed;
       test_case "Either behaves the same on Racket" `Slow (racket_behavior_oracle "<go-either>" either_source);
       test_case "tuples behave the same on Racket" `Slow (racket_behavior_oracle "<go-tuples>" tuple_source);
       test_case "check-driven lists behave the same on Racket" `Slow (racket_behavior_oracle "<go-check-lists>" check_list_source);
       test_case "higher-order lists behave the same on Racket" `Slow (racket_behavior_oracle "<go-hof>" hof_source);
-      test_case "function values fail closed" `Quick test_function_values_fail_closed;
       test_case "lists behave the same on Racket" `Slow (racket_behavior_oracle "<go-lists>" list_source);
       test_case "unsupported Tesl.List exports fail closed" `Quick test_unsupported_list_exports_fail_closed;
       test_case "Tesl.String behaves the same on Racket" `Slow (racket_behavior_oracle "<go-strings>" string_source);

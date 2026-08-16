@@ -142,7 +142,8 @@ type lowered = {
 
 let lower label src =
   let body = parse_query src in
-  (* The body is `with database D { <query> }`; the query is its content. *)
+  (* A function body is the query itself.  The `EWithDatabase` arm remains because a TEST
+     body still binds a database in its header and lowers through the same node. *)
   let query = match body with
     | Ast.EWithDatabase { body = q; _ } -> q
     | other -> other
@@ -172,15 +173,13 @@ let test_compound_where_then_order () =
   assert_same_lowering "compound where + order"
     ~one_line:{|
 fn q(org: String) -> List Thing requires [dbRead] =
-  with database D { select t from Thing where t.orgId == org && t.archived == False order t.name asc }
+  select t from Thing where t.orgId == org && t.archived == False order t.name asc
 |}
     ~multi_line:{|
 fn q(org: String) -> List Thing requires [dbRead] =
-  with database D {
-    select t from Thing
-      where t.orgId == org && t.archived == False
-      order t.name asc
-  }
+  select t from Thing
+    where t.orgId == org && t.archived == False
+    order t.name asc
 |}
 
 (* The issue's own repro: a functional predicate last, then order + limit. *)
@@ -188,16 +187,14 @@ let test_compound_where_ilike_then_order_limit () =
   assert_same_lowering "compound where with ilike + order + limit"
     ~one_line:{|
 fn q(org: String, pat: String) -> List Thing requires [dbRead] =
-  with database D { select t from Thing where t.orgId == org && t.archived == False && ilike t.name pat order t.name asc limit 5 }
+  select t from Thing where t.orgId == org && t.archived == False && ilike t.name pat order t.name asc limit 5
 |}
     ~multi_line:{|
 fn q(org: String, pat: String) -> List Thing requires [dbRead] =
-  with database D {
-    select t from Thing
-      where t.orgId == org && t.archived == False && ilike t.name pat
-      order t.name asc
-      limit 5
-  }
+  select t from Thing
+    where t.orgId == org && t.archived == False && ilike t.name pat
+    order t.name asc
+    limit 5
 |}
 
 (* A SINGLE comparison predicate was broken too — the issue reported this shape
@@ -206,32 +203,28 @@ let test_single_where_then_order_limit_offset () =
   assert_same_lowering "single where + order + limit + offset"
     ~one_line:{|
 fn q(org: String) -> List Thing requires [dbRead] =
-  with database D { select t from Thing where t.orgId == org order t.name desc limit 2 offset 1 }
+  select t from Thing where t.orgId == org order t.name desc limit 2 offset 1
 |}
     ~multi_line:{|
 fn q(org: String) -> List Thing requires [dbRead] =
-  with database D {
-    select t from Thing
-      where t.orgId == org
-      order t.name desc
-      limit 2
-      offset 1
-  }
+  select t from Thing
+    where t.orgId == org
+    order t.name desc
+    limit 2
+    offset 1
 |}
 
 let test_or_where_then_order () =
   assert_same_lowering "|| where + order"
     ~one_line:{|
 fn q(org: String) -> List Thing requires [dbRead] =
-  with database D { select t from Thing where t.orgId == org || t.archived == True order t.name asc }
+  select t from Thing where t.orgId == org || t.archived == True order t.name asc
 |}
     ~multi_line:{|
 fn q(org: String) -> List Thing requires [dbRead] =
-  with database D {
-    select t from Thing
-      where t.orgId == org || t.archived == True
-      order t.name asc
-  }
+  select t from Thing
+    where t.orgId == org || t.archived == True
+    order t.name asc
 |}
 
 (* ── 2. The symptom itself: no free binder / clause keyword in the output ─── *)
@@ -239,10 +232,8 @@ fn q(org: String) -> List Thing requires [dbRead] =
 let test_emit_has_no_free_binder () =
   let out = emit {|
 fn q(org: String, pat: String) -> Int requires [dbRead] =
-  with database D {
-    let rows = select t from Thing where t.orgId == org && t.archived == False && ilike t.name pat order t.name asc limit 5
-    List.length rows
-  }
+  let rows = select t from Thing where t.orgId == org && t.archived == False && ilike t.name pat order t.name asc limit 5
+  List.length rows
 |} in
   (* Before the fix this emitted `(ilike … pat order … asc limit 5)` — the clause
      keywords as ordinary identifiers, and `t` as a free variable. *)
@@ -261,21 +252,17 @@ let test_query_as_argument_one_line () =
   should_pass "one-line query as a call argument"
     {|
 fn q(org: String) -> Int requires [dbRead] =
-  with database D {
-    List.length (select t from Thing where t.orgId == org && t.archived == False order t.name asc limit 5)
-  }
+  List.length (select t from Thing where t.orgId == org && t.archived == False order t.name asc limit 5)
 |}
 
 let test_query_as_argument_multi_line () =
   should_pass "multi-line query as a call argument"
     {|
 fn q(org: String) -> Int requires [dbRead] =
-  with database D {
-    List.length (select t from Thing
-      where t.orgId == org && t.archived == False
-      order t.name asc
-      limit 5)
-  }
+  List.length (select t from Thing
+    where t.orgId == org && t.archived == False
+    order t.name asc
+    limit 5)
 |}
 
 (* ── 4. The class: an unlowerable query fails at CHECK, with the cause ───── *)
@@ -287,7 +274,7 @@ let test_non_literal_limit_rejected_at_check () =
   should_fail "a variable `limit`" ~expect:"lowered from an integer literal"
     {|
 fn q(org: String, n: Int) -> List Thing requires [dbRead] =
-  with database D { select t from Thing where t.orgId == org order t.name asc limit n }
+  select t from Thing where t.orgId == org order t.name asc limit n
 |}
 
 (* Single-line `update` has never been supported.  It used to check CLEAN and
@@ -296,13 +283,13 @@ let test_single_line_update_rejected_at_check () =
   should_fail "single-line update" ~expect:"no lowering for this SQL shape"
     {|
 fn q(org: String) -> Unit requires [dbRead, dbWrite] =
-  with database D { update t in Thing where t.orgId == org set t.archived = True }
+  update t in Thing where t.orgId == org set t.archived = True
 |}
 
 let test_single_line_update_hint_shows_multi_line_form () =
   let _, out = check {|
 fn q(org: String) -> Unit requires [dbRead, dbWrite] =
-  with database D { update t in Thing where t.orgId == org set t.archived = True }
+  update t in Thing where t.orgId == org set t.archived = True
 |} in
   if not (contains out "update p in Entity") then
     failf "the rejection does not show the working multi-line form:\n%s" out
@@ -312,9 +299,7 @@ let test_insert_many_literal_rejected_at_check () =
   should_fail "insertMany on a list literal" ~expect:"the rows must be a NAME"
     {|
 fn q() -> Unit requires [dbRead, dbWrite] =
-  with database D {
-    insertMany [Thing { id: "a", orgId: "o1", name: "alpha", qty: 1, archived: False }] in Thing
-  }
+  insertMany [Thing { id: "a", orgId: "o1", name: "alpha", qty: 1, archived: False }] in Thing
 |}
 
 (* The gate must not fire on the forms that DO lower — the multi-line update and
@@ -323,24 +308,20 @@ let test_gate_accepts_supported_forms () =
   should_pass "multi-line update"
     {|
 fn q(org: String) -> Unit requires [dbRead, dbWrite] =
-  with database D {
-    update t in Thing
-      where t.orgId == org
-      set t.archived = True
-  }
+  update t in Thing
+    where t.orgId == org
+    set t.archived = True
 |};
   should_pass "single-line delete with a compound where"
     {|
 fn q(org: String) -> Unit requires [dbRead, dbWrite] =
-  with database D { delete t from Thing where t.orgId == org && t.archived == False }
+  delete t from Thing where t.orgId == org && t.archived == False
 |};
   should_pass "insertMany on a bound name"
     {|
 fn q() -> Unit requires [dbRead, dbWrite] =
-  with database D {
-    let rows = [Thing { id: "a", orgId: "o1", name: "alpha", qty: 1, archived: False }]
-    insertMany rows in Thing
-  }
+  let rows = [Thing { id: "a", orgId: "o1", name: "alpha", qty: 1, archived: False }]
+  insertMany rows in Thing
 |}
 
 (* Decide-by-resolution: a user function named `select` stands the rule down —
