@@ -53,15 +53,18 @@ most of the corpus's Postgres files do.
   `runtime/go/go.sum` by a seam test, and `postgres.go`/`database.go`/`dbquery.go` gated out of
   every other program.
 
-**Also landed with it:** `deleteAndReturnResult` (its `DeleteResult` is runtime-provided like
+**Also landed with it:** `Queue.requeue` (a `DeadJob` carries the queue it came out of, since
+the call names none — Racket's dead-job carries its queue-spec for the same reason),
+`posixMillisCodec` in the encode direction, `deleteAndReturnResult` (its `DeleteResult` is runtime-provided like
 `Maybe`, since it crosses module boundaries), `unique index` (an INVARIANT, not a hint: the
 in-memory store enforces it because the Racket memory backend does, and the server gets a real
 index from the bootstrap under the name `dsl/sql.rkt` derives — hash-suffixed truncation
 included, so a shared table cannot end up with two indexes doing one job), and `Float.pow`.
 
 **Still refused on the Postgres path**, each with a message naming what is missing: a Money or
-MoneyRate column (two and three columns respectively), `innerJoin`, an ADT constructor that
-CARRIES fields (decoding those needs a derived ADT decoder, which the JSON path does not have
+MoneyRate column (two and three columns respectively), `innerJoin`, a QUEUE as a value (`fn f(q: EmailQueue)` — the queue verbs resolve their
+queue statically by name, so a queue-typed parameter has no Go type yet), an ADT constructor
+that CARRIES fields (decoding those needs a derived ADT decoder, which the JSON path does not have
 either), a `secret` column, and a `set` value that reads the row — Racket's Postgres path binds
 every SET value as a parameter and cannot do that one either.
 
@@ -94,6 +97,17 @@ every SET value as a parameter and cannot do that one either.
    none. The Go runtime guards C's two contradicting special cases (`pow(-1, ±Inf)` = 1,
    `pow(-4, +Inf)` = +Inf) back to NaN, so the two backends agree at every input rather than at
    most of them.
+
+11. **`posixMillisCodec` cannot DECODE, on Racket.** `tesl-decode-prim-posix-millis` answers
+   the bare integer, but a `PosixMillis` field holds a NEWTYPE value — so a request body
+   carrying an instant is a 400 on Racket for a perfectly well formed payload. The corpus never
+   noticed because it only ever uses this codec in `toJson` (`lesson16`). The obvious one-line
+   fix does not work: the newtype's token is a `type-ref` OWNED by `tesl/time.rkt`
+   (`#s(type-ref …/tesl/time.rkt PosixMillis)`), and `dsl/types.rkt` cannot construct one
+   without a cycle — it needs a late-bound hook that `tesl/time.rkt` registers at load time, or
+   the registry lookup made owner-insensitive. Left for a maintainer decision. **The Go emitter
+   supports the ENCODE direction and refuses the DECODE one**, naming the reason, so it never
+   accepts a program the other backend rejects.
 
 **One checker bug found and NOT fixed** (it is not a backend issue): a `case` over a
 `DeleteResult` that names BOTH constructors — `RowsDeleted n` and `NoRowDeleted` — is rejected

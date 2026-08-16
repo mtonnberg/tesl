@@ -112,7 +112,12 @@ func (queue *Queue) dequeue(status string) (string, any, int, bool) {
 // DeadJob is one entry in a queue's dead letter. It is OPAQUE to Tesl — `deadJobs` is typed
 // `List DeadJob` and the type has no accessors — so it carries the job's identity for the
 // runtime's use and nothing a program can read: what a test does with the list is count it.
-type DeadJob struct{ ID string }
+type DeadJob struct {
+	ID string
+	// The queue the job came out of. `requeue job` names no queue — the value carries it, as
+	// Racket's dead-job carries its queue-spec — so this is what makes that call resolvable.
+	queue *Queue
+}
 
 // DeadJobs is the dead letter's contents, oldest first. The order is by enqueue sequence
 // rather than by map iteration, matching the PostgreSQL path's `order by created_at asc`.
@@ -132,7 +137,7 @@ func DeadJobs(queue *Queue) []DeadJob {
 	sort.Slice(found, func(left, right int) bool { return found[left].seq < found[right].seq })
 	dead := make([]DeadJob, 0, len(found))
 	for _, each := range found {
-		dead = append(dead, DeadJob{ID: each.id})
+		dead = append(dead, DeadJob{ID: each.id, queue: queue})
 	}
 	return dead
 }
@@ -293,4 +298,22 @@ func EmptyQueue(queueName, who string) string {
 func EnqueueJob(queue *Queue, payload any) struct{} {
 	Enqueue(queue, payload)
 	return struct{}{}
+}
+
+// Requeue resets a dead job to pending with a fresh attempt count, so the workers pick it up
+// again. It answers whether the job was there to reset — a job the dead letter no longer holds
+// is `False` rather than a trap, which is Racket's answer for the same case.
+func Requeue(job DeadJob) bool {
+	if job.queue == nil {
+		return false
+	}
+	job.queue.mutex.Lock()
+	defer job.queue.mutex.Unlock()
+	found, present := job.queue.jobs[job.ID]
+	if !present {
+		return false
+	}
+	found.status = jobPending
+	found.attempts = 0
+	return true
 }

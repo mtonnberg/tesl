@@ -7354,6 +7354,10 @@ let primitive_codec = function
   | "intCodec" -> Some `Int
   | "boolCodec" -> Some `Bool
   | "floatCodec" -> Some `Float
+  (* A `PosixMillis` crosses the wire as its integer millis and nothing else — the
+     agent-boundary enrichment (`{epochMillis, iso}`) is a different surface, and an HTTP body
+     carries the bare number on both backends (`tesl-encode-prim-posix-millis`). *)
+  | "posixMillisCodec" -> Some `PosixMillis
   | _ -> None
 
 (* The wire shape of a response value, mirroring `runtime-value->jsexpr` in dsl/types.rkt:
@@ -7836,6 +7840,8 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
          (List.map (fun (entry : codec_encode_entry) ->
             let value = Printf.sprintf "teslValue.%s" (field_go entry.field_name) in
             (entry.json_key, match primitive_codec entry.codec with
+              (* The instant is a newtype at run time, so the wire value is its payload. *)
+              | Some `PosixMillis -> value ^ ".Value"
               | Some _ -> value
               | None -> Printf.sprintf "%s(%s)" (codec_encode_ref entry.codec) value))
             entries));
@@ -7874,6 +7880,20 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
                 let decoder = match kind with
                   | `String -> "DecodeStringField" | `Int -> "DecodeIntField"
                   | `Bool -> "DecodeBoolField" | `Float -> "DecodeFloatField"
+                  (* DECODING an instant is refused, and the reason is a bug on the OTHER
+                     backend rather than a gap here: `tesl-decode-prim-posix-millis` answers the
+                     bare integer, and a `PosixMillis` field rejects it (the runtime value is a
+                     newtype whose token is a `type-ref` owned by `tesl/time.rkt`, which
+                     `dsl/types.rkt` cannot construct without a late-bound hook).  A body
+                     carrying one therefore answers 400 on Racket for a perfectly well formed
+                     payload.  Emitting the working Go form would mean accepting a program the
+                     other backend rejects, so this fails closed until that is fixed — see
+                     finding 11 in roadmap/next/migrate_to_golang.md.  ENCODING is supported,
+                     which is the direction the corpus uses. *)
+                  | `PosixMillis -> unsupported codec.loc
+                    "Go backend does not support `posixMillisCodec` in a `fromJson` block yet \
+                     (the Racket decoder answers a bare integer that no `PosixMillis` field \
+                     accepts, so such a body is a 400 there)"
                 in
                 Printf.bprintf body
                   "\t%s, teslErr%s := teslrt.%s(teslJSON, %S)\n\tif teslErr%s != nil {\n\t\treturn teslrt.RejectShape[%s](teslErr%s.Error())\n\t}\n"
@@ -9100,7 +9120,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       | "Tesl.Json" ->
         List.iter (fun name ->
           match name with
-          | "stringCodec" | "intCodec" | "boolCodec" | "floatCodec" -> ()
+          | "stringCodec" | "intCodec" | "boolCodec" | "floatCodec"
+          | "posixMillisCodec" -> ()
           (* A CONTAINER codec names the shape; the field's declared type says how to read each
              element, which is what the decoder walks. *)
           | "listCodec" -> ()
@@ -9272,7 +9293,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | "pubsub"
           (* `deadJobs` is a FUNCTION over a queue (registered as a leaf below), and
              `DeadJob` the opaque type of its elements. *)
-          | "deadJobs" | "DeadJob" -> ()
+          (* `requeue` takes a `DeadJob` back to pending, so importing it brings `DeadJob`
+             in as well — the value it takes has to have a type. *)
+          | "deadJobs" | "DeadJob" | "requeue" -> ()
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.Queue` export `%s` yet" other) exposed
         (* validated against the leaf/type tables below *)
@@ -10048,11 +10071,16 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
        (`DeadJob`), so what a test can do with the list is count it or requeue from it — which
        is what the Racket surface allows too. *)
     let dead_jobs_imported = ref false in
+    let requeue_imported = ref false in
     List.iter (fun (import : import_decl) ->
       if import.module_name = "Tesl.Queue" then begin
         let exposed = match import.names with
           | ImportAll -> [] | ImportExposing names -> names in
-        if List.mem "deadJobs" exposed then dead_jobs_imported := true
+        if List.mem "deadJobs" exposed || List.mem "requeue" exposed then
+          dead_jobs_imported := true;
+        (* `requeue` is an ordinary function over a `DeadJob`, unlike the queue VERBS, which
+           name a queue and are resolved statically. *)
+        if List.mem "requeue" exposed then requeue_imported := true
       end) m.imports;
     List.iter (fun (import : import_decl) ->
       if import.module_name = "Tesl.String" then begin
@@ -10990,6 +11018,18 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       Hashtbl.replace signatures name
         { params; result; go_name; sig_owner = ""; sig_needs_scope = false })
       !effect_imports;
+    (* `requeue job` resets a dead job to pending.  It answers whether the job was there to
+       reset — a dead letter that no longer holds it is `False` rather than a trap, which is
+       the answer `tesl/queue.rkt` gives for the same case. *)
+    if !requeue_imported then
+      (match Hashtbl.find_opt types.records "DeadJob" with
+       | Some row ->
+         Hashtbl.replace signatures "requeue"
+           { params = [TRecord row]; result = TBool; go_name = "teslrt.Requeue";
+             sig_owner = ""; sig_needs_scope = false }
+       | None -> unsupported (Location.dummy_loc m.source_file)
+         "Go backend `requeue` needs `DeadJob` from `Tesl.Queue`");
+
     List.iter (fun name ->
       let posix = match Hashtbl.find_opt types.newtypes "PosixMillis" with
         | Some info -> TNewtype info

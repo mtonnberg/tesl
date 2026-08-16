@@ -3662,6 +3662,155 @@ let test_postgres_live_oracle () =
     Printf.printf "SKIP: no shared PostgreSQL cluster configured (TESL_TEST_POSTGRES_SHARED_*)\n%!"
   | Some env -> racket_behavior_oracle ~env "<go-pg-live-oracle>" postgres_live_source ()
 
+
+(* A `unique index` is an INVARIANT, not a hint: the Racket memory backend raises on an insert
+   that violates one, so accepting the declaration without enforcing it would let `tesl test`
+   pass on data PostgreSQL rejects — the two backends would then run different programs, which
+   is worse than one of them not compiling.  A Postgres-backed entity gets a real index from the
+   bootstrap under the name `dsl/sql.rkt` derives, so a shared table does not end up with two
+   indexes doing one job.  A plain index is a performance hint with no observable effect on
+   either store and is carried nowhere. *)
+let unique_index_source = {|module GoUniqueIndex exposing [add, rename]
+
+import Tesl.Prelude exposing [Int, String, Unit]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Memory]
+
+entity Member table "members" primaryKey id {
+  id: String
+  email: String
+  nickname: Maybe String
+
+  unique index [email]
+  unique index [nickname]
+}
+
+database Team = Database {
+  entities: [Member]
+  backend: Memory
+}
+
+fn add(id: String, email: String) -> Member requires [dbWrite] =
+  insert Member { id: id, email: email, nickname: Nothing }
+
+fn rename(id: String, email: String) -> Unit requires [dbWrite] =
+  update m in Member
+    where m.id == id
+    set m.email = email
+
+test "a unique index is enforced, and NULLs do not collide" requires [dbRead, dbWrite] {
+  let _ = add "m1" "ada@example.com"
+  let _ = add "m2" "grace@example.com"
+  expectFail add "m3" "ada@example.com"
+  # Two rows with a NULL nickname do not violate the index on it: two NULLs are not equal,
+  # which is PostgreSQL's rule and Racket's.
+  expect selectCount m from Member == 2
+  # An UPDATE is checked too, and never against the row it is replacing.
+  let _ = rename "m1" "ada@example.com"
+  expectFail rename "m1" "grace@example.com"
+}
+|}
+
+let test_unique_index_with_go () =
+  let emitted = emit_ok "<go-unique-index>" unique_index_source in
+  let module_go = artifact "internal/teslmodgouniqueindex/module.go" emitted in
+  check bool "an insert carries the declared unique indexes" true
+    (contains module_go "teslrt.UniqueIndexOf(");
+  check bool "and names the columns the refusal will name" true
+    (contains module_go "[]string{\"email\"}");
+  (* A row with a NULL in an indexed column is UNCONSTRAINED, so a nullable column carries a
+     guard and a non-nullable one carries none. *)
+  check bool "a nullable column is unconstrained when it is NULL" true
+    (contains module_go "return teslRow.Nickname.IsSomething()");
+  (* `go test` RUNS it: the two `expectFail`s are the enforcement. *)
+  gate_emitted "tesl-go-unique-index" emitted
+
+
+(* `posixMillisCodec` puts an instant on the wire as its integer millis and nothing else — the
+   agent boundary's `{epochMillis, iso}` enrichment is a different surface.  Only the ENCODE
+   direction is supported: `tesl-decode-prim-posix-millis` answers the bare integer, which no
+   `PosixMillis` field accepts, so a body carrying one is a 400 on Racket for a perfectly well
+   formed payload (finding 11 in the roadmap).  Emitting the working Go form would accept a
+   program the other backend rejects, so the decode direction fails closed. *)
+let posix_codec_source = {|module GoPosixCodec exposing [PosixServer]
+
+import Tesl.Prelude exposing [Int, String]
+import Tesl.Time exposing [PosixMillis, Time.secondsToPosix]
+import Tesl.Json exposing [stringCodec, posixMillisCodec]
+import Tesl.ApiTest exposing [statusOk]
+
+record Stamp {
+  label: String
+  at: PosixMillis
+}
+
+codec Stamp {
+  toJson {
+    label -> "label" with_codec stringCodec
+    at -> "at" with_codec posixMillisCodec
+  }
+  fromJson_forbidden
+}
+
+handler get stamp(seconds: String) -> Stamp =
+  Stamp { label: seconds, at: Time.secondsToPosix 1700000000 }
+
+api StampApi {
+  get "/stamp/:seconds"
+    capture seconds: String using stringCodec
+    -> Stamp
+}
+
+server PosixServer for StampApi {
+  stamp
+}
+
+api-test "an instant crosses the wire as its millis" for PosixServer {
+  let r = get "/stamp/now"
+  expect statusOk r.status
+  expect r.body.label == "now"
+  expect r.body.at == 1700000000000
+}
+|}
+
+let test_posix_codec_with_go () =
+  let emitted = emit_ok "<go-posix-codec>" posix_codec_source in
+  let module_go = artifact "internal/teslmodgoposixcodec/module.go" emitted in
+  (* The instant is a newtype at run time, so the wire value is its payload rather than the
+     struct — a struct there would marshal as an object no Racket client would read. *)
+  check bool "an instant encodes as its integer millis" true
+    (contains module_go "teslValue.At.Value,");
+  let decoding = {|module GoPosixDecode exposing [Stamp]
+import Tesl.Prelude exposing [String]
+import Tesl.Time exposing [PosixMillis]
+import Tesl.Json exposing [stringCodec, posixMillisCodec]
+
+record Stamp {
+  label: String
+  at: PosixMillis
+}
+
+codec Stamp {
+  toJson_forbidden
+  fromJson [
+    {
+      label <- "label" with_codec stringCodec
+      at <- "at" with_codec posixMillisCodec
+    }
+  ]
+}
+|} in
+  (match Compile.compile_go_source "<go-posix-decode>" decoding with
+   | Compile.GoSuccess _ -> fail "the decode direction emitted instead of failing closed"
+   | Compile.GoFailure diagnostics ->
+     check bool "decoding an instant fails closed" true
+       (List.exists (fun (d : Compile.diagnostic) ->
+          d.source = "go-emitter"
+          && contains d.message "`posixMillisCodec` in a `fromJson` block") diagnostics));
+  (* `go test` RUNS the api-test: the wire number is asserted there. *)
+  gate_emitted "tesl-go-posix-codec" emitted
+
 let test_unsupported_database_forms_fail_closed () =
   let expect_go_error name source needle =
     match Compile.compile_go_source ("<go-" ^ name ^ ">") source with
@@ -3951,17 +4100,22 @@ let test_check_delegation_with_go () =
    runs the same source as the oracle. *)
 let queue_source = {|module GoQueue exposing [QueueServer]
 
-import Tesl.Prelude exposing [Int, String, Unit]
+import Tesl.Prelude exposing [Bool(..), Int, String, Unit]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Json exposing [stringCodec, intCodec]
 import Tesl.Database exposing [Database, Memory]
+import Tesl.List exposing [List.head, List.length]
 import Tesl.Queue exposing [
   FromQueue,
+  FromDeadQueue,
   queueRead,
   queueWrite,
   Queue,
   QueueRetryStrategy,
   Fixed,
+  deadJobs,
+  DeadJob,
+  requeue,
 ]
 import Tesl.ApiTest exposing [
   statusOk,
@@ -3969,6 +4123,7 @@ import Tesl.ApiTest exposing [
   processNextJob,
   pendingJobCount,
   expectJobOk,
+  expectJobFailed,
 ]
 
 database QueueDb = Database {
@@ -3994,6 +4149,25 @@ queue SendQueue requires [queueRead] = Queue {
 worker handleSend(job: SendJob ::: FromQueue (Id == jobId) job)
   requires [queueRead] =
   job
+
+record FlakyJob {
+  tag: String
+}
+
+queue FlakyQueue requires [queueRead] = Queue {
+  database: QueueDb
+  jobs: [Job FlakyJob handleFlaky Nothing]
+  retry: QueueRetryStrategy {
+    maxAttempts: 1
+    backoff: Fixed
+    initialDelay: 1
+  }
+}
+
+# A worker that always fails, so the job reaches the dead letter on its first attempt.
+worker handleFlaky(job: FlakyJob ::: FromQueue (Id == jobId) job)
+  requires [queueRead] =
+  fail 500 "the upstream refused"
 
 record TriggerRequest {
   tag: String
@@ -4026,14 +4200,23 @@ handler post send(request: TriggerRequest) -> TriggerReply
   enqueue SendJob { tag: request.tag }
   TriggerReply { queued: request.tag }
 
+handler post sendFlaky(request: TriggerRequest) -> TriggerReply
+  requires [queueWrite] =
+  enqueue FlakyJob { tag: request.tag }
+  TriggerReply { queued: request.tag }
+
 api QueueApi {
   post "/send"
+    body request: TriggerRequest
+    -> TriggerReply
+  post "/flaky"
     body request: TriggerRequest
     -> TriggerReply
 }
 
 server QueueServer for QueueApi {
   send
+  sendFlaky
 }
 
 api-test "the queue dequeues in enqueue order" for QueueServer requires [queueRead, queueWrite] {
@@ -4053,6 +4236,23 @@ api-test "the queue dequeues in enqueue order" for QueueServer requires [queueRe
   expect jobB.tag == "two"
 
   expect pendingJobCount SendQueue == 0
+}
+
+# `requeue` takes a job OUT of the dead letter and back to pending, so the workers pick it up
+# again.  The `FromDeadQueue` proof is what stops an arbitrary value being passed here; it
+# erases, and what is left is the reset.
+api-test "requeue takes a dead job back to pending" for QueueServer requires [queueRead, queueWrite] {
+  let r1 = post "/flaky" body { "tag": "one" }
+  expect statusOk r1.status
+  let failed = processNextJob FlakyQueue
+  let message = expectJobFailed failed
+  expect pendingJobCount FlakyQueue == 0
+  expect List.length (deadJobs FlakyQueue) == 1
+  case List.head (deadJobs FlakyQueue) of
+    Something job -> expect requeue job == True
+    Nothing -> expect List.length (deadJobs FlakyQueue) == 99
+  expect pendingJobCount FlakyQueue == 1
+  expect List.length (deadJobs FlakyQueue) == 0
 }
 |}
 
@@ -4074,6 +4274,12 @@ let test_queue_with_go () =
     (contains tests_go "panic(teslrt.EmptyQueue(\"SendQueue\", \"processNextJob\"))");
   check bool "a JSON body template becomes constant JSON" true
     (contains tests_go "teslrt.ApiRequest(QueueServer, \"POST\", \"/send\", \"{\\\"tag\\\":\\\"one\\\"}\", nil, nil)");
+  (* `requeue` takes a job OUT of the dead letter: the value carries the queue it came from,
+     since the call names none. *)
+  check bool "`requeue` resets a dead job to pending" true
+    (contains tests_go "teslrt.Requeue(");
+  check bool "and reads the dead letter from the queue it names" true
+    (contains tests_go "teslrt.DeadJobs(FlakyQueueQueue)");
   (* `go test` RUNS the api-test: FIFO order and the pending count are asserted there. *)
   gate_emitted "tesl-go-queue" emitted
 
@@ -8047,6 +8253,12 @@ let () =
       test_case "Memory-backend databases" `Slow test_db_with_go;
       test_case "databases behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-db-oracle>" db_source);
+      test_case "a declared unique index" `Slow test_unique_index_with_go;
+      test_case "a unique index behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-unique-index-oracle>" unique_index_source);
+      test_case "an instant on the wire" `Slow test_posix_codec_with_go;
+      test_case "an instant on the wire behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-posix-codec-oracle>" posix_codec_source);
       test_case "a Postgres round trip" `Slow test_postgres_live_with_go;
       test_case "a Postgres round trip behaves the same on Racket" `Slow
         test_postgres_live_oracle;
