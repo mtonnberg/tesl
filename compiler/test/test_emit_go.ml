@@ -9846,6 +9846,237 @@ let test_boundary_with_go () =
       run_go_gates root)
   end
 
+(* ── Proof shapes at the edges of erasure ────────────────────────────────────
+   A proof ANNOTATION on a constructor field is a type-level contract with no runtime
+   structure, like every other: what it buys is that a `Node` cannot be BUILT without a
+   proven value, and that is the checker's to enforce.  A labelled constructor application
+   resolves its labels against the declaration.  `-> Wrapper (T ? P)` answers the wrapper
+   the source names, which is not always `Maybe`.
+
+   `expectHasProof f x P` asserts, on Racket, that the value carries the fact.  Facts erase
+   here, so what a Go run can still assert is the half that is about the run — that the
+   check ACCEPTED, without which there is no value for the proof to be about.  The predicate
+   is guaranteed statically, which is stronger than an assertion about a list.
+
+   And a check whose body is a BARE call to another check DELEGATES: reading it as a value
+   would `MustCheck` it, turning a rejection into a trap that escapes the caller's
+   `expectFail`. *)
+let proof_shapes_source = {|module GoProofShapes exposing [PositiveTree, insertTree, treeSum, findMin, wrapPositive]
+
+import Tesl.Prelude exposing [Int, String, Bool(..), List]
+import Tesl.Either exposing [Either(..)]
+import Tesl.String exposing [String.length]
+
+fact IsPositive (n: Int)
+fact InRange (n: Int)
+
+check checkPositive(n: Int) -> n: Int ::: IsPositive n =
+  if n > 0 then
+    ok n ::: IsPositive n
+  else
+    fail 400 "must be positive"
+
+# A check whose body is a BARE call to another check: it hands back that check's
+# own result, rejection included. Reading it as a value would trap instead.
+check wrapPositive(n: Int) -> n: Int ::: IsPositive n =
+  checkPositive n
+
+check checkRange(n: Int) -> n: Int ::: InRange n =
+  if n >= 0 then
+    if n <= 100 then
+      ok n ::: InRange n
+    else
+      fail 400 "too large"
+  else
+    fail 400 "too small"
+
+# A constructor field carrying a proof: the annotation erases, and what it buys is
+# that a Node cannot be BUILT without a proven value.
+type PositiveTree
+  = Leaf
+  | Node (left: PositiveTree) (value: Int ::: IsPositive value) (right: PositiveTree)
+
+# Labelled constructor application: the declaration fixes the order.
+fn insertTree(t: PositiveTree, v: Int ::: IsPositive v) -> PositiveTree =
+  case t of
+    Leaf ->
+      Node { left: Leaf, value: v, right: Leaf }
+    Node l cur r ->
+      if v < cur then
+        Node { left: insertTree l v, value: cur, right: r }
+      else
+        Node { left: l, value: cur, right: insertTree r v }
+
+fn treeSum(t: PositiveTree) -> Int =
+  case t of
+    Leaf -> 0
+    Node l v r -> v + treeSum l + treeSum r
+
+# `-> Wrapper (T ? P)` where the wrapper is NOT Maybe: the proof erases and the
+# result is the wrapper the source names.
+fn findMin(t: PositiveTree) -> Either String (Int ? IsPositive) =
+  case t of
+    Leaf -> Left "Not found"
+    Node Leaf cur _ -> Right cur
+    Node l _ _ -> findMin l
+
+test "a proof-carrying constructor field builds and reads back" {
+  let n3 = 3
+  let n1 = 1
+  let n7 = 7
+  let three = check checkPositive n3
+  let one = check checkPositive n1
+  let seven = check checkPositive n7
+  let t = insertTree (insertTree (insertTree Leaf three) one) seven
+  expect treeSum t == 11
+}
+
+# `expectHasProof f x P` asserts the check accepts and mints the predicate. The
+# predicate itself is a compile-time guarantee on Go; what a run can still show is
+# that the check accepted.
+test "a check mints its predicate" {
+  let mid = 50
+  let low = 0
+  let high = 100
+  expectHasProof checkRange mid InRange
+  expectHasProof checkRange low InRange
+  expectHasProof checkRange high InRange
+}
+
+# A bare delegation propagates its rejection rather than trapping.
+test "a wrapping check rejects for the same reason the inner one does" {
+  let five = 5
+  let zero = 0
+  let negative = -1
+  let good = check wrapPositive five
+  expect good == 5
+  expectFail check wrapPositive zero
+  expectFail check wrapPositive negative
+}
+
+# An `if` in a test body is the statement it describes.
+test "an if in a test body picks a branch" {
+  let tooLong = "aaaaaaaaaabbbbbbbbbbcccccccccc"
+  let tooBig = 1000
+  if String.length tooLong > 20 then
+    expectFail check checkRange tooBig
+  else
+    expect True
+  if String.length tooLong > 1000 then
+    expect False
+  else
+    expect String.length tooLong == 30
+}
+|}
+
+let test_proof_shapes_with_go () =
+  let emitted = match Compile.compile_go_source "<go-proof-shapes>" proof_shapes_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "proof-shapes compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgoproofshapes/module.go" emitted in
+  let tests_go = artifact "internal/teslmodgoproofshapes/module_test.go" emitted in
+  (* The proof erases: the field is its own type. *)
+  check bool "a proof-carrying constructor field is its own type" true
+    (contains module_go "NodeValue teslrt.Int");
+  (* Labels resolve against the declaration, so the positional order is the declared one. *)
+  check bool "a labelled constructor application is ordered by the declaration" true
+    (contains module_go "NodeLeft: ") ;
+  (* The wrapper is the one the source names. *)
+  check bool "a proof-carrying return keeps its own wrapper" true
+    (contains module_go "func FindMin(t PositiveTree) teslrt.Either[string, teslrt.Int]");
+  (* A bare delegation hands the inner check back rather than trapping on it. *)
+  check bool "a bare check delegation propagates" true
+    (contains module_go "func WrapPositive(n teslrt.Int) teslrt.Check[teslrt.Int] {"
+     && contains module_go "\treturn checkPositive(n)\n}");
+  (* `expectHasProof` asserts the run's half. *)
+  check bool "expectHasProof asserts the check accepted" true
+    (contains tests_go "teslT.Fatal(\"expected the check to accept, minting InRange\")");
+  (* An `if` in a test body is the statement it describes. *)
+  check bool "a test-body if is a Go if" true
+    (contains tests_go "} else {");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-proof-shapes" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+  end
+
+(* A proof operation that could only fail on RACKET stays refused, and the rule is precise
+   rather than a blanket one: its runtime raises when a value carries more than one proof,
+   which the emitter can see — a `check` applied to a value that is itself a check's result
+   ACCUMULATES.  A proof operation on a singly-checked value raises nowhere, so an
+   `expectFail` over that function is expecting one of its CHECKS to reject, which happens
+   here too. *)
+let test_racket_only_proof_failures_fail_closed () =
+  let header = {|module GoProofLimit exposing []
+import Tesl.Prelude exposing [Int, Bool(..), Fact, forgetFact, detachFact, attachFact]
+
+fact PosLimit (n: Int)
+fact SmallLimit (n: Int)
+
+check checkPos(n: Int) -> n: Int ::: PosLimit n =
+  if n > 0 then
+    ok n ::: PosLimit n
+  else
+    fail 400 "must be positive"
+
+check checkSmall(n: Int ::: PosLimit n) -> n: Int ::: SmallLimit n =
+  if n < 100 then
+    ok n ::: SmallLimit n
+  else
+    fail 400 "too large"
+
+|} in
+  (* ACCUMULATED: the second check runs on the first one's result, so `detachFact` on it is
+     the shape whose failure exists only on Racket. *)
+  let accumulated = {|fn twoProofs(raw: Int) -> Int =
+  let a = check checkPos raw
+  let b = check checkSmall a
+  let _p = detachFact b
+  0
+
+test "refused" {
+  let n = 5
+  expectFail (fn () -> twoProofs n)
+}
+|} in
+  (match Compile.compile_go_source "<go-proof-limit>" (header ^ accumulated) with
+   | Compile.GoSuccess _ -> fail "an accumulated-proof detach emitted instead of failing closed"
+   | Compile.GoFailure diagnostics ->
+     check bool "an accumulated-proof detach is refused" true
+       (List.exists (fun (d : Compile.diagnostic) ->
+          contains d.message "erases proofs, so `detachFact` cannot fail") diagnostics));
+  (* SINGLY checked: the detach raises nowhere, and the expected failure is the check's. *)
+  let single = {|fn oneProof(raw: Int) -> Int =
+  let a = check checkPos raw
+  let plain = forgetFact a
+  let p = detachFact a
+  let back = attachFact plain p
+  back
+
+test "emitted" {
+  let n = 5
+  expect oneProof n == 5
+  let bad = 0
+  expectFail (fn () -> oneProof bad)
+}
+|} in
+  match Compile.compile_go_source "<go-proof-single>" (header ^ single) with
+  | Compile.GoFailure diagnostics ->
+    failf "a singly-checked detach was refused: %s"
+      (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  | Compile.GoSuccess _ -> check bool "a singly-checked detach emits" true true
+
 let () =
   run "emit_go" [
     "emission", [
@@ -10044,6 +10275,11 @@ let () =
       test_case "unsupported Tesl.Agent forms fail closed" `Quick test_agent_limits_fail_closed;
       test_case "serverTools and humanActions" `Slow test_endpoint_tools_with_go;
       test_case "Tesl.Proxy" `Slow test_proxy_with_go;
+      test_case "proof shapes at the edges of erasure" `Slow test_proof_shapes_with_go;
+      test_case "proof shapes behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-proof-shapes>" proof_shapes_source);
+      test_case "Racket-only proof failures fail closed" `Quick
+        test_racket_only_proof_failures_fail_closed;
       test_case "the request boundary: captures, list bodies, chained checks" `Slow
         test_boundary_with_go;
       test_case "the request boundary behaves the same on Racket" `Slow

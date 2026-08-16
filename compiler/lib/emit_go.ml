@@ -963,6 +963,11 @@ let rec type_of_return_spec types = function
   (* Every remaining proof-bearing return is the same erasure applied to a different
      container: the proof is a TYPE-LEVEL contract with no runtime structure, so what comes
      back is the Maybe, the Set or the Dict itself. *)
+  (* `-> Wrapper (T ? P)`.  The proof erases, so the result is the WRAPPER applied to the
+     value's own type — and the wrapper is not always `Maybe`: `Either String (Int ?
+     IsPositive)` is the same shape with another, and reading it as a Maybe answered a type
+     the function does not return. *)
+  | RetMaybeAttached { outer_ty = Some outer; _ } -> type_of_type_expr types outer
   | RetMaybeAttached { binding; loc; _ } ->
     (match Hashtbl.find_opt types.adts "Maybe" with
      | Some info -> TAdt (info, [type_of_type_expr types binding.type_expr])
@@ -1598,6 +1603,26 @@ let queue_of_job_type loc name =
 
 (* An api-test queue verb takes the QUEUE as its only argument, written as a bare name
    (`pendingJobCount SendQueue`), which parses as a constructor. *)
+(* A variant may be applied with LABELLED fields — `Node { left: l, value: v, right: r }` —
+   rather than positionally.  The declaration is what fixes the order, so the labels are
+   resolved against it here, once, and both the type rule and the emitter see the positional
+   list they already know how to handle.  A missing or unknown label is refused rather than
+   filled in: a constructor with a field left out is not a value. *)
+let variant_positional_args loc (variant : variant_info) args =
+  match args with
+  | [ERecord { fields; _ }] when variant.var_fields <> [] ->
+    List.iter (fun (label, _) ->
+      if not (List.mem_assoc label variant.var_fields) then
+        unsupported loc "Go backend constructor `%s` has no field `%s`" variant.var_ctor label)
+      fields;
+    List.map (fun (name, _) ->
+      match List.assoc_opt name fields with
+      | Some value -> value
+      | None -> unsupported loc
+        "Go backend constructor `%s` is missing field `%s`" variant.var_ctor name)
+      variant.var_fields
+  | _ -> args
+
 let queue_argument args =
   match args with
   | [EConstructor { name; args = []; _ }] | [EVar { name; _ }] -> Some name
@@ -2431,7 +2456,8 @@ let rec type_of_expr signatures env expr =
          | Some pair -> pair
          | None -> assert false
        in
-       type_of_variant_application signatures env loc info variant (constructor_args @ args)
+       type_of_variant_application signatures env loc info variant
+         (variant_positional_args loc variant (constructor_args @ args))
      (* `exists name => body` parses as `make-witness (name body)`: the witness is a proof
         SUBJECT, not a value the caller receives, so the package erases to its body. *)
      | EVar { name = "make-witness"; _ } ->
@@ -4508,7 +4534,8 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
            when info.adt_tesl_name = owner.adt_tesl_name -> want
          | _ -> type_of_expr signatures env app
        in
-       emit_variant_literal ~indent signatures env result variant (constructor_args @ args)
+       emit_variant_literal ~indent signatures env result variant
+         (variant_positional_args loc variant (constructor_args @ args))
      (* A COMBINED check: run each in turn, short-circuiting on the first rejection and
         feeding the checked value to the next — Racket's `check-and`, with the fact merge
         dropped because facts erase.  Hoisted into a helper so the call site stays one
@@ -6713,10 +6740,14 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
     let state = Printf.sprintf "teslState%d" depth in
     let applied =
       emit_applied ~indent:body_indent signatures env callable [accumulator; element] bound in
+    (* Both binders are discarded explicitly.  A callback that ignores its element — `fn(acc,
+       ignored) -> acc + 1`, which is how a fold counts — otherwise leaves the range variable
+       declared and unused, and Go rejects that. *)
     Printf.sprintf
-      "(func() %s {\n%s%s := %s\n%sfor _, %s := range %s {\n%s%s := %s\n%s_ = %s\n%s%s = %s\n%s}\n%sreturn %s\n%s}())"
+      "(func() %s {\n%s%s := %s\n%sfor _, %s := range %s {\n%s_ = %s\n%s%s := %s\n%s_ = %s\n%s%s = %s\n%s}\n%sreturn %s\n%s}())"
       (go_type accumulator) inner state (emit_init accumulator)
       inner (List.nth bound 1) (emit_list ~at:inner 2)
+      body_indent (List.nth bound 1)
       body_indent (List.nth bound 0) state
       body_indent (List.nth bound 0)
       body_indent state applied
@@ -8165,7 +8196,15 @@ let tail_accepts_value signatures env expected expr =
      is what happened to `check (checkPositive && checkSmall) n` before this test was here. *)
   let delegates = match flatten_app [] expr with
     | EVar { name = "check"; _ }, (_ :: _) -> true
-    | _ -> check_application signatures expr <> None
+    | _ ->
+      check_application signatures expr <> None
+      (* A BARE call to another check delegates too — `check wrap(n) -> … = inner n` has no
+         `check` keyword and still hands back the inner check's own result.  Reading it as a
+         value would `MustCheck` it, turning a rejection into a trap that escapes the
+         caller's `expectFail`. *)
+      || (match expected, typed_with_default (type_of_expr signatures env) expr with
+          | TCheck inner, (Some (TCheck delegated), _) -> not (type_unequal delegated inner)
+          | _ -> false)
   in
   match expected, expr with
   | TCheck _, (EOk _ | EFail _) -> None
@@ -10149,8 +10188,43 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
       if guards <> [] then Printf.bprintf body "%s\t}\n" indent;
       Printf.bprintf body "%s}\n" indent;
       emit_stmts env indent rest
-    | (TsExpectHasProof { loc; _ } | TsIf { loc; _ }) :: _ ->
-      unsupported loc "Go backend does not support this test statement yet"
+    (* `expectHasProof f x P` asserts, on Racket, that the value `f x` answers carries the
+       fact `P`.  A fact has NO runtime form here — the checker discharges the proof before
+       anything is emitted — so the fact list is not there to inspect.  What a Go run can
+       still assert is the half that is about the run: that the check ACCEPTED, without
+       which there is no value for the proof to be about.  The predicate itself is
+       guaranteed statically, which is stronger than an assertion about a list. *)
+    | TsExpectHasProof { fn; arg; proof_name; loc } :: rest ->
+      let call = EApp { fn; arg; loc } in
+      let emitted = match delegated_check_call ~indent signatures env call with
+        | Some (rendered, _) -> rendered
+        | None ->
+          (match type_of_expr signatures env call with
+           | TCheck _ -> ()
+           | _ -> unsupported loc
+             "Go backend `expectHasProof` takes a check that mints the proof");
+          emit_expr ~indent signatures env call
+      in
+      Buffer.add_string body (line_directive loc);
+      Printf.bprintf body
+        "%sif !(%s).OK() {\n%s\tteslT.Fatal(\"expected the check to accept, minting %s\")\n%s}\n"
+        indent emitted indent proof_name indent;
+      emit_stmts env indent rest
+    (* `if cond { … } else { … }` in a test body is the Go statement it describes.  Each
+       branch is its own scope, which is what the emitted braces already give. *)
+    | TsIf { cond; then_stmts; else_stmts; loc } :: rest ->
+      if type_of_expr signatures env cond <> TBool then
+        unsupported loc "Go backend test `if` condition must be Bool";
+      Buffer.add_string body (line_directive loc);
+      Printf.bprintf body "%sif %s {\n" indent
+        (strip_outer_parens (emit_expr ~expected:TBool ~indent signatures env cond));
+      emit_stmts env (indent ^ "\t") then_stmts;
+      if else_stmts <> [] then begin
+        Printf.bprintf body "%s} else {\n" indent;
+        emit_stmts env (indent ^ "\t") else_stmts
+      end;
+      Printf.bprintf body "%s}\n" indent;
+      emit_stmts env indent rest
   in
   (* `seed { insert … }` runs before a block's own statements: the store starts from the rows the
      test declares rather than from whatever an earlier block left, which is the point of pairing
@@ -10768,16 +10842,68 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
                   server_tool_endpoint_schema codecs endpoint, endpoint) paired))
         | _ -> ()) m.decls
     end;
-    let rec proof_op_in expr =
-      match expr with
-      | EVar { name = ("detachFact" | "introAnd" | "andLeft" | "andRight") as name; _ } ->
-        Some name
-      | _ -> Ast_visitor.fold_children (fun found child ->
-               match found with Some _ -> found | None -> proof_op_in child) None expr
+    (* WHICH functions have a proof operation that could only fail on RACKET.  Its runtime
+       raises when a value carries more than one proof — and the emitter can see when that
+       is the case: a `check` applied to a value that is itself a check's result
+       ACCUMULATES, and a proof decomposition of such a value carries the accumulation to
+       both names it binds.
+
+       A proof operation on a SINGLY-checked value raises nowhere, so an `expectFail` over
+       that function is expecting one of its checks to reject — which happens on Go too, and
+       refusing it cost a whole file (`wrapAndUnwrap 0` fails because `checkPositive 0`
+       rejects, on both backends). *)
+    let accumulated_proof_names body =
+      let checked = ref [] and accumulated = ref [] in
+      let mentions_accumulated expr =
+        let found = ref false in
+        Ast_visitor.iter (function
+          | EVar { name; _ } when List.mem name !accumulated -> found := true
+          | _ -> ()) expr;
+        !found
+      in
+      let rec walk expr =
+        (match expr with
+         | ELet { name; value; _ } ->
+           (match flatten_app [] value with
+            | EVar { name = "check"; _ }, (_ :: arguments) ->
+              if List.exists (function
+                   | EVar { name = argument; _ } -> List.mem argument !checked
+                   | _ -> false) arguments
+              then accumulated := name :: !accumulated;
+              checked := name :: !checked
+            | _ -> if mentions_accumulated value then accumulated := name :: !accumulated)
+         | ELetProof { value_name; proof_name; value; _ } ->
+           if mentions_accumulated value then
+             accumulated := value_name :: proof_name :: !accumulated
+         | _ -> ());
+        Ast_visitor.iter_children walk expr
+      in
+      walk body;
+      !accumulated
+    in
+    let proof_op_on_accumulated body =
+      let accumulated = accumulated_proof_names body in
+      if accumulated = [] then None
+      else
+        let found = ref None in
+        Ast_visitor.iter (fun node ->
+          if !found = None then
+            match flatten_app [] node with
+            | EVar { name = ("detachFact" | "introAnd" | "andLeft" | "andRight") as name; _ },
+              (_ :: _ as arguments) ->
+              if List.exists (fun argument ->
+                   let hit = ref false in
+                   Ast_visitor.iter (function
+                     | EVar { name = used; _ } when List.mem used accumulated -> hit := true
+                     | _ -> ()) argument;
+                   !hit) arguments
+              then found := Some name
+            | _ -> ()) body;
+        !found
     in
     List.iter (function
       | DFunc f ->
-        (match proof_op_in f.body with
+        (match proof_op_on_accumulated f.body with
          | Some op -> Hashtbl.replace proof_op_functions f.name op
          | None -> ())
       | _ -> ()) m.decls;
@@ -12013,9 +12139,12 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       if variants = [] then unsupported loc "Go backend requires `%s` to have variants" name;
       List.iter (fun (variant : adt_variant) ->
         List.iter (fun (field : field_def) ->
-          if field.proof_ann <> None then unsupported field.loc
-            "Go backend does not support proof-carrying constructor field `%s.%s` yet"
-            variant.ctor field.name;
+          (* A proof ANNOTATION on a constructor field is a type-level contract with no
+             runtime structure — the frontend has discharged it before anything reaches
+             here — so the field is its own type, exactly as a proof-annotated record field
+             and a proof-carrying return are.  What the annotation buys is that a `Node`
+             cannot be BUILT without a proven value, and that is the checker's to enforce on
+             both backends. *)
           if field.checker <> None then unsupported field.loc
             "Go backend does not support `via` on constructor field `%s.%s` yet"
             variant.ctor field.name) variant.fields) variants;
