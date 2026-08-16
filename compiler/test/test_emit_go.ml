@@ -10266,6 +10266,97 @@ fn setOwner(ticketId: String, owner: String) -> String requires [dbWrite] =
          contains d.message "type mismatch" || contains d.message "different type than the column")
          diagnostics)
 
+(* ── Property generators over proof-carrying records ─────────────────────────
+   A field annotated `Int ::: IsPositive n` cannot be drawn from the whole Int range: the
+   property would be handed a value its own annotation says is impossible.  The three
+   predicates Racket has proof-aware draws for get the same three here, over the same
+   ranges, so a property searches the same space on both backends; any other predicate falls
+   back to the plain draw and the proof is NOT fabricated — what makes it true is the
+   checker, not the generator.
+
+   A RECORD-level invariant is a relation between fields, which no fieldwise draw can
+   guarantee, so the generator redraws until the invariant's own check accepts — rejection
+   sampling, the same 100 attempts Racket allows before it skips the iteration. *)
+let property_generator_source = {|module GoPropGen exposing [isLarger, bumped]
+
+import Tesl.Prelude exposing [Int, Bool(..)]
+
+fact IsPositive (n: Int)
+fact IsNonZero (n: Int)
+fact Ordered (x: Int) (y: Int)
+
+check isLarger(x: Int, y: Int) -> x: Int ::: Ordered x y =
+  if x > y then
+    ok x ::: Ordered x y
+  else
+    fail 400 "x must be larger than y"
+
+# A field carrying a proof cannot be drawn from the whole range: the property
+# would be handed a value its own annotation says is impossible.
+record Bounds {
+  low: Int ::: IsPositive low
+  step: Int ::: IsNonZero step
+}
+
+# A RECORD-level invariant is a relation BETWEEN fields, which no fieldwise draw
+# can guarantee — so the generator redraws until the invariant's check accepts.
+record Span {
+  hi: Int ::: IsPositive hi
+  lo: Int ::: IsPositive lo
+} ::: Ordered hi lo via isLarger
+
+fn bumped(n: Int) -> Int =
+  n + 1
+
+test "a proof-annotated field is drawn from the range its predicate admits" with 50 runs {
+  property "positive stays positive" (b: Bounds) { b.low > 0 }
+}
+
+test "a non-zero field is never zero" with 50 runs {
+  property "step is usable as a divisor" (b: Bounds) { b.step != 0 }
+}
+
+test "a record invariant holds of every generated value" with 50 runs {
+  property "hi is larger than lo" (s: Span) { s.hi > s.lo }
+}
+
+test "a where clause still narrows a proof-annotated draw" with 50 runs {
+  property "bounded and positive" (b: Bounds where b.low < 10000) { bumped b.low > 1 }
+}
+|}
+
+let test_property_generators_with_go () =
+  let emitted =
+    match Compile.compile_go_source "<go-prop-gen>" property_generator_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "property-generator compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let tests_go = artifact "internal/teslmodgopropgen/module_test.go" emitted in
+  check bool "an IsPositive field draws a positive" true
+    (contains tests_go "Low: teslrt.PropPositiveInt()");
+  check bool "an IsNonZero field never draws zero" true
+    (contains tests_go "Step: teslrt.PropNonZeroInt()");
+  (* The invariant's check is called with the FIELDS its proof names. *)
+  check bool "a record invariant redraws until its check accepts" true
+    (contains tests_go "if IsLarger(teslCandidate.Hi, teslCandidate.Lo).OK() {");
+  check bool "the redraw is bounded" true
+    (contains tests_go "for teslAttempt := 0; teslAttempt < 100; teslAttempt++ {");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-prop-gen" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+  end
+
 let () =
   run "emit_go" [
     "emission", [
@@ -10464,6 +10555,10 @@ let () =
       test_case "unsupported Tesl.Agent forms fail closed" `Quick test_agent_limits_fail_closed;
       test_case "serverTools and humanActions" `Slow test_endpoint_tools_with_go;
       test_case "Tesl.Proxy" `Slow test_proxy_with_go;
+      test_case "property generators over proof-carrying records" `Slow
+        test_property_generators_with_go;
+      test_case "proof-aware generators behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-prop-gen>" property_generator_source);
       test_case "conjunctions whose conjuncts capture" `Slow test_captured_conjunction_with_go;
       test_case "captured conjunctions behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-combined>" captured_conjunction_source);

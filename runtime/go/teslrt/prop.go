@@ -67,3 +67,27 @@ func PropMaybe[Element any](element func() Element) Maybe[Element] {
 	}
 	return Something(element())
 }
+
+// The proof-aware generators.
+//
+// A record field carrying `Int ::: IsPositive n` cannot be drawn from the full Int range:
+// the property would be handed a value its own annotation says is impossible. Racket has
+// the same three, over the same ranges, so a property searches the same space on both
+// backends. Anything else falls back to the plain draw and the proof is not fabricated —
+// what makes it true is the checker, not the generator.
+
+func PropPositiveInt() Int {
+	return Add(FromInt64(1), RandomInt(FromInt64(0), FromInt64(1_000_000)))
+}
+
+func PropNonNegativeInt() Int {
+	return RandomInt(FromInt64(0), FromInt64(1_000_000))
+}
+
+func PropNonZeroInt() Int {
+	value := RandomInt(FromInt64(-1_000_000), FromInt64(1_000_001))
+	if value.IsZero() {
+		return FromInt64(1)
+	}
+	return value
+}

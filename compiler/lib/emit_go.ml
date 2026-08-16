@@ -627,6 +627,19 @@ let current_functions : (string, func_decl) Hashtbl.t = Hashtbl.create 16
    not just from the server emission that already has the list in hand. *)
 let current_capturers : capture_form list ref = ref []
 
+(* Record name → each field's PROOF PREDICATE, where it has one.  A property generator for
+   such a record cannot draw from the whole range: `Int ::: IsPositive n` would hand the
+   property a value its own annotation says is impossible.  The record table carries only
+   "some field has a proof"; the predicate NAME is what says which draw to use, and it lives
+   in the declaration. *)
+let current_field_proofs : (string, (string * string) list) Hashtbl.t = Hashtbl.create 8
+
+(* Record name → the check its RECORD-LEVEL invariant names.  A generated value has to
+   satisfy it, and no fieldwise draw can guarantee a relation BETWEEN fields, so the
+   generator redraws until the check accepts — rejection sampling, the same 100 attempts
+   Racket allows before it skips the iteration. *)
+let current_record_invariants : (string, string * string list) Hashtbl.t = Hashtbl.create 8
+
 (* `serverTools S user` and `humanActions S user`: which of the server's endpoints each CALL
    SITE gets.  The decision is the CHECKER's and is per site — an endpoint is included only
    where the user value's declared proof covers its auth predicates, so the same server
@@ -9976,15 +9989,53 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
        carry PROOF annotations is refused instead: Racket has proof-aware generators there
        (`IsPositive` draws a positive), and a fieldwise draw would hand the property a value
        its own annotation says is impossible. *)
-    | TRecord info when not info.rec_proof_fields ->
-      Printf.sprintf "%s{%s}" (go_type ty)
-        (String.concat ", " (List.map (fun (name, field_ty) ->
-           Printf.sprintf "%s: %s" (record_field_go_name name)
-             (property_generator loc field_ty)) info.rec_fields))
     | TRecord info ->
-      unsupported loc
-        "Go backend has no property generator for `%s`: its fields carry proofs"
-        info.rec_tesl_name
+      (* A field carrying a PROOF draws from the range the predicate admits — the same three
+         Racket has proof-aware generators for, over the same ranges, so a property searches
+         the same space on both backends.  Any other predicate falls back to the plain draw
+         and the proof is not fabricated: what makes it true is the checker. *)
+      let proofs = Option.value (Hashtbl.find_opt current_field_proofs info.rec_tesl_name)
+        ~default:[] in
+      let field_generator name field_ty =
+        match List.assoc_opt name proofs, field_ty with
+        | Some predicate, TInt ->
+          (match String.lowercase_ascii predicate with
+           | "ispositive" -> "teslrt.PropPositiveInt()"
+           | "isnonnegative" | "nonnegative" | "non_negative" -> "teslrt.PropNonNegativeInt()"
+           | "isnonzero" | "nonzero" | "non_zero" -> "teslrt.PropNonZeroInt()"
+           | _ -> property_generator loc field_ty)
+        | _ -> property_generator loc field_ty
+      in
+      let drawn =
+        Printf.sprintf "%s{%s}" (go_type ty)
+          (String.concat ", " (List.map (fun (name, field_ty) ->
+             Printf.sprintf "%s: %s" (record_field_go_name name)
+               (field_generator name field_ty)) info.rec_fields))
+      in
+      (match Hashtbl.find_opt current_record_invariants info.rec_tesl_name with
+       | None -> drawn
+       | Some (checker, fields) ->
+         (* A record-level invariant is a relation BETWEEN fields, which no fieldwise draw
+            can guarantee — so the generator REDRAWS until the invariant's own check accepts,
+            up to the 100 attempts Racket allows before it skips the iteration.  Hoisted into
+            a named function: it captures nothing, and a loop written inline is a shape gofmt
+            reflows. *)
+         let signature = match Hashtbl.find_opt signatures checker with
+           | Some signature -> signature
+           | None -> unsupported loc
+             "Go backend cannot resolve the invariant check `%s` of `%s`"
+             checker info.rec_tesl_name
+         in
+         let go_ty = go_type ty in
+         Printf.sprintf "%s()"
+           (remember_helper_stmts ~prefix:"teslPropDraw"
+              ~signature:(Printf.sprintf "() %s" go_ty)
+              ~body:(Printf.sprintf
+                "\tfor teslAttempt := 0; teslAttempt < 100; teslAttempt++ {\n\t\tteslCandidate := %s\n\t\tif %s(%s).OK() {\n\t\t\treturn teslCandidate\n\t\t}\n\t}\n\treturn %s\n"
+                drawn (qualified signature.sig_owner signature.go_name)
+                (String.concat ", " (List.map (fun field ->
+                   Printf.sprintf "teslCandidate.%s" (record_field_go_name field)) fields))
+                drawn)))
     | _ -> unsupported loc
       "Go backend has no property generator for `%s`" (go_type ty)
   in
@@ -10910,6 +10961,23 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       | DFunc f -> Hashtbl.replace current_functions f.name f
       | _ -> ()) m.decls;
     current_capturers := List.filter_map (function DCapture c -> Some c | _ -> None) m.decls;
+    Hashtbl.reset current_field_proofs;
+    List.iter (function
+      | DRecord (r : record_form) ->
+        let proofs = List.filter_map (fun (field : field_def) ->
+          match field.proof_ann with
+          | Some (PredApp { pred; _ }) -> Some (field.name, pred)
+          (* A CONJUNCTION says two things about the same field; there is no single draw
+             that satisfies both, so it falls back to the plain one. *)
+          | _ -> None) r.fields in
+        if proofs <> [] then Hashtbl.replace current_field_proofs r.name proofs;
+        (match r.invariant with
+         (* The proof's ARGUMENTS name the fields the check takes — `IsLargerThan some2Prop
+            some2Prop2 via isLargerThan` is `isLargerThan(value.Some2Prop, value.Some2Prop2)`. *)
+         | Some { checker_name = Some checker; proof_text = PredApp { args; _ }; _ } ->
+           Hashtbl.replace current_record_invariants r.name (checker, args)
+         | _ -> ())
+      | _ -> ()) m.decls;
     (* ── `serverTools` / `humanActions` metadata ─────────────────────────────
        Two things are needed and neither is in the module tree alone: WHICH endpoints each
        call site gets (the checker's per-site proof decision) and what each endpoint looks
