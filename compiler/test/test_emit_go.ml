@@ -10493,6 +10493,124 @@ fn twice(n: Int) -> Int = n * 2
     check bool "no regex runtime in a module that matches nothing" false
       (List.exists (fun (a : Emit_go.artifact) -> a.path = "internal/teslrt/regex.go") artifacts)
 
+(* ── An ADT type argument nothing constrains ──────────────────────────────────
+   `Left "err"` says what its Left payload is and says NOTHING about the Right one, and a
+   value written that way may never meet a context that settles it: `Either.withDefault 99
+   (Left "err")` reads only the Left side.  Go needs a type there, and the honest one is
+   "none of them" — the variant that would carry a Right value is not the variant in hand,
+   so no value of that parameter exists and the empty struct is a witness.
+
+   The three shapes that have to agree are here because each one broke a different way:
+     - the DEFAULT settles the Right side of the Either beside it, so both arguments of the
+       call have to be built at the same instantiation;
+     - a list literal is settled ACROSS its elements — `[Left "e", Right 1]` learns its Left
+       type from one element and its Right type from another;
+     - `Either.partition []` has no element at all, and both sides stay anonymous — the
+       answer is two empty lists whatever they would have held. *)
+let anon_type_argument_source = {|module GoAnon exposing [orDefault, errorsOf]
+
+import Tesl.Prelude exposing [Int, String, List]
+import Tesl.Either exposing [
+  Either(..),
+  Either.withDefault,
+  Either.partition,
+  Either.isLeft,
+  Either.fromLeft,
+]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Tuple exposing [Tuple2, Tuple2.first, Tuple2.second]
+
+fn orDefault(e: Either String Int) -> Int = Either.withDefault 0 e
+
+fn errorsOf(es: List (Either String Int)) -> List String =
+  Tuple2.first (Either.partition es)
+
+test "the default settles the side the Either never mentions" {
+  expect Either.withDefault 99 (Left "err") == 99
+  expect Either.withDefault 99 (Right 42) == 42
+  expect orDefault (Left "e") == 0
+}
+
+test "a bare constructor still answers the predicates" {
+  expect Either.isLeft (Left "e")
+  expect Either.fromLeft (Left "e") == Something "e"
+}
+
+# One element knows the Left type, another knows the Right one.
+test "a list literal is settled across its elements" {
+  let xs = [Left "e1", Right 1, Left "e2", Right 2]
+  let split = Either.partition xs
+  expect Tuple2.first split == ["e1", "e2"]
+  expect Tuple2.second split == [1, 2]
+  expect errorsOf xs == ["e1", "e2"]
+}
+
+test "a list of only one side leaves the other anonymous" {
+  let allLeft = Either.partition [Left "a", Left "b"]
+  expect Tuple2.first allLeft == ["a", "b"]
+  expect Tuple2.second allLeft == []
+}
+
+# No element at all: neither side is observable, and the answer is two empty lists.
+test "an empty list partitions into two empty lists" {
+  let empty = Either.partition []
+  expect Tuple2.first empty == []
+  expect Tuple2.second empty == []
+}
+|}
+
+let test_anon_type_argument_with_go () =
+  let emitted = match Compile.compile_go_source "<go-anon>" anon_type_argument_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "anonymous type argument compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let tests_go = artifact "internal/teslmodgoanon/module_test.go" emitted in
+  (* The default's type reaches the constructor beside it: both are `teslrt.Int`. *)
+  check bool "the default settles the Either's Right side" true
+    (contains tests_go "teslrt.Either[string, teslrt.Int]");
+  (* Nothing settles the side a one-sided list never mentions, and that is what it says. *)
+  check bool "an unsettled side is the empty struct" true
+    (contains tests_go "struct{}");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-anon" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      run_go_gates root)
+  end
+
+(* The wildcard must not become a way to write a value into a column it does not fit: a
+   record field has a DECLARED type, which is never anonymous, and the comparison is against
+   that. *)
+let test_anon_does_not_widen_a_declared_type () =
+  let mismatch = {|module GoAnonField exposing [wrap]
+
+import Tesl.Prelude exposing [Int, String]
+import Tesl.Either exposing [Either(..)]
+
+record Box { held: Either String Int }
+
+fn wrap(text: String) -> Box = Box { held: Left text }
+|} in
+  match Compile.compile_go_source "<go-anon-field>" mismatch with
+  | Compile.GoFailure diagnostics ->
+    failf "a field settled by its declared type failed: %s"
+      (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  | Compile.GoSuccess artifacts ->
+    let module_go = artifact "internal/teslmodgoanonfield/module.go" artifacts in
+    (* The DECLARED field type is what the constructor is built at — not `struct{}`. *)
+    check bool "the field's declared type settles the constructor" true
+      (contains module_go "teslrt.Either[string, teslrt.Int]");
+    check bool "no anonymous side survives into the field" false
+      (contains module_go "teslrt.Either[string, struct{}]")
+
 (* ── `Tesl.Url` and `Tesl.Net` ───────────────────────────────────────────────
    The Go half is a rule-for-rule port of `dsl/private/url-parse.rkt` and
    `dsl/private/host-classify.rkt`, NOT a wrapper over `net/url` and `net.ParseIP`, and the
@@ -10944,6 +11062,12 @@ let () =
         (racket_behavior_oracle "<go-regex>" regex_source);
       test_case "the regex runtime ships only where used" `Quick
         test_regex_runtime_ships_only_where_used;
+      test_case "an ADT type argument nothing constrains" `Slow
+        test_anon_type_argument_with_go;
+      test_case "an ADT type argument nothing constrains behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-anon>" anon_type_argument_source);
+      test_case "an anonymous type argument does not widen a declared type" `Quick
+        test_anon_does_not_widen_a_declared_type;
       test_case "Tesl.Url and Tesl.Net" `Slow test_url_net_with_go;
       test_case "Tesl.Url and Tesl.Net behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-url-net>" url_net_source);

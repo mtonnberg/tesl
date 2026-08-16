@@ -50,6 +50,18 @@ type go_type =
   | TStream
   | TCheck of go_type
   | TFailure
+  (* An ADT type argument NOTHING constrains: `Left "e"` says what its Left payload is and
+     says nothing at all about the Right one, and a value written that way may never meet a
+     context that settles it (`Either.withDefault 99 (Left "err")` reads only the Left side).
+     The parameter has no inhabitants there — the variant that would carry one is not the
+     variant in hand — so any Go type serves, and it renders as the empty struct.
+
+     It behaves as a WILDCARD in type comparison, and every merge prefers the other side, so
+     the moment a sibling value or an expectation does settle the parameter, that type wins.
+     What it must never do is claim to BE a type: nothing is emitted from a `TAnon` except
+     `struct{}`, and no field, column or signature is ever accepted on its authority — those
+     paths compare against a declared type, which is never anonymous. *)
+  | TAnon
 
 and newtype_info = {
   tesl_name : string;
@@ -1029,6 +1041,9 @@ let rec go_type = function
   | TJson -> "teslrt.JsonValue"
   | TStream -> "*teslrt.SseTestStream"
   | TCheck ty -> Printf.sprintf "teslrt.Check[%s]" (go_type ty)
+  (* An unconstrained type argument has no values, so the empty struct is as good a
+     witness as any — and the smallest. *)
+  | TAnon -> "struct{}"
   | TFailure -> invalid_arg "Go failure has no standalone type"
 
 (* Type equality that TERMINATES on a RECURSIVE ADT.  `=` cannot: a recursive type's
@@ -1039,6 +1054,9 @@ let rec go_type = function
    record's identity — applied to the same arguments. *)
 let rec type_equal left right =
   match left, right with
+  (* An unconstrained type argument is compatible with whatever settles it: it has no
+     values, so no comparison between the two can ever be observed. *)
+  | TAnon, _ | _, TAnon -> true
   | TAdt (left_info, left_args), TAdt (right_info, right_args) ->
     left_info.adt_go_name = right_info.adt_go_name
     && left_info.adt_owner = right_info.adt_owner
@@ -1069,6 +1087,35 @@ let rec type_equal left right =
   | _ -> false
 
 let type_unequal left right = not (type_equal left right)
+
+(* Whether a type still has an ANONYMOUS argument in it — one no value has settled. *)
+let rec has_anon ty =
+  match ty with
+  | TAnon -> true
+  | TAdt (_, args) -> List.exists has_anon args
+  | TList inner | TSet inner | TCheck inner -> has_anon inner
+  | TDict (key, value) -> has_anon key || has_anon value
+  | TFunc (params, result) -> List.exists has_anon params || has_anon result
+  | TInt | TFloat | TQuantity | TString | TBool | TUnit | TNewtype _ | TRecord _
+  | TJson | TStream | TParam _ | TFailure -> false
+
+(* Two readings of the SAME value, combined so that each keeps what the other does not know:
+   `[Left "e", Right 1]` types its first element `Either String ?` and its second
+   `Either ? Int`, and the list's element type is `Either String Int` — the one type both
+   elements can actually have.  Only an anonymous side ever gives way; a genuine
+   disagreement is left as it is, for the caller's own comparison to reject. *)
+let rec merge_anon left right =
+  match left, right with
+  | TAnon, other | other, TAnon -> other
+  | TAdt (info, left_args), TAdt (_, right_args)
+    when List.length left_args = List.length right_args ->
+    TAdt (info, List.map2 merge_anon left_args right_args)
+  | TList left_inner, TList right_inner -> TList (merge_anon left_inner right_inner)
+  | TSet left_inner, TSet right_inner -> TSet (merge_anon left_inner right_inner)
+  | TCheck left_inner, TCheck right_inner -> TCheck (merge_anon left_inner right_inner)
+  | TDict (left_key, left_value), TDict (right_key, right_value) ->
+    TDict (merge_anon left_key right_key, merge_anon left_value right_value)
+  | settled, _ -> settled
 
 let record_field_go_name name = go_ident ~exported:true name
 
@@ -1200,7 +1247,7 @@ let rec substitute_type bindings ty =
   | TFunc (params, result) ->
     TFunc (List.map (substitute_type bindings) params, substitute_type bindings result)
   | TJson | TStream | TQuantity -> ty
-  | TInt | TFloat | TString | TBool | TUnit | TNewtype _ | TRecord _ | TFailure -> ty
+  | TInt | TFloat | TString | TBool | TUnit | TNewtype _ | TRecord _ | TFailure | TAnon -> ty
 
 (** A variant's payload types with the ADT's type arguments substituted in. *)
 let variant_field_types info args variant =
@@ -1340,7 +1387,7 @@ and equal_expr ty left right =
   | TBool when left = "true" -> right
   | TBool when right = "false" -> "!" ^ selector_operand left
   | TBool when left = "false" -> "!" ^ selector_operand right
-  | TString | TBool | TUnit -> Printf.sprintf "(%s == %s)" left right
+  | TString | TBool | TUnit | TAnon -> Printf.sprintf "(%s == %s)" left right
   (* A SECRET compares in CONSTANT TIME: comparing its payload with `==` would leak a prefix
      through how long the comparison took, which is the classic way a token check betrays the
      token.  Racket's `secret-constant-time-equal?` says the same thing. *)
@@ -1415,7 +1462,7 @@ and unequal_expr ty left right =
   match ty with
   | TInt -> Printf.sprintf "!teslrt.Equal(%s, %s)" left right
   | TFloat | TQuantity -> Printf.sprintf "!teslrt.FloatEqual(%s, %s)" left right
-  | TString | TBool | TUnit -> Printf.sprintf "(%s != %s)" left right
+  | TString | TBool | TUnit | TAnon -> Printf.sprintf "(%s != %s)" left right
   | TNewtype info when info.secret ->
     Printf.sprintf "!teslrt.SecretEqual(%s.Value, %s.Value)"
       (selector_operand left) (selector_operand right)
@@ -1495,7 +1542,7 @@ and ordered_expr ty op left right =
     ordered_expr info.base op (Printf.sprintf "%s.Value" (selector_operand left))
       (Printf.sprintf "%s.Value" (selector_operand right))
   | TUnit | TRecord _ | TAdt _ | TList _ | TDict _ | TSet _ | TParam _
-  | TFunc _ | TJson | TStream | TCheck _ | TFailure ->
+  | TFunc _ | TJson | TStream | TCheck _ | TFailure | TAnon ->
     invalid_arg "Go ordering requires an ordered scalar type"
 
 let rec supports_ordering = function
@@ -1504,7 +1551,7 @@ let rec supports_ordering = function
      and there is no use for it. *)
   | TNewtype info -> (not info.secret) && supports_ordering info.base
   | TBool | TUnit | TRecord _ | TAdt _ | TList _ | TDict _ | TSet _ | TParam _
-  | TFunc _ | TJson | TStream | TCheck _ | TFailure -> false
+  | TFunc _ | TJson | TStream | TCheck _ | TFailure | TAnon -> false
 
 (* Ordering INSIDE A QUERY admits one type the value language does not: a Bool.  PostgreSQL
    orders boolean columns (false before true) and `dsl/sql.rkt` reproduces that in its own
@@ -1526,7 +1573,7 @@ let rec supports_column_ordering = function
 let rec supports_equality_seen seen ty =
   let supports_equality ty = supports_equality_seen seen ty in
   match ty with
-  | TInt | TFloat | TQuantity | TString | TBool | TUnit -> true
+  | TInt | TFloat | TQuantity | TString | TBool | TUnit | TAnon -> true
   | TNewtype info -> supports_equality info.base
   | TRecord info -> List.for_all (fun (_, ty) -> supports_equality ty) info.rec_fields
   | TAdt (info, _) when List.mem info.adt_go_name seen -> true
@@ -2915,9 +2962,13 @@ let rec type_of_expr signatures env expr =
          | "Either.fromRight" | "Either.toMaybe" -> maybe_of (snd (payloads 0))
          | "Either.withDefault" ->
            let _, right = payloads 1 in
-           if type_of_arg signatures env right (List.nth args 0) <> right then
+           let default_ty = type_of_arg signatures env right (List.nth args 0) in
+           if type_unequal default_ty right then
              unsupported loc "Go backend `%s` default has an unsupported type" name;
-           right
+           (* `Either.withDefault 99 (Left "err")` reads only the Left side, so the Either
+              argument never says what a Right would hold.  The DEFAULT says, and it is the
+              same value the call answers with. *)
+           (match right with TAnon -> default_ty | settled -> settled)
          (* The one that takes a Maybe rather than an Either: the left value is what a
             Nothing has none of. *)
          | "Either.fromMaybe" ->
@@ -2946,7 +2997,19 @@ let rec type_of_expr signatures env expr =
       | EVar { name = "Either.partition"; _ } when Hashtbl.mem signatures "Either.partition" ->
         if List.length args <> 1 then
           unsupported loc "Go backend requires `Either.partition` applied to 1 argument(s)";
-        (match type_of_expr signatures env (List.nth args 0) with
+        (* `Either.partition []` has no element to read either side from, and neither side is
+           observable: the answer is two empty lists whatever they hold.  So the argument is
+           typed as a list of Either with both sides anonymous rather than taking the empty
+           list's Int default, which would read as "a list of Int" and be refused. *)
+        let argument_type = match List.nth args 0 with
+          | EList { elems = []; _ } ->
+            (match adt_ctor_of_signature signatures "Left" with
+             | Some (info, _) -> TList (TAdt (info, [TAnon; TAnon]))
+             | None -> unsupported loc
+               "Go backend `Either.partition` takes an Either; import `Tesl.Either`")
+          | argument -> type_of_expr signatures env argument
+        in
+        (match argument_type with
          | TList (TAdt (info, [left; right])) when info.adt_tesl_name = "Either" ->
            (match Hashtbl.find_opt signatures "Tuple2" with
             | Some { result = TAdt (tuple, _); _ } ->
@@ -3298,6 +3361,16 @@ let rec type_of_expr signatures env expr =
     let element = match inferred with
       | Some element -> element
       | None -> type_of_expr signatures env (List.hd elems)
+    in
+    (* An element that types may still leave an ADT argument anonymous, and a LATER element
+       may be the one that settles it.  Only walked when there is something to settle. *)
+    let element =
+      if not (has_anon element) then element
+      else List.fold_left (fun found elem ->
+        if not (has_anon found) then found
+        else match typed_with_default (type_of_expr signatures env) elem with
+          | Some ty, false -> merge_anon found ty
+          | _ -> found) element elems
     in
     List.iter (fun elem ->
       if type_unequal (type_of_arg signatures env element elem) element then
@@ -4339,9 +4412,32 @@ and type_of_variant_application signatures env loc info variant args =
     match find variant.var_fields arg_types with
     | Some ty -> ty
     | None ->
-      unsupported loc
-        "Go backend cannot infer type argument `%s` of `%s` from constructor `%s`"
-        tesl_param info.adt_tesl_name variant.var_ctor) info.adt_params in
+      (* The parameter appears in NO field of the variant in hand — `Left e` says nothing
+         about the Right side — so this application cannot settle it and no value of it can
+         exist here.  It stays ANONYMOUS rather than being guessed at or refused: an
+         expectation or a sibling value settles it if either one does, and if neither does
+         it renders as the empty struct, which is a witness for a type with no values.
+
+         A parameter that DOES appear in a field but could not be read off its argument is a
+         different situation — the argument is there and its type disagreed — and it keeps
+         the refusal, because guessing there would paper over a real mismatch. *)
+      let mentions_param (_, field_ty) =
+        let rec mentions ty = match ty with
+          | TParam name -> name = go_param
+          | TAdt (_, args) -> List.exists mentions args
+          | TList inner | TSet inner | TCheck inner -> mentions inner
+          | TDict (key, value) -> mentions key || mentions value
+          | TFunc (params, result) -> List.exists mentions params || mentions result
+          | TInt | TFloat | TQuantity | TString | TBool | TUnit | TNewtype _ | TRecord _
+          | TJson | TStream | TFailure | TAnon -> false
+        in
+        mentions field_ty
+      in
+      if List.exists mentions_param variant.var_fields then
+        unsupported loc
+          "Go backend cannot infer type argument `%s` of `%s` from constructor `%s`"
+          tesl_param info.adt_tesl_name variant.var_ctor
+      else TAnon) info.adt_params in
   let expected = variant_field_types info type_args variant in
   List.iter2 (fun got (name, want) ->
     if type_unequal got want then
@@ -5302,7 +5398,20 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
       | EVar { name = ("Either.isLeft" | "Either.isRight" | "Either.fromLeft"
                       | "Either.fromRight" | "Either.toMaybe" | "Either.withDefault"
                       | "Either.fromMaybe") as name; _ } when Hashtbl.mem signatures name ->
-        ignore (type_of_expr signatures env app);
+        let result = type_of_expr signatures env app in
+        (* `Either.withDefault 99 (Left "err")` is the one of these whose two arguments have
+           to AGREE: the Either argument never mentions its Right side, and the default is
+           what settles it.  Emitting the constructor on its own inference would build an
+           `Either[string, struct{}]` for a call whose other argument makes it
+           `Either[string, teslrt.Int]`, which Go rejects — rightly, since they are two
+           types.  So the settled type is handed to the argument as its expectation. *)
+        let emit_argument index arg =
+          if name <> "Either.withDefault" || index <> 1 then emit arg
+          else match type_of_expr signatures env arg with
+            | TAdt (info, [left; TAnon]) ->
+              emit_expr ~expected:(TAdt (info, [left; result])) ~indent signatures env arg
+            | _ -> emit arg
+        in
         let go = match name with
           | "Either.isLeft" -> "teslrt.EitherIsLeft"
           | "Either.isRight" -> "teslrt.EitherIsRight"
@@ -5312,7 +5421,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
           | "Either.withDefault" -> "teslrt.EitherWithDefault"
           | _ -> "teslrt.EitherFromMaybe"
         in
-        Printf.sprintf "%s(%s)" go (String.concat ", " (List.map emit args))
+        Printf.sprintf "%s(%s)" go (String.concat ", " (List.mapi emit_argument args))
       | EVar { name = ("Either.map" | "Either.mapLeft" | "Either.andThen") as name; _ }
         when Hashtbl.mem signatures name ->
         let result = type_of_expr signatures env app in
@@ -5361,8 +5470,17 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
           inner
           inner passthrough indent
       | EVar { name = "Either.partition"; _ } when Hashtbl.mem signatures "Either.partition" ->
-        ignore (type_of_expr signatures env app);
-        Printf.sprintf "teslrt.EitherPartition(%s)" (emit (List.nth args 0))
+        (* The empty-list case needs its element type spelled out, for the reason the typing
+           side gives: `[]` alone would emit a `[]teslrt.Int`. *)
+        (match type_of_expr signatures env app, List.nth args 0 with
+         | TAdt (_, [TList left; TList right]), (EList { elems = []; _ } as empty) ->
+           let element = match adt_ctor_of_signature signatures "Left" with
+             | Some (info, _) -> TList (TAdt (info, [left; right]))
+             | None -> invalid_arg "Either.partition validated before emission"
+           in
+           Printf.sprintf "teslrt.EitherPartition(%s)"
+             (emit_expr ~expected:element ~indent signatures env empty)
+         | _ -> Printf.sprintf "teslrt.EitherPartition(%s)" (emit (List.nth args 0)))
       | EVar { name = ("List.range" | "List.repeat") as name; _ }
         when Hashtbl.mem signatures name ->
         ignore (type_of_expr signatures env app);
@@ -8816,7 +8934,8 @@ let rec value_encoder ty =
       ~body:(Printf.sprintf
         "func() any {\n\t\tteslOut := make([]any, len(teslValue))\n\t\tfor teslAt, teslItem := range teslValue {\n\t\t\tteslOut[teslAt] = %s(teslItem)\n\t\t}\n\t\treturn teslOut\n\t}()"
         (value_encoder element))
-  | TDict _ | TSet _ | TParam _ | TFunc _ | TJson | TStream | TCheck _ | TFailure ->
+  | TDict _ | TSet _ | TParam _ | TFunc _ | TJson | TStream | TCheck _ | TFailure
+  | TAnon ->
     invalid_arg "Go response encoding for this type is rejected before emission"
 
 (* ── HTTP: `api` routes and the `server` that binds them ──────────────────────
@@ -10251,7 +10370,8 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
          Printf.bprintf body "%sif (%s).OK() {\n%s\tteslT.Fatal(\"expected Tesl check failure\")\n%s}\n"
            indent emitted indent indent
        | TInt | TFloat | TQuantity | TString | TBool | TUnit | TNewtype _ | TRecord _
-       | TAdt _ | TList _ | TDict _ | TSet _ | TParam _ | TFunc _ | TJson | TStream ->
+       | TAdt _ | TList _ | TDict _ | TSet _ | TParam _ | TFunc _ | TJson | TStream
+       | TAnon ->
          Printf.bprintf body "%steslExpectFailure(teslT, func() {\n%s\t_ = %s\n%s})\n"
            indent indent emitted indent
        | TFailure -> unsupported loc "Go backend expectFail target has no result type");
@@ -12553,7 +12673,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         | TCheck inner -> contains_self inner
         | TList _ | TSet _ | TDict _ | TFunc _ -> false
         | TInt | TFloat | TQuantity | TString | TBool | TUnit | TJson | TStream | TParam _
-        | TFailure -> false
+        | TFailure | TAnon -> false
       in
       (* A GENERIC type naming ITSELF at another instantiation gets its own message: it is
          not "reached through another type", it is the instantiation cycle Go rejects. *)
