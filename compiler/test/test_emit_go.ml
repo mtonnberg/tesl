@@ -8903,6 +8903,152 @@ let test_proxy_with_go () =
       run_go_gates root)
   end
 
+(* ── A check that answers a plain value, and the Float transcendentals ───────
+   Two unrelated gaps that the same source pins, because the first was only VISIBLE once
+   the second stopped refusing the file.
+
+   A `check` whose declared return is a plain value — `-> Maybe (v: T ::: P v)`, where the
+   proof rides inside the `Something` — emitted the bare value where its Go signature says
+   `Check[T]`, which does not compile.  It was invisible because every corpus file with that
+   shape also had a bare `Nothing` the emitter refused first.
+
+   The transcendentals now use Go's `math` and diverge from Racket by up to an ulp, which is
+   the maintainer's recorded call (2026-08-12); only the exact points are asserted here. *)
+let float_check_source = {|module GoFloatCheck exposing [maybePositive, useMaybePositive, bothProofs]
+
+import Tesl.Prelude exposing [Int, Bool(..)]
+import Tesl.Float exposing [
+  Float,
+  Float.sin,
+  Float.cos,
+  Float.tan,
+  Float.exp,
+  Float.log,
+  Float.round,
+  Float.isNaN,
+  Float.isInfinite,
+  Float.infinity,
+  Float.nan,
+]
+import Tesl.Maybe exposing [Maybe(..)]
+
+fact IsPositive (n: Int)
+fact IsSmall (n: Int)
+
+# A `check` whose declared return is a plain VALUE: the proof rides inside the
+# `Something`, so the body has no `ok` to write and one branch is a bare `Nothing`
+# that only the return type can give an element type.
+check maybePositive(n: Int) -> Maybe (v: Int ::: IsPositive v) =
+  if n > 0 then
+    Something n
+  else
+    Nothing
+
+fn useMaybePositive(raw: Int) -> Int =
+  let m = check maybePositive raw
+  case m of
+    Nothing -> 0
+    Something v -> v + 1
+
+check checkPositive(n: Int) -> n: Int ::: IsPositive n =
+  if n > 0 then
+    ok n ::: IsPositive n
+  else
+    fail 400 "must be positive"
+
+check checkSmall(n: Int) -> n: Int ::: IsSmall n =
+  if n < 100 then
+    ok n ::: IsSmall n
+  else
+    fail 400 "must be small"
+
+# A let-bound COMBINED check inside a check: the rejection must PROPAGATE with its
+# own status, not trap.
+check bothProofs(n: Int) -> n: Int ::: IsPositive n && IsSmall n =
+  let validated = check (checkPositive && checkSmall) n
+  validated
+
+test "a check returning a plain value accepts it" {
+  expect useMaybePositive 5 == 6
+  expect useMaybePositive 0 == 0
+}
+
+# The comparison takes its type from whichever side has one, so a bare `Nothing`
+# works on either side of `==` AND of `!=`.
+test "a bare Nothing compares on both sides of both operators" {
+  let some = check maybePositive 5
+  let none = check maybePositive 0
+  expect some != Nothing
+  expect none == Nothing
+  expect Nothing != some
+  expect Nothing == none
+}
+
+test "a let-bound combined check propagates each conjunct's rejection" {
+  let good = 50
+  let accepted = check bothProofs good
+  expect accepted == 50
+  let notPositive = 0
+  let tooBig = 100
+  expectFail check bothProofs notPositive
+  expectFail check bothProofs tooBig
+}
+
+# The transcendentals. Only inputs where both backends are exact are asserted:
+# sin/cos/tan/exp diverge from Racket by up to an ulp elsewhere, which is recorded
+# rather than pinned.
+test "the transcendentals answer their exact values" {
+  expect Float.sin 0.0 == 0.0
+  expect Float.cos 0.0 == 1.0
+  expect Float.tan 0.0 == 0.0
+  expect Float.exp 0.0 == 1.0
+  expect Float.log 1.0 == 0.0
+  expect Float.round (Float.exp 1.0 * 1000.0) == 2718
+  expect Float.round (Float.sin 1.0 * 1000.0) == 841
+}
+
+test "the two Float values that are not literals" {
+  expect Float.isInfinite Float.infinity
+  expect Float.isNaN Float.nan
+  expect Float.isInfinite Float.nan == False
+}
+|}
+
+let test_float_check_with_go () =
+  let emitted = match Compile.compile_go_source "<go-float-check>" float_check_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "float/check compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgofloatcheck/module.go" emitted in
+  (* The tail is an ACCEPTANCE, and it has to say so — the bare value did not compile. *)
+  check bool "a plain-value check tail is accepted on the way out" true
+    (contains module_go "return teslrt.Accept(teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing})");
+  (* A let-bound COMBINED check propagates, exactly as the single-check form does: a
+     rejection carries its own status out rather than trapping. *)
+  check bool "a let-bound combined check propagates its rejection" true
+    (contains module_go "return teslrt.Reject[teslrt.Int](teslDelegated1.Status(), teslDelegated1.Message())");
+  check bool "the combined check is the hoisted sequencing helper" true
+    (contains module_go "teslDelegated1 := teslCheckAll");
+  (* Go has no literal for either, so they are functions rather than package variables. *)
+  check bool "the two unwritable Float values are calls" true
+    (contains module_go "teslrt.FloatInfinity()" || contains
+       (artifact "internal/teslmodgofloatcheck/module_test.go" emitted) "teslrt.FloatInfinity()");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-float-check" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+  end
+
 let () =
   run "emit_go" [
     "emission", [
@@ -9101,6 +9247,10 @@ let () =
       test_case "unsupported Tesl.Agent forms fail closed" `Quick test_agent_limits_fail_closed;
       test_case "serverTools and humanActions" `Slow test_endpoint_tools_with_go;
       test_case "Tesl.Proxy" `Slow test_proxy_with_go;
+      test_case "a plain-value check tail, and the Float transcendentals" `Slow
+        test_float_check_with_go;
+      test_case "plain-value checks behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-float-check>" float_check_source);
       test_case "Tesl.Proxy behaves the same on Racket" `Slow
         (racket_behavior_oracle "<go-proxy>" proxy_source);
       test_case "endpoint tools behave the same on Racket" `Slow

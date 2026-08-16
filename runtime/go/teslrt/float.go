@@ -253,3 +253,45 @@ func FloatSign(value float64) float64 {
 func FloatInfinity() float64 { return math.Inf(1) }
 
 func FloatNaN() float64 { return math.NaN() }
+
+// ── The transcendentals ──────────────────────────────────────────────────────
+//
+// These forward to Go's `math`, and they DIVERGE from the Racket runtime: sin, cos and tan
+// differ on 22 %, 22 % and 34 % of inputs respectively (up to 9,214 ulps near a zero of the
+// function), and exp on 0.09 %. That divergence rate says the two implementations differ,
+// not which is right — ulp-of-result exaggerates a small absolute error near a zero — and
+// deciding needs a correctly-rounded reference rather than a diff against Racket. The
+// maintainer's call (2026-08-12) is to use Go's and record the divergence, not to block on
+// it, so a program that computes a sine gets an answer here instead of a refusal.
+//
+// FloatLog is the one that does NOT forward, because Go's math.Log is wrong rather than
+// merely different; see its own note.
+
+func FloatSin(value float64) float64 { return math.Sin(value) }
+
+func FloatCos(value float64) float64 { return math.Cos(value) }
+
+func FloatTan(value float64) float64 { return math.Tan(value) }
+
+func FloatExp(value float64) float64 { return math.Exp(value) }
+
+// FloatLog wraps math.Log rather than forwarding to it. Go's returns
+// -709.0895657128241 for EVERY subnormal input — Log(5e-324) and Log(2.5e-323) give the
+// same answer, and both are wrong (the true values are about -744.44 and -742.83). Scaling
+// a subnormal into the normal range and subtracting the scale back out reproduces both
+// exactly. Everything else forwards unchanged.
+func FloatLog(value float64) float64 {
+	if value > 0 && value < smallestNormalFloat {
+		return math.Log(value*subnormalLogScale) - subnormalLogShift
+	}
+	return math.Log(value)
+}
+
+const (
+	// The smallest positive NORMAL float64: below this the mantissa loses bits, which is
+	// exactly where math.Log stops distinguishing inputs.
+	smallestNormalFloat = 2.2250738585072014e-308
+	// 2^100, and 100·ln2 — the scale up and the amount to take back off.
+	subnormalLogScale = 1267650600228229401496703205376.0
+	subnormalLogShift = 69.31471805599453
+)

@@ -2912,6 +2912,13 @@ let rec type_of_expr signatures env expr =
       | Some left_ty, Some right_ty when right_defaulted && not left_defaulted ->
         ignore right_ty; left_ty, left_ty
       | Some left_ty, Some right_ty -> left_ty, right_ty
+      (* One side carries no type of its OWN — a bare `Nothing`, a nullary constructor of a
+         generic ADT — so the other side's type instantiates it, the same rule an expectation
+         applies at a call argument.  Without this, `maybeThing != Nothing` was refused while
+         `maybeThing == Nothing` compiled, because only the `==` path routed the operands
+         through the expectation. *)
+      | Some left_ty, None -> left_ty, type_of_arg signatures env left_ty right
+      | None, Some right_ty -> type_of_arg signatures env right_ty left, right_ty
       | _ ->
         (* Nothing to reconcile: re-type so the original error is reported. *)
         type_of_expr signatures env left, type_of_expr signatures env right
@@ -3984,6 +3991,17 @@ and type_of_arg signatures env want arg =
     (match want with
      | TCheck inner -> TCheck (type_of_arg signatures env inner value)
      | _ -> assert false)
+  (* A `check` whose declared return is a plain VALUE — `-> Maybe (v: Int ::: IsPositive v)`
+     — has a body that IS that value: there is no `ok` to write, because the proof rides
+     inside the `Something`.  So a body satisfying the check's inner type satisfies the
+     check, and — the part that matters — the INNER type is what the body's branches are
+     typed against, which is what lets a bare `Nothing` in one of them find its element. *)
+  | _ when (match want with
+            | TCheck inner ->
+              (match typed_with_default (type_of_arg signatures env inner) arg with
+               | Some got, _ -> not (type_unequal got inner)
+               | None, _ -> false)
+            | _ -> false) -> want
   (* A check's VALUE satisfies an expectation of its base type: the rejection becomes a
      failure at the point of use (see the `MustCheck` emission). *)
   | EApp _ when (match want with TCheck _ -> false | _ -> true)
@@ -6125,10 +6143,12 @@ and emit_negated ?(indent="") signatures env expr =
        the other, exactly as it does in the positive emission.  Both sides are then emitted
        against it, or `xs != []` would compare a `List OrderItem` with the default's
        `[]teslrt.Int{}` and Go would reject the emitted code. *)
-    let source = match left, right with
-      | EList { elems = []; _ }, _ -> right
-      | _ -> left in
-    let ty = type_of_expr signatures env source in
+    (* The operand type comes from whichever side HAS one, whether the other is a defaulted
+       empty list or an under-constrained constructor. *)
+    let ty = match typed_with_default (type_of_expr signatures env) left with
+      | Some left_ty, false -> left_ty
+      | _ -> type_of_expr signatures env right
+    in
     let emitted_left = emit_expr ~expected:ty ~indent signatures env left
     and emitted_right = emit_expr ~expected:ty ~indent signatures env right in
     let equal = (op = BEq) in
@@ -7859,6 +7879,65 @@ let self_tail_call_args signatures env ~name ~arity expr =
      | _ -> None)
   | _ -> None
 
+(* A `check` whose declared return is a plain VALUE — `-> Maybe (v: T ::: P v)` — has a body
+   that IS that value: the proof rides inside the `Something`, so there is no `ok` to write.
+   The tail is then an ACCEPTANCE and has to say so; emitting the bare value where the Go
+   signature says `Check[T]` produced a package that did not compile, which is how this was
+   found.  Answers the value type when the tail is one, so the branches are also EMITTED
+   against it — which is what lets a bare `Nothing` in one of them find its element.
+
+   `ok` and `fail` say what they are, and a tail that delegates to another check hands back
+   that check's own result, so neither is an acceptance. *)
+(* A `let` whose value DELEGATES to a check, in either spelling: `check g x` and
+   `check (a && b) x`.  Answers the Go expression producing that `Check` and the type it
+   carries, so a check body can PROPAGATE the rejection rather than trap on it.
+
+   The combined spelling used to be missing here, which mattered only once a check whose
+   declared return is a plain value could emit at all: `let validated = check (a && b) n`
+   inside a check then trapped on a rejection where the single-check form propagated. *)
+let delegated_check_call ~indent signatures env value =
+  match check_application signatures value with
+  | Some (signature, args) ->
+    let inner = match signature.result with TCheck inner -> inner | ty -> ty in
+    (* Runs the ordinary check-call validation (arity, argument types) — the same one the
+       non-propagating path gets — so this branch cannot accept a call the other rejects. *)
+    ignore (type_of_expr signatures env value);
+    Some (Printf.sprintf "%s(%s)"
+            (qualified signature.sig_owner signature.go_name)
+            (String.concat ", " (List.map2
+               (fun want arg ->
+                  emit_leaf_argument ~indent signatures env signature.go_name want arg)
+               signature.params args)),
+          inner)
+  | None ->
+    (match flatten_app [] value with
+     | EVar { name = "check"; _ }, [conjunction; argument] ->
+       (match check_conjuncts conjunction with
+        | Some (_ :: _ :: _ as names) ->
+          let inner = type_of_expr signatures env value in
+          Some (Printf.sprintf "%s(%s)"
+                  (combined_check_helper signatures inner names)
+                  (emit_expr ~expected:inner ~indent signatures env argument),
+                inner)
+        | _ -> None)
+     | _ -> None)
+
+let tail_accepts_value signatures env expected expr =
+  (* A tail spelled `check g x` — single or combined — DELEGATES: it hands back that check's
+     own result, rejection included.  Accepting it would turn a rejection into a trap, which
+     is what happened to `check (checkPositive && checkSmall) n` before this test was here. *)
+  let delegates = match flatten_app [] expr with
+    | EVar { name = "check"; _ }, (_ :: _) -> true
+    | _ -> check_application signatures expr <> None
+  in
+  match expected, expr with
+  | TCheck _, (EOk _ | EFail _) -> None
+  | TCheck inner, _ when not delegates ->
+    (match typed_with_default (type_of_arg signatures env inner) expr with
+     | Some got, _ when not (type_unequal got inner) -> Some inner
+     | _ -> None)
+  | _ -> None
+
 let emit_tail ?self buffer signatures env expected indent expr =
   let self_name, self_params = match self with
     | Some (name, params) -> Some name, params
@@ -7995,30 +8074,19 @@ let emit_tail ?self buffer signatures env expected indent expr =
        raises there too, since `define/pow` installs a raising handler rather than letting a
        failure leak out as a value. *)
     | ELet { name; value; body; loc; _ }
-      when (match check_application signatures value, expected with
-            | Some _, TCheck _ -> true
+      when (match expected with
+            | TCheck _ ->
+              delegated_check_call ~indent:(indent ^ "\t") signatures env value <> None
             | _ -> false) ->
-      let signature, args = match check_application signatures value with
+      let call, inner =
+        match delegated_check_call ~indent:(indent ^ "\t") signatures env value with
         | Some pair -> pair
         | None -> assert false
       in
-      let inner = match signature.result with
-        | TCheck inner -> inner
-        | _ -> assert false
-      in
-      (* Runs the ordinary check-call validation (arity, argument types) — the same one the
-         non-propagating path gets — so this branch cannot accept a call the other rejects. *)
-      ignore (type_of_expr signatures env value);
       Printf.bprintf buffer "%s{\n" indent;
       Buffer.add_string buffer (line_directive loc);
       let temporary = Printf.sprintf "teslDelegated%d" (String.length indent) in
-      Printf.bprintf buffer "%s\t%s := %s(%s)\n" indent temporary
-        (qualified signature.sig_owner signature.go_name)
-        (String.concat ", " (List.map2
-           (fun want arg ->
-              emit_leaf_argument ~indent:(indent ^ "\t") signatures env
-                signature.go_name want arg)
-           signature.params args));
+      Printf.bprintf buffer "%s\t%s := %s\n" indent temporary call;
       Printf.bprintf buffer "%s\tif !%s.OK() {\n%s\t\treturn teslrt.Reject[%s](%s.Status(), %s.Message())\n%s\t}\n"
         indent temporary indent (go_type (match expected with TCheck ty -> ty | ty -> ty))
         temporary temporary indent;
@@ -8105,7 +8173,13 @@ let emit_tail ?self buffer signatures env expected indent expr =
          of a generic ADT (`Nothing`) is instantiated by the return type. *)
       ignore (type_of_arg signatures env expected expr);
       Buffer.add_string buffer (line_directive (Checker.expr_loc expr));
-      Printf.bprintf buffer "%sreturn %s\n" indent (emit_expr ~expected ~indent signatures env expr)
+      (match tail_accepts_value signatures env expected expr with
+       | Some inner ->
+         Printf.bprintf buffer "%sreturn teslrt.Accept(%s)\n" indent
+           (emit_expr ~expected:inner ~indent signatures env expr)
+       | None ->
+         Printf.bprintf buffer "%sreturn %s\n" indent
+           (emit_expr ~expected ~indent signatures env expr))
   in
   go env indent expr
 
@@ -10700,9 +10774,19 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       "Int.max",          [`Int; `Int], `Int, "teslrt.Max";
       (* Proof-total: the divisor carries `IsNonZero`, so the runtime guard is
          containment rather than the primary check. *)
-      (* `Tesl.Float`.  The transcendentals are absent on purpose: Go's sin/cos/tan
-         diverge from Racket on 22-34% of inputs and its math.Log is outright wrong for
-         subnormals, so they fail closed rather than emit divergent results. *)
+      (* `Tesl.Float`.  The TRANSCENDENTALS are here and they diverge from Racket: sin, cos
+         and tan differ on 22 %, 22 % and 34 % of inputs (up to 9,214 ulps near a zero of the
+         function) and exp on 0.09 %.  That rate says the two differ, not which is right —
+         ulp-of-result exaggerates a small absolute error near a zero — and deciding needs a
+         correctly-rounded reference rather than a diff against Racket, so the maintainer's
+         call (2026-08-12) is to use Go's and record the divergence rather than refuse to
+         emit.  `Float.log` is the exception that does NOT forward: Go's `math.Log` answers
+         the same wrong number for every subnormal, so the runtime scales around it. *)
+      "Float.sin",        [`Float], `Float, "teslrt.FloatSin";
+      "Float.cos",        [`Float], `Float, "teslrt.FloatCos";
+      "Float.tan",        [`Float], `Float, "teslrt.FloatTan";
+      "Float.exp",        [`Float], `Float, "teslrt.FloatExp";
+      "Float.log",        [`Float], `Float, "teslrt.FloatLog";
       (* The named arithmetic surface; `Float.div`'s divisor carries a FloatNonZero proof,
          which erases like every other proof. *)
       "Float.add",        [`Float; `Float], `Float, "teslrt.FloatAdd";
@@ -10807,6 +10891,12 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             if name = "Float.parse" then maybe_imported := true
           end else match name with
             | "Float" | "FloatNonZero" | "FloatNonNegative" -> ()
+            (* The two Float values with no literal spelling.  They resolve through the
+               constant table, the same path `Int32.minValue` takes. *)
+            | "Float.infinity" ->
+              Hashtbl.replace types.consts name (TFloat, "teslrt.FloatInfinity()")
+            | "Float.nan" ->
+              Hashtbl.replace types.consts name (TFloat, "teslrt.FloatNaN()")
             | other -> unsupported import.loc
               "Go backend does not support `Tesl.Float` export `%s` yet" other) exposed
       end) m.imports;

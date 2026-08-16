@@ -385,3 +385,80 @@ func TestFloatPowMatchesRacket(t *testing.T) {
 		t.Fatalf("NaN ^ 0 = %v, Racket says 1.0", got)
 	}
 }
+
+// ── The transcendentals ──────────────────────────────────────────────────────
+
+// Go's math.Log answers -709.0895657128241 for EVERY subnormal input, which is both
+// indistinguishable and wrong. The expected values here were read off the Racket runtime
+// (`(log 5e-324)` and `(log 2.5e-323)`), so this pins the agreement rather than the wrapper.
+func TestFloatLogDistinguishesSubnormals(t *testing.T) {
+	cases := []struct {
+		input float64
+		want  float64
+	}{
+		{5e-324, -744.4400719213812},
+		{2.5e-323, -742.8306340089471},
+	}
+	for _, testCase := range cases {
+		if got := FloatLog(testCase.input); got != testCase.want {
+			t.Fatalf("FloatLog(%v) = %v, want %v", testCase.input, got, testCase.want)
+		}
+	}
+	// The bug this guards against is not "slightly off" but "the same for both".
+	if FloatLog(5e-324) == FloatLog(2.5e-323) {
+		t.Fatal("two different subnormals answered the same logarithm")
+	}
+}
+
+// Everything at or above the smallest normal forwards unchanged, so the wrapper must not
+// perturb the ordinary range.
+func TestFloatLogForwardsOutsideTheSubnormalRange(t *testing.T) {
+	for _, input := range []float64{
+		smallestNormalFloat, 1e-300, 0.5, 1.0, 2.718281828459045, 1e300,
+	} {
+		if got, want := FloatLog(input), math.Log(input); got != want {
+			t.Fatalf("FloatLog(%v) = %v, want the unwrapped %v", input, got, want)
+		}
+	}
+}
+
+// Zero and negatives have no logarithm; both backends say so with -Inf and NaN.
+func TestFloatLogOfZeroAndNegatives(t *testing.T) {
+	if got := FloatLog(0); !math.IsInf(got, -1) {
+		t.Fatalf("FloatLog(0) = %v, want -Inf", got)
+	}
+	if got := FloatLog(-1); !math.IsNaN(got) {
+		t.Fatalf("FloatLog(-1) = %v, want NaN", got)
+	}
+}
+
+// The exact points, which are the ones both backends agree on to the bit. Everything else
+// may differ by up to an ulp and is recorded as a known divergence rather than pinned.
+func TestTranscendentalsAtTheirExactPoints(t *testing.T) {
+	if got := FloatSin(0); got != 0 {
+		t.Fatalf("FloatSin(0) = %v", got)
+	}
+	if got := FloatCos(0); got != 1 {
+		t.Fatalf("FloatCos(0) = %v", got)
+	}
+	if got := FloatTan(0); got != 0 {
+		t.Fatalf("FloatTan(0) = %v", got)
+	}
+	if got := FloatExp(0); got != 1 {
+		t.Fatalf("FloatExp(0) = %v", got)
+	}
+}
+
+func TestTranscendentalsPropagateNaN(t *testing.T) {
+	for name, answer := range map[string]float64{
+		"sin": FloatSin(math.NaN()),
+		"cos": FloatCos(math.NaN()),
+		"tan": FloatTan(math.NaN()),
+		"exp": FloatExp(math.NaN()),
+		"log": FloatLog(math.NaN()),
+	} {
+		if !math.IsNaN(answer) {
+			t.Fatalf("%s(NaN) = %v, want NaN", name, answer)
+		}
+	}
+}
