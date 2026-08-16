@@ -11116,6 +11116,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
          millisecond forms above stay canonical — they are exact integer arithmetic — and
          these take a Duration, converting SI seconds to that exact count. *)
       "Time.add"; "Time.subtract"; "Time.diff";
+      (* The calendar half.  Only rendering so far: the truncation family needs the
+         `TimeZone` value, which is its own slice. *)
+      "formatTime";
     ] in
     let time_imports = ref [] in
     List.iter (fun (import : import_decl) ->
@@ -12383,6 +12386,11 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         | "Time.add" -> [posix; TQuantity], posix, "teslrt.TimeAdd"
         | "Time.subtract" -> [posix; TQuantity], posix, "teslrt.TimeSubtract"
         | "Time.diff" -> [posix; posix], TQuantity, "teslrt.TimeDiff"
+        (* `formatTime ts zone fmt` — the zone is a STRING here (the TimeZone value is the
+           truncation family's), and the format is Tesl's own strftime-like vocabulary
+           rather than Go's reference layout, because the two backends have to render the
+           same instant identically. *)
+        | "formatTime" -> [posix; TString; TString], TString, "teslrt.FormatTime"
         | other -> unsupported (Location.dummy_loc m.source_file)
           "Go backend does not support `Tesl.Time` export `%s` yet" other
       in
@@ -12846,6 +12854,12 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
            argument — everything in it is standard library — but a runtime file a program has
            no use for is still surface a reader has to rule out, and the gate costs nothing. *)
         let agent_only = [ "agent.go"; "agent_endpoint.go"; "agent_provider.go" ] in
+        (* `timezone.go` embeds the IANA database (~450 KB) so a container with no
+           /usr/share/zoneinfo still renders `Europe/Stockholm` correctly rather than
+           silently falling back to UTC.  A program that formats no timestamps should not
+           carry it. *)
+        let timezone_only = [ "timezone.go" ] in
+        let uses_timezone = mentions "teslrt.FormatTime" in
         let uses_agent = List.exists mentions
           [ "teslrt.Agent"; "teslrt.LlmProvider"; "teslrt.LlmResponse"; "teslrt.Tool";
             "teslrt.Conversation"; "teslrt.Ask"; "teslrt.MockProvider" ] in
@@ -12858,6 +12872,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           else if (not has_load_tests) && List.mem name load_test_only then None
           else if (not postgres_runtime) && List.mem name postgres_only then None
           else if (not uses_agent) && List.mem name agent_only then None
+          else if (not uses_timezone) && List.mem name timezone_only then None
           else if name = "password.go" && not password_runtime then None
           else Some { path = "internal/teslrt/" ^ name; contents })
           Embedded_go_runtime.files

@@ -9240,6 +9240,109 @@ let test_partial_with_go () =
       run_go_gates root)
   end
 
+(* ── `formatTime` ────────────────────────────────────────────────────────────
+   THE ONE SOURCE HERE WITH NO RACKET ORACLE, and the reason is the point: Racket's
+   `formatTime` IGNORES its zone argument.  Its non-UTC branch sets `TZ` with `putenv` and
+   calls `seconds->date`, which resolved the zone once at startup and does not read the
+   variable again; and its "UTC" branch does not force UTC at all — it falls through to
+   local time.  Measured here (2026-08-16): the same call answers 23:13 for an instant that
+   is 22:13 UTC, for `"UTC"`, `"America/New_York"` and `"Asia/Tokyo"` alike.
+
+   So a Racket service renders every timestamp in the SERVER's zone whatever the caller
+   asked for — invisible on a UTC-configured host, an hour or thirteen wrong anywhere else.
+   Go answers correctly, with the IANA database compiled in so the answer does not depend on
+   the container either.  Asserting the two against each other would pin the bug. *)
+let format_time_source = {|module GoFormatTime exposing [render]
+
+import Tesl.Prelude exposing [Int, String, Bool(..)]
+import Tesl.Time exposing [PosixMillis, Time.secondsToPosix, addMs, formatTime]
+
+fn render(seconds: Int, zone: String, format: String) -> String =
+  formatTime (Time.secondsToPosix seconds) zone format
+
+test "the ISO shape, in UTC" {
+  expect render 1699999999 "UTC" "%Y-%m-%dT%H:%M:%SZ" == "2023-11-14T22:13:19Z"
+  expect render 0 "UTC" "%Y-%m-%dT%H:%M:%SZ" == "1970-01-01T00:00:00Z"
+}
+
+# A zone the host may not have installed: the database is compiled in, so the
+# answer is the same wherever the binary runs.
+test "a named IANA zone shifts the wall clock" {
+  expect render 1699999999 "Europe/Stockholm" "%Y-%m-%d %H:%M:%S" == "2023-11-14 23:13:19"
+  expect render 1699999999 "America/New_York" "%Y-%m-%d %H:%M:%S" == "2023-11-14 17:13:19"
+  expect render 1699999999 "Asia/Tokyo" "%Y-%m-%d %H:%M:%S" == "2023-11-15 07:13:19"
+}
+
+# Summer time is a property of the INSTANT, not of the zone.
+test "the offset follows daylight saving" {
+  expect render 1699999999 "Europe/Stockholm" "%z" == "+0100"
+  expect render 1689999999 "Europe/Stockholm" "%z" == "+0200"
+  expect render 1699999999 "UTC" "%z" == "+0000"
+}
+
+test "milliseconds come from the instant, not the calendar" {
+  let base = Time.secondsToPosix 1699999999
+  expect formatTime (addMs base 250) "UTC" "%H:%M:%S.%3N" == "22:13:19.250"
+  expect formatTime base "UTC" "%3N" == "000"
+}
+
+test "an unknown directive and a literal percent pass through" {
+  expect render 0 "UTC" "100%% sure" == "100% sure"
+  expect render 0 "UTC" "%Q" == "%Q"
+  expect render 0 "UTC" "no directives here" == "no directives here"
+}
+
+# An unknown zone name is UTC rather than a trap: Racket answers the same when
+# `TZ` names a zone the host has never heard of.
+test "an unknown zone falls back to UTC" {
+  expect render 1699999999 "Mars/Olympus_Mons" "%Y-%m-%dT%H:%M:%SZ" == "2023-11-14T22:13:19Z"
+}
+|}
+
+let test_format_time_with_go () =
+  let emitted = match Compile.compile_go_source "<go-format-time>" format_time_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "formatTime compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgoformattime/module.go" emitted in
+  check bool "the zone and the format travel as written" true
+    (contains module_go "teslrt.FormatTime(teslrt.SecondsToPosix(seconds), zone, format)");
+  (* The database is compiled in, so `Europe/Stockholm` resolves in a container that has no
+     /usr/share/zoneinfo — where the host-lookup version silently answers UTC instead. *)
+  let runtime_go = artifact "internal/teslrt/timezone.go" emitted in
+  check bool "the IANA database ships with it" true (contains runtime_go "_ \"time/tzdata\"");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-format-time" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+  end
+
+(* A program that formats no timestamps must not carry the 450 KB IANA database. *)
+let test_timezone_data_ships_only_where_used () =
+  let plain = {|module GoNoTime exposing [double]
+import Tesl.Prelude exposing [Int]
+
+fn double(n: Int) -> Int = n * 2
+|} in
+  match Compile.compile_go_source "<go-no-time>" plain with
+  | Compile.GoFailure diagnostics ->
+    failf "plain module failed: %s"
+      (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  | Compile.GoSuccess artifacts ->
+    check bool "no timezone runtime in a module that formats nothing" false
+      (List.exists (fun (a : Emit_go.artifact) -> a.path = "internal/teslrt/timezone.go")
+         artifacts)
+
 let () =
   run "emit_go" [
     "emission", [
@@ -9438,6 +9541,9 @@ let () =
       test_case "unsupported Tesl.Agent forms fail closed" `Quick test_agent_limits_fail_closed;
       test_case "serverTools and humanActions" `Slow test_endpoint_tools_with_go;
       test_case "Tesl.Proxy" `Slow test_proxy_with_go;
+      test_case "formatTime" `Slow test_format_time_with_go;
+      test_case "the timezone database ships only where used" `Quick
+        test_timezone_data_ships_only_where_used;
       test_case "partial application, and a newtype named as a codec" `Slow
         test_partial_with_go;
       test_case "partial application behaves the same on Racket" `Slow
