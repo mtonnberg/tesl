@@ -522,6 +522,14 @@ type queue_info = {
   qu_tesl_name : string;
   qu_go_var : string;
   qu_owner : string;
+  (* Every (job type, worker, dead-letter worker) the declaration wires up, in declaration
+     order.  A queue may carry SEVERAL job types — the store holds a payload as `any` and the
+     emitter passes a dispatcher that type-switches, which is what queue.go was written
+     for. *)
+  qu_jobs : (string * string * string option) list;
+  (* The FIRST wiring, which is what the single-payload surfaces use: an api-test's
+     `processNextJob` answers a `JobResult` of ONE job type, and no reading of a multi-type
+     queue gives it two. *)
   qu_job_type : string;            (* the job record's Tesl name *)
   qu_worker : string;              (* the worker function's Tesl name *)
   qu_dead_worker : string option;
@@ -1328,13 +1336,13 @@ let adt_tag_field = "Tag"
    would need the indirection inside the other type's own layout. *)
 let adt_self_field (info : adt_info) field_ty =
   match field_ty with
-  | TAdt (other, args) when other.adt_go_name = info.adt_go_name ->
-    (* At the DECLARATION's own instantiation only.  `Maybe (Maybe Int)` mentions Maybe
-       inside Maybe, and that is finite in Go (`Maybe[Maybe[Int]]`) — it is a self-reference
-       at a DIFFERENT instantiation, which needs no indirection and must not get one. *)
-    List.length args = List.length info.adt_params
-    && List.for_all2 (fun arg (_, go_param) ->
-         match arg with TParam name -> name = go_param | _ -> false) args info.adt_params
+  (* A field of the declaration's OWN type is boxed, at whatever instantiation it names.
+     `Node left: (Tree Int)` inside `Tree a` is the one Tesl actually writes and it is just as
+     infinite BY VALUE as `Tree a` would be — a `Tree[int]` holding a `Tree[int]` has no
+     size — so it needs the same pointer.  Go itself accepts the declaration once the field
+     is a pointer: an instantiation cycle is only rejected when the type ARGUMENT grows
+     (`T[*A]` inside `T[A]`), and a constant one does not. *)
+  | TAdt (other, _) -> other.adt_go_name = info.adt_go_name
   | _ -> false
 
 (* Whether a variant's payload field is boxed, asked by NAME.  A value site sees the field
@@ -5260,25 +5268,47 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
           | Some row -> go_type (TRecord row)
           | None -> unsupported loc "Go backend cannot resolve job type `%s`" info.qu_job_type
         in
-        let worker = match verb with
-          | "processNextDeadJob" ->
-            (match info.qu_dead_worker with
-             | Some dead -> dead
-             | None -> unsupported loc
-               "Go backend: queue `%s` has no dead-letter worker" info.qu_tesl_name)
-          | _ -> info.qu_worker
+        let dead = verb = "processNextDeadJob" in
+        (* Every job type the queue carries, paired with the worker that runs it.  One queue
+           may carry several, and the dispatcher below type-switches over them — which is
+           what the store's `any` payload is for.  The dead-letter dispatcher covers only the
+           job types that declare a dead-letter worker; a queue with none at all cannot run
+           `processNextDeadJob` and says so. *)
+        let wirings = List.filter_map (fun (job_type, worker, dead_worker) ->
+          match dead, dead_worker with
+          | false, _ -> Some (job_type, worker)
+          | true, Some dead_worker -> Some (job_type, dead_worker)
+          | true, None -> None) info.qu_jobs in
+        if wirings = [] then unsupported loc
+          "Go backend: queue `%s` has no dead-letter worker" info.qu_tesl_name;
+        let row_of job_type =
+          match Option.bind !current_types
+                  (fun types -> Hashtbl.find_opt types.records job_type) with
+          | Some row -> go_type (TRecord row)
+          | None -> unsupported loc "Go backend cannot resolve job type `%s`" job_type
         in
-        let worker_go = match Hashtbl.find_opt signatures worker with
+        let worker_of worker =
+          match Hashtbl.find_opt signatures worker with
           | Some signature -> qualified signature.sig_owner signature.go_name
           | None -> unsupported loc "Go backend cannot resolve worker `%s`" worker
         in
         (* The dispatcher is spliced as an ARGUMENT inside the wrapper closure, so its body
-           sits one level deeper than the wrapper's statements. *)
+           sits one level deeper than the wrapper's statements.
+
+           The FIRST job type is also the one the `JobResult` carries, so its case captures
+           the job.  Another type running is not an error — the queue carries it on purpose —
+           but a `processNextJob` that answered a `JobResult` holding the zero value of the
+           wrong type would be, so the capture is only claimed where it is true. *)
         let inner = indent ^ "\t" in
         let dispatcher =
+          let cases = List.mapi (fun index (job_type, worker) ->
+            let capture =
+              if index = 0 then Printf.sprintf "%s\t\tteslJob = teslTyped\n" inner else "" in
+            Printf.sprintf "%s\tcase %s:\n%s%s\t\t_ = %s(teslTyped)\n"
+              inner (row_of job_type) capture inner (worker_of worker)) wirings in
           Printf.sprintf
-            "func(teslPayload any) teslrt.JobOutcome {\n%s\tteslJob = teslPayload.(%s)\n%s\t_ = %s(teslJob)\n%s\treturn teslrt.JobOutcome{OK: true}\n%s}"
-            inner row_go inner worker_go inner inner
+            "func(teslPayload any) teslrt.JobOutcome {\n%s\tswitch teslTyped := teslPayload.(type) {\n%s%s\tdefault:\n%s\t\tpanic(\"%s: unexpected job payload\")\n%s\t}\n%s\treturn teslrt.JobOutcome{OK: true}\n%s}"
+            inner (String.concat "" cases) inner inner info.qu_tesl_name inner inner inner
         in
         (match verb with
          | "pendingJobCount" -> Printf.sprintf "teslrt.PendingJobCount(%s)" queue
@@ -6092,8 +6122,10 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
          inner inner indent)
   | EEnqueue { job_type; payload; loc } ->
     let info = queue_of_job_type loc job_type in
+    (* The row is the type ENQUEUED, which on a queue carrying several is not the queue's
+       first one — reading it off the queue put every job in at the same type. *)
     let row = match Option.bind !current_types
-                      (fun types -> Hashtbl.find_opt types.records info.qu_job_type) with
+                      (fun types -> Hashtbl.find_opt types.records job_type) with
       | Some row -> TRecord row
       | None -> unsupported loc "Go backend cannot resolve job type `%s`" job_type
     in
@@ -6149,28 +6181,33 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
     in
     let info = queue_of_job_type loc queue_name in
     let queue = qualified info.qu_owner info.qu_go_var in
-    let row_go = match Option.bind !current_types
-                         (fun types -> Hashtbl.find_opt types.records info.qu_job_type) with
-      | Some row -> go_type (TRecord row)
-      | None -> unsupported loc "Go backend cannot resolve job type `%s`" info.qu_job_type
-    in
-    let worker =
-      if is_dead then
-        (match info.qu_dead_worker with
-         | Some dead -> dead
-         | None -> unsupported loc
-           "Go backend: queue `%s` has no dead-letter worker" info.qu_tesl_name)
-      else info.qu_worker
-    in
-    let worker_go = match Hashtbl.find_opt signatures worker with
-      | Some signature -> qualified signature.sig_owner signature.go_name
-      | None -> unsupported loc "Go backend cannot resolve worker `%s`" worker
-    in
+    (* One dispatcher over every job type the queue carries: the store holds a payload as
+       `any` precisely so one queue can carry several, and the type switch is where the
+       emitter's static knowledge of them is spent. *)
+    let wirings = List.filter_map (fun (job_type, worker, dead_worker) ->
+      match is_dead, dead_worker with
+      | false, _ -> Some (job_type, worker)
+      | true, Some dead_worker -> Some (job_type, dead_worker)
+      | true, None -> None) info.qu_jobs in
+    if wirings = [] then unsupported loc
+      "Go backend: queue `%s` has no dead-letter worker" info.qu_tesl_name;
+    let cases = List.map (fun (job_type, worker) ->
+      let row_go = match Option.bind !current_types
+                           (fun types -> Hashtbl.find_opt types.records job_type) with
+        | Some row -> go_type (TRecord row)
+        | None -> unsupported loc "Go backend cannot resolve job type `%s`" job_type
+      in
+      let worker_go = match Hashtbl.find_opt signatures worker with
+        | Some signature -> qualified signature.sig_owner signature.go_name
+        | None -> unsupported loc "Go backend cannot resolve worker `%s`" worker
+      in
+      Printf.sprintf "%s\tcase %s:\n%s\t\t_ = %s(teslJob)\n" indent row_go indent worker_go)
+      wirings in
     (* The literal's BODY sits one level in from the call, and its closing brace lines up with
        the call — the same shape gofmt writes, which is what the emitter has to produce. *)
     Printf.sprintf
-      "teslrt.StartWorkers(%s, func(teslPayload any) teslrt.JobOutcome {\n%s\tteslJob := teslPayload.(%s)\n%s\t_ = %s(teslJob)\n%s\treturn teslrt.JobOutcome{OK: true}\n%s}, %d, %b)"
-      queue indent row_go indent worker_go indent indent
+      "teslrt.StartWorkers(%s, func(teslPayload any) teslrt.JobOutcome {\n%s\tswitch teslJob := teslPayload.(type) {\n%s%s\tdefault:\n%s\t\tpanic(\"%s: unexpected job payload\")\n%s\t}\n%s\treturn teslrt.JobOutcome{OK: true}\n%s}, %d, %b)"
+      queue indent (String.concat "" cases) indent indent info.qu_tesl_name indent indent indent
       (match concurrency with Some n when n > 0 -> n | _ -> 1) is_dead
   (* `serve` is the tail of the startup chain: it runs until the process is asked to stop. *)
   | EServe { server_name; port; static_dir; mount_path; _ } ->
@@ -11843,15 +11880,13 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       (match entries with
        | [] -> unsupported q.loc
          "Go backend requires `jobs: [Job <JobType> <worker> …]` on queue `%s`" q.name
-       | _ :: _ :: _ -> unsupported q.loc
-         "Go backend does not support a queue carrying more than one job type yet (`%s`)"
-         q.name
-       | [(job_type, worker, dead_worker)] ->
+       | ((job_type, worker, dead_worker) :: _) as jobs ->
          let go_var = package_ident (q.name ^ "Queue") in
          let info = {
            qu_tesl_name = q.name;
            qu_go_var = go_var;
            qu_owner = package;
+           qu_jobs = jobs;
            qu_job_type = job_type;
            qu_worker = worker;
            qu_dead_worker = dead_worker;
@@ -11871,8 +11906,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
            rec_fields = [];
            rec_loc = q.loc;
          };
-         (* Also by job type, since `enqueue` names the JOB and not the queue. *)
-         Hashtbl.replace types.queues job_type info;
+         (* Also by job type, since `enqueue` names the JOB and not the queue — every one of
+            them, so a queue carrying two job types is reachable from either. *)
+         List.iter (fun (each, _, _) -> Hashtbl.replace types.queues each info) jobs;
          ignore lowered)) queue_forms;
     (* An entity's ROW type is registered exactly like a record — a query result and an
        `insert` argument are ordinary struct values — and its store is one package-level
@@ -13193,17 +13229,6 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         | TInt | TFloat | TQuantity | TString | TBool | TUnit | TJson | TStream | TParam _
         | TFailure | TAnon -> false
       in
-      (* A GENERIC type naming ITSELF at another instantiation gets its own message: it is
-         not "reached through another type", it is the instantiation cycle Go rejects. *)
-      let self_at_other_instantiation =
-        info.adt_params <> []
-        && List.exists (fun variant ->
-             List.exists (fun (_, field_ty) ->
-               (not (adt_self_field info field_ty))
-               && (match field_ty with
-                   | TAdt (other, _) -> other.adt_go_name = info.adt_go_name
-                   | _ -> false)) variant.var_fields) info.adt_variants
-      in
       let indirectly_recursive =
         List.exists (fun variant ->
           List.exists (fun (_, field_ty) ->
@@ -13216,19 +13241,15 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           List.exists (fun (_, field_ty) -> adt_self_field info field_ty) variant.var_fields)
           info.adt_variants
       in
-      if self_at_other_instantiation then
-        unsupported loc
-          "Go backend supports a recursive GENERIC type only where it refers to ITSELF \
-           (`%s a`), not to another instantiation" name
-      else if indirectly_recursive then
+      if indirectly_recursive then
         unsupported loc
           "Go backend supports a recursive type only where the payload field IS the type \
            itself (`%s`)" name
-      (* A GENERIC type may refer to itself at its OWN instantiation (`MkNode left:
-         (MyTree a) …` inside `MyTree a`), which Go expresses as `*MyTree[A]`.  At a
-         DIFFERENT instantiation (`left: (Tree Int)` inside `Tree a`) Go rejects the
-         declaration as an instantiation cycle, so that shape is refused here instead of
-         being emitted as something that does not compile. *)
+      (* A GENERIC type may refer to itself at its own instantiation (`MkNode left:
+         (MyTree a)` inside `MyTree a`, emitted `*MyTree[A]`) or at another one (`left:
+         (Tree Int)` inside `Tree a`, emitted `*Tree[teslrt.Int]`).  Both are pointers and
+         both are legal Go: the instantiation cycle Go rejects is the one whose type ARGUMENT
+         grows, and neither of these does. *)
       else ignore directly_recursive)
       adt_forms;
     List.iter (function

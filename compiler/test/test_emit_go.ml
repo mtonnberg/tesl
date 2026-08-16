@@ -10493,6 +10493,178 @@ fn twice(n: Int) -> Int = n * 2
     check bool "no regex runtime in a module that matches nothing" false
       (List.exists (fun (a : Emit_go.artifact) -> a.path = "internal/teslrt/regex.go") artifacts)
 
+(* ── A queue carrying more than one job type ──────────────────────────────────
+   The store holds a payload as `any` precisely so one queue can carry several job types,
+   and the emitter is what knows them: each worker call site becomes a type SWITCH over the
+   declared wirings, so the right worker runs for the payload that was enqueued.
+
+   `enqueue` is the half that had to change with it: the row it builds is the type ENQUEUED,
+   not the queue's first — reading it off the queue would put every job in at one type. *)
+let multi_job_queue_source = {|module GoMultiJob exposing [sendEmail, resizeImage, seedBoth]
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List, Unit]
+import Tesl.Queue exposing [Queue, QueueRetryStrategy, Fixed, queueRead, queueWrite, FromQueue]
+import Tesl.Database exposing [Database, DatabaseBackend, Memory]
+import Tesl.DB exposing [dbRead, dbWrite]
+
+entity Sent table "sent" primaryKey id {
+  id: String
+  kind: String
+}
+
+database MultiJobDb = Database {
+  schema: "go_multi_job"
+  entities: [Sent]
+  backend: Memory
+}
+
+record EmailJob {
+  jobId: String
+  to: String
+}
+
+record ImageJob {
+  jobId: String
+  width: Int
+}
+
+worker sendEmail(job: EmailJob ::: FromQueue (Id == jobId) job) -> Int
+  requires [dbWrite] =
+  let _ = insert Sent { id: job.jobId, kind: "email" }
+  1
+
+worker resizeImage(job: ImageJob ::: FromQueue (Id == jobId) job) -> Int
+  requires [dbWrite] =
+  let _ = insert Sent { id: job.jobId, kind: "image" }
+  job.width
+
+queue MultiJobQueue requires [queueRead, dbWrite] = Queue {
+  database: MultiJobDb
+  jobs: [
+    Job EmailJob sendEmail Nothing,
+    Job ImageJob resizeImage Nothing
+  ]
+  numberOfWorkers: 1
+  retry: QueueRetryStrategy {
+    maxAttempts: 2
+    backoff: Fixed
+    initialDelay: 1
+  }
+}
+
+# Two job types into ONE queue: each is enqueued at its own type.
+fn queueEmail(id: String) -> Unit requires [queueWrite] =
+  enqueue EmailJob { jobId: id, to: "ada@example.com" }
+
+fn queueImage(id: String) -> Unit requires [queueWrite] =
+  enqueue ImageJob { jobId: id, width: 64 }
+
+fn seedBoth() -> Int requires [queueWrite] =
+  let _ = queueEmail "e1"
+  let _ = queueImage "i1"
+  2
+
+fn sentCount() -> Int requires [dbRead] = selectCount s from Sent
+
+test "both job types run through their own worker" requires [dbRead, dbWrite, queueRead, queueWrite] {
+  let _ = seedBoth ()
+  expect sentCount () == 0
+}
+|}
+
+let test_multi_job_queue_with_go () =
+  let emitted = match Compile.compile_go_source "<go-multi-job>" multi_job_queue_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "multi-job queue compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgomultijob/module.go" emitted in
+  (* Each job goes in at ITS OWN type, which is what the type switch then reads back. *)
+  check bool "an email job is enqueued as an EmailJob" true
+    (contains module_go "teslrt.EnqueueJob(MultiJobQueueQueue, EmailJob{");
+  check bool "an image job is enqueued as an ImageJob" true
+    (contains module_go "teslrt.EnqueueJob(MultiJobQueueQueue, ImageJob{");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-multi-job" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      run_go_gates root)
+  end
+
+(* A recursive GENERIC type may name itself at ANOTHER instantiation — `Node left: (Tree Int)`
+   inside `Tree a`, which is what the corpus writes.  It is exactly as infinite by value as a
+   reference to its own instantiation, so it takes the same pointer; Go accepts the
+   declaration once it does, because the instantiation cycle Go rejects is the one whose type
+   ARGUMENT grows and a constant one does not. *)
+let recursive_generic_source = {|module GoRecGeneric exposing [size, depth]
+
+import Tesl.Prelude exposing [Int]
+
+type Tree a
+  = Leaf
+  | Node left: (Tree Int) value: Int right: (Tree Int)
+
+fn size(t: Tree Int) -> Int =
+  case t of
+    Leaf -> 0
+    Node left value right ->
+      1 + size(left) + size(right)
+
+fn biggest(a: Int, b: Int) -> Int =
+  if a > b then
+    a
+  else
+    b
+
+fn depth(t: Tree Int) -> Int =
+  case t of
+    Leaf -> 0
+    Node left value right ->
+      1 + biggest (depth left) (depth right)
+
+test "a tree that refers to another instantiation still counts" {
+  let leaf = Leaf
+  expect size leaf == 0
+  let one = Node Leaf 1 Leaf
+  expect size one == 1
+  expect depth one == 1
+  let three = Node (Node Leaf 1 Leaf) 2 (Node Leaf 3 Leaf)
+  expect size three == 3
+  expect depth three == 2
+}
+|}
+
+let test_recursive_generic_with_go () =
+  let emitted = match Compile.compile_go_source "<go-rec-generic>" recursive_generic_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "recursive generic compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgorecgeneric/module.go" emitted in
+  (* The payload is a POINTER at the other instantiation, exactly as it would be at its
+     own — a `Tree[teslrt.Int]` holding a `Tree[teslrt.Int]` by value has no size. *)
+  check bool "the recursive field is boxed" true (contains module_go "*Tree[teslrt.Int]");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-rec-generic" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      run_go_gates root)
+  end
+
 (* ── A GENERIC function ───────────────────────────────────────────────────────
    `fn isEmpty(xs: List a) -> Bool` becomes `func IsEmpty[A any](xs []A) bool`: the type
    variables a declaration mentions become Go type parameters, in order of first appearance,
@@ -11560,6 +11732,13 @@ let () =
         (racket_behavior_oracle "<go-regex>" regex_source);
       test_case "the regex runtime ships only where used" `Quick
         test_regex_runtime_ships_only_where_used;
+      test_case "a queue carrying more than one job type" `Slow test_multi_job_queue_with_go;
+      test_case "a queue carrying more than one job type behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-multi-job>" multi_job_queue_source);
+      test_case "a recursive generic at another instantiation" `Slow
+        test_recursive_generic_with_go;
+      test_case "a recursive generic behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-rec-generic>" recursive_generic_source);
       test_case "a generic function" `Slow test_generic_function_with_go;
       test_case "a generic function behaves the same on Racket" `Slow
         (racket_behavior_oracle "<go-generic>" generic_function_source);

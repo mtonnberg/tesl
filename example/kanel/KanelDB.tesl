@@ -186,7 +186,7 @@ fn dbInsertIssue(issueId: String, projectId: String, orgId: String, userId: Stri
     createdAt: nowMillis(), updatedAt: nowMillis()
   }
 
-fn dbUpdateIssueFields(issueId: String ::: NotDone issueId, orgId: String, userId: String ::: OrgMember userId orgId, title: String ::: ValidTitle title, description: String ::: ValidDescription description, estimate: Int ::: PositiveEstimate estimate, assigneeId: String) -> Issue
+fn dbUpdateIssueFields(issueId: String ::: NotDone issueId, orgId: String, userId: String ::: OrgMember userId orgId, title: String ::: ValidTitle title, description: String ::: ValidDescription description, estimate: Int ::: PositiveEstimate estimate, assigneeId: Maybe String) -> Issue
   requires [kanelDbWrite, time] =
   update i in Issue
     where i.id == issueId
