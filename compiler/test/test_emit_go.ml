@@ -9616,6 +9616,236 @@ let test_ordered_newtype_with_go () =
       run_go_gates root)
   end
 
+(* ── The request boundary: captures, list bodies, chained checks ─────────────
+   Five shapes that all meet at the edge of a request.
+
+   An `intCodec` path capture is PARSED before anything looks at it, and a segment that is
+   not an integer is a 400 rather than a 404: the route matched and the value in it did not.
+   A LIST body is the JSON array itself, decoded element by element — through the element's
+   own codec when it has one, which is a `Check` rather than an error and so goes through one
+   adapter so a list of scalars and a list of records walk the same loop.  A queue's NAME is
+   a TYPE, so `fn listDead(q: EmailQueue)` takes one as a value.  A check bound in a test
+   binds its checked VALUE.  And a string literal inside an api-test is a template in EVERY
+   position, including the right-hand side of a comparison.
+
+   The chained `via` is the bug underneath: two checks on one codec field emitted the same
+   result binder twice, which does not compile. *)
+let boundary_source = {|module GoBoundary exposing [TaskServer, EmailQueue, listDead]
+
+import Tesl.Prelude exposing [Int, String, Bool(..), List, Unit]
+import Tesl.Json exposing [stringCodec, intCodec]
+import Tesl.String exposing [String.length, String.startsWith, String.concat]
+import Tesl.List exposing [List.length]
+import Tesl.Int exposing [Int.toString]
+import Tesl.UUID exposing [UUID.validate]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.Queue exposing [Queue, QueueRetryStrategy, Fixed, queueRead, queueWrite, Job, FromQueue, deadJobs, DeadJob]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.ApiTest exposing [statusOk, statusClientError]
+
+fact Positive (n: Int)
+fact Trimmed (s: String)
+fact Short (s: String)
+
+# Two `via` checks on ONE codec field: each runs on the value the previous one
+# accepted, and each needs its own result binder.
+check isTrimmed(s: String) -> s: String ::: Trimmed s =
+  if String.startsWith s " " then
+    fail 400 "must not start with a space"
+  else
+    ok s ::: Trimmed s
+
+check isShort(s: String) -> s: String ::: Short s =
+  if String.length s <= 10 then
+    ok s ::: Short s
+  else
+    fail 400 "too long"
+
+check isPositive(n: Int) -> n: Int ::: Positive n =
+  if n > 0 then
+    ok n ::: Positive n
+  else
+    fail 400 "must be positive"
+
+capturer positiveId: Int ::: Positive taskId using intCodec via isPositive
+
+record Task {
+  id: Int
+  label: String ::: Trimmed label && Short label
+}
+
+codec Task {
+  toJson {
+    id -> "id" with_codec intCodec
+    label -> "label" with_codec stringCodec
+  }
+  fromJson [
+    {
+      id <- "id" with_codec intCodec
+      label <- "label" with_codec stringCodec via (isTrimmed && isShort)
+    }
+  ]
+}
+
+entity Note table "notes" primaryKey id {
+  id: String
+}
+
+database TaskDatabase = Database {
+  entities: [Note]
+  backend: Memory
+}
+
+record EmailJob {
+  address: String
+}
+
+worker sendEmail(job: EmailJob ::: FromQueue (Id == jobId) job) requires [queueRead] =
+  job
+
+queue EmailQueue requires [] = Queue {
+  database: TaskDatabase
+  jobs: [Job EmailJob sendEmail Nothing]
+  retry: QueueRetryStrategy {
+    maxAttempts: 1
+    backoff: Fixed
+    initialDelay: 0
+  }
+}
+
+# A queue as a VALUE: its name is a type, and `deadJobs` reads the store without
+# needing the job type. (Not called from a test — a queue value has no literal
+# spelling in the surface; what this pins is that the parameter TYPE resolves and
+# the verb reaches the store through it.)
+fn listDead(q: EmailQueue) -> List DeadJob requires [queueRead] =
+  deadJobs q
+
+# An `intCodec` path capture: the segment is parsed before anything looks at it.
+handler get getTask(taskId: Int ::: Positive taskId) -> String =
+  String.concat "task-" (Int.toString taskId)
+
+# A LIST request body: the JSON array itself, decoded element by element.
+handler post countLabels(labels: List String) -> Int =
+  List.length labels
+
+# A list of RECORDS, whose element decoder answers a check rather than an error —
+# the two element kinds go through one loop.
+handler post countTasks(tasks: List Task) -> Int =
+  List.length tasks
+
+api TaskApi {
+  get "/tasks/:taskId"
+    capture taskId: Int ::: Positive taskId via positiveId
+    -> String
+
+  post "/labels/count"
+    body labels: List String
+    -> Int
+
+  post "/tasks/count"
+    body tasks: List Task
+    -> Int
+}
+
+server TaskServer for TaskApi {
+  getTask
+  countLabels
+  countTasks
+}
+
+# A check bound in a test binds its VALUE; a rejection there is a failed test.
+test "a check bound in a test is its checked value" {
+  let raw = "550e8400-e29b-41d4-a716-446655440000"
+  let valid = UUID.validate raw
+  expect valid == raw
+}
+
+api-test "an intCodec capture is parsed, and a bad one is the client's error" for TaskServer requires [] {
+  let ok1 = get "/tasks/7"
+  expect statusOk ok1.status
+  expect ok1.body == "task-7"
+  let notAnInt = get "/tasks/seven"
+  expect statusClientError notAnInt.status
+  let notPositive = get "/tasks/0"
+  expect statusClientError notPositive.status
+}
+
+api-test "a list body decodes element by element" for TaskServer requires [] {
+  let counted = post "/labels/count" body ["a", "b", "c"]
+  expect statusOk counted.status
+  expect counted.body == 3
+  let empty = post "/labels/count" body []
+  expect statusOk empty.status
+  expect empty.body == 0
+}
+
+# The `List Task` endpoint above is EMITTED but not exercised here: the Racket
+# runtime answers 400 for a list-of-records body even when every element is valid
+# (measured 2026-08-16, for a proof-free record with a codec too), so running it
+# would pin that gap rather than this decoder. The emitted shape is asserted in
+# the emitter suite instead.
+
+# A string literal inside an api-test is a TEMPLATE in every position, including
+# the right-hand side of a comparison — but `{}` alone is still two characters.
+api-test "a template slot interpolates wherever it is written" for TaskServer requires [] {
+  let id = "7"
+  let r = get "/tasks/{id}"
+  expect statusOk r.status
+  expect ("id: " ++ r.body) == "id: task-7"
+  # `{}` alone is two characters, not a slot: this expectation compares against
+  # the braces themselves.
+  let literal = post "/labels/count" body []
+  expect ("empty: {}" ++ "") == "empty: {}"
+  expect literal.body == 0
+}
+|}
+
+let test_boundary_with_go () =
+  let emitted = match Compile.compile_go_source "<go-boundary>" boundary_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "boundary compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgoboundary/module.go" emitted in
+  let tests_go = artifact "internal/teslmodgoboundary/module_test.go" emitted in
+  (* The capture is parsed, and a bad segment answers with the parser's own status. *)
+  check bool "an intCodec capture is parsed before the handler sees it" true
+    (contains module_go "teslSegmentTaskId := teslrt.IntegerSegment(teslRawTaskId)");
+  (* Two `via` checks on one field need two binders — one name declared twice does not
+     compile, which is how this was found. *)
+  check bool "a chained via numbers its result binders" true
+    (contains module_go "teslCheckedLabel2 := ");
+  (* A list body walks its element's reader; a record element's codec answers a Check, which
+     the adapter turns into the shape the loop takes. *)
+  check bool "a list body decodes element by element" true
+    (contains module_go "teslrt.DecodeListValue(teslParsed, teslrt.DecodeStringValue)");
+  check bool "a list of records goes through each element's codec" true
+    (contains module_go "teslrt.DecodeListValue(teslParsed, teslrt.CheckedDecoder(DecodeTaskJSON))");
+  (* A queue is a value with a type of its own. *)
+  check bool "a queue parameter is the runtime queue" true
+    (contains module_go "func ListDead(q *teslrt.Queue) []teslrt.DeadJob");
+  check bool "a queue value reaches the store directly" true (contains module_go "teslrt.DeadJobs(q)");
+  (* A check bound in a test binds its VALUE, so the comparison is against the value. *)
+  check bool "a check bound in a test is unwrapped" true
+    (contains tests_go "valid := teslrt.MustCheck(teslrt.UUIDValidate(raw))");
+  (* A template slot interpolates on the right of a comparison too. *)
+  check bool "a template slot interpolates in an expectation" true
+    (contains tests_go "teslrt.ApiTestFragment(");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-boundary" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+  end
+
 let () =
   run "emit_go" [
     "emission", [
@@ -9814,6 +10044,10 @@ let () =
       test_case "unsupported Tesl.Agent forms fail closed" `Quick test_agent_limits_fail_closed;
       test_case "serverTools and humanActions" `Slow test_endpoint_tools_with_go;
       test_case "Tesl.Proxy" `Slow test_proxy_with_go;
+      test_case "the request boundary: captures, list bodies, chained checks" `Slow
+        test_boundary_with_go;
+      test_case "the request boundary behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-boundary>" boundary_source);
       test_case "a newtype over a newtype, and unobservable containers" `Slow
         test_ordered_newtype_with_go;
       test_case "nested newtypes behave the same on Racket" `Slow

@@ -2,6 +2,7 @@ package teslrt
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"sort"
@@ -321,4 +322,18 @@ func DecodeListValue[Element any](raw any, element func(any) (Element, error)) (
 		out = append(out, decoded)
 	}
 	return out, nil
+}
+
+// CheckedDecoder adapts a codec's `Check`-answering decoder to the `(value, error)` shape
+// the container readers walk with, so one loop decodes a list of scalars and a list of
+// records alike. The check's own message is carried through, which is what the client sees.
+func CheckedDecoder[T any](decode func(any) Check[T]) func(any) (T, error) {
+	return func(raw any) (T, error) {
+		result := decode(raw)
+		value, ok := result.Value()
+		if !ok {
+			return value, errors.New(result.Message())
+		}
+		return value, nil
+	}
 }

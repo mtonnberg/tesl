@@ -176,3 +176,21 @@ func writeResponse(writer http.ResponseWriter, scope *RequestScope, response Res
 	writer.WriteHeader(response.Status)
 	_, _ = writer.Write([]byte(EncodeJSONValue(response.Body)))
 }
+
+// IntegerSegment parses a path capture declared with `intCodec`.
+//
+// A 400 rather than a 404: the route MATCHED — the shape of the path is right — and what is
+// wrong is the value in it, which is a client error the caller can act on. That is the
+// status `dsl/web.rkt`'s `integer-segment` answers, and the message is its text.
+//
+// Racket accepts anything its `string->number` reads as an integer, which includes `1e3`
+// and `#x10`. This reads decimal digits with an optional sign and nothing else: a path
+// segment is a URL component, and a route that answers to `/tasks/1e3` as well as
+// `/tasks/1000` is two names for one resource.
+func IntegerSegment(segment string) Check[Int] {
+	value, err := ParseDecimal(segment)
+	if err != nil {
+		return Reject[Int](400, "Expected an integer path segment, got "+segment)
+	}
+	return Accept(value)
+}

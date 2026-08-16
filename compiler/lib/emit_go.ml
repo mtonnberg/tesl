@@ -2582,6 +2582,23 @@ let rec type_of_expr signatures env expr =
          | [] -> unsupported loc "Go backend `collect` needs a stream")
       (* The api-test queue verbs name a QUEUE, which the emitter resolves statically; their
         result types come from the queue's job type. *)
+     (* The verb may be handed the queue as a VALUE rather than by name — `fn listDead(q:
+        EmailQueue)` takes one as a parameter.  Only `deadJobs` reads the store without
+        needing the job type, so it is the one that works on a value; the others resolve
+        their dispatcher statically from the declaration and still take the name. *)
+     | EVar { name = "deadJobs"; _ }
+       when (match args with
+             | [argument] ->
+               (match typed_with_default (type_of_expr signatures env) argument with
+                | Some (TRecord info), _ ->
+                  Option.fold ~none:false ~some:(fun types -> Hashtbl.mem types.queues info.rec_tesl_name)
+                    !current_types
+                | _ -> false)
+             | _ -> false) ->
+       (match Option.bind !current_types (fun types -> Hashtbl.find_opt types.records "DeadJob") with
+        | Some row -> TList (TRecord row)
+        | None -> unsupported loc
+          "Go backend `deadJobs` answers a `List DeadJob`; import `Tesl.Queue`")
      | EVar { name = ("pendingJobCount" | "drainQueue" | "processNextJob"
                      | "processNextDeadJob" | "deadJobs") as verb; _ }
        when queue_argument args <> None ->
@@ -2983,8 +3000,12 @@ let rec type_of_expr signatures env expr =
     if (left_ty = TJson || right_ty = TJson) && type_unequal left_ty right_ty then begin
       match op with
       | BEq | BNeq -> ()
+      (* `"payload: " ++ r.body` splices the STRING the JSON holds, which is the coercion
+         the concat emitter already applies to that side — the same rule that lets an
+         api-test build a path out of a value read from a previous response. *)
+      | BConcat -> ()
       | _ -> unsupported loc
-        "Go backend supports `==` / `!=` on an api-test JSON value, not this operator"
+        "Go backend supports `==` / `!=` / `++` on an api-test JSON value, not this operator"
     end
     else if type_unequal left_ty right_ty then
       unsupported loc "Go backend binary operands have different types";
@@ -4376,6 +4397,12 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
   | ELit { lit = LInt value; _ } -> Printf.sprintf "teslrt.FromInt64(%d)" value
   | ELit { lit = LBigInt value; _ } ->
     Printf.sprintf "teslrt.MustParseDecimal(%s)" (go_quote value)
+  (* Inside an api-test a string LITERAL is a template: `"thing-{id}"` splices the block's
+     bindings, and `expect r.body == "thing-{id}"` compares against what it renders to.  The
+     SPLIT is the shared one (`emit_api_test_string`), so a literal that only looks like a
+     slot — `"{}"`, `"{\"id\": 1}"` — stays the two characters it is. *)
+  | ELit { lit = LString _; _ } as literal when api_test_interpolates literal ->
+    emit_api_test_string ~indent signatures env literal
   | ELit { lit = LString value; _ } -> go_quote value
   | ELit { lit = LBool value; _ } -> if value then "true" else "false"
   | ELit { lit = LFloat value; _ } -> emit_float_literal value
@@ -4740,6 +4767,21 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
            in
            Printf.sprintf "teslrt.CollectUntil(%s, %s, %s)" stream pattern millis
          | None, None -> Printf.sprintf "teslrt.CollectWithin(%s, %s)" stream millis)
+      (* `deadJobs` handed the queue as a VALUE — see the matching note in the type rule.
+         It reads the store and runs no worker, so it needs no dispatcher and therefore no
+         job type: the queue itself is enough. *)
+      | EVar { name = "deadJobs"; _ }
+        when (match args with
+              | [argument] ->
+                (match typed_with_default (type_of_expr signatures env) argument with
+                 | Some (TRecord info), _ ->
+                   Option.fold ~none:false
+                     ~some:(fun types -> Hashtbl.mem types.queues info.rec_tesl_name)
+                     !current_types
+                 | _ -> false)
+              | _ -> false) ->
+        ignore (type_of_expr signatures env app);
+        Printf.sprintf "teslrt.DeadJobs(%s)" (emit (List.hd args))
       (* The api-test queue verbs.  The worker runs through a DISPATCHER closure: the store
          holds payloads as `any` because a queue may carry several job types, and the emitter
          is what knows which one this queue carries. *)
@@ -8097,8 +8139,13 @@ let expected_from_use signatures name exprs =
 (* The type a `let` binds: its own expression when that settles one, otherwise what a later
    use requires. *)
 let let_binding_type signatures env name value later =
+  (* A CHECK bound in a test body binds its checked VALUE: `let result = UUID.validate v4`
+     followed by `expect result == v4` is what the corpus writes, and a rejection there is a
+     failed test rather than a value to compare.  That is the same `MustCheck` every other
+     consumer of a check's value goes through. *)
+  let value_of = function TCheck inner -> inner | ty -> ty in
   match typed_with_default (type_of_expr signatures env) value with
-  | Some ty, false -> ty
+  | Some ty, false -> value_of ty
   | settled, _ ->
     (match expected_from_use signatures name later with
      | Some want ->
@@ -9132,13 +9179,18 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
                   suffix (codec_decode_ref field_codec) suffix
                   suffix go_type_name suffix suffix
                   binder suffix);
-             (* `via` CHAINS: each checker runs on the value the previous one accepted. *)
-             List.iter (fun checker ->
+             (* `via` CHAINS: each checker runs on the value the previous one accepted.  The
+                result binder is numbered by POSITION in the chain — a second `via` on the
+                same field redeclared the first one's name, which does not compile. *)
+             List.iteri (fun via_index checker ->
                let signature = match Hashtbl.find_opt signatures checker with
                  | Some signature -> signature
                  | None -> unsupported codec.loc
                    "Go backend codec `%s` cannot resolve check `%s`" type_name checker
                in
+               let suffix =
+                 if via_index = 0 then suffix
+                 else Printf.sprintf "%s%d" suffix (via_index + 1) in
                Printf.bprintf body
                  "\tteslChecked%s := %s(%s)\n\tif !teslChecked%s.OK() {\n\t\treturn teslrt.Reject[%s](teslChecked%s.Status(), teslChecked%s.Message())\n\t}\n\t%s, _ = teslChecked%s.Value()\n"
                  suffix (qualified signature.sig_owner signature.go_name) binder
@@ -9386,15 +9438,31 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
              | None -> unsupported endpoint_loc
                "Go backend cannot resolve capturer `%s`" via)
         in
-        if parser <> "stringCodec" then unsupported endpoint_loc
-          "Go backend supports `stringCodec` path captures only for now (`%s`)" parser;
-        (match type_of_type_expr types capture.binding.type_expr with
-         | TString -> ()
+        (* The declared type and the codec have to agree: the segment arrives as text and
+           the parser is what turns it into the capture's type. *)
+        let captured_type = type_of_type_expr types capture.binding.type_expr in
+        (match parser, captured_type with
+         | "stringCodec", TString -> ()
+         | "intCodec", TInt -> ()
+         | "stringCodec", _ | "intCodec", _ -> unsupported endpoint_loc
+           "Go backend path capture `%s` does not match its `%s`" name parser
          | _ -> unsupported endpoint_loc
-           "Go backend supports String path captures only for now");
+           "Go backend supports `stringCodec` and `intCodec` path captures only for now \
+            (`%s`)" parser);
+        (* A String capture IS the segment, so it binds the name directly.  An `intCodec` one
+           has to be parsed first, and the raw text gets its own binder so the capture's name
+           still holds the capture's declared type. *)
+        let raw_binder =
+          if parser = "intCodec" then "teslRaw" ^ suffix else local_ident name in
         Printf.bprintf body
           "\t\t\t%s, teslFound%s := teslrt.PathParam(%S, teslRequest.URL.Path, %S)\n\t\t\tif !teslFound%s {\n\t\t\t\treturn teslrt.Fail(404, \"not found\")\n\t\t\t}\n"
-          (local_ident name) suffix endpoint_path name suffix;
+          raw_binder suffix endpoint_path name suffix;
+        (* A segment that is not an integer is the CLIENT's error, not a missing route: the
+           path shape matched and the value in it did not. *)
+        if parser = "intCodec" then
+          Printf.bprintf body
+            "\t\t\tteslSegment%s := teslrt.IntegerSegment(%s)\n\t\t\tif !teslSegment%s.OK() {\n\t\t\t\treturn teslrt.Fail(teslSegment%s.Status(), teslSegment%s.Message())\n\t\t\t}\n\t\t\t%s, _ := teslSegment%s.Value()\n"
+            suffix raw_binder suffix suffix suffix (local_ident name) suffix;
         (match checker with
          | None -> ()
          | Some check_fn ->
@@ -9433,21 +9501,45 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
            | TFloat -> Some "teslrt.DecodeFloatValue"
            | _ -> None
          in
-         let decoder = match body_type, scalar_reader with
-           | _, Some _ -> ""
-           | TRecord info, None -> codec_decode_ref info.rec_tesl_name
-           | TAdt (info, _), None -> codec_decode_ref info.adt_tesl_name
+         (* A LIST body — `body ids: List String` — is the JSON array itself, decoded
+            element by element through the element's own reader.  The `ForAll` proof its
+            annotation may carry erases like every other, so what arrives is the list. *)
+         let list_reader = match body_type with
+           | TList TString -> Some "teslrt.DecodeStringValue"
+           | TList TInt -> Some "teslrt.DecodeIntValue"
+           | TList TBool -> Some "teslrt.DecodeBoolValue"
+           | TList TFloat -> Some "teslrt.DecodeFloatValue"
+           | TList (TRecord info) -> Some (codec_decode_ref info.rec_tesl_name)
+           | _ -> None
+         in
+         let decoder = match body_type, scalar_reader, list_reader with
+           | _, Some _, _ -> ""
+           | _, None, Some _ -> ""
+           | TRecord info, None, None -> codec_decode_ref info.rec_tesl_name
+           | TAdt (info, _), None, None -> codec_decode_ref info.adt_tesl_name
            | _ -> unsupported endpoint_loc
              "Go backend request body needs a type with a codec"
          in
          (* The two failure strings are the ones the Racket server sends, so a client sees
             the same 400 either way. *)
-         (match scalar_reader with
-          | Some reader ->
+         (match scalar_reader, list_reader with
+          | None, Some element ->
+            (* An element decoder that answers a `Check` (a record's codec) is adapted to the
+               `(value, error)` shape `DecodeListValue` walks with, so one loop covers both
+               kinds of element. *)
+            let element_reader = match body_type with
+              | TList (TRecord info) ->
+                Printf.sprintf "teslrt.CheckedDecoder(%s)" (codec_decode_ref info.rec_tesl_name)
+              | _ -> element
+            in
+            Printf.bprintf body
+              "\t\t\tteslParsed, teslParseErr := teslrt.ParseJSON(teslBodyBytes)\n\t\t\tif teslParseErr != nil {\n\t\t\t\treturn teslrt.Fail(400, \"Malformed JSON payload\")\n\t\t\t}\n\t\t\tteslBody, teslBodyDecodeErr := teslrt.DecodeListValue(teslParsed, %s)\n\t\t\tif teslBodyDecodeErr != nil {\n\t\t\t\treturn teslrt.Fail(400, teslBodyDecodeErr.Error())\n\t\t\t}\n"
+              element_reader
+          | Some reader, _ ->
             Printf.bprintf body
               "\t\t\tteslParsed, teslParseErr := teslrt.ParseJSON(teslBodyBytes)\n\t\t\tif teslParseErr != nil {\n\t\t\t\treturn teslrt.Fail(400, \"Malformed JSON payload\")\n\t\t\t}\n\t\t\tteslBody, teslBodyDecodeErr := %s(teslParsed)\n\t\t\tif teslBodyDecodeErr != nil {\n\t\t\t\treturn teslrt.Fail(400, teslBodyDecodeErr.Error())\n\t\t\t}\n"
               reader
-          | None ->
+          | None, None ->
             Printf.bprintf body
               "\t\t\tteslParsed, teslParseErr := teslrt.ParseJSON(teslBodyBytes)\n\t\t\tif teslParseErr != nil {\n\t\t\t\treturn teslrt.Fail(400, \"Malformed JSON payload\")\n\t\t\t}\n\t\t\tteslDecoded := %s(teslParsed)\n\t\t\tif !teslDecoded.OK() {\n\t\t\t\treturn teslrt.Fail(teslDecoded.Status(), teslDecoded.Message())\n\t\t\t}\n\t\t\tteslBody, _ := teslDecoded.Value()\n"
               decoder);
@@ -9766,10 +9858,15 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
         | EConstructor { args = []; _ } -> true
         | _ -> false
       in
-      let left_ty = match right with
+      (* A CHECK used as a value in a test — `expect UUID.validate v4 == v4` — is its
+         checked value, and a rejection traps where it stands.  That is what `MustCheck`
+         already does everywhere a check's value is consumed; the expectation just has to
+         say the comparison is against the value rather than against the check. *)
+      let value_of = function TCheck inner -> inner | ty -> ty in
+      let left_ty = value_of (match right with
         | Some right when needs_expectation left ->
           type_of_arg signatures env (type_of_expr signatures env right) left
-        | _ -> type_of_expr signatures env left
+        | _ -> type_of_expr signatures env left)
       in
       (* The emitted guard is the NEGATION of the expectation, built structurally so
          no `!(a && b)` / `!(a == b)` shape reaches the lint gate. *)
@@ -10838,6 +10935,18 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
            qu_loc = q.loc;
          } in
          Hashtbl.replace types.queues q.name info;
+         (* A queue's NAME is also a TYPE: `fn listDead(q: EmailQueue) -> List DeadJob`
+            takes the queue as a value.  Opaque — a program names one, hands it to a queue
+            verb, and reads nothing off it — so it registers with no fields, like `DeadJob`
+            itself.  The Go representation is the pointer `NewQueue` answers. *)
+         Hashtbl.replace types.records q.name {
+           rec_tesl_name = q.name;
+           rec_owner = "";
+           rec_go_name = "*teslrt.Queue";
+           rec_proof_fields = false;
+           rec_fields = [];
+           rec_loc = q.loc;
+         };
          (* Also by job type, since `enqueue` names the JOB and not the queue. *)
          Hashtbl.replace types.queues job_type info;
          ignore lowered)) queue_forms;
