@@ -614,6 +614,34 @@ let current_types : type_table option ref = ref None
    read where that assertion is emitted. *)
 let proof_op_functions : (string, string) Hashtbl.t = Hashtbl.create 8
 
+(* The module's own function declarations, by name.  `asTool fn` derives a tool's JSON
+   schema and its argument decode from the fn's PARAMETER LIST — the names as well as the
+   types — and the signature table carries only types.  Populated per module beside
+   `proof_op_functions`, for the same reason: the declaration is what the emitter needs and
+   the expression walker has only a name. *)
+let current_functions : (string, func_decl) Hashtbl.t = Hashtbl.create 16
+
+(* The module's `capturer` declarations.  A path capture may name one instead of writing
+   its codec and check inline, and an endpoint offered as a TOOL has to run the same check
+   the HTTP path does — so the declaration has to be reachable from the expression emitter,
+   not just from the server emission that already has the list in hand. *)
+let current_capturers : capture_form list ref = ref []
+
+(* `serverTools S user` and `humanActions S user`: which of the server's endpoints each CALL
+   SITE gets.  The decision is the CHECKER's and is per site — an endpoint is included only
+   where the user value's declared proof covers its auth predicates, so the same server
+   yields different tool sets to an admin and to a plain user — and the two sets partition
+   the server's endpoints.  Keyed by the call site's line and column, the way the Racket
+   backend reads the same metadata. *)
+let server_tools_sites : (int * int, string * string list) Hashtbl.t = Hashtbl.create 8
+let human_actions_sites : (int * int, string * string list) Hashtbl.t = Hashtbl.create 8
+
+(* Every non-SSE endpoint of every server declared in this module, in handler order: the
+   tool name (the bound handler), its description, its derived JSON schema, and the endpoint
+   itself.  Both call forms read this and filter it by the site tables above. *)
+let server_tools_endpoints
+  : (string, (string * string * string * api_endpoint) list) Hashtbl.t = Hashtbl.create 4
+
 (* A cache by NAME.  Every `Cache.*` operation names a declared cache, and the declaration is
    where the value type and the store live. *)
 let cache_of_name loc name =
@@ -735,6 +763,35 @@ let value_encoder_hook : (go_type -> string) ref =
 (* Tesl type names that have their OWN codec in the module being emitted.  A value with a
    codec encodes through it; anything else falls back to the generic wire shape below. *)
 let current_codec_types : string list ref = ref []
+
+(* Codec entry points are EXPORTED: they are the boundary API — the server layer calls
+   them, and a user who ejects Tesl calls them directly.  They would also read as unused
+   in a module that only declares codecs, which the `unused` linter rightly rejects. *)
+let codec_encode_name type_name = "Encode" ^ go_ident ~exported:true type_name ^ "JSON"
+
+(* A codec REFERENCE, as opposed to its definition: the codec lives in the package that
+   declared it, so a use from another package carries that package's prefix.  A type with no
+   hand-written codec answers its bare name — that decoder is derived into the using package,
+   which is where the reference is. *)
+let codec_owner name =
+  match !current_types with
+  | Some types -> Hashtbl.find_opt types.codecs name
+  | None -> None
+let codec_decode_name type_name = "Decode" ^ go_ident ~exported:true type_name ^ "JSON"
+
+let codec_encode_ref type_name =
+  match codec_owner type_name with
+  | Some owner -> qualified owner (codec_encode_name type_name)
+  | None -> codec_encode_name type_name
+
+let codec_decode_ref type_name =
+  match codec_owner type_name with
+  | Some owner -> qualified owner (codec_decode_name type_name)
+  | None -> codec_decode_name type_name
+
+(* Defined here rather than beside the codec EMITTER below because `decodeAs` needs the
+   reference: a model's structured output decodes through the very same codec an HTTP
+   request body does, and that expression is emitted long before the codec layer. *)
 
 (* True while emitting somewhere that HAS a request scope in hand: a function that declares a
    cookie-writing capability, or a handler adapter.  A test body has none — Racket agrees, since
@@ -2169,6 +2226,105 @@ let init_telemetry_keyword = function
   | EVar { name; _ } when List.mem name init_telemetry_keywords -> Some name
   | _ -> None
 
+(* ── `asTool`: a typed function wrapped as a tool ────────────────────────────
+   The schema, the argument decode and the dispatch all come from ONE place — the
+   function's parameter list — so the three cannot describe different arguments.  The
+   checker has already restricted a tool function's parameters to the agent primitives; the
+   refusals below are what keeps this emitter total rather than guessing for a type the
+   checker later admits. *)
+
+let agent_tool_prim loc (binding : binding) =
+  match Validation_common.agent_prim_of_type_expr binding.type_expr with
+  | Some prim -> prim
+  | None ->
+    unsupported loc
+      "Go backend cannot derive a tool schema for parameter `%s`: its type is not one a \
+       model can be asked for" binding.name
+
+(* The JSON Schema object a tool function's parameters describe.  It is model GUIDANCE — the
+   validator below is what actually rejects bad arguments — but it is the only channel that
+   reaches the model, which is why the per-primitive descriptions ride along in it. *)
+let agent_tool_schema loc (params : binding list) =
+  let properties = List.map (fun (binding : binding) ->
+    Printf.sprintf "%s:%s" (go_quote binding.name)
+      (Validation_common.agent_prim_schema_prop (agent_tool_prim loc binding))) params in
+  let required = List.map (fun (binding : binding) -> go_quote binding.name) params in
+  Printf.sprintf "{\"type\":\"object\",\"properties\":{%s},\"required\":[%s]}"
+    (String.concat "," properties) (String.concat "," required)
+
+(* The runtime reader for one argument.  Each answers the parameter's OWN Go type, so the
+   dispatch below asserts the type the function already declared rather than a wire shape. *)
+let agent_tool_arg_reader loc (binding : binding) =
+  match agent_tool_prim loc binding with
+  | Validation_common.APString -> "teslrt.ToolArgString"
+  | Validation_common.APInt -> "teslrt.ToolArgInt"
+  | Validation_common.APFloat -> "teslrt.ToolArgFloat"
+  | Validation_common.APBool -> "teslrt.ToolArgBool"
+  | Validation_common.APPosixMillis -> "teslrt.ToolArgPosixMillis"
+  | Validation_common.APMoney -> "teslrt.ToolArgMoney"
+  (* A dimensioned quantity IS a float at run time; its unit lives in the compiler's type
+     layer and rides to the model in the schema. *)
+  | Validation_common.APQuantity _ -> "teslrt.ToolArgFloat"
+
+(* ── `serverTools`: an endpoint's tool-input schema ──────────────────────────
+   One required property per capture and one for the body binder, in handler argument
+   order.  It is model GUIDANCE, best-effort by design: the endpoint's own decode is what
+   actually validates, and `{}` — accept anything — is the honest answer for a shape this
+   cannot describe. *)
+
+let rec server_tool_body_schema (codecs : codec_form list) (ty : type_expr) : string =
+  match Validation_common.agent_prim_of_type_expr ty with
+  | Some prim -> Validation_common.agent_prim_schema_prop prim
+  | None ->
+    (match ty with
+     | TApp { head = TName { name = "List"; _ }; arg; _ } ->
+       Printf.sprintf "{\"type\":\"array\",\"items\":%s}" (server_tool_body_schema codecs arg)
+     | TName { name; _ } ->
+       (match List.find_opt (fun (codec : codec_form) -> codec.type_name = name) codecs with
+        | Some codec -> server_tool_codec_schema codecs codec
+        | None -> "{}")
+     | _ -> "{}")
+
+and server_tool_codec_schema (codecs : codec_form list) (codec : codec_form) : string =
+  match codec.from_json with
+  | FromJsonAlts (alternative :: _) ->
+    let fields = List.filter_map (function
+      | DecodeField { json_key; codec = field_codec; _ } -> Some (json_key, field_codec)
+      | _ -> None) alternative in
+    let property field_codec = match field_codec with
+      | "stringCodec" -> "{\"type\":\"string\"}"
+      | "intCodec" -> "{\"type\":\"integer\"}"
+      | "floatCodec" -> "{\"type\":\"number\"}"
+      | "boolCodec" -> "{\"type\":\"boolean\"}"
+      | other ->
+        (match List.find_opt (fun (c : codec_form) ->
+                 c.name = other || c.type_name = other) codecs with
+         | Some nested -> server_tool_codec_schema codecs nested
+         | None -> "{}")
+    in
+    Printf.sprintf "{\"type\":\"object\",\"properties\":{%s},\"required\":[%s]}"
+      (String.concat "," (List.map (fun (key, field_codec) ->
+         Printf.sprintf "%s:%s" (go_quote key) (property field_codec)) fields))
+      (String.concat "," (List.map (fun (key, _) -> go_quote key) fields))
+  | _ -> "{}"
+
+let server_tool_endpoint_schema (codecs : codec_form list) (endpoint : api_endpoint) : string =
+  let properties =
+    List.map (fun (capture : api_capture) ->
+      capture.binding.name,
+      (match Validation_common.agent_prim_of_type_expr capture.binding.type_expr with
+       | Some prim -> Validation_common.agent_prim_schema_prop prim
+       | None -> "{\"type\":\"string\"}")) endpoint.captures
+    @ (match ep_body endpoint with
+       | Some (binding : binding) ->
+         [ binding.name, server_tool_body_schema codecs binding.type_expr ]
+       | None -> [])
+  in
+  Printf.sprintf "{\"type\":\"object\",\"properties\":{%s},\"required\":[%s]}"
+    (String.concat "," (List.map (fun (name, schema) ->
+       Printf.sprintf "%s:%s" (go_quote name) schema) properties))
+    (String.concat "," (List.map (fun (name, _) -> go_quote name) properties))
+
 let rec type_of_expr signatures env expr =
   match expr with
   | ELit { lit = LInt _ | LBigInt _; _ } -> TInt
@@ -2471,6 +2627,62 @@ let rec type_of_expr signatures env expr =
      | EVar { name = "initTelemetry"; _ } ->
        List.iter (fun value -> ignore (init_telemetry_keyword value)) args;
        TUnit
+     | EVar { name = "decodeAs"; _ } when agent_form signatures "decodeAs" "teslrt.DecodeAs" ->
+       let _, _, decoded = agent_decode_as_parts signatures env loc args in
+       decoded
+     | EVar { name = "tool"; _ } when agent_form signatures "tool" "teslrt.ToolOf" ->
+       ignore (agent_tool_parts signatures env loc args);
+       agent_opaque signatures loc "Tool"
+     | EVar { name = "asTool"; _ } when agent_form signatures "asTool" "teslrt.ToolOf#asTool" ->
+       let declaration : func_decl = agent_astool_decl loc args in
+       (* The schema derivation is the total one: a parameter type a model cannot be asked
+          for is refused HERE, at the wiring site, rather than at emission. *)
+       ignore (agent_tool_schema declaration.loc declaration.params);
+       let types = match !current_types with
+         | Some types -> types
+         | None -> unsupported loc "Go backend cannot resolve `asTool` here"
+       in
+       (* The tool_result the model reads is TEXT, so the function has to answer one. *)
+       (match type_of_return_spec types declaration.return_spec with
+        | TString -> ()
+        | _ -> unsupported loc
+          "Go backend `asTool %s` needs the function to answer a String" declaration.name);
+       agent_opaque signatures loc "Tool"
+     | EVar { name = "askFor"; _ } when agent_form signatures "askFor" "teslrt.AskFor" ->
+       let _, _, _, _, decoded = agent_ask_for_parts signatures env loc args in
+       decoded
+     | EVar { name = ("serverTools" | "humanActions") as form; _ }
+       when agent_form signatures form
+              (if form = "serverTools" then "teslrt.ServerTools" else "teslrt.HumanActions") ->
+       ignore (agent_endpoint_tools signatures env loc form args);
+       TList (agent_opaque signatures loc "Tool")
+     | EVar { name = "agentRun"; _ } when agent_form signatures "agentRun" "teslrt.AgentRun" ->
+       (match args with
+        | [agent; prompt; publisher] ->
+          if type_unequal (type_of_expr signatures env agent)
+               (agent_opaque signatures loc "Agent") then
+            unsupported (Checker.expr_loc agent) "Go backend `agentRun` takes an Agent";
+          if type_of_expr signatures env prompt <> TString then
+            unsupported (Checker.expr_loc prompt) "Go backend `agentRun` takes a String prompt";
+          agent_publisher_type signatures env loc "the `agentRun` publisher" publisher;
+          agent_opaque signatures loc "AgentReply"
+        | _ -> unsupported loc
+          "Go backend `agentRun` takes an agent, a prompt and a publisher")
+     | EVar { name = "converseStreaming"; _ }
+       when agent_form signatures "converseStreaming" "teslrt.ConverseStreaming" ->
+       (match args with
+        | [conversation; prompt; publish] ->
+          if type_unequal (type_of_expr signatures env conversation)
+               (agent_opaque signatures loc "Conversation") then
+            unsupported (Checker.expr_loc conversation)
+              "Go backend `converseStreaming` takes a Conversation";
+          if type_of_expr signatures env prompt <> TString then
+            unsupported (Checker.expr_loc prompt)
+              "Go backend `converseStreaming` takes a String prompt";
+          agent_publisher_type signatures env loc "the `converseStreaming` publisher" publish;
+          agent_opaque signatures loc "ConversationTurn"
+        | _ -> unsupported loc
+          "Go backend `converseStreaming` takes a conversation, a prompt and a publisher")
      | EVar { name = ("HttpClient.bearer" | "HttpClient.secretHeader") as leaf; _ } ->
        let signature = match Hashtbl.find_opt signatures leaf with
          | Some signature -> signature
@@ -3549,6 +3761,197 @@ and type_of_dict_leaf signatures env loc leaf args =
         | _ -> unsupported loc
           "Go backend `%s` returns tuples; import `Tesl.Tuple`" leaf.dict_name))
 
+(* ── `Tesl.Agent`: the forms a signature cannot describe ─────────────────────
+   Five of the module's leaves take something a `params`/`result` row has no way to say: a
+   literal TYPE NAME (`decodeAs`), a FUNCTION VALUE (a tool's validator and dispatch,
+   `askFor`'s decoder, a publisher).  Each is registered with a placeholder signature whose
+   Go name identifies it, recognised by [agent_form], and typed and emitted from what it was
+   actually given.
+
+   The placeholder is what makes the recognition safe: a module that declares its own `tool`
+   never reaches these arms, because its signature is its own. *)
+and agent_form signatures name go =
+  match Hashtbl.find_opt signatures name with
+  | Some signature -> signature.go_name = go
+  | None -> false
+
+and agent_opaque signatures loc name =
+  match Hashtbl.find_opt signatures name with
+  | Some { result = TRecord info; _ } -> TRecord info
+  | _ -> unsupported loc "Go backend `Tesl.Agent` needs its `%s` type" name
+
+(* `decodeAs "T" json`: the type is a literal at the call site, so the decoder is chosen at
+   COMPILE time and the name survives only in the failure message. *)
+and agent_decode_as_parts signatures env loc args =
+  match args with
+  | [ELit { lit = LString type_name; _ }; json] ->
+    (match type_of_expr signatures env json with
+     | TString -> ()
+     | _ -> unsupported (Checker.expr_loc json)
+       "Go backend `decodeAs` takes the JSON as a String");
+    if codec_owner type_name = None then
+      unsupported loc
+        "Go backend `decodeAs \"%s\"` needs `%s` to have a `codec`: the decode goes through \
+         the same one an HTTP request body does" type_name type_name;
+    let types = match !current_types with
+      | Some types -> types
+      | None -> unsupported loc "Go backend cannot resolve `decodeAs` here"
+    in
+    type_name, json, type_of_type_expr types (TName { name = type_name; loc })
+  | _ -> unsupported loc
+    "Go backend `decodeAs` takes a literal type name and a JSON String \
+     (`decodeAs \"MyType\" json`)"
+
+(* A named function in VALUE position.  Go accepts one here — these are the only places the
+   surface passes a function that is not a lambda — but not one that needs the request
+   scope: its Go signature has a parameter the caller cannot supply. *)
+and agent_function_ref signatures loc what expr =
+  match expr with
+  | EVar { name; _ } | EConstructor { name; args = []; _ } ->
+    (match Hashtbl.find_opt signatures name with
+     | Some { sig_needs_scope = true; _ } ->
+       unsupported loc "Go backend cannot pass `%s` as %s: it takes the request scope" name what
+     | Some signature -> signature
+     | None -> unsupported loc "Go backend cannot resolve function `%s`" name)
+  | _ -> unsupported (Checker.expr_loc expr) "Go backend %s must be a named function" what
+
+(* `tool name description schema validator dispatch`.  The validator and the dispatch meet at
+   a type only they two mention — the tool's VALIDATED argument — and the runtime erases it
+   into the pair of closures, so the one thing to establish here is that they agree. *)
+and agent_tool_parts signatures env loc args =
+  match args with
+  | [name; description; schema; validator; dispatch] ->
+    List.iter (fun (label, text) ->
+      match type_of_expr signatures env text with
+      | TString -> ()
+      | _ -> unsupported (Checker.expr_loc text)
+        "Go backend `tool` takes a String %s" label)
+      [ "name", name; "description", description; "JSON schema", schema ];
+    let validate = agent_function_ref signatures loc "a tool validator" validator in
+    let argument = match agent_tool_dispatch signatures env loc dispatch with
+      | `Direct signature | `Captured (signature, _) -> agent_dispatch_argument loc signature
+    in
+    (match validate.params with
+     | [TString] when not (type_unequal validate.result argument) -> ()
+     | _ -> unsupported loc
+       "Go backend `tool` takes a validator `String -> a` and a dispatch `a -> String` over \
+        the same `a`");
+    name, description, schema, validator, dispatch
+  | _ -> unsupported loc
+    "Go backend `tool` takes a name, a description, a JSON-schema String, a validator and a \
+     dispatch"
+
+(* The type the validator hands the dispatch: the dispatch's LAST parameter, since anything
+   before it was captured by the program. *)
+and agent_dispatch_argument loc (signature : signature) =
+  match List.rev signature.params with
+  | argument :: _ when signature.result = TString -> argument
+  | _ -> unsupported loc "Go backend `tool` takes a dispatch answering a String"
+
+(* A tool dispatch is a named function, optionally PARTIALLY APPLIED to the arguments the
+   program supplies itself.  That partial application is load-bearing rather than a
+   convenience: it is what lets a tool be built per turn around a value the model never
+   sees — the conversation it belongs to, the user it acts for — so the model chooses only
+   what the schema describes. *)
+and agent_tool_dispatch signatures env loc dispatch =
+  let head, captured = flatten_app [] dispatch in
+  match captured with
+  | [] -> `Direct (agent_function_ref signatures loc "a tool dispatch" dispatch)
+  | [one] ->
+    let signature = agent_function_ref signatures loc "a tool dispatch" head in
+    (match signature.params with
+     | [first; _] ->
+       if type_unequal (type_of_arg signatures env first one) first then
+         unsupported (Checker.expr_loc one)
+           "Go backend cannot capture this argument in a tool dispatch: it is not the type \
+            the function declares";
+       `Captured (signature, one)
+     | _ -> unsupported loc
+       "Go backend `tool` supports a dispatch partially applied to ONE captured argument")
+  | _ -> unsupported loc
+    "Go backend `tool` supports a dispatch partially applied to ONE captured argument"
+
+(* `asTool fn` derives all three of a tool's parts from the function's declaration, which is
+   why it needs the declaration and not just the signature. *)
+and agent_astool_decl loc args =
+  match args with
+  | [EVar { name; _ }] | [EConstructor { name; args = []; _ }] ->
+    (match Hashtbl.find_opt current_functions name with
+     | Some declaration -> declaration
+     | None -> unsupported loc
+       "Go backend `asTool` supports a function declared in this module; `%s` is not one" name)
+  | _ -> unsupported loc
+    "Go backend `asTool` takes a bare function reference (`asTool myFn`)"
+
+(* `askFor agent prompt decoder retries` answers whatever the DECODER answers — the retry
+   loop exists to produce that value, so its type is the decoder's result. *)
+and agent_ask_for_parts signatures env loc args =
+  match args with
+  | [agent; prompt; decoder; retries] ->
+    let expect what ty expr =
+      if type_unequal (type_of_expr signatures env expr) ty then
+        unsupported (Checker.expr_loc expr) "Go backend `askFor` takes %s" what
+    in
+    expect "an Agent" (agent_opaque signatures loc "Agent") agent;
+    expect "a String prompt" TString prompt;
+    expect "an Int retry count" TInt retries;
+    let decode = agent_function_ref signatures loc "an `askFor` decoder" decoder in
+    (match decode.params with
+     | [TString] -> ()
+     | _ -> unsupported loc "Go backend `askFor` takes a decoder `String -> a`");
+    agent, prompt, decoder, retries, decode.result
+  | _ -> unsupported loc
+    "Go backend `askFor` takes an agent, a prompt, a decoder and a retry count"
+
+(* A step publisher is a Tesl `String -> Unit`, written either as a lambda or as a named
+   function.  Both reach Go as the same function type, so the only thing to settle is that
+   the shape is that one. *)
+(* `serverTools S user` / `humanActions S user`: the server, the user, and the endpoints
+   THIS call site gets.  The site tables are the checker's per-call-site decision; a missing
+   entry means the emitter and the checker disagree about what the module contains, which is
+   a compiler bug rather than a program one, so it fails rather than emitting an empty set —
+   an empty tool list would read as "this user may do nothing" and be silently wrong. *)
+and agent_endpoint_tools signatures env loc form args =
+  let server_ref, user = match args with
+    | [server_ref; user] -> server_ref, user
+    | _ -> unsupported loc
+      "Go backend `%s` takes a server and an authenticated user (`%s MyServer user`)"
+      form form
+  in
+  let server_name = match server_ref with
+    | EConstructor { name; args = []; _ } | EVar { name; _ } -> name
+    | _ -> unsupported loc
+      "Go backend `%s` takes a bare reference to a server declared in this module" form
+  in
+  let endpoints = match Hashtbl.find_opt server_tools_endpoints server_name with
+    | Some endpoints -> endpoints
+    | None -> unsupported loc
+      "Go backend `%s %s` — no such server in this module" form server_name
+  in
+  let sites = if form = "serverTools" then server_tools_sites else human_actions_sites in
+  let key = loc.Location.start.line, loc.Location.start.col in
+  let names = match Hashtbl.find_opt sites key with
+    | Some (_, names) -> names
+    | None -> unsupported loc
+      "Go backend has no checker decision for this `%s` call site" form
+  in
+  let selected = List.filter (fun (name, _, _, _) -> List.mem name names) endpoints in
+  server_name, user, type_of_expr signatures env user, selected
+
+and agent_publisher_type signatures env loc what expr =
+  let ok = match expr with
+    | ELambda _ ->
+      (match type_of_expr signatures env expr with
+       | TFunc ([TString], TUnit) -> true
+       | _ -> false)
+    | _ ->
+      let signature = agent_function_ref signatures loc what expr in
+      signature.params = [TString] && signature.result = TUnit
+  in
+  if not ok then
+    unsupported (Checker.expr_loc expr)
+      "Go backend %s takes a `String -> Unit` function" what
+
 and type_of_arg signatures env want arg =
   match arg with
   (* A check may DELEGATE to another check in tail position: `check parseAge raw = … check
@@ -4390,6 +4793,77 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
            Printf.sprintf "teslrt.CheckPassword(%s, %s)"
              (emit stored) (plaintext_argument plaintext)
          | _ -> unsupported loc "Go backend `%s` is applied to the wrong arity" leaf)
+      (* ── `Tesl.Agent`: the forms a signature cannot describe ──────────────
+         Typed in `type_of_expr` by the matching arms; here each renders to the runtime
+         call, with the pieces a signature could not carry — a chosen decoder, a function
+         reference, a derived tool — supplied from the same places the typing read them. *)
+      | EVar { name = "decodeAs"; _ } when agent_form signatures "decodeAs" "teslrt.DecodeAs" ->
+        let type_name, json, _ = agent_decode_as_parts signatures env loc args in
+        Printf.sprintf "teslrt.DecodeAs(%s, %s, %s)"
+          (go_quote type_name) (emit_expr ~expected:TString ~indent signatures env json)
+          (codec_decode_ref type_name)
+      | EVar { name = "tool"; _ } when agent_form signatures "tool" "teslrt.ToolOf" ->
+        let name, description, schema, validator, dispatch =
+          agent_tool_parts signatures env loc args in
+        let text value = emit_expr ~expected:TString ~indent signatures env value in
+        let dispatch_go = match agent_tool_dispatch signatures env loc dispatch with
+          | `Direct signature -> qualified signature.sig_owner signature.go_name
+          | `Captured (signature, value) ->
+            Printf.sprintf "teslrt.ToolDispatchWith(%s, %s)"
+              (qualified signature.sig_owner signature.go_name) (emit value)
+        in
+        Printf.sprintf "teslrt.ToolOf(%s, %s, %s, %s, %s)"
+          (text name) (text description) (text schema)
+          (agent_function_go signatures loc "a tool validator" validator) dispatch_go
+      | EVar { name = "asTool"; _ } when agent_form signatures "asTool" "teslrt.ToolOf#asTool" ->
+        ignore (type_of_expr signatures env app);
+        emit_astool ~indent signatures (agent_astool_decl loc args)
+      | EVar { name = "serverTools"; _ }
+        when agent_form signatures "serverTools" "teslrt.ServerTools" ->
+        ignore (type_of_expr signatures env app);
+        let _, user, user_type, selected =
+          agent_endpoint_tools signatures env loc "serverTools" args in
+        let emitted_user = emit user in
+        Printf.sprintf "[]teslrt.Tool{%s}"
+          (String.concat ", " (List.map (fun (name, description, schema, endpoint) ->
+             emit_endpoint_tool signatures loc name description schema endpoint
+               user_type emitted_user) selected))
+      | EVar { name = "humanActions"; _ }
+        when agent_form signatures "humanActions" "teslrt.HumanActions" ->
+        ignore (type_of_expr signatures env app);
+        let server_name, _, _, selected =
+          agent_endpoint_tools signatures env loc "humanActions" args in
+        Printf.sprintf "teslrt.HumanActions(%s, []teslrt.HumanActionSpec{%s})"
+          (go_quote server_name)
+          (String.concat ", " (List.map (fun (name, description, schema, _) ->
+             Printf.sprintf "teslrt.HumanActionOf(%s, %s, %s)"
+               (go_quote name) (go_quote description) (go_quote schema)) selected))
+      | EVar { name = "askFor"; _ } when agent_form signatures "askFor" "teslrt.AskFor" ->
+        let agent, prompt, decoder, retries, _ = agent_ask_for_parts signatures env loc args in
+        Printf.sprintf "teslrt.AskFor(%s, %s, %s, %s)"
+          (emit agent) (emit_expr ~expected:TString ~indent signatures env prompt)
+          (agent_function_go signatures loc "an `askFor` decoder" decoder)
+          (emit_expr ~expected:TInt ~indent signatures env retries)
+      | EVar { name = "agentRun"; _ } when agent_form signatures "agentRun" "teslrt.AgentRun" ->
+        ignore (type_of_expr signatures env app);
+        (match args with
+         | [agent; prompt; publisher] ->
+           Printf.sprintf "teslrt.AgentRun(%s, %s, %s)"
+             (emit agent) (emit_expr ~expected:TString ~indent signatures env prompt)
+             (agent_publisher_go ~indent signatures env loc
+                "the `agentRun` publisher" publisher)
+         | _ -> unsupported loc "Go backend `agentRun` is applied to the wrong arity")
+      | EVar { name = "converseStreaming"; _ }
+        when agent_form signatures "converseStreaming" "teslrt.ConverseStreaming" ->
+        ignore (type_of_expr signatures env app);
+        (match args with
+         | [conversation; prompt; publish] ->
+           Printf.sprintf "teslrt.ConverseStreaming(%s, %s, %s)"
+             (emit conversation) (emit_expr ~expected:TString ~indent signatures env prompt)
+             (agent_publisher_go ~indent signatures env loc
+                "the `converseStreaming` publisher" publish)
+         | _ -> unsupported loc
+           "Go backend `converseStreaming` is applied to the wrong arity")
       | EVar { name = ("HttpClient.bearer" | "HttpClient.secretHeader") as leaf; _ }
         when args <> [] ->
         ignore (type_of_expr signatures env app);
@@ -5154,6 +5628,182 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
 (* A literal SUB-pattern (`RGB { r = 255, … }`): the comparison the arm has to make.  It
    goes through the same `equal_expr` a value comparison does, so an Int compares as an
    arbitrary-precision Int rather than as a Go int. *)
+(* A named function reference, as a Go value.  The reference is the function's own Go name,
+   qualified when it came from another package — the same resolution a CALL to it goes
+   through, which is what keeps the two from drifting. *)
+and agent_function_go signatures loc what expr =
+  let signature = agent_function_ref signatures loc what expr in
+  qualified signature.sig_owner signature.go_name
+
+(* A publisher is a lambda or a named function; a lambda goes through the ordinary lambda
+   emitter, which already produces the `func(string) struct{}` the runtime takes. *)
+and agent_publisher_go ~indent signatures env loc what publisher =
+  match publisher with
+  | ELambda _ -> emit_expr ~indent signatures env publisher
+  | _ -> agent_function_go signatures loc what publisher
+
+(* `asTool fn` — the tool a plain typed function becomes.
+   The two closures are HOISTED into named package-level functions rather than written
+   inline, for the reason the comparators are: go/printer decides whether a function literal
+   fits on one line by a threshold the emitter cannot predict, so an inline pair reformats
+   under gofmt at some sizes and not others — and a gofmt diff on emitted code is an emitter
+   bug.  Named functions are stable at every size, and read better in a tree someone owns
+   after ejecting. *)
+and emit_astool ~indent signatures (declaration : func_decl) =
+  ignore indent;
+  let types = match !current_types with
+    | Some types -> types
+    | None -> unsupported declaration.loc "Go backend cannot resolve `asTool` here"
+  in
+  let signature = match Hashtbl.find_opt signatures declaration.name with
+    | Some signature -> signature
+    | None -> unsupported declaration.loc
+      "Go backend cannot resolve function `%s`" declaration.name
+  in
+  if signature.sig_needs_scope then
+    unsupported declaration.loc
+      "Go backend cannot wrap `%s` as a tool: it takes the request scope" declaration.name;
+  let readers = List.map (fun (binding : binding) ->
+    Printf.sprintf "%s(teslFields, %s)"
+      (agent_tool_arg_reader declaration.loc binding) (go_quote binding.name))
+    declaration.params in
+  let decode = remember_helper_stmts ~prefix:"teslToolArgs"
+    ~signature:"(teslArgs string) []any"
+    ~body:(Printf.sprintf "\tteslFields := teslrt.ToolArguments(teslArgs)\n\treturn []any{%s}\n"
+             (String.concat ", " readers)) in
+  (* The dispatch asserts each argument back to the type the function DECLARED, so the
+     erased `any` never reaches user code. *)
+  let arguments = List.mapi (fun index (binding : binding) ->
+    Printf.sprintf "teslArgs[%d].(%s)" index
+      (go_type (type_of_type_expr types binding.type_expr))) declaration.params in
+  let parameter = if declaration.params = [] then "_ []any" else "teslArgs []any" in
+  let call = remember_helper ~prefix:"teslToolCall"
+    ~signature:(Printf.sprintf "(%s) string" parameter)
+    ~body:(Printf.sprintf "%s(%s)"
+             (qualified signature.sig_owner signature.go_name)
+             (String.concat ", " arguments)) in
+  let description = match declaration.doc with
+    | Some text when String.trim text <> "" -> String.trim text
+    | _ -> declaration.name
+  in
+  Printf.sprintf "teslrt.ToolOf(%s, %s, %s, %s, %s)"
+    (go_quote declaration.name) (go_quote description)
+    (go_quote (agent_tool_schema declaration.loc declaration.params)) decode call
+
+(* One endpoint, as a tool.  The tool IS the endpoint: the same handler, called with the
+   same authenticated user, so every check in the handler body runs unchanged.  What is
+   generated here is the pair the runtime needs — the argument decode and the call — each a
+   named function for the gofmt reason every other hoisted helper is one. *)
+and emit_endpoint_tool signatures loc name description schema (endpoint : api_endpoint)
+    user_type emitted_user =
+  let types = match !current_types with
+    | Some types -> types
+    | None -> unsupported loc "Go backend cannot resolve `serverTools` here"
+  in
+  let signature = match Hashtbl.find_opt signatures name with
+    | Some signature -> signature
+    | None -> unsupported loc "Go backend cannot resolve handler `%s`" name
+  in
+  if signature.sig_needs_scope then
+    unsupported loc
+      "Go backend cannot offer `%s` as a tool: it writes a cookie, and a tool call has no \
+       HTTP response to attach one to" name;
+  let has_auth = endpoint.auth <> None in
+  (* The handler's own parameter list is what the arguments must satisfy, so the types come
+     from it rather than being re-derived from the endpoint. *)
+  let argument_types = match signature.params, has_auth with
+    | _ :: rest, true -> rest
+    | params, false -> params
+    | [], true -> unsupported loc
+      "Go backend handler `%s` takes no authenticated user" name
+  in
+  let readers =
+    List.map (fun (capture : api_capture) ->
+      let parser, checker = match capture.via_fn with
+        | "" -> (match capture.inline_codec with Some codec -> codec | None -> "stringCodec"),
+                capture.inline_check
+        | via ->
+          (match List.find_opt (fun (form : capture_form) -> form.name = via) !current_capturers with
+           | Some form -> form.parser, form.checker
+           | None -> unsupported endpoint.loc
+             "Go backend cannot resolve capturer `%s`" via)
+      in
+      if parser <> "stringCodec" then unsupported endpoint.loc
+        "Go backend supports `stringCodec` path captures only for now (`%s`)" parser;
+      let raw = Printf.sprintf "teslrt.ToolArgString(teslFields, %s)" (go_quote capture.binding.name) in
+      match checker with
+      | None -> raw
+      | Some check_fn ->
+        let check = match Hashtbl.find_opt signatures check_fn with
+          | Some check -> check
+          | None -> unsupported endpoint.loc
+            "Go backend cannot resolve capture check `%s`" check_fn
+        in
+        let reference = qualified check.sig_owner check.go_name in
+        (* A capturer's `via` is either a CHECK, which may reject the segment, or a plain
+           function that normalises it — the same two shapes the HTTP path allows. *)
+        (match check.result with
+         | TCheck _ ->
+           Printf.sprintf "teslrt.ToolChecked(%s, %s(%s))"
+             (go_quote capture.binding.name) reference raw
+         | _ -> Printf.sprintf "%s(%s)" reference raw))
+      endpoint.captures
+    @ (match ep_body endpoint with
+       | None -> []
+       | Some (binding : binding) ->
+         let key = go_quote binding.name in
+         (match type_of_type_expr types binding.type_expr with
+          (* A SCALAR body is the whole value, as it is over HTTP. *)
+          | TString -> [ Printf.sprintf "teslrt.ToolArgString(teslFields, %s)" key ]
+          | TInt -> [ Printf.sprintf "teslrt.ToolArgInt(teslFields, %s)" key ]
+          | TBool -> [ Printf.sprintf "teslrt.ToolArgBool(teslFields, %s)" key ]
+          | TFloat -> [ Printf.sprintf "teslrt.ToolArgFloat(teslFields, %s)" key ]
+          (* Anything else decodes through the type's own codec — the very decode the HTTP
+             boundary runs, so a tool argument cannot be validated more weakly. *)
+          | TRecord info ->
+            [ Printf.sprintf "teslrt.ToolArgDecoded(teslFields, %s, %s)" key
+                (codec_decode_ref info.rec_tesl_name) ]
+          | TAdt (info, _) ->
+            [ Printf.sprintf "teslrt.ToolArgDecoded(teslFields, %s, %s)" key
+                (codec_decode_ref info.adt_tesl_name) ]
+          | _ -> unsupported endpoint.loc
+            "Go backend cannot decode `%s` as a tool argument; give the type a `codec`"
+            binding.name))
+  in
+  if List.length readers <> List.length argument_types then
+    unsupported loc
+      "Go backend endpoint `%s` declares %d argument(s) but its handler takes %d"
+      name (List.length readers) (List.length argument_types);
+  let decode = remember_helper_stmts ~prefix:"teslEndpointArgs"
+    ~signature:"(teslArgs string) []any"
+    (* An endpoint that takes nothing still validates the payload — the model has to send an
+       object — but it binds no fields, and a bound-and-unused `teslFields` does not
+       compile. *)
+    ~body:(if readers = [] then
+             "\t_ = teslrt.ToolArguments(teslArgs)\n\treturn []any{}\n"
+           else
+             Printf.sprintf "\tteslFields := teslrt.ToolArguments(teslArgs)\n\treturn []any{%s}\n"
+               (String.concat ", " readers)) in
+  let arguments = List.mapi (fun index ty ->
+    Printf.sprintf "teslArgs[%d].(%s)" index (go_type ty)) argument_types in
+  let call_arguments = if has_auth then "teslUser" :: arguments else arguments in
+  let encoder = match signature.result with
+    | TDict _ | TSet _ | TParam _ | TCheck _ | TFailure ->
+      unsupported loc "Go backend cannot encode endpoint `%s`\'s response as a tool result" name
+    | result -> !value_encoder_hook result
+  in
+  (* A tool_result is TEXT, and the endpoint's response is JSON — the same bytes an HTTP
+     caller would receive, through the same encoder. *)
+  let dispatch = remember_helper_stmts ~prefix:"teslEndpointCall"
+    ~signature:(Printf.sprintf "(%s %s, teslArgs []any) string"
+                  (if has_auth then "teslUser" else "_") (go_type user_type))
+    ~body:(Printf.sprintf
+             "\tdefer teslrt.ToolRejection()\n\treturn teslrt.EncodeJSONValue(%s(%s(%s)))\n"
+             encoder (qualified signature.sig_owner signature.go_name)
+             (String.concat ", " call_arguments)) in
+  Printf.sprintf "teslrt.ToolOf(%s, %s, %s, %s, teslrt.ToolDispatchWith(%s, %s))"
+    (go_quote name) (go_quote description) (go_quote schema) decode dispatch emitted_user
+
 and literal_pattern_test access field_ty value =
   let literal = match field_ty, value with
     | TInt, LInt n -> Printf.sprintf "teslrt.FromInt64(%d)" n
@@ -7572,30 +8222,6 @@ let adt_source info =
    Decode returns a `teslrt.Check`, so a `via` failure carries the check's own status and
    message (the 400 the client sees), while a missing or mistyped field is a decode
    failure whose text Racket hides behind "Invalid request payload" by default. *)
-(* Codec entry points are EXPORTED: they are the boundary API — the server layer calls
-   them, and a user who ejects Tesl calls them directly.  They would also read as unused
-   in a module that only declares codecs, which the `unused` linter rightly rejects. *)
-let codec_encode_name type_name = "Encode" ^ go_ident ~exported:true type_name ^ "JSON"
-
-(* A codec REFERENCE, as opposed to its definition: the codec lives in the package that
-   declared it, so a use from another package carries that package's prefix.  A type with no
-   hand-written codec answers its bare name — that decoder is derived into the using package,
-   which is where the reference is. *)
-let codec_owner name =
-  match !current_types with
-  | Some types -> Hashtbl.find_opt types.codecs name
-  | None -> None
-let codec_decode_name type_name = "Decode" ^ go_ident ~exported:true type_name ^ "JSON"
-
-let codec_encode_ref type_name =
-  match codec_owner type_name with
-  | Some owner -> qualified owner (codec_encode_name type_name)
-  | None -> codec_encode_name type_name
-
-let codec_decode_ref type_name =
-  match codec_owner type_name with
-  | Some owner -> qualified owner (codec_decode_name type_name)
-  | None -> codec_decode_name type_name
 let codec_alt_name type_name index =
   Printf.sprintf "teslDecode%sAlt%d" (go_ident ~exported:true type_name) index
 
@@ -7753,7 +8379,8 @@ let rec json_value_decoder ~package ~loc ~what ty =
     "Go backend cannot decode `%s` from JSON; give the type a `codec`" what
 
 let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=[])
-    ?(servers=[]) ?(capturers=[]) ?(consts=[]) ?(capabilities=[]) module_path package signatures
+    ?(servers=[]) ?(capturers=[]) ?(consts=[]) ?(agents=[]) ?(capabilities=[])
+    module_path package signatures
     types (funcs : func_decl list) =
   Hashtbl.reset pending_helpers;
   Hashtbl.reset helper_names;
@@ -7953,6 +8580,47 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
     Buffer.add_string body (line_directive c.loc);
     Printf.bprintf body "var %s = %s\n" go_name
       (emit_expr ~expected:ty signatures [] c.value)) consts;
+  (* Module-level AGENTS.  The four fields are written out here rather than through the
+     record-literal emitter because one of them is treated differently: the PROVIDER is
+     wrapped in `DeferredProvider`, so a declaration whose provider reads configuration
+     (`anthropic (requireEnv "…") "model"` is the shape the corpus uses) does not read it
+     when the program loads.  See DeferredProvider for why that is the right moment. *)
+  List.iter (fun (a : agent_form) ->
+    let go_name = match Hashtbl.find_opt types.consts a.name with
+      | Some (_, go_name) -> go_name
+      | None -> unsupported a.loc "Go backend cannot resolve agent `%s`" a.name
+    in
+    let fields = match a.config_expr with
+      | Some (ERecord { fields; _ }) -> fields
+      | Some (EApp { fn = EConstructor { name = "Agent"; args = []; _ };
+                     arg = ERecord { fields; _ }; _ }) -> fields
+      | _ -> unsupported a.loc
+        "Go backend requires an `agent` block to be written `= Agent { … }`"
+    in
+    let info = match Hashtbl.find_opt types.records "Agent" with
+      | Some info -> info
+      | None -> unsupported a.loc
+        "Go backend `agent %s` needs `Agent` imported from `Tesl.Agent`" a.name
+    in
+    check_record_literal signatures [] a.loc info fields;
+    (* The declaration's TYPE, now that it is known: a reference to the agent elsewhere in
+       the module resolves through this table, exactly as a reference to a constant does. *)
+    Hashtbl.replace types.consts a.name (TRecord info, go_name);
+    let field name =
+      match List.assoc_opt name fields, List.assoc_opt name info.rec_fields with
+      | Some value, Some want -> emit_expr ~expected:want signatures [] value
+      | _ -> unsupported a.loc "Go backend `agent %s` is missing field `%s`" a.name name
+    in
+    (* The provider expression becomes a named builder rather than an inline literal, for
+       the reason every other hoisted helper is named: gofmt reflows a function literal at
+       a size the emitter cannot predict. *)
+    let build = remember_helper ~prefix:"teslProvider"
+      ~signature:"() teslrt.LlmProvider" ~body:(field "provider") in
+    Buffer.add_char body '\n';
+    Buffer.add_string body (line_directive a.loc);
+    Printf.bprintf body
+      "var %s = teslrt.Agent{Provider: teslrt.DeferredProvider(%s), SystemPrompt: %s, MaxTokens: %s, Tools: %s}\n"
+      go_name build (field "systemPrompt") (field "maxTokens") (field "tools")) agents;
   List.iter (fun (fd : func_decl) ->
     (* `establish` returns a detached proof, which erases — so the function body computes
        nothing observable and the emitted function returns the zero-size proof value.  It
@@ -9533,7 +10201,10 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.Email` export `%s` yet" other) exposed
       (* `Tesl.Money` and `Tesl.Units` are validated where their types and leaves are
-         registered, against the compiler's own catalogs. *)
+         registered, against the compiler's own catalogs.  `Tesl.Agent` is validated the same
+         way: its types and its leaves are registered together, so one list decides what the
+         module offers rather than a second list here that could drift from it. *)
+      | "Tesl.Agent"
       | "Tesl.Money" | "Tesl.Units"
       | "Tesl.String" | "Tesl.List" | "Tesl.Int" | "Tesl.Tuple" | "Tesl.Dict"
       | "Tesl.Set" | "Tesl.Float" | "Tesl.Either" | "Tesl.EitherPrim"
@@ -9607,6 +10278,66 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
     (* Which functions perform a proof operation, for the one assertion that depends on it
        (see the `expectFail` emission).  Computed here, where the bodies are in hand. *)
     Hashtbl.reset proof_op_functions;
+    Hashtbl.reset current_functions;
+    List.iter (function
+      | DFunc f -> Hashtbl.replace current_functions f.name f
+      | _ -> ()) m.decls;
+    current_capturers := List.filter_map (function DCapture c -> Some c | _ -> None) m.decls;
+    (* ── `serverTools` / `humanActions` metadata ─────────────────────────────
+       Two things are needed and neither is in the module tree alone: WHICH endpoints each
+       call site gets (the checker's per-site proof decision) and what each endpoint looks
+       like to a model (its name, description and derived schema).  The checker is re-run
+       for the first, as the Racket backend does — and only for a module that actually uses
+       one of the two forms, so nothing else pays for it. *)
+    Hashtbl.reset server_tools_sites;
+    Hashtbl.reset human_actions_sites;
+    Hashtbl.reset server_tools_endpoints;
+    let uses_endpoint_tools = List.exists (fun (import : import_decl) ->
+      import.module_name = "Tesl.Agent"
+      && (match import.names with
+          | ImportAll -> true
+          | ImportExposing names ->
+            List.mem "serverTools" names || List.mem "humanActions" names)) m.imports in
+    if uses_endpoint_tools then begin
+      let _, _, _, _, tools_sites, actions_sites, _ = Checker.check_module_with_metadata m in
+      List.iter (fun ((site : Location.loc), decision) ->
+        Hashtbl.replace server_tools_sites
+          (site.Location.start.line, site.Location.start.col) decision) tools_sites;
+      List.iter (fun ((site : Location.loc), decision) ->
+        Hashtbl.replace human_actions_sites
+          (site.Location.start.line, site.Location.start.col) decision) actions_sites;
+      let codecs = List.filter_map (function DCodec c -> Some c | _ -> None) m.decls in
+      List.iter (function
+        | DServer (server : server_form) ->
+          (match List.find_map (function
+                   | DApi (api : api_form) when api.name = server.api_name -> Some api
+                   | _ -> None) m.decls with
+           | None -> ()
+           | Some api ->
+             let http_endpoints = List.filter (fun (endpoint : api_endpoint) ->
+               endpoint.method_ <> SSE) api.endpoints in
+             (* The tool NAME is the bound handler's, paired positionally with the api's
+                non-SSE endpoints — exactly how the server emission pairs them. *)
+             let paired =
+               if List.length server.handlers = List.length http_endpoints
+               then List.combine server.handlers http_endpoints
+               else List.map (fun (endpoint : api_endpoint) -> endpoint.name, endpoint)
+                      http_endpoints
+             in
+             Hashtbl.replace server_tools_endpoints server.name
+               (List.map (fun (handler, (endpoint : api_endpoint)) ->
+                  (* The description is what the model reads to decide whether to call it,
+                     so the handler's own doc comment is used when there is one. *)
+                  let description =
+                    match Hashtbl.find_opt current_functions handler with
+                    | Some { doc = Some text; _ } when String.trim text <> "" -> String.trim text
+                    | _ -> Printf.sprintf "%s %s"
+                             (http_method_name endpoint.method_) endpoint.path
+                  in
+                  handler, description,
+                  server_tool_endpoint_schema codecs endpoint, endpoint) paired))
+        | _ -> ()) m.decls
+    end;
     let rec proof_op_in expr =
       match expr with
       | EVar { name = ("detachFact" | "introAnd" | "andLeft" | "andRight") as name; _ } ->
@@ -9695,6 +10426,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
          function.  Its TYPE is filled in when the value is emitted (typing it needs the
          signature table), which is also why the entry starts as Unit. *)
       | DConst c -> Hashtbl.replace types.consts c.name (TUnit, package_ident c.name)
+      (* An `agent X = Agent { … }` block is a package-level VALUE, like a constant: the
+         type settles when it is emitted. *)
+      | DAgent a -> Hashtbl.replace types.consts a.name (TUnit, package_ident a.name)
       | _ -> ()) m.decls;
     let record_forms = List.filter_map (function DRecord r -> Some r | _ -> None) m.decls in
     List.iter (fun (r : record_form) ->
@@ -10426,6 +11160,39 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
          operations. *)
       List.iter (fun (alias, _) -> Hashtbl.replace types.aliases alias TQuantity)
         Units_catalog.aliases;
+    (* ── `Tesl.Agent` ────────────────────────────────────────────────────────
+       The agent SPEC is written as a record literal — `Agent { provider: …, systemPrompt: …,
+       maxTokens: …, tools: … }` — so it registers with its fields and reaches the ordinary
+       record-literal path; the Go struct carries the same four names.
+
+       Everything else the module exposes is OPAQUE: a provider, a reply, a tool, a scripted
+       mock step, a conversation and one turn of it are values a program holds, passes on and
+       reads through FUNCTIONS, never through a field.  Each registers with no fields, the
+       same treatment `DeadJob` and `ExchangeRate` get, so a program cannot reach inside one
+       and the runtime stays free to change what is in it. *)
+    let agent_imports = ref [] in
+    List.iter (fun (import : import_decl) ->
+      if import.module_name = "Tesl.Agent" then begin
+        let exposed = match import.names with
+          | ImportAll -> [] | ImportExposing names -> names in
+        List.iter (fun name -> agent_imports := name :: !agent_imports) exposed
+      end) m.imports;
+    if !agent_imports <> [] then begin
+      let provider = runtime_record "LlmProvider" "teslrt.LlmProvider" [] in
+      let tool = runtime_record "Tool" "teslrt.Tool" [] in
+      List.iter (fun (info : record_info) ->
+        Hashtbl.replace types.records info.rec_tesl_name info)
+        [ provider; tool;
+          runtime_record "Agent" "teslrt.Agent"
+            [ "provider", TRecord provider; "systemPrompt", TString;
+              "maxTokens", TInt; "tools", TList (TRecord tool) ];
+          runtime_record "AgentReply" "teslrt.AgentReply" [];
+          (* A mock script entry IS a normalised provider response at run time, which is why
+             the Go name is the response rather than a type of its own. *)
+          runtime_record "ToolStep" "teslrt.LlmResponse" [];
+          runtime_record "Conversation" "teslrt.Conversation" [];
+          runtime_record "ConversationTurn" "teslrt.ConversationTurn" [] ]
+    end;
     (* `deadJobs` answers the dead-letter contents of a queue.  Its element type is opaque
        (`DeadJob`), so what a test can do with the list is count it or requeue from it — which
        is what the Racket surface allows too. *)
@@ -11042,7 +11809,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       (* A `cache` declaration emits its store above, with the other package-level state; the
          capability it mints (`cacheCap C`) is compile-time, like every other. *)
       | DCache _ -> ()
-      | DAgent a -> unsupported a.loc "Go backend does not support agents yet"
+      (* Emitted with the module-level values below. *)
+      | DAgent _ -> ()
       (* An `email` declaration emits its outbox above, with the other package-level state;
          `emailCap` is compile-time, like every other capability. *)
       | DEmail _ -> ()
@@ -11066,6 +11834,17 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         | _ -> ()) fd.body;
        fd.name, !calls) funcs in
     let test_roots = ref [] in
+    (* A top-level `agent … = Agent { … }` block names functions too — `asTool myFn` wires
+       one in as a tool — and those are as reachable as anything a body calls.  Without this
+       the declaration's tool functions counted as unreachable and were kept alive by a
+       `var _ = f` reference, which says the opposite of what is true. *)
+    List.iter (function
+      | DAgent { config_expr = Some config; _ } ->
+        Ast_visitor.iter (function
+          | EVar { name; _ } when List.mem name function_names ->
+            if not (List.mem name !test_roots) then test_roots := name :: !test_roots
+          | _ -> ()) config
+      | _ -> ()) m.decls;
     List.iter (fun (test : test_form) ->
       List.iter (fun stmt ->
         List.iter (Ast_visitor.iter (function
@@ -11553,6 +12332,86 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           { params; result; go_name; sig_owner = ""; sig_needs_scope = false })
         !httpclient_imports
     end;
+    (* ── `Tesl.Agent`: the inference and conversation leaves ─────────────────
+       This match is the module's export list for this backend: a name that reaches its
+       fallthrough is one the Go runtime does not offer yet, and the message says so with the
+       name.  The type names and the capability are handled first and register nothing — the
+       types were registered above, and `aiProvider` erases with every other capability. *)
+    if !agent_imports <> [] then begin
+      let loc = Location.dummy_loc m.source_file in
+      let opaque name = match Hashtbl.find_opt types.records name with
+        | Some info -> TRecord info
+        | None -> unsupported loc "Go backend `Tesl.Agent` needs its `%s` type" name
+      in
+      let agent = opaque "Agent" in
+      let provider = opaque "LlmProvider" in
+      let reply = opaque "AgentReply" in
+      let step = opaque "ToolStep" in
+      let conversation = opaque "Conversation" in
+      let turn = opaque "ConversationTurn" in
+      List.iter (fun name ->
+        match name with
+        | "aiProvider"
+        | "Agent" | "LlmProvider" | "AgentReply" | "AgentReply?" | "Tool" | "ToolStep"
+        | "Conversation" | "Conversation?" | "ConversationTurn" | "ConversationTurn?" -> ()
+        | _ ->
+          let params, result, go_name = match name with
+            (* The two test doubles.  A mock is deterministic and reaches no network, which is
+               what lets an agent test run in the ordinary suite. *)
+            | "mockProvider" -> [TList TString], provider, "teslrt.MockProvider"
+            | "mockToolProvider" -> [TList step], provider, "teslrt.MockToolProvider"
+            | "toolUseStep" -> [TString; TString; TString], step, "teslrt.ToolUseStep"
+            | "textStep" -> [TString], step, "teslrt.TextStep"
+            (* The real providers.  Each is a translation layer over the same normalised
+               request; the outbound call goes through the ordinary HTTP client, so the
+               network is gated and stubbable exactly like any other. *)
+            | "anthropic" -> [TString; TString], provider, "teslrt.AnthropicProvider"
+            | "openai" -> [TString; TString], provider, "teslrt.OpenAIProvider"
+            | "mistral" -> [TString; TString], provider, "teslrt.MistralProvider"
+            (* `local endpoint model`: the endpoint comes first, because it is the thing a
+               self-hosted server is identified by. *)
+            | "local" -> [TString; TString], provider, "teslrt.LocalProvider"
+            (* Inference.  `ask` is `askReply` with everything but the text dropped; both run
+               the same tool-calling loop, so a tool-augmented agent works through either. *)
+            | "ask" -> [agent; TString], TString, "teslrt.Ask"
+            | "askReply" -> [agent; TString], reply, "teslrt.AskReply"
+            | "askWith" -> [agent; TString; provider], reply, "teslrt.AskWith"
+            | "replyText" -> [reply], TString, "teslrt.ReplyText"
+            | "replyTokens" -> [reply], TInt, "teslrt.ReplyTokens"
+            | "replyToolCalls" -> [reply], TInt, "teslrt.ReplyToolCalls"
+            (* Multi-turn conversation.  The transcript is threaded by the PROGRAM: `converse`
+               answers the conversation advanced by this turn, and persisting it is a string
+               round-trip through the program's own entity. *)
+            | "newConversation" -> [agent], conversation, "teslrt.NewConversation"
+            | "conversationFrom" -> [agent; TString], conversation, "teslrt.ConversationFrom"
+            | "converse" -> [conversation; TString], turn, "teslrt.Converse"
+            | "turnReply" -> [turn], reply, "teslrt.TurnReply"
+            | "turnConversation" -> [turn], conversation, "teslrt.TurnConversation"
+            | "conversationJson" -> [conversation], TString, "teslrt.ConversationJSON"
+            | "conversationLength" -> [conversation], TInt, "teslrt.ConversationLength"
+            (* Streaming takes a `String -> Unit` publisher, which a `params` row cannot
+               describe — see the special-form arms in the expression emitter, which these
+               placeholder rows are what identifies. *)
+            | "converseStreaming" -> [], TFailure, "teslrt.ConverseStreaming"
+            | "agentRun" -> [], TFailure, "teslrt.AgentRun"
+            (* A tool's validator and dispatch, and `askFor`'s decoder, are FUNCTIONS; and
+               `decodeAs` picks its decoder from a literal type name.  All four are typed
+               from what the call site was given. *)
+            | "tool" -> [], TFailure, "teslrt.ToolOf"
+            | "asTool" -> [], TFailure, "teslrt.ToolOf#asTool"
+            | "decodeAs" -> [], TFailure, "teslrt.DecodeAs"
+            (* Both endpoint forms are decided per CALL SITE by the checker, so neither has
+               a fixed result beyond `List Tool` and neither can be described here. *)
+            | "serverTools" -> [], TFailure, "teslrt.ServerTools"
+            | "humanActions" -> [], TFailure, "teslrt.HumanActions"
+            | "askFor" -> [], TFailure, "teslrt.AskFor"
+            | other -> unsupported loc
+              "Go backend does not support `Tesl.Agent` export `%s` yet" other
+          in
+          Hashtbl.replace signatures name
+            { params; result; go_name; sig_owner = ""; sig_needs_scope = false })
+        !agent_imports
+    end;
     (* The outbound-HTTP double.  A stub DECLARATION is a statement whose Tesl type is Unit,
        so the runtime entry points answer `struct{}` like `enqueue` does. *)
     List.iter (fun name ->
@@ -11648,6 +12507,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
     let source =
       module_source ~imported_packages:!imported_packages ~codecs ~apis ~servers ~capturers
         ~consts:(List.filter_map (function DConst c -> Some c | _ -> None) m.decls)
+        ~agents:(List.filter_map (function DAgent a -> Some a | _ -> None) m.decls)
         ~capabilities:(List.filter_map (function DCapability c -> Some c | _ -> None) m.decls)
         ~unreachable:(List.filter_map (fun name ->
           match Hashtbl.find_opt signatures name with
@@ -11781,6 +12641,13 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
            database, for the reason the HTTP half does: it pulls a third-party driver and its
            whole dependency chain into a binary that would otherwise require nothing. *)
         let postgres_only = [ "postgres.go"; "database.go"; "dbquery.go" ] in
+        (* `agent.go` ships only to a program that talks to a model.  It is not a dependency
+           argument — everything in it is standard library — but a runtime file a program has
+           no use for is still surface a reader has to rule out, and the gate costs nothing. *)
+        let agent_only = [ "agent.go"; "agent_endpoint.go"; "agent_provider.go" ] in
+        let uses_agent = List.exists mentions
+          [ "teslrt.Agent"; "teslrt.LlmProvider"; "teslrt.LlmResponse"; "teslrt.Tool";
+            "teslrt.Conversation"; "teslrt.Ask"; "teslrt.MockProvider" ] in
         let has_load_tests = match tests_source with
           | Some text -> contains_go_code text "teslrt.RunLoadTest"
           | None -> false
@@ -11789,6 +12656,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           if (not serves_http) && List.mem name http_only then None
           else if (not has_load_tests) && List.mem name load_test_only then None
           else if (not postgres_runtime) && List.mem name postgres_only then None
+          else if (not uses_agent) && List.mem name agent_only then None
           else if name = "password.go" && not password_runtime then None
           else Some { path = "internal/teslrt/" ^ name; contents })
           Embedded_go_runtime.files

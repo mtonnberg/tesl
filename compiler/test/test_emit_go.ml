@@ -8177,6 +8177,662 @@ let test_generated_module_with_go () =
       run_go_gates marker)
   end
 
+(* ── `Tesl.Agent` ────────────────────────────────────────────────────────────
+   The whole mock-driven surface in one module: the two test doubles, the tool-calling
+   loop, a hand-written tool and one derived by `asTool`, a dispatch the program partially
+   applies, typed structured output with a retry, multi-turn conversation with its string
+   round-trip, both streaming entry points, and a top-level `agent` declaration whose
+   provider reads the environment.
+
+   Nothing here reaches a network: every call is scripted, which is what lets the same
+   source run under the Racket oracle beside it. *)
+let agent_source = {|module GoAgent exposing [askOnce, plannedReply]
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List, Unit]
+import Tesl.Json exposing [stringCodec, intCodec]
+import Tesl.String exposing [String.concat, String.contains]
+import Tesl.Env exposing [envRead, requireEnv]
+import Tesl.Agent exposing [
+  aiProvider,
+  Agent,
+  LlmProvider,
+  AgentReply,
+  Tool,
+  ToolStep,
+  Conversation,
+  ConversationTurn,
+  anthropic,
+  openai,
+  mistral,
+  local,
+  mockProvider,
+  mockToolProvider,
+  toolUseStep,
+  textStep,
+  tool,
+  asTool,
+  ask,
+  askReply,
+  askWith,
+  replyText,
+  replyTokens,
+  replyToolCalls,
+  decodeAs,
+  askFor,
+  newConversation,
+  conversationFrom,
+  converse,
+  converseStreaming,
+  turnReply,
+  turnConversation,
+  conversationJson,
+  conversationLength,
+  agentRun,
+]
+
+capability goAi implies aiProvider
+
+record CityArgs {
+  city: String
+}
+
+codec CityArgs {
+  toJson_forbidden
+  fromJson [
+    {
+      city <- "city" with_codec stringCodec
+    }
+  ]
+}
+
+record Verdict {
+  label: String
+  score: Int
+}
+
+codec Verdict {
+  toJson_forbidden
+  fromJson [
+    {
+      label <- "label" with_codec stringCodec
+      score <- "score" with_codec intCodec
+    }
+  ]
+}
+
+fn validateCity(argsJson: String) -> CityArgs =
+  decodeAs "CityArgs" argsJson
+
+fn reportCity(args: CityArgs) -> String =
+  String.concat "weather in " args.city
+
+# A dispatch the program partially applies: the model chooses the city, the
+# caller chooses which region the answer is for.
+fn reportCityIn(region: String, args: CityArgs) -> String =
+  String.concat (String.concat region ": ") args.city
+
+fn decodeVerdict(j: String) -> Verdict =
+  decodeAs "Verdict" j
+
+# A plain typed function wrapped by `asTool`: two parameters of different types,
+# so the derived schema and the derived decode both carry more than one shape.
+fn bookTable(restaurant: String, guests: Int) -> String =
+  String.concat "booked " restaurant
+
+# A publisher for the streaming entry points.
+fn dropEvent(event: String) -> Unit =
+  Unit
+
+# The top-level declaration, with a REAL provider whose key comes from the
+# environment. Every test below overrides the provider, so nothing here reads it.
+agent Assistant requires [envRead] = Agent {
+  provider: anthropic (requireEnv "TESL_GO_AGENT_KEY") "claude-opus-5"
+  systemPrompt: "You are a concierge."
+  maxTokens: 256
+  tools: [asTool bookTable]
+}
+
+fn askOnce(prompt: String) -> String requires [goAi] =
+  let agent = Agent { provider: mockProvider ["one reply"], systemPrompt: "x", maxTokens: 32, tools: [] }
+  ask agent prompt
+
+fn plannedReply() -> String requires [goAi] =
+  replyText (askWith Assistant "plan" (mockProvider ["from the override"]))
+
+test "ask walks the mock script by call index" requires [goAi] {
+  let agent = Agent { provider: mockProvider ["first", "second"], systemPrompt: "x", maxTokens: 32, tools: [] }
+  expect (ask agent "a") == "first"
+  expect (ask agent "b") == "second"
+  expect (askOnce "hi") == "one reply"
+}
+
+test "a declared agent keeps its own tools while the provider is overridden" requires [goAi] {
+  expect (plannedReply ()) == "from the override"
+  let call = toolUseStep "bookTable" "c1" "{\"restaurant\":\"Chez Tesl\",\"guests\":4}"
+  let final = textStep "All set."
+  let reply = askWith Assistant "book it" (mockToolProvider [call, final])
+  expect (replyText reply) == "All set."
+  expect (replyToolCalls reply) == 1
+}
+
+test "a hand-written tool dispatches with the validated argument" requires [goAi] {
+  let cityTool = tool "weather" "Look up the weather" "{\"type\":\"object\"}" validateCity reportCity
+  let call = toolUseStep "weather" "c1" "{\"city\":\"Malmo\"}"
+  let reply = askReply (Agent {
+    provider: mockToolProvider [call, textStep "It is sunny."]
+    systemPrompt: "x"
+    maxTokens: 64
+    tools: [cityTool]
+  }) "weather?"
+  expect (replyText reply) == "It is sunny."
+  expect (replyToolCalls reply) == 1
+  expect (replyTokens reply) == 4
+}
+
+test "a partially applied dispatch captures what the model may not choose" requires [goAi] {
+  let cityTool = tool "weather" "Look up the weather" "{}" validateCity (reportCityIn "north")
+  let call = toolUseStep "weather" "c1" "{\"city\":\"Malmo\"}"
+  let reply = askReply (Agent {
+    provider: mockToolProvider [call, textStep "done"]
+    systemPrompt: "x"
+    maxTokens: 64
+    tools: [cityTool]
+  }) "weather?"
+  expect (replyText reply) == "done"
+  expect (replyToolCalls reply) == 1
+}
+
+test "malformed tool arguments keep the loop running" requires [goAi] {
+  let cityTool = tool "weather" "Look up the weather" "{}" validateCity reportCity
+  let call = toolUseStep "weather" "c1" "{\"wrong\":\"field\"}"
+  let reply = askReply (Agent {
+    provider: mockToolProvider [call, textStep "I could not look that up."]
+    systemPrompt: "x"
+    maxTokens: 64
+    tools: [cityTool]
+  }) "weather?"
+  expect (replyText reply) == "I could not look that up."
+  expect (replyToolCalls reply) == 1
+}
+
+test "askFor decodes, and retries once when the first reply does not" requires [goAi] {
+  let good = Agent { provider: mockProvider ["{\"label\":\"ok\",\"score\":42}"], systemPrompt: "x", maxTokens: 32, tools: [] }
+  let first = askFor good "judge" decodeVerdict 2
+  expect first.label == "ok"
+  expect first.score == 42
+  let retried = Agent { provider: mockProvider ["not json", "{\"label\":\"recovered\",\"score\":7}"], systemPrompt: "x", maxTokens: 32, tools: [] }
+  let second = askFor retried "judge" decodeVerdict 2
+  expect second.label == "recovered"
+  expect second.score == 7
+}
+
+test "converse threads the transcript and round-trips through a String" requires [goAi] {
+  let agent = Agent { provider: mockProvider ["reply one", "reply two"], systemPrompt: "x", maxTokens: 32, tools: [] }
+  let turn1 = converse (newConversation agent) "first question"
+  expect (replyText (turnReply turn1)) == "reply one"
+  let conv1 = turnConversation turn1
+  expect (conversationLength conv1) == 2
+  let saved = conversationJson conv1
+  expect (String.contains saved "first question")
+  expect (String.contains saved "reply one")
+  let reloaded = conversationFrom agent saved
+  expect (conversationLength reloaded) == 2
+  let turn2 = converse reloaded "second question"
+  expect (replyText (turnReply turn2)) == "reply two"
+  expect (conversationLength (turnConversation turn2)) == 4
+}
+
+test "the streaming entry points answer the same value as the blocking ones" requires [goAi] {
+  let agent = Agent { provider: mockProvider ["streamed"], systemPrompt: "x", maxTokens: 32, tools: [] }
+  let turn = converseStreaming (newConversation agent) "hi" dropEvent
+  expect (replyText (turnReply turn)) == "streamed"
+  let runner = Agent { provider: mockProvider ["ran"], systemPrompt: "x", maxTokens: 32, tools: [] }
+  expect (replyText (agentRun runner "go" dropEvent)) == "ran"
+  let inline = Agent { provider: mockProvider ["lambda"], systemPrompt: "x", maxTokens: 32, tools: [] }
+  let lambdaTurn = converseStreaming (newConversation inline) "hi" (fn(event: String) -> dropEvent event)
+  expect (replyText (turnReply lambdaTurn)) == "lambda"
+}
+
+test "every provider constructor builds a usable value" requires [goAi, envRead] {
+  let a = Agent { provider: anthropic "k" "m", systemPrompt: "x", maxTokens: 8, tools: [] }
+  let b = Agent { provider: openai "k" "m", systemPrompt: "x", maxTokens: 8, tools: [] }
+  let c = Agent { provider: mistral "k" "m", systemPrompt: "x", maxTokens: 8, tools: [] }
+  let d = Agent { provider: local "http://127.0.0.1:11434/v1/chat/completions" "m", systemPrompt: "x", maxTokens: 8, tools: [] }
+  expect (replyText (askWith a "hi" (mockProvider ["a"]))) == "a"
+  expect (replyText (askWith b "hi" (mockProvider ["b"]))) == "b"
+  expect (replyText (askWith c "hi" (mockProvider ["c"]))) == "c"
+  expect (replyText (askWith d "hi" (mockProvider ["d"]))) == "d"
+}
+|}
+
+let test_agent_with_go () =
+  let emitted = match Compile.compile_go_source "<go-agent>" agent_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "agent compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgoagent/module.go" emitted in
+  let tests_go = artifact "internal/teslmodgoagent/module_test.go" emitted in
+  (* The declaration is a package-level value whose PROVIDER is deferred: its
+     `requireEnv` runs on the first provider call, not when the program loads. *)
+  check bool "a declared agent is a package-level value" true
+    (contains module_go "var Assistant = teslrt.Agent{Provider: teslrt.DeferredProvider(teslProvider1)");
+  check bool "the provider builder is a named function, not an inline literal" true
+    (contains module_go
+       "func teslProvider1() teslrt.LlmProvider {\n\treturn teslrt.AnthropicProvider(teslrt.RequireEnv(\"TESL_GO_AGENT_KEY\"), \"claude-opus-5\")");
+  (* `asTool` derives the schema from the parameter list, and the argument reader from each
+     parameter's type — a String and an Int read differently. *)
+  check bool "the derived schema names both parameters with their JSON types" true
+    (contains module_go
+       "{\\\"type\\\":\\\"object\\\",\\\"properties\\\":{\\\"restaurant\\\":{\\\"type\\\":\\\"string\\\"},\\\"guests\\\":{\\\"type\\\":\\\"integer\\\"}},\\\"required\\\":[\\\"restaurant\\\",\\\"guests\\\"]}");
+  check bool "the derived decode reads each argument by its own type" true
+    (contains module_go
+       "return []any{teslrt.ToolArgString(teslFields, \"restaurant\"), teslrt.ToolArgInt(teslFields, \"guests\")}");
+  check bool "the derived dispatch asserts back to the declared types" true
+    (contains module_go "return bookTable(teslArgs[0].(string), teslArgs[1].(teslrt.Int))");
+  (* A tool function wired in ONLY by the declaration is reached through it, so it needs no
+     keep-alive reference. *)
+  check bool "an agent declaration counts as a use of its tool functions" false
+    (contains module_go "var _ = bookTable");
+  (* `decodeAs` resolves its decoder at compile time from the literal type name. *)
+  check bool "decodeAs goes through the type's own codec" true
+    (contains module_go "teslrt.DecodeAs(\"CityArgs\", argsJson, DecodeCityArgsJSON)");
+  (* A partially applied dispatch keeps the captured argument out of the model's reach. *)
+  check bool "a captured dispatch argument is bound by the runtime combinator" true
+    (contains tests_go "teslrt.ToolDispatchWith(reportCityIn, \"north\")");
+  check bool "a named publisher is passed straight through" true
+    (contains tests_go "teslrt.AgentRun(runner, \"go\", dropEvent)");
+  check bool "a lambda publisher is the ordinary lambda emission" true
+    (contains tests_go "teslrt.ConverseStreaming(teslrt.NewConversation(inline), \"hi\", func(event string) struct{} {");
+  (* The agent SPEC is the one Tesl.Agent type with fields, so it is a keyed literal. *)
+  check bool "an inline agent is a keyed struct literal" true
+    (contains tests_go "teslrt.Agent{Provider: teslrt.MockProvider([]string{\"first\", \"second\"})");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-agent" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+  end
+
+(* The `Tesl.Agent` forms the GO BACKEND refuses, each with the reason it refuses them.
+   Most of the surface's limits are the CHECKER's and are stronger for it — a `decodeAs`
+   whose type has no codec, a non-literal type name, and `asTool` applied to anything but a
+   bare reference are all T001s that never reach an emitter, and were verified to be so
+   while this was written.  What is left here is what only the Go backend can decide. *)
+let test_agent_limits_fail_closed () =
+  let header = {|module GoAgentLimit exposing []
+import Tesl.Prelude exposing [Int, String, List, Unit]
+import Tesl.Agent exposing [aiProvider, Agent, Tool, tool, asTool, mockProvider]
+
+capability limitAi implies aiProvider
+
+fn plainText(v: String) -> String = v
+
+fn threeArgs(a: String, b: String, c: String) -> String = a
+
+|} in
+  let cases = [
+    (* A tool_result is text the model reads, so a tool function has to answer one.  The
+       checker allows any return type here; only the emitter knows there is nothing to put
+       in the result. *)
+    "a String result",
+    {|fn counts(n: Int) -> Int = n
+fn wireIt() -> List Tool = [asTool counts]
+|},
+    "needs the function to answer a String";
+
+    (* Go can pass a named function as a value; it cannot pass a Tesl lambda where the
+       runtime expects one, because a lambda has no name to reference. *)
+    "a named validator",
+    {|fn wireIt() -> Tool = tool "n" "d" "{}" (fn(s: String) -> s) plainText
+|},
+    "a tool validator must be a named function";
+
+    (* The captured half of a partially applied dispatch is bound by one runtime
+       combinator, which takes exactly one value. *)
+    "one captured argument",
+    {|fn wireIt() -> Tool = tool "n" "d" "{}" plainText (threeArgs "a" "b")
+|},
+    "partially applied to ONE captured argument";
+  ] in
+  List.iter (fun (what, body, expected) ->
+    match Compile.compile_go_source "<go-agent-limit>" (header ^ body) with
+    | Compile.GoSuccess _ -> failf "%s: emitted instead of failing closed" what
+    | Compile.GoFailure diagnostics ->
+      check bool what true
+        (List.exists (fun (d : Compile.diagnostic) -> contains d.message expected)
+           diagnostics)) cases
+
+(* ── `serverTools` / `humanActions` ──────────────────────────────────────────
+   A server whose endpoints become agent tools, and the complement it holds back for the
+   human.  The five endpoints cover what an endpoint tool has to carry: no arguments, a
+   codec-decoded body with a `via` check, a capture with a capturer's check, a handler that
+   rejects, and one gated behind a second fact — so the same source exercises inclusion (a
+   plain user gets four tools, an admin five), the decode path, and every failure the loop
+   must survive rather than crash on. *)
+let endpoint_tools_source = {|module GoEndpointTools exposing [NotesServer, User, Authenticated, Admin, mkUser, mkAdmin]
+
+import Tesl.Prelude exposing [Int, String, Bool, List]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.String exposing [String.concat, String.length, String.startsWith, String.contains]
+import Tesl.List exposing [List.length, List.append]
+import Tesl.Agent exposing [
+  aiProvider,
+  Agent,
+  Tool,
+  serverTools,
+  humanActions,
+  asTool,
+  mockToolProvider,
+  toolUseStep,
+  textStep,
+  askWith,
+  replyText,
+  replyToolCalls,
+]
+
+capability notesBot implies aiProvider
+
+record User {
+  id: String
+  role: String
+}
+
+fact Authenticated (u: User)
+fact Admin (u: User)
+fact NoteId (noteId: String)
+fact TextSafe (text: String)
+
+auth cookieAuth(request: HttpRequest) -> u: User ::: Authenticated u =
+  case Dict.lookup "user" request.cookies of
+    Something userId -> ok (User { id: userId, role: "user" }) ::: Authenticated u
+    Nothing -> fail 401 "Missing user cookie"
+
+auth adminAuth(request: HttpRequest) -> u: User ::: Authenticated u && Admin u =
+  case Dict.lookup "admin" request.cookies of
+    Something userId -> ok (User { id: userId, role: "admin" }) ::: Authenticated u && Admin u
+    Nothing -> fail 401 "Missing admin cookie"
+
+check isNoteId(noteId: String) -> noteId: String ::: NoteId noteId =
+  if String.startsWith noteId "note-" then
+    ok noteId ::: NoteId noteId
+  else
+    fail 400 "Malformed note id"
+
+capturer noteIdCapture: String ::: NoteId noteId using stringCodec via isNoteId
+
+check isSafeText(text: String) -> text: String ::: TextSafe text =
+  if String.length text <= 20 then
+    ok text ::: TextSafe text
+  else
+    fail 400 "Text too long"
+
+record NewNote {
+  text: String ::: TextSafe text
+}
+
+codec NewNote {
+  toJson_forbidden
+  fromJson [
+    {
+      text <- "text" with_codec stringCodec via isSafeText
+    }
+  ]
+}
+
+# Greet the authenticated user by id.
+handler get greet(u: User ::: Authenticated u) -> String =
+  String.concat "hello " u.id
+
+# Store a validated note for the authenticated user.
+handler post createNote(u: User ::: Authenticated u, note: NewNote) -> String =
+  String.concat (String.concat u.id ":") note.text
+
+# Read one note by its id.
+handler get getNote(u: User ::: Authenticated u, noteId: String ::: NoteId noteId) -> String =
+  String.concat "note " noteId
+
+# Refuse for a blocked user.
+handler get guarded(u: User ::: Authenticated u) -> String =
+  if u.id == "blocked" then
+    fail 403 "blocked user"
+  else
+    "ok"
+
+# Wipe everything. Admin only.
+handler post adminWipe(u: User ::: Authenticated u && Admin u) -> String =
+  "wiped"
+
+api NotesApi {
+  get "/greet"
+    auth u: User ::: Authenticated u via cookieAuth
+    -> String
+
+  post "/notes"
+    auth u: User ::: Authenticated u via cookieAuth
+    body note: NewNote
+    -> String
+
+  get "/notes/:noteId"
+    auth u: User ::: Authenticated u via cookieAuth
+    capture noteId: String ::: NoteId noteId via noteIdCapture
+    -> String
+
+  get "/guarded"
+    auth u: User ::: Authenticated u via cookieAuth
+    -> String
+
+  post "/admin/wipe"
+    auth u: User ::: Authenticated u && Admin u via adminAuth
+    -> String
+}
+
+server NotesServer for NotesApi {
+  greet
+  createNote
+  getNote
+  guarded
+  adminWipe
+}
+
+check mkUser(u: User) -> u: User ::: Authenticated u =
+  ok u ::: Authenticated u
+
+check mkAdmin(u: User) -> u: User ::: Authenticated u && Admin u =
+  ok u ::: Authenticated u && Admin u
+
+# A plain function alongside the endpoint tools, to prove the two kinds compose.
+fn summarize(text: String) -> String =
+  String.concat "summary of " text
+
+fn plainAgent(u: User ::: Authenticated u) -> Agent =
+  Agent {
+    provider: mockToolProvider []
+    systemPrompt: "You manage the user's notes."
+    maxTokens: 256
+    tools: List.append (serverTools NotesServer u) (humanActions NotesServer u)
+  }
+
+fn adminAgent(u: User ::: Authenticated u && Admin u) -> Agent =
+  Agent {
+    provider: mockToolProvider []
+    systemPrompt: "You administer the notes service."
+    maxTokens: 256
+    tools: List.append (serverTools NotesServer u) [asTool summarize]
+  }
+
+test "the two sets partition the server's endpoints at each call site" {
+  let raw = User { id: "alice", role: "user" }
+  let user = check mkUser raw
+  expect (List.length (serverTools NotesServer user)) == 4
+  expect (List.length (humanActions NotesServer user)) == 1
+  let rawAdmin = User { id: "root", role: "admin" }
+  let admin = check mkAdmin rawAdmin
+  expect (List.length (serverTools NotesServer admin)) == 5
+  expect (List.length (humanActions NotesServer admin)) == 0
+}
+
+test "an endpoint tool dispatches its handler with the authenticated user" requires [notesBot] {
+  let raw = User { id: "alice", role: "user" }
+  let user = check mkUser raw
+  let reply = askWith (plainAgent user) "greet me"
+    (mockToolProvider [toolUseStep "greet" "c1" "{}", textStep "Greeted you."])
+  expect (replyText reply) == "Greeted you."
+  expect (replyToolCalls reply) == 1
+}
+
+test "a body argument decodes through the endpoint's own codec and via-check" requires [notesBot] {
+  let raw = User { id: "alice", role: "user" }
+  let user = check mkUser raw
+  let reply = askWith (plainAgent user) "note"
+    (mockToolProvider [toolUseStep "createNote" "c1" "{\"note\":{\"text\":\"buy milk\"}}", textStep "Saved."])
+  expect (replyText reply) == "Saved."
+  expect (replyToolCalls reply) == 1
+}
+
+test "a body that fails the via-check is an is_error result, not a crash" requires [notesBot] {
+  let raw = User { id: "alice", role: "user" }
+  let user = check mkUser raw
+  let reply = askWith (plainAgent user) "note"
+    (mockToolProvider [toolUseStep "createNote" "c1" "{\"note\":{\"text\":\"aaaaaaaaaaaaaaaaaaaaa\"}}", textStep "Too long."])
+  expect (replyText reply) == "Too long."
+  expect (replyToolCalls reply) == 1
+}
+
+test "a capture argument runs the capturer's check" requires [notesBot] {
+  let raw = User { id: "alice", role: "user" }
+  let user = check mkUser raw
+  let reply = askWith (plainAgent user) "show it"
+    (mockToolProvider [toolUseStep "getNote" "c1" "{\"noteId\":\"note-7\"}", textStep "Found it."])
+  expect (replyText reply) == "Found it."
+  expect (replyToolCalls reply) == 1
+}
+
+test "a capture the check rejects is an is_error result" requires [notesBot] {
+  let raw = User { id: "alice", role: "user" }
+  let user = check mkUser raw
+  let reply = askWith (plainAgent user) "show it"
+    (mockToolProvider [toolUseStep "getNote" "c1" "{\"noteId\":\"nope\"}", textStep "Bad id."])
+  expect (replyText reply) == "Bad id."
+  expect (replyToolCalls reply) == 1
+}
+
+test "a handler fail becomes an is_error result and the loop continues" requires [notesBot] {
+  let rawBlocked = User { id: "blocked", role: "user" }
+  let blocked = check mkUser rawBlocked
+  let reply = askWith (plainAgent blocked) "do it"
+    (mockToolProvider [toolUseStep "guarded" "c1" "{}", textStep "Not allowed."])
+  expect (replyText reply) == "Not allowed."
+  expect (replyToolCalls reply) == 1
+}
+
+test "a held-back action is inert: the handler never runs" requires [notesBot] {
+  let raw = User { id: "alice", role: "user" }
+  let user = check mkUser raw
+  let reply = askWith (plainAgent user) "wipe it"
+    (mockToolProvider [toolUseStep "adminWipe" "c1" "{}", textStep "Asked the human."])
+  expect (replyText reply) == "Asked the human."
+  expect (replyToolCalls reply) == 1
+}
+
+test "the admin-gated endpoint dispatches for an admin-proved user" requires [notesBot] {
+  let rawAdmin = User { id: "root", role: "admin" }
+  let admin = check mkAdmin rawAdmin
+  let reply = askWith (adminAgent admin) "wipe it"
+    (mockToolProvider [toolUseStep "adminWipe" "c1" "{}", textStep "Wiped."])
+  expect (replyText reply) == "Wiped."
+  expect (replyToolCalls reply) == 1
+}
+
+# An endpoint tool and an `asTool` function live in the same list, and the loop
+# reaches both — the two kinds are the same Tool value by the time it runs.
+test "endpoint tools compose with an asTool function in the same list" requires [notesBot] {
+  let rawAdmin = User { id: "root", role: "admin" }
+  let admin = check mkAdmin rawAdmin
+  let reply = askWith (adminAgent admin) "summarize it"
+    (mockToolProvider [toolUseStep "summarize" "c1" "{\"text\":\"the notes\"}", textStep "Summarized."])
+  expect (replyText reply) == "Summarized."
+  expect (replyToolCalls reply) == 1
+}
+|}
+
+let test_endpoint_tools_with_go () =
+  let emitted = match Compile.compile_go_source "<go-endpoint-tools>" endpoint_tools_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "endpoint-tools compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgoendpointtools/module.go" emitted in
+  let tests_go = artifact "internal/teslmodgoendpointtools/module_test.go" emitted in
+  (* The tool IS the endpoint: the same handler, bound to the same authenticated user. *)
+  check bool "an endpoint tool binds the user to the handler" true
+    (contains module_go "teslrt.ToolDispatchWith(teslEndpointCall");
+  check bool "the dispatch calls the handler with the user first" true
+    (contains module_go "(greet(teslUser)))");
+  check bool "an argument-taking endpoint gets its arguments after the user" true
+    (contains module_go "(createNote(teslUser, teslArgs[0].(NewNote))))");
+  (* A rejection reaching a tool has no response to write, so it becomes the result text —
+     with the status, which is what tells the model what went wrong. *)
+  check bool "a handler rejection becomes the tool result" true
+    (contains module_go "defer teslrt.ToolRejection()");
+  (* Arguments go through the endpoint's OWN decode, so a tool argument cannot be validated
+     more weakly than the HTTP boundary. *)
+  check bool "a body argument decodes through the endpoint's codec" true
+    (contains module_go "teslrt.ToolArgDecoded(teslFields, \"note\", DecodeNewNoteJSON)");
+  check bool "a capture argument runs the capturer's check" true
+    (contains module_go "teslrt.ToolChecked(\"noteId\", isNoteId(teslrt.ToolArgString(teslFields, \"noteId\")))");
+  (* An endpoint taking nothing still requires an object, but binds no fields — a bound and
+     unused variable does not compile. *)
+  check bool "a no-argument endpoint validates without binding fields" true
+    (contains module_go "_ = teslrt.ToolArguments(teslArgs)\n\treturn []any{}");
+  (* The held-back set takes the server NAME and nothing else: with no route table and no
+     handler in reach, an inert tool cannot become a call. *)
+  check bool "a human action carries only the server name" true
+    (contains module_go "teslrt.HumanActions(\"NotesServer\", []teslrt.HumanActionSpec{");
+  check bool "the held-back tool is the one the user's proof does not cover" true
+    (contains module_go "teslrt.HumanActionOf(\"adminWipe\"");
+  (* Inclusion is per call site, so the admin's list has the endpoint the plain user's
+     does not — and no `humanActions` entry for it. *)
+  check bool "the admin site includes the admin-gated endpoint" true
+    (contains module_go "teslrt.ToolOf(\"adminWipe\"");
+  (* An admin's proof covers every endpoint, so the complement at that site is empty —
+     which is what makes the two sets a partition rather than two overlapping lists. *)
+  check bool "the admin site holds nothing back" true
+    (contains tests_go "teslrt.HumanActions(\"NotesServer\", []teslrt.HumanActionSpec{})");
+  (* The derived schema is what reaches the model. *)
+  check bool "the body schema comes from the type's codec" true
+    (contains module_go
+       "{\\\"type\\\":\\\"object\\\",\\\"properties\\\":{\\\"note\\\":{\\\"type\\\":\\\"object\\\",\\\"properties\\\":{\\\"text\\\":{\\\"type\\\":\\\"string\\\"}},\\\"required\\\":[\\\"text\\\"]}},\\\"required\\\":[\\\"note\\\"]}");
+  (* A handler with a doc comment describes itself to the model; one without falls back to
+     its method and path. *)
+  check bool "the description is the handler's own doc comment" true
+    (contains module_go "\"Greet the authenticated user by id.\"");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-endpoint-tools" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+  end
+
 let () =
   run "emit_go" [
     "emission", [
@@ -8369,6 +9025,13 @@ let () =
         (racket_behavior_oracle "<go-hof-leaves>" higher_order_leaves_source);
       test_case "filterMap keeps a falsy payload on both backends" `Slow
         (racket_behavior_oracle "<go-filtermap-bool>" filter_map_bool_source);
+      test_case "Tesl.Agent" `Slow test_agent_with_go;
+      test_case "Tesl.Agent behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-agent>" agent_source);
+      test_case "unsupported Tesl.Agent forms fail closed" `Quick test_agent_limits_fail_closed;
+      test_case "serverTools and humanActions" `Slow test_endpoint_tools_with_go;
+      test_case "endpoint tools behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-endpoint-tools>" endpoint_tools_source);
       test_case "more Tesl.List leaves" `Slow test_list_leaves_with_go;
       test_case "more Tesl.List leaves behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-list-leaves>" list_leaves_source);
