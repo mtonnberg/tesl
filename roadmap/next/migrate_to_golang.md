@@ -10,7 +10,7 @@ I think we should migrate all tests to Go, even for the code that moves into a s
 
 ## Status recap (2026-08-17) — the PostgreSQL backend
 
-**Corpus reach: 117 of 181 files** through the full pinned gate stack. The count moved by three
+**Corpus reach: 118 of 181 files** through the full pinned gate stack. The count moved by three
 on this slice and then stopped: the Postgres, ADT-column, `deleteAndReturnResult`, `unique index`
 and `Float.pow` work moved a dozen more files PAST their first blocker onto their second, which
 is progress the count does not show. The census below lists what each now stops on.
@@ -53,7 +53,10 @@ most of the corpus's Postgres files do.
   `runtime/go/go.sum` by a seam test, and `postgres.go`/`database.go`/`dbquery.go` gated out of
   every other program.
 
-**Also landed with it:** `Tesl.Int32` (nominal for the checker, its own integer at run time —
+**Also landed with it:** `innerJoin` (an EXISTENCE test, not a product: the clause filters the
+main entity to rows with a counterpart and the result is still a list of that entity, so a real
+join — which duplicates — cannot be what it means; `dsl/sql.rkt`'s memory store reads it the
+same way, and its Postgres path does not, which is finding 13), `Tesl.Int32` (nominal for the checker, its own integer at run time —
 so it registers as an ALIAS for `Int` and carries no wrapper, which is what `tesl/int32.rkt`
 says; the split worth reading is in the signatures, where an operation that cannot leave
 [-2^31, 2^31) answers the value and one that can answers a `Maybe`), `Queue.requeue` (a `DeadJob` carries the queue it came out of, since
@@ -64,14 +67,38 @@ in-memory store enforces it because the Racket memory backend does, and the serv
 index from the bootstrap under the name `dsl/sql.rkt` derives — hash-suffixed truncation
 included, so a shared table cannot end up with two indexes doing one job), and `Float.pow`.
 
+**Where a connection comes from (maintainer, 2026-08-17).** There are exactly TWO places a
+database is connected: the `database:` field of the `App { … }` record `main` returns, and the
+`test "…" with database D { … }` header. Nothing else connects, and a declared database that
+neither names is INERT — its entities' queries answer from the in-memory table, which is the
+same behaviour a `backend: Memory` database has and the same behaviour Racket has
+(`database-runtime-for-entity` answers a connection only for an entity the BOUND runtime
+manages). So a module may declare a second Postgres-backed database; its entities simply run
+against memory until something connects it, and today nothing can. That is defined behaviour,
+not a gap to be refused at emission — the sharp edge, worth knowing, is that such a program
+runs in production reading the in-memory store rather than failing to start.
+
+**On `with database` (maintainer, 2026-08-17).** The FREE-FLOATING block form is a historical
+artifact and is a candidate for removal from the language. The evidence: a real app connects
+through the `main() -> App { … }` lowering, which wraps `serve` in `call-with-database` — 
+`example/learn/lesson18-database-sql-and-proofs.tesl` is Postgres-backed, queries throughout,
+and contains no `with database` at all. Every free-floating use in the corpus (lesson67,
+lesson48, lesson71, lesson64, `sql-clause-placement-tests`, `memory-backend-regressions`) names
+a MEMORY database, where the block is a complete no-op. The one position where it is not a
+no-op — inside a test body — is the position where the parser silently drops it (finding 9), so
+removing the form would close that finding by construction. The `test "…" with database D`
+HEADER stays; it binds correctly on both backends. One capability would be lost: the App
+lowering connects ONE database, so a program with two Postgres databases would have no way to
+reach the second. No corpus file does that.
+
 **Still refused on the Postgres path**, each with a message naming what is missing: a Money or
-MoneyRate column (two and three columns respectively), `innerJoin`, a QUEUE as a value (`fn f(q: EmailQueue)` — the queue verbs resolve their
+MoneyRate column (two and three columns respectively), a QUEUE as a value (`fn f(q: EmailQueue)` — the queue verbs resolve their
 queue statically by name, so a queue-typed parameter has no Go type yet), an ADT constructor
 that CARRIES fields (decoding those needs a derived ADT decoder, which the JSON path does not have
 either), a `secret` column, and a `set` value that reads the row — Racket's Postgres path binds
 every SET value as a parameter and cannot do that one either.
 
-**Three more findings, numbers 8 to 10:**
+**Findings 8 to 14, and one checker bug:**
 
 8. **`supports_ordering` had been widened to include Bool** for the Money slice's `order by`.
    Racket orders booleans ONLY in its SQL layer (`ordered-comparison-result`, PostgreSQL
@@ -108,16 +135,74 @@ every SET value as a parameter and cannot do that one either.
    fix does not work: the newtype's token is a `type-ref` OWNED by `tesl/time.rkt`
    (`#s(type-ref …/tesl/time.rkt PosixMillis)`), and `dsl/types.rkt` cannot construct one
    without a cycle — it needs a late-bound hook that `tesl/time.rkt` registers at load time, or
-   the registry lookup made owner-insensitive. Left for a maintainer decision. **The Go emitter
-   supports the ENCODE direction and refuses the DECODE one**, naming the reason, so it never
-   accepts a program the other backend rejects.
+   the registry lookup made owner-insensitive. **Go does BOTH directions correctly**
+   (maintainer, 2026-08-17): refusing the decode to match a broken backend would have been
+   inconsistent with the call already taken for findings 12 and 13, where Go is right and
+   Racket is wrong. The same program is a 400 on Racket until its decoder is fixed, and that
+   is a measured divergence rather than an inherited one.
 
-**One checker bug found and NOT fixed** (it is not a backend issue): a `case` over a
-`DeleteResult` that names BOTH constructors — `RowsDeleted n` and `NoRowDeleted` — is rejected
+12. **`selectCount` drops its `innerJoin` clauses, on BOTH Racket paths.** `select-count` in
+   `dsl/sql.rkt` builds `select count(*) from t <where>` with no join on the Postgres side and
+   calls `in-memory-select-many entity predicates` — also join-free — on the memory side, while
+   `select-many` applies the joins on both. So a joined `selectCount` silently OVER-COUNTS. The
+   Go emitter applies the join to a count on both of its paths, which is the answer the query
+   asks for; the divergence is measured rather than reproduced.
+13. **`innerJoin` against a real PostgreSQL server is broken on Racket.** Its join builder
+   qualifies the ON columns with `camel->snake` of the ENTITY name rather than with the
+   declared TABLE name, so `entity LiveBook table "live_books"` produces
+   `… ON "live_book"."…"` and PostgreSQL answers *missing FROM-clause entry for table
+   "live_book"* (SQLSTATE 42P01). Every entity whose table is not the snake-cased entity name
+   is affected, which is most of them. It has never been hit because the corpus's joined
+   queries all run against Memory-backed databases. The Go form is an `exists (…)` subquery
+   naming the declared tables, and it is exercised against the cluster
+   (`TestBoundInnerJoinExists`).
+
+14. **Expressions with REAL types inside an `api-test` are not type-checked at all.** `DTest`
+   runs `check_test_stmts` (full typing); `DApiTest` and `DLoadTest` run
+   `check_api_test_scope`, which resolves NAMES and stops there. So a `seed { insert Room
+   { createdAt: 0 } }` — a `PosixMillis` column given an `Int`, a T001 error in every other
+   position — passes `--check`, and so does `expect someTypedCall () == "wrong type"`. Found
+   because the Go emitter type-checks everything it emits, which currently makes it the only
+   thing looking; 29 such sites were sitting in `example/chat/chat-backend.tesl` and
+   `example/kanel/KanelBackend.tesl` and are fixed in the corpus, but the hole is open.
+
+   **This is NOT a call to type the response view.** `resp.body.userId` is untyped BY DESIGN
+   (maintainer, 2026-08-17): the point of the dynamic view is that a test reads the JSON it
+   checks without the real types being duplicated or reused there. The Go emitter already
+   draws exactly that line — a response value is `TJson` and fails open, everything else is
+   typed normally — so closing this needs no new types, only the same split in the checker.
+   Expect it to surface further corpus errors when switched on; the Go census already names a
+   few (`expect operands have different types`, `String.contains` on a JSON value).
+
+**`DeleteResult` models an illegal state (maintainer, 2026-08-17).** `RowsDeleted Int` carries an
+UNCONSTRAINED integer, so `RowsDeleted 0` is inhabited and means exactly what `NoRowDeleted`
+means — two representations of one state, which is the failure the rest of the language works to
+prevent. A proof on the payload (`RowsDeleted (n: Int ::: IsPositive n)`) would close the
+overlap, but the open question is whether the ADT earns its keep at all: `selectCount` already
+answers a plain `Int` for the same kind of quantity, and the argument for the ADT — that it
+makes the nothing-happened case a compile-time obligation — is not currently true, since the
+exhaustiveness bug below FORCES a catch-all `_` arm, the most ignorable form there is. The
+alternative is `deleteAndReturnResult … -> n: Int ::: IsNonNegative n`: no overlap by
+construction, composes with arithmetic, consistent with `selectCount`, and one fewer stdlib
+constructor set to register in three separate tables. **Not decided; not changed here** — it is
+a stdlib API change touching Racket, the checker, both emitters and `lesson21`.
+
+**One checker bug found and FIXED** (it is not a backend issue): a `case` over a
+`DeleteResult` that names BOTH constructors — `RowsDeleted n` and `NoRowDeleted` — was rejected
 as "non-exhaustive: nested constructor/literal patterns leave uncovered values", in either
-order, while a catch-all arm is accepted. The checker knows the constructor set
-(`checker.ml:3540`); the nested-pattern path does not close over a nullary constructor beside a
-one-field one. Backend-independent — `--check` alone reproduces it.
+order, while a catch-all arm was accepted. A total match refused and the ignorable one
+demanded in its place.
+
+The cause was TWO constructor tables that disagreed. `checker.ml`'s `stdlib_ctors_for_type`
+listed `DeleteResult`; `validation_common.ml`'s `builtin_ctor_info` — which the nested-pattern
+check reads, and which needs SIGNATURES rather than names — did not, and its
+`patterns_are_exhaustive_for_types` treats "no known constructors" as "cannot be covered".
+Fixed (maintainer's call, 2026-08-17) by making it ONE table: `DeleteResult` gained rows in
+`builtin_ctor_info`, and `checker.ml` now derives its set from that same table instead of
+carrying a second list. `Bool` stays special-cased there, its constructors being literals.
+`JobResult` is still absent and still unchecked: `tesl/api-test.rkt` declares it with TWO type
+parameters (`(JobResult job error)`) while the rest of the compiler carries only its
+constructor names, so a row would be an arity guess rather than a fact.
 
 Also fixed in passing: the govulncheck gate's "standard library only" escape hatch matched on
 the wrong phrase, so a vulnerability in a DEPENDENCY that the emitted code actually calls would

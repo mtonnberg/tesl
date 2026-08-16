@@ -29,6 +29,13 @@ func JsonNull() JsonValue { return JsonValue{} }
 // JsonOf wraps an already-parsed shape.
 func JsonOf(raw any) JsonValue { return JsonValue{raw: raw} }
 
+// JsonValueOf wraps an ORDINARY Tesl value for the api-test JSON surface. Racket's predicates
+// normalise whatever they are given (`api-test-normalize-json` runs the value→jsexpr walk
+// first), so `hasField "k" job` on a plain record and `isNotNull err` on a String are
+// legitimate assertions there. This is that normalisation, applied once at the boundary
+// instead of inside each predicate.
+func JsonValueOf(value any) JsonValue { return JsonValue{raw: jsonNormalize(value)} }
+
 // JsonRaw is for the runtime's own use (comparing, printing); emitted code goes through the
 // helpers below.
 func (value JsonValue) JsonRaw() any { return value.raw }
@@ -321,25 +328,6 @@ func jsonMatch(needle, value any) bool {
 	}
 }
 
-func jsonTypeName(raw any) string {
-	switch raw.(type) {
-	case nil:
-		return "null"
-	case json.Number:
-		return "number"
-	case string:
-		return "string"
-	case bool:
-		return "boolean"
-	case []any:
-		return "array"
-	case map[string]any:
-		return "object"
-	default:
-		return fmt.Sprintf("%T", raw)
-	}
-}
-
 // JsonListOf lifts a typed slice into the `any` shape `JsonEqual` compares against, so a
 // list can be compared with a JSON array without the emitter building the conversion inline.
 func JsonListOf[Element any](elements []Element) []any {
@@ -405,4 +393,32 @@ func jsonArrayMatches(who string, pattern any, value JsonValue) bool {
 		}
 	}
 	return matched
+}
+
+// ApiTestFragment renders one `{…}` slot of an api-test string template.
+//
+// The value goes through the same value→JSON walk `api-test-string-fragment` performs in
+// dsl/test-support.rkt, and what comes out is rendered as TEXT: a string as itself, anything
+// else the way Racket's `~a` writes that jsexpr. That includes the two odd ones — a boolean
+// reads `#t`/`#f` and a JSON null reads `null` — because a template that interpolated one has
+// to produce the same request on both backends, and picking Go's spelling instead would be a
+// difference only a failing test would reveal.
+func ApiTestFragment(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case bool:
+		if typed {
+			return "#t"
+		}
+		return "#f"
+	case Int:
+		return typed.String()
+	case float64:
+		return FormatFloat(typed)
+	case nil:
+		return "null"
+	default:
+		return EncodeJSONValue(typed)
+	}
 }

@@ -131,6 +131,50 @@ func JSONFieldValue(object any, key string) (any, error) {
 	return jsonField(object, key)
 }
 
+// jsonTypeName names a parsed JSON shape for an error message. It lives HERE rather than beside
+// the api-test assertions because `json.go` ships with every program while the api-test half
+// does not, and the ADT tag decoder below needs it.
+func jsonTypeName(raw any) string {
+	switch raw.(type) {
+	case nil:
+		return "null"
+	case json.Number:
+		return "number"
+	case string:
+		return "string"
+	case bool:
+		return "boolean"
+	case []any:
+		return "array"
+	case map[string]any:
+		return "object"
+	default:
+		return fmt.Sprintf("%T", raw)
+	}
+}
+
+// DecodeAdtTag reads the constructor name an `adtJson` codec decodes from. Racket's generated
+// decoder accepts BOTH shapes — `{"tag": "Ctor"}`, which is what its encoder writes, and a bare
+// "Ctor" string, which is what an Elm or hand-written client may send — so this does too.
+func DecodeAdtTag(raw any) (string, error) {
+	switch typed := raw.(type) {
+	case string:
+		return typed, nil
+	case map[string]any:
+		found, present := typed["tag"]
+		if !present {
+			return "", fmt.Errorf("expected {\"tag\": ...} or a string, got an object with no tag")
+		}
+		name, ok := found.(string)
+		if !ok {
+			return "", fmt.Errorf("expected a string tag, got %s", jsonTypeName(found))
+		}
+		return name, nil
+	default:
+		return "", fmt.Errorf("expected {\"tag\": ...} or a string, got %s", jsonTypeName(raw))
+	}
+}
+
 // EncodeJSON renders an object. Keys are emitted in sorted order to match Racket, which
 // is why this takes a map rather than marshalling a generated struct.
 func EncodeJSON(fields map[string]any) string {

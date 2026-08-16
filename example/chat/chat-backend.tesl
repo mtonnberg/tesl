@@ -18,7 +18,7 @@ import Tesl.Http exposing [HttpRequest]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Dict exposing [Dict.lookup]
 import Tesl.String exposing [String.length]
-import Tesl.Time exposing [nowMillis, time, PosixMillis]
+import Tesl.Time exposing [nowMillis, time, PosixMillis, Time.secondsToPosix]
 import Tesl.Id exposing [generatePrefixedId]
 import Tesl.Env exposing [envInt, envRead]
 import Tesl.Random exposing [random]
@@ -442,14 +442,14 @@ api-test "chat flow can reuse ids and fields from returned JSON" for ChatServer 
 api-test "seed can prepare authenticated chat state" for ChatServer requires [chatRead, chatWrite] {
   seed {
     insert ChatUser { id: "usr-seeded", username: "seeded-alice" }
-    insert Room { id: "room-seeded", name: "Seeded room", createdAt: 0 }
+    insert Room { id: "room-seeded", name: "Seeded room", createdAt: Time.secondsToPosix 0 }
     insert Message {
       id: "msg-seeded",
       roomId: "room-seeded",
       userId: "usr-seeded",
       username: "seeded-alice",
       content: "hello from seed",
-      createdAt: 0
+      createdAt: Time.secondsToPosix 0
     }
   }
 
@@ -474,7 +474,7 @@ api-test "room streams buffer messages while queue jobs are processed separately
   seed {
     insert ChatUser { id: "usr-alice", username: "alice" }
     insert ChatUser { id: "usr-bob", username: "bob" }
-    insert Room { id: "room-live", name: "Live room", createdAt: 0 }
+    insert Room { id: "room-live", name: "Live room", createdAt: Time.secondsToPosix 0 }
   }
 
   let roomId = "room-live"
@@ -503,7 +503,7 @@ api-test "room streams buffer messages while queue jobs are processed separately
 api-test "failed notification jobs publish dead-letter events to room streams" for ChatServer requires [chatRead, chatWrite, chatPubSub, chatQueue, notifyCap, deadLetterCap] {
   seed {
     insert ChatUser { id: "usr-anna", username: "anna" }
-    insert Room { id: "room-failure", name: "Failure room", createdAt: 0 }
+    insert Room { id: "room-failure", name: "Failure room", createdAt: Time.secondsToPosix 0 }
   }
 
   let roomId = "room-failure"

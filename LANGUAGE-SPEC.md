@@ -477,7 +477,7 @@ whose diagnostic carries a delete-line fix.
 Tesl uses two structural mechanisms:
 
 - indentation for function bodies and nested body constructs such as `if`, `case`, and existential packing bodies;
-- braces for top-level blocks such as `record`, `entity`, `database`, `api`, `server`, the `App { ... }` record returned by `main`, and for body blocks such as `with database { ... }` and `transaction { ... }`.
+- braces for top-level blocks such as `record`, `entity`, `database`, `api`, `server`, the `App { ... }` record returned by `main`, and for the `transaction { ... }` body block.
 
 Unexpected indentation is a parse error.
 
@@ -2189,7 +2189,6 @@ The runtime automatically starts (with PostgreSQL) a pub/sub LISTEN thread when 
               | <if-statement>
               | <case-statement>
               | <exists-pack-statement>
-              | <with-database-statement>
               | <update-statement>
               | <telemetry-statement>
               | <init-telemetry-statement>
@@ -2420,11 +2419,14 @@ This statement does not bind a fresh variable. It packages an existing named val
 
 #### Resource blocks
 
-```text
-<with-database-statement> ::= "with database" <identifier> "{" <body> "}"
-```
-
-`with database X { ... }` opens a SQL database context for the enclosed body (used in handler bodies that run queries). There is no `with capabilities { ... }` block — that construct has been removed. Capabilities flow from each declaration's `requires` and are granted at the App root (§11.13).
+There are none. A database is connected by the `App { database: X }` field `main` returns
+(§11.13), which binds it for the whole program, and a test binds one with the
+`test "..." with database X { ... }` header (see **Test databases**). The free-floating
+`with database X { ... }` block was removed (2026-08-17): wherever the named database was
+Memory-backed it did nothing at all, which was every use of it, and in a test body it silently
+DISCARDED the name — the block read the in-memory store while the author had asked for the
+server. There is no `with capabilities { ... }` block either; capabilities flow from each
+declaration's `requires` and are granted at the App root (§11.13).
 
 #### Success and failure
 

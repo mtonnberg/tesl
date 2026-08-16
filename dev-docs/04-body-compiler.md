@@ -91,7 +91,7 @@ Dispatches on the statement's text:
 | `if ... then` | multi-line if/else |
 | `case ... of` | exhaustive case expression |
 | `exists name =>` | existential packing |
-| `with database X {` | `(call-with-database ...)` |
+| `App { database: X }` in `main` (lowered) | `(call-with-database ...)` |
 | `transaction {` | `(call-with-queue-transaction ...)` |
 | `ok expr` | `(accept ...)` / inline terminal |
 | `fail code msg` | `(reject msg #:http-code code)` |

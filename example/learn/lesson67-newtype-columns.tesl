@@ -46,48 +46,36 @@ database Warehouse = Database {
 # lifted into a Sku explicitly. `where p.sku == rawSku` would not compile.
 fn findBySku(rawSku: String) -> List Product
   requires [dbRead] =
-  with database Warehouse {
-    select p from Product where p.sku == Sku rawSku
-  }
+  select p from Product where p.sku == Sku rawSku
 
 # ─── Read a scalar back through the newtype column ──────────────────────────────
 # Returns the quantity of the product matching the Sku, or 0 if none. `selectOne`
 # also compares the Sku column, so the raw String is lifted with `Sku` here too.
 fn quantityForSku(rawSku: String) -> Int
   requires [dbRead] =
-  with database Warehouse {
-    let found = selectOne p from Product where p.sku == Sku rawSku
-    case found of
-      Nothing -> 0
-      Something p -> p.quantity
-  }
+  let found = selectOne p from Product where p.sku == Sku rawSku
+  case found of
+    Nothing -> 0
+    Something p -> p.quantity
 
 # ─── Tests — newtype columns round-trip through insert / set / where ────────────
 
 test "insert constructs the newtype column and query finds it" requires [dbRead, dbWrite] {
-  with database Warehouse {
-    let _ = insert Product { id: "p1", sku: Sku "WIDGET-1", quantity: 10 }
-  }
+  let _ = insert Product { id: "p1", sku: Sku "WIDGET-1", quantity: 10 }
   expect quantityForSku "WIDGET-1" == 10
 }
 
 test "query by a non-existent Sku returns empty" requires [dbRead, dbWrite] {
-  with database Warehouse {
-    let _ = insert Product { id: "p2", sku: Sku "WIDGET-2", quantity: 5 }
-  }
+  let _ = insert Product { id: "p2", sku: Sku "WIDGET-2", quantity: 5 }
   expect findBySku "NO-SUCH-SKU" == []
 }
 
 test "update ... set writes the newtype column, then query finds the new value" requires [dbRead, dbWrite] {
-  with database Warehouse {
-    let _ = insert Product { id: "p3", sku: Sku "OLD-SKU", quantity: 7 }
-  }
-  with database Warehouse {
-    update p in Product
-      where p.id == "p3"
-      set p.sku = Sku "NEW-SKU"
-      set p.quantity = 99
-  }
+  let _ = insert Product { id: "p3", sku: Sku "OLD-SKU", quantity: 7 }
+  update p in Product
+    where p.id == "p3"
+    set p.sku = Sku "NEW-SKU"
+    set p.quantity = 99
   expect quantityForSku "NEW-SKU" == 99
   expect findBySku "OLD-SKU" == []
 }

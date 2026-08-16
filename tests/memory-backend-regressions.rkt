@@ -29,7 +29,7 @@
 ;; Debugger: the lines whose statement is a READ-ONLY query.  The pause on
 ;; those happens AFTER the statement, so the SQL lens can show the exact
 ;; statement that ran (erased with the checkpoints in a release build).
-(register-sql-read-lines! "tests/memory-backend-regressions.tesl" '(92 95 98 101 104 110 111 118 119 126 127 134 135 143 182))
+(register-sql-read-lines! "tests/memory-backend-regressions.tesl" '(92 94 96 98 100 105 111 117 123 130 162))
 (define-newtype Code Integer)
 
 (define-entity P
@@ -79,67 +79,67 @@
   (orderedAsc)
   #:capabilities [dbRead]
   #:returns (List P)
-  (thsl-src! "tests/memory-backend-regressions.tesl" 92 (list) (lambda () (call-with-database D (lambda () (select-many (from P) (order-by (entity-field-ref P 'qty) 'asc)))))))
+  (thsl-src! "tests/memory-backend-regressions.tesl" 92 (list) (lambda () (select-many (from P) (order-by (entity-field-ref P 'qty) 'asc)))))
 
 (define/pow
   (orderedDesc)
   #:capabilities [dbRead]
   #:returns (List P)
-  (thsl-src! "tests/memory-backend-regressions.tesl" 95 (list) (lambda () (call-with-database D (lambda () (select-many (from P) (order-by (entity-field-ref P 'qty) 'desc)))))))
+  (thsl-src! "tests/memory-backend-regressions.tesl" 94 (list) (lambda () (select-many (from P) (order-by (entity-field-ref P 'qty) 'desc)))))
 
 (define/pow
   (orderedByName)
   #:capabilities [dbRead]
   #:returns (List P)
-  (thsl-src! "tests/memory-backend-regressions.tesl" 98 (list) (lambda () (call-with-database D (lambda () (select-many (from P) (order-by (entity-field-ref P 'name) 'asc)))))))
+  (thsl-src! "tests/memory-backend-regressions.tesl" 96 (list) (lambda () (select-many (from P) (order-by (entity-field-ref P 'name) 'asc)))))
 
 (define/pow
   (orderedByDone)
   #:capabilities [dbRead]
   #:returns (List P)
-  (thsl-src! "tests/memory-backend-regressions.tesl" 101 (list) (lambda () (call-with-database D (lambda () (select-many (from P) (order-by (entity-field-ref P 'done) 'asc)))))))
+  (thsl-src! "tests/memory-backend-regressions.tesl" 98 (list) (lambda () (select-many (from P) (order-by (entity-field-ref P 'done) 'asc)))))
 
 (define/pow
   (orderedByDoneDesc)
   #:capabilities [dbRead]
   #:returns (List P)
-  (thsl-src! "tests/memory-backend-regressions.tesl" 104 (list) (lambda () (call-with-database D (lambda () (select-many (from P) (order-by (entity-field-ref P 'done) 'desc)))))))
+  (thsl-src! "tests/memory-backend-regressions.tesl" 100 (list) (lambda () (select-many (from P) (order-by (entity-field-ref P 'done) 'desc)))))
 
 (define/pow
   (newest)
   #:capabilities [dbRead]
   #:returns PosixMillis
-  (thsl-src! "tests/memory-backend-regressions.tesl" 110 (list) (lambda () (call-with-database D (lambda () (let ([latest (select-max (entity-field-ref P 'at) (from P))]) (let ([tesl-case-2 (raw-value latest)]) (cond [(and (adt-value? *tesl-case-2) (eq? (adt-value-variant *tesl-case-2) 'Nothing)) (thsl-src! "tests/memory-backend-regressions.tesl" 113 (list) (lambda () (raw-value (raw-value (tesl_import_Time_secondsToPosix 0)))))] [(and (adt-value? *tesl-case-2) (eq? (adt-value-variant *tesl-case-2) 'Something)) (let ([at (hash-ref (adt-value-fields *tesl-case-2) 'value)]) (thsl-src! "tests/memory-backend-regressions.tesl" 114 (list (cons 'at at)) (lambda () *at)))]))))))))
+  (let ([latest (thsl-src! "tests/memory-backend-regressions.tesl" 105 (list) (lambda () (select-max (entity-field-ref P 'at) (from P))) 'latest)]) (thsl-src-control! "tests/memory-backend-regressions.tesl" 106 (list (cons 'latest *latest)) (lambda () (let ([tesl-case-2 (raw-value latest)]) (cond [(and (adt-value? *tesl-case-2) (eq? (adt-value-variant *tesl-case-2) 'Nothing)) (thsl-src! "tests/memory-backend-regressions.tesl" 107 (list) (lambda () (raw-value (raw-value (tesl_import_Time_secondsToPosix 0)))))] [(and (adt-value? *tesl-case-2) (eq? (adt-value-variant *tesl-case-2) 'Something)) (let ([at (hash-ref (adt-value-fields *tesl-case-2) 'value)]) (thsl-src! "tests/memory-backend-regressions.tesl" 108 (list (cons 'at at)) (lambda () *at)))]))))))
 
 (define/pow
   (oldest)
   #:capabilities [dbRead]
   #:returns PosixMillis
-  (thsl-src! "tests/memory-backend-regressions.tesl" 118 (list) (lambda () (call-with-database D (lambda () (let ([earliest (select-min (entity-field-ref P 'at) (from P))]) (let ([tesl-case-3 (raw-value earliest)]) (cond [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Nothing)) (thsl-src! "tests/memory-backend-regressions.tesl" 121 (list) (lambda () (raw-value (raw-value (tesl_import_Time_secondsToPosix 0)))))] [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Something)) (let ([at (hash-ref (adt-value-fields *tesl-case-3) 'value)]) (thsl-src! "tests/memory-backend-regressions.tesl" 122 (list (cons 'at at)) (lambda () *at)))]))))))))
+  (let ([earliest (thsl-src! "tests/memory-backend-regressions.tesl" 111 (list) (lambda () (select-min (entity-field-ref P 'at) (from P))) 'earliest)]) (thsl-src-control! "tests/memory-backend-regressions.tesl" 112 (list (cons 'earliest *earliest)) (lambda () (let ([tesl-case-3 (raw-value earliest)]) (cond [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Nothing)) (thsl-src! "tests/memory-backend-regressions.tesl" 113 (list) (lambda () (raw-value (raw-value (tesl_import_Time_secondsToPosix 0)))))] [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Something)) (let ([at (hash-ref (adt-value-fields *tesl-case-3) 'value)]) (thsl-src! "tests/memory-backend-regressions.tesl" 114 (list (cons 'at at)) (lambda () *at)))]))))))
 
 (define/pow
   (maxQty)
   #:capabilities [dbRead]
   #:returns Integer
-  (thsl-src! "tests/memory-backend-regressions.tesl" 126 (list) (lambda () (call-with-database D (lambda () (let ([biggest (select-max (entity-field-ref P 'qty) (from P))]) (let ([tesl-case-4 (raw-value biggest)]) (cond [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Nothing)) (thsl-src! "tests/memory-backend-regressions.tesl" 129 (list) (lambda () (raw-value 0)))] [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Something)) (let ([qty (hash-ref (adt-value-fields *tesl-case-4) 'value)]) (thsl-src! "tests/memory-backend-regressions.tesl" 130 (list (cons 'qty qty)) (lambda () *qty)))]))))))))
+  (let ([biggest (thsl-src! "tests/memory-backend-regressions.tesl" 117 (list) (lambda () (select-max (entity-field-ref P 'qty) (from P))) 'biggest)]) (thsl-src-control! "tests/memory-backend-regressions.tesl" 118 (list (cons 'biggest *biggest)) (lambda () (let ([tesl-case-4 (raw-value biggest)]) (cond [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Nothing)) (thsl-src! "tests/memory-backend-regressions.tesl" 119 (list) (lambda () (raw-value 0)))] [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Something)) (let ([qty (hash-ref (adt-value-fields *tesl-case-4) 'value)]) (thsl-src! "tests/memory-backend-regressions.tesl" 120 (list (cons 'qty qty)) (lambda () *qty)))]))))))
 
 (define/pow
   (minCode)
   #:capabilities [dbRead]
   #:returns Code
-  (thsl-src! "tests/memory-backend-regressions.tesl" 134 (list) (lambda () (call-with-database D (lambda () (let ([smallest (select-min (entity-field-ref P 'code) (from P))]) (let ([tesl-case-5 (raw-value smallest)]) (cond [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Nothing)) (thsl-src! "tests/memory-backend-regressions.tesl" 137 (list) (lambda () (raw-value (raw-value (Code 0)))))] [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Something)) (let ([code (hash-ref (adt-value-fields *tesl-case-5) 'value)]) (thsl-src! "tests/memory-backend-regressions.tesl" 138 (list (cons 'code code)) (lambda () *code)))]))))))))
+  (let ([smallest (thsl-src! "tests/memory-backend-regressions.tesl" 123 (list) (lambda () (select-min (entity-field-ref P 'code) (from P))) 'smallest)]) (thsl-src-control! "tests/memory-backend-regressions.tesl" 124 (list (cons 'smallest *smallest)) (lambda () (let ([tesl-case-5 (raw-value smallest)]) (cond [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Nothing)) (thsl-src! "tests/memory-backend-regressions.tesl" 125 (list) (lambda () (raw-value (raw-value (Code 0)))))] [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Something)) (let ([code (hash-ref (adt-value-fields *tesl-case-5) 'value)]) (thsl-src! "tests/memory-backend-regressions.tesl" 126 (list (cons 'code code)) (lambda () *code)))]))))))
 
 (define/pow
   (maxOfEmpty)
   #:capabilities [dbRead]
   #:returns (Maybe Integer)
-  (thsl-src! "tests/memory-backend-regressions.tesl" 143 (list) (lambda () (call-with-database D (lambda () (raw-value (select-max (entity-field-ref Empty 'qty) (from Empty))))))))
+  (thsl-src! "tests/memory-backend-regressions.tesl" 130 (list) (lambda () (raw-value (select-max (entity-field-ref Empty 'qty) (from Empty))))))
 
 (define/pow
   (sumIn [c : String])
   #:capabilities [dbRead]
   #:returns Money
-  (thsl-src! "tests/memory-backend-regressions.tesl" 182 (list (cons 'c *c)) (lambda () (call-with-database D (lambda () (select-sum (entity-field-ref L 'price) (from L) (where (==. (entity-field-ref L 'cat) c))))))))
+  (thsl-src! "tests/memory-backend-regressions.tesl" 162 (list (cons 'c *c)) (lambda () (select-sum (entity-field-ref L 'price) (from L) (where (==. (entity-field-ref L 'cat) c))))))
 
 (define-database QDb
   #:backend memory
@@ -161,7 +161,7 @@
   (handleSeq [job : SeqJob ::: (FromQueue (Id == jobId) job)])
   #:capabilities [queueRead]
   #:returns SeqJob
-  (thsl-src! "tests/memory-backend-regressions.tesl" 234 (list (cons 'job *job)) (lambda () *job)))
+  (thsl-src! "tests/memory-backend-regressions.tesl" 209 (list (cons 'job *job)) (lambda () *job)))
 
 (define-record TriggerRequest
   [tag : String]
@@ -185,7 +185,7 @@
   (send [req : TriggerRequest])
   #:capabilities [queueWrite]
   #:returns String
-  (let ([_ (thsl-src! "tests/memory-backend-regressions.tesl" 253 (list (cons 'req *req)) (lambda () (enqueue! RegQueue (SeqJob #:tag (tesl-dot/runtime req 'tag 'TriggerRequest)))))]) (thsl-src! "tests/memory-backend-regressions.tesl" 254 (list (cons 'req *req)) (lambda () "queued"))))
+  (let ([_ (thsl-src! "tests/memory-backend-regressions.tesl" 228 (list (cons 'req *req)) (lambda () (enqueue! RegQueue (SeqJob #:tag (tesl-dot/runtime req 'tag 'TriggerRequest)))))]) (thsl-src! "tests/memory-backend-regressions.tesl" 229 (list (cons 'req *req)) (lambda () "queued"))))
 
 (define RegServer-sse-routes '())
 (define-api RegApi
@@ -209,22 +209,22 @@
         (call-with-api-test-subscriptions
           (lambda ()
             (with-capabilities (queueRead queueWrite)
-              (define r1 (thsl-src! "tests/memory-backend-regressions.tesl" 267 (list) (lambda () (dispatch-api-test-request RegServer 'post (list "send") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "tag") "one") #:capabilities (list queueRead queueWrite)))))
-              (check-true (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 268 (list (cons 'r1 r1)) (lambda () (statusOk (raw-value (api-test-field-access-ref r1 'status)))))))
-              (define r2 (thsl-src! "tests/memory-backend-regressions.tesl" 269 (list (cons 'r1 r1)) (lambda () (dispatch-api-test-request RegServer 'post (list "send") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "tag") "two") #:capabilities (list queueRead queueWrite)))))
-              (check-true (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 270 (list (cons 'r2 r2) (cons 'r1 r1)) (lambda () (statusOk (raw-value (api-test-field-access-ref r2 'status)))))))
-              (define r3 (thsl-src! "tests/memory-backend-regressions.tesl" 271 (list (cons 'r2 r2) (cons 'r1 r1)) (lambda () (dispatch-api-test-request RegServer 'post (list "send") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "tag") "three") #:capabilities (list queueRead queueWrite)))))
-              (check-true (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 272 (list (cons 'r3 r3) (cons 'r2 r2) (cons 'r1 r1)) (lambda () (statusOk (raw-value (api-test-field-access-ref r3 'status)))))))
-              (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 274 (list (cons 'r3 r3) (cons 'r2 r2) (cons 'r1 r1)) (lambda () (pendingJobCount RegQueue)))) 3)
-              (define resA (thsl-src! "tests/memory-backend-regressions.tesl" 276 (list (cons 'r3 r3) (cons 'r2 r2) (cons 'r1 r1)) (lambda () (processNextJob RegQueue))))
-              (define jobA (thsl-src! "tests/memory-backend-regressions.tesl" 277 (list (cons 'resA resA) (cons 'r3 r3) (cons 'r2 r2) (cons 'r1 r1)) (lambda () (expectJobOk (raw-value resA)))))
-              (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 278 (list (cons 'jobA jobA) (cons 'resA resA) (cons 'r3 r3) (cons 'r2 r2) (cons 'r1 r1)) (lambda () (api-test-field-access-ref jobA 'tag)))) "one")
-              (define resB (thsl-src! "tests/memory-backend-regressions.tesl" 280 (list (cons 'jobA jobA) (cons 'resA resA) (cons 'r3 r3) (cons 'r2 r2) (cons 'r1 r1)) (lambda () (processNextJob RegQueue))))
-              (define jobB (thsl-src! "tests/memory-backend-regressions.tesl" 281 (list (cons 'resB resB) (cons 'jobA jobA) (cons 'resA resA) (cons 'r3 r3) (cons 'r2 r2) (cons 'r1 r1)) (lambda () (expectJobOk (raw-value resB)))))
-              (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 282 (list (cons 'jobB jobB) (cons 'resB resB) (cons 'jobA jobA) (cons 'resA resA) (cons 'r3 r3) (cons 'r2 r2) (cons 'r1 r1)) (lambda () (api-test-field-access-ref jobB 'tag)))) "two")
-              (define resC (thsl-src! "tests/memory-backend-regressions.tesl" 284 (list (cons 'jobB jobB) (cons 'resB resB) (cons 'jobA jobA) (cons 'resA resA) (cons 'r3 r3) (cons 'r2 r2) (cons 'r1 r1)) (lambda () (processNextJob RegQueue))))
-              (define jobC (thsl-src! "tests/memory-backend-regressions.tesl" 285 (list (cons 'resC resC) (cons 'jobB jobB) (cons 'resB resB) (cons 'jobA jobA) (cons 'resA resA) (cons 'r3 r3) (cons 'r2 r2) (cons 'r1 r1)) (lambda () (expectJobOk (raw-value resC)))))
-              (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 286 (list (cons 'jobC jobC) (cons 'resC resC) (cons 'jobB jobB) (cons 'resB resB) (cons 'jobA jobA) (cons 'resA resA) (cons 'r3 r3) (cons 'r2 r2) (cons 'r1 r1)) (lambda () (api-test-field-access-ref jobC 'tag)))) "three")
+              (define r1 (thsl-src! "tests/memory-backend-regressions.tesl" 242 (list) (lambda () (dispatch-api-test-request RegServer 'post (list "send") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "tag") "one") #:capabilities (list queueRead queueWrite)))))
+              (check-true (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 243 (list (cons 'r1 r1)) (lambda () (statusOk (raw-value (api-test-field-access-ref r1 'status)))))))
+              (define r2 (thsl-src! "tests/memory-backend-regressions.tesl" 244 (list (cons 'r1 r1)) (lambda () (dispatch-api-test-request RegServer 'post (list "send") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "tag") "two") #:capabilities (list queueRead queueWrite)))))
+              (check-true (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 245 (list (cons 'r2 r2) (cons 'r1 r1)) (lambda () (statusOk (raw-value (api-test-field-access-ref r2 'status)))))))
+              (define r3 (thsl-src! "tests/memory-backend-regressions.tesl" 246 (list (cons 'r2 r2) (cons 'r1 r1)) (lambda () (dispatch-api-test-request RegServer 'post (list "send") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "tag") "three") #:capabilities (list queueRead queueWrite)))))
+              (check-true (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 247 (list (cons 'r3 r3) (cons 'r2 r2) (cons 'r1 r1)) (lambda () (statusOk (raw-value (api-test-field-access-ref r3 'status)))))))
+              (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 249 (list (cons 'r3 r3) (cons 'r2 r2) (cons 'r1 r1)) (lambda () (pendingJobCount RegQueue)))) 3)
+              (define resA (thsl-src! "tests/memory-backend-regressions.tesl" 251 (list (cons 'r3 r3) (cons 'r2 r2) (cons 'r1 r1)) (lambda () (processNextJob RegQueue))))
+              (define jobA (thsl-src! "tests/memory-backend-regressions.tesl" 252 (list (cons 'resA resA) (cons 'r3 r3) (cons 'r2 r2) (cons 'r1 r1)) (lambda () (expectJobOk (raw-value resA)))))
+              (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 253 (list (cons 'jobA jobA) (cons 'resA resA) (cons 'r3 r3) (cons 'r2 r2) (cons 'r1 r1)) (lambda () (api-test-field-access-ref jobA 'tag)))) "one")
+              (define resB (thsl-src! "tests/memory-backend-regressions.tesl" 255 (list (cons 'jobA jobA) (cons 'resA resA) (cons 'r3 r3) (cons 'r2 r2) (cons 'r1 r1)) (lambda () (processNextJob RegQueue))))
+              (define jobB (thsl-src! "tests/memory-backend-regressions.tesl" 256 (list (cons 'resB resB) (cons 'jobA jobA) (cons 'resA resA) (cons 'r3 r3) (cons 'r2 r2) (cons 'r1 r1)) (lambda () (expectJobOk (raw-value resB)))))
+              (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 257 (list (cons 'jobB jobB) (cons 'resB resB) (cons 'jobA jobA) (cons 'resA resA) (cons 'r3 r3) (cons 'r2 r2) (cons 'r1 r1)) (lambda () (api-test-field-access-ref jobB 'tag)))) "two")
+              (define resC (thsl-src! "tests/memory-backend-regressions.tesl" 259 (list (cons 'jobB jobB) (cons 'resB resB) (cons 'jobA jobA) (cons 'resA resA) (cons 'r3 r3) (cons 'r2 r2) (cons 'r1 r1)) (lambda () (processNextJob RegQueue))))
+              (define jobC (thsl-src! "tests/memory-backend-regressions.tesl" 260 (list (cons 'resC resC) (cons 'jobB jobB) (cons 'resB resB) (cons 'jobA jobA) (cons 'resA resA) (cons 'r3 r3) (cons 'r2 r2) (cons 'r1 r1)) (lambda () (expectJobOk (raw-value resC)))))
+              (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 261 (list (cons 'jobC jobC) (cons 'resC resC) (cons 'jobB jobB) (cons 'resB resB) (cons 'jobA jobA) (cons 'resA resA) (cons 'r3 r3) (cons 'r2 r2) (cons 'r1 r1)) (lambda () (api-test-field-access-ref jobC 'tag)))) "three")
             )
           ))
       ))
@@ -240,11 +240,11 @@
   (test-case "order by asc/desc is applied on the Memory backend"
     (call-with-fresh-memory-db (list D QDb) (lambda ()
     (with-capabilities (dbRead dbWrite)
-    (define tesl-ignored-6 (thsl-src! "tests/memory-backend-regressions.tesl" 147 (list) (lambda () (insert-one! P (tesl-hash 'id "a" 'qty 3 'name "cherry" 'at (raw-value (tesl_import_Time_secondsToPosix 300)) 'code (raw-value (Code 7)) 'done #t)))))
-    (define tesl-ignored-7 (thsl-src! "tests/memory-backend-regressions.tesl" 148 (list) (lambda () (insert-one! P (tesl-hash 'id "b" 'qty 1 'name "apple" 'at (raw-value (tesl_import_Time_secondsToPosix 100)) 'code (raw-value (Code 9)) 'done #f)))))
-    (define tesl-ignored-8 (thsl-src! "tests/memory-backend-regressions.tesl" 149 (list) (lambda () (insert-one! P (tesl-hash 'id "c" 'qty 2 'name "banana" 'at (raw-value (tesl_import_Time_secondsToPosix 200)) 'code (raw-value (Code 3)) 'done #t)))))
-    (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 151 (list) (lambda () (qtys (orderedAsc))))) (list 1 2 3))
-    (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 152 (list) (lambda () (qtys (orderedDesc))))) (list 3 2 1))
+    (define tesl-ignored-6 (thsl-src! "tests/memory-backend-regressions.tesl" 132 (list) (lambda () (insert-one! P (tesl-hash 'id "a" 'qty 3 'name "cherry" 'at (raw-value (tesl_import_Time_secondsToPosix 300)) 'code (raw-value (Code 7)) 'done #t)))))
+    (define tesl-ignored-7 (thsl-src! "tests/memory-backend-regressions.tesl" 133 (list) (lambda () (insert-one! P (tesl-hash 'id "b" 'qty 1 'name "apple" 'at (raw-value (tesl_import_Time_secondsToPosix 100)) 'code (raw-value (Code 9)) 'done #f)))))
+    (define tesl-ignored-8 (thsl-src! "tests/memory-backend-regressions.tesl" 134 (list) (lambda () (insert-one! P (tesl-hash 'id "c" 'qty 2 'name "banana" 'at (raw-value (tesl_import_Time_secondsToPosix 200)) 'code (raw-value (Code 3)) 'done #t)))))
+    (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 135 (list) (lambda () (qtys (orderedAsc))))) (list 1 2 3))
+    (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 136 (list) (lambda () (qtys (orderedDesc))))) (list 3 2 1))
     )
     ))
   )
@@ -252,10 +252,10 @@
   (test-case "order by on a Bool column sorts false before true (PG parity)"
     (call-with-fresh-memory-db (list D QDb) (lambda ()
     (with-capabilities (dbRead dbWrite)
-    (define tesl-ignored-9 (thsl-src! "tests/memory-backend-regressions.tesl" 162 (list) (lambda () (insert-one! P (tesl-hash 'id "b" 'qty 1 'name "apple" 'at (raw-value (tesl_import_Time_secondsToPosix 100)) 'code (raw-value (Code 9)) 'done #f)))))
-    (define tesl-ignored-10 (thsl-src! "tests/memory-backend-regressions.tesl" 163 (list) (lambda () (insert-one! P (tesl-hash 'id "a" 'qty 3 'name "cherry" 'at (raw-value (tesl_import_Time_secondsToPosix 300)) 'code (raw-value (Code 7)) 'done #t)))))
-    (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 165 (list) (lambda () (names (orderedByDone))))) (list "apple" "cherry"))
-    (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 166 (list) (lambda () (names (orderedByDoneDesc))))) (list "cherry" "apple"))
+    (define tesl-ignored-9 (thsl-src! "tests/memory-backend-regressions.tesl" 145 (list) (lambda () (insert-one! P (tesl-hash 'id "b" 'qty 1 'name "apple" 'at (raw-value (tesl_import_Time_secondsToPosix 100)) 'code (raw-value (Code 9)) 'done #f)))))
+    (define tesl-ignored-10 (thsl-src! "tests/memory-backend-regressions.tesl" 146 (list) (lambda () (insert-one! P (tesl-hash 'id "a" 'qty 3 'name "cherry" 'at (raw-value (tesl_import_Time_secondsToPosix 300)) 'code (raw-value (Code 7)) 'done #t)))))
+    (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 147 (list) (lambda () (names (orderedByDone))))) (list "apple" "cherry"))
+    (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 148 (list) (lambda () (names (orderedByDoneDesc))))) (list "cherry" "apple"))
     )
     ))
   )
@@ -263,10 +263,10 @@
   (test-case "order by on a String column sorts lexicographically"
     (call-with-fresh-memory-db (list D QDb) (lambda ()
     (with-capabilities (dbRead dbWrite)
-    (define tesl-ignored-11 (thsl-src! "tests/memory-backend-regressions.tesl" 171 (list) (lambda () (insert-one! P (tesl-hash 'id "a" 'qty 3 'name "cherry" 'at (raw-value (tesl_import_Time_secondsToPosix 300)) 'code (raw-value (Code 7)) 'done #t)))))
-    (define tesl-ignored-12 (thsl-src! "tests/memory-backend-regressions.tesl" 172 (list) (lambda () (insert-one! P (tesl-hash 'id "b" 'qty 1 'name "apple" 'at (raw-value (tesl_import_Time_secondsToPosix 100)) 'code (raw-value (Code 9)) 'done #f)))))
-    (define tesl-ignored-13 (thsl-src! "tests/memory-backend-regressions.tesl" 173 (list) (lambda () (insert-one! P (tesl-hash 'id "c" 'qty 2 'name "banana" 'at (raw-value (tesl_import_Time_secondsToPosix 200)) 'code (raw-value (Code 3)) 'done #t)))))
-    (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 175 (list) (lambda () (names (orderedByName))))) (list "apple" "banana" "cherry"))
+    (define tesl-ignored-11 (thsl-src! "tests/memory-backend-regressions.tesl" 152 (list) (lambda () (insert-one! P (tesl-hash 'id "a" 'qty 3 'name "cherry" 'at (raw-value (tesl_import_Time_secondsToPosix 300)) 'code (raw-value (Code 7)) 'done #t)))))
+    (define tesl-ignored-12 (thsl-src! "tests/memory-backend-regressions.tesl" 153 (list) (lambda () (insert-one! P (tesl-hash 'id "b" 'qty 1 'name "apple" 'at (raw-value (tesl_import_Time_secondsToPosix 100)) 'code (raw-value (Code 9)) 'done #f)))))
+    (define tesl-ignored-13 (thsl-src! "tests/memory-backend-regressions.tesl" 154 (list) (lambda () (insert-one! P (tesl-hash 'id "c" 'qty 2 'name "banana" 'at (raw-value (tesl_import_Time_secondsToPosix 200)) 'code (raw-value (Code 3)) 'done #t)))))
+    (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 155 (list) (lambda () (names (orderedByName))))) (list "apple" "banana" "cherry"))
     )
     ))
   )
@@ -274,11 +274,11 @@
   (test-case "money sum with a where-clause"
     (call-with-fresh-memory-db (list D QDb) (lambda ()
     (with-capabilities (dbRead dbWrite)
-    (define tesl-ignored-14 (thsl-src! "tests/memory-backend-regressions.tesl" 186 (list) (lambda () (insert-one! L (tesl-hash 'id "l1" 'cat "x" 'price (raw-value (tesl_import_Money_usd 100)))))))
-    (define tesl-ignored-15 (thsl-src! "tests/memory-backend-regressions.tesl" 187 (list) (lambda () (insert-one! L (tesl-hash 'id "l2" 'cat "x" 'price (raw-value (tesl_import_Money_usd 250)))))))
-    (define tesl-ignored-16 (thsl-src! "tests/memory-backend-regressions.tesl" 188 (list) (lambda () (insert-one! L (tesl-hash 'id "l3" 'cat "y" 'price (raw-value (tesl_import_Money_usd 999)))))))
-    (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 190 (list) (lambda () (raw-value (tesl_import_Money_minorUnits (raw-value (sumIn "x"))))))) 350)
-    (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 191 (list) (lambda () (raw-value (tesl_import_Money_minorUnits (raw-value (sumIn "y"))))))) 999)
+    (define tesl-ignored-14 (thsl-src! "tests/memory-backend-regressions.tesl" 164 (list) (lambda () (insert-one! L (tesl-hash 'id "l1" 'cat "x" 'price (raw-value (tesl_import_Money_usd 100)))))))
+    (define tesl-ignored-15 (thsl-src! "tests/memory-backend-regressions.tesl" 165 (list) (lambda () (insert-one! L (tesl-hash 'id "l2" 'cat "x" 'price (raw-value (tesl_import_Money_usd 250)))))))
+    (define tesl-ignored-16 (thsl-src! "tests/memory-backend-regressions.tesl" 166 (list) (lambda () (insert-one! L (tesl-hash 'id "l3" 'cat "y" 'price (raw-value (tesl_import_Money_usd 999)))))))
+    (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 167 (list) (lambda () (raw-value (tesl_import_Money_minorUnits (raw-value (sumIn "x"))))))) 350)
+    (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 168 (list) (lambda () (raw-value (tesl_import_Money_minorUnits (raw-value (sumIn "y"))))))) 999)
     )
     ))
   )
@@ -286,13 +286,13 @@
   (test-case "selectMax/selectMin over newtype columns on the Memory backend"
     (call-with-fresh-memory-db (list D QDb) (lambda ()
     (with-capabilities (dbRead dbWrite)
-    (define tesl-ignored-17 (thsl-src! "tests/memory-backend-regressions.tesl" 196 (list) (lambda () (insert-one! P (tesl-hash 'id "a" 'qty 3 'name "cherry" 'at (raw-value (tesl_import_Time_secondsToPosix 300)) 'code (raw-value (Code 7)) 'done #t)))))
-    (define tesl-ignored-18 (thsl-src! "tests/memory-backend-regressions.tesl" 197 (list) (lambda () (insert-one! P (tesl-hash 'id "b" 'qty 1 'name "apple" 'at (raw-value (tesl_import_Time_secondsToPosix 100)) 'code (raw-value (Code 9)) 'done #f)))))
-    (define tesl-ignored-19 (thsl-src! "tests/memory-backend-regressions.tesl" 198 (list) (lambda () (insert-one! P (tesl-hash 'id "c" 'qty 2 'name "banana" 'at (raw-value (tesl_import_Time_secondsToPosix 200)) 'code (raw-value (Code 3)) 'done #t)))))
-    (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 200 (list) (lambda () (raw-value (tesl_import_Time_posixToSeconds (raw-value (newest))))))) 300)
-    (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 201 (list) (lambda () (raw-value (tesl_import_Time_posixToSeconds (raw-value (oldest))))))) 100)
-    (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 202 (list) (lambda () (minCode)))) (raw-value (Code 3)))
-    (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 203 (list) (lambda () (maxQty)))) 3)
+    (define tesl-ignored-17 (thsl-src! "tests/memory-backend-regressions.tesl" 172 (list) (lambda () (insert-one! P (tesl-hash 'id "a" 'qty 3 'name "cherry" 'at (raw-value (tesl_import_Time_secondsToPosix 300)) 'code (raw-value (Code 7)) 'done #t)))))
+    (define tesl-ignored-18 (thsl-src! "tests/memory-backend-regressions.tesl" 173 (list) (lambda () (insert-one! P (tesl-hash 'id "b" 'qty 1 'name "apple" 'at (raw-value (tesl_import_Time_secondsToPosix 100)) 'code (raw-value (Code 9)) 'done #f)))))
+    (define tesl-ignored-19 (thsl-src! "tests/memory-backend-regressions.tesl" 174 (list) (lambda () (insert-one! P (tesl-hash 'id "c" 'qty 2 'name "banana" 'at (raw-value (tesl_import_Time_secondsToPosix 200)) 'code (raw-value (Code 3)) 'done #t)))))
+    (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 175 (list) (lambda () (raw-value (tesl_import_Time_posixToSeconds (raw-value (newest))))))) 300)
+    (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 176 (list) (lambda () (raw-value (tesl_import_Time_posixToSeconds (raw-value (oldest))))))) 100)
+    (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 177 (list) (lambda () (minCode)))) (raw-value (Code 3)))
+    (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 178 (list) (lambda () (maxQty)))) 3)
     )
     ))
   )
@@ -300,7 +300,7 @@
   (test-case "selectMax over no matching row is Nothing"
     (call-with-fresh-memory-db (list D QDb) (lambda ()
     (with-capabilities (dbRead)
-    (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 207 (list) (lambda () (maxOfEmpty)))) Nothing)
+    (check-equal? (raw-value (thsl-src! "tests/memory-backend-regressions.tesl" 182 (list) (lambda () (maxOfEmpty)))) Nothing)
     )
     ))
   )

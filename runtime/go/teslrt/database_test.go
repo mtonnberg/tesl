@@ -1,6 +1,7 @@
 package teslrt
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -354,4 +355,46 @@ func TestGoroutineIDIsPerGoroutine(t *testing.T) {
 	if <-other == mine {
 		t.Fatal("another goroutine reported the same id")
 	}
+}
+
+// `innerJoin` becomes an `exists (…)` subquery rather than a real INNER JOIN: the clause
+// filters the MAIN entity to rows with a counterpart, and the result is still a list of that
+// entity — a join would DUPLICATE a main row for every counterpart, which the declared type
+// cannot hold. This runs the statement the emitter builds, because a subquery that names its
+// tables wrongly reads perfectly well in an assertion and fails only when PostgreSQL parses it
+// (which is exactly how Racket's join builder has been broken: it qualifies the ON columns with
+// the snake-cased ENTITY name instead of the declared table name).
+func TestBoundInnerJoinExists(t *testing.T) {
+	database := liveDatabase(t)
+	table := NewTable[dbBook]()
+	WithDatabase(database, func() {
+		connection := database.bound()
+		if _, err := connection.pool.Exec(context.Background(),
+			`create table if not exists "teslgotest"."authors" ("id" TEXT PRIMARY KEY)`); err != nil {
+			t.Fatalf("cannot create the joined table: %v", err)
+		}
+		PgTruncate(connection, "authors")
+		DbTruncate(database, table, "books")
+		PgExec(connection, `insert into "teslgotest"."authors" ("id") values ($1)`, []any{"a-1"})
+
+		insert := func(id, author string) {
+			PgExec(connection,
+				`insert into "teslgotest"."books" ("id", "title", "pages") values ($1, $2, $3)`,
+				[]any{id, author, PgInt(FromInt64(1))})
+		}
+		insert("b-1", "a-1")
+		insert("b-2", "ghost")
+
+		// The book's `title` stands in for the foreign key here, which keeps the fixture to the
+		// three columns `liveDatabase` declares.
+		joined := DbSelect(database, table, allBooks, nil, 0, -1,
+			bookPlan(database, `select "id", "title", "pages" from @books`+
+				` where exists (select 1 from "teslgotest"."authors"`+
+				` where "teslgotest"."authors"."id" = "teslgotest"."books"."title")`+
+				` order by "id" ASC`),
+			scanDbBook)
+		if len(joined) != 1 || joined[0].ID != "b-1" {
+			t.Fatalf("the join answered %+v, want only b-1", joined)
+		}
+	})
 }

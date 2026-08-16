@@ -3532,17 +3532,27 @@ let rec infer_expr ctx (e : expr) : ty =
 
   | ECase { scrut; arms; loc } ->
     (* ── Exhaustiveness helper (defined inline to close over ctx/loc) ──────── *)
-    let stdlib_ctors_for_type = function
-      | "Bool"         -> Some ["True"; "False"]
-      | "Maybe"        -> Some ["Nothing"; "Something"]
-      | "Either"       -> Some ["Left"; "Right"]
-      | "Result"       -> Some ["Ok"; "Err"]
-      | "DeleteResult" -> Some ["NoRowDeleted"; "RowsDeleted"]
-      (* Tesl.Email's EmailBody is a real stdlib ADT (tesl/email.rkt); seeding
-         its variants makes exhaustive matches recognized as such (2026-07
-         matrix email-cache: all-3-arm case was flagged non-exhaustive). *)
-      | "EmailBody"    -> Some ["TextBody"; "HtmlBody"; "RichBody"]
-      | _              -> None
+    (* The stdlib ADTs' constructor sets come from ONE table,
+       `Validation_common.builtin_ctor_info`, which is also what the nested-pattern
+       exhaustiveness check reads.  They used to be two lists, and they disagreed: this one
+       knew `DeleteResult` and that one did not, so a `case` naming both of its constructors
+       passed the top-level check and was then reported non-exhaustive by the nested one —
+       a total match refused, with a catch-all `_` demanded in its place.  A constructor set
+       written twice is a constructor set that drifts, so it is written once.
+       `Bool` stays here: its constructors are literals rather than rows in that table. *)
+    let stdlib_ctors_for_type name =
+      if name = "Bool" then Some ["True"; "False"]
+      else
+        let rec head (t : type_expr) = match t with
+          | TApp { head = inner; _ } -> head inner
+          | TName { name; _ } -> Some name
+          | _ -> None
+        in
+        match List.filter_map (fun (ctor, (_, result_ty)) ->
+          if head result_ty = Some name then Some ctor else None)
+          Validation_common.builtin_ctor_info with
+        | [] -> None
+        | ctors -> Some ctors
     in
     let all_ctors_for_type type_name =
       match stdlib_ctors_for_type type_name with

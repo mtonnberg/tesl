@@ -277,11 +277,14 @@ func ExpectJobOk[Payload any](result JobResult[Payload]) Payload {
 }
 
 // ExpectJobFailed is its counterpart: the job that failed, or a trap.
-func ExpectJobFailed[Payload any](result JobResult[Payload]) Payload {
+// ExpectJobFailed answers the ERROR, not the job: `tesl/api-test.rkt` returns
+// `JobFailed-error` here, and a test written against it (`expect isNotNull err`) reads a
+// message rather than a payload. The job is still reachable through the `JobResult` itself.
+func ExpectJobFailed[Payload any](result JobResult[Payload]) string {
 	if result.Tag != JobResultFailed {
 		panic("expectJobFailed: expected JobFailed but the worker succeeded")
 	}
-	return result.FailedJob
+	return result.FailedError
 }
 
 // EmptyQueue is the trap an api-test gets when it asks for a job and there is none — the

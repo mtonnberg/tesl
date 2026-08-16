@@ -834,10 +834,11 @@ let builtin_ctor_info : ctor_info = [
      nine `Net.isX` predicates: a forgotten range has to be a compile error,
      because the bug the issue reports IS a forgotten spelling.
 
-     RECORDED, not fixed here: `DeleteResult` and `JobResult` are stdlib ADTs
-     with no rows in this table either, so a `case` over them is silently
-     unchecked for exhaustiveness — the same shape as the EmailBody gap above,
-     and a wider change than this issue authorises. *)
+     `DeleteResult` was the same gap and is fixed below.  `JobResult` still has
+     no rows: `tesl/api-test.rkt` declares it `(define-adt (JobResult job error)
+     [JobOk job] [JobFailed job error])` — TWO type parameters — while the rest
+     of the compiler carries only its constructor NAMES and no signatures, so a
+     row here would be an arity guess rather than a fact. *)
   ("Loopback",    ([], mk_name_type "HostClass"));
   ("PrivateIp",   ([], mk_name_type "HostClass"));
   ("LinkLocal",   ([], mk_name_type "HostClass"));
@@ -853,6 +854,14 @@ let builtin_ctor_info : ctor_info = [
      exhaustiveness-checked, and without a variant list here a TOTAL case is
      flagged non-exhaustive instead — the same false positive the EmailBody and
      HostClass rows above exist to remove. *)
+  (* DeleteResult (Tesl.DB) — what `deleteAndReturnResult` answers.  Without these rows a
+     `case` naming BOTH constructors was reported non-exhaustive and a catch-all `_` was
+     required, which is the opposite of what an exhaustiveness check is for: the total match
+     was refused and the ignorable one accepted.  NOTE the payload is an unconstrained `Int`,
+     so `RowsDeleted 0` is inhabited and means what `NoRowDeleted` means — see the roadmap on
+     whether this type should be a count with a proof instead. *)
+  ("NoRowDeleted", ([], mk_name_type "DeleteResult"));
+  ("RowsDeleted",  ([mk_name_type "Int"], mk_name_type "DeleteResult"));
   ("January",   ([], mk_name_type "Month"));
   ("February",  ([], mk_name_type "Month"));
   ("March",     ([], mk_name_type "Month"));

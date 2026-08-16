@@ -430,3 +430,22 @@ func TableDeleteResult[Row any](table *Table[Row], match func(Row) bool) DeleteR
 	}
 	return RowsDeleted(removed)
 }
+
+// TableAny reports whether any row matches. It is what an `innerJoin` becomes on the in-memory
+// store: the clause filters the MAIN entity's rows to those with a counterpart, and the result
+// is still a list of that entity — so it is an existence test, not a product.
+//
+// That reading is also why the Postgres path emits `exists (…)` rather than a real INNER JOIN:
+// a join would DUPLICATE a main row for every counterpart, which a `List Order` cannot hold.
+// The Racket backends disagree here — its memory store tests existence while its Postgres path
+// joins — and the two Go paths agree with each other and with the declared result type.
+func TableAny[Row any](table *Table[Row], match func(Row) bool) bool {
+	table.mutex.RLock()
+	defer table.mutex.RUnlock()
+	for _, row := range table.rows {
+		if match(row) {
+			return true
+		}
+	}
+	return false
+}

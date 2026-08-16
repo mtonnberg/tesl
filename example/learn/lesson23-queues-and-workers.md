@@ -1,6 +1,6 @@
 # Lesson 23: Queues and Workers
 
-> **Implemented — including horizontal scaling via LISTEN/NOTIFY.** When a `with database` context is active, all queue operations go through PostgreSQL automatically. Workers in **multiple OS processes** all receive wakeup signals via `NOTIFY` and compete safely via `FOR UPDATE SKIP LOCKED` — no duplicate processing. No code changes are needed; the runtime detects the database context at call time.
+> **Implemented — including horizontal scaling via LISTEN/NOTIFY.** When a database is connected — which `main`'s `App { database: X }` does for the whole program — all queue operations go through PostgreSQL automatically. Workers in **multiple OS processes** all receive wakeup signals via `NOTIFY` and compete safely via `FOR UPDATE SKIP LOCKED` — no duplicate processing. No code changes are needed; the runtime detects the database context at call time.
 >
 > An in-memory fallback is active when no database context is present (unit tests, REPL exploration).
 >

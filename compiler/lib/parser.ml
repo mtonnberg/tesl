@@ -2682,31 +2682,6 @@ and parse_start_email_worker_stmt s =
   let loc = span loc0 (current_loc s) in
   return (EStartEmailWorker { email_name; loc })
 
-and parse_with_stmt s =
-  (* `with database X { … }` — bind a named database for the block body.  (The
-     `database` keyword is intentionally retained here: dropping it would collide with
-     the `database X = Database { … }` declaration keyword.  `with transaction` was
-     migrated to the bare `transaction { … }` form — see [parse_transaction_block].) *)
-  let loc0 = current_loc s in
-  let* _ =
-    match peek s with
-    | IDENT "with" -> advance s; return ()
-    | t -> err s (Printf.sprintf "expected with block, got %s" (tok_to_string t))
-  in
-  match peek s with
-  | DATABASE ->
-    advance s;
-    let* database_name = expect_uident s in
-    let* _ = expect s LBRACE in
-    skip_newlines s;
-    if peek s = INDENT then advance s;
-    let* body = parse_stmt_seq s in
-    skip_layout s;
-    let* _ = expect s RBRACE in
-    let loc = span loc0 (current_loc s) in
-    return (EWithDatabase { database_name; body; loc })
-  | t -> err s (Printf.sprintf "expected `database` after `with`, got %s" (tok_to_string t))
-
 and parse_transaction_block s =
   (* `transaction { … }` — wrap multiple writes in one atomic transaction.  (Formerly
      spelled `with transaction { … }`; the `with` was dropped in the with-keyword
@@ -2839,9 +2814,16 @@ and parse_stmt_seq s =
   | IDENT "transaction" when peek2 s = LBRACE ->
     let* e = parse_transaction_block s in
     continue_stmt_seq s e
+  (* `with database D { … }` as a free-floating block is GONE (2026-08-17).  A database is
+     connected by `main`'s `App { database: D }` — which is what every real program already
+     relies on, and what `Desugar.lower_main_app` builds the binding from — and a test binds one
+     with the `test "…" with database D { … }` header.  Every free-floating use in the corpus
+     named a MEMORY database, where the block did nothing at all, and the one position where it
+     was not a no-op (inside a test body) silently DROPPED the binding.  Removing the form
+     closes that hole by construction rather than by fixing it. *)
   | IDENT "with" when peek2 s = DATABASE ->
-    let* e = parse_with_stmt s in
-    continue_stmt_seq s e
+    err s "`with database` is not a statement: a database is connected by `main`'s \
+           `App { database: D }`, and a test binds one with `test \"…\" with database D { … }`"
   | IDENT "set" ->
     let loc0 = current_loc s in
     advance s;
@@ -5026,17 +5008,14 @@ and parse_test_stmt_items s =
            | Err _ -> return [])
         | Err _ -> return [])
      | Err _ -> return [])
-  | IDENT "with" when peek2 s = DATABASE || (match peek2 s with IDENT _ -> true | _ -> false) ->
-    advance s;
-    while peek s <> LBRACE && peek s <> EOF && peek s <> NEWLINE do advance s done;
-    if peek s = LBRACE then begin
-      advance s; skip_layout s;
-      let* nested = parse_test_body_until_with_skip s skip_layout (fun tok -> tok = RBRACE || tok = EOF) in
-      skip_layout s;
-      if peek s = RBRACE then advance s;
-      return nested
-    end else
-      return []
+  (* `with database D { … }` inside a test BODY is gone with the free-floating form.  It never
+     bound anything: this arm skipped to the `{` and spliced the statements, so the database
+     name was discarded and the block read the in-memory store while the author asked for the
+     server.  The binding belongs in the header — `test "…" with database D { … }` — which is
+     parsed by `parse_test_form` and does bind. *)
+  | IDENT "with" when peek2 s = DATABASE ->
+    err s "`with database` is not a statement: bind it in the test header instead — \
+           `test \"…\" with database D { … }`"
   (* SQL write statements (`update`/`delete`) carry indented `where … set … = …`
      continuation clauses.  The test-body expression parser runs with
      `allow_test_multiline_request_continuations` on (for api-test request

@@ -3168,109 +3168,81 @@ database ProbeDb = Database {
 
 fn titleOf(wanted: String) -> String
   requires [dbRead] =
-  with database ProbeDb {
-    let found = selectOne i from Item where i.id == wanted
-    case found of
-      Nothing -> "none"
-      Something i -> i.name
-  }
+  let found = selectOne i from Item where i.id == wanted
+  case found of
+    Nothing -> "none"
+    Something i -> i.name
 
 fn orderedNames() -> List String
   requires [dbRead] =
-  with database ProbeDb {
-    let rows = select i from Item order i.qty desc
-    List.map (fn(i: Item) -> i.name) rows
-  }
+  let rows = select i from Item order i.qty desc
+  List.map (fn(i: Item) -> i.name) rows
 
 fn cheapestName() -> String
   requires [dbRead] =
-  with database ProbeDb {
-    let rows = select i from Item order i.qty asc limit 1
-    case List.head rows of
-      Nothing -> "none"
-      Something i -> i.name
-  }
+  let rows = select i from Item order i.qty asc limit 1
+  case List.head rows of
+    Nothing -> "none"
+    Something i -> i.name
 
 fn countAbove(threshold: Int) -> Int
   requires [dbRead] =
-  with database ProbeDb {
-    selectCount i from Item where i.qty > threshold
-  }
+  selectCount i from Item where i.qty > threshold
 
 fn totalQty() -> Int
   requires [dbRead] =
-  with database ProbeDb {
-    selectSum i.qty from Item
-  }
+  selectSum i.qty from Item
 
 # selectMax/selectMin answer a Maybe: no matching row has no maximum.
 fn biggestQty() -> Int
   requires [dbRead] =
-  with database ProbeDb {
-    case selectMax i.qty from Item of
-      Nothing -> 0
-      Something qty -> qty
-  }
+  case selectMax i.qty from Item of
+    Nothing -> 0
+    Something qty -> qty
 
 fn smallestQty() -> Int
   requires [dbRead] =
-  with database ProbeDb {
-    case selectMin i.qty from Item of
-      Nothing -> 0
-      Something qty -> qty
-  }
+  case selectMin i.qty from Item of
+    Nothing -> 0
+    Something qty -> qty
 
 # The empty answer itself, over a predicate nothing matches.
 fn biggestQtyNamed(wanted: String) -> Maybe Int
   requires [dbRead] =
-  with database ProbeDb {
-    selectMax i.qty from Item where i.name == wanted
-  }
+  selectMax i.qty from Item where i.name == wanted
 
 fn namesLike(pattern: String) -> Int
   requires [dbRead] =
-  with database ProbeDb {
-    selectCount i from Item where like i.name pattern
-  }
+  selectCount i from Item where like i.name pattern
 
 fn namesILike(pattern: String) -> Int
   requires [dbRead] =
-  with database ProbeDb {
-    selectCount i from Item where ilike i.name pattern
-  }
+  selectCount i from Item where ilike i.name pattern
 
 fn bySku(raw: String) -> Int
   requires [dbRead] =
-  with database ProbeDb {
-    selectCount i from Item where i.sku == Sku raw
-  }
+  selectCount i from Item where i.sku == Sku raw
 
 fn eitherName(left: String, right: String) -> Int
   requires [dbRead] =
-  with database ProbeDb {
-    selectCount i from Item where i.name == left || i.name == right
-  }
+  selectCount i from Item where i.name == left || i.name == right
 
 fn describeDelete(name: String) -> String
   requires [dbWrite] =
-  with database ProbeDb {
-    let removed = deleteAndReturnResult i from Item where i.name == name
-    case removed of
-      RowsDeleted n -> Int.toString n
-      _ -> "none"
-  }
+  let removed = deleteAndReturnResult i from Item where i.name == name
+  case removed of
+    RowsDeleted n -> Int.toString n
+    _ -> "none"
 
 fn seed() -> Unit
   requires [dbWrite] =
-  with database ProbeDb {
-    let _ = insert Item { id: "i1", sku: Sku "S-1", name: "alpha", qty: 7 }
-    let rest = [
-      Item { id: "i2", sku: Sku "S-2", name: "beta", qty: 3 },
-      Item { id: "i3", sku: Sku "S-3", name: "Gamma", qty: 5 }
-    ]
-    let _ = insertMany rest in Item
-    Unit
-  }
+  let _ = insert Item { id: "i1", sku: Sku "S-1", name: "alpha", qty: 7 }
+  let rest = [
+    Item { id: "i2", sku: Sku "S-2", name: "beta", qty: 3 },
+    Item { id: "i3", sku: Sku "S-3", name: "Gamma", qty: 5 }
+  ]
+  let _ = insertMany rest in Item
+  Unit
 
 test "queries read back what was written" requires [dbRead, dbWrite] {
   let _ = seed ()
@@ -3295,24 +3267,18 @@ test "queries read back what was written" requires [dbRead, dbWrite] {
 # The Memory store is NOT reset between test blocks (it is one process-wide store on
 # both backends), so this test owns its own rows rather than re-seeding the first one's.
 test "update and delete change what queries see" requires [dbRead, dbWrite] {
-  with database ProbeDb {
-    let _ = insert Item { id: "u1", sku: Sku "S-U1", name: "delta", qty: 20 }
-    let _ = insert Item { id: "u2", sku: Sku "S-U2", name: "epsilon", qty: 30 }
-    Unit
-  }
-  with database ProbeDb {
-    update i in Item
-      where i.id == "u1"
-      set i.name = "renamed"
-      set i.qty = 21
-  }
+  let _ = insert Item { id: "u1", sku: Sku "S-U1", name: "delta", qty: 20 }
+  let _ = insert Item { id: "u2", sku: Sku "S-U2", name: "epsilon", qty: 30 }
+  Unit
+  update i in Item
+    where i.id == "u1"
+    set i.name = "renamed"
+    set i.qty = 21
   expect titleOf "u1" == "renamed"
   expect biggestQty () == 30
   expect titleOf "u1" == "renamed"
   expect countAbove 19 == 2
-  with database ProbeDb {
-    delete i from Item where i.qty > 25
-  }
+  delete i from Item where i.qty > 25
   expect countAbove 19 == 1
   expect titleOf "u2" == "none"
   # `deleteAndReturnResult` says whether anything WENT, which is not the same as a count of
@@ -3519,7 +3485,8 @@ let test_postgres_declaration_with_go () =
    case skips: a developer without a server still gets everything above. *)
 let postgres_live_source = {|module GoPostgresLive exposing [titleOf, countBooks]
 
-import Tesl.Prelude exposing [Bool(..), Int, String, Unit]
+import Tesl.Prelude exposing [Bool(..), Int, List, String, Unit]
+import Tesl.List exposing [List.length]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Database exposing [
@@ -3542,11 +3509,17 @@ entity LiveBook table "live_books" primaryKey id {
   pages: Int
   shelf: Shelf
   retired: Bool
+  authorId: String
+}
+
+entity LiveAuthor table "live_authors" primaryKey id {
+  id: String
+  name: String
 }
 
 database LiveDb = Database {
   schema: "goliveprobe"
-  entities: [LiveBook]
+  entities: [LiveBook, LiveAuthor]
   backend: Postgres (PostgresConfig {
     dbName: env "TESL_TEST_POSTGRES_SHARED_ADMIN_DATABASE"
     user: env "TESL_TEST_POSTGRES_SHARED_USER"
@@ -3558,9 +3531,22 @@ database LiveDb = Database {
   })
 }
 
-fn store(id: String, title: String, pages: Int, shelf: Shelf, retired: Bool) -> LiveBook
+fn store(id: String, title: String, pages: Int, shelf: Shelf, retired: Bool, authorId: String) -> LiveBook
   requires [dbWrite] =
-  insert LiveBook { id: id, title: title, pages: pages, shelf: shelf, retired: retired }
+  insert LiveBook { id: id, title: title, pages: pages, shelf: shelf, retired: retired, authorId: authorId }
+
+fn storeAuthor(id: String, name: String) -> LiveAuthor
+  requires [dbWrite] =
+  insert LiveAuthor { id: id, name: name }
+
+# NO `innerJoin` here, deliberately.  Racket's Postgres join builder qualifies the ON columns
+# with the snake-cased ENTITY name rather than the declared TABLE name, so a join against a
+# real server is broken there for every entity whose table is named anything else —
+# `LiveBook`/`live_books` included (finding 13 in the roadmap).  The Go form is an
+# `exists (…)` subquery and does run: it is exercised against the cluster by
+# `TestBoundInnerJoinExists` in runtime/go/teslrt/database_test.go, where there is no Racket
+# counterpart to disagree with, and its BEHAVIOUR is compared on both backends by
+# example/learn/lesson48-sql-inner-join.tesl, whose database is Memory-backed.
 
 fn titleOf(wanted: String) -> String
   requires [dbRead] =
@@ -3601,8 +3587,10 @@ fn shelfOf(wanted: String) -> String
 
 test "a round trip through the server answers what it stored" with database LiveDb requires [dbRead, dbWrite] {
   delete b from LiveBook
-  let _ = store "l-1" "The Art of Tesl" 320 Fiction False
-  let _ = store "l-2" "Proofs in Practice" 210 Reference True
+  delete a from LiveAuthor
+  let _ = storeAuthor "a-1" "Ada"
+  let _ = store "l-1" "The Art of Tesl" 320 Fiction False "a-1"
+  let _ = store "l-2" "Proofs in Practice" 210 Reference True "ghost"
   expect titleOf "l-1" == "The Art of Tesl"
   expect titleOf "l-404" == "none"
   expect countBooks () == 2
@@ -3781,6 +3769,11 @@ let test_posix_codec_with_go () =
      struct — a struct there would marshal as an object no Racket client would read. *)
   check bool "an instant encodes as its integer millis" true
     (contains module_go "teslValue.At.Value,");
+  (* The DECODE direction works here and does NOT on Racket: its
+     `tesl-decode-prim-posix-millis` answers a bare integer that no `PosixMillis` field
+     accepts, so the same body is a 400 there (finding 11 in the roadmap).  Go answers
+     correctly rather than reproducing that — the same call taken for `selectCount`'s dropped
+     joins and for `innerJoin` against a real server (maintainer, 2026-08-17). *)
   let decoding = {|module GoPosixDecode exposing [Stamp]
 import Tesl.Prelude exposing [String]
 import Tesl.Time exposing [PosixMillis]
@@ -3802,12 +3795,14 @@ codec Stamp {
 }
 |} in
   (match Compile.compile_go_source "<go-posix-decode>" decoding with
-   | Compile.GoSuccess _ -> fail "the decode direction emitted instead of failing closed"
    | Compile.GoFailure diagnostics ->
-     check bool "decoding an instant fails closed" true
-       (List.exists (fun (d : Compile.diagnostic) ->
-          d.source = "go-emitter"
-          && contains d.message "`posixMillisCodec` in a `fromJson` block") diagnostics));
+     failf "decoding an instant failed to compile: %s"
+       (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+   | Compile.GoSuccess artifacts ->
+     let decoded = artifact "internal/teslmodgoposixdecode/module.go" artifacts in
+     (* The millis arrive as an Int and the field's own newtype wraps them. *)
+     check bool "an instant decodes from its integer millis" true
+       (contains decoded "teslrt.DecodeIntField(teslJSON, \"at\")"));
   (* `go test` RUNS the api-test: the wire number is asserted there. *)
   gate_emitted "tesl-go-posix-codec" emitted
 
@@ -3905,46 +3900,6 @@ let test_int32_with_go () =
     (contains module_go "teslrt.Int32FromInt(");
   (* `go test` RUNS the four blocks: every boundary above is asserted there. *)
   gate_emitted "tesl-go-int32" emitted
-
-let test_unsupported_database_forms_fail_closed () =
-  let expect_go_error name source needle =
-    match Compile.compile_go_source ("<go-" ^ name ^ ">") source with
-    | Compile.GoSuccess _ -> failf "%s emitted instead of failing closed" name
-    | Compile.GoFailure diagnostics ->
-      check bool (name ^ " fails closed") true
-        (List.exists (fun (d : Compile.diagnostic) ->
-           d.source = "go-emitter" && contains d.message needle) diagnostics)
-  in
-  let program ~entity_extra ~backend ~body = Printf.sprintf {|module GoDbBad exposing [probe]
-import Tesl.Prelude exposing [Int, String, List]
-import Tesl.DB exposing [dbRead]
-import Tesl.Database exposing [Database, Memory, Postgres, PostgresConfig, TcpConnection]
-
-entity Item table "bad_items" primaryKey id {
-  id: String
-  qty: Int%s
-}
-
-database BadDb = Database {
-  schema: "public"
-  entities: [Item]
-  backend: %s
-}
-
-fn probe() -> List Item
-  requires [dbRead] =
-  with database BadDb {
-    %s
-  }
-|} entity_extra backend body
-  in
-  (* A UNIQUE index is ENFORCED by the Racket memory backend, so accepting one without
-     enforcing it would make the two backends run different programs. *)
-  expect_go_error "inner-join"
-    (program ~entity_extra:"" ~backend:"Memory"
-       ~body:"select i from Item innerJoin Item on i.id Item.id")
-    "innerJoin"
-
 
 (* ─── Instants, and the effects with no state of their own ────────────────────
    `PosixMillis` is an exact-integer instant provided by the runtime (an instant crosses
@@ -4576,10 +4531,8 @@ codec Count {
 
 handler get listWidgets() -> Count
   requires [dbRead] =
-  with database SeedDb {
-    let rows = select w from Widget
-    Count { widgets: List.length rows }
-  }
+  let rows = select w from Widget
+  Count { widgets: List.length rows }
 
 api SeedApi {
   get "/widgets"
@@ -7871,24 +7824,18 @@ database TxnDb = Database {
 
 fn addEntry(id: String, account: String, amount: Int) -> Int
   requires [dbRead, dbWrite] =
-  with database TxnDb {
-    transaction {
-      insert Ledger { id: id, account: account, amount: amount }
-      selectCount l from Ledger where l.account == account
-    }
+  transaction {
+    insert Ledger { id: id, account: account, amount: amount }
+    selectCount l from Ledger where l.account == account
   }
 
 fn totalFor(account: String) -> Int
   requires [dbRead] =
-  with database TxnDb {
-    selectSum l.amount from Ledger where l.account == account
-  }
+  selectSum l.amount from Ledger where l.account == account
 
 fn entriesFor(account: String) -> Int
   requires [dbRead] =
-  with database TxnDb {
-    selectCount l from Ledger where l.account == account
-  }
+  selectCount l from Ledger where l.account == account
 
 test "a transaction groups its writes and answers its tail" requires [dbRead, dbWrite] {
   expect addEntry "1" "ada" 100 == 1
@@ -8396,8 +8343,6 @@ let () =
       test_case "a Postgres-backed entity" `Slow test_postgres_declaration_with_go;
       test_case "a Postgres-backed entity behaves the same on Racket" `Slow
         (racket_behavior_oracle "<go-pg-decl-oracle>" postgres_declaration_source);
-      test_case "unsupported database forms fail closed" `Quick
-        test_unsupported_database_forms_fail_closed;
       test_case "a rejected check answers instead of crashing" `Slow
         test_check_delegation_with_go;
       test_case "check delegation behaves the same on Racket" `Slow

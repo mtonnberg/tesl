@@ -292,6 +292,15 @@ let rec literal_json expr =
     | ELit { lit = LBigInt text; _ } -> Some text
     | ELit { lit = LBool b; _ } -> Some (if b then "true" else "false")
     | ELit { lit = LFloat f; _ } -> Some (json_float f)
+    (* A NEGATIVE number in a template is a unary minus over a literal, not a literal — JSON
+       has no such distinction, so `{ "value": -5 }` renders as the number it reads as.  Only
+       a literal operand qualifies: anything else is a computation, and a template is a
+       constant. *)
+    | EUnop { op = UNeg; arg; _ } ->
+      (match arg with
+       | ELit { lit = (LInt _ | LBigInt _ | LFloat _); _ } ->
+         Option.map (fun text -> "-" ^ text) (literal_json arg)
+       | _ -> None)
     | EConstructor { name = "True"; args = []; _ } -> Some "true"
     | EConstructor { name = "False"; args = []; _ } -> Some "false"
     | EList { elems; _ } ->
@@ -2482,11 +2491,15 @@ let rec type_of_expr signatures env expr =
         | _ -> unsupported (Checker.expr_loc secret)
           "Go backend `%s` takes a `secret` over String" leaf);
        signature.result
-     | EVar { name = ("expectJobOk" | "expectJobFailed"); _ } ->
+     | EVar { name = ("expectJobOk" | "expectJobFailed") as verb; _ } ->
        (match args with
         | [result] ->
           (match type_of_expr signatures env result with
-           | TAdt (info, [payload]) when info.adt_tesl_name = "JobResult" -> payload
+           (* `expectJobOk` answers the JOB; `expectJobFailed` answers the ERROR, which is a
+              String — `tesl/api-test.rkt` returns `JobFailed-error` there, and answering the
+              payload instead made `expect isNotNull err` compare a job struct. *)
+           | TAdt (info, [payload]) when info.adt_tesl_name = "JobResult" ->
+             if verb = "expectJobFailed" then TString else payload
            | _ -> unsupported loc
              "Go backend `expectJobOk` takes the result of `processNextJob`")
         | _ -> unsupported loc "Go backend requires `expectJobOk` applied to 1 argument")
@@ -4133,7 +4146,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
           | None -> "nil"
           | Some value ->
             Printf.sprintf "[]string{%s}"
-              (emit_expr ~expected:TString ~indent signatures env value)
+              (emit_api_test_string ~indent signatures env value)
         in
         let headers = match request_headers with
           | None -> "nil"
@@ -4142,7 +4155,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
               (String.concat ", " (List.map (fun (name, value) ->
                  let emitted =
                    if type_of_expr signatures env value = TString then
-                     emit_expr ~expected:TString ~indent signatures env value
+                     emit_api_test_string ~indent signatures env value
                    else unsupported (Checker.expr_loc value)
                      "Go backend api-test header `%s` must be a String" name
                  in
@@ -4153,7 +4166,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
         in
         Printf.sprintf "teslrt.ApiRequest(%s, %S, %s, %s, %s, %s)" server
           (String.uppercase_ascii verb)
-          (emit_expr ~expected:TString ~indent signatures env path)
+          (emit_api_test_string ~indent signatures env path)
           (match request_body with
            | None -> "\"\""
            | Some value -> emit_api_test_body ~indent signatures env value)
@@ -4177,10 +4190,10 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
           | None -> "nil"
           | Some value ->
             Printf.sprintf "[]string{%s}"
-              (emit_expr ~expected:TString ~indent signatures env value)
+              (emit_api_test_string ~indent signatures env value)
         in
         Printf.sprintf "teslrt.SubscribeStream(%s, %s, %s)" server
-          (emit_expr ~expected:TString ~indent signatures env path) cookies
+          (emit_api_test_string ~indent signatures env path) cookies
       (* `collect stream …` — the three shapes Racket's `api-test-collect` implements: wait for
          a COUNT, wait UNTIL a matching event, or take whatever arrives within the timeout. The
          first two treat a timeout as a test failure; the third does not, since "nothing was
@@ -4410,9 +4423,32 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
                       | "includesWhere" | "excludesWhere"
                       | "bodyField") as verb; _ } ->
         ignore (type_of_expr signatures env app);
+        (* The RESPONSE positions (`bodyField resp`) hand the value over as it is. *)
         let json_argument index =
           match List.nth_opt args index with
           | Some argument -> emit argument
+          | None -> unsupported loc "Go backend requires `%s` applied to its argument(s)" verb
+        in
+        (* The INSPECTED positions take any value, not only a JSON handle: Racket's predicates
+           normalise whatever they are given (`api-test-normalize-json` runs the value→jsexpr
+           walk first), so `hasField "k" job` on a plain record and `isNotNull err` on a String
+           are legitimate assertions there.  Such a value is wrapped through its own encoder,
+           which is the shape that walk produces. *)
+        let json_value_argument index =
+          match List.nth_opt args index with
+          | Some argument ->
+            (match type_of_expr signatures env argument with
+             | TJson -> emit argument
+             | ty ->
+               (* A type with no wire shape (a check, a stream, a function) has nothing to
+                  inspect, so it is refused by name rather than crashing the emitter. *)
+               let encoder =
+                 try !value_encoder_hook ty with Invalid_argument _ ->
+                   unsupported loc
+                     "Go backend `%s` cannot inspect a `%s` as JSON" verb (go_type ty)
+               in
+               Printf.sprintf "teslrt.JsonValueOf(%s(%s))" encoder
+                 (emit_expr ~expected:ty ~indent signatures env argument))
           | None -> unsupported loc "Go backend requires `%s` applied to its argument(s)" verb
         in
         let string_argument index =
@@ -4425,26 +4461,34 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
           | Some argument -> emit_expr ~expected:TInt ~indent signatures env argument
           | None -> unsupported loc "Go backend requires `%s` applied to its argument(s)" verb
         in
+        (* `isNull` / `isNotNull` are the two verbs that take a value RATHER than a JSON
+           handle as well: Racket normalises whatever it is given, so `isNotNull err` on a
+           plain String is a legitimate assertion there.  The value goes through its own
+           encoder, which is the shape the normalising walk would have produced. *)
         (match verb with
-         | "isNull" -> Printf.sprintf "teslrt.JsonIsNull(%s)" (json_argument 0)
-         | "isNotNull" -> Printf.sprintf "teslrt.JsonIsNotNull(%s)" (json_argument 0)
-         | "isEmpty" -> Printf.sprintf "teslrt.JsonIsEmpty(%s)" (json_argument 0)
-         | "isNotEmpty" -> Printf.sprintf "teslrt.JsonIsNotEmpty(%s)" (json_argument 0)
-         | "jsonLength" -> Printf.sprintf "teslrt.JsonLength(%s)" (json_argument 0)
-         | "jsonInt" -> Printf.sprintf "teslrt.JsonAsInt(%s)" (json_argument 0)
-         | "jsonString" -> Printf.sprintf "teslrt.JsonAsString(%s)" (json_argument 0)
-         | "jsonBool" -> Printf.sprintf "teslrt.JsonAsBool(%s)" (json_argument 0)
+         | "isNull" -> Printf.sprintf "teslrt.JsonIsNull(%s)" (json_value_argument 0)
+         | "isNotNull" -> Printf.sprintf "teslrt.JsonIsNotNull(%s)" (json_value_argument 0)
+         | "isEmpty" -> Printf.sprintf "teslrt.JsonIsEmpty(%s)" (json_value_argument 0)
+         | "isNotEmpty" -> Printf.sprintf "teslrt.JsonIsNotEmpty(%s)" (json_value_argument 0)
+         | "jsonLength" -> Printf.sprintf "teslrt.JsonLength(%s)" (json_value_argument 0)
+         | "jsonInt" -> Printf.sprintf "teslrt.JsonAsInt(%s)" (json_value_argument 0)
+         | "jsonString" -> Printf.sprintf "teslrt.JsonAsString(%s)" (json_value_argument 0)
+         | "jsonBool" -> Printf.sprintf "teslrt.JsonAsBool(%s)" (json_value_argument 0)
          (* `jsonArray`/`jsonObject` assert the shape and hand the value back; the assertion
             happens inside the length/field helpers that follow, so the value passes through. *)
-         | "jsonArray" | "jsonObject" -> json_argument 0
+         | "jsonArray" | "jsonObject" -> json_value_argument 0
          | "hasField" ->
-           Printf.sprintf "teslrt.JsonHasField(%s, %s)" (string_argument 0) (json_argument 1)
+           Printf.sprintf "teslrt.JsonHasField(%s, %s)" (string_argument 0)
+             (json_value_argument 1)
          | "hasLength" ->
-           Printf.sprintf "teslrt.JsonHasLength(%s, %s)" (int_argument 0) (json_argument 1)
+           Printf.sprintf "teslrt.JsonHasLength(%s, %s)" (int_argument 0)
+             (json_value_argument 1)
          | "arrayAt" ->
-           Printf.sprintf "teslrt.JsonArrayAt(%s, %s)" (int_argument 0) (json_argument 1)
+           Printf.sprintf "teslrt.JsonArrayAt(%s, %s)" (int_argument 0)
+             (json_value_argument 1)
          | "fieldAt" ->
-           Printf.sprintf "teslrt.JsonFieldAt(%s, %s)" (string_argument 0) (json_argument 1)
+           Printf.sprintf "teslrt.JsonFieldAt(%s, %s)" (string_argument 0)
+             (json_value_argument 1)
          | "bodyField" ->
            Printf.sprintf "teslrt.JsonFieldAt(%s, %s.Body)"
              (string_argument 0) (selector_operand (json_argument 1))
@@ -4456,16 +4500,13 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
              | Some (ERecord _ as template) ->
                Printf.sprintf "teslrt.JsonParseBody(%s).JsonRaw()"
                  (emit_api_test_body ~indent signatures env template)
-             | Some other ->
-               (match type_of_expr signatures env other with
-                | TJson -> Printf.sprintf "%s.JsonRaw()" (selector_operand (emit other))
-                | _ -> unsupported loc
-                  "Go backend `%s` takes a `{ \"field\": value }` pattern" verb)
+             | Some _ ->
+               Printf.sprintf "%s.JsonRaw()" (selector_operand (json_value_argument 0))
              | None -> unsupported loc "Go backend requires `%s` applied to 2 arguments" verb
            in
            Printf.sprintf "teslrt.Json%s(%s, %s)"
              (if verb = "includesWhere" then "IncludesWhere" else "ExcludesWhere")
-             pattern (json_argument 1)
+             pattern (json_value_argument 1)
          | _ ->
            (* jsonContains: the needle is an ordinary Tesl value, compared structurally. *)
            let needle = match List.nth_opt args 0 with
@@ -5002,10 +5043,11 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
       | Some signature -> qualified signature.sig_owner signature.go_name
       | None -> unsupported loc "Go backend cannot resolve worker `%s`" worker
     in
-    let inner = indent ^ "\t" in
+    (* The literal's BODY sits one level in from the call, and its closing brace lines up with
+       the call — the same shape gofmt writes, which is what the emitter has to produce. *)
     Printf.sprintf
       "teslrt.StartWorkers(%s, func(teslPayload any) teslrt.JobOutcome {\n%s\tteslJob := teslPayload.(%s)\n%s\t_ = %s(teslJob)\n%s\treturn teslrt.JobOutcome{OK: true}\n%s}, %d, %b)"
-      queue inner row_go inner worker_go inner indent
+      queue indent row_go indent worker_go indent indent
       (match concurrency with Some n when n > 0 -> n | _ -> 1) is_dead
   (* `serve` is the tail of the startup chain: it runs until the process is asked to stop. *)
   | EServe { server_name; port; static_dir; mount_path; _ } ->
@@ -5429,8 +5471,16 @@ and emit_negated ?(indent="") signatures env expr =
   | EBinop { op = BOr; left; right; _ } ->
     Printf.sprintf "(%s && %s)" (group (neg left)) (group (neg right))
   | EBinop { op = (BEq | BNeq) as op; left; right; _ } ->
-    let ty = type_of_expr signatures env left in
-    let emitted_left = emit left and emitted_right = emit right in
+    (* The operand type comes from whichever side HAS one: a defaulted empty list yields to
+       the other, exactly as it does in the positive emission.  Both sides are then emitted
+       against it, or `xs != []` would compare a `List OrderItem` with the default's
+       `[]teslrt.Int{}` and Go would reject the emitted code. *)
+    let source = match left, right with
+      | EList { elems = []; _ }, _ -> right
+      | _ -> left in
+    let ty = type_of_expr signatures env source in
+    let emitted_left = emit_expr ~expected:ty ~indent signatures env left
+    and emitted_right = emit_expr ~expected:ty ~indent signatures env right in
     let equal = (op = BEq) in
     (match bool_literal_value left, bool_literal_value right with
      | Some expected, None when ty = TBool ->
@@ -6106,7 +6156,7 @@ and sql_column_value ~indent signatures row_env loc (info : entity_info) field e
     info.ent_tesl_name field;
   emit_expr ~expected:want ~indent signatures row_env expr
 
-and emit_sql_predicate ~indent signatures env loc (info : entity_info) binder clauses =
+and emit_sql_predicate ?(joins=[]) ~indent signatures env loc (info : entity_info) binder clauses =
   let row_env = (binder, TRecord info.ent_row) :: env in
   let column_ref field =
     Printf.sprintf "%s.%s" (local_ident binder) (record_field_go_name field) in
@@ -6179,12 +6229,13 @@ and emit_sql_predicate ~indent signatures env loc (info : entity_info) binder cl
   let split params returned =
     Printf.sprintf "func(%s) bool {\n%s\treturn %s\n%s}" params indent returned indent
   in
-  match clauses with
+  let rendered = List.map clause clauses @ joins in
+  match rendered with
   (* No clause means every row, and naming the row would leave an unused parameter. *)
   | [] -> split (Printf.sprintf "_ %s" (sql_row_type info)) "true"
   | _ ->
     split (Printf.sprintf "%s %s" (local_ident binder) (sql_row_type info))
-      (String.concat " && " (List.map clause clauses))
+      (String.concat " && " rendered)
 
 (* `where_field` is the field the RECOVERY saw first; every supported form also produces
    a clause for it.  One left over means the predicate was written in a shape this
@@ -6385,7 +6436,8 @@ and sql_scalar_scan loc ty ~optional =
 (* The `where` fragment, in the same clause shapes the memory predicate supports — so a query
    this backend emits at all is emitted for BOTH stores, and one can never silently read rows
    the other would not. *)
-and sql_where_text ~indent signatures env loc (info : entity_info) binder clauses builder =
+and sql_where_text ?(joins=[]) ~indent signatures env loc (info : entity_info) binder clauses
+    builder =
   let row_env = (binder, TRecord info.ent_row) :: env in
   let bind field expr =
     let ty = entity_column loc info field in
@@ -6430,9 +6482,9 @@ and sql_where_text ~indent signatures env loc (info : entity_info) binder clause
         (sql_placeholder builder
            (emit_expr ~expected:TString ~indent signatures row_env pattern))
   in
-  match clauses with
+  match List.map clause clauses @ joins with
   | [] -> ""
-  | _ -> " where " ^ String.concat " and " (List.map clause clauses)
+  | rendered -> " where " ^ String.concat " and " rendered
 
 and sql_order_text loc (info : entity_info) order =
   match order with
@@ -6526,6 +6578,42 @@ and sql_unique_indexes ~indent loc (info : entity_info) =
         inner row inner same inner inner row inner describe inner indent)
     end) info.ent_indexes
 
+(* `innerJoin E on main.f E.g` filters the MAIN entity's rows to those with a counterpart —
+   the result is still a list of the main entity, so it is an EXISTENCE test rather than a
+   product.  That is what `dsl/sql.rkt`'s memory store does
+   (`in-memory-inner-join-matches?`), and it is the only reading a `List Order` can hold: a
+   real join DUPLICATES a main row for every counterpart.
+
+   Racket's own two backends disagree here — its Postgres path builds an `INNER JOIN`, which
+   duplicates — so the two Go paths agree with each other and with the declared result type,
+   and the divergence is recorded rather than reproduced. *)
+and sql_join_predicate ~indent signatures loc (info : entity_info) binder (join : Sql_query.sql_join) =
+  let joined = entity_of_query loc join.join_entity in
+  let main_ty = entity_column loc info join.main_field in
+  let join_ty = entity_column loc joined join.join_field in
+  if type_unequal main_ty join_ty then unsupported loc
+    "Go backend: `innerJoin %s on %s.%s %s.%s` compares columns of different types"
+    join.join_entity binder join.main_field join.join_entity join.join_field;
+  ignore signatures;
+  Printf.sprintf "teslrt.TableAny(%s, func(teslJoined %s) bool {\n%s\treturn %s\n%s})"
+    (sql_table_ref joined) (sql_row_type joined) indent
+    (equal_expr join_ty
+       (Printf.sprintf "teslJoined.%s" (record_field_go_name join.join_field))
+       (Printf.sprintf "%s.%s" (local_ident binder) (record_field_go_name join.main_field)))
+    indent
+
+(* The same clause as SQL: `exists (select 1 from … where …)`, with both sides of the
+   comparison table-qualified because the subquery sees the outer row's columns too. *)
+and sql_join_exists loc (database : database_info) (info : entity_info)
+    (join : Sql_query.sql_join) =
+  let joined = entity_of_query loc join.join_entity in
+  let main_column = (sql_column_of loc info join.main_field).col_name in
+  let join_column = (sql_column_of loc joined join.join_field).col_name in
+  Printf.sprintf "exists (select 1 from %s where %s.%s = %s.%s)"
+    (sql_qualified_table database joined)
+    (sql_qualified_table database joined) (sql_ident join_column)
+    (sql_qualified_table database info) (sql_ident main_column)
+
 (* The extra arguments a write carries when the entity declares a unique index: none at all
    when it declares none, so a program without one emits exactly what it always did. *)
 and sql_unique_arguments ~indent loc (info : entity_info) =
@@ -6556,12 +6644,16 @@ and emit_sql_form ?(indent="") signatures env loc form =
     let info = entity_of_query loc seed.entity in
     let all_clauses = seed.static_clauses @ clauses in
     sql_check_where_field loc seed.where_field all_clauses;
-    if seed.joins <> [] then unsupported loc
-      "Go backend does not support `innerJoin` yet";
     if seed.group_by <> [] then unsupported loc
       "Go backend does not support `groupBy` yet";
+    (* One level deeper: the semi-join literal sits inside the predicate's own body, whose
+       return line the `split` below writes at `indent + 1`. *)
+    let join_predicates =
+      List.map (sql_join_predicate ~indent:(indent ^ "\t") signatures loc info seed.binder)
+        seed.joins in
     let predicate =
-      emit_sql_predicate ~indent signatures env loc info seed.binder all_clauses in
+      emit_sql_predicate ~joins:join_predicates ~indent signatures env loc info seed.binder
+        all_clauses in
     (* `order p.field asc|desc` becomes the STRICTLY-BEFORE comparison on that column;
        `desc` is the same comparison with its operands swapped, which keeps the sort
        stable in the direction Racket's ordering does. *)
@@ -6593,7 +6685,11 @@ and emit_sql_form ?(indent="") signatures env loc form =
        emitted in BOTH forms and the store is chosen at run time. *)
     let pg = info.ent_database in
     let where builder =
-      sql_where_text ~indent signatures env loc info seed.binder all_clauses builder in
+      let exists = match pg with
+        | Some database -> List.map (sql_join_exists loc database info) seed.joins
+        | None -> [] in
+      sql_where_text ~joins:exists ~indent signatures env loc info seed.binder all_clauses
+        builder in
     let db_ref (database : database_info) = qualified database.db_owner database.db_go_var in
     (match seed.kind with
      | SelectMany ->
@@ -6905,17 +7001,113 @@ and emit_leaf_argument ?(indent="") signatures env name want arg =
     | TNewtype _ -> Printf.sprintf "teslrt.MakeSecret(%s.Value)" (selector_operand emitted)
     | _ -> Printf.sprintf "teslrt.MakeSecret(%s)" emitted
 
-and emit_api_test_body ?(indent="") signatures env value =
-  match literal_json value with
-  | Some json -> go_quote json
+(* Does this template hold a string that INTERPOLATES?  Only asked inside an api-test, where a
+   `{…}` slot in a string literal is a substitution rather than the two characters. *)
+and api_test_interpolates value =
+  !current_api_server <> None
+  && (match value with
+      | ELit { lit = LString text; _ } ->
+        List.exists (function
+          | Emit_racket.ApiTestTemplateExpr _ -> true
+          | Emit_racket.ApiTestTemplateLiteral _ -> false)
+          (Emit_racket.parse_api_test_template_content text)
+      | ERecord { fields; _ } ->
+        List.exists (fun (_, field_value) -> api_test_interpolates field_value) fields
+      | EList { elems; _ } -> List.exists api_test_interpolates elems
+      | _ -> false)
+
+(* An api-test STRING is a template: `cookie "chatUserId={userId}"` and `post "/rooms/{roomId}"`
+   substitute the block's bindings, which is what `emit_racket` does through
+   `api-test-string-fragment`.  The SPLIT is shared with that emitter rather than reproduced —
+   a rule for what counts as an interpolation, written twice, is a rule that drifts, and its
+   corner cases (`"{}"`, `"{\"id\": 1}"`, an unbalanced quote) are exactly where it would.
+
+   Outside an api-test block a string literal is itself; nothing here is reached from ordinary
+   code. *)
+and emit_api_test_string ?(indent="") signatures env value =
+  match value with
+  | ELit { lit = LString text; _ } when !current_api_server <> None ->
+    let parts = Emit_racket.parse_api_test_template_content text in
+    let interpolates = List.exists (function
+      | Emit_racket.ApiTestTemplateExpr _ -> true
+      | Emit_racket.ApiTestTemplateLiteral _ -> false) parts in
+    if not interpolates then emit_expr ~expected:TString ~indent signatures env value
+    else
+      let rendered = List.map (function
+        | Emit_racket.ApiTestTemplateLiteral literal -> go_quote literal
+        | Emit_racket.ApiTestTemplateExpr slot ->
+          let ty = type_of_expr signatures env slot in
+          let encoded = match ty with
+            (* An untyped JSON handle hands over the value it holds; anything else goes
+               through its own encoder, which is the shape the Racket walk produces. *)
+            | TJson -> Printf.sprintf "%s.JsonRaw()"
+                         (selector_operand (emit_expr ~indent signatures env slot))
+            | _ -> Printf.sprintf "%s(%s)" (!value_encoder_hook ty)
+                     (emit_expr ~expected:ty ~indent signatures env slot)
+          in
+          Printf.sprintf "teslrt.ApiTestFragment(%s)" encoded) parts in
+      (match rendered with
+       | [single] -> single
+       | many -> "(" ^ String.concat " + " many ^ ")")
+  | _ -> emit_expr ~expected:TString ~indent signatures env value
+
+(* A JSON template, as the Go expression producing its TEXT.  A template whose values are all
+   literals is that text, computed here; one that SPLICES a binding
+   (`{ "id": roomId, "name": roomName }`) is built at run time through the same encoder a
+   response body goes through, so a test and the code under test cannot disagree about how a
+   value is written. *)
+and emit_json_template ?(indent="") signatures env value =
+  (* The constant shortcut is skipped when a string inside the template INTERPOLATES: the
+     template is then not a constant, whatever `literal_json` makes of its spelling. *)
+  match (if api_test_interpolates value then None else literal_json value) with
+  | Some json -> Some (go_quote json)
   | None ->
-    (* Not a constant template: a String expression is sent as-is (it IS the body), and
+    (match value with
+     | ERecord _ ->
+       Some (Printf.sprintf "teslrt.EncodeJSON(%s)"
+               (json_template_object ~indent signatures env value))
+     | _ -> None)
+
+(* One VALUE inside a template, in the shape the encoder takes.  A nested object or array
+   recurses — `{ "fields": { "roomName": roomId } }` is one template, not an object holding a
+   Tesl record — and anything else goes through its own type's encoder, which is the encoder a
+   response body would use for it. *)
+and json_template_value ?(indent="") signatures env value =
+  match value with
+  (* A string INSIDE a body template interpolates too: `body { "content": "hello {name}" }`. *)
+  | ELit { lit = LString _; _ } when !current_api_server <> None ->
+    emit_api_test_string ~indent signatures env value
+  | ERecord _ -> json_template_object ~indent signatures env value
+  | EList { elems; _ } ->
+    Printf.sprintf "[]any{%s}"
+      (String.concat ", "
+         (List.map (json_template_value ~indent signatures env) elems))
+  | _ ->
+    let ty = type_of_expr signatures env value in
+    Printf.sprintf "%s(%s)" (!value_encoder_hook ty)
+      (emit_expr ~expected:ty ~indent signatures env value)
+
+and json_template_object ?(indent="") signatures env value =
+  match value with
+  | ERecord { fields; _ } ->
+    Printf.sprintf "map[string]any{%s}"
+      (String.concat ", "
+         (List.map (fun (key, field_value) ->
+            Printf.sprintf "%s: %s" (go_quote key)
+              (json_template_value ~indent signatures env field_value)) fields))
+  | _ -> invalid_arg "json template object validated before emission"
+
+and emit_api_test_body ?(indent="") signatures env value =
+  match emit_json_template ~indent signatures env value with
+  | Some rendered -> rendered
+  | None ->
+    (* Not a template at all: a String expression is sent as-is (it IS the body), and
        anything else fails closed rather than being guessed at. *)
     if type_of_expr signatures env value = TString then
       emit_expr ~expected:TString ~indent signatures env value
     else
       unsupported (Checker.expr_loc value)
-        "Go backend api-test body must be a literal JSON template or a String"
+        "Go backend api-test body must be a JSON template or a String"
 
 and emit_interp ?(indent="") signatures env segments =
   let parts = List.map (function
@@ -7084,6 +7276,49 @@ let emit_tail ?self buffer signatures env expected indent expr =
           (emit_expr ~expected ~indent signatures env expr)
       end
     | EWithCapabilities { body; _ } -> go env indent body
+    (* `let (v ::: p) = check g x` inside a CHECK or an AUTH: the rejection PROPAGATES, exactly
+       as it does for a plain `let v = check g x` below.  The proof-DECOMPOSING form was left
+       on the trapping path, so an `auth` that delegated to a check answered 500 where Racket
+       answers the check's own status — `adminAuth` in tests/critical-review-48-auth-api-tests
+       returns 403 there and crashed here. *)
+    | ELetProof { value_name; proof_name; value; body; loc; _ }
+      when (match check_application signatures value, expected with
+            | Some _, TCheck _ -> true
+            | _ -> false) ->
+      let signature, args = match check_application signatures value with
+        | Some pair -> pair
+        | None -> assert false
+      in
+      let inner = match signature.result with
+        | TCheck inner -> inner
+        | _ -> assert false
+      in
+      ignore (type_of_expr signatures env value);
+      Printf.bprintf buffer "%s{\n" indent;
+      Buffer.add_string buffer (line_directive loc);
+      let temporary = Printf.sprintf "teslDelegated%d" (String.length indent) in
+      Printf.bprintf buffer "%s\t%s := %s(%s)\n" indent temporary
+        (qualified signature.sig_owner signature.go_name)
+        (String.concat ", " (List.map2
+           (fun want arg ->
+              emit_leaf_argument ~indent:(indent ^ "\t") signatures env
+                signature.go_name want arg)
+           signature.params args));
+      Printf.bprintf buffer
+        "%s\tif !%s.OK() {\n%s\t\treturn teslrt.Reject[%s](%s.Status(), %s.Message())\n%s\t}\n"
+        indent temporary indent (go_type (match expected with TCheck ty -> ty | ty -> ty))
+        temporary temporary indent;
+      (* Past the guard the check cannot be a rejection, so unwrapping is total. *)
+      if value_name = "_" then
+        Printf.bprintf buffer "%s\t_ = teslrt.MustCheck(%s)\n" indent temporary
+      else
+        Printf.bprintf buffer "%s\t%s := teslrt.MustCheck(%s)\n%s\t_ = %s\n" indent
+          (local_ident value_name) temporary indent (local_ident value_name);
+      if proof_name <> "_" then
+        Printf.bprintf buffer "%s\t%s := struct{}{}\n%s\t_ = %s\n" indent
+          (local_ident proof_name) indent (local_ident proof_name);
+      go ((proof_name, TUnit) :: (value_name, inner) :: env) (indent ^ "\t") body;
+      Printf.bprintf buffer "%s}\n" indent
     (* Proof decomposition in tail position keeps statement form, like an ordinary `let`.
        Either half may be `_`, since the decomposition is often written for one of them. *)
     | ELetProof { value_name; proof_name; value; body; loc; _ } ->
@@ -7846,7 +8081,11 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
           List.iter (fun variant ->
             if variant.var_fields <> [] then unsupported codec.loc
               "Go backend `adtJson` needs constructors without payloads (`%s`)" variant.var_ctor;
-            Printf.bprintf body "\tcase %s:\n\t\treturn %S\n"
+            (* The wire shape is `{"tag": "Ctor"}`, which is what Racket's generated `adtJson`
+               encoder writes — a bare constructor STRING (which this emitted before) reads
+               back as a different value on the other backend, and the two disagreed about
+               every response carrying an enum. *)
+            Printf.bprintf body "\tcase %s:\n\t\treturn map[string]any{\"tag\": %S}\n"
               (qualified info.adt_owner variant.var_tag) variant.var_ctor) info.adt_variants;
           Printf.bprintf body "\t}\n\tpanic(\"unreachable: checker guarantees case exhaustiveness\")\n}\n"
         | _ -> unsupported codec.loc "Go backend `adtJson` needs an ADT type")
@@ -7871,7 +8110,10 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
        (match go_ty with
         | TAdt (info, _) ->
           Printf.bprintf body
-            "\nfunc %s(teslJSON any) teslrt.Check[%s] {\n\tteslName, teslErr := teslrt.DecodeStringValue(teslJSON)\n\tif teslErr != nil {\n\t\treturn teslrt.Reject[%s](400, teslErr.Error())\n\t}\n\tswitch teslName {\n"
+            (* BOTH shapes are accepted, as Racket's generated decoder accepts them: the
+               tagged object its own encoder writes, and a bare string a hand-written or Elm
+               client may send. *)
+            "\nfunc %s(teslJSON any) teslrt.Check[%s] {\n\tteslName, teslErr := teslrt.DecodeAdtTag(teslJSON)\n\tif teslErr != nil {\n\t\treturn teslrt.Reject[%s](400, teslErr.Error())\n\t}\n\tswitch teslName {\n"
             (codec_decode_name type_name) (go_type go_ty) (go_type go_ty);
           List.iter (fun variant ->
             Printf.bprintf body "\tcase %S:\n\t\treturn teslrt.Accept(%s{%s: %s})\n"
@@ -7897,20 +8139,15 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
                 let decoder = match kind with
                   | `String -> "DecodeStringField" | `Int -> "DecodeIntField"
                   | `Bool -> "DecodeBoolField" | `Float -> "DecodeFloatField"
-                  (* DECODING an instant is refused, and the reason is a bug on the OTHER
-                     backend rather than a gap here: `tesl-decode-prim-posix-millis` answers the
-                     bare integer, and a `PosixMillis` field rejects it (the runtime value is a
-                     newtype whose token is a `type-ref` owned by `tesl/time.rkt`, which
-                     `dsl/types.rkt` cannot construct without a late-bound hook).  A body
-                     carrying one therefore answers 400 on Racket for a perfectly well formed
-                     payload.  Emitting the working Go form would mean accepting a program the
-                     other backend rejects, so this fails closed until that is fixed — see
-                     finding 11 in roadmap/next/migrate_to_golang.md.  ENCODING is supported,
-                     which is the direction the corpus uses. *)
-                  | `PosixMillis -> unsupported codec.loc
-                    "Go backend does not support `posixMillisCodec` in a `fromJson` block yet \
-                     (the Racket decoder answers a bare integer that no `PosixMillis` field \
-                     accepts, so such a body is a 400 there)"
+                  (* The millis come back as an Int and the field's own newtype wraps them,
+                     which is what `base_value` below arranges.
+                     Racket cannot do this today — `tesl-decode-prim-posix-millis` answers the
+                     bare integer and a `PosixMillis` field rejects it, so the same body is a
+                     400 there (finding 11).  Go answers correctly rather than reproducing that:
+                     the same call the port has made for `selectCount`'s dropped joins and for
+                     `innerJoin` against a real server.  The divergence is measured, not
+                     inherited. *)
+                  | `PosixMillis -> "DecodeIntField"
                 in
                 Printf.bprintf body
                   "\t%s, teslErr%s := teslrt.%s(teslJSON, %S)\n\tif teslErr%s != nil {\n\t\treturn teslrt.RejectShape[%s](teslErr%s.Error())\n\t}\n"
@@ -8418,8 +8655,14 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
 
 let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_path package
     signatures (tests : test_form list) =
+  (* `pending_helpers` is cleared so the test file emits only what IT introduces, but
+     `helper_names` is NOT: the two files are one Go package, and restarting the numbering
+     minted a name module.go had already used for a different helper.  `module_helpers` then
+     suppressed the duplicate definition and the test file silently called the module's
+     function — `hasField "body" job` reached an encoder written for another type, which Go
+     caught only because the two types differ.  Keeping the numbering monotonic makes a
+     repeated name mean the same helper and nothing else. *)
   Hashtbl.reset pending_helpers;
-  Hashtbl.reset helper_names;
   let body = Buffer.create 1024 in
   (* Numbers the operand bindings a comparison introduces, unique across the file. *)
   let expect_operand = ref 0 in
@@ -9377,6 +9620,33 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
          | Some op -> Hashtbl.replace proof_op_functions f.name op
          | None -> ())
       | _ -> ()) m.decls;
+    (* ONE Postgres-backed database per module, because only one can ever be CONNECTED.
+       `main`'s `App { database: X }` names a single database and is the only thing that
+       connects (Racket keeps one `current-database-runtime`; this backend keeps one binding
+       per declaration and only the App's is ever bound).  A second Postgres database would
+       therefore compile, route its entities' queries to a connection nothing opens, and read
+       the IN-MEMORY table in production — silently, with the same rows a test would see.
+       That is worse than not compiling, so it does not compile.
+
+       This became reachable when the free-floating `with database D { … }` block was removed
+       (2026-08-17): before that a program could wrap the second database's queries to bind it.
+       The block is gone because every other use of it was a no-op and the one non-no-op
+       position silently dropped the name — and multiple databases deserve a better answer
+       than a scoping block, when someone needs them. *)
+    (match List.filter_map (function
+       | DDatabase d ->
+         let d = Desugar.desugar_database_config d in
+         (match String.lowercase_ascii d.backend with
+          | "memory" -> None
+          | _ -> Some (d.name, d.loc))
+       | _ -> None) m.decls with
+     | (first, _) :: ((second, loc) :: _) ->
+       unsupported loc
+         "Go backend supports one Postgres-backed database per module: `%s` is declared \
+          beside `%s`, and only the one `main`'s `App { database: … }` names is ever \
+          connected — the other's queries would read the in-memory store instead"
+         second first
+     | _ -> ());
     (* Every package-level Go name is minted here, in declaration order, so the
        emitted names are deterministic and provably distinct. *)
     let taken : (string, unit) Hashtbl.t = Hashtbl.create 32 in
@@ -11580,9 +11850,48 @@ let compile_project ?(mode=Release) ~(entry : module_form) (modules : module_for
      | Error errors -> Error errors
      | Ok artifacts ->
        (* On a duplicate path the FIRST wins, and dependencies are emitted first, so the
-          shared artifacts (go.mod, lint config, runtime) come from whichever module
-          needed them earliest — they are byte-identical either way. *)
+          shared artifacts (the lint config, the runtime files) come from whichever module
+          needed them earliest — those are byte-identical either way. *)
        let seen = Hashtbl.create 16 in
-       Ok (List.filter (fun (artifact : artifact) ->
+       let deduped = List.filter (fun (artifact : artifact) ->
          if Hashtbl.mem seen artifact.path then false
-         else begin Hashtbl.add seen artifact.path (); true end) artifacts))
+         else begin Hashtbl.add seen artifact.path (); true end) artifacts in
+       (* `go.mod` and `go.sum` are NOT byte-identical across modules: each names the
+          dependencies ITS module needs, and taking the first one shipped a manifest missing
+          whatever a LATER module required — a project whose database is declared in one module
+          and whose entry point is another got the pgx runtime files with a go.mod requiring
+          nothing, which does not build.  They are rebuilt here from the union of what the
+          emitted tree actually references. *)
+       let references marker =
+         List.exists (fun (artifact : artifact) ->
+           let is_go = Filename.check_suffix artifact.path ".go" in
+           is_go && contains_go_code artifact.contents marker) deduped
+       in
+       let needs_password =
+         List.exists references
+           [ "teslrt.HashPassword"; "teslrt.CheckPassword"; "teslrt.NeedsRehash";
+             "teslrt.PasswordHash" ] in
+       let needs_postgres =
+         List.exists references [ "teslrt.NewDatabase"; "teslrt.WithDatabase"; "teslrt.PgSql" ] in
+       let requires =
+         (if needs_password then
+            "\nrequire golang.org/x/crypto v0.55.0\n\nrequire golang.org/x/sys v0.47.0 // indirect\n"
+          else "")
+         ^ (if needs_postgres then postgres_dependency_go_mod else "") in
+       let checksums =
+         (if needs_password then password_dependency_go_sum else "")
+         ^ (if needs_postgres then postgres_dependency_go_sum else "") in
+       let rebuilt = List.filter_map (fun (artifact : artifact) ->
+         if artifact.path = "go.mod" then
+           Some { artifact with
+                  contents = Printf.sprintf "module %s\n\ngo 1.26\n%s" project_path requires }
+         else if artifact.path = "go.sum" then
+           (if checksums = "" then None else Some { artifact with contents = checksums })
+         else Some artifact) deduped in
+       (* A go.sum is needed even when no module emitted one, which happens when the module
+          that requires a dependency is not the one that emitted the manifest. *)
+       let rebuilt =
+         if checksums = "" || List.exists (fun (a : artifact) -> a.path = "go.sum") rebuilt
+         then rebuilt
+         else rebuilt @ [{ path = "go.sum"; contents = checksums }] in
+       Ok rebuilt)
