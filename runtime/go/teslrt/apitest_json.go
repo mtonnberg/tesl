@@ -42,7 +42,13 @@ func (value JsonValue) JsonRaw() any { return value.raw }
 
 // JsonParseBody parses a response body for inspection. An empty body is JSON null — a
 // handler that answered `204` has nothing to inspect, and that is not a test failure by
-// itself. A malformed body traps: the test asked to look inside a body that is not JSON.
+// itself.
+//
+// A body that is NOT JSON is the body as TEXT, which is what Racket's api-test holds: it
+// keeps the raw string and lets a field read on it answer null. Not every response a server
+// sends is JSON — the SSO failure page is a fixed HTML document — and trapping here made
+// `expect resp.status == 401` fail on a response whose STATUS was exactly what the test
+// asked about.
 func JsonParseBody(body string) JsonValue {
 	trimmed := strings.TrimSpace(body)
 	if trimmed == "" {
@@ -50,7 +56,7 @@ func JsonParseBody(body string) JsonValue {
 	}
 	parsed, err := ParseJSON([]byte(trimmed))
 	if err != nil {
-		panic("api-test: response body is not JSON: " + err.Error())
+		return JsonOf(body)
 	}
 	return JsonOf(parsed)
 }

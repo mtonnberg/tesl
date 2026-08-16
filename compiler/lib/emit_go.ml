@@ -5161,8 +5161,15 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
                  in
                  Printf.sprintf "{Tuple2First: %s, Tuple2Second: %s}" (go_quote name) emitted)
                  fields))
+          (* A DICT of headers: `headers (onHost())`.  The surface takes either a literal
+             template or a `Dict String String`, and a shared helper — the one every test in
+             a `publicOrigin` server needs for its Host header — answers the second. *)
+          | Some other when type_of_expr signatures env other = TDict (TString, TString) ->
+            Printf.sprintf "teslrt.DictToList(%s)"
+              (emit_expr ~expected:(TDict (TString, TString)) ~indent signatures env other)
           | Some other -> unsupported (Checker.expr_loc other)
-            "Go backend api-test `headers` must be a `{ \"name\": value }` template"
+            "Go backend api-test `headers` must be a `{ \"name\": value }` template or a \
+             `Dict String String`"
         in
         Printf.sprintf "teslrt.ApiRequest(%s, %S, %s, %s, %s, %s)" server
           (String.uppercase_ascii verb)
@@ -10420,6 +10427,56 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
         sse_endpoints;
       Buffer.add_string body "\t},\n"
     end;
+    (* ── The runtime-owned SSO routes ─────────────────────────────────────
+       An `sso "<seg>" connection <fn> onIdentity <fn>` clause mints /auth/<seg>/login and
+       /auth/<seg>/callback.  The connection and the session key are THUNKS: both read the
+       environment, which a test sets per case, so reading them at boot would freeze the
+       first value the process ever saw.  `onIdentity` is app code the RUNTIME owns the call
+       to — it runs after the identity is verified and the domain rules applied. *)
+    if server.sso_clauses <> [] then begin
+      let session_key_env = match server.sso_session_key_env with
+        | Some name -> name
+        | None -> unsupported server.loc
+          "Go backend needs `sessionKey \"ENV_VAR\"` on a server that declares `sso`"
+      in
+      let public_origin = match server.public_origin with
+        | Some (POLiteral origin) -> go_quote origin
+        (* `publicOrigin fromEnv "VAR"`: read where it is used, not baked in, so a
+           deployment can move without a rebuild. *)
+        | Some (POEnv name) -> Printf.sprintf "teslrt.EnvString(%s, \"\")" (go_quote name)
+        | None -> unsupported server.loc
+          "Go backend needs `publicOrigin` on a server that declares `sso`: it is the \
+           redirect_uri's base"
+      in
+      let after_login = match server.after_login with
+        | Some path -> path
+        | None -> "/"
+      in
+      Buffer.add_string body "\tSsoRoutes: []teslrt.SsoRoute{\n";
+      List.iter (fun (segment, connection_fn, on_identity_fn) ->
+        let resolve name what = match Hashtbl.find_opt signatures name with
+          | Some signature -> qualified signature.sig_owner signature.go_name
+          | None -> unsupported server.loc
+            "Go backend cannot resolve the `sso` %s function `%s`" what name
+        in
+        (* The keys are ALIGNED as gofmt aligns a run of them — `PublicOrigin:` is the
+           longest, so every value starts in its column.  Emitting them unaligned is a file
+           gofmt would rewrite, which the gate reads as an emitter bug. *)
+        let field name value =
+          Printf.bprintf body "\t\t\t%-13s %s,\n" (name ^ ":") value in
+        Buffer.add_string body "\t\t{\n";
+        field "Segment" (Printf.sprintf "%S" segment);
+        field "Connection" (resolve connection_fn "connection");
+        field "OnIdentity" (resolve on_identity_fn "onIdentity");
+        field "SessionKey"
+          (Printf.sprintf "func() teslrt.Secret { return teslrt.RequireSecret(%s) }"
+             (go_quote session_key_env));
+        field "PublicOrigin" public_origin;
+        field "AfterLogin" (Printf.sprintf "%S" after_login);
+        Buffer.add_string body "\t\t},\n")
+        server.sso_clauses;
+      Buffer.add_string body "\t},\n"
+    end;
     Buffer.add_string body "}\n";
     current_scope_in_hand := false) servers;
   (* Comparator helpers the body referenced, in name order so the output is
@@ -11422,6 +11479,23 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | "ProxyBound" | "Proxy.verifyBinding" -> ()
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.Proxy` export `%s` yet" other) exposed
+      (* `Tesl.Sso` is the identity-provider surface.  Every value in it is OPAQUE — a
+         connection, a subject key, an identity — because what makes them trustworthy is the
+         path they came down: `Sso.defaults` or `Sso.oidc` builds a connection, the RUNTIME
+         drives the flow, and an app first sees an identity at `onIdentity`, after the
+         signature, the claims and the domain rules have all been applied.  The leaves and
+         types register below, where the `Secret` their credentials use is in hand. *)
+      | "Tesl.Sso" ->
+        List.iter (fun name ->
+          match name with
+          | "SsoConnection" | "SsoSubjectKey" | "SsoIdentity" | "SsoProvider"
+          | "Github" | "Google"
+          | "Sso.defaults" | "Sso.oidc" | "Sso.keyText" | "Sso.subject"
+          | "Sso.email" | "Sso.tenant" | "Sso.claim"
+          | "Sso.allowedEmailDomains" | "Sso.allowedHostedDomains" | "Sso.allowedTenants"
+          | "Sso.logoutUrl" -> ()
+          | other -> unsupported import.loc
+            "Go backend does not support `Tesl.Sso` export `%s` yet" other) exposed
       | "Tesl.Crypto" ->
         List.iter (fun name ->
           match name with
@@ -12433,6 +12507,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       "Crypto.sha256"; "Crypto.sha512";
     ] in
     let crypto_imports = ref [] in
+    let sso_imported = ref false in
     let jwt_imports = ref [] in
     let jwt_type_needed = ref false in
     let secret_type_needed = ref false in
@@ -12446,6 +12521,11 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         List.iter (fun name ->
           if List.mem name crypto_leaf_names then crypto_imports := name :: !crypto_imports)
           exposed
+      (* An SSO connection holds the client SECRET, so importing the module brings that type
+         into play even when the program never names it. *)
+      | "Tesl.Sso" ->
+        secret_type_needed := true;
+        sso_imported := true
       (* The proxy binding is verified against a `Secret`, so it registers through the same
          block the crypto leaves do — that is where the type is in hand. *)
       | "Tesl.Proxy" ->
@@ -13715,6 +13795,69 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       Hashtbl.replace signatures name
         { params; result; go_name; sig_owner = ""; sig_needs_scope = false })
       !time_imports;
+    (* ── `Tesl.Sso` ────────────────────────────────────────────────────────
+       Every value here is OPAQUE, and that is the design rather than an omission: what makes
+       an identity trustworthy is the path it came down — a connection built by
+       `Sso.defaults`/`Sso.oidc`, a flow the RUNTIME drives, and an app that first sees the
+       result at `onIdentity`, after the signature, the claims and the domain rules.  A
+       program that could assemble an `SsoIdentity` could assert one. *)
+    if !sso_imported then begin
+      let loc = Location.dummy_loc m.source_file in
+      let opaque name go_name =
+        let info = {
+          rec_tesl_name = name;
+          rec_owner = "";
+          rec_go_name = go_name;
+          rec_proof_fields = false;
+          rec_fields = [];
+          rec_loc = loc;
+        } in
+        Hashtbl.replace types.records name info;
+        TRecord info
+      in
+      let connection = opaque "SsoConnection" "teslrt.SsoConnection" in
+      let identity = opaque "SsoIdentity" "teslrt.SsoIdentity" in
+      let subject_key = opaque "SsoSubjectKey" "teslrt.SsoSubjectKeyValue" in
+      (* A provider is one of a FIXED set, so each constructor is a VALUE — the string the
+         runtime's defaults table is keyed by, written at the call site as `Github`. *)
+      Hashtbl.replace types.aliases "SsoProvider" TString;
+      Hashtbl.replace types.consts "Github" (TString, go_quote "GitHub");
+      Hashtbl.replace types.consts "Google" (TString, go_quote "Google");
+      let secret = match Hashtbl.find_opt types.newtypes "Secret" with
+        | Some info -> TNewtype info
+        | None -> unsupported loc "Go backend `Tesl.Sso` needs its `Secret` type"
+      in
+      (* The three accessors that answer a `Maybe` register only when the module is in
+         scope.  A program that never imported it cannot have called them — the checker
+         refuses the name — so this is the difference between registering nothing and
+         refusing a program that is fine. *)
+      let maybe_string = match Hashtbl.find_opt types.adts "Maybe" with
+        | Some info -> Some (TAdt (info, [TString]))
+        | None -> None
+      in
+      let maybe_leaves = match maybe_string with
+        | None -> []
+        | Some answer ->
+          [ "Sso.email", [identity], answer, "teslrt.SsoEmail";
+            "Sso.tenant", [identity], answer, "teslrt.SsoTenant";
+            "Sso.claim", [identity; TString], answer, "teslrt.SsoClaim" ]
+      in
+      List.iter (fun (name, params, result, go_name) ->
+        Hashtbl.replace signatures name
+          { params; result; go_name; sig_owner = ""; sig_needs_scope = false })
+        (maybe_leaves @
+        [ "Sso.defaults", [TString; TString; secret], connection, "teslrt.SsoDefaults";
+          "Sso.oidc", [TString; TString; secret], connection, "teslrt.SsoOidc";
+          "Sso.allowedEmailDomains", [connection; TList TString], connection,
+            "teslrt.SsoAllowedEmailDomains";
+          "Sso.allowedHostedDomains", [connection; TList TString], connection,
+            "teslrt.SsoAllowedHostedDomains";
+          "Sso.allowedTenants", [connection; TList TString], connection,
+            "teslrt.SsoAllowedTenants";
+          "Sso.logoutUrl", [connection; TString], TString, "teslrt.SsoLogoutURL";
+          "Sso.keyText", [subject_key], TString, "teslrt.SsoKeyText";
+          "Sso.subject", [identity], TString, "teslrt.SsoSubject" ])
+    end;
     if !crypto_imports <> [] then begin
       let loc = Location.dummy_loc m.source_file in
       let secret = match Hashtbl.find_opt types.newtypes "Secret" with
@@ -14266,7 +14409,11 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             (* The SSE ROUTE and the api-test subscription need the server and the JSON view;
                the channel itself (sse.go) does not, so a module that only publishes ships
                no HTTP runtime. *)
-            "sse_http.go" ] in
+            "sse_http.go";
+            (* The SSO routes are part of the SERVER: `sso_route.go` names `Server` and
+               `handleSsoRequest` is called from its dispatch, so it cannot ship without the
+               HTTP half — and there is nothing for it to do in a program with no server. *)
+            "sso.go"; "sso_flow.go"; "sso_route.go"; "jws.go" ] in
         (* `loadtest.go` imports `testing`, so it ships ONLY with a module that has load tests:
            the testing package has no place in a production binary. *)
         let load_test_only = [ "loadtest.go" ] in

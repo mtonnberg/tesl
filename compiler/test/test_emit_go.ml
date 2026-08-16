@@ -10493,6 +10493,248 @@ fn twice(n: Int) -> Int = n * 2
     check bool "no regex runtime in a module that matches nothing" false
       (List.exists (fun (a : Emit_go.artifact) -> a.path = "internal/teslrt/regex.go") artifacts)
 
+(* ── `Tesl.Sso`: the runtime-owned login routes ───────────────────────────────
+   An `sso "<seg>" connection <fn> onIdentity <fn>` clause mints /auth/<seg>/login and
+   /auth/<seg>/callback. They are not handlers a program writes, and that is the point: the
+   OAuth2/OIDC dance belongs to the runtime, and what reaches app code is ONE already-verified
+   identity, at `onIdentity`, after the signature, the claims and the domain rules.
+
+   Every value in the module is OPAQUE for the same reason — a program that could assemble an
+   `SsoIdentity` could assert one.
+
+   The api-test below drives a whole GitHub login through the stubbed HTTP client: the login
+   redirect (with PKCE S256 and a sealed `__Host-oauth` cookie), the code exchange, the
+   userinfo and verified-primary-email calls, and the session the callback mints. The Racket
+   oracle beside it runs the same flow through `dsl/sso.rkt`. *)
+let sso_source = {|module GoSso exposing [githubConn, linkUser, me, sessionKey]
+
+import Tesl.Prelude exposing [Bool(..), Int, String]
+import Tesl.Sso exposing [
+  SsoConnection,
+  SsoIdentity,
+  Github,
+  Sso.defaults,
+  Sso.subject,
+]
+import Tesl.Time exposing [time]
+import Tesl.Env exposing [envRead, requireSecret]
+import Tesl.HttpClient exposing [httpClient]
+import Tesl.Crypto exposing [Secret]
+import Tesl.JWT exposing [jwt, JWT.sign, JWT.verify]
+import Tesl.Http exposing [HttpRequest, Http.sessionToken]
+import Tesl.Dict exposing [Dict, Dict.singleton, Dict.lookup]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.String exposing [String.contains, String.indexOf, String.length, String.slice]
+import Tesl.ApiTest exposing [stubHttp, httpCalled, responseCookie, statusOk]
+import Tesl.Database exposing [Database, DatabaseBackend, Memory]
+import Tesl.App exposing [App]
+
+# The one capability the session surface needs, named once so every function that
+# touches a session declares the same thing.
+capability sessions implies jwt, time, envRead
+
+record Profile {
+  userId: String
+}
+
+record User {
+  id: String
+}
+
+fact Authenticated (u: User)
+
+fn sessionKey() -> Secret requires [envRead] = requireSecret "GO_SSO_SESSION_KEY"
+
+fn githubConn() -> SsoConnection requires [envRead] =
+  Sso.defaults Github "demo-github-client-id" (requireSecret "GO_SSO_CLIENT_SECRET")
+
+fn linkUser(identity: SsoIdentity) -> String = Sso.subject identity
+
+fn subjectOf(claims: Dict String String) -> String =
+  case Dict.lookup "sub" claims of
+    Nothing -> ""
+    Something subject -> subject
+
+auth sessionOwner(request: HttpRequest) -> user: User ::: Authenticated user
+  requires [sessions] =
+  case Http.sessionToken request of
+    Nothing -> fail 401 "no session"
+    Something token ->
+      let claims = check JWT.verify token (sessionKey())
+      ok (User { id: subjectOf claims }) ::: Authenticated user
+
+handler get me(user: User ::: Authenticated user) -> Profile =
+  Profile { userId: user.id }
+
+api SsoApi {
+  get "/me"
+    auth user: User ::: Authenticated user via sessionOwner
+    -> Profile
+}
+
+server SsoServer for SsoApi {
+  me
+  sso "github" connection githubConn onIdentity linkUser
+  publicOrigin "https://app.example.com"
+  sessionKey "GO_SSO_SESSION_KEY"
+  afterLogin "/me"
+  loginMethods [Sso]
+}
+
+database SsoDb = Database {
+  entities: []
+  backend: Memory
+}
+
+main() -> App requires [sessions, httpClient, envRead] =
+  App {
+    database: SsoDb
+    api: SsoServer
+    port: 8080
+  }
+
+fn onHost() -> Dict String String = Dict.singleton "Host" "app.example.com"
+
+fn valueOf(url: String, key: String) -> String =
+  let marker = key ++ "="
+  case String.indexOf url marker of
+    Nothing -> ""
+    Something at ->
+      let rest = String.slice url (at + String.length marker) (String.length url)
+      case String.indexOf rest "&" of
+        Nothing -> rest
+        Something amp -> String.slice rest 0 amp
+
+# No network is needed for the redirect: a blessed provider's endpoints are baked in.
+api-test "the login redirect carries PKCE S256 and no secret" for SsoServer requires [sessions] {
+  let resp = get "/auth/github/login" headers (onHost())
+  expect resp.status == 303
+  case Dict.lookup "location" resp.headers of
+    Nothing -> expect False
+    Something location ->
+      expect String.contains location "https://github.com/login/oauth/authorize"
+      expect String.contains location "code_challenge_method=S256"
+      expect String.contains location "redirect_uri=https%3A%2F%2Fapp.example.com"
+      # The client SECRET never travels in a URL — it goes in the Authorization header of
+      # the token exchange, and nowhere else.
+      expect String.contains location "client_secret" == False
+}
+
+api-test "an unknown segment is not a login route" for SsoServer requires [sessions] {
+  let resp = get "/auth/nope/login" headers (onHost())
+  expect resp.status == 404
+}
+
+# A callback with no in-flight cookie is a FIXED failure page, never a 500 and never
+# the provider's own text.
+api-test "a callback with no in-flight state fails closed" for SsoServer requires [sessions] {
+  let resp = get "/auth/github/callback?code=c&state=s" headers (onHost())
+  expect resp.status == 401
+}
+
+api-test "a whole GitHub login" for SsoServer requires [httpClient, sessions] {
+  let login = get "/auth/github/login" headers (onHost())
+  let location = case Dict.lookup "location" login.headers of
+    Nothing -> ""
+    Something loc -> loc
+  let state = valueOf location "state"
+  expect String.length state > 0
+
+  let oauthCookie = case responseCookie login of
+    Nothing -> ""
+    Something pair -> pair
+  expect String.contains oauthCookie "__Host-oauth="
+
+  stubHttp "POST" "https://github.com/login/oauth/access_token" 200
+    "{\"access_token\": \"gh-test-token\"}"
+  stubHttp "GET" "https://api.github.com/user" 200
+    "{\"id\": 4242, \"name\": \"Ada Lovelace\"}"
+  stubHttp "GET" "https://api.github.com/user/emails" 200
+    "[{\"email\": \"ada@example.com\", \"primary\": true, \"verified\": true}]"
+
+  let cb = get ("/auth/github/callback?code=test-code&state=" ++ state)
+    cookie oauthCookie headers (onHost())
+  expect cb.status == 303
+  expect httpCalled "POST" "https://github.com/login/oauth/access_token"
+
+  # The response both SETS the session and CLEARS the spent in-flight cookie, and the
+  # one that survives for a round trip is the one that sets a value.
+  case responseCookie cb of
+    Nothing -> expect False
+    Something sessionCookie ->
+      let profile = get "/me" cookie sessionCookie headers (onHost())
+      expect statusOk profile.status
+      expect profile.body.userId == "4242"
+}
+
+# The state is single-use: presenting the same callback twice is a replay.
+api-test "a replayed callback is refused" for SsoServer requires [httpClient, sessions] {
+  let login = get "/auth/github/login" headers (onHost())
+  let location = case Dict.lookup "location" login.headers of
+    Nothing -> ""
+    Something loc -> loc
+  let state = valueOf location "state"
+  let oauthCookie = case responseCookie login of
+    Nothing -> ""
+    Something pair -> pair
+
+  stubHttp "POST" "https://github.com/login/oauth/access_token" 200
+    "{\"access_token\": \"gh-test-token\"}"
+  stubHttp "GET" "https://api.github.com/user" 200
+    "{\"id\": 4242, \"name\": \"Ada Lovelace\"}"
+  stubHttp "GET" "https://api.github.com/user/emails" 200
+    "[{\"email\": \"ada@example.com\", \"primary\": true, \"verified\": true}]"
+
+  let path = "/auth/github/callback?code=test-code&state=" ++ state
+  let first = get path cookie oauthCookie headers (onHost())
+  expect first.status == 303
+  let second = get path cookie oauthCookie headers (onHost())
+  expect second.status == 401
+}
+|}
+
+let test_sso_with_go () =
+  let emitted = match Compile.compile_go_source "<go-sso>" sso_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "SSO compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgosso/module.go" emitted in
+  (* The clause becomes a route the SERVER carries, not a handler the program wrote. *)
+  check bool "the sso clause mints a runtime-owned route" true
+    (contains module_go "SsoRoutes: []teslrt.SsoRoute{");
+  check bool "the connection is a thunk, read per request" true
+    (contains module_go "Connection:   GithubConn");
+  check bool "the session key is read from the declared variable" true
+    (contains module_go "teslrt.RequireSecret(\"GO_SSO_SESSION_KEY\")");
+  (* `publicOrigin` is the redirect_uri's base and is NEVER derived from a request. *)
+  check bool "the public origin comes from the clause" true
+    (contains module_go "PublicOrigin: \"https://app.example.com\"");
+  let sso_go = artifact "internal/teslrt/sso.go" emitted in
+  check bool "the identity key is length-prefixed before hashing" true
+    (contains sso_go "binary.BigEndian.PutUint64");
+  check bool "the in-flight cookie is MAC'd under a derived subkey" true
+    (contains sso_go "oauthCookieKdfContext");
+  let jws_go = artifact "internal/teslrt/jws.go" emitted in
+  check bool "a token that nominates its own key is refused" true
+    (contains jws_go "nominatedHeaderKeys");
+  check bool "alg:none is refused" true (contains jws_go "alg:none refused");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-sso" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root
+        "GO_SSO_SESSION_KEY=go-sso-signing-key GO_SSO_CLIENT_SECRET=go-sso-client-secret \
+         go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      run_go_gates root)
+  end
+
 (* ── A queue carrying more than one job type ──────────────────────────────────
    The store holds a payload as `any` precisely so one queue can carry several job types,
    and the emitter is what knows them: each worker call site becomes a type SWITCH over the
@@ -11732,6 +11974,12 @@ let () =
         (racket_behavior_oracle "<go-regex>" regex_source);
       test_case "the regex runtime ships only where used" `Quick
         test_regex_runtime_ships_only_where_used;
+      test_case "Tesl.Sso: the runtime-owned login routes" `Slow test_sso_with_go;
+      test_case "Tesl.Sso behaves the same on Racket" `Slow
+        (racket_behavior_oracle
+           ~env:["GO_SSO_SESSION_KEY=go-sso-signing-key";
+                 "GO_SSO_CLIENT_SECRET=go-sso-client-secret"]
+           "<go-sso>" sso_source);
       test_case "a queue carrying more than one job type" `Slow test_multi_job_queue_with_go;
       test_case "a queue carrying more than one job type behaves the same on Racket" `Slow
         (racket_behavior_oracle "<go-multi-job>" multi_job_queue_source);

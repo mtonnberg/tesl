@@ -57,6 +57,10 @@ type Server struct {
 	// Streams holds the SSE endpoints, keyed like Handlers. A route resolves to one or the
 	// other, never both: `sse` and the request/response methods are different declarations.
 	Streams map[string]StreamFunc
+	// The runtime-owned SSO routes an `sso "<seg>"` clause mints. They are matched BEFORE
+	// the declared ones and they own their whole response — a 303 with cookies, not the JSON
+	// envelope every handler answers in — so they cannot be expressed as a Handler.
+	SsoRoutes []SsoRoute
 }
 
 // ServeHTTP dispatches by method and path. A path segment written `:name` in the route
@@ -96,6 +100,17 @@ func (server Server) ServeHTTP(writer http.ResponseWriter, request *http.Request
 	// them too.
 	if refusal, refused := requestRefusal(request); refused {
 		writeResponse(writer, nil, refusal)
+		return
+	}
+	// The SSO routes are matched FIRST. `/auth/<seg>/login` is runtime-owned, and a declared
+	// route that happened to share the path would otherwise shadow a login — the same
+	// precedence dsl/web.rkt gives them.
+	if route, kind, matched := findSsoMatch(server.SsoRoutes, request.URL.Path); matched {
+		if request.Method != http.MethodGet {
+			writeResponse(writer, nil, Fail(405, "method not allowed"))
+			return
+		}
+		handleSsoRequest(route, kind, writer, request)
 		return
 	}
 	pathMatched := false

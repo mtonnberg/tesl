@@ -202,8 +202,24 @@ func StartWorkers(queue *Queue, handler func(any) JobOutcome, concurrency int, d
 var publicOriginOnce sync.Once
 var publicOrigin string
 
-// PublicOrigin is `TESL_PUBLIC_ORIGIN` when set: the origin this deployment answers as.
+// The `publicOrigin` server clause, when the program declares one. It TAKES PRECEDENCE over
+// the environment variable: the clause is compile-time validated and the variable is not,
+// and a deployment that declared its origin should not answer as another because a stray
+// variable disagreed. The same precedence the Racket parameter has.
+var (
+	publicOriginMutex    sync.RWMutex
+	publicOriginOverride string
+)
+
+// PublicOrigin is the declared origin, else `TESL_PUBLIC_ORIGIN`: the origin this deployment
+// answers as. Never derived from a request — a Host header is exactly what it guards.
 func PublicOrigin() string {
+	publicOriginMutex.RLock()
+	declared := publicOriginOverride
+	publicOriginMutex.RUnlock()
+	if declared != "" {
+		return declared
+	}
 	publicOriginOnce.Do(func() {
 		publicOrigin = strings.TrimSpace(os.Getenv("TESL_PUBLIC_ORIGIN"))
 	})
