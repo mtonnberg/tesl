@@ -10357,6 +10357,142 @@ let test_property_generators_with_go () =
       run_go_gates root)
   end
 
+(* ── `Tesl.Regex` ────────────────────────────────────────────────────────────
+   Six functions over String, pattern first, and the Racket oracle beside them agrees on
+   every one — the patterns a program may write are the compiler-checked subset, which is
+   common ground between `pregexp` and RE2.
+
+   ONE deliberate difference, and it is a strengthening: Racket runs every match in its own
+   thread under a wall-clock deadline, because its matcher backtracks.  Go's `regexp` is RE2
+   — linear in the input and the pattern, and unable to express the constructs that make
+   backtracking blow up, which are the same ones the compiler's lint already refuses.  The
+   bound the deadline existed to give holds by construction, so a timeout knob that can
+   never fire would be a promise about scheduling rather than about work.  The INPUT bound
+   is kept: it is about memory.
+
+   The property worth a test of its own is the replacement: it is inserted LITERALLY, so a
+   replacement built from user data cannot be reinterpreted as a substitution directive.
+   Go's `ReplaceAllString` WOULD expand `$1`. *)
+let regex_source = {|module GoRegex exposing [looksLikeSlug, firstNumber, allNumbers, parts, redact, fields]
+
+import Tesl.Prelude exposing [Int, String, Bool(..), List]
+import Tesl.Regex exposing [
+  Regex.matches,
+  Regex.find,
+  Regex.findAll,
+  Regex.captures,
+  Regex.replace,
+  Regex.split,
+]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.List exposing [List.length]
+
+fn looksLikeSlug(s: String) -> Bool =
+  Regex.matches "^[a-z0-9]+(?:-[a-z0-9]+)*$" s
+
+fn firstNumber(s: String) -> Maybe String =
+  Regex.find "[0-9]+" s
+
+fn allNumbers(s: String) -> List String =
+  Regex.findAll "[0-9]+" s
+
+fn parts(s: String) -> Maybe (List String) =
+  Regex.captures "([a-z]+)-([0-9]+)" s
+
+# The replacement is inserted LITERALLY: a replacement built from user data can
+# never be reinterpreted as a substitution directive.
+fn redact(s: String) -> String =
+  Regex.replace "[0-9]+" s "#"
+
+fn fields(s: String) -> List String =
+  Regex.split "," s
+
+test "matches is unanchored unless the pattern says otherwise" {
+  expect Regex.matches "cat" "the cat sat"
+  expect Regex.matches "^cat$" "the cat sat" == False
+  expect looksLikeSlug "hello-world-2"
+  expect looksLikeSlug "Hello" == False
+  expect looksLikeSlug "-leading" == False
+}
+
+test "find answers the first match, or nothing" {
+  expect firstNumber "abc 42 def 7" == Something "42"
+  expect firstNumber "abc" == Nothing
+}
+
+test "findAll answers every match, left to right" {
+  expect allNumbers "a1 b22 c333" == ["1", "22", "333"]
+  expect List.length (allNumbers "abc") == 0
+}
+
+test "captures excludes the whole match" {
+  expect parts "id: abc-42 rest" == Something ["abc", "42"]
+  expect parts "nothing here" == Nothing
+}
+
+# Group references are ordinary characters in the replacement.
+test "replace inserts the replacement literally" {
+  expect redact "a1b22c" == "a#b#c"
+  expect Regex.replace "([a-z])([0-9])" "a1" "$2$1" == "$2$1"
+  expect Regex.replace "([a-z])([0-9])" "a1" "&" == "&"
+  expect Regex.replace "cat" "the cat sat" "dog" == "the dog sat"
+}
+
+test "split keeps the empty pieces" {
+  expect fields "a,b,c" == ["a", "b", "c"]
+  expect fields ",a,,b," == ["", "a", "", "b", ""]
+  expect List.length (fields "") == 1
+}
+|}
+
+let test_regex_with_go () =
+  let emitted = match Compile.compile_go_source "<go-regex>" regex_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "regex compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgoregex/module.go" emitted in
+  check bool "the pattern is the first argument, as written" true
+    (contains module_go "teslrt.RegexMatches(\"^[a-z0-9]+(?:-[a-z0-9]+)*$\", s)");
+  check bool "find answers a Maybe" true (contains module_go "teslrt.RegexFind(");
+  check bool "captures answers a Maybe of the group list" true
+    (contains module_go "teslrt.RegexCaptures(");
+  (* The one that would be a security bug if it went through the expanding form. *)
+  let runtime_go = artifact "internal/teslrt/regex.go" emitted in
+  check bool "replace uses the literal form" true
+    (contains runtime_go "ReplaceAllLiteralString");
+  check bool "replace never uses the expanding form" false
+    (contains runtime_go "ReplaceAllString(");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-regex" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+  end
+
+(* A program that matches nothing must not carry the regex runtime. *)
+let test_regex_runtime_ships_only_where_used () =
+  let plain = {|module GoNoRegex exposing [twice]
+import Tesl.Prelude exposing [Int]
+
+fn twice(n: Int) -> Int = n * 2
+|} in
+  match Compile.compile_go_source "<go-no-regex>" plain with
+  | Compile.GoFailure diagnostics ->
+    failf "plain module failed: %s"
+      (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  | Compile.GoSuccess artifacts ->
+    check bool "no regex runtime in a module that matches nothing" false
+      (List.exists (fun (a : Emit_go.artifact) -> a.path = "internal/teslrt/regex.go") artifacts)
+
 let () =
   run "emit_go" [
     "emission", [
@@ -10555,6 +10691,11 @@ let () =
       test_case "unsupported Tesl.Agent forms fail closed" `Quick test_agent_limits_fail_closed;
       test_case "serverTools and humanActions" `Slow test_endpoint_tools_with_go;
       test_case "Tesl.Proxy" `Slow test_proxy_with_go;
+      test_case "Tesl.Regex" `Slow test_regex_with_go;
+      test_case "Tesl.Regex behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-regex>" regex_source);
+      test_case "the regex runtime ships only where used" `Quick
+        test_regex_runtime_ships_only_where_used;
       test_case "property generators over proof-carrying records" `Slow
         test_property_generators_with_go;
       test_case "proof-aware generators behave the same on Racket" `Slow

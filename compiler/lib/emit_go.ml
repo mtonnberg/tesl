@@ -10882,6 +10882,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
          registered, against the compiler's own catalogs.  `Tesl.Agent` is validated the same
          way: its types and its leaves are registered together, so one list decides what the
          module offers rather than a second list here that could drift from it. *)
+      (* `Tesl.Regex` is validated where its leaves are registered, like the catalogs. *)
+      | "Tesl.Regex"
       | "Tesl.Agent"
       | "Tesl.Money" | "Tesl.Units"
       | "Tesl.String" | "Tesl.List" | "Tesl.Int" | "Tesl.Tuple" | "Tesl.Dict"
@@ -13138,6 +13140,35 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           { params; result; go_name; sig_owner = ""; sig_needs_scope = false })
         !httpclient_imports
     end;
+    (* ── `Tesl.Regex` ────────────────────────────────────────────────────────
+       Six functions over String, each with the pattern first.  Pure: no capability, because
+       nothing here reaches outside the process. *)
+    List.iter (fun (import : import_decl) ->
+      if import.module_name = "Tesl.Regex" then begin
+        let loc = import.loc in
+        let exposed = match import.names with
+          | ImportAll -> [] | ImportExposing names -> names in
+        let maybe_of inner = match Hashtbl.find_opt types.adts "Maybe" with
+          | Some info -> TAdt (info, [inner])
+          | None -> unsupported loc
+            "Go backend `Tesl.Regex` answers a Maybe; import `Tesl.Maybe`"
+        in
+        List.iter (fun name ->
+          let params, result, go_name = match name with
+            | "Regex.matches" -> [TString; TString], TBool, "teslrt.RegexMatches"
+            | "Regex.find" -> [TString; TString], maybe_of TString, "teslrt.RegexFind"
+            | "Regex.findAll" -> [TString; TString], TList TString, "teslrt.RegexFindAll"
+            | "Regex.captures" ->
+              [TString; TString], maybe_of (TList TString), "teslrt.RegexCaptures"
+            | "Regex.replace" ->
+              [TString; TString; TString], TString, "teslrt.RegexReplace"
+            | "Regex.split" -> [TString; TString], TList TString, "teslrt.RegexSplit"
+            | other -> unsupported loc
+              "Go backend does not support `Tesl.Regex` export `%s` yet" other
+          in
+          Hashtbl.replace signatures name
+            { params; result; go_name; sig_owner = ""; sig_needs_scope = false }) exposed
+      end) m.imports;
     (* ── `Tesl.Agent`: the inference and conversation leaves ─────────────────
        This match is the module's export list for this backend: a name that reaches its
        fallthrough is one the Go runtime does not offer yet, and the message says so with the
@@ -13455,6 +13486,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
            /usr/share/zoneinfo still renders `Europe/Stockholm` correctly rather than
            silently falling back to UTC.  A program that formats no timestamps should not
            carry it. *)
+        let regex_only = [ "regex.go" ] in
+        let uses_regex = mentions "teslrt.Regex" in
         let timezone_only = [ "timezone.go" ] in
         let uses_timezone = mentions "teslrt.FormatTime" in
         let uses_agent = List.exists mentions
@@ -13470,6 +13503,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           else if (not postgres_runtime) && List.mem name postgres_only then None
           else if (not uses_agent) && List.mem name agent_only then None
           else if (not uses_timezone) && List.mem name timezone_only then None
+          else if (not uses_regex) && List.mem name regex_only then None
           else if name = "password.go" && not password_runtime then None
           else Some { path = "internal/teslrt/" ^ name; contents })
           Embedded_go_runtime.files
