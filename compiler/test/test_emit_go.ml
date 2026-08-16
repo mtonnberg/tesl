@@ -10077,6 +10077,195 @@ test "emitted" {
       (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
   | Compile.GoSuccess _ -> check bool "a singly-checked detach emits" true true
 
+(* ── A conjunction whose conjuncts capture, and the cookie record form ───────
+   `checkAtLeast 0 && checkAtMost 100` is two checks the PROGRAM has partially applied, and
+   the values it supplied belong to the call site rather than to the conjunction.  The
+   sequencing helper is cached by its source, so a captured value cannot be baked into it:
+   it becomes a PARAMETER, and the call site — which is where the loop body sits, so the
+   values are in scope — supplies it.  Every position a conjunction can be written in goes
+   through the one resolver: applied to a value, as a callback, as `emptyForAll`'s element
+   witness, and inside `expectFail`.
+
+   `cookie { "name": value }` is the second spelling of a request cookie, for the case the
+   value is computed. *)
+let captured_conjunction_source = {|module GoCombined exposing [ProfileServer]
+
+import Tesl.Prelude exposing [Int, String, Bool(..), List]
+import Tesl.Json exposing [stringCodec, intCodec]
+import Tesl.List exposing [List.length, List.filterCheck, List.allCheck, List.emptyForAll]
+import Tesl.String exposing [String.concat]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.ApiTest exposing [statusOk, statusClientError]
+
+fact AtLeast (lo: Int) (n: Int)
+fact AtMost (hi: Int) (n: Int)
+fact InBand (n: Int)
+
+# Two checks that CAPTURE a bound: the value the program supplies belongs to the
+# call site, not to the conjunction.
+check checkAtLeast(lo: Int, n: Int) -> n: Int ::: AtLeast lo n =
+  if n >= lo then
+    ok n ::: AtLeast lo n
+  else
+    fail 400 "too small"
+
+check checkAtMost(hi: Int, n: Int) -> n: Int ::: AtMost hi n =
+  if n <= hi then
+    ok n ::: AtMost hi n
+  else
+    fail 400 "too large"
+
+check inBand(n: Int) -> n: Int ::: InBand n =
+  if n >= 0 then
+    ok n ::: InBand n
+  else
+    fail 400 "negative"
+
+fn keepInRange(xs: List Int) -> List Int =
+  List.filterCheck (checkAtLeast 0 && checkAtMost 100) xs
+
+fn keepBanded(xs: List Int) -> List Int =
+  List.filterCheck (inBand && checkAtMost 10) xs
+
+fn emptyBanded() -> List Int =
+  List.emptyForAll (inBand && checkAtMost 10)
+
+fn allInRange(xs: List Int) -> Bool =
+  case List.allCheck (checkAtLeast 0 && checkAtMost 100) xs of
+    Something _ -> True
+    Nothing -> False
+
+# A `check (a && b) x` whose conjuncts capture, applied directly.
+fn narrow(raw: Int) -> Int =
+  let banded = check (checkAtLeast 5 && checkAtMost 9) raw
+  banded
+
+# ── The cookie record form ───────────────────────────────────────────────────
+
+fact Authenticated (u: String)
+
+auth cookieAuth(request: HttpRequest) -> u: String ::: Authenticated u =
+  case Dict.lookup "session" request.cookies of
+    Something userId -> ok userId ::: Authenticated u
+    Nothing -> fail 401 "no session"
+
+# A PRESENT value written to a nullable column is the present case of it.
+handler get whoami(u: String ::: Authenticated u) -> String =
+  String.concat "you are " u
+
+api ProfileApi {
+  get "/whoami"
+    auth u: String ::: Authenticated u via cookieAuth
+    -> String
+}
+
+server ProfileServer for ProfileApi {
+  whoami
+}
+
+test "a conjunction of captured checks keeps only what passes both" {
+  expect List.length (keepInRange [-7, 1, 50, 200, 99]) == 3
+  expect List.length (keepBanded [-1, 0, 5, 11]) == 2
+  expect allInRange [1, 2, 3] == True
+  expect allInRange [1, 200] == False
+  expect List.length (emptyBanded ()) == 0
+}
+
+test "a captured conjunction applied directly rejects for either reason" {
+  let good = 7
+  let low = 1
+  let high = 99
+  expect narrow good == 7
+  expectFail (fn () -> narrow low)
+  expectFail (fn () -> narrow high)
+}
+
+# `cookie { "name": value }` names the parts, which is what a test does when the
+# value is computed.
+api-test "a cookie written as a record reaches the request" for ProfileServer requires [] {
+  let who = "alice"
+  let resp = get "/whoami" cookie { "session": who }
+  expect statusOk resp.status
+  expect resp.body == "you are alice"
+  let anonymous = get "/whoami"
+  expect statusClientError anonymous.status
+}
+|}
+
+let test_captured_conjunction_with_go () =
+  let emitted = match Compile.compile_go_source "<go-combined>" captured_conjunction_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "combined-check compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgocombined/module.go" emitted in
+  let tests_go = artifact "internal/teslmodgocombined/module_test.go" emitted in
+  (* The captured bound is a PARAMETER of the helper, not a constant inside it. *)
+  check bool "a captured conjunct's argument is a helper parameter" true
+    (contains module_go "teslStep0 := checkAtLeast(teslCapture0, teslValue)");
+  check bool "the next conjunct runs on the value the first accepted" true
+    (contains module_go "teslStep1 := checkAtMost(teslCapture1, teslrt.MustCheck(teslStep0))");
+  (* A conjunction mixing a bare conjunct with an applied one works the same way. *)
+  check bool "a bare conjunct takes no capture parameter" true
+    (contains module_go "teslStep0 := inBand(teslValue)");
+  (* `emptyForAll` reads the element type off the first conjunct. *)
+  check bool "emptyForAll over a conjunction answers the element's slice" true
+    (contains module_go "func emptyBanded() []teslrt.Int");
+  (* The cookie's two parts become the one wire form. *)
+  check bool "a record cookie is written as name=value" true
+    (contains tests_go "[]string{\"session=\" + ");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-combined" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+  end
+
+(* A value whose type is not the COLUMN's is refused, which is the language's own rule — the
+   checker's SET-clause validation says the assigned value must have the same type.  Worth a
+   test of its own because the tempting coercion (a String into a `Maybe String` column is
+   "obviously" the present case) would make this backend agree with a hole in that
+   validation rather than with the rule: it only sees entities declared in the SAME module,
+   so a cross-module entity slips past it. *)
+let test_column_type_mismatch_fails_closed () =
+  let source = {|module GoColumn exposing [setOwner]
+import Tesl.Prelude exposing [String]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.DB exposing [dbWrite]
+
+entity Ticket table "tickets" primaryKey id {
+  id: String
+  ownerId: Maybe String
+}
+
+database TicketDatabase = Database {
+  entities: [Ticket]
+  backend: Memory
+}
+
+fn setOwner(ticketId: String, owner: String) -> String requires [dbWrite] =
+  let _ = update t in Ticket where t.id == ticketId set t.ownerId = owner
+  ticketId
+|} in
+  match Compile.compile_go_source "<go-column>" source with
+  | Compile.GoSuccess _ -> fail "a String written to a Maybe column emitted"
+  | Compile.GoFailure diagnostics ->
+    check bool "the column's own type is what the value must have" true
+      (List.exists (fun (d : Compile.diagnostic) ->
+         contains d.message "type mismatch" || contains d.message "different type than the column")
+         diagnostics)
+
 let () =
   run "emit_go" [
     "emission", [
@@ -10275,6 +10464,11 @@ let () =
       test_case "unsupported Tesl.Agent forms fail closed" `Quick test_agent_limits_fail_closed;
       test_case "serverTools and humanActions" `Slow test_endpoint_tools_with_go;
       test_case "Tesl.Proxy" `Slow test_proxy_with_go;
+      test_case "conjunctions whose conjuncts capture" `Slow test_captured_conjunction_with_go;
+      test_case "captured conjunctions behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-combined>" captured_conjunction_source);
+      test_case "a column-type mismatch fails closed" `Quick
+        test_column_type_mismatch_fails_closed;
       test_case "proof shapes at the edges of erasure" `Slow test_proof_shapes_with_go;
       test_case "proof shapes behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-proof-shapes>" proof_shapes_source);

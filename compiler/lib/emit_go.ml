@@ -1645,28 +1645,45 @@ let job_result_type signatures loc (info : queue_info) =
    fact merging, which erases.  Minted once and shared by both positions a conjunction can be
    written in: applied to a value (`check (a && b) x`) and passed as a callback
    (`List.allCheck (a && b) xs`). *)
-let combined_check_helper signatures element names =
+(* [conjuncts] is one entry per conjunct: its name and the Go TYPES of the arguments the
+   program supplied to it — `checkAtLeast 0 && checkAtMost 100` captures one apiece.  Those
+   become parameters of the helper rather than values baked into it: the helper is cached by
+   its source, and a captured value is a run-time expression the call site owns. *)
+let combined_check_helper signatures element conjuncts =
   let go_of name = match Hashtbl.find_opt signatures name with
     | Some (signature : signature) -> qualified signature.sig_owner signature.go_name
     | None -> invalid_arg "combined check validated before emission"
   in
   let checked = go_type element in
   let body = Buffer.create 256 in
-  List.iteri (fun index name ->
+  let captured = ref 0 in
+  let parameters = ref [] in
+  List.iteri (fun index (name, capture_types) ->
+    let arguments = List.map (fun capture_type ->
+      let parameter = Printf.sprintf "teslCapture%d" !captured in
+      incr captured;
+      parameters := (parameter, capture_type) :: !parameters;
+      parameter) capture_types in
     let temporary = Printf.sprintf "teslStep%d" index in
-    if index = 0 then
-      Printf.bprintf body "\t%s := %s(teslValue)\n" temporary (go_of name)
-    else
-      Printf.bprintf body "\t%s := %s(teslrt.MustCheck(teslStep%d))\n"
-        temporary (go_of name) (index - 1);
-    if index < List.length names - 1 then
+    let subject =
+      if index = 0 then "teslValue"
+      else Printf.sprintf "teslrt.MustCheck(teslStep%d)" (index - 1) in
+    Printf.bprintf body "\t%s := %s(%s)\n" temporary (go_of name)
+      (String.concat ", " (arguments @ [subject]));
+    if index < List.length conjuncts - 1 then
       Printf.bprintf body
         "\tif !%s.OK() {\n\t\treturn teslrt.Reject[%s](%s.Status(), %s.Message())\n\t}\n"
         temporary checked temporary temporary
     else
-      Printf.bprintf body "\treturn %s\n" temporary) names;
+      Printf.bprintf body "\treturn %s\n" temporary) conjuncts;
+  let signature_text =
+    String.concat ", "
+      (Printf.sprintf "teslValue %s" checked
+       :: List.rev_map (fun (parameter, capture_type) ->
+            Printf.sprintf "%s %s" parameter (go_type capture_type)) !parameters)
+  in
   remember_helper_stmts ~prefix:"teslCheckAll"
-    ~signature:(Printf.sprintf "(teslValue %s) teslrt.Check[%s]" checked checked)
+    ~signature:(Printf.sprintf "(%s) teslrt.Check[%s]" signature_text checked)
     ~body:(Buffer.contents body)
 
 (* `check (checkA && checkB) x` — a COMBINED check.  Racket's `check-and` runs the first,
@@ -1679,6 +1696,28 @@ let rec check_conjuncts expr =
      | Some left_names, Some right_names -> Some (left_names @ right_names)
      | _ -> None)
   | EVar { name; _ } -> Some [name]
+  | _ -> None
+
+(* The same conjunction, with each conjunct's SUPPLIED arguments kept: `checkAtLeast 0 &&
+   checkAtMost 100` is two checks the program has partially applied, and the values it
+   supplied belong to the call site rather than to the conjunction. *)
+let rec check_conjunct_calls expr =
+  match expr with
+  | EBinop { op = BAnd; left; right; _ } ->
+    (match check_conjunct_calls left, check_conjunct_calls right with
+     | Some left_calls, Some right_calls -> Some (left_calls @ right_calls)
+     | _ -> None)
+  | EVar { name; _ } -> Some [name, []]
+  | EApp _ ->
+    (* Spelled out rather than through `flatten_app`, which is defined with the expression
+       walkers below. *)
+    let rec flatten supplied = function
+      | EApp { fn; arg; _ } -> flatten (arg :: supplied) fn
+      | head -> head, supplied
+    in
+    (match flatten [] expr with
+     | EVar { name; _ }, (_ :: _ as supplied) -> Some [name, supplied]
+     | _ -> None)
   | _ -> None
 
 (* Does this expression READ the named binding?  Asked of a `set` value on a Postgres-backed
@@ -2468,21 +2507,27 @@ let rec type_of_expr signatures env expr =
      | EVar { name = "check"; _ }
        when (match args with
              | conjunction :: _ ->
-               (match check_conjuncts conjunction with
+               (match check_conjunct_calls conjunction with
                 | Some (_ :: _ :: _) -> true
                 | _ -> false)
              | [] -> false) ->
        (* Every conjunct is a check over the SAME type, since each one's result feeds the
-          next; the combined result is that type, exactly as for a single check. *)
+          next; the combined result is that type, exactly as for a single check.  A conjunct
+          may be PARTIALLY APPLIED, in which case its last parameter is the checked one. *)
        let names = match args with
-         | conjunction :: _ -> Option.value (check_conjuncts conjunction) ~default:[]
+         | conjunction :: _ ->
+           List.map fst (Option.value (check_conjunct_calls conjunction) ~default:[])
          | [] -> []
        in
        let value_ty = List.fold_left (fun expected name ->
          match Hashtbl.find_opt signatures name with
-         | Some { params = [param]; result = TCheck result; _ }
-           when param = result && (expected = None || expected = Some result) -> Some result
-         | Some { params = [_]; result = TCheck _; _ } ->
+         (* The CHECKED parameter is the last one; anything before it the program supplied. *)
+         | Some { params = (_ :: _ as params); result = TCheck result; _ }
+           when (match List.rev params with
+                 | subject :: _ -> subject = result
+                 | [] -> false)
+                && (expected = None || expected = Some result) -> Some result
+         | Some { params = (_ :: _); result = TCheck _; _ } ->
            unsupported loc
              "Go backend combined check `%s` does not check the same type as the others" name
          | Some _ -> unsupported loc "`%s` is not a check" name
@@ -3437,21 +3482,33 @@ and type_of_callable signatures env loc what callable param_types =
   (* A COMBINED check passed as the callback: `List.allCheck (isPositive && isSmall) xs`.
      Every conjunct checks the same type and the result is that type's `Check`, exactly as
      for `check (a && b) x` — the difference is only where it is applied. *)
-  | EBinop { op = BAnd; _ } when (match check_conjuncts callable with
+  (* A conjunction whose conjuncts may be PARTIALLY APPLIED — `checkAtLeast 0 &&
+     checkAtMost 100`.  The supplied arguments belong to the call site; what has to hold of
+     each conjunct is that its LAST parameter and its result are the element type, which is
+     what makes the sequencing well-formed. *)
+  | EBinop { op = BAnd; _ } when (match check_conjunct_calls callable with
                                   | Some (_ :: _ :: _) -> true | _ -> false) ->
-    let names = Option.value (check_conjuncts callable) ~default:[] in
+    let calls = Option.value (check_conjunct_calls callable) ~default:[] in
     let element = match param_types with
       | [element] -> element
       | _ -> unsupported loc "Go backend `%s` applies a combined check to one value" what
     in
-    List.iter (fun name ->
+    List.iter (fun (name, supplied) ->
       match Hashtbl.find_opt signatures name with
-      | Some { params = [param]; result = TCheck result; _ }
-        when param = element && result = element -> ()
-      | Some { params = [_]; result = TCheck _; _ } -> unsupported loc
+      | Some { params; result = TCheck result; _ }
+        when List.length params = List.length supplied + 1
+             && (match List.rev params with subject :: _ -> subject = element | [] -> false)
+             && result = element ->
+        List.iteri (fun index argument ->
+          let want = List.nth params index in
+          if type_unequal (type_of_arg signatures env want argument) want then
+            unsupported (Checker.expr_loc argument)
+              "Go backend combined check `%s` argument %d has an unsupported type"
+              name (index + 1)) supplied
+      | Some { result = TCheck _; _ } -> unsupported loc
         "Go backend combined check `%s` does not check the same type as the others" name
       | Some _ -> unsupported loc "`%s` is not a check" name
-      | None -> unsupported loc "Go backend cannot resolve check `%s`" name) names;
+      | None -> unsupported loc "Go backend cannot resolve check `%s`" name) calls;
     TCheck element
   | ELambda { params; body; _ } ->
     if List.length params <> List.length param_types then
@@ -3591,14 +3648,23 @@ and type_of_hof signatures env loc what hof args =
      it.  A lambda is refused for the same reason — its parameter annotation is the only thing
      that could say, and a `check` cannot be written as one. *)
   | HofEmptyForAll ->
-    (match normalize_call_head (List.nth args 0) with
-     | EVar { name; _ } ->
+    (* A CONJUNCTION names the element type through its first conjunct: every conjunct
+       checks the same type, which is what makes the sequencing well-formed at all. *)
+    let named = match check_conjunct_calls (List.nth args 0) with
+      | Some ((first, _) :: _) -> Some first
+      | _ ->
+        (match normalize_call_head (List.nth args 0) with
+         | EVar { name; _ } -> Some name
+         | _ -> None)
+    in
+    (match named with
+     | Some name ->
        (match Hashtbl.find_opt signatures name with
         | Some { params = [element]; result = TCheck checked; _ } when checked = element ->
           TList element
         | _ -> unsupported loc
           "Go backend `%s` takes a named `check` function over the element type" what)
-     | _ -> unsupported loc "Go backend `%s` takes a named `check` function" what)
+     | None -> unsupported loc "Go backend `%s` takes a named `check` function" what)
   (* `List.count p xs` answers how many elements satisfy p — a Bool-returning function, like
      `filter`, but nothing is kept. *)
   | HofCount ->
@@ -4550,24 +4616,37 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
      | EVar { name = "check"; _ }
        when (match args with
              | conjunction :: _ ->
-               (match check_conjuncts conjunction with
+               (match check_conjunct_calls conjunction with
                 | Some (_ :: _ :: _) -> true
                 | _ -> false)
              | [] -> false) ->
        let value_ty = type_of_expr signatures env app in
-       let names = match args with
-         | conjunction :: _ -> Option.value (check_conjuncts conjunction) ~default:[]
+       let calls = match args with
+         | conjunction :: _ -> Option.value (check_conjunct_calls conjunction) ~default:[]
          | [] -> []
        in
-       let helper = combined_check_helper signatures value_ty names in
+       let captured = List.map (fun (name, supplied) ->
+         let leading = match Hashtbl.find_opt signatures name with
+           | Some signature ->
+             List.filteri (fun index _ -> index < List.length supplied) signature.params
+           | None -> List.map (fun _ -> value_ty) supplied
+         in
+         name, leading, List.combine supplied leading) calls in
+       let helper = combined_check_helper signatures value_ty
+         (List.map (fun (name, leading, _) -> name, leading) captured) in
        let argument = match args with
          | [_; argument] -> argument
          | _ -> unsupported loc
            "Go backend requires a combined check applied to exactly one value"
        in
+       let capture_arguments = List.concat_map (fun (_, _, pairs) ->
+         List.map (fun (value, want) ->
+           emit_expr ~expected:want ~indent signatures env value) pairs) captured in
        let applied =
          Printf.sprintf "%s(%s)" helper
-           (emit_expr ~expected:value_ty ~indent signatures env argument)
+           (String.concat ", "
+              (emit_expr ~expected:value_ty ~indent signatures env argument
+               :: capture_arguments))
        in
        (match expected with
         (* A CHECK's tail: the combined check's own `Check` IS this check's result, so it is
@@ -4702,6 +4781,19 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
            whose values are Strings rather than JSON: they go on the wire as written. *)
         let cookies = match cookie with
           | None -> "nil"
+          (* Two spellings, one wire form.  `cookie "name=value"` writes the pair itself;
+             `cookie { "name": value }` names the parts, which is what a test does when the
+             value is computed (`mintSession "alice"`).  Both become `name=value`. *)
+          | Some (ERecord { fields; _ }) ->
+            Printf.sprintf "[]string{%s}"
+              (String.concat ", " (List.map (fun (name, value) ->
+                 let emitted =
+                   if type_of_expr signatures env value = TString then
+                     emit_api_test_string ~indent signatures env value
+                   else unsupported (Checker.expr_loc value)
+                     "Go backend api-test cookie `%s` must be a String" name
+                 in
+                 Printf.sprintf "%s + %s" (go_quote (name ^ "=")) emitted) fields))
           | Some value ->
             Printf.sprintf "[]string{%s}"
               (emit_api_test_string ~indent signatures env value)
@@ -6374,15 +6466,27 @@ and emit_applied ?(indent="") signatures env callable params bound =
   (* A combined check as the callback: the SAME sequencing helper `check (a && b) x` mints,
      called with the loop's element.  Sharing the helper is the point — one rule for what a
      conjunction means, whichever position it is written in. *)
-  | EBinop { op = BAnd; _ } when (match check_conjuncts callable with
+  | EBinop { op = BAnd; _ } when (match check_conjunct_calls callable with
                                   | Some (_ :: _ :: _) -> true | _ -> false) ->
-    let names = Option.value (check_conjuncts callable) ~default:[] in
+    let calls = Option.value (check_conjunct_calls callable) ~default:[] in
     let element = match params with
       | [element] -> element
       | _ -> invalid_arg "combined check callback validated before emission"
     in
-    Printf.sprintf "%s(%s)" (combined_check_helper signatures element names)
-      (String.concat ", " bound)
+    let captured = List.map (fun (name, supplied) ->
+      let leading = match Hashtbl.find_opt signatures name with
+        | Some signature ->
+          List.filteri (fun index _ -> index < List.length supplied) signature.params
+        | None -> List.map (fun _ -> element) supplied
+      in
+      name, leading, List.combine supplied leading) calls in
+    let capture_arguments = List.concat_map (fun (_, _, pairs) ->
+      List.map (fun (value, want) ->
+        emit_expr ~expected:want ~indent signatures env value) pairs) captured in
+    Printf.sprintf "%s(%s)"
+      (combined_check_helper signatures element
+         (List.map (fun (name, leading, _) -> name, leading) captured))
+      (String.concat ", " (bound @ capture_arguments))
   | _ -> invalid_arg "function argument validated before emission"
 
 and callable_binders callable fallback =
@@ -7031,7 +7135,13 @@ and sql_row_type (info : entity_info) = go_type (TRecord info.ent_row)
 
 and sql_column_value ~indent signatures row_env loc (info : entity_info) field expr =
   let want = entity_column loc info field in
-  let got = type_of_expr signatures row_env expr in
+  let got = type_of_arg signatures row_env want expr in
+  (* No coercion here, deliberately.  A String written to a `Maybe String` column is
+     refused, which is the LANGUAGE's own rule — the checker's SET-clause validation says
+     "the assigned value must have the same type; convert or construct it explicitly".  That
+     validation only sees entities declared in the SAME module (`record_fields_of_type` is
+     module-local), so a cross-module entity slips past it; accepting the coercion here would
+     make the Go backend agree with the hole rather than with the rule. *)
   if type_unequal got want then unsupported (Checker.expr_loc expr)
     "Go backend: the value written to `%s.%s` has a different type than the column"
     info.ent_tesl_name field;
@@ -8133,12 +8243,25 @@ let delegated_check_call ~indent signatures env value =
   | None ->
     (match flatten_app [] value with
      | EVar { name = "check"; _ }, [conjunction; argument] ->
-       (match check_conjuncts conjunction with
-        | Some (_ :: _ :: _ as names) ->
+       (match check_conjunct_calls conjunction with
+        | Some (_ :: _ :: _ as calls) ->
           let inner = type_of_expr signatures env value in
+          let captured = List.map (fun (name, supplied) ->
+            let leading = match Hashtbl.find_opt signatures name with
+              | Some signature ->
+                List.filteri (fun index _ -> index < List.length supplied) signature.params
+              | None -> List.map (fun _ -> inner) supplied
+            in
+            name, leading, List.combine supplied leading) calls in
+          let capture_arguments = List.concat_map (fun (_, _, pairs) ->
+            List.map (fun (capture, want) ->
+              emit_expr ~expected:want ~indent signatures env capture) pairs) captured in
           Some (Printf.sprintf "%s(%s)"
-                  (combined_check_helper signatures inner names)
-                  (emit_expr ~expected:inner ~indent signatures env argument),
+                  (combined_check_helper signatures inner
+                     (List.map (fun (name, leading, _) -> name, leading) captured))
+                  (String.concat ", "
+                     (emit_expr ~expected:inner ~indent signatures env argument
+                      :: capture_arguments)),
                 inner)
         | _ -> None)
      | _ -> None)
@@ -10009,7 +10132,7 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
          second place. *)
       let combined = match arg with
         | EApp { fn = conjunction; arg = value; loc = app_loc }
-          when (match check_conjuncts conjunction with
+          when (match check_conjunct_calls conjunction with
                 | Some (_ :: _ :: _) -> true
                 | _ -> false) ->
           delegated_check_call ~indent signatures env
