@@ -38,6 +38,14 @@ func ApiRequest(server Server, method, path, body string, cookies []string,
 		request.Header.Set("Cookie", strings.Join(cookies, "; "))
 	}
 	for _, header := range headers {
+		// HOST is not an ordinary header in Go: the request carries it in its own field, and a
+		// value left in the header map is ignored by everything that reads it — including the
+		// Host check a `publicOrigin` server applies. A test that sends `Host` means the host
+		// the request is FOR, so it lands where that check looks.
+		if strings.EqualFold(header.Tuple2First, "Host") {
+			request.Host = header.Tuple2Second
+			continue
+		}
 		// Added rather than set: a test may send the same header twice deliberately, and the
 		// server side is what decides which value wins.
 		request.Header.Add(header.Tuple2First, header.Tuple2Second)

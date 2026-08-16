@@ -10478,6 +10478,29 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
       Buffer.add_string body "\t},\n"
     end;
     Buffer.add_string body "}\n";
+    (* ── The server-wide settings, applied at PACKAGE LOAD ──────────────────
+       `publicOrigin` turns on the Host check and is the redirect_uri's base; `sessionPolicy`
+       decides the session cookie's Max-Age.  Both are set in an `init` rather than in
+       `main`, because that is where Racket sets them — a top-level side effect at module
+       load — and an api-test never runs `main`.  A server that declares neither emits
+       nothing here, so a file without them is byte-identical to before. *)
+    let boot_settings =
+      (match server.public_origin with
+       | Some (POLiteral origin) ->
+         [Printf.sprintf "\tteslrt.SetPublicOriginValue(%s)" (go_quote origin)]
+       (* The env form is read ONCE, here, and never per request: a public origin derived
+          from a request is the thing it exists to guard against. *)
+       | Some (POEnv name) ->
+         [Printf.sprintf "\tteslrt.SetPublicOriginValue(teslrt.RequireEnv(%s))" (go_quote name)]
+       | None -> [])
+      @ (match server.session_policy with
+         | Some policy ->
+           [Printf.sprintf "\tteslrt.SetSessionPolicy(teslrt.SessionPolicyTTL(%s))"
+              (go_quote policy)]
+         | None -> [])
+    in
+    if boot_settings <> [] then
+      Printf.bprintf body "\nfunc init() {\n%s\n}\n" (String.concat "\n" boot_settings);
     current_scope_in_hand := false) servers;
   (* Comparator helpers the body referenced, in name order so the output is
      deterministic. *)

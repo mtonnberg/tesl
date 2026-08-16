@@ -106,10 +106,10 @@ func (server Server) ServeHTTP(writer http.ResponseWriter, request *http.Request
 	// route that happened to share the path would otherwise shadow a login — the same
 	// precedence dsl/web.rkt gives them.
 	if route, kind, matched := findSsoMatch(server.SsoRoutes, request.URL.Path); matched {
-		if request.Method != http.MethodGet {
-			writeResponse(writer, nil, Fail(405, "method not allowed"))
-			return
-		}
+		// ANY method, as dsl/web.rkt's matcher does. Narrowing this to GET would be the
+		// safer-looking choice and the wrong one: it decides which PROGRAMS run rather than
+		// only what they answer, and a POST to a login path would then reach a declared
+		// handler here while being shadowed there.
 		handleSsoRequest(route, kind, writer, request)
 		return
 	}
