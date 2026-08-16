@@ -9343,6 +9343,148 @@ fn double(n: Int) -> Int = n * 2
       (List.exists (fun (a : Emit_go.artifact) -> a.path = "internal/teslrt/timezone.go")
          artifacts)
 
+(* ── What an empty container is, and what a seed block describes ─────────────
+   Three shapes that all come down to "nothing here says what this holds".
+   `Dict.fromList []` takes its key and value from the next line that uses the binding —
+   one step, and only when the expression could not type by itself.  `Set.isEmpty
+   Set.empty` needs no element at all: the answer is the same whatever the set holds, which
+   is the relaxation `List.isEmpty []` already gets, while anything whose RESULT mentions
+   the element still fails closed.  And an untyped api-test value where a String is wanted
+   reads as the string it holds, the coercion `++` already applies to it.
+
+   The seed block is the odd one out and the reason this source has an api-test: `seed {
+   let _ = … }` is written as a discarding `let`, and what it describes is a STATEMENT — not
+   an expression whose value is the binding it just discarded. *)
+let inference_source = {|module GoInfer exposing [scoresOf, WidgetServer, seedWidgets]
+
+import Tesl.Prelude exposing [Int, String, Bool(..), List]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Dict exposing [Dict, Dict.fromList, Dict.size, Dict.insert, Dict.toList]
+import Tesl.Set exposing [Set, Set.empty, Set.fromList, Set.isEmpty, Set.size, Set.insert]
+import Tesl.String exposing [String.contains, String.concat]
+import Tesl.List exposing [List.length]
+import Tesl.Tuple exposing [Tuple2]
+import Tesl.ApiTest exposing [statusOk]
+
+fn scoresOf(raw: Dict String Int) -> Int =
+  Dict.size raw
+
+fn namesOf(raw: Set String) -> Int =
+  Set.size raw
+
+# `Dict.fromList []` carries no key or value type of its own; the LATER use is
+# what says what it holds.
+test "an empty container takes its type from a later use" {
+  let raw = Dict.fromList []
+  expect scoresOf raw == 0
+  let names = Set.fromList []
+  expect namesOf names == 0
+}
+
+# An element type nothing can observe: `isEmpty` and `size` answer the same
+# whatever the container holds, so a bare empty one is answered rather than
+# refused. Anything whose RESULT mentions the element still fails closed.
+test "an unobservable element type is not a refusal" {
+  expect Set.isEmpty Set.empty == True
+  expect Set.size Set.empty == 0
+}
+
+test "a populated container still infers from its contents" {
+  let scores = Dict.fromList [Tuple2 "a" 1, Tuple2 "b" 2]
+  expect Dict.size scores == 2
+  expect List.length (Dict.toList scores) == 2
+  let names = Set.fromList ["x", "y", "x"]
+  expect Set.size names == 2
+}
+
+# ── The api-test half: an untyped response value where a String is wanted ────
+
+record Widget {
+  id: String
+  names: String
+}
+
+codec Widget {
+  toJson {
+    id -> "id" with_codec stringCodec
+    names -> "names" with_codec stringCodec
+  }
+  fromJson [
+    {
+      id <- "id" with_codec stringCodec
+      names <- "names" with_codec stringCodec
+    }
+  ]
+}
+
+fn seedWidgets() -> String =
+  "seeded"
+
+handler get getWidget(id: String) -> Widget =
+  Widget { id: id, names: String.concat "alpha-" id }
+
+api WidgetApi {
+  get "/widgets/:id"
+    capture id: String using stringCodec
+    -> Widget
+}
+
+server WidgetServer for WidgetApi {
+  getWidget
+}
+
+# `seed { let _ = … }` is written as a discarding `let`, and what it describes is
+# a statement — not an expression whose value is the binding it just discarded.
+api-test "an untyped response value reads as the string it holds" for WidgetServer requires [] {
+  seed {
+    let _ = seedWidgets()
+  }
+
+  let r = get "/widgets/three"
+  expect statusOk r.status
+  expect String.contains r.body.names "alpha-three" == True
+  expect String.contains r.body.names "beta" == False
+  expect String.concat "id=" r.body.id == "id=three"
+}
+|}
+
+let test_inference_with_go () =
+  let emitted = match Compile.compile_go_source "<go-infer>" inference_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "inference compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let tests_go = artifact "internal/teslmodgoinfer/module_test.go" emitted in
+  (* The later use decides, so the empty dict is built at the type that use requires. *)
+  check bool "an empty dict takes its key and value from a later use" true
+    (contains tests_go "teslrt.DictFromList([]teslrt.Tuple2[string, teslrt.Int]{}");
+  check bool "an empty set does too" true
+    (contains tests_go "teslrt.SetFromList([]string{}");
+  (* An unobservable element does not stop the call; the choice cannot change the answer. *)
+  check bool "an unobservable element type is chosen rather than refused" true
+    (contains tests_go "teslrt.SetIsEmpty(teslrt.SetEmpty[teslrt.Int]())");
+  (* The untyped value reads as its string. *)
+  check bool "an untyped response value is read as a string" true
+    (contains tests_go "teslrt.StringContains(teslrt.JsonAsString(");
+  (* The seed statement is a statement, not a closure returning the binding it discarded. *)
+  check bool "a discarding seed let is emitted as a statement" true
+    (contains tests_go "_ = SeedWidgets()");
+  check bool "the seed block is not a closure returning `_`" false (contains tests_go "return _");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-infer" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+  end
+
 let () =
   run "emit_go" [
     "emission", [
@@ -9541,6 +9683,10 @@ let () =
       test_case "unsupported Tesl.Agent forms fail closed" `Quick test_agent_limits_fail_closed;
       test_case "serverTools and humanActions" `Slow test_endpoint_tools_with_go;
       test_case "Tesl.Proxy" `Slow test_proxy_with_go;
+      test_case "empty containers, and what a seed block describes" `Slow
+        test_inference_with_go;
+      test_case "empty-container inference behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-infer>" inference_source);
       test_case "formatTime" `Slow test_format_time_with_go;
       test_case "the timezone database ships only where used" `Quick
         test_timezone_data_ships_only_where_used;

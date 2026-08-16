@@ -3691,6 +3691,13 @@ and type_of_set_leaf signatures env loc leaf args expected =
       match List.nth args leaf.set_index with
       | argument when is_set_empty argument && leaf.set_index = 1 ->
         type_of_expr signatures env (List.nth args 0)
+      (* A leaf whose result does NOT mention the element — `isEmpty`, `size` — behaves
+         identically whatever the set holds, so a bare `Set.empty` there is answered rather
+         than refused: picking an element type cannot change the result.  A leaf that DOES
+         mention it (`Set.toList Set.empty`) still fails closed, because the choice would
+         be a guess.  This is the rule `List.isEmpty []` already gets. *)
+      | argument when is_set_empty argument
+                      && (leaf.set_name = "Set.isEmpty" || leaf.set_name = "Set.size") -> TInt
       | argument ->
         (match type_of_expr signatures env argument with
          | TSet element -> element
@@ -4069,6 +4076,24 @@ and type_of_arg signatures env want arg =
   | _ when (match normalize_call_head arg, want with
             | EVar { name = "Set.empty"; _ }, TSet _ -> true
             | EVar { name = "Dict.empty"; _ }, TDict _ -> true
+            | _ -> false) -> want
+  (* An UNTYPED api-test value where a String is wanted: what a `String.*` leaf reads is the
+     string the JSON holds, which is the same coercion `++` already applies to it — and the
+     shape these tests are written in (`String.contains r.body.names "x"`).  Only inside an
+     api-test, which is the only place the untyped view exists. *)
+  | _ when want = TString && !current_api_server <> None
+           && (match typed_with_default (type_of_expr signatures env) arg with
+               | Some TJson, _ -> true
+               | _ -> false) -> want
+  (* `Dict.fromList []` builds an empty dict from an empty list of pairs, and neither says
+     anything about the key or the value — so the expectation does, exactly as it does for
+     `Dict.empty`.  `Set.fromList []` is the same shape over one element type. *)
+  | _ when (match flatten_app [] arg with
+            | head, [EList { elems = []; _ }] ->
+              (match normalize_call_head head, want with
+               | EVar { name = "Dict.fromList"; _ }, TDict _ -> true
+               | EVar { name = "Set.fromList"; _ }, TSet _ -> true
+               | _ -> false)
             | _ -> false) -> want
   | EIf { cond; then_; else_; loc } ->
     if type_of_expr signatures env cond <> TBool then
@@ -4555,12 +4580,24 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
          | _ -> unsupported loc "Go backend cannot emit constructor `%s`" name)
       | EVar { name; _ } when set_leaf name <> None && Hashtbl.mem signatures name ->
        let leaf = match set_leaf name with Some leaf -> leaf | None -> assert false in
-       emit_set_leaf ~indent signatures env loc leaf args
-         (type_of_expr signatures env app) expected
+       (* Same rule as the Dict leaves: a leaf with nothing to read an element off takes the
+          expected type, and only fails when there is none. *)
+       let result = match typed_with_default (type_of_expr signatures env) app, expected with
+         | (Some ty, false), _ -> ty
+         | _, Some (TSet _ as want) -> want
+         | _ -> type_of_expr signatures env app
+       in
+       emit_set_leaf ~indent signatures env loc leaf args result expected
       | EVar { name; _ } when dict_leaf name <> None && Hashtbl.mem signatures name ->
        let leaf = match dict_leaf name with Some leaf -> leaf | None -> assert false in
-       emit_dict_leaf ~indent signatures env loc leaf args
-         (type_of_expr signatures env app) expected
+       (* `Dict.fromList []` has no pair to read a key or a value off, so where a Dict is
+          EXPECTED that is what the result is — the same rule `Dict.empty` gets. *)
+       let result = match typed_with_default (type_of_expr signatures env) app, expected with
+         | (Some ty, false), _ -> ty
+         | _, Some (TDict _ as want) -> want
+         | _ -> type_of_expr signatures env app
+       in
+       emit_dict_leaf ~indent signatures env loc leaf args result expected
       | EVar { name; _ } when tuple_accessor name <> None ->
        let field = match tuple_accessor name with
          | Some (_, field) -> field
@@ -5198,7 +5235,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
        let total = List.length signature.params in
        let leading = List.filteri (fun index _ -> index < supplied) signature.params in
        let emitted = List.map2 (fun arg want ->
-         emit_expr ~expected:want ~indent signatures env arg) args leading in
+         emit_leaf_argument ~indent signatures env name want arg) args leading in
        if supplied < total then
          (* Partially applied: the runtime combinator closes over what was given. *)
          (match partial_application_combinator ~supplied ~total with
@@ -6710,7 +6747,15 @@ and emit_dict_leaf ?(indent="") signatures env loc leaf args result expected =
   (* The dict argument is emitted with its type EXPECTED, so an empty dict written in place
      (`Dict.insert k v Dict.empty`) knows what to instantiate. *)
   let emitted = List.mapi (fun index argument ->
-    if index = leaf.dict_arity - 1 && leaf.dict_name <> "Dict.singleton"
+    (* `Dict.fromList` takes a LIST OF PAIRS, not a dict — the only leaf whose last
+       argument is neither.  An empty list there carries no pair type of its own, so the
+       result's key and value are what say what it holds. *)
+    if leaf.dict_name = "Dict.fromList" then
+      (match result, Option.bind !current_types (fun types -> Hashtbl.find_opt types.adts "Tuple2") with
+       | TDict (key, value), Some tuple ->
+         emit_expr ~expected:(TList (TAdt (tuple, [key; value]))) ~indent signatures env argument
+       | _ -> emit_expr ~indent signatures env argument)
+    else if index = leaf.dict_arity - 1 && leaf.dict_name <> "Dict.singleton"
        && leaf.dict_name <> "Dict.empty" && result <> TFailure then
       match result, key with
       | TDict (_, value), Some key ->
@@ -6747,8 +6792,14 @@ and emit_set_leaf ?(indent="") signatures env loc leaf args result expected =
     | _, Some (TSet element) -> element
     | _ ->
       if leaf.set_index >= 0 then
-        (match type_of_expr signatures env (List.nth args leaf.set_index) with
-         | TSet element -> element
+        (match typed_with_default (type_of_expr signatures env)
+                 (List.nth args leaf.set_index) with
+         | Some (TSet element), _ -> element
+         (* `isEmpty` and `size` answer the same whatever the set holds, so a bare
+            `Set.empty` there is given an element rather than refused: the choice cannot
+            change the result.  Anything whose result MENTIONS the element still fails
+            closed, because there the choice would be a guess. *)
+         | _ when leaf.set_name = "Set.isEmpty" || leaf.set_name = "Set.size" -> TInt
          | _ -> unsupported loc "Go backend `%s` requires a Set argument" leaf.set_name)
       else unsupported loc "Go backend cannot infer the element type of `%s`" leaf.set_name
   in
@@ -6757,7 +6808,13 @@ and emit_set_leaf ?(indent="") signatures env loc leaf args result expected =
     else Printf.sprintf "[%s]" (go_type element)
   in
   let emitted = List.mapi (fun index argument ->
-    if index = leaf.set_index then
+    (* `Set.fromList` takes a LIST, not a set — the one leaf whose indexed argument is a
+       different container — so an empty one there is expected at the ELEMENT type.  Handing
+       it a set expectation left the elements defaulted while the comparator followed the
+       real element type, and the two disagreed. *)
+    if leaf.set_name = "Set.fromList" then
+      emit_expr ~expected:(TList element) ~indent signatures env argument
+    else if index = leaf.set_index then
       emit_expr ~expected:(TSet element) ~indent signatures env argument
     else emit_expr ~indent signatures env argument) args in
   let emitted =
@@ -7727,7 +7784,17 @@ and emit_leaf_argument ?(indent="") signatures env name want arg =
         "teslrt.HashPassword"; "teslrt.CheckPassword" ]
     && want = TString
   in
-  if not password_plaintext then emit_expr ~expected:want ~indent signatures env arg
+  (* An untyped api-test value handed to a String parameter reads as the string it holds;
+     see the matching rule in `type_of_arg`. *)
+  let json_as_string =
+    want = TString
+    && (match typed_with_default (type_of_expr signatures env) arg with
+        | Some TJson, _ -> true
+        | _ -> false)
+  in
+  if json_as_string then
+    Printf.sprintf "teslrt.JsonAsString(%s)" (emit_expr ~indent signatures env arg)
+  else if not password_plaintext then emit_expr ~expected:want ~indent signatures env arg
   else
     let emitted = emit_expr ~indent signatures env arg in
     match type_of_expr signatures env arg with
@@ -7985,6 +8052,48 @@ let delegated_check_call ~indent signatures env value =
                 inner)
         | _ -> None)
      | _ -> None)
+
+(* What a LATER use says a `let` binding must hold.
+   `let raw = Dict.fromList []` carries no key or value type of its own, and the next line —
+   `getVerifiedScores raw` — is what says what it is.  One step and no more: the binding's
+   own expression is always preferred, and this is consulted only when that expression could
+   not type by itself.  Anything a single use cannot settle stays refused rather than
+   guessed at. *)
+let expected_from_use signatures name exprs =
+  let found = ref None in
+  List.iter (fun expr ->
+    Ast_visitor.iter (fun node ->
+      if !found = None then
+        match flatten_app [] node with
+        | EVar { name = callee; _ }, (_ :: _ as args) when callee <> name ->
+          (match Hashtbl.find_opt signatures callee with
+           | Some signature when List.length args = List.length signature.params ->
+             List.iteri (fun index arg ->
+               match arg with
+               | EVar { name = used; _ } when used = name && !found = None ->
+                 found := List.nth_opt signature.params index
+               | _ -> ()) args
+           | _ -> ())
+        | _ -> ()) expr) exprs;
+  !found
+
+(* The type a `let` binds: its own expression when that settles one, otherwise what a later
+   use requires. *)
+let let_binding_type signatures env name value later =
+  match typed_with_default (type_of_expr signatures env) value with
+  | Some ty, false -> ty
+  | settled, _ ->
+    (match expected_from_use signatures name later with
+     | Some want ->
+       (match typed_with_default (type_of_arg signatures env want) value with
+        | Some ty, _ -> ty
+        | None, _ -> (match settled with
+                      | Some ty -> ty
+                      | None -> type_of_expr signatures env value))
+     | None ->
+       (match settled with
+        | Some ty -> ty
+        | None -> type_of_expr signatures env value))
 
 let tail_accepts_value signatures env expected expr =
   (* A tail spelled `check g x` — single or combined — DELEGATES: it hands back that check's
@@ -9611,10 +9720,11 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
   let rec emit_stmts env indent = function
     | [] -> ()
     | TsLet { name; value; loc; _ } :: rest ->
-      let ty = type_of_expr signatures env value in
+      let ty = let_binding_type signatures env name value
+        (List.concat_map Ast.test_stmt_exprs rest) in
       Printf.bprintf body "%s{\n" indent;
       Buffer.add_string body (line_directive loc);
-      let emitted = emit_expr ~indent:(indent ^ "\t") signatures env value in
+      let emitted = emit_expr ~expected:ty ~indent:(indent ^ "\t") signatures env value in
       (* `let _ = …` runs the statement and DISCARDS the result — Go's `_` is not a
          variable, so it can neither be declared with `:=` nor read back. *)
       if name = "_" then Printf.bprintf body "%s\t_ = %s\n" indent emitted
@@ -9913,6 +10023,19 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
      test declares rather than from whatever an earlier block left, which is the point of pairing
      it with the per-test reset.  The statements are EXPRESSIONS (an `insert` answers the row),
      so each is emitted and discarded — the shape a `let _ = insert …` already takes. *)
+  (* A seed statement is WRITTEN `let _ = insert …`, and the parser gives that `let` a body:
+     a reference to the binding it just made.  Emitted as one expression, that body becomes
+     the closure's return value — `return _`, which is not Go.  A chain of discarding `let`s
+     is peeled into the statements it describes.  Anything that binds a name and goes on to
+     use it is left as it stands: there the closure IS the right shape. *)
+  let rec seed_statements expr =
+    match expr with
+    | ELet { name = "_"; value; body; _ } ->
+      value :: (match body with
+                | EVar { name = "_"; _ } -> []
+                | rest -> seed_statements rest)
+    | _ -> [expr]
+  in
   let emit_seed loc (seed_stmts : expr list) =
     if seed_stmts <> [] then begin
       Buffer.add_string body (line_directive loc);
@@ -9920,7 +10043,7 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
         ignore (type_of_expr signatures [] statement);
         Buffer.add_string body (line_directive (Checker.expr_loc statement));
         Printf.bprintf body "\t_ = %s\n" (emit_expr ~indent:"\t" signatures [] statement))
-        seed_stmts
+        (List.concat_map seed_statements seed_stmts)
     end
   in
   List.iteri (fun index (test : test_form) ->
