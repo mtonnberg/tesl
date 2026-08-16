@@ -645,6 +645,51 @@ let proof_op_functions : (string, string) Hashtbl.t = Hashtbl.create 8
    the expression walker has only a name. *)
 let current_functions : (string, func_decl) Hashtbl.t = Hashtbl.create 16
 
+(* The type parameters a GENERIC function declares, by function name: the Tesl type variable
+   paired with the Go type-parameter name it renders as.  `fn isEmpty(xs: List a) -> Bool`
+   becomes `func IsEmpty[A any](xs []A) bool`, and the variables are collected from the
+   declaration in order of first appearance so the Go parameter list is deterministic.
+
+   Kept beside the signature rather than in it because a signature is built at 23 sites and
+   only a module's own `fn` declarations can be generic — everything else registers a
+   monomorphic row.  Populated per module, like `current_functions`. *)
+let current_type_params : (string, (string * string) list) Hashtbl.t = Hashtbl.create 16
+
+(* The type variables a declaration mentions, in order of first appearance, paired with the
+   Go type-parameter name each renders as: `A`, `B`, … by position.  Positional rather than
+   derived from the Tesl name, because two variables spelled `a` and `acc` would otherwise
+   both want `A`, and a type parameter that collides is not a type parameter. *)
+let rec return_spec_type_exprs = function
+  | RetPlain { ty; _ } | RetNamedPack { ty; _ } -> [ty]
+  | RetAttached { binding; _ } -> [binding.type_expr]
+  | RetForAll { elem_ty; _ } | RetMaybeForAll { elem_ty; _ }
+  | RetSetForAll { elem_ty; _ } | RetMaybeSetForAll { elem_ty; _ } -> [elem_ty]
+  | RetMaybeAttached { outer_ty = Some outer; binding; _ } -> [outer; binding.type_expr]
+  | RetMaybeAttached { binding; _ } -> [binding.type_expr]
+  | RetForAllDictValues { key_ty; val_ty; _ } | RetForAllDictKeys { key_ty; val_ty; _ } ->
+    [key_ty; val_ty]
+  | RetExists { body; _ } -> return_spec_type_exprs body
+
+let type_variables_of ?(subjects=[]) type_exprs =
+  let seen = ref [] in
+  let rec walk ty =
+    match ty with
+    (* A lowercase name inside a PROOF is a value — `Fact (AlwaysValid33 n)` names the
+       parameter `n`, not a type — and a proof erases here, so nothing under it is a type at
+       all.  `subjects` catches the same thing from the other side: a name that is one of the
+       function's own parameters is a value wherever it appears. *)
+    | TVar { name; _ } ->
+      if not (List.mem name !seen || List.mem name subjects) then seen := !seen @ [name]
+    | TApp { head = TName { name = "Fact"; _ }; _ } -> ()
+    | TApp { head; arg; _ } -> walk head; walk arg
+    | TFun { dom; cod; _ } -> walk dom; walk cod
+    | TTuple { elems; _ } -> List.iter walk elems
+    | TName _ -> ()
+  in
+  List.iter walk type_exprs;
+  List.mapi (fun index name ->
+    (name, String.make 1 (Char.chr (Char.code 'A' + index)))) !seen
+
 (* The module's `capturer` declarations.  A path capture may name one instead of writing
    its codec and check inline, and an endpoint offered as a TOOL has to run the same check
    the HTTP path does — so the declaration has to be reachable from the expression emitter,
@@ -856,6 +901,33 @@ let used_empty_default = ref false
    partial application, so the emitter goes through a runtime combinator that supplies the
    leading arguments and closes over the rest.  The family stops at three parameters because
    that is what the surface reaches for; anything wider is refused rather than guessed at. *)
+(* Read a generic call's TYPE ARGUMENTS off the types it is applied to: `boxMap33 f box`
+   with `f : Int -> String` and `box : Box33 Int` binds A to Int and B to String.
+
+   Collection only — the FIRST binding for a parameter wins, and nothing is verified here.
+   Verification is the caller's, and it does it the honest way: substitute the bindings into
+   each declared parameter and check the argument against THAT, so a second occurrence that
+   disagrees is an ordinary argument-type mismatch rather than a special rule. *)
+let rec collect_type_arguments bindings want got =
+  match want, got with
+  | TParam name, actual ->
+    if not (List.mem_assoc name !bindings) then bindings := (name, actual) :: !bindings
+  | TList want_inner, TList got_inner
+  | TSet want_inner, TSet got_inner
+  | TCheck want_inner, TCheck got_inner -> collect_type_arguments bindings want_inner got_inner
+  | TDict (want_key, want_value), TDict (got_key, got_value) ->
+    collect_type_arguments bindings want_key got_key;
+    collect_type_arguments bindings want_value got_value
+  | TAdt (want_info, want_args), TAdt (got_info, got_args)
+    when want_info.adt_go_name = got_info.adt_go_name
+         && List.length want_args = List.length got_args ->
+    List.iter2 (collect_type_arguments bindings) want_args got_args
+  | TFunc (want_params, want_result), TFunc (got_params, got_result)
+    when List.length want_params = List.length got_params ->
+    List.iter2 (collect_type_arguments bindings) want_params got_params;
+    collect_type_arguments bindings want_result got_result
+  | _ -> ()
+
 let partial_application_combinator ~supplied ~total =
   match supplied, total with
   | 1, 2 -> Some "teslrt.Apply1Of2"
@@ -985,17 +1057,17 @@ let rec type_of_type_expr ?(params=[]) types ty =
     TFunc (params, result)
   | TTuple { loc; _ } -> unsupported loc "Go backend does not support tuple types yet"
 
-let rec type_of_return_spec types = function
-  | RetPlain { ty; _ } -> type_of_type_expr types ty
-  | RetAttached { binding; _ } -> TCheck (type_of_type_expr types binding.type_expr)
+let rec type_of_return_spec ?(params=[]) types = function
+  | RetPlain { ty; _ } -> type_of_type_expr ~params types ty
+  | RetAttached { binding; _ } -> TCheck (type_of_type_expr ~params types binding.type_expr)
   (* `List T ::: ForAll P` is a TYPE-LEVEL contract with zero runtime structure
      (LANGUAGE-SPEC 16.9: "at runtime, the list is a plain list with no per-element
      proof structs"), so it erases to the list itself.  The frontend has already
      discharged the proof; nothing is erased that was not checked. *)
-  | RetForAll { elem_ty; _ } -> TList (type_of_type_expr types elem_ty)
+  | RetForAll { elem_ty; _ } -> TList (type_of_type_expr ~params types elem_ty)
   | RetMaybeForAll { elem_ty; loc; _ } ->
     (match Hashtbl.find_opt types.adts "Maybe" with
-     | Some info -> TAdt (info, [TList (type_of_type_expr types elem_ty)])
+     | Some info -> TAdt (info, [TList (type_of_type_expr ~params types elem_ty)])
      | None -> unsupported loc
        "Go backend needs `Tesl.Maybe` imported for a `Maybe (List … ::: ForAll …)` return")
   (* `-> T ? P` is a proof-carrying return.  A proof has no runtime structure in Go — the
@@ -1009,7 +1081,7 @@ let rec type_of_return_spec types = function
      value came from for the checker, and the checker has already used it.  (This used to
      be justified by "entities are refused before this point", which stopped being true
      when the DB slice landed; the rule above is the real reason.) *)
-  | RetNamedPack { ty; _ } -> type_of_type_expr types ty
+  | RetNamedPack { ty; _ } -> type_of_type_expr ~params types ty
   (* Every remaining proof-bearing return is the same erasure applied to a different
      container: the proof is a TYPE-LEVEL contract with no runtime structure, so what comes
      back is the Maybe, the Set or the Dict itself. *)
@@ -1017,28 +1089,28 @@ let rec type_of_return_spec types = function
      value's own type — and the wrapper is not always `Maybe`: `Either String (Int ?
      IsPositive)` is the same shape with another, and reading it as a Maybe answered a type
      the function does not return. *)
-  | RetMaybeAttached { outer_ty = Some outer; _ } -> type_of_type_expr types outer
+  | RetMaybeAttached { outer_ty = Some outer; _ } -> type_of_type_expr ~params types outer
   | RetMaybeAttached { binding; loc; _ } ->
     (match Hashtbl.find_opt types.adts "Maybe" with
-     | Some info -> TAdt (info, [type_of_type_expr types binding.type_expr])
+     | Some info -> TAdt (info, [type_of_type_expr ~params types binding.type_expr])
      | None -> unsupported loc
        "Go backend needs `Tesl.Maybe` imported for a `Maybe (… ::: …)` return")
-  | RetSetForAll { elem_ty; _ } -> TSet (type_of_type_expr types elem_ty)
+  | RetSetForAll { elem_ty; _ } -> TSet (type_of_type_expr ~params types elem_ty)
   | RetMaybeSetForAll { elem_ty; loc; _ } ->
     (match Hashtbl.find_opt types.adts "Maybe" with
-     | Some info -> TAdt (info, [TSet (type_of_type_expr types elem_ty)])
+     | Some info -> TAdt (info, [TSet (type_of_type_expr ~params types elem_ty)])
      | None -> unsupported loc
        "Go backend needs `Tesl.Maybe` imported for a `Maybe (Set … ::: ForAll …)` return")
   | RetForAllDictValues { key_ty; val_ty; _ }
   | RetForAllDictKeys { key_ty; val_ty; _ } ->
-    TDict (type_of_type_expr types key_ty, type_of_type_expr types val_ty)
+    TDict (type_of_type_expr ~params types key_ty, type_of_type_expr ~params types val_ty)
   (* An EXISTENTIAL return (`-> exists taskId: String => Task ? FromDb (Id == taskId)`) hides
      the witness from the caller's proof context.  The witness is a proof SUBJECT, not a
      value the caller receives — the body still returns the same value it would without the
      `exists` — so the type is the inner spec's and the quantifier erases.  Soundness here is
      the CHECKER's: it is what refuses to let a packed witness be forwarded where the fact
      does not hold (issue #73), and it runs before this point. *)
-  | RetExists { body; _ } -> type_of_return_spec types body
+  | RetExists { body; _ } -> type_of_return_spec ~params types body
 
 let rec go_type = function
   | TInt -> "teslrt.Int"
@@ -1070,6 +1142,13 @@ let rec go_type = function
      witness as any — and the smallest. *)
   | TAnon -> "struct{}"
   | TFailure -> invalid_arg "Go failure has no standalone type"
+
+(* A conjunction (or disjunction) of ONE is that one comparison: wrapping it in parentheses
+   is what gofmt then takes back off, and an emitted file gofmt would rewrite is a gate
+   failure rather than a style opinion. *)
+let joined_comparison separator = function
+  | [only] -> only
+  | parts -> "(" ^ String.concat separator parts ^ ")"
 
 (* Type equality that TERMINATES on a RECURSIVE ADT.  `=` cannot: a recursive type's
    `adt_info` contains field types that point back at it, and OCaml's structural equality
@@ -1297,6 +1376,27 @@ let rec substitute_type bindings ty =
   | TInt | TFloat | TString | TBool | TUnit | TNewtype _ | TRecord _ | TFailure | TAnon -> ty
 
 (** A variant's payload types with the ADT's type arguments substituted in. *)
+(* The parameter types a call to [name] is checked and emitted against.  For an ordinary
+   function they are the declared ones; for a GENERIC function they are the declared ones
+   with its type parameters filled in from the arguments, which is what lets a lambda
+   argument be emitted as `func(teslrt.Int) string` rather than as `func(A) B`. *)
+let instantiated_call_types type_of_argument loc name (signature : signature) args =
+  match Hashtbl.find_opt current_type_params name with
+  | None | Some [] -> signature.params, signature.result
+  | Some declared ->
+    if List.length args <> List.length signature.params then
+      unsupported loc "Go backend requires a fully-applied call to the generic function `%s`"
+        name;
+    let bindings = ref [] in
+    List.iter2 (fun arg want ->
+      collect_type_arguments bindings want (type_of_argument arg)) args signature.params;
+    List.iter (fun (tesl, go) ->
+      if not (List.mem_assoc go !bindings) then unsupported loc
+        "Go backend cannot infer the type argument `%s` of `%s` from its arguments" tesl name)
+      declared;
+    (List.map (substitute_type !bindings) signature.params,
+     substitute_type !bindings signature.result)
+
 let variant_field_types info args variant =
   if info.adt_params = [] || args = [] then variant.var_fields
   else
@@ -1461,7 +1561,7 @@ and equal_expr ty left right =
          let field = record_field_go_name name in
          equal_expr field_ty (Printf.sprintf "%s.%s" (selector_operand left) field)
            (Printf.sprintf "%s.%s" (selector_operand right) field)) fields in
-       "(" ^ String.concat " && " parts ^ ")")
+       joined_comparison " && " parts)
   | TAdt (info, args) when single_variant info <> None ->
     (match single_variant info with
      | Some variant ->
@@ -1472,7 +1572,7 @@ and equal_expr ty left right =
             let field = variant_field_go_name variant name in
             equal_expr field_ty (Printf.sprintf "%s.%s" (selector_operand left) field)
               (Printf.sprintf "%s.%s" (selector_operand right) field)) fields in
-          "(" ^ String.concat " && " parts ^ ")")
+          joined_comparison " && " parts)
      | None -> assert false)
   (* A module-declared, non-generic ADT gets a generated `TeslEqual` method: it keeps
      the comparison site short.  A runtime-provided or generic one cannot — a method
@@ -1541,7 +1641,7 @@ and unequal_expr ty left right =
          let field = record_field_go_name name in
          unequal_expr field_ty (Printf.sprintf "%s.%s" (selector_operand left) field)
            (Printf.sprintf "%s.%s" (selector_operand right) field)) fields in
-       "(" ^ String.concat " || " parts ^ ")")
+       joined_comparison " || " parts)
   | TAdt (info, args) when single_variant info <> None ->
     (match single_variant info with
      | Some variant ->
@@ -1552,7 +1652,7 @@ and unequal_expr ty left right =
             let field = variant_field_go_name variant name in
             unequal_expr field_ty (Printf.sprintf "%s.%s" (selector_operand left) field)
               (Printf.sprintf "%s.%s" (selector_operand right) field)) fields in
-          "(" ^ String.concat " || " parts ^ ")")
+          joined_comparison " || " parts)
      | None -> assert false)
   | TAdt (info, _) when not info.adt_builtin && info.adt_params = [] ->
     Printf.sprintf "!%s.TeslEqual(%s)" (selector_operand left) right
@@ -3176,21 +3276,26 @@ let rec type_of_expr signatures env expr =
                 "Go backend supports partial application up to three parameters; `%s` takes %d"
                 name total
           end;
-          let leading = List.filteri (fun index _ -> index < supplied) signature.params in
+          (* A GENERIC callee is INSTANTIATED first: its type parameters are read off the
+             argument types, and everything after that is the ordinary check against a
+             parameter list with no variables left in it. *)
+          let instantiated_params, instantiated_result =
+            instantiated_call_types (type_of_expr signatures env) loc name signature args in
+          let leading = List.filteri (fun index _ -> index < supplied) instantiated_params in
           List.iter2 (fun arg want ->
             let got = type_of_arg signatures env want arg in
             if type_unequal got want then unsupported (Checker.expr_loc arg)
               "Go backend call to `%s` has an unsupported argument type" name)
             args leading;
-          if supplied = total then signature.result
+          if supplied = total then instantiated_result
           else
             (* CURRIED: `blend 1` is a function of `b` answering a function of `c`, not a
                two-argument function.  That is the surface's shape and the Racket runtime's —
                a flat `withA 2 3` is an arity error there — so a flat call to a partially
                applied value is refused here rather than quietly accepted. *)
             List.fold_right (fun param answer -> TFunc ([param], answer))
-              (List.filteri (fun index _ -> index >= supplied) signature.params)
-              signature.result)
+              (List.filteri (fun index _ -> index >= supplied) instantiated_params)
+              instantiated_result)
      (* A call through any FUNCTION-VALUED expression — a record field holding one, say —
         not just through a name. *)
      | head when (match type_of_expr signatures env head with TFunc _ -> true | _ -> false) ->
@@ -5656,9 +5761,11 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
        in
        let args = normalize_call_args signature.params args in
        ignore (type_of_expr signatures env app);
+       let instantiated_params, _ =
+         instantiated_call_types (type_of_expr signatures env) loc name signature args in
        let supplied = List.length args in
-       let total = List.length signature.params in
-       let leading = List.filteri (fun index _ -> index < supplied) signature.params in
+       let total = List.length instantiated_params in
+       let leading = List.filteri (fun index _ -> index < supplied) instantiated_params in
        let emitted = List.map2 (fun arg want ->
          emit_leaf_argument ~indent signatures env name want arg) args leading in
        if supplied < total then
@@ -6421,11 +6528,17 @@ and pattern_plan ~scrut info type_args pattern =
 (* Arms arrive as (pattern, guard, body) TRIPLES rather than as `case_arm`s: an expression
    `case` carries an expr body while a test-block `case` carries a statement list, and the
    discrimination logic is the same for both. *)
-and emit_case_statements ?(indent="") signatures env buffer scrut arms =
+(* [terminating] says whether every arm's body ENDS the function — it does in expression
+   position, where each arm is a `return`, and it does not in a test block, where the arms
+   are plain statements.  It changes what "no arm matched" has to look like: a `panic` after
+   arms that all return is unreachable AND is what makes the emitted function terminating to
+   Go's own analysis, while after arms that fall through it has to be conditional or it runs
+   every time. *)
+and emit_case_statements ?(indent="") ?(terminating=true) signatures env buffer scrut arms =
   match type_of_expr signatures env scrut with
   | scalar_ty when scalar_case_type scalar_ty ->
     emit_scalar_case_statements ~indent signatures env buffer scrut arms scalar_ty
-  | _ -> emit_adt_case_statements ~indent signatures env buffer scrut arms
+  | _ -> emit_adt_case_statements ~indent ~terminating signatures env buffer scrut arms
 
 (* A `case` over a SCALAR: the arms are literal patterns and at most one catch-all, so the
    emitted shape is an `if`/`else if` chain over the scrutinee rather than a tag switch — a Go
@@ -6465,66 +6578,76 @@ and emit_scalar_case_statements ?(indent="") signatures env buffer scrut arms sc
     | PNullary { ctor; loc } | PCon { ctor; loc; _ } ->
       unsupported loc "Go backend `case` over a scalar cannot match constructor `%s`" ctor
   in
-  let bind_variable body_indent arm arm_env =
+  (* An arm that BINDS the scrutinee declares its name as the first statement of its own
+     body: with the `if init; cond` form below the declaration is in the `if` header, and Go
+     rejects a declared-and-unused variable, so the discard has to be inside. *)
+  let discard_variable body_indent arm arm_env =
     match arm_pattern arm with
     | PVar name ->
-      Printf.bprintf buffer "%s%s := %s\n%s_ = %s\n" body_indent (local_ident name)
-        scrut_name body_indent (local_ident name);
+      Printf.bprintf buffer "%s_ = %s\n" body_indent (local_ident name);
       arm_env
     | _ -> arm_env
   in
-  let rec chain = function
+  (* The arms are ONE if/else-if chain, not a run of independent `if`s.  In expression
+     position every arm ends in a `return`, so a missing `else` was invisible; as STATEMENTS
+     — a `case` in a test block — it meant the arms after a matching one ran as well, and a
+     `case label of "hello" -> … _ -> …` executed BOTH.  A chain also says what the code
+     means: at most one arm runs. *)
+  let rec chain ~first = function
     | [] ->
-      Printf.bprintf buffer
-        "%spanic(\"unreachable: checker guarantees case exhaustiveness\")\n" inner
+      if first then
+        Printf.bprintf buffer
+          "%spanic(\"unreachable: checker guarantees case exhaustiveness\")\n" inner
+      else
+        Printf.bprintf buffer " else {\n%s\tpanic(\"unreachable: checker guarantees case \
+                               exhaustiveness\")\n%s}\n" inner inner
     | arm :: rest ->
       let condition, arm_env = condition_of arm in
       let guard = arm_guard arm in
+      (* A guard on a VARIABLE pattern reads the name the arm binds, so the binding is
+         declared in the `if`'s own init statement — where it is in scope for the condition
+         and for the body, and for nothing else. *)
+      let initialiser = match arm_pattern arm, guard with
+        | PVar name, Some _ ->
+          Printf.sprintf "%s := %s; " (local_ident name) scrut_name
+        | _ -> ""
+      in
       let full_condition = match condition, guard with
         | None, None -> None
         | Some condition, None -> Some condition
         | None, Some guard ->
           Some (strip_outer_parens (emit_expr ~indent:inner signatures arm_env guard))
         | Some condition, Some guard ->
-          (* The guard may name the variable this arm binds, which is bound INSIDE the branch —
-             so a guarded variable pattern reads the scrutinee directly instead. *)
-          let guard_env = match arm_pattern arm with
-            | PVar name -> (name, scrut_ty) :: env
-            | _ -> env
-          in
           Some (Printf.sprintf "%s && %s" condition
-                  (strip_outer_parens (emit_expr ~indent:inner signatures guard_env guard)))
+                  (strip_outer_parens (emit_expr ~indent:inner signatures arm_env guard)))
       in
       (match full_condition with
        | None ->
-         Printf.bprintf buffer "%s{\n" inner;
+         (* An unconditional arm CLOSES the chain: everything after it is unreachable, which
+            the checker's exhaustiveness rule already says. *)
          let body_indent = inner ^ "\t" in
-         let arm_env = bind_variable body_indent arm arm_env in
+         if first then Printf.bprintf buffer "%s{\n" inner
+         else Printf.bprintf buffer " else {\n";
+         (match arm_pattern arm with
+          | PVar name ->
+            Printf.bprintf buffer "%s%s := %s\n%s_ = %s\n" body_indent (local_ident name)
+              scrut_name body_indent (local_ident name)
+          | _ -> ());
          (arm_body arm) arm_env body_indent;
          Printf.bprintf buffer "%s}\n" inner
        | Some condition ->
-         (* A variable pattern is bound BEFORE the condition when the guard reads it — the
-            guard is written in terms of the name, not of the scrutinee. *)
-         let binds_variable = match arm_pattern arm with PVar _ -> true | _ -> false in
-         if binds_variable then begin
-           Printf.bprintf buffer "%s{\n" inner;
-           let arm_env = bind_variable (inner ^ "\t") arm arm_env in
-           Printf.bprintf buffer "%s\tif %s {\n" inner condition;
-           (arm_body arm) arm_env (inner ^ "\t\t");
-           Printf.bprintf buffer "%s\t}\n%s}\n" inner inner
-         end else begin
-           Printf.bprintf buffer "%sif %s {\n" inner condition;
-           let body_indent = inner ^ "\t" in
-           let arm_env = bind_variable body_indent arm arm_env in
-           (arm_body arm) arm_env body_indent;
-           Printf.bprintf buffer "%s}\n" inner
-         end;
-         chain rest)
+         if first then Printf.bprintf buffer "%sif %s%s {\n" inner initialiser condition
+         else Printf.bprintf buffer " else if %s%s {\n" initialiser condition;
+         let body_indent = inner ^ "\t" in
+         let arm_env = discard_variable body_indent arm arm_env in
+         (arm_body arm) arm_env body_indent;
+         Printf.bprintf buffer "%s}" inner;
+         chain ~first:false rest)
   in
-  chain arms;
+  chain ~first:true arms;
   Printf.bprintf buffer "%s}\n" indent
 
-and emit_adt_case_statements ?(indent="") signatures env buffer scrut arms =
+and emit_adt_case_statements ?(indent="") ?(terminating=true) signatures env buffer scrut arms =
   let info, type_args = match type_of_expr signatures env scrut with
     | TAdt (info, args) -> info, args
     | _ -> invalid_arg "case scrutinee validated before emission"
@@ -6577,34 +6700,58 @@ and emit_adt_case_statements ?(indent="") signatures env buffer scrut arms =
     | [] -> invalid_arg "case validated before emission"
   end else if guarded then begin
     (* First match wins, so an unguarded catch-all ends the chain: anything after
-       it is dead code, which `go vet` rejects. *)
-    let rec chain = function
-      | [] -> unreachable_default inner
+       it is dead code, which `go vet` rejects.
+
+       An arm's GUARD is tested inside its tag block, because it reads the bindings the
+       pattern introduces and those can only be read once the tag says the payload is
+       there — so the arms cannot be one `if`/`else if`.  A FLAG carries "an arm already
+       ran" instead: without it every later arm ran as well, which in expression position
+       was invisible (each arm returns) and in STATEMENT position meant a `case` in a test
+       block executed more than one of its arms. *)
+    let matched = Printf.sprintf "teslMatched%d" (String.length indent) in
+    (* Only where the arms FALL THROUGH.  Where they return, an arm that ran has already
+       left the function and the flag would be dead weight — and the conditional panic it
+       would force is not a terminating statement, which Go reads as a missing return. *)
+    let needs_flag = (not terminating) && List.length plans > 1 in
+    if needs_flag then Printf.bprintf buffer "%s%s := false\n" inner matched;
+    let rec chain first = function
+      | [] ->
+        if needs_flag then begin
+          Printf.bprintf buffer "%sif !%s {\n" inner matched;
+          unreachable_default (inner ^ "\t");
+          Printf.bprintf buffer "%s}\n" inner
+        end else unreachable_default inner
       | (arm, (variant, whole, bindings, conditions)) :: rest ->
         let body_indent = inner ^ "\t" in
         (* The arm's own tag and its nested tests are ONE condition: a nested test reads
            through the payload, so it may only be evaluated once the tag says the payload
            is there — `&&` short-circuits left to right, which is exactly that order. *)
-        let tests = (match variant with
-          | Some variant ->
-            [Printf.sprintf "%s.%s == %s" scrut_name adt_tag_field
-               (qualified info.adt_owner variant.var_tag)]
-          | None -> []) @ conditions in
+        let tests =
+          (if needs_flag && not first then [Printf.sprintf "!%s" matched] else [])
+          @ (match variant with
+             | Some variant ->
+               [Printf.sprintf "%s.%s == %s" scrut_name adt_tag_field
+                  (qualified info.adt_owner variant.var_tag)]
+             | None -> []) @ conditions in
         (match tests with
          | [] -> Printf.bprintf buffer "%s{\n" inner
          | _ -> Printf.bprintf buffer "%sif %s {\n" inner (String.concat " && " tests));
         let arm_env = bind_arm body_indent (whole, bindings) in
+        let ran indent = if needs_flag then Printf.bprintf buffer "%s%s = true\n" indent matched in
         (match arm_guard arm with
-         | None -> (arm_body arm) arm_env body_indent
+         | None ->
+           ran body_indent;
+           (arm_body arm) arm_env body_indent
          | Some guard ->
            Printf.bprintf buffer "%sif %s {\n" body_indent
              (strip_outer_parens (emit_expr ~indent:body_indent signatures arm_env guard));
+           ran (body_indent ^ "\t");
            (arm_body arm) arm_env (body_indent ^ "\t");
            Printf.bprintf buffer "%s}\n" body_indent);
         Printf.bprintf buffer "%s}\n" inner;
-        if tests = [] && arm_guard arm = None then () else chain rest
+        if tests = [] && arm_guard arm = None then () else chain false rest
     in
-    chain plans
+    chain true plans
   end else begin
     (* Every tag is named explicitly — a Tesl catch-all becomes the list of tags no
        earlier arm covered — so the `exhaustive` linter can still verify the switch
@@ -8704,6 +8851,18 @@ let let_binding_type signatures env name value later =
      consumer of a check's value goes through. *)
   let value_of = function TCheck inner -> inner | ty -> ty in
   match typed_with_default (type_of_expr signatures env) value with
+  (* The value settled a type of its own, but left an ADT argument ANONYMOUS: `let xs =
+     [Left "a", Left "b"]` says nothing about what a Right would hold, and the LATER use is
+     what settles it.  Without this the binding is emitted at `Either[string, struct{}]` and
+     the call that receives it wants `Either[string, teslrt.Int]`, which Go rejects — the
+     value is right and only its type was under-determined. *)
+  | Some ty, false when has_anon ty ->
+    (match expected_from_use signatures name later with
+     | Some want when not (has_anon want) ->
+       (match typed_with_default (type_of_arg signatures env want) value with
+        | Some settled, _ -> value_of settled
+        | None, _ -> value_of ty)
+     | _ -> value_of ty)
   | Some ty, false -> value_of ty
   | settled, _ ->
     (match expected_from_use signatures name later with
@@ -9571,8 +9730,17 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
        parameter.  Nothing else gains one, so ordinary functions keep plain signatures. *)
     let scope_parameter =
       if needs_scope then [ "teslScope *teslrt.RequestScope" ] else [] in
-    Printf.bprintf body "func %s(%s) %s {\n"
-      signature.go_name
+    (* A GENERIC function declares its type parameters between the name and the arguments.
+       `any` is the only constraint: Tesl has no bounded polymorphism, and a parameter this
+       backend cannot do anything to is exactly what an unconstrained one is. *)
+    let type_parameters = match Hashtbl.find_opt current_type_params fd.name with
+      | None | Some [] -> ""
+      | Some params ->
+        Printf.sprintf "[%s]"
+          (String.concat ", " (List.map (fun (_, go) -> go ^ " any") params))
+    in
+    Printf.bprintf body "func %s%s(%s) %s {\n"
+      signature.go_name type_parameters
       (String.concat ", "
          (scope_parameter
           @ List.map (fun (name, ty) -> local_ident name ^ " " ^ go_type ty) params))
@@ -10671,7 +10839,7 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
        emitter runs it — but each arm carries STATEMENTS rather than a value. *)
     | TsCase { scrut; arms; loc } :: rest ->
       Buffer.add_string body (line_directive loc);
-      emit_case_statements ~indent signatures env body scrut
+      emit_case_statements ~indent ~terminating:false signatures env body scrut
         (List.map (fun (arm : ts_case_arm) ->
            arm.ts_pattern, arm.ts_guard,
            (fun arm_env body_indent -> emit_stmts arm_env body_indent arm.ts_body)) arms);
@@ -13889,8 +14057,20 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
     List.iter (fun (fd : func_decl) ->
       if Hashtbl.mem signatures fd.name then unsupported fd.loc
         "Go backend generated name collision for `%s`" fd.name;
+      (* A GENERIC function: the type variables its declaration mentions become Go type
+         parameters, in order of first appearance.  Only a `fn` may be generic — a handler,
+         a worker or a check is called by the runtime through a monomorphic signature. *)
+      let type_params =
+        type_variables_of
+          ~subjects:(List.map (fun (binding : binding) -> binding.name) fd.params)
+          (List.map (fun (binding : binding) -> binding.type_expr) fd.params
+           @ return_spec_type_exprs fd.return_spec) in
+      if type_params <> [] && fd.kind <> FnKind then
+        unsupported fd.loc
+          "Go backend supports a type variable only on a `fn`, and `%s` is not one" fd.name;
+      if type_params <> [] then Hashtbl.replace current_type_params fd.name type_params;
       let params = List.map (fun (binding : binding) ->
-        type_of_type_expr types binding.type_expr) fd.params in
+        type_of_type_expr ~params:type_params types binding.type_expr) fd.params in
       (* `main` is exported whatever the module's `exposing` list says: the generated
          `package main` has to call it, and it is the program's entry point rather than part of a
          library surface. *)
@@ -13905,7 +14085,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
          emitted function answers is Unit.  Typing `App` as a value type would need a runtime
          representation for something that has none. *)
       let result = if fd.kind = MainKind then TUnit else
-        match type_of_return_spec types fd.return_spec, fd.kind with
+        match type_of_return_spec ~params:type_params types fd.return_spec, fd.kind with
         (* A `check`/`auth` can REJECT, so whatever its return spec says about the value, the
            result is a `Check` of it: `-> String ? Authenticated` on an `auth` is
            `Check[string]`, not `string`. *)

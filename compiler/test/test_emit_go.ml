@@ -10493,6 +10493,212 @@ fn twice(n: Int) -> Int = n * 2
     check bool "no regex runtime in a module that matches nothing" false
       (List.exists (fun (a : Emit_go.artifact) -> a.path = "internal/teslrt/regex.go") artifacts)
 
+(* ── A GENERIC function ───────────────────────────────────────────────────────
+   `fn isEmpty(xs: List a) -> Bool` becomes `func IsEmpty[A any](xs []A) bool`: the type
+   variables a declaration mentions become Go type parameters, in order of first appearance,
+   and a call reads its type ARGUMENTS off the types it is applied to — `boxMap f box` with
+   `f : Int -> String` and `box : Box Int` answers a `Box String`.
+
+   Two things the collection has to get right, and both are here:
+     - a lowercase name inside a PROOF is a VALUE, not a type: `-> Fact (AlwaysValid n)`
+       names the parameter `n`, and reading it as a type variable made an `establish` a
+       generic function over nothing;
+     - a type parameter that appears ONLY in the result cannot be inferred from the
+       arguments, and Go cannot infer it either — that is refused rather than emitted as
+       code that does not compile. *)
+let generic_function_source = {|module GoGeneric exposing [isEmpty, firstOr, boxMap, swap, countOf]
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List]
+import Tesl.List exposing [List.isEmpty, List.length, List.head]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Tuple exposing [Tuple2, Tuple2.first, Tuple2.second]
+
+type Box a
+  = MkBox value: a
+
+fn isEmpty(xs: List a) -> Bool = List.isEmpty xs
+
+fn countOf(xs: List a) -> Int = List.length xs
+
+# The type variable appears in a parameter AND in the result, which is what lets
+# the call site settle it.
+fn firstOr(fallback: a, xs: List a) -> a =
+  case List.head xs of
+    Nothing -> fallback
+    Something value -> value
+
+fn boxMap(f: a -> b, box: Box a) -> Box b =
+  case box of
+    MkBox value -> MkBox (f value)
+
+fn swap(pair: Tuple2 a b) -> Tuple2 b a =
+  Tuple2 (Tuple2.second pair) (Tuple2.first pair)
+
+fn double(n: Int) -> Int = n * 2
+
+fn label(n: Int) -> String = "n=${n}"
+
+test "a type variable in a parameter is read off the argument" {
+  expect isEmpty [1, 2, 3] == False
+  expect isEmpty ["a"] == False
+  expect countOf [1, 2, 3] == 3
+  expect countOf ["a", "b"] == 2
+}
+
+test "a type variable in the result comes back instantiated" {
+  expect firstOr 0 [7, 8] == 7
+  expect firstOr 0 [] == 0
+  expect firstOr "none" ["x"] == "x"
+}
+
+# A lambda and a NAMED function are both function values here.
+test "a function parameter is instantiated at both ends" {
+  expect boxMap double (MkBox 21) == MkBox 42
+  expect boxMap label (MkBox 5) == MkBox "n=5"
+  expect boxMap (fn(x: Int) -> x + 1) (MkBox 1) == MkBox 2
+}
+
+test "two type variables swap places" {
+  let swapped = swap (Tuple2 1 "one")
+  expect Tuple2.first swapped == "one"
+  expect Tuple2.second swapped == 1
+}
+|}
+
+let test_generic_function_with_go () =
+  let emitted = match Compile.compile_go_source "<go-generic>" generic_function_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "generic function compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgogeneric/module.go" emitted in
+  check bool "one type parameter, named by position" true
+    (contains module_go "func IsEmpty[A any](xs []A) bool");
+  check bool "two type parameters, in order of first appearance" true
+    (contains module_go "func BoxMap[A any, B any](f func(A) B, box Box[A]) Box[B]");
+  check bool "a type variable in the result is a parameter too" true
+    (contains module_go "func FirstOr[A any](fallback A, xs []A) A");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-generic" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      run_go_gates root)
+  end
+
+(* A type parameter that appears ONLY in the result has nothing to be inferred FROM at the
+   call site, and Go cannot infer it either.  The DECLARATION is fine — `func Conjure[A any]`
+   compiles — so the refusal belongs where the type argument would have to be known, which is
+   the call. *)
+let test_uninferable_type_parameter_fails_closed () =
+  let source = {|module GoGenericBad exposing [conjure, useIt]
+
+import Tesl.Prelude exposing [Int, List]
+import Tesl.List exposing [List.length]
+
+fn conjure(n: Int) -> List a = []
+
+fn useIt() -> Int = List.length (conjure 1)
+|} in
+  match Compile.compile_go_source "<go-generic-bad>" source with
+  | Compile.GoSuccess _ -> fail "an uninferable type parameter was emitted"
+  | Compile.GoFailure diagnostics ->
+    check bool "the refusal names the type argument" true
+      (List.exists (fun (d : Compile.diagnostic) ->
+         d.source = "go-emitter" && contains d.message "cannot infer the type argument")
+         diagnostics)
+
+(* A `case` in a test block is a chain, not a run of independent `if`s.  In expression
+   position every arm ends in a `return`, so a missing `else` was invisible; as statements it
+   meant the arms AFTER a matching one ran as well, and `case label of "hello" -> … _ -> …`
+   executed both — the catch-all failed the test the first arm had just passed. *)
+let case_statement_source = {|module GoCaseStmt exposing [classify]
+
+import Tesl.Prelude exposing [Bool(..), Int, String]
+
+type Shape
+  = Circle radius: Int
+  | Rect width: Int height: Int
+  | Point
+
+fn classify(n: Int) -> String =
+  case n of
+    0 -> "zero"
+    1 -> "one"
+    _ -> "many"
+
+test "a literal arm stops the chain" {
+  let label = "hello"
+  case label of
+    "hello" -> expect 1 == 1
+    _ -> expect 1 == 2
+}
+
+test "an integer literal arm stops the chain" {
+  let n = 42
+  case n of
+    42 -> expect 1 == 1
+    0 -> expect 1 == 2
+    _ -> expect 1 == 2
+}
+
+test "a catch-all runs only when nothing matched" {
+  let n = 7
+  case n of
+    42 -> expect 1 == 2
+    _ -> expect 1 == 1
+}
+
+# A guard that fails must fall through to the next arm, and only one arm may run.
+test "a guarded arm falls through when its guard fails" {
+  let s = Rect 3 4
+  case s of
+    Rect w h where w > 10 -> expect 1 == 2
+    Rect w h -> expect w + h == 7
+    Circle _ -> expect 1 == 2
+    Point -> expect 1 == 2
+}
+
+test "the same case in expression position still answers one arm" {
+  expect classify 0 == "zero"
+  expect classify 1 == "one"
+  expect classify 9 == "many"
+}
+|}
+
+let test_case_statement_chain_with_go () =
+  let emitted = match Compile.compile_go_source "<go-case-stmt>" case_statement_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "case-statement compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let tests_go = artifact "internal/teslmodgocasestmt/module_test.go" emitted in
+  (* The scalar arms are ONE chain: an `else` is what says at most one runs. *)
+  check bool "a scalar case is an if/else chain" true (contains tests_go "} else if ");
+  check bool "a scalar catch-all is the chain's else" true (contains tests_go "} else {");
+  (* A guarded ADT arm cannot be an `else if` — its guard reads bindings that only exist
+     once the tag matched — so a flag carries "an arm already ran". *)
+  check bool "a guarded ADT case carries a matched flag" true (contains tests_go "teslMatched");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-case-stmt" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      run_go_gates root)
+  end
+
 (* ── The calendar half of `Tesl.Time`: `TimeZone` and the bucket family ──────
    `Time.truncDay zone ts` is the bucket-START instant for the wall clock in a zone, and the
    engine behind it is a rule-for-rule port of `dsl/private/time-trunc.rkt` — deliberately
@@ -11354,6 +11560,14 @@ let () =
         (racket_behavior_oracle "<go-regex>" regex_source);
       test_case "the regex runtime ships only where used" `Quick
         test_regex_runtime_ships_only_where_used;
+      test_case "a generic function" `Slow test_generic_function_with_go;
+      test_case "a generic function behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-generic>" generic_function_source);
+      test_case "an uninferable type parameter fails closed" `Quick
+        test_uninferable_type_parameter_fails_closed;
+      test_case "a case in a test block is a chain" `Slow test_case_statement_chain_with_go;
+      test_case "a case in a test block behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-case-stmt>" case_statement_source);
       test_case "the calendar half of Tesl.Time" `Slow test_time_zone_with_go;
       test_case "the calendar half of Tesl.Time behaves the same on Racket" `Slow
         (racket_behavior_oracle "<go-timezone>" time_zone_source);
