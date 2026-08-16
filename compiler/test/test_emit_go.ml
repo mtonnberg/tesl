@@ -9485,6 +9485,137 @@ let test_inference_with_go () =
       run_go_gates root)
   end
 
+(* ── A newtype over a newtype, and two things a container does not observe ───
+   `type Rank = Score` where `type Score = Int` nests in Go exactly as it does on Racket,
+   and each layer compares through its payload — which is what "orderable transitively"
+   means when it is emitted rather than asserted.
+
+   `expectFail check (a && b) x` splits at the `check`, leaving the CONJUNCTION applied to
+   the value: a shape nothing types on its own, since a check is not a function value.
+   Rebuilding the application puts it back on the path that already knows what a combined
+   check means.
+
+   And `Dict.isEmpty Dict.empty` observes neither the key nor the value, so it is answered
+   rather than refused — the same rule `List.isEmpty []` already has. *)
+let ordered_newtype_source = {|module GoOrd exposing [Score, Rank, makeScore, promote, best]
+
+import Tesl.Prelude exposing [Int, String, Bool(..), List]
+import Tesl.Dict exposing [Dict, Dict.empty, Dict.isEmpty, Dict.size, Dict.insert]
+import Tesl.Set exposing [Set, Set.empty, Set.isEmpty, Set.size]
+import Tesl.String exposing [String.startsWith, String.endsWith]
+
+fact IsA (s: String)
+fact EndsB (s: String)
+
+# A newtype over a newtype: ordering works transitively, because each layer
+# compares through its payload.
+type Score = Int
+type Rank = Score
+
+fn makeScore(n: Int) -> Score =
+  Score n
+
+fn promote(s: Score) -> Rank =
+  Rank s
+
+fn rankToInt(r: Rank) -> Int =
+  r.value.value
+
+# The DIRECT comparison, which is what a two-layer newtype has to support. It is
+# not called from a test: the Racket runtime traps on it (`tesl-gt?: ordered
+# comparison needs a number, got (newtype-value … Score)`) even though its own
+# checker admits the type as transitively orderable, so running it here would
+# pin that bug rather than this behaviour. The emitted shape is asserted instead.
+fn best(a: Rank, b: Rank) -> Rank =
+  if a > b then
+    a
+  else
+    b
+
+fn higherRank(a: Rank, b: Rank) -> Rank =
+  if rankToInt a > rankToInt b then
+    a
+  else
+    b
+
+check startsA(s: String) -> s: String ::: IsA s =
+  if String.startsWith s "A" then
+    ok s ::: IsA s
+  else
+    fail 400 "must start with A"
+
+check endsB(s: String) -> s: String ::: EndsB s =
+  if String.endsWith s "B" then
+    ok s ::: EndsB s
+  else
+    fail 400 "must end with B"
+
+test "a newtype chain orders through its payload" {
+  let low = promote (makeScore 3)
+  let high = promote (makeScore 9)
+  expect higherRank low high == high
+  expect rankToInt low < rankToInt high
+  expect low == promote (makeScore 3)
+}
+
+# `expectFail check (a && b) x` splits at the `check`, leaving the conjunction
+# applied to the value — a shape nothing types on its own.
+test "expectFail over a combined check reports each conjunct's rejection" {
+  expectFail check (startsA && endsB) "XB"
+  expectFail check (startsA && endsB) "AX"
+  expectFail check (startsA && endsB) "XX"
+  let good = check (startsA && endsB) "AB"
+  expect good == "AB"
+}
+
+# Neither `isEmpty` nor `size` observes what the container holds, so an empty one
+# is answered rather than refused.
+test "an unobservable key or value is not a refusal" {
+  expect Dict.isEmpty Dict.empty == True
+  expect Dict.size Dict.empty == 0
+  expect Set.isEmpty Set.empty == True
+  expect Set.size Set.empty == 0
+  let d = Dict.insert "x" 1 Dict.empty
+  expect Dict.isEmpty d == False
+  expect Dict.size d == 1
+}
+|}
+
+let test_ordered_newtype_with_go () =
+  let emitted = match Compile.compile_go_source "<go-ord>" ordered_newtype_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "ordered-newtype compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgoord/module.go" emitted in
+  let tests_go = artifact "internal/teslmodgoord/module_test.go" emitted in
+  (* The chain nests, and a comparison unwraps through BOTH layers.  The Racket runtime
+     traps here — `tesl-gt?` unwraps one — which is why `best` is emitted but not run. *)
+  check bool "a newtype over a newtype nests" true
+    (contains module_go "type Rank struct {\n\tValue Score\n}");
+  check bool "a comparison unwraps through both layers" true
+    (contains module_go "teslrt.Compare(a.Value.Value, b.Value.Value) > 0");
+  (* The combined check reaches its sequencing helper from `expectFail` too. *)
+  check bool "expectFail over a combined check runs the sequencing helper" true
+    (contains tests_go "teslCheckAll");
+  (* Nothing observes the key or the value, so one is chosen and the call is emitted. *)
+  check bool "an unobservable dict is instantiated rather than refused" true
+    (contains tests_go "teslrt.DictIsEmpty(teslrt.DictEmpty[teslrt.Int, teslrt.Int]())");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-ord" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+  end
+
 let () =
   run "emit_go" [
     "emission", [
@@ -9683,6 +9814,10 @@ let () =
       test_case "unsupported Tesl.Agent forms fail closed" `Quick test_agent_limits_fail_closed;
       test_case "serverTools and humanActions" `Slow test_endpoint_tools_with_go;
       test_case "Tesl.Proxy" `Slow test_proxy_with_go;
+      test_case "a newtype over a newtype, and unobservable containers" `Slow
+        test_ordered_newtype_with_go;
+      test_case "nested newtypes behave the same on Racket" `Slow
+        (racket_behavior_oracle "<go-ord>" ordered_newtype_source);
       test_case "empty containers, and what a seed block describes" `Slow
         test_inference_with_go;
       test_case "empty-container inference behaves the same on Racket" `Slow

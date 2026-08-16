@@ -3751,8 +3751,13 @@ and type_of_dict_leaf signatures env loc leaf args =
       type_of_expr signatures env (List.nth args 0),
       type_of_expr signatures env (List.nth args 1)
     | _ ->
-      (match type_of_expr signatures env (List.nth args index) with
-       | TDict (key, value) -> key, value
+      (match typed_with_default (type_of_expr signatures env) (List.nth args index) with
+       | Some (TDict (key, value)), _ -> key, value
+       (* A leaf whose result mentions NEITHER the key nor the value — `isEmpty`, `size` —
+          answers the same whatever the dict holds, so a bare `Dict.empty` there is given a
+          pair rather than refused: the choice cannot change the result.  This is the rule
+          `List.isEmpty []` and `Set.isEmpty Set.empty` already get. *)
+       | _ when leaf.dict_name = "Dict.isEmpty" || leaf.dict_name = "Dict.size" -> TInt, TInt
        | _ -> unsupported loc "Go backend `%s` requires a Dict argument" leaf.dict_name)
   in
   let maybe_of inner =
@@ -6731,8 +6736,12 @@ and emit_dict_leaf ?(indent="") signatures env loc leaf args result expected =
     | "Dict.empty", _, _ -> None
     | _, TDict (key, _), _ -> Some key
     | _ ->
-      (match type_of_expr signatures env (List.nth args (leaf.dict_arity - 1)) with
-       | TDict (key, _) -> Some key
+      (match typed_with_default (type_of_expr signatures env)
+               (List.nth args (leaf.dict_arity - 1)) with
+       | Some (TDict (key, _)), _ -> Some key
+       (* See the matching note in the type rule: a leaf that observes neither the key nor
+          the value gets one rather than a refusal. *)
+       | _ when leaf.dict_name = "Dict.isEmpty" || leaf.dict_name = "Dict.size" -> Some TInt
        | _ -> None)
   in
   (* `Dict.empty` takes no argument, so its type parameters have to be written out. *)
@@ -6750,7 +6759,15 @@ and emit_dict_leaf ?(indent="") signatures env loc leaf args result expected =
     (* `Dict.fromList` takes a LIST OF PAIRS, not a dict — the only leaf whose last
        argument is neither.  An empty list there carries no pair type of its own, so the
        result's key and value are what say what it holds. *)
-    if leaf.dict_name = "Dict.fromList" then
+    (* `isEmpty` and `size` observe neither the key nor the value, so a bare `Dict.empty`
+       here is given a pair to instantiate rather than left without one — see the matching
+       note in the type rule. *)
+    if (leaf.dict_name = "Dict.isEmpty" || leaf.dict_name = "Dict.size")
+       && index = leaf.dict_arity - 1 then
+      (match key with
+       | Some element -> emit_expr ~expected:(TDict (element, element)) ~indent signatures env argument
+       | None -> emit_expr ~indent signatures env argument)
+    else if leaf.dict_name = "Dict.fromList" then
       (match result, Option.bind !current_types (fun types -> Hashtbl.find_opt types.adts "Tuple2") with
        | TDict (key, value), Some tuple ->
          emit_expr ~expected:(TList (TAdt (tuple, [key; value]))) ~indent signatures env argument
@@ -9848,14 +9865,33 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
       Buffer.add_string body (line_directive loc);
       Printf.bprintf body "%s_ = %s\n" indent (emit_expr ~indent signatures env e);
       emit_stmts env indent rest
-    | TsExpectFail { fn = EVar { name = "check"; _ }; arg; loc } :: rest ->
-      let result_ty = type_of_expr signatures env arg in
-      (match result_ty with
-       | TCheck _ -> ()
-       | _ -> unsupported loc "Go backend expectFail target is not a check");
+    | TsExpectFail { fn = EVar { name = "check"; _ } as check_head; arg; loc } :: rest ->
+      (* `expectFail check (a && b) x` splits at the `check`, leaving the CONJUNCTION applied
+         to the value as the argument — a shape nothing types on its own, since a check is
+         not a function value.  Rebuilding the `check (a && b) x` application puts it back on
+         the path that already knows what a combined check means, rather than teaching a
+         second place. *)
+      let combined = match arg with
+        | EApp { fn = conjunction; arg = value; loc = app_loc }
+          when (match check_conjuncts conjunction with
+                | Some (_ :: _ :: _) -> true
+                | _ -> false) ->
+          delegated_check_call ~indent signatures env
+            (EApp { fn = EApp { fn = check_head; arg = conjunction; loc = app_loc };
+                    arg = value; loc = app_loc })
+        | _ -> None
+      in
+      let emitted = match combined with
+        | Some (call, _) -> call
+        | None ->
+          (match type_of_expr signatures env arg with
+           | TCheck _ -> ()
+           | _ -> unsupported loc "Go backend expectFail target is not a check");
+          emit_expr ~indent signatures env arg
+      in
       Buffer.add_string body (line_directive loc);
       Printf.bprintf body "%sif (%s).OK() {\n%s\tteslT.Fatal(\"expected Tesl check failure\")\n%s}\n"
-        indent (emit_expr ~indent signatures env arg) indent indent;
+        indent emitted indent indent;
       emit_stmts env indent rest
     (* `expectFail (f x)` parenthesises the whole call, so the "function" is already an
        application and there are no further arguments — `expect_fail_call` answers it
@@ -10704,7 +10740,16 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       | _ -> ()) m.decls;
     List.iter (function
       | DType (TypeNewtype { name; base_type; secret; loc; _ }) ->
-        let base = primitive_type_of_type_expr base_type in
+        (* A newtype over a NEWTYPE — `type Rank = Score` where `type Score = Int`.  Racket
+           nests them the same way, and ordering works transitively because each layer
+           compares through its payload.  Declaration order is what makes this resolve: the
+           base has to have been registered already, which is the same rule the source
+           follows. *)
+        let base = match base_type with
+          | TName { name = base_name; _ } when Hashtbl.mem types.newtypes base_name ->
+            TNewtype (Hashtbl.find types.newtypes base_name)
+          | _ -> primitive_type_of_type_expr base_type
+        in
         (* A secret's payload is held as a `teslrt.SecretString`, so only a String base has a
            representation today; a secret over Int would need its own redacting carrier and
            has no corpus use. *)
