@@ -10103,6 +10103,16 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
          dependency): the alternative substitutes would mint hashes the Racket side cannot
          verify, turning a shared database into a silent lockout.  It ships only with a program
          that stores passwords. *)
+      (* `Tesl.Proxy` is the authenticating-proxy edge binding: one check-shaped function
+         and the fact only it can mint.  The fact erases like every other; what survives is
+         that the value carrying it went through a real comparison against stored material,
+         which is what distinguishes it from trusting a header. *)
+      | "Tesl.Proxy" ->
+        List.iter (fun name ->
+          match name with
+          | "ProxyBound" | "Proxy.verifyBinding" -> ()
+          | other -> unsupported import.loc
+            "Go backend does not support `Tesl.Proxy` export `%s` yet" other) exposed
       | "Tesl.Crypto" ->
         List.iter (fun name ->
           match name with
@@ -10981,6 +10991,13 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         secret_type_needed := true;
         List.iter (fun name ->
           if List.mem name crypto_leaf_names then crypto_imports := name :: !crypto_imports)
+          exposed
+      (* The proxy binding is verified against a `Secret`, so it registers through the same
+         block the crypto leaves do — that is where the type is in hand. *)
+      | "Tesl.Proxy" ->
+        secret_type_needed := true;
+        List.iter (fun name ->
+          if name = "Proxy.verifyBinding" then crypto_imports := name :: !crypto_imports)
           exposed
       | "Tesl.Env" ->
         if List.mem "requireSecret" exposed then secret_type_needed := true
@@ -12233,6 +12250,10 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | "Crypto.signatureFromHex" -> [TString], signature, "teslrt.SignatureFromHex"
           | "Crypto.signatureBase64" -> [signature], TString, "teslrt.SignatureBase64"
           | "Crypto.signatureFromBase64" -> [TString], signature, "teslrt.SignatureFromBase64"
+          (* `Tesl.Proxy`.  A CHECK for the same reason `checkSignature` is one: it answers
+             the verified binding or a 401, and the constant-time compare is inside it. *)
+          | "Proxy.verifyBinding" ->
+            [secret; TString], TCheck TString, "teslrt.ProxyVerifyBinding"
           | "Crypto.fingerprint" -> [TString], TString, "teslrt.Fingerprint"
           | "Crypto.keyFingerprint" -> [secret], TString, "teslrt.KeyFingerprint"
           (* A VALUE in Tesl's type table, written `randomToken()`. *)

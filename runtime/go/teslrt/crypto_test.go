@@ -134,3 +134,51 @@ func TestRequireSecretRedactsAndFailsClosed(t *testing.T) {
 		}()
 	}
 }
+
+// ── The authenticating-proxy edge binding ────────────────────────────────────
+
+func TestProxyVerifyBindingAcceptsTheConfiguredSecret(t *testing.T) {
+	configured := Secret{Value: MakeSecret("s3cr3t-edge-binding")}
+	result := ProxyVerifyBinding(configured, "s3cr3t-edge-binding")
+	value, ok := result.Value()
+	if !ok {
+		t.Fatalf("a matching binding was rejected: %s", result.Message())
+	}
+	// The verified binding itself comes back — it is the value the minted fact is about.
+	if value != "s3cr3t-edge-binding" {
+		t.Fatalf("accepted value = %q, want the presented binding", value)
+	}
+}
+
+// A 401 with the Racket runtime's own message, so a client sees the same answer either way.
+func TestProxyVerifyBindingRejectsAnythingElse(t *testing.T) {
+	configured := Secret{Value: MakeSecret("s3cr3t-edge-binding")}
+	for _, presented := range []string{
+		"",
+		"wrong",
+		"s3cr3t-edge-bindin",   // one character short
+		"s3cr3t-edge-bindingg", // one character long
+		"S3CR3T-EDGE-BINDING",  // case matters
+	} {
+		result := ProxyVerifyBinding(configured, presented)
+		if _, ok := result.Value(); ok {
+			t.Fatalf("binding %q was accepted", presented)
+		}
+		if result.Status() != 401 {
+			t.Fatalf("binding %q rejected with %d, want 401", presented, result.Status())
+		}
+		if result.Message() != "proxy binding does not match" {
+			t.Fatalf("binding %q rejected with %q", presented, result.Message())
+		}
+	}
+}
+
+// An empty configured secret must not turn every request into a valid one. It is a
+// misconfiguration either way, but the failure mode matters: accepting "" would let a
+// request that sent no binding through.
+func TestProxyVerifyBindingWithAnEmptySecretStillRejects(t *testing.T) {
+	configured := Secret{Value: MakeSecret("")}
+	if _, ok := ProxyVerifyBinding(configured, "anything").Value(); ok {
+		t.Fatal("an empty configured secret accepted a non-empty binding")
+	}
+}

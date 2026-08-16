@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/sha512"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -153,4 +154,26 @@ func Sha256Hex(content string) string { return Fingerprint(content) }
 func Sha512Hex(content string) string {
 	sum := sha512.Sum512([]byte(content))
 	return hex.EncodeToString(sum[:])
+}
+
+// ── The authenticating-proxy edge binding (`Tesl.Proxy`) ─────────────────────
+
+// ProxyVerifyBinding compares a request-supplied proxy-binding header against the app's
+// configured shared secret, in constant time, and accepts only on a match.
+//
+// The proof it mints on the Tesl side (`ProxyBound presented`) erases here like every
+// other, but what the proof is worth does not: the fact can be obtained ONLY through this
+// verification, so a function that demands it is reachable only by a value that was
+// actually checked against stored material. That is the whole difference from trusting an
+// `X-Auth-User`-style header, which asserts a network topology nothing verifies.
+//
+// Constant time for the reason Crypto.checkSignature is: a comparison that returns early
+// tells a caller how much of the secret it guessed.
+func ProxyVerifyBinding(configured Secret, presented string) Check[string] {
+	if subtle.ConstantTimeCompare([]byte(configured.Value.Reveal()), []byte(presented)) == 1 {
+		return Accept(presented)
+	}
+	// A 401, not a 403: the request has not proved who it is, which is what an unmatched
+	// binding means — and it is the status the Racket runtime answers with.
+	return Reject[string](401, "proxy binding does not match")
 }

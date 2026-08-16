@@ -8833,6 +8833,76 @@ let test_endpoint_tools_with_go () =
       run_go_gates root)
   end
 
+(* ── `Tesl.Proxy` ────────────────────────────────────────────────────────────
+   The authenticating-proxy edge binding: one check-shaped function and the fact only it
+   can mint.  The FACT erases here like every other, so what the emitted code has to get
+   right is the comparison — constant time, against the configured secret — and the shape
+   that makes the fact worth having: the value `internalOnly` receives is the one the check
+   handed back, so a binding that was never verified cannot reach it. *)
+let proxy_source = {|module GoProxy exposing [internalOnly, edgeCall]
+
+import Tesl.Prelude exposing [Bool, String]
+import Tesl.String exposing [String.concat]
+import Tesl.Crypto exposing [Secret]
+import Tesl.Proxy exposing [ProxyBound, Proxy.verifyBinding]
+
+# The shared secret the reverse proxy stamps every request with.
+secret ProxySecret = String
+
+# `internalOnly` DEMANDS `ProxyBound`, and nothing but the verification below can
+# mint it — so a request that never passed the proxy cannot reach this function.
+fn internalOnly(bound: String ::: ProxyBound bound) -> String =
+  String.concat "internal for " bound
+
+# The edge: verify the presented header against the configured secret, then use
+# the value the check hands back — which is the one carrying the proof.
+fn edgeCall(configured: Secret, presented: String) -> String =
+  let bound = check Proxy.verifyBinding configured presented
+  internalOnly bound
+
+test "a matching binding reaches the internal function" {
+  let configured = Secret "edge-secret"
+  expect (edgeCall configured "edge-secret") == "internal for edge-secret"
+}
+
+test "a binding that does not match is refused" {
+  let configured = Secret "edge-secret"
+  expect expectFail (edgeCall configured "not-the-secret")
+  expect expectFail (edgeCall configured "")
+  expect expectFail (edgeCall configured "edge-secre")
+  expect expectFail (edgeCall configured "edge-secrett")
+  expect expectFail (edgeCall configured "EDGE-SECRET")
+}
+|}
+
+let test_proxy_with_go () =
+  let emitted = match Compile.compile_go_source "<go-proxy>" proxy_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "proxy compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgoproxy/module.go" emitted in
+  check bool "the verification is the runtime's constant-time compare" true
+    (contains module_go "teslrt.ProxyVerifyBinding(configured, presented)");
+  (* The proof erases, so the parameter is a plain String — and the only thing that makes
+     `internalOnly` unreachable without a verification is that the checker said so. *)
+  check bool "the proof-demanding function takes the checked value" true
+    (contains module_go "return InternalOnly(bound)");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-proxy" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+  end
+
 let () =
   run "emit_go" [
     "emission", [
@@ -9030,6 +9100,9 @@ let () =
         (racket_behavior_oracle "<go-agent>" agent_source);
       test_case "unsupported Tesl.Agent forms fail closed" `Quick test_agent_limits_fail_closed;
       test_case "serverTools and humanActions" `Slow test_endpoint_tools_with_go;
+      test_case "Tesl.Proxy" `Slow test_proxy_with_go;
+      test_case "Tesl.Proxy behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-proxy>" proxy_source);
       test_case "endpoint tools behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-endpoint-tools>" endpoint_tools_source);
       test_case "more Tesl.List leaves" `Slow test_list_leaves_with_go;
