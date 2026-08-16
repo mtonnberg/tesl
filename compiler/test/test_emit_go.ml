@@ -9049,6 +9049,197 @@ let test_float_check_with_go () =
       run_go_gates root)
   end
 
+(* ── Partial application, and a newtype named as a codec ─────────────────────
+   `add 1` is a function of the remaining argument, and it is CURRIED: `blend 1` answers a
+   function of `b` that answers a function of `c`, which is the surface's shape and the
+   Racket runtime's — a flat `withA 2 3` is an arity error there, so it is refused here.
+
+   The codec half is a separate bug the same file pins: `with_codec AcctId` names a NEWTYPE
+   rather than a codec, and the emitter referenced an `EncodeAcctIdJSON` nobody writes.  A
+   newtype has no codec of its own; the spelling means "through the base", and the two
+   endpoints below assert that against each other. *)
+let partial_source = {|module GoPartial exposing [add, blend, label, AcctServer]
+
+import Tesl.Prelude exposing [Int, String, Bool(..), List]
+import Tesl.Json exposing [stringCodec, intCodec]
+import Tesl.ApiTest exposing [statusOk]
+import Tesl.List exposing [List.map, List.length]
+
+fn add(x: Int, y: Int) -> Int =
+  x + y
+
+fn blend(a: Int, b: Int, c: Int) -> Int =
+  a + b * c
+
+fn label(prefix: String, separator: String, body: String) -> String =
+  "${prefix}${separator}${body}"
+
+fn applyTwice(f: Int -> Int, n: Int) -> Int =
+  f (f n)
+
+# A newtype named as the codec: `with_codec AcctId` means "through the base", the
+# same wire value `with_codec stringCodec` gives on the same field.
+type AcctId = String
+
+record Acct {
+  id: AcctId
+  count: Int
+}
+
+codec Acct {
+  toJson {
+    id -> "id" with_codec AcctId
+    count -> "count" with_codec intCodec
+  }
+  fromJson [
+    {
+      id <- "id" with_codec AcctId
+      count <- "count" with_codec intCodec
+    }
+  ]
+}
+
+# The other spelling, on a field of the same newtype: the two must agree.
+record Plain {
+  id: AcctId
+}
+
+codec Plain {
+  toJson {
+    id -> "id" with_codec stringCodec
+  }
+  fromJson [
+    {
+      id <- "id" with_codec stringCodec
+    }
+  ]
+}
+
+# The codec is reachable only across an HTTP boundary, which is also the place it
+# matters: what a client receives.
+handler get getAcct(id: String) -> Acct =
+  Acct { id: AcctId id, count: 2 }
+
+handler post echoAcct(body: Acct) -> Acct =
+  Acct { id: body.id, count: body.count + 1 }
+
+handler get getPlain(id: String) -> Plain =
+  Plain { id: AcctId id }
+
+api AcctApi {
+  get "/accts/:id"
+    capture id: String using stringCodec
+    -> Acct
+
+  post "/accts/echo"
+    body body: Acct
+    -> Acct
+
+  get "/plain/:id"
+    capture id: String using stringCodec
+    -> Plain
+}
+
+server AcctServer for AcctApi {
+  getAcct
+  echoAcct
+  getPlain
+}
+
+test "one of two arguments supplied" {
+  let addOne = add 1
+  expect addOne 4 == 5
+  let subOne = add -1
+  expect subOne 4 == 3
+}
+
+test "a partial application in argument position" {
+  expect applyTwice (add 3) 1 == 7
+}
+
+test "a local function value reaches a higher-order leaf" {
+  let addThree = add 3
+  expect List.map addThree [1, 2, 3, 4] == [4, 5, 6, 7]
+  expect List.length (List.map addThree []) == 0
+}
+
+# Partial application is CURRIED: `blend 1` is a function of `b` answering a
+# function of `c`, applied one argument at a time on both backends.
+test "one and two of three arguments supplied" {
+  let withA = blend 1
+  let thenB = withA 2
+  expect thenB 3 == 7
+  let withAB = blend 1 2
+  expect withAB 3 == 7
+  let greet = label "hello" ", "
+  expect greet "world" == "hello, world"
+}
+
+# A newtype-typed field puts its PAYLOAD on the wire, not the wrapper — the wrapper
+# marshals to an object, which is not what either backend sends.  `with_codec AcctId`
+# names the NEWTYPE rather than a codec and means the same thing as the base codec,
+# which is what the two endpoints below assert against each other.
+api-test "a newtype field encodes as its payload, both spellings" for AcctServer requires [] {
+  let named = get "/accts/a-1"
+  expect statusOk named.status
+  expect named.body.id == "a-1"
+  expect named.body.count == 2
+  let base = get "/plain/p-1"
+  expect statusOk base.status
+  expect base.body.id == "p-1"
+}
+
+api-test "a newtype field decodes back through the same spelling" for AcctServer requires [] {
+  let echoed = post "/accts/echo" body { "id": "a-9", "count": 7 }
+  expect statusOk echoed.status
+  expect echoed.body.id == "a-9"
+  expect echoed.body.count == 8
+}
+|}
+
+let test_partial_with_go () =
+  let emitted = match Compile.compile_go_source "<go-partial>" partial_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "partial-application compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgopartial/module.go" emitted in
+  let tests_go = artifact "internal/teslmodgopartial/module_test.go" emitted in
+  (* Go has no partial application, so the emitter goes through a runtime combinator rather
+     than an inline closure — named, for the gofmt reason every hoisted helper is. *)
+  check bool "one of two arguments is supplied by the runtime" true
+    (contains tests_go "teslrt.Apply1Of2(Add, teslrt.FromInt64(1))");
+  check bool "one of three is supplied the same way" true
+    (contains tests_go "teslrt.Apply1Of3(Blend, teslrt.FromInt64(1))");
+  check bool "two of three is its own combinator" true
+    (contains tests_go "teslrt.Apply2Of3(Blend, teslrt.FromInt64(1), teslrt.FromInt64(2))");
+  (* A partially applied value passed to a higher-order leaf is a LOCAL, not a declaration,
+     so the callback is called through its own identifier. *)
+  check bool "a local function value is called through its identifier" true
+    (contains tests_go "addThree(Value2)");
+  (* A newtype field puts its PAYLOAD on the wire under either spelling; the wrapper
+     marshals to an object, which is what the client would otherwise have received. *)
+  check bool "the newtype-named codec unwraps to the base" true
+    (contains module_go "\"id\":    teslValue.Id.Value");
+  check bool "the base-codec spelling unwraps identically" true
+    (contains module_go "\"id\": teslValue.Id.Value");
+  check bool "the newtype is rebuilt on the way back in" true
+    (contains module_go "Acct{Id: AcctId{Value: teslFieldId}");
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-go-partial" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root emitted;
+      let unformatted = run_command root "gofmt -l ." |> String.trim in
+      if unformatted <> "" then
+        failf "emitted source is not gofmt-clean (%s):\n%s"
+          unformatted (run_command root "gofmt -d .");
+      ignore (run_command root "go test -count=1 ./...");
+      ignore (run_command root "go vet ./...");
+      ignore (run_command root "go test -race -count=1 ./...");
+      run_go_gates root)
+  end
+
 let () =
   run "emit_go" [
     "emission", [
@@ -9247,6 +9438,10 @@ let () =
       test_case "unsupported Tesl.Agent forms fail closed" `Quick test_agent_limits_fail_closed;
       test_case "serverTools and humanActions" `Slow test_endpoint_tools_with_go;
       test_case "Tesl.Proxy" `Slow test_proxy_with_go;
+      test_case "partial application, and a newtype named as a codec" `Slow
+        test_partial_with_go;
+      test_case "partial application behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-partial>" partial_source);
       test_case "a plain-value check tail, and the Float transcendentals" `Slow
         test_float_check_with_go;
       test_case "plain-value checks behave the same on Racket" `Slow

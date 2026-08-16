@@ -815,6 +815,17 @@ let current_handler_body = ref false
 let used_empty_default = ref false
 
 (* Types [expr], reporting whether the result relied on the empty-list default. *)
+(* `add 1` where `add` takes two arguments is a function of the remaining one.  Go has no
+   partial application, so the emitter goes through a runtime combinator that supplies the
+   leading arguments and closes over the rest.  The family stops at three parameters because
+   that is what the surface reaches for; anything wider is refused rather than guessed at. *)
+let partial_application_combinator ~supplied ~total =
+  match supplied, total with
+  | 1, 2 -> Some "teslrt.Apply1Of2"
+  | 1, 3 -> Some "teslrt.Apply1Of3"
+  | 2, 3 -> Some "teslrt.Apply2Of3"
+  | _ -> None
+
 let typed_with_default type_of expr =
   let saved = !used_empty_default in
   used_empty_default := false;
@@ -2876,14 +2887,35 @@ let rec type_of_expr signatures env expr =
         | None -> unsupported loc "Go backend cannot resolve function `%s`" name
         | Some signature ->
           let args = normalize_call_args signature.params args in
-          if List.length args <> List.length signature.params then
+          let supplied = List.length args in
+          let total = List.length signature.params in
+          if supplied > total then
             unsupported loc "Go backend requires a fully-applied call to `%s`" name;
+          if supplied < total then begin
+            (* PARTIALLY applied: the arguments given are checked against the leading
+               parameters, and the value is a function of the rest. *)
+            if signature.sig_needs_scope then unsupported loc
+              "Go backend cannot partially apply `%s`: it takes the request scope" name;
+            if partial_application_combinator ~supplied ~total = None then
+              unsupported loc
+                "Go backend supports partial application up to three parameters; `%s` takes %d"
+                name total
+          end;
+          let leading = List.filteri (fun index _ -> index < supplied) signature.params in
           List.iter2 (fun arg want ->
             let got = type_of_arg signatures env want arg in
             if type_unequal got want then unsupported (Checker.expr_loc arg)
               "Go backend call to `%s` has an unsupported argument type" name)
-            args signature.params;
-          signature.result)
+            args leading;
+          if supplied = total then signature.result
+          else
+            (* CURRIED: `blend 1` is a function of `b` answering a function of `c`, not a
+               two-argument function.  That is the surface's shape and the Racket runtime's —
+               a flat `withA 2 3` is an arity error there — so a flat call to a partially
+               applied value is refused here rather than quietly accepted. *)
+            List.fold_right (fun param answer -> TFunc ([param], answer))
+              (List.filteri (fun index _ -> index >= supplied) signature.params)
+              signature.result)
      (* A call through any FUNCTION-VALUED expression — a record field holding one, say —
         not just through a name. *)
      | head when (match type_of_expr signatures env head with TFunc _ -> true | _ -> false) ->
@@ -3386,7 +3418,16 @@ and type_of_callable signatures env loc what callable param_types =
        if signature.params <> param_types then unsupported loc
          "Go backend `%s` function argument has unsupported parameter types" what;
        signature.result
-     | None -> unsupported loc "Go backend cannot resolve function `%s`" name)
+     (* A LOCAL holding a function — `let addThree = add28 3` then `List.map addThree xs`.
+        It is not in the signature table because it is not a declaration; the binding's own
+        type is what says it can be called. *)
+     | None ->
+       (match List.assoc_opt name env with
+        | Some (TFunc (params, result)) ->
+          if params <> param_types then unsupported loc
+            "Go backend `%s` function argument has unsupported parameter types" what;
+          result
+        | _ -> unsupported loc "Go backend cannot resolve function `%s`" name))
   | EApp _ ->
     (* A partial application supplied AT the call site — `List.filterCheck (checkFn
        arg) xs`.  The loop supplies the remaining arguments, so this needs no general
@@ -5153,6 +5194,21 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
        in
        let args = normalize_call_args signature.params args in
        ignore (type_of_expr signatures env app);
+       let supplied = List.length args in
+       let total = List.length signature.params in
+       let leading = List.filteri (fun index _ -> index < supplied) signature.params in
+       let emitted = List.map2 (fun arg want ->
+         emit_expr ~expected:want ~indent signatures env arg) args leading in
+       if supplied < total then
+         (* Partially applied: the runtime combinator closes over what was given. *)
+         (match partial_application_combinator ~supplied ~total with
+          | Some combinator ->
+            Printf.sprintf "%s(%s, %s)" combinator
+              (qualified signature.sig_owner signature.go_name) (String.concat ", " emitted)
+          | None -> unsupported loc
+            "Go backend supports partial application up to three parameters; `%s` takes %d"
+            name total)
+       else
        (* A callee that may write to the response takes the request scope FIRST.  The
           caller always has one to pass: the checker requires it to declare `cookieCap`
           too, which is what gave the caller its own scope parameter. *)
@@ -5161,8 +5217,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
          else if !current_scope_in_hand then [ "teslScope" ] else [ "nil" ]
        in
        baked_call (qualified signature.sig_owner signature.go_name)
-          (scope_argument @ List.map2 (fun arg want ->
-             emit_expr ~expected:want ~indent signatures env arg) args signature.params)
+          (scope_argument @ emitted)
       (* The same call, emitted: the head is an expression of func type. *)
       | head when (match type_of_expr signatures env head with TFunc _ -> true | _ -> false) ->
         let params = match type_of_expr signatures env head with
@@ -5178,7 +5233,14 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
      typed side ENCODED the same way a response body is, so the two directions cannot disagree
      about what a value looks like as JSON. *)
   | EBinop { op = (BEq | BNeq) as op; left; right; loc; _ }
-    when (let json side = type_of_expr signatures env side = TJson in
+    (* Tolerantly: one side may carry no type of its own — a bare `Nothing`, a `Left e` that
+       says nothing about the Right parameter — and asking whether THAT side is untyped JSON
+       must not be what refuses the comparison. *)
+    when (let json side =
+            match typed_with_default (type_of_expr signatures env) side with
+            | Some TJson, _ -> true
+            | _ -> false
+          in
           json left <> json right) ->
     let json_side, typed_side =
       if type_of_expr signatures env left = TJson then left, right else right, left in
@@ -6180,11 +6242,13 @@ and emit_applied ?(indent="") signatures env callable params bound =
       List.map2 (fun (binding : binding) ty -> binding.name, ty) lambda_params params @ env in
     emit_expr ~indent signatures env body
   | EVar { name; _ } ->
-    let go_name = match Hashtbl.find_opt signatures name with
-      | Some signature -> qualified signature.sig_owner signature.go_name
-      | None -> invalid_arg "function argument validated before emission"
-    in
-    baked_call go_name bound
+    (match Hashtbl.find_opt signatures name with
+     | Some signature ->
+       baked_call (qualified signature.sig_owner signature.go_name) bound
+     (* A local holding a function is called through its own identifier. *)
+     | None when List.mem_assoc name env ->
+       Printf.sprintf "%s(%s)" (local_ident name) (String.concat ", " bound)
+     | None -> invalid_arg "function argument validated before emission")
   | EApp _ ->
     let head, supplied = flatten_app [] callable in
     let go_name = match normalize_call_head head with
@@ -8301,6 +8365,20 @@ let codec_alt_name type_name index =
 
 (* The primitive codecs, by the name written in `with_codec`.  Anything else is a TYPE
    name and resolves to that type's own codec. *)
+(* `with_codec AcctId` names a NEWTYPE rather than a codec.  A newtype has no codec of its
+   own — Racket resolves the spelling to the BASE codec, which is why `with_codec AcctId` and
+   `with_codec stringCodec` on the same field round-trip identically — so it resolves here the
+   same way.  Emitting a reference to `EncodeAcctIdJSON` instead produced a package that did
+   not compile. *)
+let newtype_base_codec name =
+  match Option.bind !current_types (fun types -> Hashtbl.find_opt types.newtypes name) with
+  | Some info ->
+    (match info.base with
+     | TString -> Some `String | TInt -> Some `Int
+     | TBool -> Some `Bool | TFloat -> Some `Float
+     | _ -> None)
+  | None -> None
+
 let primitive_codec = function
   | "stringCodec" -> Some `String
   | "intCodec" -> Some `Int
@@ -8311,6 +8389,12 @@ let primitive_codec = function
      carries the bare number on both backends (`tesl-encode-prim-posix-millis`). *)
   | "posixMillisCodec" -> Some `PosixMillis
   | _ -> None
+
+(* What a field's `with_codec` means: a primitive codec, or a newtype standing for its base. *)
+let field_codec_kind name =
+  match primitive_codec name with
+  | Some kind -> Some kind
+  | None -> newtype_base_codec name
 
 (* The wire shape of a response value, mirroring `runtime-value->jsexpr` in dsl/types.rkt:
    a type with its own codec encodes through it; a record without one becomes an object of
@@ -8837,10 +8921,16 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
        Buffer.add_string body (aligned_map_entries "\t\t"
          (List.map (fun (entry : codec_encode_entry) ->
             let value = Printf.sprintf "teslValue.%s" (field_go entry.field_name) in
-            (entry.json_key, match primitive_codec entry.codec with
-              (* The instant is a newtype at run time, so the wire value is its payload. *)
-              | Some `PosixMillis -> value ^ ".Value"
-              | Some _ -> value
+            (* A PRIMITIVE codec puts the base value on the wire, so a field whose type is a
+               newtype hands over its payload rather than the wrapper — `{"id":"u-9"}`, not
+               `{"id":{"Value":"u-9"}}`, which is what the wrapper marshals to.  The instant is
+               the same rule, not a special case. *)
+            let rec unwrapped ty rendered = match ty with
+              | TNewtype info -> unwrapped info.base (rendered ^ ".Value")
+              | _ -> rendered
+            in
+            (entry.json_key, match field_codec_kind entry.codec with
+              | Some _ -> unwrapped (field_type entry.field_name) value
               | None -> Printf.sprintf "%s(%s)" (codec_encode_ref entry.codec) value))
             entries));
        Buffer.add_string body "\n\t}\n}\n");
@@ -8876,7 +8966,7 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
            | DecodeField { field_name; json_key; codec = field_codec; via; _ } ->
              let suffix = go_ident ~exported:true field_name in
              let binder = "teslField" ^ suffix in
-             (match primitive_codec field_codec with
+             (match field_codec_kind field_codec with
               | Some kind ->
                 let decoder = match kind with
                   | `String -> "DecodeStringField" | `Int -> "DecodeIntField"
@@ -8930,7 +9020,7 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
              (* Whether the binder holds the field's own type or its BASE value: a primitive
                 codec answers a `string`/`Int`, so a newtype field still needs its constructor;
                 a nested codec already answers the field's type. *)
-             let base_value = primitive_codec field_codec <> None in
+             let base_value = field_codec_kind field_codec <> None in
              assignments := (field_name, binder, base_value) :: !assignments
            | DecodeDefault { field_name; default_lit; _ } ->
              let binder = Printf.sprintf "teslField%s" (go_ident ~exported:true field_name) in
