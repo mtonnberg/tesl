@@ -151,7 +151,20 @@
     (raise-user-error 'Float.sqrt
                       "negative input — use `check Float.requireNonNegative(f)` first"))
   (exact->inexact (sqrt v)))
-(define (Float.pow base exp) (exact->inexact (expt (rv base) (rv exp))))
+;; `expt` on a NEGATIVE base with a non-integer exponent has no real value, and Racket answers
+;; a COMPLEX number — which no Tesl Float can hold.  That is the same hole `Float.sqrt` guards
+;; directly above, left open here: `(Float.pow -8.0 (/ 1.0 3.0))` returned
+;; `1.0+1.732050807568877i` from a function typed `Float -> Float -> Float`.  (Found by the Go
+;; port, 2026-08-17.)
+;;
+;; The answer is NaN rather than a raise, unlike `Float.sqrt`: sqrt has a static check
+;; (`FloatNonNegative`) that makes a refusal actionable, pow has none, and IEEE's own answer for
+;; a real `pow` with no real result IS NaN.  C's `pow` makes two exceptions that contradict it —
+;; `(-1)^±inf = 1` and `(-4)^+inf = +inf` — which the Go runtime guards back to NaN, so the two
+;; backends answer alike at every input.
+(define (Float.pow base exp)
+  (define result (expt (exact->inexact (rv base)) (exact->inexact (rv exp))))
+  (if (real? result) (exact->inexact result) +nan.0))
 (define (Float.log  f) (log  (exact->inexact (rv f))))
 (define (Float.exp  f) (exp  (exact->inexact (rv f))))
 (define (Float.sin  f) (sin  (exact->inexact (rv f))))

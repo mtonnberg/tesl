@@ -31,20 +31,77 @@ func NewTable[Row any]() *Table[Row] {
 // to the emitter. The Racket memory backend keys its store BY the primary key and raises
 // on a duplicate, so this is parity rather than an extra: a table that silently accepted
 // two rows with one key would answer `selectOne` differently on the two backends.
-func TableInsert[Row any](table *Table[Row], entity string, row Row, conflicts func(Row, Row) bool) Row {
+func TableInsert[Row any](table *Table[Row], entity string, row Row, conflicts func(Row, Row) bool,
+	unique ...UniqueIndex[Row]) Row {
 	table.mutex.Lock()
 	defer table.mutex.Unlock()
+	table.checkUniqueLocked(entity, row, unique, -1)
 	table.insertLocked(entity, row, conflicts)
 	return row
+}
+
+// A declared `unique index [a, b]`. It is an INVARIANT rather than a performance hint, so the
+// in-memory store enforces it: the whole point of that store is that a test fails the way
+// production fails, and skipping the check would let `tesl test` pass on data PostgreSQL
+// rejects. On a Postgres-backed entity the SERVER enforces it — the bootstrap creates the
+// index — so the check here is the memory path's alone.
+type UniqueIndex[Row any] struct {
+	// Entity as the declaration names it, which is what the refusal names.
+	Entity string
+	// Columns as the declaration lists them, which is what the refusal names.
+	Columns []string
+	// Constrained is false when the row holds a NULL in an indexed column: two NULLs are not
+	// equal, so such a row is unconstrained. PostgreSQL's rule, and Racket's.
+	Constrained func(Row) bool
+	Same        func(Row, Row) bool
+	// Describe renders the indexed values for the refusal.
+	Describe func(Row) string
+}
+
+// UniqueIndexOf is what a declaration emits. A constructor rather than a struct literal for
+// the reason `NewDatabase` is one: gofmt ALIGNS the keys of a multi-line composite literal and
+// breaks the alignment run at a nested multi-line value, a rule the emitter would have to
+// reproduce exactly at every shape. A call with one argument per line is stable at every size.
+func UniqueIndexOf[Row any](entity string, columns []string, constrained func(Row) bool,
+	same func(Row, Row) bool, describe func(Row) string) UniqueIndex[Row] {
+	return UniqueIndex[Row]{
+		Entity:      entity,
+		Columns:     columns,
+		Constrained: constrained,
+		Same:        same,
+		Describe:    describe,
+	}
+}
+
+// The caller holds the write lock. `skip` is the position of the row being REPLACED, so an
+// update never conflicts with itself; -1 skips nothing.
+func (table *Table[Row]) checkUniqueLocked(entity string, row Row, indexes []UniqueIndex[Row],
+	skip int) {
+	for _, index := range indexes {
+		if index.Constrained != nil && !index.Constrained(row) {
+			continue
+		}
+		for position, existing := range table.rows {
+			if position == skip || !index.Same(existing, row) {
+				continue
+			}
+			panic("entity " + entity + " already contains a row with (" +
+				strings.Join(index.Columns, " ") + ") = " + index.Describe(row) +
+				"; the declared unique index on (" + strings.Join(index.Columns, ", ") +
+				") forbids duplicates")
+		}
+	}
 }
 
 // TableInsertMany inserts in order, and a row conflicting with an EARLIER row of the same
 // batch is rejected just as it would be if the two were inserted separately — Racket's
 // insert-many! is a loop over insert-one!.
-func TableInsertMany[Row any](table *Table[Row], entity string, rows []Row, conflicts func(Row, Row) bool) struct{} {
+func TableInsertMany[Row any](table *Table[Row], entity string, rows []Row,
+	conflicts func(Row, Row) bool, unique ...UniqueIndex[Row]) struct{} {
 	table.mutex.Lock()
 	defer table.mutex.Unlock()
 	for _, row := range rows {
+		table.checkUniqueLocked(entity, row, unique, -1)
 		table.insertLocked(entity, row, conflicts)
 	}
 	return struct{}{}
@@ -156,25 +213,34 @@ func TableSumMoney[Row any](table *Table[Row], match func(Row) bool, project fun
 	defer table.mutex.RUnlock()
 	total := FromInt64(0)
 	var currency Currency
-	matched := false
+	distinct := map[string]struct{}{}
 	for _, row := range table.rows {
 		if !match(row) {
 			continue
 		}
 		amount := project(row)
-		if !matched {
+		if len(distinct) == 0 {
 			currency = amount.Currency
-			matched = true
-		} else if amount.Currency.Code != currency.Code {
-			panic("field " + field + " on entity " + entity +
-				": cannot sum Money across mixed currencies; filter by currency first")
 		}
+		distinct[amount.Currency.Code] = struct{}{}
 		total = Add(total, amount.MinorUnits)
 	}
-	if !matched {
+	return MoneySumResult(entity, field, total, currency, len(distinct))
+}
+
+// MoneySumResult is the rule both stores answer a Money sum by, so the two cannot phrase a
+// refusal differently: the counted currencies decide, and the wording is Racket's
+// (`money-sum-result`) down to the count it names.
+func MoneySumResult(entity, field string, total Int, currency Currency, distinct int) Money {
+	if distinct == 0 {
 		panic("field " + field + " on entity " + entity +
 			": cannot sum Money over an empty row set (no currency for the zero total);" +
 			" guard with a count first")
+	}
+	if distinct > 1 {
+		panic("field " + field + " on entity " + entity +
+			": cannot sum Money across mixed currencies (found " + FromInt64(int64(distinct)).String() +
+			"); filter by currency first")
 	}
 	return Money{MinorUnits: total, Currency: currency}
 }
@@ -278,30 +344,46 @@ func TableDeleteCount[Row any](table *Table[Row], match func(Row) bool) Int {
 
 // TableUpdate replaces every matching row with the result of `apply`. Like `delete`, a
 // plain `update` is a statement, so nothing is reported back.
-func TableUpdate[Row any](table *Table[Row], match func(Row) bool, apply func(Row) Row) struct{} {
+func TableUpdate[Row any](table *Table[Row], match func(Row) bool, apply func(Row) Row,
+	unique ...UniqueIndex[Row]) struct{} {
 	table.mutex.Lock()
 	defer table.mutex.Unlock()
 	for index, row := range table.rows {
-		if match(row) {
-			table.rows[index] = apply(row)
+		if !match(row) {
+			continue
 		}
+		updated := apply(row)
+		table.checkUniqueLocked(uniqueEntity(unique), updated, unique, index)
+		table.rows[index] = updated
 	}
 	return struct{}{}
+}
+
+// The entity NAME a unique-index refusal carries. `update` does not take one — nothing else in
+// its emission needs it — so it travels on the index, where the refusal is built.
+func uniqueEntity[Row any](indexes []UniqueIndex[Row]) string {
+	if len(indexes) == 0 {
+		return ""
+	}
+	return indexes[0].Entity
 }
 
 // TableUpdateReturnOne is `updateAndReturnOne`: it yields the FIRST updated row, and
 // traps when the predicate matched nothing — Racket takes the `car` of the updated rows,
 // which errors on an empty list, so "no row updated" is a failure on both backends rather
 // than a zero value.
-func TableUpdateReturnOne[Row any](table *Table[Row], match func(Row) bool, apply func(Row) Row) Row {
+func TableUpdateReturnOne[Row any](table *Table[Row], match func(Row) bool, apply func(Row) Row,
+	unique ...UniqueIndex[Row]) Row {
 	table.mutex.Lock()
 	defer table.mutex.Unlock()
 	for index, row := range table.rows {
-		if match(row) {
-			updated := apply(row)
-			table.rows[index] = updated
-			return updated
+		if !match(row) {
+			continue
 		}
+		updated := apply(row)
+		table.checkUniqueLocked(uniqueEntity(unique), updated, unique, index)
+		table.rows[index] = updated
+		return updated
 	}
 	panic("updateAndReturnOne: no row matched")
 }
@@ -311,4 +393,40 @@ func TableTruncate[Row any](table *Table[Row]) {
 	table.mutex.Lock()
 	defer table.mutex.Unlock()
 	table.rows = nil
+}
+
+// `deleteAndReturnResult` answers a `DeleteResult`, which is `NoRowDeleted` or `RowsDeleted n`.
+// It is a runtime-provided ADT for the reason `Maybe` is: it crosses module boundaries, so it
+// cannot be emitted once per module that mentions it.
+//
+// The distinction it draws is the one a plain count does not: deleting nothing is a different
+// OUTCOME from deleting rows, and a caller that has to act on "nothing matched" reads it as a
+// case rather than as a comparison with zero.
+type DeleteResultTag int
+
+const (
+	DeleteResultNoRowDeleted DeleteResultTag = iota
+	DeleteResultRowsDeleted
+)
+
+type DeleteResult struct {
+	Tag              DeleteResultTag
+	RowsDeletedCount Int
+}
+
+func NoRowDeleted() DeleteResult {
+	return DeleteResult{Tag: DeleteResultNoRowDeleted}
+}
+
+func RowsDeleted(count Int) DeleteResult {
+	return DeleteResult{Tag: DeleteResultRowsDeleted, RowsDeletedCount: count}
+}
+
+// TableDeleteResult is `deleteAndReturnResult` over the in-memory store.
+func TableDeleteResult[Row any](table *Table[Row], match func(Row) bool) DeleteResult {
+	removed := TableDeleteCount(table, match)
+	if Compare(removed, FromInt64(0)) == 0 {
+		return NoRowDeleted()
+	}
+	return RowsDeleted(removed)
 }

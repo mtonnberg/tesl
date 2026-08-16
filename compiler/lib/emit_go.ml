@@ -181,7 +181,11 @@ let go_predeclared = [
    generated helper, temporary, and field the emitter introduces is spelled
    `tesl…`/`Tesl…`, so a Tesl name in that namespace is renamed rather than risking
    a silent capture. *)
-let go_emitter_owned = ["fmt"; "os"; "strconv"; "testing"; "teslrt"]
+let go_emitter_owned =
+  ["fmt"; "os"; "strconv"; "testing"; "teslrt";
+   (* The PostgreSQL driver's two packages: a row scanner names both, so a Tesl module called
+      `Pgx` would otherwise capture one of them. *)
+   "pgx"; "pgtype"]
 
 let sanitize_chars name =
   let b = Buffer.create (String.length name) in
@@ -367,6 +371,37 @@ let go_config_value loc value =
     unsupported loc "Go backend cannot read `%s` as a text configuration value" value
   else go_quote value
 
+(* The same, for a NUMERIC configuration field (a port).  `envInt` carries its own fallback,
+   which is what makes an unset variable a documented default rather than a zero. *)
+let go_config_int loc value =
+  let prefixed prefix =
+    String.length value > String.length prefix
+    && String.sub value 0 (String.length prefix) = prefix
+    && value.[String.length value - 1] = ')'
+  in
+  let inner prefix =
+    String.sub value (String.length prefix)
+      (String.length value - String.length prefix - 1)
+  in
+  let unquote s =
+    let n = String.length s in
+    if n >= 2 && s.[0] = '"' && s.[n - 1] = '"' then String.sub s 1 (n - 2) else s
+  in
+  if prefixed "envInt(" then
+    (match String.index_opt (inner "envInt(") ',' with
+     | Some comma ->
+       let raw = inner "envInt(" in
+       let name = unquote (String.trim (String.sub raw 0 comma)) in
+       let fallback = String.trim (String.sub raw (comma + 1) (String.length raw - comma - 1)) in
+       Printf.sprintf "teslrt.PgPort(%s, %s)" (go_quote name) fallback
+     | None -> unsupported loc "Go backend cannot read `%s` as a numeric configuration value"
+                 value)
+  else
+    match int_of_string_opt value with
+    | Some number -> string_of_int number
+    | None -> unsupported loc
+      "Go backend cannot read `%s` as a numeric configuration value" value
+
 let directive_file file =
   let file = if file = "" then "generated.tesl" else Filename.basename file in
   String.map (function '\n' | '\r' -> '_' | c -> c) file
@@ -400,7 +435,51 @@ type entity_info = {
   ent_table_var : string;
   ent_owner : string;
   ent_primary_key : string;
+  (* The SQL table the entity names (`entity Note table "notes"`), and any `@db(type)` a field
+     overrides its column type with.  The COLUMNS themselves are derived from the row's fields
+     (`entity_columns`), which are not resolved until every type in the module is. *)
+  ent_table_name : string;
+  ent_db_types : (string * string) list;
+  (* The declared indexes.  A plain one is a performance hint with no observable effect; a
+     UNIQUE one is an invariant both stores enforce, so it reaches the emitted code. *)
+  ent_indexes : entity_index list;
+  (* The Postgres-backed database that manages this entity, if one does.  `None` covers both
+     "declared in a Memory database" and "declared in none": either way the rows live in the
+     table variable and nothing else, which is the emission that has always been produced. *)
+  ent_database : database_info option;
   ent_loc : Location.loc;
+}
+
+(* One column, as the SQL side sees it.  `col_name` is the snake_case column `dsl/sql.rkt`
+   derives from the field key, which is what a table created by the Racket backend is already
+   named by — deriving it differently here would make the two backends unable to share one. *)
+and column_info = {
+  col_field : string;
+  col_name : string;
+  col_sql_type : string;
+  col_nullable : bool;
+  col_primary_key : bool;
+  (* The Go type the column reads back as, which decides both how a value is BOUND and how a
+     row is SCANNED. *)
+  col_type : go_type;
+}
+
+(* A statement under construction.  Arguments are appended in the order their placeholders are
+   minted, which is the order the driver binds them. *)
+and sql_arguments = { mutable sql_args : string list }
+
+(* A `database D = Database { … }`, with what a connection to it needs. *)
+and database_info = {
+  db_tesl_name : string;
+  db_backend : string;              (* "memory" | "postgres" *)
+  db_schema : string;
+  db_entities : string list;
+  db_config : (string * string) list;
+  (* The package-level `var DDatabase = &teslrt.Database{…}`; "" for a Memory database, which
+     has no emitted form. *)
+  db_go_var : string;
+  db_owner : string;
+  db_loc : Location.loc;
 }
 
 (* A `queue` is a job STORE plus the wiring from job type to worker.  Like an entity's
@@ -497,12 +576,12 @@ type type_table = {
      APPLIED, and a const that resolved through that table would be indistinguishable from a
      nullary function — whose bare mention is a partial application the emitter refuses. *)
   consts : (string, go_type * string) Hashtbl.t;
-  (* A `database` declaration by NAME, with the backend it selects ("memory" | "postgres")
-     and where it was written.  The declaration has no emitted form on either backend — a
-     Racket `define-database` is inert until something CONNECTS to it — so what this table
-     is for is the one place the backend becomes observable: `with database D`, which is
-     what binds the store the body's queries run against. *)
-  databases : (string, string * Location.loc) Hashtbl.t;
+  (* A `database` declaration by NAME.  A Memory-backed one has no emitted form at all — a
+     Racket `define-database` is inert until something CONNECTS to it, and the store a Memory
+     database names IS the entity's table variable.  A Postgres-backed one becomes a
+     package-level `teslrt.Database` holding what a connection needs, because there the
+     declaration decides a real server, a real schema and a real set of tables. *)
+  databases : (string, database_info) Hashtbl.t;
   (* Type names that stand for another type OUTRIGHT, with no wrapper of their own: a
      dimensioned quantity is a Float (the dimension lives in the compiler's type layer and
      erases there), and `MoneyPerDuration` is the runtime's one rate type under a name that
@@ -557,32 +636,35 @@ let email_of_name loc name =
    `with database` in it names a Memory-backed database.
    Only databases declared in the module being emitted are known here; one reached across a
    module boundary is not, and it is also not something the corpus does. *)
-let check_with_database loc database_name =
-  match !current_types with
-  | None -> ()
-  | Some types ->
-    (match Hashtbl.find_opt types.databases database_name with
-     | Some ("postgres", _) -> unsupported loc
-       "Go backend does not support `with database %s` on a Postgres-backed database yet"
-       database_name
-     | _ -> ())
+let database_of_name database_name =
+  Option.bind !current_types (fun types -> Hashtbl.find_opt types.databases database_name)
 
-(* `transaction { … }` groups statements that must commit together.  On the Memory backend it
+(* The Postgres-backed database `with database D` binds, if it is one.  A Memory-backed D
+   answers None, and the body is emitted exactly as it always was. *)
+let postgres_database loc database_name =
+  match database_of_name database_name with
+  | Some info when info.db_backend = "postgres" ->
+    if info.db_go_var = "" then unsupported loc
+      "Go backend cannot reach Postgres-backed database `%s` from this module" database_name;
+    Some info
+  | _ -> None
+
+(* `transaction { … }` groups statements that must commit together.  With nothing connected it
    adds NOTHING at run time — Racket's `call-with-queue-transaction` is `(thunk)` unless a
-   PostgreSQL connection is active — so the body is emitted as it stands.
+   PostgreSQL connection is active — and against a connected server it is a real BEGIN/COMMIT
+   on the connection the block itself opens.
 
-   Against a Postgres-backed database it is a real `BEGIN`/`COMMIT` and inlining the body would
-   silently drop atomicity: a failure halfway through would leave the earlier writes committed
-   where the same program on Racket rolls them back.  So the block is refused there, exactly as
-   `with database D` is, rather than emitted as something weaker than it claims. *)
-let check_transaction loc =
+   WHICH server that is, is decided at run time rather than here: Racket keeps ONE
+   `current-database-runtime`, so a `transaction` opens one on whatever `with database` has
+   bound, and the emitted form says exactly that (`teslrt.WithTransaction`).  A module with two
+   database declarations therefore needs no disambiguation, because only one of them can be
+   bound when the block is entered. *)
+let module_has_postgres_database () =
   match !current_types with
-  | None -> ()
+  | None -> false
   | Some types ->
-    Hashtbl.iter (fun name (backend, _) ->
-      if backend = "postgres" then unsupported loc
-        "Go backend does not support `transaction` against Postgres-backed database `%s` yet"
-        name) types.databases
+    Hashtbl.fold (fun _ (info : database_info) found -> found || info.db_backend = "postgres")
+      types.databases false
 
 (* The server an `api-test` block drives, while its statements are being emitted.  A
    request verb (`get "/path"`) only means something inside such a block, and this is what
@@ -604,6 +686,33 @@ let password_dependency_go_sum =
    golang.org/x/crypto v0.55.0/go.mod h1:uq0V9dE/fzQuJtbnL+2EhWOE63vo164FY8xqEnV9xis=\n\
    golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=\n\
    golang.org/x/sys v0.47.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=\n"
+
+(* The pinned PostgreSQL driver, for a program that declares a Postgres-backed database.  Same
+   discipline as `password_dependency_go_sum`: written here rather than fetched, so an emitted
+   project builds without a network round trip deciding what it got. *)
+let postgres_dependency_go_mod =
+  "\nrequire github.com/jackc/pgx/v5 v5.10.0\n\n\
+   require (\n\
+   \tgithub.com/jackc/pgpassfile v1.0.0 // indirect\n\
+   \tgithub.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect\n\
+   \tgithub.com/jackc/puddle/v2 v2.2.2 // indirect\n\
+   \tgolang.org/x/sync v0.22.0 // indirect\n\
+   \tgolang.org/x/text v0.41.0 // indirect\n\
+   )\n"
+
+let postgres_dependency_go_sum =
+  "github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=\n\
+   github.com/jackc/pgpassfile v1.0.0/go.mod h1:CEx0iS5ambNFdcRtxPj5JhEz+xB6uRky5eyVu/W2HEg=\n\
+   github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 h1:iCEnooe7UlwOQYpKFhBabPMi4aNAfoODPEFNiAnClxo=\n\
+   github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761/go.mod h1:5TJZWKEWniPve33vlWYSoGYefn3gLQRzjfDlhSJ9ZKM=\n\
+   github.com/jackc/pgx/v5 v5.10.0 h1:VhSvgU2jSli8o3AqIEOTJr7rZwAEUVo4E4XhR94Zfr0=\n\
+   github.com/jackc/pgx/v5 v5.10.0/go.mod h1:mal1tBGAFfLHvZzaYh77YS/eC6IX9OWbRV1QIIM0Jn4=\n\
+   github.com/jackc/puddle/v2 v2.2.2 h1:PR8nw+E/1w0GLuRFSmiioY6UooMp6KJv0/61nB7icHo=\n\
+   github.com/jackc/puddle/v2 v2.2.2/go.mod h1:vriiEXHvEE654aYKXXjOvZM39qJ0q+azkZFrfEOc3H4=\n\
+   golang.org/x/sync v0.22.0 h1:SZjpbeLmrCk4xhRSZFNZW5gFUeCeFgjekvI/+gfScek=\n\
+   golang.org/x/sync v0.22.0/go.mod h1:9xrNwdLfx4jkKbNva9FpL6vEN7evnE43NNNJQ2LF3+0=\n\
+   golang.org/x/text v0.41.0 h1:vz/seA0lnX87Othu2f/0L24RcgrXD9/YFTSuGjj3rH8=\n\
+   golang.org/x/text v0.41.0/go.mod h1:jvf1O8ajNzZqhSrQBPbutR/EB83Cc0CFrezNQIwbb5M=\n"
 
 let api_response_key = "HttpResponse (api-test)"
 
@@ -1295,12 +1404,22 @@ and ordered_expr ty op left right =
     invalid_arg "Go ordering requires an ordered scalar type"
 
 let rec supports_ordering = function
-  | TInt | TFloat | TQuantity | TString | TBool -> true
+  | TInt | TFloat | TQuantity | TString -> true
   (* A secret must not be ORDERED: sorting or comparing them leaks their relative values,
      and there is no use for it. *)
   | TNewtype info -> (not info.secret) && supports_ordering info.base
-  | TUnit | TRecord _ | TAdt _ | TList _ | TDict _ | TSet _ | TParam _
+  | TBool | TUnit | TRecord _ | TAdt _ | TList _ | TDict _ | TSet _ | TParam _
   | TFunc _ | TJson | TStream | TCheck _ | TFailure -> false
+
+(* Ordering INSIDE A QUERY admits one type the value language does not: a Bool.  PostgreSQL
+   orders boolean columns (false before true) and `dsl/sql.rkt` reproduces that in its own
+   comparison layer (`ordered-comparison-result`) — while Racket's value-level `<` refuses a
+   boolean outright (`tesl-ord-operand` raises).  So the two are separate predicates here as
+   well: `order t.done asc` sorts, and `List.sort` over a `List Bool` is still refused. *)
+let rec supports_column_ordering = function
+  | TBool -> true
+  | TNewtype info -> (not info.secret) && supports_column_ordering info.base
+  | other -> supports_ordering other
 
 (* A generic ADT has no comparable Go form: `TeslEqual` would have to dispatch
    `teslrt.Equal` for whatever the type parameter was instantiated with, which Go
@@ -1460,9 +1579,120 @@ let rec check_conjuncts expr =
   | EVar { name; _ } -> Some [name]
   | _ -> None
 
+(* Does this expression READ the named binding?  Asked of a `set` value on a Postgres-backed
+   entity, where the value becomes a bound parameter and so cannot mention the row. *)
+let rec mentions_variable name expr =
+  match expr with
+  | EVar { name = other; _ } -> other = name
+  | _ ->
+    Ast_visitor.fold_children
+      (fun found child -> found || mentions_variable name child) false expr
+
 let entity_column loc (info : entity_info) field =
   match List.assoc_opt field info.ent_row.rec_fields with
   | Some ty -> ty
+  | None -> unsupported loc "Go backend: entity `%s` has no column `%s`"
+    info.ent_tesl_name field
+
+(* ─── SQL schema ──────────────────────────────────────────────────────────────
+   Everything a Postgres-backed entity needs to name itself in a statement.  The rules are
+   `dsl/sql.rkt`'s rather than fresh ones: a table created by the Racket backend and read by
+   this one is the whole point of having two, so a column name or a column TYPE that differed
+   would make the two unable to share a database. *)
+
+(* A field key becomes its column name the way `camel->snake` does it, acronyms included:
+   `userID` is `user_id`, not `user_i_d`. *)
+let camel_to_snake text =
+  let buffer = Buffer.create (String.length text + 4) in
+  let length = String.length text in
+  String.iteri (fun index char ->
+    let upper = char >= 'A' && char <= 'Z' in
+    if upper && index > 0 then begin
+      let previous = text.[index - 1] in
+      let previous_lower =
+        (previous >= 'a' && previous <= 'z') || (previous >= '0' && previous <= '9') in
+      let previous_upper = previous >= 'A' && previous <= 'Z' in
+      let next_lower =
+        index + 1 < length && text.[index + 1] >= 'a' && text.[index + 1] <= 'z' in
+      if previous_lower || (previous_upper && next_lower) then Buffer.add_char buffer '_'
+    end;
+    Buffer.add_char buffer (Char.lowercase_ascii char)) text;
+  Buffer.contents buffer
+
+(* An identifier is quoted with its embedded quotes doubled, which is a quoted SQL identifier's
+   only escape.  Identifiers here come from the PROGRAM — an entity's declared table, a field's
+   key — never from a request, and quoting is what keeps that true if one ever does. *)
+let sql_ident name =
+  "\"" ^ String.concat "\"\"" (String.split_on_char '"' name) ^ "\""
+
+(* PostgreSQL truncates an identifier at 63 BYTES and only emits a NOTICE, so two derived names
+   sharing a 63-byte prefix would collide and `if not exists` would then match the WRONG index.
+   `dsl/sql.rkt` truncates deterministically with an FNV-1a-32 suffix instead; this is the same
+   function, because a name derived differently on the two backends would leave a shared table
+   with two indexes doing one job. *)
+let fnv1a_32 text =
+  let hash = ref 0x811c9dc5 in
+  String.iter (fun char ->
+    hash := ((!hash lxor Char.code char) * 16777619) land 0xffffffff) text;
+  !hash
+
+let truncate_sql_identifier name =
+  if String.length name <= 63 then name
+  else begin
+    let suffix = Printf.sprintf "_%x" (fnv1a_32 name) in
+    String.sub name 0 (63 - String.length suffix) ^ suffix
+  end
+
+(* `Maybe X` is the nullable column; everything else is NOT NULL. *)
+let maybe_element = function
+  | TAdt (info, [inner]) when info.adt_tesl_name = "Maybe" -> Some inner
+  | _ -> None
+
+(* The column type a Tesl type maps to.  `Int` is NUMERIC because a Tesl integer is unbounded
+   and BIGINT is exactly where that stops being true; `PosixMillis` is the ONE deliberate
+   BIGINT exception, named as such in `dsl/sql.rkt` and contractual for existing tables. *)
+let rec column_sql_type ty =
+  match ty with
+  | TInt -> Some "NUMERIC"
+  | TFloat -> Some "DOUBLE PRECISION"
+  | TString -> Some "TEXT"
+  | TBool -> Some "BOOLEAN"
+  | TNewtype { tesl_name = "PosixMillis"; _ } -> Some "BIGINT"
+  | TNewtype { tesl_name = "Int32"; _ } -> Some "INTEGER"
+  | TNewtype info -> column_sql_type info.base
+  (* An ADT column is JSONB holding the value's own wire shape (`{"tag":…}`), which is what
+     `dsl/sql.rkt` writes — a column written by one backend has to be readable by the other. *)
+  | TAdt (info, _) when info.adt_tesl_name <> "Maybe" -> Some "JSONB"
+  | _ -> (match maybe_element ty with Some inner -> column_sql_type inner | None -> None)
+
+let entity_columns (info : entity_info) =
+  List.map (fun (field, ty) ->
+    let sql_type = match List.assoc_opt field info.ent_db_types with
+      | Some declared -> String.uppercase_ascii declared
+      | None ->
+        (match column_sql_type ty with
+         | Some text -> text
+         | None -> unsupported info.ent_loc
+           "Go backend does not support column `%s.%s` on a Postgres-backed database yet"
+           info.ent_tesl_name field)
+    in
+    { col_field = field;
+      col_name = camel_to_snake field;
+      col_sql_type = sql_type;
+      col_nullable = maybe_element ty <> None;
+      col_primary_key = field = info.ent_primary_key;
+      col_type = ty })
+    info.ent_row.rec_fields
+
+(* `"schema"."table"`, or the bare table when the declaration names no schema. *)
+let sql_qualified_table (database : database_info) (info : entity_info) =
+  if database.db_schema = "" then sql_ident info.ent_table_name
+  else sql_ident database.db_schema ^ "." ^ sql_ident info.ent_table_name
+
+let sql_column_of loc (info : entity_info) field =
+  match List.find_opt (fun (column : column_info) -> column.col_field = field)
+          (entity_columns info) with
+  | Some column -> column
   | None -> unsupported loc "Go backend: entity `%s` has no column `%s`"
     info.ent_tesl_name field
 
@@ -1875,9 +2105,18 @@ let type_of_sql_form signatures loc form =
     if update.returning_one then TRecord (entity_of_query loc update.entity).ent_row
     else TUnit
   | SqlDelete (seed, _) ->
-    if seed.with_result then unsupported loc
-      "Go backend does not support `deleteAndReturnResult` yet"
-    else begin ignore (entity_of_query loc seed.entity); TUnit end
+    ignore (entity_of_query loc seed.entity);
+    if not seed.with_result then TUnit
+    else
+      (* `DeleteResult` is runtime-provided and registered by the import that names it, so a
+         module that deletes with a result and does not import it is refused HERE rather than
+         emitting a reference to a type it never brought in. *)
+      (match Option.bind !current_types
+               (fun types -> Hashtbl.find_opt types.adts "DeleteResult") with
+       | Some info -> TAdt (info, [])
+       | None -> unsupported loc
+         "Go backend `deleteAndReturnResult` answers a `DeleteResult`; import \
+          `Tesl.DB exposing [DeleteResult(..)]`")
 
 (* A stand-in for the ADT info a scalar `case` does not have.  The scalar path never reads it;
    it exists so the two paths can share one `let` binding rather than duplicating every arm
@@ -2702,8 +2941,7 @@ let rec type_of_expr signatures env expr =
   (* `with database D { … }` names the store the body's queries run against.  With
      `backend: Memory` that store IS the entity's table variable, so the block adds
      nothing at run time and types as its body. *)
-  | EWithDatabase { database_name; body; loc } ->
-    check_with_database loc database_name; type_of_expr signatures env body
+  | EWithDatabase { body; _ } -> type_of_expr signatures env body
   (* `enqueue` is a statement: the job id stays inside the store, as it does on Racket. *)
   | EEnqueue { payload; _ } -> ignore (type_of_expr signatures env payload); TUnit
   (* A `telemetry "name" { … }` block is a STATEMENT: it records a signal and answers Unit, so a
@@ -2767,10 +3005,9 @@ let rec type_of_expr signatures env expr =
   | EStartEmailWorker { email_name; loc } ->
     ignore (email_of_name loc email_name);
     TUnit
-  (* `transaction { … }` types as its body: on the Memory backend the block has no runtime
-     form at all (see `check_transaction`). *)
-  | EWithTransaction { body; loc } ->
-    check_transaction loc; type_of_expr signatures env body
+  (* `transaction { … }` types as its body: the block groups statements, it does not produce a
+     value of its own. *)
+  | EWithTransaction { body; _ } -> type_of_expr signatures env body
   (* `publish C(key) Payload { … }` answers Unit: it hands the event to the listeners on that
      key and returns, which is what keeps a handler's latency independent of its subscribers. *)
   | EPublish { channel_name; key; event_ctor; payload; loc } ->
@@ -4653,8 +4890,25 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
          (match expected with Some ty -> go_type ty | None -> "struct{}{}")
          status (emit message))
   | EWithDatabase { database_name; body; loc } ->
-    check_with_database loc database_name;
-    emit_expr ?expected ~indent signatures env body
+    (* With a Memory-backed database the block adds nothing at run time: the store it names IS
+       the entity's table variable.  With a Postgres-backed one it is what CONNECTS, and every
+       query in the body — including those inside functions the body calls — routes to the
+       server for as long as it is bound. *)
+    (match postgres_database loc database_name with
+     | None -> emit_expr ?expected ~indent signatures env body
+     | Some info ->
+       (* The body's value has to survive the closure the connection is held open around, so it
+          is assigned out of it rather than returned through it: a `with database` in tail
+          position answers what its body answers, exactly as the Memory form does. *)
+       let ty = match expected with
+         | Some ty -> ty
+         | None -> type_of_expr signatures env body in
+       let inner = indent ^ "\t" in
+       Printf.sprintf
+         "func() %s {\n%svar teslBound %s\n%steslrt.WithDatabase(%s, func() {\n%steslBound = %s\n%s})\n%sreturn teslBound\n%s}()"
+         (go_type ty) inner (go_type ty) inner (qualified info.db_owner info.db_go_var)
+         (inner ^ "\t") (emit_expr ~expected:ty ~indent:(inner ^ "\t") signatures env body)
+         inner inner indent)
   | EEnqueue { job_type; payload; loc } ->
     let info = queue_of_job_type loc job_type in
     let row = match Option.bind !current_types
@@ -4780,8 +5034,20 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
   | EStartEmailWorker { email_name; loc } ->
     let info = email_of_name loc email_name in
     Printf.sprintf "teslrt.StartEmailWorker(%s)" (qualified info.em_owner info.em_go_var)
-  | EWithTransaction { body; loc } ->
-    check_transaction loc; emit_expr ?expected ~indent signatures env body
+  | EWithTransaction { body; _ } ->
+    if not (module_has_postgres_database ()) then
+      emit_expr ?expected ~indent signatures env body
+    else begin
+      let ty = match expected with
+        | Some ty -> ty
+        | None -> type_of_expr signatures env body in
+      let inner = indent ^ "\t" in
+      Printf.sprintf
+        "func() %s {\n%svar teslCommitted %s\n%steslrt.WithTransaction(func() {\n%steslCommitted = %s\n%s})\n%sreturn teslCommitted\n%s}()"
+        (go_type ty) inner (go_type ty) inner
+        (inner ^ "\t") (emit_expr ~expected:ty ~indent:(inner ^ "\t") signatures env body)
+        inner inner indent
+    end
   | EPublish { channel_name; key; event_ctor; payload; loc } ->
     let info = channel_of_name loc channel_name in
     ignore (type_of_expr signatures env expr);
@@ -5835,7 +6101,7 @@ and emit_sql_predicate ~indent signatures env loc (info : entity_info) binder cl
     | BEq -> equal_expr ty left right
     | BNeq -> unequal_expr ty left right
     | BLt | BLe | BGt | BGe ->
-      if not (supports_ordering ty) then unsupported loc
+      if not (supports_column_ordering ty) then unsupported loc
         "Go backend cannot order column `%s.%s`" info.ent_tesl_name field;
       let symbol = match op with
         | BLt -> "<" | BLe -> "<=" | BGt -> ">" | _ -> ">=" in
@@ -5931,6 +6197,342 @@ and sql_key_conflict loc (info : entity_info) =
   Printf.sprintf "func(teslRow, teslNew %s) bool { return %s }" (sql_row_type info)
     (equal_expr key_type (field "teslRow") (field "teslNew"))
 
+(* ─── The SQL half of a query ─────────────────────────────────────────────────
+   For an entity a Postgres-backed database manages, the same query is emitted TWICE: once as
+   the Go predicate the in-memory table needs, once as the statement the server needs.  The
+   dispatcher picks at run time, because which store an entity's rows live in is decided by
+   whether something has CONNECTED — a `test` block runs the very same query against the memory
+   table with no server anywhere, which is what `database-runtime-for-entity` decides on the
+   Racket side.
+
+   The statement's TEXT is built here, at compile time, and never carries a value: every operand
+   becomes a `$n` placeholder with its Go expression in the argument list.  So nothing a request
+   sends can change what a statement SAYS. *)
+and sql_placeholder (builder : sql_arguments) argument =
+  builder.sql_args <- builder.sql_args @ [argument];
+  Printf.sprintf "$%d" (List.length builder.sql_args)
+
+(* The Go expression that BINDS a value of a column's type.  An `Int` travels as a NUMERIC
+   rather than through int64, which is exactly where a Tesl integer stops being unbounded. *)
+and sql_bound_value loc ty value =
+  match ty with
+  | TInt -> Printf.sprintf "teslrt.PgInt(%s)" value
+  | TFloat | TString | TBool -> value
+  | TNewtype { tesl_name = "PosixMillis"; _ } ->
+    Printf.sprintf "teslrt.PgBigint(%s.Value)" value
+  | TNewtype { secret = true; tesl_name; _ } ->
+    (* A secret's payload is a redacting carrier, not a string: binding it would put the
+       plaintext on the wire under a name that promises it is not there. *)
+    unsupported loc
+      "Go backend does not support a `secret` column (`%s`) on a Postgres-backed database yet"
+      tesl_name
+  | TNewtype newtype -> sql_bound_value loc newtype.base (value ^ ".Value")
+  | TAdt (info, _) when info.adt_tesl_name <> "Maybe" ->
+    Printf.sprintf "teslrt.EncodeJSONValue(%s(%s))" (!value_encoder_hook ty) value
+  | _ ->
+    (match maybe_element ty with
+     | Some inner ->
+       Printf.sprintf "teslrt.PgNull(%s, func(teslValue %s) any { return %s })"
+         value (go_type inner) (sql_bound_value loc inner "teslValue")
+     | None -> unsupported loc
+       "Go backend cannot store a `%s` value in a column yet" (go_type ty))
+
+(* The driver-side carrier a column is SCANNED into, and the expression that turns it back into
+   the Tesl value.  A pair, so the scanner declares one variable and assigns one field per
+   column, in the entity's own order. *)
+and sql_scan_carrier loc ty target =
+  match ty with
+  | TInt -> ("pgtype.Numeric", Printf.sprintf "teslrt.PgIntOf(%s)" target)
+  | TFloat -> ("float64", target)
+  | TString -> ("string", target)
+  | TBool -> ("bool", target)
+  | TNewtype { tesl_name = "PosixMillis"; go_name; owner; _ } ->
+    ("int64", Printf.sprintf "%s{Value: teslrt.FromInt64(%s)}" (qualified owner go_name) target)
+  | TNewtype { secret = true; tesl_name; _ } ->
+    unsupported loc
+      "Go backend does not support a `secret` column (`%s`) on a Postgres-backed database yet"
+      tesl_name
+  | TNewtype newtype ->
+    let carrier, decode = sql_scan_carrier loc newtype.base target in
+    (carrier, Printf.sprintf "%s{Value: %s}" (qualified newtype.owner newtype.go_name) decode)
+  | TAdt (info, _) when info.adt_tesl_name <> "Maybe" ->
+    ("[]byte", Printf.sprintf "%s(%s)" (sql_adt_column_decoder loc info) target)
+  | _ ->
+    (match maybe_element ty with
+     | Some inner ->
+       let carrier, decode = sql_scan_carrier loc inner ("*" ^ target) in
+       ("*" ^ carrier,
+        Printf.sprintf "teslrt.MaybeOfPointer(%s, func() %s { return %s })"
+          target (go_type inner) decode)
+     | None -> unsupported loc
+       "Go backend cannot read a `%s` column back yet" (go_type ty))
+
+(* The reader for an ADT COLUMN.  The stored shape is the value's own wire shape — `{"tag": …}`
+   for a constructor with no fields — so reading it back is a tag lookup.  A constructor that
+   CARRIES fields is refused rather than half-read: decoding those needs the generic decoder,
+   which does not derive an ADT yet, and a column that silently lost its payload is worse than
+   one that does not compile.
+
+   An unknown tag TRAPS.  It means the column holds a value this build has no constructor for —
+   data written by an incompatible schema — and `dsl/sql.rkt` takes the same line for a stored
+   currency code it cannot resolve. *)
+and sql_adt_column_decoder loc (info : adt_info) =
+  let name = "teslColumn" ^ go_ident ~exported:true info.adt_tesl_name in
+  if not (Hashtbl.mem pending_helpers name) then begin
+    List.iter (fun variant ->
+      if variant.var_fields <> [] then unsupported loc
+        "Go backend does not support a `%s` column on a Postgres-backed database yet: its \
+         constructor `%s` carries fields" info.adt_tesl_name variant.var_ctor)
+      info.adt_variants;
+    let go_ty = qualified info.adt_owner info.adt_go_name in
+    let buffer = Buffer.create 256 in
+    Printf.bprintf buffer "\nfunc %s(teslText []byte) %s {\n" name go_ty;
+    Printf.bprintf buffer
+      "\tteslParsed, teslParseErr := teslrt.ParseJSON(teslText)\n\tif teslParseErr != nil {\n\t\tpanic(\"database: a %s column holds text that is not JSON: \" + teslParseErr.Error())\n\t}\n"
+      info.adt_tesl_name;
+    Printf.bprintf buffer
+      "\tteslTag, teslTagErr := teslrt.DecodeStringField(teslParsed, \"tag\")\n\tif teslTagErr != nil {\n\t\tpanic(\"database: a %s column holds \" + teslTagErr.Error())\n\t}\n"
+      info.adt_tesl_name;
+    Buffer.add_string buffer "\tswitch teslTag {\n";
+    List.iter (fun variant ->
+      Printf.bprintf buffer "\tcase %s:\n\t\treturn %s{%s: %s}\n"
+        (go_quote variant.var_ctor) go_ty adt_tag_field
+        (qualified info.adt_owner variant.var_tag)) info.adt_variants;
+    Printf.bprintf buffer
+      "\t}\n\tpanic(\"database: a %s column holds an unknown tag \" + teslTag)\n}\n"
+      info.adt_tesl_name;
+    Hashtbl.replace pending_helpers name (Buffer.contents buffer)
+  end;
+  name
+
+(* The scanner for one entity, hoisted to package level and emitted once: every statement that
+   answers rows uses the same one, so the column ORDER a select asks for and the order the
+   scanner reads can only be the same order. *)
+and sql_scanner loc (info : entity_info) =
+  let name = "teslScan" ^ go_ident ~exported:true info.ent_tesl_name in
+  if not (Hashtbl.mem pending_helpers name) then begin
+    let columns = entity_columns info in
+    let row = sql_row_type info in
+    let buffer = Buffer.create 256 in
+    Printf.bprintf buffer "\nfunc %s(teslRow pgx.CollectableRow) (%s, error) {\n" name row;
+    Printf.bprintf buffer "\tteslValue := %s{}\n" row;
+    List.iteri (fun index (column : column_info) ->
+      let carrier, _ = sql_scan_carrier loc column.col_type "" in
+      Printf.bprintf buffer "\tvar teslColumn%d %s\n" index carrier) columns;
+    Printf.bprintf buffer
+      "\tif teslErr := teslRow.Scan(%s); teslErr != nil {\n\t\treturn teslValue, teslErr\n\t}\n"
+      (String.concat ", "
+         (List.mapi (fun index _ -> Printf.sprintf "&teslColumn%d" index) columns));
+    List.iteri (fun index (column : column_info) ->
+      let _, decode =
+        sql_scan_carrier loc column.col_type (Printf.sprintf "teslColumn%d" index) in
+      Printf.bprintf buffer "\tteslValue.%s = %s\n"
+        (record_field_go_name column.col_field) decode) columns;
+    Buffer.add_string buffer "\treturn teslValue, nil\n}\n";
+    Hashtbl.replace pending_helpers name (Buffer.contents buffer)
+  end;
+  name
+
+(* The reader for an AGGREGATE: one row, one column.  A sum answers the column's own type with
+   `coalesce` supplying the zero; a max or min answers a `Maybe`, since SQL's aggregate over no
+   rows is NULL where Tesl says Nothing. *)
+and sql_scalar_scan loc ty ~optional =
+  let name = Printf.sprintf "teslScan%s%s" (if optional then "Extreme" else "Total")
+    (helper_suffix ty) in
+  if not (Hashtbl.mem pending_helpers name) then begin
+    let buffer = Buffer.create 256 in
+    if optional then begin
+      let carrier, decode = sql_scan_carrier loc ty "*teslFound" in
+      Printf.bprintf buffer
+        "\nfunc %s(teslRow pgx.Row) (teslrt.Maybe[%s], error) {\n\tvar teslFound *%s\n"
+        name (go_type ty) carrier;
+      Printf.bprintf buffer
+        "\tif teslErr := teslRow.Scan(&teslFound); teslErr != nil {\n\t\treturn teslrt.Nothing[%s](), teslErr\n\t}\n"
+        (go_type ty);
+      Printf.bprintf buffer
+        "\treturn teslrt.MaybeOfPointer(teslFound, func() %s { return %s }), nil\n}\n"
+        (go_type ty) decode
+    end else begin
+      let carrier, decode = sql_scan_carrier loc ty "teslTotal" in
+      Printf.bprintf buffer
+        "\nfunc %s(teslRow pgx.Row) (%s, error) {\n\tvar teslTotal %s\n\tvar teslZero %s\n"
+        name (go_type ty) carrier (go_type ty);
+      Buffer.add_string buffer
+        "\tif teslErr := teslRow.Scan(&teslTotal); teslErr != nil {\n\t\treturn teslZero, teslErr\n\t}\n";
+      Printf.bprintf buffer "\treturn %s, nil\n}\n" decode
+    end;
+    Hashtbl.replace pending_helpers name (Buffer.contents buffer)
+  end;
+  name
+
+(* The `where` fragment, in the same clause shapes the memory predicate supports — so a query
+   this backend emits at all is emitted for BOTH stores, and one can never silently read rows
+   the other would not. *)
+and sql_where_text ~indent signatures env loc (info : entity_info) binder clauses builder =
+  let row_env = (binder, TRecord info.ent_row) :: env in
+  let bind field expr =
+    let ty = entity_column loc info field in
+    let value = sql_column_value ~indent signatures row_env loc info field expr in
+    sql_placeholder builder (sql_bound_value loc ty value)
+  in
+  let column field = sql_ident (sql_column_of loc info field).col_name in
+  let compare_op field op expr =
+    let symbol = match op with
+      | BEq -> "=" | BNeq -> "<>" | BLt -> "<" | BLe -> "<=" | BGt -> ">" | BGe -> ">="
+      | _ -> unsupported loc "Go backend does not support this operator in a `where` clause yet"
+    in
+    Printf.sprintf "%s %s %s" (column field) symbol (bind field expr)
+  in
+  let rec clause (c : Sql_query.sql_clause) =
+    match c with
+    | SqlPred { field; op; value } -> compare_op field op value
+    | SqlOr parts ->
+      (match List.map clause parts with
+       | [] -> "false"
+       | rendered -> "(" ^ String.concat " or " rendered ^ ")")
+    | SqlIn { field; values } ->
+      (match List.map (fun value -> compare_op field BEq value) values with
+       | [] -> "false"
+       | rendered -> "(" ^ String.concat " or " rendered ^ ")")
+    | SqlNotIn { field; values } ->
+      (match List.map (fun value -> compare_op field BNeq value) values with
+       | [] -> "true"
+       | rendered -> "(" ^ String.concat " and " rendered ^ ")")
+    | SqlIsNull { field } -> unsupported loc
+      "Go backend does not support `where isNull %s.%s` yet" binder field
+    | SqlIsNotNull { field } -> unsupported loc
+      "Go backend does not support `where isNotNull %s.%s` yet" binder field
+    (* `like`/`ilike` are the SQL operators themselves; the memory store matches the same
+       pattern by hand (`SqlLike`), which is what keeps the two answering alike. *)
+    | SqlLike { field; pattern } ->
+      Printf.sprintf "%s like %s" (column field)
+        (sql_placeholder builder
+           (emit_expr ~expected:TString ~indent signatures row_env pattern))
+    | SqlILike { field; pattern } ->
+      Printf.sprintf "%s ilike %s" (column field)
+        (sql_placeholder builder
+           (emit_expr ~expected:TString ~indent signatures row_env pattern))
+  in
+  match clauses with
+  | [] -> ""
+  | _ -> " where " ^ String.concat " and " (List.map clause clauses)
+
+and sql_order_text loc (info : entity_info) order =
+  match order with
+  | None -> ""
+  | Some (field, direction) ->
+    Printf.sprintf " order by %s %s" (sql_ident (sql_column_of loc info field).col_name)
+      (if direction = "desc" then "DESC" else "ASC")
+
+and sql_range_text limit offset =
+  (match limit with Some count -> Printf.sprintf " limit %d" count | None -> "")
+  ^ (match offset with Some count -> Printf.sprintf " offset %d" count | None -> "")
+
+(* The column list a select asks for: the entity's own fields in declaration order, which is
+   the order the scanner reads them in. *)
+and sql_column_list (info : entity_info) =
+  String.concat ", "
+    (List.map (fun (column : column_info) -> sql_ident column.col_name) (entity_columns info))
+
+(* The binder an INSERT hands the dispatcher: the arguments read off the row VALUE rather than
+   emitted a second time from the same field expressions.  A row whose `createdAt` is
+   `Time.nowMillis()` would otherwise be stored with one instant and answered with another. *)
+and sql_row_binder loc indent (info : entity_info) columns =
+  Printf.sprintf "func(teslRow %s) []any {\n%s\treturn []any{%s}\n%s}"
+    (sql_row_type info) indent
+    (String.concat ", "
+       (List.map (fun (column : column_info) ->
+          sql_bound_value loc column.col_type
+            (Printf.sprintf "teslRow.%s" (record_field_go_name column.col_field)))
+          columns))
+    indent
+
+(* The declared UNIQUE indexes an insert or an update carries, as `teslrt.UniqueIndex` values.
+   The in-memory store enforces them (an index is an invariant, not a hint) and the server has
+   the real index, so the emitted check runs only on the path that has no server.
+
+   Emitted SPLIT across lines: gofmt keeps a composite literal on one line only while it fits,
+   and one of these carries three func literals. *)
+and sql_unique_indexes ~indent loc (info : entity_info) =
+  let row = sql_row_type info in
+  let inner = indent ^ "\t" in
+  List.filter_map (fun (index : entity_index) ->
+    if not index.ix_unique then None
+    else begin
+      let columns = List.map (fun field -> (sql_column_of loc info field).col_name)
+        index.ix_fields in
+      let same =
+        String.concat " && " (List.map (fun field ->
+          let ty = entity_column loc info field in
+          let side name = Printf.sprintf "%s.%s" name (record_field_go_name field) in
+          equal_expr ty (side "teslLeft") (side "teslRight")) index.ix_fields) in
+      (* A row with a NULL in an indexed column is UNCONSTRAINED: two NULLs are not equal, so
+         they do not collide.  PostgreSQL's rule, and Racket's. *)
+      let nullable = List.filter (fun field ->
+        maybe_element (entity_column loc info field) <> None) index.ix_fields in
+      let constrained = match nullable with
+        | [] -> "nil"
+        | fields ->
+          Printf.sprintf "func(teslRow %s) bool {\n%s\treturn %s\n%s}" row inner
+            (String.concat " && " (List.map (fun field ->
+               Printf.sprintf "teslRow.%s.IsSomething()" (record_field_go_name field)) fields))
+            inner
+      in
+      (* The refusal names the VALUES that collided, so each is rendered the way an
+         interpolation renders it — a column type with no rendering is refused rather than
+         printed as a Go struct. *)
+      let rec rendered ty operand =
+        match ty with
+        | TString -> operand
+        | TInt -> operand ^ ".String()"
+        | TFloat -> Printf.sprintf "teslrt.FormatFloat(%s)" operand
+        | TBool -> Printf.sprintf "strconv.FormatBool(%s)" operand
+        | TNewtype { secret = true; _ } -> unsupported loc
+          "Go backend cannot put a `secret` column in a unique index on entity `%s`"
+          info.ent_tesl_name
+        | TNewtype newtype -> rendered newtype.base (operand ^ ".Value")
+        | _ ->
+          (match maybe_element ty with
+           | Some inner -> rendered inner (operand ^ ".SomethingValue")
+           | None -> unsupported loc
+             "Go backend cannot name a `%s` column in a unique-index refusal" (go_type ty))
+      in
+      let describe =
+        String.concat " + \" \" + " (List.map (fun field ->
+          rendered (entity_column loc info field)
+            (Printf.sprintf "teslRow.%s" (record_field_go_name field)))
+          index.ix_fields) in
+      Some (Printf.sprintf
+        "teslrt.UniqueIndexOf(\n%s%s,\n%s[]string{%s},\n%s%s,\n%sfunc(teslLeft, teslRight %s) bool {\n%s\treturn %s\n%s},\n%sfunc(teslRow %s) string {\n%s\treturn \"(\" + %s + \")\"\n%s},\n%s)"
+        inner (go_quote info.ent_tesl_name) inner
+        (String.concat ", " (List.map go_quote columns)) inner constrained
+        inner row inner same inner inner row inner describe inner indent)
+    end) info.ent_indexes
+
+(* The extra arguments a write carries when the entity declares a unique index: none at all
+   when it declares none, so a program without one emits exactly what it always did. *)
+and sql_unique_arguments ~indent loc (info : entity_info) =
+  match sql_unique_indexes ~indent loc info with
+  | [] -> ""
+  | values -> ", " ^ String.concat ", " values
+
+(* The emitted `teslrt.PgSql(…)`: one statement and a THUNK for the arguments its placeholders
+   stand for.  A thunk because both forms of the query sit at this one call site but only one of
+   them runs: an eager slice would evaluate a `where` operand that reads the clock, draws a
+   random value or fails a check even on the memory path, where the memory-only emission never
+   evaluates it.
+
+   The thunk is emitted ALREADY SPLIT across lines.  gofmt keeps a func literal on one line only
+   while go/printer judges it short enough, and an argument list crosses that threshold at a
+   size the emitter cannot predict — but gofmt never JOINS a split literal, so the split form is
+   stable at every size. *)
+and sql_plan ~indent statement (builder : sql_arguments) =
+  match builder.sql_args with
+  | [] -> Printf.sprintf "teslrt.PgSql(%s, nil)" (go_quote statement)
+  | args ->
+    Printf.sprintf "teslrt.PgSql(%s, func() []any {\n%s\treturn []any{%s}\n%s})"
+      (go_quote statement) indent (String.concat ", " args) indent
+
 and emit_sql_form ?(indent="") signatures env loc form =
   match form with
   | SqlSelect (seed, clauses) ->
@@ -5950,7 +6552,7 @@ and emit_sql_form ?(indent="") signatures env loc form =
       | None -> None
       | Some (field, direction) ->
         let ty = entity_column loc info field in
-        if not (supports_ordering ty) then unsupported loc
+        if not (supports_column_ordering ty) then unsupported loc
           "Go backend cannot order by column `%s.%s`" info.ent_tesl_name field;
         let column name = Printf.sprintf "%s.%s" name (record_field_go_name field) in
         let left, right = match direction with
@@ -5970,29 +6572,67 @@ and emit_sql_form ?(indent="") signatures env loc form =
         (Option.value seed.limit ~default:(-1))
     in
     let table = sql_table_ref info in
+    (* The database this entity belongs to, when it is a Postgres-backed one: the query is then
+       emitted in BOTH forms and the store is chosen at run time. *)
+    let pg = info.ent_database in
+    let where builder =
+      sql_where_text ~indent signatures env loc info seed.binder all_clauses builder in
+    let db_ref (database : database_info) = qualified database.db_owner database.db_go_var in
     (match seed.kind with
      | SelectMany ->
-       (match ordering (), seed.limit, seed.offset with
-        | None, None, None -> Printf.sprintf "teslrt.TableSelect(%s, %s)" table predicate
-        | None, _, _ ->
-          Printf.sprintf "teslrt.TableSelectRange(%s, %s, %s)" table predicate (range ())
-        | Some less, _, _ ->
-          Printf.sprintf "teslrt.TableSelectSorted(%s, %s, %s, %s)"
-            table predicate less (range ()))
+       (match pg with
+        | Some database ->
+          let builder = { sql_args = [] } in
+          let statement =
+            Printf.sprintf "select %s from %s%s%s%s" (sql_column_list info)
+              (sql_qualified_table database info) (where builder)
+              (sql_order_text loc info seed.order) (sql_range_text seed.limit seed.offset) in
+          Printf.sprintf "teslrt.DbSelect(%s, %s, %s, %s, %s, %s, %s)"
+            (db_ref database) table predicate
+            (match ordering () with None -> "nil" | Some less -> less)
+            (range ()) (sql_plan ~indent statement builder) (sql_scanner loc info)
+        | None ->
+          (match ordering (), seed.limit, seed.offset with
+           | None, None, None -> Printf.sprintf "teslrt.TableSelect(%s, %s)" table predicate
+           | None, _, _ ->
+             Printf.sprintf "teslrt.TableSelectRange(%s, %s, %s)" table predicate (range ())
+           | Some less, _, _ ->
+             Printf.sprintf "teslrt.TableSelectSorted(%s, %s, %s, %s)"
+               table predicate less (range ())))
      | SelectOne ->
        (* `limit`/`offset` on a `selectOne` would change WHICH row it is, so they are
           refused rather than dropped; `order` decides it and is supported. *)
        if seed.limit <> None || seed.offset <> None then unsupported loc
          "Go backend does not support `limit`/`offset` on `selectOne` yet";
-       (match ordering () with
-        | None -> Printf.sprintf "teslrt.TableSelectOne(%s, %s)" table predicate
-        | Some less ->
-          Printf.sprintf "teslrt.TableSelectOneSorted(%s, %s, %s)" table predicate less)
+       (match pg with
+        | Some database ->
+          let builder = { sql_args = [] } in
+          let statement =
+            Printf.sprintf "select %s from %s%s%s limit 1" (sql_column_list info)
+              (sql_qualified_table database info) (where builder)
+              (sql_order_text loc info seed.order) in
+          Printf.sprintf "teslrt.DbSelectOne(%s, %s, %s, %s, %s, %s)"
+            (db_ref database) table predicate
+            (match ordering () with None -> "nil" | Some less -> less)
+            (sql_plan ~indent statement builder) (sql_scanner loc info)
+        | None ->
+          (match ordering () with
+           | None -> Printf.sprintf "teslrt.TableSelectOne(%s, %s)" table predicate
+           | Some less ->
+             Printf.sprintf "teslrt.TableSelectOneSorted(%s, %s, %s)" table predicate less))
      | SelectCount ->
        if seed.order <> None || seed.limit <> None || seed.offset <> None then
          unsupported loc "Go backend does not support `order`/`limit`/`offset` on \
                           `selectCount` yet";
-       Printf.sprintf "teslrt.TableCount(%s, %s)" table predicate
+       (match pg with
+        | Some database ->
+          let builder = { sql_args = [] } in
+          let statement =
+            Printf.sprintf "select count(*) from %s%s"
+              (sql_qualified_table database info) (where builder) in
+          Printf.sprintf "teslrt.DbCount(%s, %s, %s, %s)"
+            (db_ref database) table predicate (sql_plan ~indent statement builder)
+        | None -> Printf.sprintf "teslrt.TableCount(%s, %s)" table predicate)
      | SelectSum field ->
        if seed.order <> None || seed.limit <> None || seed.offset <> None then
          unsupported loc "Go backend does not support `order`/`limit`/`offset` on \
@@ -6003,37 +6643,49 @@ and emit_sql_form ?(indent="") signatures env loc form =
          (sql_row_type info) (go_type ty) column in
        (* The SUM is over the column's OWN type, so a newtype column sums to that
           newtype and a Float column to a Float — no unwrapping at the boundary. *)
-       let fold_sum () =
-         let combine, zero = match ty with
-         | TInt -> "teslrt.Add", "teslrt.FromInt64(0)"
+       let fold_parts () = match ty with
+         | TInt -> ("teslrt.Add", "teslrt.FromInt64(0)")
          | TFloat ->
-           Printf.sprintf "func(teslLeft, teslRight float64) float64 { return teslLeft + teslRight }",
-           "float64(0)"
+           ("func(teslLeft, teslRight float64) float64 { return teslLeft + teslRight }",
+            "float64(0)")
          | TNewtype newtype when newtype.base = TInt ->
-           Printf.sprintf
-             "func(teslLeft, teslRight %s) %s { return %s{Value: teslrt.Add(teslLeft.Value, teslRight.Value)} }"
-             (go_type ty) (go_type ty) (go_type ty),
-           Printf.sprintf "%s{Value: teslrt.FromInt64(0)}" (go_type ty)
+           (Printf.sprintf
+              "func(teslLeft, teslRight %s) %s { return %s{Value: teslrt.Add(teslLeft.Value, teslRight.Value)} }"
+              (go_type ty) (go_type ty) (go_type ty),
+            Printf.sprintf "%s{Value: teslrt.FromInt64(0)}" (go_type ty))
          | TNewtype newtype when newtype.base = TFloat ->
-           Printf.sprintf
-             "func(teslLeft, teslRight %s) %s { return %s{Value: teslLeft.Value + teslRight.Value} }"
-             (go_type ty) (go_type ty) (go_type ty),
-           Printf.sprintf "%s{Value: float64(0)}" (go_type ty)
+           (Printf.sprintf
+              "func(teslLeft, teslRight %s) %s { return %s{Value: teslLeft.Value + teslRight.Value} }"
+              (go_type ty) (go_type ty) (go_type ty),
+            Printf.sprintf "%s{Value: float64(0)}" (go_type ty))
          | _ -> unsupported loc
            "Go backend cannot sum column `%s.%s`" info.ent_tesl_name field
-         in
-         Printf.sprintf "teslrt.TableFold(%s, %s, %s, %s, %s)"
-           table predicate project combine zero
        in
        (* A MONEY column cannot FOLD: the currency rule needs the whole set — an empty one has
-          no currency to carry its zero, and two currencies have no common total — so the
-          amounts are collected and totalled in one place, where both refusals live.  They are
-          Racket's refusals, word for word. *)
-       (match ty with
-        | TRecord money when money.rec_tesl_name = "Money" ->
+          no currency to carry its zero, and two currencies have no common total — so it is one
+          pass that adopts the currency from the first matching row and checks every later row
+          against it.  Those are Racket's two refusals, word for word.  On a Postgres-backed
+          entity a Money column stores into TWO columns, which `entity_columns` refuses above. *)
+       (match ty, pg with
+        | TRecord money, _ when money.rec_tesl_name = "Money" ->
           Printf.sprintf "teslrt.TableSumMoney(%s, %s, %s, %s, %s)"
             table predicate project (go_quote info.ent_tesl_name) (go_quote field)
-        | _ -> fold_sum ())
+        | _, None ->
+          let combine, zero = fold_parts () in
+          Printf.sprintf "teslrt.TableFold(%s, %s, %s, %s, %s)"
+            table predicate project combine zero
+        | _, Some database ->
+          (* The server sums in the database rather than shipping every row here to be added
+             up; `coalesce(…, 0)` is what makes a sum over no rows zero on both paths. *)
+          let combine, zero = fold_parts () in
+          let builder = { sql_args = [] } in
+          let statement =
+            Printf.sprintf "select coalesce(sum(%s), 0) from %s%s"
+              (sql_ident (sql_column_of loc info field).col_name)
+              (sql_qualified_table database info) (where builder) in
+          Printf.sprintf "teslrt.DbSum(%s, %s, %s, %s, %s, %s, %s, %s)"
+            (db_ref database) table predicate project combine zero
+            (sql_plan ~indent statement builder) (sql_scalar_scan loc ty ~optional:false))
      (* `selectMax`/`selectMin` answer a `Maybe`: no matching row is `Nothing`, not a trap
         and not a fabricated zero. *)
      | SelectMax field | SelectMin field ->
@@ -6042,7 +6694,7 @@ and emit_sql_form ?(indent="") signatures env loc form =
                           `selectMax`/`selectMin` yet";
        let biggest = match seed.kind with SelectMax _ -> true | _ -> false in
        let ty = entity_column loc info field in
-       if not (supports_ordering ty) then unsupported loc
+       if not (supports_column_ordering ty) then unsupported loc
          "Go backend cannot compare column `%s.%s`" info.ent_tesl_name field;
        let project = Printf.sprintf "func(teslRow %s) %s { return teslRow.%s }"
          (sql_row_type info) (go_type ty) (record_field_go_name field) in
@@ -6052,17 +6704,52 @@ and emit_sql_form ?(indent="") signatures env loc form =
          Printf.sprintf "func(teslLeft, teslRight %s) bool {\n%s\treturn %s\n%s}" (go_type ty)
            indent (ordered_expr ty (if biggest then ">" else "<") "teslLeft" "teslRight")
            indent in
-       Printf.sprintf "teslrt.TableExtreme(%s, %s, %s, %s)"
-         table predicate project better
+       (match pg with
+        | Some database ->
+          let builder = { sql_args = [] } in
+          let statement =
+            Printf.sprintf "select %s(%s) from %s%s" (if biggest then "max" else "min")
+              (sql_ident (sql_column_of loc info field).col_name)
+              (sql_qualified_table database info) (where builder) in
+          Printf.sprintf "teslrt.DbExtreme(%s, %s, %s, %s, %s, %s, %s)"
+            (db_ref database) table predicate project better
+            (sql_plan ~indent statement builder) (sql_scalar_scan loc ty ~optional:true)
+        | None ->
+          Printf.sprintf "teslrt.TableExtreme(%s, %s, %s, %s)"
+            table predicate project better)
      | SelectCountBy -> unsupported loc "Go backend does not support `selectCountBy` yet"
      | SelectSumBy _ -> unsupported loc "Go backend does not support `selectSumBy` yet")
   | SqlInsert insert ->
     let info = entity_of_query loc insert.entity in
     check_record_literal signatures env loc info.ent_row insert.fields;
-    Printf.sprintf "teslrt.TableInsert(%s, %s, %s, %s)"
-      (sql_table_ref info) (go_quote info.ent_tesl_name)
-      (emit_record_literal ~indent signatures env info.ent_row insert.fields)
-      (sql_key_conflict loc info)
+    let row = emit_record_literal ~indent signatures env info.ent_row insert.fields in
+    (match info.ent_database with
+     | None ->
+       Printf.sprintf "teslrt.TableInsert(%s, %s, %s, %s%s)"
+         (sql_table_ref info) (go_quote info.ent_tesl_name) row (sql_key_conflict loc info)
+         (sql_unique_arguments ~indent loc info)
+     | Some database ->
+       (* Each column is bound from the literal's OWN field expression rather than by reading
+          it back out of the emitted struct: the two are the same value, and reading it back
+          would mean naming a temporary the memory path has no use for.  The DUPLICATE-key
+          refusal is the server's here (the primary key carries the constraint) and the
+          emitted comparison there, which is what keeps the two backends agreeing about which
+          programs run rather than only about what they answer. *)
+       let columns = entity_columns info in
+       List.iter (fun (column : column_info) ->
+         if not (List.mem_assoc column.col_field insert.fields) then unsupported loc
+           "Go backend: `insert` into `%s` leaves column `%s` unset"
+           info.ent_tesl_name column.col_field) columns;
+       let statement =
+         Printf.sprintf "insert into %s (%s) values (%s)"
+           (sql_qualified_table database info) (sql_column_list info)
+           (String.concat ", "
+              (List.mapi (fun index _ -> Printf.sprintf "$%d" (index + 1)) columns)) in
+       Printf.sprintf "teslrt.DbInsert(%s, %s, %s, %s, %s, %s, %s%s)"
+         (qualified database.db_owner database.db_go_var) (sql_table_ref info)
+         (go_quote info.ent_tesl_name) row (sql_key_conflict loc info)
+         (go_quote statement) (sql_row_binder loc indent info columns)
+         (sql_unique_arguments ~indent loc info))
   | SqlInsertMany (list_var, entity) ->
     let info = entity_of_query loc entity in
     let rows = match List.assoc_opt list_var env with
@@ -6072,8 +6759,28 @@ and emit_sql_form ?(indent="") signatures env loc form =
         list_var entity entity
       | None -> unsupported loc "Go backend cannot resolve value `%s`" list_var
     in
-    Printf.sprintf "teslrt.TableInsertMany(%s, %s, %s, %s)"
-      (sql_table_ref info) (go_quote info.ent_tesl_name) rows (sql_key_conflict loc info)
+    (match info.ent_database with
+     | None ->
+       Printf.sprintf "teslrt.TableInsertMany(%s, %s, %s, %s%s)"
+         (sql_table_ref info) (go_quote info.ent_tesl_name) rows (sql_key_conflict loc info)
+         (sql_unique_arguments ~indent loc info)
+     | Some database ->
+       (* The rows are only known at run time, so the statement is fixed and its ARGUMENTS are
+          read off each row — the one query whose plan cannot be a value.  One statement per
+          row rather than a multi-row VALUES list, so a row conflicting with an EARLIER row of
+          the same batch is refused exactly where it would be if the two had been inserted
+          separately: Racket's `insert-many!` is a loop over `insert-one!`. *)
+       let columns = entity_columns info in
+       let statement =
+         Printf.sprintf "insert into %s (%s) values (%s)"
+           (sql_qualified_table database info) (sql_column_list info)
+           (String.concat ", "
+              (List.mapi (fun index _ -> Printf.sprintf "$%d" (index + 1)) columns)) in
+       let bind = sql_row_binder loc indent info columns in
+       Printf.sprintf "teslrt.DbInsertMany(%s, %s, %s, %s, %s, %s, %s%s)"
+         (qualified database.db_owner database.db_go_var) (sql_table_ref info)
+         (go_quote info.ent_tesl_name) rows (sql_key_conflict loc info)
+         (go_quote statement) bind (sql_unique_arguments ~indent loc info))
   | SqlUpdate update ->
     let info = entity_of_query loc update.entity in
     sql_check_where_field loc None update.clauses;
@@ -6094,16 +6801,63 @@ and emit_sql_form ?(indent="") signatures env loc form =
         inner (local_ident update.binder)
         (String.concat "" assignments) inner indent
     in
-    Printf.sprintf "teslrt.%s(%s, %s, %s)"
-      (if update.returning_one then "TableUpdateReturnOne" else "TableUpdate")
-      (sql_table_ref info) predicate apply
+    (match info.ent_database with
+     | None ->
+       Printf.sprintf "teslrt.%s(%s, %s, %s%s)"
+         (if update.returning_one then "TableUpdateReturnOne" else "TableUpdate")
+         (sql_table_ref info) predicate apply (sql_unique_arguments ~indent loc info)
+     | Some database ->
+       (* A `set` value is a PARAMETER on the server: `set p.count = p.count + 1` would have to
+          become SQL arithmetic over the stored column, and Racket's Postgres path cannot do
+          that either (`postgres-update-many!` binds every SET value).  So a value that reads
+          the row is refused rather than silently evaluated against a row this side never
+          fetched. *)
+       let builder = { sql_args = [] } in
+       let assignment (field, value) =
+         if mentions_variable update.binder value then unsupported loc
+           "Go backend does not support a `set` value that reads the row (`%s.%s`) on a \
+            Postgres-backed database yet" update.binder field;
+         let column = sql_column_of loc info field in
+         let bound =
+           sql_column_value ~indent signatures env loc info field value in
+         Printf.sprintf "%s = %s" (sql_ident column.col_name)
+           (sql_placeholder builder (sql_bound_value loc column.col_type bound))
+       in
+       let sets = String.concat ", " (List.map assignment update.updates) in
+       let where =
+         sql_where_text ~indent signatures env loc info update.binder update.clauses builder in
+       if update.returning_one then
+         let statement =
+           Printf.sprintf "update %s set %s%s returning %s"
+             (sql_qualified_table database info) sets where (sql_column_list info) in
+         Printf.sprintf "teslrt.DbUpdateReturnOne(%s, %s, %s, %s, %s, %s%s)"
+           (qualified database.db_owner database.db_go_var) (sql_table_ref info) predicate
+           apply (sql_plan ~indent statement builder) (sql_scanner loc info)
+           (sql_unique_arguments ~indent loc info)
+       else
+         let statement =
+           Printf.sprintf "update %s set %s%s" (sql_qualified_table database info) sets where in
+         Printf.sprintf "teslrt.DbUpdate(%s, %s, %s, %s, %s%s)"
+           (qualified database.db_owner database.db_go_var) (sql_table_ref info) predicate
+           apply (sql_plan ~indent statement builder) (sql_unique_arguments ~indent loc info))
   | SqlDelete (seed, clauses) ->
     let info = entity_of_query loc seed.entity in
     sql_check_where_field loc seed.where_field clauses;
-    if seed.with_result then unsupported loc
-      "Go backend does not support `deleteAndReturnResult` yet";
-    Printf.sprintf "teslrt.TableDelete(%s, %s)" (sql_table_ref info)
-      (emit_sql_predicate ~indent signatures env loc info seed.binder clauses)
+    let predicate = emit_sql_predicate ~indent signatures env loc info seed.binder clauses in
+    (* `delete` is a statement; `deleteAndReturnResult` answers whether anything WENT, which is
+       a different outcome from a count of zero and is read as a `case` rather than compared. *)
+    let memory = if seed.with_result then "TableDeleteResult" else "TableDelete" in
+    let server = if seed.with_result then "DbDeleteResult" else "DbDelete" in
+    (match info.ent_database with
+     | None -> Printf.sprintf "teslrt.%s(%s, %s)" memory (sql_table_ref info) predicate
+     | Some database ->
+       let builder = { sql_args = [] } in
+       let statement =
+         Printf.sprintf "delete from %s%s" (sql_qualified_table database info)
+           (sql_where_text ~indent signatures env loc info seed.binder clauses builder) in
+       Printf.sprintf "teslrt.%s(%s, %s, %s, %s)" server
+         (qualified database.db_owner database.db_go_var) (sql_table_ref info) predicate
+         (sql_plan ~indent statement builder))
 
 (* An api-test request BODY is a JSON template: `body { "tag": "one" }`.  It is rendered to
    the JSON text the request carries.  A literal template becomes a constant string at
@@ -6295,12 +7049,23 @@ let emit_tail ?self buffer signatures env expected indent expr =
        into an immediately-called closure.  A capability scope is the same: the checker has
        verified every call in it already, so the scope itself has no runtime form. *)
     | EWithDatabase { database_name; body; loc } ->
-      check_with_database loc database_name; go env indent body
-    (* A `transaction` block is its body on the Memory backend, so it keeps STATEMENT form:
+      (match postgres_database loc database_name with
+       | None -> go env indent body
+       | Some _ ->
+         Buffer.add_string buffer (line_directive loc);
+         Printf.bprintf buffer "%sreturn %s\n" indent
+           (emit_expr ~expected ~indent signatures env expr))
+    (* A `transaction` block is its body with nothing connected, so it keeps STATEMENT form:
        the writes it groups are ordinary statements, and wrapping them in a closure would
-       change nothing but the shape of the emitted code. *)
+       change nothing but the shape of the emitted code.  Where a Postgres database is
+       declared the block IS a runtime form (BEGIN/COMMIT) and takes the expression shape. *)
     | EWithTransaction { body; loc } ->
-      check_transaction loc; go env indent body
+      if not (module_has_postgres_database ()) then go env indent body
+      else begin
+        Buffer.add_string buffer (line_directive loc);
+        Printf.bprintf buffer "%sreturn %s\n" indent
+          (emit_expr ~expected ~indent signatures env expr)
+      end
     | EWithCapabilities { body; _ } -> go env indent body
     (* Proof decomposition in tail position keeps statement form, like an ordinary `let`.
        Either half may be `_`, since the decomposition is often written for one of them. *)
@@ -6844,6 +7609,81 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
     Buffer.add_string body (line_directive info.ent_loc);
     Printf.bprintf body "var %s = teslrt.NewTable[%s]()\n"
       info.ent_table_var info.ent_row.rec_go_name);
+  (* A Postgres-backed `database` declaration becomes one value holding what a connection
+     needs: the DSN parts, the schema, and the tables the bootstrap creates if they are absent.
+     A Memory-backed declaration emits nothing at all — the store it names IS the entity's
+     table variable, which is why the corpus's Memory programs are unchanged by any of this. *)
+  Hashtbl.to_seq_values types.databases
+  |> List.of_seq
+  |> List.sort (fun left right -> String.compare left.db_tesl_name right.db_tesl_name)
+  |> List.filter (fun info -> info.db_backend = "postgres" && declared_here info.db_owner)
+  |> List.iter (fun (database : database_info) ->
+    let setting key = List.assoc_opt key database.db_config in
+    let text key = match setting key with
+      | Some value -> Some (go_config_value database.db_loc value)
+      | None -> None in
+    let fields =
+      List.filter_map (fun (name, rendered) ->
+        Option.map (fun value -> Printf.sprintf "%s: %s" name value) rendered)
+        [ "DBName", text "database";
+          "User", text "user";
+          "Password", text "password";
+          "Host", text "host";
+          "Port", Option.map (go_config_int database.db_loc) (setting "port");
+          "SocketDir", text "socket";
+          "Schema", (if database.db_schema = "" then None
+                     else Some (go_quote database.db_schema)) ]
+    in
+    let tables =
+      Hashtbl.to_seq_values types.entities
+      |> List.of_seq
+      |> List.sort (fun left right -> String.compare left.ent_tesl_name right.ent_tesl_name)
+      |> List.filter (fun (entity : entity_info) ->
+           List.mem entity.ent_tesl_name database.db_entities)
+      |> List.map (fun (entity : entity_info) ->
+           let columns =
+             List.map (fun (column : column_info) ->
+               Printf.sprintf "\t\t\tteslrt.PostgresColumnOf(%s, %s, %b, %b),\n"
+                 (go_quote column.col_name) (go_quote column.col_sql_type)
+                 column.col_primary_key column.col_nullable)
+               (entity_columns entity) in
+           (* A UNIQUE index is created by the bootstrap under the name `dsl/sql.rkt` derives,
+              so a table shared with the Racket backend does not end up with two indexes doing
+              the same job.  A plain index is a hint with no observable effect and is left to
+              whoever tunes the database. *)
+           let unique =
+             List.filter_map (fun (index : entity_index) ->
+               if not index.ix_unique then None
+               else
+                 let columns = List.map (fun field ->
+                   (sql_column_of entity.ent_loc entity field).col_name) index.ix_fields in
+                 let name = match index.ix_name with
+                   | Some explicit -> explicit
+                   | None -> truncate_sql_identifier
+                     (entity.ent_table_name ^ "_" ^ String.concat "_" columns ^ "_idx") in
+                 Some (Printf.sprintf "teslrt.PostgresIndexOf(%s, %s)" (go_quote name)
+                         (String.concat ", " (List.map go_quote columns))))
+               entity.ent_indexes in
+           match unique with
+           | [] ->
+             Printf.sprintf "\t\tteslrt.PostgresTableOf(%s,\n%s\t\t),\n"
+               (go_quote entity.ent_table_name) (String.concat "" columns)
+           | _ ->
+             Printf.sprintf
+               "\t\tteslrt.PostgresTableWithIndexes(%s,\n\t\t\t[]teslrt.PostgresIndex{%s},\n%s\t\t),\n"
+               (go_quote entity.ent_table_name) (String.concat ", " unique)
+               (String.concat "" columns))
+    in
+    Buffer.add_char body '\n';
+    Buffer.add_string body (line_directive database.db_loc);
+    Printf.bprintf body
+      "var %s = teslrt.NewDatabase(\n\t%s,\n\tteslrt.PostgresConfig{%s},\n\t%s,\n)\n"
+      database.db_go_var (go_quote database.db_tesl_name) (String.concat ", " fields)
+      (* An EMPTY table list is written on one line: gofmt collapses `{\n}` and a database
+         whose entities are declared in another module has none of them here. *)
+      (match tables with
+       | [] -> "[]teslrt.PostgresTable{}"
+       | _ -> Printf.sprintf "[]teslrt.PostgresTable{\n%s\t}" (String.concat "" tables)));
   (* Module-level constants, in declaration order: each one's type settles as it is emitted, so
      a constant may be written in terms of an earlier one. *)
   List.iter (fun (c : const_form) ->
@@ -7522,6 +8362,11 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
     @ (if contains_go_code body "io.ReadAll" then ["io"] else [])
     (* A derived decoder turns a nested record's rejection into an `error`. *)
     @ (if contains_go_code body "errors.New" then ["errors"] else [])
+    (* A Postgres-backed entity's row SCANNER names the driver's own types: a row handle to
+       scan from, and the NUMERIC carrier an unbounded `Int` column travels in. *)
+    @ (if contains_go_code body "pgx.CollectableRow" || contains_go_code body "pgx.Row"
+       then ["github.com/jackc/pgx/v5"] else [])
+    @ (if contains_go_code body "pgtype." then ["github.com/jackc/pgx/v5/pgtype"] else [])
     @ (if contains_go_code body "teslrt." then [module_path ^ "/internal/teslrt"] else [])
     (* Only packages the emitted body actually references: an unused import is a Go
        compile error, and a Tesl module may import names it only uses in a type
@@ -7979,13 +8824,23 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
        is unaffected, on either backend. *)
     property_runs := Option.value test.runs ~default:200;
     ignore test.capabilities;
-    (* The header names a database the checker has already resolved, and every database
-       this backend accepts is a Memory one, so there is nothing to bind. *)
-    ignore test.database;
+    (* `test "…" with database D { … }` binds D for the whole block, exactly as the same
+       header does on a function.  With a Memory-backed D there is nothing to bind — the store
+       is the entity's own table variable — and with a Postgres-backed one this is what
+       CONNECTS, so the block's queries reach the server instead of the in-memory table. *)
+    let bound = match test.database with
+      | Some name -> postgres_database test.loc name
+      | None -> None in
     Buffer.add_char body '\n';
     Printf.bprintf body "func TestTesl%d(teslT *testing.T) {\n" index;
     emit_reset ();
-    emit_stmts [] "\t" test.stmts;
+    (match bound with
+     | None -> emit_stmts [] "\t" test.stmts
+     | Some database ->
+       Printf.bprintf body "\tteslrt.WithDatabase(%s, func() {\n"
+         (qualified database.db_owner database.db_go_var);
+       emit_stmts [] "\t\t" test.stmts;
+       Buffer.add_string body "\t})\n");
     Buffer.add_string body "}\n") tests;
   (* An `api-test` drives the emitted server IN PROCESS — no socket, so it is an ordinary
      `go test` case.  Racket dispatches the same way, so both backends exercise the same
@@ -8100,6 +8955,9 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
   let imports = ["fmt"; "os"]
     @ (if contains_go_code body "strconv." then ["strconv"] else [])
     @ (if contains_go_code body "math." then ["math"] else [])
+    @ (if contains_go_code body "pgx.CollectableRow" || contains_go_code body "pgx.Row"
+       then ["github.com/jackc/pgx/v5"] else [])
+    @ (if contains_go_code body "pgtype." then ["github.com/jackc/pgx/v5/pgtype"] else [])
     @ (if contains_go_code body "teslrt." then [module_path ^ "/internal/teslrt"] else [])
     (* A test block may construct a dependency's type or call into it directly, so the
        test file needs the same imports — and only the ones it actually references. *)
@@ -8355,6 +9213,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         List.iter (fun name ->
           match name with
           | "dbRead" | "dbWrite" -> ()
+          (* `DeleteResult` is runtime-provided, like `Maybe`: it crosses module boundaries, so
+             it cannot be emitted once per module that names it.  Registered below. *)
+          | "DeleteResult" | "DeleteResult(..)" | "NoRowDeleted" | "RowsDeleted" -> ()
           | other -> unsupported import.loc
             "Go backend does not support `Tesl.DB` export `%s` yet" other) exposed
       (* `Tesl.Database` names the DECLARATION form (`= Database { entities: … backend:
@@ -8362,9 +9223,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       | "Tesl.Database" ->
         List.iter (fun name ->
           match name with
-          (* The Postgres names are accepted as NAMES — they are only meaningful inside a
-             `database` declaration, and a declaration that selects that backend is
-             refused there. *)
+          (* These names are only meaningful inside a `database` declaration, which is where
+             the backend is read and where the connection is built. *)
           | "Database" | "Memory" | "DatabaseBackend" | "Postgres" | "PostgresConfig"
           | "PostgresConnection" | "TcpConnection" | "SocketConnection" -> ()
           | other -> unsupported import.loc
@@ -8477,8 +9337,13 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
          | Some op -> Hashtbl.replace proof_op_functions f.name op
          | None -> ())
       | _ -> ()) m.decls;
-    (* Databases are registered BEFORE anything is emitted, because `with database D` may
-       be written above D's own declaration. *)
+    (* Every package-level Go name is minted here, in declaration order, so the
+       emitted names are deterministic and provably distinct. *)
+    let taken : (string, unit) Hashtbl.t = Hashtbl.create 32 in
+    let package_ident name = unique_ident taken (go_ident ~exported:true name) in
+    (* Databases are registered BEFORE anything is emitted, because `with database D` may be
+       written above D's own declaration, and because an ENTITY has to know whether a
+       Postgres-backed database manages it before any of its queries are emitted. *)
     List.iter (function
       | DDatabase d ->
         let d = Desugar.desugar_database_config d in
@@ -8487,12 +9352,18 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | "" | "postgres" -> "postgres"
           | other -> other
         in
-        Hashtbl.replace types.databases d.name (backend, d.loc)
+        Hashtbl.replace types.databases d.name {
+          db_tesl_name = d.name;
+          db_backend = backend;
+          db_schema = d.schema;
+          db_entities = d.entities;
+          db_config = d.postgres;
+          db_go_var =
+            (if backend = "postgres" then package_ident (d.name ^ "Database") else "");
+          db_owner = package;
+          db_loc = d.loc;
+        }
       | _ -> ()) m.decls;
-    (* Every package-level Go name is minted here, in declaration order, so the
-       emitted names are deterministic and provably distinct. *)
-    let taken : (string, unit) Hashtbl.t = Hashtbl.create 32 in
-    let package_ident name = unique_ident taken (go_ident ~exported:true name) in
     List.iter (function
       | DType (TypeNewtype { name; base_type; secret; loc; _ }) ->
         let base = primitive_type_of_type_expr base_type in
@@ -8600,13 +9471,14 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         unsupported e.loc
           "Go backend cannot find the primary key `%s` among the fields of entity `%s`"
           e.primary_key e.name;
-      (* A UNIQUE index is a constraint the Memory backend ENFORCES on Racket (an insert
-         that violates it raises), so accepting one here without enforcing it would make
-         the two backends disagree about which programs run.  A plain index is a
-         performance hint with no observable effect, so it is simply ignored. *)
+      (* A UNIQUE index is a constraint the Memory backend ENFORCES on Racket (an insert that
+         violates it raises), so it is enforced here too — accepting one without enforcing it
+         would make the two backends disagree about which programs RUN, not merely about what
+         they answer.  A plain index is a performance hint with no observable effect on either
+         store, so it is carried for the schema and nothing else. *)
       List.iter (fun (index : entity_index) ->
-        if index.ix_unique then unsupported index.ix_loc
-          "Go backend does not support `unique index` on entity `%s` yet" e.name)
+        if index.ix_fields = [] then unsupported index.ix_loc
+          "Go backend: the index on entity `%s` lists no fields" e.name)
         e.indexes;
       if Hashtbl.mem types.newtypes e.name || Hashtbl.mem types.records e.name then
         unsupported e.loc "Go backend generated type name collision for `%s`" e.name;
@@ -8620,12 +9492,30 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         rec_loc = e.loc;
       } in
       Hashtbl.replace types.records e.name row;
+      (* The database that MANAGES this entity, found by asking each declaration which
+         entities it lists — the direction `dsl/sql.rkt` reads it in, and the reason an entity
+         needs no `database:` field of its own. *)
+      let managing =
+        Hashtbl.fold (fun _ (database : database_info) found ->
+          match found with
+          | Some _ -> found
+          | None ->
+            if database.db_backend = "postgres" && List.mem e.name database.db_entities
+            then Some database else None)
+          types.databases None
+      in
       Hashtbl.replace types.entities e.name {
         ent_tesl_name = e.name;
         ent_row = row;
         ent_table_var = package_ident (e.name ^ "Table");
         ent_owner = package;
         ent_primary_key = e.primary_key;
+        ent_table_name = e.table;
+        ent_indexes = e.indexes;
+        ent_db_types =
+          List.filter_map (fun (field : field_def) ->
+            Option.map (fun ty -> (field.name, ty)) field.db_type) e.fields;
+        ent_database = managing;
         ent_loc = e.loc;
       }) entity_forms;
     let tuple_imported = ref false in
@@ -8770,6 +9660,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       "Float.max",        [`Float; `Float], `Float, "teslrt.FloatMax";
       "Float.clamp",      [`Float; `Float; `Float], `Float, "teslrt.FloatClamp";
       "Float.sqrt",       [`Float], `Float, "teslrt.FloatSqrt";
+      "Float.pow",        [`Float; `Float], `Float, "teslrt.FloatPow";
       "Float.floor",      [`Float], `Int,   "teslrt.FloatFloor";
       "Float.ceil",       [`Float], `Int,   "teslrt.FloatCeil";
       "Float.round",      [`Float], `Int,   "teslrt.FloatRound";
@@ -9352,6 +10243,30 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             { var_ctor = "JobFailed"; var_tag = "teslrt.JobResultFailed";
               var_fields = ["job", TParam "Payload"; "error", TString];
               var_go_fields = ["job", "FailedJob"; "error", "FailedError"]; var_loc = loc };
+          ];
+          adt_loc = loc;
+          adt_builtin = true;
+        }
+      end) m.imports;
+    (* `DeleteResult` is what `deleteAndReturnResult` answers: `NoRowDeleted` or
+       `RowsDeleted n`.  Runtime-provided for the reason `Maybe` is, and registered on the
+       import that names it rather than unconditionally, so a module that never deletes with a
+       result carries no reference to it. *)
+    List.iter (fun (import : import_decl) ->
+      if import.module_name = "Tesl.DB" then begin
+        let loc = import.loc in
+        Hashtbl.replace types.adts "DeleteResult" {
+          adt_tesl_name = "DeleteResult";
+          adt_owner = "";
+          adt_go_name = "teslrt.DeleteResult";
+          adt_tag_type = "teslrt.DeleteResultTag";
+          adt_params = [];
+          adt_variants = [
+            { var_ctor = "NoRowDeleted"; var_tag = "teslrt.DeleteResultNoRowDeleted";
+              var_fields = []; var_go_fields = []; var_loc = loc };
+            { var_ctor = "RowsDeleted"; var_tag = "teslrt.DeleteResultRowsDeleted";
+              var_fields = ["count", TInt];
+              var_go_fields = ["count", "RowsDeletedCount"]; var_loc = loc };
           ];
           adt_loc = loc;
           adt_builtin = true;
@@ -10378,10 +11293,25 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         [ "teslrt.HashPassword"; "teslrt.CheckPassword"; "teslrt.NeedsRehash";
           "teslrt.PasswordHash" ]
     in
+    (* The PostgreSQL driver, on the same terms as the password dependency: Go has no Postgres
+       driver in its standard library, so a program that declares a Postgres-backed database
+       takes `github.com/jackc/pgx/v5` and a program that does not takes nothing.  Pinned here
+       and checked against `runtime/go/go.mod`/`go.sum` by a seam test, so a bump cannot
+       drift. *)
+    let postgres_runtime =
+      let mentions name =
+        contains_go_code source name
+        || (match tests_source with
+            | Some text -> contains_go_code text name
+            | None -> false)
+      in
+      List.exists mentions [ "teslrt.NewDatabase"; "teslrt.WithDatabase"; "teslrt.PgPlan" ]
+    in
     let dependency_requires =
-      if password_runtime then
-        "\nrequire golang.org/x/crypto v0.55.0\n\nrequire golang.org/x/sys v0.47.0 // indirect\n"
-      else ""
+      (if password_runtime then
+         "\nrequire golang.org/x/crypto v0.55.0\n\nrequire golang.org/x/sys v0.47.0 // indirect\n"
+       else "")
+      ^ (if postgres_runtime then postgres_dependency_go_mod else "")
     in
     let artifacts = [
       (* The go directive tracks the toolchain the gates pin (maintainer: use the latest
@@ -10402,8 +11332,10 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
                "package main\n\nimport (\n\t%s\n)\n\n// The entry point Tesl's `main` describes: its `App { … }` record was lowered into the\n// startup chain (activate each queue's workers, then serve), so this is the whole program.\nfunc main() {\n\t_ = %s.Main()\n}\n"
                (go_quote (module_path ^ "/internal/" ^ package)) package } ]
        else [])
-    @ (if password_runtime then
-           [ { path = "go.sum"; contents = password_dependency_go_sum } ]
+    @ (if password_runtime || postgres_runtime then
+           [ { path = "go.sum";
+               contents = (if password_runtime then password_dependency_go_sum else "")
+                          ^ (if postgres_runtime then postgres_dependency_go_sum else "") } ]
          else []) in
     let artifacts = match tests_source with
       | None -> artifacts
@@ -10446,6 +11378,10 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         (* `loadtest.go` imports `testing`, so it ships ONLY with a module that has load tests:
            the testing package has no place in a production binary. *)
         let load_test_only = [ "loadtest.go" ] in
+        (* The PostgreSQL half ships ONLY to a program that declares a Postgres-backed
+           database, for the reason the HTTP half does: it pulls a third-party driver and its
+           whole dependency chain into a binary that would otherwise require nothing. *)
+        let postgres_only = [ "postgres.go"; "database.go"; "dbquery.go" ] in
         let has_load_tests = match tests_source with
           | Some text -> contains_go_code text "teslrt.RunLoadTest"
           | None -> false
@@ -10453,6 +11389,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         artifacts @ List.filter_map (fun (name, contents) ->
           if (not serves_http) && List.mem name http_only then None
           else if (not has_load_tests) && List.mem name load_test_only then None
+          else if (not postgres_runtime) && List.mem name postgres_only then None
           else if name = "password.go" && not password_runtime then None
           else Some { path = "internal/teslrt/" ^ name; contents })
           Embedded_go_runtime.files

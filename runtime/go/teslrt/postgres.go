@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -40,13 +41,12 @@ import (
 //
 // A newtype takes its base's column type; a `Maybe X` column is X's type, nullable.
 //
-// NOT YET SHIPPED WITH AN EMITTED PROGRAM, deliberately. A declared database is inert on both
-// backends until something CONNECTS to it, and the only thing that connects is `with database D`
-// — every `with database` in the corpus names a Memory-backed database, and the emitter refuses
-// the Postgres case rather than silently reading the in-memory store. So this file is absent
-// from compiler/gen/gen_go_runtime.ml's list: it is verified here (postgres_test.go, against the
-// same shared cluster the Racket Postgres tests use) and joins an emitted project when the
-// emitter can route a query to it.
+// WHICH PROGRAMS GET THIS FILE. Only one that declares a Postgres-backed database: the driver
+// and its dependency chain have no place in a binary that never opens a connection, the same
+// argument that gates the HTTP half. A declared database is still INERT until something
+// connects — `with database D` is the only thing that does — so a `test` block over a
+// Postgres-backed entity runs against the in-memory table with no server anywhere, which is
+// the dispatch `database.go` performs.
 type PostgresConfig struct {
 	DBName   string
 	User     string
@@ -71,6 +71,18 @@ type PostgresColumn struct {
 type PostgresTable struct {
 	Name    string
 	Columns []PostgresColumn
+	// The declared UNIQUE indexes. A plain index is a performance hint with no observable
+	// effect and is not created here; a unique one is an INVARIANT, and the two backends have
+	// to agree about which programs run.
+	Unique []PostgresIndex
+}
+
+// PostgresIndex is one declared index: the name `dsl/sql.rkt` derives (`<table>_<cols>_idx`,
+// or an explicit `as "…"`) and the columns it covers. The NAME matters — a table shared with
+// the Racket backend must not end up with two indexes doing the same job.
+type PostgresIndex struct {
+	Name    string
+	Columns []string
 }
 
 // PostgresDB is a live pool plus the schema every statement is qualified with.
@@ -106,6 +118,22 @@ func OpenPostgres(config PostgresConfig, tables []PostgresTable) *PostgresDB {
 	db.bootstrap(ctx, tables)
 	postgresConnectOnce.Store(key, db)
 	return db
+}
+
+// PgPort reads a port out of the environment, falling back to the number the declaration
+// wrote. It is not `EnvInt`: a Tesl `Int` is unbounded and a port is an ordinary `int`, and a
+// value that is not a port at all is the declaration's fallback rather than a zero — a zero
+// port would silently become "let the OS choose", which is not what an unset variable means.
+func PgPort(name string, fallback int) int {
+	text := os.Getenv(name)
+	if text == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(text)
+	if err != nil || parsed <= 0 || parsed > 65535 {
+		return fallback
+	}
+	return parsed
 }
 
 func postgresDSN(config PostgresConfig) string {
@@ -171,6 +199,18 @@ func (db *PostgresDB) bootstrap(ctx context.Context, tables []PostgresTable) {
 		if _, err := db.pool.Exec(ctx, statement); err != nil {
 			panic("database: cannot create table " + table.Name + ": " + err.Error())
 		}
+		for _, index := range table.Unique {
+			columns := make([]string, 0, len(index.Columns))
+			for _, column := range index.Columns {
+				columns = append(columns, quoteIdentifier(column))
+			}
+			indexStatement := fmt.Sprintf("create unique index if not exists %s on %s (%s)",
+				quoteIdentifier(index.Name), db.QualifiedTable(table.Name),
+				strings.Join(columns, ", "))
+			if _, err := db.pool.Exec(ctx, indexStatement); err != nil {
+				panic("database: cannot create unique index " + index.Name + ": " + err.Error())
+			}
+		}
 	}
 }
 
@@ -195,12 +235,29 @@ func quoteIdentifier(name string) string {
 // Four executors, because a Tesl query is one of four shapes. Each takes SQL the EMITTER built,
 // so nothing here decides what a query says.
 
+// Every statement goes through `executor` rather than through the pool directly: inside a
+// `transaction { … }` the statements have to share ONE connection, and the transaction is the
+// only thing that knows which. Both *pgxpool.Pool and pgx.Tx answer this shape, so the choice
+// is made once, here, rather than at each of the executors below.
+type pgExecutor interface {
+	Query(ctx context.Context, sql string, arguments ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, arguments ...any) pgx.Row
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+}
+
+func (db *PostgresDB) executor() pgExecutor {
+	if transaction := currentTransaction(); transaction != nil {
+		return transaction
+	}
+	return db.pool
+}
+
 // PgQuery runs a select and scans every row through `scan`.
 func PgQuery[Row any](db *PostgresDB, statement string, arguments []any,
 	scan func(pgx.CollectableRow) (Row, error)) []Row {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	rows, err := db.pool.Query(ctx, statement, arguments...)
+	rows, err := db.executor().Query(ctx, statement, arguments...)
 	if err != nil {
 		panic("database: " + err.Error())
 	}
@@ -226,7 +283,7 @@ func PgQueryOne[Row any](db *PostgresDB, statement string, arguments []any,
 func PgExec(db *PostgresDB, statement string, arguments []any) int64 {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	tag, err := db.pool.Exec(ctx, statement, arguments...)
+	tag, err := db.executor().Exec(ctx, statement, arguments...)
 	if err != nil {
 		panic("database: " + err.Error())
 	}
@@ -237,12 +294,55 @@ func PgExec(db *PostgresDB, statement string, arguments []any) int64 {
 func PgCount(db *PostgresDB, statement string, arguments []any) Int {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	row := db.pool.QueryRow(ctx, statement, arguments...)
+	row := db.executor().QueryRow(ctx, statement, arguments...)
 	var counted int64
 	if err := row.Scan(&counted); err != nil {
 		panic("database: " + err.Error())
 	}
 	return FromInt64(counted)
+}
+
+// PgScalar is the aggregate executor: one row, one value, scanned by the emitter's own reader
+// because the column's type is the entity's rather than something this file can know.
+func PgScalar[Value any](db *PostgresDB, statement string, arguments []any,
+	scan func(pgx.Row) (Value, error)) Value {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	value, err := scan(db.executor().QueryRow(ctx, statement, arguments...))
+	if err != nil {
+		panic("database: " + err.Error())
+	}
+	return value
+}
+
+// PgSumMoney is `selectSum` over a Money column. The statement answers the total, the number of
+// DISTINCT currencies and one witness code in a single row, because the two refusals need those
+// facts and a second query could see a different set of rows than the sum did.
+//
+// A stored code that is not an ISO 4217 currency is data corruption or a schema written by an
+// incompatible build, and it traps rather than decoding into a half-formed Money — Racket's
+// `money-stored-currency` takes the same line.
+func PgSumMoney(db *PostgresDB, statement string, arguments []any, entity, field string) Money {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var total pgtype.Numeric
+	var distinct int64
+	var witness *string
+	if err := db.executor().QueryRow(ctx, statement, arguments...).
+		Scan(&total, &distinct, &witness); err != nil {
+		panic("database: " + err.Error())
+	}
+	currency := Currency{}
+	if witness != nil {
+		known := CurrencyFromCode(*witness)
+		if !known.IsSomething() {
+			panic("field " + field + " on entity " + entity + ": stored currency code " + *witness +
+				" is not a known ISO 4217 currency — the column holds corrupt data or was" +
+				" written by an incompatible schema")
+		}
+		currency = known.SomethingValue
+	}
+	return MoneySumResult(entity, field, PgIntOf(total), currency, int(distinct))
 }
 
 // PgTruncate empties a table, for a test block that starts from an empty store. It is the
@@ -251,7 +351,7 @@ func PgCount(db *PostgresDB, statement string, arguments []any) Int {
 func PgTruncate(db *PostgresDB, table string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if _, err := db.pool.Exec(ctx, "truncate table "+db.QualifiedTable(table)); err != nil {
+	if _, err := db.executor().Exec(ctx, "truncate table "+db.QualifiedTable(table)); err != nil {
 		// A table that does not exist yet is not an error here: a test may run before anything
 		// created it, and the bootstrap is what creates it.
 		if !strings.Contains(err.Error(), "does not exist") {
@@ -296,6 +396,25 @@ func PgIntOf(value pgtype.Numeric) Int {
 		return fromBig(scaled)
 	}
 	panic("database: a NUMERIC column holds a fractional value where Tesl expects an Int")
+}
+
+// PgNull binds a `Maybe X` column: Nothing is SQL NULL, Something is the bound value. The
+// binding of the inner value is the caller's, because only the emitter knows the column's type.
+func PgNull[T any](value Maybe[T], bind func(T) any) any {
+	if !value.IsSomething() {
+		return nil
+	}
+	return bind(value.SomethingValue)
+}
+
+// MaybeOfPointer reads a nullable column back: a NULL is Nothing, and anything else is decoded
+// by the caller's reader. The reader is a thunk rather than a value so the decode is not run on
+// the NULL — dereferencing the carrier there would panic.
+func MaybeOfPointer[Carrier any, Value any](carrier *Carrier, decode func() Value) Maybe[Value] {
+	if carrier == nil {
+		return Nothing[Value]()
+	}
+	return Something(decode())
 }
 
 // PgBigint binds a PosixMillis-shaped value, whose column is BIGINT.

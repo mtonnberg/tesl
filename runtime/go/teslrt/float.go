@@ -145,6 +145,23 @@ func FloatSqrt(value float64) float64 {
 	return math.Sqrt(value)
 }
 
+// FloatPow answers NaN wherever the result has no REAL value, which is every negative base with
+// a non-integer exponent. Racket's `expt` returns a COMPLEX number there — a value no Tesl Float
+// can hold, and a bug this port found in `tesl/float.rkt` (fixed to answer NaN as well).
+//
+// The guard is not decoration: C's `pow`, which `math.Pow` follows, makes two deliberate
+// exceptions — `pow(-1, ±Inf)` is 1 and `pow(-4, +Inf)` is +Inf — on the grounds that ±Inf is
+// "even". A Tesl Float is a real number and (-1)^∞ has no real value, so those answer NaN here
+// too, and the two backends agree at every input rather than at most of them.
+func FloatPow(base, exponent float64) float64 {
+	nonInteger := math.IsInf(exponent, 0) || math.IsNaN(exponent) ||
+		exponent != math.Trunc(exponent)
+	if base < 0 && nonInteger {
+		return math.NaN()
+	}
+	return math.Pow(base, exponent)
+}
+
 // FloatFromInt is exact up to 2^53 and rounds beyond it, like Racket's exact->inexact.
 func FloatFromInt(value Int) float64 {
 	return value.Float64()

@@ -345,3 +345,43 @@ func TestFloatKeyedCollectionsUseTheKeyComparator(t *testing.T) {
 		t.Errorf("re-inserting a NaN key must replace, got size %s", got)
 	}
 }
+
+// Float.pow is the one transcendental in the surface, and the interesting half of it is where
+// there is no REAL result: Racket's `expt` answers a complex number there (a bug this port
+// found and fixed) and C's `pow` answers 1 or +Inf for two "even infinity" cases. Both are NaN
+// here, and every expectation below was read off the fixed Racket runtime.
+func TestFloatPowMatchesRacket(t *testing.T) {
+	for _, want := range []struct {
+		base     float64
+		exponent float64
+		expected float64
+	}{
+		{2, 10, 1024},
+		{2, 0.5, 1.4142135623730951},
+		{0, 0, 1},
+		{-2, 3, -8},
+		{-1, -3, -1},
+		{-1, 1e300, 1}, // 1e300 IS an integer float, so the result is real
+		{0, -1, math.Inf(1)},
+		{math.Copysign(0, -1), -3, math.Inf(-1)},
+		{1e308, 2, math.Inf(1)},
+		{math.Copysign(0, -1), 0.5, 0}, // -0.0 is not negative, so this one has a real result
+	} {
+		if got := FloatPow(want.base, want.exponent); got != want.expected {
+			t.Fatalf("%v ^ %v = %v, Racket says %v", want.base, want.exponent, got, want.expected)
+		}
+	}
+	// No real result: a negative base with a non-integer exponent, ±Inf and NaN included.
+	for _, want := range [][2]float64{
+		{-8, 1.0 / 3.0}, {-2, 2.5}, {-1, math.Inf(1)}, {-1, math.Inf(-1)},
+		{-4, math.Inf(1)}, {-1, math.NaN()},
+	} {
+		if got := FloatPow(want[0], want[1]); !math.IsNaN(got) {
+			t.Fatalf("%v ^ %v = %v, want NaN", want[0], want[1], got)
+		}
+	}
+	// A NaN base is not negative, so the ordinary rules apply.
+	if got := FloatPow(math.NaN(), 0); got != 1 {
+		t.Fatalf("NaN ^ 0 = %v, Racket says 1.0", got)
+	}
+}

@@ -239,7 +239,7 @@ func TestRoundHalfEven(t *testing.T) {
 // The Money column sum: one pass, the currency adopted from the first matching row, and the
 // two refusals Racket raises rather than an answer nobody can act on.
 func TestTableSumMoney(t *testing.T) {
-	table := NewTable[Money]("orders")
+	table := NewTable[Money]()
 	all := func(Money) bool { return true }
 	itself := func(amount Money) Money { return amount }
 

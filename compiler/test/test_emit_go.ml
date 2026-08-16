@@ -686,6 +686,12 @@ let stdlib_only_vulnerability output =
   in
   contains "Your code is affected by"
   && contains "from the Go standard library"
+  (* The affected-by sentence names every source it found, so a DEPENDENCY's vulnerability
+     that the emitted code actually calls appears as "… and 1 from module github.com/…"
+     alongside the standard library's.  Excluding only the "modules you require" wording
+     would let that through, since govulncheck reserves that phrase for vulnerabilities it
+     found but could NOT reach. *)
+  && not (contains "from module ")
   && not (contains "vulnerability from modules you require")
   && not (contains "vulnerabilities from modules you require")
 
@@ -1105,19 +1111,35 @@ fn firstOr(r: Result Int Int) -> Int =
    | Compile.GoFailure diagnostics ->
      failf "Result failed to compile: %s"
        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics)));
-  (* The point of this case survives: the runtime ADTs are whitelisted BY NAME, not
-     "any stdlib ADT".  One that has no runtime type behind it still fails closed. *)
-  let unsupported = {|module DeleteResultUser exposing [count]
+  (* `DeleteResult` joined them when `deleteAndReturnResult` landed, so it compiles too. *)
+  let delete_result = {|module DeleteResultUser exposing [count]
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [DeleteResult(..)]
-fn count(r: DeleteResult) -> Int = 0
+fn count(r: DeleteResult) -> Int =
+  case r of
+    RowsDeleted n -> n
+    _ -> 0
 |} in
-  match Compile.compile_go_source "<go-delete-result>" unsupported with
+  (match Compile.compile_go_source "<go-delete-result>" delete_result with
+   | Compile.GoSuccess _ -> ()
+   | Compile.GoFailure diagnostics ->
+     failf "DeleteResult failed to compile: %s"
+       (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics)));
+  (* The point of this case survives: the runtime ADTs are whitelisted BY NAME, not
+     "any stdlib ADT".  One that has no runtime type behind it still fails closed —
+     `TimeZone` is 489 IANA constructors and its own TZif reader, and none of it is built. *)
+  let unsupported = {|module ZoneUser exposing [zoneName]
+import Tesl.Prelude exposing [String]
+import Tesl.Time exposing [TimeZone]
+fn zoneName(z: TimeZone) -> String = "z"
+|} in
+  match Compile.compile_go_source "<go-time-zone>" unsupported with
   | Compile.GoSuccess _ -> fail "an unsupported stdlib ADT emitted Go artifacts"
   | Compile.GoFailure diagnostics ->
     check bool "an unlisted stdlib ADT is refused" true
       (List.exists (fun (d : Compile.diagnostic) ->
-         d.source = "go-emitter" && contains d.message "`Tesl.DB` export") diagnostics)
+         d.source = "go-emitter" && contains d.message "`Tesl.Time` export `TimeZone`")
+        diagnostics)
 
 let string_source = {|module GoStrings exposing [size, shout, initial, parsed, found, label, checked]
 import Tesl.Prelude exposing [Bool, Int, String]
@@ -3124,9 +3146,10 @@ let test_go_api_tests () =
 let db_source = {|module GoDb exposing [orderedNames, titleOf]
 
 import Tesl.Prelude exposing [Bool(..), Int, String, List, Unit]
+import Tesl.Int exposing [Int.toString]
 import Tesl.List exposing [List.length, List.map, List.head]
 import Tesl.Maybe exposing [Maybe(..)]
-import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.DB exposing [dbRead, dbWrite, DeleteResult(..)]
 import Tesl.Database exposing [Database, Memory]
 
 type Sku = String
@@ -3228,6 +3251,15 @@ fn eitherName(left: String, right: String) -> Int
     selectCount i from Item where i.name == left || i.name == right
   }
 
+fn describeDelete(name: String) -> String
+  requires [dbWrite] =
+  with database ProbeDb {
+    let removed = deleteAndReturnResult i from Item where i.name == name
+    case removed of
+      RowsDeleted n -> Int.toString n
+      _ -> "none"
+  }
+
 fn seed() -> Unit
   requires [dbWrite] =
   with database ProbeDb {
@@ -3283,6 +3315,10 @@ test "update and delete change what queries see" requires [dbRead, dbWrite] {
   }
   expect countAbove 19 == 1
   expect titleOf "u2" == "none"
+  # `deleteAndReturnResult` says whether anything WENT, which is not the same as a count of
+  # zero: the caller reads it as a case.
+  expect describeDelete "no-such-name" == "none"
+  expect describeDelete "renamed" == "1"
 }
 |}
 
@@ -3305,9 +3341,10 @@ let test_db_with_go () =
     (contains module_go "teslrt.TableSelectOne(ItemTable, func(i Item) bool {");
   check bool "and the clause itself is the predicate's body" true
     (contains module_go "return (i.Id == wanted)");
+  (* The comparator is pre-split too, for the same reason the predicate is. *)
   check bool "`order … desc` swaps the comparison rather than sorting twice" true
     (contains module_go
-       "func(teslLeft, teslRight Item) bool { return (teslrt.Compare(teslRight.Qty, teslLeft.Qty) < 0) }, 0, -1)");
+       "return (teslrt.Compare(teslRight.Qty, teslLeft.Qty) < 0)\n\t\t}, 0, -1)");
   check bool "selectSum folds the column with its own addition" true
     (contains module_go "teslrt.TableFold(ItemTable,");
   check bool "`like` is a matcher, never a regular expression" true
@@ -3321,17 +3358,22 @@ let test_db_with_go () =
     (contains tests_go "teslNext := i");
   check bool "and reports nothing back, because `update` is a statement" true
     (contains tests_go "_ = teslrt.TableUpdate(ItemTable,");
+  (* `deleteAndReturnResult` answers a runtime-provided ADT rather than a count: "nothing
+     matched" is an outcome, not the number zero. *)
+  check bool "`deleteAndReturnResult` answers a DeleteResult" true
+    (contains module_go "teslrt.TableDeleteResult(ItemTable,");
   (* `go test` RUNS the two test blocks, so a wrong answer fails here. *)
   gate_emitted "tesl-go-db" emitted
 
-(* A `database` declaration is INERT on both backends: a query reaches a declared database
-   only inside `with database D`, and everything outside one runs against the entity's own
-   store (Racket binds `current-database-runtime` in `call-with-database` and nowhere else,
-   so its emitted `define-database` connects to nothing until then).  A Postgres-backed
-   declaration therefore has to COMPILE and answer from the in-memory store — which is what
-   the corpus's Postgres files do, `example/learn/lesson41-load-tests.tesl` included — and
-   the Racket oracle on the same source is what proves the two agree.  The refusal that
-   guards the other half is `with database` on such a database, above. *)
+(* A Postgres-backed entity is emitted TWICE: as the Go predicate the in-memory table needs,
+   and as the statement the server needs.  Which one runs is decided at RUN time by whether
+   something has connected — Racket binds `current-database-runtime` in `call-with-database`
+   and nowhere else, so a query outside one answers from the entity's own store even when its
+   database names a server.  That is not a technicality: it is what lets the `test` block
+   below run with no cluster anywhere, and it is what the corpus's Postgres files rely on
+   (`example/learn/lesson41-load-tests.tesl` included).  The Racket oracle on this same source
+   is what proves the two agree about the unbound half; `database_test.go` in the runtime
+   proves the bound half against a live cluster. *)
 let postgres_declaration_source = {|module GoPostgresDeclaration exposing [titleOf, countBooks]
 
 import Tesl.Prelude exposing [Int, String, Unit]
@@ -3347,10 +3389,15 @@ import Tesl.Database exposing [
   SocketConnection,
 ]
 
+type BookStatus
+  = Draft
+  | Published
+
 entity Book table "pg_books" primaryKey id {
   id: String
   title: String
   pages: Int
+  status: BookStatus
 }
 
 database Shelf = Database {
@@ -3367,9 +3414,19 @@ database Shelf = Database {
   })
 }
 
-fn shelve(id: String, title: String, pages: Int) -> Book
+fn shelve(id: String, title: String, pages: Int, status: BookStatus) -> Book
   requires [dbWrite] =
-  insert Book { id: id, title: title, pages: pages }
+  insert Book { id: id, title: title, pages: pages, status: status }
+
+# An ADT column round-trips through the same wire shape a response body uses.
+fn statusOf(wanted: String) -> String
+  requires [dbRead] =
+  case selectOne b from Book where b.id == wanted of
+    Nothing -> "none"
+    Something b ->
+      case b.status of
+        Draft -> "draft"
+        Published -> "published"
 
 fn titleOf(wanted: String) -> String
   requires [dbRead] =
@@ -3382,28 +3439,228 @@ fn countBooks() -> Int
   selectCount b from Book
 
 test "a Postgres declaration leaves the store where it was" requires [dbRead, dbWrite] {
-  let _ = shelve "b-1" "The Art of Tesl" 320
-  let _ = shelve "b-2" "Proofs in Practice" 210
+  let _ = shelve "b-1" "The Art of Tesl" 320 Published
+  let _ = shelve "b-2" "Proofs in Practice" 210 Draft
   expect titleOf "b-1" == "The Art of Tesl"
   expect titleOf "b-404" == "none"
   expect countBooks () == 2
+  expect statusOf "b-1" == "published"
+  expect statusOf "b-2" == "draft"
 }
 |}
 
 let test_postgres_declaration_with_go () =
   let emitted = emit_ok "<go-pg-decl>" postgres_declaration_source in
   let module_go = artifact "internal/teslmodgopostgresdeclaration/module.go" emitted in
-  (* The declaration emits nothing of its own: the store is still the entity's table, and no
-     connection is opened for a database nothing connects to. *)
+  (* The entity keeps its in-memory table — that is the store a query answers from until
+     something connects — and the declaration adds the connection beside it. *)
   check bool "the entity still keeps its in-memory table" true
     (contains module_go "var BookTable = teslrt.NewTable[Book]()");
-  check bool "and no connection is opened" false
-    (contains module_go "OpenPostgres" || contains module_go "pgx");
-  List.iter (fun (artifact_path, contents) ->
-    if artifact_path = "go.mod" && contains contents "pgx" then
-      failf "a program that connects to nothing required the Postgres driver")
-    (List.map (fun (a : Emit_go.artifact) -> (a.path, a.contents)) emitted);
+  check bool "the declaration becomes one database value" true
+    (contains module_go "var ShelfDatabase = teslrt.NewDatabase(");
+  (* The COLUMN types are the Racket runtime's, because a table created by one backend has to
+     be readable by the other: an unbounded `Int` is NUMERIC, never BIGINT. *)
+  check bool "and the tables it bootstraps" true
+    (contains module_go "teslrt.PostgresTableOf(\"pg_books\",");
+  check bool "the primary key carries its constraint" true
+    (contains module_go "teslrt.PostgresColumnOf(\"id\", \"TEXT\", true, false)");
+  check bool "and an unbounded Int is NUMERIC, never BIGINT" true
+    (contains module_go "teslrt.PostgresColumnOf(\"pages\", \"NUMERIC\", false, false)");
+  (* An ADT column is JSONB holding the value's own wire shape, which is what `dsl/sql.rkt`
+     writes — the two backends have to be able to read each other's rows. *)
+  check bool "an ADT column is JSONB" true
+    (contains module_go "teslrt.PostgresColumnOf(\"status\", \"JSONB\", false, false)");
+  check bool "and reads back through a tag lookup" true
+    (contains module_go "func teslColumnBookStatus(teslText []byte) BookStatus {");
+  (* An unknown tag TRAPS: it means the column holds a value this build has no constructor
+     for, and half-reading it would be worse than not reading it. *)
+  check bool "an unknown tag traps rather than decoding to a default" true
+    (contains module_go "column holds an unknown tag");
+  (* Both forms of the query, at one call site. *)
+  check bool "a select carries the predicate and the statement" true
+    (contains module_go "teslrt.DbSelectOne(ShelfDatabase, BookTable, func(b Book) bool {");
+  check bool "the statement names the schema-qualified table" true
+    (contains module_go
+       {|select \"id\", \"title\", \"pages\", \"status\" from \"gopgdecl\".\"pg_books\" where \"id\" = $1 limit 1|});
+  (* No value is ever in the TEXT: an operand is a placeholder and its argument travels
+     separately, so nothing a request sends can change what a statement says. *)
+  check bool "and binds its operand rather than interpolating it" true
+    (contains module_go "return []any{wanted}");
+  (* The count aggregates in the DATABASE rather than shipping rows here to be counted. *)
+  check bool "a count aggregates on the server" true
+    (contains module_go {|select count(*) from \"gopgdecl\".\"pg_books\"|});
+  (* One scanner per entity, so the column order a select asks for and the order the scanner
+     reads can only be the same order. *)
+  check bool "one scanner reads the rows back" true
+    (contains module_go "func teslScanBook(teslRow pgx.CollectableRow) (Book, error) {");
+  check bool "an Int column travels as a NUMERIC, not through int64" true
+    (contains module_go "teslrt.PgIntOf(teslColumn2)");
+  (* The driver ships with the program that needs it, and only with it. *)
+  let go_mod = artifact "go.mod" emitted in
+  check bool "the driver is required, pinned" true
+    (contains go_mod "require github.com/jackc/pgx/v5 v5.10.0");
+  check bool "and its checksums travel with it" true
+    (contains (artifact "go.sum" emitted) "github.com/jackc/pgx/v5 v5.10.0/go.mod h1:");
+  check bool "the Postgres runtime ships too" true
+    (List.exists (fun (a : Emit_go.artifact) -> a.path = "internal/teslrt/dbquery.go") emitted);
   gate_emitted "tesl-go-pg-decl" emitted
+
+
+(* ─── Against a live server ───────────────────────────────────────────────────
+   Everything above ASSERTS the statements the emitter builds; this RUNS them.  A typo in a
+   generated statement reads perfectly well in an assertion and fails only when PostgreSQL
+   parses it, so the SQL half of this backend is not proven by text comparison — it is proven
+   by a round trip.
+
+   `test "…" with database D` is the header that BINDS D for the block, so the block's queries
+   reach the server rather than the in-memory table.  The configuration reads the same
+   environment ci.sh sets for the Racket Postgres tests, which is what lets ONE cluster serve
+   both backends and the oracle compare them on the same rows.  With no cluster configured the
+   case skips: a developer without a server still gets everything above. *)
+let postgres_live_source = {|module GoPostgresLive exposing [titleOf, countBooks]
+
+import Tesl.Prelude exposing [Bool(..), Int, String, Unit]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [
+  Database,
+  DatabaseBackend,
+  Postgres,
+  Memory,
+  PostgresConfig,
+  TcpConnection,
+  SocketConnection,
+]
+
+type Shelf
+  = Fiction
+  | Reference
+
+entity LiveBook table "live_books" primaryKey id {
+  id: String
+  title: String
+  pages: Int
+  shelf: Shelf
+  retired: Bool
+}
+
+database LiveDb = Database {
+  schema: "goliveprobe"
+  entities: [LiveBook]
+  backend: Postgres (PostgresConfig {
+    dbName: env "TESL_TEST_POSTGRES_SHARED_ADMIN_DATABASE"
+    user: env "TESL_TEST_POSTGRES_SHARED_USER"
+    password: env "PGPASSWORD"
+    connection: TcpConnection {
+      host: env "TESL_TEST_POSTGRES_SHARED_HOST"
+      port: envInt "TESL_TEST_POSTGRES_SHARED_PORT" 5432
+    }
+  })
+}
+
+fn store(id: String, title: String, pages: Int, shelf: Shelf, retired: Bool) -> LiveBook
+  requires [dbWrite] =
+  insert LiveBook { id: id, title: title, pages: pages, shelf: shelf, retired: retired }
+
+fn titleOf(wanted: String) -> String
+  requires [dbRead] =
+  case selectOne b from LiveBook where b.id == wanted of
+    Nothing -> "none"
+    Something b -> b.title
+
+fn countBooks() -> Int
+  requires [dbRead] =
+  selectCount b from LiveBook
+
+fn countRetired() -> Int
+  requires [dbRead] =
+  selectCount b from LiveBook where b.retired == True
+
+fn totalPages() -> Int
+  requires [dbRead] =
+  selectSum b.pages from LiveBook
+
+fn longest() -> Int
+  requires [dbRead] =
+  case selectMax b.pages from LiveBook of
+    Nothing -> 0
+    Something pages -> pages
+
+fn titlesByPages() -> Int
+  requires [dbRead] =
+  selectCount b from LiveBook where b.pages > 250
+
+fn shelfOf(wanted: String) -> String
+  requires [dbRead] =
+  case selectOne b from LiveBook where b.id == wanted of
+    Nothing -> "none"
+    Something b ->
+      case b.shelf of
+        Fiction -> "fiction"
+        Reference -> "reference"
+
+test "a round trip through the server answers what it stored" with database LiveDb requires [dbRead, dbWrite] {
+  delete b from LiveBook
+  let _ = store "l-1" "The Art of Tesl" 320 Fiction False
+  let _ = store "l-2" "Proofs in Practice" 210 Reference True
+  expect titleOf "l-1" == "The Art of Tesl"
+  expect titleOf "l-404" == "none"
+  expect countBooks () == 2
+  expect countRetired () == 1
+  expect totalPages () == 530
+  expect longest () == 320
+  expect titlesByPages () == 1
+  # An ADT column round-trips through the same wire shape a response body uses.
+  expect shelfOf "l-1" == "fiction"
+  expect shelfOf "l-2" == "reference"
+  update b in LiveBook
+    where b.id == "l-2"
+    set b.title = "Proofs, Revised"
+    set b.pages = 240
+  expect titleOf "l-2" == "Proofs, Revised"
+  expect totalPages () == 560
+  delete b from LiveBook where b.retired == True
+  expect countBooks () == 1
+  expect titleOf "l-2" == "none"
+  # An aggregate over no rows: a sum is zero, a max is Nothing.
+  delete b from LiveBook
+  expect countBooks () == 0
+  expect totalPages () == 0
+  expect longest () == 0
+}
+|}
+
+(* The cluster ci.sh starts, as an environment for a subprocess.  Absent, the two cases below
+   skip rather than fail — the same reading `runtime/go/teslrt/postgres_test.go` takes. *)
+let live_postgres_env () =
+  let read name = Option.map (fun value -> name ^ "=" ^ value) (Sys.getenv_opt name) in
+  match read "TESL_TEST_POSTGRES_SHARED_HOST", read "TESL_TEST_POSTGRES_SHARED_PORT",
+        read "TESL_TEST_POSTGRES_SHARED_USER" with
+  | Some host, Some port, Some user ->
+    Some ([host; port; user]
+          @ [Option.value (read "TESL_TEST_POSTGRES_SHARED_ADMIN_DATABASE")
+               ~default:"TESL_TEST_POSTGRES_SHARED_ADMIN_DATABASE=postgres"]
+          @ (match read "PGPASSWORD" with Some binding -> [binding] | None -> []))
+  | _ -> None
+
+let test_postgres_live_with_go () =
+  match live_postgres_env () with
+  | None ->
+    Printf.printf "SKIP: no shared PostgreSQL cluster configured (TESL_TEST_POSTGRES_SHARED_*)\n%!"
+  | Some env ->
+    let emitted = emit_ok "<go-pg-live>" postgres_live_source in
+    let tests_go = artifact "internal/teslmodgopostgreslive/module_test.go" emitted in
+    (* The header BINDS: without this the block would run against the in-memory table and pass
+       while touching no server at all, which is the one way this case could lie. *)
+    check bool "the test block binds the database for its whole body" true
+      (contains tests_go "teslrt.WithDatabase(LiveDbDatabase, func() {");
+    gate_emitted ~env "tesl-go-pg-live" emitted
+
+let test_postgres_live_oracle () =
+  match live_postgres_env () with
+  | None ->
+    Printf.printf "SKIP: no shared PostgreSQL cluster configured (TESL_TEST_POSTGRES_SHARED_*)\n%!"
+  | Some env -> racket_behavior_oracle ~env "<go-pg-live-oracle>" postgres_live_source ()
 
 let test_unsupported_database_forms_fail_closed () =
   let expect_go_error name source needle =
@@ -3437,21 +3694,8 @@ fn probe() -> List Item
   }
 |} entity_extra backend body
   in
-  (* The DECLARATION of a Postgres database is fine — it is inert on both backends, see the
-     case below — but `with database` is where the backend becomes observable: running that
-     body against the in-memory store would answer from a different store than the same
-     program does on Racket, which is a silent substitution rather than a missing feature. *)
-  expect_go_error "postgres-with-database"
-    (program ~entity_extra:""
-       ~backend:"Postgres (PostgresConfig {\n    dbName: \"x\"\n    user: \"u\"\n    password: \"p\"\n    connection: TcpConnection {\n      host: \"localhost\"\n      port: 5432\n    }\n  })"
-       ~body:"select i from Item")
-    "`with database BadDb` on a Postgres-backed database";
   (* A UNIQUE index is ENFORCED by the Racket memory backend, so accepting one without
      enforcing it would make the two backends run different programs. *)
-  expect_go_error "unique-index"
-    (program ~entity_extra:"\n  unique index [qty]" ~backend:"Memory"
-       ~body:"select i from Item")
-    "unique index";
   expect_go_error "inner-join"
     (program ~entity_extra:"" ~backend:"Memory"
        ~body:"select i from Item innerJoin Item on i.id Item.id")
@@ -7082,10 +7326,13 @@ test "quantities convert and divide" {
 let test_money_with_go () =
   let emitted = emit_ok "<go-money>" money_source in
   let module_go = artifact "internal/teslmodgomoney/module.go" emitted in
+  let tests_go = artifact "internal/teslmodgomoney/module_test.go" emitted in
   (* A per-currency constructor bakes its ISO code and its minor-digit count, both read from
-     the compiler's own currency table — the runtime looks nothing up. *)
+     the compiler's own currency table — the runtime looks nothing up.  The constructor is
+     written in the TEST block (a `Money` reaches the functions as a parameter), so that is
+     where the baked call lands. *)
   check bool "a money constructor bakes its currency" true
-    (contains module_go "teslrt.MoneyOf(teslrt.FromInt64(1999), \"USD\", 2)");
+    (contains tests_go "teslrt.MoneyOf(teslrt.FromInt64(1999), \"USD\", 2)");
   check bool "and a bare currency is a value, not a call" true
     (contains module_go "teslrt.CurrencyOf(\"USD\", 2)");
   (* An integer scale is exact; a fractional one rounds and is a different function. *)
@@ -7097,8 +7344,10 @@ let test_money_with_go () =
      rescale. *)
   check bool "a rate times a quantity materialises money" true
     (contains module_go "teslrt.MoneyRateMul(");
+  (* The rate itself is BUILT in the test block — a function takes one as a parameter — so the
+     baked label lands there, beside the currency the constructor bakes. *)
   check bool "a per-hour rate bakes its label" true
-    (contains module_go "teslrt.MoneyRateOfLabel(");
+    (contains tests_go "teslrt.MoneyRateOfLabel(");
   (* A quantity is a float64 with a dimension the compiler kept: the arithmetic is ordinary. *)
   check bool "quantity division is plain float arithmetic" true
     (contains module_go "(distance / elapsedNonZero)");
@@ -7171,7 +7420,8 @@ let test_property_with_go () =
     (contains tests_go "SmallInt(teslrt.FromInt64(int64(teslPropRun");
   (* A `where` clause SKIPS the run rather than failing it: the guard says which values the
      property is about, so a value outside it is not a counterexample. *)
-  check bool "a where clause guards the check" true (contains tests_go "\tif (low <= high)");
+  check bool "a where clause guards the check" true
+    (contains tests_go "\tif teslrt.Compare(low, high) <= 0 {");
   (* The failing BINDING is reported, not just the property's name. *)
   check bool "a failure names the values it failed on" true
     (contains tests_go "failed (x=%v, y=%v)");
@@ -7797,6 +8047,9 @@ let () =
       test_case "Memory-backend databases" `Slow test_db_with_go;
       test_case "databases behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-db-oracle>" db_source);
+      test_case "a Postgres round trip" `Slow test_postgres_live_with_go;
+      test_case "a Postgres round trip behaves the same on Racket" `Slow
+        test_postgres_live_oracle;
       test_case "Tesl.Cache" `Slow test_cache_with_go;
       test_case "caches behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-cache-oracle>" cache_source);
@@ -7830,8 +8083,8 @@ let () =
       test_case "container and Either leaves" `Slow test_leaves2_with_go;
       test_case "container and Either leaves behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-leaves2-oracle>" leaves2_source);
-      test_case "a Postgres declaration is inert" `Slow test_postgres_declaration_with_go;
-      test_case "an inert Postgres declaration behaves the same on Racket" `Slow
+      test_case "a Postgres-backed entity" `Slow test_postgres_declaration_with_go;
+      test_case "a Postgres-backed entity behaves the same on Racket" `Slow
         (racket_behavior_oracle "<go-pg-decl-oracle>" postgres_declaration_source);
       test_case "unsupported database forms fail closed" `Quick
         test_unsupported_database_forms_fail_closed;
