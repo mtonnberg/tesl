@@ -27,7 +27,8 @@ func TestSubjectKeyIsInjectiveAcrossIssuers(t *testing.T) {
 	if left == right {
 		t.Error("two different (issuer, subject) pairs produced the same key")
 	}
-	if ssoSubjectKey("https://a", "x") != ssoSubjectKey("https://a", "x") {
+	issuer, subject := "https://a", "x"
+	if ssoSubjectKey(issuer, subject) != ssoSubjectKey(issuer, subject) {
 		t.Error("the same pair produced two keys")
 	}
 	if strings.Contains(ssoSubjectKey("https://a", "ada@example.com"), "@") {
