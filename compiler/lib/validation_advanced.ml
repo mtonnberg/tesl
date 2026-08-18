@@ -694,6 +694,77 @@ let check_group_by_rules (decls : top_decl list) : validation_error list =
     Decide-by-resolution (as everywhere else on this surface): a user-declared
     `fn select` — or any local binding of a SQL op name — stands the rule down
     for that name. *)
+(** `limit` / `offset` on a `selectOne`, and on an AGGREGATE, decide nothing.
+
+    `selectOne` answers the first matching row, which `order` decides; a `limit` on top of
+    that cannot change the answer, and an `offset` silently would — it would name a DIFFERENT
+    row while reading like a no-op. An aggregate answers one value over the whole matching
+    set, so neither clause has anything to apply to.
+
+    Both were accepted, and the two backends then disagreed about the SAME program: the
+    Racket runtime reads only the predicates and the order for these forms (`select-one` in
+    `dsl/sql.rkt` never looks at limit/offset), so the clause was silently dropped, while the
+    Go emitter refused to emit a query whose clause it could not honour. A clause that means
+    nothing is a mistake in the program, so it is a compile error for both. *)
+let check_meaningless_limit_offset (decls : top_decl list) : validation_error list =
+  let errors = ref [] in
+  let seen : (Location.loc, unit) Hashtbl.t = Hashtbl.create 16 in
+  let head_of kind = match kind with
+    | Sql_query.SelectOne -> Some "selectOne"
+    | Sql_query.SelectCount -> Some "selectCount"
+    | Sql_query.SelectSum _ -> Some "selectSum"
+    | Sql_query.SelectMax _ -> Some "selectMax"
+    | Sql_query.SelectMin _ -> Some "selectMin"
+    | Sql_query.SelectCountBy -> Some "selectCountBy"
+    | Sql_query.SelectSumBy _ -> Some "selectSumBy"
+    | Sql_query.SelectMany -> None
+  in
+  let visit expr =
+    Ast_visitor.iter (fun node ->
+      match Sql_query.extract_select_query node with
+      | None -> ()
+      | Some (seed, _) ->
+        let loc = Checker.expr_loc node in
+        if not (Hashtbl.mem seen loc) then begin
+          Hashtbl.add seen loc ();
+          (* `order` decides WHICH row `selectOne` answers, so it is meaningful there and
+             meaningless on an aggregate — the clause list differs by form. *)
+          let offending = match seed.kind with
+            | Sql_query.SelectMany -> None
+            | Sql_query.SelectOne ->
+              if seed.limit <> None then Some "limit"
+              else if seed.offset <> None then Some "offset" else None
+            | _ ->
+              if seed.limit <> None then Some "limit"
+              else if seed.offset <> None then Some "offset"
+              else if seed.order <> None then Some "order" else None
+          in
+          match head_of seed.kind, offending with
+          | None, _ | _, None -> ()
+          | Some head, Some clause ->
+            let why = match seed.kind with
+              | Sql_query.SelectOne ->
+                "`selectOne` answers the first matching row, which `order` decides"
+              | _ -> "an aggregate answers one value over the whole matching set"
+            in
+            errors := make_error loc
+              ~hint:(Printf.sprintf
+                "drop the `%s`; to read a bounded WINDOW of rows use `select` with `order` \
+                 and `limit`, then take what you need from the list" clause)
+              (Printf.sprintf
+                 "`%s` on `%s` decides nothing: %s, so the clause would be silently dropped"
+                 clause head why)
+              :: !errors
+        end)
+      expr
+  in
+  List.iter (function
+    | DFunc (fd : func_decl) -> visit fd.body
+    | DTest (t : test_form) ->
+      List.iter (fun stmt -> List.iter visit (Ast.test_stmt_exprs stmt)) t.stmts
+    | _ -> ()) decls;
+  List.rev !errors
+
 let check_sql_query_shape (decls : top_decl list) : validation_error list =
   let errors = ref [] in
   let emit err = errors := err :: !errors in

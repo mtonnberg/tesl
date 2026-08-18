@@ -3464,7 +3464,8 @@ let test_postgres_declaration_with_go () =
 let postgres_live_source = {|module GoPostgresLive exposing [titleOf, countBooks]
 
 import Tesl.Prelude exposing [Bool(..), Int, List, String, Unit]
-import Tesl.List exposing [List.length]
+import Tesl.List exposing [List.length, List.map]
+import Tesl.Tuple exposing [Tuple2, Tuple2.first, Tuple2.second]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Database exposing [
@@ -3554,6 +3555,33 @@ fn titlesByPages() -> Int
   requires [dbRead] =
   selectCount b from LiveBook where b.pages > 250
 
+# `upsert` on the SERVER is one statement — `insert … on conflict (id) do update set …` —
+# where the memory path finds, merges and stores. The two agree about the outcome, which is
+# what a test that runs on either store asserts.
+fn stash(id: String, title: String, pages: Int) -> Unit requires [dbWrite] =
+  upsert LiveBook {
+    id: id, title: title, pages: pages, shelf: Fiction, retired: False, authorId: "a-1"
+  } onConflict [id] doUpdate [title, pages]
+
+# A grouped aggregate GROUPS on the server: `select "authorId", coalesce(sum("pages"), 0) …
+# group by 1 order by 1`, one row per bucket in ascending key order — the same order the
+# memory fold answers in.
+fn pagesByAuthor() -> List (Tuple2 String Int) requires [dbRead] =
+  selectSumBy b.pages from LiveBook groupBy b.authorId
+
+fn booksByAuthor() -> List (Tuple2 String Int) requires [dbRead] =
+  selectCountBy b from LiveBook groupBy b.authorId
+
+fn authorsSeen() -> List String requires [dbRead] = List.map firstOfPair (pagesByAuthor ())
+
+fn firstOfPair(row: Tuple2 String Int) -> String = Tuple2.first row
+
+fn pagesSeen() -> List Int requires [dbRead] = List.map secondOfPair (pagesByAuthor ())
+
+fn secondOfPair(row: Tuple2 String Int) -> Int = Tuple2.second row
+
+fn countsSeen() -> List Int requires [dbRead] = List.map secondOfPair (booksByAuthor ())
+
 fn shelfOf(wanted: String) -> String
   requires [dbRead] =
   case selectOne b from LiveBook where b.id == wanted of
@@ -3593,6 +3621,22 @@ test "a round trip through the server answers what it stored" with database Live
   expect countBooks () == 0
   expect totalPages () == 0
   expect longest () == 0
+  # `upsert`: the first call inserts, the second updates the columns it names and leaves the
+  # rest — on the server that is ON CONFLICT DO UPDATE, and the row is read back to prove it.
+  let _ = stash "u-1" "First" 100
+  expect titleOf "u-1" == "First"
+  expect totalPages () == 100
+  let _ = stash "u-1" "Second" 250
+  expect countBooks () == 1
+  expect titleOf "u-1" == "Second"
+  expect totalPages () == 250
+  # A grouped aggregate: one row per author, ascending by key.
+  let _ = store "g-1" "One" 10 Fiction False "zeta"
+  let _ = store "g-2" "Two" 20 Fiction False "alpha"
+  let _ = store "g-3" "Three" 30 Fiction False "alpha"
+  expect authorsSeen () == ["a-1", "alpha", "zeta"]
+  expect pagesSeen () == [250, 50, 10]
+  expect countsSeen () == [1, 2, 1]
 }
 |}
 

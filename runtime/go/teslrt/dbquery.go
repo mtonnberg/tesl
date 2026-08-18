@@ -1,6 +1,9 @@
 package teslrt
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/jackc/pgx/v5"
 )
 
@@ -206,4 +209,129 @@ func DbDeleteResult[Row any](database *Database, table *Table[Row], match func(R
 		return RowsDeleted(FromInt64(removed))
 	}
 	return TableDeleteResult(table, match)
+}
+
+// DbUpsert is `upsert … onConflict [c] doUpdate [u]`. On a Postgres-backed database the SERVER
+// decides the conflict — `insert … on conflict (c) do update set u = EXCLUDED.u` is one
+// statement and one round trip, and the conflict target is the unique index the bootstrap
+// created — so the memory path's find-then-merge has no counterpart there. Off a connection it
+// is exactly that find-then-merge, which is what makes a test exercise the same program.
+func DbUpsert[Row any](database *Database, table *Table[Row], entity string, row Row,
+	matches func(Row, Row) bool, merge func(Row, Row) Row, conflicts func(Row, Row) bool,
+	statement string, bind func(Row) []any, unique ...UniqueIndex[Row]) Row {
+	if connection := database.bound(); connection != nil {
+		PgExec(connection, statement, bind(row))
+		return row
+	}
+	return TableUpsert(table, entity, row, matches, merge, conflicts, unique...)
+}
+
+// DbGroupFold is the grouped aggregate. On a Postgres-backed database the GROUPING is the
+// server's — `select <key>, <agg> … group by 1 order by 1` — because shipping every row here to
+// bucket it is the thing a grouped aggregate exists to avoid; the scanner reads one (key, value)
+// pair per row. Off a connection it folds the in-memory table, and both answer in ascending key
+// order, which is the contract rather than an accident of iteration.
+func DbGroupFold[Row any, Key any, Value any](
+	database *Database, table *Table[Row],
+	match func(Row) bool,
+	key func(Row) Key, less func(Key, Key) bool, equal func(Key, Key) bool,
+	step func(Value, Row) Value, zero Value,
+	plan PgGroupPlan, scan func(pgx.CollectableRow) (Tuple2[Key, Value], error),
+) []Tuple2[Key, Value] {
+	if connection := database.bound(); connection != nil {
+		statement, arguments := plan.statement()
+		return PgQuery(connection, statement, arguments, scan)
+	}
+	return TableGroupFold(table, match, key, less, equal, step, zero)
+}
+
+// PgGroupPlan is a grouped aggregate's statement in PIECES rather than as one string.
+//
+// The bucket expression depends on the ZONE, and a zone is a value the program supplies at run
+// time (`minutesPerDay(zone: TimeZone)`), so the statement cannot be baked at compile time —
+// `dsl/sql.rkt` composes the same one per call for the same reason. The pieces are what the
+// emitter knows statically; the zone-dependent part is assembled here, so the two backends
+// cannot drift on where a bucket starts.
+type PgGroupPlan struct {
+	// The aggregate over the group, already rendered: `count(*)`, `coalesce(sum("minutes"), 0)`.
+	Aggregate string
+	// The qualified, quoted table.
+	Table string
+	// The `where …` fragment, or "" — with its own `$1..$n` placeholders.
+	Where string
+	// The where fragment's arguments. The bucket's own argument follows them.
+	Args []any
+	// The quoted group column.
+	Column string
+	// "" groups by the column itself; otherwise the calendar unit (Hour|Day|Week|Month|Year).
+	Unit string
+	Zone PgGroupZone
+}
+
+// PgGroupZone is the part of a `TimeZone` the bucket SQL needs, in a type THIS file can name.
+// The zone database lives in timetrunc.go and ships only to a program that buckets by a
+// calendar unit; a Postgres program that groups by a plain column must not carry ~450 KB of
+// tzdata to name a field it never fills. `PgZoneOf` (in timetrunc.go) is the conversion, and
+// it is reachable exactly when a calendar bucket is.
+type PgGroupZone struct {
+	Name          string
+	OffsetMinutes int
+	Fixed         bool
+}
+
+// statement renders the plan, and the bucket expression with it.
+//
+// A NAMED zone hands the DST-correct work to PostgreSQL's own tzdata —
+// `date_trunc(u, ts at time zone $z) at time zone $z` — which mirrors the engine's two-step
+// semantics (instant → local wall clock → truncate → back), and PG's `date_trunc('week')` is
+// the ISO Monday week the engine uses. A FIXED offset is integer arithmetic on the millisecond
+// column for hour/day/week, and `date_trunc` on the UTC-shifted timestamp for month/year,
+// because those two are calendar units rather than fixed spans.
+func (plan PgGroupPlan) statement() (string, []any) {
+	arguments := append([]any{}, plan.Args...)
+	placeholder := func(value any) string {
+		arguments = append(arguments, value)
+		return fmt.Sprintf("$%d", len(arguments))
+	}
+	unit := strings.ToLower(plan.Unit)
+	bucket := plan.Column
+	switch {
+	case unit == "":
+	case !plan.Zone.Fixed && plan.Zone.Name != "":
+		zone := placeholder(plan.Zone.Name)
+		bucket = fmt.Sprintf(
+			"(extract(epoch from (date_trunc('%s', to_timestamp((%s)::double precision / 1000.0) "+
+				"at time zone %s) at time zone %s))::bigint * 1000)",
+			unit, plan.Column, zone, zone)
+	default:
+		offset := placeholder(int64(plan.Zone.OffsetMinutes) * 60000)
+		local := fmt.Sprintf("(%s + %s)", plan.Column, offset)
+		// Floor to a multiple of n, with the sign of the dividend handled: `%` in SQL keeps the
+		// dividend's sign, and a bucket before the epoch must round DOWN.
+		floorTo := func(value string, n int64) string {
+			return fmt.Sprintf("(%s - (((%s %% %d) + %d) %% %d))", value, value, n, n, n)
+		}
+		switch unit {
+		case "hour":
+			bucket = fmt.Sprintf("(%s - %s)", floorTo(local, 3600000), offset)
+		case "day":
+			bucket = fmt.Sprintf("(%s - %s)", floorTo(local, 86400000), offset)
+		case "week":
+			// Epoch day 0 is a Thursday, so the ISO Monday week is the week grid shifted by
+			// three days — the same +3/-3 the engine applies.
+			shifted := fmt.Sprintf("(%s + 259200000)", local)
+			bucket = fmt.Sprintf("((%s - 259200000) - %s)", floorTo(shifted, 604800000), offset)
+		default:
+			bucket = fmt.Sprintf(
+				"((extract(epoch from date_trunc('%s', to_timestamp((%s)::double precision / 1000.0) "+
+					"at time zone 'UTC'))::bigint * 1000) - %s)",
+				unit, local, offset)
+		}
+	}
+	where := ""
+	if plan.Where != "" {
+		where = " " + plan.Where
+	}
+	return fmt.Sprintf("select %s, %s from %s%s group by 1 order by 1",
+		bucket, plan.Aggregate, plan.Table, where), arguments
 }

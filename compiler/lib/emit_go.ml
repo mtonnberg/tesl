@@ -7715,6 +7715,16 @@ and emit_sql_predicate ?(joins=[]) ~indent signatures env loc (info : entity_inf
     Printf.sprintf "teslrt.SqlLike(%s, %s, %b)" text
       (emit_expr ~expected:TString ~indent signatures row_env pattern) fold_case
   in
+  (* `isNull` asks about a column that CAN be null, which in Tesl is a `Maybe`: on a column
+     that cannot, the answer is constant and the question is a mistake worth naming rather
+     than answering. *)
+  let nullable_field field =
+    let ty = entity_column loc info field in
+    if maybe_element ty = None then unsupported loc
+      "Go backend: `isNull %s.%s` asks about a column that cannot be null (`%s` is not a \
+       `Maybe`)" binder field field;
+    column_ref field
+  in
   let rec clause (c : Sql_query.sql_clause) =
     match c with
     | SqlPred { field; op; value } -> compare_op field op value
@@ -7733,10 +7743,11 @@ and emit_sql_predicate ?(joins=[]) ~indent signatures env loc (info : entity_inf
       (match List.map (fun value -> compare_op field BNeq value) values with
        | [] -> "true"
        | rendered -> "(" ^ String.concat " && " rendered ^ ")")
-    | SqlIsNull { field } -> unsupported loc
-      "Go backend does not support `where isNull %s.%s` yet" binder field
-    | SqlIsNotNull { field } -> unsupported loc
-      "Go backend does not support `where isNotNull %s.%s` yet" binder field
+    (* The memory counterpart of `IS NULL`: a nullable column is a `Maybe`, and `Nothing` IS
+       the null.  TRUE or FALSE, never UNKNOWN — the one place NULL-ness is decidable — which
+       is why it is its own clause rather than a comparison against a null. *)
+    | SqlIsNull { field } -> Printf.sprintf "!%s.IsSomething()" (nullable_field field)
+    | SqlIsNotNull { field } -> Printf.sprintf "%s.IsSomething()" (nullable_field field)
     | SqlLike { field; pattern } -> like field pattern false
     | SqlILike { field; pattern } -> like field pattern true
   in
@@ -7809,12 +7820,13 @@ and sql_bound_value loc ty value =
   | TFloat | TString | TBool -> value
   | TNewtype { tesl_name = "PosixMillis"; _ } ->
     Printf.sprintf "teslrt.PgBigint(%s.Value)" value
-  | TNewtype { secret = true; tesl_name; _ } ->
-    (* A secret's payload is a redacting carrier, not a string: binding it would put the
-       plaintext on the wire under a name that promises it is not there. *)
-    unsupported loc
-      "Go backend does not support a `secret` column (`%s`) on a Postgres-backed database yet"
-      tesl_name
+  (* A `secret` column BINDS its plaintext, because storage is not rendering: the redaction a
+     secret newtype provides is about what a log line, a print or a span carries, and a column
+     the program declared has to receive the value itself. `dsl/sql.rkt` binds it the same way
+     and states the same reason ("a `secret` column's bound parameter really is the secret"),
+     and neither runtime puts a parameter on a span or in a log. *)
+  | TNewtype { secret = true; _ } ->
+    Printf.sprintf "%s.Value.Reveal()" (selector_operand value)
   | TNewtype newtype -> sql_bound_value loc newtype.base (value ^ ".Value")
   | TAdt (info, _) when info.adt_tesl_name <> "Maybe" ->
     Printf.sprintf "teslrt.EncodeJSONValue(%s(%s))" (!value_encoder_hook ty) value
@@ -7837,10 +7849,12 @@ and sql_scan_carrier loc ty target =
   | TBool -> ("bool", target)
   | TNewtype { tesl_name = "PosixMillis"; go_name; owner; _ } ->
     ("int64", Printf.sprintf "%s{Value: teslrt.FromInt64(%s)}" (qualified owner go_name) target)
-  | TNewtype { secret = true; tesl_name; _ } ->
-    unsupported loc
-      "Go backend does not support a `secret` column (`%s`) on a Postgres-backed database yet"
-      tesl_name
+  (* Read back into the redacting carrier, so a row from the server holds a secret that
+     prints as "[redacted]" exactly like one the program built. *)
+  | TNewtype ({ secret = true; _ } as newtype) ->
+    ("string",
+     Printf.sprintf "%s{Value: teslrt.MakeSecret(%s)}"
+       (qualified newtype.owner newtype.go_name) target)
   | TNewtype newtype ->
     let carrier, decode = sql_scan_carrier loc newtype.base target in
     (carrier, Printf.sprintf "%s{Value: %s}" (qualified newtype.owner newtype.go_name) decode)
@@ -7925,6 +7939,27 @@ and sql_scanner loc (info : entity_info) =
 (* The reader for an AGGREGATE: one row, one column.  A sum answers the column's own type with
    `coalesce` supplying the zero; a max or min answers a `Maybe`, since SQL's aggregate over no
    rows is NULL where Tesl says Nothing. *)
+(* The scanner for a grouped aggregate's rows: one (bucket, value) pair per row, each column
+   read through the SAME carrier a scalar column uses — so a `PosixMillis` bucket comes back as
+   the newtype on both backends rather than as whatever the driver handed over. *)
+and sql_group_scan loc key_ty value_ty =
+  let name = Printf.sprintf "teslScanGroup%s%s" (helper_suffix key_ty) (helper_suffix value_ty) in
+  if not (Hashtbl.mem pending_helpers name) then begin
+    let pair = Printf.sprintf "teslrt.Tuple2[%s, %s]" (go_type key_ty) (go_type value_ty) in
+    let key_carrier, key_decode = sql_scan_carrier loc key_ty "teslKey" in
+    let value_carrier, value_decode = sql_scan_carrier loc value_ty "teslValue" in
+    let buffer = Buffer.create 256 in
+    Printf.bprintf buffer
+      "\nfunc %s(teslRow pgx.CollectableRow) (%s, error) {\n\tvar teslKey %s\n\tvar teslValue %s\n\tvar teslZero %s\n"
+      name pair key_carrier value_carrier pair;
+    Buffer.add_string buffer
+      "\tif teslErr := teslRow.Scan(&teslKey, &teslValue); teslErr != nil {\n\t\treturn teslZero, teslErr\n\t}\n";
+    Printf.bprintf buffer
+      "\treturn %s{Tuple2First: %s, Tuple2Second: %s}, nil\n}\n" pair key_decode value_decode;
+    Hashtbl.replace pending_helpers name (Buffer.contents buffer)
+  end;
+  name
+
 and sql_scalar_scan loc ty ~optional =
   let name = Printf.sprintf "teslScan%s%s" (if optional then "Extreme" else "Total")
     (helper_suffix ty) in
@@ -7966,6 +8001,15 @@ and sql_where_text ?(joins=[]) ~indent signatures env loc (info : entity_info) b
     sql_placeholder builder (sql_bound_value loc ty value)
   in
   let column field = sql_ident (sql_column_of loc info field).col_name in
+  (* Same rule as the predicate beside it: `IS NULL` on a NOT NULL column is a constant, so
+     the question is refused rather than answered. *)
+  let nullable_column field =
+    let ty = entity_column loc info field in
+    if maybe_element ty = None then unsupported loc
+      "Go backend: `isNull %s.%s` asks about a column that cannot be null (`%s` is not a \
+       `Maybe`)" binder field field;
+    column field
+  in
   let compare_op field op expr =
     let symbol = match op with
       | BEq -> "=" | BNeq -> "<>" | BLt -> "<" | BLe -> "<=" | BGt -> ">" | BGe -> ">="
@@ -7988,10 +8032,8 @@ and sql_where_text ?(joins=[]) ~indent signatures env loc (info : entity_info) b
       (match List.map (fun value -> compare_op field BNeq value) values with
        | [] -> "true"
        | rendered -> "(" ^ String.concat " and " rendered ^ ")")
-    | SqlIsNull { field } -> unsupported loc
-      "Go backend does not support `where isNull %s.%s` yet" binder field
-    | SqlIsNotNull { field } -> unsupported loc
-      "Go backend does not support `where isNotNull %s.%s` yet" binder field
+    | SqlIsNull { field } -> Printf.sprintf "%s is null" (nullable_column field)
+    | SqlIsNotNull { field } -> Printf.sprintf "%s is not null" (nullable_column field)
     (* `like`/`ilike` are the SQL operators themselves; the memory store matches the same
        pattern by hand (`SqlLike`), which is what keeps the two answering alike. *)
     | SqlLike { field; pattern } ->
@@ -8238,10 +8280,12 @@ and emit_sql_form ?(indent="") signatures env loc form =
              Printf.sprintf "teslrt.TableSelectSorted(%s, %s, %s, %s)"
                table predicate less (range ())))
      | SelectOne ->
-       (* `limit`/`offset` on a `selectOne` would change WHICH row it is, so they are
-          refused rather than dropped; `order` decides it and is supported. *)
+       (* `limit`/`offset` on a `selectOne` decide nothing — `order` is what decides which
+          row it is — and `check_meaningless_limit_offset` refuses them for BOTH backends, so
+          this is a backstop rather than a limit of this one. *)
        if seed.limit <> None || seed.offset <> None then unsupported loc
-         "Go backend does not support `limit`/`offset` on `selectOne` yet";
+         "Go backend: `limit`/`offset` on `selectOne` decides nothing (the checker refuses \
+          this; reaching here means that rule was bypassed)";
        (match pg with
         | Some database ->
           let builder = { sql_args = [] } in
@@ -8259,9 +8303,12 @@ and emit_sql_form ?(indent="") signatures env loc form =
            | Some less ->
              Printf.sprintf "teslrt.TableSelectOneSorted(%s, %s, %s)" table predicate less))
      | SelectCount ->
+       (* An aggregate answers ONE value over the whole matching set, so none of these
+          decides anything; `check_meaningless_limit_offset` refuses them for both backends,
+          and this is the backstop. *)
        if seed.order <> None || seed.limit <> None || seed.offset <> None then
-         unsupported loc "Go backend does not support `order`/`limit`/`offset` on \
-                          `selectCount` yet";
+         unsupported loc "Go backend: `order`/`limit`/`offset` on `selectCount` decides nothing (the \
+                          checker refuses this; reaching here means that rule was bypassed)";
        (match pg with
         | Some database ->
           let builder = { sql_args = [] } in
@@ -8272,9 +8319,12 @@ and emit_sql_form ?(indent="") signatures env loc form =
             (db_ref database) table predicate (sql_plan ~indent statement builder)
         | None -> Printf.sprintf "teslrt.TableCount(%s, %s)" table predicate)
      | SelectSum field ->
+       (* An aggregate answers ONE value over the whole matching set, so none of these
+          decides anything; `check_meaningless_limit_offset` refuses them for both backends,
+          and this is the backstop. *)
        if seed.order <> None || seed.limit <> None || seed.offset <> None then
-         unsupported loc "Go backend does not support `order`/`limit`/`offset` on \
-                          `selectSum` yet";
+         unsupported loc "Go backend: `order`/`limit`/`offset` on `selectSum` decides nothing (the \
+                          checker refuses this; reaching here means that rule was bypassed)";
        let ty = entity_column loc info field in
        let column = Printf.sprintf "teslRow.%s" (record_field_go_name field) in
        let project = Printf.sprintf "func(teslRow %s) %s { return %s }"
@@ -8327,9 +8377,12 @@ and emit_sql_form ?(indent="") signatures env loc form =
      (* `selectMax`/`selectMin` answer a `Maybe`: no matching row is `Nothing`, not a trap
         and not a fabricated zero. *)
      | SelectMax field | SelectMin field ->
+       (* An aggregate answers ONE value over the whole matching set, so none of these
+          decides anything; `check_meaningless_limit_offset` refuses them for both backends,
+          and this is the backstop. *)
        if seed.order <> None || seed.limit <> None || seed.offset <> None then
-         unsupported loc "Go backend does not support `order`/`limit`/`offset` on \
-                          `selectMax`/`selectMin` yet";
+         unsupported loc "Go backend: `order`/`limit`/`offset` on `selectMax`/`selectMin` decides nothing (the \
+                          checker refuses this; reaching here means that rule was bypassed)";
        let biggest = match seed.kind with SelectMax _ -> true | _ -> false in
        let ty = entity_column loc info field in
        if not (supports_column_ordering ty) then unsupported loc
@@ -8367,8 +8420,10 @@ and emit_sql_form ?(indent="") signatures env loc form =
         disagree about where a day starts. *)
      | SelectCountBy | SelectSumBy _ ->
        if seed.order <> None || seed.limit <> None || seed.offset <> None then
-         unsupported loc "Go backend does not support `order`/`limit`/`offset` on a \
-                          grouped aggregate yet";
+         unsupported loc "Go backend: `order`/`limit`/`offset` on a grouped aggregate \
+                          decides nothing — the rows come back in ascending key order by \
+                          contract (the checker refuses these; reaching here means that rule \
+                          was bypassed)";
        let key_field = match seed.group_by with
          | [GField field] | [GTimeTrunc (_, _, field)] -> field
          | [] -> unsupported loc "Go backend requires `groupBy` on a grouped aggregate"
@@ -8443,13 +8498,54 @@ and emit_sql_form ?(indent="") signatures env loc form =
              (sql_row_type info) indent indent,
            "teslrt.FromInt64(0)"
        in
-       ignore value_ty;
        (match pg with
-        | Some _ -> unsupported loc
-          "Go backend does not support a grouped aggregate on a PostgreSQL-backed database yet"
         | None ->
           Printf.sprintf "teslrt.TableGroupFold(%s, %s, %s, %s, %s, %s, %s)"
-            table predicate key less equal step zero))
+            table predicate key less equal step zero
+        | Some database ->
+          (* The server GROUPS: shipping every row here to bucket it is the thing a grouped
+             aggregate exists to avoid.  The statement goes over in PIECES rather than as one
+             string — its bucket expression depends on the ZONE, which is a value the program
+             supplies at run time — and the runtime assembles it exactly as `dsl/sql.rkt`
+             does, so the two cannot disagree about where a bucket starts. *)
+          let builder = { sql_args = [] } in
+          let where_text = where builder in
+          let aggregate = match seed.kind with
+            | SelectSumBy field ->
+              Printf.sprintf "coalesce(sum(%s), 0)"
+                (sql_ident (sql_column_of loc info field).col_name)
+            | _ -> "count(*)"
+          in
+          let unit, zone = match seed.group_by with
+            | [GTimeTrunc (unit, zone_expr, _)] ->
+              String.capitalize_ascii unit,
+              (* Narrowed to the part the SQL needs: the zone DATABASE ships only to a program
+                 that buckets by a calendar unit, and this is the one place that needs it. *)
+              Printf.sprintf "teslrt.PgZoneOf(%s)"
+                (emit_expr ~indent signatures env zone_expr)
+            | _ -> "", "teslrt.PgGroupZone{}"
+          in
+          let arguments = match builder.sql_args with
+            | [] -> "nil"
+            | args -> Printf.sprintf "[]any{%s}" (String.concat ", " args)
+          in
+          (* The keys are ALIGNED as gofmt aligns a run of them — `Aggregate:` is the
+             longest — because an emitted file gofmt would rewrite is a gate failure. *)
+          let field name value =
+            Printf.sprintf "%s\t%-10s %s,\n" indent (name ^ ":") value in
+          Printf.sprintf
+            "teslrt.DbGroupFold(%s, %s, %s, %s, %s, %s, %s, %s, teslrt.PgGroupPlan{\n%s%s}, %s)"
+            (db_ref database) table predicate key less equal step zero
+            (String.concat ""
+               [ field "Aggregate" (go_quote aggregate);
+                 field "Table" (go_quote (sql_qualified_table database info));
+                 field "Where" (go_quote where_text);
+                 field "Args" arguments;
+                 field "Column"
+                   (go_quote (sql_ident (sql_column_of loc info key_field).col_name));
+                 field "Unit" (go_quote unit);
+                 field "Zone" zone ])
+            indent (sql_group_scan loc key_ty value_ty)))
   | SqlInsert insert ->
     let info = entity_of_query loc insert.entity in
     check_record_literal signatures env loc info.ent_row insert.fields;
@@ -8528,8 +8624,42 @@ and emit_sql_form ?(indent="") signatures env loc form =
        Printf.sprintf "teslrt.Discard(teslrt.TableUpsert(%s, %s, %s, %s, %s, %s%s))"
          (sql_table_ref info) (go_quote info.ent_tesl_name) row matches merge
          (sql_key_conflict loc info) (sql_unique_arguments ~indent loc info)
-     | Some _ -> unsupported loc
-       "Go backend does not support `upsert` on a PostgreSQL-backed database yet")
+     | Some database ->
+       (* On the server it is ONE statement and one round trip — `insert … on conflict (c) do
+          update set u = EXCLUDED.u` — and the conflict target is the unique index the
+          bootstrap created, so the find-then-merge the memory path performs has no
+          counterpart here.  The two agree about the OUTCOME, which is what a test that runs
+          on either store is asserting. *)
+       let columns = entity_columns info in
+       List.iter (fun (column : column_info) ->
+         if not (List.mem_assoc column.col_field upsert.fields) then unsupported loc
+           "Go backend: `upsert` into `%s` leaves column `%s` unset"
+           info.ent_tesl_name column.col_field) columns;
+       let conflict_columns = List.map (fun field ->
+         sql_ident (sql_column_of loc info field).col_name) upsert.conflict in
+       (* A DO UPDATE that sets nothing is `do nothing`: PostgreSQL rejects an empty SET
+          list, and "insert unless it is there" is what the empty list means. *)
+       let action = match upsert.do_update with
+         | [] -> "do nothing"
+         | fields ->
+           Printf.sprintf "do update set %s"
+             (String.concat ", " (List.map (fun field ->
+                let column = sql_ident (sql_column_of loc info field).col_name in
+                Printf.sprintf "%s = EXCLUDED.%s" column column) fields))
+       in
+       let statement =
+         Printf.sprintf "insert into %s (%s) values (%s) on conflict (%s) %s"
+           (sql_qualified_table database info) (sql_column_list info)
+           (String.concat ", "
+              (List.mapi (fun index _ -> Printf.sprintf "$%d" (index + 1)) columns))
+           (String.concat ", " conflict_columns) action
+       in
+       Printf.sprintf "teslrt.Discard(teslrt.DbUpsert(%s, %s, %s, %s, %s, %s, %s, %s%s))"
+         (qualified database.db_owner database.db_go_var) (sql_table_ref info) (go_quote info.ent_tesl_name) row
+         matches merge (sql_key_conflict loc info)
+         (Printf.sprintf "%s, %s" (go_quote statement)
+            (sql_row_binder loc indent info columns))
+         (sql_unique_arguments ~indent loc info))
   | SqlInsertMany (list_var, entity) ->
     let info = entity_of_query loc entity in
     let rows = match List.assoc_opt list_var env with

@@ -235,3 +235,15 @@ func TimeTruncMonth(zone TimeZone, at PosixMillis) PosixMillis {
 func TimeTruncYear(zone TimeZone, at PosixMillis) PosixMillis {
 	return TimeTrunc("Year", zone, at)
 }
+
+// PgZoneOf narrows a zone to the part the grouped-aggregate SQL needs (see PgGroupZone). The
+// conversion lives HERE rather than in dbquery.go because this file carries the zone database:
+// a Postgres program that groups by a plain column names the narrow type and never reaches
+// this function, so it ships without tzdata.
+func PgZoneOf(zone TimeZone) PgGroupZone {
+	return PgGroupZone{
+		Name:          zone.Name,
+		OffsetMinutes: zone.OffsetMinutes,
+		Fixed:         zone.Fixed,
+	}
+}
