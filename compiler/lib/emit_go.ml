@@ -439,10 +439,20 @@ let primitive_type_of_type_expr = function
   | TName { name = "Unit"; _ } -> TUnit
   | TName { name; loc } ->
     unsupported loc "Go backend newtype base `%s` is not a direct scalar type" name
-  | TVar { name; loc } -> unsupported loc "Go backend does not support type variable `%s` yet" name
-  | TApp { loc; _ } -> unsupported loc "Go backend does not support applied types yet"
-  | TFun { loc; _ } -> unsupported loc "Go backend does not support function values yet"
-  | TTuple { loc; _ } -> unsupported loc "Go backend does not support tuple types yet"
+  (* Each of these says what it refuses IN THIS POSITION, and none says "yet": a newtype is a
+     nominal wrapper over ONE scalar carrier, so there is nothing to add later that would make
+     a function, a tuple or a type variable into one.  The old wording named the shape instead
+     of the position — "does not support function values yet" pointed at a feature that IS
+     supported and promised work that will never happen. *)
+  | TVar { name; loc } -> unsupported loc
+    "Go backend newtype base `%s` is a type variable: a newtype wraps one scalar carrier, so \
+     there is nothing for it to stand for" name
+  | TApp { loc; _ } -> unsupported loc
+    "Go backend newtype base is an applied type: a newtype wraps one scalar carrier"
+  | TFun { loc; _ } -> unsupported loc
+    "Go backend newtype base is a function type: a newtype wraps one scalar carrier"
+  | TTuple { loc; _ } -> unsupported loc
+    "Go backend newtype base is a tuple type: a newtype wraps one scalar carrier"
 
 (* An `entity` is a record PLUS a store.  The row type is an ordinary struct — that is
    what a query returns and what `insert` takes — and the store is one package-level
@@ -1019,7 +1029,13 @@ let rec type_of_type_expr ?(params=[]) types ty =
   | TVar { name; loc } ->
     (match List.assoc_opt name params with
      | Some go_name -> TParam go_name
-     | None -> unsupported loc "Go backend does not support type variable `%s` yet" name)
+     (* A `fn`'s OWN type variables are in `params` and resolve above.  Reaching here means a
+        variable in a position that has no type-parameter scope — a record field, an entity
+        column, an api type — which is the generic-DECLARATION feature rather than the generic
+        function one, so the message says which. *)
+     | None -> unsupported loc
+       "Go backend does not support the type variable `%s` here: a `fn` may be generic, a \
+        record, entity or api declaration may not yet" name)
   | TApp { loc; _ } ->
     let head, args = flatten_type_app [] ty in
     (match head with

@@ -216,3 +216,14 @@
  (names test_stdlib_ctor_labels)
  (modules test_stdlib_ctor_labels)
  (libraries tesl_compiler_lib alcotest str unix))
+
+; Go stdlib EXPORT seam test: every (module, export) in the checker's own allowlist is
+; compiled through the Go emitter, and the set the fallthrough catches is pinned against an
+; explicit list.  Without this, adding a stdlib export routes it straight to the
+; `| other -> unsupported …` arm — refused at the USER's compile time with no signal at ours,
+; so the fallthrough would quietly eat every future addition:
+;   dune exec test/test_go_stdlib_export_seam.exe
+(tests
+ (names test_go_stdlib_export_seam)
+ (modules test_go_stdlib_export_seam)
+ (libraries tesl_compiler_lib alcotest str unix))
