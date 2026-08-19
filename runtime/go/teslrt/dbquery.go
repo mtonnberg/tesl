@@ -26,7 +26,8 @@ import (
 type PgPlan struct {
 	SQL string
 	// Args is nil for a statement with no placeholders.
-	Args func() []any
+	Args    func() []any
+	Capture func(int)
 }
 
 // PgSql is the constructor the emitter calls. A function rather than a struct literal because
@@ -49,7 +50,7 @@ func DbSelect[Row any](database *Database, table *Table[Row], match func(Row) bo
 	less func(Row, Row) bool, offset, limit int, plan PgPlan,
 	scan func(pgx.CollectableRow) (Row, error)) []Row {
 	if connection := database.bound(); connection != nil {
-		return PgQuery(connection, plan.SQL, plan.arguments(), scan)
+		return PgQueryPlan(connection, plan, scan)
 	}
 	if less == nil {
 		return TableSelectRange(table, match, offset, limit)
@@ -63,7 +64,7 @@ func DbSelectOne[Row any](database *Database, table *Table[Row], match func(Row)
 	less func(Row, Row) bool, plan PgPlan,
 	scan func(pgx.CollectableRow) (Row, error)) Maybe[Row] {
 	if connection := database.bound(); connection != nil {
-		return PgQueryOne(connection, plan.SQL, plan.arguments(), scan)
+		return PgQueryOnePlan(connection, plan, scan)
 	}
 	if less == nil {
 		return TableSelectOne(table, match)
@@ -76,7 +77,7 @@ func DbSelectOne[Row any](database *Database, table *Table[Row], match func(Row)
 func DbCount[Row any](database *Database, table *Table[Row], match func(Row) bool,
 	plan PgPlan) Int {
 	if connection := database.bound(); connection != nil {
-		return PgCount(connection, plan.SQL, plan.arguments())
+		return PgCountPlan(connection, plan)
 	}
 	return TableCount(table, match)
 }
@@ -87,7 +88,7 @@ func DbSum[Row any, Value any](database *Database, table *Table[Row], match func
 	project func(Row) Value, combine func(Value, Value) Value, zero Value, plan PgPlan,
 	scan func(pgx.Row) (Value, error)) Value {
 	if connection := database.bound(); connection != nil {
-		return PgScalar(connection, plan.SQL, plan.arguments(), scan)
+		return PgScalarPlan(connection, plan, scan)
 	}
 	return TableFold(table, match, project, combine, zero)
 }
@@ -99,7 +100,7 @@ func DbSum[Row any, Value any](database *Database, table *Table[Row], match func
 func DbSumMoney[Row any](database *Database, table *Table[Row], match func(Row) bool,
 	project func(Row) Money, entity, field string, plan PgPlan) Money {
 	if connection := database.bound(); connection != nil {
-		return PgSumMoney(connection, plan.SQL, plan.arguments(), entity, field)
+		return PgSumMoneyPlan(connection, plan, entity, field)
 	}
 	return TableSumMoney(table, match, project, entity, field)
 }
@@ -110,7 +111,7 @@ func DbExtreme[Row any, Value any](database *Database, table *Table[Row], match 
 	project func(Row) Value, better func(Value, Value) bool, plan PgPlan,
 	scan func(pgx.Row) (Maybe[Value], error)) Maybe[Value] {
 	if connection := database.bound(); connection != nil {
-		return PgScalar(connection, plan.SQL, plan.arguments(), scan)
+		return PgScalarPlan(connection, plan, scan)
 	}
 	return TableExtreme(table, match, project, better)
 }
@@ -156,7 +157,7 @@ func DbInsertMany[Row any](database *Database, table *Table[Row], entity string,
 func DbUpdate[Row any](database *Database, table *Table[Row], match func(Row) bool,
 	apply func(Row) Row, plan PgPlan, unique ...UniqueIndex[Row]) struct{} {
 	if connection := database.bound(); connection != nil {
-		PgExec(connection, plan.SQL, plan.arguments())
+		PgExecPlan(connection, plan)
 		return struct{}{}
 	}
 	return TableUpdate(table, match, apply, unique...)
@@ -168,7 +169,7 @@ func DbUpdateReturnOne[Row any](database *Database, table *Table[Row], match fun
 	apply func(Row) Row, plan PgPlan, scan func(pgx.CollectableRow) (Row, error),
 	unique ...UniqueIndex[Row]) Row {
 	if connection := database.bound(); connection != nil {
-		updated := PgQuery(connection, plan.SQL, plan.arguments(), scan)
+		updated := PgQueryPlan(connection, plan, scan)
 		if len(updated) == 0 {
 			panic("updateAndReturnOne: no row matched")
 		}
@@ -181,7 +182,7 @@ func DbUpdateReturnOne[Row any](database *Database, table *Table[Row], match fun
 func DbDelete[Row any](database *Database, table *Table[Row], match func(Row) bool,
 	plan PgPlan) struct{} {
 	if connection := database.bound(); connection != nil {
-		PgExec(connection, plan.SQL, plan.arguments())
+		PgExecPlan(connection, plan)
 		return struct{}{}
 	}
 	return TableDelete(table, match)
@@ -202,7 +203,7 @@ func DbTruncate[Row any](database *Database, table *Table[Row], tableName string
 func DbDeleteResult[Row any](database *Database, table *Table[Row], match func(Row) bool,
 	plan PgPlan) DeleteResult {
 	if connection := database.bound(); connection != nil {
-		removed := PgExec(connection, plan.SQL, plan.arguments())
+		removed := PgExecPlan(connection, plan)
 		if removed == 0 {
 			return NoRowDeleted()
 		}

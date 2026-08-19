@@ -182,7 +182,8 @@ let test_debug_emission_has_versioned_checkpoint () =
   check bool "debug test identity" true (contains test_go "Test: ");
   check string "debug IDs are stable" module_go module_again;
   ignore (artifact "internal/teslrt/debug.go" emitted);
-  ignore (artifact "internal/teslrt/debug_control.go" emitted)
+  ignore (artifact "internal/teslrt/debug_control.go" emitted);
+  ignore (artifact "internal/teslrt/debug_state.go" emitted)
 
 let test_release_emission_excludes_debug_runtime () =
   let emitted = artifacts () in
@@ -190,7 +191,7 @@ let test_release_emission_excludes_debug_runtime () =
   check bool "release has no checkpoint call" false (contains module_go "teslrt.Checkpoint");
   check bool "release has no debug runtime" false
     (List.exists (fun (a : Emit_go.artifact) ->
-       List.mem a.path ["internal/teslrt/debug.go"; "internal/teslrt/debug_control.go"]) emitted)
+       List.mem a.path ["internal/teslrt/debug.go"; "internal/teslrt/debug_control.go"; "internal/teslrt/debug_state.go"]) emitted)
 
 let test_named_expect_fail_emission () =
   let emitted = artifacts () in

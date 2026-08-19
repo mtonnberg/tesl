@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -175,8 +176,19 @@ func TestServerScopesAndVariablesAreStopScoped(t *testing.T) {
 	if len(stack.StackFrames) != 1 || stack.StackFrames[0].ID == 0 {
 		t.Fatalf("stack = %#v", stack)
 	}
+	evaluateResponse, _, err := server.handle(Request{Seq: 2, Type: "request", Command: "evaluate", Arguments: mustJSON(evaluateArguments{Expression: "point[0]", FrameID: 1})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var evaluated evaluateBody
+	if err := json.Unmarshal(evaluateResponse.Body, &evaluated); err != nil {
+		t.Fatal(err)
+	}
+	if evaluated.Result != "42" || evaluated.Type != "Int" {
+		t.Fatalf("evaluate = %#v", evaluated)
+	}
 
-	scopesResponse, _, err := server.handle(Request{Seq: 2, Type: "request", Command: "scopes", Arguments: json.RawMessage(`{"frameId":1}`)})
+	scopesResponse, _, err := server.handle(Request{Seq: 3, Type: "request", Command: "scopes", Arguments: json.RawMessage(`{"frameId":1}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +200,7 @@ func TestServerScopesAndVariablesAreStopScoped(t *testing.T) {
 		t.Fatalf("scopes = %#v", scopes)
 	}
 
-	variablesResponse, _, err := server.handle(Request{Seq: 3, Type: "request", Command: "variables", Arguments: mustJSON(variablesArguments{VariablesReference: scopes.Scopes[0].VariablesReference})})
+	variablesResponse, _, err := server.handle(Request{Seq: 4, Type: "request", Command: "variables", Arguments: mustJSON(variablesArguments{VariablesReference: scopes.Scopes[0].VariablesReference})})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +212,7 @@ func TestServerScopesAndVariablesAreStopScoped(t *testing.T) {
 		t.Fatalf("variables = %#v", variables)
 	}
 
-	childrenResponse, _, err := server.handle(Request{Seq: 4, Type: "request", Command: "variables", Arguments: mustJSON(variablesArguments{VariablesReference: variables.Variables[0].VariablesReference})})
+	childrenResponse, _, err := server.handle(Request{Seq: 5, Type: "request", Command: "variables", Arguments: mustJSON(variablesArguments{VariablesReference: variables.Variables[0].VariablesReference})})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,6 +259,26 @@ func TestServerAddsDomainAndSQLScopes(t *testing.T) {
 	}
 	if len(variables.Variables) == 0 || variables.Variables[0].Name != "sql" {
 		t.Fatalf("SQL variables = %#v", variables.Variables)
+	}
+}
+
+func TestServerReadsBoundedTeslSource(t *testing.T) {
+	path := t.TempDir() + "/sample.tesl"
+	if err := os.WriteFile(path, []byte("fn main() -> Unit = ()\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(strings.NewReader(""), io.Discard, teslrt.NewDebugger())
+	defer server.Close()
+	response, _, err := server.handle(Request{Seq: 1, Type: "request", Command: "source", Arguments: mustJSON(sourceArguments{Source: source{Path: path}})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body sourceBody
+	if err := json.Unmarshal(response.Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Content != "fn main() -> Unit = ()\n" || body.MimeType != "text/x-tesl" {
+		t.Fatalf("source = %#v", body)
 	}
 }
 

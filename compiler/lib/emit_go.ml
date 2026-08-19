@@ -136,6 +136,7 @@ type signature = {
    `go_type` is called from ~40 sites; it is set once per module in compile_project and
    read nowhere else. *)
 let current_package = ref ""
+let current_debug = ref false
 
 let debug_frame_id package (fd : func_decl) =
   Digest.to_hex (Digest.string (Printf.sprintf "%s:%s:%s:%d:%d"
@@ -6635,10 +6636,11 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
       wirings in
     (* The literal's BODY sits one level in from the call, and its closing brace lines up with
        the call — the same shape gofmt writes, which is what the emitter has to produce. *)
-    Printf.sprintf
-      "teslrt.StartWorkers(%s, func(teslPayload any) teslrt.JobOutcome {\n%s\tswitch teslJob := teslPayload.(type) {\n%s%s\tdefault:\n%s\t\tpanic(\"%s: unexpected job payload\")\n%s\t}\n%s\treturn teslrt.JobOutcome{OK: true}\n%s}, %d, %b)"
-      queue indent (String.concat "" cases) indent indent info.qu_tesl_name indent indent indent
-      (match concurrency with Some n when n > 0 -> n | _ -> 1) is_dead
+     let start_name = if !current_debug then "teslrt.DebugStartWorkers" else "teslrt.StartWorkers" in
+     Printf.sprintf
+       "%s(%s, func(teslPayload any) teslrt.JobOutcome {\n%s\tswitch teslJob := teslPayload.(type) {\n%s%s\tdefault:\n%s\t\tpanic(\"%s: unexpected job payload\")\n%s\t}\n%s\treturn teslrt.JobOutcome{OK: true}\n%s}, %d, %b)"
+       start_name queue indent (String.concat "" cases) indent indent info.qu_tesl_name indent indent indent
+       (match concurrency with Some n when n > 0 -> n | _ -> 1) is_dead
   (* `serve` is the tail of the startup chain: it runs until the process is asked to stop.
      Every field of the node is named here, and `serve_field_dispositions` rebuilds the record
      from those names — so a new field on `EServe` (which is where an `App { … }` field lands
@@ -8682,11 +8684,12 @@ and sql_unique_arguments ~indent loc (info : entity_info) =
    size the emitter cannot predict — but gofmt never JOINS a split literal, so the split form is
    stable at every size. *)
 and sql_plan ~indent statement (builder : sql_arguments) =
-  match builder.sql_args with
-  | [] -> Printf.sprintf "teslrt.PgSql(%s, nil)" (go_quote statement)
-  | args ->
-    Printf.sprintf "teslrt.PgSql(%s, func() []any {\n%s\treturn []any{%s}\n%s})"
-      (go_quote statement) indent (String.concat ", " args) indent
+  let rendered = match builder.sql_args with
+    | [] -> Printf.sprintf "teslrt.PgSql(%s, nil)" (go_quote statement)
+    | args ->
+      Printf.sprintf "teslrt.PgSql(%s, func() []any {\n%s\treturn []any{%s}\n%s})"
+        (go_quote statement) indent (String.concat ", " args) indent in
+  if !current_debug then "teslrt.DebugPgSql(" ^ rendered ^ ")" else rendered
 
 and emit_sql_form ?(indent="") signatures env loc form =
   match form with
@@ -9965,7 +9968,7 @@ let runtime_file_gates : (string * string list) list = [
   (* The PostgreSQL half ships ONLY to a program that declares a Postgres-backed database, for
      the reason the HTTP half does: it pulls a third-party driver and its whole dependency
      chain into a binary that would otherwise require nothing. *)
-  "postgres", [ "postgres.go"; "database.go"; "dbquery.go" ];
+   "postgres", [ "postgres.go"; "database.go"; "dbquery.go"; "debug_sql.go" ];
   (* `agent.go` ships only to a program that talks to a model.  Not a dependency argument —
      everything in it is standard library — but a runtime file a program has no use for is
      still surface a reader has to rule out, and the gate costs nothing. *)
@@ -10329,6 +10332,7 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
   Hashtbl.reset pending_helpers;
   Hashtbl.reset helper_names;
   Hashtbl.reset module_helpers;
+  current_debug := debug;
   let body = Buffer.create 1024 in
   (* ONLY THE DECLARING PACKAGE EMITS A DECLARATION.  An imported type is present in
      these tables so it can be referenced and its fields read, but emitting it here too
@@ -10385,9 +10389,11 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
   |> List.filter (fun info -> info.qu_owner = package)
   |> List.iter (fun info ->
     Buffer.add_char body '\n';
-    Buffer.add_string body (line_directive info.qu_loc);
-    Printf.bprintf body "var %s = teslrt.NewQueue(%s, %d)\n"
-      info.qu_go_var (go_quote info.qu_tesl_name) info.qu_max_attempts);
+     Buffer.add_string body (line_directive info.qu_loc);
+     Printf.bprintf body "var %s = teslrt.NewQueue(%s, %d)\n"
+       info.qu_go_var (go_quote info.qu_tesl_name) info.qu_max_attempts;
+     if debug then
+       Printf.bprintf body "var _ = teslrt.RegisterDebugQueue(%s)\n" info.qu_go_var);
   (* The store for a `cache` declaration.  `defaultTtl:` is baked in for the reason
      `maxAttempts` is: the expiry rule belongs to the declaration, not to any call site, and a
      `Cache.set` with no TTL of its own is exactly the one that asks for it. *)
@@ -10397,9 +10403,12 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
   |> List.filter (fun info -> declared_here info.ca_owner)
   |> List.iter (fun info ->
     Buffer.add_char body '\n';
-    Buffer.add_string body (line_directive info.ca_loc);
-    Printf.bprintf body "var %s = teslrt.NewCache[%s](%d)\n"
-      info.ca_go_var (go_type info.ca_value) info.ca_default_ttl);
+     Buffer.add_string body (line_directive info.ca_loc);
+     Printf.bprintf body "var %s = teslrt.NewCache[%s](%d)\n"
+       info.ca_go_var (go_type info.ca_value) info.ca_default_ttl;
+     if debug then
+       Printf.bprintf body "var _ = teslrt.RegisterDebugCache(%s, %S)\n"
+         info.ca_go_var info.ca_tesl_name);
   (* The outbox for an `email` declaration.  Its SMTP settings are the declaration's, and an
      `env` among them is a call here rather than a baked-in string: the variable belongs to
      the deployment, not to the build. *)
@@ -10410,9 +10419,12 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
   |> List.iter (fun info ->
     Buffer.add_char body '\n';
     Buffer.add_string body (line_directive info.em_loc);
-    Printf.bprintf body
-      "var %s = teslrt.NewOutbox(teslrt.SmtpSettings{\n\tHost:     %s,\n\tPort:     %d,\n\tUsername: %s,\n\tPassword: %s,\n\tTLS:      %b,\n})\n"
-      info.em_go_var info.em_host info.em_port info.em_username info.em_password info.em_tls);
+     Printf.bprintf body
+       "var %s = teslrt.NewOutbox(teslrt.SmtpSettings{\n\tHost:     %s,\n\tPort:     %d,\n\tUsername: %s,\n\tPassword: %s,\n\tTLS:      %b,\n})\n"
+       info.em_go_var info.em_host info.em_port info.em_username info.em_password info.em_tls;
+     if debug then
+       Printf.bprintf body "var _ = teslrt.RegisterDebugOutbox(%s, %S)\n"
+         info.em_go_var info.em_tesl_name);
   (* The channel a `sseChannel` declaration becomes: one registry per declaration, named so a
      reader can see which channel a `publish` reaches. *)
   Hashtbl.to_seq_values types.channels
@@ -10421,9 +10433,11 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
   |> List.filter (fun info -> declared_here info.ch_owner)
   |> List.iter (fun info ->
     Buffer.add_char body '\n';
-    Buffer.add_string body (line_directive info.ch_loc);
-    Printf.bprintf body "var %s = teslrt.NewSseChannel(%s)\n"
-      info.ch_go_var (go_quote info.ch_tesl_name));
+     Buffer.add_string body (line_directive info.ch_loc);
+     Printf.bprintf body "var %s = teslrt.NewSseChannel(%s)\n"
+       info.ch_go_var (go_quote info.ch_tesl_name);
+     if debug then
+       Printf.bprintf body "var _ = teslrt.RegisterDebugSSE(%s)\n" info.ch_go_var);
   (* The store for a `backend: Memory` entity.  One variable per entity, initialised at
      package level: an entity belongs to exactly one database, and the table itself is
      what carries the lock, so nothing has to be threaded through call sites. *)
@@ -15608,7 +15622,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         in
         artifacts @ List.filter_map (fun (name, contents) ->
            if (not serves_http) && List.mem name http_only then None
-            else if List.mem name ["debug.go"; "debug_control.go"; "debug_state.go"] && mode <> Debug then None
+            else if List.mem name ["debug.go"; "debug_control.go"; "debug_state.go"; "debug_sql.go"] && mode <> Debug then None
            else if (not has_load_tests) && List.mem name load_test_only then None
           else if (not postgres_runtime) && List.mem name postgres_only then None
           else if (not uses_agent) && List.mem name agent_only then None

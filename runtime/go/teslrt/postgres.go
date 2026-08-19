@@ -268,11 +268,29 @@ func PgQuery[Row any](db *PostgresDB, statement string, arguments []any,
 	return collected
 }
 
+func PgQueryPlan[Row any](db *PostgresDB, plan PgPlan,
+	scan func(pgx.CollectableRow) (Row, error)) []Row {
+	rows := PgQuery(db, plan.SQL, plan.arguments(), scan)
+	if plan.Capture != nil {
+		plan.Capture(len(rows))
+	}
+	return rows
+}
+
 // PgQueryOne is `selectOne`: the first row, or Nothing. `limit 1` is the emitter's job, so this
 // only decides what "no row" means.
 func PgQueryOne[Row any](db *PostgresDB, statement string, arguments []any,
 	scan func(pgx.CollectableRow) (Row, error)) Maybe[Row] {
 	rows := PgQuery(db, statement, arguments, scan)
+	if len(rows) == 0 {
+		return Nothing[Row]()
+	}
+	return Something(rows[0])
+}
+
+func PgQueryOnePlan[Row any](db *PostgresDB, plan PgPlan,
+	scan func(pgx.CollectableRow) (Row, error)) Maybe[Row] {
+	rows := PgQueryPlan(db, plan, scan)
 	if len(rows) == 0 {
 		return Nothing[Row]()
 	}
@@ -290,6 +308,14 @@ func PgExec(db *PostgresDB, statement string, arguments []any) int64 {
 	return tag.RowsAffected()
 }
 
+func PgExecPlan(db *PostgresDB, plan PgPlan) int64 {
+	rows := PgExec(db, plan.SQL, plan.arguments())
+	if plan.Capture != nil {
+		plan.Capture(int(rows))
+	}
+	return rows
+}
+
 // PgCount is `count … from …`: one row, one number.
 func PgCount(db *PostgresDB, statement string, arguments []any) Int {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -302,6 +328,16 @@ func PgCount(db *PostgresDB, statement string, arguments []any) Int {
 	return FromInt64(counted)
 }
 
+func PgCountPlan(db *PostgresDB, plan PgPlan) Int {
+	count := PgCount(db, plan.SQL, plan.arguments())
+	if plan.Capture != nil {
+		if value, ok := count.Int64(); ok {
+			plan.Capture(int(value))
+		}
+	}
+	return count
+}
+
 // PgScalar is the aggregate executor: one row, one value, scanned by the emitter's own reader
 // because the column's type is the entity's rather than something this file can know.
 func PgScalar[Value any](db *PostgresDB, statement string, arguments []any,
@@ -311,6 +347,15 @@ func PgScalar[Value any](db *PostgresDB, statement string, arguments []any,
 	value, err := scan(db.executor().QueryRow(ctx, statement, arguments...))
 	if err != nil {
 		panic("database: " + err.Error())
+	}
+	return value
+}
+
+func PgScalarPlan[Value any](db *PostgresDB, plan PgPlan,
+	scan func(pgx.Row) (Value, error)) Value {
+	value := PgScalar(db, plan.SQL, plan.arguments(), scan)
+	if plan.Capture != nil {
+		plan.Capture(1)
 	}
 	return value
 }
@@ -343,6 +388,14 @@ func PgSumMoney(db *PostgresDB, statement string, arguments []any, entity, field
 		currency = known.SomethingValue
 	}
 	return MoneySumResult(entity, field, PgIntOf(total), currency, int(distinct))
+}
+
+func PgSumMoneyPlan(db *PostgresDB, plan PgPlan, entity, field string) Money {
+	value := PgSumMoney(db, plan.SQL, plan.arguments(), entity, field)
+	if plan.Capture != nil {
+		plan.Capture(1)
+	}
+	return value
 }
 
 // PgTruncate empties a table, for a test block that starts from an empty store. It is the

@@ -1,6 +1,12 @@
 package teslrt
 
-import "sync"
+import (
+	"fmt"
+	"sort"
+	"sync"
+	"sync/atomic"
+	"time"
+)
 
 type DebugDomainItem struct {
 	Name  string     `json:"name"`
@@ -126,4 +132,127 @@ func cloneDebugSQL(capture *DebugSQLCapture) *DebugSQLCapture {
 	clone := *capture
 	clone.Params = cloneDebugValues(capture.Params)
 	return &clone
+}
+
+func debugValueOf(value any) DebugValue {
+	return DebugValue{Type: fmt.Sprintf("%T", value), Display: fmt.Sprint(value)}
+}
+
+func RegisterDebugQueue(queue *Queue) func() {
+	return RegisterDebugDomainProvider(func() DebugDomainState {
+		queue.mutex.Lock()
+		defer queue.mutex.Unlock()
+		jobs := make([]DebugValue, 0, len(queue.jobs))
+		pending, dead := 0, 0
+		ordered := make([]*queuedJob, 0, len(queue.jobs))
+		for _, job := range queue.jobs {
+			ordered = append(ordered, job)
+		}
+		sort.Slice(ordered, func(left, right int) bool { return ordered[left].seq < ordered[right].seq })
+		for _, job := range ordered {
+			if job.status == jobPending {
+				pending++
+			}
+			if job.status == jobDead {
+				dead++
+			}
+			jobs = append(jobs, DebugValue{Type: "Job", Display: fmt.Sprintf("%s — %s", job.status, debugValueOf(job.payload).Display)})
+		}
+		return DebugDomainState{Queues: []DebugDomainItem{{
+			Name: queue.name, Kind: "queue", Type: "Queue",
+			Value: DebugValue{Type: "Queue", Display: fmt.Sprintf("%d pending, %d dead", pending, dead), Children: jobs},
+		}}}
+	})
+}
+
+func RegisterDebugCache[V any](cache *Cache[V], name string) func() {
+	return RegisterDebugDomainProvider(func() DebugDomainState {
+		cache.mutex.Lock()
+		defer cache.mutex.Unlock()
+		children := make([]DebugValue, 0, len(cache.entries))
+		now := time.Now().Unix()
+		for key, entry := range cache.entries {
+			if entry.expiresAt != 0 && now > entry.expiresAt {
+				continue
+			}
+			children = append(children, DebugValue{Type: "CacheEntry", Display: key + " = " + debugValueOf(entry.value).Display})
+		}
+		sort.Slice(children, func(left, right int) bool { return children[left].Display < children[right].Display })
+		return DebugDomainState{Caches: []DebugDomainItem{{
+			Name: name, Kind: "cache", Type: "Cache",
+			Value: DebugValue{Type: "Cache", Display: fmt.Sprintf("%d entries", len(children)), Children: children},
+		}}}
+	})
+}
+
+func RegisterDebugSSE(channel *SseChannel) func() {
+	return RegisterDebugDomainProvider(func() DebugDomainState {
+		channel.mutex.Lock()
+		defer channel.mutex.Unlock()
+		children := make([]DebugValue, 0, len(channel.listeners))
+		for key, listeners := range channel.listeners {
+			children = append(children, DebugValue{Type: "SSEKey", Display: fmt.Sprintf("%s: %d connected client(s)", key, len(listeners))})
+		}
+		sort.Slice(children, func(left, right int) bool { return children[left].Display < children[right].Display })
+		return DebugDomainState{SSE: []DebugDomainItem{{
+			Name: channel.name, Kind: "sse", Type: "SseChannel",
+			Value: DebugValue{Type: "SseChannel", Display: fmt.Sprintf("%d connected client(s)", channel.active), Children: children},
+		}}}
+	})
+}
+
+func RegisterDebugOutbox(outbox *Outbox, name string) func() {
+	return RegisterDebugDomainProvider(func() DebugDomainState {
+		outbox.mutex.Lock()
+		defer outbox.mutex.Unlock()
+		children := make([]DebugValue, 0, len(outbox.messages))
+		for _, message := range outbox.messages {
+			children = append(children, DebugValue{Type: "Email", Display: fmt.Sprintf("email -> %s [%d]", message.Subject, message.Status)})
+		}
+		return DebugDomainState{Email: []DebugDomainItem{{
+			Name: name, Kind: "email", Type: "Outbox",
+			Value: DebugValue{Type: "Outbox", Display: fmt.Sprintf("%d messages", len(children)), Children: children},
+		}}}
+	})
+}
+
+func RegisterDebugWorkers(queue *Queue, total int, dead bool) func() {
+	pool := &debugWorkerPool{queue: queue, total: total, dead: dead}
+	return registerDebugWorkerPool(pool)
+}
+
+type debugWorkerPool struct {
+	queue  *Queue
+	total  int
+	dead   bool
+	active atomic.Int64
+}
+
+func registerDebugWorkerPool(pool *debugWorkerPool) func() {
+	return RegisterDebugDomainProvider(func() DebugDomainState {
+		label := pool.queue.name + " workers"
+		if pool.dead {
+			label = pool.queue.name + " dead workers"
+		}
+		return DebugDomainState{Workers: []DebugDomainItem{{
+			Name: label, Kind: "worker", Type: "WorkerPool",
+			Value: DebugValue{Type: "WorkerPool", Display: fmt.Sprintf("%d live / %d total", pool.active.Load(), pool.total)},
+		}}}
+	})
+}
+
+func DebugStartWorkers(queue *Queue, handler func(any) JobOutcome, concurrency int, dead bool) struct{} {
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	pool := &debugWorkerPool{queue: queue, total: concurrency, dead: dead}
+	remove := registerDebugWorkerPool(pool)
+	_ = remove
+	return startWorkers(queue, handler, concurrency, dead, func(active bool) {
+		if active {
+			pool.active.Add(1)
+		} else {
+			pool.active.Add(-1)
+		}
+	})
 }
