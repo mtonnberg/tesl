@@ -12253,7 +12253,13 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
      |> String.concat "")
     ^ body
   in
-  let imports = ["fmt"; "os"]
+   let debug_control_start, debug_control_end =
+     if debug then
+       ("\tteslDebug, teslDebugErr := teslrt.StartDebugControlFromEnvironment()\n\tif teslDebugErr != nil {\n\t\tpanic(teslDebugErr)\n\t}\n",
+        "\tif teslDebug != nil {\n\t\t_ = teslDebug.Close()\n\t}\n")
+     else ("", "")
+   in
+   let imports = ["fmt"; "os"]
      @ (if contains_go_code body "strconv." then ["strconv"] else [])
      @ (if contains_go_code body "fmt." then ["fmt"] else [])
     @ (if contains_go_code body "math." then ["math"] else [])
@@ -12268,9 +12274,9 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
           Some (module_path ^ "/internal/" ^ dependency)
         else None) imported_packages
     @ ["testing"] in
-  Printf.sprintf
-    "package %s\n%s\nfunc TestMain(teslM *testing.M) {\n\t_, _ = fmt.Fprintln(os.Stderr, \"TESL_GO_TESTS_STARTED\")\n\tos.Exit(teslM.Run())\n}\n%s%s"
-    package (import_block imports) expect_failure_helper body
+   Printf.sprintf
+     "package %s\n%s\nfunc TestMain(teslM *testing.M) {\n%s\t_, _ = fmt.Fprintln(os.Stderr, \"TESL_GO_TESTS_STARTED\")\n\ttestExitCode := teslM.Run()\n%s\tos.Exit(testExitCode)\n}\n%s%s"
+     package (import_block imports) debug_control_start debug_control_end expect_failure_helper body
 
 (* Brings an imported local module's exposed names into scope by COPYING the entries
    from the tables that module emitted from.  Nothing is re-derived: a second derivation

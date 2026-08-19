@@ -5458,9 +5458,20 @@ let test_debug_main_starts_control_server () =
   let main_go = artifact "cmd/app/main.go" emitted in
   check bool "debug main starts discovered control endpoint" true
     (contains main_go "teslrt.StartDebugControlFromEnvironment()");
-  check bool "debug main imports runtime" true (contains main_go "/internal/teslrt");
-  ignore (artifact "internal/teslrt/debug_control.go" emitted);
-  gate_emitted ~short:true "tesl-go-debug-main" emitted
+   check bool "debug main imports runtime" true (contains main_go "/internal/teslrt");
+   ignore (artifact "internal/teslrt/debug_control.go" emitted);
+   gate_emitted ~short:true "tesl-go-debug-main" emitted;
+   let test_emitted =
+     match Compile.compile_go_source ~debug:true "<go-debug-tests>" source with
+     | Compile.GoSuccess artifacts -> artifacts
+     | Compile.GoFailure diagnostics ->
+       failf "debug test compilation failed: %s"
+         (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+   in
+   let tests_go = artifact "internal/teslmodgosmoke/module_test.go" test_emitted in
+   check bool "debug tests start the control endpoint" true
+     (contains tests_go "teslrt.StartDebugControlFromEnvironment()");
+   gate_emitted ~short:true "tesl-go-debug-tests" test_emitted
 
 let test_telemetry_app_with_go () =
   let emitted = emit_ok "<go-telemetry-app>" telemetry_app_source in
