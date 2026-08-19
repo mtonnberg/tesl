@@ -19,7 +19,8 @@ const targetConnectTimeout = 10 * time.Second
 type ProcessTarget struct {
 	mutex         sync.Mutex
 	command       *exec.Cmd
-	waitDone      chan error
+	waitDone      chan struct{}
+	processErr    error
 	client        *ControlClient
 	eventMutex    sync.Mutex
 	eventListener func(TargetEvent)
@@ -94,6 +95,9 @@ func (target *ProcessTarget) LaunchBackend(data json.RawMessage) (DebugBackend, 
 	command := exec.Command(arguments.Program, arguments.Args...)
 	command.Dir = cwd
 	command.Env = environment
+	target.mutex.Lock()
+	target.processErr = nil
+	target.mutex.Unlock()
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("capture debug program stdout: %w", err)
@@ -105,15 +109,21 @@ func (target *ProcessTarget) LaunchBackend(data json.RawMessage) (DebugBackend, 
 	if err := command.Start(); err != nil {
 		return nil, fmt.Errorf("start debug program: %w", err)
 	}
-	waitDone := make(chan error, 1)
-	go func() { waitDone <- command.Wait() }()
+	waitDone := make(chan struct{})
+	go func() {
+		err := command.Wait()
+		target.mutex.Lock()
+		target.processErr = err
+		close(waitDone)
+		target.mutex.Unlock()
+	}()
 	go target.streamOutput(stdout, "stdout")
 	go target.streamOutput(stderr, "stderr")
 	target.mutex.Lock()
 	target.command = command
 	target.waitDone = waitDone
 	target.mutex.Unlock()
-	client, err := waitForControlEndpoint(endpoint, command, waitDone)
+	client, err := waitForControlEndpoint(endpoint, command, waitDone, target.processError)
 	if err != nil {
 		_ = target.Close()
 		return nil, err
@@ -195,8 +205,9 @@ func (target *ProcessTarget) streamOutput(reader io.ReadCloser, category string)
 	}
 }
 
-func (target *ProcessTarget) watchProcess(waitDone <-chan error) {
-	err := <-waitDone
+func (target *ProcessTarget) watchProcess(waitDone <-chan struct{}) {
+	<-waitDone
+	err := target.processError()
 	exitCode := 0
 	if err != nil {
 		exitCode = 1
@@ -262,7 +273,7 @@ func splitAddress(address string) (string, int, error) {
 	return address[:separator], port, nil
 }
 
-func waitForControlEndpoint(endpoint launchEndpointSpec, command *exec.Cmd, waitDone <-chan error) (*ControlClient, error) {
+func waitForControlEndpoint(endpoint launchEndpointSpec, command *exec.Cmd, waitDone <-chan struct{}, processError func() error) (*ControlClient, error) {
 	deadline := time.Now().Add(targetConnectTimeout)
 	for time.Now().Before(deadline) {
 		var client *ControlClient
@@ -276,12 +287,18 @@ func waitForControlEndpoint(endpoint launchEndpointSpec, command *exec.Cmd, wait
 			return client, nil
 		}
 		select {
-		case processErr := <-waitDone:
-			return nil, fmt.Errorf("debug program exited before control endpoint: %w", processErr)
+		case <-waitDone:
+			return nil, fmt.Errorf("debug program exited before control endpoint: %w", processError())
 		case <-time.After(25 * time.Millisecond):
 		}
 	}
 	return nil, fmt.Errorf("timed out waiting for debug endpoint for process %d", command.Process.Pid)
+}
+
+func (target *ProcessTarget) processError() error {
+	target.mutex.Lock()
+	defer target.mutex.Unlock()
+	return target.processErr
 }
 
 func setEnvironment(environment []string, name, value string) []string {

@@ -187,6 +187,24 @@ func TestServerScopesAndVariablesAreStopScoped(t *testing.T) {
 	if evaluated.Result != "42" || evaluated.Type != "Int" {
 		t.Fatalf("evaluate = %#v", evaluated)
 	}
+	clipboardResponse, _, err := server.handle(Request{Seq: 6, Type: "request", Command: "evaluate", Arguments: mustJSON(evaluateArguments{Expression: "point[0]", FrameID: 1, Context: "clipboard"})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var clipboard evaluateBody
+	if err := json.Unmarshal(clipboardResponse.Body, &clipboard); err != nil {
+		t.Fatal(err)
+	}
+	if clipboard.Result != "42" || clipboard.VariablesReference != 0 {
+		t.Fatalf("clipboard evaluate = %#v", clipboard)
+	}
+	hoverResponse, _, err := server.handle(Request{Seq: 7, Type: "request", Command: "evaluate", Arguments: mustJSON(evaluateArguments{Expression: "missing", FrameID: 1, Context: "hover"})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hoverResponse.Success || hoverResponse.Message != "" {
+		t.Fatalf("unknown hover = %#v", hoverResponse)
+	}
 
 	scopesResponse, _, err := server.handle(Request{Seq: 3, Type: "request", Command: "scopes", Arguments: json.RawMessage(`{"frameId":1}`)})
 	if err != nil {

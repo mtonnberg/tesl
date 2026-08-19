@@ -182,6 +182,7 @@ type capabilities struct {
 	SupportsConditionalBreakpoints    bool `json:"supportsConditionalBreakpoints"`
 	SupportsHitConditionalBreakpoints bool `json:"supportsHitConditionalBreakpoints"`
 	SupportsEvaluateForHovers         bool `json:"supportsEvaluateForHovers"`
+	SupportsClipboardContext          bool `json:"supportsClipboardContext"`
 	SupportsSteppingGranularity       bool `json:"supportsSteppingGranularity"`
 }
 
@@ -329,6 +330,7 @@ func (server *Server) handle(request Request) (Response, bool, error) {
 			SupportsConditionalBreakpoints:    true,
 			SupportsHitConditionalBreakpoints: true,
 			SupportsEvaluateForHovers:         true,
+			SupportsClipboardContext:          true,
 			SupportsSteppingGranularity:       true,
 		})
 	case "configurationDone", "setExceptionBreakpoints":
@@ -705,10 +707,13 @@ func (server *Server) evaluate(request Request) (Response, bool, error) {
 	name, value, valueType, ok := evaluateFrameValue(frame, arguments.Expression)
 	if !ok {
 		server.mutex.Unlock()
+		if arguments.Context == "hover" {
+			return server.failure(request, "")
+		}
 		return server.failure(request, "evaluate supports locals and indexed child values only")
 	}
 	result := evaluateBody{Result: value.Display, Type: valueType}
-	if len(value.Children) > 0 {
+	if arguments.Context != "clipboard" && len(value.Children) > 0 {
 		result.VariablesReference = server.newReferenceLocked(variableReference{Value: value, HasValue: true})
 	}
 	server.mutex.Unlock()
