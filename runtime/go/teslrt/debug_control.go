@@ -44,8 +44,9 @@ type DebugControlError struct {
 }
 
 type DebugStoppedEvent struct {
-	Event string     `json:"event"`
-	Frame DebugFrame `json:"frame"`
+	Event string       `json:"event"`
+	Frame DebugFrame   `json:"frame"`
+	Stack []DebugFrame `json:"stack,omitempty"`
 }
 
 type DebugHandshake struct {
@@ -82,22 +83,22 @@ func (debugger *Debugger) StartDebugControl(path string) (*DebugControlServer, e
 	if path == "" {
 		return nil, errors.New("debug control: socket path is empty")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil { // #nosec G703 -- debug endpoint path is intentionally caller-selected.
 		return nil, fmt.Errorf("debug control: create endpoint directory: %w", err)
 	}
-	if err := os.Chmod(filepath.Dir(path), 0o700); err != nil {
+	if err := os.Chmod(filepath.Dir(path), 0o700); err != nil { // #nosec G302,G703 -- tighten the private endpoint directory.
 		return nil, fmt.Errorf("debug control: protect endpoint directory: %w", err)
 	}
-	if directory, err := os.Stat(filepath.Dir(path)); err != nil {
+	if directory, err := os.Stat(filepath.Dir(path)); err != nil { // #nosec G703 -- path is the configured local debug endpoint.
 		return nil, fmt.Errorf("debug control: inspect endpoint directory: %w", err)
 	} else if directory.Mode().Perm()&0o077 != 0 {
 		return nil, errors.New("debug control: endpoint directory is not owner-only")
 	}
-	if info, err := os.Lstat(path); err == nil {
+	if info, err := os.Lstat(path); err == nil { // #nosec G703 -- inspect only the configured debug endpoint.
 		if info.Mode()&os.ModeSocket == 0 {
 			return nil, errors.New("debug control: endpoint exists and is not a socket")
 		}
-		if err := os.Remove(path); err != nil {
+		if err := os.Remove(path); err != nil { // #nosec G703 -- remove only a verified stale socket.
 			return nil, fmt.Errorf("debug control: remove stale endpoint: %w", err)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -107,9 +108,9 @@ func (debugger *Debugger) StartDebugControl(path string) (*DebugControlServer, e
 	if err != nil {
 		return nil, fmt.Errorf("debug control: listen: %w", err)
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
+	if err := os.Chmod(path, 0o600); err != nil { // #nosec G703 -- protect the configured debug socket.
 		_ = listener.Close()
-		_ = os.Remove(path)
+		_ = os.Remove(path) // #nosec G703 -- remove only the socket just created.
 		return nil, fmt.Errorf("debug control: protect endpoint: %w", err)
 	}
 	return newDebugControlServer(debugger, listener, path), nil
@@ -263,9 +264,10 @@ func (server *DebugControlServer) handleRequest(request DebugControlRequest) (De
 		return result(map[string]bool{"ok": true}), false
 	case "step-in", "step-over", "step-out":
 		mode := DebugStepIn
-		if request.Command == "step-over" {
+		switch request.Command {
+		case "step-over":
 			mode = DebugStepOver
-		} else if request.Command == "step-out" {
+		case "step-out":
 			mode = DebugStepOut
 		}
 		if !server.debugger.Step(mode) {
@@ -273,8 +275,7 @@ func (server *DebugControlServer) handleRequest(request DebugControlRequest) (De
 		}
 		return result(map[string]bool{"ok": true}), false
 	case "snapshot":
-		frame, paused := server.debugger.Snapshot()
-		return result(map[string]any{"paused": paused, "frame": frame}), false
+		return result(server.debugger.SnapshotState()), false
 	case "detach":
 		return result(map[string]bool{"ok": true}), true
 	default:
@@ -482,7 +483,7 @@ func compareConditionNumbers(left, right int64, operator string) bool {
 }
 
 func (server *DebugControlServer) broadcast(event DebugEvent) {
-	message, err := json.Marshal(DebugStoppedEvent{Event: event.Kind, Frame: event.Frame})
+	message, err := json.Marshal(DebugStoppedEvent{Event: event.Kind, Frame: event.Frame, Stack: event.Stack})
 	if err != nil {
 		return
 	}
@@ -556,4 +557,14 @@ func parseHitCondition(specification string) (func(int) bool, error) {
 			return hit == count
 		}
 	}, nil
+}
+
+// CompileDebugCondition exposes the bounded condition grammar to debugger adapters.
+func CompileDebugCondition(specification string) (func(DebugFrame) bool, error) {
+	return compileDebugCondition(specification)
+}
+
+// ParseHitCondition exposes hit-count parsing to debugger adapters.
+func ParseHitCondition(specification string) (func(int) bool, error) {
+	return parseHitCondition(specification)
 }

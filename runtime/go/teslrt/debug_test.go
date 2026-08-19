@@ -121,3 +121,31 @@ func TestDebuggerStepModesStopAtNextFrame(t *testing.T) {
 	<-done
 	<-nextDone
 }
+
+func TestDebuggerSnapshotsNestedScopes(t *testing.T) {
+	debugger := NewDebugger()
+	seen := make(chan DebugEvent, 1)
+	debugger.Attach(func(event DebugEvent) { seen <- event })
+	debugger.SetBreakpoints([]DebugBreakpoint{{File: "main.tesl", Line: 9}})
+	outer := debugger.Enter(DebugFrame{ID: "outer", Function: "outer"})
+	inner := debugger.Enter(DebugFrame{ID: "inner", Function: "inner"})
+	done := make(chan struct{})
+	go func() {
+		debugger.Checkpoint(DebugFrame{ID: "inner", Function: "inner", Location: SourceLocation{File: "main.tesl", Line: 9}})
+		close(done)
+	}()
+	event := <-seen
+	if len(event.Stack) != 2 || event.Stack[0].ID != "outer" || event.Stack[1].ID != "inner" {
+		t.Fatalf("stack = %#v", event.Stack)
+	}
+	if event.Stack[1].Location.Line != 9 || event.Stack[1].Depth != 1 {
+		t.Fatalf("updated stack frame = %#v", event.Stack[1])
+	}
+	debugger.Continue()
+	inner.Leave()
+	outer.Leave()
+	<-done
+	if stack := debugger.StackSnapshot(); len(stack) != 0 {
+		t.Fatalf("stack after leave = %#v", stack)
+	}
+}

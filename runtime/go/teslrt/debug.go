@@ -40,8 +40,16 @@ type DebugFrame struct {
 }
 
 type DebugEvent struct {
-	Kind  string     `json:"kind"`
-	Frame DebugFrame `json:"frame"`
+	Kind  string       `json:"kind"`
+	Frame DebugFrame   `json:"frame"`
+	Stack []DebugFrame `json:"stack,omitempty"`
+}
+
+type DebugSnapshot struct {
+	Paused  bool              `json:"paused"`
+	Frame   DebugFrame        `json:"frame"`
+	Stack   []DebugFrame      `json:"stack"`
+	Runtime DebugRuntimeState `json:"runtime"`
 }
 
 type DebugListener func(DebugEvent)
@@ -82,6 +90,13 @@ type Debugger struct {
 	lastFrame      DebugFrame
 	stepMode       DebugStepMode
 	stepOrigin     DebugFrame
+	stack          []DebugFrame
+}
+
+type DebugScope struct {
+	debugger *Debugger
+	frameID  string
+	once     sync.Once
 }
 
 func NewDebugger() *Debugger {
@@ -104,6 +119,40 @@ func (debugger *Debugger) Detach() {
 	debugger.pauseRequested = false
 	debugger.condition.Broadcast()
 	debugger.mutex.Unlock()
+}
+
+func (debugger *Debugger) Enter(frame DebugFrame) *DebugScope {
+	debugger.mutex.Lock()
+	frame.Depth = len(debugger.stack)
+	debugger.stack = append(debugger.stack, frame)
+	debugger.mutex.Unlock()
+	return &DebugScope{debugger: debugger, frameID: frame.ID}
+}
+
+func (scope *DebugScope) Leave() {
+	if scope == nil {
+		return
+	}
+	scope.once.Do(func() {
+		scope.debugger.mutex.Lock()
+		for index := len(scope.debugger.stack) - 1; index >= 0; index-- {
+			if scope.debugger.stack[index].ID == scope.frameID {
+				scope.debugger.stack = append(scope.debugger.stack[:index], scope.debugger.stack[index+1:]...)
+				break
+			}
+		}
+		scope.debugger.mutex.Unlock()
+	})
+}
+
+func (debugger *Debugger) updateStackFrame(frame DebugFrame) {
+	for index := len(debugger.stack) - 1; index >= 0; index-- {
+		if debugger.stack[index].ID == frame.ID {
+			frame.Depth = index
+			debugger.stack[index] = frame
+			return
+		}
+	}
 }
 
 func (debugger *Debugger) breakpointHit(frame DebugFrame) bool {
@@ -139,6 +188,10 @@ func (debugger *Debugger) Checkpoint(frame DebugFrame) {
 	}
 	debugger.mutex.Lock()
 	listener = debugger.listener
+	if len(debugger.stack) > 0 {
+		frame.Depth = len(debugger.stack) - 1
+		debugger.updateStackFrame(frame)
+	}
 	stepHit := debugger.stepMode != DebugStepNone && debugger.stepMatches(frame)
 	if listener == nil || (!debugger.pauseRequested && !stepHit && !debugger.breakpointHit(frame)) {
 		debugger.mutex.Unlock()
@@ -148,8 +201,9 @@ func (debugger *Debugger) Checkpoint(frame DebugFrame) {
 	debugger.stepMode = DebugStepNone
 	debugger.paused = true
 	debugger.lastFrame = frame
+	stack := append([]DebugFrame(nil), debugger.stack...)
 	debugger.mutex.Unlock()
-	listener(DebugEvent{Kind: "stopped", Frame: frame})
+	listener(DebugEvent{Kind: "stopped", Frame: frame, Stack: stack})
 	debugger.mutex.Lock()
 	for debugger.paused && debugger.listener != nil {
 		debugger.condition.Wait()
@@ -165,6 +219,8 @@ func (debugger *Debugger) stepMatches(frame DebugFrame) bool {
 		return frame.Function == debugger.stepOrigin.Function
 	case DebugStepOut:
 		return frame.Function != debugger.stepOrigin.Function
+	case DebugStepNone:
+		return false
 	default:
 		return false
 	}
@@ -231,6 +287,25 @@ func (debugger *Debugger) Snapshot() (DebugFrame, bool) {
 	return debugger.lastFrame, debugger.paused
 }
 
+func (debugger *Debugger) StackSnapshot() []DebugFrame {
+	debugger.mutex.Lock()
+	defer debugger.mutex.Unlock()
+	return append([]DebugFrame(nil), debugger.stack...)
+}
+
+func (debugger *Debugger) SnapshotState() DebugSnapshot {
+	debugger.mutex.Lock()
+	defer debugger.mutex.Unlock()
+	return DebugSnapshot{
+		Paused:  debugger.paused,
+		Frame:   debugger.lastFrame,
+		Stack:   append([]DebugFrame(nil), debugger.stack...),
+		Runtime: DebugRuntimeStateSnapshot(),
+	}
+}
+
 var DefaultDebugger = NewDebugger()
 
 func Checkpoint(frame DebugFrame) { DefaultDebugger.Checkpoint(frame) }
+
+func DebugEnter(frame DebugFrame) *DebugScope { return DefaultDebugger.Enter(frame) }

@@ -10647,6 +10647,10 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
            @ List.map (fun (name, ty) -> local_ident name ^ " " ^ go_type ty) params
            @ dictionaries))
        (go_type result);
+     if debug then
+       Printf.bprintf body
+         "\tteslDebugScope := teslrt.DebugEnter(teslrt.DebugFrame{Version: teslrt.DebugABIVersion, ID: %S, Function: %S, Location: teslrt.SourceLocation{File: %S, Line: %d, Column: %d}})\n\tdefer teslDebugScope.Leave()\n"
+         (debug_frame_id package fd) fd.name fd.loc.file fd.loc.start.line fd.loc.start.col;
      if debug then begin
        let locals = List.map (fun (name, ty) ->
          Printf.sprintf
@@ -11463,6 +11467,7 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
   let body = Buffer.contents body in
   let imports =
     (if contains_go_code body "strconv." then ["strconv"] else [])
+    @ (if contains_go_code body "fmt." then ["fmt"] else [])
     (* A Float literal that Go has no syntax for — negative zero, an infinity, a NaN —
        renders as a `math` call, so the literal itself pulls the import in. *)
     @ (if contains_go_code body "math." then ["math"] else [])
@@ -15469,7 +15474,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         (go_quote (module_path ^ "/internal/teslrt"))
     else go_quote (module_path ^ "/internal/" ^ package) in
     let main_startup = if mode = Debug then
-      "\tteslDebug, teslDebugErr := teslrt.StartDebugControlFromEnvironment()\n\tif teslDebugErr != nil {\n\t\tpanic(teslDebugErr)\n\t}\n\tif teslDebug != nil {\n\t\tdefer teslDebug.Close()\n\t}\n"
+      "\tteslDebug, teslDebugErr := teslrt.StartDebugControlFromEnvironment()\n\tif teslDebugErr != nil {\n\t\tpanic(teslDebugErr)\n\t}\n\tif teslDebug != nil {\n\t\tdefer func() { _ = teslDebug.Close() }()\n\t}\n"
     else "" in
     (* The lint configuration is part of the emitter contract, versioned with this
        file: `exhaustive` is the static half of the ADT exhaustiveness mitigation and
@@ -15603,7 +15608,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         in
         artifacts @ List.filter_map (fun (name, contents) ->
            if (not serves_http) && List.mem name http_only then None
-           else if List.mem name ["debug.go"; "debug_control.go"] && mode <> Debug then None
+            else if List.mem name ["debug.go"; "debug_control.go"; "debug_state.go"] && mode <> Debug then None
            else if (not has_load_tests) && List.mem name load_test_only then None
           else if (not postgres_runtime) && List.mem name postgres_only then None
           else if (not uses_agent) && List.mem name agent_only then None

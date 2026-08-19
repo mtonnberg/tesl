@@ -176,6 +176,7 @@ let test_debug_emission_has_versioned_checkpoint () =
   in
   let module_again = artifact "internal/teslmodgosmoke/module.go" emitted_again in
   check bool "debug checkpoint call" true (contains module_go "teslrt.Checkpoint(teslrt.DebugFrame{");
+  check bool "debug function scope" true (contains module_go "teslrt.DebugEnter(teslrt.DebugFrame{");
   check bool "debug ABI version" true (contains module_go "teslrt.DebugABIVersion");
   check bool "debug function locals" true (contains module_go "Accessor: func() teslrt.DebugValue");
   check bool "debug test identity" true (contains test_go "Test: ");
@@ -5457,7 +5458,8 @@ let test_debug_main_starts_control_server () =
   check bool "debug main starts discovered control endpoint" true
     (contains main_go "teslrt.StartDebugControlFromEnvironment()");
   check bool "debug main imports runtime" true (contains main_go "/internal/teslrt");
-  ignore (artifact "internal/teslrt/debug_control.go" emitted)
+  ignore (artifact "internal/teslrt/debug_control.go" emitted);
+  gate_emitted ~short:true "tesl-go-debug-main" emitted
 
 let test_telemetry_app_with_go () =
   let emitted = emit_ok "<go-telemetry-app>" telemetry_app_source in
