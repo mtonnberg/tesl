@@ -166,16 +166,30 @@ let test_debug_emission_has_versioned_checkpoint () =
         (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
   in
   let module_go = artifact "internal/teslmodgosmoke/module.go" emitted in
+  let test_go = artifact "internal/teslmodgosmoke/module_test.go" emitted in
+  let emitted_again =
+    match Compile.compile_go_source ~debug:true "<go-debug>" source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "second debug Go compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_again = artifact "internal/teslmodgosmoke/module.go" emitted_again in
   check bool "debug checkpoint call" true (contains module_go "teslrt.Checkpoint(teslrt.DebugFrame{");
   check bool "debug ABI version" true (contains module_go "teslrt.DebugABIVersion");
-  ignore (artifact "internal/teslrt/debug.go" emitted)
+  check bool "debug function locals" true (contains module_go "Accessor: func() teslrt.DebugValue");
+  check bool "debug test identity" true (contains test_go "Test: ");
+  check string "debug IDs are stable" module_go module_again;
+  ignore (artifact "internal/teslrt/debug.go" emitted);
+  ignore (artifact "internal/teslrt/debug_control.go" emitted)
 
 let test_release_emission_excludes_debug_runtime () =
   let emitted = artifacts () in
   let module_go = artifact "internal/teslmodgosmoke/module.go" emitted in
   check bool "release has no checkpoint call" false (contains module_go "teslrt.Checkpoint");
   check bool "release has no debug runtime" false
-    (List.exists (fun (a : Emit_go.artifact) -> a.path = "internal/teslrt/debug.go") emitted)
+    (List.exists (fun (a : Emit_go.artifact) ->
+       List.mem a.path ["internal/teslrt/debug.go"; "internal/teslrt/debug_control.go"]) emitted)
 
 let test_named_expect_fail_emission () =
   let emitted = artifacts () in
@@ -5430,6 +5444,20 @@ load-test "the greeting endpoint under load" for TelemetryServer
   assert regressionVsBaseline p95 < 1.5
 }
 |}
+
+let test_debug_main_starts_control_server () =
+  let emitted =
+    match Compile.compile_go_source ~debug:true "<go-debug-main>" telemetry_app_source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "debug main compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let main_go = artifact "cmd/app/main.go" emitted in
+  check bool "debug main starts discovered control endpoint" true
+    (contains main_go "teslrt.StartDebugControlFromEnvironment()");
+  check bool "debug main imports runtime" true (contains main_go "/internal/teslrt");
+  ignore (artifact "internal/teslrt/debug_control.go" emitted)
 
 let test_telemetry_app_with_go () =
   let emitted = emit_ok "<go-telemetry-app>" telemetry_app_source in
@@ -12615,6 +12643,7 @@ let () =
       test_case "seeded api-tests behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-seeded-oracle>" seeded_source);
       test_case "Tesl.Telemetry, Tesl.App and load tests" `Slow test_telemetry_app_with_go;
+      test_case "debug main starts control server" `Quick test_debug_main_starts_control_server;
       test_case "telemetry and App behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-telemetry-app-oracle>" telemetry_app_source);
       test_case "`case` over a scalar" `Slow test_scalar_case_with_go;

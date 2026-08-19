@@ -141,6 +141,14 @@ let debug_frame_id package (fd : func_decl) =
   Digest.to_hex (Digest.string (Printf.sprintf "%s:%s:%s:%d:%d"
     package fd.name fd.loc.file fd.loc.start.line fd.loc.start.col))
 
+let debug_test_id package index (test : test_form) =
+  Digest.to_hex (Digest.string (Printf.sprintf "%s:test:%d:%s:%s:%d:%d"
+    package index test.description test.loc.file test.loc.start.line test.loc.start.col))
+
+let debug_checkpoint_id package function_name (loc : Location.loc) =
+  Digest.to_hex (Digest.string (Printf.sprintf "%s:%s:%s:%d:%d"
+    package function_name loc.file loc.start.line loc.start.col))
+
 let qualified owner name =
   if owner = "" || owner = !current_package then name else owner ^ "." ^ name
 
@@ -9639,7 +9647,8 @@ let tail_accepts_value signatures env expected expr =
      | _ -> None)
   | _ -> None
 
-let emit_tail ?self buffer signatures env expected indent expr =
+let emit_tail ?self ?(debug=false) ?(debug_package="") ?(debug_function="")
+    buffer signatures env expected indent expr =
   let self_name, self_params = match self with
     | Some (name, params) -> Some name, params
     | None -> None, []
@@ -9671,6 +9680,12 @@ let emit_tail ?self buffer signatures env expected indent expr =
       emit_self_tail_call env indent args
     | _ -> go_shape env indent expr
   and go_shape env indent expr =
+    (if debug then
+       Printf.bprintf buffer
+         "%steslrt.Checkpoint(teslrt.DebugFrame{Version: teslrt.DebugABIVersion, ID: %S, Function: %S, Location: teslrt.SourceLocation{File: %S, Line: %d, Column: %d}})\n"
+         indent (debug_checkpoint_id debug_package debug_function (Checker.expr_loc expr))
+         debug_function (Checker.expr_loc expr).file (Checker.expr_loc expr).start.line
+         (Checker.expr_loc expr).start.col);
     match expr with
     (* A MULTI-LINE query — `update p in E` / `delete p in E` / a `select` with its clauses
        on their own lines — is an underscore-`let` CHAIN in the surface tree, so it arrives
@@ -10632,10 +10647,16 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
            @ List.map (fun (name, ty) -> local_ident name ^ " " ^ go_type ty) params
            @ dictionaries))
        (go_type result);
-     if debug then
+     if debug then begin
+       let locals = List.map (fun (name, ty) ->
+         Printf.sprintf
+           "{Name: %S, Type: %S, Accessor: func() teslrt.DebugValue { return teslrt.DebugValue{Type: %S, Display: fmt.Sprint(%s)} }}"
+           name (go_type ty) (go_type ty) (local_ident name)) params in
        Printf.bprintf body
-         "\tteslrt.Checkpoint(teslrt.DebugFrame{Version: teslrt.DebugABIVersion, ID: %S, Function: %S, Location: teslrt.SourceLocation{File: %S, Line: %d, Column: %d}})\n"
-         (debug_frame_id package fd) fd.name fd.loc.file fd.loc.start.line fd.loc.start.col;
+         "\tteslrt.Checkpoint(teslrt.DebugFrame{Version: teslrt.DebugABIVersion, ID: %S, Function: %S, Location: teslrt.SourceLocation{File: %S, Line: %d, Column: %d}, Locals: []teslrt.DebugLocal{%s}})\n"
+         (debug_frame_id package fd) fd.name fd.loc.file fd.loc.start.line fd.loc.start.col
+         (String.concat ", " locals)
+     end;
     (* Emit the body once assuming it may loop.  If no self tail call actually turned
        into a `continue`, re-emit it flat: an unused label is a Go compile error, and
        a function that never tail-calls itself should read as plain Go. *)
@@ -10655,13 +10676,15 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
     current_handler_body := (fd.kind = HandlerKind);
     current_scope_in_hand := needs_scope;
     let looped = Buffer.create 256 in
-    emit_tail ~self looped signatures env result "\t\t" fd.body;
+     emit_tail ~self ~debug ~debug_package:package ~debug_function:fd.name
+       looped signatures env result "\t\t" fd.body;
     if contains_go_code (Buffer.contents looped) ("continue " ^ loop_label) then begin
       Printf.bprintf body "%s:\n\tfor {\n" loop_label;
       Buffer.add_buffer body looped;
       Buffer.add_string body "\t}\n"
     end else
-      emit_tail body signatures env result "\t" fd.body;
+       emit_tail ~debug ~debug_package:package ~debug_function:fd.name
+         body signatures env result "\t" fd.body;
     current_handler_body := false;
     current_scope_in_hand := false;
     (* Out of scope with the function: the next one's body must not read this one's
@@ -11465,7 +11488,7 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
   let header = Printf.sprintf "package %s\n%s" package (import_block imports) in
   header ^ body
 
-let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_path package
+let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_path package
     signatures (tests : test_form list) =
   (* `pending_helpers` is cleared so the test file emits only what IT introduces, but
      `helper_names` is NOT: the two files are one Go package, and restarting the numbering
@@ -12061,10 +12084,15 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
     let bound = match test.database with
       | Some name -> postgres_database test.loc name
       | None -> None in
-    Buffer.add_char body '\n';
-    Printf.bprintf body "func TestTesl%d(teslT *testing.T) {\n" index;
-    emit_reset ();
-    (match bound with
+     Buffer.add_char body '\n';
+     Printf.bprintf body "func TestTesl%d(teslT *testing.T) {\n" index;
+     emit_reset ();
+     if debug then
+       Printf.bprintf body
+         "\tteslrt.Checkpoint(teslrt.DebugFrame{Version: teslrt.DebugABIVersion, ID: %S, Function: %S, Test: %S, Location: teslrt.SourceLocation{File: %S, Line: %d, Column: %d}})\n"
+         (debug_test_id package index test) (Printf.sprintf "TestTesl%d" index)
+         test.description test.loc.file test.loc.start.line test.loc.start.col;
+     (match bound with
      | None -> emit_stmts [] "\t" test.stmts
      | Some database ->
        Printf.bprintf body "\tteslrt.WithDatabase(%s, func() {\n"
@@ -12198,7 +12226,8 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
     ^ body
   in
   let imports = ["fmt"; "os"]
-    @ (if contains_go_code body "strconv." then ["strconv"] else [])
+     @ (if contains_go_code body "strconv." then ["strconv"] else [])
+     @ (if contains_go_code body "fmt." then ["fmt"] else [])
     @ (if contains_go_code body "math." then ["math"] else [])
     @ (if contains_go_code body "pgx.CollectableRow" || contains_go_code body "pgx.Row"
        then ["github.com/jackc/pgx/v5"] else [])
@@ -15431,10 +15460,17 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         module_path package signatures types funcs in
     let tests_source =
       if tests = [] && api_tests = [] && load_tests = [] then None
-      else Some (test_source ~imported_packages:!imported_packages ~api_tests ~load_tests
-                   module_path package signatures tests) in
-    let needs_runtime = contains_go_code source "teslrt." ||
+       else Some (test_source ~debug:(mode = Debug) ~imported_packages:!imported_packages ~api_tests ~load_tests
+                    module_path package signatures tests) in
+    let needs_runtime = mode = Debug || contains_go_code source "teslrt." ||
       match tests_source with Some text -> contains_go_code text "teslrt." | None -> false in
+    let main_imports = if mode = Debug then
+      Printf.sprintf "%s\n\t%s" (go_quote (module_path ^ "/internal/" ^ package))
+        (go_quote (module_path ^ "/internal/teslrt"))
+    else go_quote (module_path ^ "/internal/" ^ package) in
+    let main_startup = if mode = Debug then
+      "\tteslDebug, teslDebugErr := teslrt.StartDebugControlFromEnvironment()\n\tif teslDebugErr != nil {\n\t\tpanic(teslDebugErr)\n\t}\n\tif teslDebug != nil {\n\t\tdefer teslDebug.Close()\n\t}\n"
+    else "" in
     (* The lint configuration is part of the emitter contract, versioned with this
        file: `exhaustive` is the static half of the ADT exhaustiveness mitigation and
        only sees a tag switch when a `default` arm does NOT count as covering. *)
@@ -15503,8 +15539,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
     @ (if List.exists (fun (fd : func_decl) -> fd.kind = MainKind) funcs then
          [ { path = "cmd/app/main.go";
              contents = Printf.sprintf
-               "package main\n\nimport (\n\t%s\n)\n\n// The entry point Tesl's `main` describes: its `App { … }` record was lowered into the\n// startup chain (activate each queue's workers, then serve), so this is the whole program.\nfunc main() {\n\t_ = %s.Main()\n}\n"
-               (go_quote (module_path ^ "/internal/" ^ package)) package } ]
+                "package main\n\nimport (\n\t%s\n)\n\n// The entry point Tesl's `main` describes: its `App { … }` record was lowered into the\n// startup chain (activate each queue's workers, then serve), so this is the whole program.\nfunc main() {\n%s\t_ = %s.Main()\n}\n"
+                main_imports main_startup package } ]
        else [])
     @ (if password_runtime || postgres_runtime then
            [ { path = "go.sum";
@@ -15567,7 +15603,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         in
         artifacts @ List.filter_map (fun (name, contents) ->
            if (not serves_http) && List.mem name http_only then None
-           else if name = "debug.go" && mode <> Debug then None
+           else if List.mem name ["debug.go"; "debug_control.go"] && mode <> Debug then None
            else if (not has_load_tests) && List.mem name load_test_only then None
           else if (not postgres_runtime) && List.mem name postgres_only then None
           else if (not uses_agent) && List.mem name agent_only then None
