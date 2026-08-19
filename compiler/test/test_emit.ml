@@ -1175,6 +1175,47 @@ fn f(m: Maybe Int) -> Int =
     [ "tesl_case_"; "tesl_checked_"; "tesl_ignored_"; "tesl_proof_binding_";
       "tesl_proof_bind_"; "tesl_lazy_import"; "_tesl_p" ]
 
+(* GitHub #81: main emits as a plain `module+ main`, not through define/pow.
+   Treating MainKind as a function-macro context bound `tesl-case-N` and the
+   arm payload without stars, then referenced `*tesl-case-N` and `*value`.
+   Racket rejected the generated module despite a clean Tesl check. *)
+let test_issue81_main_case_binds_referenced_names () =
+  let src = {|module Issue81 exposing []
+import Tesl.Prelude exposing [Int, String]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Database exposing [Database, DatabaseBackend, Memory]
+import Tesl.App exposing [App]
+database D = Database {
+  entities: []
+  backend: Memory
+}
+handler get root() -> String requires [] = "ok"
+api A {
+  get "/" -> String
+}
+server S for A {
+  root
+}
+main() -> App requires [] =
+  let selected = case Something 42 of
+    Something value -> value
+    Nothing -> 0
+  App {
+    database: D
+    api: S
+    port: selected
+  }
+|} in
+  let racket = compile_ok src "issue-81 main case" in
+  assert_contains ~name:"main binds the starred case temporary directly"
+    racket "(let ([*tesl-case-0 ";
+  assert_not_contains ~name:"main does not bind an unread plain case temporary"
+    racket "(let ([tesl-case-0 ";
+  assert_contains ~name:"main case payload reference matches its plain binding"
+    racket "(lambda () value)";
+  assert_not_contains ~name:"main does not reference an unbound starred payload"
+    racket "*value"
+
 (* ── Suite ───────────────────────────────────────────────────────────────── *)
 
 (* An api-test body calling a ZERO-ARG helper in ARGUMENT position: `()` parses
@@ -1224,6 +1265,7 @@ let () =
       Alcotest.test_case "define/pow emission" `Quick test_fn_define_pow;
       Alcotest.test_case "string interpolation" `Quick test_fn_string_interpolation;
       Alcotest.test_case "case expression" `Quick test_fn_case_expression;
+      Alcotest.test_case "main case binds referenced names (#81)" `Quick test_issue81_main_case_binds_referenced_names;
       Alcotest.test_case "if expression" `Quick test_fn_if_expression;
     ];
     "check-auth", [
