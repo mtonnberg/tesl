@@ -4646,7 +4646,10 @@ let emit_func ctx (fd : func_decl) =
   if fd.kind = MainKind then begin
     emit_line ctx "(module+ main";
     emit ctx "  ";
-    ctx.func_kind <- Some MainKind;
+    (* Unlike every other function kind, main is plain Racket rather than a
+       define/pow-family macro body.  Keep plain-binding mode: no macro exists
+       here to synthesize the `*name` aliases used in function bodies. *)
+    ctx.func_kind <- None;
     ctx.func_return_spec <- None;
     (* B5: always wrap each statement in (thsl-src! file line locals thunk) so
        breakpoints can fire inside main blocks.  The macro erases to the bare
