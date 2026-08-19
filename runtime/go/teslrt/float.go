@@ -80,6 +80,22 @@ func FloatKeyLess(left, right float64) bool {
 	return left < right
 }
 
+// FloatKey is a COMPARABLE key whose equality is exactly `FloatEqual`'s, so a map keyed by it
+// answers the same question the language's `==` answers.
+//
+// Neither the value nor its raw bits will do. `float64` as a map key makes -0.0 and +0.0 the same
+// key (the language distinguishes them) and every NaN a distinct one (the language makes all NaNs
+// equal). Raw bits fix the first and worsen the second — two NaNs with different payloads are
+// different bit patterns. So NaN collapses to ONE sentinel and everything else keeps its bits.
+func FloatKey(value float64) uint64 {
+	if math.IsNaN(value) {
+		// A quiet NaN with a zero payload: one canonical key for every NaN, and not a value any
+		// non-NaN float can produce.
+		return math.Float64bits(math.NaN())
+	}
+	return math.Float64bits(value)
+}
+
 // ParseFloat accepts what Tesl's `Float.parse` accepts: a decimal float, with no
 // leading or trailing space and no Racket reader syntax.
 func ParseFloat(text string) Maybe[float64] {

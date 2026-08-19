@@ -57,7 +57,6 @@ type field_def = {
   name      : string;
   type_expr : type_expr;
   proof_ann : proof_expr option;
-  checker   : string option;   (** via checker name (for codec fields) *)
   db_type   : string option;   (** @db(type) override *)
   loc       : loc;
 }
@@ -270,8 +269,6 @@ type type_form =
                        precisely because everything else about it is identical:
                        [TypeNewtype] is matched at ~55 sites, and every
                        [{ name; base_type; _ }] pattern keeps working. *)
-  | TypeAlias   of { name : string; base_type : type_expr; loc : loc }
-                   (** transparent alias — currently same as newtype at surface *)
   | TypeAdt     of { name : string; params : string list; variants : adt_variant list; loc : loc }
                    (** type Status = Open | Closed | Pending reason:String *)
 
@@ -796,7 +793,6 @@ let top_decl_loc (decl : top_decl) : loc =
   match decl with
   | DFunc fd -> fd.loc
   | DType (TypeNewtype { loc; _ })
-  | DType (TypeAlias { loc; _ })
   | DType (TypeAdt { loc; _ }) -> loc
   | DRecord r -> r.loc
   | DEntity e -> e.loc

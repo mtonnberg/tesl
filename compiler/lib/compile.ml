@@ -821,8 +821,7 @@ let definition_in_top_decl env line col (decl : Ast.top_decl) =
        match definition_in_return_spec env line col fd.return_spec with
        | Some _ as found -> found
        | None -> definition_in_expr env (extend_locals_with_params [] fd.params) line col fd.body)
-  | Ast.DType (Ast.TypeNewtype { base_type; _ })
-  | Ast.DType (Ast.TypeAlias { base_type; _ }) ->
+  | Ast.DType (Ast.TypeNewtype { base_type; _ }) ->
     definition_in_type_expr env line col base_type
   | Ast.DType (Ast.TypeAdt { variants; _ }) ->
     find_map_list (fun (variant : Ast.adt_variant) ->
@@ -936,8 +935,7 @@ let collect_definition_env (m : Ast.module_form) =
   List.fold_left (fun env decl ->
     match decl with
     | Ast.DFunc fd -> add_term_def env fd.name (precise_name_loc fd.loc fd.name)
-    | Ast.DType (Ast.TypeNewtype { name; loc; _ })
-    | Ast.DType (Ast.TypeAlias { name; loc; _ }) ->
+    | Ast.DType (Ast.TypeNewtype { name; loc; _ }) ->
       add_type_def env name (precise_name_loc loc name)
     | Ast.DType (Ast.TypeAdt { name; params = _; variants; loc }) ->
       let env = add_type_def env name (precise_name_loc loc name) in
@@ -1317,8 +1315,7 @@ let resolve_symbol_in_top_decl env line col (decl : Ast.top_decl) =
          match resolve_symbol_in_expr env param_locals line col fd.body with
          | Some _ as found -> found
          | None -> if loc_contains_position name_loc line col then Some (term_symbol fd.name name_loc) else None)
-  | Ast.DType (Ast.TypeNewtype { name; base_type; loc; _ })
-  | Ast.DType (Ast.TypeAlias { name; base_type; loc }) ->
+  | Ast.DType (Ast.TypeNewtype { name; base_type; loc; _ }) ->
     let name_loc = precise_name_loc loc name in
     (match resolve_symbol_in_type_expr env line col base_type with
      | Some _ as result -> result
@@ -1697,8 +1694,7 @@ let rec collect_occurrences_in_top_decl env target (decl : Ast.top_decl) =
     @ List.concat_map (collect_occurrences_in_binding ~locals:param_locals env target) fd.params
     @ collect_occurrences_in_return_spec ~locals:param_locals env target fd.return_spec
     @ collect_occurrences_in_expr env param_locals target fd.body
-  | Ast.DType (Ast.TypeNewtype { name; base_type; loc; _ })
-  | Ast.DType (Ast.TypeAlias { name; base_type; loc }) ->
+  | Ast.DType (Ast.TypeNewtype { name; base_type; loc; _ }) ->
     let name_loc = precise_name_loc loc name in
     (if symbol_equal (type_symbol name name_loc) target then [name_loc] else [])
     @ collect_occurrences_in_type_expr env target base_type
@@ -2549,8 +2545,7 @@ let legacy_bool_diagnostics _filename source (m : module_form) =
         visit_expr fd.body
     | DRecord r -> List.iter visit_field_def r.fields
     | DEntity e -> List.iter visit_field_def e.fields
-    | DType (TypeNewtype { base_type; _ })
-    | DType (TypeAlias { base_type; _ }) -> visit_type_expr base_type
+    | DType (TypeNewtype { base_type; _ }) -> visit_type_expr base_type
     | DType (TypeAdt { variants; _ }) ->
         List.iter (fun (v : adt_variant) -> List.iter visit_field_def v.fields) variants
     | DConst c -> visit_expr c.value
@@ -2823,8 +2818,7 @@ let cycle_decl_bound_name (d : Ast.top_decl) : string option =
   | Ast.DEntity e -> Some e.name
   | Ast.DFact f -> Some f.name
   | Ast.DType (Ast.TypeAdt { name; _ })
-  | Ast.DType (Ast.TypeNewtype { name; _ })
-  | Ast.DType (Ast.TypeAlias { name; _ }) -> Some name
+  | Ast.DType (Ast.TypeNewtype { name; _ }) -> Some name
   | _ -> None
 
 (* A cyclic SCC is COLLAPSED into one namespace, and that is where a same-named
@@ -3672,8 +3666,7 @@ let merge_imported_client_decls (entry : Ast.module_form) : Ast.module_form =
   let decl_key = function
     | Ast.DFact (f : Ast.fact_form) -> Some ("fact:" ^ f.name)
     | Ast.DType (Ast.TypeAdt { name; _ })
-    | Ast.DType (Ast.TypeNewtype { name; _ })
-    | Ast.DType (Ast.TypeAlias { name; _ }) -> Some ("type:" ^ name)
+    | Ast.DType (Ast.TypeNewtype { name; _ }) -> Some ("type:" ^ name)
     | Ast.DRecord (r : Ast.record_form) -> Some ("type:" ^ r.name)
     | Ast.DEntity (e : Ast.entity_form) -> Some ("type:" ^ e.name)
     | Ast.DCodec (c : Ast.codec_form) -> Some ("codec:" ^ c.name)
@@ -4067,9 +4060,6 @@ let agent_symbols_of_module (m : Ast.module_form) : string list =
       Some (agent_symbol_json ~name:fd.name ~kind ~signature)
     | Ast.DType (Ast.TypeNewtype { name; base_type; _ }) ->
       Some (agent_symbol_json ~name ~kind:"newtype"
-              ~signature:(Type_system.pp_ty (Checker.ty_of_type_expr base_type)))
-    | Ast.DType (Ast.TypeAlias { name; base_type; _ }) ->
-      Some (agent_symbol_json ~name ~kind:"alias"
               ~signature:(Type_system.pp_ty (Checker.ty_of_type_expr base_type)))
     | Ast.DType (Ast.TypeAdt { name; variants; _ }) ->
       let ctors = List.map (fun (v : Ast.adt_variant) -> v.ctor) variants in

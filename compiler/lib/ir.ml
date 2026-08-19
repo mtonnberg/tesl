@@ -633,8 +633,7 @@ let adt_variant_json (variant : adt_variant) =
   ]
 
 let type_decl_json ~(codec_names : string list) = function
-  | TypeNewtype { name; base_type; _ }
-  | TypeAlias { name; base_type; _ } ->
+  | TypeNewtype { name; base_type; _ } ->
     Some (json_object [
       json_field "name" (json_string name);
       json_field "base" (json_string (type_expr_to_text base_type));
@@ -988,7 +987,7 @@ let module_to_json ~(source_name : string) (m : module_form) =
         (match type_decl with
          | TypeAdt _ ->
            (match type_decl_json ~codec_names type_decl with Some json -> adts := json :: !adts | None -> ())
-         | TypeNewtype _ | TypeAlias _ ->
+         | TypeNewtype _ ->
            (match type_decl_json ~codec_names type_decl with Some json -> newtypes := json :: !newtypes | None -> ()))
       | DFunc func ->
         (match fact_json_of_func ~fact_decls func with

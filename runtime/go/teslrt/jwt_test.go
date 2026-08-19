@@ -257,3 +257,105 @@ func TestDecodeReadsWithoutVerifying(t *testing.T) {
 		t.Fatal("decode refused an unverified token")
 	}
 }
+
+// ── The `sessionRevoked` hook and the `sessionPolicy` numbers ────────────────
+//
+// Both were declarations the Go backend accepted and then ignored: a revoked session kept
+// renewing, and `ShortSession` shortened only the cookie while the token itself carried the
+// standard hour against the standard twelve. Each test below fails if that returns.
+
+func TestRenewalConsultsTheRevocationHook(t *testing.T) {
+	t.Cleanup(func() { SetSessionRevokedHook(nil) })
+	key := testKey("revocation-key")
+	token := JwtSign(claimsOf("sub", "u1"), key)
+
+	// No hook: today's behaviour, a renewal that succeeds.
+	if renewed := JwtRenew(token, key); !renewed.OK() {
+		t.Fatalf("renewal without a hook was refused: %s", renewed.Message())
+	}
+
+	var sawSubject string
+	var sawIssuedAt int64
+	SetSessionRevokedHook(func(subject string, issuedAt int64) bool {
+		sawSubject, sawIssuedAt = subject, issuedAt
+		return subject == "u1"
+	})
+	refused := JwtRenew(token, key)
+	if refused.OK() {
+		t.Error("a revoked session renewed")
+	}
+	if refused.Status() != 401 || refused.Message() != "Session cannot be renewed: session revoked" {
+		t.Errorf("refusal = %d %q", refused.Status(), refused.Message())
+	}
+	// The hook is handed the claim and `iat` in SECONDS, which is what the emitted adapter
+	// converts from — a hook given milliseconds would compare against the wrong epoch.
+	if sawSubject != "u1" {
+		t.Errorf("the hook saw subject %q", sawSubject)
+	}
+	if sawIssuedAt <= 0 || sawIssuedAt > jwtNowSeconds()+1 {
+		t.Errorf("the hook saw iat %d, which is not epoch seconds", sawIssuedAt)
+	}
+
+	// A session the hook does not name still renews, so the check is per session rather than a
+	// global off switch.
+	other := JwtSign(claimsOf("sub", "u2"), key)
+	if renewed := JwtRenew(other, key); !renewed.OK() {
+		t.Errorf("an unrevoked session was refused: %s", renewed.Message())
+	}
+}
+
+// FAIL CLOSED: a hook that panics — a failing dbRead, a nil map — denies the renewal. Allowing it
+// would make an unavailable revocation store indistinguishable from an empty one.
+func TestAPanickingRevocationHookDenies(t *testing.T) {
+	t.Cleanup(func() { SetSessionRevokedHook(nil) })
+	key := testKey("revocation-key")
+	token := JwtSign(claimsOf("sub", "u1"), key)
+	SetSessionRevokedHook(func(string, int64) bool { panic("db down") })
+	if renewed := JwtRenew(token, key); renewed.OK() {
+		t.Error("a renewal survived a panicking revocation hook")
+	}
+}
+
+// `sessionPolicy ShortSession` is ONE choice with TWO numbers: the renewable window and the hard
+// stop on a renewed session's total lifetime. Reading only the first leaves a short window
+// guarding the same total exposure, which is not what the clause says.
+func TestSessionPolicyDrivesTheTokenAndNotOnlyTheCookie(t *testing.T) {
+	t.Cleanup(func() { SetSessionPolicy(jwtTTLSeconds) })
+	key := testKey("policy-key")
+
+	SetSessionPolicy(SessionPolicyTTL("StandardSession"))
+	standard := JwtSign(claimsOf("sub", "u1"), key)
+	if lifetime := tokenLifetime(t, standard); lifetime != jwtTTLSeconds {
+		t.Errorf("StandardSession token lifetime = %d, want %d", lifetime, jwtTTLSeconds)
+	}
+	if got := sessionPolicyAbsoluteMaxSeconds(); got != jwtAbsoluteMaxSeconds {
+		t.Errorf("StandardSession cap = %d, want %d", got, jwtAbsoluteMaxSeconds)
+	}
+
+	SetSessionPolicy(SessionPolicyTTL("ShortSession"))
+	short := JwtSign(claimsOf("sub", "u1"), key)
+	if lifetime := tokenLifetime(t, short); lifetime != jwtShortTTLSeconds {
+		t.Errorf("ShortSession token lifetime = %d, want %d", lifetime, jwtShortTTLSeconds)
+	}
+	if got := sessionPolicyAbsoluteMaxSeconds(); got != jwtShortAbsoluteMaxSeconds {
+		t.Errorf("ShortSession cap = %d, want %d", got, jwtShortAbsoluteMaxSeconds)
+	}
+}
+
+// tokenLifetime is `exp - iat` out of a signed token's own payload.
+func tokenLifetime(t *testing.T, token JwtToken) int64 {
+	t.Helper()
+	_, payload, _ := segmentsOf(t, token.Value)
+	raw, ok := decodeBase64URL(payload)
+	if !ok {
+		t.Fatalf("payload %q is not base64url", payload)
+	}
+	var claims struct {
+		IssuedAt  int64 `json:"iat"`
+		ExpiresAt int64 `json:"exp"`
+	}
+	if err := json.Unmarshal(raw, &claims); err != nil {
+		t.Fatalf("payload does not decode: %v", err)
+	}
+	return claims.ExpiresAt - claims.IssuedAt
+}

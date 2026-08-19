@@ -1,6 +1,9 @@
 package teslrt
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func intEqual(left, right Int) bool { return Equal(left, right) }
 
@@ -395,4 +398,116 @@ func TestListMaximumMinimum(t *testing.T) {
 	if got := ListMaximum([]int{7}, less); got.SomethingValue != 7 {
 		t.Errorf("single element = %v", got)
 	}
+}
+
+// ── `List.unique`: the keyed path answers exactly what the closure path answers ──
+//
+// The keyed form is an optimisation, so the property that matters is that it is not also a
+// behaviour change. Every element type the emitter can key gets checked BOTH ways here, and the
+// two must agree on the value AND the order (first occurrence wins, order preserved).
+
+func TestListUniqueKeyedAgreesWithTheClosurePath(t *testing.T) {
+	strings := []string{"b", "a", "b", "c", "a", ""}
+	if got, want := ListUniqueKeyed(strings, func(s string) string { return s }),
+		ListUniqueBy(strings, func(a, b string) bool { return a == b }); !slicesEqual(got, want) {
+		t.Errorf("String: keyed %v, closure %v", got, want)
+	}
+
+	bools := []bool{true, false, true, true}
+	if got, want := ListUniqueKeyed(bools, func(b bool) bool { return b }),
+		ListUniqueBy(bools, func(a, b bool) bool { return a == b }); !slicesEqual(got, want) {
+		t.Errorf("Bool: keyed %v, closure %v", got, want)
+	}
+
+	ints := []Int{FromInt64(3), FromInt64(1), FromInt64(3), MustParseDecimal("99999999999999999999"),
+		FromInt64(1), MustParseDecimal("99999999999999999999")}
+	keyed := ListUniqueKeyed(ints, func(n Int) IntKey { return n.Key() })
+	closure := ListUniqueBy(ints, Equal)
+	if len(keyed) != len(closure) {
+		t.Fatalf("Int: keyed %v, closure %v", keyed, closure)
+	}
+	for index := range keyed {
+		if !Equal(keyed[index], closure[index]) {
+			t.Errorf("Int at %d: keyed %v, closure %v", index, keyed[index], closure[index])
+		}
+	}
+}
+
+// Float is where a naive key would change the answer: the language makes every NaN equal to every
+// other and -0.0 distinct from +0.0, which is the opposite of what `float64` as a map key does on
+// both counts.
+func TestListUniqueKeyedMatchesFloatEquality(t *testing.T) {
+	nan := math.NaN()
+	otherNaN := math.Float64frombits(math.Float64bits(nan) | 0x3) // a different NaN payload
+	negativeZero := math.Copysign(0, -1)
+	values := []float64{1.5, nan, negativeZero, 0, nan, otherNaN, 1.5, negativeZero}
+
+	keyed := ListUniqueKeyed(values, FloatKey)
+	closure := ListUniqueBy(values, FloatEqual)
+	if len(keyed) != len(closure) {
+		t.Fatalf("keyed %v, closure %v", keyed, closure)
+	}
+	for index := range keyed {
+		if !FloatEqual(keyed[index], closure[index]) {
+			t.Errorf("at %d: keyed %v, closure %v", index, keyed[index], closure[index])
+		}
+	}
+	// Spelled out, because this is the case a raw-bits key would get wrong: one NaN survives, and
+	// BOTH zeros do.
+	if len(keyed) != 4 {
+		t.Errorf("keyed = %v, want [1.5 NaN -0 0]", keyed)
+	}
+	if !math.IsNaN(keyed[1]) {
+		t.Errorf("the second unique value is %v, want a NaN", keyed[1])
+	}
+	if !math.Signbit(keyed[2]) || math.Signbit(keyed[3]) {
+		t.Errorf("the zeros did not survive as two values: %v", keyed)
+	}
+}
+
+// FloatKey's contract, directly: equal keys iff FloatEqual.
+func TestFloatKeyMatchesFloatEqual(t *testing.T) {
+	nan := math.NaN()
+	otherNaN := math.Float64frombits(math.Float64bits(nan) | 0x7)
+	negativeZero := math.Copysign(0, -1)
+	corpus := []float64{0, negativeZero, 1, -1, 1.5, math.Inf(1), math.Inf(-1), nan, otherNaN,
+		math.MaxFloat64, math.SmallestNonzeroFloat64}
+	for _, left := range corpus {
+		for _, right := range corpus {
+			if (FloatKey(left) == FloatKey(right)) != FloatEqual(left, right) {
+				t.Errorf("FloatKey disagrees with FloatEqual on (%v, %v)", left, right)
+			}
+		}
+	}
+}
+
+// The keyed path preserves ORDER, which is the half a map could plausibly lose.
+func TestListUniqueKeyedPreservesFirstOccurrenceOrder(t *testing.T) {
+	input := []string{"z", "y", "z", "x", "y", "w"}
+	got := ListUniqueKeyed(input, func(s string) string { return s })
+	want := []string{"z", "y", "x", "w"}
+	if !slicesEqual(got, want) {
+		t.Errorf("ListUniqueKeyed = %v, want %v", got, want)
+	}
+}
+
+// The input value is untouched: a writer works in its own array.
+func TestListUniqueKeyedDoesNotWriteItsInput(t *testing.T) {
+	input := []string{"b", "a", "b"}
+	_ = ListUniqueKeyed(input, func(s string) string { return s })
+	if !slicesEqual(input, []string{"b", "a", "b"}) {
+		t.Errorf("the input was rewritten to %v", input)
+	}
+}
+
+func slicesEqual[T comparable](left, right []T) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }

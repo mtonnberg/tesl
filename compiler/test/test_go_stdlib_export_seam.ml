@@ -3,7 +3,7 @@
     Each stdlib module's export list is matched name by name in [Emit_go.compile_module], and
     every match ends in
 
-      {[ | other -> unsupported loc "Go backend does not support `Tesl.M` export `%s` yet" other ]}
+      {[ | other -> unsupported loc "Go backend does not emit the `Tesl.M` export `%s`: …" other ]}
 
     which is the right shape — an unwired name must be REFUSED, not emitted as something the
     backend guessed at — but it is silent in the direction that matters to us: adding an
@@ -65,7 +65,10 @@ let probe module_name export =
     let message = String.concat "; "
       (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics) in
     if List.exists (fun (d : Compile.diagnostic) ->
-         d.source = "go-emitter" && contains d.message "does not support"
+         (* Matched on the SHAPE of the fallthrough's message, which every module arm shares:
+            "does not emit the `Tesl.M` export `x`".  A refusal that says something else is a
+            different rule (a type refusal, a capability refusal) and belongs in [Rejected]. *)
+         d.source = "go-emitter" && contains d.message "does not emit the"
          && contains d.message "export") diagnostics
     then Refused message
     else Rejected message
@@ -150,11 +153,59 @@ let test_the_fallthrough_names_what_it_refuses () =
   | Wired -> fail "the probe compiled; pick a name that is still unwired"
   | Rejected message -> failf "the checker refused the probe: %s" message
 
+(* ── The `App` field inventory ─────────────────────────────────────────────────
+   `App { … }` is the startup surface: `Desugar.lower_main_app` reads its fields and turns them
+   into the imperative chain (start workers, start email workers, serve).  It reads them BY NAME
+   out of an assoc list, so a field added to the App schema that nothing reads is silently
+   dropped — the same class as the six `server` clauses this backend was ignoring, and it would
+   hit both backends rather than one.
+
+   `Ast.server_form` and `Ast.EServe` are OCaml records, so their seams are compile-time ones
+   (`emit_go.ml` rebuilds each record from its own fields).  The App schema is DATA — a row in
+   `Validation_structural.config_block_schema` — so its seam is this test: adding a field fails
+   here until someone writes down what happens to it. *)
+let app_field_dispositions = [
+  (* READ by `Desugar.lower_main_app`, and what each becomes. *)
+  "database", "the database scope main's body runs inside";
+  "queues", "one teslrt.StartWorkers per activated queue (plus its dead-letter pool)";
+  "email", "one teslrt.StartEmailWorker per declared outbox";
+  "api", "the server teslrt.Serve is called with";
+  "port", "ServeOptions.Port";
+  "static", "ServeOptions.StaticDir";
+  "mountPath", "ServeOptions.MountPath";
+  (* INERT on BOTH backends: an `sseChannel` declaration registers its own channel, and
+     listing it in App starts nothing — `emit_racket.ml` reads this field no more than
+     `emit_go.ml` does.  Listed so the field is accounted for rather than forgotten. *)
+  "sseChannels", "inert: the channel declaration is what registers it, on both backends";
+]
+
+let test_app_fields_are_accounted_for () =
+  let declared =
+    List.map (fun (name, _, _) -> name) (Validation_structural.config_block_schema "App") in
+  let accounted = List.map fst app_field_dispositions in
+  let missing = List.filter (fun name -> not (List.mem name accounted)) declared in
+  let stale = List.filter (fun name -> not (List.mem name declared)) accounted in
+  (match missing with
+   | [] -> ()
+   | names ->
+     failf "the App schema gained %s, which nothing in the startup chain accounts for. \
+            Decide what it does — read it in Desugar.lower_main_app, or add it to \
+            app_field_dispositions as deliberately inert."
+       (String.concat ", " names));
+  (match stale with
+   | [] -> ()
+   | names ->
+     failf "app_field_dispositions names %s, which the App schema no longer declares"
+       (String.concat ", " names))
+
 let () =
   run "Go stdlib export seam" [
     "fallthrough", [
       test_case "no stdlib export is swallowed silently" `Slow test_no_export_is_swallowed;
       test_case "the refusal names the module and the export" `Quick
         test_the_fallthrough_names_what_it_refuses;
+    ];
+    "startup-surface", [
+      test_case "every App field is accounted for" `Quick test_app_fields_are_accounted_for;
     ];
   ]

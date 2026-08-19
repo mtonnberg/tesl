@@ -77,7 +77,7 @@ type ctx = {
   env      : (string * scheme) list;
   records  : (string * record_def) list;
   adts     : (string * adt_def) list;      (* type name → ADT def *)
-  type_aliases : (string * ty) list;        (* newtype/alias name → base type (for Eq/Ord resolution) *)
+  type_aliases : (string * ty) list;        (* newtype name → base type (for Eq/Ord resolution) *)
   secret_types : string list;
   (** Names declared `secret X = T` — local decls and the exported types of
       imported modules (see [load_imported_ctors], which re-parses the source, so
@@ -196,7 +196,6 @@ let make_ctx ?(source_lines = [||]) ~filename ~env () = {
       [DRecord] / [DEntity]           → [records]
       [DType (TypeAdt …)]             → [adts]
       [DType (TypeNewtype …)]         → [type_aliases] (+ [secret_types])
-      [DType (TypeAlias …)]           → [type_aliases]
 
     That derivation is the point.  Issue #71 was a consumer
     ({!check_api_decl_types}) rebuilding this list from [records] + [ctors] and
@@ -459,7 +458,7 @@ let check_units_name_collisions (m : module_form) : type_error list =
         match decl with
         | DType tf ->
           let (name, loc) = match tf with
-            | TypeNewtype { name; loc; _ } | TypeAlias { name; loc; _ }
+            | TypeNewtype { name; loc; _ }
             | TypeAdt { name; loc; _ } -> (name, loc) in
           let alias_clash =
             imports_units && List.mem_assoc name Units_catalog.aliases in
@@ -693,9 +692,6 @@ let collect_type_defs ctx (decls : top_decl list) : ctx =
         ctors = (name, (name, ctor_sch)) :: ctx.ctors;
         type_aliases = (name, base) :: ctx.type_aliases;
         secret_types = (if secret then name :: ctx.secret_types else ctx.secret_types) }
-    | DType (TypeAlias { name; base_type; _ }) ->
-      (* Transparent alias — record its base so Eq/Ord resolution can chase it. *)
-      { ctx with type_aliases = (name, ty_of_type_expr base_type) :: ctx.type_aliases }
     | DCodec cf ->
       (* Register the target type as decodable iff it has a non-forbidden
          fromJson codec; this drives the decide-by-resolution check for
@@ -1083,7 +1079,7 @@ let load_imported_func_sigs (m : module_form) : (string * scheme) list =
           (* Collect locally-defined type names from the imported module *)
           let local_types = List.concat_map (function
             | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ })
-            | DType (TypeAlias { name; _ }) | DRecord { name; _ } -> [name]
+             | DRecord { name; _ } -> [name]
             | _ -> []
           ) imported.decls in
           let strip_dotdot s =
@@ -2382,7 +2378,7 @@ let rec ty_is_ground (t : ty) : bool =
   | TCon name -> not (is_ty_var_name name)
   | TApp (h, a) | TFun (h, a) -> ty_is_ground h && ty_is_ground a
 
-(* [ctx.type_aliases] holds both newtype and transparent-alias bases (populated in
+(* [ctx.type_aliases] holds newtype bases (populated in
    collect_type_defs); resolving through it makes `type Celsius = Float` orderable
    and `type Callback = (Int) -> Int` non-equatable.  Nominal identity is unaffected
    (unification still distinguishes the TCons); this only decides comparability. *)
@@ -4528,7 +4524,41 @@ and bind_pattern_vars ctx scrut_ty (pat : pattern) : (string * scheme) list =
   in
   match pat with
   | PVar n -> [(n, mono scrut_ty)]
-  | PWild | PLit _ -> []
+  | PWild -> []
+  (* A LITERAL arm has to be a literal OF THE SCRUTINEE'S TYPE.  Unchecked, `case p of 3 -> …`
+     over an ADT type-checked and then died at run time on Racket (`=: contract violation`,
+     because the arm compiles to `(= p 3)`) while the Go backend refused to emit it — a
+     compile-clean program that no backend can run.  Every literal shape goes through this,
+     interpolation included: an interpolated pattern is unparseable today, so admitting one
+     silently would be a hole the day the parser grows one. *)
+  | PLit { value; loc } ->
+    let lit_ty = infer_lit value in
+    (* A NEWTYPE scrutinee matches a literal of its BASE: `type Code = Int` then
+       `case code of 404 -> …` compares through the payload, which is what both backends emit
+       and what `tests`' own newtype-case program relies on.  Resolved transitively, so a
+       newtype over a newtype behaves the same. *)
+    let rec underlying seen ty =
+      match apply !(ctx.subst) ty with
+      | TCon name when not (List.mem name seen) ->
+        (match List.assoc_opt name ctx.type_aliases with
+         | Some base -> underlying (name :: seen) base
+         | None -> apply !(ctx.subst) ty)
+      | resolved -> resolved
+    in
+    (match unify !(ctx.subst) scrut_ty lit_ty with
+     | subst' -> ctx.subst := subst'; []
+     | exception TypeMismatch _ ->
+     match unify !(ctx.subst) (underlying [] scrut_ty) lit_ty with
+     | subst' -> ctx.subst := subst'; []
+     | exception TypeMismatch _ ->
+       add_error ctx loc
+         (Printf.sprintf
+            "this `case` arm matches a literal of type `%s`, but the scrutinee is a `%s`\n\
+             Hint: match a constructor of `%s`, or a wildcard branch `_ -> ...`"
+            (pp_ty (apply !(ctx.subst) lit_ty))
+            (pp_ty (apply !(ctx.subst) scrut_ty))
+            (pp_ty (apply !(ctx.subst) scrut_ty)));
+       [])
   | PNullary { ctor; loc } ->
     ignore (bind_constructor_pattern ctor [] loc);
     []
@@ -5483,7 +5513,7 @@ let export_locality_errors (m : module_form) : type_error list =
     | DConst c -> [c.name]
     | DType (TypeAdt { name; variants; _ }) ->
       name :: List.map (fun (v : Ast.adt_variant) -> v.ctor) variants
-    | DType (TypeNewtype { name; _ }) | DType (TypeAlias { name; _ }) -> [name]
+    | DType (TypeNewtype { name; _ })  -> [name]
     | DRecord r -> [r.name]
     | DEntity e -> [e.name]
     | DDatabase db -> [db.name]
@@ -5646,7 +5676,7 @@ let collect_scope_type_names_split (m : module_form) : string list * string list
   let always_in_scope = ["Fact"] in
   let local_types = List.filter_map (function
     | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ })
-    | DType (TypeAlias { name; _ }) | DRecord { name; _ }
+     | DRecord { name; _ }
     | DEntity { name; _ } | DFact { name; _ }
     | DQueue { name; _ } | DChannel { name; _ } | DCache { name; _ }
     | DAgent { name; _ } -> Some name
@@ -5667,7 +5697,7 @@ let collect_scope_type_names_split (m : module_form) : string list * string list
              | Some (Ok imp_m) ->
                let names = List.filter_map (function
                  | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ })
-                 | DType (TypeAlias { name; _ }) | DRecord { name; _ }
+                  | DRecord { name; _ }
                  | DFact { name; _ } -> Some name
                  | _ -> None
                ) imp_m.decls in
@@ -5904,8 +5934,6 @@ let check_type_names_in_scope ~(suggest : string -> Import_suggest.suggestion op
           | DType (TypeNewtype { name; base_type; secret; _ }) ->
             if secret then wire_secret_names := name :: !wire_secret_names;
             [ (name, [ ("", base_type) ]) ]
-          | DType (TypeAlias { name; base_type; _ }) ->
-            [ (name, [ ("", base_type) ]) ]
           | _ -> []
         ) dm.decls
       in
@@ -6068,8 +6096,6 @@ let check_type_names_in_scope ~(suggest : string -> Import_suggest.suggestion op
         List.concat_map (fun (f : field_def) -> check_te f.type_expr) v.fields
       ) variants
     | DType (TypeNewtype { base_type; _ }) ->
-      check_te base_type
-    | DType (TypeAlias { base_type; _ }) ->
       check_te base_type
     | DTest t ->
       List.concat_map (function
@@ -6332,7 +6358,7 @@ let collect_bound_names (m : module_form) : (string, unit) Hashtbl.t =
        shadowing error (`check_name_shadowing`). *)
     | DType (TypeAdt { name; variants; _ }) ->
       add name; List.iter (fun (v : adt_variant) -> add v.ctor) variants
-    | DType (TypeNewtype { name; _ }) | DType (TypeAlias { name; _ }) -> add name
+    | DType (TypeNewtype { name; _ })  -> add name
     | DRecord r -> add r.name
     | DEntity e -> add e.name
     | _ -> ()

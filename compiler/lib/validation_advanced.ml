@@ -765,6 +765,67 @@ let check_meaningless_limit_offset (decls : top_decl list) : validation_error li
     | _ -> ()) decls;
   List.rev !errors
 
+(** A `set` value that READS the row it is updating.
+
+    `set c.count = c.count + 1` reads naturally and does not survive either lowering:
+
+      - the Racket emitter binds the SET values before the update runs, so the emitted code
+        references the row binder where nothing binds it — `c: unbound identifier`, a module
+        that does not LOAD, from a program that type-checks;
+      - the PostgreSQL path binds every SET value as a parameter, so there is no row to read
+        from on that side at all — Racket's `postgres-update-many!` has the same shape.
+
+    Go's in-memory path happens to manage it (it applies a function to each matching row), and
+    one backend's memory store being able to do it is not the language supporting it. Read the
+    row, then write what you computed:
+
+      case selectOne c from Counter where c.id == id of
+        Nothing -> …
+        Something row -> update c in Counter where c.id == id set c.count = row.count + 1 *)
+let check_set_value_reads_row (decls : top_decl list) : validation_error list =
+  let errors = ref [] in
+  let seen : (Location.loc, unit) Hashtbl.t = Hashtbl.create 16 in
+  let mentions binder expr =
+    let found = ref false in
+    Ast_visitor.iter (fun node ->
+      match node with
+      | EVar { name; _ } when name = binder -> found := true
+      | EField { obj = EVar { name; _ }; _ } when name = binder -> found := true
+      | _ -> ()) expr;
+    !found
+  in
+  let visit expr =
+    Ast_visitor.iter (fun node ->
+      match Sql_query.extract_update node with
+      | None -> ()
+      | Some (update : Sql_query.sql_update) ->
+        let loc = Checker.expr_loc node in
+        if not (Hashtbl.mem seen loc) then begin
+          Hashtbl.add seen loc ();
+          List.iter (fun (field, value) ->
+            if mentions update.binder value then
+              errors := make_error loc
+                ~hint:(Printf.sprintf
+                  "read the row first, then write what you computed: `case selectOne %s from … \
+                   of … Something row -> update %s in … set %s.%s = row.%s + 1`"
+                  update.binder update.binder update.binder field field)
+                (Printf.sprintf
+                   "the `set` value for `%s.%s` reads the row it is updating, which no backend \
+                    can lower: the update's values are computed BEFORE it runs, so there is no \
+                    row to read from"
+                   update.binder field)
+                :: !errors)
+            update.updates
+        end)
+      expr
+  in
+  List.iter (function
+    | DFunc (fd : func_decl) -> visit fd.body
+    | DTest (t : test_form) ->
+      List.iter (fun stmt -> List.iter visit (Ast.test_stmt_exprs stmt)) t.stmts
+    | _ -> ()) decls;
+  List.rev !errors
+
 let check_sql_query_shape (decls : top_decl list) : validation_error list =
   let errors = ref [] in
   let emit err = errors := err :: !errors in

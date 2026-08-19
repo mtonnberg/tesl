@@ -510,7 +510,6 @@ let emit_ts (m : module_form) : string =
   (* ── Newtypes ── *)
   let newtypes = List.filter_map (function
     | DType (TypeNewtype { name; base_type; secret; _ }) -> Some (name, base_type, secret)
-    | DType (TypeAlias  { name; base_type; _ }) -> Some (name, base_type, false)
     | _ -> None
   ) m.decls in
 

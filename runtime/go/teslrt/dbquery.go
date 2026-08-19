@@ -268,17 +268,6 @@ type PgGroupPlan struct {
 	Zone PgGroupZone
 }
 
-// PgGroupZone is the part of a `TimeZone` the bucket SQL needs, in a type THIS file can name.
-// The zone database lives in timetrunc.go and ships only to a program that buckets by a
-// calendar unit; a Postgres program that groups by a plain column must not carry ~450 KB of
-// tzdata to name a field it never fills. `PgZoneOf` (in timetrunc.go) is the conversion, and
-// it is reachable exactly when a calendar bucket is.
-type PgGroupZone struct {
-	Name          string
-	OffsetMinutes int
-	Fixed         bool
-}
-
 // statement renders the plan, and the bucket expression with it.
 //
 // A NAMED zone hands the DST-correct work to PostgreSQL's own tzdata —
@@ -294,6 +283,16 @@ func (plan PgGroupPlan) statement() (string, []any) {
 		return fmt.Sprintf("$%d", len(arguments))
 	}
 	unit := strings.ToLower(plan.Unit)
+	// The unit is the one part of this statement that lands in SQL TEXT rather than a parameter
+	// (`date_trunc` takes a literal field name), so it is checked against the closed set the
+	// emitter can produce. Nothing user-supplied reaches it today — `Time.truncHour` and its
+	// four siblings are the only sources — and this is what keeps that true if a later surface
+	// lets a unit come from a value.
+	switch unit {
+	case "", "hour", "day", "week", "month", "year":
+	default:
+		panic("database: " + unit + " is not a grouping unit (hour, day, week, month, year)")
+	}
 	bucket := plan.Column
 	switch {
 	case unit == "":

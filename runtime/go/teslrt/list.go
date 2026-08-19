@@ -150,8 +150,31 @@ func ListMemberBy[T any](needle T, xs []T, equal func(T, T) bool) bool {
 	return false
 }
 
-// ListUniqueBy keeps the FIRST occurrence and preserves order, matching Racket's
-// hash-based `List.unique`. It writes only into its own fresh array.
+// ListUniqueKeyed keeps the FIRST occurrence and preserves order, in ONE pass over a map — the
+// same complexity as Racket's hash-based `List.unique`.
+//
+// The emitter picks this whenever it can hand the element type a COMPARABLE key whose equality is
+// exactly the language's `==` on that type: the value itself for String and Bool, `Int.Key()` for
+// an unbounded integer, `FloatKey` for a Float (see the note there — neither the float nor its raw
+// bits would do), and the base's key through a newtype. Anything else — an ADT, a record, a
+// container, a `secret` whose comparison must stay constant-time — goes through `ListUniqueBy`,
+// which is a linear scan per element and therefore quadratic.
+func ListUniqueKeyed[T any, K comparable](xs []T, key func(T) K) []T {
+	out := make([]T, 0, len(xs))
+	seen := make(map[K]struct{}, len(xs))
+	for _, value := range xs {
+		k := key(value)
+		if _, already := seen[k]; already {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+// ListUniqueBy is the same answer for an element type with no comparable key. It is QUADRATIC —
+// one linear scan per element — which is why the keyed form above exists and is preferred.
 func ListUniqueBy[T any](xs []T, equal func(T, T) bool) []T {
 	out := make([]T, 0, len(xs))
 	for _, value := range xs {

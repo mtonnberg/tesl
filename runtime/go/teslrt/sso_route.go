@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -31,38 +30,6 @@ type SsoRoute struct {
 	SessionKey   func() Secret
 	PublicOrigin string
 	AfterLogin   string
-}
-
-// The session policy the `sessionPolicy` clause selects. It decides the session cookie's
-// Max-Age, so it is runtime state rather than a constant: a program that asks for
-// ShortSession must not be handed a StandardSession cookie by the other backend.
-var (
-	sessionPolicyMutex sync.RWMutex
-	sessionPolicyTTL   = jwtTTLSeconds
-)
-
-// SetSessionPolicy is the `sessionPolicy` clause, applied at boot. The two names are a
-// CLOSED set on the surface, so an unknown one is a compile error rather than a default
-// here; this takes the ttl the emitter resolved from the name.
-func SetSessionPolicy(ttlSeconds int) {
-	sessionPolicyMutex.Lock()
-	defer sessionPolicyMutex.Unlock()
-	sessionPolicyTTL = ttlSeconds
-}
-
-func sessionPolicySeconds() int {
-	sessionPolicyMutex.RLock()
-	defer sessionPolicyMutex.RUnlock()
-	return sessionPolicyTTL
-}
-
-// SessionPolicyTTL maps the surface's closed keyword set to its ttl in seconds. It lives
-// here rather than in the emitter so both backends read one table.
-func SessionPolicyTTL(name string) int {
-	if name == "ShortSession" {
-		return 900
-	}
-	return jwtTTLSeconds
 }
 
 // SetPublicOriginValue is the `publicOrigin` clause, applied at boot. It takes precedence

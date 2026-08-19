@@ -5622,11 +5622,6 @@ let emit_type_form ctx = function
     emit_type_name ctx base_type;
     emit_line ctx ")";
     emit_nl ctx
-  | TypeAlias { name; base_type; _ } ->
-    emit ctx (Printf.sprintf "(define-type-alias %s " name);
-    emit_type_name ctx base_type;
-    emit_line ctx ")";
-    emit_nl ctx
   | TypeAdt { name; params; variants; _ } ->
     (* Parameterized ADT: (define-adt (Name a b) ...) vs simple (define-adt Name ...) *)
     if params = [] then
@@ -7608,7 +7603,6 @@ let top_decl_loc_label (d : top_decl) : Location.loc * string =
     in
     fd.loc, (if fd.kind = MainKind then "main block" else Printf.sprintf "%s %s" k fd.name)
   | DType (TypeNewtype { loc; name; _ }) -> loc, Printf.sprintf "newtype %s" name
-  | DType (TypeAlias { loc; name; _ })   -> loc, Printf.sprintf "type alias %s" name
   | DType (TypeAdt { loc; name; _ })     -> loc, Printf.sprintf "type %s" name
   | DRecord r     -> r.loc, Printf.sprintf "record %s" r.name
   | DEntity e     -> e.loc, Printf.sprintf "entity %s" e.name
@@ -7733,7 +7727,7 @@ let emit_module ctx (m : module_form) =
     List.concat_map (function
       | DRecord r -> [r.name]
       | DEntity e -> [e.name]
-      | DType (TypeNewtype { name; _ }) | DType (TypeAlias { name; _ }) -> [name]
+      | DType (TypeNewtype { name; _ })  -> [name]
       | DType (TypeAdt { name; variants; _ }) ->
         name :: List.map (fun (v : Ast.adt_variant) -> v.ctor) variants
       | _ -> []
@@ -8229,7 +8223,7 @@ let emit_module ctx (m : module_form) =
     | DConst c -> Hashtbl.replace emitted_names c.name ()
     | DRecord r -> Hashtbl.replace emitted_names r.name ()
     | DEntity e -> Hashtbl.replace emitted_names e.name ()
-    | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ }) | DType (TypeAlias { name; _ }) ->
+    | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ })  ->
       Hashtbl.replace emitted_names name ()
     | _ -> ()
   ) m.decls;
@@ -8262,8 +8256,8 @@ let emit_module ctx (m : module_form) =
         | DFunc fd -> Hashtbl.mem emitted_names fd.name
         | DConst c -> Hashtbl.mem emitted_names c.name
         | DRecord r -> Hashtbl.mem emitted_names r.name
-        | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ })
-        | DType (TypeAlias { name; _ }) -> Hashtbl.mem emitted_names name
+        | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ }) ->
+          Hashtbl.mem emitted_names name
         | _ -> false
       in
       if not skip then

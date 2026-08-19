@@ -35,6 +35,10 @@ type ServeOptions struct {
 	// runtime makes, and for its reason: the SPA is precisely the other thing sharing this
 	// origin that the prefix exists to separate the API from.
 	MountPath string
+	// ListenAddress is the interface to bind, from the `listenAddress` server clause:
+	// "127.0.0.1" for `Loopback` (the server sits behind a reverse proxy) and empty for
+	// `AllInterfaces`. Empty binds every interface, which is Go's and Racket's default.
+	ListenAddress string
 }
 
 // Serve runs the HTTP server until the process is asked to stop, then drains in-flight requests.
@@ -52,7 +56,7 @@ func Serve(server Server, options ServeOptions) struct{} {
 		port = 8080
 	}
 	handler := server.handlerWith(options)
-	address := fmt.Sprintf(":%d", port)
+	address := bindAddress(options)
 	httpServer := &http.Server{
 		Addr:              address,
 		Handler:           handler,
@@ -72,11 +76,27 @@ func Serve(server Server, options ServeOptions) struct{} {
 		defer cancel()
 		_ = httpServer.Shutdown(drain)
 	}()
-	fmt.Fprintf(os.Stderr, "tesl: serving on http://localhost:%d\n", port)
+	announced := options.ListenAddress
+	if announced == "" {
+		announced = "localhost"
+	}
+	fmt.Fprintf(os.Stderr, "tesl: serving on http://%s:%d\n", announced, port)
 	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		panic("serve: " + err.Error())
 	}
 	return struct{}{}
+}
+
+// bindAddress is where the listener goes: the `listenAddress` clause's interface and the port.
+// Named because it is a RULE rather than a format string — an empty interface binds every one of
+// them, which is the difference between a service a reverse proxy reaches and one the whole
+// network reaches.
+func bindAddress(options ServeOptions) string {
+	port := options.Port
+	if port == 0 {
+		port = 8080
+	}
+	return fmt.Sprintf("%s:%d", options.ListenAddress, port)
 }
 
 // handlerWith wraps the router with the static-file surface an App may declare. The API routes
@@ -84,7 +104,11 @@ func Serve(server Server, options ServeOptions) struct{} {
 func (server Server) handlerWith(options ServeOptions) http.Handler {
 	mount := strings.Trim(options.MountPath, "/")
 	static := options.StaticDir
-	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	return http.HandlerFunc(func(raw http.ResponseWriter, request *http.Request) {
+		// Every response — API, static file and SPA fallback alike — carries the security header
+		// floor, which is where `dsl/web.rkt` puts it (`harden-servlet` wraps the servlet, after
+		// the two direct-response paths were found carrying none).
+		writer := &hardenedWriter{ResponseWriter: raw}
 		routed := request
 		if mount != "" {
 			trimmed := strings.TrimPrefix(strings.TrimPrefix(request.URL.Path, "/"), mount)
@@ -226,6 +250,126 @@ func PublicOrigin() string {
 	return publicOrigin
 }
 
+// The `healthProbePath` server clause: the ONE path exempt from Host validation, because a load
+// balancer probes host-blind. Exempt from THAT check only — the cross-site guard still applies,
+// and a probe is a GET so it never meets it.
+var (
+	healthProbeMutex sync.RWMutex
+	healthProbePath  string
+)
+
+// SetHealthProbePath is the clause, applied at boot.
+func SetHealthProbePath(path string) {
+	healthProbeMutex.Lock()
+	defer healthProbeMutex.Unlock()
+	healthProbePath = path
+}
+
+func healthProbeExempt(path string) bool {
+	healthProbeMutex.RLock()
+	defer healthProbeMutex.RUnlock()
+	return healthProbePath != "" && path == healthProbePath
+}
+
+// The `contentSecurityPolicy` server clause: the default CSP for responses this runtime serves
+// as HTML. Precedence matches `dsl/web.rkt` — the clause, then `TESL_CSP`, then a non-breaking
+// `frame-ancestors 'none'` (it constrains framing, not script or style sources, so it cannot
+// break a single-page app). A response that sets its own policy keeps it.
+var (
+	contentSecurityPolicyMutex sync.RWMutex
+	contentSecurityPolicy      string
+)
+
+// SetContentSecurityPolicy is the clause, applied at boot.
+func SetContentSecurityPolicy(policy string) {
+	contentSecurityPolicyMutex.Lock()
+	defer contentSecurityPolicyMutex.Unlock()
+	contentSecurityPolicy = strings.TrimSpace(policy)
+}
+
+func htmlContentSecurityPolicy() string {
+	contentSecurityPolicyMutex.RLock()
+	declared := contentSecurityPolicy
+	contentSecurityPolicyMutex.RUnlock()
+	if declared != "" {
+		return declared
+	}
+	if fromEnv := strings.TrimSpace(os.Getenv("TESL_CSP")); fromEnv != "" {
+		return fromEnv
+	}
+	return "frame-ancestors 'none'"
+}
+
+// hstsHeaderValue is set ONLY from the CONFIGURED public origin, never from the request: a Host
+// header is untrusted and absent behind a proxy, and HSTS is close to irreversible once a
+// browser has seen it. One year, no includeSubDomains and no preload — Tesl cannot see the
+// subdomain topology. Suppressed for a loopback dev origin.
+func hstsHeaderValue() string {
+	origin := strings.ToLower(PublicOrigin())
+	if !strings.HasPrefix(origin, "https://") {
+		return ""
+	}
+	host := hostOf(origin)
+	if host == "localhost" || host == "[::1]" || strings.HasPrefix(host, "127.") {
+		return ""
+	}
+	return "max-age=31536000"
+}
+
+// hardenedWriter adds the response-header floor at the moment the status is written, which is the
+// first point where the Content-Type is known — the CSP applies to HTML and `no-store` to the
+// JSON API, exactly as `dsl/web.rkt` splits them. A header the producer already set WINS: a
+// handler that chose its own Referrer-Policy or CSP means it.
+type hardenedWriter struct {
+	http.ResponseWriter
+	wroteHeader bool
+}
+
+func (writer *hardenedWriter) WriteHeader(status int) {
+	if !writer.wroteHeader {
+		writer.wroteHeader = true
+		applySecurityHeaders(writer.Header())
+	}
+	writer.ResponseWriter.WriteHeader(status)
+}
+
+func (writer *hardenedWriter) Write(payload []byte) (int, error) {
+	if !writer.wroteHeader {
+		writer.WriteHeader(http.StatusOK)
+	}
+	return writer.ResponseWriter.Write(payload)
+}
+
+// Flush passes through so an SSE stream still streams: wrapping a writer without this turns
+// every event into buffered output that arrives at the end.
+func (writer *hardenedWriter) Flush() {
+	if flusher, canFlush := writer.ResponseWriter.(http.Flusher); canFlush {
+		flusher.Flush()
+	}
+}
+
+func applySecurityHeaders(header http.Header) {
+	setIfAbsent := func(name, value string) {
+		if value != "" && header.Get(name) == "" {
+			header.Set(name, value)
+		}
+	}
+	setIfAbsent("X-Content-Type-Options", "nosniff")
+	setIfAbsent("Referrer-Policy", "no-referrer")
+	setIfAbsent("X-Frame-Options", "DENY")
+	setIfAbsent("Strict-Transport-Security", hstsHeaderValue())
+	contentType := strings.ToLower(header.Get("Content-Type"))
+	switch {
+	case strings.Contains(contentType, "text/html"):
+		// A CSP is meaningful for a document only, and the app cannot set one on HTML this
+		// runtime serves (the static file and the SPA fallback are both ours).
+		setIfAbsent("Content-Security-Policy", htmlContentSecurityPolicy())
+	case strings.Contains(contentType, "application/json"):
+		// The JSON API answers session-bearing data; a shared cache must not keep it.
+		setIfAbsent("Cache-Control", "no-store")
+	}
+}
+
 // requestRefusal is the guard pair: a cross-site state-changing request is refused (403), and a
 // Host that does not match the configured public origin is refused (421). Answering the second
 // with 421 rather than 404 is deliberate — it says "not this origin", which is what a
@@ -238,7 +382,7 @@ func requestRefusal(request *http.Request) (Response, bool) {
 		}
 	}
 	origin := PublicOrigin()
-	if origin == "" {
+	if origin == "" || healthProbeExempt(request.URL.Path) {
 		return Response{}, false
 	}
 	if hostOf(request.Host) == hostOf(origin) {

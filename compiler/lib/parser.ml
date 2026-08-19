@@ -3315,13 +3315,13 @@ let parse_field_defs_ext ~allow_indexes s =
            (match parse_type_expr s with
             | Ok ty ->
               (* optional proof annotation *)
-              let proof_ann, checker =
+              let proof_ann =
                 if peek s = PROOF_ANNOT then begin
                   advance s;
                   match parse_proof_expr s with
-                  | Ok p -> Some p, None
-                  | Err _ -> None, None
-                end else None, None
+                  | Ok p -> Some p
+                  | Err _ -> None
+                end else None
               in
               (* optional @db(type) *)
               let db_type =
@@ -3340,7 +3340,7 @@ let parse_field_defs_ext ~allow_indexes s =
                 end else None
               in
               let loc = span loc0 (current_loc s) in
-              fields := { name = fname; type_expr = ty; proof_ann; checker; db_type; loc } :: !fields;
+              fields := { name = fname; type_expr = ty; proof_ann; db_type; loc } :: !fields;
               skip_layout s;
               if peek s = COMMA then (advance s; skip_layout s)
             | Err _ -> continue_ := false)
@@ -3533,7 +3533,7 @@ and parse_adt_variants_flat s =
                       end else None
                     in
                     let fd = { name = fname; type_expr = ty; proof_ann;
-                               checker = None; db_type = None; loc = floc } in
+                               db_type = None; loc = floc } in
                     fields := fd :: !fields;
                     if peek s = COMMA then advance s
                   | Err _ -> brace_continue := false)
@@ -3562,7 +3562,7 @@ and parse_adt_variants_flat s =
                 if peek s = RPAREN then begin
                   advance s;
                   let fd = { name = fname; type_expr = ty; proof_ann;
-                             checker = None; db_type = None; loc = floc } in
+                             db_type = None; loc = floc } in
                   fields := fd :: !fields
                 end else begin
                   s.pos <- saved; continue2 := false
@@ -3584,7 +3584,7 @@ and parse_adt_variants_flat s =
                end else None
              in
              let fd = { name = fname; type_expr = ty; proof_ann;
-                        checker = None; db_type = None; loc = floc } in
+                        db_type = None; loc = floc } in
              fields := fd :: !fields
            | Err _ -> continue2 := false)
         | PIPE | NEWLINE | INDENT | DEDENT | EOF | RBRACE -> continue2 := false
@@ -3666,7 +3666,7 @@ and parse_adt_variant_line s =
                   end else None
                 in
                 fields := { name = fname; type_expr = ty; proof_ann;
-                            checker = None; db_type = None; loc = floc } :: !fields;
+                            db_type = None; loc = floc } :: !fields;
                 if peek s = COMMA then advance s
               | Err _ -> brace_continue := false)
            | _ -> brace_continue := false)
@@ -3688,7 +3688,7 @@ and parse_adt_variant_line s =
            end else None
          in
          fields := { name = fname; type_expr = ty; proof_ann;
-                     checker = None; db_type = None; loc = floc } :: !fields
+                     db_type = None; loc = floc } :: !fields
        | Err _ -> continue_ := false)
     | LPAREN ->
       (* Could be:
@@ -3714,7 +3714,7 @@ and parse_adt_variant_line s =
             if peek s = RPAREN then begin
               advance s;  (* consume ) *)
               fields := { name = fname; type_expr = ty; proof_ann;
-                          checker = None; db_type = None; loc = floc } :: !fields
+                          db_type = None; loc = floc } :: !fields
             end else begin
               s.pos <- saved;
               (* Fall through to positional *)
@@ -3723,7 +3723,7 @@ and parse_adt_variant_line s =
                  let pos = List.length !fields in
                  let label = if pos = 0 then "value" else Printf.sprintf "value%d" (pos + 1) in
                  fields := { name = label; type_expr = ty2; proof_ann = None;
-                             checker = None; db_type = None; loc = floc } :: !fields
+                             db_type = None; loc = floc } :: !fields
                | Err _ -> continue_ := false)
             end
           | Err _ ->
@@ -3733,7 +3733,7 @@ and parse_adt_variant_line s =
                let pos = List.length !fields in
                let label = if pos = 0 then "value" else Printf.sprintf "value%d" (pos + 1) in
                fields := { name = label; type_expr = ty; proof_ann = None;
-                           checker = None; db_type = None; loc = floc } :: !fields
+                           db_type = None; loc = floc } :: !fields
              | Err _ -> continue_ := false))
        | _ ->
          s.pos <- saved;
@@ -3742,7 +3742,7 @@ and parse_adt_variant_line s =
             let pos = List.length !fields in
             let label = if pos = 0 then "value" else Printf.sprintf "value%d" (pos + 1) in
             fields := { name = label; type_expr = ty; proof_ann = None;
-                        checker = None; db_type = None; loc = floc } :: !fields
+                        db_type = None; loc = floc } :: !fields
           | Err _ -> continue_ := false))
     | UIDENT _ ->
       (* Positional (unlabeled) field: each bare TypeName is ONE field.
@@ -3755,7 +3755,7 @@ and parse_adt_variant_line s =
          let pos = List.length !fields in
          let label = if pos = 0 then "value" else Printf.sprintf "value%d" (pos + 1) in
          fields := { name = label; type_expr = ty; proof_ann = None;
-                     checker = None; db_type = None; loc = floc } :: !fields
+                     db_type = None; loc = floc } :: !fields
        | Err _ -> continue_ := false)
     | NEWLINE | DEDENT | EOF | PIPE -> continue_ := false
     | _ -> continue_ := false

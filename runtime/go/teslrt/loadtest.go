@@ -215,6 +215,30 @@ func AssertLoadTest(teslT *testing.T, result LoadTestResult, metric, operator st
 	}
 }
 
+// NoteLoadTestBaseline records that a `baseline` clause was declared, WITHOUT comparing against
+// one.
+//
+// Neither backend stores baselines: `dsl/load-test.rkt` prints
+// "in-process baselines; store/compare deferred" and moves on, and this says the same thing in the
+// same place. The note exists because the alternative — accepting the clause silently — would read
+// as a regression check that ran, and refusing it would make a load test that runs on Racket fail
+// to compile here.
+//
+// Implementing real baselines is a language feature owed to BOTH backends (a stored format, a
+// location, and a decision about what CI does with a regression), not a migration item.
+func NoteLoadTestBaseline(teslT *testing.T, name string) {
+	teslT.Helper()
+	teslT.Logf("    (baseline %q — in-process baselines; store/compare deferred)", name)
+}
+
+// NoteLoadTestRegression is the same for a regression ASSERTION, which needs the baseline the line
+// above does not store. It does not fail the test: a check that cannot run has not failed.
+func NoteLoadTestRegression(teslT *testing.T, metric string, ratio float64) {
+	teslT.Helper()
+	teslT.Logf("    (baseline regression check for %s with ratio %g — baseline comparison not yet stored)",
+		metric, ratio)
+}
+
 // LoadTestStatus is what a request thunk answers: the status an api-test response carries, or 0
 // when the request trapped. A trap is an error rather than a crash, because a load test that
 // dies on the first 500 measures nothing.

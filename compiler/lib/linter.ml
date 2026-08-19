@@ -620,7 +620,7 @@ let collect_decl_names acc (d : Ast.top_decl) =
         collect_type_expr_names a2 f.type_expr
       ) a v.fields
     ) acc variants
-  | DType (TypeNewtype { base_type; _ }) | DType (TypeAlias { base_type; _ }) ->
+  | DType (TypeNewtype { base_type; _ })  ->
     collect_type_expr_names acc base_type
   | DRecord rf ->
     List.fold_left (fun a (f : Ast.field_def) ->
@@ -1514,7 +1514,6 @@ let lint_unexported_signature_names filename (source : string) (out : lint_diag 
       | Ast.DRecord r -> Some r.name
       | Ast.DType (Ast.TypeAdt { name; _ }) -> Some name
       | Ast.DType (Ast.TypeNewtype { name; _ }) -> Some name
-      | Ast.DType (Ast.TypeAlias { name; _ }) -> Some name
       | Ast.DFact f -> Some f.name
       | Ast.DCapability cap -> Some cap.name
       | _ -> None

@@ -890,8 +890,7 @@ let build_ctor_info (decls : top_decl list) : ctor_info =
       List.map (fun (v : adt_variant) ->
         (v.ctor, (List.map (fun (f : field_def) -> f.type_expr) v.fields, result_ty))
       ) variants
-    | DType (TypeNewtype { name; base_type; _ })
-    | DType (TypeAlias { name; base_type; _ }) ->
+    | DType (TypeNewtype { name; base_type; _ }) ->
       [ (name, ([base_type], mk_name_type name)) ]
     | _ -> []
   ) decls in
@@ -919,8 +918,7 @@ let build_ctor_info (decls : top_decl list) : ctor_info =
      builtin rows describe a different type. *)
   let local_type_names = List.filter_map (function
     | DType (TypeAdt { name; _ })
-    | DType (TypeNewtype { name; _ })
-    | DType (TypeAlias { name; _ }) -> Some name
+    | DType (TypeNewtype { name; _ }) -> Some name
     | DRecord (r : record_form) -> Some r.name
     | DEntity (e : entity_form) -> Some e.name
     | _ -> None) decls in
@@ -1115,8 +1113,7 @@ let load_imported_type_decls (m : module_form) : top_decl list =
       | DRecord (r : record_form) -> [r.name]
       | DEntity (e : entity_form) -> [e.name]
       | DType (TypeAdt { name; _ })
-      | DType (TypeNewtype { name; _ })
-      | DType (TypeAlias { name; _ }) -> [name]
+      | DType (TypeNewtype { name; _ }) -> [name]
       | _ -> []
     ) m.decls
   in
@@ -1145,8 +1142,7 @@ let load_imported_type_decls (m : module_form) : top_decl list =
             | DRecord (r : record_form) -> in_scope r.name
             | DEntity (e : entity_form) -> in_scope e.name
             | DType (TypeAdt { name; _ })
-            | DType (TypeNewtype { name; _ })
-            | DType (TypeAlias { name; _ }) -> in_scope name
+            | DType (TypeNewtype { name; _ }) -> in_scope name
             | _ -> false
           ) imported.decls
   ) m.imports
@@ -2212,7 +2208,6 @@ let check_self_referential_aliases (decls : top_decl list) : validation_error li
     | TTuple { elems; _ } -> List.exists (mentions_name name) elems
   in
   List.concat_map (function
-    | DType (TypeAlias { name; base_type; loc })
     | DType (TypeNewtype { name; base_type; loc; _ }) ->
       if mentions_name name base_type then
         [ make_error loc

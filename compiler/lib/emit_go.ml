@@ -452,7 +452,8 @@ let primitive_type_of_type_expr = function
   | TFun { loc; _ } -> unsupported loc
     "Go backend newtype base is a function type: a newtype wraps one scalar carrier"
   | TTuple { loc; _ } -> unsupported loc
-    "Go backend newtype base is a tuple type: a newtype wraps one scalar carrier"
+    "Go backend newtype base is the `(a, b)` comma type form: a newtype wraps one scalar \
+     carrier"
 
 (* An `entity` is a record PLUS a store.  The row type is an ordinary struct — that is
    what a query returns and what `insert` takes — and the store is one package-level
@@ -673,6 +674,32 @@ let current_functions : (string, func_decl) Hashtbl.t = Hashtbl.create 16
    monomorphic row.  Populated per module, like `current_functions`. *)
 let current_type_params : (string, (string * string) list) Hashtbl.t = Hashtbl.create 16
 
+(* ── Equality DICTIONARIES for generic functions ──────────────────────────────
+   `fn same(x: a, y: a) -> Bool = x == y` runs on Racket, which compares two `a` values
+   structurally.  An emitted Go generic cannot: `==` needs `comparable`, and Tesl's values
+   include maps and slices that are not; `reflect.DeepEqual` would compare a `secret` byte by
+   byte, throwing away the constant-time comparison that is the point of the type.
+
+   So the comparison travels as an ARGUMENT.  A generic function whose body compares two values
+   of type parameter `A` takes one extra parameter — `teslEqualA func(A, A) bool` — and each
+   call site passes the concrete type's own comparator, which the emitter already generates for
+   every comparable type (`element_equal_func`).  Precise, allocation-free, no reflection, and
+   `secret` keeps its constant-time compare because the comparator for a secret IS that
+   compare.
+
+   Which parameters need one is decided BEFORE anything is emitted (`plan_equality_dicts`), so
+   a call site emitted ahead of the callee's body still knows the callee's arity.  The plan
+   under-approximates safely: a comparison it does not see falls back to the refusal that was
+   there before, never to wrong code. *)
+let equality_dicts : (string, string list) Hashtbl.t = Hashtbl.create 8
+
+(* The dictionary parameter a type parameter travels in. *)
+let equality_dict_param go_param = "teslEqual" ^ go_param
+
+(* The dictionaries the function currently being emitted has in scope, so `equal_expr` knows
+   whether it may call one. *)
+let current_equality_dicts : string list ref = ref []
+
 (* The type variables a declaration mentions, in order of first appearance, paired with the
    Go type-parameter name each renders as: `A`, `B`, … by position.  Positional rather than
    derived from the Tesl name, because two variables spelled `a` and `acc` would otherwise
@@ -807,6 +834,80 @@ let module_has_postgres_database () =
    request verb (`get "/path"`) only means something inside such a block, and this is what
    tells the emitter which server it addresses. *)
 let current_api_server : string option ref = ref None
+
+(* The `serve` node's fields, and what each one does here.  Rebuilding the record is what makes
+   this exhaustive: an `App { … }` field that `Desugar.lower_main_app` starts carrying has to be
+   accounted for in this function before the backend compiles again. *)
+let serve_field_dispositions ~server_name ~port ~static_dir ~mount_path ~capabilities ~loc =
+  (* EMITTED: the server value, and three `ServeOptions` fields — Port, StaticDir, MountPath.
+     `listenAddress` is a SERVER clause rather than an App field and reaches the same struct
+     through `server_listen_addresses`. *)
+  ignore (server_name, port, static_dir, mount_path);
+  (* INERT: a capability row is compile-time on both backends — the checker propagates it and
+     it has no runtime form — and `loc` is diagnostics. *)
+  ignore (capabilities, loc);
+  ignore (EServe { server_name; port; static_dir; mount_path; capabilities; loc })
+
+(* ── THE `server` CLAUSE SEAM ─────────────────────────────────────────────────
+   `Ast.server_form` carries sixteen fields.  `emit_racket.ml` honours all of them; this
+   backend read TEN, and the six it ignored were not refused — they were DROPPED.  Two of those
+   had teeth: a `sessionRevoked` hook that never ran meant a revoked session went on renewing,
+   and a `listenAddress Loopback` that never arrived meant a proxy-only service bound every
+   interface.  Three of the six are declared by corpus programs that PASSED the whole time,
+   because no test asserted a clause.
+
+   Nothing made that visible.  The stdlib has a mechanism that makes a dropped export
+   impossible (test_go_stdlib_export_seam.ml walks `Type_system.tesl_module_exports` and
+   asserts the inventory both ways); the server surface had none.
+
+   This is that mechanism, and it is a COMPILE-TIME one.  The function names every field and
+   then REBUILDS the record from those names: a record literal must mention every field, so
+   adding one to `Ast.server_form` fails to compile HERE until someone writes down what the Go
+   backend does with it.  The disposition of each is recorded beside it — emitted, inert by
+   design, or refused — so the answer is a decision rather than an omission. *)
+let server_clause_dispositions (server : server_form) : unit =
+  let { name; api_name; handlers; session_policy; public_origin; sso_clauses;
+        sso_session_key_env; sso_previous_key_env; after_login; session_revoked;
+        listen_address; login_methods; password_policy_fn; trusted_proxies;
+        health_probe_path; content_security_policy; loc } = server in
+  (* EMITTED — each of these reaches the emitted program below:
+       name                    the Go identifier of the server value
+       api_name / handlers     the route table
+       session_policy          teslrt.SetSessionPolicy (token TTL and absolute cap)
+       public_origin           teslrt.SetPublicOriginValue (Host check, redirect_uri base)
+       sso_clauses             the SsoRoute table
+       sso_session_key_env     each route's SessionKey
+       sso_previous_key_env    teslrt.SetPreviousSessionKey (rotation overlap)
+       after_login             each route's AfterLogin
+       session_revoked         teslrt.SetSessionRevokedHook (renewal-time revocation)
+       listen_address          ServeOptions.ListenAddress (the bind interface)
+       health_probe_path       teslrt.SetHealthProbePath (Host-check exemption)
+       content_security_policy teslrt.SetContentSecurityPolicy (CSP on served HTML) *)
+  ignore (name, api_name, handlers, session_policy, public_origin, sso_clauses);
+  ignore (sso_session_key_env, sso_previous_key_env, after_login, session_revoked);
+  ignore (listen_address, health_probe_path, content_security_policy, loc);
+  (* INERT BY DESIGN, on BOTH backends: `loginMethods` and its `Password via <fn>` policy name
+     are a CHECKED promise about which code paths may mint a session, enforced by the checker
+     (`validation_*`) and carrying no runtime form on either backend — `emit_racket.ml` reads
+     neither field either. *)
+  ignore (login_methods, password_policy_fn);
+  (* REFUSED — `trustedProxies` scopes which forwarded-for header `request.clientAddress` may
+     believe, and this backend has no `clientAddress`.  The refusal is raised at the emission
+     site (which has the location); this arm exists so the field is accounted for. *)
+  ignore trusted_proxies;
+  (* The rebuild is the seam: a new field breaks THIS line. *)
+  ignore { name; api_name; handlers; session_policy; public_origin; sso_clauses;
+           sso_session_key_env; sso_previous_key_env; after_login; session_revoked;
+           listen_address; login_methods; password_policy_fn; trusted_proxies;
+           health_probe_path; content_security_policy; loc }
+
+(* The bind interface each `server` declared, by server name.  `serve` is emitted from `main`'s
+   startup chain, which has the server NAME and not its declaration, so the `listenAddress` clause
+   is recorded here when the declarations are collected and read at the `serve` site.
+
+   It travels as a `ServeOptions` field rather than a boot call because it is not runtime state
+   that something later consults — it is an argument to the one `ListenAndServe`. *)
+let server_listen_addresses : (string, string) Hashtbl.t = Hashtbl.create 4
 
 (* Where the api-test response record lives in the record table.  It shares the Tesl name
    `HttpResponse` with `Tesl.HttpClient`'s outbound response — the checker has one opaque
@@ -1025,7 +1126,13 @@ let rec type_of_type_expr ?(params=[]) types ty =
          "Go backend requires `%s` to be applied to %d type argument(s)"
          name (List.length info.adt_params);
        TAdt (info, [])
-     | None, None, None -> unsupported loc "Go backend does not support type `%s` yet" name)
+     (* Not a gap: nothing of that name is a newtype, record, entity or ADT in this module or
+        an imported one.  A STDLIB type reaches the tables through its import, so the usual
+        cause is a type named without importing its module — the same shape
+        `import_gated_stdlib_constructors.md` closed for constructors. *)
+     | None, None, None -> unsupported loc
+       "Go backend: unknown type `%s` — no newtype, record, entity or ADT of that name is in \
+        scope, and a stdlib type needs its module imported" name)
   | TVar { name; loc } ->
     (match List.assoc_opt name params with
      | Some go_name -> TParam go_name
@@ -1034,8 +1141,8 @@ let rec type_of_type_expr ?(params=[]) types ty =
         column, an api type — which is the generic-DECLARATION feature rather than the generic
         function one, so the message says which. *)
      | None -> unsupported loc
-       "Go backend does not support the type variable `%s` here: a `fn` may be generic, a \
-        record, entity or api declaration may not yet" name)
+       "Go backend does not support the type variable `%s` here: a `fn` may be generic; a \
+        record, entity or api declaration may not" name)
   | TApp { loc; _ } ->
     let head, args = flatten_type_app [] ty in
     (match head with
@@ -1066,8 +1173,13 @@ let rec type_of_type_expr ?(params=[]) types ty =
              compile-time type system"), and LANGUAGE-SPEC 16.9 gives a proof no runtime
              structure.  So it becomes a zero-size value that carries nothing. *)
           if name = "Fact" then TUnit
-          else unsupported loc "Go backend does not support applied type `%s` yet" name)
-     | _ -> unsupported loc "Go backend does not support applied types yet")
+          else unsupported loc
+            "Go backend: unknown applied type `%s` — the applied types this backend knows are \
+             `List`, `Dict`, `Set`, `Fact` and any ADT declared with parameters" name)
+     (* The head of an application is a NAME in every form the parser builds, so a head that
+        is anything else means the type grammar grew a shape this walk has not seen. *)
+     | _ -> unsupported loc
+       "internal error: an applied type whose head is not a name reached the Go backend")
   (* `a -> b` is a FUNCTION VALUE.  The arrow's capability row is compile-time — the checker
      propagates it to callers and it has no runtime form — so only the domain and codomain
      survive.  A curried arrow (`a -> b -> c`) flattens into ONE Go signature, which is the
@@ -1079,7 +1191,16 @@ let rec type_of_type_expr ?(params=[]) types ty =
     in
     let params, result = flatten [recur dom] cod in
     TFunc (params, result)
-  | TTuple { loc; _ } -> unsupported loc "Go backend does not support tuple types yet"
+  (* The COMMA type form `(a, b)`.  This is not how Tesl writes a tuple: `Tuple2`/`Tuple3`
+     (Tesl.Tuple, example/learn/lesson45-tuples.tesl) are ordinary ADTs and emit like any
+     other, and they are what every program in the corpus uses.  The comma form parses, but
+     there is no expression that inhabits it — `(a, b)` as a VALUE is a parse error — and on
+     Racket it lowers to `(list Integer String)`, a shape no runtime type rule recognises, so
+     the annotation validates nothing.  Refused rather than mapped onto `Tuple2`, which would
+     make a form with no value syntax look inhabited. *)
+  | TTuple { loc; _ } -> unsupported loc
+    "Go backend does not support the `(a, b)` comma type form: use `Tuple2 a b` or \
+     `Tuple3 a b c` from Tesl.Tuple, which the Go backend emits like any other ADT"
 
 let rec type_of_return_spec ?(params=[]) types = function
   | RetPlain { ty; _ } -> type_of_type_expr ~params types ty
@@ -1371,10 +1492,91 @@ let adt_self_payload (info : adt_info) variant field_name =
   | Some declared_ty -> adt_self_field info declared_ty
   | None -> false
 
-let variant_field_go_name variant name =
+(* ── The ADT LAYOUT, chosen per type ──────────────────────────────────────────
+   A Tesl ADT is a sum, and Go has no sum type.  The default here is ONE FLAT STRUCT holding
+   every variant's fields beside a tag: construction allocates nothing, a copy is one memmove,
+   and a read is one field offset.  For the shapes Tesl programs actually declare — two to four
+   variants carrying a handful of scalars — that is the fastest representation available and the
+   one a Go author would write.
+
+   It stops being that when the payloads add up.  The struct is as large as the SUM of every
+   variant's fields, so a value is copied whole on every call, assignment and slice write; past
+   a few hundred bytes the copies cost more than an allocation would.  `RoomEvent` in
+   `example/chat/chat-backend.tesl` is the corpus's own example: three variants, nine string
+   fields, ~170 bytes copied to pass a value that holds at most five of them.
+
+   So above a threshold the emitter switches to a BOXED layout: one small struct per
+   payload-carrying variant, and a pointer to it in the outer struct, which becomes tag + one
+   pointer whatever the payloads do.  Reads go through the pointer (no copy); construction
+   allocates the one variant's payload.  The choice is the emitter's and is invisible in Tesl.
+
+   A nil payload pointer PANICS on read, which is the same contract a recursive payload field
+   has had all along (`teslrt.Unboxed`: "a payload field was never filled") — every read is
+   under a tag test, and every construction fills the pointer. *)
+let adt_layout_threshold_bytes = 128
+
+(* An estimate of a type's size in an emitted struct, in bytes on a 64-bit target.  An estimate
+   is all this needs to be: it decides a representation, and being off by a word either way
+   moves the boundary by one field. *)
+let rec estimated_go_size ?(seen=[]) ty =
+  let size ty = estimated_go_size ~seen ty in
+  match ty with
+  | TBool -> 1
+  | TFloat | TQuantity -> 8
+  | TString -> 16                     (* pointer + length *)
+  | TInt -> 24                        (* the noCompare marker, an int64 and a *big.Int *)
+  | TUnit | TAnon -> 0
+  | TList _ -> 24                     (* pointer + length + capacity *)
+  | TDict _ | TSet _ | TFunc _ | TStream | TJson -> 8
+  | TParam _ -> 16                    (* an interface header at the widest instantiation *)
+  | TFailure -> 24
+  | TCheck inner -> size inner + 24
+  | TNewtype info -> size info.base
+  | TRecord info -> List.fold_left (fun total (_, field) -> total + size field) 0 info.rec_fields
+  | TAdt (info, _) when List.mem info.adt_go_name seen -> 8   (* boxed: a pointer *)
+  | TAdt (info, _) ->
+    (* The FLAT size: a tag plus every variant's fields, which is what the decision is about. *)
+    let seen = info.adt_go_name :: seen in
+    8 + List.fold_left (fun total variant ->
+      total + List.fold_left (fun row (_, field) -> row + estimated_go_size ~seen field)
+        0 variant.var_fields)
+      0 info.adt_variants
+
+(* Whether THIS ADT is emitted boxed.  Two conditions, and both matter:
+     - the flat struct is over the threshold, which is the cost being avoided;
+     - at least TWO variants carry a payload, because with one there is nothing to overlap —
+       the flat struct is already exactly that variant's fields and boxing would only add an
+       allocation. *)
+let adt_boxed (info : adt_info) =
+  let payload_variants =
+    List.length (List.filter (fun variant -> variant.var_fields <> []) info.adt_variants) in
+  payload_variants >= 2
+  && estimated_go_size (TAdt (info, [])) > adt_layout_threshold_bytes
+
+(* The name of a variant's payload struct, and of the pointer field that holds it. *)
+let variant_payload_type (info : adt_info) variant =
+  (* `Payload` is not decoration: the TAG CONSTANT is already `<Adt><Variant>`
+     (`RoomEventNewMessage`), and a package cannot hold a constant and a type of one name. *)
+  info.adt_go_name ^ go_ident ~exported:true variant.var_ctor ^ "Payload"
+
+let variant_payload_field variant = go_ident ~exported:true variant.var_ctor
+
+(* The name a payload field is DECLARED with, inside whichever struct holds it. *)
+let variant_field_literal_name variant name =
   match List.assoc_opt name variant.var_go_fields with
   | Some go_name -> go_name
   | None -> go_ident ~exported:true variant.var_ctor ^ go_ident ~exported:true name
+
+(* How a payload field is READ from a value of the ADT: a field of the flat struct, or a field
+   of the boxed payload through its pointer.  Every read site appends this to the operand, so
+   the layout choice reaches all of them through this one function. *)
+let variant_field_path (info : adt_info) variant name =
+  if adt_boxed info then
+    Printf.sprintf "%s.%s" (variant_payload_field variant) (go_ident ~exported:true name)
+  else variant_field_literal_name variant name
+
+(* Kept for the sites that only ever read from a value of a KNOWN ADT. *)
+let variant_field_go_name variant name = variant_field_literal_name variant name
 
 (* A single-variant ADT has nothing to discriminate: it needs no tag field, matching
    binds its payload directly, and equality is field-wise like a record's. *)
@@ -1406,7 +1608,7 @@ let rec substitute_type bindings ty =
    argument be emitted as `func(teslrt.Int) string` rather than as `func(A) B`. *)
 let instantiated_call_types type_of_argument loc name (signature : signature) args =
   match Hashtbl.find_opt current_type_params name with
-  | None | Some [] -> signature.params, signature.result
+  | None | Some [] -> signature.params, signature.result, []
   | Some declared ->
     if List.length args <> List.length signature.params then
       unsupported loc "Go backend requires a fully-applied call to the generic function `%s`"
@@ -1419,7 +1621,8 @@ let instantiated_call_types type_of_argument loc name (signature : signature) ar
         "Go backend cannot infer the type argument `%s` of `%s` from its arguments" tesl name)
       declared;
     (List.map (substitute_type !bindings) signature.params,
-     substitute_type !bindings signature.result)
+     substitute_type !bindings signature.result,
+     !bindings)
 
 let variant_field_types info args variant =
   if info.adt_params = [] || args = [] then variant.var_fields
@@ -1518,6 +1721,35 @@ let comparator kind ty body =
          name (go_type ty) body);
   name
 
+(* A COMPARABLE Go key for an element type, when there is one: the Go type of the key and the
+   expression that derives it.  `None` means the type has no cheap key and the caller falls back to
+   a comparison closure.
+
+   The requirement is exact: two elements must produce EQUAL keys precisely when the language's
+   `==` calls them equal.  That rules out the obvious spellings for two types —
+     * Float: the value itself makes -0.0 and +0.0 one key (the language separates them) and every
+       NaN its own (the language makes them all equal), so `teslrt.FloatKey` canonicalises;
+     * Int: an unbounded integer is not a Go comparable at all (`noCompare`), so `.Key()` gives the
+       canonical decimal.
+   And it rules out a key for anything whose comparison is not structural equality on a scalar:
+     * a `secret`, whose comparison is constant-time on purpose — a map lookup is not, and putting
+       one in a map key would hand the timing back;
+     * ADTs, records and containers, which have no single scalar to key on.  They keep the closure
+       path, which is what they had before. *)
+let rec comparable_key ty =
+  match ty with
+  | TString -> Some ("string", fun operand -> operand)
+  | TBool -> Some ("bool", fun operand -> operand)
+  | TInt -> Some ("teslrt.IntKey", fun operand -> operand ^ ".Key()")
+  | TFloat | TQuantity ->
+    Some ("uint64", fun operand -> Printf.sprintf "teslrt.FloatKey(%s)" operand)
+  | TNewtype { secret = true; _ } -> None
+  | TNewtype newtype ->
+    (match comparable_key newtype.base with
+     | Some (key_type, derive) -> Some (key_type, fun operand -> derive (operand ^ ".Value"))
+     | None -> None)
+  | _ -> None
+
 let rec element_equal_func element =
   comparator "Equal" element (equal_expr element "teslX" "teslY")
 
@@ -1531,6 +1763,19 @@ and element_less_func element =
    differ: IEEE makes every NaN comparison false (so a NaN key matches whatever the search
    probes first) and treats -0.0 and +0.0 as equal (while `FloatEqual` distinguishes
    them).  `List.sort` and user comparisons keep plain IEEE. *)
+(* The key function `teslrt.ListUniqueKeyed` takes, hoisted like every other comparator so one
+   element type emits one helper. *)
+and element_key_func element =
+  match comparable_key element with
+  | None -> None
+  | Some (key_type, derive) ->
+    let name = Printf.sprintf "teslKey%s" (helper_suffix element) in
+    if not (Hashtbl.mem pending_helpers name) then
+      Hashtbl.replace pending_helpers name
+        (Printf.sprintf "\nfunc %s(teslX %s) %s {\n\treturn %s\n}\n"
+           name (go_type element) key_type (derive "teslX"));
+    Some name
+
 and element_key_less_func element =
   comparator "KeyLess" element (ordered_key_expr element "teslX" "teslY")
 
@@ -1616,7 +1861,7 @@ and equal_expr ty left right =
       | [] -> None
       | fields ->
         let parts = List.map (fun (name, field_ty) ->
-          let field = variant_field_go_name variant name in
+          let field = variant_field_path info variant name in
           equal_expr field_ty (Printf.sprintf "%s.%s" (selector_operand left) field)
             (Printf.sprintf "%s.%s" (selector_operand right) field)) fields in
         Some (Printf.sprintf "(%s.%s != %s || %s)"
@@ -1634,6 +1879,10 @@ and equal_expr ty left right =
       (element_equal_func key) (element_equal_func value)
   | TSet element ->
     Printf.sprintf "teslrt.SetEqualBy(%s, %s, %s)" left right (element_equal_func element)
+  (* A type PARAMETER compares through the dictionary its function was given.  Without one in
+     scope the comparison was refused before emission, and this arm is unreachable. *)
+  | TParam go_param when List.mem go_param !current_equality_dicts ->
+    Printf.sprintf "%s(%s, %s)" (equality_dict_param go_param) left right
   | TFunc _ | TParam _ | TCheck _ | TFailure | TStream ->
     invalid_arg "Go equality on this type is rejected before emission"
   | TJson -> invalid_arg "Go api-test JSON equality goes through JsonEqual"
@@ -1695,7 +1944,7 @@ and unequal_expr ty left right =
       | [] -> None
       | fields ->
         let parts = List.map (fun (name, field_ty) ->
-          let field = variant_field_go_name variant name in
+          let field = variant_field_path info variant name in
           unequal_expr field_ty (Printf.sprintf "%s.%s" (selector_operand left) field)
             (Printf.sprintf "%s.%s" (selector_operand right) field)) fields in
         Some (Printf.sprintf "(%s.%s == %s && %s)"
@@ -1710,6 +1959,10 @@ and unequal_expr ty left right =
       (element_equal_func key) (element_equal_func value)
   | TSet element ->
     Printf.sprintf "!teslrt.SetEqualBy(%s, %s, %s)" left right (element_equal_func element)
+  (* A type PARAMETER compares through the dictionary its function was given.  Without one in
+     scope the comparison was refused before emission, and this arm is unreachable. *)
+  | TParam go_param when List.mem go_param !current_equality_dicts ->
+    Printf.sprintf "!%s(%s, %s)" (equality_dict_param go_param) left right
   | TFunc _ | TParam _ | TCheck _ | TFailure | TStream ->
     invalid_arg "Go equality on this type is rejected before emission"
   | TJson -> invalid_arg "Go api-test JSON equality goes through JsonEqual"
@@ -1756,37 +2009,82 @@ let rec supports_column_ordering = function
 (* `seen` carries the ADTs already being answered for, so a RECURSIVE type terminates:
    `Expr` is comparable exactly when its non-recursive payloads are, and asking the same
    question about the same type again cannot change that answer. *)
-let rec supports_equality_seen seen ty =
-  let supports_equality ty = supports_equality_seen seen ty in
+(* WHY a type has no `==`, as the first leaf that blocks it — `None` when nothing does.
+   The obstruction is carried out rather than collapsed to a bool because the two kinds of
+   refusal are not the same claim: a type PARAMETER is a real gap (Racket compares two `a`
+   values structurally and this backend has no shape to compare), while a function value, a
+   stream, a raw JSON value or a proof-carrying wrapper is not something either backend
+   compares — calling those "not supported yet" invites a fix that should not exist. *)
+let rec equality_obstruction_seen seen ty =
+  let obstruction ty = equality_obstruction_seen seen ty in
+  let first types = List.fold_left (fun found ty ->
+    match found with Some _ -> found | None -> obstruction ty) None types in
   match ty with
-  | TInt | TFloat | TQuantity | TString | TBool | TUnit | TAnon -> true
-  | TNewtype info -> supports_equality info.base
+  | TInt | TFloat | TQuantity | TString | TBool | TUnit | TAnon -> None
+  | TNewtype info -> obstruction info.base
   (* NO fields here means OPAQUE, not empty: comparing zero fields would answer `true`,
      which is not "equal" but "nothing was compared". *)
-  | TRecord { rec_fields = []; rec_go_name; _ } -> comparable_runtime_record rec_go_name
-  | TRecord info -> List.for_all (fun (_, ty) -> supports_equality ty) info.rec_fields
-  | TAdt (info, _) when List.mem info.adt_go_name seen -> true
+  | TRecord { rec_fields = []; rec_go_name; _ } ->
+    if comparable_runtime_record rec_go_name then None else Some ty
+  | TRecord info -> first (List.map snd info.rec_fields)
+  | TAdt (info, _) when List.mem info.adt_go_name seen -> None
   | TAdt (info, args) ->
     let seen = info.adt_go_name :: seen in
-    let supports_equality ty = supports_equality_seen seen ty in
+    let obstruction ty = equality_obstruction_seen seen ty in
+    let first types = List.fold_left (fun found ty ->
+      match found with Some _ -> found | None -> obstruction ty) None types in
     (match single_variant info with
      (* A single-variant type compares field-wise, so it stays comparable even when
         generic: the emitter knows the instantiation at the comparison site. *)
-     | Some variant ->
-       List.for_all (fun (_, ty) -> supports_equality ty)
-         (variant_field_types info args variant)
+     | Some variant -> first (List.map snd (variant_field_types info args variant))
      | None ->
        (* A multi-variant type is comparable when every payload it could hold is —
           generic or not, since the instantiation is known at the comparison site. *)
-       List.for_all (fun variant ->
-         List.for_all (fun (_, ty) -> supports_equality ty)
-           (variant_field_types info args variant)) info.adt_variants)
-  | TList element -> supports_equality element
-  | TDict (key, value) -> supports_equality key && supports_equality value
-  | TSet element -> supports_equality element
-  | TFunc _ | TJson | TStream | TParam _ | TCheck _ | TFailure -> false
+       first (List.concat_map (fun variant ->
+         List.map snd (variant_field_types info args variant)) info.adt_variants))
+  | TList element -> obstruction element
+  | TDict (key, value) -> (match obstruction key with Some _ as found -> found
+                           | None -> obstruction value)
+  | TSet element -> obstruction element
+  (* A type parameter with a dictionary in scope IS comparable: the comparison travels as an
+     argument (see `equality_dicts`).  Without one it is the real gap the refusal describes. *)
+  | TParam go_param when List.mem go_param !current_equality_dicts -> None
+  | TFunc _ | TJson | TStream | TParam _ | TCheck _ | TFailure -> Some ty
 
-let supports_equality ty = supports_equality_seen [] ty
+let equality_obstruction ty = equality_obstruction_seen [] ty
+
+let supports_equality ty = equality_obstruction ty = None
+
+(* The refusal text for a comparison this backend cannot make, naming the leaf that blocks it
+   and — where the answer is "never" rather than "not yet" — saying so. *)
+let equality_refusal what ty =
+  match equality_obstruction ty with
+  | Some (TParam name) ->
+    Printf.sprintf
+      "Go backend cannot %s two values of the type parameter `%s`: an emitted generic \
+       compares the SHAPE it was given, and a parameter has none. Racket compares such a pair \
+       structurally, so this is a real gap — give the function a concrete type, or compare \
+       inside the caller that knows one" what name
+  | Some (TFunc _) ->
+    Printf.sprintf "Go backend cannot %s function values: two functions are equal only by \
+                    identity, which is not a property a program may observe" what
+  | Some TStream ->
+    Printf.sprintf "Go backend cannot %s streams: a stream is a live channel, not a value" what
+  | Some TJson ->
+    Printf.sprintf "Go backend cannot %s raw JSON values: decode both sides to a declared \
+                    type first, and compare that" what
+  | Some (TCheck _) ->
+    Printf.sprintf "Go backend cannot %s proof-carrying values: compare the values the proofs \
+                    are about, which erase to the same thing" what
+  | Some TFailure ->
+    Printf.sprintf "Go backend cannot %s a failure value" what
+  | Some (TRecord { rec_fields = []; rec_tesl_name; _ }) ->
+    Printf.sprintf "Go backend cannot %s two `%s` values: the type is opaque, so there are no \
+                    fields to compare and answering `true` would compare nothing" what
+      rec_tesl_name
+  | Some other ->
+    Printf.sprintf "Go backend cannot %s a `%s`" what (go_type other)
+  | None -> Printf.sprintf "Go backend cannot %s this type" what
 
 let record_info_of_signature signatures name =
   match Hashtbl.find_opt signatures name with
@@ -2069,8 +2367,13 @@ let entity_columns (info : entity_info) =
       | None ->
         (match column_sql_type ty with
          | Some text -> text
+         (* No automatic column type for this Tesl type — a list, a dict, a record, an opaque
+            runtime value.  Racket refuses the same field, later: its schema generator asks
+            for an explicit `#:db-type`.  Both honour the same escape hatch, so the message
+            names it rather than reading as a backend limit. *)
          | None -> unsupported info.ent_loc
-           "Go backend does not support column `%s.%s` on a Postgres-backed database yet"
+           "Go backend: column `%s.%s` has no automatic PostgreSQL type — annotate the field \
+            with `@db(<sql type>)` to say what it stores"
            info.ent_tesl_name field)
     in
     { col_field = field;
@@ -2499,7 +2802,12 @@ let type_of_sql_form signatures loc form =
          | [GField field] | [GTimeTrunc (_, _, field)] -> entity_column loc info field
          | [] -> unsupported loc "Go backend requires `groupBy` on a grouped aggregate"
          | _ -> unsupported loc
-           "Go backend does not support `groupBy` on more than one key yet"
+           (* Not a gap: `Validation_advanced.check_group_by_rules` admits EXACTLY ONE
+              `groupBy` clause on a grouped aggregate, and `emit_racket.ml` refuses a second
+              one too ("requires exactly one groupBy").  Multi-key grouping is a language
+              feature neither backend has, not a Go shortfall. *)
+           "internal error: a grouped aggregate reached the Go backend with more than one \
+            `groupBy` key, which `Validation_advanced.check_group_by_rules` does not admit"
        in
        let value = match seed.kind with
          | SelectSumBy field -> entity_column loc info field
@@ -2749,7 +3057,12 @@ let rec type_of_expr signatures env expr =
      (* A proof term: `ValidPort port` applies a FACT, which erases to the zero-size proof.
         Its arguments are proof subjects, so nothing is evaluated. *)
      | Some { params = []; result = TUnit; go_name = "struct{}{}"; _ } -> TUnit
-     | _ -> unsupported loc "Go backend does not support constructor `%s` yet" name)
+     (* Not a gap: no declared constructor, record, entity or stdlib leaf answers to that
+        name.  A stdlib CONSTRUCTOR is import-gated in every position, so the usual cause is
+        naming one without importing its module. *)
+     | _ -> unsupported loc
+       "Go backend: unknown constructor `%s` — no ADT variant, record or stdlib constructor of \
+        that name is in scope, and a stdlib constructor needs its module imported" name)
   (* A query's type comes from its ENTITY and its form, not from a signature: `select`
      and friends are surface syntax rather than functions. *)
   | (EApp _ | EBinop _ | ELet _) as sql when recognise_sql sql <> None ->
@@ -2887,7 +3200,10 @@ let rec type_of_expr signatures env expr =
            signature.result
          (* An APPLIED fact — the proof term `ValidPort port` — erases to the zero proof. *)
          | Some { params = []; result = TUnit; go_name = "struct{}{}"; _ } -> TUnit
-         | _ -> unsupported loc "Go backend does not support constructor `%s` yet" name)
+         | _ -> unsupported loc
+           "Go backend: unknown constructor `%s` — no ADT variant, record or stdlib \
+            constructor of that name is in scope, and a stdlib constructor needs its module \
+            imported" name)
       | EVar { name; _ } when set_leaf name <> None && Hashtbl.mem signatures name ->
        let leaf = match set_leaf name with Some leaf -> leaf | None -> assert false in
        (* No expectation is available here; `Set.empty` resolves through type_of_arg,
@@ -3303,7 +3619,7 @@ let rec type_of_expr signatures env expr =
           (* A GENERIC callee is INSTANTIATED first: its type parameters are read off the
              argument types, and everything after that is the ordinary check against a
              parameter list with no variables left in it. *)
-          let instantiated_params, instantiated_result =
+          let instantiated_params, instantiated_result, _ =
             instantiated_call_types (type_of_expr signatures env) loc name signature args in
           let leading = List.filteri (fun index _ -> index < supplied) instantiated_params in
           List.iter2 (fun arg want ->
@@ -3426,10 +3742,11 @@ let rec type_of_expr signatures env expr =
        if left_ty <> TBool then unsupported loc "Go backend boolean operator requires Bool";
        TBool
      | BEq | BNeq ->
-       (* A generic ADT (or anything holding a type parameter) has no comparable Go
-          form, so equality on it fails closed rather than reaching the emitter. *)
-       if not (supports_equality left_ty) then unsupported loc
-         "Go backend does not support equality on this type yet";
+       (* Equality fails closed here rather than in the emitter, so the refusal can name the
+          leaf that blocks it: a generic ADT is fine (the instantiation is known at the
+          comparison site), a bare type parameter is not. *)
+       if not (supports_equality left_ty) then
+         unsupported loc "%s" (equality_refusal "compare" left_ty);
        TBool
       | BLt | BLe | BGt | BGe ->
         if not (supports_ordering left_ty) then
@@ -3510,7 +3827,12 @@ let rec type_of_expr signatures env expr =
         of dynamic reads, and a missing key is null rather than an error — the same shape
         `api-test-field-access-ref` gives on Racket. *)
      | TJson, _ -> TJson
-     | _ -> unsupported loc "Go backend does not support field `%s` yet" field)
+     (* A field READ needs something with fields: a record, an entity row, a newtype's
+        `.value`, or an untyped JSON value.  Anything else has no field to read, which the
+        checker reports as a type error — so this is the shape a new field-bearing type would
+        take on its way through. *)
+     | other, _ -> unsupported loc
+       "Go backend: `.%s` reads a field of a `%s`, which has no fields" field (go_type other))
   | ECase { scrut; arms; loc } ->
     let scrut_ty = type_of_expr signatures env scrut in
     let info, type_args = match scrut_ty with
@@ -3570,7 +3892,9 @@ let rec type_of_expr signatures env expr =
   | ERecord { type_hint = Some name; fields; loc } ->
     (match record_info_of_signature signatures name with
      | Some info -> check_record_literal signatures env loc info fields; TRecord info
-     | None -> unsupported loc "Go backend does not support record type `%s` yet" name)
+     (* Not a gap: the literal names a type that is not a declared record in scope. *)
+     | None -> unsupported loc
+       "Go backend: `%s { … }` names no record declared in this module or an imported one" name)
   | ERecord { type_hint = None; loc; _ } ->
     unsupported loc "Go backend cannot infer the record type of this literal"
   (* An empty list literal whose element type NOTHING constrains.  Every path that can
@@ -3785,8 +4109,10 @@ and type_of_list_leaf signatures env loc leaf args =
     unsupported loc "Go backend `%s` requires a List Int" leaf.leaf_name;
   (match leaf.leaf_closure with
    | `Equal ->
+     (* The leaf COMPARES its elements, so the element type's own refusal is the reason. *)
      if not (supports_equality element) then unsupported loc
-       "Go backend `%s` needs comparable elements" leaf.leaf_name
+       "Go backend `%s` compares elements: %s" leaf.leaf_name
+       (equality_refusal "compare" element)
    | `Less ->
      if not (supports_ordering element) then unsupported loc
        "Go backend `%s` needs ordered elements" leaf.leaf_name
@@ -4698,8 +5024,14 @@ and pattern_bindings _loc info type_args pattern =
   match pattern with
   | PWild -> []
   | PVar name -> [name, TAdt (info, type_args)]
+  (* Not a gap: a literal arm must be a literal of the SCRUTINEE'S type, which the checker
+     now enforces (`bind_pattern_vars`), so a literal cannot be matched against an ADT at all.
+     Named as an internal error because the alternative — emitting a comparison — is what
+     Racket does, and there it dies at run time with `=: contract violation`. *)
   | PLit { loc; _ } ->
-    unsupported loc "Go backend does not support literal patterns over `%s` yet"
+    unsupported loc
+      "internal error: a literal pattern reached the `%s` case emitter; the checker admits a \
+       literal arm only when the scrutinee has that literal's own type"
       info.adt_tesl_name
   | PNullary { ctor; loc } ->
     (match find_variant info ctor with
@@ -5797,12 +6129,22 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
          | EList { elems = []; _ } when index = leaf.leaf_list_index ->
            emit_expr ~expected:(TList element) ~indent signatures env arg
          | _ -> emit arg) args in
-       let emitted = match leaf.leaf_closure with
-         | `None -> emitted
-         | `Equal -> emitted @ [element_equal_func element]
-         | `Less -> emitted @ [element_less_func element]
+       (* `List.unique` takes the KEYED path whenever the element type has a comparable key: one
+          pass over a map, which is the complexity Racket's hash-based `List.unique` has.  The
+          closure form is a linear scan per element — quadratic — and stays the answer for an
+          element type with no key (an ADT, a record, a container, a `secret`). *)
+       let keyed_unique =
+         if leaf.leaf_name <> "List.unique" then None
+         else Option.map (fun key -> ("teslrt.ListUniqueKeyed", key))
+                (element_key_func element)
        in
-       Printf.sprintf "%s(%s)" leaf.leaf_go (String.concat ", " emitted)
+       let go_name, emitted = match keyed_unique, leaf.leaf_closure with
+         | Some (keyed_go, key_func), _ -> keyed_go, emitted @ [key_func]
+         | None, `None -> leaf.leaf_go, emitted
+         | None, `Equal -> leaf.leaf_go, emitted @ [element_equal_func element]
+         | None, `Less -> leaf.leaf_go, emitted @ [element_less_func element]
+       in
+       Printf.sprintf "%s(%s)" go_name (String.concat ", " emitted)
       (* A call through a function VALUE is an ordinary Go call on the binding. *)
       | EVar { name; _ } when (match List.assoc_opt name env with
                                | Some (TFunc _) -> true | _ -> false) ->
@@ -5821,14 +6163,43 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
        in
        let args = normalize_call_args signature.params args in
        ignore (type_of_expr signatures env app);
-       let instantiated_params, _ =
+       let instantiated_params, _, call_bindings =
          instantiated_call_types (type_of_expr signatures env) loc name signature args in
+       (* The equality dictionaries the callee declared, resolved to the concrete type at THIS
+          call site: the comparison the callee cannot write for itself. *)
+       let dictionaries = match Hashtbl.find_opt equality_dicts name with
+         | None -> []
+         | Some go_params ->
+           List.map (fun go_param ->
+             match List.assoc_opt go_param call_bindings with
+             (* The caller is generic too and the argument is ITS type parameter: forward the
+                dictionary the caller was given rather than building one, which is how a
+                comparison travels down a chain of generic functions. *)
+             | Some (TParam caller_param)
+               when List.mem caller_param !current_equality_dicts ->
+               equality_dict_param caller_param
+             | Some concrete when supports_equality concrete -> element_equal_func concrete
+             | Some concrete -> unsupported loc
+               "Go backend cannot pass `%s` to `%s`, which compares its argument: %s"
+               (go_type concrete) name
+               (String.lowercase_ascii (equality_refusal "compare" concrete))
+             | None -> unsupported loc
+               "Go backend cannot infer what `%s` compares at this call site" name) go_params
+       in
        let supplied = List.length args in
        let total = List.length instantiated_params in
        let leading = List.filteri (fun index _ -> index < supplied) instantiated_params in
        let emitted = List.map2 (fun arg want ->
          emit_leaf_argument ~indent signatures env name want arg) args leading in
-       if supplied < total then
+       if supplied < total then begin
+         (* A callee that takes an equality dictionary cannot be PARTIALLY applied: the
+            combinators close over the arguments given and call the function with exactly the
+            remaining ones, and there is no place in that shape for an extra argument the
+            caller supplies rather than the caller's caller. *)
+         if dictionaries <> [] then unsupported loc
+           "Go backend cannot partially apply `%s`: it compares a value of a type variable, so \
+            it takes the comparison as an argument, and a partial application has no place to \
+            put one" name;
          (* Partially applied: the runtime combinator closes over what was given. *)
          (match partial_application_combinator ~supplied ~total with
           | Some combinator ->
@@ -5837,6 +6208,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
           | None -> unsupported loc
             "Go backend supports partial application up to three parameters; `%s` takes %d"
             name total)
+       end
        else
        (* A callee that may write to the response takes the request scope FIRST.  The
           caller always has one to pass: the checker requires it to declare `cookieCap`
@@ -5846,7 +6218,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
          else if !current_scope_in_hand then [ "teslScope" ] else [ "nil" ]
        in
        baked_call (qualified signature.sig_owner signature.go_name)
-          (scope_argument @ emitted)
+          (scope_argument @ emitted @ dictionaries)
       (* The same call, emitted: the head is an expression of func type. *)
       | head when (match type_of_expr signatures env head with TFunc _ -> true | _ -> false) ->
         let params = match type_of_expr signatures env head with
@@ -6109,8 +6481,13 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
       (String.concat ", " (List.map (fun elem ->
          emit_expr ~expected:element ~indent signatures env elem) elems))
   | ELetProof _ as let_proof -> emit_let_expr ?expected ~indent signatures env let_proof
+  (* The TYPED literal is handled above.  This is the untyped one — `{ a: 1 }` with no type
+     name — which the type walk already refuses ("cannot infer the record type of this
+     literal"); repeated here because the emitter is reached directly for some sub-expressions
+     and a record with no type has no Go struct to build. *)
   | ERecord { loc; _ } ->
-    unsupported loc "Go backend cannot emit this expression yet"
+    unsupported loc
+      "Go backend cannot emit a record literal with no type name: write `TypeName { … }`"
   | EOk { value; keyword = false; _ } -> emit_expr ?expected ~indent signatures env value
   | EOk { value; _ } when (match expected with Some (TCheck _) | None -> false | Some _ -> true) ->
     (* Proof attachment at a call site: the proof has no runtime content. *)
@@ -6250,8 +6627,13 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
       "teslrt.StartWorkers(%s, func(teslPayload any) teslrt.JobOutcome {\n%s\tswitch teslJob := teslPayload.(type) {\n%s%s\tdefault:\n%s\t\tpanic(\"%s: unexpected job payload\")\n%s\t}\n%s\treturn teslrt.JobOutcome{OK: true}\n%s}, %d, %b)"
       queue indent (String.concat "" cases) indent indent info.qu_tesl_name indent indent indent
       (match concurrency with Some n when n > 0 -> n | _ -> 1) is_dead
-  (* `serve` is the tail of the startup chain: it runs until the process is asked to stop. *)
-  | EServe { server_name; port; static_dir; mount_path; _ } ->
+  (* `serve` is the tail of the startup chain: it runs until the process is asked to stop.
+     Every field of the node is named here, and `serve_field_dispositions` rebuilds the record
+     from those names — so a new field on `EServe` (which is where an `App { … }` field lands
+     once `Desugar.lower_main_app` reads it) fails to compile until someone decides whether it
+     reaches `ServeOptions`.  The same seam the `server` clauses have, for the same reason. *)
+  | EServe { server_name; port; static_dir; mount_path; capabilities; loc } ->
+    serve_field_dispositions ~server_name ~port ~static_dir ~mount_path ~capabilities ~loc;
     let options =
       String.concat ", "
         ([ Printf.sprintf "Port: teslrt.PortOf(%s)"
@@ -6259,7 +6641,10 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
          @ (match static_dir with
             | Some dir -> [ Printf.sprintf "StaticDir: %s" (go_quote dir) ] | None -> [])
          @ (match mount_path with
-            | Some mount -> [ Printf.sprintf "MountPath: %s" (go_quote mount) ] | None -> []))
+            | Some mount -> [ Printf.sprintf "MountPath: %s" (go_quote mount) ] | None -> [])
+         @ (match Hashtbl.find_opt server_listen_addresses server_name with
+            | Some address -> [ Printf.sprintf "ListenAddress: %s" (go_quote address) ]
+            | None -> []))
     in
     Printf.sprintf "teslrt.Serve(%s, teslrt.ServeOptions{%s})"
       (go_ident ~exported:true server_name) options
@@ -6548,7 +6933,7 @@ and pattern_plan ~scrut info type_args pattern =
      binder that reads two levels down. *)
   let field_access base (owner : adt_info) variant field_name field_ty =
     ignore field_ty;
-    let read = Printf.sprintf "%s.%s" base (variant_field_go_name variant field_name) in
+    let read = Printf.sprintf "%s.%s" base (variant_field_path owner variant field_name) in
     (* A self-referential payload is behind a pointer, so reading it — to test it or to
        bind it — goes through `teslrt.Unboxed`, exactly as a top-level binding does. *)
     if adt_self_payload owner variant field_name then Printf.sprintf "teslrt.Unboxed(%s)" read
@@ -7562,7 +7947,22 @@ and emit_variant_literal ?(indent="") signatures env result variant args =
       if adt_self_payload info variant name then Printf.sprintf "teslrt.Boxed(%s)" value
       else value
     in
-    Printf.sprintf "%s: %s" (variant_field_go_name variant name) value) args payload in
+    Printf.sprintf "%s: %s"
+      (if adt_boxed info then go_ident ~exported:true name
+       else variant_field_literal_name variant name) value) args payload in
+  (* BOXED: the payload goes into its own struct and the outer literal holds a pointer to it,
+     which is the one allocation the layout costs.  `&T{…}` on a composite literal is the
+     idiomatic spelling and needs no named temporary. *)
+  let parts =
+    if parts = [] || not (adt_boxed info) then parts
+    else
+      [ Printf.sprintf "%s: &%s{%s}" (variant_payload_field variant)
+          (variant_payload_type info variant
+           ^ (match type_args with
+              | [] -> ""
+              | args -> "[" ^ String.concat ", " (List.map go_type args) ^ "]"))
+          (String.concat ", " parts) ]
+  in
   let fields =
     if single_variant info <> None then parts
     else (adt_tag_field ^ ": " ^ qualified info.adt_owner variant.var_tag) :: parts
@@ -7694,8 +8094,13 @@ and emit_sql_predicate ?(joins=[]) ~indent signatures env loc (info : entity_inf
       let symbol = match op with
         | BLt -> "<" | BLe -> "<=" | BGt -> ">" | _ -> ">=" in
       ordered_expr ty symbol left right
+    (* Same invariant as the SQL side: `Sql_query.is_sql_comparison` gates clause
+       construction to these six operators, so anything else is a query-builder change that
+       did not reach this table. *)
     | _ -> unsupported loc
-      "Go backend does not support this operator in a `where` clause yet"
+      "internal error: operator reached a `where` predicate that \
+       `Sql_query.is_sql_comparison` does not admit (bug in compiler/lib/sql_query.ml or this \
+       table)"
   in
   (* `like` / `ilike` are String-only, as they are on the Racket side (which rejects a
      Money column outright and answers false for any non-string value). *)
@@ -7784,8 +8189,14 @@ and sql_check_where_field loc where_field clauses =
   in
   match where_field with
   | Some field when not (List.exists (mentions field) clauses) ->
+    (* A BACKSTOP behind `Validation_sql.check_sql_clause_placement`, which is what a user
+       normally meets (it reports the shape and shows the clause-per-line form).  Reaching
+       here means the spine mentions a where field that the clause builder produced nothing
+       for, and emitting the query without that clause would read or write the wrong rows. *)
     unsupported loc
-      "Go backend does not support this `where` clause shape (on `%s`) yet" field
+      "Go backend cannot render the `where` clause on `%s`: the query mentions the field but \
+       no comparison was recognised for it, so the statement would silently match the wrong \
+       rows" field
   | _ -> ()
 
 (* The duplicate-primary-key test an insert carries: the same comparison the Racket
@@ -7836,7 +8247,9 @@ and sql_bound_value loc ty value =
        Printf.sprintf "teslrt.PgNull(%s, func(teslValue %s) any { return %s })"
          value (go_type inner) (sql_bound_value loc inner "teslValue")
      | None -> unsupported loc
-       "Go backend cannot store a `%s` value in a column yet" (go_type ty))
+       "Go backend cannot store a `%s` in a column: a column holds a scalar (Int, Float, \
+        String, Bool), a newtype over one, an instant, an ADT as JSON, or a `Maybe` of any of \
+        those" (go_type ty))
 
 (* The driver-side carrier a column is SCANNED into, and the expression that turns it back into
    the Tesl value.  A pair, so the scanner declares one variable and assigns one field per
@@ -7868,7 +8281,9 @@ and sql_scan_carrier loc ty target =
         Printf.sprintf "teslrt.MaybeOfPointer(%s, func() %s { return %s })"
           target (go_type inner) decode)
      | None -> unsupported loc
-       "Go backend cannot read a `%s` column back yet" (go_type ty))
+       "Go backend cannot read a `%s` column back: a column holds a scalar (Int, Float, \
+        String, Bool), a newtype over one, an instant, an ADT as JSON, or a `Maybe` of any of \
+        those" (go_type ty))
 
 (* The reader for an ADT COLUMN.  The stored shape is the value's own wire shape — `{"tag": …}`
    for a constructor with no fields — so reading it back is a tag lookup.  A constructor that
@@ -7879,28 +8294,81 @@ and sql_scan_carrier loc ty target =
    An unknown tag TRAPS.  It means the column holds a value this build has no constructor for —
    data written by an incompatible schema — and `dsl/sql.rkt` takes the same line for a stored
    currency code it cannot resolve. *)
+(* Reading ONE payload field of an ADT column back out of its JSON.
+   The wire shape is the one the response encoder writes and `dsl/types.rkt` writes —
+   `{"tag": …, "fields": {…}}`.  The DOCUMENT around it may be either of the two shapes a Tesl
+   backend stores (see `teslrt.ParseColumnJSON`); by the time a field is read, that difference
+   is gone.
+
+   A mismatch PANICS rather than answering a zero value: a column holds data this build wrote,
+   so a field of the wrong shape is corruption or an incompatible schema, which is the same
+   line `sql_adt_column_decoder` takes for an unknown tag. *)
+and sql_adt_field_decoder loc ty raw =
+  match ty with
+  | TInt -> Printf.sprintf "teslrt.MustDecodeInt(%s)" raw
+  | TFloat -> Printf.sprintf "teslrt.MustDecodeFloat(%s)" raw
+  | TString -> Printf.sprintf "teslrt.MustDecodeString(%s)" raw
+  | TBool -> Printf.sprintf "teslrt.MustDecodeBool(%s)" raw
+  | TNewtype newtype ->
+    Printf.sprintf "%s{Value: %s}" (qualified newtype.owner newtype.go_name)
+      (sql_adt_field_decoder loc newtype.base raw)
+  | TAdt (nested, _) when nested.adt_tesl_name <> "Maybe" ->
+    (* A nested ADT decodes through its OWN column decoder, so one rule covers any depth. *)
+    Printf.sprintf "%s(teslrt.MustEncodeJSON(%s))" (sql_adt_column_decoder loc nested) raw
+  | _ ->
+    (match maybe_element ty with
+     | Some inner ->
+       Printf.sprintf "teslrt.MaybeOfJSON(%s, func(teslInner any) %s { return %s })"
+         raw (go_type inner) (sql_adt_field_decoder loc inner "teslInner")
+     | None -> unsupported loc
+       "Go backend: an ADT column's constructor field of type `%s` has no column decoder — a \
+        stored variant may carry scalars, newtypes over them, nested ADTs and `Maybe`s of \
+        those" (go_type ty))
+
 and sql_adt_column_decoder loc (info : adt_info) =
   let name = "teslColumn" ^ go_ident ~exported:true info.adt_tesl_name in
   if not (Hashtbl.mem pending_helpers name) then begin
-    List.iter (fun variant ->
-      if variant.var_fields <> [] then unsupported loc
-        "Go backend does not support a `%s` column on a Postgres-backed database yet: its \
-         constructor `%s` carries fields" info.adt_tesl_name variant.var_ctor)
-      info.adt_variants;
     let go_ty = qualified info.adt_owner info.adt_go_name in
     let buffer = Buffer.create 256 in
     Printf.bprintf buffer "\nfunc %s(teslText []byte) %s {\n" name go_ty;
     Printf.bprintf buffer
-      "\tteslParsed, teslParseErr := teslrt.ParseJSON(teslText)\n\tif teslParseErr != nil {\n\t\tpanic(\"database: a %s column holds text that is not JSON: \" + teslParseErr.Error())\n\t}\n"
+      "\tteslParsed, teslParseErr := teslrt.ParseColumnJSON(teslText)\n\tif teslParseErr != nil {\n\t\tpanic(\"database: a %s column holds text that is not JSON: \" + teslParseErr.Error())\n\t}\n"
       info.adt_tesl_name;
     Printf.bprintf buffer
       "\tteslTag, teslTagErr := teslrt.DecodeStringField(teslParsed, \"tag\")\n\tif teslTagErr != nil {\n\t\tpanic(\"database: a %s column holds \" + teslTagErr.Error())\n\t}\n"
       info.adt_tesl_name;
     Buffer.add_string buffer "\tswitch teslTag {\n";
     List.iter (fun variant ->
-      Printf.bprintf buffer "\tcase %s:\n\t\treturn %s{%s: %s}\n"
-        (go_quote variant.var_ctor) go_ty adt_tag_field
-        (qualified info.adt_owner variant.var_tag)) info.adt_variants;
+      match variant.var_fields with
+      | [] ->
+        Printf.bprintf buffer "\tcase %s:\n\t\treturn %s{%s: %s}\n"
+          (go_quote variant.var_ctor) go_ty adt_tag_field
+          (qualified info.adt_owner variant.var_tag)
+      | fields ->
+        (* A variant with a payload reads its fields out of the `fields` object, each by its
+           own label — the same labels the encoder writes. *)
+        let assignments = List.map (fun (field, field_ty) ->
+          Printf.sprintf "%s: %s"
+            (if adt_boxed info then go_ident ~exported:true field
+             else variant_field_literal_name variant field)
+            (sql_adt_field_decoder loc field_ty
+               (Printf.sprintf "teslrt.MustJSONField(teslFields, %s)" (go_quote field))))
+          fields in
+        (* BOXED: the decoded fields go into the variant's own payload struct — the same shape
+           the constructor builds, so a value read back from a column is indistinguishable from
+           one the program built. *)
+        let assignments =
+          if not (adt_boxed info) then assignments
+          else [ Printf.sprintf "%s: &%s{%s}" (variant_payload_field variant)
+                   (variant_payload_type info variant) (String.concat ", " assignments) ]
+        in
+        Printf.bprintf buffer
+          "\tcase %s:\n\t\tteslFields := teslrt.MustJSONFields(teslParsed, %s, %s)\n\t\treturn %s{%s: %s, %s}\n"
+          (go_quote variant.var_ctor) (go_quote info.adt_tesl_name)
+          (go_quote variant.var_ctor)
+          go_ty adt_tag_field (qualified info.adt_owner variant.var_tag)
+          (String.concat ", " assignments))
+      info.adt_variants;
     Printf.bprintf buffer
       "\t}\n\tpanic(\"database: a %s column holds an unknown tag \" + teslTag)\n}\n"
       info.adt_tesl_name;
@@ -8013,7 +8481,14 @@ and sql_where_text ?(joins=[]) ~indent signatures env loc (info : entity_info) b
   let compare_op field op expr =
     let symbol = match op with
       | BEq -> "=" | BNeq -> "<>" | BLt -> "<" | BLe -> "<=" | BGt -> ">" | BGe -> ">="
-      | _ -> unsupported loc "Go backend does not support this operator in a `where` clause yet"
+      (* Not a gap: `Sql_query.is_sql_comparison` gates clause construction to exactly these
+         six operators, so any other one means the query builder changed without this table.
+         Named as an internal error so a new comparison cannot slip through as a silent
+         "unsupported" that the memory predicate beside it goes on answering. *)
+      | _ -> unsupported loc
+        "internal error: operator reached a `where` clause that \
+         `Sql_query.is_sql_comparison` does not admit (bug in compiler/lib/sql_query.ml or \
+         this table)"
     in
     Printf.sprintf "%s %s %s" (column field) symbol (bind field expr)
   in
@@ -8428,7 +8903,12 @@ and emit_sql_form ?(indent="") signatures env loc form =
          | [GField field] | [GTimeTrunc (_, _, field)] -> field
          | [] -> unsupported loc "Go backend requires `groupBy` on a grouped aggregate"
          | _ -> unsupported loc
-           "Go backend does not support `groupBy` on more than one key yet"
+           (* Not a gap: `Validation_advanced.check_group_by_rules` admits EXACTLY ONE
+              `groupBy` clause on a grouped aggregate, and `emit_racket.ml` refuses a second
+              one too ("requires exactly one groupBy").  Multi-key grouping is a language
+              feature neither backend has, not a Go shortfall. *)
+           "internal error: a grouped aggregate reached the Go backend with more than one \
+            `groupBy` key, which `Validation_advanced.check_group_by_rules` does not admit"
        in
        let key_ty = entity_column loc info key_field in
        if not (supports_column_ordering key_ty) then unsupported loc
@@ -8717,16 +9197,16 @@ and emit_sql_form ?(indent="") signatures env loc form =
          (if update.returning_one then "TableUpdateReturnOne" else "TableUpdate")
          (sql_table_ref info) predicate apply (sql_unique_arguments ~indent loc info)
      | Some database ->
-       (* A `set` value is a PARAMETER on the server: `set p.count = p.count + 1` would have to
-          become SQL arithmetic over the stored column, and Racket's Postgres path cannot do
-          that either (`postgres-update-many!` binds every SET value).  So a value that reads
-          the row is refused rather than silently evaluated against a row this side never
-          fetched. *)
+       (* A `set` value is a PARAMETER on the server, so there is no row to read from:
+          `check_set_value_reads_row` refuses this shape for BOTH backends (the Racket emitter
+          produces an unbound row binder and the module does not load), which makes this a
+          backstop rather than a limit of this path. *)
        let builder = { sql_args = [] } in
        let assignment (field, value) =
          if mentions_variable update.binder value then unsupported loc
-           "Go backend does not support a `set` value that reads the row (`%s.%s`) on a \
-            Postgres-backed database yet" update.binder field;
+           "Go backend: the `set` value for `%s.%s` reads the row it is updating, and a SET \
+            value is a parameter on the server (the checker refuses this shape; reaching here \
+            means that rule was bypassed)" update.binder field;
          let column = sql_column_of loc info field in
          let bound =
            sql_column_value ~indent signatures env loc info field value in
@@ -9431,6 +9911,12 @@ let import_block paths =
   | _ -> Printf.sprintf "\nimport (\n%s)\n"
       (String.concat "" (List.map (fun path -> "\t" ^ go_quote path ^ "\n") paths))
 
+(* The name of one variant's payload comparison. Derived from the ADT and the variant rather
+   than from a counter, so the same type emits the same names on every run. *)
+let variant_equal_name info variant =
+  Printf.sprintf "teslEqual%s%s" (go_ident ~exported:true info.adt_tesl_name)
+    (go_ident ~exported:true variant.var_ctor)
+
 (* One ADT emits its tag enum, one flat payload struct, and the equality method
    every comparison site calls.  The struct is deliberately NOT Go-comparable
    whenever a payload is, so `==` cannot silently replace TeslEqual. *)
@@ -9448,21 +9934,58 @@ let adt_source info =
     if index = 0 then Printf.bprintf body "\t%s %s = iota\n" variant.var_tag info.adt_tag_type
     else Printf.bprintf body "\t%s\n" variant.var_tag) info.adt_variants;
   Buffer.add_string body ")\n\n";
-  let fields = (adt_tag_field, info.adt_tag_type)
-    :: List.concat_map (fun variant ->
-         List.map (fun (name, field_ty) ->
-           variant_field_go_name variant name,
-           (* A self-referential payload is a POINTER: a struct holding itself by value has
-              no finite size.  Every read goes through `teslrt.Unboxed`. *)
-           (if adt_self_field info field_ty then "*" else "") ^ go_type field_ty)
-           variant.var_fields)
-         info.adt_variants in
-  let width = List.fold_left (fun width (name, _) -> max width (String.length name)) 0 fields in
-  Printf.bprintf body "type %s%s struct {\n" info.adt_go_name type_params;
-  List.iter (fun (name, go_field_type) ->
-    Printf.bprintf body "\t%s%s %s\n" name
-      (String.make (width - String.length name) ' ') go_field_type) fields;
-  Buffer.add_string body "}\n";
+  (* A self-referential payload is a POINTER whatever the layout: a struct holding itself by
+     value has no finite size.  Every read of one goes through `teslrt.Unboxed`. *)
+  let field_type field_ty =
+    (if adt_self_field info field_ty then "*" else "") ^ go_type field_ty in
+  let emit_struct name declared =
+    let width =
+      List.fold_left (fun width (field, _) -> max width (String.length field)) 0 declared in
+    Printf.bprintf body "type %s struct {\n" name;
+    List.iter (fun (field, go_field_type) ->
+      Printf.bprintf body "\t%s%s %s\n" field
+        (String.make (width - String.length field) ' ') go_field_type) declared;
+    Buffer.add_string body "}\n"
+  in
+  (* A declaration binds `[A any]`; a USE names the argument only, `[A]`.  The payload pointer in
+     the outer struct is a use. *)
+  let type_arguments =
+    if info.adt_params = [] then ""
+    else "[" ^ String.concat ", " (List.map snd info.adt_params) ^ "]" in
+  if adt_boxed info then begin
+    (* BOXED (see `adt_boxed`): one struct per payload-carrying variant, and the outer struct is
+       a tag plus one pointer each — sixteen bytes and a pointer per variant however large the
+       payloads are, where the flat form would copy their sum on every assignment.
+
+       No leading blank line on the FIRST struct: the tag block above already ends with one, and
+       two in a row is a line gofmt removes. *)
+    (* "First EMITTED", not "index 0": a payload-free variant may come first, and counting it
+       would leave the blank line gofmt removes. *)
+    let emitted_a_payload = ref false in
+    List.iter (fun variant ->
+      if variant.var_fields <> [] then begin
+        if !emitted_a_payload then Buffer.add_char body '\n';
+        emitted_a_payload := true;
+        emit_struct (variant_payload_type info variant ^ type_params)
+          (List.map (fun (name, field_ty) ->
+             go_ident ~exported:true name, field_type field_ty) variant.var_fields)
+      end) info.adt_variants;
+    Buffer.add_char body '\n';
+    emit_struct (info.adt_go_name ^ type_params)
+      ((adt_tag_field, info.adt_tag_type)
+       :: List.filter_map (fun variant ->
+            if variant.var_fields = [] then None
+            else Some (variant_payload_field variant,
+                       "*" ^ variant_payload_type info variant ^ type_arguments))
+            info.adt_variants)
+  end else
+    emit_struct (info.adt_go_name ^ type_params)
+      ((adt_tag_field, info.adt_tag_type)
+       :: List.concat_map (fun variant ->
+            List.map (fun (name, field_ty) ->
+              variant_field_literal_name variant name, field_type field_ty)
+              variant.var_fields)
+            info.adt_variants);
   let payload_variants = List.filter (fun variant -> variant.var_fields <> []) info.adt_variants in
   (* A generic ADT gets no `TeslEqual`: equality on it is rejected before emission,
      and an unused method would be a lint finding. *)
@@ -9477,17 +10000,16 @@ let adt_source info =
     Printf.bprintf body "\tif teslLeft.%s != teslRight.%s {\n\t\treturn false\n\t}\n"
       adt_tag_field adt_tag_field;
     Printf.bprintf body "\tswitch teslLeft.%s {\n" adt_tag_field;
+    (* Each variant's payload compares in its OWN function, one field per statement.
+       Inline, this was a single `&&` chain whose length grows with the variant: a
+       three-field variant holding a `Maybe` reached 364 columns, and gofmt does not split an
+       expression, so the line stayed as emitted.  A per-variant helper keeps every line short
+       whatever the type does, and the switch reads as one call per tag.  Comparison is the one
+       generated construct that grows with the TYPE rather than with the program, which is why
+       it gets this treatment and nothing else does. *)
     List.iter (fun variant ->
-      Printf.bprintf body "\tcase %s:\n" variant.var_tag;
-      let parts = List.map (fun (name, field_ty) ->
-        let field = variant_field_go_name variant name in
-        let operand side =
-          if adt_self_field info field_ty then
-            Printf.sprintf "teslrt.Unboxed(tesl%s.%s)" side field
-          else Printf.sprintf "tesl%s.%s" side field
-        in
-        equal_expr field_ty (operand "Left") (operand "Right")) variant.var_fields in
-      Printf.bprintf body "\t\treturn %s\n" (String.concat " && " parts)) payload_variants;
+      Printf.bprintf body "\tcase %s:\n\t\treturn %s(teslLeft, teslRight)\n"
+        variant.var_tag (variant_equal_name info variant)) payload_variants;
     (* The payload-free tags are listed too: equal tags with no payload are equal, and
        naming them keeps the switch verifiable by the `exhaustive` linter. *)
     let nullary_variants =
@@ -9498,6 +10020,44 @@ let adt_source info =
     Buffer.add_string body "\tdefault:\n\t\treturn true\n\t}\n"
   end;
   Buffer.add_string body "}\n";
+  (* The per-variant comparisons, after the method that calls them: a field per line, so a
+     variant with a dozen fields is a dozen short lines rather than one unreadable one. *)
+  List.iter (fun variant ->
+    Printf.bprintf body "\nfunc %s(teslLeft, teslRight %s) bool {\n"
+      (variant_equal_name info variant) info.adt_go_name;
+    let field_operand name field_ty side =
+      let field = variant_field_path info variant name in
+      if adt_self_field info field_ty then
+        Printf.sprintf "teslrt.Unboxed(tesl%s.%s)" side field
+      else Printf.sprintf "tesl%s.%s" side field
+    in
+    (* ONE field is ONE expression.  The guard chain below reads well for several fields and is
+       a staticcheck finding when it is the whole body (S1008, "should use `return x == y`") —
+       and a lint finding on emitted code is an emitter bug by contract. *)
+    match variant.var_fields with
+    | [ (name, field_ty) ] ->
+      Printf.bprintf body "\treturn %s\n}\n"
+        (strip_outer_parens
+           (equal_expr field_ty (field_operand name field_ty "Left")
+              (field_operand name field_ty "Right")))
+    | fields ->
+    List.iter (fun (name, field_ty) ->
+      let left = field_operand name field_ty "Left" in
+      let right = field_operand name field_ty "Right" in
+      let inline = unequal_expr field_ty left right in
+      (* A field whose inequality is ONE comparison is written inline.  A field whose
+         comparison is itself a conjunction — a `Maybe`, a nested record — goes through the
+         hoisted comparator for its own type instead, because inlining it is what made these
+         lines grow without bound: the `Maybe String` field alone was 300 columns. *)
+      if String.length inline < 90 && not (contains_go_code inline "&&")
+         && not (contains_go_code inline "||")
+      (* `strip_outer_parens`: `if (a != b)` is a line gofmt rewrites, and a gate finding on
+         emitted code is an emitter bug by contract. *)
+      then Printf.bprintf body "\tif %s {\n\t\treturn false\n\t}\n"
+             (strip_outer_parens inline)
+      else Printf.bprintf body "\tif !%s(%s, %s) {\n\t\treturn false\n\t}\n"
+             (element_equal_func field_ty) left right) fields;
+    Buffer.add_string body "\treturn true\n}\n") payload_variants;
   Buffer.contents body
   end
 
@@ -9602,7 +10162,7 @@ let rec value_encoder ty =
         | [] -> Printf.sprintf "map[string]any{\"tag\": %S}" variant.var_ctor
         | _ ->
           let entries = aligned_map_entries "\t\t\t\t" (List.map (fun (name, field_ty) ->
-            (name, encoded_field ("teslValue." ^ variant_field_go_name variant name) field_ty))
+            (name, encoded_field ("teslValue." ^ variant_field_path info variant name) field_ty))
             fields) in
           Printf.sprintf
             "map[string]any{\"tag\": %S, \"fields\": map[string]any{\n%s\n\t\t\t}}"
@@ -9934,6 +10494,11 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
       "var %s = teslrt.Agent{Provider: teslrt.DeferredProvider(%s), SystemPrompt: %s, MaxTokens: %s, Tools: %s}\n"
       go_name build (field "systemPrompt") (field "maxTokens") (field "tools")) agents;
   List.iter (fun (fd : func_decl) ->
+    (* The equality dictionaries THIS function has in scope, set before anything reads or types
+       its body: the type walk decides whether a comparison on a type parameter is allowed, and
+       it runs before the emission does. *)
+    current_equality_dicts :=
+      (match Hashtbl.find_opt equality_dicts fd.name with None -> [] | Some ps -> ps);
     (* `establish` returns a detached proof, which erases — so the function body computes
        nothing observable and the emitted function returns the zero-size proof value.  It
        is still emitted (rather than dropped) because callers name it. *)
@@ -9993,11 +10558,22 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
         Printf.sprintf "[%s]"
           (String.concat ", " (List.map (fun (_, go) -> go ^ " any") params))
     in
+    (* The equality DICTIONARIES this function's body needs, after the value parameters: a
+       generic that compares two `A` values is handed the comparison to use (see
+       `equality_dicts`).  Every call site appends the same list in the same order. *)
+    let dictionaries = match Hashtbl.find_opt equality_dicts fd.name with
+      | None -> []
+      | Some go_params ->
+        List.map (fun go_param ->
+          Printf.sprintf "%s func(%s, %s) bool" (equality_dict_param go_param) go_param go_param)
+          go_params
+    in
     Printf.bprintf body "func %s%s(%s) %s {\n"
       signature.go_name type_parameters
       (String.concat ", "
          (scope_parameter
-          @ List.map (fun (name, ty) -> local_ident name ^ " " ^ go_type ty) params))
+          @ List.map (fun (name, ty) -> local_ident name ^ " " ^ go_type ty) params
+          @ dictionaries))
       (go_type result);
     (* Emit the body once assuming it may loop.  If no self tail call actually turned
        into a `continue`, re-emit it flat: an unused label is a Go compile error, and
@@ -10027,6 +10603,9 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
       emit_tail body signatures env result "\t" fd.body;
     current_handler_body := false;
     current_scope_in_hand := false;
+    (* Out of scope with the function: the next one's body must not read this one's
+       dictionaries, or a comparison would compile against a parameter it does not have. *)
+    current_equality_dicts := [];
     Buffer.add_string body "}\n" end) funcs;
   (* ── Codecs ─────────────────────────────────────────────────────────────── *)
   (* Which types have their own codec, for the response encoder above. *)
@@ -10391,12 +10970,16 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
          twice gave the auth an empty body and made it verify a tag over "". Racket reads
          `request-post-data/raw` once for exactly this reason. *)
       let reads_body = endpoint_auth <> None || endpoint_body <> None in
+      (* The read goes through `teslrt.ReadRequestBody`, not `io.ReadAll`: the body is parsed
+         whole in memory, so an uncapped read is a one-request memory exhaustion.  The cap and
+         its `TESL_MAX_BODY_BYTES` override are the runtime's, shared with `dsl/web.rkt` so
+         both backends refuse the same requests with the same 413. *)
       if reads_body then
         Buffer.add_string body
           (if endpoint_auth <> None then
-             "\t\t\tteslBodyBytes, teslBodyErr := io.ReadAll(teslRequest.Body)\n\t\t\tif teslBodyErr != nil {\n\t\t\t\treturn teslrt.Fail(400, \"Missing JSON payload\")\n\t\t\t}\n\t\t\tteslBodyText := string(teslBodyBytes)\n"
+             "\t\t\tteslBodyBytes, teslBodyStatus, teslBodyMessage := teslrt.ReadRequestBody(teslRequest)\n\t\t\tif teslBodyStatus != 0 {\n\t\t\t\treturn teslrt.Fail(teslBodyStatus, teslBodyMessage)\n\t\t\t}\n\t\t\tteslBodyText := string(teslBodyBytes)\n"
            else
-             "\t\t\tteslBodyBytes, teslBodyErr := io.ReadAll(teslRequest.Body)\n\t\t\tif teslBodyErr != nil {\n\t\t\t\treturn teslrt.Fail(400, \"Missing JSON payload\")\n\t\t\t}\n");
+             "\t\t\tteslBodyBytes, teslBodyStatus, teslBodyMessage := teslrt.ReadRequestBody(teslRequest)\n\t\t\tif teslBodyStatus != 0 {\n\t\t\t\treturn teslrt.Fail(teslBodyStatus, teslBodyMessage)\n\t\t\t}\n");
       (match endpoint_auth with
        | None -> ()
        | Some (auth : api_auth) ->
@@ -10510,6 +11093,14 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
            | _ -> unsupported endpoint_loc
              "Go backend request body needs a type with a codec"
          in
+         (* Before any parse: the content type must say JSON (415) and the body must not be
+            empty (400).  `dsl/web.rkt`'s `parse-json-body` applies both to an endpoint with a
+            DECLARED payload and nothing else — an `auth` that verifies a MAC over the raw bytes
+            reads the body of a request that may not be JSON at all — so this is emitted in the
+            same place.  A JSON API that parsed a `text/plain` body would be the surprising
+            behaviour, and the two backends now refuse the same request with the same status. *)
+         Buffer.add_string body
+           "\t\t\tif teslStatus, teslMessage := teslrt.CheckJSONPayload(teslRequest, teslBodyBytes); teslStatus != 0 {\n\t\t\t\treturn teslrt.Fail(teslStatus, teslMessage)\n\t\t\t}\n";
          (* The two failure strings are the ones the Racket server sends, so a client sees
             the same 400 either way. *)
          (match scalar_reader, list_reader with
@@ -10708,6 +11299,53 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
            [Printf.sprintf "\tteslrt.SetSessionPolicy(teslrt.SessionPolicyTTL(%s))"
               (go_quote policy)]
          | None -> [])
+      (* `sessionPreviousKey "VAR"` is the ROTATION OVERLAP: verification accepts a token
+         signed by either key, so a leaked signing key can be replaced without logging every
+         user out.  Read once here — the same one-time bootstrap read Racket wraps in
+         `with-env-bootstrap` — because a per-request read of a secret is a per-request
+         opportunity to leak it. *)
+      @ (match server.sso_previous_key_env with
+         | Some name ->
+           [Printf.sprintf
+              "\tteslrt.SetPreviousSessionKey(teslrt.SecretPointer(teslrt.RequireSecret(%s)))"
+              (go_quote name)]
+         | None -> [])
+      (* `sessionRevoked <fn>` installs the renewal-time revocation check.  The clause's fn
+         takes `(String, PosixMillis)`; the runtime hook is handed `iat` in SECONDS, so the
+         adapter converts — the same conversion the Racket emitter writes with
+         `Time.secondsToPosix`. *)
+      @ (match server.session_revoked with
+         | Some fn ->
+           let target = match Hashtbl.find_opt signatures fn with
+             | Some signature -> qualified signature.sig_owner signature.go_name
+             | None -> unsupported server.loc
+               "Go backend cannot resolve the `sessionRevoked` function `%s`" fn
+           in
+           [Printf.sprintf
+              "\tteslrt.SetSessionRevokedHook(func(teslSubject string, teslIssuedAt int64) bool {\n\t\treturn %s(teslSubject, teslrt.SecondsToPosix(teslrt.FromInt64(teslIssuedAt)))\n\t})"
+              target]
+         | None -> [])
+      (* Risk 50/60: the ONE path exempt from the Host check, so a load balancer can probe
+         host-blind. *)
+      @ (match server.health_probe_path with
+         | Some path -> [Printf.sprintf "\tteslrt.SetHealthProbePath(%s)" (go_quote path)]
+         | None -> [])
+      (* The server default CSP for the HTML this runtime serves (a static file or the SPA
+         fallback) — the app cannot set a header on a response it does not build. *)
+      @ (match server.content_security_policy with
+         | Some policy ->
+           [Printf.sprintf "\tteslrt.SetContentSecurityPolicy(%s)" (go_quote policy)]
+         | None -> [])
+      (* #51: `trustedProxies` configures which forwarded-for headers `request.clientAddress`
+         may believe.  This backend has no `clientAddress` — nothing reads a forwarded header —
+         so the clause would configure a reader that does not exist.  Refused rather than
+         accepted-and-ignored: accepting it would say the edge is described when it is not. *)
+      @ (match server.trusted_proxies with
+         | [] -> []
+         | _ -> unsupported server.loc
+           "Go backend does not support `trustedProxies`: it configures which forwarded-for \
+            header `request.clientAddress` may believe, and this backend has no \
+            `clientAddress` to configure")
     in
     if boot_settings <> [] then
       Printf.bprintf body "\nfunc init() {\n%s\n}\n" (String.concat "\n" boot_settings);
@@ -11031,8 +11669,8 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
              if expected then strip_outer_parens (emit_negated ~indent signatures env left)
              else strip_outer_parens (emit_expr ~indent signatures env left)
            | _ ->
-             if not (supports_equality left_ty) then unsupported loc
-               "Go backend does not support `expect` equality on this type yet";
+             if not (supports_equality left_ty) then
+               unsupported loc "%s" (equality_refusal "compare" left_ty);
              (* Comparing a multi-variant value expands to a tag test plus a payload test,
                 each mentioning the operand — so a non-trivial operand would be emitted
                 THREE times, evaluating the whole expression three times and producing a
@@ -11392,14 +12030,24 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
     emit_stmts [] "\t" api_test.stmts;
     current_api_server := None;
     Buffer.add_string body "}\n") api_tests;
+  (* The metric NAMES the runtime answers to, read by the metric assertion and by the regression
+     note — one table, so the two cannot drift. *)
+  let load_test_metric_name = function
+    | LtP50 -> "p50" | LtP95 -> "p95" | LtP99 -> "p99" | LtP999 -> "p99.9"
+    | LtErrorRate -> "errorRate" | LtThroughput -> "throughput"
+  in
   (* A `load-test` block is a Go test too: it drives the same in-process dispatch an api-test
      uses, at a fixed arrival rate, and asserts on the sample.  Driving the SAME dispatch is what
      makes the number comparable with the Racket harness's — both measure the program, not a
      socket.  The request statements are ordinary api-test statements, so they go through the
      same emitter; what differs is that they run inside the harness's thunk. *)
   List.iteri (fun index (load_test : load_test_form) ->
-    if load_test.baseline <> None then unsupported load_test.loc
-      "Go backend does not support load-test baselines yet";
+    (* A `baseline` compares this run against a RECORDED one, and NEITHER backend stores one:
+       `dsl/load-test.rkt` prints "in-process baselines; store/compare deferred" and moves on.
+       So the clause is noted here in the same place and in the same words, rather than refused
+       (which would make a load test that runs on Racket fail to compile) or dropped (which
+       would read as a regression check that ran).  Real baselines are a language feature owed
+       to both backends, not a migration item. *)
     Buffer.add_char body '\n';
     Printf.bprintf body "// load-test %s\n//\n" (String.escaped load_test.description);
     Buffer.add_string body (line_directive load_test.loc);
@@ -11441,10 +12089,7 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
     List.iter (fun assertion ->
       match assertion with
       | LtAssertMetric { metric; op; value; unit } ->
-        let metric_name = match metric with
-          | LtP50 -> "p50" | LtP95 -> "p95" | LtP99 -> "p99" | LtP999 -> "p99.9"
-          | LtErrorRate -> "errorRate" | LtThroughput -> "throughput"
-        in
+        let metric_name = load_test_metric_name metric in
         let operator = match op with
           | BLt -> "<" | BLe -> "<=" | BGt -> ">" | BGe -> ">="
           | _ -> unsupported load_test.loc
@@ -11453,9 +12098,17 @@ let test_source ?(imported_packages=[]) ?(api_tests=[]) ?(load_tests=[]) module_
         ignore unit;
         Printf.bprintf body "\tteslrt.AssertLoadTest(teslT, teslResult, %s, %s, %s)\n"
           (go_quote metric_name) (go_quote operator) (emit_float_literal value)
-      | LtAssertRegression _ ->
-        unsupported load_test.loc
-          "Go backend does not support load-test regression baselines yet") load_test.assertions;
+      (* The regression assertion needs the baseline nothing stores, so it is NOTED and does not
+         fail: a check that could not run has not failed.  Same answer as Racket's. *)
+      | LtAssertRegression { metric; ratio } ->
+        Printf.bprintf body "\tteslrt.NoteLoadTestRegression(teslT, %s, %s)\n"
+          (go_quote (load_test_metric_name metric)) (emit_float_literal ratio))
+      load_test.assertions;
+    (* Emitted AFTER the assertions, which is where `dsl/load-test.rkt` prints it. *)
+    (match load_test.baseline with
+     | Some name ->
+       Printf.bprintf body "\tteslrt.NoteLoadTestBaseline(teslT, %s)\n" (go_quote name)
+     | None -> ());
     Buffer.add_string body "}\n") load_tests;
   if reset_calls <> [] then begin
     Buffer.add_string body
@@ -11624,8 +12277,13 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
   try
     (match mode with
      | Release -> ()
+     (* `--debug` emits the checkpoint calls the DAP adapter attaches to.  On Racket those
+        are `thsl-src!` wrappers around every statement; the Go backend emits none, so a debug
+        build is refused rather than answered with a release build that no debugger can stop
+        in. *)
      | Debug -> unsupported (Location.dummy_loc m.source_file)
-       "Go debugger instrumentation is not implemented yet");
+       "Go backend does not emit debugger instrumentation: build without `--debug`, or use \
+        the Racket backend for a debug session");
     (* `Maybe` is provided by `internal/teslrt` rather than emitted per module: a
        Maybe crosses module boundaries, and two packages declaring their own would
        be incompatible Go types.  Only the type and its constructors are available;
@@ -11647,7 +12305,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           match name with
           | "Maybe" | "Maybe(..)" | "Nothing" | "Something" -> ()
           | other -> unsupported import.loc
-            "Go backend does not support `Tesl.Maybe` export `%s` yet" other) exposed;
+            "Go backend does not emit the `Tesl.Maybe` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed;
         maybe_imported := true
       (* `Tesl.Json` exports codec COMBINATOR names, not values: `stringCodec` and
          friends only ever appear in a `with_codec` position, which the codec emitter
@@ -11662,7 +12321,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
              element, which is what the decoder walks. *)
           | "listCodec" -> ()
           | other -> unsupported import.loc
-            "Go backend does not support `Tesl.Json` export `%s` yet" other) exposed
+            "Go backend does not emit the `Tesl.Json` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       (* `Tesl.Http`: the request type is runtime-provided (registered above) and
          `cookieCap` is a capability name the checker enforces — neither needs anything at
          run time.  The cookie WRITERS arrive with the session slice. *)
@@ -11696,14 +12356,16 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
              `collect` waits on it.  Both are statement shapes the emitter renders directly. *)
           | "subscribe" | "collect" -> ()
           | other -> unsupported import.loc
-            "Go backend does not support `Tesl.ApiTest` export `%s` yet" other) exposed
+            "Go backend does not emit the `Tesl.ApiTest` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       | "Tesl.Http" ->
         List.iter (fun name ->
           match name with
           | "HttpRequest" | "cookieCap" | "Http.clearSessionCookie"
           | "Http.setSessionCookie" | "Http.sessionToken" -> ()
           | other -> unsupported import.loc
-            "Go backend does not support `Tesl.Http` export `%s` yet" other) exposed
+            "Go backend does not emit the `Tesl.Http` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       (* `Tesl.Crypto`: message authentication, digests and tokens are runtime leaves over Go's
          standard library — the same primitives the Racket runtime reaches for in libsodium, so
          a tag or a fingerprint produced by one backend verifies on the other.  PASSWORD STORAGE
@@ -11720,7 +12382,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           match name with
           | "ProxyBound" | "Proxy.verifyBinding" -> ()
           | other -> unsupported import.loc
-            "Go backend does not support `Tesl.Proxy` export `%s` yet" other) exposed
+            "Go backend does not emit the `Tesl.Proxy` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       (* `Tesl.Sso` is the identity-provider surface.  Every value in it is OPAQUE — a
          connection, a subject key, an identity — because what makes them trustworthy is the
          path they came down: `Sso.defaults` or `Sso.oidc` builds a connection, the RUNTIME
@@ -11737,7 +12400,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | "Sso.allowedEmailDomains" | "Sso.allowedHostedDomains" | "Sso.allowedTenants"
           | "Sso.logoutUrl" -> ()
           | other -> unsupported import.loc
-            "Go backend does not support `Tesl.Sso` export `%s` yet" other) exposed
+            "Go backend does not emit the `Tesl.Sso` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       | "Tesl.Crypto" ->
         List.iter (fun name ->
           match name with
@@ -11751,7 +12415,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           (* The proof predicates erase, like every other fact. *)
           | "HashFor" | "PasswordVerified" | "Authentic" -> ()
           | other -> unsupported import.loc
-            "Go backend does not support `Tesl.Crypto` export `%s` yet" other) exposed
+            "Go backend does not emit the `Tesl.Crypto` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       (* `Tesl.App`: the DECLARATION vocabulary for `main`.  `App` names the record the compiler
          lowers into a startup chain, so there is nothing to bind at run time. *)
       | "Tesl.App" ->
@@ -11759,7 +12424,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           match name with
           | "App" -> ()
           | other -> unsupported import.loc
-            "Go backend does not support `Tesl.App` export `%s` yet" other) exposed
+            "Go backend does not emit the `Tesl.App` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       (* `Tesl.Telemetry`: the ambient signals.  Nothing is gated — an observability call that
          needed a capability would be threaded through every signature or left out of the code
          that most needs it — so what is left is one runtime call per signal. *)
@@ -11768,7 +12434,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           match name with
           | "initTelemetry" | "telemetry" | "counter" | "histogram" | "gauge" -> ()
           | other -> unsupported import.loc
-            "Go backend does not support `Tesl.Telemetry` export `%s` yet" other) exposed
+            "Go backend does not emit the `Tesl.Telemetry` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       (* `Tesl.JWT`: the one blessed session token.  HS256 over `header.payload`, which is
          `Tesl.Crypto`'s own primitive — so a token minted by either backend verifies on the
          other, and a test pins that against a real Racket-minted token. *)
@@ -11778,7 +12445,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | "jwt" | "JwtToken" | "Authentic"
           | "JWT.sign" | "JWT.verify" | "JWT.renew" | "JWT.decode" -> ()
           | other -> unsupported import.loc
-            "Go backend does not support `Tesl.JWT` export `%s` yet" other) exposed
+            "Go backend does not emit the `Tesl.JWT` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       (* `Tesl.HttpClient`: the four verbs and the two secret-accepting header builders are
          runtime leaves (registered below); `HttpResponse` is the runtime-provided record
          they answer with, and `httpClient` is the capability the checker enforces. *)
@@ -11789,7 +12457,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | "HttpClient.get" | "HttpClient.post" | "HttpClient.put" | "HttpClient.delete"
           | "HttpClient.bearer" | "HttpClient.secretHeader" -> ()
           | other -> unsupported import.loc
-            "Go backend does not support `Tesl.HttpClient` export `%s` yet" other) exposed
+            "Go backend does not emit the `Tesl.HttpClient` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       (* `Tesl.DB` exports the two database CAPABILITIES, which the checker enforces and
          which have no runtime form, plus the `delete … returning result` ADT — refused
          while `deleteAndReturnResult` is. *)
@@ -11801,7 +12470,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
              it cannot be emitted once per module that names it.  Registered below. *)
           | "DeleteResult" | "DeleteResult(..)" | "NoRowDeleted" | "RowsDeleted" -> ()
           | other -> unsupported import.loc
-            "Go backend does not support `Tesl.DB` export `%s` yet" other) exposed
+            "Go backend does not emit the `Tesl.DB` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       (* `Tesl.Database` names the DECLARATION form (`= Database { entities: … backend:
          Memory }`); the declaration itself is where the backend is checked. *)
       | "Tesl.Database" ->
@@ -11812,7 +12482,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | "Database" | "Memory" | "DatabaseBackend" | "Postgres" | "PostgresConfig"
           | "PostgresConnection" | "TcpConnection" | "SocketConnection" -> ()
           | other -> unsupported import.loc
-            "Go backend does not support `Tesl.Database` export `%s` yet" other) exposed
+            "Go backend does not emit the `Tesl.Database` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       (* `Tesl.Email` exposes the DECLARATION vocabulary (`Email`, `SmtpConfig`), the
          `EmailBody` ADT its `body:` field takes, and `emailCap` — a capability the checker
          enforces, so it has no emitted form.  The two OPERATIONS (`Email.send`,
@@ -11827,14 +12498,16 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           match name with
           | "SseChannel" | "pubsub" -> ()
           | other -> unsupported import.loc
-            "Go backend does not support `Tesl.SSE` export `%s` yet" other) exposed
+            "Go backend does not emit the `Tesl.SSE` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       | "Tesl.Email" ->
         List.iter (fun name ->
           match name with
           | "Email" | "SmtpConfig" | "emailCap"
           | "EmailBody" | "EmailBody(..)" | "TextBody" | "HtmlBody" | "RichBody" -> ()
           | other -> unsupported import.loc
-            "Go backend does not support `Tesl.Email` export `%s` yet" other) exposed
+            "Go backend does not emit the `Tesl.Email` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       (* `Tesl.Money` and `Tesl.Units` are validated where their types and leaves are
          registered, against the compiler's own catalogs.  `Tesl.Agent` is validated the same
          way: its types and its leaves are registered together, so one list decides what the
@@ -11866,14 +12539,23 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
              in as well — the value it takes has to have a type. *)
           | "deadJobs" | "DeadJob" | "requeue" -> ()
           | other -> unsupported import.loc
-            "Go backend does not support `Tesl.Queue` export `%s` yet" other) exposed
+            "Go backend does not support the `Tesl.Queue` export `%s`: the exports it emits \
+             are enumerated above, and test_go_stdlib_export_seam.ml holds the whole \
+             backend's inventory" other) exposed
         (* validated against the leaf/type tables below *)
       | other when List.exists (fun dependency ->
                      dependency_named dependency other) dependencies ->
         (* A LOCAL module: registered below, once the type tables exist. *)
         ()
+      (* A stdlib module this backend has no wiring for at all: no leaf table, no type table,
+         no runtime file.  Distinct from a wired module with an unwired export, which the arms
+         above refuse by export name.  test_go_stdlib_export_seam.ml walks
+         `Type_system.tesl_module_exports` and asserts the whole inventory both ways, so a new
+         module cannot arrive unnoticed on either side. *)
       | other ->
-        unsupported import.loc "Go backend does not support import `%s` yet" other) m.imports;
+        unsupported import.loc
+          "Go backend has no wiring for the module `%s` — see test_go_stdlib_export_seam.ml \
+           for the modules and exports it does emit" other) m.imports;
     (* A `fact` is a proof PREDICATE.  Applying it (`ValidPort port`) builds a proof term,
        which erases — so it is registered like a zero-size constructor: the arguments are
        typed and then dropped, and the value is the empty struct.  Registered because a
@@ -11890,6 +12572,17 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
     let codecs = List.filter_map (function DCodec c -> Some c | _ -> None) m.decls in
     let apis = List.filter_map (function DApi a -> Some a | _ -> None) m.decls in
     let servers = List.filter_map (function DServer s -> Some s | _ -> None) m.decls in
+    Hashtbl.reset server_listen_addresses;
+    List.iter (fun (server : server_form) ->
+      match server.listen_address with
+      (* `Loopback` binds 127.0.0.1 only — the server sits behind a reverse proxy, and binding
+         every interface would publish it.  `AllInterfaces` is Go's default, so it records
+         nothing and the emitted options stay byte-identical for a server without the clause. *)
+      | Some "Loopback" -> Hashtbl.replace server_listen_addresses server.name "127.0.0.1"
+      | Some "AllInterfaces" | None -> ()
+      | Some other -> unsupported server.loc
+        "Go backend does not know the `listenAddress` value `%s`: it is `Loopback` or \
+         `AllInterfaces`" other) servers;
     let capturers = List.filter_map (function DCapture c -> Some c | _ -> None) m.decls in
     let api_tests = List.filter_map (function DApiTest t -> Some t | _ -> None) m.decls in
     let load_tests = List.filter_map (function DLoadTest t -> Some t | _ -> None) m.decls in
@@ -12168,10 +12861,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
            wrapper and unwraps on every read, which is an implementation detail of that
            backend.  This used to fail closed as a not-yet; codecs are what forced the
            question, since a decoded field is exactly a proof-carrying field. *)
-        ignore field.proof_ann;
-        if field.checker <> None then unsupported field.loc
-          "Go backend does not support `via` on record field `%s.%s` yet" r.name field.name)
-        r.fields;
+        ignore field.proof_ann) r.fields;
       if Hashtbl.mem types.newtypes r.name || Hashtbl.mem types.records r.name then
         unsupported r.loc "Go backend generated type name collision for `%s`" r.name;
       Hashtbl.replace types.records r.name {
@@ -12238,11 +12928,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
     List.iter (fun (e : entity_form) ->
       if e.fields = [] then unsupported e.loc
         "Go backend does not support the field-less entity `%s`" e.name;
-      List.iter (fun (field : field_def) ->
-        ignore field.proof_ann;
-        if field.checker <> None then unsupported field.loc
-          "Go backend does not support `via` on entity field `%s.%s` yet" e.name field.name)
-        e.fields;
+      List.iter (fun (field : field_def) -> ignore field.proof_ann) e.fields;
       if not (List.exists (fun (field : field_def) -> field.name = e.primary_key) e.fields) then
         unsupported e.loc
           "Go backend cannot find the primary key `%s` among the fields of entity `%s`"
@@ -12322,7 +13008,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           else match name with
             | "Set" -> ()
             | other -> unsupported import.loc
-              "Go backend does not support `Tesl.Set` export `%s` yet" other) exposed
+              "Go backend does not emit the `Tesl.Set` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       end) m.imports;
     let dict_imports = ref [] in
     List.iter (fun (import : import_decl) ->
@@ -12350,7 +13037,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
                fact: what it buys is that `Dict.get` does not compile without it. *)
             | "HasKey" -> ()
             | other -> unsupported import.loc
-              "Go backend does not support `Tesl.Dict` export `%s` yet" other) exposed
+              "Go backend does not emit the `Tesl.Dict` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       end) m.imports;
     (* A list leaf is element-polymorphic, so its signature cannot be a fixed tuple of
        types like a String leaf's.  Each entry says how to type the call from the
@@ -12387,7 +13075,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
                needs no runtime support. *)
             | "IsSorted" | "ForAll" | "IsNonEmpty" | "IsNonNegative" -> ()
             | other -> unsupported import.loc
-              "Go backend does not support `Tesl.List` export `%s` yet" other) exposed
+              "Go backend does not emit the `Tesl.List` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       end) m.imports;
     let string_leaves = [
       (* name, params, result-shape, teslrt function *)
@@ -12551,7 +13240,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             | "Float.nan" ->
               Hashtbl.replace types.consts name (TFloat, "teslrt.FloatNaN()")
             | other -> unsupported import.loc
-              "Go backend does not support `Tesl.Float` export `%s` yet" other) exposed
+              "Go backend does not emit the `Tesl.Float` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       end) m.imports;
     (* `String.toInt` and `String.indexOf` return `Maybe Int`, so importing either
        one brings the runtime Maybe in even when the module never names Maybe. *)
@@ -12570,7 +13260,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             (* Proof predicates are compile-time only. *)
             | "IsNonZero" | "IsNonNegative" | "IsPositive" -> ()
             | other -> unsupported import.loc
-              "Go backend does not support `Tesl.Int` export `%s` yet" other) exposed
+              "Go backend does not emit the `Tesl.Int` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       end) m.imports;
     (* `Tesl.Int32` (NT-07): a 32-bit-bounded integer for wire and storage boundaries.  The
        type is NOMINAL for the checker and IS its integer at run time, so it registers as an
@@ -12601,7 +13292,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             (* The bounds are VALUES, not calls; registered as constants below. *)
             | "Int32.minValue" | "Int32.maxValue" -> ()
             | other -> unsupported import.loc
-              "Go backend does not support `Tesl.Int32` export `%s` yet" other) exposed
+              "Go backend does not emit the `Tesl.Int32` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       end) m.imports;
     (* ── `Tesl.Env` / `Tesl.Random`: effects with no state of their own ──────
        Both are gated by a capability the checker enforces (`envRead`, `random`), so what
@@ -12625,7 +13317,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           end else match name with
             | "envRead" -> ()
             | other -> unsupported import.loc
-              "Go backend does not support `Tesl.Env` export `%s` yet" other) exposed
+              "Go backend does not emit the `Tesl.Env` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       | "Tesl.Random" ->
         List.iter (fun name ->
           if List.mem name random_leaf_names then
@@ -12633,14 +13326,16 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           else match name with
             | "random" -> ()
             | other -> unsupported import.loc
-              "Go backend does not support `Tesl.Random` export `%s` yet" other) exposed
+              "Go backend does not emit the `Tesl.Random` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       | "Tesl.Id" ->
         List.iter (fun name ->
           match name with
           | "generateId" | "generatePrefixedId" ->
             effect_imports := name :: !effect_imports
           | other -> unsupported import.loc
-            "Go backend does not support `Tesl.Id` export `%s` yet" other) exposed
+            "Go backend does not emit the `Tesl.Id` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       (* `Tesl.Cache` exposes the TYPE (the declaration's `= Cache { … }` head) and the four
          operations; `cacheCap` is a capability the checker enforces, so it has no emitted
          form. *)
@@ -12652,7 +13347,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             if name = "Cache.get" then maybe_imported := true
           | "Cache" | "cacheCap" -> ()
           | other -> unsupported import.loc
-            "Go backend does not support `Tesl.Cache` export `%s` yet" other) exposed
+            "Go backend does not emit the `Tesl.Cache` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       (* `Tesl.UUID`.  Generation is gated by the `uuid` capability (the checker enforces
          it, so nothing survives here), and `UUID.validate` is a CHECK — an invalid string
          is the 400 the request answers with, not a trap.  `IsUuid` is the fact it mints,
@@ -12664,7 +13360,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             effect_imports := name :: !effect_imports
           | "uuid" | "IsUuid" -> ()
           | other -> unsupported import.loc
-            "Go backend does not support `Tesl.UUID` export `%s` yet" other) exposed
+            "Go backend does not emit the `Tesl.UUID` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       | _ -> ()) m.imports;
     (* ── `Tesl.Time`: the instant, and exact-integer millisecond arithmetic ──
        `PosixMillis` is runtime-provided for the reason `Maybe` is: an instant crosses
@@ -12705,7 +13402,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             | "TimeZone" | "Utc" | "FixedOffset" -> zone_type_needed := true
             | other when List.mem_assoc other Tz_zones.zones -> zone_type_needed := true
             | other -> unsupported import.loc
-              "Go backend does not support `Tesl.Time` export `%s` yet" other) exposed;
+              "Go backend does not emit the `Tesl.Time` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed;
         (* Registered whenever the module imports Tesl.Time at all: the type is named in
            signatures and entity columns even when no leaf is exposed. *)
         Hashtbl.replace types.newtypes "PosixMillis" {
@@ -12911,7 +13609,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
                             || String.sub leaf 0 10 = "MoneyRate.") ->
               money_leaf_imports := leaf :: !money_leaf_imports
             | other -> unsupported import.loc
-              "Go backend does not support `Tesl.Money` export `%s` yet" other) exposed
+              "Go backend does not emit the `Tesl.Money` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       | "Tesl.Units" ->
         units_imported := true;
         List.iter (fun name ->
@@ -12922,7 +13621,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           end else match name with
             | "FloatNonZero" -> ()
             | other -> unsupported import.loc
-              "Go backend does not support `Tesl.Units` export `%s` yet" other) exposed
+              "Go backend does not emit the `Tesl.Units` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       | _ -> ()) m.imports;
     if !money_imported then begin
       let currency_record = runtime_record "Currency" "teslrt.Currency"
@@ -13058,7 +13758,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             | "IsTrimmed" | "IsUpperCase" | "IsLowerCase" | "IsNonNegative"
             | "IsNonEmpty" -> ()
             | other -> unsupported import.loc
-              "Go backend does not support `Tesl.String` export `%s` yet" other) exposed
+              "Go backend does not emit the `Tesl.String` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       end) m.imports;
     List.iter (fun (import : import_decl) ->
       if import.module_name = "Tesl.Tuple" then begin
@@ -13072,7 +13773,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | "Tuple2.first" | "Tuple2.second"
           | "Tuple3.first" | "Tuple3.second" | "Tuple3.third" -> ()
           | other -> unsupported import.loc
-            "Go backend does not support `Tesl.Tuple` export `%s` yet" other) exposed;
+            "Go backend does not emit the `Tesl.Tuple` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed;
         tuple_imported := true
       end) m.imports;
     if !tuple_imported then begin
@@ -13209,7 +13911,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | "Either.map" | "Either.mapLeft" | "Either.andThen" ->
             either_fn_imports := name :: !either_fn_imports
           | other -> unsupported import.loc
-            "Go backend does not support `%s` export `%s` yet" import.module_name other) exposed;
+            "Go backend does not emit the `%s` export `%s`: the module is wired, that export \
+             is not — test_go_stdlib_export_seam.ml holds the whole inventory" import.module_name other) exposed;
         either_imported := true
       end) m.imports;
     (* `JobResult` is the queue counterpart: `JobOk job` and `JobFailed job error` — the
@@ -13274,7 +13977,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           match name with
           | "Result" | "Result(..)" | "Ok" | "Err" -> ()
           | other -> unsupported import.loc
-            "Go backend does not support `Tesl.Result` export `%s` yet" other) exposed;
+            "Go backend does not emit the `Tesl.Result` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed;
         result_imported := true
       end) m.imports;
     if !result_imported then begin
@@ -13369,16 +14073,12 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
     List.iter (fun (name, params, variants, loc) ->
       if variants = [] then unsupported loc "Go backend requires `%s` to have variants" name;
       List.iter (fun (variant : adt_variant) ->
-        List.iter (fun (field : field_def) ->
-          (* A proof ANNOTATION on a constructor field is a type-level contract with no
-             runtime structure — the frontend has discharged it before anything reaches
-             here — so the field is its own type, exactly as a proof-annotated record field
-             and a proof-carrying return are.  What the annotation buys is that a `Node`
-             cannot be BUILT without a proven value, and that is the checker's to enforce on
-             both backends. *)
-          if field.checker <> None then unsupported field.loc
-            "Go backend does not support `via` on constructor field `%s.%s` yet"
-            variant.ctor field.name) variant.fields) variants;
+        (* A proof ANNOTATION on a constructor field is a type-level contract with no runtime
+           structure — the frontend has discharged it before anything reaches here — so the field
+           is its own type, exactly as a proof-annotated record field and a proof-carrying return
+           are.  What the annotation buys is that a `Node` cannot be BUILT without a proven value,
+           and that is the checker's to enforce on both backends. *)
+        List.iter (fun (field : field_def) -> ignore field.proof_ann) variant.fields) variants;
       if Hashtbl.mem types.newtypes name || Hashtbl.mem types.records name
          || Hashtbl.mem types.adts name then
         unsupported loc "Go backend generated type name collision for `%s`" name;
@@ -13583,8 +14283,6 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       | DFunc _ | DTest _ -> ()
       | DType (TypeNewtype _) -> ()
       | DRecord _ -> ()
-      | DType (TypeAlias { loc; _ }) ->
-        unsupported loc "Go backend does not support transparent type aliases yet"
       | DType (TypeAdt _) -> ()
       | DEntity _ -> ()
       | DFact _ -> ()
@@ -13972,8 +14670,12 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         | "UUID.v7" -> [], TString, "teslrt.UUIDv7"
         | "UUID.validate" -> [TString], TCheck TString, "teslrt.UUIDValidate"
         | "generatePrefixedId" -> [TString], TString, "teslrt.GeneratePrefixedId"
+        (* An effect import is refused BY NAME at the module's import arm, so a name reaching
+           this table means the two lists disagree — the import arm admitted an export this
+           table has no signature for. *)
         | other -> unsupported (Location.dummy_loc m.source_file)
-          "Go backend does not support the effect leaf `%s` yet" other
+          "internal error: the effect leaf `%s` was admitted by its import arm but has no \
+           signature in this table" other
       in
       Hashtbl.replace signatures name
         { params; result; go_name; sig_owner = ""; sig_needs_scope = false })
@@ -14037,7 +14739,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
              let unit = String.sub name 10 (String.length name - 10) in
              [zone; posix], posix, "teslrt.TimeTrunc" ^ unit)
         | other -> unsupported (Location.dummy_loc m.source_file)
-          "Go backend does not support `Tesl.Time` export `%s` yet" other
+          "Go backend does not emit the `Tesl.Time` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other
       in
       Hashtbl.replace signatures name
         { params; result; go_name; sig_owner = ""; sig_needs_scope = false })
@@ -14157,7 +14860,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | "Crypto.sha256" -> [TString], TString, "teslrt.Sha256Hex"
           | "Crypto.sha512" -> [TString], TString, "teslrt.Sha512Hex"
           | other -> unsupported loc
-            "Go backend does not support `Tesl.Crypto` export `%s` yet" other
+            "Go backend does not emit the `Tesl.Crypto` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other
         in
         Hashtbl.replace signatures name
           { params; result; go_name; sig_owner = ""; sig_needs_scope = false })
@@ -14209,7 +14913,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
              so it mints no fact and its result must not be trusted. *)
           | "JWT.decode" -> [token], claims, "teslrt.JwtDecode"
           | other -> unsupported loc
-            "Go backend does not support `Tesl.JWT` export `%s` yet" other
+            "Go backend does not emit the `Tesl.JWT` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other
         in
         Hashtbl.replace signatures name
           { params; result; go_name; sig_owner = ""; sig_needs_scope = false })
@@ -14243,7 +14948,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | "HttpClient.secretHeader" ->
             [TString; TParam "Secret"], header_pair, "teslrt.HttpSecretHeader"
           | other -> unsupported loc
-            "Go backend does not support `Tesl.HttpClient` export `%s` yet" other
+            "Go backend does not emit the `Tesl.HttpClient` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other
         in
         Hashtbl.replace signatures name
           { params; result; go_name; sig_owner = ""; sig_needs_scope = false })
@@ -14273,7 +14979,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
               [TString; TString; TString], TString, "teslrt.RegexReplace"
             | "Regex.split" -> [TString; TString], TList TString, "teslrt.RegexSplit"
             | other -> unsupported loc
-              "Go backend does not support `Tesl.Regex` export `%s` yet" other
+              "Go backend does not emit the `Tesl.Regex` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other
           in
           Hashtbl.replace signatures name
             { params; result; go_name; sig_owner = ""; sig_needs_scope = false }) exposed
@@ -14328,7 +15035,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             | "Net.isIpv4Mapped" -> [TString], TBool, "teslrt.NetIsIPv4Mapped"
             | "Net.isForbiddenHost" -> [TString], TBool, "teslrt.NetIsForbiddenHost"
             | other -> unsupported loc
-              "Go backend does not support `%s` export `%s` yet" import.module_name other
+              "Go backend does not emit the `%s` export `%s`: the module is wired, that export \
+             is not — test_go_stdlib_export_seam.ml holds the whole inventory" import.module_name other
           in
           if go_name <> "" then
             Hashtbl.replace signatures name
@@ -14408,7 +15116,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             | "humanActions" -> [], TFailure, "teslrt.HumanActions"
             | "askFor" -> [], TFailure, "teslrt.AskFor"
             | other -> unsupported loc
-              "Go backend does not support `Tesl.Agent` export `%s` yet" other
+              "Go backend does not emit the `Tesl.Agent` export `%s`: the module is wired, that \
+             export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other
           in
           Hashtbl.replace signatures name
             { params; result; go_name; sig_owner = ""; sig_needs_scope = false })
@@ -14424,8 +15133,11 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         | "httpCalled" -> [TString; TString], TBool, "teslrt.HttpCalled"
         | "httpCallCount" -> [TString; TString], TInt, "teslrt.HttpCallCount"
         | "httpLastBody" -> [TString; TString], TString, "teslrt.HttpLastBody"
+        (* Same invariant as the effect table: the import arm is the gate, so a name reaching
+           here means the gate and this table disagree. *)
         | other -> unsupported (Location.dummy_loc m.source_file)
-          "Go backend does not support the HTTP-stub leaf `%s` yet" other
+          "internal error: the HTTP-stub leaf `%s` was admitted by its import arm but has no \
+           signature in this table" other
       in
       Hashtbl.replace signatures name
         { params; result; go_name; sig_owner = ""; sig_needs_scope = false })
@@ -14519,6 +15231,132 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             (List.filter_map (function DCapability c -> Some c | _ -> None) m.decls)
             fd.capabilities;
       }) funcs;
+
+    (* ── THE EQUALITY-DICTIONARY PLAN ─────────────────────────────────────────
+       Which type parameters of which generic function are COMPARED, decided before anything is
+       emitted so a call site emitted ahead of the callee's body still knows the callee's arity.
+
+       The rule is syntactic and deliberately narrow: a comparison one of whose sides is a
+       PARAMETER declared with that type variable.  `x == y` in `fn same(x: a, y: a)` is the
+       shape that matters and the shape Racket supports; a value that only becomes an `a`
+       through a `let` is not seen here and keeps the refusal it had before.  Under-approximating
+       is safe — it degrades to a compile-time refusal, never to a wrong comparison — while
+       over-approximating would add a parameter no caller knows to pass. *)
+    Hashtbl.reset equality_dicts;
+    List.iter (fun (fd : func_decl) ->
+      match Hashtbl.find_opt current_type_params fd.name with
+      | None | Some [] -> ()
+      | Some type_params ->
+        (* Which parameter names carry which type variable, by the declaration's own spelling. *)
+        let param_variable =
+          List.filter_map (fun (binding : binding) ->
+            match binding.type_expr with
+            | TVar { name; _ } ->
+              (match List.assoc_opt name type_params with
+               | Some go_param -> Some (binding.name, go_param)
+               | None -> None)
+            | _ -> None) fd.params
+        in
+        if param_variable <> [] then begin
+          let needed = ref [] in
+          let note operand =
+            match operand with
+            | EVar { name; _ } ->
+              (match List.assoc_opt name param_variable with
+               | Some go_param when not (List.mem go_param !needed) ->
+                 needed := go_param :: !needed
+               | _ -> ())
+            | _ -> ()
+          in
+          Ast_visitor.iter (fun e ->
+            match e with
+            | EBinop { op = (BEq | BNeq); left; right; _ } -> note left; note right
+            | _ -> ()) fd.body;
+          if !needed <> [] then
+            (* In the type parameters' own order, so the emitted parameter list and every call
+               site agree without either consulting the other. *)
+            Hashtbl.replace equality_dicts fd.name
+              (List.filter_map (fun (_, go_param) ->
+                 if List.mem go_param !needed then Some go_param else None) type_params)
+        end)
+      funcs;
+    (* The requirement is TRANSITIVE: a function that hands its own `a` to a function which
+       compares one needs a dictionary too, and has to forward it.  `countMatches needle xs`
+       calling `same needle needle` is the shape — `countMatches` compares nothing itself.
+       Iterated to a fixpoint, because the chain can be any length and the declarations are in
+       no particular order. *)
+    let generic_params name =
+      match Hashtbl.find_opt current_type_params name with Some ps -> ps | None -> [] in
+    let declared_params name =
+      match List.find_opt (fun (fd : func_decl) -> fd.name = name) funcs with
+      | Some fd -> fd.params
+      | None -> [] in
+    (* The ARGUMENT POSITIONS through which a callee's dictionary is decided: the positions
+       whose declared type is the type variable that dictionary belongs to. *)
+    let dict_positions callee go_param =
+      let type_params = generic_params callee in
+      let positions = ref [] in
+      List.iteri (fun index (binding : binding) ->
+        match binding.type_expr with
+        | TVar { name; _ } when List.assoc_opt name type_params = Some go_param ->
+          positions := index :: !positions
+        | _ -> ()) (declared_params callee);
+      !positions
+    in
+    let changed = ref true in
+    while !changed do
+      changed := false;
+      List.iter (fun (fd : func_decl) ->
+        let type_params = generic_params fd.name in
+        if type_params <> [] then begin
+          let param_variable =
+            List.filter_map (fun (binding : binding) ->
+              match binding.type_expr with
+              | TVar { name; _ } ->
+                (match List.assoc_opt name type_params with
+                 | Some go_param -> Some (binding.name, go_param)
+                 | None -> None)
+              | _ -> None) fd.params
+          in
+          let have = match Hashtbl.find_opt equality_dicts fd.name with
+            | Some ps -> ps | None -> [] in
+          let needed = ref have in
+          let require go_param =
+            if not (List.mem go_param !needed) then begin
+              needed := go_param :: !needed; changed := true
+            end
+          in
+          Ast_visitor.iter (fun e ->
+            (* The head and the arguments of an application, flattened: `f a b` is nested. *)
+            let rec spine acc = function
+              | EApp { fn; arg; _ } -> spine (arg :: acc) fn
+              | head -> head, acc
+            in
+            match e with
+            | EApp _ ->
+              let head, args = spine [] e in
+              (match head with
+               | EVar { name = callee; _ } ->
+                 (match Hashtbl.find_opt equality_dicts callee with
+                  | None -> ()
+                  | Some callee_dicts ->
+                    List.iter (fun callee_param ->
+                      List.iter (fun position ->
+                        match List.nth_opt args position with
+                        | Some (EVar { name; _ }) ->
+                          (match List.assoc_opt name param_variable with
+                           | Some go_param -> require go_param
+                           | None -> ())
+                        | _ -> ()) (dict_positions callee callee_param)) callee_dicts)
+               | _ -> ())
+            | _ -> ()) fd.body;
+          if !needed <> have then
+            Hashtbl.replace equality_dicts fd.name
+              (List.filter_map (fun (_, go_param) ->
+                 if List.mem go_param !needed then Some go_param else None) type_params)
+        end)
+        funcs
+    done;
     (* Every package in a multi-module program lives under ONE Go module path, so an
        importer and its dependency agree on the import path. *)
     let module_path = match project_path with

@@ -231,8 +231,7 @@ let check_sql_field_names ?facts ?(extra_funcs=[]) (decls : top_decl list) : val
 let local_declared_type_names (decls : top_decl list) : string list =
   List.concat_map (function
     | DType (TypeAdt { name; _ }) -> [name]
-    | DType (TypeNewtype { name; _ })
-    | DType (TypeAlias { name; _ }) -> [name]
+    | DType (TypeNewtype { name; _ }) -> [name]
     | DRecord r -> [r.name]
     | DEntity e -> [e.name]
     | _ -> []
@@ -257,8 +256,7 @@ let codec_target_kinds (decls : top_decl list) : (string * codec_target_kind) li
     | DRecord r -> [(r.name, Record)]
     | DEntity e -> [(e.name, Record)]
     | DType (TypeNewtype { name; secret = true; _ }) -> [(name, Secret)]
-    | DType (TypeNewtype { name; _ })
-    | DType (TypeAlias { name; _ }) -> [(name, Other)]
+    | DType (TypeNewtype { name; _ }) -> [(name, Other)]
     | _ -> []
   ) decls
 

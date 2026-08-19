@@ -337,3 +337,130 @@ func CheckedDecoder[T any](decode func(any) Check[T]) func(any) (T, error) {
 		return value, nil
 	}
 }
+
+// The column-decoder half of the ADT wire shape: reading a stored `{"tag": …, "fields": {…}}`
+// back into the value it was written from.
+//
+// Each of these PANICS on a mismatch rather than answering a zero value. A column holds data
+// this build wrote, so a field of the wrong shape is corruption or an incompatible schema —
+// the same line the tag switch takes for a tag it has no constructor for. A request body is
+// the opposite case and goes through the `Decode*` functions above, which answer an error.
+
+// ParseColumnJSON parses the text of a jsonb column that holds an ADT.
+//
+// It accepts BOTH shapes a Tesl backend writes there. This backend writes a JSON object.
+// `dsl/sql.rkt` binds the serialised value as a STRING parameter, so a row written by the
+// Racket backend holds a jsonb string whose contents are that object — `"{\"tag\":\"Low\"}"`
+// rather than `{"tag": "Low"}`. The Racket reader accepts either, and this one has to as well:
+// a service being ported reads the rows it already has, and refusing the incumbent shape would
+// make every existing ADT column unreadable.
+//
+// Exactly ONE layer is unwrapped. A stored value that is a string all the way down is not an
+// ADT under either backend's encoding, and unwrapping repeatedly would turn a corrupt column
+// into a plausible one.
+func ParseColumnJSON(data []byte) (any, error) {
+	parsed, err := ParseJSON(data)
+	if err != nil {
+		return nil, err
+	}
+	text, isText := parsed.(string)
+	if !isText {
+		return parsed, nil
+	}
+	return ParseJSON([]byte(text))
+}
+
+// MustJSONFields is the `fields` object of a stored variant.
+func MustJSONFields(parsed any, typeName, variant string) any {
+	object, isObject := parsed.(map[string]any)
+	if !isObject {
+		panic("database: a " + typeName + " column does not hold a JSON object")
+	}
+	fields, present := object["fields"]
+	if !present {
+		panic("database: a " + typeName + " column's " + variant + " carries fields, but the " +
+			"stored value has no \"fields\" object")
+	}
+	return fields
+}
+
+// MustJSONField is one labelled field of that object.
+func MustJSONField(fields any, label string) any {
+	object, isObject := fields.(map[string]any)
+	if !isObject {
+		panic("database: a stored variant's \"fields\" is not a JSON object")
+	}
+	value, present := object[label]
+	if !present {
+		panic("database: a stored variant is missing the field " + label)
+	}
+	return value
+}
+
+func MustDecodeString(raw any) string {
+	value, err := DecodeStringValue(raw)
+	if err != nil {
+		panic("database: " + err.Error())
+	}
+	return value
+}
+
+func MustDecodeInt(raw any) Int {
+	value, err := DecodeIntValue(raw)
+	if err != nil {
+		panic("database: " + err.Error())
+	}
+	return value
+}
+
+func MustDecodeFloat(raw any) float64 {
+	number, isNumber := raw.(json.Number)
+	if !isNumber {
+		panic("database: expected a stored number")
+	}
+	value, err := number.Float64()
+	if err != nil {
+		panic("database: " + err.Error())
+	}
+	return value
+}
+
+func MustDecodeBool(raw any) bool {
+	value, isBool := raw.(bool)
+	if !isBool {
+		panic("database: expected a stored boolean")
+	}
+	return value
+}
+
+// MustEncodeJSON re-serialises a decoded sub-value, so a NESTED ADT field can go through the
+// same column decoder its own type already has rather than needing a second one.
+func MustEncodeJSON(raw any) []byte {
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		panic("database: a stored value does not re-encode: " + err.Error())
+	}
+	return encoded
+}
+
+// MaybeOfJSON reads a stored `Maybe` field.
+//
+// A `Maybe` inside a variant is written as the TAGGED shape every other ADT gets —
+// `{"tag":"Nothing"}` / `{"tag":"Something","fields":{"value":…}}` — because that is what the
+// value encoder and `dsl/types.rkt` both write for it. It is NOT a JSON null: null is what a
+// nullable COLUMN holds, and a field inside a stored variant is not a column.
+func MaybeOfJSON[A any](raw any, decode func(any) A) Maybe[A] {
+	object, isObject := raw.(map[string]any)
+	if !isObject {
+		panic("database: a stored Maybe field is not a JSON object")
+	}
+	tag, _ := object["tag"].(string)
+	switch tag {
+	case "Nothing":
+		return Nothing[A]()
+	case "Something":
+		return Something(decode(MustJSONField(MustJSONFields(raw, "Maybe", "Something"), "value")))
+	default:
+		panic("database: a stored Maybe field holds an unknown tag " + tag)
+	}
+}

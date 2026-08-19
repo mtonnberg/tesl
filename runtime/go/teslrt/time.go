@@ -24,6 +24,23 @@ func NowMillis() PosixMillis {
 
 // PosixToSeconds truncates toward zero, which is what Racket's `quotient` does — NOT floor,
 // so an instant before the epoch rounds up toward it on both backends.
+// PgGroupZone is the part of a `TimeZone` that a grouped aggregate's SQL needs: a name, or a
+// fixed offset in minutes.
+//
+// It lives in this file — which every program gets — because the two files that need it are
+// gated on DIFFERENT conditions: `dbquery.go` ships only with a Postgres-backed database, and
+// `PgZoneOf` (timetrunc.go) only with a program that buckets by a calendar unit. Declaring it in
+// either one breaks the other, and the gates are exclusion filters: a Memory-backed program that
+// truncates by hour got timetrunc.go WITHOUT dbquery.go and did not compile
+// (`undefined: PgGroupZone`), which is what `example/learn/lesson21-sql-reference.tesl` measured.
+//
+// It carries no tzdata, so an always-shipped home costs three fields and nothing else.
+type PgGroupZone struct {
+	Name          string
+	OffsetMinutes int
+	Fixed         bool
+}
+
 func PosixToSeconds(instant PosixMillis) Int {
 	return MustQuo(instant.Value, FromInt64(1000))
 }

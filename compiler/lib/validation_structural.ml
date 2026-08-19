@@ -2376,7 +2376,7 @@ let check_typed_config_blocks (decls : top_decl list) : validation_error list =
   let types = entities @ records
     @ names (function DType (TypeAdt { name; _ }) -> Some name
                     | DType (TypeNewtype { name; _ }) -> Some name
-                    | DType (TypeAlias { name; _ }) -> Some name | _ -> None) in
+                    | _ -> None) in
   let rec check_value loc fname kind v : validation_error list =
     let err m = [ make_error (cfg_expr_loc v) m ] in
     match kind with

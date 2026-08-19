@@ -27,8 +27,12 @@ func TestSubjectKeyIsInjectiveAcrossIssuers(t *testing.T) {
 	if left == right {
 		t.Error("two different (issuer, subject) pairs produced the same key")
 	}
+	// Determinism, through a NAMED first result: comparing the two calls inline is a
+	// staticcheck finding (SA4000, identical expressions either side of `!=`), which it cannot
+	// see past because it does not know the function is pure.
 	issuer, subject := "https://a", "x"
-	if ssoSubjectKey(issuer, subject) != ssoSubjectKey(issuer, subject) {
+	first := ssoSubjectKey(issuer, subject)
+	if again := ssoSubjectKey(issuer, subject); again != first {
 		t.Error("the same pair produced two keys")
 	}
 	if strings.Contains(ssoSubjectKey("https://a", "ada@example.com"), "@") {
@@ -230,8 +234,13 @@ func TestOauthCookieIsAuthenticated(t *testing.T) {
 	// A tampered payload fails the MAC, so its contents are never parsed.
 	forged := oauthState{Segment: "github", State: "s-2", Nonce: "n-2", Verifier: "v-2"}
 	payload, _ := json.Marshal(forged)
-	tampered := base64.RawURLEncoding.EncodeToString(payload) + "." +
-		strings.Split(sealed, ".")[1]
+	// The tag half, taken from a slice whose length is CHECKED: indexing the split directly is
+	// a nilaway finding, and the check states the cookie's shape rather than assuming it.
+	sealedParts := strings.Split(sealed, ".")
+	if len(sealedParts) != 2 {
+		t.Fatalf("a sealed cookie is payload.tag, got %q", sealed)
+	}
+	tampered := base64.RawURLEncoding.EncodeToString(payload) + "." + sealedParts[1]
 	if _, ok := oauthCookieOpen(tampered, "github", []string{key}); ok {
 		t.Error("a tampered cookie opened")
 	}

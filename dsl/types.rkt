@@ -62,6 +62,7 @@
  tesl-record-update
  lookup-adt-spec
  instantiate-adt-field-template
+ adt-field-spec-type
  adt-application-spec
  register-field-access!
  lookup-field-access-spec
@@ -768,6 +769,25 @@
           template)]
     [else template]))
 
+
+;; The declared TYPE of one ADT payload field, instantiated for this use of the ADT.
+;;
+;; `adt-field-spec-template` holds the field FORM the declaration was written with —
+;; `(label : type)`, or `(label : type ::: proof)` — which is NOT a type on its own.  Reading
+;; the form as a type makes every rule that consults it vacuous: `runtime-type-satisfied?`
+;; answers #t for a datum it does not recognise, and `jsexpr->typed-value` hands the raw jsexpr
+;; back untouched — so a `Maybe` field inside a stored or posted variant came back as the wire
+;; hash `#hash((tag . Nothing))` instead of `Nothing`, and no check said so.
+;;
+;; The type is extracted BEFORE substitution, so a type parameter that shares a field's label
+;; (`type Box a = Box a: a`) cannot rewrite the label position.  A field written with no type
+;; at all is a bare label, and #f says so: there is nothing to check or decode against.
+(define (adt-field-spec-type field-spec param-env)
+  (define template (adt-field-spec-template field-spec))
+  (and (pair? template)
+       (>= (length template) 3)
+       (instantiate-adt-field-template (third template) param-env)))
+
 (define (adt-application-spec normalized-type)
   (and (list? normalized-type)
        (pair? normalized-type)
@@ -1420,10 +1440,10 @@
                                 (sort actual-labels symbol<?))
                         (for/and ([field-spec (in-list expected-fields)])
                           (define label (adt-field-spec-label field-spec))
-                          (runtime-type-satisfied?
-                           (instantiate-adt-field-template (adt-field-spec-template field-spec)
-                                                           param-env)
-                           (hash-ref actual-fields label))))))))]
+                          (define field-type (adt-field-spec-type field-spec param-env))
+                          (or (not field-type)
+                              (runtime-type-satisfied? field-type
+                                                       (hash-ref actual-fields label)))))))))]
     [maybe-record-spec
      (record-value-matches-spec? maybe-record-spec value)]
     ;; Issue #80: when the element type is a type variable the per-element
@@ -1554,12 +1574,12 @@
                 variant-name
                 (for/hash ([field-spec (in-list expected-fields)])
                   (define label (adt-field-spec-label field-spec))
+                  (define field-type (adt-field-spec-type field-spec param-env))
+                  (define raw (hash-ref actual-fields label))
                   (values label
-                          (jsexpr->typed-value
-                           (instantiate-adt-field-template (adt-field-spec-template field-spec)
-                                                           param-env)
-                           (hash-ref actual-fields label)
-                           who))))]
+                          (if field-type
+                              (jsexpr->typed-value field-type raw who)
+                              raw))))]
     [maybe-record-spec
      (define _rec-type-name (record-spec-name maybe-record-spec))
      (define _rec-codec-entry (hash-ref type-codec-registry _rec-type-name #f))

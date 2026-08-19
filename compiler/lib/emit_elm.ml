@@ -1292,8 +1292,7 @@ let decl_uses_money_rate = function
   | DType (TypeAdt { variants; _ }) ->
     List.exists (fun (v : adt_variant) ->
       List.exists (fun (f : field_def) -> type_expr_uses_money_rate f.type_expr) v.fields) variants
-  | DType (TypeNewtype { base_type; _ })
-  | DType (TypeAlias { base_type; _ }) -> type_expr_uses_money_rate base_type
+  | DType (TypeNewtype { base_type; _ }) -> type_expr_uses_money_rate base_type
   | DFact fd -> List.exists (fun (p : binding) -> type_expr_uses_money_rate p.type_expr) fd.params
   | _ -> false
 
@@ -1316,8 +1315,7 @@ let decl_uses_money = function
   | DType (TypeAdt { variants; _ }) ->
     List.exists (fun (v : adt_variant) ->
       List.exists (fun (f : field_def) -> type_expr_uses_money f.type_expr) v.fields) variants
-  | DType (TypeNewtype { base_type; _ })
-  | DType (TypeAlias { base_type; _ }) -> type_expr_uses_money base_type
+  | DType (TypeNewtype { base_type; _ }) -> type_expr_uses_money base_type
   (* Fact base types: find_fact_base_type reads the DFact's first param. *)
   | DFact fd -> List.exists (fun (p : binding) -> type_expr_uses_money p.type_expr) fd.params
   | _ -> false
@@ -1329,7 +1327,6 @@ let decl_defines_money = function
   | DEntity { name = "Money"; _ } -> true
   | DType (TypeAdt { name = "Money"; _ })
   | DType (TypeNewtype { name = "Money"; _ })
-  | DType (TypeAlias { name = "Money"; _ }) -> true
   | _ -> false
 
 let format_elm_exports items =
@@ -1389,8 +1386,8 @@ let emit_elm ?module_name_override (m : module_form) : string =
        then ["MoneyRate"; "moneyRateDecoder"; "moneyRateEncoder"] else [])
   in
   let newtype_exports = List.filter_map (function
-    | DType (TypeNewtype { name; _ })
-    | DType (TypeAlias { name; _ }) -> Some [name; decoder_fn_name name; encoder_fn_name name]
+    | DType (TypeNewtype { name; _ }) ->
+      Some [name; decoder_fn_name name; encoder_fn_name name]
     | _ -> None
   ) m.decls |> List.concat in
   let fact_exports = List.filter_map (function
@@ -1549,7 +1546,6 @@ let emit_elm ?module_name_override (m : module_form) : string =
   (* ── Newtypes ── *)
   let newtypes = List.filter_map (function
     | DType (TypeNewtype { name; base_type; secret; _ }) -> Some (name, base_type, secret)
-    | DType (TypeAlias  { name; base_type; _ }) -> Some (name, base_type, false)
     | _ -> None
   ) m.decls in
 

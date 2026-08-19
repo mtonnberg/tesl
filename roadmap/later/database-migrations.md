@@ -8,7 +8,12 @@ The current `auto-migrate?: true` approach creates/alters tables at startup. Thi
 
 This feature might not be as necessary as we first thought - after feedback from users the automatic migrations work very well.
 
-## Proposed design
+## Notes
+
+- Down migrations should not be part of syntax, it is rarely/never useful in production
+- It would be nice to have an automatic check if the migration is dangerous or not - we have the current and previous type (at least in git history). The "migration" maybe could be just a list of database descriptions? (that is not enough but maybe a worthwhile direction)
+
+## Conceptual design (not proposed)
 
 ```tesl
 migration AddUserBio "2026-03-20-001" {

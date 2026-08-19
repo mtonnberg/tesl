@@ -39,10 +39,65 @@ const (
 	// nobody chose.
 	jwtTTLSeconds         = 3600
 	jwtAbsoluteMaxSeconds = 12 * jwtTTLSeconds
+	// `ShortSession`: 15 minutes renewable against an 8-hour (workday) cap. The pair is named
+	// rather than derived from the TTL — applying the 12× multiplier to 15 minutes would yield a
+	// 3-hour cap nobody chose. Same two numbers as `tesl/jwt.rkt`'s `short-session`.
+	jwtShortTTLSeconds         = 900
+	jwtShortAbsoluteMaxSeconds = 8 * 3600
 	// The only tolerance granted to an `iat` ahead of this machine's clock: enough for ordinary
 	// NTP drift between replicas, too small to meaningfully extend a session.
 	jwtMaxClockSkewSeconds = 60
 )
+
+// ── The session policy ───────────────────────────────────────────────────────
+//
+// Lives HERE rather than beside the SSO routes because it is a property of the TOKEN: it decides
+// the renewable window and the hard stop on a renewed session's total lifetime, and the SSO
+// cookie's Max-Age is a consumer of the first number rather than its owner. It was in
+// `sso_route.go`, which ships only with the SSO surface — so a program that used `JWT.sign`
+// without `sso` could not build once signing started reading the policy.
+// The session policy the `sessionPolicy` clause selects. It decides the session cookie's
+// Max-Age, so it is runtime state rather than a constant: a program that asks for
+// ShortSession must not be handed a StandardSession cookie by the other backend.
+var (
+	sessionPolicyMutex sync.RWMutex
+	sessionPolicyTTL   = jwtTTLSeconds
+)
+
+// SetSessionPolicy is the `sessionPolicy` clause, applied at boot. The two names are a
+// CLOSED set on the surface, so an unknown one is a compile error rather than a default
+// here; this takes the ttl the emitter resolved from the name.
+func SetSessionPolicy(ttlSeconds int) {
+	sessionPolicyMutex.Lock()
+	defer sessionPolicyMutex.Unlock()
+	sessionPolicyTTL = ttlSeconds
+}
+
+func sessionPolicySeconds() int {
+	sessionPolicyMutex.RLock()
+	defer sessionPolicyMutex.RUnlock()
+	return sessionPolicyTTL
+}
+
+// sessionPolicyAbsoluteMaxSeconds is the hard stop on a RENEWED session's total lifetime under
+// the active policy. Read here rather than fixed at the JWT layer because the policy is one
+// choice with two numbers: `ShortSession` that renewed against a 12-hour cap would be a shorter
+// window guarding the same total exposure, which is not what the clause says.
+func sessionPolicyAbsoluteMaxSeconds() int {
+	if sessionPolicySeconds() == jwtShortTTLSeconds {
+		return jwtShortAbsoluteMaxSeconds
+	}
+	return jwtAbsoluteMaxSeconds
+}
+
+// SessionPolicyTTL maps the surface's closed keyword set to its ttl in seconds. It lives
+// here rather than in the emitter so both backends read one table.
+func SessionPolicyTTL(name string) int {
+	if name == "ShortSession" {
+		return jwtShortTTLSeconds
+	}
+	return jwtTTLSeconds
+}
 
 // The OPTIONAL previous signing key. Verification accepts a token signed by either the current
 // key or this one, which is the overlap that lets a leaked key be rotated WITHOUT logging every
@@ -52,12 +107,54 @@ var (
 	previousSessionKey      *Secret
 )
 
+// SecretPointer is the one-line adapter the emitter needs: `SetPreviousSessionKey` takes a
+// pointer so that "no previous key" is a distinct state from "the empty secret", and an emitted
+// boot line has an expression rather than a variable to take the address of.
+func SecretPointer(secret Secret) *Secret { return &secret }
+
 // SetPreviousSessionKey installs (or, with nil, clears) the rotation overlap. Clearing it while
 // rotating the current key is the global kill switch.
 func SetPreviousSessionKey(key *Secret) {
 	previousSessionKeyMutex.Lock()
 	defer previousSessionKeyMutex.Unlock()
 	previousSessionKey = key
+}
+
+// The OPTIONAL revocation hook the `sessionRevoked` server clause installs.
+//
+// Consulted ONLY when a session RENEWS — never on the verify path, which stays byte-identical
+// and stateless. That bounds revocation latency to the renewable window at the cost of one read
+// per session per TTL, which is the trade `tesl/jwt.rkt` documents and makes.
+var (
+	sessionRevokedMutex sync.RWMutex
+	sessionRevokedHook  func(subject string, issuedAtSeconds int64) bool
+)
+
+// SetSessionRevokedHook installs (or, with nil, clears) the renewal-time revocation check.
+// The hook takes the `sub` claim and `iat` in epoch SECONDS and answers true for a session that
+// may no longer renew.
+func SetSessionRevokedHook(hook func(subject string, issuedAtSeconds int64) bool) {
+	sessionRevokedMutex.Lock()
+	defer sessionRevokedMutex.Unlock()
+	sessionRevokedHook = hook
+}
+
+// sessionRevoked FAILS CLOSED: a hook that panics — a failing dbRead, a nil map — denies the
+// renewal rather than allowing it, which is the answer `tesl/jwt.rkt` gives for the same case
+// ("any error from the hook denies the renewal").
+func sessionRevoked(subject string, issuedAtSeconds int64) (revoked bool) {
+	sessionRevokedMutex.RLock()
+	hook := sessionRevokedHook
+	sessionRevokedMutex.RUnlock()
+	if hook == nil {
+		return false
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			revoked = true
+		}
+	}()
+	return hook(subject, issuedAtSeconds)
 }
 
 func sessionKeys(current Secret) []string {
@@ -140,7 +237,7 @@ func JwtSign(claims Dict[string, string], key Secret) JwtToken {
 		}
 	}
 	now := jwtNowSeconds()
-	return signClaims(claims, key, now, now+jwtTTLSeconds)
+	return signClaims(claims, key, now, now+int64(sessionPolicySeconds()))
 }
 
 func signClaims(claims Dict[string, string], key Secret, issuedAt, expiresAt int64) JwtToken {
@@ -317,10 +414,15 @@ func JwtRenew(token JwtToken, key Secret) Check[JwtToken] {
 	now := jwtNowSeconds()
 	issuedAt, usable := jsonSeconds(verified.raw["iat"])
 	if !usable || issuedAt < 0 || issuedAt > now+jwtMaxClockSkewSeconds {
-		return Reject[JwtToken](401, "Session cannot be renewed")
+		return Reject[JwtToken](401, "Session cannot be renewed: no usable issued-at claim")
 	}
-	if now-issuedAt > jwtAbsoluteMaxSeconds {
+	if now-issuedAt > int64(sessionPolicyAbsoluteMaxSeconds()) {
 		return Reject[JwtToken](401, "Session has reached its maximum lifetime")
+	}
+	// Revocation at the renewal boundary, after the lifetime checks and before any new token is
+	// minted: the same position and the same message `tesl/jwt.rkt` uses.
+	if sessionRevoked(claimText(verified.raw["sub"]), issuedAt) {
+		return Reject[JwtToken](401, "Session cannot be renewed: session revoked")
 	}
 	// Every claim travels across except the two this function owns.
 	carried := DictEmpty[string, string]()
@@ -330,7 +432,7 @@ func JwtRenew(token JwtToken, key Secret) Check[JwtToken] {
 		}
 		carried = DictInsert(carried, name, claimText(value), stringKeyLess)
 	}
-	return Accept(signClaims(carried, key, issuedAt, now+jwtTTLSeconds))
+	return Accept(signClaims(carried, key, issuedAt, now+int64(sessionPolicySeconds())))
 }
 
 // JwtTokenText is the token as it travels — what a cookie writer puts on the wire.

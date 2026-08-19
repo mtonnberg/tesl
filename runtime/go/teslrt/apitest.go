@@ -50,6 +50,14 @@ func ApiRequest(server Server, method, path, body string, cookies []string,
 		// server side is what decides which value wins.
 		request.Header.Add(header.Tuple2First, header.Tuple2Second)
 	}
+	// A body implies JSON unless the test said otherwise. The Racket harness hands the dispatcher
+	// an already-parsed body, so "the body is JSON" is true there by construction; here the request
+	// is real, and without this every `post … body { … }` would meet the server's own
+	// content-type check (415) instead of the handler. Set only when the test did NOT choose a
+	// content type — sending `text/plain` deliberately is how a test asserts that check.
+	if body != "" && request.Header.Get("Content-Type") == "" {
+		request.Header.Set("Content-Type", "application/json")
+	}
 	recorder := httptest.NewRecorder()
 	server.ServeHTTP(recorder, request)
 	result := recorder.Result()

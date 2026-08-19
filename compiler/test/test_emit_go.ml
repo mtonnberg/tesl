@@ -2696,8 +2696,18 @@ import (
 // touches ambient state — the dispatcher creates the request scope and passes it in.
 func do(t *testing.T, method, path, body string) (int, string) {
 	t.Helper()
+	return doTyped(t, method, path, body, "application/json")
+}
+
+// A body carries a content type, because a real client sends one: an endpoint that declares a
+// payload refuses anything that does not say JSON, which is what `dsl/web.rkt` does too.
+func doTyped(t *testing.T, method, path, body, contentType string) (int, string) {
+	t.Helper()
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(method, path, strings.NewReader(body))
+	if contentType != "" {
+		request.Header.Set("Content-Type", contentType)
+	}
 	HelloServer.ServeHTTP(recorder, request)
 	response := recorder.Result()
 	out, _ := io.ReadAll(response.Body)
@@ -2729,6 +2739,18 @@ func TestEmittedServerRejections(t *testing.T) {
 	}
 	if status, body := do(t, "POST", "/greet", `{}`); status != 400 {
 		t.Errorf("missing field = %d %s", status, body)
+	}
+	// A declared payload is CHECKED before it is parsed: the wrong content type is 415 and an
+	// empty body is 400, both before the decoder sees anything. Same statuses as the Racket
+	// server, and only reachable over a real request — an api-test on either backend hands the
+	// dispatcher a body that is JSON by construction.
+	if status, body := doTyped(t, "POST", "/greet", `{"name":"ada"}`, "text/plain"); status != 415 ||
+		!strings.Contains(body, "Expected application/json payload") {
+		t.Errorf("wrong content type = %d %s", status, body)
+	}
+	if status, body := doTyped(t, "POST", "/greet", "", "application/json"); status != 400 ||
+		!strings.Contains(body, "Missing JSON payload") {
+		t.Errorf("empty body = %d %s", status, body)
 	}
 	if status, _ := do(t, "GET", "/nope", ""); status != 404 {
 		t.Errorf("unknown path status = %d", status)
@@ -2892,8 +2914,11 @@ let test_http_auth_with_go () =
      raw bytes, and `teslRequest.Body` is a stream that can only be read once. *)
   check bool "auth runs before the handler body" true
     (contains module_go "teslAuth := CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))");
-  check bool "and it sees the bytes that arrived" true
-    (contains module_go "teslBodyBytes, teslBodyErr := io.ReadAll(teslRequest.Body)");
+  (* Through `teslrt.ReadRequestBody`, which applies the size cap `dsl/web.rkt` applies —
+     the body is parsed whole in memory, so an uncapped read is a one-request exhaustion. *)
+  check bool "and it sees the bytes that arrived, under the shared body cap" true
+    (contains module_go
+       "teslBodyBytes, teslBodyStatus, teslBodyMessage := teslrt.ReadRequestBody(teslRequest)");
   check bool "a failed auth returns its own status and message" true
     (contains module_go "return teslrt.Fail(teslAuth.Status(), teslAuth.Message())");
   (* The proof erases: what reaches the handler is the value. *)
@@ -3069,11 +3094,29 @@ let gate_emitted ?(env=[]) ?(short=false) prefix emitted =
       if unformatted <> "" then
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
+      (* `-race` when the emitted program STARTS GOROUTINES, and only then.
+         Emitted tests are sequential — no `t.Parallel` — so most trees have nothing to race,
+         and the detector costs wall clock on every case.  What does start goroutines is
+         `workers` (a queue's worker pool), an SSE channel's delivery, and `serve` itself, and
+         those are exactly the trees where a data race in the runtime or in emitted state would
+         hide.  Detected from the emitted source rather than declared per case, so a new test
+         that happens to start workers cannot forget to ask for it. *)
+      let starts_goroutines =
+        List.exists (fun (artifact : Emit_go.artifact) ->
+          Filename.check_suffix artifact.path ".go"
+          && not (Filename.check_suffix artifact.path "_test.go")
+          && (contains artifact.contents "teslrt.StartWorkers("
+              || contains artifact.contents "teslrt.Serve("
+              || contains artifact.contents "teslrt.Publish("))
+          emitted
+      in
       (* `-short` where the emitted tests include a LOAD test: it takes seconds by construction
          (a warm-up plus a measured window), and its value is in `bench/`, not in this suite. *)
-      ignore (run_command root
-                (with_env (if short then "go test -short -count=1 ./..."
-                           else "go test -count=1 ./...")));
+      let test_command =
+        (if short then "go test -short -count=1" else "go test -count=1")
+        ^ (if starts_goroutines then " -race" else "") ^ " ./..."
+      in
+      ignore (run_command root (with_env test_command));
       ignore (run_command root "go vet ./...");
       run_go_gates root)
   end
@@ -3465,6 +3508,7 @@ let postgres_live_source = {|module GoPostgresLive exposing [titleOf, countBooks
 
 import Tesl.Prelude exposing [Bool(..), Int, List, String, Unit]
 import Tesl.List exposing [List.length, List.map]
+import Tesl.String exposing [String.fromInt]
 import Tesl.Tuple exposing [Tuple2, Tuple2.first, Tuple2.second]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.DB exposing [dbRead, dbWrite]
@@ -3482,11 +3526,19 @@ type Shelf
   = Fiction
   | Reference
 
+# A variant that CARRIES a payload. The column is JSONB holding `{"tag": …, "fields": {…}}`,
+# which is the shape both backends write, so a row written by either is readable by both.
+type Binding
+  = Paperback
+  | Hardcover pressing: Int
+  | Special edition: String
+
 entity LiveBook table "live_books" primaryKey id {
   id: String
   title: String
   pages: Int
   shelf: Shelf
+  binding: Binding
   retired: Bool
   authorId: String
 }
@@ -3512,7 +3564,25 @@ database LiveDb = Database {
 
 fn store(id: String, title: String, pages: Int, shelf: Shelf, retired: Bool, authorId: String) -> LiveBook
   requires [dbWrite] =
-  insert LiveBook { id: id, title: title, pages: pages, shelf: shelf, retired: retired, authorId: authorId }
+  insert LiveBook {
+    id: id, title: title, pages: pages, shelf: shelf, binding: Paperback,
+    retired: retired, authorId: authorId
+  }
+
+fn storeBound(id: String, binding: Binding) -> LiveBook requires [dbWrite] =
+  insert LiveBook {
+    id: id, title: "Bound", pages: 1, shelf: Fiction, binding: binding,
+    retired: False, authorId: "a-1"
+  }
+
+fn bindingOf(wanted: String) -> String requires [dbRead] =
+  case selectOne b from LiveBook where b.id == wanted of
+    Nothing -> "none"
+    Something b ->
+      case b.binding of
+        Paperback -> "paperback"
+        Hardcover pressing -> "hardcover-" ++ String.fromInt pressing
+        Special edition -> "special-" ++ edition
 
 fn storeAuthor(id: String, name: String) -> LiveAuthor
   requires [dbWrite] =
@@ -3560,7 +3630,8 @@ fn titlesByPages() -> Int
 # what a test that runs on either store asserts.
 fn stash(id: String, title: String, pages: Int) -> Unit requires [dbWrite] =
   upsert LiveBook {
-    id: id, title: title, pages: pages, shelf: Fiction, retired: False, authorId: "a-1"
+    id: id, title: title, pages: pages, shelf: Fiction, binding: Paperback,
+    retired: False, authorId: "a-1"
   } onConflict [id] doUpdate [title, pages]
 
 # A grouped aggregate GROUPS on the server: `select "authorId", coalesce(sum("pages"), 0) …
@@ -3637,6 +3708,15 @@ test "a round trip through the server answers what it stored" with database Live
   expect authorsSeen () == ["a-1", "alpha", "zeta"]
   expect pagesSeen () == [250, 50, 10]
   expect countsSeen () == [1, 2, 1]
+  # A payload-carrying ADT column: the stored `{"tag": …, "fields": {…}}` reads back as the
+  # value it was written from, whatever the variant carries.
+  delete b from LiveBook
+  let _ = storeBound "b-1" Paperback
+  let _ = storeBound "b-2" (Hardcover 3)
+  let _ = storeBound "b-3" (Special "slipcase")
+  expect bindingOf "b-1" == "paperback"
+  expect bindingOf "b-2" == "hardcover-3"
+  expect bindingOf "b-3" == "special-slipcase"
 }
 |}
 
@@ -3671,6 +3751,654 @@ let test_postgres_live_oracle () =
   | None ->
     Printf.printf "SKIP: no shared PostgreSQL cluster configured (TESL_TEST_POSTGRES_SHARED_*)\n%!"
   | Some env -> racket_behavior_oracle ~env "<go-pg-live-oracle>" postgres_live_source ()
+
+(* The three column shapes a Postgres-backed entity can hold that a scalar column rule does not
+   reach: a payload-carrying ADT, a `secret` newtype, and a nullable column asked about by
+   `isNull`.
+
+   The ADT column is where the two backends were measurably INCOMPATIBLE.  Both write the same
+   document, but `dsl/sql.rkt` binds it as a string parameter, so a row it wrote holds a jsonb
+   STRING whose contents are that document while a row this backend wrote holds the document.
+   The Racket reader accepts either; this one refused the incumbent shape, so a service being
+   ported could not read the rows it already had.  `teslrt.ParseColumnJSON` now unwraps that one
+   layer, and this suite's live case covers the Racket-writes/Go-reads direction by running both
+   backends against the same table in sequence.
+
+   The nested `Maybe` in `Named` is what found a Racket bug underneath: `adt-field-spec-template`
+   holds the field FORM `(label : type)`, and `jsexpr->typed-value` read it as a type, so every
+   payload field decoded fail-open — a `Maybe` came back as the wire hash rather than `Nothing`,
+   and `runtime-type-satisfied?` said nothing was wrong. *)
+let pg_columns_source = {|module GoPgColumns exposing [labelOf, tokenMatches, unnamed]
+
+import Tesl.Prelude exposing [Bool(..), Int, String, Unit]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.String exposing [String.fromInt]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [
+  Database,
+  Postgres,
+  PostgresConfig,
+  TcpConnection,
+]
+
+secret Token = String
+
+# A payload-carrying variant whose payload is itself a `Maybe`: the stored JSON holds the
+# TAGGED shape `{"tag": "Nothing"}`, never a JSON null, so a decoder that tests for null
+# would read every absent note as present.
+type Priority
+  = Low
+  | Numbered level: Int
+  | Named label: String note: (Maybe String)
+
+entity Ticket table "pg_column_tickets" primaryKey id {
+  id: String
+  priority: Priority
+  token: Token
+  assignee: Maybe String
+}
+
+database ColumnDb = Database {
+  schema: "gocolumnprobe"
+  entities: [Ticket]
+  backend: Postgres (PostgresConfig {
+    dbName: env "TESL_TEST_POSTGRES_SHARED_ADMIN_DATABASE"
+    user: env "TESL_TEST_POSTGRES_SHARED_USER"
+    password: env "PGPASSWORD"
+    connection: TcpConnection {
+      host: env "TESL_TEST_POSTGRES_SHARED_HOST"
+      port: envInt "TESL_TEST_POSTGRES_SHARED_PORT" 5432
+    }
+  })
+}
+
+fn store(id: String, priority: Priority, token: Token, assignee: Maybe String) -> Ticket
+  requires [dbWrite] =
+  insert Ticket { id: id, priority: priority, token: token, assignee: assignee }
+
+fn labelOf(wanted: String) -> String requires [dbRead] =
+  case selectOne t from Ticket where t.id == wanted of
+    Nothing -> "none"
+    Something t ->
+      case t.priority of
+        Low -> "low"
+        Numbered level -> "n" ++ String.fromInt level
+        Named label note ->
+          case note of
+            Nothing -> label
+            Something extra -> label ++ "/" ++ extra
+
+# A `secret` column: the column stores the newtype's BASE value, and what comes back is the
+# newtype again — so the only thing a caller can do with it is compare, which is the point.
+fn tokenMatches(wanted: String, guess: Token) -> Bool requires [dbRead] =
+  case selectOne t from Ticket where t.id == wanted of
+    Nothing -> False
+    Something t -> t.token == guess
+
+# `isNull` is the only way to ask a nullable column about its emptiness in a WHERE clause:
+# `t.assignee == Nothing` compares a column against a Tesl value, which the store cannot do.
+fn unnamed() -> Int requires [dbRead] =
+  selectCount t from Ticket where isNull t.assignee
+
+test "a payload ADT, a secret and a nullable column all survive a round trip" with database ColumnDb requires [dbRead, dbWrite] {
+  # A live table outlives a test process, so the block starts by clearing what an earlier run
+  # left — the per-test freshening both backends do covers memory stores only.
+  delete t from Ticket
+  let _ = store "t-1" Low (Token "k-1") (Something "ada")
+  let _ = store "t-2" (Numbered 3) (Token "k-2") Nothing
+  let _ = store "t-3" (Named "urgent" Nothing) (Token "k-3") Nothing
+  let _ = store "t-4" (Named "urgent" (Something "today")) (Token "k-4") (Something "grace")
+  expect labelOf "t-1" == "low"
+  expect labelOf "t-2" == "n3"
+  expect labelOf "t-3" == "urgent"
+  expect labelOf "t-4" == "urgent/today"
+  expect labelOf "t-404" == "none"
+  expect tokenMatches "t-1" (Token "k-1") == True
+  expect tokenMatches "t-1" (Token "k-2") == False
+  expect unnamed () == 2
+}|}
+
+let test_pg_columns_with_go () =
+  match live_postgres_env () with
+  | None ->
+    Printf.printf "SKIP: no shared PostgreSQL cluster configured (TESL_TEST_POSTGRES_SHARED_*)\n%!"
+  | Some env ->
+    let emitted = emit_ok "<go-pg-columns>" pg_columns_source in
+    let module_go = artifact "internal/teslmodgopgcolumns/module.go" emitted in
+    (* The column decoder goes through the tolerant parse, not the strict one: this is the line
+       that makes an existing Racket-written table readable. *)
+    check bool "an ADT column parses through the tolerant column parse" true
+      (contains module_go "teslrt.ParseColumnJSON(teslText)");
+    (* A `secret` column stores the plaintext and reads back INTO the redacting carrier. *)
+    check bool "a secret column binds its plaintext" true
+      (contains module_go ".Value.Reveal()");
+    check bool "a secret column scans back into a secret" true
+      (contains module_go "Token{Value: teslrt.MakeSecret(");
+    (* `isNull` asks the STORE, so it has to reach the statement rather than filtering rows
+       here — a predicate evaluated in Go would answer the same on this data and the wrong
+       thing on a table that does not fit in memory. *)
+    check bool "isNull becomes a SQL predicate" true
+      (contains module_go {|assignee\" is null|});
+    gate_emitted ~env "tesl-go-pg-columns" emitted
+
+let test_pg_columns_oracle () =
+  match live_postgres_env () with
+  | None ->
+    Printf.printf "SKIP: no shared PostgreSQL cluster configured (TESL_TEST_POSTGRES_SHARED_*)\n%!"
+  | Some env -> racket_behavior_oracle ~env "<go-pg-columns-oracle>" pg_columns_source ()
+
+(* ─── The `server` clause surface ─────────────────────────────────────────────
+   `Ast.server_form` carries 16 fields and `emit_racket.ml` honours all of them.  This backend
+   read TEN.  The six it ignored were not refused — they were DROPPED, which is the one failure
+   mode this migration exists to prevent:
+
+     `sessionRevoked`         a revoked session went on renewing
+     `sessionPreviousKey`     key rotation logged every user out
+     `listenAddress Loopback` the server bound every interface
+     `healthProbePath`        a load balancer's probe got 421
+     `contentSecurityPolicy`  runtime-served HTML carried no CSP
+     `trustedProxies`         a security declaration configured nothing
+
+   Three of them are declared by corpus programs TODAY (`example/sso-demo.tesl`,
+   `lesson78-sso.tesl`, `lesson79-authenticating-proxy.tesl`, `lesson80-testing-sso.tesl`,
+   `tests/proxy-binding-http-tests.tesl`) and those programs PASSED — a green corpus over a real
+   divergence, because no test asserted a clause.  So this case asserts the boot line for each,
+   and then asserts the BEHAVIOUR of the one with teeth: `expectFail renewedLength banned` fails
+   unless the revocation hook actually denies.  `trustedProxies` is refused rather than wired,
+   because there is no `request.clientAddress` on this backend for it to scope. *)
+let server_clauses_source = {|module GoServerClauses exposing [profile, renewedLength]
+
+import Tesl.Prelude exposing [Bool(..), Int, String, Unit]
+import Tesl.String exposing [String.length]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Dict exposing [Dict, Dict.singleton, Dict.lookup]
+import Tesl.Time exposing [time, PosixMillis]
+import Tesl.Env exposing [requireSecret, envRead]
+import Tesl.Crypto exposing [Secret]
+import Tesl.JWT exposing [jwt, JwtToken, JWT.sign, JWT.renew]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.App exposing [App]
+import Tesl.Database exposing [Database, Memory]
+
+fact Authenticated(user: Profile)
+
+record Profile { name: String }
+
+fn sessionKey() -> Secret requires [envRead] =
+  requireSecret "GOCLAUSES_SESSION_KEY"
+
+# The `sessionRevoked` clause's own function: `(String, PosixMillis) -> Bool`, where True means
+# "this session may no longer renew".  The runtime hook is handed `iat` in SECONDS, so the
+# emitted adapter has to convert — a hook given milliseconds compares against the wrong epoch.
+fn revoked(subject: String, _issuedAt: PosixMillis) -> Bool =
+  subject == "banned"
+
+auth sessionOwner(request: HttpRequest) -> user: Profile ::: Authenticated user
+  requires [jwt, envRead] =
+  ok (Profile { name: "anyone" }) ::: Authenticated user
+
+handler get profile(user: Profile ::: Authenticated user) -> Profile = user
+
+# A renewal, as a function, so a test can assert on the token it answers: the check's refusal
+# routes to a 401 the same way `check JWT.verify` does.
+fn renewedLength(token: JwtToken) -> Int requires [jwt, envRead, time] =
+  let fresh = check JWT.renew token (sessionKey ())
+  String.length fresh.value
+
+api ClauseApi {
+  get "/me"
+    auth user: Profile ::: Authenticated user via sessionOwner
+    -> Profile
+}
+
+server ClauseServer for ClauseApi {
+  profile
+  publicOrigin "https://app.example.test"
+  sessionKey "GOCLAUSES_SESSION_KEY"
+  sessionPolicy ShortSession
+  sessionPreviousKey "GOCLAUSES_PREVIOUS_KEY"
+  sessionRevoked revoked
+  listenAddress Loopback
+  healthProbePath "/healthz"
+  contentSecurityPolicy "default-src 'self'"
+}
+
+database ClauseDb = Database {
+  entities: []
+  backend: Memory
+}
+
+main() -> App requires [jwt, envRead] =
+  App {
+    database: ClauseDb
+    api: ClauseServer
+    port: 8080
+  }
+
+test "a revoked session cannot renew, an ordinary one can" requires [jwt, envRead, time] {
+  let token = JWT.sign (Dict.singleton "sub" "ada") (sessionKey ())
+  let banned = JWT.sign (Dict.singleton "sub" "banned") (sessionKey ())
+  # An ordinary session renews; the one the `sessionRevoked` fn names does not.
+  expect renewedLength token > 20
+  expectFail renewedLength banned
+}|}
+
+let test_server_clauses_with_go () =
+  let emitted = emit_ok "<go-server-clauses>" server_clauses_source in
+  let module_go = artifact "internal/teslmodgoserverclauses/module.go" emitted in
+  List.iter (fun (what, expected) ->
+    check bool ("the " ^ what ^ " clause reaches the boot init") true
+      (contains module_go expected))
+    [ "publicOrigin", "teslrt.SetPublicOriginValue(\"https://app.example.test\")";
+      "sessionPolicy", "teslrt.SetSessionPolicy(teslrt.SessionPolicyTTL(\"ShortSession\"))";
+      "sessionPreviousKey",
+        "teslrt.SetPreviousSessionKey(teslrt.SecretPointer(teslrt.RequireSecret(\"GOCLAUSES_PREVIOUS_KEY\")))";
+      "sessionRevoked", "teslrt.SetSessionRevokedHook(func(teslSubject string, teslIssuedAt int64) bool {";
+      "healthProbePath", "teslrt.SetHealthProbePath(\"/healthz\")";
+      "contentSecurityPolicy", "teslrt.SetContentSecurityPolicy(\"default-src 'self'\")" ];
+  (* The hook is handed `iat` in SECONDS and the clause's fn takes a `PosixMillis`, so the
+     adapter has to convert — a hook given milliseconds compares against the wrong epoch and
+     never revokes anything. *)
+  check bool "the revocation adapter converts seconds to an instant" true
+    (contains module_go "teslrt.SecondsToPosix(teslrt.FromInt64(teslIssuedAt))");
+  (* `listenAddress Loopback` is the difference between a service a reverse proxy reaches and
+     one the whole network reaches, so it travels as the bind address rather than a boot call. *)
+  check bool "listenAddress reaches the serve options" true
+    (contains module_go "ListenAddress: \"127.0.0.1\"");
+  gate_emitted ~env:["GOCLAUSES_SESSION_KEY=clauses-signing-key-0123456789";
+                     "GOCLAUSES_PREVIOUS_KEY=clauses-previous-key-0123456789"]
+    "tesl-go-server-clauses" emitted
+
+(* `trustedProxies` scopes which forwarded-for header `request.clientAddress` may believe.  This
+   backend has no `clientAddress`, so the clause would configure a reader that does not exist:
+   refused, because accepting a security declaration that does nothing is worse than not
+   compiling. *)
+let test_trusted_proxies_fails_closed () =
+  let source = {|module GoTrustedProxies exposing [ping]
+
+import Tesl.Prelude exposing [String]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.App exposing [App]
+
+handler get ping() -> String = "pong"
+
+api ProxyApi {
+  get "/ping" -> String
+}
+
+server ProxyServer for ProxyApi {
+  ping
+  trustedProxies ["10.0.0.1"]
+}
+
+database ProxyDb = Database {
+  entities: []
+  backend: Memory
+}
+
+main() -> App =
+  App {
+    database: ProxyDb
+    api: ProxyServer
+    port: 8080
+  }
+|} in
+  match Compile.compile_go_source "<go-trusted-proxies>" source with
+  | Compile.GoSuccess _ -> fail "trustedProxies emitted instead of failing closed"
+  | Compile.GoFailure diagnostics ->
+    let message = String.concat "; "
+      (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics) in
+    check bool "the refusal says why there is nothing to configure" true
+      (contains message "clientAddress")
+
+(* ─── `List.unique`: the keyed path ───────────────────────────────────────────
+   `ListUniqueBy` is a linear scan per element — quadratic — while Racket's `List.unique` is
+   hash-based and linear.  The comment on the Go helper claimed the two matched; they did not.
+
+   The emitter now takes a KEYED path whenever the element type has a comparable Go key whose
+   equality is exactly the language's `==`.  Two types make that non-obvious and both are here:
+   an unbounded `Int` is not a Go comparable at all (`noCompare`), so the key is its canonical
+   decimal; and a `Float` keyed by its own value would make -0.0 and +0.0 one key (the language
+   separates them) and every NaN its own (the language makes them equal), so it is keyed by
+   `teslrt.FloatKey`.  A multi-variant ADT has no scalar to key on and keeps the closure path. *)
+let list_unique_source = {|module GoUnique exposing [names, counts, prices, flags, skus, tags]
+
+import Tesl.Prelude exposing [Bool(..), Int, List, String]
+import Tesl.Float exposing [Float]
+import Tesl.List exposing [List.unique, List.length]
+
+type Sku = String
+
+type Tag
+  = Red
+  | Blue
+
+fn names(xs: List String) -> List String = List.unique xs
+
+fn counts(xs: List Int) -> List Int = List.unique xs
+
+fn prices(xs: List Float) -> List Float = List.unique xs
+
+fn flags(xs: List Bool) -> List Bool = List.unique xs
+
+fn skus(xs: List Sku) -> List Sku = List.unique xs
+
+# A multi-variant ADT has no comparable key, so this one keeps the closure path.
+fn tags(xs: List Tag) -> Int = List.length (List.unique xs)
+
+test "unique keeps the first occurrence and preserves order, keyed or not" {
+  expect names ["b", "a", "b", "c", "a"] == ["b", "a", "c"]
+  expect counts [3, 1, 3, 1, 2] == [3, 1, 2]
+  expect prices [1.5, 0.5, 1.5] == [1.5, 0.5]
+  expect flags [True, False, True] == [True, False]
+  expect skus [Sku "x", Sku "y", Sku "x"] == [Sku "x", Sku "y"]
+  expect tags [Red, Blue, Red] == 2
+}|}
+
+let test_list_unique_with_go () =
+  let emitted = emit_ok "<go-list-unique>" list_unique_source in
+  let module_go = artifact "internal/teslmodgounique/module.go" emitted in
+  List.iter (fun (what, expected) ->
+    check bool (what ^ " takes the keyed path") true (contains module_go expected))
+    [ "String", "teslrt.ListUniqueKeyed(xs, teslKeyString)";
+      "Int", "teslrt.ListUniqueKeyed(xs, teslKeyTeslrtInt)";
+      "Float", "teslrt.ListUniqueKeyed(xs, teslKeyFloat64)";
+      "Bool", "teslrt.ListUniqueKeyed(xs, teslKeyBool)";
+      "a scalar newtype", "teslrt.ListUniqueKeyed(xs, teslKeySku)" ];
+  (* The two keys that are not the value itself. *)
+  check bool "an Int is keyed by its canonical decimal, not by a Go comparison" true
+    (contains module_go "func teslKeyTeslrtInt(teslX teslrt.Int) teslrt.IntKey {\n\treturn teslX.Key()");
+  check bool "a Float is keyed by FloatKey, so NaN and signed zero keep the language's equality" true
+    (contains module_go "func teslKeyFloat64(teslX float64) uint64 {\n\treturn teslrt.FloatKey(teslX)");
+  (* And the fallback is unchanged: an ADT has no key, so it still compares. *)
+  check bool "a multi-variant ADT keeps the comparison closure" true
+    (contains module_go "teslrt.ListUniqueBy(xs, teslEqualTag)");
+  gate_emitted "tesl-go-list-unique" emitted
+
+(* ─── A declared JSON payload is CHECKED before it is parsed ──────────────────
+   `dsl/web.rkt`'s `parse-json-body` refuses a body whose content type does not say JSON (415)
+   and an empty one (400 "Missing JSON payload") before parsing anything, and applies both only
+   where the endpoint DECLARES a payload — an `auth` that verifies a MAC over the raw bytes reads
+   the body of a request that may not be JSON at all.  This backend parsed whatever arrived.
+
+   NOT oracled, and the reason is a difference in the two HARNESSES rather than in the two
+   servers.  Racket's `dispatch-api-test-request` hands the dispatcher an already-PARSED body, so
+   "the body is JSON" is true there by construction and no api-test on that backend can reach the
+   content-type check.  `teslrt.ApiRequest` builds a real `*http.Request` and calls the server, so
+   here the check is on the path an api-test walks — which is why the assertion below is possible
+   at all.  Over real HTTP both backends answer 415; only the test surfaces differ. *)
+let json_payload_source = {|module GoJsonPayload exposing [echo]
+
+import Tesl.Prelude exposing [Int, String]
+import Tesl.Json exposing [stringCodec]
+import Tesl.ApiTest exposing [statusOk]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.App exposing [App]
+
+record Note { text: String }
+
+codec Note {
+  toJson {
+    text -> "text" with_codec stringCodec
+  }
+  fromJson [
+    {
+      text <- "text" with_codec stringCodec
+    }
+  ]
+}
+
+handler post echo(note: Note) -> Note = note
+
+api PayloadApi {
+  post "/echo"
+    body note: Note
+    -> Note
+}
+
+server PayloadServer for PayloadApi {
+  echo
+}
+
+database PayloadDb = Database {
+  entities: []
+  backend: Memory
+}
+
+main() -> App =
+  App {
+    database: PayloadDb
+    api: PayloadServer
+    port: 8080
+  }
+
+api-test "a declared JSON payload is checked before it is parsed" for PayloadServer {
+  # The ordinary path: the harness sends application/json.
+  let accepted = post "/echo" body { "text": "hello" }
+  expect statusOk accepted.status
+  expect accepted.body.text == "hello"
+
+  # A body that is not JSON at all is refused with 415 rather than parsed: a JSON API that
+  # accepted `text/plain` would be the surprising behaviour, and `dsl/web.rkt` answers 415 here.
+  let wrongType = post "/echo" headers { "content-type": "text/plain" } body { "text": "hello" }
+  expect wrongType.status == 415
+}|}
+
+let test_json_payload_with_go () =
+  let emitted = emit_ok "<go-json-payload>" json_payload_source in
+  let module_go = artifact "internal/teslmodgojsonpayload/module.go" emitted in
+  (* Before the parse, and only on the endpoint that declares a body. *)
+  let position text substring =
+    let n = String.length text and m = String.length substring in
+    let rec scan index =
+      if index + m > n then None
+      else if String.sub text index m = substring then Some index
+      else scan (index + 1)
+    in
+    scan 0
+  in
+  check bool "the payload check runs BEFORE the parse it guards" true
+    (match position module_go "teslrt.CheckJSONPayload(teslRequest, teslBodyBytes)",
+           position module_go "teslrt.ParseJSON(teslBodyBytes)" with
+     | Some check_at, Some parse_at -> check_at < parse_at
+     | _ -> false);
+  gate_emitted "tesl-go-json-payload" emitted
+
+(* ─── Polymorphic equality, by DICTIONARY ─────────────────────────────────────
+   `fn same(x: a, y: a) -> Bool = x == y` runs on Racket, which compares two `a` values
+   structurally.  This backend refused it: an emitted Go generic cannot use `==` (that needs
+   `comparable`, and Tesl's values include maps and slices), and `reflect.DeepEqual` would
+   compare a `secret` byte by byte — throwing away the constant-time comparison the type exists
+   for.
+
+   So the comparison travels as an ARGUMENT.  A generic whose body compares two `A` values takes
+   `teslEqualA func(A, A) bool`, and each call site passes the concrete type's own comparator —
+   which for a `secret` IS the constant-time compare, so the property survives the indirection.
+   A generic that hands its own `a` to one of these forwards the dictionary it was given. *)
+let poly_equality_source = {|module GoPolyEq exposing [same, differs, firstIsSame, countMatches]
+
+import Tesl.Prelude exposing [Bool(..), Int, List, String]
+import Tesl.List exposing [List.length]
+import Tesl.Maybe exposing [Maybe(..)]
+
+# The canonical shape Racket supports: two values of a type variable, compared.
+fn same(x: a, y: a) -> Bool =
+  x == y
+
+fn differs(x: a, y: a) -> Bool =
+  x != y
+
+# A second type variable that is NOT compared gets no dictionary.
+fn firstIsSame(x: a, y: a, label: b) -> Bool =
+  let _ = label
+  x == y
+
+# Comparison inside a nested position: the dictionary is in scope for the whole body.
+fn countMatches(needle: a, xs: List a) -> Int =
+  if same needle needle then
+    List.length xs
+  else
+    0
+
+test "polymorphic equality answers what the concrete type's own equality answers" {
+  expect same 1 1 == True
+  expect same 1 2 == False
+  expect same "a" "a" == True
+  expect same "a" "b" == False
+  expect differs 1 2 == True
+  expect differs "a" "a" == False
+  expect same True True == True
+  expect firstIsSame 3 3 "ignored" == True
+  expect same (Something 4) (Something 4) == True
+  expect same (Something 4) Nothing == False
+  expect countMatches 1 [1, 2, 3] == 3
+}|}
+
+let test_poly_equality_with_go () =
+  let emitted = emit_ok "<go-poly-equality>" poly_equality_source in
+  let module_go = artifact "internal/teslmodgopolyeq/module.go" emitted in
+  check bool "a comparing generic takes the comparison as a parameter" true
+    (contains module_go "func Same[A any](x A, y A, teslEqualA func(A, A) bool) bool");
+  check bool "and its body calls it" true (contains module_go "return teslEqualA(x, y)");
+  (* A type parameter that is NOT compared gets no dictionary: the parameter list grows with
+     what the body does, not with the number of type variables. *)
+  check bool "an uncompared type parameter gets none" true
+    (contains module_go
+       "func FirstIsSame[A any, B any](x A, y A, label B, teslEqualA func(A, A) bool) bool");
+  (* The transitive case: `countMatches` compares nothing itself and calls one that does. *)
+  check bool "a generic that only PASSES its value forwards the dictionary" true
+    (contains module_go "func CountMatches[A any](needle A, xs []A, teslEqualA func(A, A) bool)");
+  (* Each call site resolves the dictionary to the concrete type's own comparator. *)
+  let tests_go = artifact "internal/teslmodgopolyeq/module_test.go" emitted in
+  check bool "a String call site passes String's comparator" true
+    (contains tests_go "Same(\"a\", \"a\", teslEqualString)");
+  gate_emitted "tesl-go-poly-equality" emitted
+
+(* ─── A WIDE ADT is emitted BOXED ─────────────────────────────────────────────
+   A Tesl ADT is a sum and Go has no sum type, so the default here is one flat struct holding
+   every variant's fields beside a tag: no allocation, one memmove to copy, one offset to read.
+   That is the right representation until the payloads add up — the struct is as large as their
+   SUM, and past a few hundred bytes a value is copied whole on every call and assignment.
+
+   Above the threshold the emitter switches by itself: one small struct per payload variant, and
+   a pointer to it, so the value is a tag and a pointer whatever the payloads do.  Nothing in
+   Tesl says which layout a type gets.  `example/chat/chat-backend.tesl` has the corpus's own
+   example (three variants, nine strings, ~170 bytes) and is emitted boxed by this rule.
+
+   The program below is deliberately exhaustive rather than minimal, because a layout change has
+   to keep EVERY operation working: construction, a `case` that binds five fields, a nested
+   `Maybe` payload, equality across variants, and a database column that goes out through the
+   encoder and back through the decoder. *)
+let wide_adt_source = {|module GoWideAdt exposing [label, same, roundTrip, storeEvent, labelOf]
+
+import Tesl.Prelude exposing [Bool(..), Int, String, Unit]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.String exposing [String.fromInt]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Memory]
+
+# Nine string fields across three payload variants: ~170 bytes flat, which is over the
+# threshold, so the emitter boxes it. Every operation below has to keep working through the
+# indirection — construction, pattern matching, equality, the wire encoder and a column.
+type WideEvent
+  = Posted msgId: String userId: String username: String content: String room: String
+  | Joined userId: String username: String
+  | Failed senderName: String roomName: String note: (Maybe String)
+  | Quiet
+
+entity EventRow table "wide_events" primaryKey id {
+  id: String
+  event: WideEvent
+}
+
+database WideDb = Database {
+  entities: [EventRow]
+  backend: Memory
+}
+
+fn label(event: WideEvent) -> String =
+  case event of
+    Posted msgId userId username content room ->
+      msgId ++ "/" ++ userId ++ "/" ++ username ++ "/" ++ content ++ "/" ++ room
+    Joined userId username -> userId ++ "+" ++ username
+    Failed senderName roomName note ->
+      case note of
+        Nothing -> senderName ++ "!" ++ roomName
+        Something extra -> senderName ++ "!" ++ roomName ++ "!" ++ extra
+    Quiet -> "quiet"
+
+fn same(left: WideEvent, right: WideEvent) -> Bool =
+  left == right
+
+fn roundTrip(event: WideEvent) -> String =
+  label event
+
+fn storeEvent(id: String, event: WideEvent) -> EventRow requires [dbWrite] =
+  insert EventRow { id: id, event: event }
+
+fn labelOf(wanted: String) -> String requires [dbRead] =
+  case selectOne row from EventRow where row.id == wanted of
+    Nothing -> "none"
+    Something row -> label row.event
+
+test "a boxed ADT behaves exactly as a flat one does" requires [dbRead, dbWrite] {
+  let posted = Posted "m1" "u1" "ada" "hello" "general"
+  let joined = Joined "u2" "grace"
+  let failed = Failed "ada" "general" Nothing
+  let noted = Failed "ada" "general" (Something "retry")
+
+  expect label posted == "m1/u1/ada/hello/general"
+  expect label joined == "u2+grace"
+  expect label failed == "ada!general"
+  expect label noted == "ada!general!retry"
+  expect label Quiet == "quiet"
+
+  # Equality reaches every field of the active variant, and only that variant.
+  expect same posted posted == True
+  expect same posted (Posted "m1" "u1" "ada" "hello" "other") == False
+  expect same joined joined == True
+  expect same posted joined == False
+  expect same failed noted == False
+  expect same Quiet Quiet == True
+
+  # A column: the value goes out through the encoder and comes back through the decoder.
+  let _ = storeEvent "r1" posted
+  let _ = storeEvent "r2" noted
+  let _ = storeEvent "r3" Quiet
+  expect labelOf "r1" == "m1/u1/ada/hello/general"
+  expect labelOf "r2" == "ada!general!retry"
+  expect labelOf "r3" == "quiet"
+  expect labelOf "r404" == "none"
+
+  expect roundTrip joined == "u2+grace"
+}|}
+
+let test_wide_adt_is_boxed () =
+  let emitted = emit_ok "<go-wide-adt>" wide_adt_source in
+  let module_go = artifact "internal/teslmodgowideadt/module.go" emitted in
+  (* The outer struct is a tag and one pointer per payload variant — 32 bytes rather than the
+     ~170 the flat form would be. *)
+  check bool "the wide ADT is a tag plus payload pointers" true
+    (contains module_go "Posted *WideEventPostedPayload");
+  check bool "each payload variant gets its own struct" true
+    (contains module_go "type WideEventJoinedPayload struct {");
+  (* `Payload` is not decoration: the tag CONSTANT already owns `WideEventJoined`. *)
+  check bool "the payload type cannot collide with the tag constant" true
+    (contains module_go "WideEventJoinedPayload");
+  (* Construction allocates the one variant's payload; reads go through the pointer. *)
+  (* Construction allocates the one variant's payload.  It happens in the TEST block here, so
+     the literal lands in the test artifact rather than in module.go. *)
+  let tests_go = artifact "internal/teslmodgowideadt/module_test.go" emitted in
+  check bool "construction fills the payload pointer" true
+    (contains tests_go "&WideEventJoinedPayload{UserId: \"u2\", Username: \"grace\"}");
+  (* And a read goes through the pointer — no copy of the payload to reach one field. *)
+  check bool "and a read goes through it" true (contains module_go ".Joined.UserId");
+  gate_emitted "tesl-go-wide-adt" emitted
+
+
+
+
+
 
 
 (* A `unique index` is an INVARIANT, not a hint: the Racket memory backend raises on an insert
@@ -4673,11 +5401,13 @@ api-test "an endpoint that reports signals still answers" for TelemetryServer {
 
 load-test "the greeting endpoint under load" for TelemetryServer
   rate 50rps
-  duration 1s {
+  duration 1s
+  baseline "greeting-latency" {
 
   get "/greeting"
 
   assert errorRate < 0.01
+  assert regressionVsBaseline p95 < 1.5
 }
 |}
 
@@ -4715,6 +5445,14 @@ let test_telemetry_app_with_go () =
        "teslrt.AssertLoadTest(teslT, teslResult, \"errorRate\", \"<\", float64(0.01))");
   check bool "and `-short` skips it, so an ordinary test run does not pay for it" true
     (contains tests_go "if testing.Short() {");
+  (* A `baseline` clause and a regression assertion are NOTED rather than refused or dropped.
+     Neither backend stores baselines — `dsl/load-test.rkt` prints "store/compare deferred" — so
+     refusing would fail to compile a load test that runs on Racket, and dropping would read as a
+     regression check that ran.  The note text is the Racket text, so the oracle compares it. *)
+  check bool "a regression assertion is noted rather than silently dropped" true
+    (contains tests_go "teslrt.NoteLoadTestRegression(teslT, \"p95\", float64(1.5))");
+  check bool "and the baseline clause after it" true
+    (contains tests_go "teslrt.NoteLoadTestBaseline(teslT, \"greeting-latency\")");
   gate_emitted ~short:true "tesl-go-telemetry-app" emitted
 
 (* ─── `case` over a scalar ─────────────────────────────────────────────────────
@@ -6570,7 +7308,11 @@ let test_unsupported_newtypes_fail_closed () =
      Racket nests it — so it is no longer a case here; see "a newtype over a newtype, and
      unobservable containers" for what it emits and its Racket oracle. What stays refused is
      a base that is not a type at all in this position: an APPLIED one. *)
-  expect_go_error "applied newtype base" "applied types" {|module AppliedNewtype exposing [Counts]
+  (* The needle is the newtype-base arm's own words.  It used to read "applied types", which
+     matched a SECOND diagnostic from the type walk — reworded since, because that arm is
+     unreachable and now says so. *)
+  expect_go_error "applied newtype base" "newtype base is an applied type"
+    {|module AppliedNewtype exposing [Counts]
 import Tesl.Prelude exposing [Int, List]
 type Counts = (List Int)
 |}
@@ -11907,6 +12649,26 @@ let () =
       test_case "a Postgres round trip" `Slow test_postgres_live_with_go;
       test_case "a Postgres round trip behaves the same on Racket" `Slow
         test_postgres_live_oracle;
+      test_case "payload ADT, secret and nullable columns" `Slow test_pg_columns_with_go;
+      test_case "those columns behave the same on Racket" `Slow test_pg_columns_oracle;
+      test_case "every server clause reaches the boot init" `Slow test_server_clauses_with_go;
+      test_case "server clauses behave the same on Racket" `Slow
+        (racket_behavior_oracle
+           ~env:["GOCLAUSES_SESSION_KEY=clauses-signing-key-0123456789";
+                 "GOCLAUSES_PREVIOUS_KEY=clauses-previous-key-0123456789"]
+           "<go-server-clauses-oracle>" server_clauses_source);
+      test_case "trustedProxies fails closed" `Quick test_trusted_proxies_fails_closed;
+      test_case "List.unique takes a keyed path where it can" `Slow test_list_unique_with_go;
+      test_case "keyed unique behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-list-unique-oracle>" list_unique_source);
+      test_case "a declared JSON payload is checked before parsing" `Slow
+        test_json_payload_with_go;
+      test_case "polymorphic equality travels as a dictionary" `Slow test_poly_equality_with_go;
+      test_case "polymorphic equality behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-poly-equality-oracle>" poly_equality_source);
+      test_case "a wide ADT is emitted boxed" `Slow test_wide_adt_is_boxed;
+      test_case "a boxed ADT behaves the same on Racket" `Slow
+        (racket_behavior_oracle "<go-wide-adt-oracle>" wide_adt_source);
       test_case "Tesl.Cache" `Slow test_cache_with_go;
       test_case "caches behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-cache-oracle>" cache_source);

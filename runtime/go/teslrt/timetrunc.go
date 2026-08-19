@@ -240,10 +240,9 @@ func TimeTruncYear(zone TimeZone, at PosixMillis) PosixMillis {
 // conversion lives HERE rather than in dbquery.go because this file carries the zone database:
 // a Postgres program that groups by a plain column names the narrow type and never reaches
 // this function, so it ships without tzdata.
+// A CONVERSION rather than a field-by-field literal: the two structs have the same fields in
+// the same order, which staticcheck says outright (S1016) — and if `TimeZone` ever gains a field
+// the conversion stops compiling, which is the loud failure this narrowing wants.
 func PgZoneOf(zone TimeZone) PgGroupZone {
-	return PgGroupZone{
-		Name:          zone.Name,
-		OffsetMinutes: zone.OffsetMinutes,
-		Fixed:         zone.Fixed,
-	}
+	return PgGroupZone(zone)
 }

@@ -2,8 +2,12 @@ package teslrt
 
 import (
 	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
+	"sync"
 )
 
 // RequestScope is the per-request state the Racket runtime keeps in a `parameterize`
@@ -115,6 +119,67 @@ type HttpRequest struct {
 	QueryParameters Dict[string, string]
 	Body            string
 }
+
+// ReadRequestBody reads a request body under the SAME cap `dsl/web.rkt` applies.
+//
+// The body is read whole into memory and parsed, so an unbounded one lets a client exhaust
+// memory and CPU with a single request. The limit is `TESL_MAX_BODY_BYTES` when it names a
+// positive number, else 1 MiB — generous for a typed JSON API, and the same default and variable
+// the Racket runtime reads, so the two refuse the same requests.
+//
+// Answers the body plus a status and message: 0 means the body is usable, 413 that it exceeded
+// the cap, 400 that the connection failed mid-read. The caller turns that into a rejection,
+// because a runtime that wrote the response itself would bypass the handler's own error shape.
+func ReadRequestBody(request *http.Request) ([]byte, int, string) {
+	limit := maxRequestBodyBytes()
+	// One byte OVER the cap distinguishes "exactly at the limit" from "too long" without reading
+	// the rest of an arbitrarily large body.
+	raw, err := io.ReadAll(io.LimitReader(request.Body, int64(limit)+1))
+	if err != nil {
+		return nil, 400, "Missing JSON payload"
+	}
+	if len(raw) > limit {
+		return nil, 413, "Request body too large"
+	}
+	return raw, 0, ""
+}
+
+// CheckJSONPayload is the rest of `dsl/web.rkt`'s `parse-json-body`, for an endpoint that
+// DECLARES a body: the content type must say JSON, and the body must not be empty.
+//
+// Emitted only where a payload is declared, which is where Racket applies it — an `auth` that
+// verifies a MAC over the raw bytes reads the body of a request that may legitimately not be JSON
+// at all.
+//
+// Answers a status and message, 0 for "usable", the same shape `ReadRequestBody` uses so the
+// emitted handler has one refusal idiom rather than two.
+func CheckJSONPayload(request *http.Request, body []byte) (int, string) {
+	// `Contains` rather than an exact compare: a real content type carries parameters
+	// (`application/json; charset=utf-8`), and this is the same substring test the Racket side
+	// makes with `#rx"application/json"`.
+	if !strings.Contains(strings.ToLower(request.Header.Get("Content-Type")), "application/json") {
+		return 415, "Expected application/json payload"
+	}
+	if len(body) == 0 {
+		return 400, "Missing JSON payload"
+	}
+	return 0, ""
+}
+
+func maxRequestBodyBytes() int {
+	maxBodyOnce.Do(func() {
+		maxBodyBytes = 1 << 20
+		if declared, err := strconv.Atoi(strings.TrimSpace(os.Getenv("TESL_MAX_BODY_BYTES"))); err == nil && declared > 0 {
+			maxBodyBytes = declared
+		}
+	})
+	return maxBodyBytes
+}
+
+var (
+	maxBodyOnce  sync.Once
+	maxBodyBytes int
+)
 
 // NewHttpRequest snapshots the request. Header names are lower-cased so a lookup does not
 // depend on the casing a client happened to send; cookie names are left exactly as sent.
