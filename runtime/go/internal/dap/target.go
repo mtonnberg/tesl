@@ -39,6 +39,7 @@ type processLaunchArguments struct {
 }
 
 type processAttachArguments struct {
+	Project string `json:"project,omitempty"`
 	Socket  string `json:"socket,omitempty"`
 	Address string `json:"address,omitempty"`
 	Port    int    `json:"port,omitempty"`
@@ -159,8 +160,10 @@ func (target *ProcessTarget) AttachBackend(data json.RawMessage) (DebugBackend, 
 		client, err = DialControlTCP(arguments.Address)
 	case arguments.Port > 0:
 		client, err = DialControlTCP("127.0.0.1:" + strconv.Itoa(arguments.Port))
+	case arguments.Project != "":
+		client, err = dialProjectEndpoint(arguments.Project)
 	default:
-		err = errors.New("attach requires socket, address, or port")
+		err = errors.New("attach requires project, socket, address, or port")
 	}
 	if err != nil {
 		return nil, err
@@ -169,6 +172,29 @@ func (target *ProcessTarget) AttachBackend(data json.RawMessage) (DebugBackend, 
 	target.client = client
 	target.mutex.Unlock()
 	return client, nil
+}
+
+func dialProjectEndpoint(project string) (*ControlClient, error) {
+	stuff := filepath.Join(project, ".tesl-stuff")
+	socket := filepath.Join(stuff, "debug.sock")
+	if _, err := os.Stat(socket); err == nil {
+		return DialControlUnix(socket)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("inspect debug socket: %w", err)
+	}
+	portPath := filepath.Join(stuff, "debug.port")
+	contents, err := os.ReadFile(portPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("no debug endpoint under %s", stuff)
+		}
+		return nil, fmt.Errorf("read debug port: %w", err)
+	}
+	port := strings.TrimSpace(string(contents))
+	if port == "" {
+		return nil, fmt.Errorf("debug port file is empty: %s", portPath)
+	}
+	return DialControlTCP("127.0.0.1:" + port)
 }
 
 func (target *ProcessTarget) Close() error {

@@ -3,6 +3,7 @@ package dap
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,6 +43,13 @@ func TestLaunchEndpointRejectsConflictingPorts(t *testing.T) {
 	_, err := launchEndpoint(processLaunchArguments{DebugAddress: "127.0.0.1:4000", DebugPort: 4001}, ".")
 	if err == nil {
 		t.Fatal("accepted conflicting debug endpoints")
+	}
+}
+
+func TestDialProjectEndpointRejectsMissingEndpoint(t *testing.T) {
+	_, err := dialProjectEndpoint(t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "no debug endpoint") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

@@ -159,6 +159,26 @@ function findTeslCompiler(wsPath) {
   return null;
 }
 
+function findGoDap(wsPath) {
+  const override = vscode.workspace.getConfiguration("tesl").get("dapBinary");
+  if (override && fs.existsSync(override)) return { command: override, args: [], cwd: undefined };
+
+  const candidates = [
+    path.join(os.homedir(), ".nix-profile", "bin", "tesl-dap"),
+    "/nix/var/nix/profiles/default/bin/tesl-dap",
+    "/run/current-system/sw/bin/tesl-dap",
+  ];
+  const onPath = commandOnPath("tesl-dap") ? "tesl-dap" : null;
+  const binary = onPath || candidates.find((candidate) => fs.existsSync(candidate));
+  if (binary) return { command: binary, args: [], cwd: undefined };
+
+  const runtime = wsPath ? path.join(wsPath, "runtime", "go") : null;
+  if (runtime && fs.existsSync(path.join(runtime, "cmd", "tesl-dap", "main.go")) && commandOnPath("go")) {
+    return { command: "go", args: ["run", "./cmd/tesl-dap"], cwd: runtime };
+  }
+  return null;
+}
+
 /**
  * Find the dap-server.rkt file.
  * Search order: workspace repo → nix profile → extension dir (if bundled).
@@ -959,6 +979,19 @@ function activate(context) {
     vscode.debug.registerDebugAdapterDescriptorFactory("tesl", {
       createDebugAdapterDescriptor(session) {
         const launchScript = path.join(context.extensionPath, "debug", "launch-dap.sh");
+
+        const goDap = findGoDap(wsPath);
+        if (session.configuration.request === "attach" && goDap) {
+          const env = {
+            ...process.env,
+            ...(wsPath ? { TESL_REPO_ROOT: wsPath } : {}),
+          };
+          const dbgOut = vscode.window.createOutputChannel("Tesl Debugger");
+          dbgOut.appendLine(`[tesl-debug] Go DAP: ${goDap.command} ${goDap.args.join(" ")}`);
+          dbgOut.appendLine(`[tesl-debug] attach project: ${session.configuration.project || "(explicit endpoint)"}`);
+          dbgOut.show(true);
+          return new vscode.DebugAdapterExecutable(goDap.command, goDap.args, { env, cwd: goDap.cwd });
+        }
 
         if (!fs.existsSync(launchScript)) {
           vscode.window.showErrorMessage(
