@@ -1558,17 +1558,24 @@ let () =
      | Compile.Success racket -> print_string racket
      | Compile.Failure diags -> List.iter print_diagnostic diags; exit 1)
 
-  | ["--backend"; "go"; filename; "--out"; out_dir] ->
-    (match Compile.compile_go_file filename with
-     | Compile.GoFailure diags -> List.iter print_diagnostic diags; exit 1
-     | Compile.GoSuccess artifacts ->
-       write_go_project out_dir artifacts;
-       Printf.printf "emitted Go module: %s\n" out_dir)
+   | ["--backend"; "go"; filename; "--out"; out_dir] ->
+     (match Compile.compile_go_file filename with
+      | Compile.GoFailure diags -> List.iter print_diagnostic diags; exit 1
+      | Compile.GoSuccess artifacts ->
+        write_go_project out_dir artifacts;
+        Printf.printf "emitted Go module: %s\n" out_dir)
+
+   | ["--backend"; "go"; filename; "--out"; out_dir; "--debug"] ->
+     (match Compile.compile_go_file ~debug:true filename with
+      | Compile.GoFailure diags -> List.iter print_diagnostic diags; exit 1
+      | Compile.GoSuccess artifacts ->
+        write_go_project out_dir artifacts;
+        Printf.printf "emitted debug Go module: %s\n" out_dir)
 
   | "--backend" :: backend :: _ ->
     Printf.eprintf "%serror%s: unsupported backend or arguments: %s\n"
       (col "1;31") (col "0") backend;
-    Printf.eprintf "usage: tesl --backend racket <file> | tesl --backend go <file> --out <dir>\n";
+     Printf.eprintf "usage: tesl --backend racket <file> | tesl --backend go <file> --out <dir> [--debug]\n";
     exit 2
 
   | "--exe" :: filename :: rest

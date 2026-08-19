@@ -137,6 +137,10 @@ type signature = {
    read nowhere else. *)
 let current_package = ref ""
 
+let debug_frame_id package (fd : func_decl) =
+  Digest.to_hex (Digest.string (Printf.sprintf "%s:%s:%s:%d:%d"
+    package fd.name fd.loc.file fd.loc.start.line fd.loc.start.col))
+
 let qualified owner name =
   if owner = "" || owner = !current_package then name else owner ^ "." ^ name
 
@@ -10303,7 +10307,7 @@ let rec json_value_decoder ~package ~loc ~what ty =
   | _ -> unsupported loc
     "Go backend cannot decode `%s` from JSON; give the type a `codec`" what
 
-let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=[])
+let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=[])
     ?(servers=[]) ?(capturers=[]) ?(consts=[]) ?(agents=[]) ?(capabilities=[])
     module_path package signatures
     types (funcs : func_decl list) =
@@ -10623,11 +10627,15 @@ let module_source ?(imported_packages=[]) ?(unreachable=[]) ?(codecs=[]) ?(apis=
     in
     Printf.bprintf body "func %s%s(%s) %s {\n"
       signature.go_name type_parameters
-      (String.concat ", "
-         (scope_parameter
-          @ List.map (fun (name, ty) -> local_ident name ^ " " ^ go_type ty) params
-          @ dictionaries))
-      (go_type result);
+       (String.concat ", "
+          (scope_parameter
+           @ List.map (fun (name, ty) -> local_ident name ^ " " ^ go_type ty) params
+           @ dictionaries))
+       (go_type result);
+     if debug then
+       Printf.bprintf body
+         "\tteslrt.Checkpoint(teslrt.DebugFrame{Version: teslrt.DebugABIVersion, ID: %S, Function: %S, Location: teslrt.SourceLocation{File: %S, Line: %d, Column: %d}})\n"
+         (debug_frame_id package fd) fd.name fd.loc.file fd.loc.start.line fd.loc.start.col;
     (* Emit the body once assuming it may loop.  If no self tail call actually turned
        into a `continue`, re-emit it flat: an unused label is a Go compile error, and
        a function that never tail-calls itself should read as plain Go. *)
@@ -12328,15 +12336,8 @@ let register_imported_module ~loc ~exposed types signatures (exports : module_ex
 
 let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_form) =
   try
-    (match mode with
-     | Release -> ()
-     (* `--debug` emits the checkpoint calls the DAP adapter attaches to.  On Racket those
-        are `thsl-src!` wrappers around every statement; the Go backend emits none, so a debug
-        build is refused rather than answered with a release build that no debugger can stop
-        in. *)
-     | Debug -> unsupported (Location.dummy_loc m.source_file)
-       "Go backend does not emit debugger instrumentation: build without `--debug`, or use \
-        the Racket backend for a debug session");
+    (* Debug adds only versioned runtime checkpoints. Release remains the same source path and
+       contains no debug import or call. *)
     (* `Maybe` is provided by `internal/teslrt` rather than emitted per module: a
        Maybe crosses module boundaries, and two packages declaring their own would
        be incompatible Go types.  Only the type and its constructors are available;
@@ -15419,7 +15420,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
     current_package := package;
     current_types := Some types;
     let source =
-      module_source ~imported_packages:!imported_packages ~codecs ~apis ~servers ~capturers
+       module_source ~debug:(mode = Debug) ~imported_packages:!imported_packages ~codecs ~apis ~servers ~capturers
         ~consts:(List.filter_map (function DConst c -> Some c | _ -> None) m.decls)
         ~agents:(List.filter_map (function DAgent a -> Some a | _ -> None) m.decls)
         ~capabilities:(List.filter_map (function DCapability c -> Some c | _ -> None) m.decls)
@@ -15565,8 +15566,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | None -> false
         in
         artifacts @ List.filter_map (fun (name, contents) ->
-          if (not serves_http) && List.mem name http_only then None
-          else if (not has_load_tests) && List.mem name load_test_only then None
+           if (not serves_http) && List.mem name http_only then None
+           else if name = "debug.go" && mode <> Debug then None
+           else if (not has_load_tests) && List.mem name load_test_only then None
           else if (not postgres_runtime) && List.mem name postgres_only then None
           else if (not uses_agent) && List.mem name agent_only then None
           else if (not uses_timezone) && List.mem name timezone_only then None

@@ -157,6 +157,26 @@ let test_artifact_layout () =
   let go_mod = artifact "go.mod" emitted in
   check bool "no third-party requirement" false (contains go_mod "require")
 
+let test_debug_emission_has_versioned_checkpoint () =
+  let emitted =
+    match Compile.compile_go_source ~debug:true "<go-debug>" source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "debug Go compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  let module_go = artifact "internal/teslmodgosmoke/module.go" emitted in
+  check bool "debug checkpoint call" true (contains module_go "teslrt.Checkpoint(teslrt.DebugFrame{");
+  check bool "debug ABI version" true (contains module_go "teslrt.DebugABIVersion");
+  ignore (artifact "internal/teslrt/debug.go" emitted)
+
+let test_release_emission_excludes_debug_runtime () =
+  let emitted = artifacts () in
+  let module_go = artifact "internal/teslmodgosmoke/module.go" emitted in
+  check bool "release has no checkpoint call" false (contains module_go "teslrt.Checkpoint");
+  check bool "release has no debug runtime" false
+    (List.exists (fun (a : Emit_go.artifact) -> a.path = "internal/teslrt/debug.go") emitted)
+
 let test_named_expect_fail_emission () =
   let emitted = artifacts () in
   let module_go = artifact "internal/teslmodgosmoke/module.go" emitted in
@@ -12523,6 +12543,8 @@ let () =
   run "emit_go" [
     "emission", [
       test_case "artifact layout and helpers" `Quick test_artifact_layout;
+      test_case "debug emission has versioned checkpoint" `Quick test_debug_emission_has_versioned_checkpoint;
+      test_case "release emission excludes debug runtime" `Quick test_release_emission_excludes_debug_runtime;
       test_case "named expectFail emission" `Quick test_named_expect_fail_emission;
       test_case "named expectFail requires full application" `Quick test_named_expect_fail_requires_full_application;
       test_case "Racket remains default" `Quick test_racket_default_unchanged;

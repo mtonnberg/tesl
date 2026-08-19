@@ -3475,7 +3475,7 @@ let go_project_diag file message = {
   manual = None;
 }
 
-let compile_go_source ?(path="") filename source =
+let compile_go_source ?(debug=false) ?(path="") filename source =
   match parse_module filename source with
   | Err error -> GoFailure [diag_of_parse_error error]
   | Ok m ->
@@ -3496,13 +3496,14 @@ let compile_go_source ?(path="") filename source =
              | exception Sys_error _ -> []) originals in
          if dependency_diags <> [] then GoFailure dependency_diags
          else
-           match Emit_go.compile_project ~mode:Emit_go.Release ~entry:entry_emit modules with
+            let mode = if debug then Emit_go.Debug else Emit_go.Release in
+            match Emit_go.compile_project ~mode ~entry:entry_emit modules with
            | Ok artifacts -> GoSuccess artifacts
            | Error errors -> GoFailure (List.map diag_of_go_emit_error errors))
 
-let compile_go_file filename =
+let compile_go_file ?(debug=false) filename =
   let source = In_channel.with_open_text filename In_channel.input_all in
-  compile_go_source ~path:filename filename source
+  compile_go_source ~debug ~path:filename filename source
 
 (** Check only — return diagnostics without emitting Racket. *)
 let local_binding_of_checker (b : Checker.local_binding_info) : local_binding = {
