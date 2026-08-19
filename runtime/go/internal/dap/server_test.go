@@ -41,6 +41,13 @@ func TestServerHandlesCoreRequests(t *testing.T) {
 	if !ok || !response.Success || response.Command != "initialize" {
 		t.Fatalf("initialize response = %#v", first)
 	}
+	var advertised capabilities
+	if err := json.Unmarshal(response.Body, &advertised); err != nil {
+		t.Fatal(err)
+	}
+	if !advertised.SupportsConfigurationDoneRequest || !advertised.SupportsVariablesRequest || !advertised.SupportsSingleStepRequest || !advertised.SupportsConditionalBreakpoints || !advertised.SupportsHitConditionalBreakpoints || !advertised.SupportsEvaluateForHovers || !advertised.SupportsClipboardContext || advertised.SupportsStepInTargetsRequest {
+		t.Fatalf("capabilities = %#v", advertised)
+	}
 	second, err := Read(reader)
 	if err != nil {
 		t.Fatal(err)
@@ -81,6 +88,35 @@ type recordingTarget struct {
 	attached bool
 }
 
+type recordingBackend struct {
+	specifications []teslrt.DebugBreakpointSpec
+}
+
+func (backend *recordingBackend) Attach(teslrt.DebugListener) func() { return func() {} }
+func (backend *recordingBackend) ClearBreakpoints() error            { return nil }
+func (backend *recordingBackend) Pause() error                       { return nil }
+func (backend *recordingBackend) Continue() error                    { return nil }
+func (backend *recordingBackend) Step(teslrt.DebugStepMode) error    { return nil }
+func (backend *recordingBackend) SnapshotState() (teslrt.DebugSnapshot, error) {
+	return teslrt.DebugSnapshot{}, nil
+}
+func (backend *recordingBackend) SetBreakpointSpecs(specifications []teslrt.DebugBreakpointSpec) ([]teslrt.DebugBreakpointResult, error) {
+	backend.specifications = append([]teslrt.DebugBreakpointSpec(nil), specifications...)
+	return []teslrt.DebugBreakpointResult{{ID: "bp", Verified: true}}, nil
+}
+
+type recordingBackendTarget struct{ backend *recordingBackend }
+
+func (target *recordingBackendTarget) Launch(json.RawMessage) error { return nil }
+func (target *recordingBackendTarget) Attach(json.RawMessage) error { return nil }
+func (target *recordingBackendTarget) LaunchBackend(json.RawMessage) (DebugBackend, error) {
+	return target.backend, nil
+}
+func (target *recordingBackendTarget) AttachBackend(json.RawMessage) (DebugBackend, error) {
+	return target.backend, nil
+}
+func (target *recordingBackendTarget) Close() error { return nil }
+
 func (target *recordingTarget) Launch(json.RawMessage) error {
 	target.launched = true
 	return nil
@@ -102,6 +138,25 @@ func TestServerUsesExplicitLaunchAttachTarget(t *testing.T) {
 	attach, _, err := server.handle(Request{Seq: 2, Type: "request", Command: "attach"})
 	if err != nil || !attach.Success || !target.attached {
 		t.Fatalf("attach = %#v, target = %#v, error = %v", attach, target, err)
+	}
+}
+
+func TestServerAppliesPreLaunchBreakpointsToNewBackend(t *testing.T) {
+	target := &recordingBackendTarget{backend: &recordingBackend{}}
+	server := NewServerWithTarget(strings.NewReader(""), io.Discard, teslrt.NewDebugger(), target)
+	defer server.Close()
+	set, _, err := server.handle(Request{Seq: 1, Type: "request", Command: "setBreakpoints", Arguments: mustJSON(setBreakpointsArguments{
+		Source: source{Path: "main.tesl"}, Breakpoints: []breakpointRequest{{Line: 19, Condition: "n == 3"}},
+	})})
+	if err != nil || !set.Success {
+		t.Fatalf("setBreakpoints = %#v, error = %v", set, err)
+	}
+	launch, _, err := server.handle(Request{Seq: 2, Type: "request", Command: "launch"})
+	if err != nil || !launch.Success {
+		t.Fatalf("launch = %#v, error = %v", launch, err)
+	}
+	if len(target.backend.specifications) != 1 || target.backend.specifications[0].File != "main.tesl" || target.backend.specifications[0].Line != 19 || target.backend.specifications[0].Condition != "n == 3" {
+		t.Fatalf("applied breakpoints = %#v", target.backend.specifications)
 	}
 }
 
@@ -337,8 +392,13 @@ func TestControlClientBridgesRuntimeProtocol(t *testing.T) {
 				if err := encoder.Encode(teslrt.DebugStoppedEvent{Event: "stopped", Frame: teslrt.DebugFrame{ID: "frame"}}); err != nil {
 					return
 				}
+			case "ping":
+				response.Result = json.RawMessage(`{"ok":true}`)
 			}
 			if err := encoder.Encode(response); err != nil {
+				return
+			}
+			if request.Command == "detach" {
 				return
 			}
 		}
@@ -351,6 +411,9 @@ func TestControlClientBridgesRuntimeProtocol(t *testing.T) {
 		client.Close()
 		<-serverDone
 	}()
+	if err := client.Ping(); err != nil {
+		t.Fatal(err)
+	}
 
 	breakpoints, err := client.SetBreakpointSpecs([]teslrt.DebugBreakpointSpec{{ID: "bp", File: "main.tesl", Line: 7}})
 	if err != nil || len(breakpoints) != 1 || !breakpoints[0].Verified {
@@ -376,5 +439,8 @@ func TestControlClientBridgesRuntimeProtocol(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("stopped event not delivered")
+	}
+	if err := client.Detach(); err != nil {
+		t.Fatal(err)
 	}
 }

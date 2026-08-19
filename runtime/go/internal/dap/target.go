@@ -34,6 +34,8 @@ type processLaunchArguments struct {
 	DebugSocket  string            `json:"debugSocket,omitempty"`
 	DebugAddress string            `json:"debugAddress,omitempty"`
 	DebugPort    int               `json:"debugPort,omitempty"`
+	TestName     string            `json:"testName,omitempty"`
+	TestKind     string            `json:"testKind,omitempty"`
 }
 
 type processAttachArguments struct {
@@ -84,6 +86,12 @@ func (target *ProcessTarget) LaunchBackend(data json.RawMessage) (DebugBackend, 
 	environment := os.Environ()
 	for name, value := range arguments.Env {
 		environment = setEnvironment(environment, name, value)
+	}
+	if arguments.TestName != "" {
+		environment = setEnvironment(environment, "TESL_TEST_NAME", arguments.TestName)
+	}
+	if arguments.TestKind != "" {
+		environment = setEnvironment(environment, "TESL_TEST_KIND", arguments.TestKind)
 	}
 	endpoint, err := launchEndpoint(arguments, cwd)
 	if err != nil {

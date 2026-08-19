@@ -15,18 +15,19 @@ import (
 )
 
 type Server struct {
-	backend DebugBackend
-	target  Target
-	reader  *protocol.Reader
-	writer  *protocol.Writer
-	session *Session
-	detach  func()
-	close   sync.Once
-	mutex   sync.Mutex
-	frames  map[int]teslrt.DebugFrame
-	values  map[int]variableReference
-	nextRef int
-	runtime teslrt.DebugRuntimeState
+	backend     DebugBackend
+	target      Target
+	reader      *protocol.Reader
+	writer      *protocol.Writer
+	session     *Session
+	detach      func()
+	close       sync.Once
+	mutex       sync.Mutex
+	frames      map[int]teslrt.DebugFrame
+	values      map[int]variableReference
+	nextRef     int
+	runtime     teslrt.DebugRuntimeState
+	breakpoints []teslrt.DebugBreakpointSpec
 }
 
 type DebugBackend interface {
@@ -179,6 +180,9 @@ type initializeArguments struct {
 
 type capabilities struct {
 	SupportsConfigurationDoneRequest  bool `json:"supportsConfigurationDoneRequest"`
+	SupportsVariablesRequest          bool `json:"supportsVariablesRequest"`
+	SupportsSingleStepRequest         bool `json:"supportsSingleStepRequest"`
+	SupportsStepInTargetsRequest      bool `json:"supportsStepInTargetsRequest"`
 	SupportsConditionalBreakpoints    bool `json:"supportsConditionalBreakpoints"`
 	SupportsHitConditionalBreakpoints bool `json:"supportsHitConditionalBreakpoints"`
 	SupportsEvaluateForHovers         bool `json:"supportsEvaluateForHovers"`
@@ -327,6 +331,9 @@ func (server *Server) handle(request Request) (Response, bool, error) {
 		}
 		return server.success(request, capabilities{
 			SupportsConfigurationDoneRequest:  true,
+			SupportsVariablesRequest:          true,
+			SupportsSingleStepRequest:         true,
+			SupportsStepInTargetsRequest:      false,
 			SupportsConditionalBreakpoints:    true,
 			SupportsHitConditionalBreakpoints: true,
 			SupportsEvaluateForHovers:         true,
@@ -376,7 +383,9 @@ func (server *Server) handle(request Request) (Response, bool, error) {
 			if err != nil {
 				return server.failure(request, "launch failed: "+err.Error())
 			}
-			server.replaceBackend(backend)
+			if err := server.replaceBackend(backend); err != nil {
+				return server.failure(request, "launch failed: "+err.Error())
+			}
 			return server.success(request, map[string]bool{})
 		}
 		if err := server.target.Launch(request.Arguments); err != nil {
@@ -392,7 +401,9 @@ func (server *Server) handle(request Request) (Response, bool, error) {
 			if err != nil {
 				return server.failure(request, "attach failed: "+err.Error())
 			}
-			server.replaceBackend(backend)
+			if err := server.replaceBackend(backend); err != nil {
+				return server.failure(request, "attach failed: "+err.Error())
+			}
 			return server.success(request, map[string]bool{})
 		}
 		if err := server.target.Attach(request.Arguments); err != nil {
@@ -408,18 +419,28 @@ func (server *Server) handle(request Request) (Response, bool, error) {
 	}
 }
 
-func (server *Server) replaceBackend(backend DebugBackend) {
+func (server *Server) replaceBackend(backend DebugBackend) error {
 	if server.detach != nil {
 		server.detach()
 	}
 	server.backend = backend
 	server.detach = backend.Attach(server.stopped)
 	server.mutex.Lock()
+	breakpoints := append([]teslrt.DebugBreakpointSpec(nil), server.breakpoints...)
 	server.frames = make(map[int]teslrt.DebugFrame)
 	server.values = make(map[int]variableReference)
 	server.nextRef = 1
 	server.runtime = teslrt.DebugRuntimeState{}
 	server.mutex.Unlock()
+	if setter, ok := backend.(interface {
+		SetBreakpointSpecs([]teslrt.DebugBreakpointSpec) ([]teslrt.DebugBreakpointResult, error)
+	}); ok && len(breakpoints) > 0 {
+		_, err := setter.SetBreakpointSpecs(breakpoints)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (server *Server) success(request Request, body any) (Response, bool, error) {
@@ -448,16 +469,16 @@ func (server *Server) setBreakpoints(request Request) (Response, bool, error) {
 		return server.failure(request, err.Error())
 	}
 	var results []teslrt.DebugBreakpointResult
+	specifications := make([]teslrt.DebugBreakpointSpec, 0, len(arguments.Breakpoints))
+	for index, specification := range arguments.Breakpoints {
+		specifications = append(specifications, teslrt.DebugBreakpointSpec{
+			ID: fmt.Sprintf("dap-bp-%d", index+1), File: arguments.Source.Path, Line: specification.Line,
+			Condition: specification.Condition, Hit: specification.HitCondition,
+		})
+	}
 	if backend, ok := server.backend.(interface {
 		SetBreakpointSpecs([]teslrt.DebugBreakpointSpec) ([]teslrt.DebugBreakpointResult, error)
 	}); ok {
-		specifications := make([]teslrt.DebugBreakpointSpec, 0, len(arguments.Breakpoints))
-		for index, specification := range arguments.Breakpoints {
-			specifications = append(specifications, teslrt.DebugBreakpointSpec{
-				ID: fmt.Sprintf("dap-bp-%d", index+1), File: arguments.Source.Path, Line: specification.Line,
-				Condition: specification.Condition, Hit: specification.HitCondition,
-			})
-		}
 		var err error
 		results, err = backend.SetBreakpointSpecs(specifications)
 		if err != nil {
@@ -487,11 +508,18 @@ func (server *Server) setBreakpoints(request Request) (Response, bool, error) {
 		}
 		results = backend.SetBreakpoints(debugBreakpoints)
 	}
+	server.mutex.Lock()
+	server.breakpoints = append([]teslrt.DebugBreakpointSpec(nil), specifications...)
+	server.mutex.Unlock()
 	body := breakpointsBody{Breakpoints: make([]breakpoint, len(results))}
 	for index, result := range results {
+		line := 0
+		if index < len(arguments.Breakpoints) {
+			line = arguments.Breakpoints[index].Line
+		}
 		body.Breakpoints[index] = breakpoint{
 			ID: index + 1, Verified: result.Verified, Message: result.Message,
-			Source: arguments.Source, Line: arguments.Breakpoints[index].Line,
+			Source: arguments.Source, Line: line,
 		}
 	}
 	return server.success(request, body)

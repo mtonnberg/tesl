@@ -48,8 +48,9 @@ func TestLaunchEndpointRejectsConflictingPorts(t *testing.T) {
 func TestProcessTargetLaunchesAndReportsLifecycle(t *testing.T) {
 	arguments, err := json.Marshal(processLaunchArguments{
 		Program: os.Args[0], Cwd: t.TempDir(),
-		Args: []string{"-test.run=TestProcessTargetLaunchHelper", "-test.v"},
-		Env:  map[string]string{"TESL_DAP_TARGET_HELPER": "1"},
+		Args:     []string{"-test.run=TestProcessTargetLaunchHelper", "-test.v"},
+		Env:      map[string]string{"TESL_DAP_TARGET_HELPER": "1"},
+		TestName: "named test", TestKind: "test",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -86,6 +87,9 @@ func TestProcessTargetLaunchesAndReportsLifecycle(t *testing.T) {
 func TestProcessTargetLaunchHelper(t *testing.T) {
 	if os.Getenv("TESL_DAP_TARGET_HELPER") != "1" {
 		return
+	}
+	if os.Getenv("TESL_TEST_NAME") != "named test" || os.Getenv("TESL_TEST_KIND") != "test" {
+		t.Fatalf("test selection environment = %q/%q", os.Getenv("TESL_TEST_NAME"), os.Getenv("TESL_TEST_KIND"))
 	}
 	control, err := teslrt.StartDebugControlFromEnvironment()
 	if err != nil {

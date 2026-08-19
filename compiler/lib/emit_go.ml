@@ -12105,6 +12105,9 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
       | None -> None in
      Buffer.add_char body '\n';
      Printf.bprintf body "func TestTesl%d(teslT *testing.T) {\n" index;
+     Printf.bprintf body
+       "\tif teslWanted := os.Getenv(\"TESL_TEST_NAME\"); teslWanted != \"\" && teslWanted != %S && teslWanted != %S {\n\t\tteslT.Skip(\"named test filter\")\n\t}\n\tif teslKind := os.Getenv(\"TESL_TEST_KIND\"); teslKind != \"\" && teslKind != \"test\" {\n\t\tteslT.Skip(\"test kind filter\")\n\t}\n"
+       test.description (Printf.sprintf "TestTesl%d" index);
      emit_reset ();
      if debug then
        Printf.bprintf body
@@ -12130,9 +12133,12 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
     (* gofmt separates a doc comment from a following `//line` directive with a bare `//`
        line, so it is emitted that way rather than left for gofmt to add. *)
     Printf.bprintf body "// api-test %s\n//\n" (String.escaped api_test.description);
-    Buffer.add_string body (line_directive api_test.loc);
-    Printf.bprintf body "func TestTeslApi%d(teslT *testing.T) {\n" index;
-    emit_reset ();
+     Buffer.add_string body (line_directive api_test.loc);
+     Printf.bprintf body "func TestTeslApi%d(teslT *testing.T) {\n" index;
+     Printf.bprintf body
+       "\tif teslWanted := os.Getenv(\"TESL_TEST_NAME\"); teslWanted != \"\" && teslWanted != %S && teslWanted != %S {\n\t\tteslT.Skip(\"named test filter\")\n\t}\n\tif teslKind := os.Getenv(\"TESL_TEST_KIND\"); teslKind != \"\" && teslKind != \"api-test\" {\n\t\tteslT.Skip(\"test kind filter\")\n\t}\n"
+       api_test.description (Printf.sprintf "TestTeslApi%d" index);
+     emit_reset ();
     emit_seed api_test.loc api_test.seed_stmts;
     current_api_server := Some (go_ident ~exported:true api_test.server_name);
     emit_stmts [] "\t" api_test.stmts;
@@ -12158,9 +12164,12 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
        to both backends, not a migration item. *)
     Buffer.add_char body '\n';
     Printf.bprintf body "// load-test %s\n//\n" (String.escaped load_test.description);
-    Buffer.add_string body (line_directive load_test.loc);
-    Printf.bprintf body "func TestTeslLoad%d(teslT *testing.T) {\n" index;
-    emit_reset ();
+     Buffer.add_string body (line_directive load_test.loc);
+     Printf.bprintf body "func TestTeslLoad%d(teslT *testing.T) {\n" index;
+     Printf.bprintf body
+       "\tif teslWanted := os.Getenv(\"TESL_TEST_NAME\"); teslWanted != \"\" && teslWanted != %S && teslWanted != %S {\n\t\tteslT.Skip(\"named test filter\")\n\t}\n\tif teslKind := os.Getenv(\"TESL_TEST_KIND\"); teslKind != \"\" && teslKind != \"load-test\" {\n\t\tteslT.Skip(\"test kind filter\")\n\t}\n"
+       load_test.description (Printf.sprintf "TestTeslLoad%d" index);
+     emit_reset ();
     (* Seeded ONCE, before the run: every request sees the same state, which is what makes the
        measurement about the request rather than about a store that keeps growing. *)
     emit_seed load_test.loc load_test.seed_stmts;

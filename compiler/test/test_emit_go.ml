@@ -5489,9 +5489,13 @@ let test_telemetry_app_with_go () =
     (contains main_go "teslmodgotelemetryapp.Main()");
   (* A load test drives the same in-process dispatch an api-test does, at a fixed arrival rate. *)
   let tests_go = artifact "internal/teslmodgotelemetryapp/module_test.go" emitted in
-  check bool "a load-test block becomes a Go test over the harness" true
-    (contains tests_go "teslResult := teslrt.RunLoadTest(50, 1, func() int {");
-  check bool "its assertion names the metric and the threshold" true
+   check bool "a load-test block becomes a Go test over the harness" true
+     (contains tests_go "teslResult := teslrt.RunLoadTest(50, 1, func() int {");
+   check bool "named test launch filters by description or Go name" true
+     (contains tests_go "os.Getenv(\"TESL_TEST_NAME\")");
+   check bool "named test launch filters by block kind" true
+     (contains tests_go "os.Getenv(\"TESL_TEST_KIND\")");
+   check bool "its assertion names the metric and the threshold" true
     (contains tests_go
        "teslrt.AssertLoadTest(teslT, teslResult, \"errorRate\", \"<\", float64(0.01))");
   check bool "and `-short` skips it, so an ordinary test run does not pay for it" true

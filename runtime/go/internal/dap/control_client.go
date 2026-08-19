@@ -49,6 +49,16 @@ func (client *ControlClient) SnapshotState() (teslrt.DebugSnapshot, error) {
 	return snapshot, nil
 }
 
+func (client *ControlClient) Ping() error {
+	_, err := client.call(teslrt.DebugControlRequest{Command: "ping"})
+	return err
+}
+
+func (client *ControlClient) Detach() error {
+	_, err := client.call(teslrt.DebugControlRequest{Command: "detach"})
+	return err
+}
+
 func DialControlUnix(path string) (*ControlClient, error) {
 	connection, err := net.Dial("unix", path)
 	if err != nil {
@@ -186,6 +196,20 @@ func (client *ControlClient) call(request teslrt.DebugControlRequest) (json.RawM
 		}
 		return result.response.Result, nil
 	case <-client.done:
+		// A detach response is followed by an intentional connection close. The read loop can
+		// publish both at nearly the same time; prefer a response already queued before reporting
+		// the endpoint's EOF.
+		select {
+		case result := <-response:
+			if result.err != nil {
+				return nil, result.err
+			}
+			if result.response.Error != nil {
+				return nil, fmt.Errorf("dap: debug control %s: %s", result.response.Error.Code, result.response.Error.Message)
+			}
+			return result.response.Result, nil
+		default:
+		}
 		client.mutex.Lock()
 		err := client.err
 		client.mutex.Unlock()
