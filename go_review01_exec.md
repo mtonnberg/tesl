@@ -107,6 +107,8 @@ Each was a maintainer decision on 2026-08-18; all are built and corpus-swept.
 | OQ8 | test `hostname.go` | 11 differential tests against `net/netip`, pinning 3 deliberate divergences |
 | OQ9 | load-tests work | baselines behave exactly as Racket's do (neither stores one — a correction) |
 | OQ10 | targeted `-race` | on every emitted tree that starts goroutines; zero races found |
+| OQ11 | gate probe | each runtime file set builds alone; found 2 issues on its first run |
+| OQ12 | leave refused | partial application of a comparing generic stays a compile-time refusal |
 
 Three further findings surfaced while implementing them — including a corpus program that did not
 build (`lesson21-sql-reference.tesl`, a runtime file-set gating bug) and the fact that **no api-test
@@ -154,10 +156,15 @@ The three gates I named before default-on are now met:
   is neutered;
 - **415 on a non-JSON body** (OQ7) — decided and implemented.
 
-What I would still do before defaulting: **OQ11**, a mechanical check over the gated runtime file
-sets. Three bugs of one shape appeared in this session — a declaration in a file gated on one
-condition, used by a file gated on another — and only a corpus program with the wrong combination
-catches it. Eight probe builds would close it.
+**OQ11 is now closed too**: `test_go_runtime_gates.ml` builds the always-shipped runtime set
+alone and then each gate on top of it — eight builds, five seconds. It found two things on its
+first run (a file gated outside the table, and a real gate coupling that had been holding by
+accident), and reproduces the original `PgGroupZone` failure when that bug is put back.
+
+And the emitted Go is now **checked in**, one snapshot per `example/` source, diffed byte for
+byte by ci.sh. That closes the last structural gap between the two backends: the Racket side has
+had this ratchet for years, and it is what catches a compiler change that "should not" have
+changed the output. A one-token emitter edit flags 27 snapshots.
 
 **What I would not change:** the refusal-heavy design, the flat ADT layout for the common case,
 `Int` that cannot be compared with `==` by accident, JWT that never parses its own header, and the

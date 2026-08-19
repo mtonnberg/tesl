@@ -227,3 +227,14 @@
  (names test_go_stdlib_export_seam)
  (modules test_go_stdlib_export_seam)
  (libraries tesl_compiler_lib alcotest str unix))
+
+; Go runtime FILE-GATE seam test: the runtime ships by reference, and the gates are exclusion
+; filters — so a declaration in a file gated on one condition, used by a file gated on another,
+; builds fine until a program with the wrong combination appears.  That happened three times in
+; one session (PgGroupZone, the session policy), each found by a corpus program rather than a
+; check.  This builds the always-shipped set alone and then each gate on top of it:
+;   dune exec test/test_go_runtime_gates.exe
+(tests
+ (names test_go_runtime_gates)
+ (modules test_go_runtime_gates)
+ (libraries tesl_compiler_lib alcotest unix))

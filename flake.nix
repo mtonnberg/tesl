@@ -9,7 +9,32 @@
   outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = nixpkgs.legacyPackages.${system};
+        # Go is PINNED to a patch release nixpkgs has not packaged yet.
+        #
+        # `govulncheck` is a mandatory gate (ci.sh phase 2a), and go1.26.4 — what
+        # nixpkgs-unstable carried — is subject to three advisories that are all in the
+        # standard library and therefore unavoidable from Tesl's side: GO-2026-6218
+        # (quadratic `net/url.resolvePath`), GO-2026-6090 (`crypto/tls`) and GO-2026-6089
+        # (`net/http`).  All three are fixed in go1.26.6.
+        #
+        # Bumping the whole channel does NOT deliver it: nixpkgs-unstable was at go1.26.5 when
+        # this was written, which still trips all three, while moving staticcheck,
+        # golangci-lint and every other pinned tool underneath the gates for no gain.  So the
+        # OVERLAY pins exactly the one thing the gate is about and leaves the rest of the
+        # channel where it is.
+        #
+        # Remove this the moment nixpkgs carries go1.26.6 or newer — `nix flake update
+        # nixpkgs` then gives the same result with no local patch to maintain.
+        goOverlay = final: prev: {
+          go = prev.go.overrideAttrs (old: rec {
+            version = "1.26.6";
+            src = final.fetchurl {
+              url = "https://go.dev/dl/go${version}.src.tar.gz";
+              sha256 = "1c9czy9wnbp9h89qkzsm0xrp9i57gvnb7nbssx419448qra1qwm0";
+            };
+          });
+        };
+        pkgs = import nixpkgs { inherit system; overlays = [ goOverlay ]; };
         staticcheck = pkgs.buildGoModule rec {
           pname = "staticcheck";
           version = "2026.1";

@@ -40,6 +40,54 @@ across the corpus and green under `./ci.sh`.
 3. **The SSRF classifier's divergences from `net/netip` were untested.**  Now pinned, with the
    Racket rule each one matches quoted.
 
+## Checked-in Go output + the gate probe (2026-08-19)
+
+Two ratchets the Go backend was missing, both now in ci.sh.
+
+**1. The emitted Go is COMMITTED, one `<name>.go.snap` per source under `example/`.**
+`scripts/regen-go-snapshots.sh` writes them; a ci.sh phase diffs them byte for byte. This is the
+`.rkt` ratchet the Racket side has had for years, and it closes the one question no other Go
+phase asks: the corpus gate checks that emitted Go BUILDS and that its tests RUN, never that it
+is the Go the maintainer last read — so a compiler change that "should not" alter the output
+could reshape every generated program with every phase still green.
+
+107 snapshots, 1.74 MB (the committed `.rkt` is 1.55 MB). The vendored runtime
+(`internal/teslrt/**`) is excluded: it is copied identically into every program and already held
+to the full gate stack in phase 2a, so committing 34 copies per example would be ~100 MB of diff
+noise. `go.mod` IS included — a program that starts pulling pgx should show up as a diff.
+
+No path canonicalisation is needed, unlike the `.rkt` phase: the Go emitter bakes only the
+BASENAME into `//line`, so a snapshot does not depend on where the repo sits.
+
+Verified by mutating the emitter: renaming a generated helper prefix flagged 27 lesson
+snapshots.
+
+**2. Each gated runtime file set builds on its own** (`compiler/test/test_go_runtime_gates.ml`).
+The gates are EXCLUSION filters, so a declaration in a file gated on one condition, used by a
+file gated on another, builds fine until a program with the wrong combination appears — which
+happened three times in one session and each time was found by a corpus program rather than a
+check. The probe builds the always-shipped set alone and then each gate on top of it: eight
+builds, five seconds, no Tesl programs involved.
+
+It found two things immediately:
+
+  - `password.go` was gated by a one-off check OUTSIDE the table, so nothing watched it. The
+    file lists now live in `Emit_go.runtime_file_gates` — one table, read by both the emitter
+    and the test — and `password` is a gate like the rest.
+  - the `load_test` gate really does need `http` (`load-test "…" for <Server>` names a server,
+    and `loadtest.go` reads the api-test `ApiResponse`). Recorded in `gate_prerequisites` with
+    the reason instead of holding by accident.
+
+Then checked against the bug it exists for: putting `PgGroupZone` back into `dbquery.go`
+reproduces `undefined: PgGroupZone` in the `timezone` set.
+
+**Toolchain.** `flake.nix` pins go1.26.6 through an overlay. go1.26.4 carries three advisories
+that are all in the Go standard library — GO-2026-6218 (`net/url`), GO-2026-6090 (`crypto/tls`),
+GO-2026-6089 (`net/http`) — and `govulncheck` is a mandatory gate. Bumping the channel does not
+help (nixpkgs-unstable is at go1.26.5, which still trips all three) and would move staticcheck,
+golangci-lint and the rest underneath the gates for nothing. Delete the overlay when nixpkgs
+carries 1.26.6.
+
 ## Formal review (2026-08-18) — [`go_review01.md`](../../go_review01.md)
 
 A full design/implementation/test review of the emitter and runtime, with an executive summary in

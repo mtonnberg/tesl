@@ -549,19 +549,72 @@ backends accept a leading `-` in a hostname label.
 
 ---
 
-## 7c. Open questions remaining
+## 7c. The two follow-on questions — ANSWERED
 
-**OQ11 — should the gated runtime file sets be checked mechanically?**
-F10, and the two like it earlier in this session, are all the same shape: a declaration in a file
-gated on condition A, used by a file gated on condition B. Nothing catches it until a program with
-B-and-not-A appears in the corpus. A cheap check exists: for each gate, emit a probe program that
-pulls exactly that set and build it. That is ~8 builds and would have caught all three. **My
-recommendation: add it.**
+**OQ11 — check the gated runtime file sets mechanically. → yes, added.**
+`compiler/test/test_go_runtime_gates.ml` builds the always-shipped set alone and then each gate
+on top of it: eight `go build`s, five seconds, no Tesl programs involved, because a gate
+combination is a property of the runtime rather than of any source that reaches it. The file
+lists moved out of `compile_module` into `Emit_go.runtime_file_gates`, so the test reads the
+emitter's own table rather than a copy that can drift.
 
-**OQ12 — partial application of a comparing generic.**
-`same 1` as a value is refused (fail-closed). Closing it means the partial-application combinators
-carrying dictionaries, which changes their arity contract. It has no corpus use. **My
-recommendation: leave it refused until something needs it.**
+It paid for itself on the first run, twice:
+
+  - `password.go` was gated by a one-off check OUTSIDE the table, so nothing was watching it.
+    It is a gate like the rest now.
+  - the `load_test` gate genuinely needs `http` — a `load-test` block is written
+    `for <Server>`, and `loadtest.go` reads the api-test `ApiResponse`. That coupling is now
+    written down in `gate_prerequisites` with its reason, rather than holding by accident.
+
+Then it was checked against the bug it exists for: putting `PgGroupZone` back into `dbquery.go`
+reproduces `undefined: PgGroupZone` in the `timezone` set — the failure that previously took a
+corpus program to find.
+
+**OQ12 — partial application of a comparing generic. → left refused.**
+`same 1` as a value stays a compile-time refusal. Closing it would mean the partial-application
+combinators carrying dictionaries, which changes their arity contract for every caller, and no
+corpus program needs it. It fails closed, so waiting costs a refusal rather than a wrong answer.
+
+---
+
+## 7d. Checked-in Go output (2026-08-19)
+
+The `.rkt` snapshots have caught "a change that should not have changed anything" for years. The
+Go backend had no equivalent: the corpus gate asks whether emitted Go BUILDS and whether its
+tests RUN, never whether it is the Go the maintainer last read. An emitter edit could reshape
+every generated program and every phase would still pass.
+
+`scripts/regen-go-snapshots.sh` now writes one `<name>.go.snap` per source under `example/`, and
+ci.sh diffs them byte for byte. 107 snapshots, 1.74 MB — the same order as the 1.55 MB of
+committed `.rkt`.
+
+Two decisions worth stating:
+
+  - **The vendored runtime is excluded.** `internal/teslrt/**` is copied verbatim and identically
+    into every program and is already held to the full gate stack in phase 2a; committing 34
+    identical copies per example would be ~100 MB of diff noise that moves whenever the runtime
+    does. `go.mod` IS included — its `require` block is where a program's dependency set shows
+    up, so a change that starts pulling pgx into a program with no database is a diff rather
+    than a surprise.
+  - **No path canonicalisation is needed**, unlike the `.rkt` phase: the Go emitter bakes only
+    the BASENAME into its `//line` directives, so a snapshot does not depend on where the
+    repository sits.
+
+Verified the way this gate has to be: a one-token emitter change — renaming a generated helper
+prefix — flagged 27 lesson snapshots.
+
+## 7e. The toolchain (2026-08-19)
+
+`govulncheck` is a mandatory gate, and go1.26.4 carries three advisories that are ALL in the Go
+standard library and therefore unavoidable from Tesl's side: GO-2026-6218 (quadratic
+`net/url.resolvePath`), GO-2026-6090 (`crypto/tls`), GO-2026-6089 (`net/http`). All three are
+fixed in go1.26.6.
+
+Bumping the channel does not deliver it — nixpkgs-unstable was at go1.26.5, which still trips all
+three, while moving staticcheck, golangci-lint and every other pinned tool underneath the gates
+for no gain. So `flake.nix` carries an overlay pinning go1.26.6 exactly, and nothing else moves.
+Delete the overlay the moment nixpkgs carries 1.26.6 or newer.
+
 
 ## 8. What I would not change
 

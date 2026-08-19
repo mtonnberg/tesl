@@ -9917,6 +9917,59 @@ let variant_equal_name info variant =
   Printf.sprintf "teslEqual%s%s" (go_ident ~exported:true info.adt_tesl_name)
     (go_ident ~exported:true variant.var_ctor)
 
+(* ── THE GATED RUNTIME FILE SETS ──────────────────────────────────────────────
+   Which runtime files ship only with a program that uses the feature, by gate name.
+
+   These lists are here, at module level, rather than inside `compile_module` where the
+   CONDITIONS live, because a test has to be able to read exactly what the emitter reads.
+   The gates are EXCLUSION filters — a file is dropped when its gate's condition is false —
+   so a declaration in a file gated on one condition, used by a file gated on another, breaks
+   any program that pulls the user without the declarer.  That is not hypothetical: it
+   happened three times in one session (`PgGroupZone` in dbquery.go used by timetrunc.go, which
+   broke `example/learn/lesson21-sql-reference.tesl`; the session-policy state in sso_route.go
+   used by jwt.go), and each time only a corpus program with the wrong combination found it.
+
+   `test_go_runtime_gates.ml` builds each set on its own, which is the check that finds it
+   without waiting for such a program to exist. *)
+let runtime_file_gates : (string * string list) list = [
+  (* `apitest_json.go` travels with `apitest.go`: the untyped JSON view exists to inspect a
+     RESPONSE, so a module that serves no HTTP has no use for it.  The SSE ROUTE and the
+     api-test subscription need the server and that view; the channel itself (sse.go) does not,
+     so a module that only publishes ships no HTTP runtime.  The SSO routes are part of the
+     SERVER — `sso_route.go` names `Server` and `handleSsoRequest` is called from its dispatch —
+     so they cannot ship without the HTTP half, and have nothing to do without a server. *)
+  "http", [ "serve.go"; "server.go"; "request.go"; "apitest.go"; "apitest_json.go";
+            "sse_http.go"; "sso.go"; "sso_flow.go"; "sso_route.go"; "jws.go" ];
+  (* `loadtest.go` imports `testing`, so it ships ONLY with a module that has load tests: the
+     testing package has no place in a production binary. *)
+  "load_test", [ "loadtest.go" ];
+  (* The PostgreSQL half ships ONLY to a program that declares a Postgres-backed database, for
+     the reason the HTTP half does: it pulls a third-party driver and its whole dependency
+     chain into a binary that would otherwise require nothing. *)
+  "postgres", [ "postgres.go"; "database.go"; "dbquery.go" ];
+  (* `agent.go` ships only to a program that talks to a model.  Not a dependency argument —
+     everything in it is standard library — but a runtime file a program has no use for is
+     still surface a reader has to rule out, and the gate costs nothing. *)
+  "agent", [ "agent.go"; "agent_endpoint.go"; "agent_provider.go" ];
+  "regex", [ "regex.go" ];
+  (* PASSWORD STORAGE is the one part of the runtime that is not standard-library-only:
+     Argon2id comes from `golang.org/x/crypto/argon2`, because Racket hashes with libsodium's
+     Argon2id and a stdlib substitute would mint hashes the other backend cannot verify.  The
+     dependency travels with this file and only with it, which is why the file is gated. *)
+  "password", [ "password.go" ];
+  (* `Tesl.Url` and `Tesl.Net` travel TOGETHER: a URL's host is canonicalised by the
+     classifier, so shipping the parser without it does not build. *)
+  "url_net", [ "hostname.go"; "url.go" ];
+  (* `timezone.go` embeds the IANA database (~450 KB) so a container with no
+     /usr/share/zoneinfo still renders `Europe/Stockholm` rather than silently falling back to
+     UTC; a program that formats no timestamps should not carry it.  It travels with
+     `timetrunc.go`, whose engine resolves a named zone through that same database. *)
+  "timezone", [ "timezone.go"; "timetrunc.go" ];
+]
+
+let runtime_gate_files name =
+  match List.assoc_opt name runtime_file_gates with Some files -> files | None -> []
+
 (* One ADT emits its tag enum, one flat payload struct, and the equality method
    every comparison site calls.  The struct is deliberately NOT Go-comparable
    whenever a payload is, so `==` cannot silently replace TeslEqual. *)
@@ -15487,45 +15540,19 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           || List.exists mentions
                [ "teslrt.HttpRequest"; "teslrt.ApiResponse"; "teslrt.ApiRequest";
                  "teslrt.JsonValue"; "teslrt.RequestScope"; "teslrt.Server" ] in
-        (* `apitest_json.go` travels with `apitest.go`: the untyped JSON view exists to inspect
-           a RESPONSE, so a module that serves no HTTP has no use for it. *)
-        let http_only =
-          [ "serve.go"; "server.go"; "request.go"; "apitest.go"; "apitest_json.go";
-            (* The SSE ROUTE and the api-test subscription need the server and the JSON view;
-               the channel itself (sse.go) does not, so a module that only publishes ships
-               no HTTP runtime. *)
-            "sse_http.go";
-            (* The SSO routes are part of the SERVER: `sso_route.go` names `Server` and
-               `handleSsoRequest` is called from its dispatch, so it cannot ship without the
-               HTTP half — and there is nothing for it to do in a program with no server. *)
-            "sso.go"; "sso_flow.go"; "sso_route.go"; "jws.go" ] in
-        (* `loadtest.go` imports `testing`, so it ships ONLY with a module that has load tests:
-           the testing package has no place in a production binary. *)
-        let load_test_only = [ "loadtest.go" ] in
-        (* The PostgreSQL half ships ONLY to a program that declares a Postgres-backed
-           database, for the reason the HTTP half does: it pulls a third-party driver and its
-           whole dependency chain into a binary that would otherwise require nothing. *)
-        let postgres_only = [ "postgres.go"; "database.go"; "dbquery.go" ] in
-        (* `agent.go` ships only to a program that talks to a model.  It is not a dependency
-           argument — everything in it is standard library — but a runtime file a program has
-           no use for is still surface a reader has to rule out, and the gate costs nothing. *)
-        let agent_only = [ "agent.go"; "agent_endpoint.go"; "agent_provider.go" ] in
-        (* `timezone.go` embeds the IANA database (~450 KB) so a container with no
-           /usr/share/zoneinfo still renders `Europe/Stockholm` correctly rather than
-           silently falling back to UTC.  A program that formats no timestamps should not
-           carry it. *)
-        let regex_only = [ "regex.go" ] in
+        (* The FILE LISTS live in `runtime_file_gates` at module level, so
+           `test_go_runtime_gates.ml` can build each set on its own; the CONDITIONS stay here,
+           where the module being compiled is in hand. *)
+        let http_only = runtime_gate_files "http" in
+        let load_test_only = runtime_gate_files "load_test" in
+        let postgres_only = runtime_gate_files "postgres" in
+        let agent_only = runtime_gate_files "agent" in
+        let regex_only = runtime_gate_files "regex" in
+        let url_net_only = runtime_gate_files "url_net" in
+        let timezone_only = runtime_gate_files "timezone" in
         let uses_regex = mentions "teslrt.Regex" in
-        (* `Tesl.Url` and `Tesl.Net` travel TOGETHER: a URL's host is canonicalised by the
-           classifier, so shipping the parser without it does not build.  They are gated only
-           because a program that parses no URLs has no use for either. *)
-        let url_net_only = [ "hostname.go"; "url.go" ] in
         let uses_url_net = List.exists mentions
           [ "teslrt.Url"; "teslrt.ClassifyHost"; "teslrt.NormalizeHost"; "teslrt.NetIs" ] in
-        (* `timezone.go` and `timetrunc.go` travel TOGETHER: the truncation engine resolves a
-           named zone through the same embedded database formatting uses, and a bucket that
-           silently fell back to UTC would be the exact bug the embedding prevents. *)
-        let timezone_only = [ "timezone.go"; "timetrunc.go" ] in
         let uses_timezone = List.exists mentions
           [ "teslrt.FormatTime"; "teslrt.TimeTrunc"; "teslrt.TimeOffsetAt";
             "teslrt.TimeZone"; "teslrt.UtcZone"; "teslrt.NamedZone";
@@ -15545,7 +15572,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           else if (not uses_timezone) && List.mem name timezone_only then None
           else if (not uses_regex) && List.mem name regex_only then None
           else if (not uses_url_net) && List.mem name url_net_only then None
-          else if name = "password.go" && not password_runtime then None
+          else if (not password_runtime) && List.mem name (runtime_gate_files "password") then None
           else Some { path = "internal/teslrt/" ^ name; contents })
           Embedded_go_runtime.files
       end
