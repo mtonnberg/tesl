@@ -12255,7 +12255,7 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
   in
    let debug_control_start, debug_control_end =
      if debug then
-       ("\tteslDebug, teslDebugErr := teslrt.StartDebugControlFromEnvironment()\n\tif teslDebugErr != nil {\n\t\tpanic(teslDebugErr)\n\t}\n",
+       ("\tteslDebug, teslDebugErr := teslrt.StartDebugControlFromEnvironment()\n\tif teslDebugErr != nil {\n\t\tpanic(teslDebugErr)\n\t}\n\tif teslDebug != nil && os.Getenv(\"TESL_DEBUG_WAIT\") != \"\" {\n\t\tteslDebug.WaitForConfiguration()\n\t}\n",
         "\tif teslDebug != nil {\n\t\t_ = teslDebug.Close()\n\t}\n")
      else ("", "")
    in
@@ -15499,11 +15499,12 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
     let needs_runtime = mode = Debug || contains_go_code source "teslrt." ||
       match tests_source with Some text -> contains_go_code text "teslrt." | None -> false in
     let main_imports = if mode = Debug then
-      Printf.sprintf "%s\n\t%s" (go_quote (module_path ^ "/internal/" ^ package))
+      Printf.sprintf "%s\n\t%s\n\t%s" (go_quote "os")
+        (go_quote (module_path ^ "/internal/" ^ package))
         (go_quote (module_path ^ "/internal/teslrt"))
     else go_quote (module_path ^ "/internal/" ^ package) in
     let main_startup = if mode = Debug then
-      "\tteslDebug, teslDebugErr := teslrt.StartDebugControlFromEnvironment()\n\tif teslDebugErr != nil {\n\t\tpanic(teslDebugErr)\n\t}\n\tif teslDebug != nil {\n\t\tdefer func() { _ = teslDebug.Close() }()\n\t}\n"
+       "\tteslDebug, teslDebugErr := teslrt.StartDebugControlFromEnvironment()\n\tif teslDebugErr != nil {\n\t\tpanic(teslDebugErr)\n\t}\n\tif teslDebug != nil && os.Getenv(\"TESL_DEBUG_WAIT\") != \"\" {\n\t\tteslDebug.WaitForConfiguration()\n\t}\n\tif teslDebug != nil {\n\t\tdefer func() { _ = teslDebug.Close() }()\n\t}\n"
     else "" in
     (* The lint configuration is part of the emitter contract, versioned with this
        file: `exhaustive` is the static half of the ADT exhaustiveness mitigation and

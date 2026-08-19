@@ -3,6 +3,8 @@ package dap
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -50,6 +52,64 @@ func TestDialProjectEndpointRejectsMissingEndpoint(t *testing.T) {
 	_, err := dialProjectEndpoint(t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "no debug endpoint") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func generatedGoTestFixture(t *testing.T) (string, string, string) {
+	_, testFile, _, _ := runtime.Caller(0)
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(testFile), "../../../.."))
+	compiler := filepath.Join(repoRoot, "compiler", "_build", "default", "bin", "main.exe")
+	if _, err := os.Stat(compiler); err != nil {
+		t.Skip("compiler build unavailable")
+	}
+	source := filepath.Join(repoRoot, "example", "learn", "lesson14-test-blocks.tesl")
+	if _, err := os.Stat(source); err != nil {
+		t.Skip("test source unavailable")
+	}
+	t.Setenv("TESL_REPO_ROOT", repoRoot)
+	return repoRoot, compiler, source
+}
+
+func TestPrepareProgramBuildsGeneratedGoTest(t *testing.T) {
+	repoRoot, compiler, source := generatedGoTestFixture(t)
+	target := NewProcessTarget()
+	program, args, cleanup, err := target.prepareProgram(processLaunchArguments{
+		Program: source, Compiler: compiler, Mode: "test", OutDir: filepath.Join(t.TempDir(), "generated"),
+	}, repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if len(args) != 0 {
+		t.Fatalf("generated test args = %#v, want none", args)
+	}
+	if _, err := os.Stat(program); err != nil {
+		t.Fatalf("generated test binary: %v", err)
+	}
+}
+
+func TestProcessTargetLaunchesGeneratedGoTest(t *testing.T) {
+	repoRoot, compiler, source := generatedGoTestFixture(t)
+	arguments, err := json.Marshal(processLaunchArguments{
+		Program: source, Compiler: compiler, Cwd: repoRoot, Mode: "test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := NewProcessTarget()
+	backend, err := target.LaunchBackend(arguments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, ok := backend.(*ControlClient)
+	if !ok {
+		t.Fatalf("backend = %T, want *ControlClient", backend)
+	}
+	if _, err := client.SetBreakpointSpecs(nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

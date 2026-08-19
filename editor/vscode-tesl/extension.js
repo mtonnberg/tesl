@@ -981,14 +981,20 @@ function activate(context) {
         const launchScript = path.join(context.extensionPath, "debug", "launch-dap.sh");
 
         const goDap = findGoDap(wsPath);
-        if (session.configuration.request === "attach" && goDap) {
+        const sourceLaunch = session.configuration.request === "launch" &&
+          typeof session.configuration.program === "string" &&
+          session.configuration.program.toLowerCase().endsWith(".tesl");
+        if ((session.configuration.request === "attach" || sourceLaunch) && goDap) {
           const env = {
             ...process.env,
             ...(wsPath ? { TESL_REPO_ROOT: wsPath } : {}),
           };
+          const compiler = findTeslCompiler(wsPath);
+          if (compiler) env.TESL_COMPILER = compiler;
           const dbgOut = vscode.window.createOutputChannel("Tesl Debugger");
           dbgOut.appendLine(`[tesl-debug] Go DAP: ${goDap.command} ${goDap.args.join(" ")}`);
-          dbgOut.appendLine(`[tesl-debug] attach project: ${session.configuration.project || "(explicit endpoint)"}`);
+          dbgOut.appendLine(`[tesl-debug] ${sourceLaunch ? "launch source" : "attach project"}: ${session.configuration.program || session.configuration.project || "(explicit endpoint)"}`);
+          dbgOut.appendLine(`[tesl-debug] compiler: ${compiler || "PATH fallback"}`);
           dbgOut.show(true);
           return new vscode.DebugAdapterExecutable(goDap.command, goDap.args, { env, cwd: goDap.cwd });
         }
@@ -1057,6 +1063,10 @@ function activate(context) {
       // stage — a value like "${workspaceFolder}/backend" is still the raw
       // unsubstituted string and any path check on it is meaningless.
       resolveDebugConfiguration(folder, config) {
+        if (config.request === "launch" && typeof config.program === "string" &&
+            config.program.toLowerCase().endsWith(".tesl") && !config.cwd && folder) {
+          config.cwd = folder.uri.fsPath;
+        }
         if (config.request === "attach" && !config.socket && !config.port && !config.program) {
           if (!config.project) {
             config.project = folder ? folder.uri.fsPath : wsPath;

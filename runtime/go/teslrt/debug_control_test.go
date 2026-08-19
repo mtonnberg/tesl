@@ -95,6 +95,43 @@ func TestDebugControlHandshakeAndContinue(t *testing.T) {
 	<-nextDone
 }
 
+func TestDebugControlWaitsForConfiguration(t *testing.T) {
+	server, err := NewDebugger().StartDebugControlTCP(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	done := make(chan struct{})
+	go func() {
+		server.WaitForConfiguration()
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("configuration wait returned before breakpoints")
+	case <-time.After(20 * time.Millisecond):
+	}
+	connection, err := net.Dial("tcp", server.Endpoint())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	reader := bufio.NewReader(connection)
+	encoder := json.NewEncoder(connection)
+	if err := encoder.Encode(DebugControlRequest{ID: "1", Command: "set-breakpoints"}); err != nil {
+		t.Fatal(err)
+	}
+	var response DebugControlResponse
+	if err := json.NewDecoder(reader).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("configuration wait did not return")
+	}
+}
+
 func TestDebugControlEvaluatesWireConditions(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix control endpoint")

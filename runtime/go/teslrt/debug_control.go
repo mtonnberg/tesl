@@ -65,15 +65,17 @@ type debugConditionValue struct {
 }
 
 type DebugControlServer struct {
-	debugger *Debugger
-	listener net.Listener
-	path     string
-	done     chan struct{}
-	closed   chan struct{}
-	mutex    sync.Mutex
-	clients  map[net.Conn]struct{}
-	write    sync.Mutex
-	detach   func()
+	debugger       *Debugger
+	listener       net.Listener
+	path           string
+	done           chan struct{}
+	closed         chan struct{}
+	mutex          sync.Mutex
+	clients        map[net.Conn]struct{}
+	configured     chan struct{}
+	configuredOnce sync.Once
+	write          sync.Mutex
+	detach         func()
 }
 
 // StartDebugControl creates an owner-only Unix-domain endpoint and starts the
@@ -156,12 +158,13 @@ func StartDebugControlFromEnvironment() (*DebugControlServer, error) {
 
 func newDebugControlServer(debugger *Debugger, listener net.Listener, path string) *DebugControlServer {
 	server := &DebugControlServer{
-		debugger: debugger,
-		listener: listener,
-		path:     path,
-		done:     make(chan struct{}),
-		closed:   make(chan struct{}),
-		clients:  make(map[net.Conn]struct{}),
+		debugger:   debugger,
+		listener:   listener,
+		path:       path,
+		done:       make(chan struct{}),
+		closed:     make(chan struct{}),
+		clients:    make(map[net.Conn]struct{}),
+		configured: make(chan struct{}),
 	}
 	server.detach = debugger.Attach(server.broadcast)
 	go server.acceptLoop()
@@ -169,6 +172,16 @@ func newDebugControlServer(debugger *Debugger, listener net.Listener, path strin
 }
 
 func (server *DebugControlServer) Endpoint() string { return server.listener.Addr().String() }
+
+// WaitForConfiguration holds a compiler-launched target until its DAP client has
+// installed the initial breakpoint set. It is deliberately opt-in: ordinary debug
+// runs and attach sessions keep their existing start behavior.
+func (server *DebugControlServer) WaitForConfiguration() {
+	select {
+	case <-server.configured:
+	case <-server.done:
+	}
+}
 
 func (server *DebugControlServer) acceptLoop() {
 	defer close(server.closed)
@@ -236,6 +249,7 @@ func (server *DebugControlServer) handleRequest(request DebugControlRequest) (De
 	case "ping":
 		return result(map[string]bool{"ok": true}), false
 	case "set-breakpoints":
+		server.configuredOnce.Do(func() { close(server.configured) })
 		breakpoints := make([]DebugBreakpoint, 0, len(request.Breakpoints))
 		for _, specification := range request.Breakpoints {
 			condition, err := compileDebugCondition(specification.Condition)
