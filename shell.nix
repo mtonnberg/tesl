@@ -17,7 +17,7 @@ let
   # body resolves templates + runtime collections from the live checkout.
   tesl-cli = pkgs.writeShellScriptBin "tesl" (''
     #!/usr/bin/env bash
-    export TESL_REPO_ROOT="${toString ./.}"
+    export TESL_REPO_ROOT="''${TESL_REPO_ROOT:-$PWD}"
     export TESL_OCAML_COMPILER="$TESL_REPO_ROOT/compiler/_build/default/bin/main.exe"
   '' + builtins.readFile ./nix/tesl-cli-body.sh);
   staticcheck = pkgs.buildGoModule rec {
@@ -64,7 +64,12 @@ pkgs.mkShell {
   ];
 
   shellHook = ''
-    export TESL_REPO_ROOT="${toString ./.}"
+    _tesl_root="''${PWD}"
+    while [ "$_tesl_root" != "/" ] && [ ! -f "$_tesl_root/flake.nix" ]; do
+      _tesl_root="$(dirname "$_tesl_root")"
+    done
+    export TESL_REPO_ROOT="''${TESL_REPO_ROOT:-$_tesl_root}"
+    unset _tesl_root
     export TESL_OCAML_COMPILER="$TESL_REPO_ROOT/compiler/_build/default/bin/main.exe"
 
     # Native library for Tesl.Crypto: `tesl/crypto.rkt` dlopen()s libsodium

@@ -373,7 +373,14 @@
           ];
 
           shellHook = ''
-            export TESL_REPO_ROOT="''${TESL_REPO_ROOT:-${toString ./.}}"
+            # `${toString ./.}` is an immutable Nix-store source during `nix develop`,
+            # so compiler auto-builds must resolve the live checkout from the shell cwd.
+            _tesl_root="''${PWD}"
+            while [ "$_tesl_root" != "/" ] && [ ! -f "$_tesl_root/flake.nix" ]; do
+              _tesl_root="$(dirname "$_tesl_root")"
+            done
+            export TESL_REPO_ROOT="''${TESL_REPO_ROOT:-$_tesl_root}"
+            unset _tesl_root
             export TESL_OCAML_COMPILER="''${TESL_OCAML_COMPILER:-$TESL_REPO_ROOT/compiler/_build/default/bin/main.exe}"
 
             # Tesl.Crypto's libsodium — absolute store path, same as the
