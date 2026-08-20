@@ -257,7 +257,8 @@ func toolDefinitions() []map[string]any {
 		},
 	}
 	debugAttach := map[string]any{
-		"type": "object",
+		"type":     "object",
+		"required": []string{},
 		"properties": map[string]any{
 			"project":    map[string]string{"type": "string"},
 			"action":     map[string]any{"type": "string", "enum": []string{"once", "snapshot", "ping", "detach"}},

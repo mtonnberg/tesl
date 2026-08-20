@@ -70,7 +70,7 @@ The migration must not create a period where all editor and debugging tools are 
 - `editor/` (3): replace LSP, MCP, and MCP smoke test with Go implementations/tests.
 - `example/` (119): stop committing backend outputs; compile/run `.tesl` sources through Go. Resolve Racket-only generated-name variants and development support to an originating `.tesl` source or Go replacement before deleting.
 - `templates/` (2): retain `.tesl` templates and make init/Docker/package flows compile them to Go.
-- `tests/` (146): 142 root tests, 3 benchmarks, and 1 private support file. The 71 same-path `.tesl` tests become Go-backend source tests; all 75 Racket-only responsibilities get named Go, OCaml, shell/black-box, protocol, or benchmark replacements.
+- `tests/` currently contains 143 root `.rkt` tests plus nested benchmark/private files. The 71 same-path `.tesl` tests become Go-backend source tests; the 72 remaining Racket-only responsibilities have named Go, OCaml, shell/black-box, protocol, benchmark, or reviewed-obsolete replacements.
 - The exact 354-path baseline is appended below and is normative. Reinventory before implementation and before deletion; any newly added `.rkt` joins this scope and blocks final acceptance.
 ## Migration phases
 ### Phase status
@@ -82,9 +82,9 @@ The migration must not create a period where all editor and debugging tools are 
 | 3. Checkpoint engine, values, domains, and control channel | Complete | Bounded/panic-safe named value trees, concurrent checkpoint stress, stop-world recovery, Unix/TCP control, disconnect resume/reattach, domain/SQL scopes, ABI fixtures, and race gates pass. |
 | 4. DAP and headless debugger | Complete | Go DAP launch/attach lifecycle, named-test launch, real launch-to-breakpoint integration, headless v2 breakpoint/scalar-local output, Go attach bridge/once/project discovery, normalized transcripts, and race gates pass. |
 | 5. LSP | Complete | Go LSP shipped entrypoint, expanded initialize contract, ranged/multiple UTF-16 edits, save/watch/format/resolve/execute handlers, field/doc compiler queries, cancellable versioned diagnostics, built-compiler integration, and race/vet gates pass. |
-| 6. MCP | Partial | Go stdio server, tool schemas, compiler queries, Go headless inspection routing, attach flags, real-stdio matrix, race/vet, and protocol smoke pass; full Racket transcript differential and live endpoint parity remain open. |
+| 6. MCP | Complete | Go stdio server, compatible tool schemas, compiler-query differential, Go headless inspection, real-stdio coverage, live Go-runtime attach, race, vet, and protocol smoke pass. |
 | 7. CLI, VS Code, packaging, environments | Partial | Go is the default for shipped/dev compile/run/test/debug-inspect/watch/build flows and Go LSP/DAP/MCP tools; clean-install and template/Docker gates pass. Explicit Racket fallback, compatibility CI, and final Racket-free packaging remain. |
-| 8. Complete test/example/template migration | Partial | All 71 paired sources and 107 examples pass Go corpus gates; all 75 Racket-only rows have named evidence; templates pass Go init/build/test gates; stale aggregate fixtures are removed. Remaining work is final responsibility/manifest review and compatibility cleanup. |
+| 8. Complete test/example/template migration | Complete | All 71 paired sources and 107 examples pass Go corpus gates; all 72 Racket-only rows have named replacement evidence; templates pass Go init/build/test gates; stale aggregate fixtures are removed. Remaining Racket files are explicit compatibility/oracle debt tracked by phase 7/C3, not unmapped test responsibility. |
 
 ### Phase 0: Contract freeze and traceability
 1. Generate a machine-readable row for every `.rkt`: category, behavior owner, replacement package/test, parity evidence, deletion status. CI compares it with `git ls-files '*.rkt'`.
@@ -194,7 +194,8 @@ Gate: names/schemas/JSON remain compatible and live compiler/debug calls pass.
 ### Phase 6 closure log
 
 - 2026-08-20: Go `tesl-mcp` exposes the compiler query surface and debugger tools over bounded MCP stdio framing; unit, framing, race, vet, and real compiler agent-context smoke checks pass. Differential tool/error and live attach parity remain open.
-- 2026-08-20: MCP now keeps capability discovery alive when the compiler is absent, supports `shutdown`, validates source-query positions, returns contained `tools/call` errors, and has real-stdio matrix coverage for all compiler tools plus debug-attach argument forwarding. Full Racket transcript differential and live target attach remain open.
+- 2026-08-20: MCP now keeps capability discovery alive when the compiler is absent, supports `shutdown`, validates source-query positions, returns contained `tools/call` errors, and has real-stdio matrix coverage for all compiler tools plus debug-attach argument forwarding.
+- 2026-08-20: MCP phase closure adds a real built-compiler/headless-debugger stdio test, Racket-versus-Go catalog/schema and `agent_context` differential coverage, and a CLI smoke that arms Go `debug-attach` through MCP against a running Go server and verifies the stopped event.
 ### Phase 7: CLI, VS Code, packaging, environments
 1. Replace Racket discovery and `.rkt` launch paths in the extension, debug launcher, package manifest, launch configs, and editor bundle with shipped Go tools.
 2. Switch `tesl` CLI run/test/debug/debug-attach/debug-inspect/LSP/MCP flows to Go while preserving flags, environment compatibility where required, output, and exit codes.
@@ -231,7 +232,7 @@ Gate: shipped workflows find only Go binaries and packages contain no `.rkt` or 
 - 2026-08-20: Full `ci.sh` was attempted after the Go gates; OCaml build and Go migration contracts passed, then the 967-second dune phase exhausted the host filesystem and aborted with `No space left on device`. Do not treat this run as a release pass; rerun after storage recovery. Legacy exact-match/Racket phases also still require migration updates.
 ### Phase 8: Complete test/example/template migration
 1. Make each of the 71 paired `.tesl` tests the sole source and assert Go compile diagnostics, runtime output, status, side effects, and services.
-2. Assign each of 75 Racket-only test responsibilities a named Go runtime/integration test, OCaml compiler test, black-box test, protocol fixture, benchmark, or reviewed obsolete disposition.
+2. Assign each of the 72 current Racket-only test responsibilities a named Go runtime/integration test, OCaml compiler test, black-box test, protocol fixture, benchmark, or reviewed obsolete disposition.
 3. Preserve PostgreSQL, HTTP/TLS/SSRF, telemetry/OTLP, SSO, secrets, crypto, SQL, queue, cache, server, timeout, concurrency, and external-service coverage without weakening isolation/assertions.
 4. Convert all Racket benchmarks with retained metrics/budgets.
 5. Compile and run all meaningful examples/lessons/templates through Go; resolve stale generated variants and prevent tracked `.tesl-stuff` outputs.

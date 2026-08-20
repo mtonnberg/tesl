@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -273,4 +274,271 @@ func TestMCPStdioCompilerToolMatrix(t *testing.T) {
 	if err := command.Wait(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestMCPStdioRealCompilerAndHeadlessDebugger(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler := os.Getenv("TESL_COMPILER")
+	if compiler == "" {
+		compiler = filepath.Join(root, "compiler", "_build", "default", "bin", "main.exe")
+	}
+	if _, err := os.Stat(compiler); err != nil {
+		t.Skipf("built compiler unavailable: %v", err)
+	}
+	lesson := filepath.Join(root, "example", "learn", "lesson61-step-debugging.tesl")
+	command := exec.Command(os.Args[0], "-test.run=TestMCPStdioHelper")
+	command.Env = append(os.Environ(),
+		"TESL_MCP_STDIO_HELPER=1",
+		"TESL_COMPILER="+compiler,
+		"TESL_REPO_ROOT="+root,
+	)
+	input, err := command.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := command.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	writer := protocol.NewWriter(input)
+	reader := protocol.NewReader(output)
+	request := func(id int, method string, params map[string]any) map[string]any {
+		t.Helper()
+		if err := writer.WriteJSON(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params}); err != nil {
+			t.Fatal(err)
+		}
+		payload, err := reader.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var response map[string]any
+		if err := json.Unmarshal(payload, &response); err != nil {
+			t.Fatal(err)
+		}
+		if response["error"] != nil {
+			t.Fatalf("%s response = %s", method, payload)
+		}
+		return response
+	}
+	request(1, "initialize", nil)
+	tools := request(2, "tools/list", nil)
+	toolsJSON, err := json.Marshal(tools["result"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"tesl.agent_context", "tesl.debug_inspect", "tesl.debug_attach"} {
+		if !strings.Contains(string(toolsJSON), name) {
+			t.Fatalf("real tools/list missing %s: %s", name, toolsJSON)
+		}
+	}
+	contextResponse := request(3, "tools/call", map[string]any{
+		"name":      "tesl.agent_context",
+		"arguments": map[string]any{"file": lesson},
+	})
+	contextText := toolResultText(t, contextResponse)
+	if !strings.Contains(contextText, `"ok":true`) {
+		t.Fatalf("real agent context is not successful: %s", contextText)
+	}
+	inspectResponse := request(4, "tools/call", map[string]any{
+		"name": "tesl.debug_inspect",
+		"arguments": map[string]any{
+			"file": lesson, "mode": "test", "break_at": []string{"193"},
+		},
+	})
+	inspectText := toolResultText(t, inspectResponse)
+	if !strings.Contains(inspectText, `"stopped":true`) {
+		t.Fatalf("real debug inspect did not stop: %s", inspectText)
+	}
+	request(5, "shutdown", nil)
+	if err := input.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := command.Wait(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func toolResultText(t *testing.T, response map[string]any) string {
+	t.Helper()
+	result, ok := response["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool response has no result object: %#v", response)
+	}
+	content, ok := result["content"].([]any)
+	if !ok || len(content) == 0 {
+		t.Fatalf("tool response has no content: %#v", response)
+	}
+	first, ok := content[0].(map[string]any)
+	if !ok {
+		t.Fatalf("tool response content is not an object: %#v", content[0])
+	}
+	text, ok := first["text"].(string)
+	if !ok {
+		t.Fatalf("tool response content has no text: %#v", first)
+	}
+	return text
+}
+
+func TestMCPRacketCatalogAndCompilerDifferential(t *testing.T) {
+	racket, err := exec.LookPath("racket")
+	if err != nil {
+		t.Skipf("Racket compatibility oracle unavailable: %v", err)
+	}
+	root, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler := os.Getenv("TESL_COMPILER")
+	if compiler == "" {
+		compiler = filepath.Join(root, "compiler", "_build", "default", "bin", "main.exe")
+	}
+	if _, err := os.Stat(compiler); err != nil {
+		t.Skipf("built compiler unavailable: %v", err)
+	}
+	racketCommand := exec.Command(racket, filepath.Join(root, "editor", "tesl-mcp", "tesl-mcp.rkt"))
+	racketCommand.Env = append(os.Environ(), "TESL_REPO_ROOT="+root, "TESL_COMPILER="+compiler)
+	racketInput, err := racketCommand.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	racketOutput, err := racketCommand.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := racketCommand.Start(); err != nil {
+		t.Fatal(err)
+	}
+	racketWriter := protocol.NewWriter(racketInput)
+	racketReader := protocol.NewReader(racketOutput)
+	racketRequest := func(id int, method string, params map[string]any) map[string]any {
+		t.Helper()
+		if err := racketWriter.WriteJSON(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params}); err != nil {
+			t.Fatal(err)
+		}
+		payload, err := racketReader.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var response map[string]any
+		if err := json.Unmarshal(payload, &response); err != nil {
+			t.Fatal(err)
+		}
+		if response["error"] != nil {
+			t.Fatalf("Racket %s response = %s", method, payload)
+		}
+		return response
+	}
+	racketTools := racketRequest(1, "tools/list", nil)
+	lesson := filepath.Join(root, "example", "learn", "lesson01-basic-types-and-functions.tesl")
+	racketContext := racketRequest(2, "tools/call", map[string]any{
+		"name": "tesl.agent_context", "arguments": map[string]any{"file": lesson},
+	})
+	if err := racketInput.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := racketCommand.Wait(); err != nil {
+		t.Fatal(err)
+	}
+
+	goTools, err := json.Marshal(map[string]any{"tools": toolDefinitions()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var goCatalog map[string]any
+	if err := json.Unmarshal(goTools, &goCatalog); err != nil {
+		t.Fatal(err)
+	}
+	if err := compareToolCatalog(t, goCatalog, racketTools); err != nil {
+		t.Fatal(err)
+	}
+
+	goContext, err := (&server{compiler: tooling.Client{Executable: compiler}}).callTool(
+		context.Background(), "tesl.agent_context", map[string]any{"file": lesson})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if racketText := toolResultText(t, racketContext); string(goContext) != racketText {
+		t.Fatalf("agent_context differential:\nGo:     %s\nRacket: %s", goContext, racketText)
+	}
+}
+
+func compareToolCatalog(t *testing.T, goCatalog, racketResponse map[string]any) error {
+	goTools, ok := goCatalog["tools"].([]any)
+	if !ok {
+		return fmt.Errorf("Go catalog has no tools array")
+	}
+	racketResult, ok := racketResponse["result"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("Racket catalog has no result object")
+	}
+	racketTools, ok := racketResult["tools"].([]any)
+	if !ok {
+		return fmt.Errorf("Racket catalog has no tools array")
+	}
+	if len(goTools) != len(racketTools) {
+		return fmt.Errorf("tool count differs: Go=%d Racket=%d", len(goTools), len(racketTools))
+	}
+	goByName := make(map[string]map[string]any, len(goTools))
+	racketByName := make(map[string]map[string]any, len(racketTools))
+	for _, raw := range goTools {
+		tool, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("Go tool is not an object: %#v", raw)
+		}
+		name, _ := tool["name"].(string)
+		goByName[name] = tool
+	}
+	for _, raw := range racketTools {
+		tool, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("Racket tool is not an object: %#v", raw)
+		}
+		name, _ := tool["name"].(string)
+		racketByName[name] = tool
+	}
+	for name, goTool := range goByName {
+		racketTool, ok := racketByName[name]
+		if !ok {
+			return fmt.Errorf("Racket catalog missing %s", name)
+		}
+		goShape, err := schemaShape(goTool)
+		if err != nil {
+			return fmt.Errorf("Go %s: %w", name, err)
+		}
+		racketShape, err := schemaShape(racketTool)
+		if err != nil {
+			return fmt.Errorf("Racket %s: %w", name, err)
+		}
+		if string(goShape) != string(racketShape) {
+			return fmt.Errorf("schema differs for %s: Go=%s Racket=%s", name, goShape, racketShape)
+		}
+	}
+	return nil
+}
+
+func schemaShape(tool map[string]any) ([]byte, error) {
+	schema, ok := tool["inputSchema"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("missing inputSchema")
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("missing schema properties")
+	}
+	types := make(map[string]string, len(properties))
+	for name, raw := range properties {
+		property, ok := raw.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("property %s is not an object", name)
+		}
+		typeName, _ := property["type"].(string)
+		types[name] = typeName
+	}
+	return json.Marshal(map[string]any{"required": schema["required"], "types": types})
 }
