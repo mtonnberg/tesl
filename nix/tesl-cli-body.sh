@@ -1129,18 +1129,23 @@ _tesl_compile_go_file() {
 _tesl_build_go() {
   local entry="$1" name="$2" requested_out="$3" out
   out="$(_tesl_compile_go_file "$entry" "$requested_out")" || return 1
-  (cd "$out" && "${TESL_GO:-go}" build ./...) || return 1
-  echo "tesl build: $name built Go module — $entry → $out"
+  if [ -d "$out/cmd/app" ]; then
+    (cd "$out" && "${TESL_GO:-go}" build -trimpath -o "$out/tesl-app" ./cmd/app) || return 1
+    echo "tesl build: $name built Go binary — $entry → $out/tesl-app"
+  else
+    (cd "$out" && "${TESL_GO:-go}" build ./...) || return 1
+    echo "tesl build: $name compiled Go module — $entry → $out"
+  fi
 }
 
 _tesl_build_go_container() {
   local entry="$1" name="$2" port="$3" dbmode="$4" variant="$5" tag="$6" no_docker="$7" requested_out="$8"
-  local ctx generated template
+  local ctx generated template go
   if [ -n "$requested_out" ]; then
     ctx="$requested_out"
     mkdir -p "$ctx"
   else
-    ctx="$(_tesl_mktemp_dir)" || return 1
+    ctx="$(_tesl_project_mktemp_dir "$entry" container)" || return 1
   fi
   generated="$ctx/generated"
   rm -rf "$generated"
@@ -1152,6 +1157,12 @@ _tesl_build_go_container() {
     echo "tesl build --backend go: $entry does not define a main/server entrypoint" >&2
     return 2
   }
+  go="${TESL_GO:-go}"
+  (cd "$generated" && GOOS=linux CGO_ENABLED=0 "$go" build -trimpath -o "$ctx/tesl-app" ./cmd/app) || {
+    echo "tesl build --backend go: failed to build $entry for Linux" >&2
+    return 1
+  }
+  rm -rf "$generated"
   if [ "$variant" = "all-in-one" ]; then
     template="$(_tesl_templates_dir)/docker/Dockerfile.all-in-one.tmpl"
   else
@@ -1162,7 +1173,7 @@ _tesl_build_go_container() {
     return 1
   }
   sed -e "s|__APP_NAME__|$name|g" -e "s|__PORT__|$port|g" "$template" > "$ctx/Dockerfile"
-  echo "tesl build: staged Go Docker context at $ctx (port=$port)"
+  echo "tesl build: staged Go binary Docker context at $ctx (port=$port)"
   if [ "$no_docker" = "1" ]; then
     echo "tesl build: --no-docker set; build context ready at $ctx"
     echo "  docker build -t $tag \"$ctx\""
@@ -1190,8 +1201,9 @@ _tesl_build() {
         echo "Usage: tesl build [--local|--container] [--app-only|--with-postgres]"
         echo "                  [--tag NAME] [--no-docker] [--out DIR]"
         echo "  Build the project named by tesl.toml. Without a flag the mode comes from"
-        echo "  [deploy].target: \"local\" compiles into .tesl-stuff/build/ (no Docker),"
-        echo "  \"container\" stages a Dockerfile and builds the image."
+        echo "  [deploy].target: \"local\" compiles into .tesl-stuff/go-build/ (no Docker),"
+        echo "  \"container\" builds a Linux binary, stages a runtime-only image, and builds it."
+        echo "  --app-only and --with-postgres are compatibility aliases; PostgreSQL is external."
         return 0 ;;
       -*)              echo "tesl build: unknown flag $1" >&2; return 1 ;;
       *)               echo "tesl build: unexpected arg $1" >&2; return 1 ;;

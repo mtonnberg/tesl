@@ -7,21 +7,18 @@ Templates package the Go application emitted by `tesl build`.
 ```text
 context/
   Dockerfile
-  generated/
-    go.mod
-    cmd/app/
-    internal/
+  tesl-app
 ```
 
-The generated module owns the Tesl runtime and application entrypoint. The
-image does not contain Racket, `raco`, `.rkt` files, or `PLTCOLLECTS`.
+The host build owns Go compilation. The image contains only the resulting
+binary; it does not contain Go, Racket, `raco`, `.rkt` files, or `PLTCOLLECTS`.
 
 ## Database
 
-Both templates use an external PostgreSQL service through the standard
+Both template names use an external PostgreSQL service through the standard
 `TESL_POSTGRES_*` environment variables. Embedded PostgreSQL is intentionally
-not packaged in a single application image; use `tesl db` or a separate
-PostgreSQL container.
+not packaged in the image; `Dockerfile.all-in-one.tmpl` is retained as a legacy
+name. Use `tesl db` or a separate PostgreSQL container.
 
 ## Build
 

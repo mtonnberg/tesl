@@ -70,7 +70,7 @@ context="$TMP/context"
   echo "go-cli-smoke: Go Docker context staging failed" >&2
   exit 1
 }
-[ -f "$context/Dockerfile" ] && [ -f "$context/generated/cmd/app/main.go" ] || {
+[ -f "$context/Dockerfile" ] && [ -x "$context/tesl-app" ] || {
   echo "go-cli-smoke: incomplete Go Docker context" >&2
   exit 1
 }

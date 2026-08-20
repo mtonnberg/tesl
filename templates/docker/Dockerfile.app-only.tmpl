@@ -1,15 +1,9 @@
 # syntax=docker/dockerfile:1
-# Go application image with an external PostgreSQL service.
-FROM golang:1.26 AS build
-WORKDIR /src
-COPY generated/ ./
-RUN go build -trimpath -o /out/tesl-app ./cmd/app
-
 FROM debian:bookworm-slim
 LABEL org.opencontainers.image.title="__APP_NAME__" \
       org.opencontainers.image.description="Tesl Go app (external PostgreSQL)"
 WORKDIR /opt/tesl/app
-COPY --from=build /out/tesl-app /usr/local/bin/tesl-app
+COPY tesl-app /usr/local/bin/tesl-app
 ENV PORT=__PORT__
 EXPOSE __PORT__
 USER 65532:65532

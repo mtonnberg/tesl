@@ -297,7 +297,7 @@ fi
 #    PATH deliberately has no docker: a Docker attempt fails the assertion.
 out="$(tesl_bsd "$PROJ" build)"; rc=$?
 if [ "$rc" -eq 0 ] \
-   && printf '%s' "$out" | grep -q "built Go module" \
+   && printf '%s' "$out" | grep -q "compiled Go module" \
    && ! printf '%s' "$out" | grep -qE "staged Dockerfile|building image" \
    && [ -f "$PROJ/.tesl-stuff/go-build/go.mod" ]; then
   pass "tesl build honours [deploy].target = local (compile only, no Docker)"

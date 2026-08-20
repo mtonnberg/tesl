@@ -1,5 +1,6 @@
 .tesl-postgres/
 .thesl-postgres/
+.tesl-stuff/
 node_modules/
 elm-stuff/
 compiled/

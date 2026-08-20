@@ -69,8 +69,8 @@ tesl run app.tesl          # starts the project database if needed, serves on ht
 `AGENTS.md`/`CLAUDE.md` for coding agents. With the default **managed** database, `tesl run`
 auto-starts a project-local PostgreSQL and loads `.env`, so the API is live with no extra setup.
 
-Ship it as a Docker image with `tesl build --with-postgres` (all-in-one) or `tesl build --app-only`
-(bring your own database) — see [`manual/deploy.md`](manual/deploy.md).
+Ship it as a Docker image with `tesl build`; database-backed apps use an
+external PostgreSQL service — see [`manual/deploy.md`](manual/deploy.md).
 
 **Caveat: Nix is required** Nix is the only supported install path today. If you do not
 have Nix and do not want it, this is where the trail ends for now — a standalone binary is on the

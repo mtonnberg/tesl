@@ -8,8 +8,8 @@ Use `tesl help manual deploy` to access this from the CLI.
 
 | `[deploy].target` | What `tesl build` does | Needs Docker |
 |---|---|---|
-| `"local"` (what `tesl init` scaffolds) | Type-checks and compiles the `[project].entrypoint` into `.tesl-stuff/build/`, then tells you to `tesl run`. | no |
-| `"container"` | Stages a Dockerfile + the Tesl runtime and builds the image (the rest of this page). | yes |
+| `"local"` (what `tesl init` scaffolds) | Type-checks and compiles the `[project].entrypoint` into `.tesl-stuff/go-build/`, including a runnable `tesl-app` binary when it is an application. | no |
+| `"container"` | Compiles a Linux `tesl-app`, stages it with a runtime-only Dockerfile, and builds the image (the rest of this page). | yes |
 | key absent | `"container"` (the behaviour that predates the key). | yes |
 
 Override the manifest per invocation with `tesl build --local` /
@@ -17,8 +17,8 @@ Override the manifest per invocation with `tesl build --local` /
 (`--app-only`, `--with-postgres`, `--tag`, `--out`, `--no-docker`) imply
 `--container`, so asking for an image variant always builds one.
 
-A local build produces no artifact to ship — `tesl run` executes the compiled
-program in place. The rest of this page is the **container** mode.
+A local build leaves the compiled module and application binary in
+`.tesl-stuff/go-build/`. The rest of this page is the **container** mode.
 
 ## The container mode
 
@@ -26,15 +26,14 @@ A Tesl project ships as a **Docker image you can just run** — `tesl build`
 compiles the app, stages the Tesl runtime, generates a Dockerfile, and builds
 the image. No runtime code changes, no hand-written Dockerfile.
 
-There are two flavours, chosen by a flag (or by `[database].mode` in `tesl.toml`):
+There is one Go image flavour. The old flavour flags remain accepted as
+compatibility aliases, but neither image embeds PostgreSQL:
 
 | Image | Command | What it contains | Use when |
 |---|---|---|---|
-| **All-in-one** | `tesl build --with-postgres` | app **+ an embedded PostgreSQL** + an entrypoint that starts the DB then the app | demos, self-contained deploys, "just run it" — **no external database** |
-| **App-only** | `tesl build --app-only` | app only; connects to a database you run | production with a managed/external PostgreSQL |
+| **Runtime image** | `tesl build --container` | prebuilt app binary only; connects to an external PostgreSQL service when needed | deployments using a separate database |
 
-With no flag, `tesl build` picks all-in-one when `[database].mode = "managed"`
-and app-only otherwise.
+`--app-only` and `--with-postgres` select the same runtime image for now.
 
 ## Worked example
 
@@ -47,8 +46,8 @@ cd myapi
 tesl build                            # → .tesl-stuff/go-build (no Docker)
 tesl run                              # serve it
 
-# --- all-in-one: runs anywhere, no external database ---
-tesl build --with-postgres            # → image tagged "myapi" (the [project].name)
+# --- container: binary plus runtime image; PostgreSQL remains external ---
+tesl build --container                # → image tagged "myapi" (the [project].name)
 docker run -d -p 8086:8086 myapi
 curl -s localhost:8086/todos/todo-1 -H 'Cookie: user=demo'
 #   → 200 {"id":"todo-1","ownerId":"demo","title":"Read the Tesl tutorial",...}
@@ -67,22 +66,19 @@ The app is configured entirely through environment variables — set them with
 | Variable | Meaning |
 |---|---|
 | `PORT` | port the HTTP server binds (default from `tesl.toml [env]`) |
-| `TESL_POSTGRES_HOST` / `_PORT` / `_DATABASE` / `_USER` / `_PASSWORD` | database connection (app-only image, or to override the all-in-one defaults) |
+| `TESL_POSTGRES_HOST` / `_PORT` / `_DATABASE` / `_USER` / `_PASSWORD` | external PostgreSQL connection |
 
 The Tesl runtime **creates its own tables on first boot** (`ensure-database-ready!`),
 so there is no separate migration step for the system tables.
 
 ```bash
-# app-only image against your own PostgreSQL:
-tesl build --app-only
+# container image against your own PostgreSQL:
+tesl build --container
 docker run -d -p 8086:8086 \
   -e TESL_POSTGRES_HOST=db.internal -e TESL_POSTGRES_DATABASE=myapi \
   -e TESL_POSTGRES_USER=myapi -e TESL_POSTGRES_PASSWORD=… \
   myapi
 ```
-
-For the all-in-one image, mount a volume at `/var/lib/tesl-postgres` to persist
-the embedded database across restarts.
 
 ## Continuous deployment (GitHub Actions)
 
@@ -93,9 +89,8 @@ Copy it to your project's `.github/workflows/deploy.yml` and set `APP_NAME`.
 
 ## How it works (and what is intentionally not here)
 
-- `tesl build` stages the generated Go module and a multi-stage Go/Debian
-  container context (it never touches your source tree or `.tesl-stuff/`),
-  instantiates one of the templates in [`templates/docker/`](../templates/docker/),
+- `tesl build --container` compiles a Linux Go binary, stages a runtime-only
+  container context, instantiates a template in [`templates/docker/`](../templates/docker/),
   and runs `docker build`.
 - The deployment story is deliberately **just an image** — the app serves HTTP
   the same way it does locally. Health-check endpoints, graceful-shutdown

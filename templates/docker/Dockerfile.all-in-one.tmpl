@@ -1,15 +1,10 @@
 # syntax=docker/dockerfile:1
-# Go application image. PostgreSQL remains an external service; use
-# `tesl db` or a separate postgres container for managed database workflows.
-FROM golang:1.26 AS build
-WORKDIR /src
-COPY generated/ ./
-RUN go build -trimpath -o /out/tesl-app ./cmd/app
-
+# Legacy template name: PostgreSQL remains external and is not installed here.
 FROM debian:bookworm-slim
 LABEL org.opencontainers.image.title="__APP_NAME__" \
       org.opencontainers.image.description="Tesl Go app (external PostgreSQL)"
-COPY --from=build /out/tesl-app /usr/local/bin/tesl-app
+WORKDIR /opt/tesl/app
+COPY tesl-app /usr/local/bin/tesl-app
 ENV PORT=__PORT__
 EXPOSE __PORT__
 USER 65532:65532

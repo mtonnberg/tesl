@@ -133,7 +133,7 @@ tesl fmt app.tesl          # format in place (--check to verify only)
 tesl test app.tesl         # run the file's `test` / `api-test` / `load-test` blocks
 tesl run app.tesl          # serve it (TESL_VERBOSE=1 for detailed logs)
 tesl mutate app.tesl       # mutate the validation logic and confirm your tests catch it
-tesl build --with-postgres # an all-in-one Docker image (see deploy.md)
+tesl build                 # build a local binary; use --container for an image
 ```
 
 Add files as the project grows and `tesl check` them together: `tesl check app.tesl db.tesl`.
