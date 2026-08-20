@@ -35,6 +35,18 @@ type output struct {
 	SQL    *teslrt.DebugSQLCapture `json:"sql,omitempty"`
 }
 
+type stringFlags []string
+
+func (values *stringFlags) String() string { return strings.Join(*values, ",") }
+
+func (values *stringFlags) Set(value string) error {
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("value must not be empty")
+	}
+	*values = append(*values, value)
+	return nil
+}
+
 func main() {
 	project := flag.String("project", "", "project directory containing .tesl-stuff/debug.sock or debug.port")
 	socket := flag.String("socket", "", "Unix debug socket")
@@ -42,11 +54,15 @@ func main() {
 	operation := flag.String("operation", "bridge", "bridge, snapshot, ping, or detach")
 	once := flag.Bool("once", false, "process one bridge request and exit")
 	timeoutMS := flag.Int("timeout-ms", 30000, "connection timeout in milliseconds")
+	var breakAt stringFlags
+	flag.Var(&breakAt, "break-at", "arm a breakpoint as FILE:LINE; repeatable")
+	when := flag.String("when", "", "condition applied to each --break-at")
+	hit := flag.String("hit", "", "hit condition applied to each --break-at")
 	flag.Parse()
 	if *timeoutMS < 1 {
 		fail("-timeout-ms must be positive")
 	}
-	if *operation != "bridge" && *operation != "snapshot" && *operation != "ping" && *operation != "detach" {
+	if *operation != "bridge" && *operation != "once" && *operation != "snapshot" && *operation != "ping" && *operation != "detach" {
 		fail("unsupported operation %q", *operation)
 	}
 	if *socket != "" && *tcp != "" {
@@ -71,6 +87,28 @@ func main() {
 		fail("handshake: %v", err)
 	}
 	defer client.Close()
+	if len(breakAt) > 0 {
+		specifications := make([]teslrt.DebugBreakpointSpec, 0, len(breakAt))
+		for index, value := range breakAt {
+			file, line, err := parseBreakpoint(value)
+			if err != nil {
+				fail("invalid --break-at #%d: %v", index+1, err)
+			}
+			specifications = append(specifications, teslrt.DebugBreakpointSpec{
+				ID: fmt.Sprintf("attach-bp-%d", index+1), File: file, Line: line,
+				Condition: *when, Hit: *hit,
+			})
+		}
+		results, err := client.SetBreakpointSpecs(specifications)
+		if err != nil {
+			fail("set breakpoints: %v", err)
+		}
+		for index, result := range results {
+			if !result.Verified {
+				fail("breakpoint #%d is not verified: %s", index+1, result.Message)
+			}
+		}
+	}
 
 	switch *operation {
 	case "bridge":
@@ -91,6 +129,31 @@ func main() {
 			fail("snapshot: %v", err)
 		}
 		writeJSON(snapshotOutput(snapshot))
+	case "once":
+		if len(breakAt) == 0 {
+			fail("once operation requires at least one --break-at")
+		}
+		stopped := make(chan struct{}, 1)
+		detach := client.Attach(func(event teslrt.DebugEvent) {
+			if event.Kind == "stopped" {
+				select {
+				case stopped <- struct{}{}:
+				default:
+				}
+			}
+		})
+		defer detach()
+		select {
+		case <-stopped:
+			snapshot, err := client.SnapshotState()
+			if err != nil {
+				fail("snapshot after breakpoint: %v", err)
+			}
+			writeJSON(snapshotOutput(snapshot))
+			_ = client.Continue()
+		case <-time.After(time.Duration(*timeoutMS) * time.Millisecond):
+			writeJSON(map[string]any{"version": 2, "stopped": false, "reason": "breakpoint-not-hit"})
+		}
 	}
 }
 
@@ -167,6 +230,18 @@ func projectEndpoint(project string) (string, string, error) {
 		return "", "", err
 	}
 	return "", "127.0.0.1:" + port, nil
+}
+
+func parseBreakpoint(value string) (string, int, error) {
+	separator := strings.LastIndexByte(value, ':')
+	if separator <= 0 || separator == len(value)-1 {
+		return "", 0, fmt.Errorf("expected FILE:LINE")
+	}
+	line, err := strconv.Atoi(value[separator+1:])
+	if err != nil || line < 1 {
+		return "", 0, fmt.Errorf("line must be a positive integer")
+	}
+	return value[:separator], line, nil
 }
 
 func dial(socket, tcp string, timeout time.Duration) (net.Conn, error) {

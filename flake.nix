@@ -169,42 +169,21 @@
           meta.description = "Tesl project templates (minimal, api, docker)";
         };
 
-        # ── LSP Racket script ─────────────────────────────────────────────────
-        # Bundle the LSP entry-point so tesl-lsp can reference it by absolute
-        # store path without assuming a live repo checkout.
-        tesl-lsp-script = pkgs.stdenv.mkDerivation {
-          pname   = "tesl-lsp-script";
+        # ── Go editor/debug/MCP tools ─────────────────────────────────────────
+        tesl-go-tools = pkgs.buildGoModule {
+          pname = "tesl-go-tools";
           version = "0.1.0";
-
-          src = pkgs.lib.cleanSourceWith {
-            src    = ./editor/tesl-lsp;
-            filter = path: _type:
-              !(pkgs.lib.hasInfix "/compiled/" (toString path));
-          };
-
-          dontBuild    = true;
-          installPhase = ''
-            install -Dm644 tesl-lsp.rkt $out/share/tesl-lsp/tesl-lsp.rkt
-          '';
-        };
-
-        # ── MCP Racket script ─────────────────────────────────────────────────
-        # Bundle the MCP server entry-point so tesl-mcp can reference it by
-        # absolute store path without assuming a live repo checkout.
-        tesl-mcp-script = pkgs.stdenv.mkDerivation {
-          pname   = "tesl-mcp-script";
-          version = "0.1.0";
-
-          src = pkgs.lib.cleanSourceWith {
-            src    = ./editor/tesl-mcp;
-            filter = path: _type:
-              !(pkgs.lib.hasInfix "/compiled/" (toString path));
-          };
-
-          dontBuild    = true;
-          installPhase = ''
-            install -Dm644 tesl-mcp.rkt $out/share/tesl-mcp/tesl-mcp.rkt
-          '';
+          src = ./.;
+          modRoot = "runtime/go";
+          vendorHash = "sha256-SMXMkfkj5ehtjri4CCWPMwOyLIGcaoSgBv8k4DVG86c=";
+          subPackages = [
+            "cmd/tesl-dap"
+            "cmd/tesl-debug-attach"
+            "cmd/tesl-debug-inspect"
+            "cmd/tesl-lsp"
+            "cmd/tesl-mcp"
+          ];
+          meta.description = "Tesl Go LSP, DAP, headless debugger, and MCP tools";
         };
 
         # ── GNU userland pinned into the wrappers' PATH ────────────────────────
@@ -303,30 +282,37 @@
         # compiler/_build binary, and clobbering it here is what silently pinned
         # every diagnostic to the store compiler of whatever revision the user
         # last ran `nix profile install` on — new checks looked simply absent.
-        tesl-lsp = pkgs.writeShellScriptBin "tesl-lsp" (runtimePreamble + ''
+        tesl-lsp = pkgs.writeShellScriptBin "tesl-lsp" (''
+          export TESL_OCAML_COMPILER="${tesl-compiler}/bin/tesl-compiler"
           export TESL_COMPILER="''${TESL_COMPILER:-$TESL_OCAML_COMPILER}"
-          exec racket "${tesl-lsp-script}/share/tesl-lsp/tesl-lsp.rkt" "$@"
+          exec "${tesl-go-tools}/bin/tesl-lsp" "$@"
         '');
 
         # ── tesl-mcp wrapper ──────────────────────────────────────────────────
         # MCP stdio server exposing the Tesl agent API to AI agents (Claude Code,
         # etc.). Same compiler discovery as tesl-lsp — sets TESL_COMPILER, so no
         # TESL_REPO_ROOT / repo checkout is needed.
-        tesl-mcp = pkgs.writeShellScriptBin "tesl-mcp" (runtimePreamble + ''
+        tesl-mcp = pkgs.writeShellScriptBin "tesl-mcp" (''
+          export TESL_OCAML_COMPILER="${tesl-compiler}/bin/tesl-compiler"
           export TESL_COMPILER="''${TESL_COMPILER:-$TESL_OCAML_COMPILER}"
-          exec racket "${tesl-mcp-script}/share/tesl-mcp/tesl-mcp.rkt" "$@"
+          exec "${tesl-go-tools}/bin/tesl-mcp" "$@"
         '');
+
+        tesl-debug-tools = pkgs.symlinkJoin {
+          name = "tesl-debug-tools";
+          paths = [ tesl-go-tools ];
+        };
 
         # ── Combined default: CLI + LSP + MCP in one profile install ───────────
         tesl-full = pkgs.symlinkJoin {
           name = "tesl";
-          paths = [ tesl-cli tesl-lsp tesl-mcp ];
+          paths = [ tesl-cli tesl-compiler tesl-lsp tesl-mcp tesl-debug-tools ];
         };
 
       in {
         # ── Packages ──────────────────────────────────────────────────────────
           packages = {
-           inherit tesl-compiler tesl-racket tesl-cli tesl-lsp tesl-mcp tesl-full staticcheck;
+           inherit tesl-compiler tesl-racket tesl-cli tesl-lsp tesl-mcp tesl-go-tools tesl-debug-tools tesl-full staticcheck;
           default = tesl-full;
           # Reusable PostgreSQL so the managed-PG lifecycle (`tesl db`) can source
           # initdb / pg_ctl / createdb via nix without entering a dev shell.
@@ -346,6 +332,7 @@
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
             tesl-cli-dev
+            tesl-go-tools
             racket
             curl
             jq

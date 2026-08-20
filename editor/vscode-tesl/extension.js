@@ -16,10 +16,10 @@ function commandOnPath(name) {
 /**
  * Resolve how to launch the Tesl LSP.
  */
-function resolveLsp(extensionDir) {
-  const override = vscode.workspace.getConfiguration("tesl").get("lspScript");
-  if (override && fs.existsSync(override)) {
-    return { kind: "script", script: override };
+function resolveLsp(_extensionDir) {
+  const override = vscode.workspace.getConfiguration("tesl").get("lspBinary");
+  if (override && (fs.existsSync(override) || commandOnPath(override))) {
+    return { kind: "binary", command: override };
   }
 
   const nixCandidates = [
@@ -32,18 +32,6 @@ function resolveLsp(extensionDir) {
     : nixCandidates.find((p) => fs.existsSync(p));
   if (binaryCmd) {
     return { kind: "binary", command: binaryCmd };
-  }
-
-  const candidates = [];
-  const folders = vscode.workspace.workspaceFolders;
-  if (folders && folders.length > 0) {
-    candidates.push(path.join(folders[0].uri.fsPath, "editor", "tesl-lsp", "tesl-lsp.rkt"));
-  }
-  candidates.push(path.join(extensionDir, "..", "tesl-lsp", "tesl-lsp.rkt"));
-  candidates.push(path.join(extensionDir, "..", "..", "editor", "tesl-lsp", "tesl-lsp.rkt"));
-
-  for (const c of candidates) {
-    if (fs.existsSync(c)) return { kind: "script", script: c };
   }
 
   return null;
@@ -269,7 +257,7 @@ function activate(context) {
     vscode.window.showWarningMessage(
       "Tesl: could not find tesl-lsp. " +
       "Install Tesl (nix profile install github:mtonnberg/tesl) or set " +
-      "tesl.lspScript to the absolute path of tesl-lsp.rkt."
+      "tesl.lspBinary to the Go tesl-lsp executable."
     );
   } else {
     const outputChannel = vscode.window.createOutputChannel("Tesl Language Server");
@@ -294,16 +282,6 @@ function activate(context) {
             ...process.env,
             ...(wsCompiler ? { TESL_COMPILER: wsCompiler } : {}),
           },
-        },
-      };
-    } else {
-      outputChannel.appendLine(`[tesl-lsp] using script: ${lsp.script}`);
-      serverOptions = {
-        command: "racket",
-        args: [lsp.script],
-        transport: TransportKind.stdio,
-        options: {
-          env: { ...process.env, TESL_REPO_ROOT: wsPath },
         },
       };
     }

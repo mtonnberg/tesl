@@ -7,8 +7,7 @@ free — type-checking, diagnostics with fixes, type/signature/completion querie
 go-to-definition, references, proof obligations, and a headless step-debugger.
 
 It is a thin JSON-RPC-over-stdio wrapper around the `tesl` compiler binary, built
-on the same framing and compiler-discovery as the Tesl LSP
-(`editor/tesl-lsp/tesl-lsp.rkt`).
+on the same bounded framing and compiler-query client as the Go Tesl LSP.
 
 ## Tools
 
@@ -105,13 +104,14 @@ cd compiler && dune build
 Run the server (it speaks JSON-RPC over stdin/stdout; logs go to stderr):
 
 ```sh
-TESL_REPO_ROOT="$PWD" racket editor/tesl-mcp/tesl-mcp.rkt
+TESL_COMPILER="$PWD/compiler/_build/default/bin/main.exe" \
+  go run ./runtime/go/cmd/tesl-mcp
 ```
 
 ## Registering with an MCP client
 
-The launch command is `racket <abs path>/editor/tesl-mcp/tesl-mcp.rkt` with
-`TESL_REPO_ROOT` pointed at your Tesl checkout.
+The launch command is `tesl-mcp`, with `TESL_COMPILER` set only when using a
+checkout instead of the installed wrapper.
 
 ### Claude Code
 
@@ -132,8 +132,8 @@ claude mcp add tesl -- nix run github:mtonnberg/tesl#tesl-mcp
 **From a repo checkout** (developing Tesl) — point it at your build:
 
 ```sh
-claude mcp add tesl -e TESL_REPO_ROOT=/abs/path/to/tesl -- \
-  racket /abs/path/to/tesl/editor/tesl-mcp/tesl-mcp.rkt
+claude mcp add tesl -e TESL_COMPILER=/abs/path/to/tesl/compiler/_build/default/bin/main.exe -- \
+  go run /abs/path/to/tesl/runtime/go/cmd/tesl-mcp
 ```
 
 Then restart Claude Code (MCP servers load at startup).
@@ -144,9 +144,9 @@ Then restart Claude Code (MCP servers load at startup).
 {
   "mcpServers": {
     "tesl": {
-      "command": "racket",
-      "args": ["/abs/path/to/tesl/editor/tesl-mcp/tesl-mcp.rkt"],
-      "env": { "TESL_REPO_ROOT": "/abs/path/to/tesl" }
+      "command": "tesl-mcp",
+      "args": [],
+      "env": {}
     }
   }
 }
@@ -155,7 +155,7 @@ Then restart Claude Code (MCP servers load at startup).
 ## Tests
 
 ```sh
-racket editor/tesl-mcp/tests/protocol-smoke.rkt
+go test ./runtime/go/cmd/tesl-mcp ./runtime/go/internal/protocol
 ```
 
 The smoke test spawns the server, drives a full JSON-RPC session over stdio, and

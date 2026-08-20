@@ -82,8 +82,8 @@ The migration must not create a period where all editor and debugging tools are 
 | 3. Checkpoint engine, values, domains, and control channel | Complete | Bounded/panic-safe named value trees, concurrent checkpoint stress, stop-world recovery, Unix/TCP control, disconnect resume/reattach, domain/SQL scopes, ABI fixtures, and race gates pass. |
 | 4. DAP and headless debugger | Complete | Go DAP launch/attach lifecycle, named-test launch, real launch-to-breakpoint integration, headless v2 breakpoint/scalar-local output, Go attach bridge/once/project discovery, normalized transcripts, and race gates pass. |
 | 5. LSP | Complete | Go LSP shipped entrypoint, expanded initialize contract, ranged/multiple UTF-16 edits, save/watch/format/resolve/execute handlers, field/doc compiler queries, cancellable versioned diagnostics, built-compiler integration, and race/vet gates pass. |
-| 6. MCP | Not started | No Go MCP implementation or parity gate. |
-| 7. CLI, VS Code, packaging, environments | Partial | Go development binaries and direnv/Nix environment wiring exist; shipped-default cutover and Racket-free packaging do not. |
+| 6. MCP | Partial | Go stdio server, tool schemas, compiler queries, attach flags, and protocol smoke coverage exist; full differential/live endpoint parity is still open. |
+| 7. CLI, VS Code, packaging, environments | Partial | Go tools are wired into Nix defaults and VS Code LSP/MCP paths; Go DAP/test-runner cutover and Racket-free artifact tests remain. |
 | 8. Complete test/example/template migration | Not started | Corpus migration and responsibility manifest are not complete. |
 | 9. Delete Racket implementation and backend | Not started | Racket sources and backend remain. |
 | 10. Permanent zero-Racket enforcement | Not started | Zero-Racket CI gate does not exist. |
@@ -192,12 +192,20 @@ Gate: all methods have unit/session coverage, differential behavior matches exce
 2. Port `editor/tesl-mcp/tests/protocol-smoke.rkt`; add per-tool, invalid-input, compiler-failure, timeout, endpoint, attach/detach, and concurrency tests.
 3. Differential-test `tools/list`, every `tools/call`, and errors through a real MCP stdio client.
 Gate: names/schemas/JSON remain compatible and live compiler/debug calls pass.
+
+### Phase 6 closure log
+
+- 2026-08-20: Go `tesl-mcp` exposes the compiler query surface and debugger tools over bounded MCP stdio framing; unit, framing, race, vet, and real compiler agent-context smoke checks pass. Differential tool/error and live attach parity remain open.
 ### Phase 7: CLI, VS Code, packaging, environments
 1. Replace Racket discovery and `.rkt` launch paths in the extension, debug launcher, package manifest, launch configs, and editor bundle with shipped Go tools.
 2. Switch `tesl` CLI run/test/debug/debug-attach/debug-inspect/LSP/MCP flows to Go while preserving flags, environment compatibility where required, output, and exit codes.
 3. Remove Racket/`PLTCOLLECTS` from `flake.nix`, `shell.nix`, Docker, installers, Makefile, GitHub workflows, release artifacts, and packaging.
 4. Add artifact-level clean-install tests for extension activation, LSP, DAP launch/attach, MCP, templates, Docker, Nix, and CLI with Racket absent.
 Gate: shipped workflows find only Go binaries and packages contain no `.rkt` or Racket closure.
+
+### Phase 7 closure log
+
+- 2026-08-20: Nix exposes Go LSP, DAP, headless, attach, and MCP binaries; default profile and dev shell include them. VS Code LSP resolution and MCP documentation now target Go. Full Go DAP/test-runner cutover and Racket-free clean-install validation remain open.
 ### Phase 8: Complete test/example/template migration
 1. Make each of the 71 paired `.tesl` tests the sole source and assert Go compile diagnostics, runtime output, status, side effects, and services.
 2. Assign each of 75 Racket-only test responsibilities a named Go runtime/integration test, OCaml compiler test, black-box test, protocol fixture, benchmark, or reviewed obsolete disposition.

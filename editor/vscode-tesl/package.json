@@ -60,10 +60,10 @@
     "configuration": {
       "title": "Tesl",
       "properties": {
-        "tesl.lspScript": {
+        "tesl.lspBinary": {
           "type": "string",
           "default": "",
-          "description": "Absolute path to tesl-lsp.rkt (advanced override). Leave empty to use the tesl-lsp binary from PATH (installed via nix profile install github:mtonnberg/tesl) or to auto-detect from the workspace."
+          "description": "Absolute path to the Go tesl-lsp binary (advanced override). Leave empty to use tesl-lsp from PATH."
         },
         "tesl.dapBinary": {
           "type": "string",
