@@ -6,7 +6,7 @@
   },
   "fixtures": [
     {"kind":"dap", "path":"tests/protocol/dap-core.json", "consumer":"runtime/go/internal/dap/transcript_test.go"},
-    {"kind":"abi", "path":"tests/protocol/debug-frame-v1.json", "consumer":"scripts/check-go-migration-manifest.sh"},
+    {"kind":"abi", "path":"tests/protocol/debug-frame-v1.json", "consumer":"tests/protocol/check-go-migration-manifest.sh"},
     {"kind":"control", "path":"tests/protocol/control-core.json", "consumer":"runtime/go/teslrt"},
     {"kind":"headless", "path":"tests/protocol/headless-v2.json", "consumer":"runtime/go/cmd/tesl-debug-inspect"},
     {"kind":"mcp", "path":"tests/protocol/mcp-core.json", "consumer":"editor/tesl-mcp"},

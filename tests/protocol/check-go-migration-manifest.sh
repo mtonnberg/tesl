@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root=${TESL_REPO_ROOT:-$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)}
-manifest="$repo_root/roadmap/next/racket-traceability.json"
+repo_root=${TESL_REPO_ROOT:-$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)}
+manifest="$repo_root/tests/protocol/racket-traceability.json"
 
 # Use tracked paths that still exist in the checkout. This keeps the manifest gate useful while
 # an intentional deletion is present in a worktree but not yet staged; after commit the result is
-# identical to `git ls-files '*.rkt'`.
+# identical to `git ls-files '*.rkt'`. An empty result is valid after the Racket cleanup.
 tracked_racket_files() {
   git -C "$repo_root" ls-files '*.rkt' |
     while IFS= read -r path; do
@@ -65,7 +65,7 @@ if ! cmp -s "$expected" "$actual"; then
 fi
 
 jq -e '
-  type == "array" and length > 0 and
+  type == "array" and
   all(.[]; (.path | type) == "string" and .path != "" and
       (.category | type) == "string" and .category != "" and
       (.owner | type) == "string" and .owner != "" and
@@ -75,8 +75,8 @@ jq -e '
       .status == "inventory")' "$manifest" >/dev/null
 printf 'traceability manifest OK (%s rows)\n' "$(jq 'length' "$manifest")"
 
-matrix="$repo_root/roadmap/next/go-capability-matrix.json"
-abi="$repo_root/roadmap/next/go-debug-abi-v1.schema.json"
+matrix="$repo_root/tests/protocol/go-capability-matrix.json"
+abi="$repo_root/tests/protocol/go-debug-abi-v1.schema.json"
 jq -e 'type == "object" and .version == 1 and (.id | type) == "string" and (.location.file | type) == "string" and (.location.line >= 1) and (.location.column >= 1) and (.locals | type) == "array"' "$repo_root/tests/protocol/debug-frame-v1.json" >/dev/null
 jq -e 'type == "object" and .version == 1 and (.normalization.remove | length) > 0 and (.normalization.preserve | length) > 0 and (.fixtures | length) >= 4' "$repo_root/tests/protocol/transcript-index.json" >/dev/null
 jq -e 'type == "object" and .version == 1 and (.diagnostics | type) == "array"' "$repo_root/tests/protocol/diagnostics-core.json" >/dev/null
@@ -85,4 +85,4 @@ jq -e 'type == "object" and .version == 1 and (.capabilities | type) == "array" 
 jq -e 'type == "object" and ."$schema" != null and ."$id" != null and .properties.version.const == 1 and .properties.location != null and ."$defs".value != null' "$abi" >/dev/null
 printf 'capability matrix and ABI schema OK\n'
 
-"$repo_root/scripts/check-go-test-inventory.sh"
+"$repo_root/tests/protocol/check-go-test-inventory.sh"

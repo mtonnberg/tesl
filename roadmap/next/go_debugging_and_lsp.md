@@ -76,7 +76,7 @@ The migration must not create a period where all editor and debugging tools are 
 ### Phase status
 | Phase | Status | Gate state |
 |---|---|---|
-| 0. Contract freeze and traceability | Complete | `racket-traceability.json` covers the current 262-file checkout inventory; protocol/schema fixtures, capability matrix, and migration gate validation pass. Legacy replay remains opt-in while compatibility sources are isolated. |
+| 0. Contract freeze and traceability | Complete | `tests/protocol/racket-traceability.json` covers the current zero-file checkout inventory; protocol/schema fixtures, capability matrix, and migration gate validation pass. |
 | 1. Shared Go protocol/compiler-query foundation | Complete | Bounded framing, malformed/truncated/partial-I/O coverage, UTF-16/URI portability, protocol fuzz gates, real built-compiler query coverage, LSP field/doc queries, versioned diagnostic cancellation, race/vet, and shipped Go tooling tests pass. |
 | 2. Go debug emission and ABI | Complete | ABI v1 schema/fixture, debug/release emission, function/test checkpoints, generated single/multi-module debug builds, release symbol scans, unattached equivalence gates, SQL/domain instrumentation, and benchmarks pass. |
 | 3. Checkpoint engine, values, domains, and control channel | Complete | Bounded/panic-safe named value trees, concurrent checkpoint stress, stop-world recovery, Unix/TCP control, disconnect resume/reattach, domain/SQL scopes, ABI fixtures, and race gates pass. |
@@ -103,8 +103,7 @@ Gate: shared packages pass Go tests, fuzz seeds, race/static checks, and query-d
 
 ### Phase 0 closure log
 
-- 2026-08-20: `scripts/check-go-migration-manifest.sh` now validates a 354-row machine-readable ownership/test manifest against `git ls-files '*.rkt'`, plus capability, ABI, schema, and transcript-index contracts.
-- 2026-08-20: `scripts/racket-stability.sh` replayed all `tests/dap-*.rkt` suites twice with stable success; normalized protocol fixtures cover DAP, control, headless v2, MCP, CLI, diagnostics, semantic data, value trees, and ABI frames.
+- 2026-08-20: `tests/protocol/check-go-migration-manifest.sh` validates the machine-readable ownership/test manifest against `git ls-files '*.rkt'`, plus capability, ABI, schema, and transcript-index contracts.
 
 ### Phase 1 implementation log
 
@@ -223,7 +222,7 @@ Gate: shipped workflows find only Go binaries and packages contain no `.rkt` or 
 - 2026-08-20: VS Code Run Function now uses `tesl test --backend go`; removed its direct compiler/Racket launcher dependency. Test Explorer parser now understands generated Go `TestTeslN` failures and parser tests pass.
 - 2026-08-20: Live version metadata is `0.3.1`; the default Nix profile and dev shell use Go CLI preambles, the default package has no Racket closure, the shipped CLI rejects Racket backend selection, clean-install CLI compile/build passes with `racket` and `raco` absent, and Docker templates are Go-based.
 - 2026-08-20: Phase 8 started with a Go template gate: `tesl init` minimal and api templates compile, test, and stage Docker contexts through the Go backend. Fixed a Go module-graph collision where a project module named `App` was mistaken for `Tesl.App`; the regression is pinned in `test_emit_go.ml`. Focused `tests/go-cli-smoke.sh` passes; paired-test and Racket-only responsibility inventory remain open.
-- 2026-08-20: Added `roadmap/next/go-test-migration.json` and `scripts/check-go-test-inventory.sh`; the gate now validates 74 tracked `.tesl` sources, 72 explicit Go replacement rows, and zero retired Racket-only test files. The three deleted generated-fixture sources remain included in the source-driven Go runner where present.
+- 2026-08-20: Added `tests/protocol/go-test-migration.json` and `tests/protocol/check-go-test-inventory.sh`; the gate now validates 74 tracked `.tesl` sources, 72 explicit Go replacement rows, and zero retired Racket-only test files. The three deleted generated-fixture sources remain included in the source-driven Go runner where present.
 - 2026-08-20: Expanded the test migration manifest to all 72 remaining Racket-only root rows with concrete owners and replacement forms. All 72 rows are green against Go/runtime evidence, including OTLP JSON metrics/traces export and outbound traceparent propagation.
 - 2026-08-20: Added `scripts/run-go-test-manifest.sh` with list, single-source Go compile, full-corpus compile, and full-corpus execution modes. The runner is now source-driven and executes all 74 tracked `.tesl` tests without depending on Racket siblings.
 - 2026-08-20: Full Go test corpus gate passes for all 74 `.tesl` sources; full example gate passes for 107 tracked examples. Added Go proof/codec and OTLP exporter benchmarks/tests, outbound traceparent propagation, and removed all 72 retired Racket-only test files.

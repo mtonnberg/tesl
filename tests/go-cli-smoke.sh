@@ -34,7 +34,7 @@ run_cli() {
   bash "$BODY" "$@"
 }
 
-bash "$REPO_ROOT/scripts/check-go-test-inventory.sh"
+bash "$REPO_ROOT/tests/protocol/check-go-test-inventory.sh"
 bash "$REPO_ROOT/scripts/run-go-test-manifest.sh" --list >/dev/null
 TESL_REPO_ROOT="$REPO_ROOT" TESL_OCAML_COMPILER="$COMPILER" \
   bash "$REPO_ROOT/scripts/run-go-test-manifest.sh" --run-all >/dev/null

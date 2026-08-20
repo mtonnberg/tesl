@@ -7,11 +7,9 @@
 # replaces:
 #
 #   * ./compile-examples.sh   (was: format → dune test → validate-sweep → Tesl
-#                              tests → mutation → integration → Racket aggregate
-#                              suite w/ shared PostgreSQL)
+#                              tests → mutation → integration)
 #   * ./compiler/ci.sh        (was: dune build → dune test (ID-keyed waivers) →
-#                              lifted-stdlib snapshots → compile-all → exact-match
-#                              .rkt snapshots → Racket suites → AI suites)
+#                              compile-all → exact-match Go snapshots)
 #
 # Both of those files are now THIN SHIMS that `exec` this script, so any hook,
 # muscle-memory, or CI reference to either keeps working (see their headers).
@@ -29,7 +27,6 @@
 #    1. Build                 dune build                              (compiler/)
 #    2. Dune test             OCaml alcotest suite, ID-keyed waivers   (compiler/)
 #   2a. Go backend           runtime + fresh emitted module toolchain gates
-#    3. Lifted-stdlib snaps   scripts/gen-stdlib-rkt.sh --check
 #    4. Embedded-docs sync    embedded_docs.ml matches manual/+example/ (promote)
 #   4a. Doc integrity         tests/doc-integrity.sh — relative links, cited
 #                             #anchors, MANUAL.md ↔ `tesl help manual` round-trip,
@@ -38,16 +35,12 @@
 #                             the anchor contract + doc-prose lints (str/unix only)
 #    5. Format                tesl fmt (in place), bounded xargs -P pool
 #    6. Validate              tesl validate (check+lint+fmt), xargs -P pool
-#    7. Exact-match snaps     byte-exact re-emit vs committed example/learn/*.rkt
-#                             + templates/{api,minimal}/app.rkt (`tesl init` scaffold)
-#    8. Tesl test files       generated Racket test submodules (batch runner)
-#    9. Mutation              Racket/Go parity on lesson42 + scalar proof corpus
+#    7. Exact-match snaps     byte-exact Go snapshots
+#    8. Tesl test files       Go source manifests
+#    9. Mutation              Go mutation testing on lesson42 + scalar proof corpus
 #   10. Integration           httpclient + email alcotest integration exes
-#   11. Racket suites         debugger / headless-inspect / MCP / lifted-stdlib
-#                             + AI (Tesl.Agent) mock feature/runtime suites
-#   12. Racket aggregate      tests/all.rkt (shared PostgreSQL when available)
-#   13. Boot smoke            tesl run app.tesl — activation-path banner check
-#   14. Playground parity     scripts/playground-parity.sh — the browser build's
+#   11. Boot smoke            Go App activation via `tesl run`
+#   12. Playground parity     scripts/playground-parity.sh — the browser build's
 #                             teslCheck vs `tesl --check-json` over 30 lessons
 #                             (SKIPs when js_of_ocaml or node is unavailable)
 #
@@ -56,7 +49,7 @@
 # no cursor tricks) when stdout is not a TTY (CI logs).  A final collated summary
 # lists every phase with its status + timing and the overall verdict.
 #
-# Optional dependencies (racket/raco, initdb/pg_ctl, python3, MailHog) that are
+# Optional dependencies (initdb/pg_ctl, python3, MailHog) that are
 # absent cause the affected phase to SELF-SKIP with an explicit SKIPPED line — a
 # missing optional tool is never a hard failure (mirrors the originals).  A real
 # test failure always fails the gate; exit code is 0 iff every phase passed or
@@ -67,13 +60,8 @@
 #
 # Env knobs (all preserved from the originals):
 #   TESL_CI_JOBS               parallel worker count for fmt/validate (default: nproc)
-#   RKT_SUITES_SKIP=0          opt into the legacy Racket suites + AI suites
-#   TESL_RACKET_SUITE_TIMEOUT  cap on the tests/all.rkt aggregate run (default 600s)
 #   TESL_MUTATION_TIMEOUT      cap on the full --mutate run (default 120s)
-#   TESL_TEST_FORCE_NIX_SHELL  force nix-shell wrapping even if racket is on PATH
 #   TESL_TEST_USE_TEMP_PG      use a temp PostgreSQL data root (default: CI)
-#   TESL_TEST_BUFFERED_OUTPUT  buffer sub-phase output instead of streaming
-#   TESL_TEST_DISABLE_PRECOMP  skip the raco-make precompile warm-up
 #   TESL_POSTGRES_HOST/PORT/USER  reuse an external PostgreSQL cluster
 #   TESL_CI_NO_COLOR=1         force plain output even on a TTY
 #
@@ -90,13 +78,11 @@ COMPILER_DIR="$SCRIPT_DIR/compiler"
 # ── CI hermetic-store guard ──────────────────────────────────────────────────
 # Under `nix develop`, the flake source is realised into the READ-ONLY Nix
 # store, so the dev shell's shellHook can neither build the OCaml compiler in
-# place nor `raco --link` the runtime collections there — it leaves the `tesl`
-# wrapper pointing at an unbuilt store binary and no `tesl` collection linked.
+# place nor register the runtime collection there — it leaves the `tesl` wrapper
+# pointing at an unbuilt store binary.
 # ci.sh always runs from the WRITABLE checkout ($SCRIPT_DIR, basename `tesl`), so:
 #   (1) point the compiler env at the binary phase 1 builds here — the dev `tesl`
 #       wrapper now honours a pre-set $TESL_OCAML_COMPILER (see flake.nix), and
-#   (2) register the `tesl` Racket collection against the checkout so a bare
-#       `racket foo.rkt` (integration tests) resolves `(require tesl/dsl/…)`.
 # Both are idempotent and harmless when the source is already writable (local).
 export TESL_OCAML_COMPILER="$COMPILER_DIR/_build/default/bin/main.exe"
 
@@ -104,16 +90,6 @@ export TESL_OCAML_COMPILER="$COMPILER_DIR/_build/default/bin/main.exe"
 # corpus for accepted soundness-breaking mutants — the full detector), not the
 # fast budget-bounded mode the developer dune-test loop uses.  Overridable.
 export TESL_S7_EXHAUSTIVE="${TESL_S7_EXHAUSTIVE:-1}"
-
-if command -v raco >/dev/null 2>&1; then
-    if ! raco pkg show tesl 2>/dev/null | grep -qF "link $SCRIPT_DIR"; then
-        if raco pkg show tesl 2>/dev/null | grep -Eq '^[[:space:]]*tesl([[:space:]]|$)'; then
-            raco pkg update  --auto --link "$SCRIPT_DIR" >/dev/null 2>&1 || true
-        else
-            raco pkg install --auto --link "$SCRIPT_DIR" >/dev/null 2>&1 || true
-        fi
-    fi
-fi
 
 # ── Parallel worker pool size (fmt/validate) ─────────────────────────────────
 # The per-file `tesl fmt` and `tesl validate` loops are embarrassingly parallel.
@@ -136,13 +112,9 @@ fi
 script_started_at=$SECONDS
 phase_started_at=$SECONDS
 
-# The shipped CI environment is Go-only.  Keep the legacy Racket suites
-# opt-in while retaining the explicit RKT_SUITES_SKIP override for local runs.
-RKT_SUITES_SKIP="${RKT_SUITES_SKIP:-1}"
-
 # ── Phase registry / progress bar ────────────────────────────────────────────
 # We know the phase count up front so each phase can print "[N/T] <name>".
-TOTAL_PHASES=26
+TOTAL_PHASES=20
 PHASE_NUM=0
 # Parallel arrays: name / status (OK|FAIL|SKIP) / elapsed seconds.
 PHASE_NAMES=()
@@ -193,18 +165,16 @@ print_summary_and_exit() {
     printf "%s  CI SUMMARY%s\n" "$C_BOLD" "$C_RESET"
     printf "%s════════════════════════════════════════════%s\n" "$C_BOLD" "$C_RESET"
     local i mark colour
-    # Option E: SKIP ≠ PASS.  A soundness-required phase that SKIPs — e.g. because
-    # racket/raco/initdb was missing — used to be counted as "legitimately skipped"
+    # Option E: SKIP ≠ PASS. A soundness-required phase that SKIPs — e.g. because
+    # initdb/pg_ctl was missing — used to be counted as "legitimately skipped"
     # and the gate still printed "All good", silently masking that the entire
     # runtime/proof-runtime layer never ran.  We now treat a SKIP of any required
     # phase (everything except the cosmetic "Format" phase) as a gate FAILURE.
-    # Local fast-loops that intentionally skip (RKT_SUITES_SKIP=1, no racket, …)
-    # opt out with TESL_CI_ALLOW_SKIP=1.
+    # Local fast-loops that intentionally skip opt out with TESL_CI_ALLOW_SKIP=1.
     local skipped_required=0
     local allow_skip=0
-    # An explicit fast-loop skip knob (RKT_SUITES_SKIP=1) or TESL_CI_ALLOW_SKIP=1
-    # opts out of the strict SKIP-is-FAIL rule; the authoritative gate sets neither.
-    if is_truthy "${TESL_CI_ALLOW_SKIP:-}" || is_truthy "${RKT_SUITES_SKIP:-}"; then allow_skip=1; fi
+    # TESL_CI_ALLOW_SKIP opts out of the strict SKIP-is-FAIL rule.
+    if is_truthy "${TESL_CI_ALLOW_SKIP:-}"; then allow_skip=1; fi
     for i in "${!PHASE_NAMES[@]}"; do
         local st="${PHASE_STATUS[$i]}"
         local nm="${PHASE_NAMES[$i]}"
@@ -239,24 +209,6 @@ print_summary_and_exit() {
         printf "%s════════════════════════════════════════════%s\n" "$C_BOLD" "$C_RESET"
         exit 1
     fi
-}
-
-# ── Racket invocation: prefer direct racket/raco, else wrap in nix-shell ──────
-use_direct_racket=0
-if ! is_truthy "${TESL_TEST_FORCE_NIX_SHELL:-0}" \
-    && command -v racket >/dev/null 2>&1 \
-    && command -v raco >/dev/null 2>&1; then
-    use_direct_racket=1
-fi
-
-run_with_optional_nix_shell() {
-    if [ "$use_direct_racket" -eq 1 ]; then
-        "$@"
-        return $?
-    fi
-    local command_string=""
-    printf -v command_string '%q ' "$@"
-    nix-shell --run "${command_string% }"
 }
 
 # ── Shared PostgreSQL cluster (async warm-up) ────────────────────────────────
@@ -502,132 +454,9 @@ tally_validate_result() {
     fi
 }
 
-# ── Tesl test-block detection + batch runner ─────────────────────────────────
-TESL_TESTABLE_TESL_FILES=()
-TESL_TESTABLE_RKT_FILES=()
-TESL_NO_TEST_BLOCK_FILES=()
-
-has_test_submodule() {
-    local rkt_file="$1"
-    [ -f "$rkt_file" ] && grep -Fq "(module+ test" "$rkt_file"
-}
-
-detect_tesl_test_files() {
-    TESL_TESTABLE_TESL_FILES=()
-    TESL_TESTABLE_RKT_FILES=()
-    TESL_NO_TEST_BLOCK_FILES=()
-    local tesl_file="" rkt_file=""
-    for tesl_file in "${ALL_FILES[@]}"; do
-        rkt_file="${tesl_file%.tesl}.rkt"
-        if has_test_submodule "$rkt_file"; then
-            TESL_TESTABLE_TESL_FILES+=("$tesl_file")
-            TESL_TESTABLE_RKT_FILES+=("$rkt_file")
-        else
-            TESL_NO_TEST_BLOCK_FILES+=("$tesl_file")
-        fi
-    done
-    tesl_test_skipped_no_blocks=${#TESL_NO_TEST_BLOCK_FILES[@]}
-}
-
-precompile_racket_modules() {
-    if is_truthy "${TESL_TEST_DISABLE_PRECOMP:-0}"; then
-        return 0
-    fi
-    if [ "$#" -eq 0 ]; then
-        return 0
-    fi
-    printf "  Precompiling Racket modules (will take a few minutes)...\n"
-    if run_with_optional_nix_shell raco make "$@" >/dev/null 2>&1; then
-        printf "  %s✓%s  Racket precompile cache warmed\n" "$C_GREEN" "$C_RESET"
-        return 0
-    fi
-    printf "  %s⚠%s  Racket precompile failed; continuing with on-demand compilation\n" "$C_YELLOW" "$C_RESET"
-    return 1
-}
-
-run_tesl_batch_runner() {
-    test_pass=0
-    test_fail=0
-    if [ "$#" -eq 0 ]; then
-        return 0
-    fi
-    local output_log batch_exit=0 summary_line="" parsed_pass=0 parsed_fail=0
-    output_log="$(mktemp "${TMPDIR:-/tmp}/tesl-example-batch.XXXXXX")"
-
-    # lesson80-testing-sso.tesl's `sessionKey "LESSON80_SESSION_KEY"` clause
-    # compiles to an unconditional Env.requireSecret read (every `sso` route,
-    # not only the callback, seals its state cookie with it) — there is no
-    # literal-secret form of `sessionKey` in the grammar. The whole learn corpus
-    # runs as ONE racket process here, so one fixed, obviously-dev-only value
-    # covers it without per-lesson env plumbing.
-    export LESSON80_SESSION_KEY="lesson80-signing-key-not-for-production"
-
-    if is_truthy "${TESL_TEST_BUFFERED_OUTPUT:-0}"; then
-        local batch_output=""
-        if batch_output=$(run_with_optional_nix_shell racket tests/example-test-batch.rkt "$@" 2>&1); then
-            batch_exit=0
-        else
-            batch_exit=$?
-        fi
-        printf '%s\n' "$batch_output"
-        printf '%s' "$batch_output" > "$output_log"
-    else
-        run_with_optional_nix_shell racket tests/example-test-batch.rkt "$@" 2>&1 | tee "$output_log"
-        local -a pipe_status=("${PIPESTATUS[@]}")
-        batch_exit=${pipe_status[0]}
-    fi
-
-    summary_line=$(grep '^TESL_TEST_BATCH_SUMMARY ' "$output_log" | tail -1 || true)
-    rm -f "$output_log"
-
-    if [ -n "$summary_line" ]; then
-        parsed_pass=$(printf '%s\n' "$summary_line" | sed -E 's/.*pass=([0-9]+).*/\1/')
-        parsed_fail=$(printf '%s\n' "$summary_line" | sed -E 's/.*fail=([0-9]+).*/\1/')
-        test_pass=${parsed_pass:-0}
-        test_fail=${parsed_fail:-0}
-        return 0
-    fi
-    if [ "$batch_exit" -ne 0 ]; then
-        test_fail=$#
-        return "$batch_exit"
-    fi
-    return 0
-}
-
-run_racket_test_suite() {
-    # TESL_RACKET_SUITE_TIMEOUT caps the tests/all.rkt aggregate run.  It starts
-    # its own PostgreSQL; on WSL2 pg_ctl -w can block indefinitely.  Default 600s;
-    # 0 disables.  `timeout` cannot wrap a bash function, so we apply it to the
-    # real racket/nix-shell command.
-    local timeout_secs="${TESL_RACKET_SUITE_TIMEOUT:-600}"
-    local use_timeout=0
-    if [ "${timeout_secs:-0}" -gt 0 ] && command -v timeout >/dev/null 2>&1; then
-        use_timeout=1
-    fi
-    local racket_cmd=""
-    if [ "$use_direct_racket" -eq 1 ] && command -v stdbuf >/dev/null 2>&1; then
-        racket_cmd="stdbuf -oL -eL racket tests/all.rkt"
-    else
-        racket_cmd="racket tests/all.rkt"
-    fi
-    if [ "$use_timeout" -eq 1 ]; then
-        if [ "$use_direct_racket" -eq 1 ]; then
-            timeout "$timeout_secs" $racket_cmd
-        else
-            local cmd_string=""
-            printf -v cmd_string '%s' "$racket_cmd"
-            timeout "$timeout_secs" nix-shell --run "$cmd_string"
-        fi
-    else
-        run_with_optional_nix_shell $racket_cmd
-    fi
-}
-
 # ── File corpus ───────────────────────────────────────────────────────────────
-# Relative paths (we `cd "$SCRIPT_DIR"` above): the compiler embeds the input
-# path into each emitted .rkt's source map, so relative paths keep the committed
-# .rkt snapshots machine-independent.  Drop transient LSP validation copies that
-# the globs could race-capture (see roadmap/later/lsp-temp-files-pollute-repo.md).
+# Relative paths (we `cd "$SCRIPT_DIR"` above) keep diagnostics stable. Drop
+# transient LSP validation copies that the globs could race-capture.
 _drop_transient() {
     local f
     for f in "$@"; do
@@ -658,8 +487,7 @@ mapfile -t TEST_FILES < <(_drop_transient tests/*.tesl)
 
 # The `tesl init` scaffold — the FIRST Tesl code a new user ever runs, and until
 # now the one shipped corpus in no phase at all: not validate, not the snapshot
-# diff, not the Tesl-test sweep (templates/ held no .rkt, so detect_tesl_test_files
-# could not see its `test` blocks).  A scaffold that does not boot is the worst
+# diff, not the Tesl-test sweep. A scaffold that does not boot is the worst
 # first impression there is, and it went unguarded through a change that made the
 # templates depend on libsodium at runtime.  Globbed, like the examples, so a new
 # template subdirectory is covered without an edit here.  templates/docker/ ships
@@ -677,7 +505,7 @@ start_shared_postgres_async
 # ══════════════════════════════════════════════════════════════════════════════
 phase_begin "Go migration contracts and traceability"
 migration_contract_fail=0
-if ! "$SCRIPT_DIR/scripts/check-go-migration-manifest.sh"; then
+    if ! "$SCRIPT_DIR/tests/protocol/check-go-migration-manifest.sh"; then
     migration_contract_fail=1
 fi
 if [ "$migration_contract_fail" -eq 0 ]; then phase_end OK; else phase_end FAIL; fi
@@ -710,27 +538,6 @@ fi
 # A broken build makes every downstream phase meaningless — abort early.
 if [ "$build_fail" -gt 0 ]; then
     printf "\n  %sBuild failed — aborting the gate.%s\n" "$C_RED" "$C_RESET"
-    print_summary_and_exit
-fi
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  Migration gate — Racket debugger stability policy
-# ══════════════════════════════════════════════════════════════════════════════
-phase_begin "Racket DAP stability replay"
-racket_stability_fail=0
-if is_truthy "${RKT_SUITES_SKIP:-0}"; then
-    printf "  %s⚠%s  RKT_SUITES_SKIP=1 — skipping Racket stability replay\n" "$C_YELLOW" "$C_RESET"
-elif command -v racket >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
-    if ! "$SCRIPT_DIR/scripts/racket-stability.sh"; then
-        racket_stability_fail=1
-    fi
-else
-    printf "  %s✗%s  racket and timeout are required for Phase 0 stability replay\n" "$C_RED" "$C_RESET"
-    racket_stability_fail=1
-fi
-if [ "$racket_stability_fail" -eq 0 ]; then phase_end OK; else phase_end FAIL; fi
-if [ "$racket_stability_fail" -gt 0 ]; then
-    printf "\n  %sRacket stability replay failed — aborting the gate.%s\n" "$C_RED" "$C_RESET"
     print_summary_and_exit
 fi
 
@@ -855,11 +662,8 @@ fi
 if [ "$go_gate_fail" -eq 0 ]; then phase_end OK; else phase_end FAIL; fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Phase 3 — Lifted-stdlib runtime snapshots
+#  Lesson catalog
 # ══════════════════════════════════════════════════════════════════════════════
-# Modules whose pure combinator bodies are written in Tesl (e.g. tesl/list.tesl)
-# compile to a committed *-derived.rkt snapshot the public shim re-exports.
-# `tesl/` is outside the dune root, so the snapshot is committed; a drift fails.
 phase_begin "Lesson catalog (gen-lesson-index --check)"
 # The lesson corpus was indexed by hand in three places that all disagreed, and
 # every count had drifted (73 / 70+ / 50+ against a real 77), while 37 lesson
@@ -882,17 +686,6 @@ else
         printf "  %s✗%s  lesson metadata invalid or manual/lessons.md drifted (run scripts/gen-lesson-index.sh and commit)\n" "$C_RED" "$C_RESET"
         phase_end FAIL
     fi
-fi
-
-phase_begin "Lifted-stdlib snapshots (gen-stdlib-rkt --check)"
-if [ ! -f "$SCRIPT_DIR/scripts/gen-stdlib-rkt.sh" ]; then
-    printf "  %s⚠%s  scripts/gen-stdlib-rkt.sh not found — skipping\n" "$C_YELLOW" "$C_RESET"
-    phase_end SKIP
-elif bash "$SCRIPT_DIR/scripts/gen-stdlib-rkt.sh" --check; then
-    phase_end OK
-else
-    printf "  %s✗%s  lifted-stdlib snapshot drift (run scripts/gen-stdlib-rkt.sh and commit)\n" "$C_RED" "$C_RESET"
-    phase_end FAIL
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -949,7 +742,7 @@ fi
 # emits resolves to a real heading), plus the doc-prose lints: no stale proof
 # cost-model wording, no banned marketing phrases, every dev-docs page declares an
 # Audience, no orphan manual page, and no D1-class syntax rot in ```tesl fences.
-# It has its OWN dune-project (str + unix only, no compiler library, no Racket), so
+# It has its OWN dune-project (str + unix only, no compiler library), so
 # the root `dune build` / `dune test` never reaches it — it was orphaned from the
 # gate entirely until this phase.  A missing dune SKIPs; a real failure FAILs.
 phase_begin "Manual coherence suite (manual/tests)"
@@ -1029,88 +822,14 @@ else
 fi
 
 if [ "$compile_fail" -gt 0 ]; then
-    printf "\n  %sValidation failures — aborting before test run (avoids stale .rkt artifacts).%s\n" "$C_RED" "$C_RESET"
+    printf "\n  %sValidation failures — aborting before test run.%s\n" "$C_RED" "$C_RESET"
     print_summary_and_exit
-fi
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  Phase 6 — Exact-match .rkt snapshots
-# ══════════════════════════════════════════════════════════════════════════════
-# Assert byte-exact emit for the retained Racket oracle snapshots under
-# `example/learn/*.rkt`: re-emit
-# from the paired .tesl and diff, canonicalising only the baked-in thsl-src! path
-# prefix to its basename (same normalisation test_integration uses).  Any diff is
-# a real emit change, not a stale snapshot.  Needs the built OCaml binary.
-# Canonicalise every emitted form that bakes the INPUT .tesl path — the
-# checkpoints and the debugger's read-only-query line table — down to a bare
-# basename, so comparing a snapshot compiled with an absolute path against the
-# repo-relative committed one still asserts the full emission structure.
-canon_thsl() {
-    sed -E -e 's#\(thsl-src(-control)?! "[^"]*/#(thsl-src\1! "#g' \
-           -e 's#\(register-sql-read-lines! "[^"]*/#(register-sql-read-lines! "#g'
-}
-phase_begin "Exact-match .rkt snapshots"
-_main_exe="$COMPILER_DIR/_build/default/bin/main.exe"
-if is_truthy "${RKT_SUITES_SKIP:-0}"; then
-    printf "  %s⚠%s  RKT_SUITES_SKIP=1 — skipping Racket snapshots\n" "$C_YELLOW" "$C_RESET"
-    phase_end SKIP
-elif [ ! -x "$_main_exe" ]; then
-    printf "  %s⚠%s  compiler not built — skipping exact-match snapshots\n" "$C_YELLOW" "$C_RESET"
-    phase_end SKIP
-else
-    EXACT_SKIP=""   # space-separated lesson basenames to skip (none today)
-    EXACT_FAILS=()
-    EXACT_OK=0
-    EXACT_SKIPPED=()
-    # The Go template gate owns templates/{api,minimal}; Racket templates are no
-    # longer shipped artifacts. Other example/test Racket snapshots remain the
-    # compatibility oracle until their owning migration row is deleted.
-    EXACT_DIRS="example/learn"
-    for exact_dir in $EXACT_DIRS; do
-    for rkt_file in "$SCRIPT_DIR/$exact_dir"/*.rkt; do
-        [ -f "$rkt_file" ] || continue
-        # Lesson basenames are unique, so they stay bare (the historical output
-        # format).  Every template's snapshot is `app.rkt`, so those carry their
-        # directory or a failure line could not say WHICH template broke.
-        case "$exact_dir" in
-            example/learn) lesson="$(basename "${rkt_file%.rkt}")" ;;
-            *)             lesson="$exact_dir/$(basename "${rkt_file%.rkt}")" ;;
-        esac
-        tesl_file="${rkt_file%.rkt}.tesl"
-        if [ ! -f "$tesl_file" ]; then
-            echo "  NO .tesl FOR SNAPSHOT: $lesson (orphan .rkt)"
-            EXACT_FAILS+=("$lesson(orphan)")
-            continue
-        fi
-        case " $EXACT_SKIP " in
-            *" $lesson "*) echo "  SKIP (env-dependent): $lesson"; EXACT_SKIPPED+=("$lesson"); continue ;;
-        esac
-        ocaml_out=$("$_main_exe" --backend racket "$tesl_file" 2>/dev/null | canon_thsl)
-        diff_lines=$(diff <(printf "%s\n" "$ocaml_out") <(canon_thsl < "$rkt_file") 2>/dev/null || true)
-        diff_count=$(printf "%s\n" "$diff_lines" | grep -c "^[<>]" || true)
-        if [ "$diff_count" -eq 0 ]; then
-            EXACT_OK=$((EXACT_OK + 1))
-        else
-            echo "  DIFF ($diff_count lines): $lesson"
-            EXACT_FAILS+=("$lesson")
-        fi
-    done
-    done
-    printf "  EXACT MATCH: %d snapshot(s); %d skipped; %d differ\n" \
-        "$EXACT_OK" "${#EXACT_SKIPPED[@]}" "${#EXACT_FAILS[@]}"
-    if [ ${#EXACT_FAILS[@]} -eq 0 ]; then
-        phase_end OK
-    else
-        printf "  %sDiffering snapshots: %s%s\n" "$C_RED" "${EXACT_FAILS[*]}" "$C_RESET"
-        phase_end FAIL
-    fi
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Exact-match .go.snap snapshots
 # ══════════════════════════════════════════════════════════════════════════════
-# The Go counterpart of the .rkt phase above, and it closes the same hole for the
-# other backend: the corpus gate asks whether emitted Go BUILDS and its tests RUN,
+# The corpus gate asks whether emitted Go BUILDS and its tests RUN,
 # never whether it is the Go the maintainer last read.  A compiler change that
 # "should not" alter the output is exactly the change nobody writes a test for.
 #
@@ -1118,8 +837,8 @@ fi
 # vendored runtime (identical for every program, gated in phase 2a) — see
 # scripts/regen-go-snapshots.sh, which is also what regenerates them.
 #
-# No path canonicalisation here, unlike the .rkt phase: the Go emitter bakes only
-# the BASENAME into its `//line` directives, so a snapshot does not depend on where
+# The Go emitter bakes only the BASENAME into its `//line` directives, so a snapshot
+# does not depend on where
 # the repository sits.
 phase_begin "Exact-match .go.snap snapshots"
 _main_exe="$COMPILER_DIR/_build/default/bin/main.exe"
@@ -1184,25 +903,6 @@ EOF
         printf "  Regenerate with: scripts/regen-go-snapshots.sh\n"
         phase_end FAIL
     fi
-fi
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  Phase 7 — Tesl test files (generated Racket test submodules)
-# ══════════════════════════════════════════════════════════════════════════════
-detect_tesl_test_files
-printf "\n  Detected %d Tesl file(s) with test blocks; %d without\n" \
-    "${#TESL_TESTABLE_TESL_FILES[@]}" "$tesl_test_skipped_no_blocks"
-
-# Warm the Racket precompile cache (shared deps) before the test sweep.
-declare -a PRECOMPILE_TARGETS=()
-for _rkt_target in tests/*.rkt tests/private/*.rkt; do
-    [ -f "$_rkt_target" ] && PRECOMPILE_TARGETS+=("$_rkt_target")
-done
-if [ "${#TESL_TESTABLE_RKT_FILES[@]}" -gt 0 ]; then
-    PRECOMPILE_TARGETS+=("${TESL_TESTABLE_RKT_FILES[@]}")
-fi
-if command -v raco >/dev/null 2>&1; then
-    precompile_racket_modules "${PRECOMPILE_TARGETS[@]}" || true
 fi
 
 # Join the async PostgreSQL warm-up before the tests that need it.
@@ -1340,14 +1040,14 @@ fi
 # `tesl test <entrypoint>` must compile the entrypoint's imported local modules
 # (like `tesl run` does) — on a fresh checkout (no .tesl-stuff/build/ yet) it
 # used to die with a SWALLOWED "cannot open module file" and print "(no test
-# results)".  Also locks the build-output relocation: every generated .rkt (and
-# Racket's compiled/ bytecode) lands under <project-root>/.tesl-stuff/build/ in
+# results)". Also locks the build-output relocation: every generated Go artifact
+# lands under <project-root>/.tesl-stuff/build/ in
 # a tree MIRRORING the sources — never next to the .tesl files — and deleting
 # .tesl-stuff/ then rerunning must always work.
 # Drives the real CLI body script end-to-end from a clean temp project.
 phase_begin "tesl CLI smoke (multi-module test + .tesl-stuff/build layout)"
-if ! command -v racket >/dev/null 2>&1; then
-    printf "  %s⚠%s  racket not found — skipping CLI smoke\n" "$C_YELLOW" "$C_RESET"
+if ! command -v go >/dev/null 2>&1; then
+    printf "  %s⚠%s  go not found — skipping CLI smoke\n" "$C_YELLOW" "$C_RESET"
     phase_end SKIP
 elif [ ! -f "$_main_exe" ]; then
     printf "  %s⚠%s  compiler not built — skipping CLI smoke\n" "$C_YELLOW" "$C_RESET"
@@ -1425,8 +1125,9 @@ EOF
     fi
 
     # 3) NO generated files outside .tesl-stuff/ (the whole point of the layout)
-    _cli_stray="$(find "$_cli_smoke_dir" \( -name '*.rkt' -o -name 'compiled' \) \
-        -not -path "$_cli_smoke_dir/.tesl-stuff/*" 2>/dev/null)"
+    _cli_stray="$(find "$_cli_smoke_dir" -type f \
+        -not -path "$_cli_smoke_dir/.tesl-stuff/*" \
+        -not -name '*.tesl' -not -name 'tesl.toml' 2>/dev/null)"
     if [ -z "$_cli_stray" ] && [ -f "$_cli_smoke_dir/.tesl-stuff/go-build/go.mod" ]; then
         printf "  %s✓%s  all generated output lives under .tesl-stuff/\n" "$C_GREEN" "$C_RESET"
     else
@@ -1472,329 +1173,18 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Phase 9d — Bare stdlib name import gate vs `raco expand`
+#  Boot smoke (Go App activation via tesl run)
 # ══════════════════════════════════════════════════════════════════════════════
-# roadmap/completed/import_gated_stdlib_constructors.md.  The compiler's "this bare
-# name needs its import" tables are a STATIC approximation of a runtime fact —
-# whether the emitted module binds the name at all — and an OCaml test can only
-# check those tables against each other.  This ratchet checks them against `raco
-# expand` in both directions: a gated name must be unbound without its import
-# AND bound with it, and an always-available name must really be bound.
-phase_begin "Bare stdlib name import gate (raco expand agreement)"
-_barename_rc=0
-if is_truthy "${RKT_SUITES_SKIP:-0}"; then
-    printf "  %s⚠%s  RKT_SUITES_SKIP=1 — skipping raco expand gate\n" "$C_YELLOW" "$C_RESET"
-    phase_end SKIP
-else
-TESL_REPO_ROOT="$SCRIPT_DIR" TESL_OCAML_COMPILER="$_main_exe" \
-    bash "$SCRIPT_DIR/tests/stdlib-bare-name-gate.sh" || _barename_rc=$?
-if [ "$_barename_rc" -eq 0 ]; then
-    phase_end OK
-elif [ "$_barename_rc" -eq 77 ]; then
-    phase_end SKIP
-else
-    phase_end FAIL
-fi
-fi
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  Phase 10 — Racket suites (debugger / headless-inspect / MCP / lifted-stdlib
-#             + AI (Tesl.Agent) mock feature & runtime suites)
-# ══════════════════════════════════════════════════════════════════════════════
-# These exercise the DSL-side runtime the OCaml dune test does NOT cover.  All
-# mock-based — no network/keys/cost; DB-dependent suites are intentionally NOT
-# here.  RKT_SUITES_SKIP=1 skips this whole phase for a fast inner loop.
-phase_begin "Racket suites (debugger / MCP / lifted-stdlib + AI)"
-racket_suites_fail=0
-if [ "${RKT_SUITES_SKIP:-0}" = "1" ]; then
-    printf "  %s⚠%s  RKT_SUITES_SKIP=1 — skipping\n" "$C_YELLOW" "$C_RESET"
-    phase_end SKIP
-elif ! command -v raco >/dev/null 2>&1; then
-    printf "  %s⚠%s  raco not on PATH — skipping\n" "$C_YELLOW" "$C_RESET"
-    phase_end SKIP
-else
-    RKT_SUITES=(
-        "tests/dap-server-test.rkt"
-        # Persistent NDJSON inspector mode (session-started / stopped× / exited)
-        # Live attach control channel: protocol + socket lifecycle + re-arm +
-        # detach/EOF semantics + pause timeout + concurrent-stop serialization
-        # Debugger value lenses: the composite-implies-expandable invariant plus
-        # launch-mode ≡ attach-mode tree equivalence (dsl/debug/value-tree.rkt)
-        # …and the attach wire JSON that carries those trees between processes
-        # SQL lens on the query LINE: the compiler's read-line table drives an
-        # AFTER-the-statement pause, and the freshness flag distinguishes this
-        # line's statement from the previous one
-        # Int32 (NT-07) boundary values: overflow answers Nothing at the exact
-        # edge, pow bounds the exponent before expt, NaN/inf convert cleanly —
-        # plus issue #45's api-test path normalization (literal ≡ computed)
-        # #79: queue job ids.  Here rather than in a .tesl suite because the
-        # property that broke is CROSS-PROCESS — gensym's counter restarts near
-        # the same low value in every fresh process, so a restarted server
-        # replayed ids already committed to tesl_jobs and 500'd the enqueuing
-        # request on tesl_jobs_pkey.  This suite mints in two cold subprocesses.
-        # `secret X = T` runtime half (roadmap/completed/tesl_crypto.md phases 3+4).
-        # Here because the enforcement is spread across SIX independent sinks
-        # (telemetry jsexpr + OTLP AnyValue, metric attributes, safe-display, the
-        # value-tree display/children pair, dap-server's Copy Value text, the SQL
-        # trace) and the property that matters is STRUCTURAL: a secret nested in a
-        # record inside a tuple inside a List inside a Maybe inside an ADT payload
-        # must redact while its siblings render normally.  A shallow
-        # implementation passes a flat test and fails this suite, and none of that
-        # is reachable from the OCaml `dune test` side.  It also pins the one
-        # thing a well-meaning future edit gets wrong: `runtime-value->jsexpr` is
-        # the PERSISTENCE walk too, so redaction there is opt-in and both
-        # directions are asserted.
-        # Tesl.Regex runtime last line of defence: the ReDoS deadline (a
-        # pathological pattern the COMPILER rejects, handed straight to the
-        # runtime, must not hang the process), the input bound, and the
-        # capture-list shape `Regex.captures` promises
-        # Tesl.Crypto — the security suite, and the one place in the gate where a
-        # green run means something a round-trip test cannot prove:
-        #   * KNOWN-ANSWER digests/MACs (NIST + RFC 4231) plus an INDEPENDENT
-        #     oracle (libsodium vs OpenSSL libcrypto) across the HMAC block
-        #     boundary, because a self-consistently wrong implementation
-        #     round-trips perfectly;
-        #   * the COST-PARAMETER REGRESSION — wall clock AND the memory limit
-        #     libsodium reports. A build whose Argon2id work factor silently
-        #     collapsed passes every other test in the file, and that is a total
-        #     security failure that looks like everything working. This is the
-        #     test most likely to be skipped and most likely to matter;
-        #   * TIMING EQUALISATION: verifying against Nothing (no user row) must
-        #     cost the same as against a real hash, or the login endpoint
-        #     enumerates registered addresses;
-        #   * the documented foreign-hash LIMITS as ratchets (foreign Argon2id
-        #     verifies; bcrypt and scrypt do not) so behaviour and docs cannot
-        #     drift apart.
-        # Memory-database registry: imported-db test isolation (fresh-memory-db
-        # resets ALL registered memory databases, not just the emitter's list)
-        # Entity indexes: declaration parsing totality, derived index names +
-        # the 63-byte truncation that stops `if not exists` matching the WRONG
-        # index, the emitted DDL, column-list-not-name presence detection, and
-        # the Memory backend enforcing declared unique indexes (the parity that
-        # keeps `upsert … onConflict` from passing tests and failing on PG)
-        # First-Class Units: Money two-column storage (Memory decision-table +
-        # PG parity; the PG suite self-skips without initdb/pg_ctl)
-        # First-Class Units: hand-written conversion-factor oracle (golden)
-        # + direct money-tagged tool-argument decode contract
-        # Issue #31: pool-lease waiting + 503 mapping (fake connections, no PG)
-        # Outbound-HTTP deadlines: connect / total-read / SSE-idle against real
-        # loopback servers that ACCEPT the connection (so, unlike
-        # tests/httpclient-test.rkt below, nothing depends on how the network
-        # filters a connect to a dead port), plus the outbound wire-shape
-        # regressions the deadline work uncovered (Tuple2 headers, ?query URLs)
-        # Phase -1 (roadmap/next/ensure_sso_works.md): outbound HTTPS must
-        # authenticate its TLS peer.  A self-signed loopback server is refused by
-        # the verifying context; the single loopback-only dev escape is gated on
-        # env + host; and a ratchet forbids any bare `#:ssl? #t` from returning.
-        # #48 (issue): SSRF egress containment on Tesl.HttpClient — cloud
-        # metadata / RFC1918 / CGNAT / ULA / link-local / 0.0.0.0/8 refused for
-        # every outbound call by resolved-address judgement + connect-pinning;
-        # loopback is deploy-gated with an opt-in dev escape.
-        # #51 (issue): request.clientAddress + the trustedProxies edge
-        # declaration — socket peer with no declaration; rightmost untrusted
-        # X-Forwarded-For hop when declared; refuse on disagreement.
-        # Phase -2 (roadmap/next/ensure_sso_works.md): the server-wide response
-        # security-header baseline (nosniff/Referrer-Policy/X-Frame-Options,
-        # HSTS from publicOrigin scheme, CSP on served HTML), incl. the two paths
-        # that skipped all headers today (static file + SPA fallback).
-        # Stage 2 runtime halves (roadmap/next/ensure_sso_works.md): SessionPolicy
-        # (TTL/absolute-cap decoupling), session-key rotation ([current,previous]),
-        # and revocation at the renewal boundary — all SSO-independent, in jwt.rkt.
-        # Phase 1 down-payment: SSRF containment classifier (Risk 47) — the
-        # metadata endpoint, loopback, RFC1918/CGNAT/link-local and their
-        # IPv4-mapped spellings are refused; fail-closed on unparseable input.
-        # #68 (issue): the Tesl.Url / Tesl.Net application-level primitives.
-        # Here rather than only in tests/url-net-tests.tesl because what needs
-        # pinning is below the surface: the whole inet_aton spelling matrix, RFC
-        # 5952 IPv6 canonicalization, the URL parser differentials that are
-        # refused rather than guessed, CIDR boundaries on both sides of every
-        # reserved block, and — the one that matters most — AGREEMENT with
-        # ssrf-guard.rkt above, so an app's `Net.isForbiddenHost` check and the
-        # HttpClient egress refusal can never disagree about an address.
-        # Phase 1 & 2: dsl/sso.rkt OIDC + plain-OAuth2 runtime.  Pure security
-        # layer (PKCE S256, injective SsoSubjectKey, EmailClaim rule, OIDC claim
-        # + Entra multi-tenant validation, integrity-protected __Host-oauth
-        # cookie, provider defaults) and the orchestration driven through the
-        # outbound-HTTP stub (discovery -> token -> id_token/userinfo -> identity).
-        # Item A (#50.2): Tesl.Proxy runtime — ProxyBound minted only by a
-        # constant-time Proxy.verifyBinding match.
-        # Phase 2.5: RS256/ES256 ID-token signature verification + JWKS over
-        # openssl/libcrypto (verify-only).  Valid RS256/ES256 fixtures plus the
-        # adversarial refusals: alg:none, HMAC-on-ID-token, alg-not-pinned,
-        # header key nomination (jwk/jku/x5u/x5c/crit), JWE, wrong kid, <2048-bit
-        # modulus, tampered payload.
-        # Phase 5 adversarial review pass over the SSO runtime: the spec's own
-        # attack list (secret-in-URL, provider-error reflection, broken signature,
-        # PKCE downgrade, http/SSRF transport, state cross-swap, unverified-email
-        # takeover, absent hd, subject/clock shapes, flattened-claims, Entra
-        # multi-tenant trap, extraAuthorizeParams smuggling, key stability).
-        # Phase 3: the Tesl.Sso stdlib runtime (tesl/sso.rkt) that the
-        # Sso.defaults / Sso.keyText type rows resolve to.
-        # Systemic: every opaque/nominal stdlib type usable in a checked position
-        # must resolve a runtime predicate (fail-closed define/pow return check) —
-        # closes the class the SSO e2e surfaced (non-newtype opaque types).
-        # Phase 3: the runtime-owned SSO routes in dsl/web.rkt (303 redirect +
-        # Set-Cookie on a redirect, route matching, full login->callback->session).
-        # SSE path capability wiring + the credentialed-response CORS rule
-        # (adversarial review F6/F9): an `auth`/`capture` with a `requires` row
-        # runs on a subscribe, and a Set-Cookie response drops the wildcard
-        # ACAO.  Drives handle-sse-request directly (serve needs a real port).
-        # Confused-deputy fix (F1): a tool body cannot write the OUTER request's
-        # session cookie.  Drives the real agent loop with a scripted cookie-
-        # setting tool inside a live response scope; not reachable from the .tesl
-        # api-test path, so it lives here.
-        # OTel Metrics signal: registry + OTLP mapping + /v1/metrics exporter
-        # W3C trace context (Phase A of the traces item).  Here because the
-        # parser's contract is TOTALITY over attacker-controlled header input —
-        # every malformed `traceparent` must answer "start a fresh trace" rather
-        # than raise on a request path — and because log correlation and outbound
-        # propagation are properties of the WIRE (an OTLP log record's traceId
-        # field, an injected request header), neither of which a .tesl api-test
-        # can observe.
-        # OTel Traces signal: span recorder + parent/child shape + OTLP mapping +
-        # /v1/traces exporter + the `traces False` zero-cost gate + the
-        # secret-in-a-span-attribute regression (a span is a rendering sink, and
-        # it is the newest one).
-        "editor/tesl-mcp/tests/protocol-smoke.rkt"
-        # The LSP server's own in-module suite (hover/completion/code-action/
-        # semantic-token rendering, incl. quick-fix ACTION TITLES).  It was not
-        # gated anywhere before, so ~400 assertions could rot unnoticed.
-        "editor/tesl-lsp/tesl-lsp.rkt"
-        # NOT gated here (by design): tests/httpclient-test.rkt makes real loopback
-        # TCP connects that hang where the network filters rather than RST-refuses.
-    )
-    for suite in "${RKT_SUITES[@]}"; do
-        if [ ! -f "$SCRIPT_DIR/$suite" ]; then
-            printf "  %s⚠%s  %s (missing — skipped)\n" "$C_YELLOW" "$C_RESET" "$suite"
-            continue
-        fi
-        if TESL_REPO_ROOT="$SCRIPT_DIR" timeout 300 raco test "$SCRIPT_DIR/$suite" >/dev/null 2>&1; then
-            printf "  %s✓%s  %s\n" "$C_GREEN" "$C_RESET" "$suite"
-        else
-            printf "  %s✗%s  %s\n" "$C_RED" "$C_RESET" "$suite"
-            racket_suites_fail=1
-        fi
-    done
-
-    # AI suites (Tesl.Agent): emit each .tesl mock block → raco test, plus the
-    # racket provider-norm / runtime suites.  The temp-PG runtime suite self-skips
-    # when PostgreSQL is absent.
-    echo "  ── AI suites (Tesl.Agent mock feature / runtime) ──"
-    ai_tmp="$(mktemp -d)"
-    AI_TESL=( "tests/agent-feature-tests.tesl" "tests/agent-tests.tesl" \
-              "tests/agent-tools-tests.tesl" "tests/agent-conversation-tests.tesl" \
-              "tests/agent-run-tests.tesl" "tests/server-tools-tests.tesl" \
-              "tests/two-api-server-tools-tests.tesl" \
-              "tests/human-actions-tests.tesl" \
-              "example/support-assistant.tesl" \
-              "example/ai-conversation-service.tesl" )
-     AI_RKT=()
-    for f in "${AI_TESL[@]}"; do
-        [ -f "$SCRIPT_DIR/$f" ] || { printf "  %s⚠%s  %s (missing — skipped)\n" "$C_YELLOW" "$C_RESET" "$f"; continue; }
-        out="$ai_tmp/$(basename "$f" .tesl).rkt"
-        if [ -x "$_main_exe" ] \
-           && TESL_REPO_ROOT="$SCRIPT_DIR" "$_main_exe" --backend racket "$SCRIPT_DIR/$f" > "$out" 2>/dev/null \
-           && TESL_REPO_ROOT="$SCRIPT_DIR" timeout 300 raco test "$out" >/dev/null 2>&1; then
-            printf "  %s✓%s  %s\n" "$C_GREEN" "$C_RESET" "$f"
-        else
-            printf "  %s✗%s  %s\n" "$C_RED" "$C_RESET" "$f"; racket_suites_fail=1
-        fi
-    done
-    rm -rf "$ai_tmp"
-    for suite in "${AI_RKT[@]}"; do
-        [ -f "$SCRIPT_DIR/$suite" ] || { printf "  %s⚠%s  %s (missing — skipped)\n" "$C_YELLOW" "$C_RESET" "$suite"; continue; }
-        if TESL_REPO_ROOT="$SCRIPT_DIR" timeout 300 raco test "$SCRIPT_DIR/$suite" >/dev/null 2>&1; then
-            printf "  %s✓%s  %s\n" "$C_GREEN" "$C_RESET" "$suite"
-        else
-            printf "  %s✗%s  %s\n" "$C_RED" "$C_RESET" "$suite"; racket_suites_fail=1
-        fi
-    done
-
-    if [ "$racket_suites_fail" -eq 0 ]; then
-        phase_end OK
-    else
-        phase_end FAIL
-    fi
-fi
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  Phase 11 — Racket aggregate suite (tests/all.rkt, shared PostgreSQL)
-# ══════════════════════════════════════════════════════════════════════════════
-phase_begin "Racket aggregate suite (tests/all.rkt)"
-aggregate_fail=0
-if is_truthy "${RKT_SUITES_SKIP:-0}"; then
-    printf "  %s⚠%s  RKT_SUITES_SKIP=1 — skipping Racket aggregate suite\n" "$C_YELLOW" "$C_RESET"
-    phase_end SKIP
-elif [ ! -f "$SCRIPT_DIR/tests/all.rkt" ]; then
-    printf "  %s✓%s  Racket aggregate retired; Go manifests are authoritative\n" "$C_GREEN" "$C_RESET"
-    phase_end OK
-elif ! command -v racket >/dev/null 2>&1; then
-    printf "  %s⚠%s  racket not on PATH — skipping aggregate suite\n" "$C_YELLOW" "$C_RESET"
-    phase_end SKIP
-else
-    test_output=""
-    test_exit=0
-    if is_truthy "${TESL_TEST_BUFFERED_OUTPUT:-0}"; then
-        test_output="$(run_racket_test_suite 2>&1)" || test_exit=$?
-        if [ -n "$test_output" ]; then
-            while IFS= read -r line; do
-                printf "  %s\n" "$line"
-            done <<< "$test_output"
-        fi
-    else
-        test_output_log="$(mktemp "${TMPDIR:-/tmp}/tesl-test-output.XXXXXX")"
-        run_racket_test_suite 2>&1 | tee "$test_output_log"
-        pipe_status=("${PIPESTATUS[@]}")
-        test_exit=${pipe_status[0]}
-        test_output="$(cat "$test_output_log")"
-        rm -f "$test_output_log"
-    fi
-
-    summary_failures=$(printf '%s' "$test_output" | grep -oE '[0-9]+ failure\(s\)' | grep -oE '[0-9]+' | awk '{s+=$1} END{print s+0}' || true)
-    summary_errors=$(printf '%s' "$test_output" | grep -oE '[0-9]+ error\(s\)' | grep -oE '[0-9]+' | awk '{s+=$1} END{print s+0}' || true)
-    bare_failures=$(printf '%s' "$test_output" | grep -cE '^[[:space:]]*FAILURE[[:space:]]*$' || true)
-    tests_failed=$(( ${summary_failures:-0} + ${summary_errors:-0} + ${bare_failures:-0} ))
-    postgres_failed=$(echo "$test_output" | grep -c "pg_ctl: could not start server" || true)
-
-    if [ "$tests_failed" -gt 0 ]; then
-        printf "  %s✗%s  Racket tests failed (%s failure(s))\n" "$C_RED" "$C_RESET" "$tests_failed"
-        aggregate_fail=1
-        phase_end FAIL
-    elif [ "$test_exit" -ne 0 ] && [ "$postgres_failed" -gt 0 ]; then
-        # Honest SKIP: PostgreSQL could not start (known WSL2 limitation).  We do
-        # NOT force this green — the real non-zero exit is propagated so the gate
-        # never falsely reports success when the suite did not complete cleanly.
-        printf "  %s⚠%s  SKIP: PostgreSQL could not start (known WSL2 limitation);\n" "$C_YELLOW" "$C_RESET"
-        printf "      the aggregate suite did NOT complete — exit %d is propagated (not forced green).\n" "$test_exit"
-        aggregate_fail=1
-        phase_end FAIL
-    elif [ "$test_exit" -eq 0 ]; then
-        printf "  %s✓%s  All Racket tests pass\n" "$C_GREEN" "$C_RESET"
-        phase_end OK
-    else
-        printf "  %s✗%s  test suite exited with code %d\n" "$C_RED" "$C_RESET" "$test_exit"
-        aggregate_fail=1
-        phase_end FAIL
-    fi
-fi
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  Phase 12 — Boot smoke (App activation path)
-# ══════════════════════════════════════════════════════════════════════════════
-# `tesl check` and `tesl test` never run `main`, so a codegen bug in the App
-# ACTIVATION path (start-workers! / start-dead-workers! / serve / sse) crashes only
-# at `tesl run` — invisible to the rest of the gate. This is exactly how issue #15
-# (start-dead-workers! handed #:concurrency) slipped through. Boot an activation-
-# heavy fixture (queue + single-threaded dead-letter worker + numberOfWorkers +
-# serve) and confirm it reaches the serving banner, which is printed only AFTER
-# every activation call. A boot crash exits before the banner → FAIL.
-phase_begin "Boot smoke (App activation via tesl run)"
+# `tesl check` and `tesl test` do not execute `main`; this smoke starts the
+# emitted Go server and probes its health route, covering queue-worker startup,
+# dead-letter-worker startup, worker count, and HTTP serving in one process.
+phase_begin "Boot smoke (Go App activation via tesl run)"
 boot_smoke_src="$SCRIPT_DIR/scripts/boot-smoke/app.tesl"
-if is_truthy "${RKT_SUITES_SKIP:-0}"; then
-    printf "  %s⚠%s  RKT_SUITES_SKIP=1 — skipping Racket boot smoke\n" "$C_YELLOW" "$C_RESET"
+if ! command -v go >/dev/null 2>&1; then
+    printf "  %s⚠%s  go not on PATH — skipping boot smoke\n" "$C_YELLOW" "$C_RESET"
     phase_end SKIP
-elif ! command -v racket >/dev/null 2>&1; then
-    printf "  %s⚠%s  racket not on PATH — skipping boot smoke\n" "$C_YELLOW" "$C_RESET"
+elif ! command -v curl >/dev/null 2>&1; then
+    printf "  %s⚠%s  curl not on PATH — skipping boot smoke\n" "$C_YELLOW" "$C_RESET"
     phase_end SKIP
 elif [ ! -x "$_main_exe" ]; then
     printf "  %s⚠%s  compiler binary missing — skipping boot smoke\n" "$C_YELLOW" "$C_RESET"
@@ -1803,31 +1193,47 @@ elif [ ! -f "$boot_smoke_src" ]; then
     printf "  %s⚠%s  boot-smoke fixture missing — skipping\n" "$C_YELLOW" "$C_RESET"
     phase_end SKIP
 else
-    boot_rkt="$(mktemp "${TMPDIR:-/tmp}/tesl-boot-smoke.XXXXXX.rkt")"
+    boot_root="$(mktemp -d "${TMPDIR:-/tmp}/tesl-boot.XXXXXX")"
     boot_out="$(mktemp "${TMPDIR:-/tmp}/tesl-boot-out.XXXXXX")"
-    boot_err="$(mktemp "${TMPDIR:-/tmp}/tesl-boot-err.XXXXXX")"
     boot_port="${TESL_BOOT_SMOKE_PORT:-8199}"
-    if ! TESL_REPO_ROOT="$SCRIPT_DIR" "$_main_exe" --backend racket "$boot_smoke_src" > "$boot_rkt" 2>"$boot_err"; then
-        printf "  %s✗%s  boot-smoke fixture failed to compile\n" "$C_RED" "$C_RESET"
-        sed 's/^/      /' "$boot_err" | head -n 20
+    boot_build_fail=0
+    if ! TESL_REPO_ROOT="$SCRIPT_DIR" "$_main_exe" "$boot_smoke_src" \
+        --out "$boot_root/go" >"$boot_out" 2>&1; then
+        boot_build_fail=1
+    elif ! (cd "$boot_root/go" && go build -o "$boot_root/app" ./cmd/app) >>"$boot_out" 2>&1; then
+        boot_build_fail=1
+    fi
+    if [ "$boot_build_fail" -ne 0 ]; then
+        printf "  %s✗%s  Go boot-smoke compile failed\n" "$C_RED" "$C_RESET"
+        sed 's/^/      /' "$boot_out" | tail -n 20
         phase_end FAIL
     else
-        # Run under `timeout -s KILL` so a healthy (blocking) server is force-killed
-        # and can never hang the gate; a boot crash exits on its own before then.
-        # The serving banner is the positive signal (printed after all activation).
-        PORT="$boot_port" TESL_REPO_ROOT="$SCRIPT_DIR" \
-          run_with_optional_nix_shell timeout -s KILL 12 racket "$boot_rkt" \
-          > "$boot_out" 2>"$boot_err" || true
-        if grep -q "Web application is running at" "$boot_out"; then
-            printf "  %s✓%s  App booted past activation (queue+dead-worker+numberOfWorkers+serve)\n" "$C_GREEN" "$C_RESET"
-            phase_end OK
-        else
-            printf "  %s✗%s  App crashed on boot (activation path) — never reached serving\n" "$C_RED" "$C_RESET"
-            sed 's/^/      /' "$boot_err" | tail -n 20
-            phase_end FAIL
-        fi
+        PORT="$boot_port" "$boot_root/app" >"$boot_out" 2>&1 &
+        boot_pid=$!
+        boot_ok=0
+        for _boot_attempt in $(seq 1 60); do
+            if curl --max-time 1 --silent --show-error --fail \
+                "http://127.0.0.1:$boot_port/health" >/dev/null 2>&1; then
+                boot_ok=1
+                break
+            fi
+            if ! kill -0 "$boot_pid" 2>/dev/null; then
+                break
+            fi
+            sleep 0.25
+        done
+        kill -TERM "$boot_pid" 2>/dev/null || true
+        wait "$boot_pid" 2>/dev/null || true
     fi
-    rm -f "$boot_rkt" "$boot_out" "$boot_err"
+    if [ "$boot_build_fail" -eq 0 ] && [ "$boot_ok" -eq 1 ]; then
+        printf "  %s✓%s  Go App booted and /health responded\n" "$C_GREEN" "$C_RESET"
+        phase_end OK
+    elif [ "$boot_build_fail" -eq 0 ]; then
+        printf "  %s✗%s  Go App failed to boot or /health did not respond\n" "$C_RED" "$C_RESET"
+        sed 's/^/      /' "$boot_out" | tail -n 20
+        phase_end FAIL
+    fi
+    rm -rf "$boot_root" "$boot_out"
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1851,7 +1257,7 @@ else
         phase_end OK
     elif [ "$_parity_rc" -eq 77 ]; then
         # 77 = js_of_ocaml or node absent, or no corpus/compiler.  An optional
-        # tool that is missing is never a gate failure (same rule as racket/PG).
+        # tool that is missing is never a gate failure.
         phase_end SKIP
     else
         printf "  %s✗%s  the browser checker diverged from the CLI (see above)\n" "$C_RED" "$C_RESET"

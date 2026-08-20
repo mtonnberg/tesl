@@ -1,9 +1,0 @@
-{
-  "version": 1,
-  "runs": 2,
-  "timeout_seconds": 120,
-  "suite_glob": "tests/dap-*.rkt",
-  "failure_identity": "run number plus test basename",
-  "owner": "Phase 0 migration gate",
-  "command": "scripts/racket-stability.sh"
-}

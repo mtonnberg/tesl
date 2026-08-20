@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root=${TESL_REPO_ROOT:-$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)}
-manifest="$repo_root/roadmap/next/go-test-migration.json"
+repo_root=${TESL_REPO_ROOT:-$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)}
+manifest="$repo_root/tests/protocol/go-test-migration.json"
 
 [[ -f "$manifest" ]] || {
   printf 'missing Go test migration manifest: %s\n' "$manifest" >&2

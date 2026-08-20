@@ -3,7 +3,7 @@ set -euo pipefail
 
 repo_root=${TESL_REPO_ROOT:-$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)}
 compiler=${TESL_OCAML_COMPILER:-$repo_root/compiler/_build/default/bin/main.exe}
-manifest="$repo_root/roadmap/next/go-example-migration.json"
+manifest="$repo_root/tests/protocol/go-example-migration.json"
 mode=${1:---list}
 
 [[ -x "$compiler" ]] || {
