@@ -136,6 +136,10 @@ fi
 script_started_at=$SECONDS
 phase_started_at=$SECONDS
 
+# The shipped CI environment is Go-only.  Keep the legacy Racket suites
+# opt-in while retaining the explicit RKT_SUITES_SKIP override for local runs.
+RKT_SUITES_SKIP="${RKT_SUITES_SKIP:-1}"
+
 # ── Phase registry / progress bar ────────────────────────────────────────────
 # We know the phase count up front so each phase can print "[N/T] <name>".
 TOTAL_PHASES=26
@@ -714,7 +718,9 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 phase_begin "Racket DAP stability replay"
 racket_stability_fail=0
-if command -v racket >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
+if is_truthy "${RKT_SUITES_SKIP:-0}"; then
+    printf "  %s⚠%s  RKT_SUITES_SKIP=1 — skipping Racket stability replay\n" "$C_YELLOW" "$C_RESET"
+elif command -v racket >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
     if ! "$SCRIPT_DIR/scripts/racket-stability.sh"; then
         racket_stability_fail=1
     fi
@@ -1045,7 +1051,10 @@ canon_thsl() {
 }
 phase_begin "Exact-match .rkt snapshots"
 _main_exe="$COMPILER_DIR/_build/default/bin/main.exe"
-if [ ! -x "$_main_exe" ]; then
+if is_truthy "${RKT_SUITES_SKIP:-0}"; then
+    printf "  %s⚠%s  RKT_SUITES_SKIP=1 — skipping Racket snapshots\n" "$C_YELLOW" "$C_RESET"
+    phase_end SKIP
+elif [ ! -x "$_main_exe" ]; then
     printf "  %s⚠%s  compiler not built — skipping exact-match snapshots\n" "$C_YELLOW" "$C_RESET"
     phase_end SKIP
 else
@@ -1241,70 +1250,44 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Phase 8 — Mutation testing (backend parity)
+#  Phase 8 — Go mutation testing
 # ══════════════════════════════════════════════════════════════════════════════
-phase_begin "Mutation testing (Racket/Go parity)"
+phase_begin "Mutation testing (Go backend)"
 mutation_fail=0
 if [ -x "$_main_exe" ]; then
     TESL_BIN="$_main_exe"
 else
     TESL_BIN="tesl"
 fi
-if ! command -v raco >/dev/null 2>&1; then
-    printf "  %s✗%s  raco unavailable — cannot prove Racket/Go mutation parity\n" "$C_RED" "$C_RESET"
-    mutation_fail=1
-else
-    _mutation_timeout="${TESL_MUTATION_TIMEOUT:-180}"
-    for _mutation_spec in \
-        "example/learn/lesson42-mutation-testing.tesl|20" \
-        "example/learn/lesson05-intro-to-proofs.tesl|13"; do
-        _mutation_relative="${_mutation_spec%|*}"
-        _mutation_expected="${_mutation_spec##*|}"
-        mutation_lesson="$SCRIPT_DIR/$_mutation_relative"
-        if [ ! -f "$mutation_lesson" ]; then
-            printf "  %s✗%s  %s not found\n" "$C_RED" "$C_RESET" "$mutation_lesson"
-            mutation_fail=1
-            continue
-        fi
-        _mutation_summary="Summary: $_mutation_expected mutants | $_mutation_expected killed | 0 survived"
-        printf "  Running Racket mutation oracle: %s\n" "$(basename "$mutation_lesson")"
-        mutation_out=$(timeout "$_mutation_timeout" "$TESL_BIN" --mutate "$mutation_lesson" 2>&1)
-        _mut_exit=$?
-        if [ "$_mut_exit" -ne 0 ]; then
-            mutation_fail=1
-            printf "  %s✗%s  Racket mutation testing failed (exit %d)\n%s\n" \
-                "$C_RED" "$C_RESET" "$_mut_exit" "$mutation_out"
-        else
-            case "$mutation_out" in
-                *"$_mutation_summary"*) ;;
-                *) mutation_fail=1; printf "  %s✗%s  Racket mutation report was incomplete\n%s\n" "$C_RED" "$C_RESET" "$mutation_out" ;;
-            esac
-        fi
-
-        printf "  Running Go mutation backend: %s\n" "$(basename "$mutation_lesson")"
-        go_mutation_out=$(timeout "$_mutation_timeout" "$TESL_BIN" --mutate "$mutation_lesson" 2>&1)
-        _go_mut_exit=$?
-        if [ "$_go_mut_exit" -ne 0 ]; then
-            mutation_fail=1
-            printf "  %s✗%s  Go mutation testing failed (exit %d)\n%s\n" \
-                "$C_RED" "$C_RESET" "$_go_mut_exit" "$go_mutation_out"
-        else
-            case "$go_mutation_out" in
-                *"$_mutation_summary"*) ;;
-                *) mutation_fail=1; printf "  %s✗%s  Go mutation report was incomplete\n%s\n" "$C_RED" "$C_RESET" "$go_mutation_out" ;;
-            esac
-        fi
-        _racket_mutants=$(printf '%s\n' "$mutation_out" | sed -n 's/^  \[KILLED\] //p')
-        _go_mutants=$(printf '%s\n' "$go_mutation_out" | sed -n 's/^  \[KILLED\] //p')
-        if [ "$_racket_mutants" != "$_go_mutants" ]; then
-            mutation_fail=1
-            printf "  %s✗%s  Racket/Go mutant identity or order diverged for %s\n" \
-                "$C_RED" "$C_RESET" "$(basename "$mutation_lesson")"
-        fi
-    done
-fi
+_mutation_timeout="${TESL_MUTATION_TIMEOUT:-180}"
+for _mutation_spec in \
+    "example/learn/lesson42-mutation-testing.tesl|20" \
+    "example/learn/lesson05-intro-to-proofs.tesl|13"; do
+    _mutation_relative="${_mutation_spec%|*}"
+    _mutation_expected="${_mutation_spec##*|}"
+    mutation_lesson="$SCRIPT_DIR/$_mutation_relative"
+    if [ ! -f "$mutation_lesson" ]; then
+        printf "  %s✗%s  %s not found\n" "$C_RED" "$C_RESET" "$mutation_lesson"
+        mutation_fail=1
+        continue
+    fi
+    _mutation_summary="Summary: $_mutation_expected mutants | $_mutation_expected killed | 0 survived"
+    printf "  Running Go mutation backend: %s\n" "$(basename "$mutation_lesson")"
+    go_mutation_out=$(timeout "$_mutation_timeout" "$TESL_BIN" --mutate --backend go "$mutation_lesson" 2>&1)
+    _go_mut_exit=$?
+    if [ "$_go_mut_exit" -ne 0 ]; then
+        mutation_fail=1
+        printf "  %s✗%s  Go mutation testing failed (exit %d)\n%s\n" \
+            "$C_RED" "$C_RESET" "$_go_mut_exit" "$go_mutation_out"
+    else
+        case "$go_mutation_out" in
+            *"$_mutation_summary"*) ;;
+            *) mutation_fail=1; printf "  %s✗%s  Go mutation report was incomplete\n%s\n" "$C_RED" "$C_RESET" "$go_mutation_out" ;;
+        esac
+    fi
+done
 if [ "$mutation_fail" -eq 0 ]; then
-    printf "  %s✓%s  Racket/Go mutation parity: 33/33 killed across 2 corpora\n" "$C_GREEN" "$C_RESET"
+    printf "  %s✓%s  Go mutation testing: 33/33 killed across 2 corpora\n" "$C_GREEN" "$C_RESET"
     phase_end OK
 else
     phase_end FAIL
@@ -1499,6 +1482,10 @@ fi
 # AND bound with it, and an always-available name must really be bound.
 phase_begin "Bare stdlib name import gate (raco expand agreement)"
 _barename_rc=0
+if is_truthy "${RKT_SUITES_SKIP:-0}"; then
+    printf "  %s⚠%s  RKT_SUITES_SKIP=1 — skipping raco expand gate\n" "$C_YELLOW" "$C_RESET"
+    phase_end SKIP
+else
 TESL_REPO_ROOT="$SCRIPT_DIR" TESL_OCAML_COMPILER="$_main_exe" \
     bash "$SCRIPT_DIR/tests/stdlib-bare-name-gate.sh" || _barename_rc=$?
 if [ "$_barename_rc" -eq 0 ]; then
@@ -1507,6 +1494,7 @@ elif [ "$_barename_rc" -eq 77 ]; then
     phase_end SKIP
 else
     phase_end FAIL
+fi
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1734,7 +1722,10 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 phase_begin "Racket aggregate suite (tests/all.rkt)"
 aggregate_fail=0
-if [ ! -f "$SCRIPT_DIR/tests/all.rkt" ]; then
+if is_truthy "${RKT_SUITES_SKIP:-0}"; then
+    printf "  %s⚠%s  RKT_SUITES_SKIP=1 — skipping Racket aggregate suite\n" "$C_YELLOW" "$C_RESET"
+    phase_end SKIP
+elif [ ! -f "$SCRIPT_DIR/tests/all.rkt" ]; then
     printf "  %s✓%s  Racket aggregate retired; Go manifests are authoritative\n" "$C_GREEN" "$C_RESET"
     phase_end OK
 elif ! command -v racket >/dev/null 2>&1; then
@@ -1799,7 +1790,10 @@ fi
 # every activation call. A boot crash exits before the banner → FAIL.
 phase_begin "Boot smoke (App activation via tesl run)"
 boot_smoke_src="$SCRIPT_DIR/scripts/boot-smoke/app.tesl"
-if ! command -v racket >/dev/null 2>&1; then
+if is_truthy "${RKT_SUITES_SKIP:-0}"; then
+    printf "  %s⚠%s  RKT_SUITES_SKIP=1 — skipping Racket boot smoke\n" "$C_YELLOW" "$C_RESET"
+    phase_end SKIP
+elif ! command -v racket >/dev/null 2>&1; then
     printf "  %s⚠%s  racket not on PATH — skipping boot smoke\n" "$C_YELLOW" "$C_RESET"
     phase_end SKIP
 elif [ ! -x "$_main_exe" ]; then
