@@ -509,7 +509,7 @@ table and the debugging story.
 
 ### How fast is Tesl?
 
-The compiler is written in OCaml and is quite fast. The runtime is Racket, which has good performance characteristics. However, we haven't done extensive performance optimization yet, as we're focused on getting the language right first.
+The compiler is written in OCaml and is quite fast. The runtime is Go, with ordinary Go profiling and optimization tools available for generated services. However, we haven't done extensive performance optimization yet, as we're focused on getting the language right first.
 
 ### Can I use Tesl in production?
 
@@ -573,11 +573,11 @@ We welcome contributions! See [dev-docs/README.md](../dev-docs/README.md) for ge
 - Add new features to the language
 - Improve tooling
 
-### Do I need to know OCaml or Racket?
+### Do I need to know OCaml or Go?
 
 - **OCaml**: The compiler is written in OCaml. To work on the compiler, you'll need to learn OCaml.
-- **Racket**: The runtime is written in Racket. To work on the runtime, you'll need to learn Racket.
-- **Tesl**: The language itself is designed to be approachable without knowing OCaml or Racket.
+- **Go**: The runtime is written in Go. To work on the runtime, you'll need to learn Go.
+- **Tesl**: The language itself is designed to be approachable without knowing OCaml or Go.
 
 ### How do I build from source?
 

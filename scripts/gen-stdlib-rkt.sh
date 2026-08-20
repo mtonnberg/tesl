@@ -46,7 +46,7 @@ MAIN="$COMPILER_DIR/_build/default/bin/main.exe"
 # we strip the repo-root prefix so it becomes a stable repo-root-relative path
 # (e.g. "tesl/list.tesl"). The debugger resolves stdlib sources via TESL_REPO_ROOT,
 # so a relative path is both correct and portable.
-gen() { "$MAIN" "$1" | sed "s|$REPO_ROOT/||g"; }
+gen() { "$MAIN" --backend racket "$1" | sed "s|$REPO_ROOT/||g"; }
 
 rc=0
 for row in "${LIFTED[@]}"; do

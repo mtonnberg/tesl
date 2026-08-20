@@ -40,7 +40,7 @@ You get:
 | `AGENTS.md` / `CLAUDE.md` | Instructions for AI coding agents working in this project (see [AGENTS.md](../AGENTS.md)). |
 | `.gitignore`, `README.md`, `.vscode/launch.json` | Sensible defaults: `.tesl-stuff/` ignored, a project README, and a debugger launch config. |
 
-> `.tesl-stuff/build/` holds the generated `.rkt` files and Racket bytecode. It is always safe to
+> `.tesl-stuff/go-build/` holds the generated Go module. It is always safe to
 > delete (`tesl clean`) at the cost of a fresh compile, and it should never be committed.
 
 ---

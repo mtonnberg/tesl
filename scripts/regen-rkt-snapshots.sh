@@ -10,7 +10,7 @@
 # affected files.
 #
 # The regeneration command is one line per file
-# (`main.exe <f>.tesl > <f>.rkt`) and was previously only documented in prose, so
+# (`main.exe --backend racket <f>.tesl > <f>.rkt`) and was previously only documented in prose, so
 # a sweep was retyped from scratch each time
 # (roadmap/completed/rkt_snapshot_regen_sweep.md did 98 files that way).  This is
 # that sweep, scripted, with the two things the prose version kept getting wrong:

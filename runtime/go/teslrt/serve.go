@@ -143,6 +143,9 @@ func (server Server) handlerWith(options ServeOptions) http.Handler {
 // routeExists reports whether the router has a route for this path at all — used to decide
 // between the API surface and the static one WITHOUT letting the router answer 404 first.
 func (server Server) routeExists(request *http.Request) bool {
+	if _, _, matched := findSsoMatch(server.SsoRoutes, request.URL.Path); matched {
+		return true
+	}
 	for _, route := range server.Routes {
 		if pathMatches(route.Path, request.URL.Path) {
 			return true

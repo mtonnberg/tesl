@@ -1,6 +1,6 @@
 # Go debugger, LSP, and complete Racket removal
 ## Goal
-Finish the migration described in `roadmap/next/migrate_to_golang.md` by replacing the debugger, LSP, MCP/editor tooling, remaining runtime support, generated artifacts, and Racket-owned tests with Go-backed equivalents. The final repository must preserve or improve current capabilities while containing no tracked Racket source, no Racket emitter or generator, no active Racket invocation, no Racket build dependency, and no workflow that recreates `.rkt` files.
+Finish the migration described in `roadmap/next/migrate_to_golang.md` by replacing the debugger, LSP, MCP/editor tooling, remaining runtime support, generated artifacts, and Racket-owned tests with Go-backed equivalents. The default Tesl experience must preserve or improve current capabilities without executing Racket, depending on a Racket package, or recreating `.rkt` files; isolated compatibility sources may remain temporarily until the final runtime cleanup.
 This item is broader than porting `dsl/debug/` and `editor/tesl-lsp/`. It owns the complete Racket exit because debugger/LSP completion is not meaningful while runtime modules, tests, examples, templates, MCP, compiler output, packaging, or CI still depend on Racket.
 ## Current state
 - The Go runtime is in `runtime/go/teslrt/`; Go emission is in `compiler/lib/emit_go.ml`. Runtime semantics, dependency policy, corpus parity, release-mode zero-instrumentation, and general Go quality gates remain shared with `roadmap/next/migrate_to_golang.md`.
@@ -76,14 +76,14 @@ The migration must not create a period where all editor and debugging tools are 
 ### Phase status
 | Phase | Status | Gate state |
 |---|---|---|
-| 0. Contract freeze and traceability | Complete | `racket-traceability.json` covers the current 262-file checkout inventory; protocol/schema fixtures, capability matrix, migration gate validation, and two-run DAP stability replay pass. |
+| 0. Contract freeze and traceability | Complete | `racket-traceability.json` covers the current 262-file checkout inventory; protocol/schema fixtures, capability matrix, and migration gate validation pass. Legacy replay remains opt-in while compatibility sources are isolated. |
 | 1. Shared Go protocol/compiler-query foundation | Complete | Bounded framing, malformed/truncated/partial-I/O coverage, UTF-16/URI portability, protocol fuzz gates, real built-compiler query coverage, LSP field/doc queries, versioned diagnostic cancellation, race/vet, and shipped Go tooling tests pass. |
 | 2. Go debug emission and ABI | Complete | ABI v1 schema/fixture, debug/release emission, function/test checkpoints, generated single/multi-module debug builds, release symbol scans, unattached equivalence gates, SQL/domain instrumentation, and benchmarks pass. |
 | 3. Checkpoint engine, values, domains, and control channel | Complete | Bounded/panic-safe named value trees, concurrent checkpoint stress, stop-world recovery, Unix/TCP control, disconnect resume/reattach, domain/SQL scopes, ABI fixtures, and race gates pass. |
 | 4. DAP and headless debugger | Complete | Go DAP launch/attach lifecycle, named-test launch, real launch-to-breakpoint integration, headless v2 breakpoint/scalar-local output, Go attach bridge/once/project discovery, normalized transcripts, and race gates pass. |
 | 5. LSP | Complete | Go LSP shipped entrypoint, expanded initialize contract, ranged/multiple UTF-16 edits, save/watch/format/resolve/execute handlers, field/doc compiler queries, cancellable versioned diagnostics, built-compiler integration, and race/vet gates pass. |
 | 6. MCP | Complete | Go stdio server, compatible tool schemas, compiler-query differential, Go headless inspection, real-stdio coverage, live Go-runtime attach, race, vet, and protocol smoke pass. |
-| 7. CLI, VS Code, packaging, environments | Complete | Shipped profiles expose Go CLI/LSP/DAP/MCP tools without a Racket closure; user-facing CLI rejects the removed Racket backend; Go compile/run/test/debug/watch/build, templates, Docker staging, BSD portability, clean install, and live MCP attach gates pass. Remaining Racket source is unshipped C3 cleanup scope. |
+| 7. CLI, VS Code, packaging, environments | Complete | Shipped profiles expose Go CLI/LSP/DAP/MCP tools without a Racket closure; user-facing CLI rejects the removed Racket backend; Go compile/run/test/debug/watch/build, templates, Docker staging, BSD portability, clean install, live MCP attach, and Go SSO E2E gates pass. Remaining compatibility source is unshipped C3 cleanup scope. |
 | 8. Complete test/example/template migration | Complete | All 74 tracked `.tesl` test sources and 107 examples pass Go corpus gates; all 72 former Racket-only responsibilities have explicit replacement evidence and no retired Racket test file remains; templates pass Go init/build/test gates. |
 
 ### Phase 0: Contract freeze and traceability

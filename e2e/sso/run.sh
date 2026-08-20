@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # End-to-end SSO test: a real headless browser -> a Tesl backend -> a real dex
 # OpenID Connect IdP, all provisioned through Nix.  Run it inside the repo dev
-# shell (which provides `racket` + the linked `tesl` collections):
+# shell (which provides Go, the compiler, and the linked Tesl tools):
 #
 #   nix develop --command bash e2e/sso/run.sh              # full browser e2e
 #   SSO_E2E_SMOKE=1 nix develop --command bash e2e/sso/run.sh   # protocol smoke, no browser
 #
 # It brings dex / openssl / node+playwright into PATH via `nix shell` and:
 #   1. mints a loopback self-signed cert and starts dex over HTTPS,
-#   2. compiles + boots the Tesl backend (Sso.oidc against dex; loopback TLS
+#   2. compiles + boots the Go Tesl backend (Sso.oidc against dex; loopback TLS
 #      escape on for the self-signed dev cert),
 #   3. drives the login: with a browser (Playwright) or, in smoke mode, with
 #      curl asserting the /auth/dex/login -> dex authorize redirect.
@@ -18,8 +18,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
 # Re-exec once inside a nix shell that carries the extra tools (dex, openssl,
-# node + playwright + the browser bundle).  racket + the tesl collections come
-# from the surrounding `nix develop`.
+# node + playwright + the browser bundle).  Go and the Tesl compiler come from
+# the surrounding `nix develop`.
 if [ -z "${SSO_E2E_INNER:-}" ]; then
   # Smoke mode needs only dex + openssl; the full run adds node + playwright +
   # the browser bundle (a large realise, so it's opt-in via the full path).
@@ -40,7 +40,8 @@ cleanup() {
 trap cleanup EXIT
 
 DEX_ISSUER="https://localhost:5556/dex"
-APP_ORIGIN="http://localhost:8080"
+APP_PORT="${TESL_SSO_PORT:-18080}"
+APP_ORIGIN="http://localhost:$APP_PORT"
 
 echo "[e2e] work dir: $WORK"
 
@@ -90,15 +91,21 @@ echo "[e2e] dex discovery is up."
 
 # 2. compile + boot the Tesl backend -----------------------------------------
 TESL_BIN="${TESL_OCAML_COMPILER:-$REPO_ROOT/compiler/_build/default/bin/main.exe}"
-"$TESL_BIN" e2e/sso/backend.tesl > "$WORK/backend.rkt"
-echo "[e2e] backend compiled."
+sed -e "s|http://localhost:8080|$APP_ORIGIN|g" \
+    -e "s|port: 8080|port: $APP_PORT|g" \
+    e2e/sso/backend.tesl > "$WORK/backend.tesl"
+"$TESL_BIN" "$WORK/backend.tesl" --out "$WORK/go"
+echo "[e2e] Go backend emitted."
+
+(cd "$WORK/go" && "${TESL_GO:-go}" build -o "$WORK/backend" ./cmd/app)
+echo "[e2e] Go backend built."
 
 DEX_ISSUER="$DEX_ISSUER" \
 DEX_CLIENT_ID="tesl-sandbox" \
 DEX_CLIENT_SECRET="tesl-sandbox-secret" \
 SESSION_KEY="$(openssl rand -hex 32)" \
 TESL_HTTP_TLS_INSECURE_DEV=1 \
-  racket "$WORK/backend.rkt" >"$WORK/backend.log" 2>&1 & BACKEND_PID=$!
+  "$WORK/backend" >"$WORK/backend.log" 2>&1 & BACKEND_PID=$!
 for i in $(seq 1 50); do
   if curl -fs "$APP_ORIGIN/" >/dev/null 2>&1; then break; fi
   sleep 0.3

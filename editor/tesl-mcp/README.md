@@ -168,6 +168,6 @@ the expected local; unknown method → JSON-RPC error `-32601`.
 
 - `tesl.run_function` (run a single function with concrete inputs) is **deferred**:
   the compiler currently has no per-function runner CLI, and running a compiled
-  program requires the `tesl/*` Racket collection to be registered. Use
+  program requires a generated Go module. Use
   `tesl.debug_inspect` with `mode: "test"` to observe values inside `test` blocks
   in the meantime.

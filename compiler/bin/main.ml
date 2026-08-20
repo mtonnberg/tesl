@@ -52,7 +52,7 @@ let usage = {|Usage:
   tesl --agent-context-json <file>  alias for `tesl agent-context`
   tesl debug-inspect <file> --break-at SPEC [...]  run to a breakpoint (headless) and dump paused runtime state as JSON
   tesl --mutate [--backend go] <file> [test-file ...]  run Go mutation testing; optionally merge tests from extra files
-  tesl --exe <file> [--out <path>]  build a standalone executable via `raco exe` (needs raco on PATH)
+   tesl --exe <file> [--out <path>]  build a standalone Go executable
 
 Documentation:
   tesl doc                     list all stdlib modules (the builtin surface)
@@ -118,7 +118,7 @@ let write_go_project out_dir (artifacts : Emit_go.artifact list) =
     let path = Filename.concat out_dir artifact.path in
     ensure_directory (Filename.dirname path);
     Out_channel.with_open_bin path (fun channel ->
-      output_string channel artifact.contents)) artifacts
+        output_string channel artifact.contents)) artifacts
 
 (** Read a file from disk; fall back to the embedded content store when the
     file is not present on disk (e.g. in an installed nix-flake binary with
@@ -941,8 +941,52 @@ let print_diagnostic (d : Compile.diagnostic) =
            is documented in the registry. *)
         (match Error_codes.lookup d.code with
          | Some _ ->
-           Printf.eprintf "  hint: run `tesl help %s` for an explanation\n" d.code
-         | None -> ())))
+            Printf.eprintf "  hint: run `tesl help %s` for an explanation\n" d.code
+          | None -> ())))
+
+let fresh_go_output_dir () =
+  let path = Filename.temp_file "tesl-go-" "" in
+  Sys.remove path;
+  path
+
+let emit_go_file ?(debug=false) filename out_dir =
+  match Compile.compile_go_file ~debug filename with
+  | Compile.GoFailure diags -> List.iter print_diagnostic diags; exit 1
+  | Compile.GoSuccess artifacts ->
+    write_go_project out_dir artifacts;
+    Printf.printf "emitted Go module: %s\n" out_dir
+
+let build_go_executable filename out_opt =
+  let stem =
+    if Filename.check_suffix filename ".tesl"
+    then Filename.chop_suffix filename ".tesl"
+    else filename
+  in
+  let exe_path = match out_opt with Some path -> path | None -> stem in
+  let temp_dir = fresh_go_output_dir () in
+  let cleanup () = ignore (Sys.command (Printf.sprintf "rm -rf %s" (Filename.quote temp_dir))) in
+  try
+    match Compile.compile_go_file filename with
+    | Compile.GoFailure diags ->
+      cleanup (); List.iter print_diagnostic diags; exit 1
+    | Compile.GoSuccess artifacts ->
+      write_go_project temp_dir artifacts;
+      ensure_directory (Filename.dirname exe_path);
+      let go = match Sys.getenv_opt "TESL_GO" with Some value -> value | None -> "go" in
+      let command = Printf.sprintf "cd %s && %s build -o %s ./cmd/app"
+          (Filename.quote temp_dir) (Filename.quote go) (Filename.quote exe_path) in
+      let status = Sys.command command in
+      cleanup ();
+      if status = 0 then
+        Printf.eprintf "%sbuilt%s %s\n" (col "1;32") (col "0") exe_path
+      else begin
+        Printf.eprintf "%serror%s: Go build failed (exit %d)\n"
+          (col "1;31") (col "0") status;
+        exit 1
+      end
+  with
+  | Sys_error msg -> cleanup (); Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
+  | Failure msg -> cleanup (); Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
 
 (** WS4: print per-file results for a batch / whole-project check, then a
     one-line summary, and exit (1 if any file has an error diagnostic, else 0).
@@ -1345,71 +1389,19 @@ let () =
      with Sys_error msg ->
        Printf.eprintf "error: %s\n" msg; exit 1)
 
-  | ["--debug"; filename] ->
-    (try
-       Emit_racket.set_debug_mode true;
-       match Compile.compile_file ~root_path ~type_check:true filename with
-       | Compile.Success racket -> print_string racket
-       | Compile.Failure diags ->
-         List.iter print_diagnostic diags;
-         exit 1
-     with
-     | Failure msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
-     | Sys_error msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
+   | ["--debug"; filename] ->
+     emit_go_file ~debug:true filename (fresh_go_output_dir ())
 
-  | ["--test-name"; test_name; filename] ->
-    (try
-       Emit_racket.set_test_name_filter (Some test_name);
-       match Compile.compile_file ~root_path ~type_check:true filename with
-       | Compile.Success racket -> print_string racket
-       | Compile.Failure diags ->
-         List.iter print_diagnostic diags;
-         exit 1
-     with
-     | Failure msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
-     | Sys_error msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
+   | ["--debug"; filename; "--out"; out_dir] ->
+     emit_go_file ~debug:true filename out_dir
 
-  (* `--test-kind KIND` (test|api-test|load-test|doctest) pins single-test selection to
-     one kind, so a named api-test/load-test can be run in isolation. *)
-  | ["--test-name"; test_name; "--test-kind"; test_kind; filename] ->
-    (try
-       Emit_racket.set_test_name_filter (Some test_name);
-       Emit_racket.set_test_kind_filter (Some test_kind);
-       match Compile.compile_file ~root_path ~type_check:true filename with
-       | Compile.Success racket -> print_string racket
-       | Compile.Failure diags ->
-         List.iter print_diagnostic diags;
-         exit 1
-     with
-     | Failure msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
-     | Sys_error msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
+   | "--debug" :: "--test-name" :: _ ->
+     Printf.eprintf "error: named debug tests use `tesl debug-inspect --mode test ...`\n";
+     exit 2
 
-  | ["--debug"; "--test-name"; test_name; filename] ->
-    (try
-       Emit_racket.set_debug_mode true;
-       Emit_racket.set_test_name_filter (Some test_name);
-       match Compile.compile_file ~root_path ~type_check:true filename with
-       | Compile.Success racket -> print_string racket
-       | Compile.Failure diags ->
-         List.iter print_diagnostic diags;
-         exit 1
-     with
-     | Failure msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
-     | Sys_error msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
-
-  | ["--debug"; "--test-name"; test_name; "--test-kind"; test_kind; filename] ->
-    (try
-       Emit_racket.set_debug_mode true;
-       Emit_racket.set_test_name_filter (Some test_name);
-       Emit_racket.set_test_kind_filter (Some test_kind);
-       match Compile.compile_file ~root_path ~type_check:true filename with
-       | Compile.Success racket -> print_string racket
-       | Compile.Failure diags ->
-         List.iter print_diagnostic diags;
-         exit 1
-     with
-     | Failure msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
-     | Sys_error msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
+   | "--test-name" :: _ ->
+     Printf.eprintf "error: --test-name is a test-runner option; use `tesl test --test-name ...`\n";
+     exit 2
 
   (* AC2: headless breakpoint inspector — agent-set breakpoints, full control.
        tesl debug-inspect <file.tesl> --break-at SPEC [--break-at SPEC ...]
@@ -1558,15 +1550,7 @@ let () =
         Printf.printf "emitted debug Go module: %s\n" out_dir)
 
    | [filename] when not (String.length filename > 2 && filename.[0] = '-') ->
-    (try
-       match Compile.compile_file ~root_path ~type_check:true filename with
-       | Compile.Success racket -> print_string racket
-       | Compile.Failure diags ->
-         List.iter print_diagnostic diags;
-         exit 1
-     with
-     | Failure msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
-      | Sys_error msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
+     emit_go_file filename (fresh_go_output_dir ())
 
   | ["--backend"; "racket"; filename] ->
     (match Compile.compile_file ~root_path ~type_check:true filename with
@@ -1593,20 +1577,15 @@ let () =
      Printf.eprintf "usage: tesl --backend racket <file> | tesl --backend go <file> --out <dir> [--debug]\n";
     exit 2
 
-  | "--exe" :: filename :: rest
-    when not (String.length filename > 2 && filename.[0] = '-')
-         && (rest = [] || (match rest with ["--out"; _] -> true | _ -> false)) ->
-    (* WS6: build a standalone executable via `raco exe`.  Emits byte-identical
-       Racket (same as `tesl <file>`) into a temp dir, then bundles it — no
-       generated files land next to the source. *)
-    let out = match rest with ["--out"; f] -> Some f | _ -> None in
-    (match Compile.build_exe ~root_path ?out filename with
-     | Compile.BuildOk exe_path ->
-       Printf.eprintf "%sbuilt%s %s\n" (col "1;32") (col "0") exe_path; exit 0
-     | Compile.BuildDiags diags ->
-       List.iter print_diagnostic diags; exit 1
-     | Compile.BuildErr msg ->
-       Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
+   | "--exe" :: filename :: rest
+     when not (String.length filename > 2 && filename.[0] = '-')
+          && (rest = [] || (match rest with ["--out"; _] -> true | _ -> false)) ->
+     let out = match rest with ["--out"; path] -> Some path | _ -> None in
+     build_go_executable filename out
+
+   | "--exe" :: _ ->
+     Printf.eprintf "usage: tesl --exe <file.tesl> [--out <path>]\n";
+     exit 2
 
   | "--mutate" :: args ->
     let backend, filename, extra_test_files = match args with

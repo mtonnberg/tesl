@@ -44,7 +44,7 @@ tesl init myapi --template api --yes
 cd myapi
 
 # --- local: compile + run in place ([deploy].target = "local", the default) ---
-tesl build                            # → .tesl-stuff/build/app.rkt (no Docker)
+tesl build                            # → .tesl-stuff/go-build (no Docker)
 tesl run                              # serve it
 
 # --- all-in-one: runs anywhere, no external database ---
@@ -93,12 +93,10 @@ Copy it to your project's `.github/workflows/deploy.yml` and set `APP_NAME`.
 
 ## How it works (and what is intentionally not here)
 
-- `tesl build` stages the Tesl runtime collections (`dsl`/`tesl`/`lang`) and your
-  freshly compiled `app.rkt` into its own build context (it never touches your
-  source tree or `.tesl-stuff/`), instantiates one of the templates in
-  [`templates/docker/`](../templates/docker/), and runs `docker build`. The
-  Racket base image is matched to the compiler's Racket (`racket/racket:9.2-full`
-  by default; override with `TESL_RACKET_BASE`).
+- `tesl build` stages the generated Go module and a multi-stage Go/Debian
+  container context (it never touches your source tree or `.tesl-stuff/`),
+  instantiates one of the templates in [`templates/docker/`](../templates/docker/),
+  and runs `docker build`.
 - The deployment story is deliberately **just an image** — the app serves HTTP
   the same way it does locally. Health-check endpoints, graceful-shutdown
   signalling, a reproducible Nix `dockerTools` image, multi-arch builds, and
@@ -107,27 +105,13 @@ Copy it to your project's `.github/workflows/deploy.yml` and set `APP_NAME`.
 
 ### Building on Apple Silicon / arm64
 
-The default base image, `racket/racket:9.2-full`, publishes only a
-`linux/amd64` manifest. `tesl build --container` still succeeds on an arm64
-host — Docker transparently pulls the amd64 layers — but the resulting
-image runs Racket under emulation, which can abort at boot (`Error: error
-reading from ~a ("petite")`) depending on your Docker Desktop/QEMU version.
-`docker build --platform linux/arm64 ...` on the staged context does not fix
-this: it just falls back to the same amd64 base with an
-`InvalidBaseImagePlatform` warning, since no arm64 manifest exists to select.
+The Go/Debian base image supports the host architectures published by the Go
+container template. `tesl build --container` stages the Dockerfile without
+requiring a language-runtime image from the host.
 
-`tesl build` warns at build time when it detects this mismatch (host is
-arm64 and the base image's manifest is amd64-only), so the amd64 fallback is
-never silent. If you have a Racket base image with a native arm64 manifest
-(self-built or from another registry), point `TESL_RACKET_BASE` at it:
-
-```bash
-TESL_RACKET_BASE=ghcr.io/you/racket:9.2-full-arm64 tesl build --container
-```
-
-There is currently no first-party native-arm64 base image; producing one
-(e.g. from the Nix flake's `aarch64-linux` package via `dockerTools`) is
-tracked as future work, not shipped today.
+The Go image remains ordinary Docker output, so platform-specific publishing
+can use Docker Buildx or the registry workflow without a language-runtime
+override.
 
 ## See also
 

@@ -11,12 +11,12 @@ if [ -x "$TESL_BIN" ]; then
   for tesl_file in "$REPO_ROOT"/example/kanel/*.tesl; do
     [ -f "$tesl_file" ] || continue
     # PascalCase output (KanelFoo.tesl → KanelFoo.rkt)
-    "$TESL_BIN" "$tesl_file" > "${tesl_file%.tesl}.rkt" 2>/dev/null || true
+    "$TESL_BIN" --backend racket "$tesl_file" > "${tesl_file%.tesl}.rkt" 2>/dev/null || true
     # Kebab-case output (KanelFoo.tesl → kanel-foo.rkt) used by collection requires
     pascal=$(basename "${tesl_file%.tesl}")
     kebab=$(echo "$pascal" | sed 's/\([A-Z]\)/-\L\1/g; s/^-//')
     dir=$(dirname "$tesl_file")
-    "$TESL_BIN" "$tesl_file" > "$dir/$kebab.rkt" 2>/dev/null || true
+    "$TESL_BIN" --backend racket "$tesl_file" > "$dir/$kebab.rkt" 2>/dev/null || true
   done
 fi
 

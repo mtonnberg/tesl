@@ -33,7 +33,7 @@ blocks; **Debug** is offered for `test`, `api-test`, and `doctest` blocks.
 A `load-test` is run-only — it is a throughput benchmark, so stepping through it
 is not meaningful.
 
-Behind the scenes the adapter compiles the file with `tesl --debug`, runs the
+Behind the scenes the adapter starts the file with `tesl run --debug`, runs the
 chosen `main` (program mode) or `test` blocks (test mode), and pauses at your
 breakpoints. The **Variables** panel shows each local's raw runtime value
 overlaid with its **compile-time type and proof** — the proof annotation is

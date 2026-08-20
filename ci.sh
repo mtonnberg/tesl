@@ -1085,7 +1085,7 @@ else
         case " $EXACT_SKIP " in
             *" $lesson "*) echo "  SKIP (env-dependent): $lesson"; EXACT_SKIPPED+=("$lesson"); continue ;;
         esac
-        ocaml_out=$("$_main_exe" "$tesl_file" 2>/dev/null | canon_thsl)
+        ocaml_out=$("$_main_exe" --backend racket "$tesl_file" 2>/dev/null | canon_thsl)
         diff_lines=$(diff <(printf "%s\n" "$ocaml_out") <(canon_thsl < "$rkt_file") 2>/dev/null || true)
         diff_count=$(printf "%s\n" "$diff_lines" | grep -c "^[<>]" || true)
         if [ "$diff_count" -eq 0 ]; then
@@ -1693,7 +1693,7 @@ else
         [ -f "$SCRIPT_DIR/$f" ] || { printf "  %s⚠%s  %s (missing — skipped)\n" "$C_YELLOW" "$C_RESET" "$f"; continue; }
         out="$ai_tmp/$(basename "$f" .tesl).rkt"
         if [ -x "$_main_exe" ] \
-           && TESL_REPO_ROOT="$SCRIPT_DIR" "$_main_exe" "$SCRIPT_DIR/$f" > "$out" 2>/dev/null \
+           && TESL_REPO_ROOT="$SCRIPT_DIR" "$_main_exe" --backend racket "$SCRIPT_DIR/$f" > "$out" 2>/dev/null \
            && TESL_REPO_ROOT="$SCRIPT_DIR" timeout 300 raco test "$out" >/dev/null 2>&1; then
             printf "  %s✓%s  %s\n" "$C_GREEN" "$C_RESET" "$f"
         else
@@ -1807,7 +1807,7 @@ else
     boot_out="$(mktemp "${TMPDIR:-/tmp}/tesl-boot-out.XXXXXX")"
     boot_err="$(mktemp "${TMPDIR:-/tmp}/tesl-boot-err.XXXXXX")"
     boot_port="${TESL_BOOT_SMOKE_PORT:-8199}"
-    if ! TESL_REPO_ROOT="$SCRIPT_DIR" "$_main_exe" "$boot_smoke_src" > "$boot_rkt" 2>"$boot_err"; then
+    if ! TESL_REPO_ROOT="$SCRIPT_DIR" "$_main_exe" --backend racket "$boot_smoke_src" > "$boot_rkt" 2>"$boot_err"; then
         printf "  %s✗%s  boot-smoke fixture failed to compile\n" "$C_RED" "$C_RESET"
         sed 's/^/      /' "$boot_err" | head -n 20
         phase_end FAIL
@@ -1866,14 +1866,14 @@ fi
 # path against a real IdP — a headless browser logs in via a local dex over the
 # generic `Sso.oidc` connection and reads back the session (see e2e/sso/). It is
 # what catches the "never executed end-to-end" class of bug. Needs `nix` (it
-# realizes dex + playwright + the browser bundle) and `racket`; skipped in the
-# fast inner loop (RKT_SUITES_SKIP) or explicitly (SSO_E2E_SKIP). Timeout-bounded.
+# realizes dex + playwright + the browser bundle); skipped explicitly with
+# `SSO_E2E_SKIP`. Timeout-bounded.
 phase_begin "SSO browser e2e (dex + Playwright, headless)"
-if is_truthy "${SSO_E2E_SKIP:-0}" || is_truthy "${RKT_SUITES_SKIP:-0}"; then
-    printf "  %s⚠%s  SSO_E2E_SKIP / RKT_SUITES_SKIP set — skipping\n" "$C_YELLOW" "$C_RESET"
+if is_truthy "${SSO_E2E_SKIP:-0}"; then
+    printf "  %s⚠%s  SSO_E2E_SKIP set — skipping\n" "$C_YELLOW" "$C_RESET"
     phase_end SKIP
-elif ! command -v nix >/dev/null 2>&1 || ! command -v racket >/dev/null 2>&1; then
-    printf "  %s⚠%s  nix or racket not on PATH — skipping\n" "$C_YELLOW" "$C_RESET"
+elif ! command -v nix >/dev/null 2>&1; then
+    printf "  %s⚠%s  nix not on PATH — skipping\n" "$C_YELLOW" "$C_RESET"
     phase_end SKIP
 else
     _e2e_rc=0

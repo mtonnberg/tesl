@@ -126,7 +126,7 @@ _tesl_test_go_file() {
   local file="$1" test_name="$2" test_kind="$3" root out status
   root="$(_tesl_mktemp_dir)" || return 1
   out="$root/go"
-  if ! "$TESL_OCAML_COMPILER" --backend go "$file" --out "$out"; then
+  if ! "$TESL_OCAML_COMPILER" "$file" --out "$out"; then
     rm -rf "$root"
     return 1
   fi
@@ -144,9 +144,9 @@ _tesl_run_go_file() {
   root="$(_tesl_mktemp_dir)" || return 1
   out="$root/go"
   if [ "$debug" = "1" ]; then
-    "$TESL_OCAML_COMPILER" --backend go "$file" --out "$out" --debug || { rm -rf "$root"; return 1; }
+    "$TESL_OCAML_COMPILER" "$file" --out "$out" --debug || { rm -rf "$root"; return 1; }
   else
-    "$TESL_OCAML_COMPILER" --backend go "$file" --out "$out" || { rm -rf "$root"; return 1; }
+    "$TESL_OCAML_COMPILER" "$file" --out "$out" || { rm -rf "$root"; return 1; }
   fi
   if [ ! -d "$out/cmd/app" ]; then
     echo "tesl run --backend go: $file does not define a main/server entrypoint" >&2
@@ -193,7 +193,7 @@ $dep"
       root="$(_tesl_mktemp_dir)" || return 1
       out="$root/go"
       echo "[tesl watch] Compiling Go module..."
-      if "$TESL_OCAML_COMPILER" --backend go "$file" --out "$out" && [ -d "$out/cmd/app" ] && \
+      if "$TESL_OCAML_COMPILER" "$file" --out "$out" && [ -d "$out/cmd/app" ] && \
           (cd "$out" && "${TESL_GO:-go}" build -o "$root/tesl-app" ./cmd/app); then
         binary="$root/tesl-app"
         echo "[tesl watch] Starting Go app..."
@@ -1116,7 +1116,7 @@ _tesl_compile_go_file() {
     out="$project/.tesl-stuff/go-build"
     rm -rf "$out"
   fi
-  "$TESL_OCAML_COMPILER" --backend go "$entry" --out "$out" >/dev/null || return 1
+  "$TESL_OCAML_COMPILER" "$entry" --out "$out" >/dev/null || return 1
   printf '%s\n' "$out"
 }
 
@@ -1138,7 +1138,7 @@ _tesl_build_go_container() {
   fi
   generated="$ctx/generated"
   rm -rf "$generated"
-  if ! "$TESL_OCAML_COMPILER" --backend go "$entry" --out "$generated" >/dev/null; then
+  if ! "$TESL_OCAML_COMPILER" "$entry" --out "$generated" >/dev/null; then
     echo "tesl build --backend go: failed to emit $entry" >&2
     return 1
   fi
@@ -1467,30 +1467,34 @@ unset _tesl_previous_arg _tesl_arg
 
 case "$CMD" in
   --test-name)
-    # Top-level passthrough: `tesl --test-name "NAME" [--test-kind KIND] file.tesl`
-    # emits a .rkt to stdout containing ONLY the named test block. The vscodium
-    # codelens invokes the `tesl` binary this way (then pipes to `raco test`), so the
-    # wrapper must forward it to the compiler rather than reporting "unknown command".
-    # Remaining args are forwarded verbatim so the optional `--test-kind KIND`
-    # disambiguator (test|api-test|load-test|doctest) reaches the compiler unchanged.
+    # Top-level convenience form for running one Go test block.
     [ $# -ge 2 ] || { echo "Usage: tesl --test-name <name> [--test-kind <kind>] <file.tesl>" >&2; exit 1; }
+    TEST_NAME="$1"; shift
+    TEST_KIND=""
+    if [ "${1:-}" = "--test-kind" ]; then
+      TEST_KIND="${2:?--test-kind requires a kind argument}"
+      shift 2
+    fi
+    [ $# -eq 1 ] || { echo "Usage: tesl --test-name <name> [--test-kind <kind>] <file.tesl>" >&2; exit 1; }
     _tesl_require_compiler
-    exec "$TESL_OCAML_COMPILER" --test-name "$@"
+    _tesl_test_go_file "$1" "$TEST_NAME" "$TEST_KIND"
+    exit $?
     ;;
   --debug)
-    # Top-level passthrough for the DAP debug adapter, which invokes the resolved
-    # `tesl` binary (TESL_COMPILER) as `tesl --debug [--test-name "NAME"] file.tesl`
-    # to emit a debug-instrumented .rkt. The OCaml compiler accepts both
-    # `--debug <file>` and `--debug --test-name <name> <file>`, so forward the
-    # remaining args verbatim instead of reporting "unknown command: --debug".
+    # Top-level Go debug emission. The compiler writes a temporary Go module and
+    # prints its path; use `tesl run --debug` for launch/attach workflows.
     [ $# -ge 1 ] || { echo "Usage: tesl --debug [--test-name <name>] <file.tesl>" >&2; exit 1; }
     _tesl_require_compiler
     exec "$TESL_OCAML_COMPILER" --debug "$@"
     ;;
+  --exe)
+    [ $# -ge 1 ] || { echo "Usage: tesl --exe <file.tesl> [--out <path>]" >&2; exit 1; }
+    _tesl_require_compiler
+    exec "$TESL_OCAML_COMPILER" --exe "$@"
+    ;;
   --deps)
-    # Passthrough: print all transitively imported local .tesl files, one per
-    # line. Used by the DAP debug adapter (dsl/debug/dap-server.rkt) to emit the
-    # debug-instrumented .rkt closure for a multi-module program.
+    # Print all transitively imported local .tesl files, one per line. Used by
+    # Go watch/debug tooling to build the dependency set to monitor.
     [ $# -ge 1 ] || { echo "Usage: tesl --deps <file.tesl>" >&2; exit 1; }
     _tesl_require_compiler
     exec "$TESL_OCAML_COMPILER" --deps "$@"

@@ -10,6 +10,8 @@ __pycache__/
 !.claude/commands/
 .direnv/
 _build/
+result-1/
+result-1
 # playground/build.sh's isolated dune build directory + its static output
 _build-playground/
 playground/dist/

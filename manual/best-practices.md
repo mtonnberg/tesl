@@ -694,7 +694,7 @@ Three requests hide behind that sentence, and they have three different answers.
 | A **large third-party ecosystem** — image processing, ML, PDF, a vendor SDK | A **separate service** the app calls over HTTP, per the initiator rule below | We are never going to re-implement it, and it does not have to live in our process to be usable |
 | **Arbitrary host access from app code** — a general `foreign fn` | **Never** | The return value would enter typed Tesl with no validating boundary, so it could forge any proof-annotated field, newtype, or ADT tag — a hole in the proof kernel, not a feature |
 
-The precedent for the first row is `Tesl.JWT`: `tesl/jwt.rkt` binds libcrypto's HMAC-SHA256 through Racket's FFI and exposes exactly `JWT.sign` / `JWT.verify` / `JWT.decode` under the `jwt` capability. Host FFI is allowed **maintainer-side**, inside the trusted core, with a narrow typed surface. It is never user-facing.
+The precedent for the first row is `Tesl.JWT`: the Go runtime binds the standard cryptographic primitives and exposes exactly `JWT.sign` / `JWT.verify` / `JWT.decode` under the `jwt` capability. Host integration is allowed **maintainer-side**, inside the trusted core, with a narrow typed surface. It is never user-facing.
 
 The load-bearing distinction across the whole table is **data boundary vs. host-value boundary**. A result that arrives as JSON crosses the validating decoder and cannot forge a proof — a `:::`-annotated record field will not even decode without a registered check ([`LANGUAGE-SPEC.md`](../LANGUAGE-SPEC.md) §11.17). A result that arrives as a host value bypasses every check Tesl makes.
 

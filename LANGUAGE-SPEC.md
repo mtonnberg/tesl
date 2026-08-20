@@ -838,7 +838,7 @@ fn f(s: String) -> String = String.trim(s)
 <prop-param> ::= <identifier> ":" <type> [ "where" <expr> ]
 ```
 
-Test blocks are first-class top-level declarations. They compile to Racket `module+ test` submodules using rackunit.
+Test blocks are first-class top-level declarations. They compile to Go test functions and run with `go test`.
 
 **`expect`** checks equality, comparison, or truthiness. **`expectFail`** asserts that an expression returns a check-fail or raises an exception.
 
@@ -4608,49 +4608,49 @@ Tesl provides a source-level step debugger using the Debug Adapter Protocol (DAP
 VSCode
   │  DAP JSON-RPC over stdio
   ▼
-dsl/debug/dap-server.rkt    — DAP protocol handler
-  │  spawns compiled .rkt with debug instrumentation
+runtime/go/cmd/tesl-dap     — DAP protocol handler
+  │  launches or attaches to a Go program with debug instrumentation
   ▼
-dsl/debug/checkpoint.rkt    — (thsl-src file line expr) macro
-  │  signals stopped events via Racket channels
+runtime/go/teslrt/debug.go  — source checkpoints and value snapshots
+  │  signals stopped events through the Go control channel
   ▼
-dap-server.rkt              — receives stopped events, serves variables/stackTrace
+tesl-dap                    — serves variables, stackTrace, and stepping
 ```
 
 ### 22.2 Compiling with debug instrumentation
 
-Pass `--debug` to the Tesl compiler:
+Pass `--debug` to the Go compiler:
 
 ```bash
-tesl --debug file.tesl
+tesl --debug file.tesl --out .tesl-stuff/go-debug
 ```
 
 When `--debug` is active:
-1. Every emitted expression is wrapped with `(thsl-src "file.tesl" LINE expr)` using the `loc` of the AST node.
-2. A `.tesl.srcmap.json` sidecar file is written alongside the compiled `.rkt` (when the `tesl` CLI manages the output, that pair lives under the project's `.tesl-stuff/build/` directory). It maps Tesl source lines to generated Racket lines:
+1. Debug checkpoints retain Tesl source locations and local-value accessors using the AST node locations.
+2. Debug metadata is emitted into the Go module under `.tesl-stuff/go-debug/` and maps Tesl source lines to generated Go lines:
 
 ```json
 {
   "tesl_file": "foo.tesl",
   "entries": [
-    { "tesl_line": 12, "rkt_line": 47 },
+    { "tesl_line": 12, "go_line": 47 },
     ...
   ]
 }
 ```
 
-The sidecar allows the DAP server to translate VSCode breakpoint line numbers into the correct Racket positions.
+The metadata allows the DAP server to translate VSCode breakpoint line numbers into generated Go positions.
 
 ### 22.3 VSCode integration
 
 The `editor/vscode-tesl` extension contributes a `debuggers` entry in `package.json`. Launching `Debug Tesl Program` via VSCode:
 
-1. Invokes `editor/vscode-tesl/debug/launch-dap.sh` which starts `dsl/debug/dap-server.rkt` via Racket.
-2. The DAP server compiles the `.tesl` file with `--debug`, loads the compiled `.rkt`, and runs it with `debug-enabled? = true`.
-3. Breakpoints set in VSCode are sent via `setBreakpoints` DAP messages. The `(thsl-src ...)` macro checks for a matching breakpoint, sends a stopped event, and waits on a resume channel.
-4. The variables panel calls `variables` → the `locals-thunk` captured at the pause point, which uses `thsl-display-value` to unwrap GDP proof wrappers and show plain user-level values.
+1. Starts the Go DAP server from `runtime/go/cmd/tesl-dap`.
+2. The DAP server compiles the `.tesl` file with Go debug instrumentation and launches the generated program.
+3. Breakpoints set in VSCode are sent via `setBreakpoints` DAP messages. Go checkpoints match source locations, send stopped events, and wait for resume commands.
+4. The variables panel calls `variables` and receives proof-unwrapped Go runtime values.
 
-**GDP value unwrapping in the debugger.** The `thsl-display-value` helper unwraps the runtime evidence layer before display: `named-value` structs are shown as their raw value (with proof tags listed as annotations), `newtype-value` is shown as its inner value, and `record-value` fields are recursed. The user sees the application-level value, not the proof-carrying runtime wrapper.
+**GDP value unwrapping in the debugger.** The Go value renderer unwraps the runtime evidence layer before display. The user sees the application-level value, not the proof-carrying runtime wrapper.
 
 ### 22.4 Phase 1 capabilities (implemented)
 
