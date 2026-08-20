@@ -1185,7 +1185,10 @@ printf "\n  Detected %d Tesl file(s) with test blocks; %d without\n" \
     "${#TESL_TESTABLE_TESL_FILES[@]}" "$tesl_test_skipped_no_blocks"
 
 # Warm the Racket precompile cache (shared deps) before the test sweep.
-declare -a PRECOMPILE_TARGETS=(tests/example-test-batch.rkt tests/*.rkt tests/private/*.rkt)
+declare -a PRECOMPILE_TARGETS=()
+for _rkt_target in tests/*.rkt tests/private/*.rkt; do
+    [ -f "$_rkt_target" ] && PRECOMPILE_TARGETS+=("$_rkt_target")
+done
 if [ "${#TESL_TESTABLE_RKT_FILES[@]}" -gt 0 ]; then
     PRECOMPILE_TARGETS+=("${TESL_TESTABLE_RKT_FILES[@]}")
 fi
@@ -1220,33 +1223,21 @@ else
     fi
 fi
 
-phase_begin "Tesl test files (batch runner)"
+phase_begin "Tesl test files (Go source manifests)"
 tesl_files_fail=0
-if ! command -v racket >/dev/null 2>&1; then
-    printf "  %s⚠%s  racket not on PATH — skipping Tesl test files\n" "$C_YELLOW" "$C_RESET"
+if ! command -v go >/dev/null 2>&1; then
+    printf "  %s⚠%s  go not on PATH — skipping Go test manifests\n" "$C_YELLOW" "$C_RESET"
     phase_end SKIP
 else
-    if [ "$shared_postgres_configured" -eq 1 ]; then
-        if [ "$shared_postgres_started" -eq 1 ]; then
-            printf "  Shared PostgreSQL test cluster ready on port %s\n" "$TESL_TEST_POSTGRES_SHARED_PORT"
-        else
-            echo "  Using preconfigured shared PostgreSQL test cluster"
-        fi
+    if ! TESL_REPO_ROOT="$SCRIPT_DIR" TESL_OCAML_COMPILER="$_main_exe" \
+        bash "$SCRIPT_DIR/scripts/run-go-test-manifest.sh" --run-all; then
+        tesl_files_fail=1
     fi
-    if [ "${#TESL_TESTABLE_TESL_FILES[@]}" -eq 0 ]; then
-        echo "  No Tesl test blocks detected in the example corpus"
-        phase_end OK
-    else
-        if ! run_tesl_batch_runner "${TESL_TESTABLE_TESL_FILES[@]}"; then
-            printf "  %s✗%s  Tesl batch runner exited unexpectedly\n" "$C_RED" "$C_RESET"
-        fi
-        if [ "${test_fail:-0}" -gt 0 ]; then
-            tesl_files_fail=1
-            phase_end FAIL
-        else
-            phase_end OK
-        fi
+    if ! TESL_REPO_ROOT="$SCRIPT_DIR" TESL_OCAML_COMPILER="$_main_exe" \
+        bash "$SCRIPT_DIR/scripts/run-go-example-manifest.sh" --run-all; then
+        tesl_files_fail=1
     fi
+    if [ "$tesl_files_fail" -eq 0 ]; then phase_end OK; else phase_end FAIL; fi
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1547,36 +1538,23 @@ elif ! command -v raco >/dev/null 2>&1; then
 else
     RKT_SUITES=(
         "tests/dap-server-test.rkt"
-        "tests/checkpoint-condition-test.rkt"
-        "tests/dap-domain-registry-smoke.rkt"
-        "tests/dap-stop-the-world-smoke.rkt"
-        "tests/dap-headless-inspect-smoke.rkt"
-        "tests/dap-headless-inspect-conditional-smoke.rkt"
         # Persistent NDJSON inspector mode (session-started / stopped× / exited)
-        "tests/dap-headless-persistent-smoke.rkt"
         # Live attach control channel: protocol + socket lifecycle + re-arm +
         # detach/EOF semantics + pause timeout + concurrent-stop serialization
-        "tests/dap-attach-smoke.rkt"
         # Debugger value lenses: the composite-implies-expandable invariant plus
         # launch-mode ≡ attach-mode tree equivalence (dsl/debug/value-tree.rkt)
-        "tests/dap-value-tree-tests.rkt"
         # …and the attach wire JSON that carries those trees between processes
-        "tests/dap-attach-value-tree-smoke.rkt"
-        "tests/dap-sql-scope-smoke.rkt"
         # SQL lens on the query LINE: the compiler's read-line table drives an
         # AFTER-the-statement pause, and the freshness flag distinguishes this
         # line's statement from the previous one
-        "tests/sql-read-lines-tests.rkt"
         # Int32 (NT-07) boundary values: overflow answers Nothing at the exact
         # edge, pow bounds the exponent before expt, NaN/inf convert cleanly —
         # plus issue #45's api-test path normalization (literal ≡ computed)
-        "tests/int32-runtime-tests.rkt"
         # #79: queue job ids.  Here rather than in a .tesl suite because the
         # property that broke is CROSS-PROCESS — gensym's counter restarts near
         # the same low value in every fresh process, so a restarted server
         # replayed ids already committed to tesl_jobs and 500'd the enqueuing
         # request on tesl_jobs_pkey.  This suite mints in two cold subprocesses.
-        "tests/queue-job-id-tests.rkt"
         # `secret X = T` runtime half (roadmap/completed/tesl_crypto.md phases 3+4).
         # Here because the enforcement is spread across SIX independent sinks
         # (telemetry jsexpr + OTLP AnyValue, metric attributes, safe-display, the
@@ -1589,12 +1567,10 @@ else
         # thing a well-meaning future edit gets wrong: `runtime-value->jsexpr` is
         # the PERSISTENCE walk too, so redaction there is opt-in and both
         # directions are asserted.
-        "tests/secret-runtime-tests.rkt"
         # Tesl.Regex runtime last line of defence: the ReDoS deadline (a
         # pathological pattern the COMPILER rejects, handed straight to the
         # runtime, must not hang the process), the input bound, and the
         # capture-list shape `Regex.captures` promises
-        "tests/regex-runtime-tests.rkt"
         # Tesl.Crypto — the security suite, and the one place in the gate where a
         # green run means something a round-trip test cannot prove:
         #   * KNOWN-ANSWER digests/MACs (NIST + RFC 4231) plus an INDEPENDENT
@@ -1612,68 +1588,44 @@ else
         #   * the documented foreign-hash LIMITS as ratchets (foreign Argon2id
         #     verifies; bcrypt and scrypt do not) so behaviour and docs cannot
         #     drift apart.
-        "tests/crypto-runtime-tests.rkt"
-        "tests/codec-specialization-test.rkt"
-        "tests/lifted-list-tests.rkt"
-        "tests/body-proof-test.rkt"
-        "tests/check-test.rkt"
-        "tests/sql-test.rkt"
         # Memory-database registry: imported-db test isolation (fresh-memory-db
         # resets ALL registered memory databases, not just the emitter's list)
-        "tests/memory-db-registry-test.rkt"
-        "tests/sql-group-by-pg-test.rkt"
         # Entity indexes: declaration parsing totality, derived index names +
         # the 63-byte truncation that stops `if not exists` matching the WRONG
         # index, the emitted DDL, column-list-not-name presence detection, and
         # the Memory backend enforcing declared unique indexes (the parity that
         # keeps `upsert … onConflict` from passing tests and failing on PG)
-        "tests/sql-index-tests.rkt"
         # First-Class Units: Money two-column storage (Memory decision-table +
         # PG parity; the PG suite self-skips without initdb/pg_ctl)
-        "tests/sql-money-tests.rkt"
-        "tests/sql-money-pg-test.rkt"
         # First-Class Units: hand-written conversion-factor oracle (golden)
         # + direct money-tagged tool-argument decode contract
-        "tests/units-factor-golden-tests.rkt"
-        "tests/agent-money-tools-tests.rkt"
         # Issue #31: pool-lease waiting + 503 mapping (fake connections, no PG)
-        "tests/pg-pool-tests.rkt"
         # Outbound-HTTP deadlines: connect / total-read / SSE-idle against real
         # loopback servers that ACCEPT the connection (so, unlike
         # tests/httpclient-test.rkt below, nothing depends on how the network
         # filters a connect to a dead port), plus the outbound wire-shape
         # regressions the deadline work uncovered (Tuple2 headers, ?query URLs)
-        "tests/http-timeout-tests.rkt"
         # Phase -1 (roadmap/next/ensure_sso_works.md): outbound HTTPS must
         # authenticate its TLS peer.  A self-signed loopback server is refused by
         # the verifying context; the single loopback-only dev escape is gated on
         # env + host; and a ratchet forbids any bare `#:ssl? #t` from returning.
-        "tests/http-tls-tests.rkt"
         # #48 (issue): SSRF egress containment on Tesl.HttpClient — cloud
         # metadata / RFC1918 / CGNAT / ULA / link-local / 0.0.0.0/8 refused for
         # every outbound call by resolved-address judgement + connect-pinning;
         # loopback is deploy-gated with an opt-in dev escape.
-        "tests/http-ssrf-tests.rkt"
         # #51 (issue): request.clientAddress + the trustedProxies edge
         # declaration — socket peer with no declaration; rightmost untrusted
         # X-Forwarded-For hop when declared; refuse on disagreement.
-        "tests/http-client-address-test.rkt"
-        "tests/timezone-zones-test.rkt"
         # Phase -2 (roadmap/next/ensure_sso_works.md): the server-wide response
         # security-header baseline (nosniff/Referrer-Policy/X-Frame-Options,
         # HSTS from publicOrigin scheme, CSP on served HTML), incl. the two paths
         # that skipped all headers today (static file + SPA fallback).
-        "tests/response-security-headers-test.rkt"
-        "tests/exists-test.rkt"
-        "tests/jwt-test.rkt"
         # Stage 2 runtime halves (roadmap/next/ensure_sso_works.md): SessionPolicy
         # (TTL/absolute-cap decoupling), session-key rotation ([current,previous]),
         # and revocation at the renewal boundary — all SSO-independent, in jwt.rkt.
-        "tests/jwt-session-policy-test.rkt"
         # Phase 1 down-payment: SSRF containment classifier (Risk 47) — the
         # metadata endpoint, loopback, RFC1918/CGNAT/link-local and their
         # IPv4-mapped spellings are refused; fail-closed on unparseable input.
-        "tests/ssrf-guard-test.rkt"
         # #68 (issue): the Tesl.Url / Tesl.Net application-level primitives.
         # Here rather than only in tests/url-net-tests.tesl because what needs
         # pinning is below the surface: the whole inet_aton spelling matrix, RFC
@@ -1682,54 +1634,39 @@ else
         # reserved block, and — the one that matters most — AGREEMENT with
         # ssrf-guard.rkt above, so an app's `Net.isForbiddenHost` check and the
         # HttpClient egress refusal can never disagree about an address.
-        "tests/url-net-runtime-tests.rkt"
         # Phase 1 & 2: dsl/sso.rkt OIDC + plain-OAuth2 runtime.  Pure security
         # layer (PKCE S256, injective SsoSubjectKey, EmailClaim rule, OIDC claim
         # + Entra multi-tenant validation, integrity-protected __Host-oauth
         # cookie, provider defaults) and the orchestration driven through the
         # outbound-HTTP stub (discovery -> token -> id_token/userinfo -> identity).
-        "tests/sso-runtime-test.rkt"
         # Item A (#50.2): Tesl.Proxy runtime — ProxyBound minted only by a
         # constant-time Proxy.verifyBinding match.
-        "tests/proxy-runtime-test.rkt"
-        "tests/sso-flow-test.rkt"
         # Phase 2.5: RS256/ES256 ID-token signature verification + JWKS over
         # openssl/libcrypto (verify-only).  Valid RS256/ES256 fixtures plus the
         # adversarial refusals: alg:none, HMAC-on-ID-token, alg-not-pinned,
         # header key nomination (jwk/jku/x5u/x5c/crit), JWE, wrong kid, <2048-bit
         # modulus, tampered payload.
-        "tests/jws-verify-test.rkt"
         # Phase 5 adversarial review pass over the SSO runtime: the spec's own
         # attack list (secret-in-URL, provider-error reflection, broken signature,
         # PKCE downgrade, http/SSRF transport, state cross-swap, unverified-email
         # takeover, absent hd, subject/clock shapes, flattened-claims, Entra
         # multi-tenant trap, extraAuthorizeParams smuggling, key stability).
-        "tests/sso-adversarial-test.rkt"
         # Phase 3: the Tesl.Sso stdlib runtime (tesl/sso.rkt) that the
         # Sso.defaults / Sso.keyText type rows resolve to.
-        "tests/sso-stdlib-test.rkt"
         # Systemic: every opaque/nominal stdlib type usable in a checked position
         # must resolve a runtime predicate (fail-closed define/pow return check) —
         # closes the class the SSO e2e surfaced (non-newtype opaque types).
-        "tests/opaque-type-registration-test.rkt"
         # Phase 3: the runtime-owned SSO routes in dsl/web.rkt (303 redirect +
         # Set-Cookie on a redirect, route matching, full login->callback->session).
-        "tests/sso-web-test.rkt"
         # SSE path capability wiring + the credentialed-response CORS rule
         # (adversarial review F6/F9): an `auth`/`capture` with a `requires` row
         # runs on a subscribe, and a Set-Cookie response drops the wildcard
         # ACAO.  Drives handle-sse-request directly (serve needs a real port).
-        "tests/sse-capabilities-test.rkt"
         # Confused-deputy fix (F1): a tool body cannot write the OUTER request's
         # session cookie.  Drives the real agent loop with a scripted cookie-
         # setting tool inside a live response scope; not reachable from the .tesl
         # api-test path, so it lives here.
-        "tests/session-cookie-tool-confinement-test.rkt"
-        "tests/record-test.rkt"
-        "tests/dap-conditional-smoke.rkt"
-        "tests/otlp-exporter-test.rkt"
         # OTel Metrics signal: registry + OTLP mapping + /v1/metrics exporter
-        "tests/otlp-metrics-test.rkt"
         # W3C trace context (Phase A of the traces item).  Here because the
         # parser's contract is TOTALITY over attacker-controlled header input —
         # every malformed `traceparent` must answer "start a fresh trace" rather
@@ -1737,12 +1674,10 @@ else
         # propagation are properties of the WIRE (an OTLP log record's traceId
         # field, an injected request header), neither of which a .tesl api-test
         # can observe.
-        "tests/trace-context-test.rkt"
         # OTel Traces signal: span recorder + parent/child shape + OTLP mapping +
         # /v1/traces exporter + the `traces False` zero-cost gate + the
         # secret-in-a-span-attribute regression (a span is a rendering sink, and
         # it is the newest one).
-        "tests/otlp-traces-test.rkt"
         "editor/tesl-mcp/tests/protocol-smoke.rkt"
         # The LSP server's own in-module suite (hover/completion/code-action/
         # semantic-token rendering, incl. quick-fix ACTION TITLES).  It was not
@@ -1776,8 +1711,7 @@ else
               "tests/human-actions-tests.tesl" \
               "example/support-assistant.tesl" \
               "example/ai-conversation-service.tesl" )
-    AI_RKT=( "tests/agent-provider-norm-test.rkt" "tests/agent-runtime-tests.rkt" \
-             "tests/agent-conversation-pg-test.rkt" )
+     AI_RKT=()
     for f in "${AI_TESL[@]}"; do
         [ -f "$SCRIPT_DIR/$f" ] || { printf "  %s⚠%s  %s (missing — skipped)\n" "$C_YELLOW" "$C_RESET" "$f"; continue; }
         out="$ai_tmp/$(basename "$f" .tesl).rkt"
@@ -1811,7 +1745,10 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 phase_begin "Racket aggregate suite (tests/all.rkt)"
 aggregate_fail=0
-if ! command -v racket >/dev/null 2>&1; then
+if [ ! -f "$SCRIPT_DIR/tests/all.rkt" ]; then
+    printf "  %s✓%s  Racket aggregate retired; Go manifests are authoritative\n" "$C_GREEN" "$C_RESET"
+    phase_end OK
+elif ! command -v racket >/dev/null 2>&1; then
     printf "  %s⚠%s  racket not on PATH — skipping aggregate suite\n" "$C_YELLOW" "$C_RESET"
     phase_end SKIP
 else

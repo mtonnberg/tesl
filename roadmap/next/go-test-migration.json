@@ -1,14 +1,14 @@
 {
   "version": 1,
-  "scope": "tests/*.rkt",
+  "scope": "tests/*.tesl + runtime/go + compiler/test + tests/go-cli-smoke.sh",
   "paired": {
     "source_suffix": ".tesl",
-    "expected_count": 71,
+    "expected_count": 74,
     "owner": "Go backend corpus",
     "evidence": "scripts/run-go-test-manifest.sh --run-all",
     "status": "green"
   },
-  "racket_only": {
+  "go_replacements": {
     "expected_count": 72,
     "green_count": 72,
     "planned_count": 0,

@@ -18,6 +18,7 @@ run_pid=""
 mcp_pid=""
 cleanup() {
   [ -n "$mcp_pid" ] && kill "$mcp_pid" 2>/dev/null || true
+  [ -n "$run_pid" ] && pkill -TERM -P "$run_pid" 2>/dev/null || true
   [ -n "$run_pid" ] && kill "$run_pid" 2>/dev/null || true
   [ -n "$run_pid" ] && wait "$run_pid" 2>/dev/null || true
   [ -n "$mcp_pid" ] && wait "$mcp_pid" 2>/dev/null || true
@@ -184,6 +185,7 @@ if command -v curl >/dev/null 2>&1; then
     echo "go-cli-smoke: MCP attach response contained no stopped event" >&2
     exit 1
   }
+  pkill -TERM -P "$run_pid" 2>/dev/null || true
   kill "$run_pid" 2>/dev/null || true
   wait "$run_pid" 2>/dev/null || true
   run_pid=""

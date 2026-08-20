@@ -12,11 +12,11 @@ test:
 # Proof-overhead benchmark.
 # ---------------------------------------------------------------------------
 
-# bench — proof-overhead benchmark.  Prints ns/call and bytes/call for a
-# proof-heavy hot path (fn with 3 proof params) under the zero-cost erasure.
-# `make bench` runs a moderate size; `make bench-quick` is a CI smoke run.
+# bench — Go runtime replacements for the proof and codec overhead probes.
+# `make bench` runs the normal Go benchmark budget; `make bench-quick` is a
+# short CI smoke run.
 bench:
-	racket tests/bench/proof-overhead.rkt --iters 300000 --trials 5
+	cd runtime/go && go test ./teslrt -run '^$$' -bench 'Benchmark(Proof|Codec)Overhead' -benchmem
 
 bench-quick:
-	racket tests/bench/proof-overhead.rkt --quick
+	cd runtime/go && go test ./teslrt -run '^$$' -bench 'Benchmark(Proof|Codec)Overhead' -benchtime=100ms -benchmem

@@ -11,12 +11,10 @@ mode=${1:---list}
 }
 
 mapfile -t paired_sources < <(
-  for racket_path in $(git -C "$repo_root" ls-files 'tests/*.rkt' | sort); do
-    source_path="${racket_path%.rkt}.tesl"
-    if git -C "$repo_root" ls-files --error-unmatch "$source_path" >/dev/null 2>&1; then
-      printf '%s\n' "$source_path"
-    fi
-  done
+  git -C "$repo_root" ls-files 'tests/*.tesl' |
+    while IFS= read -r source_path; do
+      [[ -f "$repo_root/$source_path" ]] && printf '%s\n' "$source_path"
+    done | sort
 )
 
 case "$mode" in
@@ -29,8 +27,8 @@ case "$mode" in
       /*) path=$source ;;
       *) path="$repo_root/$source" ;;
     esac
-    git -C "$repo_root" ls-files --error-unmatch "${path#"$repo_root/"}" >/dev/null 2>&1 || {
-      printf 'Go test manifest: file is not a tracked paired source: %s\n' "$source" >&2
+    [[ -f "$path" ]] || {
+      printf 'Go test manifest: file is not an existing Tesl source: %s\n' "$source" >&2
       exit 2
     }
     output_root=$(mktemp -d "${TMPDIR:-/tmp}/tesl-go-test.XXXXXXXX")
