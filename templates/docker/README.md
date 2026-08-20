@@ -1,6 +1,6 @@
 # Tesl Docker Templates
 
-Templates package the Go module emitted by `tesl build --backend go`.
+Templates package the Go application emitted by `tesl build`.
 
 ## Context
 
@@ -26,8 +26,8 @@ PostgreSQL container.
 ## Build
 
 ```sh
-tesl build --backend go --container
-tesl build --backend go --container --no-docker --out ./context
+tesl build --container
+tesl build --container --no-docker --out ./context
 docker build -t myorg/my-app:latest ./context
 ```
 

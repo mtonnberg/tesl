@@ -56,17 +56,17 @@ mkdir -p "$TMP/project"
 cp "$REPO_ROOT/example/todo-api.tesl" "$TMP/project/todo-api.tesl"
 printf '%s\n' '[project]' 'name = "go-cli-smoke"' 'entrypoint = "todo-api.tesl"' > "$TMP/project/tesl.toml"
 
-(cd "$TMP/project" && run_cli compile todo-api.tesl) || {
-  echo "go-cli-smoke: default Go compile failed" >&2
+(cd "$TMP/project" && run_cli emit go todo-api.tesl) || {
+  echo "go-cli-smoke: default Go emission failed" >&2
   exit 1
 }
 [ -f "$TMP/project/.tesl-stuff/go-build/go.mod" ] || {
-  echo "go-cli-smoke: default compile did not emit go.mod" >&2
+  echo "go-cli-smoke: default emission did not emit go.mod" >&2
   exit 1
 }
 
 context="$TMP/context"
-(cd "$TMP/project" && run_cli build --backend go --container --no-docker --out "$context") || {
+  (cd "$TMP/project" && run_cli build --container --no-docker --out "$context") || {
   echo "go-cli-smoke: Go Docker context staging failed" >&2
   exit 1
 }
@@ -81,7 +81,7 @@ for template_spec in "minimal-go:minimal:none" "api-go:api:existing"; do
     echo "go-cli-smoke: $template template initialization failed" >&2
     exit 1
   }
-  (cd "$TMP/$project" && run_cli compile app.tesl && run_cli test app.tesl &&
+  (cd "$TMP/$project" && run_cli emit go app.tesl && run_cli test app.tesl &&
     run_cli build --no-docker --out "$TMP/$project-context") || {
     echo "go-cli-smoke: $template template Go workflow failed" >&2
     exit 1
@@ -142,7 +142,7 @@ if command -v curl >/dev/null 2>&1; then
     cd "$TMP/live-project" && \
       TESL_REPO_ROOT="$REPO_ROOT" TESL_OCAML_COMPILER="$COMPILER" \
       TESL_DEFAULT_BACKEND=go TESL_GO="${TESL_GO:-go}" \
-      bash "$BODY" run --backend go --debug lesson17-telemetry.tesl
+      bash "$BODY" run --debug lesson17-telemetry.tesl
   ) >"$TMP/live-run.log" 2>&1 &
   run_pid=$!
   live_ready=false

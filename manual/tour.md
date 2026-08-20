@@ -933,7 +933,7 @@ requires a proof:
 
 ```text
 $ tesl validate api.tesl
-api.tesl:47: tesl compile error
+api.tesl:47: tesl validation error
   argument `email` in call to `sendWelcome` requires proof `ValidEmail email`
   the value has type `String` but does not carry the `ValidEmail` proof
   hint: use a `check` function to validate it first:

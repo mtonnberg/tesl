@@ -98,7 +98,7 @@ The Go runtime check helpers validate the boundary, run the body, and carry the 
 
 ```bash
 # Inside the dev shell (`nix develop`):
-tesl compile example/todo-api.tesl  # emit a Go module
+tesl emit go example/todo-api.tesl  # emit a Go module
 tesl --check example/todo-api.tesl  # type-check only
 tesl --lint  example/todo-api.tesl  # lint warnings
 tesl --fmt   example/todo-api.tesl  # format in-place

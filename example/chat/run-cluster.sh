@@ -73,7 +73,7 @@ export CHAT_DB_SOCKET=""
 
 # ─── Start three backend instances ────────────────────────────────────────────
 echo "build backend"
-tesl compile example/chat/chat-backend.tesl
+tesl emit go example/chat/chat-backend.tesl
 
 echo "▶  Starting backend instance on port 3000..."
 CHAT_PORT=3000 TESL_VERBOSE=0 tesl run example/chat/chat-backend.tesl &

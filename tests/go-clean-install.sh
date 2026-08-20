@@ -20,8 +20,8 @@ mkdir -p "$tmp/home" "$tmp/work"
   cd "$tmp/work"
   "${clean_env[@]}" "$tesl_bin" init clean-app --template minimal --postgres none --yes >/dev/null
   cd clean-app
-  "${clean_env[@]}" "$tesl_bin" compile app.tesl >/dev/null
+  "${clean_env[@]}" "$tesl_bin" emit go app.tesl >/dev/null
   "${clean_env[@]}" "$tesl_bin" build --no-docker --out "$tmp/context" >/dev/null
 )
 
-printf 'Go clean install OK (Racket absent, CLI compile/build passed)\n'
+printf 'Go clean install OK (Racket absent, CLI emit/build passed)\n'

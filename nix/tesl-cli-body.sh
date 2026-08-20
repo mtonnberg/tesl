@@ -121,10 +121,16 @@ _tesl_file_stamp() {
 # `mktemp`; both dialects accept an explicit trailing-X template.
 _tesl_mktemp()     { mktemp  "${TMPDIR:-/tmp}/tesl.XXXXXXXX"; }
 _tesl_mktemp_dir() { mktemp -d "${TMPDIR:-/tmp}/tesl.XXXXXXXX"; }
+_tesl_project_mktemp_dir() {
+  local file="$1" prefix="$2" project
+  project="$(_tesl_project_root "$file")" || return 1
+  mkdir -p "$project/.tesl-stuff" || return 1
+  TMPDIR="$project/.tesl-stuff" _tesl_mktemp_dir
+}
 
 _tesl_test_go_file() {
   local file="$1" test_name="$2" test_kind="$3" root out status
-  root="$(_tesl_mktemp_dir)" || return 1
+  root="$(_tesl_project_mktemp_dir "$file" test-go)" || return 1
   out="$root/go"
   if ! "$TESL_OCAML_COMPILER" "$file" --out "$out"; then
     rm -rf "$root"
@@ -141,7 +147,7 @@ _tesl_run_go_file() {
   local file="$1" debug="$2" project root out binary status
   shift 2
   project="$(_tesl_project_root "$file")" || return 1
-  root="$(_tesl_mktemp_dir)" || return 1
+  root="$(_tesl_project_mktemp_dir "$file" run-go)" || return 1
   out="$root/go"
   if [ "$debug" = "1" ]; then
     "$TESL_OCAML_COMPILER" "$file" --out "$out" --debug || { rm -rf "$root"; return 1; }
@@ -190,7 +196,7 @@ $dep"
       [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
       [ -n "$pid" ] && wait "$pid" 2>/dev/null || true
       [ -n "$root" ] && rm -rf "$root"
-      root="$(_tesl_mktemp_dir)" || return 1
+      root="$(_tesl_project_mktemp_dir "$file" watch-go)" || return 1
       out="$root/go"
       echo "[tesl watch] Compiling Go module..."
       if "$TESL_OCAML_COMPILER" "$file" --out "$out" && [ -d "$out/cmd/app" ] && \
@@ -1465,6 +1471,14 @@ for _tesl_arg in "$@"; do
 done
 unset _tesl_previous_arg _tesl_arg
 
+# Public Go source emission command. `compile` remains an unadvertised
+# compatibility alias for older scripts and editor integrations.
+if [ "$CMD" = "emit" ]; then
+  [ "${1:-}" = "go" ] || { echo "Usage: tesl emit go [file.tesl] [--out DIR]" >&2; exit 1; }
+  shift
+  CMD="compile"
+fi
+
 case "$CMD" in
   --test-name)
     # Top-level convenience form for running one Go test block.
@@ -1533,7 +1547,7 @@ case "$CMD" in
     fi
     if [ "$COMPILE_BACKEND" = "go" ]; then
       if [ $# -eq 0 ]; then
-        _TESL_ENTRY="$(_tesl_default_entry "tesl compile [file.tesl]")" || exit 1
+        _TESL_ENTRY="$(_tesl_default_entry "tesl emit go [file.tesl]")" || exit 1
         set -- "$_TESL_ENTRY"
       fi
       FILE="$1"
@@ -1543,17 +1557,17 @@ case "$CMD" in
         OUT_GO="${2:?--out requires a directory}"
         shift 2
       fi
-      [ $# -eq 0 ] || { echo "tesl compile --backend go: unexpected argument $1" >&2; exit 2; }
+      [ $# -eq 0 ] || { echo "tesl emit go: unexpected argument $1" >&2; exit 2; }
       _tesl_require_compiler
       OUT_GO="$(_tesl_compile_go_file "$FILE" "$OUT_GO")" || exit 1
       echo "compiled Go module: $FILE → $OUT_GO"
       exit 0
     elif [ "$COMPILE_BACKEND" != "racket" ]; then
-      echo "tesl compile: unsupported backend '$COMPILE_BACKEND' (use go)" >&2
+      echo "tesl emit go: unsupported backend '$COMPILE_BACKEND' (use go)" >&2
       exit 2
     fi
     if [ $# -eq 0 ]; then
-      _TESL_ENTRY="$(_tesl_default_entry "tesl compile [file.tesl]")" || exit 1
+      _TESL_ENTRY="$(_tesl_default_entry "tesl emit go [file.tesl]")" || exit 1
       set -- "$_TESL_ENTRY"
     fi
     FILE="$1"
@@ -2015,7 +2029,7 @@ Usage:
                            [--app-only|--with-postgres]      ([deploy].target = "local") or a
                            [--tag NAME] [--no-docker]        runnable Docker image
                            [--out DIR]                       ([deploy].target = "container")
-    tesl compile             [file.tesl]  Compile source
+    tesl emit go             [file.tesl]  Emit Go source (advanced)
   tesl clean                                              Delete the project's build output (.tesl-stuff/build/)
   tesl check               [file.tesl ...]               Type-check without output
   tesl lint                <file.tesl> [more.tesl ...]   Run the opinionated linter

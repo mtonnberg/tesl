@@ -435,7 +435,7 @@ ignored if all test assertions passed.
 
 ```bash
 # Emit a Go module from a .tesl file:
-tesl compile example/todo-api.tesl
+tesl emit go example/todo-api.tesl
 
 # Check a file for errors only:
 dune exec --root compiler -- bin/main.exe --check my-file.tesl

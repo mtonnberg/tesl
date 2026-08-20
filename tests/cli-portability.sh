@@ -68,7 +68,7 @@ scan() {
 
 scan "no 'mktemp --suffix' (GNU-only)"            'mktemp[^|]*--suffix'
 scan "no template-less 'mktemp' (BSD needs one)"  'mktemp( +-[dqu]+)* *(\)|\||$|")' \
-                                                  '_tesl_mktemp'
+                                                  '_tesl_mktemp|_tesl_project_mktemp_dir'
 scan "no 'readlink -f' (BSD readlink has no -f)"  'readlink +-[a-zA-Z]*f'
 scan "no 'realpath' (absent on macOS; --relative-to is GNU)" '(^|[^_[:alnum:]])realpath[^_[:alnum:]]'
 scan "no 'stat -c' outside the dialect-probing helper" 'stat +-c' 'v="\$\(stat -c'
@@ -253,15 +253,15 @@ test "quad 3 == 12" {
 }
 EOF
 
-# 1) compile (this is the exact path that died with `: No such file or directory`)
-out="$(tesl_bsd "$PROJ" compile --backend go main.tesl)"; rc=$?
+# 1) Go emission (this is the exact path that died with `: No such file or directory`)
+out="$(tesl_bsd "$PROJ" emit go main.tesl)"; rc=$?
 if [ "$rc" -eq 0 ] && [ -f "$PROJ/.tesl-stuff/go-build/go.mod" ]; then
-  pass "tesl compile works with a BSD mktemp/stat/readlink"
+  pass "tesl emit go works with a BSD mktemp/stat/readlink"
 else
-  fail "tesl compile failed under BSD userland (rc=$rc): $out"
+  fail "tesl emit go failed under BSD userland (rc=$rc): $out"
 fi
 
-# 2) bare `tesl compile` / `tesl check` default to [project].entrypoint (#46.2)
+# 2) bare `tesl emit go` / `tesl check` default to [project].entrypoint (#46.2)
 out="$(tesl_bsd "$PROJ" check)"; rc=$?
 if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "entrypoint main.tesl"; then
   pass "bare 'tesl check' uses [project].entrypoint"
@@ -286,7 +286,7 @@ else
 fi
 
  # 4) bare `tesl test` runs the test blocks (README's documented command)
-out="$(tesl_bsd "$PROJ" test --backend go)"; rc=$?
+out="$(tesl_bsd "$PROJ" test)"; rc=$?
 if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "ok"; then
   pass "bare 'tesl test' runs the entrypoint's Go test blocks"
 else
@@ -295,7 +295,7 @@ fi
 
 # 5) `tesl build` with [deploy].target = "local" must NOT need Docker (#46.3)
 #    PATH deliberately has no docker: a Docker attempt fails the assertion.
-out="$(tesl_bsd "$PROJ" build --backend go)"; rc=$?
+out="$(tesl_bsd "$PROJ" build)"; rc=$?
 if [ "$rc" -eq 0 ] \
    && printf '%s' "$out" | grep -q "built Go module" \
    && ! printf '%s' "$out" | grep -qE "staged Dockerfile|building image" \
@@ -306,7 +306,7 @@ else
 fi
 
 # 6) …and --container still stages the image context on demand
-out="$(tesl_bsd "$PROJ" build --backend go --container --no-docker)"; rc=$?
+out="$(tesl_bsd "$PROJ" build --container --no-docker)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "does not define a main/server entrypoint"; then
   pass "tesl build --container rejects a non-application source explicitly"
 else
@@ -318,7 +318,7 @@ CPROJ="$WORK/cproj"
 mkdir -p "$CPROJ"
 sed 's/^target = "local"/target = "container"/' "$PROJ/tesl.toml" > "$CPROJ/tesl.toml"
 cp "$PROJ/main.tesl" "$PROJ/lib.tesl" "$CPROJ/"
-out="$(tesl_bsd "$CPROJ" build --backend go --no-docker)"; rc=$?
+out="$(tesl_bsd "$CPROJ" build --no-docker)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "does not define a main/server entrypoint"; then
   pass "tesl build rejects a non-application container target explicitly"
 else
@@ -341,7 +341,7 @@ fi
 #    and the resolved file path must still agree, or every file looks like it
 #    "resolves outside the project root".
 ln -s "$PROJ" "$WORK/linked"
-out="$(tesl_bsd "$WORK/linked" compile --backend go)"; rc=$?
+out="$(tesl_bsd "$WORK/linked" emit go)"; rc=$?
 if [ "$rc" -eq 0 ] && [ -f "$PROJ/.tesl-stuff/go-build/go.mod" ]; then
   pass "project reached via a symlinked path still resolves its build output"
 else

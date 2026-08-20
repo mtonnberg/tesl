@@ -147,7 +147,7 @@ parameters.
 
 4. **Compile** (generate a Go module):
    ```bash
-   tesl compile example/todo-api.tesl
+   tesl build example/todo-api.tesl
    ```
    The compiled module lands under the project's `.tesl-stuff/go-build/` directory
    (the command prints the exact path).

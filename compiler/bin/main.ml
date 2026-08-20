@@ -944,8 +944,22 @@ let print_diagnostic (d : Compile.diagnostic) =
             Printf.eprintf "  hint: run `tesl help %s` for an explanation\n" d.code
           | None -> ())))
 
-let fresh_go_output_dir () =
-  let path = Filename.temp_file "tesl-go-" "" in
+let project_root_for_file filename =
+  let absolute =
+    if Filename.is_relative filename then Filename.concat (Sys.getcwd ()) filename else filename
+  in
+  let rec seek dir =
+    if Sys.file_exists (Filename.concat dir "tesl.toml") then dir
+    else
+      let parent = Filename.dirname dir in
+      if parent = dir then Sys.getcwd () else seek parent
+  in
+  seek (Filename.dirname absolute)
+
+let fresh_go_output_dir filename =
+  let stuff = Filename.concat (project_root_for_file filename) ".tesl-stuff" in
+  ensure_directory stuff;
+  let path = Filename.temp_file ~temp_dir:stuff "go-emit-" "" in
   Sys.remove path;
   path
 
@@ -963,7 +977,7 @@ let build_go_executable filename out_opt =
     else filename
   in
   let exe_path = match out_opt with Some path -> path | None -> stem in
-  let temp_dir = fresh_go_output_dir () in
+  let temp_dir = fresh_go_output_dir filename in
   let cleanup () = ignore (Sys.command (Printf.sprintf "rm -rf %s" (Filename.quote temp_dir))) in
   try
     match Compile.compile_go_file filename with
@@ -1390,7 +1404,7 @@ let () =
        Printf.eprintf "error: %s\n" msg; exit 1)
 
    | ["--debug"; filename] ->
-     emit_go_file ~debug:true filename (fresh_go_output_dir ())
+     emit_go_file ~debug:true filename (fresh_go_output_dir filename)
 
    | ["--debug"; filename; "--out"; out_dir] ->
      emit_go_file ~debug:true filename out_dir
@@ -1550,7 +1564,7 @@ let () =
         Printf.printf "emitted debug Go module: %s\n" out_dir)
 
    | [filename] when not (String.length filename > 2 && filename.[0] = '-') ->
-     emit_go_file filename (fresh_go_output_dir ())
+     emit_go_file filename (fresh_go_output_dir filename)
 
   | ["--backend"; "racket"; filename] ->
     (match Compile.compile_file ~root_path ~type_check:true filename with

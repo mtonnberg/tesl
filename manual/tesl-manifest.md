@@ -41,7 +41,7 @@ target = "local"   # "local" | "container"
 | key          | type   | required | meaning |
 |--------------|--------|----------|---------|
 | `name`       | string | yes      | Human-facing project name. Used for the telemetry `service` string and the container image name. Does **not** have to be a valid Tesl module identifier — the module header is always `App` because the entrypoint file is `app.tesl`. |
-| `entrypoint` | string | yes      | Path (relative to the manifest) of the application `.tesl` file `tesl build` compiles. It is also the file the project verbs use when you give none: `tesl run`, `tesl test`, `tesl check`, `tesl compile`, `tesl validate` and `tesl watch` fall back to it (announced on stderr) whenever they are called with no `.tesl` argument from anywhere inside the project. |
+| `entrypoint` | string | yes      | Path (relative to the manifest) of the application `.tesl` file `tesl build` compiles. It is also the file the project verbs use when you give none: `tesl run`, `tesl test`, `tesl check`, `tesl emit go`, `tesl validate` and `tesl watch` fall back to it (announced on stderr) whenever they are called with no `.tesl` argument from anywhere inside the project. |
 
 ### `[env]`
 
