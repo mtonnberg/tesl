@@ -79,7 +79,8 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 func teslExpectFailure(teslT *testing.T, teslThunk func()) {
@@ -93,6 +94,12 @@ func teslExpectFailure(teslT *testing.T, teslThunk func()) {
 }
 
 func TestTesl0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkScore accepts valid score 0" && teslWanted != "TestTesl0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson61-step-debugging.tesl:173
 		n := teslrt.FromInt64(0)
@@ -110,6 +117,12 @@ func TestTesl0(teslT *testing.T) {
 }
 
 func TestTesl1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkScore accepts valid score 100" && teslWanted != "TestTesl1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson61-step-debugging.tesl:179
 		n := teslrt.FromInt64(100)
@@ -127,6 +140,12 @@ func TestTesl1(teslT *testing.T) {
 }
 
 func TestTesl2(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkScore accepts mid-range score" && teslWanted != "TestTesl2" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson61-step-debugging.tesl:185
 		n := teslrt.FromInt64(75)
@@ -144,6 +163,12 @@ func TestTesl2(teslT *testing.T) {
 }
 
 func TestTesl3(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkScore rejects negative score" && teslWanted != "TestTesl3" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson61-step-debugging.tesl:191
 		n := teslrt.Neg(teslrt.FromInt64(10))
@@ -166,6 +191,12 @@ func TestTesl3(teslT *testing.T) {
 }
 
 func TestTesl4(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkScore rejects score over 100" && teslWanted != "TestTesl4" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson61-step-debugging.tesl:198
 		n := teslrt.FromInt64(150)
@@ -178,6 +209,12 @@ func TestTesl4(teslT *testing.T) {
 }
 
 func TestTesl5(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "computeGrade returns A for 95" && teslWanted != "TestTesl5" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft4 := ComputeGrade(teslrt.FromInt64(95))
 //line lesson61-step-debugging.tesl:203
 	if teslLeft4 != "A" {
@@ -186,6 +223,12 @@ func TestTesl5(teslT *testing.T) {
 }
 
 func TestTesl6(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "computeGrade returns B for 85" && teslWanted != "TestTesl6" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft5 := ComputeGrade(teslrt.FromInt64(85))
 //line lesson61-step-debugging.tesl:207
 	if teslLeft5 != "B" {
@@ -194,6 +237,12 @@ func TestTesl6(teslT *testing.T) {
 }
 
 func TestTesl7(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "computeGrade returns C for 75" && teslWanted != "TestTesl7" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft6 := ComputeGrade(teslrt.FromInt64(75))
 //line lesson61-step-debugging.tesl:211
 	if teslLeft6 != "C" {
@@ -202,6 +251,12 @@ func TestTesl7(teslT *testing.T) {
 }
 
 func TestTesl8(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "computeGrade returns F for 55" && teslWanted != "TestTesl8" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft7 := ComputeGrade(teslrt.FromInt64(55))
 //line lesson61-step-debugging.tesl:215
 	if teslLeft7 != "F" {

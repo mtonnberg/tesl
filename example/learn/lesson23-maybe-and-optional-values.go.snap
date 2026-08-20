@@ -161,10 +161,17 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 func TestTesl0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "safeHead returns Nothing for empty list" && teslWanted != "TestTesl0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson23-maybe-and-optional-values.tesl:109
 		xs := []teslrt.Int{}
@@ -179,6 +186,12 @@ func TestTesl0(teslT *testing.T) {
 }
 
 func TestTesl1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "safeDivideInt returns Nothing for zero divisor" && teslWanted != "TestTesl1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft2 := SafeDivideInt(teslrt.FromInt64(10), teslrt.FromInt64(0))
 	teslRight2 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}
 //line lesson23-maybe-and-optional-values.tesl:114
@@ -188,6 +201,12 @@ func TestTesl1(teslT *testing.T) {
 }
 
 func TestTesl2(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "safeDivideInt returns result for nonzero divisor" && teslWanted != "TestTesl2" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson23-maybe-and-optional-values.tesl:118
 		result := SafeDivideInt(teslrt.FromInt64(10), teslrt.FromInt64(2))
@@ -201,6 +220,12 @@ func TestTesl2(teslT *testing.T) {
 }
 
 func TestTesl3(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "combineOptionals returns Nothing if first is Nothing" && teslWanted != "TestTesl3" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft4 := CombineOptionals(teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}, teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(5)})
 	teslRight4 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}
 //line lesson23-maybe-and-optional-values.tesl:123
@@ -210,6 +235,12 @@ func TestTesl3(teslT *testing.T) {
 }
 
 func TestTesl4(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "combineOptionals returns Nothing if second is Nothing" && teslWanted != "TestTesl4" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft5 := CombineOptionals(teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(3)}, teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing})
 	teslRight5 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}
 //line lesson23-maybe-and-optional-values.tesl:127
@@ -219,6 +250,12 @@ func TestTesl4(teslT *testing.T) {
 }
 
 func TestTesl5(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "combineOptionals returns sum when both present" && teslWanted != "TestTesl5" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft6 := CombineOptionals(teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(3)}, teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(4)})
 	teslRight6 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(7)}
 //line lesson23-maybe-and-optional-values.tesl:131
@@ -228,6 +265,12 @@ func TestTesl5(teslT *testing.T) {
 }
 
 func TestTesl6(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "getUserName returns fallback for Nothing" && teslWanted != "TestTesl6" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft7 := GetUserName(teslrt.Maybe[User]{Tag: teslrt.MaybeNothing})
 //line lesson23-maybe-and-optional-values.tesl:135
 	if teslLeft7 != "unknown" {

@@ -62,10 +62,17 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 func TestTesl0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkAge: boundary values kill all mutants" && teslWanted != "TestTesl0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft1 := teslrt.MustCheck(CheckAge(teslrt.FromInt64(18)))
 //line lesson42-mutation-testing.tesl:98
 	if !teslrt.Equal(teslLeft1, teslrt.FromInt64(18)) {
@@ -92,6 +99,12 @@ func TestTesl0(teslT *testing.T) {
 }
 
 func TestTesl1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkScore: boundary values kill all mutants" && teslWanted != "TestTesl1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft4 := teslrt.MustCheck(CheckScore(teslrt.FromInt64(0)))
 //line lesson42-mutation-testing.tesl:118
 	if !teslrt.Equal(teslLeft4, teslrt.FromInt64(0)) {
@@ -128,6 +141,12 @@ func TestTesl1(teslT *testing.T) {
 }
 
 func TestTesl2(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkDiscount: equality check \xe2\x80\x94 kills == \xe2\x86\x92 != mutant" && teslWanted != "TestTesl2" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft7 := teslrt.MustCheck(CheckDiscount(teslrt.FromInt64(42)))
 //line lesson42-mutation-testing.tesl:150
 	if !teslrt.Equal(teslLeft7, teslrt.FromInt64(42)) {

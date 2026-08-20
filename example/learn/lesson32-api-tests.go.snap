@@ -211,13 +211,20 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 // api-test raw JSON body and dynamic response fields
 //
 //line lesson32-api-tests.tesl:85
 func TestTeslApi0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "raw JSON body and dynamic response fields" && teslWanted != "TestTeslApi0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	teslResetTestState()
 	{
 //line lesson32-api-tests.tesl:86
@@ -242,6 +249,12 @@ func TestTeslApi0(teslT *testing.T) {
 //
 //line lesson32-api-tests.tesl:92
 func TestTeslApi1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "seed prepares fresh in-memory state" && teslWanted != "TestTeslApi1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	teslResetTestState()
 //line lesson32-api-tests.tesl:92
 //line lesson32-api-tests.tesl:94
@@ -267,6 +280,12 @@ func TestTeslApi1(teslT *testing.T) {
 //
 //line lesson32-api-tests.tesl:102
 func TestTeslApi2(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "state is isolated between blocks" && teslWanted != "TestTeslApi2" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	teslResetTestState()
 	{
 //line lesson32-api-tests.tesl:103

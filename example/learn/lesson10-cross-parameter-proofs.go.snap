@@ -67,10 +67,17 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 func TestTesl0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkValidRange valid" && teslWanted != "TestTesl0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson10-cross-parameter-proofs.tesl:106
 		lo1 := teslrt.FromInt64(1)
@@ -132,6 +139,12 @@ func TestTesl0(teslT *testing.T) {
 }
 
 func TestTesl1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkValidRange rejects equal/inverted" && teslWanted != "TestTesl1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line lesson10-cross-parameter-proofs.tesl:121
 	if (CheckValidRange(teslrt.FromInt64(5), teslrt.FromInt64(5))).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -143,6 +156,12 @@ func TestTesl1(teslT *testing.T) {
 }
 
 func TestTesl2(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "safePair clamps correctly" && teslWanted != "TestTesl2" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson10-cross-parameter-proofs.tesl:126
 		r1 := SafePair(teslrt.FromInt64(0), teslrt.FromInt64(10), teslrt.FromInt64(5))

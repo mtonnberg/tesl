@@ -251,7 +251,8 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 func teslExpectFailure(teslT *testing.T, teslThunk func()) {
@@ -265,6 +266,12 @@ func teslExpectFailure(teslT *testing.T, teslThunk func()) {
 }
 
 func TestTesl0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "Part 1: integer literal predicates" && teslWanted != "TestTesl0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft1 := TestAllBounds(teslrt.FromInt64(10))
 //line lesson53-literal-parametrized-predicates.tesl:188
 	if !teslrt.Equal(teslLeft1, teslrt.FromInt64(10)) {
@@ -330,6 +337,12 @@ func TestTesl0(teslT *testing.T) {
 }
 
 func TestTesl1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "Part 2: string literal predicates" && teslWanted != "TestTesl1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson53-literal-parametrized-predicates.tesl:212
 		port80 := teslrt.FromInt64(80)
@@ -362,6 +375,12 @@ func TestTesl1(teslT *testing.T) {
 }
 
 func TestTesl2(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "Part 3: mixed literal and variable subjects" && teslWanted != "TestTesl2" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft8 := testClampedLet(teslrt.FromInt64(50))
 //line lesson53-literal-parametrized-predicates.tesl:222
 	if !teslrt.Equal(teslLeft8, teslrt.FromInt64(50)) {
@@ -388,6 +407,12 @@ func TestTesl2(teslT *testing.T) {
 }
 
 func TestTesl3(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "Part 4: ForAll with literal-parametrized predicates" && teslWanted != "TestTesl3" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft11 := FilterInRange1to100([]teslrt.Int{teslrt.FromInt64(10), teslrt.FromInt64(20), teslrt.FromInt64(5), teslrt.FromInt64(30)})
 //line lesson53-literal-parametrized-predicates.tesl:231
 	if !teslrt.Equal(teslLeft11, teslrt.FromInt64(3)) {

@@ -194,10 +194,17 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 func TestTesl0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "describeInt" && teslWanted != "TestTesl0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft1 := DescribeInt(teslrt.FromInt64(0))
 //line lesson49-literal-patterns.tesl:126
 	if teslLeft1 != "zero" {
@@ -221,6 +228,12 @@ func TestTesl0(teslT *testing.T) {
 }
 
 func TestTesl1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "httpStatusText" && teslWanted != "TestTesl1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft5 := HttpStatusText(teslrt.FromInt64(200))
 //line lesson49-literal-patterns.tesl:133
 	if teslLeft5 != "OK" {
@@ -239,6 +252,12 @@ func TestTesl1(teslT *testing.T) {
 }
 
 func TestTesl2(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "parseCommand" && teslWanted != "TestTesl2" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft8 := ParseCommand("help")
 //line lesson49-literal-patterns.tesl:139
 	if teslLeft8 != "show help" {
@@ -257,6 +276,12 @@ func TestTesl2(teslT *testing.T) {
 }
 
 func TestTesl3(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "classifyChar" && teslWanted != "TestTesl3" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft11 := ClassifyChar("a")
 //line lesson49-literal-patterns.tesl:145
 	if teslLeft11 != "vowel" {
@@ -275,6 +300,12 @@ func TestTesl3(teslT *testing.T) {
 }
 
 func TestTesl4(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "discountForTier" && teslWanted != "TestTesl4" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft14 := DiscountForTier(Tier{Tag: TierEnterprise}, "any")
 //line lesson49-literal-patterns.tesl:151
 	if !teslrt.Equal(teslLeft14, teslrt.FromInt64(40)) {

@@ -20,12 +20,10 @@
           (channel-get err-ch)))
 
 (define-runtime-path postgres-test-path "postgres-test.rkt")
-(define-runtime-path example-api-test-path "example-api-test.rkt")
 (define-runtime-path surface-regression-test-path "surface-regression-test.rkt")
 (define-runtime-path existential-regression-test-path "existential-regression-test.rkt")
 (define-runtime-path security-test-path "security-test.rkt")
 (define-runtime-path tesl-test-path "tesl-test.rkt")
-(define-runtime-path port-test-path "port-test.rkt")
 (define-runtime-path codec-specialization-test-path "codec-specialization-test.rkt")
 
 (define (ensure-test-module-compiled path)
@@ -91,9 +89,7 @@
 
 (define (run-internal-tests)
   (load-test-module postgres-test-path)
-  (load-test-module example-api-test-path)
   (run-self-contained-test tesl-test-path 'tesl-test)
-  (run-self-contained-test port-test-path 'port-test)
   (run-self-contained-test codec-specialization-test-path 'codec-specialization-test)
   ;; surface/existential are validation-only and pass in the default zero-cost mode.
   (define failures

@@ -419,13 +419,20 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 // api-test background work runs without a subprocess
 //
 //line lesson74-interop-patterns.tesl:312
 func TestTeslApi0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "background work runs without a subprocess" && teslWanted != "TestTeslApi0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	teslResetTestState()
 	{
 //line lesson74-interop-patterns.tesl:313
@@ -488,6 +495,12 @@ func TestTeslApi0(teslT *testing.T) {
 //
 //line lesson74-interop-patterns.tesl:324
 func TestTeslApi1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "import and export need no filesystem" && teslWanted != "TestTeslApi1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	teslResetTestState()
 	{
 //line lesson74-interop-patterns.tesl:325

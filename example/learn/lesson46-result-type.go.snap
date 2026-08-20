@@ -394,10 +394,17 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 func TestTesl0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "Ok carries the success value" && teslWanted != "TestTesl0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft1 := okIntOrDefault(Divide(teslrt.FromInt64(10), teslrt.FromInt64(2)), teslrt.FromInt64(0))
 //line lesson46-result-type.tesl:187
 	if !teslrt.Equal(teslLeft1, teslrt.FromInt64(5)) {
@@ -406,6 +413,12 @@ func TestTesl0(teslT *testing.T) {
 }
 
 func TestTesl1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "Err carries the failure description" && teslWanted != "TestTesl1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft2 := errMsgOrEmpty(Divide(teslrt.FromInt64(10), teslrt.FromInt64(0)))
 //line lesson46-result-type.tesl:191
 	if teslLeft2 != "division by zero" {
@@ -414,6 +427,12 @@ func TestTesl1(teslT *testing.T) {
 }
 
 func TestTesl2(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "divide 10 by 2 is Ok" && teslWanted != "TestTesl2" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line lesson46-result-type.tesl:195
 	if !(isOkResult(Divide(teslrt.FromInt64(10), teslrt.FromInt64(2)))) {
 		teslT.Fatal("Tesl expectation failed")
@@ -421,6 +440,12 @@ func TestTesl2(teslT *testing.T) {
 }
 
 func TestTesl3(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "divide by zero is Err" && teslWanted != "TestTesl3" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line lesson46-result-type.tesl:199
 	if !(IsErr(Divide(teslrt.FromInt64(10), teslrt.FromInt64(0)))) {
 		teslT.Fatal("Tesl expectation failed")
@@ -428,6 +453,12 @@ func TestTesl3(teslT *testing.T) {
 }
 
 func TestTesl4(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "parseInt succeeds on a valid number" && teslWanted != "TestTesl4" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft3 := okIntOrDefault(ParseInt("42"), teslrt.FromInt64(0))
 //line lesson46-result-type.tesl:203
 	if !teslrt.Equal(teslLeft3, teslrt.FromInt64(42)) {
@@ -436,6 +467,12 @@ func TestTesl4(teslT *testing.T) {
 }
 
 func TestTesl5(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "parseInt fails on empty string" && teslWanted != "TestTesl5" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft4 := errMsgOrEmpty(ParseInt(""))
 //line lesson46-result-type.tesl:207
 	if teslLeft4 != "input is empty" {
@@ -444,6 +481,12 @@ func TestTesl5(teslT *testing.T) {
 }
 
 func TestTesl6(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "parseInt fails on non-numeric input" && teslWanted != "TestTesl6" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line lesson46-result-type.tesl:211
 	if !(IsErr(ParseInt("hello"))) {
 		teslT.Fatal("Tesl expectation failed")
@@ -451,6 +494,12 @@ func TestTesl6(teslT *testing.T) {
 }
 
 func TestTesl7(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "validateAge rejects negatives" && teslWanted != "TestTesl7" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line lesson46-result-type.tesl:215
 	if !(IsErr(ValidateAge(teslrt.FromInt64(-1)))) {
 		teslT.Fatal("Tesl expectation failed")
@@ -458,6 +507,12 @@ func TestTesl7(teslT *testing.T) {
 }
 
 func TestTesl8(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "validateAge rejects unrealistic values" && teslWanted != "TestTesl8" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line lesson46-result-type.tesl:219
 	if !(IsErr(ValidateAge(teslrt.FromInt64(200)))) {
 		teslT.Fatal("Tesl expectation failed")
@@ -465,6 +520,12 @@ func TestTesl8(teslT *testing.T) {
 }
 
 func TestTesl9(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "validateAge accepts a normal value" && teslWanted != "TestTesl9" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft5 := okIntOrDefault(ValidateAge(teslrt.FromInt64(30)), teslrt.FromInt64(0))
 //line lesson46-result-type.tesl:223
 	if !teslrt.Equal(teslLeft5, teslrt.FromInt64(30)) {
@@ -473,6 +534,12 @@ func TestTesl9(teslT *testing.T) {
 }
 
 func TestTesl10(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "processAge chains parse then validate" && teslWanted != "TestTesl10" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft6 := okIntOrDefault(ProcessAge("25"), teslrt.FromInt64(0))
 //line lesson46-result-type.tesl:227
 	if !teslrt.Equal(teslLeft6, teslrt.FromInt64(25)) {
@@ -489,6 +556,12 @@ func TestTesl10(teslT *testing.T) {
 }
 
 func TestTesl11(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "fetchUser ok returns the userId" && teslWanted != "TestTesl11" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson46-result-type.tesl:233
 		r := FetchUser("bob", "alice")
@@ -501,6 +574,12 @@ func TestTesl11(teslT *testing.T) {
 }
 
 func TestTesl12(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "fetchUser empty userId is Err" && teslWanted != "TestTesl12" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson46-result-type.tesl:238
 		r := FetchUser("", "alice")
@@ -513,6 +592,12 @@ func TestTesl12(teslT *testing.T) {
 }
 
 func TestTesl13(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "fetchUser ghost is Err (not found)" && teslWanted != "TestTesl13" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson46-result-type.tesl:243
 		r := FetchUser("ghost", "alice")
@@ -525,6 +610,12 @@ func TestTesl13(teslT *testing.T) {
 }
 
 func TestTesl14(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "safeDivideOrDefault uses fallback on error" && teslWanted != "TestTesl14" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft7 := SafeDivideOrDefault(teslrt.FromInt64(10), teslrt.FromInt64(0), teslrt.FromInt64(99))
 //line lesson46-result-type.tesl:248
 	if !teslrt.Equal(teslLeft7, teslrt.FromInt64(99)) {
@@ -538,6 +629,12 @@ func TestTesl14(teslT *testing.T) {
 }
 
 func TestTesl15(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "runPipeline end-to-end success" && teslWanted != "TestTesl15" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line lesson46-result-type.tesl:253
 	if isErrStrResult(RunPipeline("25", "alice")) {
 		teslT.Fatal("Tesl expectation failed")
@@ -545,6 +642,12 @@ func TestTesl15(teslT *testing.T) {
 }
 
 func TestTesl16(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "runPipeline fails on underage" && teslWanted != "TestTesl16" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line lesson46-result-type.tesl:257
 	if !(isErrStrResult(RunPipeline("15", "alice"))) {
 		teslT.Fatal("Tesl expectation failed")

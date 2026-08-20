@@ -1813,7 +1813,8 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 func teslEncode24(teslValue KanelNotifyJob) any {
@@ -1829,6 +1830,12 @@ func teslEncode24(teslValue KanelNotifyJob) any {
 //
 //line KanelBackend.tesl:453
 func TestTeslApi0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "organizations require authentication" && teslWanted != "TestTeslApi0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	teslResetTestState()
 	{
 //line KanelBackend.tesl:454
@@ -1845,6 +1852,12 @@ func TestTeslApi0(teslT *testing.T) {
 //
 //line KanelBackend.tesl:458
 func TestTeslApi1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "register response JSON can drive follow-up requests" && teslWanted != "TestTeslApi1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	teslResetTestState()
 	{
 //line KanelBackend.tesl:459
@@ -1907,6 +1920,12 @@ func TestTeslApi1(teslT *testing.T) {
 //
 //line KanelBackend.tesl:477
 func TestTeslApi2(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "register login and project listing use JSON helpers" && teslWanted != "TestTeslApi2" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	teslResetTestState()
 	{
 //line KanelBackend.tesl:478
@@ -2085,6 +2104,12 @@ func TestTeslApi2(teslT *testing.T) {
 //
 //line KanelBackend.tesl:529
 func TestTeslApi3(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "seed can prepare organization membership for authenticated reads" && teslWanted != "TestTeslApi3" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	teslResetTestState()
 //line KanelBackend.tesl:529
 //line KanelBackend.tesl:531
@@ -2148,6 +2173,12 @@ func TestTeslApi3(teslT *testing.T) {
 //
 //line KanelBackend.tesl:568
 func TestTeslApi4(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "comment notifications enqueue work and publish delivery events" && teslWanted != "TestTeslApi4" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	teslResetTestState()
 //line KanelBackend.tesl:568
 //line KanelBackend.tesl:570
@@ -2271,6 +2302,12 @@ func TestTeslApi4(teslT *testing.T) {
 //
 //line KanelBackend.tesl:652
 func TestTeslApi5(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "blocked notification jobs reach dead-letter and publish failure events" && teslWanted != "TestTeslApi5" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	teslResetTestState()
 //line KanelBackend.tesl:652
 //line KanelBackend.tesl:654
@@ -2485,6 +2522,12 @@ func TestTeslApi5(teslT *testing.T) {
 //
 //line KanelBackend.tesl:748
 func TestTeslApi6(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "issue status can be updated through valid transitions" && teslWanted != "TestTeslApi6" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	teslResetTestState()
 //line KanelBackend.tesl:748
 //line KanelBackend.tesl:750

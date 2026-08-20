@@ -164,8 +164,8 @@ let excluded : (string * string) list =
   [ "httpclient-test.rkt",
     "network — makes real loopback TCP connects (connection-refused assertions); \
      run via `raco test` in a network-capable environment (ci.sh documents this)";
-    "httpclient-tests.rkt",
-    "network — real HttpClient sockets; run via `raco test`, not in the portable gate" ]
+     "httpclient-tests.rkt",
+     "network — real HttpClient sockets; run via `raco test`, not in the portable gate" ]
 let excluded_names = SS.of_list (List.map fst excluded)
 
 (* ── Assertions ────────────────────────────────────────────────────────────── *)

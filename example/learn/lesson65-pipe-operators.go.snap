@@ -80,10 +80,17 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 func TestTesl0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "forward pipe: basic application" && teslWanted != "TestTesl0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson65-pipe-operators.tesl:174
 		result := Double(teslrt.FromInt64(5))
@@ -96,6 +103,12 @@ func TestTesl0(teslT *testing.T) {
 }
 
 func TestTesl1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "forward pipe: chain two functions" && teslWanted != "TestTesl1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson65-pipe-operators.tesl:179
 		result := AddOne(Double(teslrt.FromInt64(3)))
@@ -108,6 +121,12 @@ func TestTesl1(teslT *testing.T) {
 }
 
 func TestTesl2(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "forward pipe: chain three functions" && teslWanted != "TestTesl2" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson65-pipe-operators.tesl:184
 		result := Double(AddOne(Double(teslrt.FromInt64(2))))
@@ -120,6 +139,12 @@ func TestTesl2(teslT *testing.T) {
 }
 
 func TestTesl3(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "backward pipe: basic application" && teslWanted != "TestTesl3" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson65-pipe-operators.tesl:189
 		result := Double(teslrt.FromInt64(5))
@@ -132,6 +157,12 @@ func TestTesl3(teslT *testing.T) {
 }
 
 func TestTesl4(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "backward pipe: chain two functions" && teslWanted != "TestTesl4" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson65-pipe-operators.tesl:194
 		result := AddOne(Double(teslrt.FromInt64(3)))
@@ -144,6 +175,12 @@ func TestTesl4(teslT *testing.T) {
 }
 
 func TestTesl5(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "backward pipe: chain three functions" && teslWanted != "TestTesl5" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson65-pipe-operators.tesl:199
 		result := Double(AddOne(Double(teslrt.FromInt64(2))))
@@ -156,6 +193,12 @@ func TestTesl5(teslT *testing.T) {
 }
 
 func TestTesl6(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "forward pipe with stdlib function" && teslWanted != "TestTesl6" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson65-pipe-operators.tesl:204
 		result := teslrt.StringLength("hello")
@@ -168,6 +211,12 @@ func TestTesl6(teslT *testing.T) {
 }
 
 func TestTesl7(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "backward pipe with stdlib function" && teslWanted != "TestTesl7" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson65-pipe-operators.tesl:209
 		result := teslrt.StringLength("hello")
@@ -180,6 +229,12 @@ func TestTesl7(teslT *testing.T) {
 }
 
 func TestTesl8(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "measureWord trims before measuring" && teslWanted != "TestTesl8" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft9 := MeasureWord("  hi  ")
 //line lesson65-pipe-operators.tesl:214
 	if !teslrt.Equal(teslLeft9, teslrt.FromInt64(2)) {
@@ -198,6 +253,12 @@ func TestTesl8(teslT *testing.T) {
 }
 
 func TestTesl9(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "processWord gives same result as measureWord" && teslWanted != "TestTesl9" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft12 := ProcessWord("  hi  ")
 //line lesson65-pipe-operators.tesl:220
 	if !teslrt.Equal(teslLeft12, teslrt.FromInt64(2)) {
@@ -216,6 +277,12 @@ func TestTesl9(teslT *testing.T) {
 }
 
 func TestTesl10(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "processChain applies double, addOne, double in order" && teslWanted != "TestTesl10" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft15 := ProcessChain(teslrt.FromInt64(3))
 //line lesson65-pipe-operators.tesl:228
 	if !teslrt.Equal(teslLeft15, teslrt.FromInt64(14)) {
@@ -234,6 +301,12 @@ func TestTesl10(teslT *testing.T) {
 }
 
 func TestTesl11(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "describeLength classifies correctly" && teslWanted != "TestTesl11" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson65-pipe-operators.tesl:236
 		short := DescribeLength(teslrt.FromInt64(3))

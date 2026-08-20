@@ -9,8 +9,8 @@
     "status": "green"
   },
   "racket_only": {
-    "expected_count": 75,
-    "green_count": 75,
+    "expected_count": 72,
+    "green_count": 72,
     "planned_count": 0,
     "owner": "per-row owners below",
     "evidence": "roadmap/next/go_debugging_and_lsp.md#phase-8-complete-test-example-template-migration",
@@ -38,7 +38,6 @@
       {"path":"tests/dap-sql-scope-smoke.rkt","owner":"runtime/go/internal/dap","replacement":"Go DAP SQL-scope test","status":"green"},
       {"path":"tests/dap-stop-the-world-smoke.rkt","owner":"runtime/go/internal/dap","replacement":"Go DAP stop-the-world test","status":"green"},
       {"path":"tests/dap-value-tree-tests.rkt","owner":"runtime/go/internal/dap","replacement":"Go DAP value-tree test","status":"green"},
-      {"path":"tests/example-api-test.rkt","owner":"tests/go-cli-smoke.sh + runtime/go","replacement":"Go example API test","status":"green"},
       {"path":"tests/example-test-batch.rkt","owner":"tests/go-cli-smoke.sh + runtime/go","replacement":"Go example corpus batch","status":"green"},
       {"path":"tests/existential-regression-test.rkt","owner":"compiler/test/test_emit_go.ml","replacement":"OCaml compiler test plus Go emitted test","status":"green"},
       {"path":"tests/exists-test.rkt","owner":"compiler/test/test_emit_go.ml","replacement":"OCaml compiler test plus Go emitted test","status":"green"},
@@ -59,7 +58,6 @@
       {"path":"tests/otlp-metrics-test.rkt","owner":"runtime/go/teslrt telemetry","replacement":"Go OTLP metrics test","status":"green"},
       {"path":"tests/otlp-traces-test.rkt","owner":"runtime/go/teslrt telemetry","replacement":"Go OTLP traces test","status":"green"},
       {"path":"tests/pg-pool-tests.rkt","owner":"runtime/go/teslrt postgres","replacement":"Go PostgreSQL pool test","status":"green"},
-      {"path":"tests/port-test.rkt","owner":"runtime/go/internal/protocol","replacement":"Go protocol test","status":"green"},
       {"path":"tests/postgres-test.rkt","owner":"runtime/go/teslrt postgres","replacement":"Go PostgreSQL integration test","status":"green"},
       {"path":"tests/private/postgres-test-support.rkt","owner":"tests/CI PostgreSQL harness","replacement":"Go/ shell PostgreSQL harness","status":"green"},
       {"path":"tests/proxy-runtime-test.rkt","owner":"runtime/go/teslrt proxy","replacement":"Go proxy runtime test","status":"green"},
@@ -88,8 +86,7 @@
       {"path":"tests/timezone-zones-test.rkt","owner":"runtime/go/teslrt timezone","replacement":"Go timezone integration test","status":"green"},
       {"path":"tests/trace-context-test.rkt","owner":"runtime/go/teslrt telemetry","replacement":"Go trace-context test","status":"green"},
       {"path":"tests/units-factor-golden-tests.rkt","owner":"runtime/go/teslrt units","replacement":"Go units golden test","status":"green"},
-      {"path":"tests/url-net-runtime-tests.rkt","owner":"runtime/go/teslrt url-net","replacement":"Go URL/net runtime test","status":"green"},
-      {"path":"tests/web-test.rkt","owner":"runtime/go/teslrt http","replacement":"Go web integration test","status":"green"}
+       {"path":"tests/url-net-runtime-tests.rkt","owner":"runtime/go/teslrt url-net","replacement":"Go URL/net runtime test","status":"green"}
     ]
   }
 }

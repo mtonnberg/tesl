@@ -440,7 +440,8 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 func teslExpectFailure(teslT *testing.T, teslThunk func()) {
@@ -462,6 +463,12 @@ func teslLessTeslrtInt(teslX, teslY teslrt.Int) bool {
 }
 
 func TestTesl0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "string basic" && teslWanted != "TestTesl0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft1 := teslrt.StringLength("hello")
 //line lesson25-standard-library-strings-lists-ints.tesl:315
 	if !teslrt.Equal(teslLeft1, teslrt.FromInt64(5)) {
@@ -483,6 +490,12 @@ func TestTesl0(teslT *testing.T) {
 }
 
 func TestTesl1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "string trim returns proof" && teslWanted != "TestTesl1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson25-standard-library-strings-lists-ints.tesl:322
 		t := teslrt.StringTrim("  hello  ")
@@ -495,6 +508,12 @@ func TestTesl1(teslT *testing.T) {
 }
 
 func TestTesl2(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "string predicates" && teslWanted != "TestTesl2" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line lesson25-standard-library-strings-lists-ints.tesl:327
 	if !(teslrt.StringStartsWith("hello", "hel")) {
 		teslT.Fatal("Tesl expectation failed")
@@ -522,6 +541,12 @@ func TestTesl2(teslT *testing.T) {
 }
 
 func TestTesl3(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "string split and join" && teslWanted != "TestTesl3" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson25-standard-library-strings-lists-ints.tesl:336
 		parts := teslrt.StringSplit("a,b,c", ",")
@@ -545,6 +570,12 @@ func TestTesl3(teslT *testing.T) {
 }
 
 func TestTesl4(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "string pad and replace" && teslWanted != "TestTesl4" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft6 := teslrt.StringPadLeft("42", teslrt.FromInt64(5), "0")
 //line lesson25-standard-library-strings-lists-ints.tesl:343
 	if teslLeft6 != "00042" {
@@ -563,6 +594,12 @@ func TestTesl4(teslT *testing.T) {
 }
 
 func TestTesl5(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "string toInt" && teslWanted != "TestTesl5" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft9 := teslrt.StringToInt("42")
 	teslRight9 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(42)}
 //line lesson25-standard-library-strings-lists-ints.tesl:349
@@ -584,6 +621,12 @@ func TestTesl5(teslT *testing.T) {
 }
 
 func TestTesl6(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "list basics" && teslWanted != "TestTesl6" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft12 := teslrt.ListLength([]teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(2), teslrt.FromInt64(3)})
 //line lesson25-standard-library-strings-lists-ints.tesl:355
 	if !teslrt.Equal(teslLeft12, teslrt.FromInt64(3)) {
@@ -617,6 +660,12 @@ func TestTesl6(teslT *testing.T) {
 }
 
 func TestTesl7(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "list map filter sum" && teslWanted != "TestTesl7" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft16 := (func() []teslrt.Int {
 		teslSrc1 := []teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(2), teslrt.FromInt64(3)}
 		teslOut1 := make([]teslrt.Int, len(teslSrc1))
@@ -658,6 +707,12 @@ func TestTesl7(teslT *testing.T) {
 }
 
 func TestTesl8(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "list sort" && teslWanted != "TestTesl8" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson25-standard-library-strings-lists-ints.tesl:371
 		sorted := teslrt.ListSortBy([]teslrt.Int{teslrt.FromInt64(3), teslrt.FromInt64(1), teslrt.FromInt64(4), teslrt.FromInt64(1), teslrt.FromInt64(5)}, teslLessTeslrtInt)
@@ -677,6 +732,12 @@ func TestTesl8(teslT *testing.T) {
 }
 
 func TestTesl9(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "list range and unique" && teslWanted != "TestTesl9" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft22 := teslrt.ListRange(teslrt.FromInt64(1), teslrt.FromInt64(5))
 	teslRight22 := []teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(2), teslrt.FromInt64(3), teslrt.FromInt64(4)}
 //line lesson25-standard-library-strings-lists-ints.tesl:377
@@ -691,6 +752,12 @@ func TestTesl9(teslT *testing.T) {
 }
 
 func TestTesl10(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "int basics" && teslWanted != "TestTesl10" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft24 := teslrt.Abs(teslrt.FromInt64(-5))
 //line lesson25-standard-library-strings-lists-ints.tesl:382
 	if !teslrt.Equal(teslLeft24, teslrt.FromInt64(5)) {
@@ -729,6 +796,12 @@ func TestTesl10(teslT *testing.T) {
 }
 
 func TestTesl11(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "int pow and predicates" && teslWanted != "TestTesl11" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft31 := teslrt.MustPow(teslrt.FromInt64(2), teslrt.FromInt64(10))
 //line lesson25-standard-library-strings-lists-ints.tesl:392
 	if !teslrt.Equal(teslLeft31, teslrt.FromInt64(1024)) {
@@ -770,6 +843,12 @@ func TestTesl11(teslT *testing.T) {
 }
 
 func TestTesl12(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "safe division" && teslWanted != "TestTesl12" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft36 := SafeDivide(teslrt.FromInt64(10), teslrt.FromInt64(2))
 	teslRight36 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(5)}
 //line lesson25-standard-library-strings-lists-ints.tesl:403
@@ -789,6 +868,12 @@ func TestTesl12(teslT *testing.T) {
 }
 
 func TestTesl13(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "count words" && teslWanted != "TestTesl13" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft38 := CountWords("hello,world,foo")
 //line lesson25-standard-library-strings-lists-ints.tesl:409
 	if !teslrt.Equal(teslLeft38, teslrt.FromInt64(3)) {
@@ -807,6 +892,12 @@ func TestTesl13(teslT *testing.T) {
 }
 
 func TestTesl14(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "++ string concatenation" && teslWanted != "TestTesl14" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft41 := BuildPath("https://api.example.com", "users", "42")
 //line lesson25-standard-library-strings-lists-ints.tesl:415
 	if teslLeft41 != "https://api.example.com/users/42" {

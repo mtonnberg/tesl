@@ -88,10 +88,17 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 func TestTesl0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "in-range value round-trips unchanged" && teslWanted != "TestTesl0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft1 := RoundTrip(teslrt.FromInt64(1000), teslrt.Sub(teslrt.FromInt64(0), teslrt.FromInt64(1)))
 //line int32-boundary.tesl:83
 	if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1000)) {
@@ -100,6 +107,12 @@ func TestTesl0(teslT *testing.T) {
 }
 
 func TestTesl1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "the int32 max boundary is in range" && teslWanted != "TestTesl1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft2 := RoundTrip(teslrt.FromInt64(2147483647), teslrt.Sub(teslrt.FromInt64(0), teslrt.FromInt64(1)))
 //line int32-boundary.tesl:87
 	if !teslrt.Equal(teslLeft2, teslrt.FromInt64(2147483647)) {
@@ -108,6 +121,12 @@ func TestTesl1(teslT *testing.T) {
 }
 
 func TestTesl2(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "a value above the int32 max is out of range" && teslWanted != "TestTesl2" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft3 := RoundTrip(teslrt.FromInt64(2147483648), teslrt.Sub(teslrt.FromInt64(0), teslrt.FromInt64(1)))
 	teslRight3 := teslrt.Sub(teslrt.FromInt64(0), teslrt.FromInt64(1))
 //line int32-boundary.tesl:91
@@ -117,6 +136,12 @@ func TestTesl2(teslT *testing.T) {
 }
 
 func TestTesl3(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "a large Int (> 2^53) is out of int32 range" && teslWanted != "TestTesl3" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft4 := RoundTrip(teslrt.FromInt64(9007199254740993), teslrt.Sub(teslrt.FromInt64(0), teslrt.FromInt64(1)))
 	teslRight4 := teslrt.Sub(teslrt.FromInt64(0), teslrt.FromInt64(1))
 //line int32-boundary.tesl:95
@@ -126,6 +151,12 @@ func TestTesl3(teslT *testing.T) {
 }
 
 func TestTesl4(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "saturating narrowing clamps to the bounds" && teslWanted != "TestTesl4" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft5 := teslrt.Int32ToInt(Saturate(teslrt.FromInt64(9007199254740993)))
 //line int32-boundary.tesl:99
 	if !teslrt.Equal(teslLeft5, teslrt.FromInt64(2147483647)) {
@@ -145,6 +176,12 @@ func TestTesl4(teslT *testing.T) {
 }
 
 func TestTesl5(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "minValue and maxValue are the range bounds" && teslWanted != "TestTesl5" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft8 := teslrt.Int32ToInt(teslrt.Int32MinValue)
 	teslRight8 := teslrt.Sub(teslrt.FromInt64(0), teslrt.FromInt64(2147483648))
 //line int32-boundary.tesl:105
@@ -159,6 +196,12 @@ func TestTesl5(teslT *testing.T) {
 }
 
 func TestTesl6(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checked subtraction reports overflow as Nothing" && teslWanted != "TestTesl6" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft10 := BudgetLeft(Saturate(teslrt.FromInt64(10)), Saturate(teslrt.FromInt64(4)))
 	teslRight10 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: Saturate(teslrt.FromInt64(6))}
 //line int32-boundary.tesl:110
@@ -174,6 +217,12 @@ func TestTesl6(teslT *testing.T) {
 }
 
 func TestTesl7(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checked addition reports overflow as Nothing" && teslWanted != "TestTesl7" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft12 := teslrt.Int32Add(teslrt.Int32MaxValue, Saturate(teslrt.FromInt64(1)))
 	teslRight12 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}
 //line int32-boundary.tesl:115
@@ -189,6 +238,12 @@ func TestTesl7(teslT *testing.T) {
 }
 
 func TestTesl8(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "clamp stays inside the boundary type" && teslWanted != "TestTesl8" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft14 := teslrt.Int32ToInt(teslrt.Int32Clamp(Saturate(teslrt.FromInt64(99)), Saturate(teslrt.FromInt64(0)), Saturate(teslrt.FromInt64(10))))
 //line int32-boundary.tesl:120
 	if !teslrt.Equal(teslLeft14, teslrt.FromInt64(10)) {
@@ -197,6 +252,12 @@ func TestTesl8(teslT *testing.T) {
 }
 
 func TestTesl9(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "predicates and toString read the Int32 directly" && teslWanted != "TestTesl9" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft15 := Describe(Saturate(teslrt.FromInt64(42)))
 //line int32-boundary.tesl:124
 	if teslLeft15 != "42" {
@@ -209,6 +270,12 @@ func TestTesl9(teslT *testing.T) {
 }
 
 func TestTesl10(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "division needs a proven non-zero divisor" && teslWanted != "TestTesl10" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line int32-boundary.tesl:129
 		two := Saturate(teslrt.FromInt64(2))
@@ -228,6 +295,12 @@ func TestTesl10(teslT *testing.T) {
 }
 
 func TestTesl11(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "the single out-of-range quotient is Nothing" && teslWanted != "TestTesl11" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line int32-boundary.tesl:137
 		negOne := Saturate(teslrt.Sub(teslrt.FromInt64(0), teslrt.FromInt64(1)))

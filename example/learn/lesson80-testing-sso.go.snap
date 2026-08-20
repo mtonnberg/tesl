@@ -297,13 +297,20 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 // api-test no session cookie is a 401, not a 500
 //
 //line lesson80-testing-sso.tesl:207
 func TestTeslApi0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "no session cookie is a 401, not a 500" && teslWanted != "TestTeslApi0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	teslResetTestState()
 	{
 //line lesson80-testing-sso.tesl:208
@@ -321,6 +328,12 @@ func TestTeslApi0(teslT *testing.T) {
 //
 //line lesson80-testing-sso.tesl:212
 func TestTeslApi1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "a session minted with the app's own key reaches the protected route" && teslWanted != "TestTeslApi1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	teslResetTestState()
 	{
 //line lesson80-testing-sso.tesl:213
@@ -341,6 +354,12 @@ func TestTeslApi1(teslT *testing.T) {
 //
 //line lesson80-testing-sso.tesl:220
 func TestTeslApi2(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "GitHub login redirects straight to GitHub \xe2\x80\x94 no network call needed" && teslWanted != "TestTeslApi2" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	teslResetTestState()
 	{
 //line lesson80-testing-sso.tesl:221
@@ -382,6 +401,12 @@ func TestTeslApi2(teslT *testing.T) {
 //
 //line lesson80-testing-sso.tesl:230
 func TestTeslApi3(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "a generic OIDC issuer is discovered, then redirected to" && teslWanted != "TestTeslApi3" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	teslResetTestState()
 //line lesson80-testing-sso.tesl:231
 	_ = teslrt.StubHttp("GET", "https://idp.example.test/.well-known/openid-configuration", teslrt.FromInt64(200), "{\"issuer\": \"https://idp.example.test\", \"authorization_endpoint\": \"https://idp.example.test/authorize\", \"token_endpoint\": \"https://idp.example.test/token\", \"jwks_uri\": \"https://idp.example.test/jwks\", \"code_challenge_methods_supported\": [\"S256\"]}")
@@ -425,6 +450,12 @@ func TestTeslApi3(teslT *testing.T) {
 //
 //line lesson80-testing-sso.tesl:245
 func TestTeslApi4(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "GitHub login all the way through: redirect, code exchange, real session" && teslWanted != "TestTeslApi4" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	teslResetTestState()
 	{
 //line lesson80-testing-sso.tesl:246

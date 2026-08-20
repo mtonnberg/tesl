@@ -923,13 +923,20 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 // api-test rooms require authentication
 //
 //line chat-backend.tesl:388
 func TestTeslApi0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "rooms require authentication" && teslWanted != "TestTeslApi0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	teslResetTestState()
 	{
 //line chat-backend.tesl:389
@@ -946,6 +953,12 @@ func TestTeslApi0(teslT *testing.T) {
 //
 //line chat-backend.tesl:393
 func TestTeslApi1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "chat flow can reuse ids and fields from returned JSON" && teslWanted != "TestTeslApi1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	teslResetTestState()
 	{
 //line chat-backend.tesl:394
@@ -1113,6 +1126,12 @@ func TestTeslApi1(teslT *testing.T) {
 //
 //line chat-backend.tesl:442
 func TestTeslApi2(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "seed can prepare authenticated chat state" && teslWanted != "TestTeslApi2" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	teslResetTestState()
 //line chat-backend.tesl:442
 //line chat-backend.tesl:444
@@ -1191,6 +1210,12 @@ func TestTeslApi2(teslT *testing.T) {
 //
 //line chat-backend.tesl:473
 func TestTeslApi3(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "room streams buffer messages while queue jobs are processed separately" && teslWanted != "TestTeslApi3" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	teslResetTestState()
 //line chat-backend.tesl:473
 //line chat-backend.tesl:475
@@ -1308,6 +1333,12 @@ func TestTeslApi3(teslT *testing.T) {
 //
 //line chat-backend.tesl:503
 func TestTeslApi4(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "failed notification jobs publish dead-letter events to room streams" && teslWanted != "TestTeslApi4" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	teslResetTestState()
 //line chat-backend.tesl:503
 //line chat-backend.tesl:505

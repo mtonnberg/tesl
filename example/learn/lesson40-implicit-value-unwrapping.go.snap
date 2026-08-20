@@ -98,10 +98,17 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 func TestTesl0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "double uses implicit unwrapping" && teslWanted != "TestTesl0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft1 := Double(teslrt.FromInt64(5))
 //line lesson40-implicit-value-unwrapping.tesl:62
 	if !teslrt.Equal(teslLeft1, teslrt.FromInt64(10)) {
@@ -110,6 +117,12 @@ func TestTesl0(teslT *testing.T) {
 }
 
 func TestTesl1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "add uses implicit unwrapping" && teslWanted != "TestTesl1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft2 := add(teslrt.FromInt64(3), teslrt.FromInt64(4))
 //line lesson40-implicit-value-unwrapping.tesl:66
 	if !teslrt.Equal(teslLeft2, teslrt.FromInt64(7)) {
@@ -118,6 +131,12 @@ func TestTesl1(teslT *testing.T) {
 }
 
 func TestTesl2(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "multiply uses implicit unwrapping" && teslWanted != "TestTesl2" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft3 := multiply(teslrt.FromInt64(6), teslrt.FromInt64(7))
 //line lesson40-implicit-value-unwrapping.tesl:70
 	if !teslrt.Equal(teslLeft3, teslrt.FromInt64(42)) {
@@ -126,6 +145,12 @@ func TestTesl2(teslT *testing.T) {
 }
 
 func TestTesl3(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "isAdult comparison" && teslWanted != "TestTesl3" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line lesson40-implicit-value-unwrapping.tesl:74
 	if !(IsAdult(teslrt.FromInt64(18))) {
 		teslT.Fatal("Tesl expectation failed")
@@ -137,6 +162,12 @@ func TestTesl3(teslT *testing.T) {
 }
 
 func TestTesl4(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "isEqual comparison" && teslWanted != "TestTesl4" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line lesson40-implicit-value-unwrapping.tesl:79
 	if !(isEqual(teslrt.FromInt64(3), teslrt.FromInt64(3))) {
 		teslT.Fatal("Tesl expectation failed")
@@ -148,6 +179,12 @@ func TestTesl4(teslT *testing.T) {
 }
 
 func TestTesl5(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "greet string interpolation" && teslWanted != "TestTesl5" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft4 := Greet("Alice")
 //line lesson40-implicit-value-unwrapping.tesl:84
 	if teslLeft4 != "Hello, Alice!" {
@@ -156,6 +193,12 @@ func TestTesl5(teslT *testing.T) {
 }
 
 func TestTesl6(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "describe string interpolation" && teslWanted != "TestTesl6" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft5 := describe(teslrt.FromInt64(42))
 //line lesson40-implicit-value-unwrapping.tesl:88
 	if teslLeft5 != "The value is 42" {
@@ -164,6 +207,12 @@ func TestTesl6(teslT *testing.T) {
 }
 
 func TestTesl7(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "absVal unary negation" && teslWanted != "TestTesl7" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft6 := AbsVal(teslrt.FromInt64(5))
 //line lesson40-implicit-value-unwrapping.tesl:92
 	if !teslrt.Equal(teslLeft6, teslrt.FromInt64(5)) {
@@ -177,6 +226,12 @@ func TestTesl7(teslT *testing.T) {
 }
 
 func TestTesl8(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "negate bool" && teslWanted != "TestTesl8" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line lesson40-implicit-value-unwrapping.tesl:97
 	if !(negate(false)) {
 		teslT.Fatal("Tesl expectation failed")
@@ -188,6 +243,12 @@ func TestTesl8(teslT *testing.T) {
 }
 
 func TestTesl9(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "classify if-condition" && teslWanted != "TestTesl9" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft8 := Classify(true, teslrt.FromInt64(10), teslrt.FromInt64(20))
 //line lesson40-implicit-value-unwrapping.tesl:102
 	if !teslrt.Equal(teslLeft8, teslrt.FromInt64(10)) {

@@ -495,10 +495,17 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 func TestTesl0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "areaCategory circles" && teslWanted != "TestTesl0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft1 := AreaCategory(Shape{Tag: ShapeCircle, CircleRadius: teslrt.FromInt64(60)})
 //line lesson39-case-where-guards.tesl:214
 	if teslLeft1 != "huge circle" {
@@ -527,6 +534,12 @@ func TestTesl0(teslT *testing.T) {
 }
 
 func TestTesl1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "areaCategory rectangles" && teslWanted != "TestTesl1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft6 := AreaCategory(Shape{Tag: ShapeRectangle, RectangleWidth: teslrt.FromInt64(5), RectangleHeight: teslrt.FromInt64(5)})
 //line lesson39-case-where-guards.tesl:222
 	if teslLeft6 != "square" {
@@ -550,6 +563,12 @@ func TestTesl1(teslT *testing.T) {
 }
 
 func TestTesl2(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "areaCategory triangles" && teslWanted != "TestTesl2" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft10 := AreaCategory(Shape{Tag: ShapeTriangle, TriangleBase: teslrt.FromInt64(3), TriangleHeight: teslrt.FromInt64(4)})
 //line lesson39-case-where-guards.tesl:229
 	if teslLeft10 != "triangle" {
@@ -563,6 +582,12 @@ func TestTesl2(teslT *testing.T) {
 }
 
 func TestTesl3(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "describeShape" && teslWanted != "TestTesl3" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft12 := DescribeShape(Shape{Tag: ShapeCircle, CircleRadius: teslrt.FromInt64(0)})
 //line lesson39-case-where-guards.tesl:234
 	if teslLeft12 != "degenerate circle (point)" {
@@ -601,6 +626,12 @@ func TestTesl3(teslT *testing.T) {
 }
 
 func TestTesl4(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "classifyByPriority tasks" && teslWanted != "TestTesl4" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft19 := ClassifyByPriority(Priority{Tag: PriorityTask, TaskLabel: "critical", TaskUrgency: teslrt.FromInt64(9)})
 //line lesson39-case-where-guards.tesl:244
 	if teslLeft19 != "drop-everything" {
@@ -629,6 +660,12 @@ func TestTesl4(teslT *testing.T) {
 }
 
 func TestTesl5(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "classifyByPriority deadlines" && teslWanted != "TestTesl5" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft24 := ClassifyByPriority(Priority{Tag: PriorityDeadline, DeadlineLabel: "report", DeadlineDays: teslrt.FromInt64(0)})
 //line lesson39-case-where-guards.tesl:252
 	if teslLeft24 != "due today" {
@@ -652,6 +689,12 @@ func TestTesl5(teslT *testing.T) {
 }
 
 func TestTesl6(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "processLabeled integers" && teslWanted != "TestTesl6" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft28 := ProcessLabeled(Labeled[teslrt.Int]{Tag: LabeledLabel, LabelTag: "vip", LabelValue: teslrt.FromInt64(99)})
 //line lesson39-case-where-guards.tesl:259
 	if teslLeft28 != "VIP high-value: 99" {
@@ -685,6 +728,12 @@ func TestTesl6(teslT *testing.T) {
 }
 
 func TestTesl7(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "rateLabeled strings" && teslWanted != "TestTesl7" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft34 := RateLabeled(Labeled[string]{Tag: LabeledLabel, LabelTag: "premium", LabelValue: "gold"})
 //line lesson39-case-where-guards.tesl:268
 	if teslLeft34 != "premium gold" {
@@ -713,6 +762,12 @@ func TestTesl7(teslT *testing.T) {
 }
 
 func TestTesl8(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "scoreGrade" && teslWanted != "TestTesl8" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft39 := ScoreGrade(teslrt.FromInt64(95))
 //line lesson39-case-where-guards.tesl:276
 	if teslLeft39 != "A" {

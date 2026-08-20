@@ -949,12 +949,11 @@ func wordAtPosition(source string, position protocol.Position) (string, int, boo
 	if err != nil {
 		return "", 0, false
 	}
-	lineText := source[lineStart:offset]
 	lineEnd := offset
 	for lineEnd < len(source) && source[lineEnd] != '\n' {
 		lineEnd++
 	}
-	lineText = source[lineStart:lineEnd]
+	lineText := source[lineStart:lineEnd]
 	byteOffset := offset - lineStart
 	if byteOffset > len(lineText) {
 		byteOffset = len(lineText)

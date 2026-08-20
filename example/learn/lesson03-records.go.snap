@@ -93,10 +93,17 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 func TestTesl0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "area" && teslWanted != "TestTesl0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson03-records.tesl:85
 		rect := Rectangle{Origin: Point{X: teslrt.FromInt64(0), Y: teslrt.FromInt64(0)}, Width: teslrt.FromInt64(4), Height: teslrt.FromInt64(3)}
@@ -120,6 +127,12 @@ func TestTesl0(teslT *testing.T) {
 }
 
 func TestTesl1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "perimeter" && teslWanted != "TestTesl1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson03-records.tesl:92
 		rect := Rectangle{Origin: Point{X: teslrt.FromInt64(0), Y: teslrt.FromInt64(0)}, Width: teslrt.FromInt64(4), Height: teslrt.FromInt64(3)}
@@ -133,6 +146,12 @@ func TestTesl1(teslT *testing.T) {
 }
 
 func TestTesl2(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "translate" && teslWanted != "TestTesl2" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson03-records.tesl:97
 		p := Point{X: teslrt.FromInt64(1), Y: teslrt.FromInt64(2)}
@@ -156,6 +175,12 @@ func TestTesl2(teslT *testing.T) {
 }
 
 func TestTesl3(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "scale" && teslWanted != "TestTesl3" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson03-records.tesl:104
 		rect := Rectangle{Origin: Point{X: teslrt.FromInt64(0), Y: teslrt.FromInt64(0)}, Width: teslrt.FromInt64(3), Height: teslrt.FromInt64(2)}
@@ -184,6 +209,12 @@ func TestTesl3(teslT *testing.T) {
 }
 
 func TestTesl4(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "origin returns zero point" && teslWanted != "TestTesl4" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson03-records.tesl:112
 		o := Origin()
@@ -202,6 +233,12 @@ func TestTesl4(teslT *testing.T) {
 }
 
 func TestTesl5(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "setX changes only x" && teslWanted != "TestTesl5" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson03-records.tesl:120
 		p := Point{X: teslrt.FromInt64(3), Y: teslrt.FromInt64(7)}
@@ -225,6 +262,12 @@ func TestTesl5(teslT *testing.T) {
 }
 
 func TestTesl6(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "single field update leaves others intact" && teslWanted != "TestTesl6" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson03-records.tesl:127
 		p := Point{X: teslrt.FromInt64(10), Y: teslrt.FromInt64(20)}
@@ -248,6 +291,12 @@ func TestTesl6(teslT *testing.T) {
 }
 
 func TestTesl7(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "update is non-destructive \xe2\x80\x94 original unchanged" && teslWanted != "TestTesl7" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson03-records.tesl:134
 		p := Point{X: teslrt.FromInt64(1), Y: teslrt.FromInt64(2)}
@@ -271,6 +320,12 @@ func TestTesl7(teslT *testing.T) {
 }
 
 func TestTesl8(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "multi-field update" && teslWanted != "TestTesl8" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson03-records.tesl:141
 		r := Rectangle{Origin: Point{X: teslrt.FromInt64(0), Y: teslrt.FromInt64(0)}, Width: teslrt.FromInt64(10), Height: teslrt.FromInt64(5)}
@@ -299,6 +354,12 @@ func TestTesl8(teslT *testing.T) {
 }
 
 func TestTesl9(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "chained updates" && teslWanted != "TestTesl9" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson03-records.tesl:149
 		p := Point{X: teslrt.FromInt64(0), Y: teslrt.FromInt64(0)}
@@ -327,6 +388,12 @@ func TestTesl9(teslT *testing.T) {
 }
 
 func TestTesl10(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "moveOrigin" && teslWanted != "TestTesl10" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson03-records.tesl:157
 		r := Rectangle{Origin: Point{X: teslrt.FromInt64(2), Y: teslrt.FromInt64(3)}, Width: teslrt.FromInt64(10), Height: teslrt.FromInt64(5)}
@@ -360,6 +427,12 @@ func TestTesl10(teslT *testing.T) {
 }
 
 func TestTesl11(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "resetOrigin" && teslWanted != "TestTesl11" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson03-records.tesl:166
 		r := Rectangle{Origin: Point{X: teslrt.FromInt64(7), Y: teslrt.FromInt64(9)}, Width: teslrt.FromInt64(4), Height: teslrt.FromInt64(4)}
@@ -388,6 +461,12 @@ func TestTesl11(teslT *testing.T) {
 }
 
 func TestTesl12(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "flipDimensions" && teslWanted != "TestTesl12" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson03-records.tesl:174
 		r := Rectangle{Origin: Point{X: teslrt.FromInt64(0), Y: teslrt.FromInt64(0)}, Width: teslrt.FromInt64(16), Height: teslrt.FromInt64(9)}
@@ -426,6 +505,12 @@ func TestTesl12(teslT *testing.T) {
 }
 
 func TestTesl13(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "update then access nested field" && teslWanted != "TestTesl13" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson03-records.tesl:184
 		r := Rectangle{Origin: Point{X: teslrt.FromInt64(0), Y: teslrt.FromInt64(0)}, Width: teslrt.FromInt64(5), Height: teslrt.FromInt64(3)}

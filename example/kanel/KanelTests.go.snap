@@ -2638,10 +2638,17 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 func TestTesl0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkOrgName: accepts valid names" && teslWanted != "TestTesl0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line KanelTests.tesl:35
 		n1 := teslrt.MustCheck(teslmodkanelorg.CheckOrgName("Acme Corp"))
@@ -2664,6 +2671,12 @@ func TestTesl0(teslT *testing.T) {
 }
 
 func TestTesl1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkOrgName: rejects empty string" && teslWanted != "TestTesl1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line KanelTests.tesl:42
 	if (teslmodkanelorg.CheckOrgName("")).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -2675,6 +2688,12 @@ func TestTesl1(teslT *testing.T) {
 }
 
 func TestTesl2(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkOrgName: rejects names that are too long" && teslWanted != "TestTesl2" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line KanelTests.tesl:48
 		tooLong := "aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeeeeeeeeeffffffffff gggggggggg hhhhhhh"
@@ -2695,6 +2714,12 @@ func TestTesl2(teslT *testing.T) {
 }
 
 func TestTesl3(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkSlug: accepts valid slugs" && teslWanted != "TestTesl3" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line KanelTests.tesl:56
 		raw1 := "acme-corp"
@@ -2726,6 +2751,12 @@ func TestTesl3(teslT *testing.T) {
 }
 
 func TestTesl4(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkSlug: rejects empty" && teslWanted != "TestTesl4" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line KanelTests.tesl:65
 	if (teslmodkanelorg.CheckSlug("")).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -2733,6 +2764,12 @@ func TestTesl4(teslT *testing.T) {
 }
 
 func TestTesl5(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkEmail: accepts valid email" && teslWanted != "TestTesl5" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line KanelTests.tesl:69
 		rawEmail := "user@example.com"
@@ -2750,6 +2787,12 @@ func TestTesl5(teslT *testing.T) {
 }
 
 func TestTesl6(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkEmail: rejects missing @" && teslWanted != "TestTesl6" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line KanelTests.tesl:75
 	if (teslmodkanelorg.CheckEmail("notanemail")).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -2761,6 +2804,12 @@ func TestTesl6(teslT *testing.T) {
 }
 
 func TestTesl7(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkTitle: basic validation" && teslWanted != "TestTesl7" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line KanelTests.tesl:80
 		rawTitle := "Fix the login bug"
@@ -2782,6 +2831,12 @@ func TestTesl7(teslT *testing.T) {
 }
 
 func TestTesl8(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkDescription: accepts empty description" && teslWanted != "TestTesl8" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line KanelTests.tesl:88
 		rawDesc := ""
@@ -2800,6 +2855,12 @@ func TestTesl8(teslT *testing.T) {
 }
 
 func TestTesl9(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkEstimate: accepts zero and positive" && teslWanted != "TestTesl9" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line KanelTests.tesl:94
 		n0 := teslrt.FromInt64(0)
@@ -2845,6 +2906,12 @@ func TestTesl9(teslT *testing.T) {
 }
 
 func TestTesl10(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkEstimate: rejects negative" && teslWanted != "TestTesl10" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line KanelTests.tesl:106
 	if (teslmodkanelissues.CheckEstimate(teslrt.FromInt64(-1))).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -2856,6 +2923,12 @@ func TestTesl10(teslT *testing.T) {
 }
 
 func TestTesl11(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkPositiveMinutes: valid range" && teslWanted != "TestTesl11" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line KanelTests.tesl:111
 		raw1 := teslrt.FromInt64(1)
@@ -2897,6 +2970,12 @@ func TestTesl11(teslT *testing.T) {
 }
 
 func TestTesl12(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkPositiveMinutes: rejects zero and above 24h" && teslWanted != "TestTesl12" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line KanelTests.tesl:122
 	if (teslmodkanelissues.CheckPositiveMinutes(teslrt.FromInt64(0))).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -2912,6 +2991,12 @@ func TestTesl12(teslT *testing.T) {
 }
 
 func TestTesl13(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkCommentBody: accepts non-empty" && teslWanted != "TestTesl13" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line KanelTests.tesl:128
 		rawBody := "This is a comment."
@@ -2929,6 +3014,12 @@ func TestTesl13(teslT *testing.T) {
 }
 
 func TestTesl14(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkCommentBody: rejects empty" && teslWanted != "TestTesl14" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line KanelTests.tesl:134
 	if (teslmodkanelissues.CheckCommentBody("")).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -2936,6 +3027,12 @@ func TestTesl14(teslT *testing.T) {
 }
 
 func TestTesl15(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "valid transitions from Backlog" && teslWanted != "TestTesl15" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line KanelTests.tesl:142
 		from1 := teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusBacklog}
@@ -2973,6 +3070,12 @@ func TestTesl15(teslT *testing.T) {
 }
 
 func TestTesl16(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "valid transitions from Todo" && teslWanted != "TestTesl16" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line KanelTests.tesl:152
 		from1 := teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusTodo}
@@ -3025,6 +3128,12 @@ func TestTesl16(teslT *testing.T) {
 }
 
 func TestTesl17(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "valid transitions from InProgress" && teslWanted != "TestTesl17" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line KanelTests.tesl:165
 		from1 := teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusInProgress}
@@ -3062,6 +3171,12 @@ func TestTesl17(teslT *testing.T) {
 }
 
 func TestTesl18(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "valid transitions from InReview" && teslWanted != "TestTesl18" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line KanelTests.tesl:175
 		from1 := teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusInReview}
@@ -3099,6 +3214,12 @@ func TestTesl18(teslT *testing.T) {
 }
 
 func TestTesl19(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "valid transition from Cancelled" && teslWanted != "TestTesl19" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line KanelTests.tesl:185
 		from1 := teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusCancelled}
@@ -3121,6 +3242,12 @@ func TestTesl19(teslT *testing.T) {
 }
 
 func TestTesl20(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "invalid: cannot jump from Backlog to Done directly" && teslWanted != "TestTesl20" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line KanelTests.tesl:192
 	if (teslmodkanelissues.CheckTransition(teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusBacklog}, teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusDone})).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -3128,6 +3255,12 @@ func TestTesl20(teslT *testing.T) {
 }
 
 func TestTesl21(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "invalid: cannot jump from Backlog to InProgress" && teslWanted != "TestTesl21" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line KanelTests.tesl:196
 	if (teslmodkanelissues.CheckTransition(teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusBacklog}, teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusInProgress})).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -3135,6 +3268,12 @@ func TestTesl21(teslT *testing.T) {
 }
 
 func TestTesl22(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "invalid: cannot jump from Backlog to InReview" && teslWanted != "TestTesl22" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line KanelTests.tesl:200
 	if (teslmodkanelissues.CheckTransition(teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusBacklog}, teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusInReview})).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -3142,6 +3281,12 @@ func TestTesl22(teslT *testing.T) {
 }
 
 func TestTesl23(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "invalid: Done is terminal" && teslWanted != "TestTesl23" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line KanelTests.tesl:204
 	if (teslmodkanelissues.CheckTransition(teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusDone}, teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusBacklog})).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -3169,6 +3314,12 @@ func TestTesl23(teslT *testing.T) {
 }
 
 func TestTesl24(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "invalid: cannot skip to Done from Todo" && teslWanted != "TestTesl24" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line KanelTests.tesl:213
 	if (teslmodkanelissues.CheckTransition(teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusTodo}, teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusDone})).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -3176,6 +3327,12 @@ func TestTesl24(teslT *testing.T) {
 }
 
 func TestTesl25(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "invalid: cannot skip to Done from InProgress" && teslWanted != "TestTesl25" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line KanelTests.tesl:217
 	if (teslmodkanelissues.CheckTransition(teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusInProgress}, teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusDone})).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -3183,6 +3340,12 @@ func TestTesl25(teslT *testing.T) {
 }
 
 func TestTesl26(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "invalid: Cancelled can only go to Backlog" && teslWanted != "TestTesl26" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line KanelTests.tesl:221
 	if (teslmodkanelissues.CheckTransition(teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusCancelled}, teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusTodo})).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -3198,6 +3361,12 @@ func TestTesl26(teslT *testing.T) {
 }
 
 func TestTesl27(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "property: checkOrgName always returns non-empty" && teslWanted != "TestTesl27" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	for teslPropRun1 := 0; teslPropRun1 < 100; teslPropRun1++ {
 //line KanelTests.tesl:235
 		n := teslrt.PropInt()
@@ -3211,6 +3380,12 @@ func TestTesl27(teslT *testing.T) {
 }
 
 func TestTesl28(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "property: checkEmail accepts user@domain" && teslWanted != "TestTesl28" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	for teslPropRun1 := 0; teslPropRun1 < 50; teslPropRun1++ {
 //line KanelTests.tesl:239
 		n := teslrt.PropInt()
@@ -3224,6 +3399,12 @@ func TestTesl28(teslT *testing.T) {
 }
 
 func TestTesl29(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "property: checkEstimate is identity on non-negative" && teslWanted != "TestTesl29" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	for teslPropRun1 := 0; teslPropRun1 < 100; teslPropRun1++ {
 //line KanelTests.tesl:243
 		n := teslrt.PropInt()
@@ -3237,6 +3418,12 @@ func TestTesl29(teslT *testing.T) {
 }
 
 func TestTesl30(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "property: checkPositiveMinutes in range 1-1440" && teslWanted != "TestTesl30" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	for teslPropRun1 := 0; teslPropRun1 < 100; teslPropRun1++ {
 //line KanelTests.tesl:247
 		n := teslrt.PropInt()
@@ -3250,6 +3437,12 @@ func TestTesl30(teslT *testing.T) {
 }
 
 func TestTesl31(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "property: addition is commutative (billing base)" && teslWanted != "TestTesl31" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	for teslPropRun1 := 0; teslPropRun1 < 50; teslPropRun1++ {
 //line KanelTests.tesl:251
 		a := teslrt.PropInt()
@@ -3265,6 +3458,12 @@ func TestTesl31(teslT *testing.T) {
 }
 
 func TestTesl32(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "property: total minutes calculation is correct" && teslWanted != "TestTesl32" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line KanelTests.tesl:256
 		entries := []teslrt.Int{teslrt.FromInt64(30), teslrt.FromInt64(60), teslrt.FromInt64(45), teslrt.FromInt64(120), teslrt.FromInt64(15)}
@@ -3291,6 +3490,12 @@ func TestTesl32(teslT *testing.T) {
 }
 
 func TestTesl33(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "property: estimates are non-negative" && teslWanted != "TestTesl33" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	for teslPropRun1 := 0; teslPropRun1 < 50; teslPropRun1++ {
 //line KanelTests.tesl:265
 		n := teslrt.PropInt()
@@ -3304,6 +3509,12 @@ func TestTesl33(teslT *testing.T) {
 }
 
 func TestTesl34(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkOrgName produces ValidOrgName proof" && teslWanted != "TestTesl34" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line KanelTests.tesl:278
 		validName := teslrt.MustCheck(teslmodkanelorg.CheckOrgName("Test Organization"))
@@ -3316,6 +3527,12 @@ func TestTesl34(teslT *testing.T) {
 }
 
 func TestTesl35(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkTransition produces ValidTransition proof" && teslWanted != "TestTesl35" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line KanelTests.tesl:287
 		from := teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusTodo}
@@ -3339,6 +3556,12 @@ func TestTesl35(teslT *testing.T) {
 }
 
 func TestTesl36(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "check combination: both proofs are required" && teslWanted != "TestTesl36" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line KanelTests.tesl:296
 		rawTitle := "Implement user auth"
@@ -3380,6 +3603,12 @@ func TestTesl36(teslT *testing.T) {
 }
 
 func TestTesl37(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "invoice total is sum of time entries" && teslWanted != "TestTesl37" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line KanelTests.tesl:313
 		raw1 := teslrt.FromInt64(30)
@@ -3422,6 +3651,12 @@ func TestTesl37(teslT *testing.T) {
 }
 
 func TestTesl38(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "zero unbilled entries should not create invoice" && teslWanted != "TestTesl38" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line KanelTests.tesl:327
 		emptyList := []teslrt.Int{}
@@ -3435,6 +3670,12 @@ func TestTesl38(teslT *testing.T) {
 }
 
 func TestTesl39(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "invoice total minutes calculation" && teslWanted != "TestTesl39" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line KanelTests.tesl:333
 		m1 := teslrt.FromInt64(30)
@@ -3462,6 +3703,12 @@ func TestTesl39(teslT *testing.T) {
 }
 
 func TestTesl40(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "slug must be lowercase" && teslWanted != "TestTesl40" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line KanelTests.tesl:347
 		rawSlug := "my-project"
@@ -3479,6 +3726,12 @@ func TestTesl40(teslT *testing.T) {
 }
 
 func TestTesl41(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "long but valid title" && teslWanted != "TestTesl41" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line KanelTests.tesl:354
 		longTitle := "This is a very long title that describes the issue in great detail and should be accepted by the validation function for the purpose of testing"
@@ -3506,6 +3759,12 @@ func TestTesl41(teslT *testing.T) {
 }
 
 func TestTesl42(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "boundary: estimate of 0 is valid" && teslWanted != "TestTesl42" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line KanelTests.tesl:364
 		n := teslrt.FromInt64(0)
@@ -3523,6 +3782,12 @@ func TestTesl42(teslT *testing.T) {
 }
 
 func TestTesl43(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "boundary: 1440 minutes is valid (24 hours exactly)" && teslWanted != "TestTesl43" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line KanelTests.tesl:370
 		n := teslrt.FromInt64(1440)
@@ -3540,6 +3805,12 @@ func TestTesl43(teslT *testing.T) {
 }
 
 func TestTesl44(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "boundary: 1441 minutes is invalid (exceeds 24h)" && teslWanted != "TestTesl44" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line KanelTests.tesl:376
 	if (teslmodkanelissues.CheckPositiveMinutes(teslrt.FromInt64(1441))).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -3547,6 +3818,12 @@ func TestTesl44(teslT *testing.T) {
 }
 
 func TestTesl45(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "comment body length boundary" && teslWanted != "TestTesl45" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	for teslPropRun1 := 0; teslPropRun1 < 1; teslPropRun1++ {
 //line KanelTests.tesl:380
 		n := teslrt.PropInt()

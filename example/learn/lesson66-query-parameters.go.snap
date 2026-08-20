@@ -112,13 +112,20 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 // api-test reads a required query parameter (optional defaults)
 //
 //line lesson66-query-parameters.tesl:74
 func TestTeslApi0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "reads a required query parameter (optional defaults)" && teslWanted != "TestTeslApi0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson66-query-parameters.tesl:75
 		resp := teslrt.ApiRequest(SearchServer, "GET", "/search?q=widgets", "", nil, nil)
@@ -138,6 +145,12 @@ func TestTeslApi0(teslT *testing.T) {
 //
 //line lesson66-query-parameters.tesl:80
 func TestTeslApi1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "url-encoded values are decoded (%20 -> space)" && teslWanted != "TestTeslApi1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson66-query-parameters.tesl:81
 		resp := teslrt.ApiRequest(SearchServer, "GET", "/search?q=red%20widgets", "", nil, nil)
@@ -153,6 +166,12 @@ func TestTeslApi1(teslT *testing.T) {
 //
 //line lesson66-query-parameters.tesl:85
 func TestTeslApi2(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "an optional parameter overrides its default" && teslWanted != "TestTeslApi2" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson66-query-parameters.tesl:86
 		resp := teslrt.ApiRequest(SearchServer, "GET", "/search?q=widgets&order=desc", "", nil, nil)
@@ -168,6 +187,12 @@ func TestTeslApi2(teslT *testing.T) {
 //
 //line lesson66-query-parameters.tesl:90
 func TestTeslApi3(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "repeated keys are last-wins" && teslWanted != "TestTeslApi3" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson66-query-parameters.tesl:91
 		resp := teslrt.ApiRequest(SearchServer, "GET", "/search?q=first&q=second", "", nil, nil)
@@ -183,6 +208,12 @@ func TestTeslApi3(teslT *testing.T) {
 //
 //line lesson66-query-parameters.tesl:95
 func TestTeslApi4(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "a missing required parameter is rejected" && teslWanted != "TestTeslApi4" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson66-query-parameters.tesl:96
 		resp := teslrt.ApiRequest(SearchServer, "GET", "/search", "", nil, nil)

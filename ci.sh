@@ -1432,7 +1432,7 @@ EOF
     }
 
     # 1) multi-module test from the project root
-    _cli_out="$(_cli_run test main.tesl)"; _cli_rc=$?
+    _cli_out="$(_cli_run test --backend racket main.tesl)"; _cli_rc=$?
     if [ "$_cli_rc" -eq 0 ] && printf '%s' "$_cli_out" | grep -q "1 test passed"; then
         printf "  %s✓%s  tesl test compiles imported modules and runs tests\n" "$C_GREEN" "$C_RESET"
     else
@@ -1450,7 +1450,7 @@ EOF
     fi
 
     # 2) subdirectory module: mirrored tree under .tesl-stuff/build/
-    _cli_out="$(_cli_run test sub/app.tesl)"; _cli_rc=$?
+    _cli_out="$(_cli_run test --backend racket sub/app.tesl)"; _cli_rc=$?
     if [ "$_cli_rc" -eq 0 ] && printf '%s' "$_cli_out" | grep -q "1 test passed" \
         && [ -f "$_cli_smoke_dir/.tesl-stuff/build/sub/app.rkt" ] \
         && [ -f "$_cli_smoke_dir/.tesl-stuff/build/sub/util.rkt" ]; then
@@ -1473,7 +1473,7 @@ EOF
 
     # 4) always safe to delete: rm -rf .tesl-stuff, rerun, must pass
     rm -rf "$_cli_smoke_dir/.tesl-stuff"
-    _cli_out="$(_cli_run test main.tesl)"; _cli_rc=$?
+    _cli_out="$(_cli_run test --backend racket main.tesl)"; _cli_rc=$?
     if [ "$_cli_rc" -eq 0 ] && printf '%s' "$_cli_out" | grep -q "1 test passed"; then
         printf "  %s✓%s  rm -rf .tesl-stuff && tesl test still passes (fresh rebuild)\n" "$C_GREEN" "$C_RESET"
     else
@@ -1659,7 +1659,6 @@ else
         # X-Forwarded-For hop when declared; refuse on disagreement.
         "tests/http-client-address-test.rkt"
         "tests/timezone-zones-test.rkt"
-        "tests/web-test.rkt"
         # Phase -2 (roadmap/next/ensure_sso_works.md): the server-wide response
         # security-header baseline (nosniff/Referrer-Policy/X-Frame-Options,
         # HSTS from publicOrigin scheme, CSP on served HTML), incl. the two paths

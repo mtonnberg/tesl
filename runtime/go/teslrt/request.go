@@ -3,6 +3,7 @@ package teslrt
 import (
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -118,6 +119,7 @@ type HttpRequest struct {
 	Headers         Dict[string, string]
 	QueryParameters Dict[string, string]
 	Body            string
+	ClientAddress   string
 }
 
 // ReadRequestBody reads a request body under the SAME cap `dsl/web.rkt` applies.
@@ -189,7 +191,7 @@ var (
 // gives: both its header and query hashes are built with `for/hash`, which keeps the last
 // binding. Taking the first instead is the natural Go spelling (`Query().Get`) and the wrong
 // one; `tests/query-parameters-tests.tesl` pins the rule.
-func NewHttpRequest(request *http.Request, body string) HttpRequest {
+func NewHttpRequest(request *http.Request, body string, trustedProxies ...string) HttpRequest {
 	headers := DictEmpty[string, string]()
 	for name, values := range request.Header {
 		if len(values) > 0 {
@@ -213,7 +215,51 @@ func NewHttpRequest(request *http.Request, body string) HttpRequest {
 		Headers:         headers,
 		QueryParameters: query,
 		Body:            body,
+		ClientAddress:   clientAddressOf(request, trustedProxies),
 	}
+}
+
+func canonicalClientAddress(raw string) string {
+	value := strings.TrimSpace(raw)
+	if host, _, err := net.SplitHostPort(value); err == nil {
+		value = host
+	}
+	value = strings.Trim(value, "[]")
+	if ip := net.ParseIP(value); ip != nil {
+		return ip.String()
+	}
+	return value
+}
+
+// clientAddressOf trusts forwarded addresses only when every hop to the socket is a declared
+// proxy. Walking from the socket toward the client stops at the first undeclared hop, so a
+// prepended client-controlled value is never selected.
+func clientAddressOf(request *http.Request, trustedProxies []string) string {
+	peer := canonicalClientAddress(request.RemoteAddr)
+	if len(trustedProxies) == 0 {
+		return peer
+	}
+	trusted := make(map[string]struct{}, len(trustedProxies))
+	for _, proxy := range trustedProxies {
+		trusted[canonicalClientAddress(proxy)] = struct{}{}
+	}
+	chain := make([]string, 0, len(request.Header.Values("X-Forwarded-For"))+1)
+	for _, header := range request.Header.Values("X-Forwarded-For") {
+		for _, value := range strings.Split(header, ",") {
+			if value = canonicalClientAddress(value); value != "" {
+				chain = append(chain, value)
+			}
+		}
+	}
+	if peer != "" {
+		chain = append(chain, peer)
+	}
+	for index := len(chain) - 1; index >= 0; index-- {
+		if _, isTrusted := trusted[chain[index]]; !isTrusted {
+			return chain[index]
+		}
+	}
+	panic("HttpRequest.clientAddress: trustedProxies declared but the forwarded chain has no untrusted hop")
 }
 
 // SetSessionCookie is `Http.setSessionCookie`: the ONE blessed session transport. The name is

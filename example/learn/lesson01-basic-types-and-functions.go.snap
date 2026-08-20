@@ -79,10 +79,17 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 func TestTesl0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "double" && teslWanted != "TestTesl0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft1 := Double(teslrt.FromInt64(0))
 //line lesson01-basic-types-and-functions.tesl:73
 	if !teslrt.Equal(teslLeft1, teslrt.FromInt64(0)) {
@@ -102,6 +109,12 @@ func TestTesl0(teslT *testing.T) {
 }
 
 func TestTesl1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "negate" && teslWanted != "TestTesl1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft4 := Negate(teslrt.FromInt64(5))
 	teslRight4 := teslrt.Neg(teslrt.FromInt64(5))
 //line lesson01-basic-types-and-functions.tesl:79
@@ -121,6 +134,12 @@ func TestTesl1(teslT *testing.T) {
 }
 
 func TestTesl2(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "clamp" && teslWanted != "TestTesl2" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft7 := Clamp(teslrt.FromInt64(0), teslrt.FromInt64(10), teslrt.FromInt64(5))
 //line lesson01-basic-types-and-functions.tesl:85
 	if !teslrt.Equal(teslLeft7, teslrt.FromInt64(5)) {
@@ -149,6 +168,12 @@ func TestTesl2(teslT *testing.T) {
 }
 
 func TestTesl3(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "greetAge" && teslWanted != "TestTesl3" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft12 := GreetAge("Alice", teslrt.FromInt64(20))
 //line lesson01-basic-types-and-functions.tesl:93
 	if teslLeft12 != "Hello, Alice! You are an adult." {
@@ -162,6 +187,12 @@ func TestTesl3(teslT *testing.T) {
 }
 
 func TestTesl4(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "clamp is bounded" && teslWanted != "TestTesl4" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	for teslPropRun1 := 0; teslPropRun1 < 200; teslPropRun1++ {
 //line lesson01-basic-types-and-functions.tesl:98
 		lo := teslrt.PropInt()
@@ -179,6 +210,12 @@ func TestTesl4(teslT *testing.T) {
 }
 
 func TestTesl5(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "doctest: double" && teslWanted != "TestTesl5" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft14 := Double(teslrt.FromInt64(0))
 //line lesson01-basic-types-and-functions.tesl:1
 	if !teslrt.Equal(teslLeft14, teslrt.FromInt64(0)) {
@@ -192,6 +229,12 @@ func TestTesl5(teslT *testing.T) {
 }
 
 func TestTesl6(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "doctest: negate" && teslWanted != "TestTesl6" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft16 := Negate(teslrt.FromInt64(3))
 	teslRight16 := teslrt.Neg(teslrt.FromInt64(3))
 //line lesson01-basic-types-and-functions.tesl:1
@@ -206,6 +249,12 @@ func TestTesl6(teslT *testing.T) {
 }
 
 func TestTesl7(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "doctest: clamp" && teslWanted != "TestTesl7" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft18 := Clamp(teslrt.FromInt64(0), teslrt.FromInt64(10), teslrt.FromInt64(5))
 //line lesson01-basic-types-and-functions.tesl:1
 	if !teslrt.Equal(teslLeft18, teslrt.FromInt64(5)) {

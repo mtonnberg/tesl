@@ -30,7 +30,14 @@ jq -e '
     (.status | IN("planned", "green", "obsolete")))
 ' "$manifest" >/dev/null
 
-mapfile -t racket_paths < <(git -C "$repo_root" ls-files 'tests/*.rkt' | sort)
+# Count files present in the current checkout. An intentional deletion remains in the index until
+# commit, and must not keep a removed responsibility in the migration inventory during review.
+mapfile -t racket_paths < <(
+  git -C "$repo_root" ls-files 'tests/*.rkt' |
+    while IFS= read -r path; do
+      [[ -f "$repo_root/$path" ]] && printf '%s\n' "$path"
+    done | sort
+)
 paired=0
 racket_only=0
 racket_only_paths=()

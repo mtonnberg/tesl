@@ -122,10 +122,17 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 func TestTesl0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "lookup tool: derived-schema args reach the typed fn and the loop returns a reply" && teslWanted != "TestTesl0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line support-assistant.tesl:116
 		call := teslrt.ToolUseStep("lookupOrder", "call_1", "{\"orderId\":\"A-100\"}")
@@ -159,6 +166,12 @@ func TestTesl0(teslT *testing.T) {
 }
 
 func TestTesl1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "refund tool: confirmed=true issues the refund" && teslWanted != "TestTesl1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line support-assistant.tesl:127
 		call := teslrt.ToolUseStep("refundOrder", "call_1", "{\"orderId\":\"A-200\",\"confirmed\":true}")
@@ -192,6 +205,12 @@ func TestTesl1(teslT *testing.T) {
 }
 
 func TestTesl2(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "refund tool: confirmed=false refuses the mutation but the loop continues" && teslWanted != "TestTesl2" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line support-assistant.tesl:139
 		call := teslrt.ToolUseStep("refundOrder", "call_1", "{\"orderId\":\"A-300\",\"confirmed\":false}")
@@ -225,6 +244,12 @@ func TestTesl2(teslT *testing.T) {
 }
 
 func TestTesl3(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "multi-step: lookup then refund is exactly two tool round-trips" && teslWanted != "TestTesl3" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line support-assistant.tesl:150
 		lookup := teslrt.ToolUseStep("lookupOrder", "call_1", "{\"orderId\":\"A-400\"}")
@@ -263,6 +288,12 @@ func TestTesl3(teslT *testing.T) {
 }
 
 func TestTesl4(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "malformed tool args become an is_error tool_result, not an exception" && teslWanted != "TestTesl4" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line support-assistant.tesl:164
 		call := teslrt.ToolUseStep("lookupOrder", "call_1", "{\"wrong\":\"shape\"}")
@@ -296,6 +327,12 @@ func TestTesl4(teslT *testing.T) {
 }
 
 func TestTesl5(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "structured output: classifyTicket decodes a typed Triage on the first reply" && teslWanted != "TestTesl5" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line support-assistant.tesl:175
 		mock := teslrt.MockProvider([]string{"{\"category\":\"billing\",\"priority\":2}"})
@@ -319,6 +356,12 @@ func TestTesl5(teslT *testing.T) {
 }
 
 func TestTesl6(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "structured output: classifyTicket retries past a bad reply then decodes" && teslWanted != "TestTesl6" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line support-assistant.tesl:184
 		mock := teslrt.MockProvider([]string{"not json at all", "{\"category\":\"shipping\",\"priority\":1}"})
@@ -342,6 +385,12 @@ func TestTesl6(teslT *testing.T) {
 }
 
 func TestTesl7(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "plain ask returns the scripted reply" && teslWanted != "TestTesl7" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line support-assistant.tesl:192
 		agent := teslrt.Agent{Provider: teslrt.MockProvider([]string{"Hi! How can I help?"}), SystemPrompt: "x", MaxTokens: teslrt.FromInt64(64), Tools: []teslrt.Tool{}}

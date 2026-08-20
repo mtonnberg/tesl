@@ -162,7 +162,8 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 func teslExpectFailure(teslT *testing.T, teslThunk func()) {
@@ -176,6 +177,12 @@ func teslExpectFailure(teslT *testing.T, teslThunk func()) {
 }
 
 func TestTesl0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkInBounds: value in range (via wrapper)" && teslWanted != "TestTesl0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft1 := DescribeInBounds(teslrt.FromInt64(1), teslrt.FromInt64(10), teslrt.FromInt64(5))
 //line lesson44-multi-param-proofs.tesl:231
 	if teslLeft1 != "5 is in [1, 10]" {
@@ -184,6 +191,12 @@ func TestTesl0(teslT *testing.T) {
 }
 
 func TestTesl1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkInBounds: boundary values (via wrapper)" && teslWanted != "TestTesl1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft2 := DescribeInBounds(teslrt.FromInt64(0), teslrt.FromInt64(100), teslrt.FromInt64(0))
 //line lesson44-multi-param-proofs.tesl:235
 	if teslLeft2 != "0 is in [0, 100]" {
@@ -197,6 +210,12 @@ func TestTesl1(teslT *testing.T) {
 }
 
 func TestTesl2(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkInBounds: rejects out-of-range" && teslWanted != "TestTesl2" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line lesson44-multi-param-proofs.tesl:240
 	if (CheckInBounds(teslrt.FromInt64(0), teslrt.FromInt64(10), teslrt.FromInt64(-1))).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -208,6 +227,12 @@ func TestTesl2(teslT *testing.T) {
 }
 
 func TestTesl3(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "describeInBounds: full round-trip" && teslWanted != "TestTesl3" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft4 := DescribeInBounds(teslrt.FromInt64(1), teslrt.FromInt64(10), teslrt.FromInt64(7))
 //line lesson44-multi-param-proofs.tesl:245
 	if teslLeft4 != "7 is in [1, 10]" {
@@ -220,6 +245,12 @@ func TestTesl3(teslT *testing.T) {
 }
 
 func TestTesl4(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkBudget: first-param proof, under budget" && teslWanted != "TestTesl4" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft5 := ApprovedDescription(teslrt.FromInt64(80), teslrt.FromInt64(100))
 //line lesson44-multi-param-proofs.tesl:250
 	if teslLeft5 != "approved 80 of 100" {
@@ -233,6 +264,12 @@ func TestTesl4(teslT *testing.T) {
 }
 
 func TestTesl5(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkBudget: rejects over budget" && teslWanted != "TestTesl5" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line lesson44-multi-param-proofs.tesl:255
 	if (CheckBudget(teslrt.FromInt64(101), teslrt.FromInt64(100))).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -244,6 +281,12 @@ func TestTesl5(teslT *testing.T) {
 }
 
 func TestTesl6(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkInWindow: timestamp in window" && teslWanted != "TestTesl6" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft7 := PairDescription(teslrt.FromInt64(100), teslrt.FromInt64(50), teslrt.FromInt64(120), teslrt.FromInt64(150))
 //line lesson44-multi-param-proofs.tesl:260
 	if teslLeft7 != "120 is in window [100, 150] and 150 is in window [100, 150]" {
@@ -252,6 +295,12 @@ func TestTesl6(teslT *testing.T) {
 }
 
 func TestTesl7(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkInWindow: rejects outside window" && teslWanted != "TestTesl7" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line lesson44-multi-param-proofs.tesl:264
 	if (CheckInWindow(teslrt.FromInt64(100), teslrt.FromInt64(50), teslrt.FromInt64(99))).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -263,6 +312,12 @@ func TestTesl7(teslT *testing.T) {
 }
 
 func TestTesl8(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkSortedPair: sorted in-range pair (via wrapper)" && teslWanted != "TestTesl8" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft8 := describeSortedPair(teslrt.FromInt64(10), teslrt.FromInt64(90))
 //line lesson44-multi-param-proofs.tesl:271
 	if teslLeft8 != "10 \xe2\x89\xa4 90 (both in range)" {
@@ -271,6 +326,12 @@ func TestTesl8(teslT *testing.T) {
 }
 
 func TestTesl9(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkSortedPair: equal values are valid (via wrapper)" && teslWanted != "TestTesl9" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft9 := describeSortedPair(teslrt.FromInt64(50), teslrt.FromInt64(50))
 //line lesson44-multi-param-proofs.tesl:275
 	if teslLeft9 != "50 \xe2\x89\xa4 50 (both in range)" {
@@ -279,6 +340,12 @@ func TestTesl9(teslT *testing.T) {
 }
 
 func TestTesl10(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkSortedPair: rejects unsorted" && teslWanted != "TestTesl10" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line lesson44-multi-param-proofs.tesl:279
 	if (CheckSortedPair(teslrt.FromInt64(90), teslrt.FromInt64(10))).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -286,6 +353,12 @@ func TestTesl10(teslT *testing.T) {
 }
 
 func TestTesl11(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "checkSortedPair: rejects out-of-range" && teslWanted != "TestTesl11" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line lesson44-multi-param-proofs.tesl:283
 	if (CheckSortedPair(teslrt.FromInt64(-1), teslrt.FromInt64(50))).OK() {
 		teslT.Fatal("expected Tesl check failure")

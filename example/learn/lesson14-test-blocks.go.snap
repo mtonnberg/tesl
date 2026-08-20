@@ -68,10 +68,17 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 func TestTesl0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "factorial" && teslWanted != "TestTesl0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft1 := Factorial(teslrt.FromInt64(0))
 //line lesson14-test-blocks.tesl:76
 	if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1)) {
@@ -100,6 +107,12 @@ func TestTesl0(teslT *testing.T) {
 }
 
 func TestTesl1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "fibonacci" && teslWanted != "TestTesl1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft6 := Fibonacci(teslrt.FromInt64(0))
 //line lesson14-test-blocks.tesl:84
 	if !teslrt.Equal(teslLeft6, teslrt.FromInt64(0)) {
@@ -128,6 +141,12 @@ func TestTesl1(teslT *testing.T) {
 }
 
 func TestTesl2(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "clamp: in range returns n" && teslWanted != "TestTesl2" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft11 := Clamp(teslrt.FromInt64(0), teslrt.FromInt64(10), teslrt.FromInt64(5))
 //line lesson14-test-blocks.tesl:92
 	if !teslrt.Equal(teslLeft11, teslrt.FromInt64(5)) {
@@ -146,6 +165,12 @@ func TestTesl2(teslT *testing.T) {
 }
 
 func TestTesl3(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "clamp: below lo returns lo" && teslWanted != "TestTesl3" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft14 := Clamp(teslrt.FromInt64(0), teslrt.FromInt64(10), teslrt.FromInt64(-5))
 //line lesson14-test-blocks.tesl:98
 	if !teslrt.Equal(teslLeft14, teslrt.FromInt64(0)) {
@@ -159,6 +184,12 @@ func TestTesl3(teslT *testing.T) {
 }
 
 func TestTesl4(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "clamp: above hi returns hi" && teslWanted != "TestTesl4" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft16 := Clamp(teslrt.FromInt64(0), teslrt.FromInt64(10), teslrt.FromInt64(20))
 //line lesson14-test-blocks.tesl:103
 	if !teslrt.Equal(teslLeft16, teslrt.FromInt64(10)) {
@@ -172,6 +203,12 @@ func TestTesl4(teslT *testing.T) {
 }
 
 func TestTesl5(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "clamp: mixed" && teslWanted != "TestTesl5" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson14-test-blocks.tesl:108
 		lo := teslrt.FromInt64(3)
@@ -210,6 +247,12 @@ func TestTesl5(teslT *testing.T) {
 }
 
 func TestTesl6(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "clamp properties" && teslWanted != "TestTesl6" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	for teslPropRun1 := 0; teslPropRun1 < 200; teslPropRun1++ {
 //line lesson14-test-blocks.tesl:125
 		lo := teslrt.PropInt()
@@ -251,6 +294,12 @@ func TestTesl6(teslT *testing.T) {
 }
 
 func TestTesl7(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "factorial growth" && teslWanted != "TestTesl7" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	for teslPropRun1 := 0; teslPropRun1 < 20; teslPropRun1++ {
 //line lesson14-test-blocks.tesl:131
 		n := teslrt.PropInt()
@@ -264,6 +313,12 @@ func TestTesl7(teslT *testing.T) {
 }
 
 func TestTesl8(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "doctest: factorial" && teslWanted != "TestTesl8" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft23 := Factorial(teslrt.FromInt64(0))
 //line lesson14-test-blocks.tesl:1
 	if !teslrt.Equal(teslLeft23, teslrt.FromInt64(1)) {
@@ -282,6 +337,12 @@ func TestTesl8(teslT *testing.T) {
 }
 
 func TestTesl9(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "doctest: fibonacci" && teslWanted != "TestTesl9" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft26 := Fibonacci(teslrt.FromInt64(0))
 //line lesson14-test-blocks.tesl:1
 	if !teslrt.Equal(teslLeft26, teslrt.FromInt64(0)) {

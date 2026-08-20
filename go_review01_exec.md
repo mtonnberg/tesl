@@ -104,7 +104,7 @@ Each was a maintainer decision on 2026-08-18; all are built and corpus-swept.
 | OQ5 | remove dead forms | two unconstructible AST forms and 43 pattern sites deleted |
 | OQ6 | keyed `List.unique` | O(n) where the element type has a key, matching Racket's complexity |
 | OQ7 | 415 on non-JSON | both backends now refuse the same request with the same status |
-| OQ8 | test `hostname.go` | 11 differential tests against `net/netip`, pinning 3 deliberate divergences |
+| OQ8 | test `hostname.go` | differential tests against `net/netip`, pinning deliberate divergences |
 | OQ9 | load-tests work | baselines behave exactly as Racket's do (neither stores one — a correction) |
 | OQ10 | targeted `-race` | on every emitted tree that starts goroutines; zero races found |
 | OQ11 | gate probe | each runtime file set builds alone; found 2 issues on its first run |
@@ -127,7 +127,7 @@ corpus programs declared `sessionRevoked` and none asserted revocation.
 
 All three items that were top of this list are now done: the completeness mechanism is built and
 verified to trip, every security-relevant clause has a test that fails when the clause stops
-working, and `hostname.go` has 11 differential tests.
+working, and `hostname.go` has differential coverage.
 
 What remains is one instance of the same reasoning applied to a different surface: **the gated
 runtime file sets** (OQ11). A declaration in a file gated on one condition, used by a file gated on

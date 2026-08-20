@@ -302,7 +302,8 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 func teslKeyLessTeslrtInt(teslX, teslY teslrt.Int) bool {
@@ -310,6 +311,12 @@ func teslKeyLessTeslrtInt(teslX, teslY teslrt.Int) bool {
 }
 
 func TestTesl0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "either parseAge success" && teslWanted != "TestTesl0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft1 := ParseAge("25")
 	teslRight1 := teslrt.Either[string, teslrt.Int]{Tag: teslrt.EitherRight, RightValue: teslrt.FromInt64(25)}
 //line lesson27-either-dict-set.tesl:308
@@ -325,6 +332,12 @@ func TestTesl0(teslT *testing.T) {
 }
 
 func TestTesl1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "either parseAge errors" && teslWanted != "TestTesl1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line lesson27-either-dict-set.tesl:319
 	if !(isLeft(ParseAge(""))) {
 		teslT.Fatal("Tesl expectation failed")
@@ -344,6 +357,12 @@ func TestTesl1(teslT *testing.T) {
 }
 
 func TestTesl2(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "either andThen chain" && teslWanted != "TestTesl2" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft3 := parseAdultAge("25")
 	teslRight3 := teslrt.Either[string, teslrt.Int]{Tag: teslrt.EitherRight, RightValue: teslrt.FromInt64(25)}
 //line lesson27-either-dict-set.tesl:326
@@ -361,6 +380,12 @@ func TestTesl2(teslT *testing.T) {
 }
 
 func TestTesl3(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "either map" && teslWanted != "TestTesl3" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft4 := ageCategory("17")
 	teslRight4 := teslrt.Either[string, string]{Tag: teslrt.EitherRight, RightValue: "minor"}
 //line lesson27-either-dict-set.tesl:332
@@ -386,6 +411,12 @@ func TestTesl3(teslT *testing.T) {
 }
 
 func TestTesl4(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "dict basics" && teslWanted != "TestTesl4" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson27-either-dict-set.tesl:339
 		d := teslrt.DictFromList([]teslrt.Tuple2[string, teslrt.Int]{teslrt.Tuple2[string, teslrt.Int]{Tuple2First: "a", Tuple2Second: teslrt.FromInt64(1)}, teslrt.Tuple2[string, teslrt.Int]{Tuple2First: "b", Tuple2Second: teslrt.FromInt64(2)}, teslrt.Tuple2[string, teslrt.Int]{Tuple2First: "c", Tuple2Second: teslrt.FromInt64(3)}}, teslKeyLessString)
@@ -434,6 +465,12 @@ func TestTesl4(teslT *testing.T) {
 }
 
 func TestTesl5(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "dict insert and remove" && teslWanted != "TestTesl5" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson27-either-dict-set.tesl:351
 		d := teslrt.DictSingleton("x", teslrt.FromInt64(42))
@@ -466,6 +503,12 @@ func TestTesl5(teslT *testing.T) {
 }
 
 func TestTesl6(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "dict union" && teslWanted != "TestTesl6" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson27-either-dict-set.tesl:360
 		d1 := teslrt.DictFromList([]teslrt.Tuple2[string, teslrt.Int]{teslrt.Tuple2[string, teslrt.Int]{Tuple2First: "a", Tuple2Second: teslrt.FromInt64(1)}, teslrt.Tuple2[string, teslrt.Int]{Tuple2First: "b", Tuple2Second: teslrt.FromInt64(2)}}, teslKeyLessString)
@@ -529,6 +572,12 @@ func TestTesl6(teslT *testing.T) {
 }
 
 func TestTesl7(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "countByStatus" && teslWanted != "TestTesl7" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson27-either-dict-set.tesl:375
 		counts := CountByStatus([]string{"active", "inactive", "active", "pending"})
@@ -582,6 +631,12 @@ func TestTesl7(teslT *testing.T) {
 }
 
 func TestTesl8(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "ForAllValues \xe2\x80\x94 getVerifiedScores keeps only positive values" && teslWanted != "TestTesl8" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson27-either-dict-set.tesl:388
 		raw := teslrt.DictFromList([]teslrt.Tuple2[string, teslrt.Int]{teslrt.Tuple2[string, teslrt.Int]{Tuple2First: "alice", Tuple2Second: teslrt.FromInt64(95)}, teslrt.Tuple2[string, teslrt.Int]{Tuple2First: "bob", Tuple2Second: teslrt.FromInt64(0)}, teslrt.Tuple2[string, teslrt.Int]{Tuple2First: "carol", Tuple2Second: teslrt.Neg(teslrt.FromInt64(5))}, teslrt.Tuple2[string, teslrt.Int]{Tuple2First: "dave", Tuple2Second: teslrt.FromInt64(80)}}, teslKeyLessString)
@@ -616,6 +671,12 @@ func TestTesl8(teslT *testing.T) {
 }
 
 func TestTesl9(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "ForAllValues \xe2\x80\x94 empty input gives empty output" && teslWanted != "TestTesl9" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson27-either-dict-set.tesl:399
 		raw := teslrt.DictFromList([]teslrt.Tuple2[string, teslrt.Int]{}, teslKeyLessString)
@@ -634,6 +695,12 @@ func TestTesl9(teslT *testing.T) {
 }
 
 func TestTesl10(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "ForAllKeys \xe2\x80\x94 getByValidKeys drops empty-string keys" && teslWanted != "TestTesl10" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson27-either-dict-set.tesl:405
 		raw := teslrt.DictFromList([]teslrt.Tuple2[string, teslrt.Int]{teslrt.Tuple2[string, teslrt.Int]{Tuple2First: "", Tuple2Second: teslrt.FromInt64(1)}, teslrt.Tuple2[string, teslrt.Int]{Tuple2First: "x", Tuple2Second: teslrt.FromInt64(2)}, teslrt.Tuple2[string, teslrt.Int]{Tuple2First: "y", Tuple2Second: teslrt.FromInt64(3)}}, teslKeyLessString)
@@ -660,6 +727,12 @@ func TestTesl10(teslT *testing.T) {
 }
 
 func TestTesl11(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "set basics" && teslWanted != "TestTesl11" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson27-either-dict-set.tesl:414
 		s := teslrt.SetFromList([]teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(2), teslrt.FromInt64(3), teslrt.FromInt64(2), teslrt.FromInt64(1)}, teslKeyLessTeslrtInt)
@@ -689,6 +762,12 @@ func TestTesl11(teslT *testing.T) {
 }
 
 func TestTesl12(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "set operations" && teslWanted != "TestTesl12" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson27-either-dict-set.tesl:423
 		s1 := teslrt.SetFromList([]teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(2), teslrt.FromInt64(3)}, teslKeyLessTeslrtInt)
@@ -721,6 +800,12 @@ func TestTesl12(teslT *testing.T) {
 }
 
 func TestTesl13(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "uniqueRoles" && teslWanted != "TestTesl13" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson27-either-dict-set.tesl:432
 		roles := UniqueRoles([]string{"admin", "member", "admin", "guest", "member"})
@@ -738,6 +823,12 @@ func TestTesl13(teslT *testing.T) {
 }
 
 func TestTesl14(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "lookupUser" && teslWanted != "TestTesl14" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft27 := LookupUser("usr-1")
 	teslRight27 := teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: "alice"}
 //line lesson27-either-dict-set.tesl:438

@@ -156,13 +156,20 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 // api-test health endpoint is accessible without auth
 //
 //line lesson55-testing-auth-and-capabilities.tesl:116
 func TestTeslApi0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "health endpoint is accessible without auth" && teslWanted != "TestTeslApi0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson55-testing-auth-and-capabilities.tesl:117
 		resp := teslrt.ApiRequest(AuthServer, "GET", "/health", "", nil, nil)
@@ -178,6 +185,12 @@ func TestTeslApi0(teslT *testing.T) {
 //
 //line lesson55-testing-auth-and-capabilities.tesl:122
 func TestTeslApi1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "profile endpoint returns 401 without cookie" && teslWanted != "TestTeslApi1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson55-testing-auth-and-capabilities.tesl:123
 		resp := teslrt.ApiRequest(AuthServer, "GET", "/profile", "", nil, nil)
@@ -193,6 +206,12 @@ func TestTeslApi1(teslT *testing.T) {
 //
 //line lesson55-testing-auth-and-capabilities.tesl:128
 func TestTeslApi2(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "profile endpoint works with a signed session cookie" && teslWanted != "TestTeslApi2" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson55-testing-auth-and-capabilities.tesl:129
 		resp := teslrt.ApiRequest(AuthServer, "GET", "/profile", "", []string{"__Host-session=" + mintSession("alice")}, nil)
@@ -208,6 +227,12 @@ func TestTeslApi2(teslT *testing.T) {
 //
 //line lesson55-testing-auth-and-capabilities.tesl:136
 func TestTeslApi3(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "profile endpoint rejects a made-up cookie value" && teslWanted != "TestTeslApi3" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson55-testing-auth-and-capabilities.tesl:137
 		resp := teslrt.ApiRequest(AuthServer, "GET", "/profile", "", []string{"__Host-session=" + "alice"}, nil)
@@ -223,6 +248,12 @@ func TestTeslApi3(teslT *testing.T) {
 //
 //line lesson55-testing-auth-and-capabilities.tesl:144
 func TestTeslApi4(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "profile endpoint rejects a token signed with the wrong key" && teslWanted != "TestTeslApi4" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson55-testing-auth-and-capabilities.tesl:145
 		resp := teslrt.ApiRequest(AuthServer, "GET", "/profile", "", []string{"__Host-session=" + forgedSession("alice")}, nil)

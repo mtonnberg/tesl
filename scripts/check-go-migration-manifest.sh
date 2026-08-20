@@ -4,8 +4,18 @@ set -euo pipefail
 repo_root=${TESL_REPO_ROOT:-$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)}
 manifest="$repo_root/roadmap/next/racket-traceability.json"
 
+# Use tracked paths that still exist in the checkout. This keeps the manifest gate useful while
+# an intentional deletion is present in a worktree but not yet staged; after commit the result is
+# identical to `git ls-files '*.rkt'`.
+tracked_racket_files() {
+  git -C "$repo_root" ls-files '*.rkt' |
+    while IFS= read -r path; do
+      [[ -f "$repo_root/$path" ]] && printf '%s\n' "$path"
+    done
+}
+
 if [[ ${1:-} == "--write" ]]; then
-  git -C "$repo_root" ls-files '*.rkt' | jq -Rsc '
+  tracked_racket_files | jq -Rsc '
     split("\n")
     | map(select(length > 0))
     | map({
@@ -46,7 +56,7 @@ fi
 expected=$(mktemp)
 actual=$(mktemp)
 trap 'rm -f "$expected" "$actual"' EXIT
-git -C "$repo_root" ls-files '*.rkt' | sort > "$expected"
+tracked_racket_files | sort > "$expected"
 jq -r '.[].path' "$manifest" | sort > "$actual"
 if ! cmp -s "$expected" "$actual"; then
   printf 'traceability manifest paths differ from tracked .rkt files\n' >&2

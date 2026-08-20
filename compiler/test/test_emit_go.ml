@@ -3976,15 +3976,14 @@ let test_pg_columns_oracle () =
      `listenAddress Loopback` the server bound every interface
      `healthProbePath`        a load balancer's probe got 421
      `contentSecurityPolicy`  runtime-served HTML carried no CSP
-     `trustedProxies`         a security declaration configured nothing
+      `trustedProxies`         the trusted client address is derived from the request chain
 
    Three of them are declared by corpus programs TODAY (`example/sso-demo.tesl`,
    `lesson78-sso.tesl`, `lesson79-authenticating-proxy.tesl`, `lesson80-testing-sso.tesl`,
    `tests/proxy-binding-http-tests.tesl`) and those programs PASSED — a green corpus over a real
    divergence, because no test asserted a clause.  So this case asserts the boot line for each,
    and then asserts the BEHAVIOUR of the one with teeth: `expectFail renewedLength banned` fails
-   unless the revocation hook actually denies.  `trustedProxies` is refused rather than wired,
-   because there is no `request.clientAddress` on this backend for it to scope. *)
+   unless the revocation hook actually denies. *)
 let server_clauses_source = {|module GoServerClauses exposing [profile, renewedLength]
 
 import Tesl.Prelude exposing [Bool(..), Int, String, Unit]
@@ -4014,7 +4013,7 @@ fn revoked(subject: String, _issuedAt: PosixMillis) -> Bool =
 
 auth sessionOwner(request: HttpRequest) -> user: Profile ::: Authenticated user
   requires [jwt, envRead] =
-  ok (Profile { name: "anyone" }) ::: Authenticated user
+  ok (Profile { name: request.clientAddress }) ::: Authenticated user
 
 handler get profile(user: Profile ::: Authenticated user) -> Profile = user
 
@@ -4040,6 +4039,7 @@ server ClauseServer for ClauseApi {
   listenAddress Loopback
   healthProbePath "/healthz"
   contentSecurityPolicy "default-src 'self'"
+  trustedProxies ["10.0.0.1"]
 }
 
 database ClauseDb = Database {
@@ -4074,7 +4074,8 @@ let test_server_clauses_with_go () =
         "teslrt.SetPreviousSessionKey(teslrt.SecretPointer(teslrt.RequireSecret(\"GOCLAUSES_PREVIOUS_KEY\")))";
       "sessionRevoked", "teslrt.SetSessionRevokedHook(func(teslSubject string, teslIssuedAt int64) bool {";
       "healthProbePath", "teslrt.SetHealthProbePath(\"/healthz\")";
-      "contentSecurityPolicy", "teslrt.SetContentSecurityPolicy(\"default-src 'self'\")" ];
+       "contentSecurityPolicy", "teslrt.SetContentSecurityPolicy(\"default-src 'self'\")";
+       "trustedProxies", "[]string{\"10.0.0.1\"}" ];
   (* The hook is handed `iat` in SECONDS and the clause's fn takes a `PosixMillis`, so the
      adapter has to convert — a hook given milliseconds compares against the wrong epoch and
      never revokes anything. *)
@@ -4088,47 +4089,13 @@ let test_server_clauses_with_go () =
                      "GOCLAUSES_PREVIOUS_KEY=clauses-previous-key-0123456789"]
     "tesl-go-server-clauses" emitted
 
-(* `trustedProxies` scopes which forwarded-for header `request.clientAddress` may believe.  This
-   backend has no `clientAddress`, so the clause would configure a reader that does not exist:
-   refused, because accepting a security declaration that does nothing is worse than not
-   compiling. *)
-let test_trusted_proxies_fails_closed () =
-  let source = {|module GoTrustedProxies exposing [ping]
-
-import Tesl.Prelude exposing [String]
-import Tesl.Database exposing [Database, Memory]
-import Tesl.App exposing [App]
-
-handler get ping() -> String = "pong"
-
-api ProxyApi {
-  get "/ping" -> String
-}
-
-server ProxyServer for ProxyApi {
-  ping
-  trustedProxies ["10.0.0.1"]
-}
-
-database ProxyDb = Database {
-  entities: []
-  backend: Memory
-}
-
-main() -> App =
-  App {
-    database: ProxyDb
-    api: ProxyServer
-    port: 8080
-  }
-|} in
-  match Compile.compile_go_source "<go-trusted-proxies>" source with
-  | Compile.GoSuccess _ -> fail "trustedProxies emitted instead of failing closed"
-  | Compile.GoFailure diagnostics ->
-    let message = String.concat "; "
-      (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics) in
-    check bool "the refusal says why there is nothing to configure" true
-      (contains message "clientAddress")
+let test_trusted_proxies_emits_client_address () =
+  let emitted = emit_ok "<go-trusted-proxies>" server_clauses_source in
+  let module_go = artifact "internal/teslmodgoserverclauses/module.go" emitted in
+  check bool "trusted proxies reach request construction" true
+    (contains module_go "[]string{\"10.0.0.1\"}...");
+  check bool "request clientAddress reaches the auth body" true
+    (contains module_go ".ClientAddress")
 
 (* ─── `List.unique`: the keyed path ───────────────────────────────────────────
    `ListUniqueBy` is a linear scan per element — quadratic — while Racket's `List.unique` is
@@ -12779,7 +12746,7 @@ let () =
            ~env:["GOCLAUSES_SESSION_KEY=clauses-signing-key-0123456789";
                  "GOCLAUSES_PREVIOUS_KEY=clauses-previous-key-0123456789"]
            "<go-server-clauses-oracle>" server_clauses_source);
-      test_case "trustedProxies fails closed" `Quick test_trusted_proxies_fails_closed;
+       test_case "trustedProxies exposes clientAddress" `Quick test_trusted_proxies_emits_client_address;
       test_case "List.unique takes a keyed path where it can" `Slow test_list_unique_with_go;
       test_case "keyed unique behaves the same on Racket" `Slow
         (racket_behavior_oracle "<go-list-unique-oracle>" list_unique_source);

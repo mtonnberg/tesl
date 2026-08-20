@@ -70,3 +70,33 @@ func TestRepeatedQueryAndHeaderAreLastWins(t *testing.T) {
 	bare := NewHttpRequest(httptest.NewRequest("GET", "/search?k", nil), "")
 	expect("bare key", lookup(bare.QueryParameters, "k"), "")
 }
+
+func TestClientAddressUsesSocketPeerWithoutTrustedProxies(t *testing.T) {
+	request := httptest.NewRequest("GET", "/", nil)
+	request.RemoteAddr = "10.0.0.1:443"
+	request.Header.Set("X-Forwarded-For", "198.51.100.9")
+	if got := NewHttpRequest(request, "").ClientAddress; got != "10.0.0.1" {
+		t.Fatalf("client address = %q, want socket peer", got)
+	}
+}
+
+func TestClientAddressUsesRightmostUntrustedForwardedHop(t *testing.T) {
+	request := httptest.NewRequest("GET", "/", nil)
+	request.RemoteAddr = "10.0.0.1:443"
+	request.Header.Set("X-Forwarded-For", "203.0.113.7, 10.0.0.2")
+	if got := NewHttpRequest(request, "", "10.0.0.1", "10.0.0.2").ClientAddress; got != "203.0.113.7" {
+		t.Fatalf("client address = %q, want rightmost untrusted hop", got)
+	}
+}
+
+func TestClientAddressRejectsAllTrustedForwardedChain(t *testing.T) {
+	request := httptest.NewRequest("GET", "/", nil)
+	request.RemoteAddr = "10.0.0.1:443"
+	request.Header.Set("X-Forwarded-For", "10.0.0.2")
+	defer func() {
+		if recover() == nil {
+			t.Fatal("all-trusted chain must fail closed")
+		}
+	}()
+	_ = NewHttpRequest(request, "", "10.0.0.1", "10.0.0.2")
+}

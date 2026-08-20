@@ -904,9 +904,7 @@ let server_clause_dispositions (server : server_form) : unit =
      (`validation_*`) and carrying no runtime form on either backend — `emit_racket.ml` reads
      neither field either. *)
   ignore (login_methods, password_policy_fn);
-  (* REFUSED — `trustedProxies` scopes which forwarded-for header `request.clientAddress` may
-     believe, and this backend has no `clientAddress`.  The refusal is raised at the emission
-     site (which has the location); this arm exists so the field is accounted for. *)
+   (* `trustedProxies` is consumed when generated auth code constructs its request value. *)
   ignore trusted_proxies;
   (* The rebuild is the seam: a new field breaks THIS line. *)
   ignore { name; api_name; handlers; session_policy; public_origin; sso_clauses;
@@ -11024,9 +11022,13 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
         "Go backend needs one handler per endpoint in `%s` (%d endpoint(s), %d handler(s))"
         server.api_name (List.length endpoints) (List.length server.handlers);
     let bound = List.combine endpoints server.handlers in
-    List.iter (fun ((ep : api_endpoint), _) ->
-      ignore ep) bound;
-    let server_name = go_ident ~exported:true server.name in
+     List.iter (fun ((ep : api_endpoint), _) ->
+       ignore ep) bound;
+     let server_name = go_ident ~exported:true server.name in
+     let trusted_proxies_go =
+       Printf.sprintf "[]string{%s}"
+         (String.concat ", " (List.map go_quote server.trusted_proxies))
+     in
     Printf.bprintf body "\nvar %s = teslrt.Server{\n\tRoutes: []teslrt.Route{\n" server_name;
     List.iter (fun ((ep : api_endpoint), handler) ->
       Printf.bprintf body "\t\t{Method: %S, Path: %S, Endpoint: %S},\n"
@@ -11095,8 +11097,8 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
             scope like any other cookie-writing function. *)
          let scope_argument = if signature.sig_needs_scope then "teslScope, " else "" in
          Printf.bprintf body
-           "\t\t\tteslAuth := %s(%steslrt.NewHttpRequest(teslRequest, teslBodyText))\n\t\t\tif !teslAuth.OK() {\n\t\t\t\treturn teslrt.Fail(teslAuth.Status(), teslAuth.Message())\n\t\t\t}\n\t\t\t%s, _ := teslAuth.Value()\n"
-           (qualified signature.sig_owner signature.go_name) scope_argument binder;
+            "\t\t\tteslAuth := %s(%steslrt.NewHttpRequest(teslRequest, teslBodyText, %s...))\n\t\t\tif !teslAuth.OK() {\n\t\t\t\treturn teslrt.Fail(teslAuth.Status(), teslAuth.Message())\n\t\t\t}\n\t\t\t%s, _ := teslAuth.Value()\n"
+            (qualified signature.sig_owner signature.go_name) scope_argument trusted_proxies_go binder;
          arguments := !arguments @ [binder]);
       List.iter (fun (capture : api_capture) ->
         let name = capture.binding.name in
@@ -11269,9 +11271,9 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
               that decides whether this subscriber may listen at all. *)
            let scope_argument =
              if signature.sig_needs_scope then "teslrt.NewRequestScope(), " else "" in
-           Printf.bprintf body
-             "\t\t\tteslAuth := %s(%steslrt.NewHttpRequest(teslRequest, \"\"))\n\t\t\tif !teslAuth.OK() {\n\t\t\t\thttp.Error(teslWriter, teslAuth.Message(), teslAuth.Status())\n\t\t\t\treturn\n\t\t\t}\n"
-             (qualified signature.sig_owner signature.go_name) scope_argument);
+            Printf.bprintf body
+              "\t\t\tteslAuth := %s(%steslrt.NewHttpRequest(teslRequest, \"\", %s...))\n\t\t\tif !teslAuth.OK() {\n\t\t\t\thttp.Error(teslWriter, teslAuth.Message(), teslAuth.Status())\n\t\t\t\treturn\n\t\t\t}\n"
+              (qualified signature.sig_owner signature.go_name) scope_argument trusted_proxies_go);
         List.iter (fun (capture : api_capture) ->
           let name = capture.binding.name in
           let suffix = go_ident ~exported:true name in
@@ -11438,16 +11440,8 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
          | Some policy ->
            [Printf.sprintf "\tteslrt.SetContentSecurityPolicy(%s)" (go_quote policy)]
          | None -> [])
-      (* #51: `trustedProxies` configures which forwarded-for headers `request.clientAddress`
-         may believe.  This backend has no `clientAddress` — nothing reads a forwarded header —
-         so the clause would configure a reader that does not exist.  Refused rather than
-         accepted-and-ignored: accepting it would say the edge is described when it is not. *)
-      @ (match server.trusted_proxies with
-         | [] -> []
-         | _ -> unsupported server.loc
-           "Go backend does not support `trustedProxies`: it configures which forwarded-for \
-            header `request.clientAddress` may believe, and this backend has no \
-            `clientAddress` to configure")
+       (* #51: trusted proxies are passed to NewHttpRequest at each auth boundary, where the
+          request's trustworthy client address is derived from the socket/XFF chain. *)
     in
     if boot_settings <> [] then
       Printf.bprintf body "\nfunc init() {\n%s\n}\n" (String.concat "\n" boot_settings);
@@ -13996,7 +13990,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         rec_fields = [
               "method", TString; "path", TString;
               "cookies", string_dict; "headers", string_dict;
-              "queryParameters", string_dict; "body", TString;
+              "queryParameters", string_dict; "clientAddress", TString; "body", TString;
             ];
             rec_loc = import.loc;
           }

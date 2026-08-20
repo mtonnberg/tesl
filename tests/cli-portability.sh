@@ -254,7 +254,7 @@ test "quad 3 == 12" {
 EOF
 
 # 1) compile (this is the exact path that died with `: No such file or directory`)
-out="$(tesl_bsd "$PROJ" compile main.tesl)"; rc=$?
+out="$(tesl_bsd "$PROJ" compile --backend racket main.tesl)"; rc=$?
 if [ "$rc" -eq 0 ] && [ -f "$PROJ/.tesl-stuff/build/main.rkt" ]; then
   pass "tesl compile works with a BSD mktemp/stat/readlink"
 else
@@ -287,7 +287,7 @@ fi
 
 # 4) bare `tesl test` runs the test blocks (README's documented command)
 if command -v raco >/dev/null 2>&1; then
-  out="$(tesl_bsd "$PROJ" test)"; rc=$?
+  out="$(tesl_bsd "$PROJ" test --backend racket)"; rc=$?
   if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "1 test passed"; then
     pass "bare 'tesl test' runs the entrypoint's test blocks"
   else
@@ -299,7 +299,7 @@ fi
 
 # 5) `tesl build` with [deploy].target = "local" must NOT need Docker (#46.3)
 #    PATH deliberately has no docker: a Docker attempt fails the assertion.
-out="$(tesl_bsd "$PROJ" build)"; rc=$?
+out="$(tesl_bsd "$PROJ" build --backend racket)"; rc=$?
 if [ "$rc" -eq 0 ] \
    && printf '%s' "$out" | grep -q "target = local" \
    && ! printf '%s' "$out" | grep -qE "staged Dockerfile|building image" \
@@ -310,7 +310,7 @@ else
 fi
 
 # 6) …and --container still stages the image context on demand
-out="$(tesl_bsd "$PROJ" build --container --no-docker)"; rc=$?
+out="$(tesl_bsd "$PROJ" build --backend racket --container --no-docker)"; rc=$?
 if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "staged Dockerfile"; then
   pass "tesl build --container overrides the manifest and stages a Dockerfile"
 else
@@ -322,7 +322,7 @@ CPROJ="$WORK/cproj"
 mkdir -p "$CPROJ"
 sed 's/^target = "local"/target = "container"/' "$PROJ/tesl.toml" > "$CPROJ/tesl.toml"
 cp "$PROJ/main.tesl" "$PROJ/lib.tesl" "$CPROJ/"
-out="$(tesl_bsd "$CPROJ" build --no-docker)"; rc=$?
+out="$(tesl_bsd "$CPROJ" build --backend racket --no-docker)"; rc=$?
 if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "staged Dockerfile"; then
   pass "tesl build stages a Dockerfile for [deploy].target = container"
 else
@@ -345,7 +345,7 @@ fi
 #    and the resolved file path must still agree, or every file looks like it
 #    "resolves outside the project root".
 ln -s "$PROJ" "$WORK/linked"
-out="$(tesl_bsd "$WORK/linked" compile)"; rc=$?
+out="$(tesl_bsd "$WORK/linked" compile --backend racket)"; rc=$?
 if [ "$rc" -eq 0 ] && [ -f "$PROJ/.tesl-stuff/build/main.rkt" ]; then
   pass "project reached via a symlinked path still resolves its build output"
 else

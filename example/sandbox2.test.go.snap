@@ -331,7 +331,8 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 func teslPropDraw1() AnIntRecordWithCombinedProof {
@@ -345,6 +346,12 @@ func teslPropDraw1() AnIntRecordWithCombinedProof {
 }
 
 func TestTesl0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "double basics" && teslWanted != "TestTesl0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft1 := double(teslrt.FromInt64(0))
 //line sandbox2.test.tesl:36
 	if !teslrt.Equal(teslLeft1, teslrt.FromInt64(0)) {
@@ -368,6 +375,12 @@ func TestTesl0(teslT *testing.T) {
 }
 
 func TestTesl1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "add basics" && teslWanted != "TestTesl1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft4 := add(teslrt.FromInt64(3), teslrt.FromInt64(7))
 //line sandbox2.test.tesl:43
 	if !teslrt.Equal(teslLeft4, teslrt.FromInt64(10)) {
@@ -386,6 +399,12 @@ func TestTesl1(teslT *testing.T) {
 }
 
 func TestTesl2(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "String.length" && teslWanted != "TestTesl2" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft7 := teslrt.StringLength("hello")
 //line sandbox2.test.tesl:49
 	if !teslrt.Equal(teslLeft7, teslrt.FromInt64(5)) {
@@ -404,6 +423,12 @@ func TestTesl2(teslT *testing.T) {
 }
 
 func TestTesl3(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "String.startsWith" && teslWanted != "TestTesl3" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line sandbox2.test.tesl:55
 	if !(teslrt.StringStartsWith("hello", "hel")) {
 		teslT.Fatal("Tesl expectation failed")
@@ -415,6 +440,12 @@ func TestTesl3(teslT *testing.T) {
 }
 
 func TestTesl4(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "comparisons" && teslWanted != "TestTesl4" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line sandbox2.test.tesl:60
 	if teslrt.Compare(teslrt.FromInt64(5), teslrt.FromInt64(3)) <= 0 {
 		teslT.Fatal("Tesl expectation failed")
@@ -438,6 +469,12 @@ func TestTesl4(teslT *testing.T) {
 }
 
 func TestTesl5(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "property: double is 2*n" && teslWanted != "TestTesl5" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	for teslPropRun1 := 0; teslPropRun1 < 50; teslPropRun1++ {
 //line sandbox2.test.tesl:70
 		n := teslrt.PropInt()
@@ -449,6 +486,12 @@ func TestTesl5(teslT *testing.T) {
 }
 
 func TestTesl6(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "property: add is commutative" && teslWanted != "TestTesl6" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	for teslPropRun1 := 0; teslPropRun1 < 50; teslPropRun1++ {
 //line sandbox2.test.tesl:74
 		x := teslrt.PropInt()
@@ -462,6 +505,12 @@ func TestTesl6(teslT *testing.T) {
 }
 
 func TestTesl7(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "property: string length is non-negative" && teslWanted != "TestTesl7" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	for teslPropRun1 := 0; teslPropRun1 < 30; teslPropRun1++ {
 //line sandbox2.test.tesl:78
 		s := teslrt.PropString()
@@ -473,6 +522,12 @@ func TestTesl7(teslT *testing.T) {
 }
 
 func TestTesl8(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "property: with where clause" && teslWanted != "TestTesl8" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	for teslPropRun1 := 0; teslPropRun1 < 100; teslPropRun1++ {
 //line sandbox2.test.tesl:82
 		n := teslrt.PropInt()
@@ -486,6 +541,12 @@ func TestTesl8(teslT *testing.T) {
 }
 
 func TestTesl9(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "property: record.  add is commutative" && teslWanted != "TestTesl9" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	for teslPropRun1 := 0; teslPropRun1 < 100; teslPropRun1++ {
 //line sandbox2.test.tesl:100
 		n := AnIntRecord{SomeProp: teslrt.PropInt()}
@@ -499,6 +560,12 @@ func TestTesl9(teslT *testing.T) {
 }
 
 func TestTesl10(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "property: record.  where statements" && teslWanted != "TestTesl10" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	for teslPropRun1 := 0; teslPropRun1 < 100; teslPropRun1++ {
 //line sandbox2.test.tesl:104
 		n := AnIntRecord{SomeProp: teslrt.PropInt()}
@@ -512,6 +579,12 @@ func TestTesl10(teslT *testing.T) {
 }
 
 func TestTesl11(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "property: record with proofs.  add is commutative" && teslWanted != "TestTesl11" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	for teslPropRun1 := 0; teslPropRun1 < 100; teslPropRun1++ {
 //line sandbox2.test.tesl:108
 		n := AnIntRecordWithProof{SomeProp: teslrt.PropPositiveInt(), SomeProp2: teslrt.PropPositiveInt()}
@@ -525,6 +598,12 @@ func TestTesl11(teslT *testing.T) {
 }
 
 func TestTesl12(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "property: record with proofs.  where statements" && teslWanted != "TestTesl12" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	for teslPropRun1 := 0; teslPropRun1 < 100; teslPropRun1++ {
 //line sandbox2.test.tesl:112
 		n := AnIntRecordWithProof{SomeProp: teslrt.PropPositiveInt(), SomeProp2: teslrt.PropPositiveInt()}
@@ -538,6 +617,12 @@ func TestTesl12(teslT *testing.T) {
 }
 
 func TestTesl13(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "property: record with combined proofs" && teslWanted != "TestTesl13" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	for teslPropRun1 := 0; teslPropRun1 < 100; teslPropRun1++ {
 //line sandbox2.test.tesl:116
 		n := teslPropDraw1()
@@ -549,6 +634,12 @@ func TestTesl13(teslT *testing.T) {
 }
 
 func TestTesl14(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "property: via custom generator" && teslWanted != "TestTesl14" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	for teslPropRun1 := 0; teslPropRun1 < 20; teslPropRun1++ {
 //line sandbox2.test.tesl:124
 		n := genSmallPositive(teslrt.FromInt64(int64(teslPropRun1)))
@@ -560,6 +651,12 @@ func TestTesl14(teslT *testing.T) {
 }
 
 func TestTesl15(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "doctest: double" && teslWanted != "TestTesl15" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft10 := double(teslrt.FromInt64(5))
 //line sandbox2.test.tesl:1
 	if !teslrt.Equal(teslLeft10, teslrt.FromInt64(10)) {
@@ -579,6 +676,12 @@ func TestTesl15(teslT *testing.T) {
 }
 
 func TestTesl16(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "doctest: add" && teslWanted != "TestTesl16" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft13 := add(teslrt.FromInt64(3), teslrt.FromInt64(7))
 //line sandbox2.test.tesl:1
 	if !teslrt.Equal(teslLeft13, teslrt.FromInt64(10)) {

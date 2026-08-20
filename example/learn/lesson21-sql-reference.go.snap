@@ -630,7 +630,8 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 func teslEqualCategory(teslX, teslY Category) bool {
@@ -642,6 +643,12 @@ func teslEqualProduct(teslX, teslY Product) bool {
 }
 
 func TestTesl0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "findById returns named entity" && teslWanted != "TestTesl0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson21-sql-reference.tesl:573
 		_ = CreateProduct("p1", "Widget", teslrt.FromInt64(10), "tools")
@@ -669,6 +676,12 @@ func TestTesl0(teslT *testing.T) {
 }
 
 func TestTesl1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "findByCategory returns matching rows" && teslWanted != "TestTesl1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson21-sql-reference.tesl:581
 		_ = CreateProduct("c1", "Hammer", teslrt.FromInt64(15), "tools")
@@ -693,6 +706,12 @@ func TestTesl1(teslT *testing.T) {
 }
 
 func TestTesl2(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "findCheapInCategory applies AND condition" && teslWanted != "TestTesl2" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson21-sql-reference.tesl:589
 		_ = CreateProduct("a1", "Cheap Tool", teslrt.FromInt64(5), "tools")
@@ -722,6 +741,12 @@ func TestTesl2(teslT *testing.T) {
 }
 
 func TestTesl3(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "findFeatured applies OR condition" && teslWanted != "TestTesl3" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson21-sql-reference.tesl:598
 		_ = CreateProduct("f1", "Alpha", teslrt.FromInt64(10), "alpha")
@@ -746,6 +771,12 @@ func TestTesl3(teslT *testing.T) {
 }
 
 func TestTesl4(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "setPrice updates the entity and returns it" && teslWanted != "TestTesl4" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson21-sql-reference.tesl:606
 		_ = CreateProduct("u1", "Updatable", teslrt.FromInt64(100), "misc")
@@ -768,6 +799,12 @@ func TestTesl4(teslT *testing.T) {
 }
 
 func TestTesl5(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "updatePriceSilently returns unit" && teslWanted != "TestTesl5" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson21-sql-reference.tesl:613
 		_ = CreateProduct("us1", "Silent", teslrt.FromInt64(50), "misc")
@@ -789,6 +826,12 @@ func TestTesl5(teslT *testing.T) {
 }
 
 func TestTesl6(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "removeProduct deletes a row and returns unit" && teslWanted != "TestTesl6" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson21-sql-reference.tesl:620
 		_ = CreateProduct("d1", "Deletable", teslrt.FromInt64(5), "misc")
@@ -812,6 +855,12 @@ func TestTesl6(teslT *testing.T) {
 }
 
 func TestTesl7(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "removeProductWithResult returns NoRowDeleted when not found" && teslWanted != "TestTesl7" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson21-sql-reference.tesl:627
 		result := RemoveProductWithResult("nonexistent-xyz")
@@ -825,6 +874,12 @@ func TestTesl7(teslT *testing.T) {
 }
 
 func TestTesl8(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "removeProductWithResult returns RowsDeleted when found" && teslWanted != "TestTesl8" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson21-sql-reference.tesl:632
 		_ = CreateProduct("dr1", "ToDelete", teslrt.FromInt64(5), "misc")
@@ -842,6 +897,12 @@ func TestTesl8(teslT *testing.T) {
 }
 
 func TestTesl9(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "batchCreate inserts all products" && teslWanted != "TestTesl9" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson21-sql-reference.tesl:638
 		_ = BatchCreate([]Product{Product{Id: "b1", Name: "Batch1", Price: teslrt.FromInt64(10), Category: "batch", InStock: true}, Product{Id: "b2", Name: "Batch2", Price: teslrt.FromInt64(20), Category: "batch", InStock: true}})
@@ -858,6 +919,12 @@ func TestTesl9(teslT *testing.T) {
 }
 
 func TestTesl10(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "expensiveProducts filters by price" && teslWanted != "TestTesl10" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson21-sql-reference.tesl:644
 		_ = CreateProduct("e1", "Pricey", teslrt.FromInt64(999), "luxury")
@@ -874,6 +941,12 @@ func TestTesl10(teslT *testing.T) {
 }
 
 func TestTesl11(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "findInPriceRange returns only rows in range" && teslWanted != "TestTesl11" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson21-sql-reference.tesl:650
 		_ = CreateProduct("br1", "Cheap", teslrt.FromInt64(5), "misc")
@@ -898,6 +971,12 @@ func TestTesl11(teslT *testing.T) {
 }
 
 func TestTesl12(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "findInPriceRangeOrdered returns ordered results" && teslWanted != "TestTesl12" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson21-sql-reference.tesl:658
 		_ = CreateProduct("bro1", "Budget", teslrt.FromInt64(15), "misc")
@@ -922,6 +1001,12 @@ func TestTesl12(teslT *testing.T) {
 }
 
 func TestTesl13(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "upsertProduct inserts when row does not exist" && teslWanted != "TestTesl13" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson21-sql-reference.tesl:666
 		_ = UpsertProduct("up1", "NewProduct", teslrt.FromInt64(42))
@@ -944,6 +1029,12 @@ func TestTesl13(teslT *testing.T) {
 }
 
 func TestTesl14(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "upsertProduct updates when row already exists" && teslWanted != "TestTesl14" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson21-sql-reference.tesl:673
 		_ = UpsertProduct("up2", "Original", teslrt.FromInt64(10))
@@ -970,6 +1061,12 @@ func TestTesl14(teslT *testing.T) {
 }
 
 func TestTesl15(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "upsertProductByName conflicts on the unique index, not the primary key" && teslWanted != "TestTesl15" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson21-sql-reference.tesl:681
 		_ = UpsertProductByName("un1", "UniqueName", teslrt.FromInt64(10))
@@ -1003,6 +1100,12 @@ func TestTesl15(teslT *testing.T) {
 }
 
 func TestTesl16(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "searchByName with like pattern matches prefix" && teslWanted != "TestTesl16" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson21-sql-reference.tesl:692
 		_ = CreateProduct("lk1", "Widget Pro", teslrt.FromInt64(50), "tools")
@@ -1023,6 +1126,12 @@ func TestTesl16(teslT *testing.T) {
 }
 
 func TestTesl17(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "searchByNameInsensitive with ilike is case-insensitive" && teslWanted != "TestTesl17" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson21-sql-reference.tesl:699
 		_ = CreateProduct("ilk1", "WidgetX", teslrt.FromInt64(50), "tools")
@@ -1039,6 +1148,12 @@ func TestTesl17(teslT *testing.T) {
 }
 
 func TestTesl18(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "countProducts returns total count" && teslWanted != "TestTesl18" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson21-sql-reference.tesl:705
 		_ = CreateProduct("cnt1", "CountMe1", teslrt.FromInt64(10), "count-test")
@@ -1059,6 +1174,12 @@ func TestTesl18(teslT *testing.T) {
 }
 
 func TestTesl19(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "sumPrices returns non-negative sum" && teslWanted != "TestTesl19" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson21-sql-reference.tesl:712
 		_ = CreateProduct("sum1", "SumMe1", teslrt.FromInt64(10), "sum-test")
@@ -1079,6 +1200,12 @@ func TestTesl19(teslT *testing.T) {
 }
 
 func TestTesl20(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "findInStockCheap filters on multiple conditions" && teslWanted != "TestTesl20" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson21-sql-reference.tesl:719
 		_ = CreateProduct("is1", "Cheap In Stock", teslrt.FromInt64(5), "misc")
@@ -1099,6 +1226,12 @@ func TestTesl20(teslT *testing.T) {
 }
 
 func TestTesl21(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "findProductsWithCategory uses innerJoin to filter" && teslWanted != "TestTesl21" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson21-sql-reference.tesl:726
 		_ = teslrt.TableInsert(CategoryTable, "Category", Category{Id: "tools", Label: "Tools", Active: true}, func(teslRow, teslNew Category) bool { return (teslRow.Id == teslNew.Id) })
@@ -1123,6 +1256,12 @@ func TestTesl21(teslT *testing.T) {
 }
 
 func TestTesl22(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "createProductWithCategory inserts both atomically" && teslWanted != "TestTesl22" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson21-sql-reference.tesl:739
 		p := CreateProductWithCategory("txp1", "Transactional Widget", teslrt.FromInt64(30), "tx-cat", "TX Category")
@@ -1152,6 +1291,12 @@ func TestTesl22(teslT *testing.T) {
 }
 
 func TestTesl23(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "swapStock updates two rows atomically" && teslWanted != "TestTesl23" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson21-sql-reference.tesl:748
 		_ = CreateProduct("swap1", "SwapOut", teslrt.FromInt64(10), "misc")
@@ -1189,6 +1334,12 @@ func TestTesl23(teslT *testing.T) {
 }
 
 func TestTesl24(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "per-day series: UTC buckets differ from Stockholm buckets" && teslWanted != "TestTesl24" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	{
 //line lesson21-sql-reference.tesl:769
 		_ = seedTimeEntries()
@@ -1216,6 +1367,12 @@ func TestTesl24(teslT *testing.T) {
 }
 
 func TestTesl25(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "filter pattern: all rows for one Stockholm day" && teslWanted != "TestTesl25" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 //line lesson21-sql-reference.tesl:780
 	_ = teslrt.TableInsert(TimeEntryTable, "TimeEntry", TimeEntry{Id: "te4", OrgId: "acme2", Minutes: teslrt.FromInt64(10), StartedAt: teslrt.SecondsToPosix(teslrt.FromInt64(1772359200))}, func(teslRow, teslNew TimeEntry) bool { return (teslRow.Id == teslNew.Id) })
 //line lesson21-sql-reference.tesl:781
@@ -1238,6 +1395,12 @@ func TestTesl25(teslT *testing.T) {
 }
 
 func TestTesl26(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "offsetAt is DST-correct per instant" && teslWanted != "TestTesl26" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+		teslT.Skip("test kind filter")
+	}
 	teslLeft21 := teslrt.TimeOffsetAt(teslrt.NamedZone("Europe/Stockholm"), teslrt.SecondsToPosix(teslrt.FromInt64(1767225600)))
 //line lesson21-sql-reference.tesl:790
 	if !teslrt.Equal(teslLeft21, teslrt.FromInt64(60)) {

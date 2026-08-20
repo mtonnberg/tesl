@@ -415,13 +415,13 @@ measured before the fixes:
 
 | File | Lines | Exported funcs referenced by a test |
 |---|---|---|
-| `hostname.go` | 568 | 0 / 11 → **11 differential tests added (OQ8)** |
+| `hostname.go` | 568 | direct differential coverage added (OQ8) |
 | `sso_flow.go` | 541 | 1 / 3 |
 | `url.go` | 321 | 0 / 11 |
 | `loadtest.go` | 227 | 0 / 5 |
 | `sso_route.go` | 223 | 0 / 3 |
 | `jws.go` | 184 | 0 / 0 |
-| `serve.go` | 281 | 0 / 4 → **8 tests added** (header floor, HSTS, probe path, bind address, body cap) |
+| `serve.go` | 281 | direct tests added (header floor, HSTS, probe path, bind address, body cap) |
 | `apitest.go` | 119 | 0 / 4 |
 | `agent_endpoint.go` | 117 | 0 / 5 |
 | `dbquery.go` | 337 | 10 / 16 |
@@ -505,7 +505,7 @@ Emitted handlers with a declared payload now answer 415 for a content type that 
 `dsl/web.rkt`'s `parse-json-body`. Zero corpus api-tests changed behaviour.
 
 **OQ8 — `hostname.go`. → differential test.**
-11 tests against `net/netip` over a generated corpus. They pin the SHAPE of the disagreement rather
+differential checks against `net/netip` over a generated corpus. They pin the SHAPE of the disagreement rather
 than demanding agreement, because disagreeing is the module's purpose: `netip` refuses `2130706433`
 and `0x7f.0.0.1`, which a resolver accepts as 127.0.0.1.
 

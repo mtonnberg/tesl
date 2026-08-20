@@ -216,13 +216,20 @@ import (
 
 func TestMain(teslM *testing.M) {
 	_, _ = fmt.Fprintln(os.Stderr, "TESL_GO_TESTS_STARTED")
-	os.Exit(teslM.Run())
+	testExitCode := teslM.Run()
+	os.Exit(testExitCode)
 }
 
 // load-test greet throughput
 //
 //line lesson41-load-tests.tesl:97
 func TestTeslLoad0(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "greet throughput" && teslWanted != "TestTeslLoad0" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "load-test" {
+		teslT.Skip("test kind filter")
+	}
 	teslResetTestState()
 	if testing.Short() {
 		teslT.Skip("load-test: skipped in -short mode")
@@ -241,6 +248,12 @@ func TestTeslLoad0(teslT *testing.T) {
 //
 //line lesson41-load-tests.tesl:112
 func TestTeslLoad1(teslT *testing.T) {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "list books with seeded data" && teslWanted != "TestTeslLoad1" {
+		teslT.Skip("named test filter")
+	}
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "load-test" {
+		teslT.Skip("test kind filter")
+	}
 	teslResetTestState()
 //line lesson41-load-tests.tesl:112
 //line lesson41-load-tests.tesl:117
