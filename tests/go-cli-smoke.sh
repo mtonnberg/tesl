@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Focused Go CLI smoke. Full ci.sh remains the release gate; this script keeps
+# the Go-backed CLI paths cheap to exercise during the migration.
+
+set -uo pipefail
+
+REPO_ROOT="${TESL_REPO_ROOT:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}"
+BODY="$REPO_ROOT/nix/tesl-cli-body.sh"
+COMPILER="${TESL_OCAML_COMPILER:-$REPO_ROOT/compiler/_build/default/bin/main.exe}"
+
+if [ ! -x "$COMPILER" ]; then
+  echo "go-cli-smoke: compiler not built; skipping" >&2
+  exit 77
+fi
+
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/tesl-go-cli.XXXXXXXX")"
+cleanup() { rm -rf "$TMP"; }
+trap cleanup EXIT INT TERM HUP
+
+run_cli() {
+  TESL_REPO_ROOT="$REPO_ROOT" \
+  TESL_OCAML_COMPILER="$COMPILER" \
+  TESL_DEFAULT_BACKEND=go \
+  TESL_GO="${TESL_GO:-go}" \
+  bash "$BODY" "$@"
+}
+
+test_output="$(run_cli test example/learn/lesson00-hello-world.tesl 2>&1)" || {
+  printf '%s\n' "$test_output" >&2
+  echo "go-cli-smoke: default Go test failed" >&2
+  exit 1
+}
+if ! printf '%s\n' "$test_output" | grep -q '^ok'; then
+  printf '%s\n' "$test_output" >&2
+  echo "go-cli-smoke: generated Go test produced no ok package" >&2
+  exit 1
+fi
+
+mkdir -p "$TMP/project"
+cp "$REPO_ROOT/example/todo-api.tesl" "$TMP/project/todo-api.tesl"
+printf '%s\n' '[project]' 'name = "go-cli-smoke"' 'entrypoint = "todo-api.tesl"' > "$TMP/project/tesl.toml"
+
+(cd "$TMP/project" && run_cli compile todo-api.tesl) || {
+  echo "go-cli-smoke: default Go compile failed" >&2
+  exit 1
+}
+[ -f "$TMP/project/.tesl-stuff/go-build/go.mod" ] || {
+  echo "go-cli-smoke: default compile did not emit go.mod" >&2
+  exit 1
+}
+
+context="$TMP/context"
+(cd "$TMP/project" && run_cli build --backend go --container --no-docker --out "$context") || {
+  echo "go-cli-smoke: Go Docker context staging failed" >&2
+  exit 1
+}
+[ -f "$context/Dockerfile" ] && [ -f "$context/generated/cmd/app/main.go" ] || {
+  echo "go-cli-smoke: incomplete Go Docker context" >&2
+  exit 1
+}
+
+inspect_bin="$TMP/tesl-debug-inspect"
+(cd "$REPO_ROOT/runtime/go" && go build -o "$inspect_bin" ./cmd/tesl-debug-inspect) || {
+  echo "go-cli-smoke: Go inspect build failed" >&2
+  exit 1
+}
+inspect_output="$(TESL_DEBUG_INSPECT_BIN="$inspect_bin" run_cli debug-inspect example/learn/lesson61-step-debugging.tesl --break-at 189 --mode test --timeout-ms 10000 2>&1)" || {
+  printf '%s\n' "$inspect_output" >&2
+  echo "go-cli-smoke: default Go headless inspection failed" >&2
+  exit 1
+}
+printf '%s\n' "$inspect_output" | grep -q '"stopped":true' || {
+  printf '%s\n' "$inspect_output" >&2
+  echo "go-cli-smoke: headless inspection did not stop" >&2
+  exit 1
+}
+
+echo "go-cli-smoke: ok"

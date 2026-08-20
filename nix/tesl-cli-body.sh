@@ -168,6 +168,50 @@ _tesl_run_go_file() {
   return "$status"
 }
 
+_tesl_watch_go() {
+  local file="$1" project root out binary pid="" previous="" current status
+  shift
+  project="$(_tesl_project_root "$file")" || return 1
+  cleanup() {
+    [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+    [ -n "$pid" ] && wait "$pid" 2>/dev/null || true
+    [ -n "$root" ] && rm -rf "$root"
+  }
+  trap 'exit 130' INT TERM HUP
+  trap cleanup EXIT
+  echo "[tesl watch] Watching $(_tesl_abspath "$file") and its imports (Ctrl+C to stop)"
+  while true; do
+    current="$file"
+    deps="$(${TESL_OCAML_COMPILER} --deps "$file" 2>/dev/null || true)"
+    while IFS= read -r dep; do
+      [ -n "$dep" ] && current="${current}
+$dep"
+    done <<< "$deps"
+    current="$(printf '%s\n' "$current" | while IFS= read -r dep; do printf '%s ' "$dep"; _tesl_file_mtime "$dep"; done | sort)"
+    if [ "$current" != "$previous" ]; then
+      previous="$current"
+      [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+      [ -n "$pid" ] && wait "$pid" 2>/dev/null || true
+      [ -n "$root" ] && rm -rf "$root"
+      root="$(_tesl_mktemp_dir)" || return 1
+      out="$root/go"
+      echo "[tesl watch] Compiling Go module..."
+      if "$TESL_OCAML_COMPILER" --backend go "$file" --out "$out" && [ -d "$out/cmd/app" ] && \
+          (cd "$out" && "${TESL_GO:-go}" build -o "$root/tesl-app" ./cmd/app); then
+        binary="$root/tesl-app"
+        echo "[tesl watch] Starting Go app..."
+        "$binary" "$@" &
+        pid=$!
+        echo "[tesl watch] Go server running (pid $pid)"
+      else
+        echo "[tesl watch] Go compile failed — previous server was stopped" >&2
+        pid=""
+      fi
+    fi
+    sleep 0.3
+  done
+}
+
 # Temp file for an emitted .rkt, created NEXT TO its destination so the
 # following `mv` is a same-filesystem rename (it also crossed /tmp → project
 # before). Replaces `mktemp --suffix=.rkt` (GNU-only); a fixed suffix cannot be
@@ -1061,20 +1105,88 @@ _tesl_warn_arch_mismatch() {
 # `--local` / `--container` override the manifest; so do the container-only
 # flags (--app-only/--with-postgres/--tag/--out/--no-docker), since asking for
 # an image variant is itself a request for the container path.
+_tesl_compile_go_file() {
+  local entry="$1" requested_out="$2" project out
+  project="$(_tesl_project_root "$entry")" || return 1
+  if [ -n "$requested_out" ]; then
+    out="$requested_out"
+    case "$out" in /*) ;; *) out="$PWD/$out" ;; esac
+    if [ -e "$out" ]; then
+      echo "tesl build --backend go: output directory already exists: $out" >&2
+      return 1
+    fi
+  else
+    out="$project/.tesl-stuff/go-build"
+    rm -rf "$out"
+  fi
+  "$TESL_OCAML_COMPILER" --backend go "$entry" --out "$out" >/dev/null || return 1
+  printf '%s\n' "$out"
+}
+
+_tesl_build_go() {
+  local entry="$1" name="$2" requested_out="$3" out
+  out="$(_tesl_compile_go_file "$entry" "$requested_out")" || return 1
+  (cd "$out" && "${TESL_GO:-go}" build ./...) || return 1
+  echo "tesl build: $name built Go module — $entry → $out"
+}
+
+_tesl_build_go_container() {
+  local entry="$1" name="$2" port="$3" dbmode="$4" variant="$5" tag="$6" no_docker="$7" requested_out="$8"
+  local ctx generated
+  [ "$variant" != "all-in-one" ] || { echo "tesl build --backend go: embedded Postgres packaging is not implemented" >&2; return 2; }
+  if [ -n "$requested_out" ]; then
+    ctx="$requested_out"
+    mkdir -p "$ctx"
+  else
+    ctx="$(_tesl_mktemp_dir)" || return 1
+  fi
+  generated="$ctx/generated"
+  rm -rf "$generated"
+  if ! "$TESL_OCAML_COMPILER" --backend go "$entry" --out "$generated" >/dev/null; then
+    echo "tesl build --backend go: failed to emit $entry" >&2
+    return 1
+  fi
+  [ -d "$generated/cmd/app" ] || {
+    echo "tesl build --backend go: $entry does not define a main/server entrypoint" >&2
+    return 2
+  }
+  cat > "$ctx/Dockerfile" <<EOF
+FROM golang:1.26 AS build
+WORKDIR /src
+COPY generated/ ./
+RUN go build -o /out/tesl-app ./cmd/app
+
+FROM debian:bookworm-slim
+COPY --from=build /out/tesl-app /usr/local/bin/tesl-app
+EXPOSE $port
+ENTRYPOINT ["/usr/local/bin/tesl-app"]
+EOF
+  echo "tesl build: staged Go Docker context at $ctx (port=$port)"
+  if [ "$no_docker" = "1" ]; then
+    echo "tesl build: --no-docker set; build context ready at $ctx"
+    echo "  docker build -t $tag \"$ctx\""
+    return 0
+  fi
+  command -v docker >/dev/null 2>&1 || { echo "tesl build: docker not found; context staged at $ctx" >&2; return 1; }
+  docker build -t "$tag" "$ctx" || { echo "tesl build: docker build failed" >&2; return 1; }
+  echo "Built Go image: $tag"
+}
+
 _tesl_build() {
   _tesl_require_compiler
-  local VARIANT="" TAG="" NO_DOCKER=0 OUT="" MODE=""
+  local VARIANT="" TAG="" NO_DOCKER=0 OUT="" MODE="" BACKEND="racket"
   while [ $# -gt 0 ]; do
     case "$1" in
+      --backend)       BACKEND="${2:?--backend needs a value}"; shift 2 ;;
       --app-only)      VARIANT="app-only";  MODE="container"; shift ;;
       --with-postgres) VARIANT="all-in-one"; MODE="container"; shift ;;
       --tag)           TAG="${2:?--tag needs a value}"; MODE="container"; shift 2 ;;
       --no-docker)     NO_DOCKER=1; MODE="container"; shift ;;
-      --out)           OUT="${2:?--out needs a value}"; MODE="container"; shift 2 ;;
+      --out)           OUT="${2:?--out needs a value}"; [ "$BACKEND" = "go" ] || MODE="container"; shift 2 ;;
       --container)     MODE="container"; shift ;;
       --local)         MODE="local"; shift ;;
       --help|-h)
-        echo "Usage: tesl build [--local|--container] [--app-only|--with-postgres]"
+        echo "Usage: tesl build [--backend racket|go] [--local|--container] [--app-only|--with-postgres]"
         echo "                  [--tag NAME] [--no-docker] [--out DIR]"
         echo "  Build the project named by tesl.toml. Without a flag the mode comes from"
         echo "  [deploy].target: \"local\" compiles into .tesl-stuff/build/ (no Docker),"
@@ -1096,6 +1208,19 @@ _tesl_build() {
   TARGET="$(tesl_manifest_get "$MANIFEST" deploy target 2>/dev/null || true)"
 
   [ -f "$ENTRY" ] || { echo "tesl build: entrypoint '$ENTRY' not found" >&2; return 1; }
+
+  if [ "$BACKEND" = "go" ]; then
+    if [ "$MODE" = "container" ]; then
+      [ -n "$VARIANT" ] || VARIANT="app-only"
+      _tesl_build_go_container "$ENTRY" "$NAME" "$PORT" "$DBMODE" "$VARIANT" "${TAG:-$NAME}" "$NO_DOCKER" "$OUT"
+    else
+      _tesl_build_go "$ENTRY" "$NAME" "$OUT"
+    fi
+    return $?
+  elif [ "$BACKEND" != "racket" ]; then
+    echo "tesl build: unsupported backend '$BACKEND' (use racket or go)" >&2
+    return 2
+  fi
 
   if [ -z "$MODE" ]; then
     case "$TARGET" in
@@ -1386,11 +1511,27 @@ case "$CMD" in
     exec "${TESL_DEBUG_ATTACH_BIN:-tesl-debug-attach}" "$@"
     ;;
   compile)
+    COMPILE_BACKEND="${TESL_BACKEND:-${TESL_DEFAULT_BACKEND:-racket}}"
     if [ "${1:-}" = "--backend" ]; then
-      [ "${2:-}" = "go" ] || { echo "Usage: tesl compile --backend go <file.tesl> --out <dir>" >&2; exit 1; }
-      [ $# -eq 5 ] && [ "${4:-}" = "--out" ] || { echo "Usage: tesl compile --backend go <file.tesl> --out <dir>" >&2; exit 1; }
+      COMPILE_BACKEND="${2:?--backend requires a backend name}"
+      shift 2
+    fi
+    if [ "$COMPILE_BACKEND" = "go" ]; then
+      FILE="${1:?tesl compile --backend go requires a source file}"
+      shift
+      OUT_GO=""
+      if [ "${1:-}" = "--out" ]; then
+        OUT_GO="${2:?--out requires a directory}"
+        shift 2
+      fi
+      [ $# -eq 0 ] || { echo "tesl compile --backend go: unexpected argument $1" >&2; exit 2; }
       _tesl_require_compiler
-      exec "$TESL_OCAML_COMPILER" --backend go "$3" --out "$5"
+      OUT_GO="$(_tesl_compile_go_file "$FILE" "$OUT_GO")" || exit 1
+      echo "compiled Go module: $FILE → $OUT_GO"
+      exit 0
+    elif [ "$COMPILE_BACKEND" != "racket" ]; then
+      echo "tesl compile: unsupported backend '$COMPILE_BACKEND' (use racket or go)" >&2
+      exit 2
     fi
     if [ $# -eq 0 ]; then
       _TESL_ENTRY="$(_tesl_default_entry "tesl compile [file.tesl]")" || exit 1
@@ -1666,12 +1807,25 @@ case "$CMD" in
     exec "$TESL_OCAML_COMPILER" --mutate "$@"
     ;;
   watch)
+    WATCH_BACKEND="${TESL_BACKEND:-${TESL_DEFAULT_BACKEND:-racket}}"
+    if [ "${1:-}" = "--backend" ]; then
+      WATCH_BACKEND="${2:?--backend requires a backend name}"
+      shift 2
+    fi
     if [ $# -eq 0 ]; then
       _TESL_ENTRY="$(_tesl_default_entry "tesl watch [file.tesl]")" || exit 1
       set -- "$_TESL_ENTRY"
     fi
     FILE="$1"
     shift
+    if [ "$WATCH_BACKEND" = "go" ]; then
+      _tesl_require_compiler
+      _tesl_watch_go "$FILE" "$@"
+      exit $?
+    elif [ "$WATCH_BACKEND" != "racket" ]; then
+      echo "tesl watch: unsupported backend '$WATCH_BACKEND' (use racket or go)" >&2
+      exit 2
+    fi
     OUT="$(_tesl_out_path "$FILE")" || exit 1
     RACKET_PID=""
     PREV_SNAP=""
@@ -1838,12 +1992,11 @@ Usage:
   tesl init                [name] [--template api|minimal]   Scaffold a new project
                            [--postgres managed|existing|none] [--yes] [--no-git]
   tesl db                  start|stop|status                 Manage the project-local Postgres
-  tesl build               [--local|--container]             Build the project: compile only
+   tesl build               [--backend racket|go] [--local|--container]  Build the project
                            [--app-only|--with-postgres]      ([deploy].target = "local") or a
                            [--tag NAME] [--no-docker]        runnable Docker image
                            [--out DIR]                       ([deploy].target = "container")
-  tesl compile             [file.tesl]                    Compile .tesl → .rkt (into .tesl-stuff/build/)
-   tesl compile --backend go <file.tesl> --out <dir>       Emit standalone Go module
+   tesl compile             [--backend racket|go] [file.tesl]  Compile source (Go default)
   tesl clean                                              Delete the project's build output (.tesl-stuff/build/)
   tesl check               [file.tesl ...]               Type-check without output
   tesl lint                <file.tesl> [more.tesl ...]   Run the opinionated linter
@@ -1856,7 +2009,7 @@ Usage:
                            (arm breakpoints, inspect, resume — see tesl debug-attach --help)
    tesl test                [--backend racket|go] [file.tesl ...]  Compile and run tests (Go default)
   tesl mutate              [--backend racket|go] <file>  Run mutation testing
-  tesl watch               [file.tesl] [args…]           Watch, recompile, and restart on changes
+   tesl watch               [--backend racket|go] [file.tesl] [args…]  Watch and restart on changes
 
   A [file.tesl] argument is OPTIONAL inside a project: with none, the verb uses
   [project].entrypoint from the nearest tesl.toml.

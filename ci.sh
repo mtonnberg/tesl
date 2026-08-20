@@ -841,6 +841,11 @@ if [ "$go_gate_fail" -eq 0 ]; then
       nilaway ./...
     ) || go_gate_fail=1
 fi
+if [ "$go_gate_fail" -eq 0 ] && [ -f "$SCRIPT_DIR/tests/go-cli-smoke.sh" ]; then
+    bash "$SCRIPT_DIR/tests/go-cli-smoke.sh"
+    _go_cli_rc=$?
+    [ "$_go_cli_rc" -eq 0 ] || [ "$_go_cli_rc" -eq 77 ] || go_gate_fail=1
+fi
 if [ "$go_gate_fail" -eq 0 ]; then phase_end OK; else phase_end FAIL; fi
 
 # ══════════════════════════════════════════════════════════════════════════════
