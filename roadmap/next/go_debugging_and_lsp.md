@@ -206,6 +206,8 @@ Gate: shipped workflows find only Go binaries and packages contain no `.rkt` or 
 ### Phase 7 closure log
 
 - 2026-08-20: Nix exposes Go LSP, DAP, headless, attach, and MCP binaries; default profile and dev shell include them. VS Code LSP resolution and MCP documentation now target Go. Full Go DAP/test-runner cutover and Racket-free clean-install validation remain open.
+- 2026-08-20: `tesl debug-attach` now routes to the Go attach client with compatible `--once`, `--snapshot`, `--ping`, `--detach`, breakpoint, condition, hit, project, and timeout flags. VS Code DAP no longer falls back to the deleted Racket launcher; legacy CLI run/test and Run Function paths still use the Racket runtime.
+- 2026-08-20: `nix build .#tesl-go-tools` and `nix build .#tesl-full` pass; the installed `tesl-mcp` wrapper completes an initialize exchange without a repo checkout.
 ### Phase 8: Complete test/example/template migration
 1. Make each of the 71 paired `.tesl` tests the sole source and assert Go compile diagnostics, runtime output, status, side effects, and services.
 2. Assign each of 75 Racket-only test responsibilities a named Go runtime/integration test, OCaml compiler test, black-box test, protocol fixture, benchmark, or reviewed obsolete disposition.

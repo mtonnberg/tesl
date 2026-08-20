@@ -76,7 +76,7 @@
       {
         "type": "tesl",
         "label": "Tesl Debugger",
-        "program": "./debug/launch-dap.sh",
+        "program": "tesl-dap",
         "runtime": "bash",
         "languages": [
           "tesl"

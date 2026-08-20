@@ -20,6 +20,17 @@ let
     export TESL_REPO_ROOT="''${TESL_REPO_ROOT:-$PWD}"
     export TESL_OCAML_COMPILER="$TESL_REPO_ROOT/compiler/_build/default/bin/main.exe"
   '' + builtins.readFile ./nix/tesl-cli-body.sh);
+  tesl-go-tool = name: pkgs.writeShellScriptBin name ''
+    set -euo pipefail
+    root="''${TESL_REPO_ROOT:-$PWD}"
+    cd "$root/runtime/go"
+    exec ${pkgs.go}/bin/go run "./cmd/${name}" "$@"
+  '';
+  tesl-dap = tesl-go-tool "tesl-dap";
+  tesl-debug-attach = tesl-go-tool "tesl-debug-attach";
+  tesl-debug-inspect = tesl-go-tool "tesl-debug-inspect";
+  tesl-lsp = tesl-go-tool "tesl-lsp";
+  tesl-mcp = tesl-go-tool "tesl-mcp";
   staticcheck = pkgs.buildGoModule rec {
     pname = "staticcheck";
     version = "2026.1";
@@ -48,6 +59,11 @@ pkgs.mkShell {
     nilaway
     libsodium   # dlopen()ed by tesl/crypto.rkt — see TESL_LIBSODIUM below
     tesl-cli
+    tesl-dap
+    tesl-debug-attach
+    tesl-debug-inspect
+    tesl-lsp
+    tesl-mcp
     ocamlPackages.ocaml
     ocamlPackages.dune_3
     ocamlPackages.findlib

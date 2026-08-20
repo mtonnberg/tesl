@@ -51,14 +51,27 @@ func main() {
 	project := flag.String("project", "", "project directory containing .tesl-stuff/debug.sock or debug.port")
 	socket := flag.String("socket", "", "Unix debug socket")
 	tcp := flag.String("tcp", "", "loopback debug address")
-	operation := flag.String("operation", "bridge", "bridge, snapshot, ping, or detach")
-	once := flag.Bool("once", false, "process one bridge request and exit")
+	operation := flag.String("operation", "bridge", "bridge, once, snapshot, ping, or detach")
+	bridgeOnce := flag.Bool("bridge-once", false, "process one bridge request and exit")
+	once := flag.Bool("once", false, "arm breakpoints, wait for one stop, and return")
+	snapshot := flag.Bool("snapshot", false, "return the current paused snapshot")
+	ping := flag.Bool("ping", false, "check whether the endpoint is alive")
+	detach := flag.Bool("detach", false, "resume and detach from the endpoint")
 	timeoutMS := flag.Int("timeout-ms", 30000, "connection timeout in milliseconds")
 	var breakAt stringFlags
 	flag.Var(&breakAt, "break-at", "arm a breakpoint as FILE:LINE; repeatable")
 	when := flag.String("when", "", "condition applied to each --break-at")
 	hit := flag.String("hit", "", "hit condition applied to each --break-at")
 	flag.Parse()
+	if *once {
+		*operation = "once"
+	} else if *snapshot {
+		*operation = "snapshot"
+	} else if *ping {
+		*operation = "ping"
+	} else if *detach {
+		*operation = "detach"
+	}
 	if *timeoutMS < 1 {
 		fail("-timeout-ms must be positive")
 	}
@@ -112,7 +125,7 @@ func main() {
 
 	switch *operation {
 	case "bridge":
-		bridge(client, *once)
+		bridge(client, *bridgeOnce)
 	case "ping":
 		if err := client.Ping(); err != nil {
 			fail("ping: %v", err)

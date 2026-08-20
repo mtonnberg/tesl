@@ -246,7 +246,8 @@
           # `tesl build` stages the runtime collections from the tesl-racket
           # derivation.  A live $TESL_REPO_ROOT (dev) takes precedence in the body.
           export TESL_TEMPLATES_DIR="${tesl-templates}/share/tesl-templates"
-          export TESL_COLLECTIONS_DIR="${tesl-racket}/share/tesl-collections/tesl"
+           export TESL_COLLECTIONS_DIR="${tesl-racket}/share/tesl-collections/tesl"
+           export TESL_DEBUG_ATTACH_BIN="${tesl-go-tools}/bin/tesl-debug-attach"
 
           export PATH="${pkgs.racket}/bin:${gnuUserland}:$PATH"
 
@@ -276,8 +277,8 @@
         '' + cliBody);
 
         # ── tesl-lsp wrapper ──────────────────────────────────────────────────
-        # Sets TESL_COMPILER so the LSP Racket script finds the binary without
-        # needing TESL_REPO_ROOT.  An INHERITED TESL_COMPILER wins: the editor
+         # Sets TESL_COMPILER for the Go LSP without needing TESL_REPO_ROOT. An
+         # inherited TESL_COMPILER wins: the editor
         # extension points a repo checkout's LSP at that checkout's fresh
         # compiler/_build binary, and clobbering it here is what silently pinned
         # every diagnostic to the store compiler of whatever revision the user

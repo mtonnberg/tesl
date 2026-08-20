@@ -167,86 +167,6 @@ function findGoDap(wsPath) {
   return null;
 }
 
-/**
- * Find the dap-server.rkt file.
- * Search order: workspace repo → nix profile → extension dir (if bundled).
- */
-function findDapServer(wsPath, extensionDir) {
-  const candidates = [];
-
-  if (wsPath) {
-    candidates.push(path.join(wsPath, "dsl", "debug", "dap-server.rkt"));
-  }
-
-  // Derive from the tesl-lsp wrapper's baked PLTCOLLECTS. This is the reliable
-  // path for a flake-installed binary: the wrapper references the exact
-  // /nix/store/…-tesl-racket-collections/share/tesl-collections store path that
-  // ships dap-server.rkt — even though `nix profile install` does NOT mirror
-  // that derivation into ~/.nix-profile/share/ (the source of the user's
-  // "dap-server: NOT FOUND"). Each PLTCOLLECTS entry is a collections root
-  // holding tesl/{dsl,tesl}.
-  const wrapper = readTeslLspWrapper();
-  if (wrapper && wrapper.pltcollects) {
-    for (const entry of wrapper.pltcollects.split(":")) {
-      if (!entry) continue;
-      candidates.push(path.join(entry, "tesl", "dsl", "debug", "dap-server.rkt"));
-    }
-  }
-
-  candidates.push(
-    path.join(os.homedir(), ".nix-profile", "share", "tesl-collections", "tesl", "dsl", "debug", "dap-server.rkt"),
-    "/nix/var/nix/profiles/default/share/tesl-collections/tesl/dsl/debug/dap-server.rkt",
-    // Check if bundled inside the extension itself
-    path.join(extensionDir, "dsl", "debug", "dap-server.rkt"),
-  );
-
-  return candidates.find((p) => fs.existsSync(p)) || null;
-}
-
-/**
- * Build PLTCOLLECTS for launching dap-server.rkt.
- *
- * For nix installs: use the PLTCOLLECTS from the tesl-lsp wrapper (already
- * contains both the Racket stdlib AND the tesl-collections from nix store).
- *
- * For dev/repo layout: create .tesl-collections/ symlinks and prepend the
- * Racket stdlib path (derived from the Racket binary location).
- */
-function buildPltcollects(wsPath, racketBin) {
-  // Build dev .tesl-collections symlinks (needed for dsl/debug/ which is not in nix release)
-  const collDir = wsPath ? path.join(wsPath, ".tesl-collections") : null;
-  if (collDir) {
-    const teslColl = path.join(collDir, "tesl");
-    try {
-      if (!fs.existsSync(teslColl)) fs.mkdirSync(teslColl, { recursive: true });
-      for (const sub of ["dsl", "tesl"]) {
-        const link = path.join(teslColl, sub);
-        const target = path.join(wsPath, sub);
-        if (!fs.existsSync(link) && fs.existsSync(target)) fs.symlinkSync(target, link);
-      }
-    } catch (_) {}
-  }
-
-  // For nix install: nix wrapper has the pre-compiled runtime collections.
-  // Append dev .tesl-collections AFTER nix so nix's compiled .zo files win for
-  // the main runtime, but dsl/debug/ (only in dev repo) is still found.
-  const wrapper = readTeslLspWrapper();
-  if (wrapper && wrapper.pltcollects) {
-    return collDir
-      ? wrapper.pltcollects + ":" + collDir
-      : wrapper.pltcollects;
-  }
-
-  // Dev/repo layout without nix: use dev collection + Racket stdlib
-  if (!collDir) return null;
-  if (racketBin) {
-    const racketPrefix = path.dirname(path.dirname(racketBin));
-    const racketCollects = path.join(racketPrefix, "share", "racket", "collects");
-    if (fs.existsSync(racketCollects)) return collDir + ":" + racketCollects;
-  }
-  return collDir;
-}
-
 function activate(context) {
   const wsPath = (vscode.workspace.workspaceFolders || [])[0]?.uri?.fsPath ?? "";
 
@@ -950,80 +870,32 @@ function activate(context) {
   }
 
   // ── Debug Adapter ─────────────────────────────────────────────────────────────
-  // Use a DebugAdapterDescriptorFactory to launch launch-dap.sh with the right
-  // environment variables — TESL_REPO_ROOT and TESL_COMPILER are set from the
-  // workspace, so the script doesn't need to guess paths.
+  // Use the shipped Go adapter for both launch and attach. There is no Racket
+  // fallback: a missing Go adapter is an installation error, not a reason to
+  // silently switch protocol/runtime implementations.
   context.subscriptions.push(
     vscode.debug.registerDebugAdapterDescriptorFactory("tesl", {
       createDebugAdapterDescriptor(session) {
-        const launchScript = path.join(context.extensionPath, "debug", "launch-dap.sh");
-
         const goDap = findGoDap(wsPath);
-        const sourceLaunch = session.configuration.request === "launch" &&
-          typeof session.configuration.program === "string" &&
-          session.configuration.program.toLowerCase().endsWith(".tesl");
-        if ((session.configuration.request === "attach" || sourceLaunch) && goDap) {
-          const env = {
-            ...process.env,
-            ...(wsPath ? { TESL_REPO_ROOT: wsPath } : {}),
-          };
-          const compiler = findTeslCompiler(wsPath);
-          if (compiler) env.TESL_COMPILER = compiler;
-          const dbgOut = vscode.window.createOutputChannel("Tesl Debugger");
-          dbgOut.appendLine(`[tesl-debug] Go DAP: ${goDap.command} ${goDap.args.join(" ")}`);
-          dbgOut.appendLine(`[tesl-debug] ${sourceLaunch ? "launch source" : "attach project"}: ${session.configuration.program || session.configuration.project || "(explicit endpoint)"}`);
-          dbgOut.appendLine(`[tesl-debug] compiler: ${compiler || "PATH fallback"}`);
-          dbgOut.show(true);
-          return new vscode.DebugAdapterExecutable(goDap.command, goDap.args, { env, cwd: goDap.cwd });
-        }
-
-        if (!fs.existsSync(launchScript)) {
+        if (!goDap) {
           vscode.window.showErrorMessage(
-            `Tesl debugger: launch-dap.sh not found at ${launchScript}. Reinstall the extension.`
+            "Tesl debugger: Go tesl-dap not found. Install Tesl or add tesl-dap to PATH."
           );
           return null;
         }
 
-        const racketBin = findRacketBinary();
         const compiler = findTeslCompiler(wsPath);
-        const dapServer = findDapServer(wsPath, context.extensionPath);
-        const pltcollects = buildPltcollects(wsPath, racketBin);
-
-        // Build env for the shell script
         const env = {
           ...process.env,
           ...(wsPath ? { TESL_REPO_ROOT: wsPath } : {}),
           ...(compiler ? { TESL_COMPILER: compiler } : {}),
-          ...(dapServer ? { TESL_DAP_SERVER: dapServer } : {}),
-          ...(pltcollects ? { PLTCOLLECTS: pltcollects + (process.env.PLTCOLLECTS ? ":" + process.env.PLTCOLLECTS : "") } : {}),
         };
-
-        // Log to the output channel for diagnostics
         const dbgOut = vscode.window.createOutputChannel("Tesl Debugger");
-        dbgOut.appendLine(`[tesl-debug] racket:        ${racketBin || "NOT FOUND"}`);
-        dbgOut.appendLine(`[tesl-debug] dap-server:    ${dapServer || "NOT FOUND"}`);
-        dbgOut.appendLine(`[tesl-debug] compiler:      ${compiler || "NOT FOUND"}`);
-        dbgOut.appendLine(`[tesl-debug] PLTCOLLECTS:   ${env.PLTCOLLECTS || "(not set)"}`);
-        dbgOut.appendLine(`[tesl-debug] TESL_REPO_ROOT:${wsPath || "(not set)"}`);
+        dbgOut.appendLine(`[tesl-debug] Go DAP: ${goDap.command} ${goDap.args.join(" ")}`);
+        dbgOut.appendLine(`[tesl-debug] target: ${session.configuration.program || session.configuration.project || "(explicit endpoint)"}`);
+        dbgOut.appendLine(`[tesl-debug] compiler: ${compiler || "PATH fallback"}`);
         dbgOut.show(true);
-
-        if (!racketBin) {
-          vscode.window.showErrorMessage(
-            "Tesl debugger: racket binary not found. Install via nix or set TESL_RACKET_PATH."
-          );
-          return null;
-        }
-
-        if (!dapServer) {
-          vscode.window.showErrorMessage(
-            "Tesl debugger: dap-server.rkt not found. Ensure workspace is the tesl repo or install via nix."
-          );
-          return null;
-        }
-
-        // Spawn Racket directly — no bash wrapper needed since extension.js
-        // already resolved all paths and env vars.
-        return new vscode.DebugAdapterExecutable(racketBin, [dapServer], { env });
+        return new vscode.DebugAdapterExecutable(goDap.command, goDap.args, { env, cwd: goDap.cwd });
       },
     })
   );

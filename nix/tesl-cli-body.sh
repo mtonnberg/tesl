@@ -1326,13 +1326,9 @@ case "$CMD" in
     exec "$TESL_OCAML_COMPILER" debug-inspect "$@"
     ;;
   debug-attach)
-    # Live attach to an ALREADY-RUNNING `tesl run --debug` process: arm/re-arm
-    # breakpoints, receive stop events, inspect, resume, detach — the server
-    # keeps serving throughout. Thin NDJSON client over the control channel
-    # (dsl/debug/control-channel.rkt); all args are handled by the client
-    # (--break-at FILE:LINE, --once, --snapshot, --ping, --detach, --project,
-    # --help). The endpoint defaults to <project>/.tesl-stuff/debug.sock.
-    exec racket -l tesl/dsl/debug/attach-client -- "$@"
+    # Live attach to an ALREADY-RUNNING `tesl run --debug` process. The Go
+    # client preserves the public flags and endpoint discovery.
+    exec "${TESL_DEBUG_ATTACH_BIN:-tesl-debug-attach}" "$@"
     ;;
   compile)
     if [ "${1:-}" = "--backend" ]; then
