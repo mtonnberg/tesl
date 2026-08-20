@@ -12077,7 +12077,13 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
         (List.concat_map seed_statements seed_stmts)
     end
   in
-  List.iteri (fun index (test : test_form) ->
+   let test_kind (test : test_form) =
+     let prefix = "doctest: " in
+     if String.length test.description >= String.length prefix
+        && String.equal (String.sub test.description 0 (String.length prefix)) prefix
+     then "doctest" else "test"
+   in
+   List.iteri (fun index (test : test_form) ->
     (* `runs` is a PROPERTY test's repetition count: emit_racket reads it only where a
        `property` statement is emitted, so on a test with no property statement it changes
        nothing on either backend — and refusing it here made a test Racket runs fine
@@ -12100,8 +12106,9 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
      Buffer.add_char body '\n';
      Printf.bprintf body "func TestTesl%d(teslT *testing.T) {\n" index;
      Printf.bprintf body
-        "\tif teslWanted := os.Getenv(\"TESL_TEST_NAME\"); teslWanted != \"\" && teslWanted != %s && teslWanted != %s {\n\t\tteslT.Skip(\"named test filter\")\n\t}\n\tif teslKind := os.Getenv(\"TESL_TEST_KIND\"); teslKind != \"\" && teslKind != \"test\" {\n\t\tteslT.Skip(\"test kind filter\")\n\t}\n"
-        (go_quote test.description) (go_quote (Printf.sprintf "TestTesl%d" index));
+         "\tif teslWanted := os.Getenv(\"TESL_TEST_NAME\"); teslWanted != \"\" && teslWanted != %s && teslWanted != %s {\n\t\tteslT.Skip(\"named test filter\")\n\t}\n\tif teslKind := os.Getenv(\"TESL_TEST_KIND\"); teslKind != \"\" && teslKind != %s {\n\t\tteslT.Skip(\"test kind filter\")\n\t}\n"
+         (go_quote test.description) (go_quote (Printf.sprintf "TestTesl%d" index))
+         (go_quote (test_kind test));
      emit_reset ();
      if debug then
        Printf.bprintf body

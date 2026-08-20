@@ -5529,7 +5529,32 @@ let test_telemetry_app_with_go () =
     (contains tests_go "teslrt.NoteLoadTestRegression(teslT, \"p95\", float64(1.5))");
   check bool "and the baseline clause after it" true
     (contains tests_go "teslrt.NoteLoadTestBaseline(teslT, \"greeting-latency\")");
-  gate_emitted ~short:true "tesl-go-telemetry-app" emitted
+   gate_emitted ~short:true "tesl-go-telemetry-app" emitted
+
+let doctest_kind_source = {|module GoDoctestKind exposing [clamp]
+
+import Tesl.Prelude exposing [Int]
+
+#> clamp 0 10 5
+#= 5
+fn clamp(lo: Int, hi: Int, n: Int) -> Int =
+  if n < lo then
+    lo
+  else
+    if n > hi then
+      hi
+    else
+      n
+|}
+
+let test_go_doctest_kind_filter () =
+  let emitted = emit_ok "<go-doctest-kind>" doctest_kind_source in
+  let tests_go = artifact "internal/teslmodgodoctestkind/module_test.go" emitted in
+  check bool "Go emits synthetic doctest as doctest kind" true
+    (contains tests_go "teslKind != \"doctest\"");
+  check bool "Go keeps doctest description filter" true
+    (contains tests_go "teslWanted != \"doctest: clamp\"");
+  gate_emitted ~short:true "tesl-go-doctest-kind" emitted
 
 (* ─── `case` over a scalar ─────────────────────────────────────────────────────
    `case a + b of 0 -> … | _ -> …` is ordinary Tesl and was refused outright ("supports `case`
@@ -12681,6 +12706,7 @@ let () =
       test_case "seeded api-tests behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-seeded-oracle>" seeded_source);
       test_case "Tesl.Telemetry, Tesl.App and load tests" `Slow test_telemetry_app_with_go;
+      test_case "doctest kind filter" `Quick test_go_doctest_kind_filter;
       test_case "debug main starts control server" `Quick test_debug_main_starts_control_server;
       test_case "telemetry and App behave the same on Racket" `Slow
         (racket_behavior_oracle "<go-telemetry-app-oracle>" telemetry_app_source);
