@@ -138,7 +138,7 @@ phase_started_at=$SECONDS
 
 # ── Phase registry / progress bar ────────────────────────────────────────────
 # We know the phase count up front so each phase can print "[N/T] <name>".
-TOTAL_PHASES=22
+TOTAL_PHASES=26
 PHASE_NUM=0
 # Parallel arrays: name / status (OK|FAIL|SKIP) / elapsed seconds.
 PHASE_NAMES=()
@@ -669,6 +669,20 @@ ALL_FILES=( "${LEARN_FILES[@]}" "${EXAMPLE_FILES[@]}" "${TEST_FILES[@]}" "${TEMP
 start_shared_postgres_async
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  Migration gate — contracts and traceability
+# ══════════════════════════════════════════════════════════════════════════════
+phase_begin "Go migration contracts and traceability"
+migration_contract_fail=0
+if ! "$SCRIPT_DIR/scripts/check-go-migration-manifest.sh"; then
+    migration_contract_fail=1
+fi
+if [ "$migration_contract_fail" -eq 0 ]; then phase_end OK; else phase_end FAIL; fi
+if [ "$migration_contract_fail" -gt 0 ]; then
+    printf "\n  %sMigration contracts failed — aborting the gate.%s\n" "$C_RED" "$C_RESET"
+    print_summary_and_exit
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  Phase 1 — Build (dune)
 # ══════════════════════════════════════════════════════════════════════════════
 phase_begin "Build (dune build)"
@@ -692,6 +706,25 @@ fi
 # A broken build makes every downstream phase meaningless — abort early.
 if [ "$build_fail" -gt 0 ]; then
     printf "\n  %sBuild failed — aborting the gate.%s\n" "$C_RED" "$C_RESET"
+    print_summary_and_exit
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Migration gate — Racket debugger stability policy
+# ══════════════════════════════════════════════════════════════════════════════
+phase_begin "Racket DAP stability replay"
+racket_stability_fail=0
+if command -v racket >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
+    if ! "$SCRIPT_DIR/scripts/racket-stability.sh"; then
+        racket_stability_fail=1
+    fi
+else
+    printf "  %s✗%s  racket and timeout are required for Phase 0 stability replay\n" "$C_RED" "$C_RESET"
+    racket_stability_fail=1
+fi
+if [ "$racket_stability_fail" -eq 0 ]; then phase_end OK; else phase_end FAIL; fi
+if [ "$racket_stability_fail" -gt 0 ]; then
+    printf "\n  %sRacket stability replay failed — aborting the gate.%s\n" "$C_RED" "$C_RESET"
     print_summary_and_exit
 fi
 
@@ -797,6 +830,8 @@ if [ "$go_gate_fail" -eq 0 ]; then
       go test ./teslrt -run '^$' -fuzz '^FuzzIntDecimalAndJSONRoundTrip$' -fuzztime="${TESL_GO_FUZZTIME:-3s}" &&
       go test ./teslrt -run '^$' -fuzz '^FuzzIntArithmeticAgainstBig$' -fuzztime="${TESL_GO_FUZZTIME:-3s}" &&
       go test ./teslrt -run '^$' -fuzz '^FuzzIntJSONInput$' -fuzztime="${TESL_GO_FUZZTIME:-3s}" &&
+      go test ./internal/protocol -run '^$' -fuzz '^FuzzReaderAcceptsWriterFrames$' -fuzztime="${TESL_GO_FUZZTIME:-3s}" &&
+      go test ./internal/protocol -run '^$' -fuzz '^FuzzUTF16PositionsNeverPanic$' -fuzztime="${TESL_GO_FUZZTIME:-3s}" &&
       go vet ./... &&
       CGO_ENABLED=0 go build ./... &&
       staticcheck ./... &&

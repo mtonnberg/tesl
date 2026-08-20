@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "normalization": {
+    "remove": ["sequence numbers", "process IDs", "temporary paths", "Unix socket paths", "ports", "timestamps"],
+    "preserve": ["request command", "response success", "diagnostic code", "source ranges", "value type/display", "schema version"]
+  },
+  "fixtures": [
+    {"kind":"dap", "path":"tests/protocol/dap-core.json", "consumer":"runtime/go/internal/dap/transcript_test.go"},
+    {"kind":"abi", "path":"tests/protocol/debug-frame-v1.json", "consumer":"scripts/check-go-migration-manifest.sh"},
+    {"kind":"control", "path":"tests/protocol/control-core.json", "consumer":"runtime/go/teslrt"},
+    {"kind":"headless", "path":"tests/protocol/headless-v2.json", "consumer":"runtime/go/cmd/tesl-debug-inspect"},
+    {"kind":"mcp", "path":"tests/protocol/mcp-core.json", "consumer":"editor/tesl-mcp"},
+    {"kind":"cli", "path":"tests/protocol/cli-core.json", "consumer":"compiler/bin/main.ml"},
+    {"kind":"value-tree", "path":"tests/protocol/value-tree-core.json", "consumer":"runtime/go/teslrt"},
+    {"kind":"diagnostics", "path":"tests/protocol/diagnostics-core.json", "consumer":"runtime/go/internal/lsp"},
+    {"kind":"semantic", "path":"tests/protocol/semantic-core.json", "consumer":"runtime/go/internal/lsp"}
+  ]
+}

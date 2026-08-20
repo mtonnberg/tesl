@@ -58,8 +58,11 @@ func (reader *Reader) Read() ([]byte, error) {
 	for {
 		line, err := reader.readHeaderLine()
 		if err != nil {
-			if errors.Is(err, io.EOF) && contentLength < 0 {
-				return nil, io.EOF
+			if errors.Is(err, io.EOF) {
+				if contentLength < 0 {
+					return nil, io.EOF
+				}
+				return nil, io.ErrUnexpectedEOF
 			}
 			return nil, err
 		}

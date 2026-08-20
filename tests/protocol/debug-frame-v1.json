@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "id": "frame-example",
+  "function": "compute",
+  "test": "example test",
+  "depth": 0,
+  "location": {"file": "example.tesl", "line": 12, "column": 3},
+  "locals": [
+    {"name": "n", "type": "Int", "value": {"type": "Int", "display": "42"}},
+    {"name": "point", "type": "Point", "value": {"type": "Point", "display": "{...}", "children": [
+      {"type": "Int", "display": "1"},
+      {"type": "Int", "display": "2"}
+    ]}}
+  ]
+}

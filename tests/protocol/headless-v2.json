@@ -1,0 +1,9 @@
+{
+  "version": 2,
+  "stopped": true,
+  "source": {"file":"fixture.tesl","line":12},
+  "breakpoint": {"line":12,"condition":"n == 3"},
+  "locals": [{"name":"n","type":"Int","value":"3"}],
+  "domain": {"queues":[],"caches":[],"sse":[],"email":[],"workers":[]},
+  "sql": null
+}

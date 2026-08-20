@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"testing"
+	"time"
 
 	"tesl.dev/runtime/go/internal/protocol"
 	"tesl.dev/runtime/go/internal/tooling"
@@ -28,7 +29,43 @@ func (compiler *fakeCompiler) QuerySourceJSON(_ context.Context, flag, _ string,
 	return compiler.payload, tooling.Result{}, nil
 }
 
+func (compiler *fakeCompiler) QueryJSON(_ context.Context, args ...string) (json.RawMessage, tooling.Result, error) {
+	if len(args) > 0 {
+		compiler.flags = append(compiler.flags, args[0])
+	}
+	if response, found := compiler.responses["--doc-json"]; found {
+		return response, tooling.Result{}, nil
+	}
+	return compiler.payload, tooling.Result{}, nil
+}
+
 func (compiler *fakeCompiler) FormatSource(context.Context, string, string) ([]byte, tooling.Result, error) {
+	return []byte("formatted"), tooling.Result{}, nil
+}
+
+type cancellableCompiler struct {
+	started  chan struct{}
+	canceled chan struct{}
+}
+
+func (compiler *cancellableCompiler) QuerySourceJSON(ctx context.Context, _ string, _ string, source string, _ ...string) ([]byte, tooling.Result, error) {
+	if source == "old" {
+		select {
+		case <-compiler.started:
+		default:
+			close(compiler.started)
+		}
+		<-ctx.Done()
+		close(compiler.canceled)
+	}
+	return []byte(`{"version":1,"diagnostics":[]}`), tooling.Result{}, nil
+}
+
+func (compiler *cancellableCompiler) QueryJSON(context.Context, ...string) (json.RawMessage, tooling.Result, error) {
+	return []byte(`{"version":1,"entries":[]}`), tooling.Result{}, nil
+}
+
+func (compiler *cancellableCompiler) FormatSource(context.Context, string, string) ([]byte, tooling.Result, error) {
 	return []byte("formatted"), tooling.Result{}, nil
 }
 
@@ -488,6 +525,62 @@ func TestServerReturnsCodeActionsAndResolvesCompletionItems(t *testing.T) {
 	}
 }
 
+func TestServerHoverFallsBackToRecordFieldQuery(t *testing.T) {
+	compiler := &fakeCompiler{responses: map[string][]byte{
+		"--type-at-json":  []byte(`{"version":1,"type_at":null}`),
+		"--field-at-json": []byte(`{"version":1,"field_at":{"field":"x","field_type":"Int"}}`),
+	}}
+	server := NewServer(compiler)
+	server.documents["file:///tmp/demo.tesl"] = document{
+		URI: "file:///tmp/demo.tesl", Path: "/tmp/demo.tesl", Text: "p.x\n", Version: 1,
+	}
+	var output bytes.Buffer
+	_, err := server.handle(context.Background(), protocol.Request{
+		JSONRPC: "2.0", ID: json.RawMessage(`1`), Method: "textDocument/hover",
+		Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl"},"position":{"line":0,"character":2}}`),
+	}, protocol.NewWriter(&output))
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := protocol.NewReader(&output).Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response protocol.Response
+	if err := json.Unmarshal(message, &response); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(response.Result, []byte(`"value":"x: Int"`)) {
+		t.Fatalf("hover = %s", response.Result)
+	}
+}
+
+func TestServerCompletionResolveLoadsCompilerDocumentation(t *testing.T) {
+	compiler := &fakeCompiler{responses: map[string][]byte{
+		"--doc-json": []byte(`{"version":1,"entries":[{"name":"Int","doc":"arbitrary precision integer"}]}`),
+	}}
+	server := NewServer(compiler)
+	var output bytes.Buffer
+	_, err := server.handle(context.Background(), protocol.Request{
+		JSONRPC: "2.0", ID: json.RawMessage(`1`), Method: "completionItem/resolve",
+		Params: json.RawMessage(`{"label":"Int"}`),
+	}, protocol.NewWriter(&output))
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := protocol.NewReader(&output).Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response protocol.Response
+	if err := json.Unmarshal(message, &response); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(response.Result, []byte(`arbitrary precision integer`)) {
+		t.Fatalf("resolved completion = %s", response.Result)
+	}
+}
+
 func TestServerReturnsDocumentLinksAndLinkedEditingRanges(t *testing.T) {
 	compiler := &fakeCompiler{payload: []byte(`{"version":1,"diagnostics":[]}`)}
 	input := frames(t,
@@ -613,6 +706,43 @@ func TestServerRejectsStaleChangesAndUsesUTF16Ranges(t *testing.T) {
 	}
 	if got := params.Diagnostics[0].Range.Start.Character; got != 2 {
 		t.Fatalf("UTF-16 start character = %d, want 2", got)
+	}
+}
+
+func TestServerCancelsStaleDiagnosticQueries(t *testing.T) {
+	compiler := &cancellableCompiler{started: make(chan struct{}), canceled: make(chan struct{})}
+	server := NewServer(compiler)
+	server.documents["file:///tmp/demo.tesl"] = document{URI: "file:///tmp/demo.tesl", Path: "/tmp/demo.tesl", Version: 1, Text: "initial"}
+	var output bytes.Buffer
+	writer := protocol.NewWriter(&output)
+	if err := server.didChange(context.Background(), json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl","version":2},"contentChanges":[{"text":"old"}]}`), writer); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-compiler.started:
+	case <-time.After(time.Second):
+		t.Fatal("old diagnostic query did not start")
+	}
+	if err := server.didChange(context.Background(), json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl","version":3},"contentChanges":[{"text":"new"}]}`), writer); err != nil {
+		t.Fatal(err)
+	}
+	server.waitDiagnostics()
+	select {
+	case <-compiler.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("old diagnostic query was not canceled")
+	}
+	reader := protocol.NewReader(&output)
+	message, err := reader.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var notification protocol.Request
+	if err := json.Unmarshal(message, &notification); err != nil || notification.Method != "textDocument/publishDiagnostics" {
+		t.Fatalf("notification = %s", message)
+	}
+	if _, err := reader.Read(); err != io.EOF {
+		t.Fatalf("stale diagnostics emitted: %v", err)
 	}
 }
 

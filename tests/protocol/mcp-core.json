@@ -1,0 +1,6 @@
+{
+  "jsonrpc": "2.0",
+  "tools/list": {"tools":[{"name":"tesl.agent_context"},{"name":"tesl.check"},{"name":"tesl.debug_inspect"}]},
+  "tools/call": {"name":"tesl.check","arguments":{"file":"fixture.tesl"}},
+  "result": {"isError":false}
+}

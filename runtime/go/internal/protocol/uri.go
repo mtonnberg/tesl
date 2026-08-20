@@ -25,7 +25,11 @@ func URIToPath(value string) (string, error) {
 	if filepath.Separator == '\\' && strings.HasPrefix(path, "/") && len(path) > 2 && path[2] == ':' {
 		path = path[1:]
 	}
-	return filepath.Clean(path), nil
+	cleaned := filepath.Clean(path)
+	if parsed.Host != "" && parsed.Host != "localhost" && filepath.Separator == '/' {
+		cleaned = "//" + strings.TrimPrefix(cleaned, "/")
+	}
+	return cleaned, nil
 }
 
 func PathToURI(path string) string {

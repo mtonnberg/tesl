@@ -193,6 +193,21 @@ let test_release_emission_excludes_debug_runtime () =
     (List.exists (fun (a : Emit_go.artifact) ->
        List.mem a.path ["internal/teslrt/debug.go"; "internal/teslrt/debug_control.go"; "internal/teslrt/debug_state.go"]) emitted)
 
+let test_release_artifacts_have_no_debug_symbols () =
+  let emitted = artifacts () in
+  let forbidden = [
+    "teslrt.Checkpoint"; "teslrt.DebugEnter"; "teslrt.DebugLeave";
+    "teslrt.DebugABIVersion"; "teslrt.StartDebugControlFromEnvironment";
+    "teslrt.RegisterDebugDomainProvider"; "teslrt.DebugPgSql";
+  ] in
+  List.iter (fun (artifact : Emit_go.artifact) ->
+    if Filename.check_suffix artifact.path ".go" then
+      List.iter (fun symbol ->
+        check bool (artifact.path ^ " has no " ^ symbol) false
+          (contains artifact.contents symbol))
+        forbidden)
+    emitted
+
 let test_named_expect_fail_emission () =
   let emitted = artifacts () in
   let module_go = artifact "internal/teslmodgosmoke/module.go" emitted in
@@ -3165,6 +3180,21 @@ let test_http_capture_with_go () =
   check bool "a failing capture returns the check's own status" true
     (contains module_go "return teslrt.Fail(teslCapturedId.Status(), teslCapturedId.Message())");
   gate_emitted "tesl-go-http-capture" emitted
+
+(* Release and unattached debug builds must execute the same generated tests. The debug
+   process still starts its inert control seam, but no listener/configuration is installed;
+   this gate catches instrumentation that changes evaluation or test outcomes. *)
+let test_release_debug_unattached_equivalence () =
+  let release = artifacts () in
+  let debug =
+    match Compile.compile_go_source ~debug:true "<go-debug-equivalence>" source with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "debug equivalence compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  gate_emitted ~short:true "tesl-go-release-equivalence" release;
+  gate_emitted ~short:true "tesl-go-debug-equivalence" debug
 
 let test_http_cookie_with_go () =
   let emitted = emit_ok "<go-http-cookie>" http_cookie_source in
@@ -6863,8 +6893,15 @@ let test_multi_module_with_go () =
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
       ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+       ignore (run_command root "go test -race -count=1 ./...");
+       run_go_gates root);
+  let debug_emitted = match Compile.compile_go_file ~debug:true path with
+    | Compile.GoSuccess artifacts -> artifacts
+    | Compile.GoFailure diagnostics ->
+      failf "debug multi-module compilation failed: %s"
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  in
+  gate_emitted ~short:true "tesl-go-debug-multi" debug_emitted
 
 let cross_module_dep_source = {|module GoDep exposing [Point, Status(..), Slug, origin, shift, describe, tagOf]
 import Tesl.Prelude exposing [Int, String]
@@ -12591,6 +12628,7 @@ let () =
       test_case "artifact layout and helpers" `Quick test_artifact_layout;
       test_case "debug emission has versioned checkpoint" `Quick test_debug_emission_has_versioned_checkpoint;
       test_case "release emission excludes debug runtime" `Quick test_release_emission_excludes_debug_runtime;
+      test_case "release artifacts have no debug symbols" `Quick test_release_artifacts_have_no_debug_symbols;
       test_case "named expectFail emission" `Quick test_named_expect_fail_emission;
       test_case "named expectFail requires full application" `Quick test_named_expect_fail_requires_full_application;
       test_case "Racket remains default" `Quick test_racket_default_unchanged;
@@ -12635,6 +12673,7 @@ let () =
       test_case "HTTP api, server and handlers" `Slow test_http_server_with_go;
       test_case "HTTP auth at the trust boundary" `Slow test_http_auth_with_go;
       test_case "HTTP checked path captures" `Slow test_http_capture_with_go;
+      test_case "release/debug unattached equivalence" `Slow test_release_debug_unattached_equivalence;
       test_case "HTTP cookie writing via requires [cookieCap]" `Slow test_http_cookie_with_go;
       test_case "Tesl api-tests run against the Go server" `Slow test_go_api_tests;
       test_case "api-test bodies are untyped" `Slow test_api_test_json_with_go;

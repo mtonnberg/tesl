@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "requests": [
+    {"command":"handshake"},
+    {"command":"ping"},
+    {"command":"set-breakpoints", "breakpoints":[{"file":"fixture.tesl","line":12,"condition":"n == 3","hit":"==2"}]},
+    {"command":"clear-breakpoints"},
+    {"command":"detach"}
+  ],
+  "responses": [
+    {"ok":true}, {"ok":true}, {"ok":true}, {"ok":true}, {"ok":true}
+  ]
+}

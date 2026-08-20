@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tesl.dev/schema/go-debug-abi-v1.json",
+  "title": "Tesl Go Debug ABI v1",
+  "type": "object",
+  "required": ["version", "id", "function", "location", "depth", "locals"],
+  "properties": {
+    "version": {"const": 1},
+    "id": {"type": "string", "minLength": 1},
+    "function": {"type": "string"},
+    "test": {"type": "string"},
+    "depth": {"type": "integer", "minimum": 0},
+    "location": {
+      "type": "object",
+      "required": ["file", "line", "column"],
+      "properties": {
+        "file": {"type": "string", "minLength": 1},
+        "line": {"type": "integer", "minimum": 1},
+        "column": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": false
+    },
+    "locals": {"type": "array", "items": {"$ref": "#/$defs/local"}}
+  },
+  "$defs": {
+    "local": {
+      "type": "object",
+      "required": ["name", "type", "value"],
+      "properties": {
+        "name": {"type": "string"},
+        "type": {"type": "string"},
+        "value": {"$ref": "#/$defs/value"}
+      },
+      "additionalProperties": false
+    },
+    "value": {
+      "type": "object",
+      "required": ["type", "display"],
+      "properties": {
+        "type": {"type": "string"},
+        "display": {"type": "string"},
+        "children": {"type": "array", "items": {"$ref": "#/$defs/value"}}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

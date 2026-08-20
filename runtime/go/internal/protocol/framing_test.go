@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"strings"
+	"sync"
 	"testing"
 )
 
@@ -45,6 +47,10 @@ func TestReaderRejectsMalformedAndOversizedFrames(t *testing.T) {
 		{"missing length", "X-Test: yes\r\n\r\n{}", ErrMissingContentLength},
 		{"duplicate length", "Content-Length: 2\r\nContent-Length: 2\r\n\r\n{}", ErrDuplicateHeader},
 		{"too large", "Content-Length: 3\r\n\r\n{}", ErrMessageTooLarge},
+		{"invalid length", "Content-Length: nope\r\n\r\n{}", nil},
+		{"negative length", "Content-Length: -1\r\n\r\n", nil},
+		{"truncated header", "Content-Length: 2\r\n", io.ErrUnexpectedEOF},
+		{"truncated body", "Content-Length: 4\r\n\r\n{}", io.ErrUnexpectedEOF},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -55,6 +61,12 @@ func TestReaderRejectsMalformedAndOversizedFrames(t *testing.T) {
 				}
 			}
 			_, err := reader.Read()
+			if test.want == nil {
+				if err == nil || !strings.Contains(err.Error(), "invalid Content-Length") {
+					t.Fatalf("Read() error = %v, want invalid length", err)
+				}
+				return
+			}
 			if !errors.Is(err, test.want) {
 				t.Fatalf("Read() error = %v, want %v", err, test.want)
 			}
@@ -69,6 +81,28 @@ func TestWriterHandlesPartialWrites(t *testing.T) {
 	}
 	if got, want := output.String(), "Content-Length: 11\r\n\r\n{\"ok\":true}"; got != want {
 		t.Fatalf("frame = %q, want %q", got, want)
+	}
+}
+
+func TestWriterSerializesConcurrentFrames(t *testing.T) {
+	var output bytes.Buffer
+	writer := NewWriter(&output)
+	var wait sync.WaitGroup
+	for index := 0; index < 32; index++ {
+		wait.Add(1)
+		go func(index int) {
+			defer wait.Done()
+			if err := writer.WriteJSON(map[string]int{"index": index}); err != nil {
+				t.Errorf("WriteJSON() error = %v", err)
+			}
+		}(index)
+	}
+	wait.Wait()
+	reader := NewReader(&output)
+	for index := 0; index < 32; index++ {
+		if _, err := reader.Read(); err != nil {
+			t.Fatalf("frame %d: %v", index, err)
+		}
 	}
 }
 

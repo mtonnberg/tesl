@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"tesl.dev/runtime/go/internal/protocol"
 	"tesl.dev/runtime/go/internal/tooling"
@@ -30,6 +31,7 @@ const (
 
 type Compiler interface {
 	QuerySourceJSON(context.Context, string, string, string, ...string) ([]byte, tooling.Result, error)
+	QueryJSON(context.Context, ...string) (json.RawMessage, tooling.Result, error)
 	FormatSource(context.Context, string, string) ([]byte, tooling.Result, error)
 }
 
@@ -46,10 +48,18 @@ type Server struct {
 	semanticTokens map[string]semanticTokenState
 	nextTokenID    uint64
 	shutdown       bool
+	diagnosticMu   sync.Mutex
+	diagnosticRuns map[string]diagnosticRun
+	diagnosticWG   sync.WaitGroup
+}
+
+type diagnosticRun struct {
+	cancel  context.CancelFunc
+	version int
 }
 
 func NewServer(compiler Compiler) *Server {
-	return &Server{compiler: compiler, documents: make(map[string]document), semanticTokens: make(map[string]semanticTokenState)}
+	return &Server{compiler: compiler, documents: make(map[string]document), semanticTokens: make(map[string]semanticTokenState), diagnosticRuns: make(map[string]diagnosticRun)}
 }
 
 // Run serves one LSP session. It returns the process exit status required by
@@ -106,6 +116,7 @@ func (server *Server) handle(ctx context.Context, request protocol.Request, writ
 	case "initialized":
 		return -1, nil
 	case "shutdown":
+		server.waitDiagnostics()
 		server.shutdown = true
 		return -1, server.writeResult(writer, request.ID, nil)
 	case "exit":
@@ -143,7 +154,7 @@ func (server *Server) handle(ctx context.Context, request protocol.Request, writ
 		if len(request.ID) == 0 {
 			return -1, nil
 		}
-		return -1, server.writeResult(writer, request.ID, json.RawMessage(request.Params))
+		return -1, server.writeCompletionDocumentation(ctx, request.ID, request.Params, writer)
 	case "textDocument/signatureHelp":
 		if len(request.ID) == 0 {
 			return -1, nil
@@ -381,7 +392,8 @@ func (server *Server) didChange(ctx context.Context, raw json.RawMessage, writer
 	doc.Version = params.TextDocument.Version
 	doc.Text = params.ContentChanges[0].Text
 	server.documents[doc.URI] = doc
-	return server.publishDiagnostics(ctx, doc, writer)
+	server.scheduleDiagnostics(ctx, doc, writer)
+	return nil
 }
 
 func (server *Server) didClose(raw json.RawMessage, writer *protocol.Writer) error {
@@ -390,7 +402,51 @@ func (server *Server) didClose(raw json.RawMessage, writer *protocol.Writer) err
 		return errors.New("textDocument/didClose: invalid params")
 	}
 	delete(server.documents, params.TextDocument.URI)
+	server.cancelDiagnostics(params.TextDocument.URI)
 	return server.publishEmptyDiagnostics(params.TextDocument.URI, writer)
+}
+
+func (server *Server) scheduleDiagnostics(ctx context.Context, doc document, writer *protocol.Writer) {
+	server.diagnosticMu.Lock()
+	if previous, found := server.diagnosticRuns[doc.URI]; found {
+		previous.cancel()
+	}
+	queryContext, cancel := context.WithCancel(ctx)
+	server.diagnosticRuns[doc.URI] = diagnosticRun{cancel: cancel, version: doc.Version}
+	server.diagnosticWG.Add(1)
+	server.diagnosticMu.Unlock()
+	go func() {
+		defer server.diagnosticWG.Done()
+		diagnostics, err := server.diagnosticsForDocument(queryContext, doc)
+		server.diagnosticMu.Lock()
+		run, current := server.diagnosticRuns[doc.URI]
+		fresh := current && run.version == doc.Version
+		if fresh {
+			delete(server.diagnosticRuns, doc.URI)
+		}
+		server.diagnosticMu.Unlock()
+		if !fresh || errors.Is(queryContext.Err(), context.Canceled) {
+			return
+		}
+		if err != nil {
+			_ = server.publishCompilerFailure(doc.URI, err, writer)
+			return
+		}
+		_ = server.publish(doc.URI, diagnostics, writer)
+	}()
+}
+
+func (server *Server) cancelDiagnostics(uri string) {
+	server.diagnosticMu.Lock()
+	if run, found := server.diagnosticRuns[uri]; found {
+		run.cancel()
+		delete(server.diagnosticRuns, uri)
+	}
+	server.diagnosticMu.Unlock()
+}
+
+func (server *Server) waitDiagnostics() {
+	server.diagnosticWG.Wait()
 }
 
 func (server *Server) queryAt(ctx context.Context, raw json.RawMessage, flag string) ([]byte, document, error) {
@@ -442,7 +498,19 @@ func (server *Server) writeHover(ctx context.Context, id json.RawMessage, raw js
 		return server.writeError(writer, id, internalError, err.Error())
 	}
 	if response.TypeAt == nil {
-		return server.writeResult(writer, id, nil)
+		fieldPayload, _, fieldErr := server.queryAt(ctx, raw, "--field-at-json")
+		if fieldErr != nil {
+			return server.writeResult(writer, id, nil)
+		}
+		var field fieldAtResponse
+		if err := decodeVersioned(fieldPayload, &field); err != nil || field.FieldAt == nil {
+			return server.writeResult(writer, id, nil)
+		}
+		return server.writeResult(writer, id, map[string]any{
+			"contents": map[string]string{
+				"kind": "plaintext", "value": field.FieldAt.Field + ": " + field.FieldAt.FieldType,
+			},
+		})
 	}
 	hover := map[string]any{
 		"contents": map[string]string{
@@ -451,6 +519,14 @@ func (server *Server) writeHover(ctx context.Context, id json.RawMessage, raw js
 		},
 	}
 	return server.writeResult(writer, id, hover)
+}
+
+type fieldAtResponse struct {
+	Version int `json:"version"`
+	FieldAt *struct {
+		Field     string `json:"field"`
+		FieldType string `json:"field_type"`
+	} `json:"field_at"`
 }
 
 type compilerLocation struct {
@@ -515,9 +591,41 @@ func (server *Server) writeCompletion(ctx context.Context, id json.RawMessage, r
 			"label":  completion.Label,
 			"detail": completion.Detail,
 			"kind":   completionKind(completion.Kind),
+			"data":   map[string]string{"name": completion.Label},
 		})
 	}
 	return server.writeResult(writer, id, map[string]any{"isIncomplete": false, "items": items})
+}
+
+func (server *Server) writeCompletionDocumentation(ctx context.Context, id json.RawMessage, raw json.RawMessage, writer *protocol.Writer) error {
+	var item map[string]any
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return server.writeResult(writer, id, json.RawMessage(raw))
+	}
+	label, _ := item["label"].(string)
+	if label == "" || server.compiler == nil {
+		return server.writeResult(writer, id, item)
+	}
+	payload, _, err := server.compiler.QueryJSON(ctx, "--doc-json", label)
+	if err != nil {
+		return server.writeResult(writer, id, item)
+	}
+	var docs struct {
+		Entries []struct {
+			Name string `json:"name"`
+			Doc  string `json:"doc"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal(payload, &docs); err != nil {
+		return server.writeResult(writer, id, item)
+	}
+	for _, entry := range docs.Entries {
+		if entry.Name == label && entry.Doc != "" {
+			item["documentation"] = map[string]string{"kind": "markdown", "value": entry.Doc}
+			break
+		}
+	}
+	return server.writeResult(writer, id, item)
 }
 
 type signatureHelpResponse struct {
