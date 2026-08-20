@@ -1099,9 +1099,11 @@ _tesl_warn_arch_mismatch() {
 # require Docker where the manifest said it should not):
 #
 #   target = "local"      -> compile the project (proofs enforced) into
-#                            .tesl-stuff/build/ and print how to run it. No
-#                            Dockerfile, no docker, no daemon needed.
-#   target = "container"  -> stage a Dockerfile + build the image (as before).
+#                            .tesl-stuff/go-build/ and build tesl-app for
+#                            application modules. No Dockerfile, no docker,
+#                            no daemon needed.
+#   target = "container"  -> build a Linux tesl-app, stage a runtime-only
+#                            Dockerfile, and build the image.
 #   [deploy] absent       -> container, preserving the historical behaviour of
 #                            manifests written before this key existed.
 #
@@ -1987,18 +1989,22 @@ case "$CMD" in
     _tesl_build "$@"
     ;;
   clean)
-    # Remove the project's transient build output (.tesl-stuff/build, or the
-    # TESL_BUILD_DIR override).  Deliberately scoped to the build output only:
-    # other .tesl-stuff/ subdirectories (e.g. a future on-disk cache with its
-    # own lifecycle) survive, and .tesl-postgres/ (real data) is never touched.
+    # Remove known transient compiler, binary, test, and debug outputs. Keep
+    # unrelated .tesl-stuff subdirectories (for example a future cache) and
+    # never touch .tesl-postgres/ (real data).
     ROOT="$(_tesl_project_root_of_dir "$PWD")" || ROOT="$PWD"
     BUILD_ROOT="$(_tesl_build_root "$ROOT")"
-    if [ -d "$BUILD_ROOT" ]; then
-      rm -rf "$BUILD_ROOT"
-      echo "tesl clean: removed $BUILD_ROOT"
-    else
-      echo "tesl clean: nothing to remove ($BUILD_ROOT does not exist)"
-    fi
+    STUFF_ROOT="$ROOT/.tesl-stuff"
+    removed=0
+    for path in "$BUILD_ROOT" "$ROOT/.tesl-stuff/go-build" \
+                "$ROOT/.tesl-stuff/debug.sock" "$ROOT/.tesl-stuff/debug.port" \
+                "$ROOT/.tesl-stuff"/tesl.* "$ROOT/.tesl-stuff"/go-emit-*; do
+      [ -e "$path" ] || [ -L "$path" ] || continue
+      rm -rf "$path"
+      echo "tesl clean: removed $path"
+      removed=1
+    done
+    [ "$removed" -eq 1 ] || echo "tesl clean: nothing to remove ($STUFF_ROOT has no generated output)"
     ;;
   version|--version|-v)
     # A stable version string plus the resolved compiler path — the latter's Nix
@@ -2042,13 +2048,13 @@ Usage:
                            [--tag NAME] [--no-docker]        runnable Docker image
                            [--out DIR]                       ([deploy].target = "container")
     tesl emit go             [file.tesl]  Emit Go source (advanced)
-  tesl clean                                              Delete the project's build output (.tesl-stuff/build/)
+  tesl clean                                              Delete the project's build output (.tesl-stuff/)
   tesl check               [file.tesl ...]               Type-check without output
   tesl lint                <file.tesl> [more.tesl ...]   Run the opinionated linter
   tesl fmt                 <file.tesl> [more.tesl ...]   Format in-place
   tesl fmt-check           <file.tesl> [more.tesl ...]   Check formatting without modifying
   tesl validate            [file.tesl ...]               Run check + lint + fmt-check
-    tesl run                 [--debug] [file.tesl] [args…]  Compile then execute
+  tesl run                 [--debug] [file.tesl] [args…]  Compile then execute
                            (--debug: live checkpoints + attach endpoint under .tesl-stuff/)
   tesl debug-attach        [--project DIR] [command…]     Attach to a `tesl run --debug` process
                            (arm breakpoints, inspect, resume — see tesl debug-attach --help)

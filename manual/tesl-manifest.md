@@ -66,8 +66,8 @@ defaults are. The canonical Postgres keys are `TESL_POSTGRES_DATABASE`,
 
 | value         | meaning |
 |---------------|---------|
-| `"local"`     | Run the compiled program directly: `tesl build` type-checks and compiles the entrypoint into `.tesl-stuff/build/` and does **not** need Docker. |
-| `"container"` | Build an OCI image: `tesl build` stages a Dockerfile plus the Tesl runtime and runs `docker build`. |
+| `"local"`     | Build locally: `tesl build` type-checks and compiles the entrypoint into `.tesl-stuff/go-build/`, including `tesl-app` for application modules. It does **not** need Docker. |
+| `"container"` | Build an OCI image: `tesl build` compiles a Linux `tesl-app`, stages a runtime-only Dockerfile, and runs `docker build`. |
 | *key absent*  | Treated as `"container"` (the behaviour that predates this key). |
 
 `tesl build --local` / `tesl build --container` override the manifest for one
