@@ -238,7 +238,8 @@
         # in the Nix store automatically and is fast (≈2 s).
         runtimePreamble = ''
           export TESL_VERSION="0.1.0"
-          export TESL_OCAML_COMPILER="${tesl-compiler}/bin/tesl-compiler"
+           export TESL_OCAML_COMPILER="${tesl-compiler}/bin/tesl-compiler"
+           export TESL_DEFAULT_BACKEND="''${TESL_DEFAULT_BACKEND:-go}"
           export PLTCOLLECTS="${pkgs.racket}/share/racket/collects:${tesl-racket}/share/tesl-collections''${PLTCOLLECTS:+:$PLTCOLLECTS}"
 
           # Assets baked into the store so the installed binary works with NO
@@ -248,6 +249,7 @@
           export TESL_TEMPLATES_DIR="${tesl-templates}/share/tesl-templates"
            export TESL_COLLECTIONS_DIR="${tesl-racket}/share/tesl-collections/tesl"
            export TESL_DEBUG_ATTACH_BIN="${tesl-go-tools}/bin/tesl-debug-attach"
+           export TESL_DEBUG_INSPECT_BIN="${tesl-go-tools}/bin/tesl-debug-inspect"
            export TESL_GO="${pkgs.go}/bin/go"
 
           export PATH="${pkgs.racket}/bin:${gnuUserland}:$PATH"
@@ -269,8 +271,9 @@
         # Used inside devShells.default so developers run against their local
         # compiler/_build/  rather than the pinned store binary.
         tesl-cli-dev = pkgs.writeShellScriptBin "tesl" (''
-          export TESL_REPO_ROOT="''${TESL_REPO_ROOT:-${toString ./.}}"
-          export TESL_OCAML_COMPILER="''${TESL_OCAML_COMPILER:-$TESL_REPO_ROOT/compiler/_build/default/bin/main.exe}"
+           export TESL_REPO_ROOT="''${TESL_REPO_ROOT:-${toString ./.}}"
+           export TESL_OCAML_COMPILER="''${TESL_OCAML_COMPILER:-$TESL_REPO_ROOT/compiler/_build/default/bin/main.exe}"
+           export TESL_DEFAULT_BACKEND="''${TESL_DEFAULT_BACKEND:-go}"
           export PLTCOLLECTS="${pkgs.racket}/share/racket/collects:${tesl-racket}/share/tesl-collections''${PLTCOLLECTS:+:$PLTCOLLECTS}"
 
           export PATH="${pkgs.racket}/bin:${gnuUserland}:$PATH"
@@ -297,6 +300,8 @@
         tesl-mcp = pkgs.writeShellScriptBin "tesl-mcp" (''
           export TESL_OCAML_COMPILER="${tesl-compiler}/bin/tesl-compiler"
           export TESL_COMPILER="''${TESL_COMPILER:-$TESL_OCAML_COMPILER}"
+          export TESL_DEBUG_ATTACH="${tesl-go-tools}/bin/tesl-debug-attach"
+          export TESL_DEBUG_INSPECT_BIN="${tesl-go-tools}/bin/tesl-debug-inspect"
           exec "${tesl-go-tools}/bin/tesl-mcp" "$@"
         '');
 

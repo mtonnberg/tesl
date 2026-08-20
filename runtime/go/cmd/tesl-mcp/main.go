@@ -129,6 +129,14 @@ func (server *server) callTool(ctx context.Context, name string, arguments map[s
 		if file == "" {
 			return nil, errors.New("file is required")
 		}
+		if command := debugInspectCommand(); command != "" {
+			inspectArgs := append([]string{"--file", file}, debugInspectArgs(arguments)...)
+			result, err := (tooling.Client{Executable: command}).Run(ctx, inspectArgs...)
+			if err != nil && len(result.Stdout) == 0 {
+				return nil, err
+			}
+			return result.Stdout, nil
+		}
 		args = append([]string{"debug-inspect", file}, debugInspectArgs(arguments)...)
 	case "tesl.debug_attach":
 		return server.debugAttach(ctx, arguments)
@@ -211,6 +219,17 @@ func debugInspectArgs(arguments map[string]any) []string {
 		args = append(args, "--continue")
 	}
 	return args
+}
+
+func debugInspectCommand() string {
+	if command := os.Getenv("TESL_DEBUG_INSPECT_BIN"); command != "" {
+		return command
+	}
+	command, err := exec.LookPath("tesl-debug-inspect")
+	if err != nil {
+		return ""
+	}
+	return command
 }
 
 func toolDefinitions() []map[string]any {

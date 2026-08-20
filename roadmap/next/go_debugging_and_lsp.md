@@ -82,8 +82,8 @@ The migration must not create a period where all editor and debugging tools are 
 | 3. Checkpoint engine, values, domains, and control channel | Complete | Bounded/panic-safe named value trees, concurrent checkpoint stress, stop-world recovery, Unix/TCP control, disconnect resume/reattach, domain/SQL scopes, ABI fixtures, and race gates pass. |
 | 4. DAP and headless debugger | Complete | Go DAP launch/attach lifecycle, named-test launch, real launch-to-breakpoint integration, headless v2 breakpoint/scalar-local output, Go attach bridge/once/project discovery, normalized transcripts, and race gates pass. |
 | 5. LSP | Complete | Go LSP shipped entrypoint, expanded initialize contract, ranged/multiple UTF-16 edits, save/watch/format/resolve/execute handlers, field/doc compiler queries, cancellable versioned diagnostics, built-compiler integration, and race/vet gates pass. |
-| 6. MCP | Partial | Go stdio server, tool schemas, compiler queries, attach flags, and protocol smoke coverage exist; full differential/live endpoint parity is still open. |
-| 7. CLI, VS Code, packaging, environments | Partial | Go tools are wired into Nix defaults, VS Code LSP/DAP paths, debug-attach, and explicit Go run/test backends; default run/test and Racket-free artifact tests remain. |
+| 6. MCP | Partial | Go stdio server, tool schemas, compiler queries, Go headless inspection routing, attach flags, and protocol smoke coverage exist; full differential/live endpoint parity is still open. |
+| 7. CLI, VS Code, packaging, environments | Partial | Go tools are wired into Nix defaults, VS Code LSP/DAP paths, debug-attach, and shipped/dev CLI defaults for run/test/headless inspection; Racket-free artifact tests and remaining runtime paths remain. |
 | 8. Complete test/example/template migration | Not started | Corpus migration and responsibility manifest are not complete. |
 
 ### Phase 0: Contract freeze and traceability
@@ -208,6 +208,8 @@ Gate: shipped workflows find only Go binaries and packages contain no `.rkt` or 
 - 2026-08-20: `nix build .#tesl-go-tools` and `nix build .#tesl-full` pass; the installed `tesl-mcp` wrapper completes an initialize exchange without a repo checkout.
 - 2026-08-20: `tesl test --backend go` now emits each file into a disposable Go module and runs generated tests with named-test/kind filters; focused single-module and imported-module smokes pass, and CI phase 9b has a Go-backend assertion. Full `ci.sh` exceeded the 15-minute session timeout during earlier compiler/integration phases before reaching phase 9b.
 - 2026-08-20: `tesl run --backend go` now emits, builds, and launches generated `cmd/app` modules from a disposable directory; debug emission exports the project attach root. Non-application modules fail explicitly instead of producing a raw Go directory error. Focused Todo API startup smoke reached the generated Go server before its timeout.
+- 2026-08-20: `tesl debug-inspect --backend go` now launches generated Go program/test targets through the Go control channel, arms source breakpoints, waits for a stop, and emits headless v2 output; `--continue` captures multiple stops until target completion. Lesson61 inspection and MCP Go-launcher routing pass focused checks.
+- 2026-08-20: Nix and legacy dev-shell wrappers now set Go as the default backend for `tesl run`, `tesl test`, and `tesl debug-inspect`; explicit `--backend racket` and `TESL_BACKEND=racket` preserve the legacy path. Installed default test and headless inspection pass focused checks.
 ### Phase 8: Complete test/example/template migration
 1. Make each of the 71 paired `.tesl` tests the sole source and assert Go compile diagnostics, runtime output, status, side effects, and services.
 2. Assign each of 75 Racket-only test responsibilities a named Go runtime/integration test, OCaml compiler test, black-box test, protocol fixture, benchmark, or reviewed obsolete disposition.

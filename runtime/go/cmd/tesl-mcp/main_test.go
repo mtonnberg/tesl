@@ -58,6 +58,26 @@ func TestMCPCompilerToolWrapsCompactJSON(t *testing.T) {
 	}
 }
 
+func TestMCPDebugInspectUsesGoLauncher(t *testing.T) {
+	directory := t.TempDir()
+	script := filepath.Join(directory, "debug-inspect-helper.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s' '{\"version\":2,\"stopped\":true}'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TESL_DEBUG_INSPECT_BIN", script)
+	server := &server{compiler: tooling.Client{Executable: script}}
+	value, err := server.callTool(context.Background(), "tesl.debug_inspect", map[string]any{
+		"file":     "fixture.tesl",
+		"break_at": []any{"42"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(value), `"stopped":true`) {
+		t.Fatalf("debug inspect = %s", value)
+	}
+}
+
 func TestMCPUnknownMethodIsProtocolError(t *testing.T) {
 	if _, err := (&server{}).handle(context.Background(), "unknown/method", nil); err == nil || !strings.Contains(err.Error(), "unknown method") {
 		t.Fatalf("unknown method error = %v", err)

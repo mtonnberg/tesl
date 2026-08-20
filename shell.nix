@@ -87,6 +87,7 @@ pkgs.mkShell {
     export TESL_REPO_ROOT="''${TESL_REPO_ROOT:-$_tesl_root}"
     unset _tesl_root
     export TESL_OCAML_COMPILER="$TESL_REPO_ROOT/compiler/_build/default/bin/main.exe"
+    export TESL_DEFAULT_BACKEND="''${TESL_DEFAULT_BACKEND:-go}"
 
     # Native library for Tesl.Crypto: `tesl/crypto.rkt` dlopen()s libsodium
     # through `ffi/unsafe` and prefers this absolute store path, falling back to

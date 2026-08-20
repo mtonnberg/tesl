@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -57,6 +58,10 @@ func (values *stringFlags) Set(value string) error {
 func main() {
 	socket := flag.String("socket", "", "Unix debug socket")
 	tcp := flag.String("tcp", "", "loopback debug address")
+	file := flag.String("file", "", "Tesl source file to compile and inspect")
+	compiler := flag.String("compiler", "", "Tesl compiler executable for source inspection")
+	mode := flag.String("mode", "program", "source inspection mode: program or test")
+	continueMode := flag.Bool("continue", false, "capture every breakpoint stop until target completion")
 	operation := flag.String("operation", "snapshot", "snapshot, ping, or detach")
 	timeoutMS := flag.Int("timeout-ms", 30000, "connection timeout in milliseconds")
 	var breakAt stringFlags
@@ -64,6 +69,10 @@ func main() {
 	when := flag.String("when", "", "condition applied to each --break-at")
 	hit := flag.String("hit", "", "hit condition applied to each --break-at")
 	flag.Parse()
+	if *file != "" {
+		sourceInspect(*file, *compiler, *mode, breakAt, *when, *hit, *timeoutMS, *continueMode)
+		return
+	}
 	if (*socket == "") == (*tcp == "") {
 		fail("exactly one of -socket or -tcp is required")
 	}
@@ -151,6 +160,200 @@ func main() {
 		}
 		writeJSON(snapshotOutput(snapshot, "", breakpoint))
 	}
+}
+
+func sourceInspect(file, compiler, mode string, breakAt []string, when, hit string, timeoutMS int, continueMode bool) {
+	if len(breakAt) == 0 {
+		fail("source inspection requires at least one --break-at LINE spec")
+	}
+	if mode != "program" && mode != "test" {
+		fail("--mode must be program or test")
+	}
+	absFile, err := filepath.Abs(file)
+	if err != nil {
+		fail("resolve source file: %v", err)
+	}
+	workingDir := filepath.Dir(absFile)
+	specifications, err := sourceBreakpointSpecs(absFile, breakAt, when, hit)
+	if err != nil {
+		fail("parse breakpoint: %v", err)
+	}
+	arguments := map[string]any{
+		"program": absFile,
+		"cwd":     workingDir,
+		"mode":    mode,
+	}
+	if compiler != "" {
+		arguments["compiler"] = compiler
+	}
+	payload, err := json.Marshal(arguments)
+	if err != nil {
+		fail("encode launch arguments: %v", err)
+	}
+	target := dap.NewProcessTarget()
+	defer target.Close()
+	exited := make(chan struct{}, 1)
+	target.SetEventListener(func(event dap.TargetEvent) {
+		if event.Event == "exited" {
+			select {
+			case exited <- struct{}{}:
+			default:
+			}
+		}
+	})
+	backend, err := target.LaunchBackend(payload)
+	if err != nil {
+		fail("launch Go debug target: %v", err)
+	}
+	client, ok := backend.(*dap.ControlClient)
+	if !ok {
+		fail("Go debug target did not return a control client")
+	}
+	stopped := make(chan teslrt.DebugFrame, 1)
+	detach := backend.Attach(func(event teslrt.DebugEvent) {
+		if event.Kind == "stopped" {
+			select {
+			case stopped <- event.Frame:
+			default:
+			}
+		}
+	})
+	defer detach()
+	results, err := client.SetBreakpointSpecs(specifications)
+	if err != nil {
+		fail("set breakpoints: %v", err)
+	}
+	for index, result := range results {
+		if !result.Verified {
+			fail("breakpoint #%d is not verified: %s", index+1, result.Message)
+		}
+	}
+	if err := backend.Continue(); err != nil {
+		fail("start Go debug target: %v", err)
+	}
+	if continueMode {
+		snapshots := make([]inspectOutput, 0, len(specifications))
+		completed := false
+		deadline := time.NewTimer(time.Duration(timeoutMS) * time.Millisecond)
+		defer deadline.Stop()
+		for {
+			select {
+			case <-stopped:
+				snapshot, err := backend.SnapshotState()
+				if err != nil {
+					fail("snapshot: %v", err)
+				}
+				snapshots = append(snapshots, snapshotOutput(snapshot, "", breakpointFromSnapshot(snapshot, breakAt, when, hit)))
+				if err := backend.Continue(); err != nil {
+					fail("continue Go debug target: %v", err)
+				}
+			case <-exited:
+				completed = true
+				writeJSON(map[string]any{"mode": "continue", "snapshots": snapshots, "completed": completed})
+				return
+			case <-deadline.C:
+				writeJSON(map[string]any{"mode": "continue", "snapshots": snapshots, "completed": completed})
+				return
+			}
+		}
+	}
+	select {
+	case <-stopped:
+		snapshot, err := backend.SnapshotState()
+		if err != nil {
+			fail("snapshot: %v", err)
+		}
+		writeJSON(snapshotOutput(snapshot, "", breakpointFromSnapshot(snapshot, breakAt, when, hit)))
+		_ = backend.Continue()
+	case <-time.After(time.Duration(timeoutMS) * time.Millisecond):
+		snapshot, err := backend.SnapshotState()
+		if err != nil {
+			fail("snapshot after breakpoint timeout: %v", err)
+		}
+		writeJSON(snapshotOutput(snapshot, "breakpoint-not-hit", breakpointFromSourceFlags(breakAt, when, hit)))
+	}
+}
+
+func sourceBreakpointSpecs(file string, values []string, when, hit string) ([]teslrt.DebugBreakpointSpec, error) {
+	result := make([]teslrt.DebugBreakpointSpec, 0, len(values))
+	for _, value := range values {
+		chunks := []string{value}
+		if !strings.Contains(value, ":") {
+			chunks = strings.Split(value, ",")
+		}
+		for _, chunk := range chunks {
+			chunk = strings.TrimSpace(chunk)
+			if chunk == "" {
+				continue
+			}
+			line, condition, hitCondition, err := parseSourceBreakpoint(chunk, when, hit)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, teslrt.DebugBreakpointSpec{
+				ID: fmt.Sprintf("inspect-bp-%d", len(result)+1), File: file, Line: line,
+				Condition: condition, Hit: hitCondition,
+			})
+		}
+	}
+	if len(result) == 0 {
+		return nil, fmt.Errorf("no valid breakpoint specs")
+	}
+	return result, nil
+}
+
+func parseSourceBreakpoint(value, defaultCondition, defaultHit string) (int, string, string, error) {
+	lineText, suffix := value, ""
+	if separator := strings.IndexByte(value, ':'); separator >= 0 {
+		lineText, suffix = value[:separator], strings.TrimSpace(value[separator+1:])
+	}
+	line, err := strconv.Atoi(strings.TrimSpace(lineText))
+	if err != nil || line < 1 {
+		return 0, "", "", fmt.Errorf("expected positive LINE, got %q", value)
+	}
+	if suffix == "" || isColumn(suffix) {
+		return line, defaultCondition, defaultHit, nil
+	}
+	if isHit(suffix) {
+		return line, defaultCondition, suffix, nil
+	}
+	return line, suffix, defaultHit, nil
+}
+
+func isColumn(value string) bool {
+	_, err := strconv.Atoi(strings.TrimSpace(value))
+	return err == nil
+}
+
+func isHit(value string) bool {
+	value = strings.TrimSpace(value)
+	for _, operator := range []string{"==", ">=", "<=", ">", "<", "%"} {
+		if strings.HasPrefix(value, operator) {
+			_, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(value, operator)))
+			return err == nil
+		}
+	}
+	return false
+}
+
+func breakpointFromSourceFlags(values []string, condition, hit string) *inspectBreakpoint {
+	if len(values) == 0 {
+		return nil
+	}
+	line, parsedCondition, parsedHit, err := parseSourceBreakpoint(strings.Split(values[0], ",")[0], condition, hit)
+	if err != nil {
+		return nil
+	}
+	return &inspectBreakpoint{Line: line, Condition: parsedCondition, Hit: parsedHit}
+}
+
+func breakpointFromSnapshot(snapshot teslrt.DebugSnapshot, values []string, condition, hit string) *inspectBreakpoint {
+	breakpoint := breakpointFromSourceFlags(values, condition, hit)
+	if breakpoint == nil {
+		breakpoint = &inspectBreakpoint{}
+	}
+	breakpoint.Line = snapshot.Frame.Location.Line
+	return breakpoint
 }
 
 func snapshotOutput(snapshot teslrt.DebugSnapshot, reason string, breakpoints ...*inspectBreakpoint) inspectOutput {

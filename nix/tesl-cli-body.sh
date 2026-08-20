@@ -1360,10 +1360,22 @@ case "$CMD" in
     ;;
   debug-inspect)
     # Headless step-debugger: run to breakpoint(s) and dump paused state as JSON.
-    # Forward all args (--break-at/--when/--hit/--mode and --continue for headless
-    # F5) to the compiler, which drives dsl/debug/headless-inspect.rkt. The verb
-    # was previously unrouted here, so `tesl debug-inspect` reported "unknown
-    # command" even though the compiler implements it.
+    # Go is the shipped/dev default; explicit --backend racket preserves the
+    # legacy compiler path during the remaining runtime migration.
+    INSPECT_BACKEND="${TESL_BACKEND:-${TESL_DEFAULT_BACKEND:-racket}}"
+    if [ "${1:-}" = "--backend" ]; then
+      INSPECT_BACKEND="${2:?--backend requires a backend name}"
+      shift 2
+    fi
+    if [ "$INSPECT_BACKEND" = "go" ]; then
+      FILE="${1:?debug-inspect requires a source file}"
+      shift
+      TESL_COMPILER="${TESL_COMPILER:-$TESL_OCAML_COMPILER}" \
+        exec "${TESL_DEBUG_INSPECT_BIN:-tesl-debug-inspect}" --file "$FILE" "$@"
+    elif [ "$INSPECT_BACKEND" != "racket" ]; then
+      echo "tesl debug-inspect: unsupported backend '$INSPECT_BACKEND' (use racket or go)" >&2
+      exit 2
+    fi
     [ $# -gt 0 ] || { echo "Usage: tesl debug-inspect <file.tesl> --break-at SPEC [...] [--continue]" >&2; exit 1; }
     _tesl_require_compiler
     exec "$TESL_OCAML_COMPILER" debug-inspect "$@"
@@ -1468,7 +1480,7 @@ case "$CMD" in
     # debugger can attach to the RUNNING process — arm/re-arm breakpoints,
     # inspect, resume — without relaunching. Costs checkpoint overhead; a
     # plain `tesl run` stays byte-for-byte the zero-residue release build.
-    RUN_BACKEND="racket"
+    RUN_BACKEND="${TESL_BACKEND:-${TESL_DEFAULT_BACKEND:-racket}}"
     TESL_RUN_DEBUG=0
     while true; do
       case "${1:-}" in
@@ -1579,7 +1591,7 @@ case "$CMD" in
     #           api-test / load-test / doctest in isolation.
     TEST_NAME=""
     TEST_KIND=""
-    TEST_BACKEND="racket"
+    TEST_BACKEND="${TESL_BACKEND:-${TESL_DEFAULT_BACKEND:-racket}}"
     while true; do
       case "${1:-}" in
         --backend) TEST_BACKEND="${2:?--backend requires a backend name}"; shift 2 ;;
@@ -1838,11 +1850,11 @@ Usage:
   tesl fmt                 <file.tesl> [more.tesl ...]   Format in-place
   tesl fmt-check           <file.tesl> [more.tesl ...]   Check formatting without modifying
   tesl validate            [file.tesl ...]               Run check + lint + fmt-check
-   tesl run                 [--backend racket|go] [--debug] [file.tesl] [args…]  Compile then execute
+   tesl run                 [--backend racket|go] [--debug] [file.tesl] [args…]  Compile then execute (Go default)
                            (--debug: live checkpoints + attach endpoint under .tesl-stuff/)
   tesl debug-attach        [--project DIR] [command…]     Attach to a `tesl run --debug` process
                            (arm breakpoints, inspect, resume — see tesl debug-attach --help)
-   tesl test                [--backend racket|go] [file.tesl ...]  Compile and run tests
+   tesl test                [--backend racket|go] [file.tesl ...]  Compile and run tests (Go default)
   tesl mutate              [--backend racket|go] <file>  Run mutation testing
   tesl watch               [file.tesl] [args…]           Watch, recompile, and restart on changes
 
