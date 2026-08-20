@@ -128,6 +128,8 @@ func (server *Server) handle(ctx context.Context, request protocol.Request, writ
 		return -1, server.didOpen(ctx, request.Params, writer)
 	case "textDocument/didChange":
 		return -1, server.didChange(ctx, request.Params, writer)
+	case "textDocument/didSave":
+		return -1, server.didSave(ctx, request.Params, writer)
 	case "textDocument/didClose":
 		return -1, server.didClose(request.Params, writer)
 	case "textDocument/hover":
@@ -205,6 +207,11 @@ func (server *Server) handle(ctx context.Context, request protocol.Request, writ
 			return -1, nil
 		}
 		return -1, server.writeFormatting(ctx, request.ID, request.Params, writer)
+	case "textDocument/rangeFormatting", "textDocument/onTypeFormatting":
+		if len(request.ID) == 0 {
+			return -1, nil
+		}
+		return -1, server.writeFormatting(ctx, request.ID, request.Params, writer)
 	case "textDocument/documentHighlight":
 		if len(request.ID) == 0 {
 			return -1, nil
@@ -220,6 +227,11 @@ func (server *Server) handle(ctx context.Context, request protocol.Request, writ
 			return -1, nil
 		}
 		return -1, server.writeInlayHints(ctx, request.ID, request.Params, writer)
+	case "inlayHint/resolve":
+		if len(request.ID) == 0 {
+			return -1, nil
+		}
+		return -1, server.writeResult(writer, request.ID, json.RawMessage(request.Params))
 	case "textDocument/foldingRange":
 		if len(request.ID) == 0 {
 			return -1, nil
@@ -247,6 +259,13 @@ func (server *Server) handle(ctx context.Context, request protocol.Request, writ
 		return -1, server.writeSemanticTokensRange(ctx, request.ID, request.Params, writer)
 	case "workspace/didChangeConfiguration":
 		return -1, nil
+	case "workspace/didChangeWatchedFiles":
+		return -1, nil
+	case "workspace/executeCommand":
+		if len(request.ID) == 0 {
+			return -1, nil
+		}
+		return -1, server.writeResult(writer, request.ID, nil)
 	default:
 		if len(request.ID) == 0 {
 			return -1, nil
@@ -267,13 +286,25 @@ func initializeResult() map[string]any {
 		"capabilities": map[string]any{
 			"textDocumentSync": map[string]any{
 				"openClose": true,
-				"change":    1,
+				"change":    2,
+				"save":      map[string]any{"includeText": true},
 			},
-			"documentSymbolProvider":    true,
-			"foldingRangeProvider":      true,
-			"documentHighlightProvider": true,
-			"selectionRangeProvider":    true,
-			"inlayHintProvider":         true,
+			"hoverProvider":                    true,
+			"definitionProvider":               true,
+			"referencesProvider":               true,
+			"renameProvider":                   map[string]any{"prepareProvider": true},
+			"documentFormattingProvider":       true,
+			"documentRangeFormattingProvider":  true,
+			"documentOnTypeFormattingProvider": map[string]any{"firstTriggerCharacter": "\n"},
+			"completionProvider":               map[string]any{"resolveProvider": true, "triggerCharacters": []string{"."}},
+			"signatureHelpProvider":            map[string]any{"triggerCharacters": []string{"(", ","}},
+			"codeActionProvider":               map[string]any{"codeActionKinds": []string{"quickfix", "source.fixAll", "source.organizeImports"}},
+			"executeCommandProvider":           map[string]any{"commands": []string{"tesl.applyFix"}},
+			"documentSymbolProvider":           true,
+			"foldingRangeProvider":             true,
+			"documentHighlightProvider":        true,
+			"selectionRangeProvider":           true,
+			"inlayHintProvider":                true,
 			"semanticTokensProvider": map[string]any{
 				"legend": map[string]any{
 					"tokenTypes":     []string{"function", "type", "enum", "enumMember", "property", "variable"},
@@ -309,6 +340,28 @@ type changeParams struct {
 			End   protocol.Position `json:"end"`
 		} `json:"range"`
 	} `json:"contentChanges"`
+}
+
+func (server *Server) didSave(ctx context.Context, raw json.RawMessage, writer *protocol.Writer) error {
+	var params struct {
+		TextDocument struct {
+			URI string `json:"uri"`
+		} `json:"textDocument"`
+		Text *string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &params); err != nil || params.TextDocument.URI == "" {
+		return errors.New("textDocument/didSave: invalid params")
+	}
+	doc, found := server.documents[params.TextDocument.URI]
+	if !found {
+		return nil
+	}
+	if params.Text != nil {
+		doc.Text = *params.Text
+		server.documents[doc.URI] = doc
+	}
+	server.scheduleDiagnostics(ctx, doc, writer)
+	return nil
 }
 
 type closeParams struct {
@@ -379,8 +432,8 @@ func (server *Server) didOpen(ctx context.Context, raw json.RawMessage, writer *
 
 func (server *Server) didChange(ctx context.Context, raw json.RawMessage, writer *protocol.Writer) error {
 	var params changeParams
-	if err := json.Unmarshal(raw, &params); err != nil || params.TextDocument.URI == "" || len(params.ContentChanges) != 1 || params.ContentChanges[0].Range != nil {
-		return errors.New("textDocument/didChange: expected one full-document change")
+	if err := json.Unmarshal(raw, &params); err != nil || params.TextDocument.URI == "" || len(params.ContentChanges) == 0 {
+		return errors.New("textDocument/didChange: invalid params")
 	}
 	doc, found := server.documents[params.TextDocument.URI]
 	if !found {
@@ -390,7 +443,24 @@ func (server *Server) didChange(ctx context.Context, raw json.RawMessage, writer
 		return nil
 	}
 	doc.Version = params.TextDocument.Version
-	doc.Text = params.ContentChanges[0].Text
+	text := doc.Text
+	for _, change := range params.ContentChanges {
+		if change.Range == nil {
+			text = change.Text
+			continue
+		}
+		index := protocol.NewLineIndex(text)
+		start, err := index.Offset(change.Range.Start)
+		if err != nil {
+			return err
+		}
+		end, err := index.Offset(change.Range.End)
+		if err != nil || end < start {
+			return errors.New("textDocument/didChange: invalid range")
+		}
+		text = text[:start] + change.Text + text[end:]
+	}
+	doc.Text = text
 	server.documents[doc.URI] = doc
 	server.scheduleDiagnostics(ctx, doc, writer)
 	return nil

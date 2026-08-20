@@ -628,6 +628,9 @@ func (server *Server) variables(request Request) (Response, bool, error) {
 	} else if reference.HasValue {
 		for index, child := range reference.Value.Children {
 			name := fmt.Sprintf("[%d]", index)
+			if child.Name != "" {
+				name = child.Name
+			}
 			variables = append(variables, server.variableLocked(name, child.Type, child))
 		}
 	}
@@ -709,9 +712,13 @@ func (server *Server) variableLocked(name, valueType string, value teslrt.DebugV
 	if valueType == "" {
 		valueType = value.Type
 	}
+	evaluateName := value.EvaluateName
+	if evaluateName == "" {
+		evaluateName = name
+	}
 	return variable{
 		Name: name, Value: value.Display, Type: valueType,
-		EvaluateName: name, VariablesReference: variablesReference,
+		EvaluateName: evaluateName, VariablesReference: variablesReference,
 	}
 }
 

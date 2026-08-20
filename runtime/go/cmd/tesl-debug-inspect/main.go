@@ -19,14 +19,27 @@ type inspectSource struct {
 	Line int    `json:"line"`
 }
 
+type inspectBreakpoint struct {
+	Line      int    `json:"line"`
+	Condition string `json:"condition,omitempty"`
+	Hit       string `json:"hit,omitempty"`
+}
+
+type inspectLocal struct {
+	Name  string `json:"name"`
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
 type inspectOutput struct {
-	Version int                     `json:"version"`
-	Stopped bool                    `json:"stopped"`
-	Reason  string                  `json:"reason,omitempty"`
-	Source  *inspectSource          `json:"source,omitempty"`
-	Locals  []teslrt.DebugLocal     `json:"locals"`
-	Domain  teslrt.DebugDomainState `json:"domain"`
-	SQL     *teslrt.DebugSQLCapture `json:"sql,omitempty"`
+	Version    int                     `json:"version"`
+	Stopped    bool                    `json:"stopped"`
+	Reason     string                  `json:"reason,omitempty"`
+	Source     *inspectSource          `json:"source,omitempty"`
+	Breakpoint *inspectBreakpoint      `json:"breakpoint,omitempty"`
+	Locals     []inspectLocal          `json:"locals"`
+	Domain     teslrt.DebugDomainState `json:"domain"`
+	SQL        *teslrt.DebugSQLCapture `json:"sql,omitempty"`
 }
 
 type stringFlags []string
@@ -108,6 +121,7 @@ func main() {
 		}
 		writeJSON(map[string]any{"version": 2, "detached": true})
 	case "snapshot":
+		var breakpoint *inspectBreakpoint
 		if len(breakAt) > 0 {
 			stopped := make(chan struct{}, 1)
 			detach := client.Attach(func(event teslrt.DebugEvent) {
@@ -126,27 +140,46 @@ func main() {
 				if err != nil {
 					fail("snapshot after breakpoint timeout: %v", err)
 				}
-				writeJSON(snapshotOutput(snapshot, "breakpoint-not-hit"))
+				writeJSON(snapshotOutput(snapshot, "breakpoint-not-hit", breakpointFromFlags(breakAt, *when, *hit)))
 				return
 			}
+			breakpoint = breakpointFromFlags(breakAt, *when, *hit)
 		}
 		snapshot, err := client.SnapshotState()
 		if err != nil {
 			fail("snapshot: %v", err)
 		}
-		writeJSON(snapshotOutput(snapshot, ""))
+		writeJSON(snapshotOutput(snapshot, "", breakpoint))
 	}
 }
 
-func snapshotOutput(snapshot teslrt.DebugSnapshot, reason string) inspectOutput {
+func snapshotOutput(snapshot teslrt.DebugSnapshot, reason string, breakpoints ...*inspectBreakpoint) inspectOutput {
+	locals := make([]inspectLocal, 0, len(snapshot.Frame.Locals))
+	for _, local := range snapshot.Frame.Locals {
+		locals = append(locals, inspectLocal{Name: local.Name, Type: local.Type, Value: local.Value.Display})
+	}
 	output := inspectOutput{
-		Version: 2, Stopped: snapshot.Paused, Reason: reason, Locals: snapshot.Frame.Locals,
+		Version: 2, Stopped: snapshot.Paused, Reason: reason, Locals: locals,
 		Domain: snapshot.Runtime.Domain, SQL: snapshot.Runtime.SQL,
+	}
+	if len(breakpoints) > 0 {
+		output.Breakpoint = breakpoints[0]
 	}
 	if snapshot.Frame.Location.File != "" || snapshot.Frame.Location.Line != 0 {
 		output.Source = &inspectSource{File: snapshot.Frame.Location.File, Line: snapshot.Frame.Location.Line}
 	}
 	return output
+}
+
+func breakpointFromFlags(values []string, condition, hit string) *inspectBreakpoint {
+	if len(values) == 0 {
+		return nil
+	}
+	_, line, err := parseBreakpoint(values[0])
+	if err != nil {
+		return nil
+	}
+	return &inspectBreakpoint{Line: line, Condition: condition, Hit: hit}
 }
 
 func parseBreakpoint(value string) (string, int, error) {

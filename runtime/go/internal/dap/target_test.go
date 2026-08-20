@@ -105,7 +105,29 @@ func TestProcessTargetLaunchesGeneratedGoTest(t *testing.T) {
 	if !ok {
 		t.Fatalf("backend = %T, want *ControlClient", backend)
 	}
-	if _, err := client.SetBreakpointSpecs(nil); err != nil {
+	stopped := make(chan struct{}, 1)
+	detach := client.Attach(func(event teslrt.DebugEvent) {
+		if event.Kind == "stopped" {
+			select {
+			case stopped <- struct{}{}:
+			default:
+			}
+		}
+	})
+	defer detach()
+	if _, err := client.SetBreakpointSpecs([]teslrt.DebugBreakpointSpec{{ID: "factorial", File: source, Line: 74}}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-stopped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("generated test did not hit launch breakpoint")
+	}
+	snapshot, err := client.SnapshotState()
+	if err != nil || !snapshot.Paused {
+		t.Fatalf("launch snapshot = %#v, %v", snapshot, err)
+	}
+	if err := client.Continue(); err != nil {
 		t.Fatal(err)
 	}
 	if err := target.Close(); err != nil {

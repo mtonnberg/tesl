@@ -1,8 +1,10 @@
 package teslrt
 
 import (
+	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestDebuggerIsNoOpUntilAttached(t *testing.T) {
@@ -30,6 +32,58 @@ func TestDebuggerIsNoOpUntilAttached(t *testing.T) {
 	detach()
 	<-done
 	debugger.Checkpoint(DebugFrame{Version: DebugABIVersion, ID: "fn"})
+}
+
+func TestDebugValueBoundsAndPanicRecovery(t *testing.T) {
+	value := DebugValue{Type: "Record", Display: "😀long", Children: []DebugValue{
+		{Name: "a", Type: "Int", Display: "1"},
+		{Name: "b", Type: "Int", Display: "2"},
+	}}
+	bounded := value.Bounded(1, 1, 4)
+	if len(bounded.Children) != 1 || !bounded.Truncated || !utf8.ValidString(bounded.Display) {
+		t.Fatalf("bounded value = %#v", bounded)
+	}
+	debugger := NewDebugger()
+	debugger.Attach(func(event DebugEvent) { debugger.Continue() })
+	debugger.Pause()
+	debugger.Checkpoint(DebugFrame{Location: SourceLocation{File: "x", Line: 1}, Locals: []DebugLocal{{
+		Name: "bad", Accessor: func() DebugValue { panic("hostile accessor") },
+	}}})
+	frame, _ := debugger.Snapshot()
+	if len(frame.Locals) != 1 || frame.Locals[0].Value.Display != "[unavailable]" {
+		t.Fatalf("panic recovery frame = %#v", frame)
+	}
+}
+
+func TestDebuggerConcurrentCheckpointsDoNotDeadlock(t *testing.T) {
+	debugger := NewDebugger()
+	debugger.SetBreakpoints([]DebugBreakpoint{{File: "stress.tesl", Line: 7}})
+	stops := make(chan struct{}, 32)
+	detach := debugger.Attach(func(event DebugEvent) {
+		stops <- struct{}{}
+		debugger.Continue()
+	})
+	defer detach()
+	var wait sync.WaitGroup
+	for worker := 0; worker < 8; worker++ {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			for iteration := 0; iteration < 4; iteration++ {
+				debugger.Checkpoint(DebugFrame{Location: SourceLocation{File: "stress.tesl", Line: 7}})
+			}
+		}()
+	}
+	done := make(chan struct{})
+	go func() { wait.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("concurrent checkpoints deadlocked")
+	}
+	if len(stops) == 0 {
+		t.Fatal("concurrent checkpoints never stopped")
+	}
 }
 
 func TestDebuggerStopsAtBreakpointAndResumes(t *testing.T) {

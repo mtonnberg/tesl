@@ -204,6 +204,9 @@ func (server *DebugControlServer) acceptLoop() {
 
 func (server *DebugControlServer) handleConnection(connection net.Conn) {
 	defer func() {
+		// A lost control client must never leave application goroutines paused. Detach
+		// also clears the listener so a fresh client can establish a new session.
+		server.debugger.Detach()
 		server.mutex.Lock()
 		delete(server.clients, connection)
 		server.mutex.Unlock()

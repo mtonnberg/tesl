@@ -2,7 +2,9 @@ package teslrt
 
 import (
 	"fmt"
+	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 // DebugABIVersion identifies the language-neutral checkpoint metadata contract.
@@ -15,9 +17,67 @@ type SourceLocation struct {
 }
 
 type DebugValue struct {
-	Type     string       `json:"type"`
-	Display  string       `json:"display"`
-	Children []DebugValue `json:"children,omitempty"`
+	Name         string       `json:"name,omitempty"`
+	EvaluateName string       `json:"evaluateName,omitempty"`
+	Type         string       `json:"type"`
+	Display      string       `json:"display"`
+	Children     []DebugValue `json:"children,omitempty"`
+	Truncated    bool         `json:"truncated,omitempty"`
+}
+
+// Bounded returns a copy safe for a wire value tree. It limits depth, child count,
+// and UTF-8 display bytes while preserving the fact that truncation occurred.
+func (value DebugValue) Bounded(maxDepth, maxChildren, maxDisplayBytes int) DebugValue {
+	if maxDepth < 0 {
+		maxDepth = 0
+	}
+	if maxChildren < 0 {
+		maxChildren = 0
+	}
+	if maxDisplayBytes > 0 && len(value.Display) > maxDisplayBytes {
+		value.Display = truncateDebugDisplay(value.Display, maxDisplayBytes)
+		value.Truncated = true
+	}
+	if maxDepth == 0 {
+		if len(value.Children) > 0 {
+			value.Children = nil
+			value.Truncated = true
+		}
+		return value
+	}
+	if len(value.Children) > maxChildren {
+		value.Children = value.Children[:maxChildren]
+		value.Truncated = true
+	}
+	for index := range value.Children {
+		value.Children[index] = value.Children[index].Bounded(maxDepth-1, maxChildren, maxDisplayBytes)
+	}
+	return value
+}
+
+func truncateDebugDisplay(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	if utf8.ValidString(value) {
+		for len(value) > limit {
+			value = value[:len(value)-1]
+			for !utf8.ValidString(value) {
+				value = value[:len(value)-1]
+			}
+		}
+		return value
+	}
+	return strings.ToValidUTF8(value[:limit], "")
+}
+
+func safeDebugValue(accessor func() DebugValue) (value DebugValue) {
+	defer func() {
+		if recover() != nil {
+			value = DebugValue{Type: "unavailable", Display: "[unavailable]", Truncated: true}
+		}
+	}()
+	return accessor().Bounded(8, 100, 4096)
 }
 
 type DebugLocal struct {
@@ -182,7 +242,7 @@ func (debugger *Debugger) Checkpoint(frame DebugFrame) {
 	debugger.mutex.Unlock()
 	for index := range frame.Locals {
 		if frame.Locals[index].Accessor != nil {
-			frame.Locals[index].Value = frame.Locals[index].Accessor()
+			frame.Locals[index].Value = safeDebugValue(frame.Locals[index].Accessor)
 			frame.Locals[index].Accessor = nil
 		}
 	}

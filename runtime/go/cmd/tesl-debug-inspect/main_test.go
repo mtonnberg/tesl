@@ -35,3 +35,27 @@ func TestSnapshotOutputReportsMissedBreakpoint(t *testing.T) {
 		t.Fatalf("snapshot JSON = %s", encoded)
 	}
 }
+
+func TestSnapshotOutputUsesHeadlessV2BreakpointAndScalarLocals(t *testing.T) {
+	snapshot := teslrt.DebugSnapshot{
+		Paused: true,
+		Frame: teslrt.DebugFrame{
+			Location: teslrt.SourceLocation{File: "fixture.tesl", Line: 12},
+			Locals:   []teslrt.DebugLocal{{Name: "n", Type: "Int", Value: teslrt.DebugValue{Type: "Int", Display: "3"}}},
+		},
+	}
+	encoded, err := json.Marshal(snapshotOutput(snapshot, "", &inspectBreakpoint{Line: 12, Condition: "n == 3"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Breakpoint *inspectBreakpoint `json:"breakpoint"`
+		Locals     []inspectLocal     `json:"locals"`
+	}
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Breakpoint == nil || decoded.Breakpoint.Line != 12 || len(decoded.Locals) != 1 || decoded.Locals[0].Value != "3" {
+		t.Fatalf("snapshot JSON = %s", encoded)
+	}
+}

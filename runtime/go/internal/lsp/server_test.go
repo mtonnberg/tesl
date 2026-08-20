@@ -746,6 +746,21 @@ func TestServerCancelsStaleDiagnosticQueries(t *testing.T) {
 	}
 }
 
+func TestServerAppliesUTF16RangedAndMultipleChanges(t *testing.T) {
+	server := NewServer(&fakeCompiler{payload: []byte(`{"version":1,"diagnostics":[]}`)})
+	server.documents["file:///tmp/demo.tesl"] = document{
+		URI: "file:///tmp/demo.tesl", Path: "/tmp/demo.tesl", Version: 1, Text: "a😀c\ndef",
+	}
+	var output bytes.Buffer
+	if err := server.didChange(context.Background(), json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl","version":2},"contentChanges":[{"range":{"start":{"line":0,"character":1},"end":{"line":0,"character":3}},"text":"X"},{"range":{"start":{"line":1,"character":0},"end":{"line":1,"character":3}},"text":"DEF"}]}`), protocol.NewWriter(&output)); err != nil {
+		t.Fatal(err)
+	}
+	server.waitDiagnostics()
+	if got := server.documents["file:///tmp/demo.tesl"].Text; got != "aXc\nDEF" {
+		t.Fatalf("document text = %q", got)
+	}
+}
+
 func frames(t *testing.T, requests ...protocol.Request) []byte {
 	t.Helper()
 	var output bytes.Buffer
