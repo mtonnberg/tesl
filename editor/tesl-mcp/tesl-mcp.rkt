@@ -172,7 +172,8 @@
                           (values (jsexpr->string (hasheq 'error (exn-message e))) #t))])
     (define j (read-json (open-input-string text)))
     (define obls (hash-ref j 'proof_obligations '()))
-    (values (jsexpr->string (hash 'proof_obligations obls)) #f)))
+     ;; MCP exposes this tool as the sliced array, not the full agent-context envelope.
+     (values (jsexpr->string obls) #f)))
 
 ;; ── Tool registry ──────────────────────────────────────────────────────────────
 ;; Each tool: (hasheq 'name … 'description … 'inputSchema … 'run proc).

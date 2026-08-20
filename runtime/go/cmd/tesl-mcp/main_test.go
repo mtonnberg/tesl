@@ -439,6 +439,32 @@ func TestMCPRacketCatalogAndCompilerDifferential(t *testing.T) {
 	racketContext := racketRequest(2, "tools/call", map[string]any{
 		"name": "tesl.agent_context", "arguments": map[string]any{"file": lesson},
 	})
+	compilerTools := []struct {
+		name string
+		args map[string]any
+	}{
+		{name: "tesl.check", args: map[string]any{"file": lesson}},
+		{name: "tesl.type_at", args: map[string]any{"file": lesson, "line": float64(35), "col": float64(2)}},
+		{name: "tesl.signature", args: map[string]any{"file": lesson, "line": float64(35), "col": float64(2)}},
+		{name: "tesl.completions", args: map[string]any{"file": lesson, "line": float64(35), "col": float64(2)}},
+		{name: "tesl.definition", args: map[string]any{"file": lesson, "line": float64(35), "col": float64(2)}},
+		{name: "tesl.references", args: map[string]any{"file": lesson, "line": float64(35), "col": float64(2)}},
+		{name: "tesl.proof_obligations", args: map[string]any{"file": lesson}},
+	}
+	goServer := &server{compiler: tooling.Client{Executable: compiler}}
+	for index, tool := range compilerTools {
+		racketResponse := racketRequest(index+3, "tools/call", map[string]any{
+			"name": tool.name, "arguments": tool.args,
+		})
+		racketText := toolResultText(t, racketResponse)
+		goText, err := goServer.callTool(context.Background(), tool.name, tool.args)
+		if err != nil {
+			t.Fatalf("Go %s: %v", tool.name, err)
+		}
+		if string(goText) != racketText {
+			t.Fatalf("%s differential:\nGo:     %s\nRacket: %s", tool.name, goText, racketText)
+		}
+	}
 	if err := racketInput.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -458,7 +484,7 @@ func TestMCPRacketCatalogAndCompilerDifferential(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	goContext, err := (&server{compiler: tooling.Client{Executable: compiler}}).callTool(
+	goContext, err := goServer.callTool(
 		context.Background(), "tesl.agent_context", map[string]any{"file": lesson})
 	if err != nil {
 		t.Fatal(err)

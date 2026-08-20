@@ -196,6 +196,7 @@ Gate: names/schemas/JSON remain compatible and live compiler/debug calls pass.
 - 2026-08-20: Go `tesl-mcp` exposes the compiler query surface and debugger tools over bounded MCP stdio framing; unit, framing, race, vet, and real compiler agent-context smoke checks pass. Differential tool/error and live attach parity remain open.
 - 2026-08-20: MCP now keeps capability discovery alive when the compiler is absent, supports `shutdown`, validates source-query positions, returns contained `tools/call` errors, and has real-stdio matrix coverage for all compiler tools plus debug-attach argument forwarding.
 - 2026-08-20: MCP phase closure adds a real built-compiler/headless-debugger stdio test, Racket-versus-Go catalog/schema and `agent_context` differential coverage, and a CLI smoke that arms Go `debug-attach` through MCP against a running Go server and verifies the stopped event.
+- 2026-08-20: The MCP differential found and fixed a Racket compatibility defect: `tesl.proof_obligations` now returns the documented sliced array, matching Go rather than wrapping it in an agent-context object.
 ### Phase 7: CLI, VS Code, packaging, environments
 1. Replace Racket discovery and `.rkt` launch paths in the extension, debug launcher, package manifest, launch configs, and editor bundle with shipped Go tools.
 2. Switch `tesl` CLI run/test/debug/debug-attach/debug-inspect/LSP/MCP flows to Go while preserving flags, environment compatibility where required, output, and exit codes.
@@ -214,6 +215,7 @@ Gate: shipped workflows find only Go binaries and packages contain no `.rkt` or 
 - 2026-08-20: Nix and legacy dev-shell wrappers now set Go as the default backend for `tesl run`, `tesl test`, and `tesl debug-inspect`; explicit `--backend racket` and `TESL_BACKEND=racket` preserve the legacy path. Installed default test and headless inspection pass focused checks.
 - 2026-08-20: `tesl build --backend go` now emits into `.tesl-stuff/go-build` (or a new `--out` directory) and runs `go build ./...`; focused Todo API project build passes. Docker and default Racket build paths remain unchanged.
 - 2026-08-20: Go `tesl watch` now snapshots imported source mtimes, rebuilds a disposable Go app, restarts it on changes, and cleans child processes on exit. Focused telemetry-app restart smoke passes; explicit Racket watch remains available.
+- 2026-08-20: `tests/go-cli-smoke.sh` now builds the Go MCP/attach tools, launches a Go debug server, arms `tesl.debug_attach` through real MCP stdio, triggers an HTTP endpoint, and requires the stopped event.
 - 2026-08-20: Shipped/dev `tesl compile` now defaults to Go module emission; `--backend racket` remains explicit fallback. Default and explicit-output Go compile smokes pass. Docker packaging still requires a Go container template.
 - 2026-08-20: `tesl build --backend go --container --no-docker` now stages a Go module plus multi-stage Go/Debian Dockerfile; embedded-Postgres mode is rejected explicitly. Focused Todo API context staging passes; Docker daemon build remains environment-gated.
 - 2026-08-20: Shipped/dev `tesl build` now follows the Go default backend and selects local or container Go output from manifest/flags; `--backend racket` local fallback passes. Go Docker context staging remains daemon-independent.
@@ -228,15 +230,14 @@ Gate: shipped workflows find only Go binaries and packages contain no `.rkt` or 
 - 2026-08-20: Go is the shipped/dev default for compile/run/test/debug-inspect/watch/build and Go LSP/DAP/MCP tools; explicit Racket fallback remains. Unsupported Go emission shapes still fail closed.
 - 2026-08-20: Aggregate CI no longer loads deleted generated `bookmark-api.rkt`/`document-api.rkt` fixtures. The obsolete Racket tests were removed; supported API/server behavior remains covered by Go corpus, runtime, and CLI gates. Full Racket backend removal is intentionally deferred until after Go merge and C3 soak.
 - 2026-08-20: Go now exposes `HttpRequest.clientAddress` and honors `trustedProxies` by selecting the rightmost untrusted forwarded hop, ignoring X-Forwarded-For without a declaration, and failing closed when every hop is trusted. Runtime, emitter, and generated-source tests cover the contract.
-- 2026-08-20: Full `ci.sh` was attempted after the Go gates; OCaml build and Go migration contracts passed, then the 967-second dune phase exhausted the host filesystem and aborted with `No space left on device`. Do not treat this run as a release pass; rerun after storage recovery. Legacy exact-match/Racket phases also still require migration updates.
-- 2026-08-20: Full `ci.sh` was attempted after the Go gates; OCaml build and Go migration contracts passed, then the 967-second dune phase exhausted the host filesystem and aborted with `No space left on device`. Do not treat this run as a release pass; rerun after storage recovery. Legacy exact-match/Racket phases also still require migration updates.
+- 2026-08-20: Earlier full `ci.sh` attempts exhausted the host filesystem during the long dune phase; those runs were not release passes. After storage recovery, a fresh run passed contracts, build, DAP stability, and the initial dune gates but exceeded the 30-minute verification budget during the remaining dune suite. Targeted Go runtime, MCP, CLI, manifest, example, template, and documentation gates pass; full CI still needs an uninterrupted completion.
 ### Phase 8: Complete test/example/template migration
 1. Make each of the 71 paired `.tesl` tests the sole source and assert Go compile diagnostics, runtime output, status, side effects, and services.
 2. Assign each of the 72 current Racket-only test responsibilities a named Go runtime/integration test, OCaml compiler test, black-box test, protocol fixture, benchmark, or reviewed obsolete disposition.
 3. Preserve PostgreSQL, HTTP/TLS/SSRF, telemetry/OTLP, SSO, secrets, crypto, SQL, queue, cache, server, timeout, concurrency, and external-service coverage without weakening isolation/assertions.
 4. Convert all Racket benchmarks with retained metrics/budgets.
 5. Compile and run all meaningful examples/lessons/templates through Go; resolve stale generated variants and prevent tracked `.tesl-stuff` outputs.
-6. Replace `tests/all.rkt`, `tests/frontend-all.rkt`, and `tests/internal-all.rkt` with manifests that fail when a mapped behavior is omitted.
+6. Use `scripts/run-go-test-manifest.sh` and the compiler/CLI manifests as the enforced migration source of truth; retain the Racket aggregate files only as explicit compatibility/oracle coverage until phase 7/C3 removes them.
 Gate: every inventory row is green, no responsibility is dropped, and disabling old Racket suites reduces no enforced behavior.
 
 ## Testing and verification requirements
