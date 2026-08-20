@@ -52,8 +52,24 @@ case "$mode" in
     done
     (( failures == 0 )) || exit 1
     ;;
+  --run-all)
+    body=${TESL_CLI_BODY:-$repo_root/nix/tesl-cli-body.sh}
+    [[ -f "$body" ]] || {
+      printf 'Go test manifest: CLI body not found: %s\n' "$body" >&2
+      exit 2
+    }
+    failures=0
+    for source in "${paired_sources[@]}"; do
+      if ! (cd "$repo_root" && TESL_REPO_ROOT="$repo_root" TESL_OCAML_COMPILER="$compiler" \
+        TESL_DEFAULT_BACKEND=go bash "$body" test --backend go "$source"); then
+        printf 'Go test manifest: run failed: %s\n' "$source" >&2
+        failures=$((failures + 1))
+      fi
+    done
+    (( failures == 0 )) || exit 1
+    ;;
   *)
-    printf 'usage: run-go-test-manifest.sh [--list|--compile-file FILE.tesl|--compile-all]\n' >&2
+    printf 'usage: run-go-test-manifest.sh [--list|--compile-file FILE.tesl|--compile-all|--run-all]\n' >&2
     exit 2
     ;;
 esac

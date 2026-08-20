@@ -315,7 +315,7 @@ func initializeResult() map[string]any {
 		},
 		"serverInfo": map[string]string{
 			"name":    "tesl-lsp-go",
-			"version": "0.1.0",
+			"version": "0.3.1",
 		},
 	}
 }

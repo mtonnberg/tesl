@@ -28,7 +28,7 @@ run_cli() {
 bash "$REPO_ROOT/scripts/check-go-test-inventory.sh"
 bash "$REPO_ROOT/scripts/run-go-test-manifest.sh" --list >/dev/null
 TESL_REPO_ROOT="$REPO_ROOT" TESL_OCAML_COMPILER="$COMPILER" \
-  bash "$REPO_ROOT/scripts/run-go-test-manifest.sh" --compile-file tests/units-tests.tesl >/dev/null
+  bash "$REPO_ROOT/scripts/run-go-test-manifest.sh" --run-all >/dev/null
 
 test_output="$(run_cli test example/learn/lesson00-hello-world.tesl 2>&1)" || {
   printf '%s\n' "$test_output" >&2

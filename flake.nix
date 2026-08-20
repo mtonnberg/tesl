@@ -54,7 +54,7 @@
         # Dependencies: ocaml, dune_3, findlib (all stdlib — no opam packages).
         tesl-compiler = pkgs.stdenv.mkDerivation {
           pname   = "tesl-compiler";
-          version = "0.1.0";
+          version = "0.3.1";
 
           src = ./.;
 
@@ -105,7 +105,7 @@
         # PLTCOMPILEDROOTS user cache picks up the slack at runtime.
         tesl-racket = pkgs.stdenv.mkDerivation {
           pname   = "tesl-racket-collections";
-          version = "0.1.0";
+          version = "0.3.1";
 
           src = pkgs.lib.cleanSourceWith {
             src    = ./.;
@@ -152,7 +152,7 @@
         # fallback.
         tesl-templates = pkgs.stdenv.mkDerivation {
           pname   = "tesl-templates";
-          version = "0.1.0";
+          version = "0.3.1";
 
           src = pkgs.lib.cleanSourceWith {
             src    = ./templates;
@@ -172,7 +172,7 @@
         # ── Go editor/debug/MCP tools ─────────────────────────────────────────
         tesl-go-tools = pkgs.buildGoModule {
           pname = "tesl-go-tools";
-          version = "0.1.0";
+          version = "0.3.1";
           src = ./.;
           modRoot = "runtime/go";
           vendorHash = "sha256-SMXMkfkj5ehtjri4CCWPMwOyLIGcaoSgBv8k4DVG86c=";
@@ -237,7 +237,7 @@
         # directory lookup (equivalent to "@") finds the pre-compiled .zo files
         # in the Nix store automatically and is fast (≈2 s).
         runtimePreamble = ''
-          export TESL_VERSION="0.1.0"
+           export TESL_VERSION="0.3.1"
            export TESL_OCAML_COMPILER="${tesl-compiler}/bin/tesl-compiler"
            export TESL_DEFAULT_BACKEND="''${TESL_DEFAULT_BACKEND:-go}"
           export PLTCOLLECTS="${pkgs.racket}/share/racket/collects:${tesl-racket}/share/tesl-collections''${PLTCOLLECTS:+:$PLTCOLLECTS}"
@@ -258,6 +258,20 @@
           export TESL_LIBSODIUM="''${TESL_LIBSODIUM:-${libsodiumPath}}"
         '';
 
+        # Go-only shipped profile.  Legacy Racket compilation remains available through
+        # the explicit development/compatibility wrapper, but the default install must not
+        # retain a Racket closure merely to run Go CLI, editor, debugger, or MCP workflows.
+        goRuntimePreamble = ''
+           export TESL_VERSION="0.3.1"
+          export TESL_OCAML_COMPILER="${tesl-compiler}/bin/tesl-compiler"
+          export TESL_DEFAULT_BACKEND="''${TESL_DEFAULT_BACKEND:-go}"
+          export TESL_TEMPLATES_DIR="${tesl-templates}/share/tesl-templates"
+          export TESL_DEBUG_ATTACH_BIN="${tesl-go-tools}/bin/tesl-debug-attach"
+          export TESL_DEBUG_INSPECT_BIN="${tesl-go-tools}/bin/tesl-debug-inspect"
+          export TESL_GO="${pkgs.go}/bin/go"
+          export PATH="${gnuUserland}:$PATH"
+        '';
+
         # ── CLI body (shared between installed and dev wrappers) ──────────────
         # Everything after the preamble — the case statement and helpers.
         cliBody = builtins.readFile ./nix/tesl-cli-body.sh;
@@ -266,6 +280,7 @@
         # For `nix run`, `nix profile install`, home-manager, etc.
         # All paths are baked into the Nix store; no live repo checkout needed.
         tesl-cli = pkgs.writeShellScriptBin "tesl" (runtimePreamble + cliBody);
+        tesl-go-cli = pkgs.writeShellScriptBin "tesl" (goRuntimePreamble + cliBody);
         
         # ── Dev tesl CLI ──────────────────────────────────────────────────────
         # Used inside devShells.default so developers run against their local
@@ -313,13 +328,13 @@
         # ── Combined default: CLI + LSP + MCP in one profile install ───────────
         tesl-full = pkgs.symlinkJoin {
           name = "tesl";
-          paths = [ tesl-cli tesl-compiler tesl-lsp tesl-mcp tesl-debug-tools ];
+          paths = [ tesl-go-cli tesl-compiler tesl-lsp tesl-mcp tesl-debug-tools ];
         };
 
       in {
         # ── Packages ──────────────────────────────────────────────────────────
           packages = {
-           inherit tesl-compiler tesl-racket tesl-cli tesl-lsp tesl-mcp tesl-go-tools tesl-debug-tools tesl-full staticcheck;
+           inherit tesl-compiler tesl-racket tesl-cli tesl-go-cli tesl-lsp tesl-mcp tesl-go-tools tesl-debug-tools tesl-full staticcheck;
           default = tesl-full;
           # Reusable PostgreSQL so the managed-PG lifecycle (`tesl db`) can source
           # initdb / pg_ctl / createdb via nix without entering a dev shell.
@@ -328,7 +343,7 @@
 
         # ── Apps (for `nix run github:mtonnberg/tesl`) ────────────────────────
         apps = {
-          default  = { type = "app"; program = "${tesl-cli}/bin/tesl"; };
+          default  = { type = "app"; program = "${tesl-go-cli}/bin/tesl"; };
           tesl-lsp = { type = "app"; program = "${tesl-lsp}/bin/tesl-lsp"; };
           tesl-mcp = { type = "app"; program = "${tesl-mcp}/bin/tesl-mcp"; };
         };

@@ -79,16 +79,18 @@ func (server *server) handle(ctx context.Context, method string, raw json.RawMes
 		return map[string]any{
 			"protocolVersion": mcpProtocolVersion,
 			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo":      map[string]string{"name": "tesl-mcp", "version": "0.1.0"},
+			"serverInfo":      map[string]string{"name": "tesl-mcp", "version": "0.3.1"},
 		}, nil
 	case "ping":
 		return map[string]any{}, nil
+	case "shutdown":
+		return nil, nil
 	case "tools/list":
 		return map[string]any{"tools": toolDefinitions()}, nil
 	case "tools/call":
 		var params callParams
 		if err := json.Unmarshal(raw, &params); err != nil || params.Name == "" {
-			return nil, errors.New("tools/call: invalid params")
+			return toolError("tools/call: invalid params"), nil
 		}
 		value, err := server.callTool(ctx, params.Name, params.Arguments)
 		if err != nil {
@@ -103,6 +105,14 @@ func (server *server) handle(ctx context.Context, method string, raw json.RawMes
 func (server *server) callTool(ctx context.Context, name string, arguments map[string]any) ([]byte, error) {
 	file, _ := arguments["file"].(string)
 	line, col := numberArgument(arguments, "line"), numberArgument(arguments, "col")
+	if isSourceQueryTool(name) {
+		if file == "" {
+			return nil, errors.New("file is required")
+		}
+		if !numberArgumentPresent(arguments, "line") || !numberArgumentPresent(arguments, "col") || line < 0 || col < 0 {
+			return nil, errors.New("line and col must be non-negative integers")
+		}
+	}
 	var args []string
 	switch name {
 	case "tesl.agent_context", "tesl.proof_obligations":
@@ -271,6 +281,22 @@ func toolDefinitions() []map[string]any {
 	}
 }
 
+func isSourceQueryTool(name string) bool {
+	switch name {
+	case "tesl.type_at", "tesl.signature", "tesl.completions", "tesl.definition", "tesl.references":
+		return true
+	default:
+		return false
+	}
+}
+
+func toolError(message string) map[string]any {
+	return map[string]any{
+		"isError": true,
+		"content": []map[string]string{{"type": "text", "text": message}},
+	}
+}
+
 func discoverCompiler() (string, error) {
 	if value := os.Getenv("TESL_COMPILER"); value != "" {
 		return value, nil
@@ -287,12 +313,19 @@ func discoverCompiler() (string, error) {
 	if value, err := exec.LookPath("tesl"); err == nil {
 		return value, nil
 	}
-	return "", errors.New("compiler not found; set TESL_COMPILER or TESL_REPO_ROOT")
+	// Keep MCP alive without a compiler. Tool calls return contained MCP errors;
+	// initialize/tools/list remain usable for clients inspecting capabilities.
+	return "", nil
 }
 
 func numberArgument(arguments map[string]any, name string) int {
 	value, _ := arguments[name].(float64)
 	return int(value)
+}
+
+func numberArgumentPresent(arguments map[string]any, name string) bool {
+	value, ok := arguments[name].(float64)
+	return ok && value == float64(int(value))
 }
 
 func stringArgument(arguments map[string]any, name, fallback string) string {

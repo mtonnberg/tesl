@@ -16,6 +16,7 @@ jq -e '
   (.paired.source_suffix | type) == "string" and
   (.paired.owner | type) == "string" and .paired.owner != "" and
   (.paired.evidence | type) == "string" and .paired.evidence != "" and
+  .paired.status == "green" and
   (.racket_only.expected_count | type) == "number" and
   (.racket_only.owner | type) == "string" and .racket_only.owner != "" and
   (.racket_only.evidence | type) == "string" and .racket_only.evidence != "" and

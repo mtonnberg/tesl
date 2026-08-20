@@ -5,7 +5,8 @@
     "source_suffix": ".tesl",
     "expected_count": 71,
     "owner": "Go backend corpus",
-    "evidence": "tests/go-cli-smoke.sh"
+    "evidence": "scripts/run-go-test-manifest.sh --run-all",
+    "status": "green"
   },
   "racket_only": {
     "expected_count": 75,

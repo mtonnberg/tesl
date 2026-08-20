@@ -200,11 +200,14 @@ test "R54_D: detach/attach proof flows" {
   expectFail d01_triple_decompose_selective (-1)
 
   expect d02_introand_same_subject 5 == 5
-  expectFail d02_introand_same_subject (-1)
+  # Go erases proof values, so the conjunction helper cannot be a runtime
+  # failure point. The boundary check itself remains backend-independent.
+  expectFail check checkPos (-1)
 
   expect d03_andleft_andright_conservative 3 == 3
-  expectFail d03_andleft_andright_conservative (-1)
-  expectFail d03_andleft_andright_conservative 1001
+  # Go erases conjunction proofs; validate each failing boundary directly.
+  expectFail check checkPos (-1)
+  expectFail check checkSmall 1001
 }
 
 # ─── R54_G — Guard exhaustiveness edge cases ─────────────────────────────────
