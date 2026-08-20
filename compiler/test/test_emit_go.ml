@@ -193,6 +193,19 @@ let test_release_emission_excludes_debug_runtime () =
     (List.exists (fun (a : Emit_go.artifact) ->
        List.mem a.path ["internal/teslrt/debug.go"; "internal/teslrt/debug_control.go"; "internal/teslrt/debug_state.go"]) emitted)
 
+let test_app_module_does_not_shadow_tesl_app () =
+  let source = {|module App exposing [answer]
+import Tesl.Prelude exposing [Int]
+import Tesl.App exposing [App]
+
+fn answer() -> Int = 42
+|} in
+  match Compile.compile_go_source "<app-module>" source with
+  | Compile.GoSuccess _ -> ()
+  | Compile.GoFailure diagnostics ->
+    failf "module named App must not shadow Tesl.App: %s"
+      (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+
 let test_release_artifacts_have_no_debug_symbols () =
   let emitted = artifacts () in
   let forbidden = [
@@ -12626,6 +12639,7 @@ let () =
   run "emit_go" [
     "emission", [
       test_case "artifact layout and helpers" `Quick test_artifact_layout;
+      test_case "App module does not shadow Tesl.App" `Quick test_app_module_does_not_shadow_tesl_app;
       test_case "debug emission has versioned checkpoint" `Quick test_debug_emission_has_versioned_checkpoint;
       test_case "release emission excludes debug runtime" `Quick test_release_emission_excludes_debug_runtime;
       test_case "release artifacts have no debug symbols" `Quick test_release_artifacts_have_no_debug_symbols;

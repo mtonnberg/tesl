@@ -15671,7 +15671,8 @@ let compile_project ?(mode=Release) ~(entry : module_form) (modules : module_for
   let local_named import_name =
     List.find_opt (fun name ->
       name = import_name
-      || (String.length import_name > 5 && String.sub import_name 0 5 = "Tesl."
+      || (import_name = "Tesl.CivilTime"
+          && String.length import_name > 5 && String.sub import_name 0 5 = "Tesl."
           && name = String.sub import_name 5 (String.length import_name - 5)
           && not (String.contains name '.')))
       local_names

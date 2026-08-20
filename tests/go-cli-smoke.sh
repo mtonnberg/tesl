@@ -59,6 +59,23 @@ context="$TMP/context"
   exit 1
 }
 
+for template_spec in "minimal-go:minimal:none" "api-go:api:existing"; do
+  IFS=: read -r project template postgres <<< "$template_spec"
+  (cd "$TMP" && run_cli init "$project" --template "$template" --postgres "$postgres" --yes) || {
+    echo "go-cli-smoke: $template template initialization failed" >&2
+    exit 1
+  }
+  (cd "$TMP/$project" && run_cli compile app.tesl && run_cli test app.tesl &&
+    run_cli build --no-docker --out "$TMP/$project-context") || {
+    echo "go-cli-smoke: $template template Go workflow failed" >&2
+    exit 1
+  }
+  [ -f "$TMP/$project-context/Dockerfile" ] || {
+    echo "go-cli-smoke: $template template emitted no Docker context" >&2
+    exit 1
+  }
+done
+
 inspect_bin="$TMP/tesl-debug-inspect"
 (cd "$REPO_ROOT/runtime/go" && go build -o "$inspect_bin" ./cmd/tesl-debug-inspect) || {
   echo "go-cli-smoke: Go inspect build failed" >&2
