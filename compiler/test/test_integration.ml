@@ -8,7 +8,7 @@
 *)
 
 open Parser
-open Emit_racket
+open Emit_go
 
 let repo_root_default () =
   let rec find dir =

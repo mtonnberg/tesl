@@ -227,7 +227,7 @@ server TimedServer for TimedApi {
 # BIGINT (via PosixMillis's auto-mapping) beats TIMESTAMPTZ because:
 #   - No timezone surprises — the integer is always milliseconds since the
 #     Unix epoch (UTC). TIMESTAMPTZ normalises to UTC too, but the round-trip
-#     through Racket's date type adds friction.
+#     through the host date type adds friction.
 #   - Simple arithmetic — diffMs, addMs, createdRecently all work with plain
 #     integer subtraction. No date arithmetic library needed.
 #   - Sorting and comparison work naturally on integers.
@@ -292,7 +292,7 @@ server TimedServer for TimedApi {
 # ─────────────────────────────────────────────
 # THEORY — the full model
 # ─────────────────────────────────────────────
-# POSIX milliseconds are stored as Racket's exact integers (bignum-capable).
+# POSIX milliseconds use the runtime's exact integer representation.
 # The underlying platform's current-inexact-milliseconds returns a floating-point
 # number; Tesl's nowMillis truncates it to an exact integer.
 #
@@ -300,7 +300,7 @@ server TimedServer for TimedApi {
 # approximately 292 million years from the Unix epoch. Milliseconds since
 # epoch will fit comfortably.
 #
-# formatTime uses Racket's built-in `seconds->date` with a TZ environment
+# formatTime uses the Go time package with a TZ environment
 # variable trick for non-UTC timezones. This is best-effort: it relies on
 # the host OS having the timezone data. For production deployments with
 # precise timezone handling, a proper timezone library is recommended.

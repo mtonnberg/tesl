@@ -125,8 +125,8 @@ load-test "list books with seeded data" for Lesson41Server
 }
 
 # ── UNDERSTANDING ────────────────────────────────────────────────────────────
-# Load tests compile to Racket code that runs inside `module+ test`, just
-# like api-test blocks. They execute during `tesl test` or `raco test`.
+# Load tests compile to Go test functions, just like api-test blocks. They
+# execute during `tesl test`.
 #
 # Key concepts:
 #

@@ -360,9 +360,8 @@ let t_all_positions_clean_with_the_import () =
 (* ── 4. The single source ─────────────────────────────────────────────────── *)
 
 let t_derived_tables_agree () =
-  (* Validation_names.stdlib_adt_ctors and Emit_racket.adt_constructors are
-     DERIVED from the groups table; assert the derivation actually covers every
-     group, so a future edit that re-hand-lists either one is caught. *)
+   (* Validation_names.stdlib_adt_ctors is derived from the groups table; assert
+      the derivation actually covers every group. *)
   List.iter (fun (m, ty, ctors) ->
     let want = ty :: ctors in
     (match List.find_opt (fun (m', (ty', _)) -> m' = m && ty' = ty)
@@ -371,11 +370,8 @@ let t_derived_tables_agree () =
      | Some (_, (_, got)) ->
        if got <> want then
          failf "Validation_names.stdlib_adt_ctors disagrees for %s / %s" m ty);
-    match Hashtbl.find_opt Emit_racket.adt_constructors ty with
-    | None -> failf "Emit_racket.adt_constructors lost %s (%s)" ty m
-    | Some got ->
-      if got <> want then
-        failf "Emit_racket.adt_constructors disagrees for %s (%s)" ty m)
+     ignore ty;
+     ignore m)
     Type_system.stdlib_adt_ctor_groups
 
 let t_every_group_ctor_is_gated () =

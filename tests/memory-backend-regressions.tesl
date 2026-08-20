@@ -6,24 +6,24 @@ module MemoryBackendRegressions exposing []
 #   1. `select … order p.field asc/desc` was SILENTLY IGNORED on the Memory
 #      backend (rows came back in hash order) — postgres-select-many passed the
 #      order clause to SQL, the in-memory branch only applied offset/limit.
-#      Fixed by in-memory-order-rows (dsl/sql.rkt).
+#      Fixed by in-memory-order-rows in the SQL runtime.
 #   2. `selectMax` / `selectMin` over a newtype-typed column (PosixMillis, a
-#      user `type Code = Int`) fed raw newtype-value structs to Racket max/min
+#      user `type Code = Int`) fed raw newtype-value values to max/min
 #      ("contract violation expected: real?") — the GitHub #28 class
 #      (unwrap-non-null) resurfacing in the aggregate path.  Fixed by
-#      in-memory-extreme (dsl/sql.rkt), which compares unwrapped values and
+#      in-memory-extreme in the SQL runtime, which compares unwrapped values and
 #      returns the stored (still-wrapped) value.
 #   3. In-memory queue FIFO: the job store is a hash keyed by the job-id string,
 #      so processNextJob dequeued in arbitrary hash order while the PostgreSQL
 #      path is FIFO (`order by created_at asc`).  Fixed by a monotonic enqueue
-#      sequence number in job-entry + sorted pending-jobs (tesl/queue.rkt).
+#      sequence number in job-entry + sorted pending-jobs in the queue runtime.
 #   4. `selectSum l.price from L where …` over a Money column: the COMPILER
 #      hole is fixed (checker.ml classify_lowered_query hardcoded Int on the
 #      where-lowered aggregate path, so the correct `-> Money` annotation was
 #      rejected and the checker-demanded `-> Int` trapped at runtime); the
 #      "money sum with a where-clause" test below now exercises the — always
 #      correct — runtime path from Tesl source.  (Runtime-only coverage lives
-#      in tests/sql-money-tests.rkt.)
+#      in the SQL runtime tests.)
 
 import Tesl.Prelude exposing [Bool(..), Int, String, List, Unit]
 import Tesl.List exposing [List.map]

@@ -1,5 +1,5 @@
 # Behavioral + type coverage for the LIFTED Tesl.List combinators (their TYPES
-# now come from tesl/list.tesl, their runtime from tesl/list.rkt).  Exercises
+# now come from tesl/list.tesl, their runtime from the Go module). Exercises
 # every lifted function so a regression in either the lifted type or the runtime
 # is caught.  Deferred (still stdlib_env): sort, sortBy, filterCheck, allCheck,
 # emptyForAll — not exercised here.

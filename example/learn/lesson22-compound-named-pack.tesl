@@ -156,7 +156,7 @@ fn validateAndReturn(n: Int) -> Int ? IsPositive =
 # ─────────────────────────────────────────────
 # THEORY — the full model
 # ─────────────────────────────────────────────
-# The entity-append rule at the Racket level:
+# The entity-append rule at the runtime level:
 #   -> Int ? IsPositive
 #   emits: (? Int _entity::: (IsPositive _entity))
 #

@@ -298,8 +298,8 @@ test "T22: verified claims satisfy a consumer that demands Authentic" requires [
 # The verify side is untouched: it recomputes the HMAC over `header.payload`
 # verbatim and never parses the header, so a token minted before this change and
 # a foreign token with any header at all verify exactly as they did.  That
-# backward compatibility is asserted in tests/jwt-test.rkt, which can forge a
-# header-less token out of band; from Tesl there is no way to mint one.
+# backward compatibility is asserted by the runtime JWT tests, which can forge
+# a header-less token out of band; from Tesl there is no way to mint one.
 
 test "T23: the header carries a kid, so it is no longer the same for every key" requires [jwtCap] {
   let s1 = makeSecret "kid-key-alpha"

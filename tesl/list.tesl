@@ -12,16 +12,16 @@
 # foldr, length, any, all, find, sum, maximum, minimum, member, contains) have
 # REAL recursive bodies, written in Tesl, that delegate to the irreducible LEAF
 # primitives in `Tesl.ListPrim` (head/tail/append).  This file is compiled at
-# build time to `tesl/list-derived.rkt`; the shim `tesl/list.rkt` re-exports
-# those compiled bodies under the dotted `List.*` runtime names.  So these
-# bodies now ARE the runtime — they are no longer hand-written Racket.
+# build time into the Go module under the dotted `List.*` runtime names. So
+# these bodies now ARE the runtime — they are no longer hand-written runtime
+# code.
 #
 # RUNTIME is otherwise unchanged: user programs that `import Tesl.List` still
-# emit a require of `tesl/list.rkt` and call `tesl_import_List_*`.  Emission of
-# *user* code is decoupled from this file (the emitter keys on the
-# collection-path table, never on this source).
+# emit calls to the generated `List.*` functions. Emission of *user* code is
+# decoupled from this file (the emitter keys on the module export table, never
+# on this source).
 #
-# STILL hand-written leaves in `tesl/list.rkt` (NOT lifted — proof/FFI machinery
+# STILL hand-written leaves in the Go runtime (NOT lifted — proof/FFI machinery
 # pure Tesl cannot express):
 #   - head, tail, isEmpty, last, nth, filterMap, zip, zipWith, unzip, flatten,
 #     dedupe, unique, range, repeat, product, count, partition, intersperse,

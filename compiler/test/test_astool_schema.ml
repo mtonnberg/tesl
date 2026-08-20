@@ -11,7 +11,7 @@
        model is told to send arguments the decoder will not accept. That is a
        silent runtime failure at the LLM boundary, not a compile error.
 
-    2. **The whitelist rejection.** `emit_racket.ml` comments that a non-primitive
+     2. **The whitelist rejection.** The Go emitter rejects a non-primitive
        parameter "can only reach here if the checker let it through, which is now
        impossible" and keeps a `{"type":"string"}` fallback for that unreachable
        case. Nothing tested that claim — so if the checker ever loosened, a
@@ -25,7 +25,7 @@
     The guarantee here is by construction (only 6 primitives are admitted), which
     is stronger than a redaction rule, and this test is what keeps it that way.
 
-    Pure OCaml + the compiler library, no Racket:
+     Pure OCaml + the compiler library:
       dune exec test/test_astool_schema.exe *)
 
 let failures = ref 0
@@ -103,7 +103,7 @@ let () =
   (* Order is preserved, every parameter appears in BOTH properties and required,
      and the primitive fragments come from the shared registry. *)
   let schema =
-    Emit_racket.agent_tool_schema_json
+     Emit_go.agent_tool_schema_json
       [ param "city" "String"; param "days" "Int"; param "precise" "Bool" ]
   in
   check "object shape" (contains schema {|"type":"object"|});
@@ -115,7 +115,7 @@ let () =
 
   (* A tool with no parameters must still be a well-formed object — a model that
      receives `"properties":` with nothing after it cannot parse the schema. *)
-  let empty = Emit_racket.agent_tool_schema_json [] in
+   let empty = Emit_go.agent_tool_schema_json [] in
   check "zero-parameter tool is still valid JSON-shaped"
     (contains empty {|"properties":{}|} && contains empty {|"required":[]|});
 
@@ -130,12 +130,12 @@ let () =
       [ ("s", "String"); ("i", "Int"); ("f", "Float");
         ("b", "Bool"); ("t", "PosixMillis"); ("m", "Money") ]
   in
-  let full = Emit_racket.agent_tool_schema_json params in
+   let full = Emit_go.agent_tool_schema_json params in
   List.iter (fun (p : Ast.binding) ->
     check (Printf.sprintf "schema names parameter %s" p.name)
       (contains full (Printf.sprintf "%S:" p.name));
     checkf (Printf.sprintf "decode tag exists for parameter %s" p.name)
-      (Emit_racket.agent_arg_type_tag p.type_expr <> None)
+       (Emit_go.agent_arg_type_tag p.type_expr <> None)
       "present in the schema but dropped from the decode list")
     params;
 
@@ -145,13 +145,13 @@ let () =
   List.iter (fun p ->
     let nm = Validation_common.agent_prim_type_name p in
     check (Printf.sprintf "%s: schema fragment is non-empty" nm)
-      (String.length (Emit_racket.agent_arg_schema_prop (tname nm)) > 2);
+       (String.length (Emit_go.agent_arg_schema_prop (tname nm)) > 2);
     check (Printf.sprintf "%s: decode tag present" nm)
-      (Emit_racket.agent_arg_type_tag (tname nm) <> None))
+       (Emit_go.agent_arg_type_tag (tname nm) <> None))
     Validation_common.all_agent_prims;
 
   (* ── 3. The whitelist rejection ─────────────────────────────────────────
-     `emit_racket.ml` keeps a `{"type":"string"}` fallback for the
+      The Go emitter keeps a `{"type":"string"}` fallback for the
      "unreachable post-checker" case. These probes are what make it unreachable.
 
      The SECRET case is the security-relevant one: tool arguments are decoded

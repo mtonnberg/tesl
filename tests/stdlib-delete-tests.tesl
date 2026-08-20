@@ -3,7 +3,7 @@ module Stdlib_delete_tests exposing []
 # Regression for the stdlib surface-drift class (roadmap:
 # stdlib_surface_binding_drift). These names were importable and type-checked
 # but had NO runtime binding (or a wrong-arity one), so any use crashed at
-# Racket load / call. Now bound:
+# runtime load / call. Now bound:
 #   - Dict.delete / Set.delete : synonyms of .remove (were unbound)
 #   - randomInt lo hi          : 2-arg [lo,hi) (was 1-arg, arity crash)
 #   - randomFloat()            : [0,1) fresh float (was unbound)

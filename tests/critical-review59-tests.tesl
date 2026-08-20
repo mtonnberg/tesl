@@ -182,7 +182,7 @@ fn multiProofDetach(raw: Int) -> Int =
 test "R59_MP01 detachFact multi-proof shape compiles" {
   let r1 = 5
   # Proof erasure makes this a compile/emission property on Go. Runtime
-  # failure behavior belongs to the legacy Racket oracle, not this paired test.
+  # failure behavior belongs to the runtime integration suite, not this paired test.
   expect singleDetach r1 == 5
 }
 

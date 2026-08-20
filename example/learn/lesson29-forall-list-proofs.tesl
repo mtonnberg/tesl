@@ -67,7 +67,7 @@ import Tesl.Database exposing [
 # UNDERSTANDING — why it works this way
 # ─────────────────────────────────────────────
 # `ForAll P` is a COMPILE-TIME annotation only.
-# At runtime, the list is a plain Racket list — there is no extra wrapper.
+# At runtime, the list is a plain runtime list — there is no extra wrapper.
 # ForAll has ZERO runtime overhead — no boxing, no proof structs per element.
 #
 # The key insight: proofs EXPAND, they never disappear.

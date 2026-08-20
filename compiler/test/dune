@@ -167,15 +167,12 @@
  (name test_suite_registration)
  (modules test_suite_registration))
 
-; Racket run-set completeness meta-test (S2b, Racket half).  Fails the build if
-; any tests/*.rkt is run by NO gate and not excluded-with-reason — the Racket
-; analogue of test_suite_registration.  Derives the gated set from the actual
-; gate config (compile-examples.sh auto-detect rule + internal-all.rkt +
-; ci.sh).  Pure OCaml (str + unix); runs under `dune runtest`:
-;   dune exec test/test_racket_discover.exe
+; Go test-set completeness meta-test.  The Go runtime and Tesl corpus are the
+; only shipped execution path, so this guards their gate entry point:
+;   dune exec test/test_go_discover.exe
 (tests
- (names test_racket_discover)
- (modules test_racket_discover)
+ (names test_go_discover)
+ (modules test_go_discover)
  (libraries str unix))
 
 ; First Go-backend vertical slice: pure emission assertions always run. When Go
@@ -192,11 +189,8 @@
  (modules test_mutation_go)
  (libraries tesl_compiler_lib alcotest unix))
 
-; Stdlib binding-existence seam test (stdlib-surface-drift class closer): every
-; name the checker accepts an import of must resolve to a REAL runtime provide
-; (via racket module->exports), and every module_path_table row must point to a
-; file that exists.  The racket-backed case self-skips (loudly) when racket is
-; not on PATH; the table/file checks always run:
+; Go stdlib surface seam test: compiler-owned export inventories stay internally
+; consistent. Runtime coverage is handled by test_go_stdlib_export_seam:
 ;   dune exec test/test_stdlib_runtime_binding.exe
 (tests
  (names test_stdlib_runtime_binding)

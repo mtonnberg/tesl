@@ -286,7 +286,7 @@ fn exampleIntOps() -> Bool =
 # ─────────────────────────────────────────────
 # THEORY — the full model
 # ─────────────────────────────────────────────
-# Standard library functions in Tesl are written in Racket and registered
+# Standard library functions in Tesl are backed by Go runtime functions and registered
 # in the compiler's module metadata. They are imported via the standard
 # `import Tesl.String exposing [...]` mechanism.
 #

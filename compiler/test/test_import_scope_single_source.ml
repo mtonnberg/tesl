@@ -284,20 +284,20 @@ let test_every_fn_env_name_is_classified () =
        always_available_stdlib_names or stdlib_bare_home_module):\n  %s"
       (String.concat "\n  " offenders)
 
-(* ── (emit-cover) every home module has a Racket file path ─────────────────── *)
+(* ── every home module has an export inventory ──────────────────────────────── *)
 
-let test_every_home_module_has_emit_path () =
+let test_every_home_module_has_export_inventory () =
+  let exported = Type_system.tesl_module_exports |> List.map fst in
   let missing =
     Type_system.stdlib_home_module
     |> List.map snd
     |> List.sort_uniq String.compare
-    |> List.filter (fun m -> not (Hashtbl.mem Emit_racket.module_path_table m))
+    |> List.filter (fun m -> not (List.mem m exported))
   in
   if missing <> [] then
     failf
-      "A7 drift guard: home modules resolved by Type_system.stdlib_home_module \
-       have no entry in Emit_racket.module_path_table, so a name could resolve \
-       to a module the emitter cannot require:\n  %s"
+       "A7 drift guard: home modules resolved by Type_system.stdlib_home_module \
+       have no export inventory, so an import could resolve to an unwired module:\n  %s"
       (String.concat "\n  " missing)
 
 let () =
@@ -329,7 +329,7 @@ let () =
     "single-source-invariants", [
       test_case "every stdlib_env name is classified" `Quick
         test_every_fn_env_name_is_classified;
-      test_case "every home module has an emit path" `Quick
-        test_every_home_module_has_emit_path;
+       test_case "every home module has an export inventory" `Quick
+         test_every_home_module_has_export_inventory;
     ];
   ]

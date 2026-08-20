@@ -44,10 +44,9 @@
 # elm/time).  Exact for year >= 1; day numbers before 1970 are ordinary negative
 # integers and work.
 #
-# This module is written in Tesl, not Racket: it is compiled at build time to
-# `tesl/civil-time-derived.rkt`, which the shim `tesl/civil-time.rkt` re-exports
-# under the dotted `CivilTime.*` runtime names.  The calendar logic — where the
-# subtle bugs live — is therefore type- and proof-checked by the language itself.
+# This module is written in Tesl and compiled into the Go module under the
+# dotted `CivilTime.*` runtime names. The calendar logic — where the subtle
+# bugs live — is therefore type- and proof-checked by the language itself.
 # ─────────────────────────────────────────────────────────────────────────────
 module CivilTime exposing [
   # Types.  CivilDate and IsoWeek are exported WITHOUT their constructors: an

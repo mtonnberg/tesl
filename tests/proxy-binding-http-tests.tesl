@@ -2,8 +2,7 @@
 # proxy-binding-http-tests.tesl
 #
 # `Tesl.Proxy.verifyBinding` / `ProxyBound` (Item A, #50.2) across the real HTTP
-# boundary. The primitive already had a unit test (`tests/proxy-runtime-test.rkt`,
-# 25 lines, three cases straight against the Racket function) but nothing
+# boundary. The primitive already had a small runtime unit test, but nothing
 # exercised the shape the feature exists for: an `auth` block that turns a
 # request HEADER into `ProxyBound`, and a handler that cannot be reached without
 # it. Everything below goes through dispatch, so the auth block, the `check`

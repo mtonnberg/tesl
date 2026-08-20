@@ -19,7 +19,7 @@ import Tesl.Maybe exposing [Maybe(..)]
 # summary: Test a whole HTTP endpoint from Tesl: seeded state, request bodies and JSON response assertions
 # ── Goal ─────────────────────────────────────────────────────────────────────
 # Learn the new `api-test` block by writing the same kinds of tests you would
-# otherwise need Racket for: request bodies, seeded state, and JSON response
+# otherwise need host-language code for: request bodies, seeded state, and JSON response
 # assertions.
 
 record EchoRequest {

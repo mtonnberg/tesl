@@ -17,7 +17,7 @@ fails to compile when a clause is added without a decision about it. The maintai
 open questions the review raised, and all ten are implemented and swept across the corpus.
 
 179 of 181 corpus files emit Go, build under nine linters and pass their own tests, with the
-Racket backend running the same source as a behavioural oracle. The two exceptions are refused by
+Legacy backend running the same source as a behavioural oracle. The two exceptions are refused by
 design and named as such.
 
 The strategic point was never the six clauses themselves — it was that the *class* was possible.
@@ -49,7 +49,7 @@ the gate growing as each linter did.
 ## What this review changed
 
 **Twelve findings fixed.** Four are security-relevant, two were blocking a real migration, one was
-a bug in the *incumbent* Racket backend, one was a checker hole, one was a corpus program that did
+a bug in the *incumbent* Legacy backend, one was a checker hole, one was a corpus program that did
 not build, one was 94 misleading messages.
 
 1. **Six dropped `server` clauses** (high) — `sessionRevoked`, `sessionPreviousKey`,
@@ -57,21 +57,21 @@ not build, one was 94 misleading messages.
    refused with the reason (the Go backend has no `request.clientAddress` to configure).
    Concretely, before this pass: a revoked session kept renewing, and a service declared
    `listenAddress Loopback` bound every interface.
-2. **No security-header floor** (high) — Racket adds `nosniff`, `Referrer-Policy`,
+2. **No security-header floor** (high) — Legacy adds `nosniff`, `Referrer-Policy`,
    `X-Frame-Options`, HSTS and a CSP to every response; Go set only `Content-Type`. Now applied
    across the API, static-file and SPA surfaces.
-3. **Unbounded request-body read** (medium-high, DoS) — Racket caps at 1 MiB and answers 413; Go
+3. **Unbounded request-body read** (medium-high, DoS) — Legacy caps at 1 MiB and answers 413; Go
    read the whole body. Now shares the cap, the env override and the status code.
 4. **`sessionPolicy ShortSession` only shortened the cookie** (medium) — the JWT itself still
-   carried a 1-hour TTL against a 12-hour cap where Racket used 15 minutes against 8 hours.
-5. **Go could not read a Racket-written ADT column** (high for migration) — the two backends
+   carried a 1-hour TTL against a 12-hour cap where Legacy used 15 minutes against 8 hours.
+5. **Go could not read a Legacy-written ADT column** (high for migration) — the two backends
    stored measurably different JSONB shapes. A service being ported could not read its own rows.
    This is the finding that would have surfaced on day one of a real migration.
-6. **Racket decoded ADT payload fields fail-open** (high, incumbent) — a `Maybe` inside a stored or
+6. **Legacy decoded ADT payload fields fail-open** (high, incumbent) — a `Maybe` inside a stored or
    posted variant came back as the raw wire hash instead of `Nothing`, and the type check that
    should have objected was vacuous. Affects request bodies and queue payloads, not just columns.
    Found only because the Go decoder is strict.
-7. **A literal pattern against an ADT** compiled and then died at run time on Racket. Now a
+7. **A literal pattern against an ADT** compiled and then died at run time on Legacy. Now a
    checker error, so neither backend can be handed the program.
 8. **`date_trunc` unit** reached SQL as text with no closed-set check (latent).
 9. **Refusal messages** — every `"… yet"` claim reviewed. Unreachable arms now say
@@ -84,7 +84,7 @@ not build, one was 94 misleading messages.
     bugs of this exact shape appeared in one session**, which is why the remaining recommendation
     below is about the gated file sets.
 11. **No api-test could catch a content-type regression on either backend** — Go's harness sent no
-    `Content-Type` at all; Racket's hands the dispatcher an already-parsed body. Go's harness now
+    `Content-Type` at all; Legacy's hands the dispatcher an already-parsed body. Go's harness now
     defaults to JSON and a test can assert the 415.
 12. **Three deliberate divergences from `net/netip`** in the SSRF host classifier were untested and
     are now pinned, so "make it agree with netip" cannot be mistaken for a fix.
@@ -102,10 +102,10 @@ Each was a maintainer decision on 2026-08-18; all are built and corpus-swept.
 | OQ3 | automatic layout | a wide ADT is boxed (170 → 32 bytes); the corpus's own case is `chat-backend` |
 | OQ4 | split equality | per-variant comparison helpers; the 364-column line is gone |
 | OQ5 | remove dead forms | two unconstructible AST forms and 43 pattern sites deleted |
-| OQ6 | keyed `List.unique` | O(n) where the element type has a key, matching Racket's complexity |
+| OQ6 | keyed `List.unique` | O(n) where the element type has a key, matching Legacy's complexity |
 | OQ7 | 415 on non-JSON | both backends now refuse the same request with the same status |
 | OQ8 | test `hostname.go` | differential tests against `net/netip`, pinning deliberate divergences |
-| OQ9 | load-tests work | baselines behave exactly as Racket's do (neither stores one — a correction) |
+| OQ9 | load-tests work | baselines behave exactly as Legacy's do (neither stores one — a correction) |
 | OQ10 | targeted `-race` | on every emitted tree that starts goroutines; zero races found |
 | OQ11 | gate probe | each runtime file set builds alone; found 2 issues on its first run |
 | OQ12 | leave refused | partial application of a comparing generic stays a compile-time refusal |
@@ -162,7 +162,7 @@ first run (a file gated outside the table, and a real gate coupling that had bee
 accident), and reproduces the original `PgGroupZone` failure when that bug is put back.
 
 And the emitted Go is now **checked in**, one snapshot per `example/` source, diffed byte for
-byte by ci.sh. That closes the last structural gap between the two backends: the Racket side has
+byte by ci.sh. That closes the last structural gap between the two backends: the Legacy side has
 had this ratchet for years, and it is what catches a compiler change that "should not" have
 changed the output. A one-token emitter edit flags 27 snapshots.
 

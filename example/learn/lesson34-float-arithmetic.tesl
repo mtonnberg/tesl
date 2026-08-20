@@ -26,7 +26,7 @@ module Lesson34FloatArithmetic exposing [
 # MIXING Float and Int is a TYPE ERROR — use Float.toInt or Int.toFloat
 # to convert explicitly.
 #
-# SAFE DIVISION: plain  /  can divide by zero (returns +inf.0 in Racket).
+# SAFE DIVISION: plain / can divide by zero (returns +Inf in Go).
 # For a proof-guarded division use:
 #   let d = check Float.requireNonZero(rawDivisor)   # establishes FloatNonZero proof
 #   Float.div numerator d                            # compiler-verified safe
@@ -260,7 +260,7 @@ test "Float.abs / min / max" {
 #   Float.div a b  — safe version: b must carry FloatNonZero proof
 #
 # WHY Float.requireNonZero?
-# The plain / operator follows Racket semantics: 1.0 / 0.0 = +inf.0.
+# The plain / operator follows Go float semantics: 1.0 / 0.0 = +Inf.
 # For robust APIs you want a compile-time guarantee that division is safe.
 # Float.requireNonZero is a CHECK FUNCTION — it validates the value at
 # runtime and attaches a FloatNonZero proof to the result. Float.div

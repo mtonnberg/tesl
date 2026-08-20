@@ -15,7 +15,7 @@ module SqlClausePlacementTests exposing []
 #
 #   * when the last conjunct was a FUNCTIONAL predicate (`ilike`), the clause
 #     atoms hid inside its argument list — `tesl check` was clean and the
-#     generated Racket referenced the row binder `t` outside the query, so the
+#     generated code referenced the row binder `t` outside the query, so the
 #     module could not even LOAD ("t: unbound identifier");
 #   * every other shape reported the misleading "unknown name: order" and
 #     rejected code that reads as valid Tesl.

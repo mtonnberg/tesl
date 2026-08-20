@@ -64,13 +64,13 @@ check sanitize(s: String) -> s: String ::: Sanitized s =
 # ─────────────────────────────────────────────
 # THEORY — the full model
 # ─────────────────────────────────────────────
-# Fact predicates compile to plain Racket bindings:
+# Fact predicates compile to plain Go runtime bindings:
 #   (define InBounds 'InBounds)
 #   (define Sanitized 'Sanitized)
 # These are regular module exports. The import requirement is enforced by the
-# Tesl reference checker, which runs after parsing but before Racket lowering.
+# Tesl reference checker, which runs after parsing but before Go lowering.
 #
-# At runtime, proof facts are Racket lists (quoted s-expressions):
+# At runtime, proof facts are runtime values:
 #   '(InBounds n)    — a fact about value n
 #   '(Sanitized s)   — a fact about value s
 # The proof checker compares these structurally against the required predicate

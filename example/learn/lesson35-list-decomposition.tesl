@@ -293,11 +293,11 @@ test "describeList" {
 # ─────────────────────────────────────────────
 # UNDERSTANDING — why it works this way
 # ─────────────────────────────────────────────
-# Tesl lists are an opaque built-in type backed by Racket lists.
+# Tesl lists are an opaque built-in type backed by Go slices.
 # Unlike algebraic types such as Maybe or Shape, List has no named
 # constructors (Nil / Cons) exposed at the surface language.
 # This is deliberate: it lets the runtime represent lists as plain
-# Racket lists without any boxing overhead, while still providing a
+# Go slices without any boxing overhead, while still providing a
 # rich typed API through List.* functions.
 #
 # The pair (List.isEmpty, List.head, List.tail) is structurally

@@ -16,7 +16,7 @@
 *)
 
 open Parser
-open Emit_racket
+open Emit_go
 
 let parse src = parse_module "<test>" src
 

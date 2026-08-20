@@ -3,7 +3,7 @@
 ## Recommendation
 Continue with Go as the Tesl runtime target. The migration so far supports the original choice: Go is a good fit for Tesl's GC-shaped values and gives the project a conventional HTTP, SQL, crypto, observability, deployment, profiling, debugging, and security-tooling ecosystem.
 
-The strongest gains are operational rather than language-level memory safety: Racket CS is already memory-safe. Go adds a typed verifier for emitted code, standard infrastructure libraries, static deployment, lower startup/RSS expectations, familiar SRE tooling, and an understandable eject/audit story.
+The strongest gains are operational rather than language-level memory safety: Legacy CS is already memory-safe. Go adds a typed verifier for emitted code, standard infrastructure libraries, static deployment, lower startup/RSS expectations, familiar SRE tooling, and an understandable eject/audit story.
 
 The completed work demonstrates that Tesl's pure value semantics can be emitted successfully. It does not yet validate the hardest parts of the migration: HTTP/JSON, SQL, capabilities and proof boundaries, concurrency and cancellation, deployment, and debugger/source-level parity. A thin end-to-end service should be the next major validation milestone.
 
@@ -104,7 +104,7 @@ Repeated Dict/Set insertion can therefore be quadratic, unlike a persistent hash
 Treat accidental quadratic collection-building folds as a migration gate rather than a post-parity micro-optimization. Add emitted-shape tests that reject repeated `ListAppend`/Set/Dict copy-on-write calls for recognized canonical builders, plus scaling/allocation benchmarks for n, 2n, and 4n inputs. Before freezing the runtime ABI, benchmark large query results, repeated insertion, bulk construction, lookups, set algebra, fold-based construction, allocation volume, and retained memory.
 
 ## Remaining migration risks
-The main outstanding risks do not justify changing runtime language, but they should gate Racket retirement:
+The main outstanding risks do not justify changing runtime language, but they should gate Legacy retirement:
 
 1. **Mutual tail recursion:** self-tail calls are looped, but deep mutual tail recursion remains Go recursion and can end in an unrecoverable process-level stack overflow. Add an SCC trampoline/state-machine strategy or establish an explicit restriction before accepting attacker-controlled recursion depth.
 2. **First-class curried functions:** direct calls and specialized higher-order lowering work, but general function values and partial application still need a consistent calling convention. A direct uncurried entry point plus generated curried adapters is a plausible approach.
@@ -124,4 +124,4 @@ The main outstanding risks do not justify changing runtime language, but they sh
 6. Build and measure one end-to-end HTTP/JSON/SQL service with cancellation and concurrent requests.
 7. Validate source-level debugging on that service.
 8. Resolve mutual tail recursion and general function values.
-9. Expand full differential corpus and mutation parity before considering Racket retirement.
+9. Expand full differential corpus and mutation parity before considering Legacy retirement.

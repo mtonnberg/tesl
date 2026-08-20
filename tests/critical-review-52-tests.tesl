@@ -19,7 +19,7 @@
 # Each section starts with the declarations the tests need, and the
 # `test "..."` blocks at the bottom exercise the corresponding `fn`s
 # through the full pipeline (parser → type-checker → proof-checker →
-# emitter → Racket runtime).
+# emitter → Go runtime).
 
 module CriticalReview52Tests exposing []
 

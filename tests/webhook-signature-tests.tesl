@@ -6,7 +6,7 @@
 # This is the third machine-credential shape the stdlib supports (alongside the
 # hashed-token lookup and the proxy binding), and it had no Tesl-level coverage
 # at all: `Crypto.signWith` / `Crypto.checkSignature` were exercised only at the
-# Racket level (`tests/crypto-runtime-tests.rkt`) plus a lesson with no test
+# runtime level plus a lesson with no test
 # blocks, and `Crypto.signatureBase64` / `Crypto.signatureFromBase64` — the
 # Standard Webhooks transport — appeared in NO .tesl file in the repo.
 #

@@ -159,7 +159,7 @@ import Tesl.Maybe exposing [Maybe(..)]
 #
 # Entity fields are compiled to typed accessor functions (e.g., Product-price).
 # WHERE clauses compile to predicate structures evaluated against rows.
-# For in-memory backends: predicates are applied as Racket functions over a hash map.
+# For in-memory backends: predicates are applied as Go functions over a map.
 # For PostgreSQL: predicates compile to parameterized SQL WHERE clauses.
 #
 # The "FromDb (Id == pkSubject) entitySubject" fact encodes two things:
@@ -553,7 +553,7 @@ fn swapStock(outId: String, inId: String) -> Unit requires [dbWrite] =
 
 # Set TESL_VERBOSE=1 in your shell before running your application:
 #
-#   TESL_VERBOSE=1 racket your-app.rkt
+#   TESL_VERBOSE=1 tesl run your-app.tesl
 #
 # Every SQL query will be logged to stderr with the form:
 #

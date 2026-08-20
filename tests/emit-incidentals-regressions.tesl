@@ -4,7 +4,7 @@ module Main exposing [MainServer]
 #
 #   1. EmailBody as a DATA type: a `fn … -> EmailBody` return trapped at
 #      runtime (no registered runtime predicate for the EmailBody type-ref —
-#      tesl/email.rkt now registers one), and an exhaustive 3-arm case over
+#      the email runtime now registers one), and an exhaustive 3-arm case over
 #      its constructors was (a) flagged non-exhaustive at check time and
 #      (b) lowered against adt-value structs that can never match the tagged
 #      LIST representation, so every arm fell through.

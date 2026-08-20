@@ -98,7 +98,7 @@ fn requiresPositive(n: Int ::: Positive n) -> Int =
 # - "fn listenOnPort(port: Int::: ValidPort port)" is the ELIMINATION RULE.
 #   It says: "I can only be called if you already have evidence for ValidPort."
 #
-# The "check" function lowers to Racket's "define-checker". Inside, it calls:
+# The "check" function lowers to the Go proof-checking runtime. Inside, it calls:
 #   - accept(value, proof) on success — this attaches the proof to the named value
 #   - reject(status, message) on failure — this raises an HTTP error
 #

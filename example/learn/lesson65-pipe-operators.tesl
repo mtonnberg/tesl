@@ -149,7 +149,7 @@ fn processChain(n: Int) -> Int =
 #
 # COMPILED OUTPUT
 #
-# Both operators lower directly to function application in the compiled Racket.
+# Both operators lower directly to function application in the compiled Go.
 # There is no runtime cost — they are purely syntactic conveniences:
 #
 #   x |> f        →   (f x)

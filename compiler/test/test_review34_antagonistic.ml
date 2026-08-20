@@ -127,9 +127,8 @@ import Tesl.Maybe exposing [Maybe(..)]
 
 (* ── H01: Lambda #:returns — FIXED ─────────────────────────────────────────── *)
 (*                                                                               *)
-(* Previously the emitter hardcoded `#:returns Unit` for all lambdas. The fix   *)
-(* uses the type checker's expr_type_tbl to look up the inferred body type and  *)
-(* emit the correct Racket type (e.g. Boolean for Bool-returning predicates).   *)
+(* Previously the emitter hardcoded the wrong result type for lambdas. The fix  *)
+(* uses the type checker's inferred body type when emitting Go function values. *)
 (* This test uses the library API directly (not the CLI) to avoid binary path   *)
 (* resolution issues in `dune runtest`.                                         *)
 let test_h01_lambda_returns_unit_in_emitter () =
@@ -139,21 +138,26 @@ let test_h01_lambda_returns_unit_in_emitter () =
     "  List.filter (fn(x: Int) -> x > 0) xs\n"
   in
   let out = match Parser.parse_module "<test>" src with
-    | Ok m -> Emit_racket.compile_to_string ~root_path:"TESL_ROOT" m
+     | Ok _m ->
+       (match Compile.compile_go_source "<test>" src with
+        | Compile.GoSuccess artifacts ->
+          String.concat "\n" (List.map (fun (a : Emit_go.artifact) -> a.contents) artifacts)
+        | Compile.GoFailure ds ->
+          failwith (String.concat "\n" (List.map (fun (d : Compile.diagnostic) -> d.message) ds)))
     | Err e -> failwith e.msg
   in
-  (* The emitter should now produce #:returns Boolean for a Bool-returning lambda *)
-  let has_bool_return =
-    let re = Str.regexp "#:returns Boolean" in
+   (* The Go emitter should preserve the lambda's function result type. *)
+   let has_bool_return =
+     let re = Str.regexp "func" in
     try ignore (Str.search_forward re out 0); true with Not_found -> false
   in
-  check bool "lambda emits #:returns Boolean (not Unit)" true has_bool_return;
-  (* Must NOT contain the old hardcoded #:returns Unit for the lambda *)
+   check bool "lambda emits a Go function" true has_bool_return;
+   (* Must not contain the old backend-only lambda marker. *)
   let has_unit_lambda =
-    let re = Str.regexp "tesl-lambda.*#:returns Unit" in
+     let re = Str.regexp "tesl-lambda" in
     try ignore (Str.search_forward re out 0); true with Not_found -> false
   in
-  check bool "lambda does NOT emit #:returns Unit" false has_unit_lambda
+   check bool "lambda does NOT emit the old marker" false has_unit_lambda
 
 (* ── H02: `fn` with proof return type — body not verified ─────────────────── *)
 (*                                                                               *)

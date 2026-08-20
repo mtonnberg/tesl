@@ -62,12 +62,12 @@ fn processRawInput(rawN: Int, rawLabel: String) -> String =
 #   2. For each such name, it checks: was this name imported from some module?
 #   3. If not, it reports: "unknown proof predicate: InBounds — did you import it?"
 #
-# This check runs before Racket code generation. It is purely a name-resolution
+# This check runs before Go code generation. It is purely a name-resolution
 # check on the Tesl AST, using the module's import table.
 #
 # The static proof checker also uses the import table:
 # When checking a call to processInput, it looks up InBounds in the import table
-# to find the canonical proof predicate object (the Racket symbol 'InBounds from
+# to find the canonical proof predicate object (the runtime name 'InBounds from
 # Lesson07Home's namespace). It then checks whether the actual argument's proof set
 # contains a fact matching that canonical predicate.
 #

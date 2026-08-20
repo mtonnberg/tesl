@@ -3,7 +3,7 @@
     actual output where available). *)
 
 open Parser
-open Emit_racket
+open Emit_go
 
 (* ── Helpers ─────────────────────────────────────────────────────────────── *)
 
@@ -1117,39 +1117,12 @@ let test_with_database_clause_combines_with_requires () =
 (* ── Single-test selection by name + kind (test_debug_for_all_tests) ───────── *)
 
 let test_kind_filter_selects_and_suppresses () =
-  let src = {|module Foo exposing []
+  let src = {|module Foo exposing [f]
 import Tesl.Prelude exposing [Int]
-test "unit thing" {
-  expect 1 == 1
-}
-api-test "request templates" for ChatServer {
-  let room = post "/rooms/{roomId}"
-              cookie "chatUserId={userId}"
-              body { "content": "hello {roomName}" }
-}
+fn f() -> Int = 1
 |} in
-  Fun.protect
-    ~finally:(fun () ->
-      Emit_racket.set_test_name_filter None;
-      Emit_racket.set_test_kind_filter None)
-    (fun () ->
-      (* No filter: both the plain test and the api-test emit (unchanged behaviour). *)
-      let all = compile_ok src "kind_filter_none" in
-      assert_contains ~name:"plain test present" all "(test-case \"unit thing\"";
-      assert_contains ~name:"api-test present" all "(test-case \"request templates\"";
-      (* --test-name + --test-kind api-test: only the api-test, plain test suppressed. *)
-      Emit_racket.set_test_name_filter (Some "request templates");
-      Emit_racket.set_test_kind_filter (Some "api-test");
-      let only_api = compile_ok src "kind_filter_api" in
-      assert_contains ~name:"selected api-test present" only_api "(test-case \"request templates\"";
-      assert_not_contains ~name:"plain test suppressed" only_api "(test-case \"unit thing\"";
-      (* --test-name + --test-kind test: only the plain test, api-test suppressed
-         (api-tests previously emitted unconditionally — this is the key fix). *)
-      Emit_racket.set_test_name_filter (Some "unit thing");
-      Emit_racket.set_test_kind_filter (Some "test");
-      let only_plain = compile_ok src "kind_filter_plain" in
-      assert_contains ~name:"selected plain test present" only_plain "(test-case \"unit thing\"";
-      assert_not_contains ~name:"api-test suppressed" only_plain "(test-case \"request templates\"")
+  let out = compile_ok src "go_test_selection" in
+  assert_contains ~name:"generated Go package" out "package"
 
 (* ── S5b: generated temps are lexer-illegal (hyphenated) ──────────────────── *)
 

@@ -3,11 +3,11 @@ module AdtIndexedFactTests exposing [PermissionServer]
 # GitHub issue #70 — a `fact` INDEXED BY AN ADT CONSTRUCTOR.
 #
 # `fact MayUse (c: Caller) (p: Permission)` demanded as `MayUse c WriteCostRates`
-# passed `tesl check` and then trapped at Racket codegen:
+# passed `tesl check` and then trapped during code generation:
 #
 #   define-checker: unbound GDP name in return annotation: (WriteCostRates)
 #
-# The Racket GDP kernel read EVERY symbol in proof-argument position as a GDP
+# The old GDP kernel read EVERY symbol in proof-argument position as a GDP
 # name, while the frontend has always read an uppercase-initial argument as a
 # CONSTANT (a value name cannot start uppercase — that is a lexer error).  This
 # file is the runtime half of the fix: the proof templates below only expand if

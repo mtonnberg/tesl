@@ -58,14 +58,15 @@ test "add" {
 # ─────────────────────────────────────────────
 # THEORY — the full model
 # ─────────────────────────────────────────────
-# "fn" lowers to Racket's "define/pow". The "pow" stands for "proof of worth" —
+# "fn" lowers to a Go function. The "pow" in the historical name stood for
+# "proof of worth" —
 # each parameter is wrapped in a GDP named-value carrier that stores:
 #   - a hidden fresh subject identity (an internal symbol, never surface-visible)
 #   - the raw payload (the actual integer, string, etc.)
 #   - an attached proof set (initially empty for plain "fn" parameters)
 #
 # At compile time a "fn" parameter is modelled as a named-value carrier, but the
-# carrier is erased during macro expansion: the emitted Racket binds the plain
+# carrier is erased during code generation: the emitted Go binds the plain
 # value, so the "+", "-", "*", "/" operators receive bare numbers directly. There
 # is no surface raw-access operator — you never "unwrap" a parameter by hand.
 #

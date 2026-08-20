@@ -50,7 +50,6 @@ let usage = {|Usage:
   tesl --semantic-json <file>  emit full module semantic snapshot as JSON (IR-1 foundation)
   tesl agent-context <file>    emit a compact AI-agent snapshot (diagnostics+symbols+obligations) as JSON
   tesl --agent-context-json <file>  alias for `tesl agent-context`
-  tesl debug-inspect <file> --break-at SPEC [...]  run to a breakpoint (headless) and dump paused runtime state as JSON
   tesl --mutate [--backend go] <file> [test-file ...]  run Go mutation testing; optionally merge tests from extra files
    tesl --exe <file> [--out <path>]  build a standalone Go executable
 
@@ -942,7 +941,13 @@ let print_diagnostic (d : Compile.diagnostic) =
         (match Error_codes.lookup d.code with
          | Some _ ->
             Printf.eprintf "  hint: run `tesl help %s` for an explanation\n" d.code
-          | None -> ())))
+         | None -> ())))
+
+let require_checked filename =
+  let diagnostics = Compile.check_file filename in
+  List.iter print_diagnostic diagnostics;
+  if List.exists (fun (d : Compile.diagnostic) -> d.severity = "error") diagnostics then
+    exit 1
 
 let project_root_for_file filename =
   let absolute =
@@ -1032,7 +1037,6 @@ let print_batch_results (results : (string * Compile.diagnostic list) list) =
 
 let () =
   let args = Array.to_list Sys.argv |> List.tl in
-  let root_path = find_repo_root () in
 
   (* Outermost safety net (review LSP-crash class): convert ANY uncaught
      exception into a clean `error:`/exit-1 instead of the OCaml runtime's
@@ -1295,9 +1299,7 @@ let () =
           it is gated behind the FULL whole-program checker exactly like
           --generate-ts/--generate-elm — a program that fails `--check` must
           not still yield a plausible machine-consumed IR artifact. *)
-       (match Compile.compile_file ~root_path ~type_check:true filename with
-        | Compile.Failure diags -> List.iter print_diagnostic diags; exit 1
-        | Compile.Success _ -> ());
+        require_checked filename;
        let source = In_channel.with_open_text filename In_channel.input_all in
        match Parser.parse_module filename source with
        | Ok m ->
@@ -1317,9 +1319,7 @@ let () =
        (* B1 / review §8.2: gate the client generator behind the FULL checker
           (type + proof + validation), so a program that fails `--check` cannot
           still emit a plausible client (the checker-bypass hole). *)
-       (match Compile.compile_file ~root_path ~type_check:true filename with
-        | Compile.Failure diags -> List.iter print_diagnostic diags; exit 1
-        | Compile.Success _ -> ());
+        require_checked filename;
        let source = In_channel.with_open_text filename In_channel.input_all in
        match Parser.parse_module filename source with
        | Ok m ->
@@ -1343,9 +1343,7 @@ let () =
     let out_file = match rest with ["--out"; f] -> Some f | _ -> None in
     (try
        (* B1 / review §8.2: gate the client generator behind the FULL checker. *)
-       (match Compile.compile_file ~root_path ~type_check:true filename with
-        | Compile.Failure diags -> List.iter print_diagnostic diags; exit 1
-        | Compile.Success _ -> ());
+        require_checked filename;
        let source = In_channel.with_open_text filename In_channel.input_all in
        match Parser.parse_module filename source with
        | Ok m ->
@@ -1416,137 +1414,6 @@ let () =
    | "--test-name" :: _ ->
      Printf.eprintf "error: --test-name is a test-runner option; use `tesl test --test-name ...`\n";
      exit 2
-
-  (* AC2: headless breakpoint inspector — agent-set breakpoints, full control.
-       tesl debug-inspect <file.tesl> --break-at SPEC [--break-at SPEC ...]
-                          [--when EXPR] [--hit SPEC] [--mode program|test]
-     Compiles the .tesl with debug instrumentation, registers ALL requested
-     breakpoints, runs to whichever fires FIRST (with stop-the-world active), and
-     emits the paused runtime state (locals + live domain registry + SQL capture)
-     plus the breakpoint that stopped it as ONE JSON object on stdout.
-
-     --break-at SPEC, where SPEC is one of:
-        LINE                bare, unconditional            e.g. 42
-        LINE:COL            column accepted and ignored    e.g. 42:7
-        LINE: <expr>        conditional (boolean over locals)  e.g. "42: n == 100"
-        LINE: <hit>         hit-count (==|>=|<=|>|<|% N)   e.g. "42: %3"
-        L1,L2,L3            comma-separated bare lines     e.g. 10,22,40
-     --break-at is repeatable; all breakpoints are registered.
-     --when EXPR  default boolean condition for breakpoints with no inline one.
-     --hit  SPEC  default hit-condition for breakpoints with no inline one.
-     A bad condition FAILS OPEN (treated as true) so a typo never silently drops a
-     breakpoint — same semantics as the DAP conditional breakpoints. *)
-  | "debug-inspect" :: filename :: rest
-    when not (String.length filename > 2 && filename.[0] = '-') ->
-    let inspect_usage () =
-      Printf.eprintf "usage: tesl debug-inspect <file.tesl> --break-at SPEC [--break-at SPEC ...] [--when EXPR] [--hit SPEC] [--mode program|test] [--continue]\n";
-      Printf.eprintf "  SPEC := LINE | LINE:COL | \"LINE: <cond-expr>\" | \"LINE: <hit-spec>\" | L1,L2,L3\n";
-      Printf.eprintf "  --continue : stop at each breakpoint in turn, resume after each, and let the program finish (headless F5); emits {snapshots:[...],completed}\n"
-    in
-    (* A single --break-at spec may carry several comma-separated bare lines OR one
-       conditional/hit breakpoint.  We classify the text after the first ':' the
-       SAME way the Racket driver's parse-bp-spec does:
-         - a bare integer after ':'         → a COLUMN (legacy), ignored
-         - an operator+int (==|>=|<=|>|<|%) → a hit-condition
-         - anything else                    → a boolean condition expression.
-       Comma-splitting only applies to a spec with NO ':' (a pure line list); a
-       spec containing ':' is treated as ONE breakpoint so commas inside an
-       expression are never mis-split. *)
-    let is_hit_spec s =                       (* (==|>=|<=|>|<|%) <digits> *)
-      let s = String.trim s in
-      let n = String.length s in
-      if n = 0 then false
-      else
-        let op_len =
-          if n >= 2 && (let p = String.sub s 0 2 in p="=="||p=">="||p="<=") then 2
-          else if (s.[0]='>'||s.[0]='<'||s.[0]='%') then 1
-          else 0
-        in
-        op_len > 0 &&
-        (let rest = String.trim (String.sub s op_len (n - op_len)) in
-         String.length rest > 0 &&
-         String.for_all (fun c -> c >= '0' && c <= '9') rest)
-    in
-    let is_all_digits s =
-      let s = String.trim s in
-      String.length s > 0 && String.for_all (fun c -> c >= '0' && c <= '9') s
-    in
-    (* Parse one chunk "LINE[: rest]" into (line, condition opt, hit opt). *)
-    let parse_chunk chunk : (int * string option * string option) option =
-      match String.index_opt chunk ':' with
-      | None ->
-        (match int_of_string_opt (String.trim chunk) with
-         | Some l when l > 0 -> Some (l, None, None)
-         | _ -> None)
-      | Some i ->
-        let line_str = String.trim (String.sub chunk 0 i) in
-        let rest = String.trim (String.sub chunk (i+1) (String.length chunk - i - 1)) in
-        (match int_of_string_opt line_str with
-         | Some l when l > 0 ->
-           if rest = "" || is_all_digits rest then Some (l, None, None)   (* COL ignored *)
-           else if is_hit_spec rest then Some (l, None, Some rest)
-           else Some (l, Some rest, None)
-         | _ -> None)
-    in
-    let parse_break_at spec : (int * string option * string option) list =
-      if String.contains spec ':' then
-        (match parse_chunk spec with Some bp -> [bp] | None -> [])
-      else
-        String.split_on_char ',' spec
-        |> List.filter_map (fun part ->
-             let part = String.trim part in
-             if part = "" then None else parse_chunk part)
-    in
-    let continue_mode = ref false in
-    let rec parse_opts bps when_opt hit_opt mode = function
-      | [] -> (List.rev bps, when_opt, hit_opt, mode)
-      | "--break-at" :: spec :: tl ->
-        let parsed = parse_break_at spec in
-        if parsed = [] then begin
-          Printf.eprintf "%serror%s: --break-at expects LINE[:COL]/LINE:<cond>/LINE:<hit>/L1,L2, got %s\n"
-            (col "1;31") (col "0") spec;
-          inspect_usage (); exit 2
-        end;
-        parse_opts (List.rev_append parsed bps) when_opt hit_opt mode tl
-      | "--when" :: w :: tl -> parse_opts bps (Some w) hit_opt mode tl
-      | "--hit"  :: h :: tl -> parse_opts bps when_opt (Some h) mode tl
-      | "--mode" :: m :: tl -> parse_opts bps when_opt hit_opt (Some m) tl
-      (* Headless F5: stop at each breakpoint in turn, resume after each, and let
-         the program finish — instead of one-shot (issue #16). *)
-      | ("--continue" | "--step-through") :: tl -> continue_mode := true; parse_opts bps when_opt hit_opt mode tl
-      | other :: _ ->
-        Printf.eprintf "%serror%s: unexpected argument to debug-inspect: %s\n"
-          (col "1;31") (col "0") other;
-        inspect_usage (); exit 2
-    in
-    let (bps, when_opt, hit_opt, mode_opt) = parse_opts [] None None None rest in
-    if bps = [] then begin
-      Printf.eprintf "%serror%s: debug-inspect requires at least one --break-at SPEC\n"
-        (col "1;31") (col "0");
-      inspect_usage (); exit 2
-    end;
-    (* Apply the global --when / --hit defaults to any breakpoint that has no
-       inline condition / hit-condition. *)
-    let breakpoints =
-      List.map (fun (line, c, h) ->
-        (line,
-         (match c with Some _ -> c | None -> when_opt),
-         (match h with Some _ -> h | None -> hit_opt)))
-        bps
-    in
-    let mode = match mode_opt with
-      | Some ("program" | "test" as m) -> m
-      | None -> "program"
-      | Some bad ->
-        Printf.eprintf "%serror%s: --mode must be program or test, got %s\n"
-          (col "1;31") (col "0") bad;
-        exit 2
-    in
-    (match Compile.debug_inspect ~root_path ~continue_mode:!continue_mode ~breakpoints ~mode filename with
-     | Compile.InspectDiags diags -> List.iter print_diagnostic diags; exit 1
-     | Compile.InspectErr msg ->
-       Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
-
    | [filename; "--out"; out_dir]
      when not (String.length filename > 2 && filename.[0] = '-') ->
      (match Compile.compile_go_file filename with
@@ -1566,12 +1433,7 @@ let () =
    | [filename] when not (String.length filename > 2 && filename.[0] = '-') ->
      emit_go_file filename (fresh_go_output_dir filename)
 
-  | ["--backend"; "racket"; filename] ->
-    (match Compile.compile_file ~root_path ~type_check:true filename with
-     | Compile.Success racket -> print_string racket
-     | Compile.Failure diags -> List.iter print_diagnostic diags; exit 1)
-
-   | ["--backend"; "go"; filename; "--out"; out_dir] ->
+    | ["--backend"; "go"; filename; "--out"; out_dir] ->
      (match Compile.compile_go_file filename with
       | Compile.GoFailure diags -> List.iter print_diagnostic diags; exit 1
       | Compile.GoSuccess artifacts ->
@@ -1588,7 +1450,7 @@ let () =
   | "--backend" :: backend :: _ ->
     Printf.eprintf "%serror%s: unsupported backend or arguments: %s\n"
       (col "1;31") (col "0") backend;
-     Printf.eprintf "usage: tesl --backend racket <file> | tesl --backend go <file> --out <dir> [--debug]\n";
+      Printf.eprintf "usage: tesl --backend go <file> --out <dir> [--debug]\n";
     exit 2
 
    | "--exe" :: filename :: rest
@@ -1603,7 +1465,7 @@ let () =
 
   | "--mutate" :: args ->
     let backend, filename, extra_test_files = match args with
-      | "--backend" :: ("go" | "racket" as backend) :: filename :: rest ->
+       | "--backend" :: ("go" as backend) :: filename :: rest ->
         backend, filename, rest
        | filename :: rest
          when not (String.length filename > 2 && filename.[0] = '-')
@@ -1615,7 +1477,7 @@ let () =
     in
     let mutation_result =
       if backend = "go" then Compile.mutate_go_file ~extra_test_files filename
-      else Compile.mutate_file ~root_path ~extra_test_files filename
+       else Compile.mutate_go_file ~extra_test_files filename
     in
     (match mutation_result with
      | Compile.MutateErr msg ->

@@ -242,15 +242,15 @@ test "validateAll" {
 # ─────────────────────────────────────────────
 # THEORY — the full model
 # ─────────────────────────────────────────────
-# Tesl lambdas lower to Racket closures via define/pow, which integrates
-# them into the GDP machinery for named values.  The generated Racket form is:
+# Tesl lambdas lower to Go function values, which integrate them into the GDP
+# machinery for named values. The generated Go form is:
 #
 #   (let () (define/pow (tesl-lambda-N [x : T]) #:returns Unit body) tesl-lambda-N)
 #
 # The "Unit" return annotation is a placeholder — return types are inferred
 # from the body.  When a lambda is passed directly to a stdlib function
-# such as List.map or List.foldl, Racket's dynamic typing means the closure
-# works without a static type ascription on the Racket side.
+# such as List.map or List.foldl, the compiler carries the static function type
+# into the generated call.
 #
 # In the HM type system, lambda introduction is the lambda rule:
 #   Γ, x:T ⊢ e : U

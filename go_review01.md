@@ -21,7 +21,7 @@ Reviewed:
 | `compiler/test/test_emit_go.ml` | 12,272 lines, 220 alcotest cases, 85 differential-oracle runs (now 230 / 89) |
 | `compiler/test/test_go_stdlib_export_seam.ml` | 160 lines, the whole stdlib inventory, asserted both ways |
 
-Method: read the emitter's refusal surface end to end; diffed the Go runtime against the Racket
+Method: read the emitter's refusal surface end to end; diffed the Go runtime against the Legacy
 runtime clause by clause for the `server` surface; audited the runtime for the standard web
 classes (headers, body limits, timing, injection, TLS); emitted and ran representative programs
 against a live PostgreSQL cluster with **both** backends interleaved, in both write orders.
@@ -34,7 +34,7 @@ Every claim below was reproduced. Where a claim is a measurement, the measuremen
 
 **The design is sound and unusually well-defended for a second backend. The implementation had a
 class of hole the design was specifically meant to prevent: silent clause drops.** Six `server`
-clauses were parsed, validated and honoured by the Racket backend, and *ignored* by the Go
+clauses were parsed, validated and honoured by the Legacy backend, and *ignored* by the Go
 backend — including two with direct security consequence. That is the one finding in this review
 that rises above "gap".
 
@@ -58,7 +58,7 @@ Ranking, honestly:
 
 ### What is right, and why it matters
 
-**The differential oracle is the load-bearing idea.** `racket_behavior_oracle` runs the *same
+**The differential oracle is the load-bearing idea.** `legacy_behavior_oracle` runs the *same
 Tesl source* on the incumbent backend and compares behaviour, so "compiles and runs" is never
 mistaken for "is correct". 85 of the 220 emitter cases carry one. This is what makes a second
 backend defensible at all.
@@ -98,10 +98,10 @@ accounted for, and a test does the same for the `App` schema. Both were verified
 
 ### F1 — Six `server` clauses were silently dropped (severity: **high**)
 
-`Ast.server_form` carries 16 fields. `emit_racket.ml` honours all of them. `emit_go.ml` read 10.
+`Ast.server_form` carries 16 fields. `emit_legacy.ml` honours all of them. `emit_go.ml` read 10.
 The six it ignored — not refused, *ignored*:
 
-| Clause | Racket behaviour | Go behaviour before this pass | Consequence |
+| Clause | Legacy behaviour | Go behaviour before this pass | Consequence |
 |---|---|---|---|
 | `sessionRevoked <fn>` | installs a renewal-time revocation hook (fail-closed) | nothing | **a revoked session kept renewing** |
 | `sessionPreviousKey "VAR"` | rotation overlap; verify accepts either key | nothing | key rotation logs every user out |
@@ -113,20 +113,20 @@ The six it ignored — not refused, *ignored*:
 Three of these are used by corpus programs *today* — `example/sso-demo.tesl`,
 `example/learn/lesson78-sso.tesl`, `lesson79-authenticating-proxy.tesl`, `lesson80-testing-sso.tesl`,
 `tests/proxy-binding-http-tests.tesl` — and those programs **passed** on the Go backend while
-behaving differently from the same source on Racket. The corpus was green over a real divergence.
+behaving differently from the same source on Legacy. The corpus was green over a real divergence.
 
 **Fixed:** all five implementable clauses are now wired
 (`emit_go.ml`, the server boot-`init` block), with the runtime halves added:
 
 - `teslrt.SetSessionRevokedHook` — consulted only on renewal, after the lifetime checks, before
-  minting; a panicking hook *denies* (`runtime/go/teslrt/jwt.go`), matching `tesl/jwt.rkt`'s
+  minting; a panicking hook *denies* (`runtime/go/teslrt/jwt.go`), matching `tesl/jwt.tesl`'s
   "any error from the hook denies the renewal".
 - `teslrt.SetPreviousSessionKey` existed already and was simply never called — a one-line miss.
 - `ServeOptions.ListenAddress` → the bind address.
 - `teslrt.SetHealthProbePath` — exempts that path from the Host check only; the cross-site guard
   still applies.
 - `teslrt.SetContentSecurityPolicy` — clause > `TESL_CSP` > `frame-ancestors 'none'`, the same
-  precedence `dsl/web.rkt` uses.
+  precedence `dsl/web.tesl` uses.
 
 `trustedProxies` is now **refused** with a message that says why: the Go backend has no
 `request.clientAddress`, so the clause would configure a reader that does not exist. Refusing beats
@@ -134,7 +134,7 @@ accepting a security declaration that does nothing.
 
 ### F2 — No security-header floor on Go responses (severity: **high**)
 
-`dsl/web.rkt` wraps every response in `harden-servlet` → `add-security-headers`:
+`dsl/web.tesl` wraps every response in `harden-servlet` → `add-security-headers`:
 `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`,
 HSTS when the *configured* public origin is https and not loopback, a CSP on HTML, and
 `Cache-Control: no-store` on the JSON API. The comment records that this exists precisely because
@@ -146,47 +146,47 @@ SPA-fallback paths set none.
 **Fixed:** `runtime/go/teslrt/serve.go` now wraps the whole surface — API, static file and SPA
 fallback — in a `hardenedWriter` that applies the floor at `WriteHeader` time, which is the first
 point where the `Content-Type` is known, so the CSP lands on HTML and `no-store` on JSON exactly as
-Racket splits them. A header the producer already set wins. `Flush` passes through, so SSE still
+Legacy splits them. A header the producer already set wins. `Flush` passes through, so SSE still
 streams.
 
 HSTS is derived from `PublicOrigin()` only — never from a request Host — which is the same rule
-Racket states (Risk 44).
+Legacy states (Risk 44).
 
 ### F3 — Unbounded request-body read (severity: **medium-high**, DoS)
 
-The emitted handler did `io.ReadAll(teslRequest.Body)` with no limit. Racket caps the body at
+The emitted handler did `io.ReadAll(teslRequest.Body)` with no limit. Legacy caps the body at
 `TESL_MAX_BODY_BYTES` (default 1 MiB) and answers **413** before parsing, because the body is read
 whole into memory and parsed.
 
 **Fixed:** emitted handlers now call `teslrt.ReadRequestBody`, which reads
 `LimitReader(body, cap+1)`, answers `(bytes, 0, "")` when usable, `(nil, 413, "Request body too
 large")` over the cap, and `(nil, 400, "Missing JSON payload")` on a read failure — the same
-variable, the same default, the same status as Racket.
+variable, the same default, the same status as Legacy.
 
 ### F4 — `sessionPolicy ShortSession` only shortened the cookie (severity: **medium**)
 
 Go's `SessionPolicyTTL` returned 900s, but only `ssoCookieLine` read it. `JwtSign` and `JwtRenew`
 used the fixed `jwtTTLSeconds = 3600` and `jwtAbsoluteMaxSeconds = 12h`. So a `ShortSession`
-server on Go minted **1-hour tokens against a 12-hour cap** while the same source on Racket minted
+server on Go minted **1-hour tokens against a 12-hour cap** while the same source on Legacy minted
 15-minute tokens against an 8-hour cap. The cookie expired early; the token did not.
 
 **Fixed:** both numbers are policy-driven, with `ShortSession` = 900s / 8h — the same pair
-`tesl/jwt.rkt` names, and named rather than derived for the reason that file gives (applying a 12×
+`tesl/jwt.tesl` names, and named rather than derived for the reason that file gives (applying a 12×
 multiplier to a 15-minute TTL yields a cap nobody chose).
 
-### F5 — Racket could not be read by Go: ADT columns (severity: **high** for migration)
+### F5 — Legacy could not be read by Go: ADT columns (severity: **high** for migration)
 
 An ADT column is JSONB holding `{"tag": …, "fields": {…}}`. Measured, on one live table:
 
 ```
--- written by the Racket backend
+-- written by the Legacy backend
 t-1 | "{\"tag\":\"Low\"}"                     jsonb_typeof = string
 -- written by the Go backend
 t-1 | {"tag": "Low"}                          jsonb_typeof = object
 ```
 
-`dsl/sql.rkt` binds the serialised value as a *string* parameter, so PostgreSQL stores a jsonb
-**string** whose contents are the document. Racket's reader accepts either shape. Go's reader
+`dsl/sql.tesl` binds the serialised value as a *string* parameter, so PostgreSQL stores a jsonb
+**string** whose contents are the document. Legacy's reader accepts either shape. Go's reader
 accepted only its own and panicked on the incumbent one:
 
 ```
@@ -197,27 +197,27 @@ panic: database: a Priority column holds codec: expected a JSON object
 premise.
 
 **Fixed:** `teslrt.ParseColumnJSON` unwraps exactly one layer of JSON-string wrapping. All four
-directions now work; verified by running the Racket writer then the Go reader, and the reverse,
+directions now work; verified by running the Legacy writer then the Go reader, and the reverse,
 against the probe cluster.
 
-### F6 — Racket decoded ADT payload fields fail-open (severity: **high**, incumbent backend)
+### F6 — Legacy decoded ADT payload fields fail-open (severity: **high**, incumbent backend)
 
 Found while validating F5, and *not* a Go bug. `Ast`-side, `adt-field-spec-template` holds the
 field **form** the declaration was written with — `(label : type)` — not a type. Three sites read it
 as a type:
 
-- `jsexpr->typed-value` (`dsl/types.rkt`) — so every payload field decoded **untouched**. A
+- `jsexpr->typed-value` (`dsl/types.tesl`) — so every payload field decoded **untouched**. A
   `Maybe` field inside a stored or posted variant came back as the raw wire hash
   `#hash((tag . Nothing))` instead of `Nothing`, and a `case … of Nothing / Something` then matched
   no arm.
 - `runtime-type-satisfied?` — vacuously true for a datum it does not recognise, so nothing said so.
-- `dsl/web.rkt`'s ADT return validator — **this one is correct**: its
+- `dsl/web.tesl`'s ADT return validator — **this one is correct**: its
   `return-spec-expected-shape` strips the binder itself and handles the `:::` proof form, so
   passing the whole field form is what it wants. Left alone.
 
 Reproduced standalone, outside SQL entirely:
 
-```racket
+```legacy
 (define-adt Priority [Low] [Numbered [level : Integer]] [Named [label : String] [note : (Maybe String)]])
 (jsexpr->typed-value 'Priority (runtime-value->jsexpr (Named "urgent" Nothing)) 'probe)
 ;; before: note = #hash((tag . Nothing))
@@ -242,7 +242,7 @@ fn label(p: Priority) -> String =
     Numbered other -> "other"
 ```
 
-The checker accepted it. Racket emitted `(= p 3)` and died at run time:
+The checker accepted it. Legacy emitted `(= p 3)` and died at run time:
 `=: contract violation, expected: number?, given: (adt-value-data 'Priority …)`. The Go backend
 refused it at compile time with a message claiming a missing feature.
 
@@ -269,7 +269,7 @@ tuples"* — was the right question and the answer was no.
 
 `Tuple2`/`Tuple3` are ordinary ADTs and the Go backend emits them (the live PostgreSQL test uses
 `Tuple2`). `Ast.TTuple` is the **comma type form** `(Int, String)`: it parses as a type, *no
-expression inhabits it* (`(a, b)` as a value is a parse error), no corpus file uses it, and Racket
+expression inhabits it* (`(a, b)` as a value is a parse error), no corpus file uses it, and Legacy
 lowers it to `(list Integer String)` — a shape no runtime type rule recognises, so the annotation
 validates nothing. The message now says exactly that and points at `Tuple2`.
 
@@ -278,7 +278,7 @@ under a comment claiming generic ADTs have no comparable form — a comment made
 fix. `supports_equality` refuses only function values, streams, raw JSON, proof-carrying wrappers,
 opaque runtime records, and **type parameters**. The refusal now carries the *cause*:
 
-- a type parameter is a real gap (Racket compares two `a` values structurally — see OQ2);
+- a type parameter is a real gap (Legacy compares two `a` values structurally — see OQ2);
 - a function value, a stream or a proof is not something either backend compares, and calling
   those "not yet" invites a fix that should not exist.
 
@@ -300,7 +300,7 @@ rather than as features: `Ast.TypeAlias` (`type X = String` parses as a *newtype
 clauses — never on a record, entity or constructor field; no site anywhere constructs
 `checker = Some`). See OQ5.
 
-Also fixed while in the file: the renew rejection message diverged from Racket
+Also fixed while in the file: the renew rejection message diverged from Legacy
 ("Session cannot be renewed" vs "Session cannot be renewed: no usable issued-at claim").
 
 ---
@@ -349,7 +349,7 @@ nothing warns. See OQ3.
 **P2 — `ListUniqueBy` is O(n²) while its own comment claims otherwise.**
 
 ```go
-// ListUniqueBy keeps the FIRST occurrence and preserves order, matching Racket's
+// ListUniqueBy keeps the FIRST occurrence and preserves order, matching Legacy's
 // hash-based `List.unique`.
 func ListUniqueBy[T any](xs []T, equal func(T, T) bool) []T {
 	out := make([]T, 0, len(xs))
@@ -360,8 +360,8 @@ func ListUniqueBy[T any](xs []T, equal func(T, T) bool) []T {
 	}
 ```
 
-Racket's is hash-based and linear. On 10⁴ distinct elements that is ~10⁸ comparisons against ~10⁴.
-The comment says "matching Racket's hash-based `List.unique`" and the complexity does not match.
+Legacy's is hash-based and linear. On 10⁴ distinct elements that is ~10⁸ comparisons against ~10⁴.
+The comment says "matching Legacy's hash-based `List.unique`" and the complexity does not match.
 Left for OQ6 rather than fixed, because the fix is an emitter decision (which element types can
 produce a comparable key), not a local edit — and getting it wrong would silently change `unique`'s
 semantics for float/`Int`/newtype elements.
@@ -371,7 +371,7 @@ semantics for float/`Int`/newtype elements.
 - Constant-time comparison wherever it matters: `subtle.ConstantTimeCompare` for secrets and
   password keys, `hmac.Equal` for every MAC. `secret.go` explains *why* per site.
 - `Secret` prints as `[redacted]` via `String()`; a `secret` column binds its plaintext (storage is
-  not rendering) and reads back into the redacting carrier — the same rule `dsl/sql.rkt` states.
+  not rendering) and reads back into the redacting carrier — the same rule `dsl/sql.tesl` states.
 - Static serving resolves the path and then checks containment, so an encoded traversal cannot
   slip past.
 - Outbound HTTP has connect and read deadlines with env overrides, a verified TLS chain, and a
@@ -475,7 +475,7 @@ place for an argument the caller rather than the caller's caller supplies. It fa
 Above an estimated 128 bytes with ≥2 payload variants, the emitter switches from the flat struct to
 one payload struct per variant behind a pointer: the value becomes a tag plus a pointer whatever
 the payloads do. `example/chat/chat-backend.tesl` is the corpus's own case (three variants, nine
-strings, ~170 bytes → 32) and is now emitted boxed; its tests and its Racket oracle both pass.
+strings, ~170 bytes → 32) and is now emitted boxed; its tests and its Legacy oracle both pass.
 A dedicated test exercises construction, a five-field `case`, a nested `Maybe` payload, equality
 across variants, and a database column through the JSONB codec, on both backends and against a live
 cluster.
@@ -490,7 +490,7 @@ not grow with the type.
 `Ast.field_def.checker` (never set to `Some` anywhere) and `Ast.TypeAlias` (never built by the
 parser) are gone, along with 43 pattern sites across 13 files. Corpus `--check` sweep clean, and
 `scripts/regen-rkt-snapshots.sh --check` byte-identical — so the frontend surgery changed no emitted
-Racket.
+Legacy.
 
 **OQ6 — `List.unique`. → keyed fast path.**
 `ListUniqueKeyed` (one map pass) is chosen whenever the element type has a comparable key whose
@@ -502,16 +502,16 @@ containers and `secret`s keep the closure path.
 **OQ7 — 415 on a non-JSON body. → added.**
 Emitted handlers with a declared payload now answer 415 for a content type that is not JSON and 400
 "Missing JSON payload" for an empty body, before parsing — the same statuses, in the same order, as
-`dsl/web.rkt`'s `parse-json-body`. Zero corpus api-tests changed behaviour.
+`dsl/web.tesl`'s `parse-json-body`. Zero corpus api-tests changed behaviour.
 
 **OQ8 — `hostname.go`. → differential test.**
 differential checks against `net/netip` over a generated corpus. They pin the SHAPE of the disagreement rather
 than demanding agreement, because disagreeing is the module's purpose: `netip` refuses `2130706433`
 and `0x7f.0.0.1`, which a resolver accepts as 127.0.0.1.
 
-**OQ9 — load-tests. → they work; baselines match Racket.**
-*A correction to §4 of the original review*: I wrote that a baseline "needs the store the Racket
-harness keeps". It keeps none. `dsl/load-test.rkt` prints "in-process baselines; store/compare
+**OQ9 — load-tests. → they work; baselines match Legacy.**
+*A correction to §4 of the original review*: I wrote that a baseline "needs the store the Legacy
+harness keeps". It keeps none. `dsl/load-test.tesl` prints "in-process baselines; store/compare
 deferred" and moves on. Go now says the same thing in the same place, so a `baseline` clause and a
 regression assertion compile and run on both backends with byte-identical output. Real baselines
 are a language feature owed to both backends, not a migration item.
@@ -534,16 +534,16 @@ twice before** (jwt/sso_route in this pass), which makes the gated file sets a p
 mechanical check of their own — see the new open question below.
 
 **F11 — no api-test on either backend could catch a content-type regression.**
-Go's `ApiRequest` sent no `Content-Type` at all; Racket's `dispatch-api-test-request` hands the
+Go's `ApiRequest` sent no `Content-Type` at all; Legacy's `dispatch-api-test-request` hands the
 dispatcher an already-parsed body, so its api-tests never reach the check. Go's harness now defaults
 to `application/json` when a body is present and the test did not choose otherwise — so a test CAN
-now assert the 415, which is what the new case does. Racket's harness still cannot; that asymmetry
+now assert the 415, which is what the new case does. Legacy's harness still cannot; that asymmetry
 is recorded rather than papered over.
 
 **F12 — three deliberate divergences from `netip`, now pinned.**
 CGNAT (100.64/10, netip has no predicate), the whole of 0.0.0.0/8 (netip's `IsUnspecified` is only
 0.0.0.0 exactly), and `>= 224` covering multicast AND the reserved space above it under one label.
-Each matches `dsl/private/host-classify.rkt` rule for rule, and each is now a test that says so, so
+Each matches `dsl/private/host-classify.tesl` rule for rule, and each is now a test that says so, so
 "make it agree with netip" cannot be mistaken for a fix. One shared laxity is pinned too: both
 backends accept a leading `-` in a hostname label.
 
@@ -579,14 +579,14 @@ corpus program needs it. It fails closed, so waiting costs a refusal rather than
 
 ## 7d. Checked-in Go output (2026-08-19)
 
-The `.rkt` snapshots have caught "a change that should not have changed anything" for years. The
+The `.tesl` snapshots have caught "a change that should not have changed anything" for years. The
 Go backend had no equivalent: the corpus gate asks whether emitted Go BUILDS and whether its
 tests RUN, never whether it is the Go the maintainer last read. An emitter edit could reshape
 every generated program and every phase would still pass.
 
 `scripts/regen-go-snapshots.sh` now writes one `<name>.go.snap` per source under `example/`, and
 ci.sh diffs them byte for byte. 107 snapshots, 1.74 MB — the same order as the 1.55 MB of
-committed `.rkt`.
+committed `.tesl`.
 
 Two decisions worth stating:
 
@@ -596,7 +596,7 @@ Two decisions worth stating:
     does. `go.mod` IS included — its `require` block is where a program's dependency set shows
     up, so a change that starts pulling pgx into a program with no database is a diff rather
     than a surprise.
-  - **No path canonicalisation is needed**, unlike the `.rkt` phase: the Go emitter bakes only
+  - **No path canonicalisation is needed**, unlike the `.tesl` phase: the Go emitter bakes only
     the BASENAME into its `//line` directives, so a snapshot does not depend on where the
     repository sits.
 
@@ -624,4 +624,4 @@ Delete the overlay the moment nixpkgs carries 1.26.6 or newer.
 - JWT with no header parse.
 - The decision to make a lint finding on emitted code an emitter bug rather than a suppression.
 - The two `critical-review` refusals: a test that asserts a proof operation fails at run time is
-  asserting a property of the Racket runtime, not of Tesl.
+  asserting a property of the Legacy runtime, not of Tesl.

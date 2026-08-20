@@ -59,13 +59,37 @@ type diagnostic = {
   manual     : string option;
 }
 
-type compile_result =
-  | Success of string            (** Racket source code *)
-  | Failure of diagnostic list   (** Parse or type errors *)
-
 type go_compile_result =
   | GoSuccess of Emit_go.artifact list
   | GoFailure of diagnostic list
+
+(* Mutation results are backend-neutral. A failing test marker means the mutant was
+   detected; a non-zero process without evidence that tests ran is only an invalid
+   mutant, not a kill. *)
+let output_lines output = String.split_on_char '\n' output
+
+let output_indicates_failure output =
+  List.exists (fun line ->
+    line = "FAILURE" || line = "ERROR" || line = "FAIL" ||
+    String.length line >= 7 && String.sub line 0 7 = "--- FAIL")
+    (output_lines output)
+
+let output_indicates_tests_ran output =
+  output_indicates_failure output ||
+  List.exists (fun line ->
+    line = "PASS" || line = "ok" ||
+    String.length line >= 3 && String.sub line 0 3 = "ok " ||
+    String.length line >= 12 && String.sub line (String.length line - 12) 12 = " test passed")
+    (output_lines output)
+
+let classify_mutant_run ~exit_code ~output =
+  exit_code = 0 && not (output_indicates_failure output)
+
+let classify_mutant_outcome ~exit_code ~output =
+  if output_indicates_failure output then `Killed
+  else if output_indicates_tests_ran output then
+    if exit_code = 0 then `Survived else `Killed
+  else `Invalid
 
 type local_binding = {
   file : string;
@@ -2599,7 +2623,7 @@ let parse_module_file path =
    [resolve_local_import_path] spells the same file differently depending on
    the importing file (`main.tesl` on the CLI vs `./main.tesl` reached through
    a dep's back-edge), and raw-string nodes made the SCC containing the entry
-   invisible — the emitter then fell back to plain requires and `raco make`
+   invisible — the emitter then fell back to plain requires and `go-tool make`
    died with a raw "cycle in loading" (2026-07-08 audit). *)
 let canonical_import_path = Validation_common.canonical_import_path
 
@@ -2691,7 +2715,7 @@ let cyclic_local_import_paths_for_entry entry_path =
 (* ── WS1: opt-in per-phase wall-clock timing ────────────────────────────────
    When the environment variable [TESL_PHASE_TIMING=1] is set, each compiler
    phase (parse / typecheck / proof / validation / emit) prints its wall-clock
-   duration in milliseconds to *stderr* so it never pollutes the emitted Racket
+   duration in milliseconds to *stderr* so it never pollutes the emitted code
    on stdout.  When the flag is unset the cost is a single [Sys.getenv_opt]
    lookup per [compile_source] call and the phase thunks run unwrapped — no
    timing, no allocation, no stderr writes. *)
@@ -2750,7 +2774,7 @@ let module_local_diags source (m : Ast.module_form) : diagnostic list =
 (* ── Cross-module structural validation (2026-07-08 multi-module audit) ─────
    `--check <entrypoint>` historically validated the entrypoint plus module
    INTERFACES only, so two classes of dependency errors surfaced one phase too
-   late (at that module's own emit, or as a raw Racket error at `raco make`):
+   late (at that module's own emit, or as a raw runtime error at `go-tool make`):
 
    1. EXPORT LOCALITY — a dependency whose `exposing` list re-exports an
       imported name passed the whole-program check, then its emit failed T001.
@@ -2758,7 +2782,7 @@ let module_local_diags source (m : Ast.module_form) : diagnostic list =
       only pure declarations (fn/type/record/entity/const/fact/tests/capturers);
       a cycle containing config decls (server/database/queue/sseChannel/api/
       codec/capability/agent/email/cache/workers/`main`) emitted provides with
-      no definition, and `raco make` rejected the require graph with a raw
+      no definition, and `go-tool make` rejected the require graph with a raw
       "standard-module-name-resolver: cycle in loading".
 
    3. (2026-07-09, the systemic hole behind both) MODULE BODIES — the
@@ -2786,10 +2810,6 @@ let module_local_diags source (m : Ast.module_form) : diagnostic list =
    own per-file run), never re-reported under each consumer.  The graph is
    still traversed through skipped modules (their deps may not be CLI args),
    and cycle/self-import detection is unaffected. *)
-(* KEEP IN SYNC with the emitter's cyclic-SCC inliner (emit_racket.ml): the
-   None arms below are exactly the decl kinds the inliner can lower inside an
-   import cycle.  The user-facing diagnostic further down enumerates the same
-   set — extend all three together when the inliner grows. *)
 let cycle_unsafe_decl_reason (d : Ast.top_decl) : string option =
   match d with
   | Ast.DFunc fd when fd.kind = Ast.MainKind -> Some "`main()`"
@@ -2824,7 +2844,7 @@ let cycle_decl_bound_name (d : Ast.top_decl) : string option =
 (* A cyclic SCC is COLLAPSED into one namespace, and that is where a same-named
    declaration can be lost.  The rule is not "two members of a cycle share a name" —
    measured, that compiles and runs CORRECTLY for a two-member cycle: `A <-> B` where each
-   declares its own `helper` keeps them apart from either entry (tests/tesl-test.rkt pins
+   declares its own `helper` keeps them apart from either entry (tests/tesl-test.go.snap pins
    it, for a function and for a record reached through qualified annotations).
 
    What breaks is a member that inlines TWO other members which share a name: the
@@ -3197,115 +3217,15 @@ let check_module ?skip_dep_body source (m : Ast.module_form) : diagnostic list =
 
 let default_root_path () =
   match Sys.getenv_opt "TESL_REPO_ROOT" with
-  | Some p when p <> "" -> p
+  | Some path when path <> "" -> path
   | _ ->
     let rec find dir =
-      let candidate = Filename.concat dir "compiler" in
-      if (try Sys.file_exists candidate && Sys.is_directory candidate with _ -> false)
-      then dir
+      if Sys.file_exists (Filename.concat dir "compiler") then dir
       else
         let parent = Filename.dirname dir in
-        if parent = dir then Filename.current_dir_name
-        else find parent
+        if parent = dir then Filename.current_dir_name else find parent
     in
     find (Filename.dirname Sys.executable_name)
-
-(** Compile a source string: parse + (optional) type-check + emit Racket.
-    When type_check=true (the default), returns Failure if any errors exist — no
-    Racket is emitted for a module that would fail `tesl check`. *)
-let compile_source ?(root_path=default_root_path ()) ?(type_check=true) ?(debug=false) filename source =
-  (* Read the timing flag exactly once per compile; [time_phase] is a no-op
-     wrapper when it is false, so the non-timing path is unchanged. *)
-  let timing = phase_timing_enabled () in
-  match time_phase timing "parse" (fun () -> parse_module filename source) with
-  | Err e -> Failure [diag_of_parse_error e]
-  | Ok m ->
-    let diags =
-      if not type_check then []
-      else
-        (* Same phases, same order as [check_module]; split here only so each
-           wall-clock segment can be reported independently.  The list built is
-           byte-identical to [check_module source m]. *)
-        let type_diags =
-          time_phase timing "typecheck" (fun () ->
-            legacy_bool_diagnostics m.source_file source m
-            @ regex_literal_diagnostics m
-            @ type_diags_of source m)
-        in
-        let proof_diags =
-          time_phase timing "proof" (fun () ->
-            List.map diag_of_proof_error (Proof_checker.check_module m))
-        in
-        let validation_diags =
-          time_phase timing "validation" (fun () ->
-            List.map diag_of_validation_error (Validation.check_module m))
-        in
-        let graph_diags =
-          time_phase timing "modgraph" (fun () -> cross_module_diags m)
-        in
-        type_diags @ proof_diags @ validation_diags @ graph_diags
-    in
-    if diags <> [] then Failure diags
-    else begin
-      Emit_racket.set_debug_mode debug;
-      (* Desugar AFTER all enforcement/diagnostics ran on the surface forms,
-         BEFORE emit.  Identity-preserving today (see Desugar). *)
-      let m = time_phase timing "desugar" (fun () -> Desugar.desugar_module m) in
-      let racket =
-        time_phase timing "emit" (fun () ->
-          Emit_racket.compile_to_string ~root_path m)
-      in
-      Emit_racket.set_debug_mode false;
-      Success racket
-    end
-
-let compile_file ?(root_path=default_root_path ()) ?(type_check=true) filename =
-  (* WS1: same opt-in per-phase timing as [compile_source].  This is the entry
-     point the CLI file-compile path (`tesl <file>`) actually uses, so timing
-     must live here too.  No-op when TESL_PHASE_TIMING is unset. *)
-  let timing = phase_timing_enabled () in
-  let source = In_channel.with_open_text filename In_channel.input_all in
-  match time_phase timing "parse" (fun () -> parse_module filename source) with
-  | Err e -> Failure [diag_of_parse_error e]
-  | Ok m ->
-    let diags =
-      if not type_check then []
-      else
-        let type_diags =
-          time_phase timing "typecheck" (fun () ->
-            legacy_bool_diagnostics m.source_file source m
-            @ regex_literal_diagnostics m
-            @ type_diags_of source m)
-        in
-        let proof_diags =
-          time_phase timing "proof" (fun () ->
-            List.map diag_of_proof_error (Proof_checker.check_module m))
-        in
-        let validation_diags =
-          time_phase timing "validation" (fun () ->
-            List.map diag_of_validation_error (Validation.check_module m))
-        in
-        let graph_diags =
-          time_phase timing "modgraph" (fun () -> cross_module_diags m)
-        in
-        type_diags @ proof_diags @ validation_diags @ graph_diags
-    in
-    if diags <> [] then Failure diags
-    else
-      (* Desugar AFTER enforcement/diagnostics, BEFORE emit (identity today). *)
-      let m = time_phase timing "desugar" (fun () -> Desugar.desugar_module m) in
-      let racket =
-        time_phase timing "emit" (fun () ->
-          let cyclic_local_import_paths =
-            if m.source_file = "" || m.source_file = "<test>" then []
-            else cyclic_local_import_paths_for_entry m.source_file
-          in
-          Emit_racket.compile_to_string
-            ~root_path
-            ~cyclic_local_import_paths
-            m)
-      in
-      Success racket
 
 let diag_of_go_emit_error (error : Emit_go.emit_error) : diagnostic = {
   file       = error.loc.file;
@@ -3322,10 +3242,8 @@ let diag_of_go_emit_error (error : Emit_go.emit_error) : diagnostic = {
 }
 
 (** Compile a checked Tesl module into a complete standalone Go module tree.
-    Go receives the surface AST: Racket-specific lowered nodes
-    must never cross this backend boundary. *)
-(* An import CYCLE collapses into ONE Go module: Racket forbids cyclic `require` (hence
-   emit_racket's SCC inliner), but Go files in the same package reference each other
+    Go receives the surface AST *)
+(* An import CYCLE collapses into ONE Go module: Go files in the same package reference each other
    freely — no ordering, no forward declarations — so mutual recursion needs no inlining
    at all, just a shared package.
    Merging the members into one synthetic module reuses the whole single-module path,
@@ -3362,13 +3280,6 @@ let merge_cycle_members (members : Ast.module_form list) =
   | [single] -> Ok single
   | first :: _ as sorted ->
     let names = List.map (fun (m : Ast.module_form) -> m.module_name) sorted in
-    (* GO-SPECIFIC, and the only guard: Racket INLINES an SCC's members with per-module
-       renaming, so two members declaring the same name compile correctly there — measured,
-       and pinned by tests/tesl-test.rkt (same-named `helper`, and a `Widget` record in both
-       members reached through qualified annotations).  Go merges the members into ONE
-       package, where the second declaration would take the first's place in the signature
-       table, so this backend refuses it.  A shared check-time error was tried and was
-       wrong: it rejected programs the Racket backend runs correctly. *)
     let declared_names = List.concat_map (fun (m : Ast.module_form) ->
       List.filter_map cycle_decl_bound_name m.decls) sorted in
     let rec first_duplicate = function
@@ -3505,7 +3416,25 @@ let compile_go_file ?(debug=false) filename =
   let source = In_channel.with_open_text filename In_channel.input_all in
   compile_go_source ~debug ~path:filename filename source
 
-(** Check only — return diagnostics without emitting Racket. *)
+type compile_result =
+  | Success of string
+  | Failure of diagnostic list
+
+let artifacts_text artifacts =
+  String.concat "\n" (List.map (fun (artifact : Emit_go.artifact) -> artifact.contents) artifacts)
+
+let compile_source ?(root_path=default_root_path ()) ?(type_check=true) ?(debug=false) filename source =
+  ignore root_path;
+  ignore type_check;
+  match compile_go_source ~debug ~path:filename filename source with
+  | GoSuccess artifacts -> Success (artifacts_text artifacts)
+  | GoFailure diagnostics -> Failure diagnostics
+
+let compile_file ?(root_path=default_root_path ()) ?(type_check=true) filename =
+  let source = In_channel.with_open_text filename In_channel.input_all in
+  compile_source ~root_path ~type_check filename source
+
+(** Check only — return diagnostics without emitting code. *)
 let local_binding_of_checker (b : Checker.local_binding_info) : local_binding = {
   file = b.loc.file;
   line = b.loc.start.line;
@@ -4173,24 +4102,28 @@ let collect_extra_test_decls test_files =
   in
   go [] test_files
 
-(** Per-mutant wall-clock budget (seconds) for one [raco test] run.  Generous
-    enough for a real DSL test suite to warm up and run, but bounded so a mutant
-    that introduces a non-terminating loop cannot hang the whole session. *)
 let mutant_timeout_secs =
-  (* Per-mutant wall-clock ceiling (DSL warmed, so runs are fast — this only
-     bounds hangs).  Honors TESL_MUTATE_TIMEOUT (main's knob); default 120s. *)
   match Sys.getenv_opt "TESL_MUTATE_TIMEOUT" with
-  | Some s -> (try int_of_string s with _ -> 120)
-  | None   -> 120
+  | Some value -> (try int_of_string value with _ -> 120)
+  | None -> 120
 
-(** Shell prefix that bounds a command's wall-clock time, when the coreutils
-    [timeout] utility is available; empty otherwise (so the command still runs,
-    just unbounded).  Computed once.  [timeout] exits 124 when the budget is
-    exceeded; callers classify exit 124 as an infrastructure error, never a kill. *)
 let timeout_prefix = lazy (
   if Sys.command "command -v timeout >/dev/null 2>&1" = 0
   then Printf.sprintf "timeout %d " mutant_timeout_secs
   else "")
+
+let run_capture cmd : int * string =
+  let output_file = Filename.temp_file "tesl_process_" ".txt" in
+  Fun.protect
+    ~finally:(fun () -> try Sys.remove output_file with Sys_error _ -> ())
+    (fun () ->
+       let full = Printf.sprintf "%s > %s 2>&1" cmd (Filename.quote output_file) in
+       let exit_code = Sys.command full in
+       let output =
+         try In_channel.with_open_text output_file In_channel.input_all
+         with Sys_error _ -> ""
+       in
+       exit_code, output)
 
 let mutation_test_count (m : module_form) =
   List.fold_left (fun count -> function
@@ -4209,325 +4142,6 @@ let prepare_mutation_suite extra_test_decls (m : module_form) =
       "mutation testing would skip %d infrastructure/api/load test block(s); refusing to report a partial score"
       removed)
   else Result.Ok stripped
-
-(** Run [cmd] via the shell, capturing its combined stdout+stderr and exit code.
-    Output is redirected to a temporary file and read back, so this depends only
-    on [Sys.command] (whose result is the shell exit code, already decoded — a
-    process killed by a signal surfaces as a non-zero [128 + signo] code, and
-    [timeout] surfaces as 124).  Callers that treat "non-zero ⇒ failure" thus
-    handle test failures, crashes, and timeouts uniformly.  Returns
-    [(exit_code, output)]. *)
-let run_capture cmd : int * string =
-  let out_tmp = Filename.temp_file "tesl_mutant_out_" ".txt" in
-  Fun.protect
-    ~finally:(fun () -> (try Sys.remove out_tmp with Sys_error _ -> ()))
-    (fun () ->
-       let full = Printf.sprintf "%s > %s 2>&1" cmd (Filename.quote out_tmp) in
-       let exit_code = Sys.command full in
-       let output =
-         try In_channel.with_open_text out_tmp In_channel.input_all
-         with Sys_error _ -> ""
-       in
-       (exit_code, output))
-
-(** [true] when [output] contains a rackunit failure/error marker.  rackunit
-    prints a "FAILURE" banner for every failed check ([exn:test:check]) and an
-    "ERROR" banner for any other raised exception, each on its own line.  This
-    mirrors the failure detection in [tests/example-test-batch.rkt]. *)
-let output_indicates_failure output =
-  (* Implemented with a plain line scan rather than [Str]: this predicate runs
-     on worker domains during parallel mutant evaluation, and [Str]'s matcher
-     keeps global, non-reentrant match state that is unsafe to touch from
-     several domains at once.  A line scan is allocation-light and trivially
-     thread-safe.  Equivalent to the regex "(^|\n)(FAILURE|ERROR)(\n|$)": true
-     iff some line of [output] is exactly "FAILURE" or exactly "ERROR". *)
-  List.exists (fun line -> line = "FAILURE" || line = "ERROR")
-    (String.split_on_char '\n' output)
-
-(** [true] when [output] carries a signal that [raco test] actually loaded and
-    RAN the test module — i.e. the mutant compiled and expanded successfully so
-    the suite got a chance to run.  A run that never reaches the tests (a module
-    load / macro-expansion / compile error) is a fundamentally different outcome
-    from a run whose tests executed and failed, and must not be scored as a
-    kill.
-
-    rackunit prints one summary line per module — either a per-check
-    "FAILURE"/"ERROR" banner (a check ran and failed / raised) or, on a clean
-    module, a "N test(s) passed" / "raco test:" progress line.  We treat the
-    presence of ANY of these as proof the suite ran.  A non-zero exit with NONE
-    of them means Racket bailed out before running a single test (the compile /
-    expand error case), which {!classify_mutant_outcome} maps to [`Invalid]. *)
-let output_indicates_tests_ran output =
-  output_indicates_failure output
-  || List.exists (fun line ->
-       (* rackunit / raco-test progress and pass banners. *)
-       let l = String.trim line in
-       (String.length l >= 4
-        && (let contains sub =
-              let n = String.length sub and m = String.length l in
-              let rec at i = i + n <= m && (String.sub l i n = sub || at (i + 1)) in
-              at 0
-            in
-            contains "test passed" || contains "tests passed"
-            || contains "raco test:"))
-     ) (String.split_on_char '\n' output)
-
-(** Classify a single mutant's [raco test] run.  Returns [true] when the mutant
-    SURVIVED (the test suite demonstrably ran and passed), [false] when it was
-    KILLED.
-
-    A mutant is a survivor ONLY when the run exited 0 AND produced no rackunit
-    failure/error marker.  Any non-zero exit (test failure, raised exception,
-    module load/expansion error, crash, or a timeout — [timeout] exits 124) is
-    a kill.  Crucially, an exit of 0 that is nonetheless accompanied by a
-    "FAILURE"/"ERROR" marker is ALSO a kill: this guards against the case where
-    [raco test] reports success without actually exercising the test suite to a
-    clean pass, which previously caused genuinely-killed mutants to be reported
-    as false survivors.
-
-    NOTE: this boolean survivor/non-survivor predicate does NOT distinguish a
-    genuine kill from a mutant that failed to compile — both are "not a
-    survivor".  {!classify_mutant_outcome} refines the non-survivor case into
-    [`Killed] vs [`Invalid]; prefer it for scoring. *)
-let classify_mutant_run ~exit_code ~output =
-  exit_code = 0 && not (output_indicates_failure output)
-
-(** Three-way classification of a single mutant's [raco test] run, used for
-    scoring.  Timeouts are handled by the caller (they surface as exit 124).
-
-    - [`Survived]: exit 0 with no rackunit failure marker — the suite ran clean
-      and did not detect the mutant (a real coverage gap).
-    - [`Killed]: the suite RAN and the mutant was detected — either a rackunit
-      "FAILURE"/"ERROR" banner was printed (regardless of exit code), or the
-      run exited non-zero AFTER the tests demonstrably ran.
-    - [`Invalid]: the mutant did NOT compile / expand (non-zero exit with no
-      evidence the tests ever ran).  A mutant that fails to compile proves
-      NOTHING about the tests, so it must NOT be credited as a kill; the caller
-      excludes it from the kill-rate denominator.
-
-    The distinction between [`Killed] and [`Invalid] is exactly "did the test
-    suite get to run?": a compile/expand error aborts before any test executes
-    (no failure marker, no pass/progress banner), whereas a genuine kill is a
-    test that ran and failed. *)
-let classify_mutant_outcome ~exit_code ~output =
-  if exit_code = 0 && not (output_indicates_failure output) then `Survived
-  else if output_indicates_tests_ran output then `Killed
-  else `Invalid
-
-let run_racket_mutation_baseline ~root_path (m : module_form) =
-  let timeout_pfx = Lazy.force timeout_prefix in
-  if timeout_pfx = "" then Result.Error "mutation testing requires `timeout` on PATH"
-  else
-    match (try Result.Ok (Emit_racket.compile_to_string ~root_path m)
-           with exn -> Result.Error (Printexc.to_string exn)) with
-    | Result.Error message -> Result.Error ("Racket mutation baseline emit failed: " ^ message)
-    | Result.Ok racket ->
-      let path = Filename.temp_file "tesl_mutation_baseline_" ".rkt" in
-      Fun.protect ~finally:(fun () -> try Sys.remove path with Sys_error _ -> ()) (fun () ->
-        Out_channel.with_open_text path (fun channel -> output_string channel racket);
-        let command = Printf.sprintf "%sraco test --quiet %s"
-          timeout_pfx (Filename.quote path) in
-        let exit_code, output = run_capture command in
-        if exit_code = 124 then Result.Error "Racket mutation baseline timed out"
-        else
-          match classify_mutant_outcome ~exit_code ~output with
-          | `Survived -> Result.Ok ()
-          | `Killed -> Result.Error ("Racket mutation baseline tests fail:\n" ^ output)
-          | `Invalid -> Result.Error ("Racket mutation baseline did not compile:\n" ^ output))
-
-(** Number of mutant [raco test] processes to run concurrently.  Defaults to
-    the machine's available parallelism (≈ [nproc]), capped at 16 so a very
-    large core count doesn't spawn an unreasonable number of Racket processes,
-    and floored at 1.  [TESL_MUTATE_JOBS] overrides it (1 ⇒ fully serial, which
-    is handy for A/B'ing the parallel path against the historical behaviour). *)
-let mutate_jobs =
-  let detected =
-    let n = Domain.recommended_domain_count () in
-    if n < 1 then 1 else if n > 16 then 16 else n
-  in
-  match Sys.getenv_opt "TESL_MUTATE_JOBS" with
-  | Some s -> (match int_of_string_opt s with Some n when n >= 1 -> n | _ -> detected)
-  | None   -> detected
-
-(** Run [f 0], …, [f (n-1)] across a bounded pool of at most [jobs] worker
-    domains and return their results in an array indexed by [i] (so the output
-    order is independent of which worker ran which item).
-
-    Each worker repeatedly claims the next index via a single mutex-guarded
-    counter and stores [f i] at [results.(i)].  This is the canonical
-    "shared work queue" pattern: the only mutable state shared across domains is
-    the [next] counter (protected by [mu]) and disjoint cells of [results]
-    (each written by exactly one worker), so there are no data races and the
-    collated result array is deterministic.  [f] is expected to do its heavy
-    lifting in an external process (here, [raco test]), so blocking workers
-    simply let the OS schedule those subprocesses concurrently.
-
-    With [jobs <= 1] (or [n <= 1]) it runs inline on the calling domain, so the
-    fully-serial path spawns no domains at all. *)
-let parallel_map ~jobs (n : int) (f : int -> 'a) : 'a array =
-  if n = 0 then [||]
-  else begin
-    (* Results land in an [option] array so the array can be allocated before
-       any element is computed without needing a dummy ['a] value; each cell is
-       filled exactly once (by the worker that claimed that index) and unwrapped
-       at the end. *)
-    let results : 'a option array = Array.make n None in
-    let store i v = results.(i) <- Some v in
-    if jobs <= 1 || n = 1 then
-      for i = 0 to n - 1 do store i (f i) done
-    else begin
-      let mu = Mutex.create () in
-      let next = ref 0 in
-      let claim () =
-        Mutex.lock mu;
-        let i = !next in
-        if i < n then incr next;
-        Mutex.unlock mu;
-        if i < n then Some i else None
-      in
-      let worker () =
-        let rec loop () =
-          match claim () with
-          | None   -> ()
-          | Some i -> store i (f i); loop ()
-        in
-        loop ()
-      in
-      let pool = min jobs n in
-      let domains = List.init pool (fun _ -> Domain.spawn worker) in
-      List.iter Domain.join domains
-    end;
-    Array.map (function Some v -> v | None -> assert false) results
-  end
-
-(** Run mutation testing on [filename].  Returns a [Mutate.mutation_report]
-    or an error string if the file doesn't parse / type-check.
-    [extra_test_files] provides additional .tesl files whose test blocks are
-    merged into each mutant, enabling cross-file mutation testing. *)
-let mutate_file ?(root_path=default_root_path ()) ?(extra_test_files=[]) filename : mutate_result =
-  let source = In_channel.with_open_text filename In_channel.input_all in
-  match parse_module filename source with
-  | Err e ->
-    MutateErr (Printf.sprintf "parse error at %s:%d: %s"
-                 e.loc.file (e.loc.start.line + 1) e.msg)
-  | Ok m  ->
-    let diags = check_module source m in
-    (match List.filter (fun (d : diagnostic) -> d.severity = "error") diags with
-     | d :: _ -> MutateErr (Printf.sprintf "type error: %s" d.message)
-     | [] ->
-       (* Collect extra test declarations from companion test files *)
-       (match collect_extra_test_decls extra_test_files with
-         | `Err msg -> MutateErr msg
-         | `Ok extra_test_decls ->
-       (match prepare_mutation_suite extra_test_decls m with
-        | Error message -> MutateErr message
-        | Ok base_module ->
-       let suite_diags = check_module source base_module in
-       (match List.filter (fun (d : diagnostic) -> d.severity = "error") suite_diags with
-        | diagnostic :: _ -> MutateErr ("mutation test suite error: " ^ diagnostic.message)
-        | [] ->
-       (match run_racket_mutation_baseline ~root_path base_module with
-        | Error message -> MutateErr message
-        | Ok () ->
-       let mutants = Mutate.generate_mutants m in
-       (* Warm the Tesl DSL bytecode ONCE before timing any mutant.  The first
-          per-mutant `raco test` otherwise cold-compiles the whole DSL (~10-13s),
-          which can exceed [timeout_secs] and misclassify a genuinely-killed mutant
-          as [Error] (124).  Compiling the original module's emitted .rkt with
-          `raco make` builds the shared DSL .zo so each subsequent `raco test` just
-          loads it.  Best-effort: any failure here is harmless (mutants still run). *)
-       (match (try Some (Emit_racket.compile_to_string ~root_path base_module)
-               with _ -> None) with
-        | None -> ()
-        | Some r ->
-          let warm = Filename.temp_file "tesl_mutant_warm_" ".rkt" in
-          Fun.protect
-            ~finally:(fun () -> (try Sys.remove warm with Sys_error _ -> ()))
-            (fun () ->
-              Out_channel.with_open_text warm
-                (fun oc -> Out_channel.output_string oc r);
-              ignore (Sys.command
-                (Printf.sprintf "raco make %s >/dev/null 2>&1" (Filename.quote warm)))));
-       (* ── Phase 1 (SERIAL): emit + prepare every mutant ─────────────────────
-          [Emit_racket.compile_to_string] mutates module-level tables
-          (qualified imports, queue map, …), so it is NOT safe to call from
-          several domains at once; doing so could corrupt the emitted Racket and
-          silently change which mutants are killed.  We therefore emit all
-          mutants here, in deterministic order, on the calling domain.  Emission
-          is pure OCaml and cheap relative to a `raco test` run, so keeping it
-          serial costs little.  Each mutant becomes either a *final* result
-          (emit failure ⇒ [Error]; no test block ⇒ [NoTests]) or a [`Run]
-          carrying the temp `.rkt` path whose `raco test` must still run.
-
-          DB stub: infrastructure-touching test blocks (Postgres DB / server /
-          queue / cache / email) are stripped from each mutant via
-          [Mutate.strip_infra_tests] so they cannot hang a DB-less mutant run.
-          Files with no such tests (lesson42, lesson44, …) are unaffected, so
-          their mutation score is identical to the un-stubbed serial run. *)
-       let arr = Array.of_list mutants in
-       let n = Array.length arr in
-       let prepared = Array.map (fun (mut : Mutate.mutant) ->
-         (* Merge extra tests into this mutant's module, then strip the
-            infrastructure-touching ones before emitting. *)
-           let module_with_tests =
-             if extra_test_decls = [] then mut.module_
-             else { mut.module_ with decls = mut.module_.decls @ extra_test_decls }
-         in
-         (* Emit without type-checking — the mutant may be semantically
-            invalid from the proof perspective, but Racket will still run
-            the runtime checks and tests. *)
-         match (try Some (Emit_racket.compile_to_string ~root_path module_with_tests)
-                with _ -> None)
-         with
-         | None   -> `Done (Mutate.Error "emit error")
-         | Some r ->
-           let has_test = List.exists (function Ast.DTest _ -> true | _ -> false) module_with_tests.decls in
-           if not has_test then `Done Mutate.NoTests
-           else begin
-             let tmp = Filename.temp_file "tesl_mutant_" ".rkt" in
-             Out_channel.with_open_text tmp
-               (fun oc -> Out_channel.output_string oc r);
-             `Run tmp
-           end
-       ) arr in
-       (* ── Phase 2 (PARALLEL): run the `raco test` of each prepared mutant ────
-          Only the external [raco test] subprocess is parallelized, across a
-          bounded pool of [mutate_jobs] worker domains.  Classification is
-          byte-for-byte identical to the serial path: a mutant SURVIVES only on
-          exit 0 with no rackunit FAILURE/ERROR marker; exit 124 (timeout, e.g.
-          an unavailable DB) is [Error]; everything else is KILLED.  Results are
-          collated by mutant index, so the report order — and thus the score —
-          is independent of which worker ran which mutant. *)
-       (* Force the [lazy] timeout prefix ONCE here, on the calling domain:
-          [Lazy.force] is not safe to evaluate concurrently from several domains
-          (it raises [CamlinternalLazy.Undefined]), so resolve it before the
-          pool starts and pass the plain string to the workers. *)
-       let timeout_pfx = Lazy.force timeout_prefix in
-       let run_one i =
-         match prepared.(i) with
-         | `Done result -> result
-         | `Run tmp ->
-           Fun.protect
-             ~finally:(fun () -> (try Sys.remove tmp with Sys_error _ -> ()))
-             (fun () ->
-               let cmd = Printf.sprintf "%sraco test --quiet %s"
-                           timeout_pfx (Filename.quote tmp) in
-               let exit_code, output = run_capture cmd in
-               if exit_code = 124 then Mutate.Error "raco test timed out (no DB?)"
-               else match classify_mutant_outcome ~exit_code ~output with
-                 | `Survived -> Mutate.Survived
-                 | `Killed   -> Mutate.Killed
-                 (* Compile/expand error: the mutant never ran the tests, so it
-                    is INVALID (skipped), NOT credited as a kill. *)
-                 | `Invalid  -> Mutate.Invalid "mutant did not compile")
-       in
-       let result_arr = parallel_map ~jobs:mutate_jobs n run_one in
-       let results = List.mapi (fun i mut -> (mut, result_arr.(i))) mutants in
-       let killed   = List.length (List.filter (fun (_, r) -> r = Mutate.Killed)   results) in
-       let survived = List.length (List.filter (fun (_, r) -> r = Mutate.Survived) results) in
-       let invalid  = List.length (List.filter (fun (_, r) -> match r with Mutate.Invalid _ -> true | _ -> false) results) in
-       let errors   = List.length (List.filter (fun (_, r) -> match r with Mutate.Error _ -> true | _ -> false) results) in
-       MutateOk { Mutate.total = List.length mutants; killed; survived; invalid; errors; results })))))
 
 let rec remove_tree path =
   if Sys.file_exists path then
@@ -4682,246 +4296,3 @@ let mutate_go_file ?(extra_test_files=[]) filename : mutate_result =
                       errors;
                       results;
                     }))))))
-
-(* ── WS6: standalone-executable build (`tesl --exe`) ─────────────────────────
-   Emit the program's Racket *exactly* as `tesl <file>` would (byte-identical
-   — this reuses [compile_file], so the distribution path never changes the
-   emitted source) and then bundle it into a standalone native executable with
-   `raco exe`.
-
-   The emitted module closure is staged FLAT into a fresh temp directory (the
-   same approach as [debug_inspect] below).  Emitted local-import requires use
-   *relative* `(file "X.rkt")` paths resolved against the requiring module's
-   own directory, and local imports are same-directory-only by language design
-   — so one flat temp dir holding every emitted `.rkt` keeps them resolving,
-   and no generated file lands in the user's source tree.  `raco exe` then
-   inlines every required module — including the `tesl/...` DSL collection — so
-   the resulting binary starts without paying the Racket source cold-start and
-   needs no `raco link`.  (Data files referenced at runtime, e.g. a server's
-   `#:static-dir`, are not bundled by `raco exe`; that is a `raco distribute`
-   concern, out of scope here.) *)
-type build_result =
-  | BuildOk      of string          (** path to the produced executable *)
-  | BuildDiags   of diagnostic list (** compile/type errors — nothing emitted *)
-  | BuildErr     of string          (** raco/IO failure with combined output *)
-
-(** Compile [filename] and bundle it into a standalone executable.
-    [out] overrides the executable path (default: source basename without the
-    `.tesl` suffix).  Requires `raco` on PATH. *)
-let build_exe ?(root_path=default_root_path ()) ?out filename : build_result =
-  if not (Sys.file_exists filename) then
-    BuildErr (Printf.sprintf "%s: No such file" filename)
-  else
-    match compile_file ~root_path ~type_check:true filename with
-    | Failure diags -> BuildDiags diags
-    | Success racket ->
-      let stem =
-        if Filename.check_suffix filename ".tesl"
-        then Filename.chop_suffix filename ".tesl"
-        else filename
-      in
-      let exe_path = match out with Some p -> p | None -> stem in
-      (* Stage the emitted closure (entry + every transitive local import)
-         flat into a temp dir — see the header comment above.  Basenames are
-         unique because local imports are same-directory-only. *)
-      let abs_src =
-        let p = if Filename.is_relative filename
-                then Filename.concat (Sys.getcwd ()) filename
-                else filename in
-        (try Unix.realpath p with _ -> p)
-      in
-      let deps =
-        let graph = build_local_import_graph abs_src in
-        let entry_canon = canonical_import_path abs_src in
-        Hashtbl.fold (fun path _ acc ->
-          if path = entry_canon then acc else path :: acc) graph []
-      in
-      let compiled_deps =
-        List.fold_left (fun acc path ->
-          match acc with
-          | Error _ -> acc
-          | Ok xs ->
-            (match compile_file ~root_path ~type_check:true path with
-             | Failure diags -> Error diags
-             | Success dep_racket -> Ok ((path, dep_racket) :: xs))
-        ) (Ok []) deps
-      in
-      (match compiled_deps with
-       | Error diags -> BuildDiags diags
-       | Ok dep_rkts ->
-         (try
-            let tmp_dir = Filename.temp_dir "tesl-exe-" "" in
-            let rkt_name src =
-              Filename.remove_extension (Filename.basename src) ^ ".rkt" in
-            List.iter (fun (dep_abs, dep_racket) ->
-              Out_channel.with_open_text
-                (Filename.concat tmp_dir (rkt_name dep_abs))
-                (fun oc -> Out_channel.output_string oc dep_racket)
-            ) dep_rkts;
-            let rkt_path = Filename.concat tmp_dir (rkt_name abs_src) in
-            Out_channel.with_open_text rkt_path
-              (fun oc -> Out_channel.output_string oc racket);
-            (* [exe_path] may be relative: it resolves against the caller's
-               cwd (unchanged — raco runs from here, only the .rkt moved). *)
-            let cmd =
-              Printf.sprintf "raco exe -o %s %s"
-                (Filename.quote exe_path) (Filename.quote rkt_path)
-            in
-            let exit_code, output = run_capture cmd in
-            if exit_code = 0 then BuildOk exe_path
-            else BuildErr
-                (Printf.sprintf "raco exe failed (exit %d):\n%s" exit_code output)
-          with Sys_error msg -> BuildErr msg))
-
-(* ── AC2: headless `tesl debug-inspect` ──────────────────────────────────────
-   Compile a .tesl with debug instrumentation, then run it headlessly to a single
-   breakpoint via the Racket driver dsl/debug/headless-inspect.rkt, which dumps the
-   paused runtime state (locals + live domain registry + SQL capture) as ONE JSON
-   object on stdout.  No DAP client, no interactive protocol.
-
-   The compiled .rkt bakes its breakpointable source positions from the path
-   handed to the parser, so we compile with the COMPLETE (absolute) path and hand
-   that SAME absolute path to the driver — only then does the breakpoint line we
-   register match the file string in the emitted thsl-src! checkpoints. *)
-type debug_inspect_result =
-  | InspectDiags of diagnostic list   (* compile failed *)
-  | InspectErr of string              (* setup/exec failure *)
-  (* InspectOk never returns: a successful run execs the racket driver, which
-     streams its JSON to stdout and exits — replacing this process. *)
-
-(** Locate the `racket` executable: honour TESL_RACKET, else search PATH. *)
-let find_racket_binary () : string option =
-  match Sys.getenv_opt "TESL_RACKET" with
-  | Some p when p <> "" -> Some p
-  | _ ->
-    let exit_code, out = run_capture "command -v racket" in
-    if exit_code = 0 then
-      (match String.trim out with "" -> None | s -> Some s)
-    else None
-
-(** Run [file] to the FIRST matching breakpoint and dump the paused runtime state
-    as JSON.  [breakpoints] is a list of [(line, condition, hit)] triples — the
-    agent's requested breakpoints, each a 1-based [line] with an optional boolean
-    [condition] string (evaluated over the paused frame's locals) and/or an
-    optional [hit] hit-condition string (e.g. ["%3"] / [">=5"]).  Multiple
-    breakpoints are all registered; the inspector stops at whichever fires first
-    and the JSON's "breakpoint" field reports which.  [mode] is "program" (run the
-    `main` block) or "test" (run the `test` blocks).  On success this execs the
-    Racket driver and never returns; the JSON appears on the inherited stdout. *)
-let debug_inspect ?(root_path=default_root_path ()) ?(continue_mode=false) ~breakpoints ~mode filename
-  : debug_inspect_result =
-  if not (Sys.file_exists filename) then
-    InspectErr (Printf.sprintf "%s: No such file" filename)
-  else begin
-    (* Absolute source path — must match the file string the emitter bakes into
-       the thsl-src! checkpoints so the registered breakpoint line lines up. *)
-    let abs_src =
-      let p = if Filename.is_relative filename
-              then Filename.concat (Sys.getcwd ()) filename
-              else filename in
-      (try Unix.realpath p with _ -> p)
-    in
-    (* Compile with debug instrumentation, parsing under the absolute path. *)
-    let source = In_channel.with_open_text abs_src In_channel.input_all in
-    match compile_source ~root_path ~type_check:true ~debug:true abs_src source with
-    | Failure diags -> InspectDiags diags
-    | Success racket ->
-      (* Multi-module: the emitter requires local imports as RELATIVE
-         `(file "dep.rkt")` paths, resolved against the requiring module's own
-         directory — a lone entry .rkt in the system temp dir dies on its first
-         local import with "cannot open module file".  Compile the whole
-         debug-instrumented closure into a fresh temp DIRECTORY instead. *)
-      let deps =
-        let graph = build_local_import_graph abs_src in
-        let entry_canon = canonical_import_path abs_src in
-        Hashtbl.fold (fun path _ acc ->
-          if path = entry_canon then acc else path :: acc) graph []
-      in
-      let compiled_deps =
-        List.fold_left (fun acc path ->
-          match acc with
-          | Error _ -> acc
-          | Ok xs ->
-            let dep_abs = (try Unix.realpath path with _ -> path) in
-            let dep_source =
-              In_channel.with_open_text dep_abs In_channel.input_all in
-            (match compile_source ~root_path ~type_check:true ~debug:true
-                     dep_abs dep_source with
-             | Failure diags -> Error diags
-             | Success dep_racket -> Ok ((dep_abs, dep_racket) :: xs))
-        ) (Ok []) deps
-      in
-      (match compiled_deps with
-       | Error diags -> InspectDiags diags
-       | Ok dep_rkts ->
-      (try
-         let tmp_dir = Filename.temp_dir "tesl-debug-inspect-" "" in
-         let rkt_name src =
-           Filename.remove_extension (Filename.basename src) ^ ".rkt" in
-         List.iter (fun (dep_abs, dep_racket) ->
-           Out_channel.with_open_text (Filename.concat tmp_dir (rkt_name dep_abs))
-             (fun oc -> Out_channel.output_string oc dep_racket)
-         ) dep_rkts;
-         let tmp_rkt = Filename.concat tmp_dir (rkt_name abs_src) in
-         Out_channel.with_open_text tmp_rkt
-           (fun oc -> Out_channel.output_string oc racket);
-         let driver =
-           let primary = Filename.concat root_path "dsl/debug/headless-inspect.rkt" in
-           if Sys.file_exists primary then primary
-           else
-             (* Installed (no repo checkout): the inspector ships inside the
-                tesl-racket collections, located via TESL_COLLECTIONS_DIR (set by
-                the Nix wrappers to <store>/share/tesl-collections/tesl). *)
-             (match Sys.getenv_opt "TESL_COLLECTIONS_DIR" with
-              | Some d when d <> "" ->
-                let c = Filename.concat d "dsl/debug/headless-inspect.rkt" in
-                if Sys.file_exists c then c else primary
-              | _ -> primary)
-         in
-         if not (Sys.file_exists driver) then
-           InspectErr (Printf.sprintf
-             "headless inspector not found at %s (set TESL_REPO_ROOT or TESL_COLLECTIONS_DIR)" driver)
-         else
-           (match find_racket_binary () with
-            | None -> InspectErr "racket not found; set TESL_RACKET or install Racket"
-            | Some racket_bin ->
-              (* TESL_DEBUG must be set so the driver's in-process expansion of the
-                 debuggee keeps its thsl-src! checkpoints.  Forward the existing env
-                 (including any PLTCOLLECTS a dev worktree set to repoint the `tesl`
-                 collection) and add TESL_DEBUG=1. *)
-              Unix.putenv "TESL_DEBUG" "1";
-              (* Encode the requested breakpoints as a JSON array the driver
-                 parses: [{"line":N,"condition":STR?,"hit":STR?}, ...].  The driver
-                 distinguishes this STRUCTURED form (argv[2]=mode, argv[3]=json)
-                 from the LEGACY single-line form (argv[2]=number) by argv[2]. *)
-              let bp_json =
-                let one (line, cond_opt, hit_opt) =
-                  let fields =
-                    (Printf.sprintf {|"line":%d|} line)
-                    :: (match cond_opt with
-                        | Some c -> [Printf.sprintf {|"condition":%s|} (json_encode_string c)]
-                        | None -> [])
-                    @  (match hit_opt with
-                        | Some h -> [Printf.sprintf {|"hit":%s|} (json_encode_string h)]
-                        | None -> [])
-                  in
-                  "{" ^ String.concat "," fields ^ "}"
-                in
-                "[" ^ String.concat "," (List.map one breakpoints) ^ "]"
-              in
-              (* Trailing "continue" enables headless F5 (run through every
-                 breakpoint, resuming after each, until completion); "once" keeps
-                 the one-shot dump. *)
-              let argv =
-                [| racket_bin; driver; tmp_rkt; abs_src; mode; bp_json;
-                   (if continue_mode then "continue" else "once") |]
-              in
-              flush stdout; flush stderr;
-              (* exec replaces this process: the driver's single JSON object is
-                 written straight to our inherited stdout, then it exits 0. *)
-              (try Unix.execv racket_bin argv
-               with Unix.Unix_error (e, _, _) ->
-                 InspectErr (Printf.sprintf "exec racket failed: %s"
-                               (Unix.error_message e))))
-       with Sys_error msg -> InspectErr msg))
-  end

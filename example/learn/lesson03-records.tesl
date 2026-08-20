@@ -221,11 +221,11 @@ test "update then access nested field" {
 # ─────────────────────────────────────────────
 # THEORY — the full model
 # ─────────────────────────────────────────────
-# Records are lowered to Racket hash maps with a type tag for runtime type checking.
+# Records are lowered to Go values with a type tag for runtime type checking.
 # The "define-record" macro creates: a constructor, per-field accessors, and a
 # runtime type predicate.
 #
-# Record literals "Point { x: 3, y: 4 }" lower to calls to the Racket record constructor.
+# Record literals "Point { x: 3, y: 4 }" lower to calls to the Go record constructor.
 # Record update "{ r | x = 5 }" is lowered to a hash-map copy that overwrites
 # the specified keys.
 #

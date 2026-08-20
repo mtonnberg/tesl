@@ -40,8 +40,7 @@ type go_type =
   (* A DIMENSIONED quantity.  It renders as `float64` — the dimension lives in the compiler's
      type layer and erases — but it is a distinct type HERE, because that is the only thing
      that tells `rate * quantity` (a rate materialising into money) from `rate * scalar` (a
-     rate rescaled): at run time both are floats, and Racket tells them apart by consulting the
-     type its checker recorded. *)
+     rate rescaled): at run time both are floats. *)
   | TQuantity
   | TJson
   (* The api-test handle on an SSE subscription: `let stream = subscribe "/events/ada"`.  It
@@ -372,7 +371,7 @@ let go_quote value =
    at compile time would be the build machine's — so it becomes the runtime call.
 
    An `env` with nothing set answers "", which is the same absent-is-empty rule
-   `tesl/private/runtime.rkt` applies (`empty-string->false`, then `(or … "")` at the use). *)
+   `tesl/private/runtime.tesl` applies (`empty-string->false`, then `(or … "")` at the use). *)
 let go_config_value loc value =
   let unquote s =
     let n = String.length s in
@@ -493,7 +492,7 @@ type entity_info = {
      table variable and nothing else, which is the emission that has always been produced. *)
   ent_database : database_info option;
   (* Whether some `database` block NAMES this entity.  It decides ONE thing: whether a test
-     block starts from an empty table.  Racket clears the stores of REGISTERED databases —
+     block starts from an empty table.  Legacy clears the stores of REGISTERED databases —
      an entity in no `database` declaration is in none of them — so a file without a
      declaration shares one store across its test blocks, which is documented behaviour a
      corpus lesson relies on (`unique index [name]` refusing a second row inserted by a later
@@ -507,8 +506,8 @@ type entity_info = {
   ent_loc : Location.loc;
 }
 
-(* One column, as the SQL side sees it.  `col_name` is the snake_case column `dsl/sql.rkt`
-   derives from the field key, which is what a table created by the Racket backend is already
+(* One column, as the SQL side sees it.  `col_name` is the snake_case column `dsl/sql.tesl`
+   derives from the field key, which is what a table created by the Legacy backend is already
    named by — deriving it differently here would make the two backends unable to share one. *)
 and column_info = {
   col_field : string;
@@ -563,7 +562,7 @@ type queue_info = {
 
 (* A `cache C = Cache { … }` is one package-level store plus the type of what it holds.
    The DATABASE it names is inert here for the same reason a `database` declaration is: the
-   Racket cache reads its own in-memory hash until something binds a PostgreSQL runtime, and
+   Legacy cache reads its own in-memory hash until something binds a PostgreSQL runtime, and
    nothing does that without `with database`. *)
 type cache_info = {
   ca_tesl_name : string;
@@ -582,7 +581,7 @@ type cache_info = {
    that happens at start-up — so they are baked into the store's initialiser exactly as a
    queue's `maxAttempts` is.
 
-   The database it names is inert here for the reason a cache's is: the Racket runtime keeps
+   The database it names is inert here for the reason a cache's is: the Legacy runtime keeps
    its outbox in memory until something binds a PostgreSQL runtime, and nothing does that
    without `with database`. *)
 type email_info = {
@@ -603,7 +602,7 @@ type email_info = {
    per-entity — `RunEvents(runId)` reaches the subscribers of that run and no others — and a
    channel declared with no key parameter is the broadcast case of the same rule.
 
-   The DATABASE it names is inert here for the reason a cache's is: the Racket channel keeps its
+   The DATABASE it names is inert here for the reason a cache's is: the Legacy channel keeps its
    listeners in memory, and the PostgreSQL fan-out only exists to reach OTHER processes. *)
 type channel_info = {
   ch_tesl_name : string;
@@ -642,7 +641,7 @@ type type_table = {
      nullary function — whose bare mention is a partial application the emitter refuses. *)
   consts : (string, go_type * string) Hashtbl.t;
   (* A `database` declaration by NAME.  A Memory-backed one has no emitted form at all — a
-     Racket `define-database` is inert until something CONNECTS to it, and the store a Memory
+     Legacy `define-database` is inert until something CONNECTS to it, and the store a Memory
      database names IS the entity's table variable.  A Postgres-backed one becomes a
      package-level `teslrt.Database` holding what a connection needs, because there the
      declaration decides a real server, a real schema and a real set of tables. *)
@@ -666,7 +665,7 @@ let current_types : type_table option ref = ref None
 (* Module functions whose body performs a PROOF OPERATION (`detachFact` and friends), by
    name.  Those operations erase here, so nothing in them can fail at run time — which
    matters for exactly one shape: a test asserting that calling such a function FAILS, as
-   Racket's runtime does when a value carries more than one proof.  Populated per module,
+   Legacy's runtime does when a value carries more than one proof.  Populated per module,
    read where that assertion is emitted. *)
 let proof_op_functions : (string, string) Hashtbl.t = Hashtbl.create 8
 
@@ -688,7 +687,7 @@ let current_functions : (string, func_decl) Hashtbl.t = Hashtbl.create 16
 let current_type_params : (string, (string * string) list) Hashtbl.t = Hashtbl.create 16
 
 (* ── Equality DICTIONARIES for generic functions ──────────────────────────────
-   `fn same(x: a, y: a) -> Bool = x == y` runs on Racket, which compares two `a` values
+   `fn same(x: a, y: a) -> Bool = x == y` runs on Legacy, which compares two `a` values
    structurally.  An emitted Go generic cannot: `==` needs `comparable`, and Tesl's values
    include maps and slices that are not; `reflect.DeepEqual` would compare a `secret` byte by
    byte, throwing away the constant-time comparison that is the point of the type.
@@ -764,14 +763,14 @@ let current_field_proofs : (string, (string * string) list) Hashtbl.t = Hashtbl.
 (* Record name → the check its RECORD-LEVEL invariant names.  A generated value has to
    satisfy it, and no fieldwise draw can guarantee a relation BETWEEN fields, so the
    generator redraws until the check accepts — rejection sampling, the same 100 attempts
-   Racket allows before it skips the iteration. *)
+   Legacy allows before it skips the iteration. *)
 let current_record_invariants : (string, string * string list) Hashtbl.t = Hashtbl.create 8
 
 (* `serverTools S user` and `humanActions S user`: which of the server's endpoints each CALL
    SITE gets.  The decision is the CHECKER's and is per site — an endpoint is included only
    where the user value's declared proof covers its auth predicates, so the same server
    yields different tool sets to an admin and to a plain user — and the two sets partition
-   the server's endpoints.  Keyed by the call site's line and column, the way the Racket
+   the server's endpoints.  Keyed by the call site's line and column, the way the Legacy
    backend reads the same metadata. *)
 let server_tools_sites : (int * int, string * string list) Hashtbl.t = Hashtbl.create 8
 let human_actions_sites : (int * int, string * string list) Hashtbl.t = Hashtbl.create 8
@@ -807,7 +806,7 @@ let email_of_name loc name =
    binds the store the body's queries run against.  On the Memory backend that store IS the
    entity's table variable, so the block adds nothing at run time and the body is emitted as
    it stands.  A Postgres-backed database is a different store, and emitting the body
-   unchanged would read the in-memory table while the same program on Racket reads the
+   unchanged would read the in-memory table while the same program on Legacy reads the
    server — the two backends would then disagree about what a query ANSWERS, which is worse
    than not compiling.  So it is refused, and the whole corpus is unaffected: every
    `with database` in it names a Memory-backed database.
@@ -827,11 +826,11 @@ let postgres_database loc database_name =
   | _ -> None
 
 (* `transaction { … }` groups statements that must commit together.  With nothing connected it
-   adds NOTHING at run time — Racket's `call-with-queue-transaction` is `(thunk)` unless a
+   adds NOTHING at run time — Legacy's `call-with-queue-transaction` is `(thunk)` unless a
    PostgreSQL connection is active — and against a connected server it is a real BEGIN/COMMIT
    on the connection the block itself opens.
 
-   WHICH server that is, is decided at run time rather than here: Racket keeps ONE
+   WHICH server that is, is decided at run time rather than here: Legacy keeps ONE
    `current-database-runtime`, so a `transaction` opens one on whatever `with database` has
    bound, and the emitted form says exactly that (`teslrt.WithTransaction`).  A module with two
    database declarations therefore needs no disambiguation, because only one of them can be
@@ -862,7 +861,7 @@ let serve_field_dispositions ~server_name ~port ~static_dir ~mount_path ~capabil
   ignore (EServe { server_name; port; static_dir; mount_path; capabilities; loc })
 
 (* ── THE `server` CLAUSE SEAM ─────────────────────────────────────────────────
-   `Ast.server_form` carries sixteen fields.  `emit_racket.ml` honours all of them; this
+   `Ast.server_form` carries sixteen fields.  `emit_legacy.ml` honours all of them; this
    backend read TEN, and the six it ignored were not refused — they were DROPPED.  Two of those
    had teeth: a `sessionRevoked` hook that never ran meant a revoked session went on renewing,
    and a `listenAddress Loopback` that never arrived meant a proxy-only service bound every
@@ -901,7 +900,7 @@ let server_clause_dispositions (server : server_form) : unit =
   ignore (listen_address, health_probe_path, content_security_policy, loc);
   (* INERT BY DESIGN, on BOTH backends: `loginMethods` and its `Password via <fn>` policy name
      are a CHECKED promise about which code paths may mint a session, enforced by the checker
-     (`validation_*`) and carrying no runtime form on either backend — `emit_racket.ml` reads
+     (`validation_*`) and carrying no runtime form on either backend — `emit_legacy.ml` reads
      neither field either. *)
   ignore (login_methods, password_policy_fn);
    (* `trustedProxies` is consumed when generated auth code constructs its request value. *)
@@ -1006,7 +1005,7 @@ let codec_decode_ref type_name =
    request body does, and that expression is emitted long before the codec layer. *)
 
 (* True while emitting somewhere that HAS a request scope in hand: a function that declares a
-   cookie-writing capability, or a handler adapter.  A test body has none — Racket agrees, since
+   cookie-writing capability, or a handler adapter.  A test body has none — Legacy agrees, since
    a test has no HTTP response to attach a cookie to — so a call there passes `nil`, and the
    runtime's own "no HTTP response to attach a cookie to" trap is what a test writing a cookie
    gets.  Without this, an emitted test that called a scope-taking function referenced a
@@ -1014,9 +1013,9 @@ let codec_decode_ref type_name =
 let current_scope_in_hand = ref false
 
 (* True while a HANDLER's body is being emitted.  A check rejection consumed there must
-   ANSWER the client with its own status rather than trap: `dsl/web.rkt` installs the
+   ANSWER the client with its own status rather than trap: `dsl/web.tesl` installs the
    raise-on-escaping-failure wrapper for every function kind except `handler`, so a
-   rejection reached in a handler body is the response on the Racket side too.  Set around
+   rejection reached in a handler body is the response on the Legacy side too.  Set around
    the body, since the consumption site is where the choice is made. *)
 let current_handler_body = ref false
 
@@ -1179,7 +1178,7 @@ let rec type_of_type_expr ?(params=[]) types ty =
         | None ->
           (* `Fact P` is a DETACHED PROOF: a first-class witness produced by `establish`
              and consumed by `attachFact`.  It erases like every other proof — the runtime
-             comment in dsl/private/check-runtime.rkt states the rule outright ("the proof
+             comment in dsl/private/check-runtime.tesl states the rule outright ("the proof
              is asserted without re-checking — correctness is guaranteed by the
              compile-time type system"), and LANGUAGE-SPEC 16.9 gives a proof no runtime
              structure.  So it becomes a zero-size value that carries nothing. *)
@@ -1206,7 +1205,7 @@ let rec type_of_type_expr ?(params=[]) types ty =
      (Tesl.Tuple, example/learn/lesson45-tuples.tesl) are ordinary ADTs and emit like any
      other, and they are what every program in the corpus uses.  The comma form parses, but
      there is no expression that inhabits it — `(a, b)` as a VALUE is a parse error — and on
-     Racket it lowers to `(list Integer String)`, a shape no runtime type rule recognises, so
+     Legacy it lowers to `(list Integer String)`, a shape no runtime type rule recognises, so
      the annotation validates nothing.  Refused rather than mapped onto `Tuple2`, which would
      make a form with no value syntax look inhabited. *)
   | TTuple { loc; _ } -> unsupported loc
@@ -1228,7 +1227,7 @@ let rec type_of_return_spec ?(params=[]) types = function
        "Go backend needs `Tesl.Maybe` imported for a `Maybe (List … ::: ForAll …)` return")
   (* `-> T ? P` is a proof-carrying return.  A proof has no runtime structure in Go — the
      frontend has already discharged it, exactly as for `ForAll` above — so it erases to
-     the value's own type.  Racket does keep a wrapper (`attach-proof-to`), but every read
+     the value's own type.  Legacy does keep a wrapper (`attach-proof-to`), but every read
      there goes through `raw-value`, so the wrapper is an implementation detail of that
      backend rather than part of the value.
      The parser puts the FIRST `? P` in `entity_proof` whether or not it is a provenance
@@ -1425,10 +1424,10 @@ let paren_wraps_whole value from =
   from + 1 < length && value.[from] = '(' && scan from 0 false false
 
 (* A float literal is never emitted bare.  Go folds UNTYPED constant arithmetic
-   EXACTLY — `0.1 + 0.2` becomes 0.3, where Racket gives 0.30000000000000004 — so every
+   EXACTLY — `0.1 + 0.2` becomes 0.3, where Legacy gives 0.30000000000000004 — so every
    literal is emitted as a typed float64 value and each operation rounds per-op, as it
    must.  Two further reasons a bare literal will not do: Go constants have no negative
-   zero, and a typed constant that overflows is a COMPILE error where Racket yields
+   zero, and a typed constant that overflows is a COMPILE error where Legacy yields
    ±inf.0. *)
 let emit_float_literal value =
   if Float.is_nan value then "math.NaN()"
@@ -1803,7 +1802,7 @@ and ordered_key_expr ty left right =
 and equal_expr ty left right =
   match ty with
   | TInt -> Printf.sprintf "teslrt.Equal(%s, %s)" left right
-  (* Float equality is Racket `equal?`, not IEEE `==`: NaN equals NaN and 0.0 does not
+  (* Float equality is Legacy `equal?`, not IEEE `==`: NaN equals NaN and 0.0 does not
      equal -0.0.  Both are inverted from Go's `==`, so `==` is never emitted. *)
   | TFloat | TQuantity -> Printf.sprintf "teslrt.FloatEqual(%s, %s)" left right
   (* A Bool compared with a LITERAL is the value itself, or its negation: `p.Archived ==
@@ -1817,7 +1816,7 @@ and equal_expr ty left right =
   | TString | TBool | TUnit | TAnon -> Printf.sprintf "(%s == %s)" left right
   (* A SECRET compares in CONSTANT TIME: comparing its payload with `==` would leak a prefix
      through how long the comparison took, which is the classic way a token check betrays the
-     token.  Racket's `secret-constant-time-equal?` says the same thing. *)
+     token.  Legacy's `secret-constant-time-equal?` says the same thing. *)
   | TNewtype info when info.secret ->
     Printf.sprintf "teslrt.SecretEqual(%s.Value, %s.Value)"
       (selector_operand left) (selector_operand right)
@@ -1983,7 +1982,7 @@ and ordered_expr ty op left right =
   | TInt -> Printf.sprintf "(teslrt.Compare(%s, %s) %s 0)" left right op
   (* Ordering, unlike equality, IS plain IEEE in both backends. *)
   | TFloat | TQuantity | TString -> Printf.sprintf "(%s %s %s)" left op right
-  (* A BOOL orders false before true — Racket sorts `#f` first, and a `order p.done asc`
+  (* A BOOL orders false before true — Legacy sorts `#f` first, and a `order p.done asc`
      column is exactly the shape that asks. *)
   | TBool ->
     let rank value = Printf.sprintf "teslrt.BoolRank(%s)" value in
@@ -2004,8 +2003,8 @@ let rec supports_ordering = function
   | TFunc _ | TJson | TStream | TCheck _ | TFailure | TAnon -> false
 
 (* Ordering INSIDE A QUERY admits one type the value language does not: a Bool.  PostgreSQL
-   orders boolean columns (false before true) and `dsl/sql.rkt` reproduces that in its own
-   comparison layer (`ordered-comparison-result`) — while Racket's value-level `<` refuses a
+   orders boolean columns (false before true) and `dsl/sql.tesl` reproduces that in its own
+   comparison layer (`ordered-comparison-result`) — while Legacy's value-level `<` refuses a
    boolean outright (`tesl-ord-operand` raises).  So the two are separate predicates here as
    well: `order t.done asc` sorts, and `List.sort` over a `List Bool` is still refused. *)
 let rec supports_column_ordering = function
@@ -2022,7 +2021,7 @@ let rec supports_column_ordering = function
    question about the same type again cannot change that answer. *)
 (* WHY a type has no `==`, as the first leaf that blocks it — `None` when nothing does.
    The obstruction is carried out rather than collapsed to a bool because the two kinds of
-   refusal are not the same claim: a type PARAMETER is a real gap (Racket compares two `a`
+   refusal are not the same claim: a type PARAMETER is a real gap (Legacy compares two `a`
    values structurally and this backend has no shape to compare), while a function value, a
    stream, a raw JSON value or a proof-carrying wrapper is not something either backend
    compares — calling those "not supported yet" invites a fix that should not exist. *)
@@ -2073,7 +2072,7 @@ let equality_refusal what ty =
   | Some (TParam name) ->
     Printf.sprintf
       "Go backend cannot %s two values of the type parameter `%s`: an emitted generic \
-       compares the SHAPE it was given, and a parameter has none. Racket compares such a pair \
+       compares the SHAPE it was given, and a parameter has none. Legacy compares such a pair \
        structurally, so this is a real gap — give the function a concrete type, or compare \
        inside the caller that knows one" what name
   | Some (TFunc _) ->
@@ -2108,7 +2107,7 @@ let record_info_of_signature signatures name =
 
 (* ─── SQL ──────────────────────────────────────────────────────────────────────
    A query is ordinary application syntax in the surface tree, so its structure is
-   recovered by {!Sql_query} — the same module the Racket backend and the checker use.
+   recovered by {!Sql_query} — the same module the Legacy backend and the checker use.
    Nothing about the shape of a query is re-derived here; this only decides which Go
    the recovered structure renders to. *)
 type sql_form =
@@ -2121,7 +2120,7 @@ type sql_form =
 
 (* The three surface shapes a query arrives in: a plain application, an application
    wrapped in the comparison that a `where` predicate parses as, and — for the
-   multi-line forms — an underscore-`let` chain.  Tried in the same order as the Racket
+   multi-line forms — an underscore-`let` chain.  Tried in the same order as the Legacy
    backend's guards, so the two agree on what a given tree means. *)
 let recognise_sql expr =
   let first_of options = List.fold_left (fun found next ->
@@ -2206,7 +2205,7 @@ let job_result_type signatures loc (info : queue_info) =
     "Go backend needs `JobResult` imported from `Tesl.ApiTest` for `processNextJob`"
 
 (* The Go form of a combined check: one helper that runs the conjuncts in order, stops at the
-   first rejection and passes each checked value to the next — Racket's `check-and`, minus the
+   first rejection and passes each checked value to the next — Legacy's `check-and`, minus the
    fact merging, which erases.  Minted once and shared by both positions a conjunction can be
    written in: applied to a value (`check (a && b) x`) and passed as a callback
    (`List.allCheck (a && b) xs`). *)
@@ -2251,7 +2250,7 @@ let combined_check_helper signatures element conjuncts =
     ~signature:(Printf.sprintf "(%s) teslrt.Check[%s]" signature_text checked)
     ~body:(Buffer.contents body)
 
-(* `check (checkA && checkB) x` — a COMBINED check.  Racket's `check-and` runs the first,
+(* `check (checkA && checkB) x` — a COMBINED check.  Legacy's `check-and` runs the first,
    short-circuits on rejection, and passes the checked value to the next; the facts are
    merged into one conjunction.  Here the facts erase, so what is left is the sequencing. *)
 let rec check_conjuncts expr =
@@ -2302,7 +2301,7 @@ let entity_column loc (info : entity_info) field =
 
 (* ─── SQL schema ──────────────────────────────────────────────────────────────
    Everything a Postgres-backed entity needs to name itself in a statement.  The rules are
-   `dsl/sql.rkt`'s rather than fresh ones: a table created by the Racket backend and read by
+   `dsl/sql.tesl`'s rather than fresh ones: a table created by the Legacy backend and read by
    this one is the whole point of having two, so a column name or a column TYPE that differed
    would make the two unable to share a database. *)
 
@@ -2333,7 +2332,7 @@ let sql_ident name =
 
 (* PostgreSQL truncates an identifier at 63 BYTES and only emits a NOTICE, so two derived names
    sharing a 63-byte prefix would collide and `if not exists` would then match the WRONG index.
-   `dsl/sql.rkt` truncates deterministically with an FNV-1a-32 suffix instead; this is the same
+   `dsl/sql.tesl` truncates deterministically with an FNV-1a-32 suffix instead; this is the same
    function, because a name derived differently on the two backends would leave a shared table
    with two indexes doing one job. *)
 let fnv1a_32 text =
@@ -2356,7 +2355,7 @@ let maybe_element = function
 
 (* The column type a Tesl type maps to.  `Int` is NUMERIC because a Tesl integer is unbounded
    and BIGINT is exactly where that stops being true; `PosixMillis` is the ONE deliberate
-   BIGINT exception, named as such in `dsl/sql.rkt` and contractual for existing tables. *)
+   BIGINT exception, named as such in `dsl/sql.tesl` and contractual for existing tables. *)
 let rec column_sql_type ty =
   match ty with
   | TInt -> Some "NUMERIC"
@@ -2367,7 +2366,7 @@ let rec column_sql_type ty =
   | TNewtype { tesl_name = "Int32"; _ } -> Some "INTEGER"
   | TNewtype info -> column_sql_type info.base
   (* An ADT column is JSONB holding the value's own wire shape (`{"tag":…}`), which is what
-     `dsl/sql.rkt` writes — a column written by one backend has to be readable by the other. *)
+     `dsl/sql.tesl` writes — a column written by one backend has to be readable by the other. *)
   | TAdt (info, _) when info.adt_tesl_name <> "Maybe" -> Some "JSONB"
   | _ -> (match maybe_element ty with Some inner -> column_sql_type inner | None -> None)
 
@@ -2379,7 +2378,7 @@ let entity_columns (info : entity_info) =
         (match column_sql_type ty with
          | Some text -> text
          (* No automatic column type for this Tesl type — a list, a dict, a record, an opaque
-            runtime value.  Racket refuses the same field, later: its schema generator asks
+            runtime value.  Legacy refuses the same field, later: its schema generator asks
             for an explicit `#:db-type`.  Both honour the same escape hatch, so the message
             names it rather than reading as a backend limit. *)
          | None -> unsupported info.ent_loc
@@ -2504,7 +2503,7 @@ let dict_leaves = [
     dict_result = `Bool; dict_needs_order = true };
   { dict_name = "Dict.remove"; dict_go = "teslrt.DictRemove"; dict_arity = 2;
     dict_result = `Dict; dict_needs_order = true };
-  (* `Dict.delete` is `Dict.remove` under another name — tesl/dict.rkt defines it as
+  (* `Dict.delete` is `Dict.remove` under another name — tesl/dict.tesl defines it as
      exactly that, so both spellings reach one implementation here too. *)
   { dict_name = "Dict.delete"; dict_go = "teslrt.DictRemove"; dict_arity = 2;
     dict_result = `Dict; dict_needs_order = true };
@@ -2651,7 +2650,7 @@ let adt_ctor_of_signature signatures name =
 
 (* The payload of a `publish C(key) Ctor { … }`: the parser splits the constructor from its
    literal, and rebuilding the application is what lets the ordinary paths emit it — the same
-   reason the Racket emitter rebuilds it there.
+   reason the Legacy emitter rebuilds it there.
 
    Which application depends on what the constructor IS.  A record type takes the literal as it
    stands (`Notice { message: … }` is a record construction).  An ADT VARIANT takes its payload
@@ -2674,7 +2673,7 @@ let is_money = function
      rate  * quantity  → MONEY, the one place a rate materialises (and so the one rounding);
      rate  * scalar    → a rate, rescaled exactly.
    `rate * float` is ambiguous between the last two — both are a rate and a float at run time —
-   so it is settled the way Racket settles it: by what the RESULT is expected to be. *)
+   so it is settled the way Legacy settles it: by what the RESULT is expected to be. *)
 let money_rate_binop ?expected op left_ty right_ty =
   ignore expected;
   match op with
@@ -2814,7 +2813,7 @@ let type_of_sql_form signatures loc form =
          | [] -> unsupported loc "Go backend requires `groupBy` on a grouped aggregate"
          | _ -> unsupported loc
            (* Not a gap: `Validation_advanced.check_group_by_rules` admits EXACTLY ONE
-              `groupBy` clause on a grouped aggregate, and `emit_racket.ml` refuses a second
+              `groupBy` clause on a grouped aggregate, and `emit_legacy.ml` refuses a second
               one too ("requires exactly one groupBy").  Multi-key grouping is a language
               feature neither backend has, not a Go shortfall. *)
            "internal error: a grouped aggregate reached the Go backend with more than one \
@@ -2829,11 +2828,11 @@ let type_of_sql_form signatures loc form =
         | _ -> unsupported loc
           "Go backend needs `Tesl.Tuple` imported for a grouped aggregate"))
   | SqlInsert insert -> TRecord (entity_of_query loc insert.entity).ent_row
-  (* `insertMany` is typed as the entity by the checker but RETURNS nothing on Racket
+  (* `insertMany` is typed as the entity by the checker but RETURNS nothing on Legacy
      (`insert-many!` ends in `(void)`), so the only sound reading of its result here is
      `Unit`: a program that bound and used it would be broken on the other backend. *)
   | SqlInsertMany (_, entity) -> ignore (entity_of_query loc entity); TUnit
-  (* An `upsert` is typed UNIT, which is what the checker types it as: the Racket form
+  (* An `upsert` is typed UNIT, which is what the checker types it as: the Legacy form
      answers the stored row, but a program that bound and used it would not type-check, so
      the only reading both backends agree on is that it answers nothing. *)
   | SqlUpsert upsert -> ignore (entity_of_query loc upsert.entity); TUnit
@@ -2881,13 +2880,13 @@ let scalar_pattern_bindings _loc scrut_ty pattern =
   | PVar name -> [name, scrut_ty]
   | PLit _ -> []
   (* `True`/`False` parse as nullary CONSTRUCTORS, but over a Bool scrutinee they are the two
-     literals — Racket matches them the same way. *)
+     literals — Legacy matches them the same way. *)
   | PNullary { ctor = ("True" | "False"); _ } -> []
   | PNullary { ctor; loc } | PCon { ctor; loc; _ } ->
     unsupported loc "Go backend `case` over a scalar cannot match constructor `%s`" ctor
 
 (* The known `initTelemetry` keywords.  Named here so a keyword in VALUE position (a user binding
-   spelled `console`, say) is not silently taken as the next keyword — the bug the Racket emitter
+   spelled `console`, say) is not silently taken as the next keyword — the bug the Legacy emitter
    documents at the same place. *)
 let init_telemetry_keywords =
   [ "service"; "endpoint"; "console"; "metrics"; "metricsInterval"; "traces"; "traceRatio" ]
@@ -2920,7 +2919,25 @@ let agent_tool_schema loc (params : binding list) =
       (Validation_common.agent_prim_schema_prop (agent_tool_prim loc binding))) params in
   let required = List.map (fun (binding : binding) -> go_quote binding.name) params in
   Printf.sprintf "{\"type\":\"object\",\"properties\":{%s},\"required\":[%s]}"
-    (String.concat "," properties) (String.concat "," required)
+     (String.concat "," properties) (String.concat "," required)
+
+(* Small public seams used by compiler conformance tests. Keep these derived from the
+   shared registry and the same schema builder used by generated Go tools. *)
+let agent_arg_type_tag (ty : type_expr) : string option =
+  Option.map Validation_common.agent_prim_decode_tag
+    (Validation_common.agent_prim_of_type_expr ty)
+
+let agent_arg_schema_prop (ty : type_expr) : string =
+  match Validation_common.agent_prim_of_type_expr ty with
+  | Some prim -> Validation_common.agent_prim_schema_prop prim
+  | None -> "{}"
+
+let agent_tool_schema_json (params : binding list) : string =
+  let loc = match params with
+    | binding :: _ -> binding.loc
+    | [] -> Validation_common.gen_loc
+  in
+  agent_tool_schema loc params
 
 (* The runtime reader for one argument.  Each answers the parameter's OWN Go type, so the
    dispatch below asserts the type the function already declared rather than a wire shape. *)
@@ -3012,7 +3029,7 @@ let rec type_of_expr signatures env expr =
     TString
   | EVar { name; loc } ->
     (* A bare function name is a function VALUE, which the Go subset has no
-       representation for.  Emitting a call here would diverge from the Racket
+       representation for.  Emitting a call here would diverge from the Legacy
        backend, which hands back a procedure. *)
     (match List.assoc_opt name env, Hashtbl.find_opt signatures name with
      | Some ty, _ -> ty
@@ -3164,7 +3181,7 @@ let rec type_of_expr signatures env expr =
                let got = type_of_arg signatures env want arg in
                (* One relaxation, and only for the password plaintext: `checkPassword` takes the
                   raw password, which a program normally holds as a `secret Password = String`.
-                  Racket's `raw-str` unwraps any newtype there, and the emitter unwraps the same
+                  Legacy's `raw-str` unwraps any newtype there, and the emitter unwraps the same
                   two shapes at the call site — so accepting a newtype over String here is
                   agreement with the other backend, not looseness. *)
                let password_plaintext =
@@ -3303,7 +3320,7 @@ let rec type_of_expr signatures env expr =
         | "pendingJobCount" -> TInt
         | "drainQueue" -> TUnit
         (* The dead-letter contents.  `DeadJob` is opaque — a test counts the list or
-           requeues from it, which is all the Racket surface allows either. *)
+           requeues from it, which is all the Legacy surface allows either. *)
         | "deadJobs" ->
           (match Option.bind !current_types (fun types ->
                    Hashtbl.find_opt types.records "DeadJob") with
@@ -3314,9 +3331,9 @@ let rec type_of_expr signatures env expr =
      (* The secret-accepting header builders.  Their secret parameter is deliberately NOT
         matched against a fixed type: every `secret` newtype is a distinct Go type, and the
         generic call path demands an exact match, so the argument is checked here and unwrapped
-        at the emit site.  A plain String is accepted for the same reason Racket accepts one. *)
+        at the emit site.  A plain String is accepted for the same reason Legacy accepts one. *)
      (* `hashPassword`/`checkPassword` take the PLAINTEXT, which is normally a
-        `secret Password = String` — Racket's `raw-str` unwraps any newtype, so the Go side
+        `secret Password = String` — Legacy's `raw-str` unwraps any newtype, so the Go side
         accepts the same two shapes and hands the runtime a `SecretString` either way.  The
         plaintext therefore never appears as an ordinary string at the call site. *)
      | EVar { name = ("Crypto.hashPassword" | "Crypto.checkPassword") as leaf; _ } ->
@@ -3429,7 +3446,7 @@ let rec type_of_expr signatures env expr =
         | [result] ->
           (match type_of_expr signatures env result with
            (* `expectJobOk` answers the JOB; `expectJobFailed` answers the ERROR, which is a
-              String — `tesl/api-test.rkt` returns `JobFailed-error` there, and answering the
+              String — `tesl/api-test.tesl` returns `JobFailed-error` there, and answering the
               payload instead made `expect isNotNull err` compare a job struct. *)
            | TAdt (info, [payload]) when info.adt_tesl_name = "JobResult" ->
              if verb = "expectJobFailed" then TString else payload
@@ -3437,7 +3454,7 @@ let rec type_of_expr signatures env expr =
              "Go backend `expectJobOk` takes the result of `processNextJob`")
         | _ -> unsupported loc "Go backend requires `expectJobOk` applied to 1 argument")
      (* The api-test JSON surface.  Every one of these takes the UNTYPED value, and the
-        argument order is Tesl's (needle/index/field first), matching tesl/api-test.rkt. *)
+        argument order is Tesl's (needle/index/field first), matching tesl/api-test.tesl. *)
      | EVar { name = ("isNull" | "isNotNull" | "isEmpty" | "isNotEmpty"); _ } -> TBool
      | EVar { name = ("hasField" | "hasLength" | "jsonContains"
                      | "includesWhere" | "excludesWhere"); _ } -> TBool
@@ -3641,7 +3658,7 @@ let rec type_of_expr signatures env expr =
           if supplied = total then instantiated_result
           else
             (* CURRIED: `blend 1` is a function of `b` answering a function of `c`, not a
-               two-argument function.  That is the surface's shape and the Racket runtime's —
+               two-argument function.  That is the surface's shape and the Legacy runtime's —
                a flat `withA 2 3` is an arity error there — so a flat call to a partially
                applied value is refused here rather than quietly accepted. *)
             List.fold_right (fun param answer -> TFunc ([param], answer))
@@ -3715,7 +3732,7 @@ let rec type_of_expr signatures env expr =
          "Go backend needs the rate's declared type here (`MoneyPerDuration` and friends)"
      | None ->
     (* An UNTYPED api-test value compares against anything: `expect resp.body.age == 7` is
-       the point of the dynamic view, and on Racket both sides are ordinary values by then.
+       the point of the dynamic view, and on Legacy both sides are ordinary values by then.
        Only equality is allowed — ordering an untyped value has no meaning the source can
        rely on. *)
     if (left_ty = TJson || right_ty = TJson) && type_unequal left_ty right_ty then begin
@@ -3737,14 +3754,14 @@ let rec type_of_expr signatures env expr =
         | TFloat -> TFloat
         | _ -> unsupported loc "Go backend arithmetic requires Int or Float")
      | BMod ->
-       (* Racket's `modulo`/`remainder` are integer operations; a Float `%` does not
+       (* Legacy's `modulo`/`remainder` are integer operations; a Float `%` does not
           exist in Go either. *)
        if left_ty <> TInt then unsupported loc "Go backend `%%` requires Int";
        TInt
      | BConcat ->
        (* An api-test may build a path out of a value read from a previous RESPONSE
           (`"/things/" ++ created.body.id`).  That side is untyped JSON by design, and it is
-          the STRING it holds that belongs in the path — the same coercion Racket applies when
+          the STRING it holds that belongs in the path — the same coercion Legacy applies when
           it splices a body field into a path. *)
        if left_ty <> TString && left_ty <> TJson then
          unsupported loc "Go backend ++ requires String";
@@ -3836,7 +3853,7 @@ let rec type_of_expr signatures env expr =
      | TRecord info, _ -> record_field_type loc info field
      (* A field read on an UNTYPED JSON value stays untyped: `resp.body.user.id` is a chain
         of dynamic reads, and a missing key is null rather than an error — the same shape
-        `api-test-field-access-ref` gives on Racket. *)
+        `api-test-field-access-ref` gives on Legacy. *)
      | TJson, _ -> TJson
      (* A field READ needs something with fields: a record, an entity row, a newtype's
         `.value`, or an untyped JSON value.  Anything else has no field to read, which the
@@ -3914,7 +3931,7 @@ let rec type_of_expr signatures env expr =
      or accumulator, a leaf's own signature — so reaching here means the program genuinely
      never says what the list would hold: `expect List.reverse [] == []`, where both sides
      are empty.
-     Such a program is legal Tesl and Racket runs it, so refusing to compile the module
+     Such a program is legal Tesl and Legacy runs it, so refusing to compile the module
      over it is a divergence with no upside (maintainer, 2026-08-13).  The element type is
      unobservable in exactly this situation — the list has no elements to read — and if the
      surrounding context did demand a specific type, Go's own type checker rejects the
@@ -3976,7 +3993,7 @@ let rec type_of_expr signatures env expr =
      `backend: Memory` that store IS the entity's table variable, so the block adds
      nothing at run time and types as its body. *)
   | EWithDatabase { body; _ } -> type_of_expr signatures env body
-  (* `enqueue` is a statement: the job id stays inside the store, as it does on Racket. *)
+  (* `enqueue` is a statement: the job id stays inside the store, as it does on Legacy. *)
   | EEnqueue { payload; _ } -> ignore (type_of_expr signatures env payload); TUnit
   (* A `telemetry "name" { … }` block is a STATEMENT: it records a signal and answers Unit, so a
      function carrying one has the type it would have without it — which is the property every
@@ -4285,7 +4302,7 @@ and type_of_hof signatures env loc what hof args =
      | None -> unsupported loc
        "Go backend `%s` returns a Maybe; import `Tesl.Maybe`" what)
   (* `filterMap`'s callback returns `Maybe b`, and the result is `List b`: the element is
-     kept when the TAG is Something, never by the payload's truthiness — Racket's own
+     kept when the TAG is Something, never by the payload's truthiness — Legacy's own
      implementation got that wrong and dropped `Something False`. *)
   | HofFilterMap ->
     let element = list_of 1 in
@@ -4799,7 +4816,7 @@ and type_of_arg signatures env want arg =
   match arg with
   (* A check may DELEGATE to another check in tail position: `check parseAge raw = … check
      checkAge parsed`.  The delegate's own `Check` IS this check's result — that is what
-     Racket's `let/check`-based lowering does when the tail is the inner call — so the
+     Legacy's `let/check`-based lowering does when the tail is the inner call — so the
      expectation is satisfied by the check's VALUE type. *)
   | _ when (match check_application signatures arg, want with
             | Some ({ result = TCheck inner; _ }, _), TCheck expected_inner ->
@@ -4892,7 +4909,7 @@ and type_of_arg signatures env want arg =
      | _ -> unsupported loc "Go backend if branches have different types")
   (* The money-rate algebra, where the EXPECTATION is what settles it: `money / quantity` has
      no denominator without the declared rate type, and `rate * float` is a rescale when a rate
-     is expected and a materialised amount when money is.  Racket settles both the same way,
+     is expected and a materialised amount when money is.  Legacy settles both the same way,
      from the result type its checker recorded. *)
   | EBinop { op; left; right; _ }
     when (match money_rate_binop ~expected:want op
@@ -5038,7 +5055,7 @@ and pattern_bindings _loc info type_args pattern =
   (* Not a gap: a literal arm must be a literal of the SCRUTINEE'S type, which the checker
      now enforces (`bind_pattern_vars`), so a literal cannot be matched against an ADT at all.
      Named as an internal error because the alternative — emitting a comparison — is what
-     Racket does, and there it dies at run time with `=: contract violation`. *)
+     Legacy does, and there it dies at run time with `=: contract violation`. *)
   | PLit { loc; _ } ->
     unsupported loc
       "internal error: a literal pattern reached the `%s` case emitter; the checker admits a \
@@ -5061,7 +5078,7 @@ and pattern_bindings _loc info type_args pattern =
        if List.length fields <> List.length variant.var_fields then
          unsupported loc "Go backend requires constructor pattern `%s` to bind its %d field(s)"
            ctor (List.length variant.var_fields);
-       (* Sub-patterns bind POSITIONALLY, matching the Racket backend: the pattern's
+       (* Sub-patterns bind POSITIONALLY, matching the Legacy backend: the pattern's
           own key is a binder name, not necessarily the declared field name. *)
        (* A sub-pattern may itself be a constructor (`Neg (Lit n)`) or a literal
           (`RGB { r = 255, … }`): what it BINDS is whatever its own sub-patterns bind, and
@@ -5265,7 +5282,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
   (* A CHECK's value used where its base type is expected — `fn validateId(s: String) ->
      String = UUID.validate s`.  The check is the only thing that can answer here, so its
      rejection has to be the failure: `MustCheck` traps, which is what the same program does
-     on Racket (its `expectFail` on this shape catches a failure, not a returned record).
+     on Legacy (its `expectFail` on this shape catches a failure, not a returned record).
      Inside a HANDLER body the rejection becomes the request's own answer instead. *)
   | EApp _ when (match expected with
                  | Some want when (match want with TCheck _ -> false | _ -> true) ->
@@ -5310,7 +5327,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
        emit_variant_literal ~indent signatures env result variant
          (variant_positional_args loc variant (constructor_args @ args))
      (* A COMBINED check: run each in turn, short-circuiting on the first rejection and
-        feeding the checked value to the next — Racket's `check-and`, with the fact merge
+        feeding the checked value to the next — Legacy's `check-and`, with the fact merge
         dropped because facts erase.  Hoisted into a helper so the call site stays one
         expression whatever the number of conjuncts. *)
       (* The existential package erases to its body. *)
@@ -5477,7 +5494,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
         when !current_api_server <> None ->
         let server = match !current_api_server with Some s -> s | None -> assert false in
         (* `post "/p" body { … } cookie c headers { … }` — the modifiers arrive as
-           keyword/value pairs in the flat argument list, the same shape the Racket api-test
+           keyword/value pairs in the flat argument list, the same shape the Legacy api-test
            emitter scans for. *)
         let path, request_body, cookie, request_headers = match args with
           | path :: rest ->
@@ -5567,7 +5584,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
         in
         Printf.sprintf "teslrt.SubscribeStream(%s, %s, %s)" server
           (emit_api_test_string ~indent signatures env path) cookies
-      (* `collect stream …` — the three shapes Racket's `api-test-collect` implements: wait for
+      (* `collect stream …` — the three shapes Legacy's `api-test-collect` implements: wait for
          a COUNT, wait UNTIL a matching event, or take whatever arrives within the timeout. The
          first two treat a timeout as a test failure; the third does not, since "nothing was
          published" is exactly what it may be asserting. *)
@@ -5716,7 +5733,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
          plain application, so the arguments are folded back into keyword/value pairs here — each
          keyword's value being every token up to the next KNOWN keyword, so `endpoint ep()` stays
          the call it is written as rather than binding the function value and dropping the rest
-         (the bug the Racket emitter records at the same place). *)
+         (the bug the Legacy emitter records at the same place). *)
       | EVar { name = "initTelemetry"; _ } ->
         let rec pairs acc = function
           | [] -> List.rev acc
@@ -5773,7 +5790,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
       (* The secret-accepting header builders.  They are the sanctioned sink for a `secret`,
          so the ARGUMENT is where the unwrapping happens: a secret newtype hands over its
          payload, and a plain String is wrapped on the way in — which is what
-         `make-secret-header` accepts on Racket too.  The runtime then holds the plaintext
+         `make-secret-header` accepts on Legacy too.  The runtime then holds the plaintext
          behind an unguessable handle, so what the returned `Tuple2 String String` carries is
          not the secret itself. *)
       (* The password plaintext reaches the runtime as a `SecretString`: a secret newtype hands
@@ -5910,7 +5927,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
           | Some argument -> emit argument
           | None -> unsupported loc "Go backend requires `%s` applied to its argument(s)" verb
         in
-        (* The INSPECTED positions take any value, not only a JSON handle: Racket's predicates
+        (* The INSPECTED positions take any value, not only a JSON handle: Legacy's predicates
            normalise whatever they are given (`api-test-normalize-json` runs the value→jsexpr
            walk first), so `hasField "k" job` on a plain record and `isNotNull err` on a String
            are legitimate assertions there.  Such a value is wrapped through its own encoder,
@@ -5943,7 +5960,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
           | None -> unsupported loc "Go backend requires `%s` applied to its argument(s)" verb
         in
         (* `isNull` / `isNotNull` are the two verbs that take a value RATHER than a JSON
-           handle as well: Racket normalises whatever it is given, so `isNotNull err` on a
+           handle as well: Legacy normalises whatever it is given, so `isNotNull err` on a
            plain String is a legitimate assertion there.  The value goes through its own
            encoder, which is the shape the normalising walk would have produced. *)
         (match verb with
@@ -6141,7 +6158,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
            emit_expr ~expected:(TList element) ~indent signatures env arg
          | _ -> emit arg) args in
        (* `List.unique` takes the KEYED path whenever the element type has a comparable key: one
-          pass over a map, which is the complexity Racket's hash-based `List.unique` has.  The
+          pass over a map, which is the complexity Legacy's hash-based `List.unique` has.  The
           closure form is a linear scan per element — quadratic — and stays the answer for an
           element type with no key (an ADT, a record, a container, a `secret`). *)
        let keyed_unique =
@@ -6365,7 +6382,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
        Printf.sprintf "(%s - %s)" emitted_left emitted_right
      | BMul when ty = TFloat || ty = TQuantity ->
        Printf.sprintf "(%s * %s)" emitted_left emitted_right
-     (* No zero guard: IEEE division by zero yields ±Inf, which is what Racket's `/` on
+     (* No zero guard: IEEE division by zero yields ±Inf, which is what Legacy's `/` on
         a flonum does too. *)
      | BDiv when ty = TFloat || ty = TQuantity ->
        Printf.sprintf "(%s / %s)" emitted_left emitted_right
@@ -6408,7 +6425,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
        else compare emitted_left emitted_right)
   (* Negating a LITERAL folds into the literal rather than emitting `-float64(0)`, which
      in Go is POSITIVE zero — the negation is applied to the already-typed value, so it
-     cannot produce a negative zero (staticcheck SA4026 says exactly this).  Racket's
+     cannot produce a negative zero (staticcheck SA4026 says exactly this).  Legacy's
      `-0.0` is a real negative zero, and Tesl's Float equality distinguishes the two, so
      this was a wrong answer and not only a lint finding. *)
   | EUnop { op = UNeg; arg = ELit { lit = LFloat value; _ }; _ } ->
@@ -6516,12 +6533,12 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
 
         What catches it is what makes the two backends agree:
         - inside a REQUEST, the router turns it back into a response carrying this status,
-          which is `dsl/web.rkt`'s rule.  A cookie written before the failure is NOT sent:
+          which is `dsl/web.tesl`'s rule.  A cookie written before the failure is NOT sent:
           `writeResponse` attaches cookies to 2xx only, so a session cannot escape on a
           non-2xx answer;
         - inside a WORKER, `runJob` records it as a failed ATTEMPT, so retry and dead-lettering
-          run — the Racket worker loop reads the same check-fail and calls `fail-job!`;
-        - anywhere else it terminates the program, which is what Racket does too: a check-fail
+          run — the Legacy worker loop reads the same check-fail and calls `fail-job!`;
+        - anywhere else it terminates the program, which is what Legacy does too: a check-fail
           escaping a non-handler `fn` raises (`current-let-check-fail-behavior`), and a test
           asserting the failure recovers it either way. *)
      | _ ->
@@ -6565,7 +6582,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
      types while the runtime takes one attribute type, so each value is rendered to text here,
      where its type is known — the same rendering an interpolation performs.  A `secret` renders
      as its REDACTION, never its payload: an attribute walk is exactly where a misplaced secret
-     would otherwise be exported in plaintext, and the Racket runtime redacts at every node of
+     would otherwise be exported in plaintext, and the Legacy runtime redacts at every node of
      the same walk for that reason. *)
   | ETelemetry { name; fields; loc } ->
     let attribute (key, value) =
@@ -6711,7 +6728,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
     let key = match key with
       | Some key_expr -> emit_expr ~expected:TString ~indent signatures env key_expr
       (* A channel with no key parameter keys every listener on the same empty string, which
-         is what the Racket publish does when the declaration has no key. *)
+         is what the Legacy publish does when the declaration has no key. *)
       | None -> "\"\""
     in
     let payload = match payload with
@@ -7019,7 +7036,7 @@ and emit_case_statements ?(indent="") ?(terminating=true) signatures env buffer 
    emitted shape is an `if`/`else if` chain over the scrutinee rather than a tag switch — a Go
    `switch` on the value would not work for `teslrt.Int`, which is deliberately not comparable
    with `==`.  The scrutinee is bound once, so a non-trivial one is evaluated once.
-   Exhaustiveness is the checker's (Racket requires it too), and the final `panic` says so
+   Exhaustiveness is the checker's (Legacy requires it too), and the final `panic` says so
    rather than answering a zero value if a future change ever let a non-exhaustive case
    through. *)
 and emit_scalar_case_statements ?(indent="") signatures env buffer scrut arms scrut_ty =
@@ -7523,7 +7540,7 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
           else strip_outer_parens (emit_negated_applied ~indent:body_indent signatures env callable element value))
          body_indent found body_indent inner inner (not found) indent)
   | HofZip ->
-    (* Racket truncates to the shorter list; the emitted loop does the same. *)
+    (* Legacy truncates to the shorter list; the emitted loop does the same. *)
     let out = Printf.sprintf "teslOut%d" depth in
     let index = Printf.sprintf "teslAt%d" depth in
     let left = Printf.sprintf "teslLeft%d" depth in
@@ -7587,7 +7604,7 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
          body_indent out kept out (element_key_less_func element)
          body_indent inner inner out indent
      (* Like `List.allCheck`, the check runs on EVERY element before the verdict is taken:
-        an early return would skip checks the Racket backend performs. *)
+        an early return would skip checks the Legacy backend performs. *)
      | _ ->
        Printf.sprintf
          "(func() %s {\n%s%s := true\n%s%s := teslrt.SetEmpty[%s]()\n%sfor _, %s := range teslrt.SetToList(%s) {\n%sif %s, %s := (%s).Value(); %s {\n%s\t%s = teslrt.SetInsert(%s, %s, %s)\n%s} else {\n%s\t%s = false\n%s}\n%s}\n%sif %s {\n%s\treturn %s{%s: %s, %s: %s}\n%s}\n%sreturn %s{%s: %s}\n%s}())"
@@ -7620,7 +7637,7 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
     let kept = Printf.sprintf "teslKept%d" depth in
     let ok = Printf.sprintf "teslOK%d" depth in
     (* The CHECKED value is what goes back in — a check may answer a different value than it
-       was given (a normalising check does), and Racket stores `check-ok-value` too. *)
+       was given (a normalising check does), and Legacy stores `check-ok-value` too. *)
     let entry_key = if keys then kept else Printf.sprintf "%s.Tuple2First" pair in
     let entry_value = if keys then Printf.sprintf "%s.Tuple2Second" pair else kept in
     Printf.sprintf
@@ -7674,8 +7691,8 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
          body_indent out out kept
          body_indent inner inner out indent
      | _ ->
-       (* Racket's allCheck runs the check on EVERY element before deciding, so this
-          does too: an early return would skip checks the Racket backend performs. *)
+       (* Legacy's allCheck runs the check on EVERY element before deciding, so this
+          does too: an early return would skip checks the Legacy backend performs. *)
        Printf.sprintf
          "(func() %s {\n%s%s%s := true\n%s%s := make(%s, 0, len(%s))\n%sfor _, %s := range %s {\n%sif %s, %s := (%s).Value(); %s {\n%s\t%s = append(%s, %s)\n%s} else {\n%s\t%s = false\n%s}\n%s}\n%sif %s {\n%s\treturn %s{%s: %s, %s: %s}\n%s}\n%sreturn %s{%s: %s}\n%s}())"
          (go_type result) bind_source inner all_ok
@@ -7725,7 +7742,7 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
          body_indent out out applied
          inner inner out indent)
   (* `sortBy` builds a comparator from the key function.  The key is recomputed per
-     comparison, matching `List.sortBy` in tesl/list.rkt, and the sort is stable. *)
+     comparison, matching `List.sortBy` in tesl/list.tesl, and the sort is stable. *)
   | HofSortBy ->
     let element = element_of 1 in
     (* Fixed names, NOT depth-derived: the comparator is a package-level function with its
@@ -7785,7 +7802,7 @@ and emit_hof ?(indent="") signatures env _loc _what hof args result =
       inner inner state indent
   (* `foldr` walks the slice BACKWARDS in a plain loop rather than recursing: Go has no
      TCO and a Go stack overflow is fatal (no `recover`), so recursing once per element
-     would put a list length limit on a function Racket runs fine.  The fold itself
+     would put a list length limit on a function Legacy runs fine.  The fold itself
      therefore adds only O(n) traversal.  What it CANNOT fix is a callback that performs
      an immutable write on a growing accumulator — `List.append [x] acc` copies Θ(k) at
      step k, so the canonical reconstruction fold is Θ(n²) in the CALLBACK, not in the
@@ -8068,7 +8085,7 @@ and emit_record_update ?(indent="") signatures env loc fields =
 
 (* ─── Queries ─────────────────────────────────────────────────────────────────
    The `backend: Memory` store has no query planner: a clause is the same comparison
-   the Racket runtime performs row by row, so a query becomes a table call plus a Go
+   the Legacy runtime performs row by row, so a query becomes a table call plus a Go
    PREDICATE over the row.  The binder is the one the query itself named, which is what
    lets a `set` value or a column-to-column comparison read as written. *)
 and sql_table_ref (info : entity_info) = qualified info.ent_owner info.ent_table_var
@@ -8114,7 +8131,7 @@ and emit_sql_predicate ?(joins=[]) ~indent signatures env loc (info : entity_inf
        `Sql_query.is_sql_comparison` does not admit (bug in compiler/lib/sql_query.ml or this \
        table)"
   in
-  (* `like` / `ilike` are String-only, as they are on the Racket side (which rejects a
+  (* `like` / `ilike` are String-only, as they are on the Legacy side (which rejects a
      Money column outright and answers false for any non-string value). *)
   let like field pattern fold_case =
     let ty = entity_column loc info field in
@@ -8211,7 +8228,7 @@ and sql_check_where_field loc where_field clauses =
        rows" field
   | _ -> ()
 
-(* The duplicate-primary-key test an insert carries: the same comparison the Racket
+(* The duplicate-primary-key test an insert carries: the same comparison the Legacy
    memory backend performs by keying its store on the primary key. *)
 and sql_key_conflict loc (info : entity_info) =
   let key = info.ent_primary_key in
@@ -8226,7 +8243,7 @@ and sql_key_conflict loc (info : entity_info) =
    dispatcher picks at run time, because which store an entity's rows live in is decided by
    whether something has CONNECTED — a `test` block runs the very same query against the memory
    table with no server anywhere, which is what `database-runtime-for-entity` decides on the
-   Racket side.
+   Legacy side.
 
    The statement's TEXT is built here, at compile time, and never carries a value: every operand
    becomes a `$n` placeholder with its Go expression in the argument list.  So nothing a request
@@ -8245,7 +8262,7 @@ and sql_bound_value loc ty value =
     Printf.sprintf "teslrt.PgBigint(%s.Value)" value
   (* A `secret` column BINDS its plaintext, because storage is not rendering: the redaction a
      secret newtype provides is about what a log line, a print or a span carries, and a column
-     the program declared has to receive the value itself. `dsl/sql.rkt` binds it the same way
+     the program declared has to receive the value itself. `dsl/sql.tesl` binds it the same way
      and states the same reason ("a `secret` column's bound parameter really is the secret"),
      and neither runtime puts a parameter on a span or in a log. *)
   | TNewtype { secret = true; _ } ->
@@ -8304,10 +8321,10 @@ and sql_scan_carrier loc ty target =
    one that does not compile.
 
    An unknown tag TRAPS.  It means the column holds a value this build has no constructor for —
-   data written by an incompatible schema — and `dsl/sql.rkt` takes the same line for a stored
+   data written by an incompatible schema — and `dsl/sql.tesl` takes the same line for a stored
    currency code it cannot resolve. *)
 (* Reading ONE payload field of an ADT column back out of its JSON.
-   The wire shape is the one the response encoder writes and `dsl/types.rkt` writes —
+   The wire shape is the one the response encoder writes and `dsl/types.tesl` writes —
    `{"tag": …, "fields": {…}}`.  The DOCUMENT around it may be either of the two shapes a Tesl
    backend stores (see `teslrt.ParseColumnJSON`); by the time a field is read, that difference
    is gone.
@@ -8586,7 +8603,7 @@ and sql_unique_indexes ~indent loc (info : entity_info) =
           let side name = Printf.sprintf "%s.%s" name (record_field_go_name field) in
           equal_expr ty (side "teslLeft") (side "teslRight")) index.ix_fields) in
       (* A row with a NULL in an indexed column is UNCONSTRAINED: two NULLs are not equal, so
-         they do not collide.  PostgreSQL's rule, and Racket's. *)
+         they do not collide.  PostgreSQL's rule, and Legacy's. *)
       let nullable = List.filter (fun field ->
         maybe_element (entity_column loc info field) <> None) index.ix_fields in
       let constrained = match nullable with
@@ -8630,11 +8647,11 @@ and sql_unique_indexes ~indent loc (info : entity_info) =
 
 (* `innerJoin E on main.f E.g` filters the MAIN entity's rows to those with a counterpart —
    the result is still a list of the main entity, so it is an EXISTENCE test rather than a
-   product.  That is what `dsl/sql.rkt`'s memory store does
+   product.  That is what `dsl/sql.tesl`'s memory store does
    (`in-memory-inner-join-matches?`), and it is the only reading a `List Order` can hold: a
    real join DUPLICATES a main row for every counterpart.
 
-   Racket's own two backends disagree here — its Postgres path builds an `INNER JOIN`, which
+   Legacy's own two backends disagree here — its Postgres path builds an `INNER JOIN`, which
    duplicates — so the two Go paths agree with each other and with the declared result type,
    and the divergence is recorded rather than reproduced. *)
 and sql_join_predicate ~indent signatures loc (info : entity_info) binder (join : Sql_query.sql_join) =
@@ -8711,7 +8728,7 @@ and emit_sql_form ?(indent="") signatures env loc form =
         all_clauses in
     (* `order p.field asc|desc` becomes the STRICTLY-BEFORE comparison on that column;
        `desc` is the same comparison with its operands swapped, which keeps the sort
-       stable in the direction Racket's ordering does. *)
+       stable in the direction Legacy's ordering does. *)
     let ordering () = match seed.order with
       | None -> None
       | Some (field, direction) ->
@@ -8840,7 +8857,7 @@ and emit_sql_form ?(indent="") signatures env loc form =
        (* A MONEY column cannot FOLD: the currency rule needs the whole set — an empty one has
           no currency to carry its zero, and two currencies have no common total — so it is one
           pass that adopts the currency from the first matching row and checks every later row
-          against it.  Those are Racket's two refusals, word for word.  On a Postgres-backed
+          against it.  Those are Legacy's two refusals, word for word.  On a Postgres-backed
           entity a Money column stores into TWO columns, which `entity_columns` refuses above. *)
        (match ty, pg with
         | TRecord money, _ when money.rec_tesl_name = "Money" ->
@@ -8898,7 +8915,7 @@ and emit_sql_form ?(indent="") signatures env loc form =
             table predicate project better)
      (* ── The GROUPED aggregates ────────────────────────────────────────────
         One (bucket, value) pair per group, ORDERED BY KEY ASCENDING — which is the contract
-        rather than an accident of iteration: the Racket memory backend sorts its buckets and
+        rather than an accident of iteration: the Legacy memory backend sorts its buckets and
         PostgreSQL's `GROUP BY … ORDER BY 1` does the same, and a series a chart draws is
         only a series if its points are in order.
 
@@ -8917,7 +8934,7 @@ and emit_sql_form ?(indent="") signatures env loc form =
          | [] -> unsupported loc "Go backend requires `groupBy` on a grouped aggregate"
          | _ -> unsupported loc
            (* Not a gap: `Validation_advanced.check_group_by_rules` admits EXACTLY ONE
-              `groupBy` clause on a grouped aggregate, and `emit_racket.ml` refuses a second
+              `groupBy` clause on a grouped aggregate, and `emit_legacy.ml` refuses a second
               one too ("requires exactly one groupBy").  Multi-key grouping is a language
               feature neither backend has, not a Go shortfall. *)
            "internal error: a grouped aggregate reached the Go backend with more than one \
@@ -8999,7 +9016,7 @@ and emit_sql_form ?(indent="") signatures env loc form =
           (* The server GROUPS: shipping every row here to bucket it is the thing a grouped
              aggregate exists to avoid.  The statement goes over in PIECES rather than as one
              string — its bucket expression depends on the ZONE, which is a value the program
-             supplies at run time — and the runtime assembles it exactly as `dsl/sql.rkt`
+             supplies at run time — and the runtime assembles it exactly as `dsl/sql.tesl`
              does, so the two cannot disagree about where a bucket starts. *)
           let builder = { sql_args = [] } in
           let where_text = where builder in
@@ -9172,7 +9189,7 @@ and emit_sql_form ?(indent="") signatures env loc form =
           read off each row — the one query whose plan cannot be a value.  One statement per
           row rather than a multi-row VALUES list, so a row conflicting with an EARLIER row of
           the same batch is refused exactly where it would be if the two had been inserted
-          separately: Racket's `insert-many!` is a loop over `insert-one!`. *)
+          separately: Legacy's `insert-many!` is a loop over `insert-one!`. *)
        let columns = entity_columns info in
        let statement =
          Printf.sprintf "insert into %s (%s) values (%s)"
@@ -9211,7 +9228,7 @@ and emit_sql_form ?(indent="") signatures env loc form =
          (sql_table_ref info) predicate apply (sql_unique_arguments ~indent loc info)
      | Some database ->
        (* A `set` value is a PARAMETER on the server, so there is no row to read from:
-          `check_set_value_reads_row` refuses this shape for BOTH backends (the Racket emitter
+          `check_set_value_reads_row` refuses this shape for BOTH backends (the Legacy emitter
           produces an unbound row binder and the module does not load), which makes this a
           backstop rather than a limit of this path. *)
        let builder = { sql_args = [] } in
@@ -9268,7 +9285,7 @@ and emit_sql_form ?(indent="") signatures env loc form =
    the runtime's JSON writer, so the two cannot disagree about escaping. *)
 (* The password plaintext is the one argument whose RUNTIME type differs from its Tesl type:
    `hashPassword`/`checkPassword` take a `teslrt.SecretString`, while Tesl types the parameter as
-   String and a program normally holds the value as a `secret Password = String`.  Racket's
+   String and a program normally holds the value as a `secret Password = String`.  Legacy's
    `raw-str` unwraps any newtype there, so both shapes are accepted — and the conversion lives
    HERE, in one function every emitting path calls, rather than being repeated at each call site
    (the emit_elm lesson: a wrap rule copied four times is a rule that drifts three ways).
@@ -9308,16 +9325,16 @@ and api_test_interpolates value =
   && (match value with
       | ELit { lit = LString text; _ } ->
         List.exists (function
-          | Emit_racket.ApiTestTemplateExpr _ -> true
-          | Emit_racket.ApiTestTemplateLiteral _ -> false)
-          (Emit_racket.parse_api_test_template_content text)
+           | Api_test_template.Expr _ -> true
+           | Api_test_template.Literal _ -> false)
+          (Api_test_template.parse text)
       | ERecord { fields; _ } ->
         List.exists (fun (_, field_value) -> api_test_interpolates field_value) fields
       | EList { elems; _ } -> List.exists api_test_interpolates elems
       | _ -> false)
 
 (* An api-test STRING is a template: `cookie "chatUserId={userId}"` and `post "/rooms/{roomId}"`
-   substitute the block's bindings, which is what `emit_racket` does through
+   substitute the block's bindings, which is what `emit_legacy` does through
    `api-test-string-fragment`.  The SPLIT is shared with that emitter rather than reproduced —
    a rule for what counts as an interpolation, written twice, is a rule that drifts, and its
    corner cases (`"{}"`, `"{\"id\": 1}"`, an unbalanced quote) are exactly where it would.
@@ -9327,19 +9344,19 @@ and api_test_interpolates value =
 and emit_api_test_string ?(indent="") signatures env value =
   match value with
   | ELit { lit = LString text; _ } when !current_api_server <> None ->
-    let parts = Emit_racket.parse_api_test_template_content text in
+    let parts = Api_test_template.parse text in
     let interpolates = List.exists (function
-      | Emit_racket.ApiTestTemplateExpr _ -> true
-      | Emit_racket.ApiTestTemplateLiteral _ -> false) parts in
+      | Api_test_template.Expr _ -> true
+      | Api_test_template.Literal _ -> false) parts in
     if not interpolates then emit_expr ~expected:TString ~indent signatures env value
     else
       let rendered = List.map (function
-        | Emit_racket.ApiTestTemplateLiteral literal -> go_quote literal
-        | Emit_racket.ApiTestTemplateExpr slot ->
+        | Api_test_template.Literal literal -> go_quote literal
+        | Api_test_template.Expr slot ->
           let ty = type_of_expr signatures env slot in
           let encoded = match ty with
             (* An untyped JSON handle hands over the value it holds; anything else goes
-               through its own encoder, which is the shape the Racket walk produces. *)
+               through its own encoder, which is the shape the Legacy walk produces. *)
             | TJson -> Printf.sprintf "%s.JsonRaw()"
                          (selector_operand (emit_expr ~indent signatures env slot))
             | _ -> Printf.sprintf "%s(%s)" (!value_encoder_hook ty)
@@ -9485,9 +9502,9 @@ and emit_let_expr ?expected ?(indent="") signatures env expr =
 
 let loop_label = "teslLoop"
 
-(* A Tesl self tail call is a loop, not a stack frame.  Racket has TCO, Go does not,
+(* A Tesl self tail call is a loop, not a stack frame.  Legacy has TCO, Go does not,
    and Go's stack overflow is a FATAL error that `recover` cannot catch — so a deep
-   tail-recursive program that merely runs on Racket would kill the process here.
+   tail-recursive program that merely runs on Legacy would kill the process here.
    Only a call in tail position to the enclosing function, with the whole parameter
    list supplied and the name not shadowed by a local, qualifies. *)
 let self_tail_call_args signatures env ~name ~arity expr =
@@ -9724,7 +9741,7 @@ let emit_tail ?self ?(debug=false) ?(debug_package="") ?(debug_function="")
     | EWithCapabilities { body; _ } -> go env indent body
     (* `let (v ::: p) = check g x` inside a CHECK or an AUTH: the rejection PROPAGATES, exactly
        as it does for a plain `let v = check g x` below.  The proof-DECOMPOSING form was left
-       on the trapping path, so an `auth` that delegated to a check answered 500 where Racket
+       on the trapping path, so an `auth` that delegated to a check answered 500 where Legacy
        answers the check's own status — `adminAuth` in tests/critical-review-48-auth-api-tests
        returns 403 there and crashed here. *)
     | ELetProof { value_name; proof_name; value; body; loc; _ }
@@ -9784,10 +9801,10 @@ let emit_tail ?self ?(debug=false) ?(debug_package="") ?(debug_function="")
       go ((proof_name, TUnit) :: (value_name, value_ty) :: env) (indent ^ "\t") body;
       Printf.bprintf buffer "%s}\n" indent
     (* `let v = check g x` inside another CHECK: a rejection PROPAGATES — it becomes this
-       check's own result, carrying the inner status and message.  Racket's `let/check`
+       check's own result, carrying the inner status and message.  Legacy's `let/check`
        does exactly this (`(if (check-fail? result) result …)`), and the emitter used to
        reach for `MustCheck` here, which PANICS: a handler that should have answered 422
-       crashed the request instead.  In a plain `fn` the trap is correct and stays — Racket
+       crashed the request instead.  In a plain `fn` the trap is correct and stays — Legacy
        raises there too, since `define/pow` installs a raising handler rather than letting a
        failure leak out as a value. *)
     | ELet { name; value; body; loc; _ }
@@ -9973,7 +9990,7 @@ let runtime_file_gates : (string * string list) list = [
   "agent", [ "agent.go"; "agent_endpoint.go"; "agent_provider.go" ];
   "regex", [ "regex.go" ];
   (* PASSWORD STORAGE is the one part of the runtime that is not standard-library-only:
-     Argon2id comes from `golang.org/x/crypto/argon2`, because Racket hashes with libsodium's
+     Argon2id comes from `golang.org/x/crypto/argon2`, because Legacy hashes with libsodium's
      Argon2id and a stdlib substitute would mint hashes the other backend cannot verify.  The
      dependency travels with this file and only with it, which is why the file is gated. *)
   "password", [ "password.go" ];
@@ -10134,25 +10151,25 @@ let adt_source info =
   Buffer.contents body
   end
 
-(* A codec becomes two ordinary Go functions per direction, mirroring what the Racket
+(* A codec becomes two ordinary Go functions per direction, mirroring what the Legacy
    backend generates (`tesl-codec-encode-T`, `tesl-codec-decode-T-N`) — there is no macro
-   layer to reproduce.  Differences that matter, both verified against Racket:
+   layer to reproduce.  Differences that matter, both verified against Legacy:
 
    - ENCODING goes through a sorted-key map rather than a struct with json tags, because
-     Racket's `jsexpr->string` sorts object keys and response bytes are observable.
+     Legacy's `jsexpr->string` sorts object keys and response bytes are observable.
    - An INTEGER is rendered from its decimal digits and decoded from `json.Number`, since
      Tesl's Int is arbitrary precision and Go's default number handling is float64.
 
    Decode returns a `teslrt.Check`, so a `via` failure carries the check's own status and
    message (the 400 the client sees), while a missing or mistyped field is a decode
-   failure whose text Racket hides behind "Invalid request payload" by default. *)
+   failure whose text Legacy hides behind "Invalid request payload" by default. *)
 let codec_alt_name type_name index =
   Printf.sprintf "teslDecode%sAlt%d" (go_ident ~exported:true type_name) index
 
 (* The primitive codecs, by the name written in `with_codec`.  Anything else is a TYPE
    name and resolves to that type's own codec. *)
 (* `with_codec AcctId` names a NEWTYPE rather than a codec.  A newtype has no codec of its
-   own — Racket resolves the spelling to the BASE codec, which is why `with_codec AcctId` and
+   own — Legacy resolves the spelling to the BASE codec, which is why `with_codec AcctId` and
    `with_codec stringCodec` on the same field round-trip identically — so it resolves here the
    same way.  Emitting a reference to `EncodeAcctIdJSON` instead produced a package that did
    not compile. *)
@@ -10182,12 +10199,12 @@ let field_codec_kind name =
   | Some kind -> Some kind
   | None -> newtype_base_codec name
 
-(* The wire shape of a response value, mirroring `runtime-value->jsexpr` in dsl/types.rkt:
+(* The wire shape of a response value, mirroring `runtime-value->jsexpr` in dsl/types.tesl:
    a type with its own codec encodes through it; a record without one becomes an object of
    its fields; an ADT without one becomes a TAGGED object — `{"tag":"Nothing"}`, or
    `{"tag":"Something","fields":{…}}` when the variant carries payload.  That is why a
    handler returning `Maybe Task` works without a codec for `Maybe`: the tagged shape is
-   the fallback, not an error.  A newtype unwraps, matching Racket.
+   the fallback, not an error.  A newtype unwraps, matching Legacy.
 
    Each encoder is hoisted into a named function, so the call site stays a plain call and
    the same type is encoded one way everywhere. *)
@@ -10293,7 +10310,7 @@ let implies_cookie_cap (capabilities : capability_form list) declared =
 (* The decoder for a JSON value of a given type, as a `func(any) (T, error)`.
    Shared by the DERIVED record decoder and by a codec field whose `with_codec` names a CONTAINER
    codec (`listCodec`/`setCodec`/`dictCodec`): those decode by the field's declared type — the
-   element type is what says how to read each element — which is exactly this walk.  Racket
+   element type is what says how to read each element — which is exactly this walk.  Legacy
    routes the same case through its generic type-aware decoder for the same reason: the prim
    decoder only checks the JSON shape and passes elements through unconverted. *)
 let rec json_value_decoder ~package ~loc ~what ty =
@@ -10486,8 +10503,8 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
                  (go_quote column.col_name) (go_quote column.col_sql_type)
                  column.col_primary_key column.col_nullable)
                (entity_columns entity) in
-           (* A UNIQUE index is created by the bootstrap under the name `dsl/sql.rkt` derives,
-              so a table shared with the Racket backend does not end up with two indexes doing
+           (* A UNIQUE index is created by the bootstrap under the name `dsl/sql.tesl` derives,
+              so a table shared with the Legacy backend does not end up with two indexes doing
               the same job.  A plain index is a hint with no observable effect and is left to
               whoever tunes the database. *)
            let unique =
@@ -10749,7 +10766,7 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
           List.iter (fun variant ->
             if variant.var_fields <> [] then unsupported codec.loc
               "Go backend `adtJson` needs constructors without payloads (`%s`)" variant.var_ctor;
-            (* The wire shape is `{"tag": "Ctor"}`, which is what Racket's generated `adtJson`
+            (* The wire shape is `{"tag": "Ctor"}`, which is what Legacy's generated `adtJson`
                encoder writes — a bare constructor STRING (which this emitted before) reads
                back as a different value on the other backend, and the two disagreed about
                every response carrying an enum. *)
@@ -10777,14 +10794,14 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
             entries));
        Buffer.add_string body "\n\t}\n}\n");
     (* Decode: each alternative is COMPLETE and they are tried in order, first success
-       winning — the same rule the Racket decoder list follows. *)
+       winning — the same rule the Legacy decoder list follows. *)
     (match codec.from_json with
      | FromJsonForbidden -> ()
      | FromJsonAdt ->
        (match go_ty with
         | TAdt (info, _) ->
           Printf.bprintf body
-            (* BOTH shapes are accepted, as Racket's generated decoder accepts them: the
+            (* BOTH shapes are accepted, as Legacy's generated decoder accepts them: the
                tagged object its own encoder writes, and a bare string a hand-written or Elm
                client may send. *)
             "\nfunc %s(teslJSON any) teslrt.Check[%s] {\n\tteslName, teslErr := teslrt.DecodeAdtTag(teslJSON)\n\tif teslErr != nil {\n\t\treturn teslrt.Reject[%s](400, teslErr.Error())\n\t}\n\tswitch teslName {\n"
@@ -10815,7 +10832,7 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
                   | `Bool -> "DecodeBoolField" | `Float -> "DecodeFloatField"
                   (* The millis come back as an Int and the field's own newtype wraps them,
                      which is what `base_value` below arranges.
-                     Racket cannot do this today — `tesl-decode-prim-posix-millis` answers the
+                     Legacy cannot do this today — `tesl-decode-prim-posix-millis` answers the
                      bare integer and a `PosixMillis` field rejects it, so the same body is a
                      400 there (finding 11).  Go answers correctly rather than reproducing that:
                      the same call the port has made for `selectCount`'s dropped joins and for
@@ -10829,7 +10846,7 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
               (* A CONTAINER codec (`listCodec`/`setCodec`/`dictCodec`) decodes by the FIELD'S
                  DECLARED TYPE rather than by the codec name: the element type is what says how
                  to read each element, and the codec name only says "this is a container".
-                 Racket routes it through its generic type-aware decoder for the same reason —
+                 Legacy routes it through its generic type-aware decoder for the same reason —
                  its prim decoder checks the JSON shape and passes elements through unconverted,
                  which made a declared `List String` accept anything an array held. *)
               | None when List.mem field_codec ["listCodec"; "setCodec"; "dictCodec"] ->
@@ -10886,7 +10903,7 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
          let assignments = List.rev !assignments in
          (* A field whose TYPE is a newtype decoded its BASE value — a primitive codec answers
             a `string`/`Int`, never the wrapper — so the constructor is applied here, at
-            construction, and NOT before.  That ordering is the fix a Racket-side soundness bug
+            construction, and NOT before.  That ordering is the fix a Legacy-side soundness bug
             forced (`compiler/test/test_secret_surface.ml` ratchets it): wrapping first meant a
             `via` checker declared `(text: String)` was handed the wrapped secret, so an
             arbitrary checker could reach the plaintext under a signature promising it never saw
@@ -10914,7 +10931,7 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
                  "Go backend codec `%s` cannot resolve check `%s`" type_name checker
              in
              (* The cross-check receives the decoded FIELDS in declaration order — not the
-                record — matching the call `emit_racket` generates.  Its result is used
+                record — matching the call `emit_legacy` generates.  Its result is used
                 only for pass/fail: the record is built from the fields either way. *)
              Printf.bprintf body
                "\tteslCross := %s(%s)\n\tif !teslCross.OK() {\n\t\treturn teslrt.Reject[%s](teslCross.Status(), teslCross.Message())\n\t}\n"
@@ -10932,7 +10949,7 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
           Printf.bprintf body "\treturn teslrt.Reject[%s](400, \"no decode alternative\")\n"
             go_type_name
         | _ ->
-          (* Alternative order follows Racket's registry loop exactly: a SHAPE mismatch
+          (* Alternative order follows Legacy's registry loop exactly: a SHAPE mismatch
              moves on, a VALIDATION failure is remembered (the FIRST one wins) and the
              search continues, since a later alternative may still succeed.  Reporting
              the last failure instead would replace a real 400 from the first
@@ -10948,8 +10965,8 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
             go_type_name);
        Buffer.add_string body "}\n")) codecs;
   (* ── Derived decoders ───────────────────────────────────────────────────────
-     A request-body record needs no `codec` block: Racket decodes it generically from the
-     record spec at run time (`dsl/types.rkt jsexpr->typed-value`), so the type alone is the
+     A request-body record needs no `codec` block: Legacy decodes it generically from the
+     record spec at run time (`dsl/types.tesl jsexpr->typed-value`), so the type alone is the
      contract. Go has no runtime type registry, so the equivalent decoder is EMITTED — and it
      has to be, because the dispatcher above already calls `Decode<T>JSON` for every body
      type. Without this the emitted package referenced a function nobody wrote: a fail-OPEN
@@ -10973,7 +10990,7 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
         let go_ty = go_type ty in
         Printf.bprintf body
           "\n// %s is the DERIVED decoder for a record with no `codec` block: the type is the\n\
-           // whole contract, exactly as it is on the Racket runtime's generic decode.\n\
+           // whole contract, exactly as it is on the Legacy runtime's generic decode.\n\
            func %s(teslJSON any) teslrt.Check[%s] {\n"
           (codec_decode_name info.rec_tesl_name) (codec_decode_name info.rec_tesl_name) go_ty;
         Printf.bprintf body "\tteslFields, teslShapeErr := teslrt.DecodeObjectShape(teslJSON, %s, []string{%s})\n\tif teslShapeErr != nil {\n\t\treturn teslrt.RejectShape[%s](teslShapeErr.Error())\n\t}\n"
@@ -11050,7 +11067,7 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
         | None -> unsupported server.loc "Go backend cannot resolve handler `%s`" handler
       in
       (* The response goes through the result type's own codec, so the body bytes are the
-         ones the codec layer already agrees with Racket on. *)
+         ones the codec layer already agrees with Legacy on. *)
       let encoder = match signature.result with
         | TDict _ | TSet _ | TParam _ | TCheck _ | TFailure ->
           unsupported server.loc
@@ -11071,12 +11088,12 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
       (* The request body is read ONCE, before anything examines the request: an `auth` may
          verify a MAC over the RAW bytes (every webhook scheme does), and the decoder needs the
          same bytes — `teslRequest.Body` is a stream that can only be read once, so reading it
-         twice gave the auth an empty body and made it verify a tag over "". Racket reads
+         twice gave the auth an empty body and made it verify a tag over "". Legacy reads
          `request-post-data/raw` once for exactly this reason. *)
       let reads_body = endpoint_auth <> None || endpoint_body <> None in
       (* The read goes through `teslrt.ReadRequestBody`, not `io.ReadAll`: the body is parsed
          whole in memory, so an uncapped read is a one-request memory exhaustion.  The cap and
-         its `TESL_MAX_BODY_BYTES` override are the runtime's, shared with `dsl/web.rkt` so
+         its `TESL_MAX_BODY_BYTES` override are the runtime's, shared with `dsl/web.tesl` so
          both backends refuse the same requests with the same 413. *)
       if reads_body then
         Buffer.add_string body
@@ -11150,7 +11167,7 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
            in
            (* A capturer's `via` names either a CHECK — which may reject the segment, and then
               the request is answered with the status it chose — or a plain `fn` that NORMALISES
-              it (`parseUserId`).  Racket tells them apart the same way: it calls the function
+              it (`parseUserId`).  Legacy tells them apart the same way: it calls the function
               and only treats a `check-fail` as a rejection. *)
            (match signature.result with
             | TCheck _ ->
@@ -11168,7 +11185,7 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
        | Some (binding : binding) ->
          (* A SCALAR body is the whole JSON value — `body runId: String` receives the string
             that was sent, not a field of an object — so it decodes through the scalar reader
-            rather than a codec.  Racket does the same: its generic decoder reads the body
+            rather than a codec.  Legacy does the same: its generic decoder reads the body
             value at the declared type. *)
          let body_type = type_of_type_expr types binding.type_expr in
          let scalar_reader = match body_type with
@@ -11198,14 +11215,14 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
              "Go backend request body needs a type with a codec"
          in
          (* Before any parse: the content type must say JSON (415) and the body must not be
-            empty (400).  `dsl/web.rkt`'s `parse-json-body` applies both to an endpoint with a
+            empty (400).  `dsl/web.tesl`'s `parse-json-body` applies both to an endpoint with a
             DECLARED payload and nothing else — an `auth` that verifies a MAC over the raw bytes
             reads the body of a request that may not be JSON at all — so this is emitted in the
             same place.  A JSON API that parsed a `text/plain` body would be the surprising
             behaviour, and the two backends now refuse the same request with the same status. *)
          Buffer.add_string body
            "\t\t\tif teslStatus, teslMessage := teslrt.CheckJSONPayload(teslRequest, teslBodyBytes); teslStatus != 0 {\n\t\t\t\treturn teslrt.Fail(teslStatus, teslMessage)\n\t\t\t}\n";
-         (* The two failure strings are the ones the Racket server sends, so a client sees
+         (* The two failure strings are the ones the Legacy server sends, so a client sees
             the same 400 either way. *)
          (match scalar_reader, list_reader with
           | None, Some element ->
@@ -11386,7 +11403,7 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
     (* ── The server-wide settings, applied at PACKAGE LOAD ──────────────────
        `publicOrigin` turns on the Host check and is the redirect_uri's base; `sessionPolicy`
        decides the session cookie's Max-Age.  Both are set in an `init` rather than in
-       `main`, because that is where Racket sets them — a top-level side effect at module
+       `main`, because that is where Legacy sets them — a top-level side effect at module
        load — and an api-test never runs `main`.  A server that declares neither emits
        nothing here, so a file without them is byte-identical to before. *)
     let boot_settings =
@@ -11405,7 +11422,7 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
          | None -> [])
       (* `sessionPreviousKey "VAR"` is the ROTATION OVERLAP: verification accepts a token
          signed by either key, so a leaked signing key can be replaced without logging every
-         user out.  Read once here — the same one-time bootstrap read Racket wraps in
+         user out.  Read once here — the same one-time bootstrap read Legacy wraps in
          `with-env-bootstrap` — because a per-request read of a secret is a per-request
          opportunity to leak it. *)
       @ (match server.sso_previous_key_env with
@@ -11416,7 +11433,7 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
          | None -> [])
       (* `sessionRevoked <fn>` installs the renewal-time revocation check.  The clause's fn
          takes `(String, PosixMillis)`; the runtime hook is handed `iat` in SECONDS, so the
-         adapter converts — the same conversion the Racket emitter writes with
+         adapter converts — the same conversion the Legacy emitter writes with
          `Time.secondsToPosix`. *)
       @ (match server.session_revoked with
          | Some fn ->
@@ -11454,7 +11471,7 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
   |> List.iter (fun (name, source) ->
     Hashtbl.replace module_helpers name ();
     Buffer.add_string body source);
-  (* A private Tesl function that nothing calls is legal Tesl, and the Racket backend
+  (* A private Tesl function that nothing calls is legal Tesl, and the Legacy backend
      emits it, so refusing to emit Go for the whole module over it was a divergence with
      no upside — a teaching file that declares a function to illustrate it could not be
      compiled at all.  It is emitted, and referenced once here because Go's `unused`
@@ -11515,11 +11532,11 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
   (* Numbers the operand bindings a comparison introduces, unique across the file. *)
   let expect_operand = ref 0 in
   (* ── Per-test isolation ────────────────────────────────────────────────────
-     Every test block starts from empty stores, which is what Racket's
+     Every test block starts from empty stores, which is what Legacy's
      `call-with-fresh-memory-db` gives every `test`/`api-test` body.  Go runs a package's
      tests in one process and (absent t.Parallel, which emitted tests never use) one at a
      time, so without this the second block would see the first block's rows, jobs and HTTP
-     stubs — the exact leak the Racket side was fixed for, where one api-test saw another's
+     stubs — the exact leak the Legacy side was fixed for, where one api-test saw another's
      seed and answered 200 instead of 404.
      Tables and queues of IMPORTED packages are reset too: a `database` block in another
      module is where that leak actually bit, and here the owning package is known rather than
@@ -11532,10 +11549,10 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
       let tables =
         Hashtbl.to_seq_values types.entities
         |> List.of_seq
-        (* Only an entity some `database` block NAMES: Racket clears the stores of REGISTERED
+        (* Only an entity some `database` block NAMES: Legacy clears the stores of REGISTERED
            databases, and an entity in no declaration is in none of them, so its rows survive
            from one test block to the next.  Truncating it here made the same program's tests
-           pass on Go and fail on Racket — a file with no `database` declaration shares one
+           pass on Go and fail on Legacy — a file with no `database` declaration shares one
            store on purpose, and a corpus lesson relies on it. *)
         |> List.filter (fun info -> owned info.ent_owner && info.ent_in_database)
         |> List.map (fun info ->
@@ -11548,7 +11565,7 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
         |> List.map (fun info ->
              Printf.sprintf "teslrt.ResetQueue(%s)" (qualified info.qu_owner info.qu_go_var))
       (* A CACHE and an email OUTBOX are reset for the same reason the tables are: one block's
-         entries must not be another's.  Racket resets both too — `call-with-fresh-memory-db`
+         entries must not be another's.  Legacy resets both too — `call-with-fresh-memory-db`
          clears them from the process-wide registry, which this slice fixed after the oracle
          caught the two backends disagreeing about what a second block sees. *)
       and caches =
@@ -11563,7 +11580,7 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
         |> List.filter (fun info -> owned info.em_owner)
         |> List.map (fun info ->
              Printf.sprintf "teslrt.ResetOutbox(%s)" (qualified info.em_owner info.em_go_var))
-      (* A channel's LISTENERS are per-block state on both backends: Racket's api-test
+      (* A channel's LISTENERS are per-block state on both backends: Legacy's api-test
          cleanups unregister the block's subscription when it ends, and the emitted block
          closes its stream at the same point (the `defer` at the subscribe).  Clearing the
          registry here covers a listener no `subscribe` opened. *)
@@ -11594,12 +11611,12 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
     if reset_calls <> [] then Buffer.add_string body "\tteslResetTestState()\n"
   in
   (* A `property` block's repetition count, from the test header's `with N runs` (200 when it
-     says nothing, which is Racket's default).  A ref because the statement emitter is one
+     says nothing, which is Legacy's default).  A ref because the statement emitter is one
      closure shared by every block. *)
   let property_runs = ref 200 in
-  (* The generator for one property parameter, by TYPE — the same values Racket's
+  (* The generator for one property parameter, by TYPE — the same values Legacy's
      `random_expr_for_type` produces, so a property searches the same space on both backends.
-     A type Racket has no generator for falls back to `0` there; here it is refused, because a
+     A type Legacy has no generator for falls back to `0` there; here it is refused, because a
      property that ran 200 times over the same wrong-typed value would report success without
      having tested anything. *)
   let rec property_generator loc ty =
@@ -11613,13 +11630,13 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
     | TAdt (info, [element]) when info.adt_tesl_name = "Maybe" ->
       Printf.sprintf "teslrt.PropMaybe(func() %s { return %s })"
         (go_type element) (property_generator loc element)
-    (* A RECORD generates fieldwise, which is what Racket does — and a record whose fields
-       carry PROOF annotations is refused instead: Racket has proof-aware generators there
+    (* A RECORD generates fieldwise, which is what Legacy does — and a record whose fields
+       carry PROOF annotations is refused instead: Legacy has proof-aware generators there
        (`IsPositive` draws a positive), and a fieldwise draw would hand the property a value
        its own annotation says is impossible. *)
     | TRecord info ->
       (* A field carrying a PROOF draws from the range the predicate admits — the same three
-         Racket has proof-aware generators for, over the same ranges, so a property searches
+         Legacy has proof-aware generators for, over the same ranges, so a property searches
          the same space on both backends.  Any other predicate falls back to the plain draw
          and the proof is not fabricated: what makes it true is the checker. *)
       let proofs = Option.value (Hashtbl.find_opt current_field_proofs info.rec_tesl_name)
@@ -11645,7 +11662,7 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
        | Some (checker, fields) ->
          (* A record-level invariant is a relation BETWEEN fields, which no fieldwise draw
             can guarantee — so the generator REDRAWS until the invariant's own check accepts,
-            up to the 100 attempts Racket allows before it skips the iteration.  Hoisted into
+            up to the 100 attempts Legacy allows before it skips the iteration.  Hoisted into
             a named function: it captures nothing, and a loop written inline is a shape gofmt
             reflows. *)
          let signature = match Hashtbl.find_opt signatures checker with
@@ -11866,7 +11883,7 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
           function is a value, and a value cannot fail"
        | _ -> ());
       (* A proof operation ERASES here, so it cannot be what fails: `expectFail (fn () ->
-         detachFact …)` asserts a Racket RUNTIME restriction (its `detachFact` raises when a
+         detachFact …)` asserts a Legacy RUNTIME restriction (its `detachFact` raises when a
          value carries more than one proof), and a program built on that assertion would run
          to completion on Go and fail the test.  Refusing says so, instead of emitting a test
          that cannot pass. *)
@@ -11884,7 +11901,7 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
       (match proof_operation call with
        | Some name -> unsupported loc
          "Go backend erases proofs, so `%s` cannot fail — this expectation is specific to \
-          the Racket runtime" name
+          the Legacy runtime" name
        | None -> ());
       let result_ty = type_of_expr signatures env call in
       (* A non-check target is wrapped in `teslExpectFailure(teslT, func() { … })`, so its
@@ -11940,7 +11957,7 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
       emit_stmts env (indent ^ "\t") rest;
       Printf.bprintf body "%s}\n" indent
     (* `property "name" (x: T, y: U where …) { body }` — the body must hold for every generated
-       binding.  A `where` clause SKIPS the run rather than failing it, which is what Racket's
+       binding.  A `where` clause SKIPS the run rather than failing it, which is what Legacy's
        `(when guard (check-true …))` does: the guard describes which values the property is
        about, so a value outside it is not a counterexample. *)
     | TsProperty { description; params; body = property_body; loc } :: rest ->
@@ -11959,7 +11976,7 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
         let generated = match param.generator with
           | Some generator ->
             (* A custom generator is a function of the RUN INDEX, so it can walk a space
-               rather than sample it — `(gen tesl-prop-i)` on the Racket side. *)
+               rather than sample it — `(gen tesl-prop-i)` on the Legacy side. *)
             let signature = match Hashtbl.find_opt signatures generator with
               | Some signature -> signature
               | None -> unsupported loc
@@ -12012,7 +12029,7 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
       if guards <> [] then Printf.bprintf body "%s\t}\n" indent;
       Printf.bprintf body "%s}\n" indent;
       emit_stmts env indent rest
-    (* `expectHasProof f x P` asserts, on Racket, that the value `f x` answers carries the
+    (* `expectHasProof f x P` asserts, on Legacy, that the value `f x` answers carries the
        fact `P`.  A fact has NO runtime form here — the checker discharges the proof before
        anything is emitted — so the fact list is not there to inspect.  What a Go run can
        still assert is the half that is about the run: that the check ACCEPTED, without
@@ -12084,9 +12101,9 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
      then "doctest" else "test"
    in
    List.iteri (fun index (test : test_form) ->
-    (* `runs` is a PROPERTY test's repetition count: emit_racket reads it only where a
+    (* `runs` is a PROPERTY test's repetition count: emit_legacy reads it only where a
        `property` statement is emitted, so on a test with no property statement it changes
-       nothing on either backend — and refusing it here made a test Racket runs fine
+       nothing on either backend — and refusing it here made a test Legacy runs fine
        uncompilable.  A test that DOES carry a property statement is still refused, by the
        statement itself, which is where the generators are missing.
        The capabilities and the `with database X` header, by contrast, are compile-time
@@ -12124,7 +12141,7 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
        Buffer.add_string body "\t})\n");
     Buffer.add_string body "}\n") tests;
   (* An `api-test` drives the emitted server IN PROCESS — no socket, so it is an ordinary
-     `go test` case.  Racket dispatches the same way, so both backends exercise the same
+     `go test` case.  Legacy dispatches the same way, so both backends exercise the same
      layer.  The statements are the same `test_stmt` forms an ordinary `test` block uses,
      so they go through the same emitter; only the request verbs are special. *)
   List.iteri (fun index (api_test : api_test_form) ->
@@ -12153,14 +12170,14 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
   in
   (* A `load-test` block is a Go test too: it drives the same in-process dispatch an api-test
      uses, at a fixed arrival rate, and asserts on the sample.  Driving the SAME dispatch is what
-     makes the number comparable with the Racket harness's — both measure the program, not a
+     makes the number comparable with the Legacy harness's — both measure the program, not a
      socket.  The request statements are ordinary api-test statements, so they go through the
      same emitter; what differs is that they run inside the harness's thunk. *)
   List.iteri (fun index (load_test : load_test_form) ->
     (* A `baseline` compares this run against a RECORDED one, and NEITHER backend stores one:
-       `dsl/load-test.rkt` prints "in-process baselines; store/compare deferred" and moves on.
+       `dsl/load-test.tesl` prints "in-process baselines; store/compare deferred" and moves on.
        So the clause is noted here in the same place and in the same words, rather than refused
-       (which would make a load test that runs on Racket fail to compile) or dropped (which
+       (which would make a load test that runs on Legacy fail to compile) or dropped (which
        would read as a regression check that ran).  Real baselines are a language feature owed
        to both backends, not a migration item. *)
     Buffer.add_char body '\n';
@@ -12217,12 +12234,12 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
         Printf.bprintf body "\tteslrt.AssertLoadTest(teslT, teslResult, %s, %s, %s)\n"
           (go_quote metric_name) (go_quote operator) (emit_float_literal value)
       (* The regression assertion needs the baseline nothing stores, so it is NOTED and does not
-         fail: a check that could not run has not failed.  Same answer as Racket's. *)
+         fail: a check that could not run has not failed.  Same answer as Legacy's. *)
       | LtAssertRegression { metric; ratio } ->
         Printf.bprintf body "\tteslrt.NoteLoadTestRegression(teslT, %s, %s)\n"
           (go_quote (load_test_metric_name metric)) (emit_float_literal ratio))
       load_test.assertions;
-    (* Emitted AFTER the assertions, which is where `dsl/load-test.rkt` prints it. *)
+    (* Emitted AFTER the assertions, which is where `dsl/load-test.tesl` prints it. *)
     (match load_test.baseline with
      | Some name ->
        Printf.bprintf body "\tteslrt.NoteLoadTestBaseline(teslT, %s)\n" (go_quote name)
@@ -12485,10 +12502,10 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             "Go backend does not emit the `Tesl.Http` export `%s`: the module is wired, that \
              export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       (* `Tesl.Crypto`: message authentication, digests and tokens are runtime leaves over Go's
-         standard library — the same primitives the Racket runtime reaches for in libsodium, so
+         standard library — the same primitives the Legacy runtime reaches for in libsodium, so
          a tag or a fingerprint produced by one backend verifies on the other.  PASSWORD STORAGE
          is Argon2id through `golang.org/x/crypto/argon2` (the one approved non-stdlib
-         dependency): the alternative substitutes would mint hashes the Racket side cannot
+         dependency): the alternative substitutes would mint hashes the Legacy side cannot
          verify, turning a shared database into a silent lockout.  It ships only with a program
          that stores passwords. *)
       (* `Tesl.Proxy` is the authenticating-proxy edge binding: one check-shaped function
@@ -12556,7 +12573,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
              export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       (* `Tesl.JWT`: the one blessed session token.  HS256 over `header.payload`, which is
          `Tesl.Crypto`'s own primitive — so a token minted by either backend verifies on the
-         other, and a test pins that against a real Racket-minted token. *)
+         other, and a test pins that against a real Legacy-minted token. *)
       | "Tesl.JWT" ->
         List.iter (fun name ->
           match name with
@@ -12682,7 +12699,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
        is real control flow. *)
     let fact_names = List.filter_map (function DFact f -> Some f.name | _ -> None) m.decls in
     (* `main`'s trailing `App { … }` record is LOWERED here, through the same backend-neutral
-       pass the Racket path uses (`Desugar.lower_main_app`), rather than being re-read in this
+       pass the Legacy path uses (`Desugar.lower_main_app`), rather than being re-read in this
        emitter: a second reader of a config record is a second place for a field to be misread,
        which is exactly how `backend: Memory` once looked like Postgres. *)
     let funcs = List.filter_map (function DFunc fd -> Some fd | _ -> None) m.decls in
@@ -12758,7 +12775,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
        Two things are needed and neither is in the module tree alone: WHICH endpoints each
        call site gets (the checker's per-site proof decision) and what each endpoint looks
        like to a model (its name, description and derived schema).  The checker is re-run
-       for the first, as the Racket backend does — and only for a module that actually uses
+       for the first, as the Legacy backend does — and only for a module that actually uses
        one of the two forms, so nothing else pays for it. *)
     Hashtbl.reset server_tools_sites;
     Hashtbl.reset human_actions_sites;
@@ -12876,7 +12893,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       | _ -> ()) m.decls;
     (* ONE Postgres-backed database per module, because only one can ever be CONNECTED.
        `main`'s `App { database: X }` names a single database and is the only thing that
-       connects (Racket keeps one `current-database-runtime`; this backend keeps one binding
+       connects (Legacy keeps one `current-database-runtime`; this backend keeps one binding
        per declaration and only the App's is ever bound).  A second Postgres database would
        therefore compile, route its entities' queries to a connection nothing opens, and read
        the IN-MEMORY table in production — silently, with the same rows a test would see.
@@ -12930,7 +12947,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       | _ -> ()) m.decls;
     List.iter (function
       | DType (TypeNewtype { name; base_type; secret; loc; _ }) ->
-        (* A newtype over a NEWTYPE — `type Rank = Score` where `type Score = Int`.  Racket
+        (* A newtype over a NEWTYPE — `type Rank = Score` where `type Score = Int`.  Legacy
            nests them the same way, and ordering works transitively because each layer
            compares through its payload.  Declaration order is what makes this resolve: the
            base has to have been registered already, which is the same rule the source
@@ -12965,7 +12982,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
     let record_forms = List.filter_map (function DRecord r -> Some r | _ -> None) m.decls in
     List.iter (fun (r : record_form) ->
       (* A record-level `::: P` after the closing brace is a CROSS-FIELD invariant, and it is
-         compile-time only — LANGUAGE-SPEC calls it a zero-cost annotation, and the Racket
+         compile-time only — LANGUAGE-SPEC calls it a zero-cost annotation, and the Legacy
          emitter reads it for nothing but property-test GENERATORS (`record_meta`), never for
          a check at construction.  Constructing such a record needs a witness, which the
          checker demands; here it erases with every other proof. *)
@@ -12975,7 +12992,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       List.iter (fun (field : field_def) ->
         (* A proof-carrying field (`name: String ::: Named name`) ERASES to its own type,
            the same rule every other proof follows: the checker has discharged it, and
-           LANGUAGE-SPEC 16.9 gives a proof no runtime structure.  Racket attaches a
+           LANGUAGE-SPEC 16.9 gives a proof no runtime structure.  Legacy attaches a
            wrapper and unwraps on every read, which is an implementation detail of that
            backend.  This used to fail closed as a not-yet; codecs are what forced the
            question, since a decoded field is exactly a proof-carrying field. *)
@@ -12993,7 +13010,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       }) record_forms;
     (* A `queue` declaration: one store variable plus the job-type → worker wiring.  The
        typed form (`= Queue { … }`) keeps its fields in `config_expr`, and the Go pipeline
-       does not run the desugar pass, so the same lowering the Racket backend gets is
+       does not run the desugar pass, so the same lowering the Legacy backend gets is
        applied here — including `job_entries`, which pairs each job type with its worker and
        optional dead-letter worker. *)
     let queue_forms = List.filter_map (function DQueue q -> Some q | _ -> None) m.decls in
@@ -13051,7 +13068,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         unsupported e.loc
           "Go backend cannot find the primary key `%s` among the fields of entity `%s`"
           e.primary_key e.name;
-      (* A UNIQUE index is a constraint the Memory backend ENFORCES on Racket (an insert that
+      (* A UNIQUE index is a constraint the Memory backend ENFORCES on Legacy (an insert that
          violates it raises), so it is enforced here too — accepting one without enforcing it
          would make the two backends disagree about which programs RUN, not merely about what
          they answer.  A plain index is a performance hint with no observable effect on either
@@ -13073,7 +13090,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       } in
       Hashtbl.replace types.records e.name row;
       (* The database that MANAGES this entity, found by asking each declaration which
-         entities it lists — the direction `dsl/sql.rkt` reads it in, and the reason an entity
+         entities it lists — the direction `dsl/sql.tesl` reads it in, and the reason an entity
          needs no `database:` field of its own. *)
       let managing =
         Hashtbl.fold (fun _ (database : database_info) found ->
@@ -13227,18 +13244,18 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       "Int.nonNegative",  [`Int], `CheckInt, "teslrt.IntNonNegative";
       "Int.abs",          [`Int], `Int,      "teslrt.Abs";
       "Int.min",          [`Int; `Int], `Int, "teslrt.Min";
-      (* Both are Racket's, so both are NON-NEGATIVE whatever the operands' signs are, and
+      (* Both are Legacy's, so both are NON-NEGATIVE whatever the operands' signs are, and
          `lcm` with a zero operand is zero rather than a division by the gcd of two zeros. *)
       "Int.gcd",          [`Int; `Int], `Int, "teslrt.IntGcd";
       "Int.lcm",          [`Int; `Int], `Int, "teslrt.IntLcm";
       "Int.max",          [`Int; `Int], `Int, "teslrt.Max";
       (* Proof-total: the divisor carries `IsNonZero`, so the runtime guard is
          containment rather than the primary check. *)
-      (* `Tesl.Float`.  The TRANSCENDENTALS are here and they diverge from Racket: sin, cos
+      (* `Tesl.Float`.  The TRANSCENDENTALS are here and they diverge from Legacy: sin, cos
          and tan differ on 22 %, 22 % and 34 % of inputs (up to 9,214 ulps near a zero of the
          function) and exp on 0.09 %.  That rate says the two differ, not which is right —
          ulp-of-result exaggerates a small absolute error near a zero — and deciding needs a
-         correctly-rounded reference rather than a diff against Racket, so the maintainer's
+         correctly-rounded reference rather than a diff against Legacy, so the maintainer's
          call (2026-08-12) is to use Go's and record the divergence rather than refuse to
          emit.  `Float.log` is the exception that does NOT forward: Go's `math.Log` answers
          the same wrong number for every subnormal, so the runtime scales around it. *)
@@ -13278,8 +13295,8 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       "Float.requireNonZero", [`Float], `CheckFloat, "teslrt.FloatRequireNonZero";
       "Float.requireNonNegative", [`Float], `CheckFloat, "teslrt.FloatRequireNonNegative";
       "Int.divide",       [`Int; `Int], `Int, "teslrt.MustQuo";
-      (* Tesl's `Int.modulo` is Racket `remainder` (truncated, sign of the
-         dividend), NOT `modulo` (floored) — see tesl/int.rkt:183.  Mapping it to
+      (* Tesl's `Int.modulo` is Legacy `remainder` (truncated, sign of the
+         dividend), NOT `modulo` (floored) — see tesl/int.tesl:183.  Mapping it to
          teslrt.MustMod would silently disagree on every negative dividend. *)
       "Int.modulo",       [`Int; `Int], `Int, "teslrt.MustRem";
       "Int.clamp",        [`Int; `Int; `Int], `Int, "teslrt.Clamp";
@@ -13287,13 +13304,13 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       "Int.isEven",       [`Int], `Bool,    "teslrt.IntIsEven";
       "Int.isOdd",        [`Int], `Bool,    "teslrt.IntIsOdd";
       "Int.toString",     [`Int], `Str,     "teslrt.IntToString";
-      (* Racket's `Int.pow` REJECTS a negative exponent rather than returning a
+      (* Legacy's `Int.pow` REJECTS a negative exponent rather than returning a
          fraction, so the Go leaf raises there too. *)
       "Int.pow",          [`Int; `Int], `Int, "teslrt.MustPow";
-      (* `Int.parse` is `String.toInt` under another name.  Racket's differ in one corner:
+      (* `Int.parse` is `String.toInt` under another name.  Legacy's differ in one corner:
          `Int.parse` accepts anything `integer?` accepts, so `Int.parse "3.0"` yields
          `Something 3.0` — a FLOAT where the type says Int — while `String.toInt` demands
-         `exact-integer?`.  Both are strict decimal here; the Racket wart is recorded in
+         `exact-integer?`.  Both are strict decimal here; the Legacy wart is recorded in
          roadmap/next/migrate_to_golang.md rather than reproduced. *)
       "Int.parse",        [`Str], `MaybeInt, "teslrt.StringToInt";
       (* `Tesl.Int32` — the same shapes, over a value that IS its integer at run time.  The
@@ -13383,7 +13400,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       end) m.imports;
     (* `Tesl.Int32` (NT-07): a 32-bit-bounded integer for wire and storage boundaries.  The
        type is NOMINAL for the checker and IS its integer at run time, so it registers as an
-       ALIAS for `Int` rather than as a type of its own — `tesl/int32.rkt` says the same, and a
+       ALIAS for `Int` rather than as a type of its own — `tesl/int32.tesl` says the same, and a
        wrapper here would put a struct where both backends store a number. *)
     let int32_leaf_names = leaf_names_for "Int32." in
     let int32_imported = ref false in
@@ -13559,7 +13576,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
        Crypto function that takes a key takes one — because it is a runtime-provided SECRET
        newtype: it redacts when printed, compares in constant time, and reaches an outbound
        header only through `HttpClient.bearer`.  `Signature` is a newtype over the hex tag,
-       which is the representation the Racket runtime keeps, so a tag crossing between the two
+       which is the representation the Legacy runtime keeps, so a tag crossing between the two
        is the same string. *)
     let crypto_leaf_names = [
       "Crypto.hashPassword"; "Crypto.checkPassword"; "Crypto.needsRehash";
@@ -13677,7 +13694,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
 
        The NAMES come from the compiler's own catalogs (`Units_catalog`, `Currencies`) rather
        than a list retyped here, so a unit or a currency added there reaches this backend
-       without a second edit — and the conversion FACTORS live only in `tesl/units.rkt`, from
+       without a second edit — and the conversion FACTORS live only in `tesl/units.tesl`, from
        which `runtime/go/teslrt/units_data.go` is generated. *)
     let money_imported = ref false in
     let units_imported = ref false in
@@ -13847,7 +13864,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
     end;
     (* `deadJobs` answers the dead-letter contents of a queue.  Its element type is opaque
        (`DeadJob`), so what a test can do with the list is count it or requeue from it — which
-       is what the Racket surface allows too. *)
+       is what the Legacy surface allows too. *)
     let dead_jobs_imported = ref false in
     let requeue_imported = ref false in
     List.iter (fun (import : import_decl) ->
@@ -13966,7 +13983,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             rec_go_name = "teslrt.ApiResponse";
             rec_proof_fields = false;
         rec_fields = [
-              (* `body` is a PARSED JSON value, matching Racket: `api-test-field-access-ref`
+              (* `body` is a PARSED JSON value, matching Legacy: `api-test-field-access-ref`
                  normalises the response and hands back the parsed body, which is why
                  `resp.body.userId` reads like the JSON it checks. *)
               "status", TInt; "body", TJson; "headers", TDict (TString, TString);
@@ -14034,7 +14051,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         either_imported := true
       end) m.imports;
     (* `JobResult` is the queue counterpart: `JobOk job` and `JobFailed job error` — the
-       failed case carries BOTH, as it does on the Racket side, so a test can assert on the
+       failed case carries BOTH, as it does on the Legacy side, so a test can assert on the
        payload of a job that failed. *)
     List.iter (fun (import : import_decl) ->
       if import.module_name = "Tesl.ApiTest" then begin
@@ -14408,13 +14425,13 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       (* A `database` declaration names a BACKEND and the entities it owns, and on BOTH
          backends it is inert: a query reaches a declared database only inside `with
          database D`, and everything outside one runs against the entity's own store
-         (Racket's `current-database-runtime` is #f until `call-with-database` binds it,
+         (Legacy's `current-database-runtime` is #f until `call-with-database` binds it,
          and its emitted `define-database` connects to nothing before that).  So the
          declaration itself emits nothing here, whichever backend it selects, and the one
          place the choice becomes observable is `with database` — see the refusal there. *)
       | DDatabase d ->
         (* The typed form (`= Database { … }`) leaves its fields in `config_expr`; the Go
-           pipeline does not run the desugar pass, so the same lowering the Racket
+           pipeline does not run the desugar pass, so the same lowering the Legacy
            backend gets is applied to this one declaration.  Reusing that function is the
            point — a second reading of the config block here would be a second place for
            `backend:` to be misread. *)
@@ -14800,7 +14817,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
       !effect_imports;
     (* `requeue job` resets a dead job to pending.  It answers whether the job was there to
        reset — a dead letter that no longer holds it is `False` rather than a trap, which is
-       the answer `tesl/queue.rkt` gives for the same case. *)
+       the answer `tesl/queue.tesl` gives for the same case. *)
     if !requeue_imported then
       (match Hashtbl.find_opt types.records "DeadJob" with
        | Some row ->
@@ -15289,7 +15306,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
     (* A `database` block may name an entity DECLARED in another module, and that entity's
        record only arrives with the import — so the flag is set again here, now that both are
        in hand.  The record is shared by reference, so marking it marks it for its own
-       package too, which is what Racket's process-wide registry does. *)
+       package too, which is what Legacy's process-wide registry does. *)
     Hashtbl.iter (fun _ (database : database_info) ->
       List.iter (fun name ->
         match Hashtbl.find_opt types.entities name with
@@ -15356,7 +15373,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
 
        The rule is syntactic and deliberately narrow: a comparison one of whose sides is a
        PARAMETER declared with that type variable.  `x == y` in `fn same(x: a, y: a)` is the
-       shape that matters and the shape Racket supports; a value that only becomes an `a`
+       shape that matters and the shape Legacy supports; a value that only becomes an `a`
        through a `let` is not seen here and keeps the refusal it had before.  Under-approximating
        is safe — it degrades to a compile-time refusal, never to a wrong comparison — while
        over-approximating would add a parameter no caller knows to pass. *)
@@ -15522,7 +15539,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
        \      default-signifies-exhaustive: false\n"
     in
     (* PASSWORD STORAGE is the one part of the runtime that is not standard-library-only:
-       Argon2id comes from `golang.org/x/crypto/argon2`, because Racket hashes with libsodium's
+       Argon2id comes from `golang.org/x/crypto/argon2`, because Legacy hashes with libsodium's
        Argon2id and a stdlib substitute would mint hashes the other backend cannot verify — a
        shared database would become a silent lockout.  The dependency therefore travels with
        `password.go` and ONLY with it: a program that stores no passwords still emits a go.mod
@@ -15654,6 +15671,15 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
     Ok (artifacts, { ex_module = m.module_name; ex_package = package;
                      ex_types = types; ex_signatures = signatures })
   with Unsupported error -> Error [error]
+
+(* Test seam for single-module callers that previously consumed one backend string. *)
+let compile_to_string ?(root_path = "") (m : module_form) =
+  ignore root_path;
+  match compile_module m with
+  | Ok (artifacts, _) -> String.concat "\n" (List.map (fun a -> a.contents) artifacts)
+  | Error errors ->
+    let message = String.concat "\n" (List.map (fun e -> e.message) errors) in
+    failwith message
 
 (* Emits a whole program: one Go package per Tesl module, all under the entry module's
    Go module path.  `modules` must contain the entry and every local module it imports,

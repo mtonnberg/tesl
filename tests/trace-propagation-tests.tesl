@@ -5,7 +5,7 @@ module TracePropagationTests exposing [TracePropServer]
 #
 # The wire-level assertions — that a `traceparent` reaches the log attributes,
 # that an outbound call carries one, that a caller-supplied header wins — live in
-# tests/trace-context-test.rkt, because a `.tesl` api-test can observe neither an
+# the runtime trace-context tests, because a `.tesl` api-test can observe neither an
 # OTLP log record's fields nor an outbound header list.
 #
 # What THIS suite pins is the property a Tesl user actually depends on, and the

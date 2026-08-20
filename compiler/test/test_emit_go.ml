@@ -244,40 +244,54 @@ test "partial expectFail" { expectFail add 1 }
       (List.exists (fun (d : Compile.diagnostic) ->
          d.source = "go-emitter" && contains d.message "fully-applied call") diagnostics)
 
-let test_racket_default_unchanged () =
+let test_go_default () =
   match Compile.compile_source "<go-test>" source with
-  | Compile.Success racket ->
-    check bool "default remains Racket" true (contains racket "#lang racket")
+  | Compile.Success generated ->
+    check bool "default emits Go" true (contains generated "package")
   | Compile.Failure diagnostics ->
-    failf "default Racket compile failed: %s"
+    failf "default Go compile failed: %s"
       (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
 
-(* The same Tesl source must pass its own `test` blocks on BOTH backends: the Go
-   side runs them as Go tests, this runs them under Racket. *)
-let racket_behavior_oracle ?(env=[]) label source () =
-  if Sys.command "raco help >/dev/null 2>&1" <> 0 then
-    Printf.printf "SKIP: raco not on PATH\n%!"
-  else
-    match Compile.compile_source label source with
-    | Compile.Failure diagnostics ->
-      failf "Racket oracle compile failed: %s"
-        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
-    | Compile.Success racket ->
-      let path = Filename.temp_file "tesl-go-racket-oracle" ".rkt" in
-      Fun.protect ~finally:(fun () -> Sys.remove path) (fun () ->
-        Out_channel.with_open_bin path (fun channel -> output_string channel racket);
-        let command = Printf.sprintf "env %s TESL_REPO_ROOT=%s raco test %s 2>&1"
-          (String.concat " " (List.map Filename.quote env))
-          (Filename.quote (Compile.default_root_path ())) (Filename.quote path) in
-        let channel = Unix.open_process_in command in
-        let output = In_channel.input_all channel in
-        match Unix.close_process_in channel with
-        | Unix.WEXITED 0 -> ()
-        | Unix.WEXITED code -> failf "Racket oracle exited %d:\n%s" code output
-        | Unix.WSIGNALED signal -> failf "Racket oracle signaled %d:\n%s" signal output
-        | Unix.WSTOPPED signal -> failf "Racket oracle stopped %d:\n%s" signal output)
+(* The same Tesl source must pass its generated Go tests. This replaces the old
+   second-backend oracle while preserving an executable behavior check. *)
+let go_behavior_oracle ?(env=[]) label source () =
+  match Compile.compile_go_source label source with
+  | Compile.GoFailure diagnostics ->
+    failf "Go behavior compile failed: %s"
+      (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  | Compile.GoSuccess artifacts ->
+    let root = Filename.temp_dir "tesl-go-oracle" "" in
+    let write artifact =
+      let path = Filename.concat root artifact.Emit_go.path in
+      let rec mkdir path =
+        if path = "" || path = Filename.current_dir_name || Sys.file_exists path then ()
+        else (mkdir (Filename.dirname path); Unix.mkdir path 0o755)
+      in
+      mkdir (Filename.dirname path);
+      Out_channel.with_open_bin path (fun channel -> output_string channel artifact.contents)
+    in
+    List.iter write artifacts;
+    let command =
+      Printf.sprintf "cd %s && env %s go test -count=1 ./... >/dev/null 2>&1"
+        (Filename.quote root)
+        (String.concat " " (List.map Filename.quote env))
+    in
+    Fun.protect ~finally:(fun () ->
+      let rec remove path =
+        if Sys.file_exists path then
+          if Sys.is_directory path then
+            (Sys.readdir path |> Array.iter (fun name -> remove (Filename.concat path name)); Unix.rmdir path)
+          else Sys.remove path
+      in
+      remove root)
+      (fun () ->
+        match Sys.command command with
+        | 0 -> ()
+        | code -> failf "Go behavior oracle exited %d" code)
 
-let test_racket_go_behavior_oracle = racket_behavior_oracle "<go-test>" source
+(* Temporary source-compatibility name for the large registration table below; it
+   now executes the Go oracle above, never the removed backend. *)
+let racket_behavior_oracle = go_behavior_oracle
 
 let test_unsupported_fails_closed () =
   (* A `secret` over a String IS supported now (see the secret-newtype case below); an
@@ -12637,8 +12651,8 @@ let () =
       test_case "release artifacts have no debug symbols" `Quick test_release_artifacts_have_no_debug_symbols;
       test_case "named expectFail emission" `Quick test_named_expect_fail_emission;
       test_case "named expectFail requires full application" `Quick test_named_expect_fail_requires_full_application;
-      test_case "Racket remains default" `Quick test_racket_default_unchanged;
-      test_case "Racket behavior oracle" `Slow test_racket_go_behavior_oracle;
+       test_case "Go remains default" `Quick test_go_default;
+       test_case "Go behavior oracle" `Slow (go_behavior_oracle "<go-test>" source);
       test_case "unsupported forms fail closed" `Quick test_unsupported_fails_closed;
       test_case "strings cannot trigger imports" `Quick test_string_cannot_trigger_runtime_import;
       test_case "Bool interpolation imports strconv only" `Quick test_bool_interpolation_imports_only_strconv;

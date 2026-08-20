@@ -5,7 +5,7 @@ module Sql_newtype_range_tests exposing []
 # runtime ("does not support ordered comparison … expected a string or number")
 # because the query operand was not unwrapped from its newtype-value before the
 # ordered check — while `==` worked. Fixed by unwrapping newtypes in
-# unwrap-non-null (dsl/sql.rkt).
+# unwrap-non-null in the SQL runtime.
 
 import Tesl.Prelude exposing [Bool(..), Int, List, String]
 import Tesl.DB exposing [dbRead, dbWrite]

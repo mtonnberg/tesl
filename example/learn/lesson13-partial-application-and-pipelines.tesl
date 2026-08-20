@@ -89,7 +89,7 @@ fn pipeline2(n: Int) -> Int =
 # ─────────────────────────────────────────────
 # THEORY — the full model
 # ─────────────────────────────────────────────
-# Partial application generates a Racket closure (lambda) that captures the
+# Partial application generates a Go closure (function value) that captures the
 # provided arguments. The closure has the same calling convention as the original
 # function for the remaining arguments.
 #

@@ -5,8 +5,8 @@ module ExistsConsumeTests exposing []
 # types the result as the underlying type (the pack hides witness NAMES, not
 # the value), but the runtime handed back the raw packed-exists struct, so
 # `String.length tok` trapped ("string-length: contract violation … given:
-# (packed-exists …)").  raw-value (dsl/private/evidence.rkt +
-# check-runtime.rkt) now projects the packed body; proof hiding is preserved
+# (packed-exists …)"). raw-value in the runtime now projects the packed body;
+# proof hiding is preserved
 # (facts-of still returns nothing for a packed value).  Identical
 # same-module and cross-module — the cross-module CHECK acceptance is locked
 # by compiler/test/test_checker_multimodule.ml.
