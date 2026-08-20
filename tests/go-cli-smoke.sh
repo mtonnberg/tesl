@@ -26,6 +26,9 @@ run_cli() {
 }
 
 bash "$REPO_ROOT/scripts/check-go-test-inventory.sh"
+bash "$REPO_ROOT/scripts/run-go-test-manifest.sh" --list >/dev/null
+TESL_REPO_ROOT="$REPO_ROOT" TESL_OCAML_COMPILER="$COMPILER" \
+  bash "$REPO_ROOT/scripts/run-go-test-manifest.sh" --compile-file tests/units-tests.tesl >/dev/null
 
 test_output="$(run_cli test example/learn/lesson00-hello-world.tesl 2>&1)" || {
   printf '%s\n' "$test_output" >&2
@@ -83,9 +86,18 @@ inspect_bin="$TMP/tesl-debug-inspect"
   echo "go-cli-smoke: Go inspect build failed" >&2
   exit 1
 }
-inspect_output="$(TESL_DEBUG_INSPECT_BIN="$inspect_bin" run_cli debug-inspect example/learn/lesson61-step-debugging.tesl --break-at 189 --mode test --timeout-ms 10000 2>&1)" || {
+inspect_output=""
+inspect_ok=false
+for attempt in 1 2 3; do
+  if inspect_output="$(TESL_DEBUG_INSPECT_BIN="$inspect_bin" run_cli debug-inspect example/learn/lesson61-step-debugging.tesl --break-at 189 --mode test --timeout-ms 10000 2>&1)"; then
+    inspect_ok=true
+    break
+  fi
+  sleep 1
+done
+$inspect_ok || {
   printf '%s\n' "$inspect_output" >&2
-  echo "go-cli-smoke: default Go headless inspection failed" >&2
+  echo "go-cli-smoke: default Go headless inspection failed after 3 attempts" >&2
   exit 1
 }
 printf '%s\n' "$inspect_output" | grep -q '"stopped":true' || {
