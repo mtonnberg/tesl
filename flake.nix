@@ -289,10 +289,11 @@
            export TESL_REPO_ROOT="''${TESL_REPO_ROOT:-${toString ./.}}"
            export TESL_OCAML_COMPILER="''${TESL_OCAML_COMPILER:-$TESL_REPO_ROOT/compiler/_build/default/bin/main.exe}"
            export TESL_DEFAULT_BACKEND="''${TESL_DEFAULT_BACKEND:-go}"
-          export PLTCOLLECTS="${pkgs.racket}/share/racket/collects:${tesl-racket}/share/tesl-collections''${PLTCOLLECTS:+:$PLTCOLLECTS}"
-
-          export PATH="${pkgs.racket}/bin:${gnuUserland}:$PATH"
-          export TESL_LIBSODIUM="''${TESL_LIBSODIUM:-${libsodiumPath}}"
+           export TESL_TEMPLATES_DIR="''${TESL_TEMPLATES_DIR:-$TESL_REPO_ROOT/templates}"
+           export TESL_DEBUG_ATTACH_BIN="''${TESL_DEBUG_ATTACH_BIN:-${tesl-go-tools}/bin/tesl-debug-attach}"
+           export TESL_DEBUG_INSPECT_BIN="''${TESL_DEBUG_INSPECT_BIN:-${tesl-go-tools}/bin/tesl-debug-inspect}"
+           export TESL_GO="''${TESL_GO:-${pkgs.go}/bin/go}"
+           export PATH="${gnuUserland}:$PATH"
         '' + cliBody);
 
         # ── tesl-lsp wrapper ──────────────────────────────────────────────────
@@ -355,7 +356,6 @@
           packages = with pkgs; [
             tesl-cli-dev
             tesl-go-tools
-            racket
             curl
             jq
             postgresql
@@ -392,24 +392,10 @@
             unset _tesl_root
             export TESL_OCAML_COMPILER="''${TESL_OCAML_COMPILER:-$TESL_REPO_ROOT/compiler/_build/default/bin/main.exe}"
 
-            # Tesl.Crypto's libsodium — absolute store path, same as the
-            # installed wrappers use.  `racket` invoked directly in the dev shell
-            # (ci.sh does this a lot) therefore resolves it identically to a
-            # `nix profile install`.
-            export TESL_LIBSODIUM="''${TESL_LIBSODIUM:-${libsodiumPath}}"
-
             if [ -z "''${TESL_SKIP_AUTO_BUILD:-}" ] && [ ! -x "$TESL_OCAML_COMPILER" ]; then
               echo "[tesl] OCaml compiler not built; building compiler/bin/main.exe..."
               (cd "$TESL_REPO_ROOT/compiler" && dune build bin/main.exe) || \
                 echo "[tesl] warning: automatic OCaml compiler build failed" >&2
-            fi
-
-            if ! raco pkg show tesl 2>/dev/null | grep -qF "link $TESL_REPO_ROOT"; then
-              if raco pkg show tesl 2>/dev/null | grep -Eq '^[[:space:]]*tesl([[:space:]]|$)'; then
-                raco pkg update --auto --link "$TESL_REPO_ROOT" 2>/dev/null || true
-              else
-                raco pkg install --auto --link "$TESL_REPO_ROOT" 2>/dev/null || true
-              fi
             fi
 
             # CI: skip the convenience PostgreSQL. Its PGDATA would sit in the

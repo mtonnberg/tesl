@@ -27,7 +27,8 @@ func TestMCPInitializeAndToolCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	encoded, _ := json.Marshal(result)
-	if !strings.Contains(string(encoded), `"name":"tesl-mcp"`) {
+	if !strings.Contains(string(encoded), `"name":"tesl-mcp"`) ||
+		!strings.Contains(string(encoded), `"version":"0.3.1"`) {
 		t.Fatalf("initialize = %s", encoded)
 	}
 	result, err = server.handle(context.Background(), "tools/list", nil)

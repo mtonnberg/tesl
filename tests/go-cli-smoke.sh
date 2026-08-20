@@ -29,6 +29,8 @@ bash "$REPO_ROOT/scripts/check-go-test-inventory.sh"
 bash "$REPO_ROOT/scripts/run-go-test-manifest.sh" --list >/dev/null
 TESL_REPO_ROOT="$REPO_ROOT" TESL_OCAML_COMPILER="$COMPILER" \
   bash "$REPO_ROOT/scripts/run-go-test-manifest.sh" --run-all >/dev/null
+TESL_REPO_ROOT="$REPO_ROOT" TESL_OCAML_COMPILER="$COMPILER" \
+  bash "$REPO_ROOT/scripts/run-go-example-manifest.sh" --run-all >/dev/null
 
 test_output="$(run_cli test example/learn/lesson00-hello-world.tesl 2>&1)" || {
   printf '%s\n' "$test_output" >&2
@@ -89,7 +91,8 @@ inspect_bin="$TMP/tesl-debug-inspect"
 inspect_output=""
 inspect_ok=false
 for attempt in 1 2 3; do
-  if inspect_output="$(TESL_DEBUG_INSPECT_BIN="$inspect_bin" run_cli debug-inspect example/learn/lesson61-step-debugging.tesl --break-at 189 --mode test --timeout-ms 10000 2>&1)"; then
+  if inspect_output="$(TESL_DEBUG_INSPECT_BIN="$inspect_bin" run_cli debug-inspect example/learn/lesson61-step-debugging.tesl --break-at 189 --mode test --timeout-ms 10000 2>&1)" &&
+     printf '%s\n' "$inspect_output" | grep -q '"stopped":true'; then
     inspect_ok=true
     break
   fi

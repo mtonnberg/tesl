@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "scope": "example/**/*.tesl",
+  "expected_count": 107,
+  "owner": "Go compiler and runtime corpus",
+  "evidence": "scripts/run-go-example-manifest.sh --run-all",
+  "status": "green"
+}

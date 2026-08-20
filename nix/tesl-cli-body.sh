@@ -1132,8 +1132,7 @@ _tesl_build_go() {
 
 _tesl_build_go_container() {
   local entry="$1" name="$2" port="$3" dbmode="$4" variant="$5" tag="$6" no_docker="$7" requested_out="$8"
-  local ctx generated
-  [ "$variant" != "all-in-one" ] || { echo "tesl build --backend go: embedded Postgres packaging is not implemented" >&2; return 2; }
+  local ctx generated template
   if [ -n "$requested_out" ]; then
     ctx="$requested_out"
     mkdir -p "$ctx"
@@ -1150,17 +1149,16 @@ _tesl_build_go_container() {
     echo "tesl build --backend go: $entry does not define a main/server entrypoint" >&2
     return 2
   }
-  cat > "$ctx/Dockerfile" <<EOF
-FROM golang:1.26 AS build
-WORKDIR /src
-COPY generated/ ./
-RUN go build -o /out/tesl-app ./cmd/app
-
-FROM debian:bookworm-slim
-COPY --from=build /out/tesl-app /usr/local/bin/tesl-app
-EXPOSE $port
-ENTRYPOINT ["/usr/local/bin/tesl-app"]
-EOF
+  if [ "$variant" = "all-in-one" ]; then
+    template="$(_tesl_templates_dir)/docker/Dockerfile.all-in-one.tmpl"
+  else
+    template="$(_tesl_templates_dir)/docker/Dockerfile.app-only.tmpl"
+  fi
+  [ -f "$template" ] || {
+    echo "tesl build --backend go: Docker template not found: $template" >&2
+    return 1
+  }
+  sed -e "s|__APP_NAME__|$name|g" -e "s|__PORT__|$port|g" "$template" > "$ctx/Dockerfile"
   echo "tesl build: staged Go Docker context at $ctx (port=$port)"
   if [ "$no_docker" = "1" ]; then
     echo "tesl build: --no-docker set; build context ready at $ctx"
@@ -1174,7 +1172,7 @@ EOF
 
 _tesl_build() {
   _tesl_require_compiler
-  local VARIANT="" TAG="" NO_DOCKER=0 OUT="" MODE="" BACKEND="${TESL_BACKEND:-${TESL_DEFAULT_BACKEND:-racket}}"
+  local VARIANT="" TAG="" NO_DOCKER=0 OUT="" MODE="" BACKEND="${TESL_BACKEND:-${TESL_DEFAULT_BACKEND:-go}}"
   while [ $# -gt 0 ]; do
     case "$1" in
       --backend)       BACKEND="${2:?--backend needs a value}"; shift 2 ;;
@@ -1487,7 +1485,7 @@ case "$CMD" in
     # Headless step-debugger: run to breakpoint(s) and dump paused state as JSON.
     # Go is the shipped/dev default; explicit --backend racket preserves the
     # legacy compiler path during the remaining runtime migration.
-    INSPECT_BACKEND="${TESL_BACKEND:-${TESL_DEFAULT_BACKEND:-racket}}"
+    INSPECT_BACKEND="${TESL_BACKEND:-${TESL_DEFAULT_BACKEND:-go}}"
     if [ "${1:-}" = "--backend" ]; then
       INSPECT_BACKEND="${2:?--backend requires a backend name}"
       shift 2
@@ -1511,7 +1509,7 @@ case "$CMD" in
     exec "${TESL_DEBUG_ATTACH_BIN:-tesl-debug-attach}" "$@"
     ;;
   compile)
-    COMPILE_BACKEND="${TESL_BACKEND:-${TESL_DEFAULT_BACKEND:-racket}}"
+    COMPILE_BACKEND="${TESL_BACKEND:-${TESL_DEFAULT_BACKEND:-go}}"
     if [ "${1:-}" = "--backend" ]; then
       COMPILE_BACKEND="${2:?--backend requires a backend name}"
       shift 2
@@ -1621,7 +1619,7 @@ case "$CMD" in
     # debugger can attach to the RUNNING process — arm/re-arm breakpoints,
     # inspect, resume — without relaunching. Costs checkpoint overhead; a
     # plain `tesl run` stays byte-for-byte the zero-residue release build.
-    RUN_BACKEND="${TESL_BACKEND:-${TESL_DEFAULT_BACKEND:-racket}}"
+    RUN_BACKEND="${TESL_BACKEND:-${TESL_DEFAULT_BACKEND:-go}}"
     TESL_RUN_DEBUG=0
     while true; do
       case "${1:-}" in
@@ -1732,7 +1730,7 @@ case "$CMD" in
     #           api-test / load-test / doctest in isolation.
     TEST_NAME=""
     TEST_KIND=""
-    TEST_BACKEND="${TESL_BACKEND:-${TESL_DEFAULT_BACKEND:-racket}}"
+    TEST_BACKEND="${TESL_BACKEND:-${TESL_DEFAULT_BACKEND:-go}}"
     while true; do
       case "${1:-}" in
         --backend) TEST_BACKEND="${2:?--backend requires a backend name}"; shift 2 ;;
@@ -1807,7 +1805,7 @@ case "$CMD" in
     exec "$TESL_OCAML_COMPILER" --mutate "$@"
     ;;
   watch)
-    WATCH_BACKEND="${TESL_BACKEND:-${TESL_DEFAULT_BACKEND:-racket}}"
+    WATCH_BACKEND="${TESL_BACKEND:-${TESL_DEFAULT_BACKEND:-go}}"
     if [ "${1:-}" = "--backend" ]; then
       WATCH_BACKEND="${2:?--backend requires a backend name}"
       shift 2

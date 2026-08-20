@@ -1030,8 +1030,8 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 #  Phase 6 — Exact-match .rkt snapshots
 # ══════════════════════════════════════════════════════════════════════════════
-# Assert byte-exact emit for every committed snapshot under EXACT_DIRS below
-# (example/learn/*.rkt plus the templates/ scaffold): re-emit
+# Assert byte-exact emit for the retained Racket oracle snapshots under
+# `example/learn/*.rkt`: re-emit
 # from the paired .tesl and diff, canonicalising only the baked-in thsl-src! path
 # prefix to its basename (same normalisation test_integration uses).  Any diff is
 # a real emit change, not a stale snapshot.  Needs the built OCaml binary.
@@ -1053,15 +1053,10 @@ else
     EXACT_FAILS=()
     EXACT_OK=0
     EXACT_SKIPPED=()
-    # Directories held to byte-exact emit HERE.  example/learn is the historical
-    # one; templates/{api,minimal} is the `tesl init` scaffold, whose committed
-    # app.rkt exists FOR this ratchet and is seeded by
-    # scripts/regen-rkt-snapshots.sh (see SEED_DIRS there) — it is not stray
-    # build output.  example/ and tests/ are NOT repeated here: `dune test`
-    # already walks them (test_integration.ml's exact_match_dir), and templates/
-    # is deliberately gated in ci.sh instead so a scaffold emit regression fails
-    # the same gate that validates and test-runs it.
-    EXACT_DIRS="example/learn templates/api templates/minimal"
+    # The Go template gate owns templates/{api,minimal}; Racket templates are no
+    # longer shipped artifacts. Other example/test Racket snapshots remain the
+    # compatibility oracle until their owning migration row is deleted.
+    EXACT_DIRS="example/learn"
     for exact_dir in $EXACT_DIRS; do
     for rkt_file in "$SCRIPT_DIR/$exact_dir"/*.rkt; do
         [ -f "$rkt_file" ] || continue

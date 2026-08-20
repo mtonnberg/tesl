@@ -47,7 +47,6 @@ let
 in
 pkgs.mkShell {
   buildInputs = with pkgs; [
-    racket
     curl
     jq
     postgresql
@@ -57,7 +56,6 @@ pkgs.mkShell {
     govulncheck
     golangci-lint
     nilaway
-    libsodium   # dlopen()ed by tesl/crypto.rkt — see TESL_LIBSODIUM below
     tesl-cli
     tesl-dap
     tesl-debug-attach
@@ -89,31 +87,10 @@ pkgs.mkShell {
     export TESL_OCAML_COMPILER="$TESL_REPO_ROOT/compiler/_build/default/bin/main.exe"
     export TESL_DEFAULT_BACKEND="''${TESL_DEFAULT_BACKEND:-go}"
 
-    # Native library for Tesl.Crypto: `tesl/crypto.rkt` dlopen()s libsodium
-    # through `ffi/unsafe` and prefers this absolute store path, falling back to
-    # a plain `ffi-lib "libsodium"` lookup off the ambient loader path.  The
-    # flake's installed wrappers export it (flake.nix `libsodiumPath`); this dev
-    # shell did NOT, so `./ci.sh` inside it failed every crypto/JWT/session test
-    # with "libsodium is required by Tesl.Crypto and could not be loaded" — the
-    # dev shell could not run the gate the flake-installed CLI passes.  Same
-    # `:-` idiom as the wrappers, so an explicit TESL_LIBSODIUM still wins, and
-    # `extensions.sharedLibrary` covers .so (Linux) and .dylib (Darwin) alike.
-    export TESL_LIBSODIUM="''${TESL_LIBSODIUM:-${pkgs.libsodium}/lib/libsodium${pkgs.stdenv.hostPlatform.extensions.sharedLibrary}}"
-
     if [ -z "''${TESL_SKIP_AUTO_BUILD:-}" ] && [ ! -x "$TESL_OCAML_COMPILER" ]; then
       echo "[tesl] OCaml compiler not built; building compiler/bin/main.exe..."
       (cd "$TESL_REPO_ROOT/compiler" && dune build bin/main.exe) || \
         echo "[tesl] warning: automatic OCaml compiler build failed" >&2
-    fi
-
-    # Keep the tesl Racket package linked to this repo.
-    # Skip entirely if the package is already linked to the correct path.
-    if ! raco pkg show tesl 2>/dev/null | grep -qF "link $TESL_REPO_ROOT"; then
-      if raco pkg show tesl 2>/dev/null | grep -Eq '^[[:space:]]*tesl([[:space:]]|$)'; then
-        raco pkg update --auto --link "$TESL_REPO_ROOT" 2>/dev/null || true
-      else
-        raco pkg install --auto --link "$TESL_REPO_ROOT" 2>/dev/null || true
-      fi
     fi
 
     # Never let a Postgres connection attempt hang the shell hook. On WSL2
