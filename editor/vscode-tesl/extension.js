@@ -38,8 +38,7 @@ function resolveLsp(_extensionDir) {
 }
 
 /**
- * Read the tesl-lsp nix wrapper to extract the correct Racket binary and PLTCOLLECTS.
- * The wrapper knows exactly which Racket version the tesl package was built with.
+ * Read compiler path from the tesl-lsp wrapper.
  */
 function readTeslLspWrapper() {
   const candidates = [
@@ -51,52 +50,13 @@ function readTeslLspWrapper() {
     try {
       const realPath = fs.realpathSync(p);
       const content = fs.readFileSync(realPath, "utf8");
-      // Extract PLTCOLLECTS — strip shell variable syntax (${PLTCOLLECTS:+:$PLTCOLLECTS})
-      // so Racket gets clean colon-separated paths, not shell substitution syntax.
-      const pltMatch = content.match(/export PLTCOLLECTS="([^"]+)"/);
-      const rawPlt = pltMatch ? pltMatch[1] : null;
-      const pltcollects = rawPlt
-        ? rawPlt.split("${")[0].replace(/:$/, "").trim()  // strip ${...} and trailing :
-        : null;
-      // Extract the Racket nix store bin directory — flexible regex handles PATH= format.
-      const racketBinDirMatch = content.match(/(\/nix\/store\/[^:\s"']*-racket[^:\s"']*\/bin)/);
       // The raw OCaml compiler the wrapper was built against. This is the
       // binary that speaks --check-json/--type-at-json; the `tesl` CLI wrapper
       // does NOT (it rejects unknown verbs), so it is a broken stand-in.
       const ocamlMatch = content.match(/export TESL_OCAML_COMPILER="([^"]+)"/);
-      return {
-        racketBin: racketBinDirMatch ? racketBinDirMatch[1] + "/racket" : null,
-        ocamlCompiler: ocamlMatch ? ocamlMatch[1] : null,
-        pltcollects,
-      };
+      return { ocamlCompiler: ocamlMatch ? ocamlMatch[1] : null };
     } catch (_) {}
   }
-  return null;
-}
-
-/**
- * Find the Racket binary — prefer the one from the tesl-lsp wrapper (correct version).
- */
-function findRacketBinary() {
-  if (process.env.TESL_RACKET_PATH && fs.existsSync(process.env.TESL_RACKET_PATH)) {
-    return process.env.TESL_RACKET_PATH;
-  }
-  // Read the tesl-lsp wrapper to get the correct Racket for the tesl package
-  const wrapper = readTeslLspWrapper();
-  if (wrapper && wrapper.racketBin && fs.existsSync(wrapper.racketBin)) {
-    return wrapper.racketBin;
-  }
-  // Fallbacks
-  const nixPaths = [
-    path.join(os.homedir(), ".nix-profile", "bin", "racket"),
-    "/nix/var/nix/profiles/default/bin/racket",
-    "/run/current-system/sw/bin/racket",
-  ];
-  for (const p of nixPaths) {
-    if (fs.existsSync(p)) return p;
-  }
-  const r = spawnSync("which", ["racket"], { encoding: "utf8" });
-  if (r.status === 0) return r.stdout.trim();
   return null;
 }
 
@@ -165,6 +125,16 @@ function findGoDap(wsPath) {
     return { command: "go", args: ["run", "./cmd/tesl-dap"], cwd: runtime };
   }
   return null;
+}
+
+function findTeslCli() {
+  if (commandOnPath("tesl")) return "tesl";
+  const candidates = [
+    path.join(os.homedir(), ".nix-profile", "bin", "tesl"),
+    "/nix/var/nix/profiles/default/bin/tesl",
+    "/run/current-system/sw/bin/tesl",
+  ];
+  return candidates.find((candidate) => fs.existsSync(candidate)) || null;
 }
 
 function activate(context) {
@@ -366,13 +336,8 @@ function activate(context) {
 
   // "Run test" — run a single named test via the `tesl` CLI wrapper.
   //
-  // IMPORTANT: do NOT emit a .rkt and run bare `raco test` on it. The emitted
-  // test module does `(require tesl/dsl/...)`, and those collections are only on
-  // PLTCOLLECTS when the `tesl` *wrapper* runs raco — a direct `raco test` fails
-  // with "collection not found: tesl/dsl/capability". `tesl test --test-name`
-  // sets PLTCOLLECTS and also reformats rackunit output to the .tesl test name +
-  // source line. Resolve the wrapper (NOT the raw compiler, which has no `test`
-  // verb): prefer `tesl` on PATH (dev shell or nix profile), then nix profile.
+   // Run through the `tesl` wrapper rather than invoking a compiler directly, so
+   // the selected backend and its runtime environment stay consistent.
   function findTeslWrapper() {
     if (commandOnPath("tesl")) return "tesl";
     const nixPaths = [
@@ -464,11 +429,10 @@ function activate(context) {
   // ── REPL-like "Run Function with Input" ───────────────────────────────────────
   // Prompt for a function call (seeded from the identifier under the cursor) plus
   // an expected value, then append a synthetic `test` block to a temp copy of the
-  // file and run it through the same compiler + raco path the test lenses use.
+  // file and run it through the Go CLI test path used by the test lenses.
   // Tesl has no user-facing print primitive, so the test harness IS the REPL: on a
   // mismatch the harness prints the actual value (the function's result); on match
-  // it prints PASS. This shells directly to the compiler/runtime we discover and
-  // does NOT depend on the LSP.
+  // it prints PASS. This does NOT depend on the LSP.
   context.subscriptions.push(
     vscode.commands.registerCommand("tesl.runFunctionWithInput", async (uri) => {
       const editor = vscode.window.activeTextEditor;
@@ -502,10 +466,10 @@ function activate(context) {
       });
       if (expected === undefined) return; // cancelled
 
-      const compiler = findTeslCompiler(wsPath);
-      if (!compiler) {
+      const tesl = findTeslCli();
+      if (!tesl) {
         vscode.window.showErrorMessage(
-          "Run Function: Tesl compiler not found. Build compiler/_build or install via nix."
+          "Run Function: tesl CLI not found. Install Tesl or add tesl to PATH."
         );
         return;
       }
@@ -525,14 +489,11 @@ function activate(context) {
         return;
       }
 
-      const racketBin = findRacketBinary();
-      const raco = racketBin ? path.join(path.dirname(racketBin), "raco") : "raco";
-      const tmpRkt = path.join(tmpDir, "run.rkt");
       const terminal = vscode.window.createTerminal({ name: `Tesl: ${expr}` });
       terminal.show(true);
-      // Compile only the synthetic test, run it, then remove the temp dir.
+      // Compile only the synthetic test with the Go backend, then remove the temp dir.
       terminal.sendText(
-        `"${compiler}" --test-name "${testName}" "${driver}" > "${tmpRkt}" && "${raco}" test "${tmpRkt}"; rm -rf "${tmpDir}"`
+        `"${tesl}" test --backend go --test-name "${testName}" "${driver}"; rm -rf "${tmpDir}"`
       );
     })
   );
@@ -728,6 +689,10 @@ function activate(context) {
       });
     }
 
+    function failureForTest(failures, testName, ordinal) {
+      return failures.get(testName) || failures.get(`TestTesl${ordinal}`);
+    }
+
     // Run profile (default): execute selected tests, report real pass/fail/error.
     // Selected leaves are grouped by file and each file is run ONCE (rackunit prints
     // only failures; passes are inferred from "discovered ∧ not failed ∧ compiled").
@@ -747,11 +712,11 @@ function activate(context) {
 
           // Strict subset of the file's tests selected → run each via
           // --test-name/--test-kind so siblings do NOT run. Whole file selected →
-          // one `tesl test <file>` run (cheaper: one compile, one raco).
+          // one `tesl test <file>` run (cheaper: one compile, one process).
           const fileItem = ctrl.items.get(vscode.Uri.file(file).toString());
           const wholeFile = !fileItem || entries.length >= fileItem.children.size;
           if (!wholeFile) {
-            for (const { item, tgt } of entries) {
+            for (const [ordinal, { item, tgt }] of entries.entries()) {
               if (token.isCancellationRequested) { run.skipped(item); continue; }
               run.started(item);
               const res = await runTeslTestFile(file, token, tgt.testName, tgt.kind);
@@ -763,7 +728,7 @@ function activate(context) {
               if (compileError) {
                 run.errored(item, new vscode.TestMessage(compileError), res.durationMs);
               } else {
-                const f = failures.get(tgt.testName);
+                const f = failureForTest(failures, tgt.testName, ordinal);
                 if (f) {
                   const msg = new vscode.TestMessage(f.message || "test failed");
                   if (item.uri && item.range) msg.location = new vscode.Location(item.uri, item.range);
@@ -795,13 +760,13 @@ function activate(context) {
           // rackunit reports no per-case timing, so spread the file-run duration
           // evenly across the file's tests.
           const per = entries.length ? Math.max(0, Math.round(res.durationMs / entries.length)) : res.durationMs;
-          for (const { item, tgt } of entries) {
+          for (const [ordinal, { item, tgt }] of entries.entries()) {
             if (token.isCancellationRequested) { run.skipped(item); continue; }
             if (compileError) {
               run.errored(item, new vscode.TestMessage(compileError), per);
               continue;
             }
-            const f = failures.get(tgt.testName);
+            const f = failureForTest(failures, tgt.testName, ordinal);
             if (f) {
               const msg = new vscode.TestMessage(f.message || "test failed");
               if (item.uri && item.range) msg.location = new vscode.Location(item.uri, item.range);

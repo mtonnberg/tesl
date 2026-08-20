@@ -97,6 +97,19 @@ t("formatted: two failures parsed, location lines dropped", () => {
   assert.ok(/boom/.test(failures.get("another broken").message));
 });
 
+t("Go test: generated TestTesl failure is parsed", () => {
+  const out = [
+    "--- FAIL: TestTesl2 (0.00s)",
+    "    module_test.go:41: Tesl expectation failed",
+    "FAIL",
+  ].join("\n");
+  const { failures, compileError, reportedFailureCount } = parseTeslTestOutput(out, 1);
+  assert.strictEqual(compileError, null);
+  assert.strictEqual(reportedFailureCount, 1);
+  assert.ok(failures.has("TestTesl2"));
+  assert.ok(/Tesl expectation failed/.test(failures.get("TestTesl2").message));
+});
+
 // ── All pass: exit 0, no failure blocks ────────────────────────────────────────
 t("all pass: exit 0 → no failures, no compile error", () => {
   const out = "raco test: (submod (file \"/x/Txr.rkt\") test)\n";

@@ -1174,7 +1174,7 @@ EOF
 
 _tesl_build() {
   _tesl_require_compiler
-  local VARIANT="" TAG="" NO_DOCKER=0 OUT="" MODE="" BACKEND="racket"
+  local VARIANT="" TAG="" NO_DOCKER=0 OUT="" MODE="" BACKEND="${TESL_BACKEND:-${TESL_DEFAULT_BACKEND:-racket}}"
   while [ $# -gt 0 ]; do
     case "$1" in
       --backend)       BACKEND="${2:?--backend needs a value}"; shift 2 ;;

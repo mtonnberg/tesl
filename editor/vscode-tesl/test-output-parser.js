@@ -44,6 +44,26 @@ function parseTeslTestOutput(output, code) {
     }
   }
 
+  // ── Format C: Go test failures from the Go backend ───────────────────────────
+  // Generated tests use stable TestTeslN names; the VS Code caller maps those
+  // ordinal names back to discovered Tesl test names.
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^--- FAIL: (TestTesl[0-9]+)\b/.exec(lines[i]);
+    if (!m) continue;
+    const msgLines = [];
+    for (let j = i + 1; j < lines.length; j++) {
+      if (/^--- FAIL: /.test(lines[j]) || /^FAIL$/.test(lines[j])) break;
+      const textLine = lines[j].trim();
+      const location = /^module_test\.go:\d+:\s*(.*)$/.exec(textLine);
+      if (location) {
+        if (location[1]) msgLines.push(location[1]);
+      } else if (textLine) {
+        msgLines.push(textLine);
+      }
+    }
+    failures.set(m[1], { message: msgLines.join("\n") || "test failed" });
+  }
+
   // ── Format B: raw rackunit failure blocks ────────────────────────────────────
   for (let i = 0; i < lines.length; i++) {
     if (!/^-{5,}\s*$/.test(lines[i])) continue;
@@ -81,6 +101,9 @@ function parseTeslTestOutput(output, code) {
     let mm = /(\d+)\/\d+\s+test\s+failures?/.exec(line);
     if (!mm) mm = /(\d+)\s+tests?\s+failed/.exec(line);
     if (mm) { reportedFailureCount = parseInt(mm[1], 10); break; }
+  }
+  if (reportedFailureCount === null && failures.size > 0 && /^(FAIL|--- FAIL:)/m.test(text)) {
+    reportedFailureCount = failures.size;
   }
 
   // ── Compile / runtime error: non-zero exit with no per-test failures parsed ───

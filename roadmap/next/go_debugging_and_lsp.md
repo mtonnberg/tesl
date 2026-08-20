@@ -83,7 +83,7 @@ The migration must not create a period where all editor and debugging tools are 
 | 4. DAP and headless debugger | Complete | Go DAP launch/attach lifecycle, named-test launch, real launch-to-breakpoint integration, headless v2 breakpoint/scalar-local output, Go attach bridge/once/project discovery, normalized transcripts, and race gates pass. |
 | 5. LSP | Complete | Go LSP shipped entrypoint, expanded initialize contract, ranged/multiple UTF-16 edits, save/watch/format/resolve/execute handlers, field/doc compiler queries, cancellable versioned diagnostics, built-compiler integration, and race/vet gates pass. |
 | 6. MCP | Partial | Go stdio server, tool schemas, compiler queries, Go headless inspection routing, attach flags, and protocol smoke coverage exist; full differential/live endpoint parity is still open. |
-| 7. CLI, VS Code, packaging, environments | Partial | Go tools are wired into Nix defaults, VS Code LSP/DAP paths, debug-attach, shipped/dev CLI defaults for compile/run/test/headless inspection/watch, and Go local/container builds; Racket-free artifact tests and remaining packaging paths remain. |
+| 7. CLI, VS Code, packaging, environments | Partial | Go tools are wired into Nix defaults, VS Code LSP/DAP paths, debug-attach, shipped/dev CLI defaults for compile/run/test/headless inspection/watch/build, and Go local/container builds; Racket-free artifact tests and remaining packaging paths remain. |
 | 8. Complete test/example/template migration | Not started | Corpus migration and responsibility manifest are not complete. |
 
 ### Phase 0: Contract freeze and traceability
@@ -214,7 +214,9 @@ Gate: shipped workflows find only Go binaries and packages contain no `.rkt` or 
 - 2026-08-20: Go `tesl watch` now snapshots imported source mtimes, rebuilds a disposable Go app, restarts it on changes, and cleans child processes on exit. Focused telemetry-app restart smoke passes; explicit Racket watch remains available.
 - 2026-08-20: Shipped/dev `tesl compile` now defaults to Go module emission; `--backend racket` remains explicit fallback. Default and explicit-output Go compile smokes pass. Docker packaging still requires a Go container template.
 - 2026-08-20: `tesl build --backend go --container --no-docker` now stages a Go module plus multi-stage Go/Debian Dockerfile; embedded-Postgres mode is rejected explicitly. Focused Todo API context staging passes; Docker daemon build remains environment-gated.
+- 2026-08-20: Shipped/dev `tesl build` now follows the Go default backend and selects local or container Go output from manifest/flags; `--backend racket` local fallback passes. Go Docker context staging remains daemon-independent.
 - 2026-08-20: Added `tests/go-cli-smoke.sh` covering default Go test/compile, headless inspection, and Docker context staging; CI Phase 2a invokes it after Go static/security gates. Focused script passes; full `ci.sh` remains intentionally deferred.
+- 2026-08-20: VS Code Run Function now uses `tesl test --backend go`; removed its direct compiler/Racket launcher dependency. Test Explorer parser now understands generated Go `TestTeslN` failures and parser tests pass.
 ### Phase 8: Complete test/example/template migration
 1. Make each of the 71 paired `.tesl` tests the sole source and assert Go compile diagnostics, runtime output, status, side effects, and services.
 2. Assign each of 75 Racket-only test responsibilities a named Go runtime/integration test, OCaml compiler test, black-box test, protocol fixture, benchmark, or reviewed obsolete disposition.
