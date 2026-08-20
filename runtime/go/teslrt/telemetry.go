@@ -1,11 +1,17 @@
 package teslrt
 
 import (
+	"bytes"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // `Tesl.Telemetry`: the ambient signals — a telemetry EVENT (`telemetry "name" { … }`) and the
@@ -16,14 +22,9 @@ import (
 // or be left out of the code that most needs it. So there is nothing to grant and nothing to
 // pass; what a program configures is the SINK, once, in `main`.
 //
-// WHAT THIS RECORDS AND WHAT IT DOES NOT EXPORT. Events and metrics accumulate in process, and
-// with `console True` they are written to stderr. OTLP export — the wire protocol, the batching
-// exporter, the `/v1/metrics` endpoint, and the span tree the Racket runtime builds around every
-// request and outbound call — is NOT here yet. That is a deliberate boundary rather than an
-// oversight: the corpus configures `endpoint "in-memory"`, every assertion in it is that
-// telemetry does not disturb the program's own answers, and an exporter that silently dropped
-// spans would be worse than one that is honestly absent. A program that needs the wire today
-// runs on the Racket backend.
+// Events and metrics accumulate in process, and with `console True` they are written to stderr.
+// A configured non-memory endpoint also receives standard-library-only OTLP/JSON batches from the
+// asynchronous exporter; collector failures never break the application record path.
 //
 // The recorder is guarded by one mutex. Metrics are per (name, attribute-set), which is what
 // makes a counter cumulative rather than per-call, and the attribute set is normalised to a
@@ -34,6 +35,8 @@ type TelemetryEvent struct {
 	Message     string
 	Attributes  []Tuple2[string, string]
 	TimestampMs int64
+	TraceID     string
+	SpanID      string
 }
 
 // MetricKind distinguishes the three instruments. A counter SUMS, a gauge keeps the LAST value,
@@ -47,7 +50,9 @@ const (
 	MetricGauge
 )
 
-// MetricSeries is one instrument at one attribute set.
+// MetricSeries is one instrument at one attribute set. Histograms retain the aggregate shape used
+// by the OTLP exporter; bucket boundaries are intentionally omitted because the Tesl surface does
+// not expose a boundary argument.
 type MetricSeries struct {
 	Name       string
 	Kind       MetricKind
@@ -70,7 +75,12 @@ var telemetry = struct {
 	metricsIntervalMs int
 	events            []TelemetryEvent
 	series            map[string]*MetricSeries
+	exporterStop      chan struct{}
 }{service: "tesl", metricsEnabled: true, traceRatio: 1.0, series: map[string]*MetricSeries{}}
+
+func readCryptoRandom(value []byte) (int, error) {
+	return rand.Read(value)
+}
 
 // InitTelemetry is `initTelemetry service … endpoint … console …`: it configures the sink, once,
 // from `main`. Calling it twice replaces the configuration and clears what was recorded, which
@@ -79,6 +89,10 @@ func InitTelemetry(service, endpoint string, console, metrics, traces bool,
 	metricsIntervalMs int, traceRatio float64) struct{} {
 	telemetry.mutex.Lock()
 	defer telemetry.mutex.Unlock()
+	if telemetry.exporterStop != nil {
+		close(telemetry.exporterStop)
+		telemetry.exporterStop = nil
+	}
 	if service != "" {
 		telemetry.service = service
 	}
@@ -91,11 +105,8 @@ func InitTelemetry(service, endpoint string, console, metrics, traces bool,
 	telemetry.events = nil
 	telemetry.series = map[string]*MetricSeries{}
 	if endpoint != "" && endpoint != "in-memory" {
-		// Said once, at configuration time, rather than silently dropping every span and metric
-		// for the lifetime of the process.
-		fmt.Fprintf(os.Stderr,
-			"tesl: telemetry endpoint %q is configured, but this runtime records in process only "+
-				"— OTLP export is not implemented on the Go backend yet.\n", endpoint)
+		telemetry.exporterStop = make(chan struct{})
+		go runTelemetryExporter(endpoint, metricsIntervalMs, telemetry.exporterStop)
 	}
 	return struct{}{}
 }
@@ -110,6 +121,8 @@ func Telemetry(message string, attributes []Tuple2[string, string]) struct{} {
 		Message:     message,
 		Attributes:  attributes,
 		TimestampMs: telemetryNowMillis(),
+		TraceID:     telemetryID(16),
+		SpanID:      telemetryID(8),
 	}
 	telemetry.mutex.Lock()
 	telemetry.events = append(telemetry.events, event)
@@ -207,6 +220,12 @@ func TelemetryEvents() []TelemetryEvent {
 	return out
 }
 
+func telemetryTraceEnabled() bool {
+	telemetry.mutex.Lock()
+	defer telemetry.mutex.Unlock()
+	return telemetry.tracesEnabled
+}
+
 // MetricSeriesSnapshot is every series, in a deterministic order (by name, then by key), so a
 // test or a dump reads the same way twice.
 func MetricSeriesSnapshot() []MetricSeries {
@@ -245,4 +264,143 @@ func MillisOf(value Int) int {
 		panic("initTelemetry: " + value.String() + " is not a millisecond interval")
 	}
 	return int(millis)
+}
+
+var otlpHTTPClient = &http.Client{Timeout: 2 * time.Second}
+
+func telemetryID(size int) string {
+	value := make([]byte, size)
+	if _, err := cryptoRandRead(value); err != nil {
+		return strings.Repeat("0", size*2)
+	}
+	return hex.EncodeToString(value)
+}
+
+var cryptoRandRead = func(value []byte) (int, error) { return readCryptoRandom(value) }
+
+func runTelemetryExporter(endpoint string, intervalMs int, stop <-chan struct{}) {
+	if intervalMs <= 0 {
+		intervalMs = 60000
+	}
+	ticker := time.NewTicker(time.Duration(intervalMs) * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			exportTelemetry(endpoint)
+		case <-stop:
+			return
+		}
+	}
+}
+
+func exportTelemetry(endpoint string) {
+	metrics, traces := telemetryPayloads()
+	if len(metrics) > 0 {
+		postOTLP(endpointPath(endpoint, "/v1/metrics"), metrics)
+	}
+	if len(traces) > 0 {
+		postOTLP(endpointPath(endpoint, "/v1/traces"), traces)
+	}
+}
+
+func postOTLP(endpoint string, payload []byte) {
+	request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := otlpHTTPClient.Do(request)
+	if err == nil && response != nil {
+		_ = response.Body.Close()
+	}
+}
+
+func endpointPath(endpoint, suffix string) string {
+	return strings.TrimRight(endpoint, "/") + suffix
+}
+
+func telemetryPayloads() ([]byte, []byte) {
+	telemetry.mutex.Lock()
+	service := telemetry.service
+	metricsEnabled := telemetry.metricsEnabled
+	tracesEnabled := telemetry.tracesEnabled
+	series := make([]MetricSeries, 0, len(telemetry.series))
+	for _, value := range telemetry.series {
+		series = append(series, *value)
+	}
+	events := append([]TelemetryEvent(nil), telemetry.events...)
+	telemetry.mutex.Unlock()
+	var metrics, traces []byte
+	if metricsEnabled && len(series) > 0 {
+		metrics = mustJSON(otlpMetrics(service, series))
+	}
+	if tracesEnabled && len(events) > 0 {
+		traces = mustJSON(otlpTraces(service, events))
+	}
+	return metrics, traces
+}
+
+func resource(service string) map[string]any {
+	return map[string]any{"attributes": []map[string]any{{
+		"key": "service.name", "value": map[string]string{"stringValue": service},
+	}}}
+}
+
+func otlpMetrics(service string, series []MetricSeries) map[string]any {
+	metrics := make([]map[string]any, 0, len(series))
+	now := fmt.Sprint(time.Now().UnixNano())
+	for _, value := range series {
+		point := map[string]any{"attributes": otlpAttributes(value.Attributes), "timeUnixNano": now}
+		metric := map[string]any{"name": value.Name}
+		switch value.Kind {
+		case MetricCounter:
+			point["asInt"] = fmt.Sprint(int64(value.Last))
+			metric["sum"] = map[string]any{"aggregationTemporality": 2, "isMonotonic": true, "dataPoints": []any{point}}
+		case MetricGauge:
+			point["asDouble"] = value.Last
+			metric["gauge"] = map[string]any{"dataPoints": []any{point}}
+		case MetricHistogram:
+			point["count"] = fmt.Sprint(value.Count)
+			point["sum"] = value.Sum
+			metric["histogram"] = map[string]any{"aggregationTemporality": 2, "dataPoints": []any{point}}
+		}
+		metrics = append(metrics, metric)
+	}
+	return map[string]any{"resourceMetrics": []any{map[string]any{
+		"resource": resource(service), "scopeMetrics": []any{map[string]any{"metrics": metrics}},
+	}}}
+}
+
+func otlpTraces(service string, events []TelemetryEvent) map[string]any {
+	spans := make([]map[string]any, 0, len(events))
+	for _, event := range events {
+		start := event.TimestampMs * 1_000_000
+		spans = append(spans, map[string]any{
+			"traceId": event.TraceID, "spanId": event.SpanID, "name": event.Message,
+			"startTimeUnixNano": fmt.Sprint(start), "endTimeUnixNano": fmt.Sprint(start),
+			"attributes": otlpAttributes(event.Attributes),
+		})
+	}
+	return map[string]any{"resourceSpans": []any{map[string]any{
+		"resource": resource(service), "scopeSpans": []any{map[string]any{"spans": spans}},
+	}}}
+}
+
+func otlpAttributes(attributes []Tuple2[string, string]) []map[string]any {
+	result := make([]map[string]any, 0, len(attributes))
+	for _, attribute := range attributes {
+		result = append(result, map[string]any{
+			"key": attribute.Tuple2First, "value": map[string]string{"stringValue": attribute.Tuple2Second},
+		})
+	}
+	return result
+}
+
+func mustJSON(value any) []byte {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	return encoded
 }

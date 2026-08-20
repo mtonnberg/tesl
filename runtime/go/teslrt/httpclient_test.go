@@ -46,6 +46,22 @@ func TestHttpGetReadsStatusBodyAndHeaders(t *testing.T) {
 	}
 }
 
+func TestHttpClientPropagatesTraceparentWhenTracingEnabled(t *testing.T) {
+	seen := make(chan string, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.Header.Get("traceparent")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	_ = InitTelemetry("trace-test", "in-memory", false, true, true, 60000, 1.0)
+	t.Cleanup(func() { _ = InitTelemetry("tesl", "in-memory", false, true, false, 60000, 1.0) })
+	_ = HttpGet(upstream.URL, noHeaders())
+	value := <-seen
+	if len(value) != len("00-")+32+1+16+3 || !strings.HasPrefix(value, "00-") || !strings.HasSuffix(value, "-01") {
+		t.Fatalf("traceparent = %q", value)
+	}
+}
+
 func TestHttpPostPutDeleteSendMethodAndBody(t *testing.T) {
 	var seenMethod, seenBody string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

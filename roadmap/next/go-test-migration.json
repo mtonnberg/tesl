@@ -10,8 +10,8 @@
   },
   "racket_only": {
     "expected_count": 75,
-    "green_count": 72,
-    "planned_count": 3,
+    "green_count": 75,
+    "planned_count": 0,
     "owner": "per-row owners below",
     "evidence": "roadmap/next/go_debugging_and_lsp.md#phase-8-complete-test-example-template-migration",
     "rows": [
@@ -55,9 +55,9 @@
       {"path":"tests/jwt-test.rkt","owner":"runtime/go/teslrt auth","replacement":"Go JWT runtime test","status":"green"},
       {"path":"tests/memory-db-registry-test.rkt","owner":"runtime/go/teslrt database","replacement":"Go database registry test","status":"green"},
       {"path":"tests/opaque-type-registration-test.rkt","owner":"compiler/test/test_emit_go.ml","replacement":"OCaml compiler/emitter test","status":"green"},
-      {"path":"tests/otlp-exporter-test.rkt","owner":"runtime/go/teslrt telemetry","replacement":"Go OTLP integration test","status":"planned"},
-      {"path":"tests/otlp-metrics-test.rkt","owner":"runtime/go/teslrt telemetry","replacement":"Go OTLP metrics test","status":"planned"},
-      {"path":"tests/otlp-traces-test.rkt","owner":"runtime/go/teslrt telemetry","replacement":"Go OTLP traces test","status":"planned"},
+      {"path":"tests/otlp-exporter-test.rkt","owner":"runtime/go/teslrt telemetry","replacement":"Go OTLP integration test","status":"green"},
+      {"path":"tests/otlp-metrics-test.rkt","owner":"runtime/go/teslrt telemetry","replacement":"Go OTLP metrics test","status":"green"},
+      {"path":"tests/otlp-traces-test.rkt","owner":"runtime/go/teslrt telemetry","replacement":"Go OTLP traces test","status":"green"},
       {"path":"tests/pg-pool-tests.rkt","owner":"runtime/go/teslrt postgres","replacement":"Go PostgreSQL pool test","status":"green"},
       {"path":"tests/port-test.rkt","owner":"runtime/go/internal/protocol","replacement":"Go protocol test","status":"green"},
       {"path":"tests/postgres-test.rkt","owner":"runtime/go/teslrt postgres","replacement":"Go PostgreSQL integration test","status":"green"},

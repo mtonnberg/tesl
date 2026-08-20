@@ -1,8 +1,12 @@
 package teslrt
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func attributes(pairs ...string) []Tuple2[string, string] {
@@ -115,5 +119,46 @@ func TestConfiguredEndpointIsAnnounced(t *testing.T) {
 	events := TelemetryEvents()
 	if len(events) != 1 || !strings.Contains(events[0].Endpoint, "collector.example") {
 		t.Fatalf("events = %+v", events)
+	}
+}
+
+func TestOTLPExporterPostsMetricsAndTraces(t *testing.T) {
+	requests := make(chan struct {
+		path string
+		body map[string]any
+	}, 10)
+	collector := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Errorf("decode OTLP payload: %v", err)
+			return
+		}
+		requests <- struct {
+			path string
+			body map[string]any
+		}{request.URL.Path, body}
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer collector.Close()
+	_ = InitTelemetry("otlp-test", collector.URL, false, true, true, 5, 1.0)
+	t.Cleanup(func() { _ = InitTelemetry("tesl", "in-memory", false, true, false, 60000, 1.0) })
+	_ = Counter("requests", FromInt64(3), attributes("route", "/"))
+	_ = Telemetry("request.finished", attributes("route", "/"))
+
+	seen := map[string]map[string]any{}
+	deadline := time.After(2 * time.Second)
+	for len(seen) < 2 {
+		select {
+		case request := <-requests:
+			seen[request.path] = request.body
+		case <-deadline:
+			t.Fatalf("received OTLP paths %v, want metrics and traces", seen)
+		}
+	}
+	if _, ok := seen["/v1/metrics"]; !ok {
+		t.Fatalf("metrics payload missing: %v", seen)
+	}
+	if _, ok := seen["/v1/traces"]; !ok {
+		t.Fatalf("traces payload missing: %v", seen)
 	}
 }

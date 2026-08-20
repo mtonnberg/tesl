@@ -125,17 +125,17 @@
 (define/pow
   (isEven [n : Integer])
   #:returns Boolean
-  (thsl-src! "tests/critical-review59-tests.tesl" 190 (list (cons 'n *n)) (lambda () (if (tesl-equal? *n 0) (raw-value #t) (raw-value (isOdd (- *n 1)))))))
+  (thsl-src! "tests/critical-review59-tests.tesl" 192 (list (cons 'n *n)) (lambda () (if (tesl-equal? *n 0) (raw-value #t) (raw-value (isOdd (- *n 1)))))))
 
 (define/pow
   (isOdd [n : Integer])
   #:returns Boolean
-  (thsl-src! "tests/critical-review59-tests.tesl" 196 (list (cons 'n *n)) (lambda () (if (tesl-equal? *n 0) (raw-value #f) (raw-value (isEven (- *n 1)))))))
+  (thsl-src! "tests/critical-review59-tests.tesl" 198 (list (cons 'n *n)) (lambda () (if (tesl-equal? *n 0) (raw-value #f) (raw-value (isEven (- *n 1)))))))
 
 (define/pow
   (proofDecompChain [raw : Integer])
   #:returns Integer
-  (thsl-src! "tests/critical-review59-tests.tesl" 222 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-8 (checkA raw)]) (let ([a tesl-checked-8]) (let/check ([tesl-checked-9 (checkB a)]) (let ([b tesl-checked-9]) (let ([tesl-proof-binding-10 b]) (let ([v (forget-proof tesl-proof-binding-10)] [p (detach-all-proof tesl-proof-binding-10)]) (let ([pA (and-left p)]) (let ([withA (attach-proof v pA)]) (raw-value (needsA withA)))))))))))))
+  (thsl-src! "tests/critical-review59-tests.tesl" 224 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-8 (checkA raw)]) (let ([a tesl-checked-8]) (let/check ([tesl-checked-9 (checkB a)]) (let ([b tesl-checked-9]) (let ([tesl-proof-binding-10 b]) (let ([v (forget-proof tesl-proof-binding-10)] [p (detach-all-proof tesl-proof-binding-10)]) (let ([pA (and-left p)]) (let ([withA (attach-proof v pA)]) (raw-value (needsA withA)))))))))))))
 
 (module+ test
   (require rackunit)
@@ -191,55 +191,52 @@
     ))
   )
 
-  (test-case "R59_MP01 detachFact fails at runtime with multiple proofs"
+  (test-case "R59_MP01 detachFact multi-proof shape compiles"
     (call-with-fresh-memory-db '() (lambda ()
   (define r1 (thsl-src! "tests/critical-review59-tests.tesl" 183 (list) (lambda () 5)))
-  (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review59-tests.tesl" 184 (list (cons 'r1 r1)) (lambda ()
-                          ((let () (define/pow (tesl-lambda-13) #:returns Integer (multiProofDetach r1)) tesl-lambda-13) (list)))))])
-    (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
-                "expected failure: (let () (define/pow (tesl-lambda-14) #:returns Integer (multiProofDetach r1)) tesl-lambda-14) (list)"))
+  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 186 (list (cons 'r1 r1)) (lambda () (singleDetach r1)))) 5)
     ))
   )
 
   (test-case "R59_MR01 mutual recursion isEven/isOdd"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 202 (list) (lambda () (isEven 4)))) #t)
-  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 203 (list) (lambda () (isEven 3)))) #f)
-  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 204 (list) (lambda () (isOdd 3)))) #t)
-  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 205 (list) (lambda () (isOdd 4)))) #f)
-  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 206 (list) (lambda () (isEven 0)))) #t)
-  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 207 (list) (lambda () (isOdd 0)))) #f)
+  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 204 (list) (lambda () (isEven 4)))) #t)
+  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 205 (list) (lambda () (isEven 3)))) #f)
+  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 206 (list) (lambda () (isOdd 3)))) #t)
+  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 207 (list) (lambda () (isOdd 4)))) #f)
+  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 208 (list) (lambda () (isEven 0)))) #t)
+  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 209 (list) (lambda () (isOdd 0)))) #f)
     ))
   )
 
   (test-case "R59_PD01 proof decomp with andLeft now works correctly (fix 1.1)"
     (call-with-fresh-memory-db '() (lambda ()
-  (define r1 (thsl-src! "tests/critical-review59-tests.tesl" 230 (list) (lambda () 5)))
-  (define result (thsl-src! "tests/critical-review59-tests.tesl" 231 (list (cons 'r1 r1)) (lambda () (proofDecompChain r1))))
-  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 232 (list (cons 'result result) (cons 'r1 r1)) (lambda () result))) 5)
+  (define r1 (thsl-src! "tests/critical-review59-tests.tesl" 232 (list) (lambda () 5)))
+  (define result (thsl-src! "tests/critical-review59-tests.tesl" 233 (list (cons 'r1 r1)) (lambda () (proofDecompChain r1))))
+  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 234 (list (cons 'result result) (cons 'r1 r1)) (lambda () result))) 5)
     ))
   )
 
   (test-case "R59_PD02 andRight also works on accumulated proofs"
     (call-with-fresh-memory-db '() (lambda ()
-  (define r1 (thsl-src! "tests/critical-review59-tests.tesl" 236 (list) (lambda () 5)))
-  (define tesl-checked-14 (checkA r1))
+  (define r1 (thsl-src! "tests/critical-review59-tests.tesl" 238 (list) (lambda () 5)))
+  (define tesl-checked-13 (checkA r1))
+  (when (check-fail? tesl-checked-13)
+    (raise-user-error 'tesl-test "unexpected failure in let a: ~a" (check-fail-message tesl-checked-13)))
+  (define a tesl-checked-13)
+  (define tesl-checked-14 (checkB a))
   (when (check-fail? tesl-checked-14)
-    (raise-user-error 'tesl-test "unexpected failure in let a: ~a" (check-fail-message tesl-checked-14)))
-  (define a tesl-checked-14)
-  (define tesl-checked-15 (checkB a))
-  (when (check-fail? tesl-checked-15)
-    (raise-user-error 'tesl-test "unexpected failure in let b: ~a" (check-fail-message tesl-checked-15)))
-  (define b tesl-checked-15)
-  (define tesl-proof-bind-16 b)
-  (when (check-fail? tesl-proof-bind-16)
-    (raise-user-error 'tesl-test "unexpected failure in let-proof: ~a" (check-fail-message tesl-proof-bind-16)))
-  (define v (forget-proof tesl-proof-bind-16))
-  (define p (detach-all-proof tesl-proof-bind-16))
-  (define pB (thsl-src! "tests/critical-review59-tests.tesl" 240 (list (cons 'v v) (cons 'b b) (cons 'a a) (cons 'r1 r1)) (lambda () (and-right p))))
-  (define withB (thsl-src! "tests/critical-review59-tests.tesl" 241 (list (cons 'pB pB) (cons 'v v) (cons 'b b) (cons 'a a) (cons 'r1 r1)) (lambda () (attach-proof v pB))))
-  (define result (thsl-src! "tests/critical-review59-tests.tesl" 242 (list (cons 'withB withB) (cons 'pB pB) (cons 'v v) (cons 'b b) (cons 'a a) (cons 'r1 r1)) (lambda () (needsB withB))))
-  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 243 (list (cons 'result result) (cons 'withB withB) (cons 'pB pB) (cons 'v v) (cons 'b b) (cons 'a a) (cons 'r1 r1)) (lambda () result))) 5)
+    (raise-user-error 'tesl-test "unexpected failure in let b: ~a" (check-fail-message tesl-checked-14)))
+  (define b tesl-checked-14)
+  (define tesl-proof-bind-15 b)
+  (when (check-fail? tesl-proof-bind-15)
+    (raise-user-error 'tesl-test "unexpected failure in let-proof: ~a" (check-fail-message tesl-proof-bind-15)))
+  (define v (forget-proof tesl-proof-bind-15))
+  (define p (detach-all-proof tesl-proof-bind-15))
+  (define pB (thsl-src! "tests/critical-review59-tests.tesl" 242 (list (cons 'v v) (cons 'b b) (cons 'a a) (cons 'r1 r1)) (lambda () (and-right p))))
+  (define withB (thsl-src! "tests/critical-review59-tests.tesl" 243 (list (cons 'pB pB) (cons 'v v) (cons 'b b) (cons 'a a) (cons 'r1 r1)) (lambda () (attach-proof v pB))))
+  (define result (thsl-src! "tests/critical-review59-tests.tesl" 244 (list (cons 'withB withB) (cons 'pB pB) (cons 'v v) (cons 'b b) (cons 'a a) (cons 'r1 r1)) (lambda () (needsB withB))))
+  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 245 (list (cons 'result result) (cons 'withB withB) (cons 'pB pB) (cons 'v v) (cons 'b b) (cons 'a a) (cons 'r1 r1)) (lambda () result))) 5)
     ))
   )
 

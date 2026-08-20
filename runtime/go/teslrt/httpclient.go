@@ -42,9 +42,9 @@ func millisDuration(millis int) time.Duration {
 //	                      retries and dead-letters) and a job that never finishes;
 //	a response-body cap   an unbounded read of a hostile response is a memory DoS.
 //
-// Trace-context propagation (`traceparent`/`tracestate` on every outbound call) is NOT here
-// yet: it needs the telemetry slice, which has not been migrated. Its absence loses trace
-// continuity across services; it takes nothing else away.
+// When tracing is enabled, outbound calls receive a W3C traceparent header unless the caller
+// supplied one explicitly. This keeps propagation deterministic and prevents an upstream trace
+// from being silently replaced.
 type HttpResponse struct {
 	Status Int
 	Body   string
@@ -228,6 +228,9 @@ func httpRequestNetwork(method, target string, parsed *url.URL, wire http.Header
 		panic(fmt.Sprintf("HttpClient: HTTP %s to %s failed: %s", method, target, err.Error()))
 	}
 	request.Header = wire
+	if telemetryTraceEnabled() && request.Header.Get("traceparent") == "" {
+		request.Header.Set("traceparent", "00-"+telemetryID(16)+"-"+telemetryID(8)+"-01")
+	}
 	client := &http.Client{
 		Transport: outboundTransport(parsed.Hostname()),
 		Timeout:   millisDuration(httpReadTimeoutMs()),
