@@ -335,7 +335,7 @@
       in {
         # ── Packages ──────────────────────────────────────────────────────────
           packages = {
-           inherit tesl-compiler tesl-racket tesl-cli tesl-go-cli tesl-lsp tesl-mcp tesl-go-tools tesl-debug-tools tesl-full staticcheck;
+           inherit tesl-compiler tesl-go-cli tesl-lsp tesl-mcp tesl-go-tools tesl-debug-tools tesl-full staticcheck;
           default = tesl-full;
           # Reusable PostgreSQL so the managed-PG lifecycle (`tesl db`) can source
           # initdb / pg_ctl / createdb via nix without entering a dev shell.

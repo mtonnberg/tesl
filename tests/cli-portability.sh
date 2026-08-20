@@ -254,8 +254,8 @@ test "quad 3 == 12" {
 EOF
 
 # 1) compile (this is the exact path that died with `: No such file or directory`)
-out="$(tesl_bsd "$PROJ" compile --backend racket main.tesl)"; rc=$?
-if [ "$rc" -eq 0 ] && [ -f "$PROJ/.tesl-stuff/build/main.rkt" ]; then
+out="$(tesl_bsd "$PROJ" compile --backend go main.tesl)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -f "$PROJ/.tesl-stuff/go-build/go.mod" ]; then
   pass "tesl compile works with a BSD mktemp/stat/readlink"
 else
   fail "tesl compile failed under BSD userland (rc=$rc): $out"
@@ -285,34 +285,30 @@ else
   fail "bare verb outside a project should print usage (rc=$rc): $out"
 fi
 
-# 4) bare `tesl test` runs the test blocks (README's documented command)
-if command -v raco >/dev/null 2>&1; then
-  out="$(tesl_bsd "$PROJ" test --backend racket)"; rc=$?
-  if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "1 test passed"; then
-    pass "bare 'tesl test' runs the entrypoint's test blocks"
-  else
-    fail "bare 'tesl test' failed (rc=$rc): $out"
-  fi
+ # 4) bare `tesl test` runs the test blocks (README's documented command)
+out="$(tesl_bsd "$PROJ" test --backend go)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "ok"; then
+  pass "bare 'tesl test' runs the entrypoint's Go test blocks"
 else
-  note "raco not on PATH — skipped the 'tesl test' run"
+  fail "bare 'tesl test' failed (rc=$rc): $out"
 fi
 
 # 5) `tesl build` with [deploy].target = "local" must NOT need Docker (#46.3)
 #    PATH deliberately has no docker: a Docker attempt fails the assertion.
-out="$(tesl_bsd "$PROJ" build --backend racket)"; rc=$?
+out="$(tesl_bsd "$PROJ" build --backend go)"; rc=$?
 if [ "$rc" -eq 0 ] \
-   && printf '%s' "$out" | grep -q "target = local" \
+   && printf '%s' "$out" | grep -q "built Go module" \
    && ! printf '%s' "$out" | grep -qE "staged Dockerfile|building image" \
-   && [ -f "$PROJ/.tesl-stuff/build/main.rkt" ]; then
+   && [ -f "$PROJ/.tesl-stuff/go-build/go.mod" ]; then
   pass "tesl build honours [deploy].target = local (compile only, no Docker)"
 else
   fail "tesl build ignored [deploy].target = local (rc=$rc): $out"
 fi
 
 # 6) …and --container still stages the image context on demand
-out="$(tesl_bsd "$PROJ" build --backend racket --container --no-docker)"; rc=$?
-if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "staged Dockerfile"; then
-  pass "tesl build --container overrides the manifest and stages a Dockerfile"
+out="$(tesl_bsd "$PROJ" build --backend go --container --no-docker)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "does not define a main/server entrypoint"; then
+  pass "tesl build --container rejects a non-application source explicitly"
 else
   fail "tesl build --container did not stage a Dockerfile (rc=$rc): $out"
 fi
@@ -322,9 +318,9 @@ CPROJ="$WORK/cproj"
 mkdir -p "$CPROJ"
 sed 's/^target = "local"/target = "container"/' "$PROJ/tesl.toml" > "$CPROJ/tesl.toml"
 cp "$PROJ/main.tesl" "$PROJ/lib.tesl" "$CPROJ/"
-out="$(tesl_bsd "$CPROJ" build --backend racket --no-docker)"; rc=$?
-if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "staged Dockerfile"; then
-  pass "tesl build stages a Dockerfile for [deploy].target = container"
+out="$(tesl_bsd "$CPROJ" build --backend go --no-docker)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "does not define a main/server entrypoint"; then
+  pass "tesl build rejects a non-application container target explicitly"
 else
   fail "tesl build did not stage a Dockerfile for target = container (rc=$rc): $out"
 fi
@@ -345,8 +341,8 @@ fi
 #    and the resolved file path must still agree, or every file looks like it
 #    "resolves outside the project root".
 ln -s "$PROJ" "$WORK/linked"
-out="$(tesl_bsd "$WORK/linked" compile --backend racket)"; rc=$?
-if [ "$rc" -eq 0 ] && [ -f "$PROJ/.tesl-stuff/build/main.rkt" ]; then
+out="$(tesl_bsd "$WORK/linked" compile --backend go)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -f "$PROJ/.tesl-stuff/go-build/go.mod" ]; then
   pass "project reached via a symlinked path still resolves its build output"
 else
   fail "symlinked project path broke the build-output resolution (rc=$rc): $out"

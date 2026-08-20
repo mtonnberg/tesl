@@ -1,7 +1,7 @@
 (** Tesl compiler CLI.
 
     Usage:
-      tesl <file>                compile .tesl file to Racket (stdout)
+       tesl <file> --out <dir>    emit a Go module (Go is the default backend)
       tesl --backend go <file> --out <dir>  emit an experimental Go module
       tesl --check <file> ...    check for parse + type errors (exit 1 if any)
       tesl --check-batch <file> ...  batch-check many files in one process (per-file summary)
@@ -26,9 +26,8 @@
 *)
 
 let usage = {|Usage:
-  tesl <file>                  compile .tesl file to Racket (stdout)
-  tesl --backend racket <file> compile .tesl file to Racket (stdout)
-  tesl --backend go <file> --out <dir>  emit an experimental Go module tree
+  tesl <file> --out <dir>      emit a Go module tree (Go is the default backend)
+  tesl --backend go <file> --out <dir>  emit a Go module tree
   tesl --check <file> [...]    check for parse + type errors (exit 1 if any)
   tesl --check-batch <file> [...]  batch-check many files in one process (shared import cache, per-file summary)
   tesl --check-all <dir>       recursively batch-check every .tesl file under <dir>
@@ -1542,7 +1541,23 @@ let () =
      | Compile.InspectErr msg ->
        Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
 
-  | [filename] when not (String.length filename > 2 && filename.[0] = '-') ->
+   | [filename; "--out"; out_dir]
+     when not (String.length filename > 2 && filename.[0] = '-') ->
+     (match Compile.compile_go_file filename with
+      | Compile.GoFailure diags -> List.iter print_diagnostic diags; exit 1
+      | Compile.GoSuccess artifacts ->
+        write_go_project out_dir artifacts;
+        Printf.printf "emitted Go module: %s\n" out_dir)
+
+   | [filename; "--out"; out_dir; "--debug"]
+     when not (String.length filename > 2 && filename.[0] = '-') ->
+     (match Compile.compile_go_file ~debug:true filename with
+      | Compile.GoFailure diags -> List.iter print_diagnostic diags; exit 1
+      | Compile.GoSuccess artifacts ->
+        write_go_project out_dir artifacts;
+        Printf.printf "emitted debug Go module: %s\n" out_dir)
+
+   | [filename] when not (String.length filename > 2 && filename.[0] = '-') ->
     (try
        match Compile.compile_file ~root_path ~type_check:true filename with
        | Compile.Success racket -> print_string racket

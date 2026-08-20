@@ -219,5 +219,5 @@ Where to start, by task:
 | `dsl/web.rkt` | HTTP handlers, `define-handler`, `serve` |
 | `tesl/queue.rkt` | Queue and pub/sub runtime |
 | `nix/tesl-cli-body.sh` | The installed `tesl` CLI wrapper (verb dispatch); the flake builds `tesl` from it |
-| `tests/private/postgres-test-support.rkt` | Shared-cluster PostgreSQL test harness and per-test database isolation |
-| `tests/tesl-test.rkt` | Main Racket test suite (run `./ci.sh` for the authoritative count) |
+| `scripts/run-go-test-manifest.sh` | Authoritative Go execution of every tracked `tests/*.tesl` source |
+| `runtime/go/teslrt/*_test.go` | Go runtime and integration coverage |

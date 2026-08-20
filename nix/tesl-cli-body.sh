@@ -9,12 +9,9 @@
 #
 # ENV CONTRACT (the preamble MUST set these before this body runs):
 #   TESL_OCAML_COMPILER   path to the OCaml compiler binary (main.exe)
-#   PLTCOLLECTS           racket collects + the tesl runtime collections
-#   PATH                  must contain `racket`
+#   PATH                  must contain the Go toolchain for Go build/test flows
 # OPTIONAL (set by the installed preamble so assets resolve without a repo):
 #   TESL_TEMPLATES_DIR    store path holding templates/{minimal,api,docker}
-#   TESL_COLLECTIONS_DIR  store path holding the tesl/{dsl,tesl} tree
-#                         (the tesl-racket derivation's …/share/tesl-collections/tesl)
 # DEV fallback:
 #   TESL_REPO_ROOT        repo checkout; templates + collections come from here.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1184,7 +1181,7 @@ _tesl_build() {
       --container)     MODE="container"; shift ;;
       --local)         MODE="local"; shift ;;
       --help|-h)
-        echo "Usage: tesl build [--backend racket|go] [--local|--container] [--app-only|--with-postgres]"
+        echo "Usage: tesl build [--local|--container] [--app-only|--with-postgres]"
         echo "                  [--tag NAME] [--no-docker] [--out DIR]"
         echo "  Build the project named by tesl.toml. Without a flag the mode comes from"
         echo "  [deploy].target: \"local\" compiles into .tesl-stuff/build/ (no Docker),"
@@ -1216,7 +1213,7 @@ _tesl_build() {
     fi
     return $?
   elif [ "$BACKEND" != "racket" ]; then
-    echo "tesl build: unsupported backend '$BACKEND' (use racket or go)" >&2
+    echo "tesl build: unsupported backend '$BACKEND' (use go)" >&2
     return 2
   fi
 
@@ -1451,6 +1448,23 @@ _tesl_test_format() {
 CMD="${1:-help}"
 shift || true
 
+# Go migration Phase 7 cutover: shipped CLI workflows are Go-only. The Racket compiler/runtime
+# remains a source-level compatibility oracle for compiler tests, but it is no
+# longer reachable through the user-facing wrapper or its packaged profiles.
+if [ "${TESL_BACKEND:-${TESL_DEFAULT_BACKEND:-go}}" = "racket" ]; then
+  echo "error: Racket backend removed from the shipped CLI; use Go" >&2
+  exit 2
+fi
+_tesl_previous_arg=""
+for _tesl_arg in "$@"; do
+  if [ "$_tesl_previous_arg" = "--backend" ] && [ "$_tesl_arg" = "racket" ]; then
+    echo "error: Racket backend removed from the shipped CLI; use Go" >&2
+    exit 2
+  fi
+  _tesl_previous_arg="$_tesl_arg"
+done
+unset _tesl_previous_arg _tesl_arg
+
 case "$CMD" in
   --test-name)
     # Top-level passthrough: `tesl --test-name "NAME" [--test-kind KIND] file.tesl`
@@ -1483,8 +1497,7 @@ case "$CMD" in
     ;;
   debug-inspect)
     # Headless step-debugger: run to breakpoint(s) and dump paused state as JSON.
-    # Go is the shipped/dev default; explicit --backend racket preserves the
-    # legacy compiler path during the remaining runtime migration.
+    # Go is the shipped/dev backend.
     INSPECT_BACKEND="${TESL_BACKEND:-${TESL_DEFAULT_BACKEND:-go}}"
     if [ "${1:-}" = "--backend" ]; then
       INSPECT_BACKEND="${2:?--backend requires a backend name}"
@@ -1496,7 +1509,7 @@ case "$CMD" in
       TESL_COMPILER="${TESL_COMPILER:-$TESL_OCAML_COMPILER}" \
         exec "${TESL_DEBUG_INSPECT_BIN:-tesl-debug-inspect}" --file "$FILE" "$@"
     elif [ "$INSPECT_BACKEND" != "racket" ]; then
-      echo "tesl debug-inspect: unsupported backend '$INSPECT_BACKEND' (use racket or go)" >&2
+      echo "tesl debug-inspect: unsupported backend '$INSPECT_BACKEND' (use go)" >&2
       exit 2
     fi
     [ $# -gt 0 ] || { echo "Usage: tesl debug-inspect <file.tesl> --break-at SPEC [...] [--continue]" >&2; exit 1; }
@@ -1515,7 +1528,11 @@ case "$CMD" in
       shift 2
     fi
     if [ "$COMPILE_BACKEND" = "go" ]; then
-      FILE="${1:?tesl compile --backend go requires a source file}"
+      if [ $# -eq 0 ]; then
+        _TESL_ENTRY="$(_tesl_default_entry "tesl compile [file.tesl]")" || exit 1
+        set -- "$_TESL_ENTRY"
+      fi
+      FILE="$1"
       shift
       OUT_GO=""
       if [ "${1:-}" = "--out" ]; then
@@ -1528,7 +1545,7 @@ case "$CMD" in
       echo "compiled Go module: $FILE → $OUT_GO"
       exit 0
     elif [ "$COMPILE_BACKEND" != "racket" ]; then
-      echo "tesl compile: unsupported backend '$COMPILE_BACKEND' (use racket or go)" >&2
+      echo "tesl compile: unsupported backend '$COMPILE_BACKEND' (use go)" >&2
       exit 2
     fi
     if [ $# -eq 0 ]; then
@@ -1639,7 +1656,7 @@ case "$CMD" in
       _tesl_run_go_file "$FILE" "$TESL_RUN_DEBUG" "$@"
       exit $?
     elif [ "$RUN_BACKEND" != "racket" ]; then
-      echo "tesl run: unsupported backend '$RUN_BACKEND' (use racket or go)" >&2
+       echo "tesl run: unsupported backend '$RUN_BACKEND' (use go)" >&2
       exit 2
     fi
     # Everything after FILE is forwarded verbatim to the app, so a trailing
@@ -1740,7 +1757,7 @@ case "$CMD" in
       esac
     done
     if [ $# -eq 0 ]; then
-      _TESL_ENTRY="$(_tesl_default_entry "tesl test [--backend racket|go] [--test-name <name>] [--test-kind <kind>] [file.tesl ...]")" || exit 1
+       _TESL_ENTRY="$(_tesl_default_entry "tesl test [--test-name <name>] [--test-kind <kind>] [file.tesl ...]")" || exit 1
       set -- "$_TESL_ENTRY"
     fi
     case "$TEST_BACKEND" in
@@ -1796,11 +1813,11 @@ case "$CMD" in
     ;;
   mutate)
     # Mutation testing: perturb the program and confirm the tests catch it.
-    # Forwards to the compiler's `--mutate [--backend racket|go] <file>
+     # Forwards to the compiler's `--mutate <file>
     # [extra-test-files…]`, which
     # compiles + runs each mutant and prints a "Mutation score" report. This is
     # the first-class command the docs (best-practices) reference as `tesl mutate`.
-    [ $# -gt 0 ] || { echo "Usage: tesl mutate [--backend racket|go] <file.tesl> [more-test-files.tesl ...]" >&2; exit 1; }
+     [ $# -gt 0 ] || { echo "Usage: tesl mutate <file.tesl> [more-test-files.tesl ...]" >&2; exit 1; }
     _tesl_require_compiler
     exec "$TESL_OCAML_COMPILER" --mutate "$@"
     ;;
@@ -1821,7 +1838,7 @@ case "$CMD" in
       _tesl_watch_go "$FILE" "$@"
       exit $?
     elif [ "$WATCH_BACKEND" != "racket" ]; then
-      echo "tesl watch: unsupported backend '$WATCH_BACKEND' (use racket or go)" >&2
+       echo "tesl watch: unsupported backend '$WATCH_BACKEND' (use go)" >&2
       exit 2
     fi
     OUT="$(_tesl_out_path "$FILE")" || exit 1
@@ -1990,24 +2007,24 @@ Usage:
   tesl init                [name] [--template api|minimal]   Scaffold a new project
                            [--postgres managed|existing|none] [--yes] [--no-git]
   tesl db                  start|stop|status                 Manage the project-local Postgres
-   tesl build               [--backend racket|go] [--local|--container]  Build the project
+    tesl build               [--local|--container]  Build the project
                            [--app-only|--with-postgres]      ([deploy].target = "local") or a
                            [--tag NAME] [--no-docker]        runnable Docker image
                            [--out DIR]                       ([deploy].target = "container")
-   tesl compile             [--backend racket|go] [file.tesl]  Compile source (Go default)
+    tesl compile             [file.tesl]  Compile source
   tesl clean                                              Delete the project's build output (.tesl-stuff/build/)
   tesl check               [file.tesl ...]               Type-check without output
   tesl lint                <file.tesl> [more.tesl ...]   Run the opinionated linter
   tesl fmt                 <file.tesl> [more.tesl ...]   Format in-place
   tesl fmt-check           <file.tesl> [more.tesl ...]   Check formatting without modifying
   tesl validate            [file.tesl ...]               Run check + lint + fmt-check
-   tesl run                 [--backend racket|go] [--debug] [file.tesl] [args…]  Compile then execute (Go default)
+    tesl run                 [--debug] [file.tesl] [args…]  Compile then execute
                            (--debug: live checkpoints + attach endpoint under .tesl-stuff/)
   tesl debug-attach        [--project DIR] [command…]     Attach to a `tesl run --debug` process
                            (arm breakpoints, inspect, resume — see tesl debug-attach --help)
-   tesl test                [--backend racket|go] [file.tesl ...]  Compile and run tests (Go default)
-  tesl mutate              [--backend racket|go] <file>  Run mutation testing
-   tesl watch               [--backend racket|go] [file.tesl] [args…]  Watch and restart on changes
+    tesl test                [file.tesl ...]  Compile and run tests
+   tesl mutate              <file>  Run mutation testing
+    tesl watch               [file.tesl] [args…]  Watch and restart on changes
 
   A [file.tesl] argument is OPTIONAL inside a project: with none, the verb uses
   [project].entrypoint from the nearest tesl.toml.

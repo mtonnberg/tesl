@@ -434,8 +434,8 @@ ignored if all test assertions passed.
 ## Useful diagnostic commands
 
 ```bash
-# See what a .tesl file compiles to:
-dune exec --root compiler -- bin/main.exe example/todo-api.tesl
+# Emit a Go module from a .tesl file:
+tesl compile example/todo-api.tesl
 
 # Check a file for errors only:
 dune exec --root compiler -- bin/main.exe --check my-file.tesl
@@ -446,15 +446,11 @@ dune exec --root compiler -- bin/main.exe --lint my-file.tesl
 # Print the import graph:
 dune exec --root compiler -- bin/main.exe --deps example/todo-api.tesl
 
-# Run a single test file:
-nix develop --command raco test tests/sql-test.rkt 2>&1
-# legacy: nix-shell --run "raco test tests/sql-test.rkt 2>&1"
+# Run a single Tesl test source:
+tesl test tests/sql-group-by-tests.tesl
 
-# Load and inspect a compiled module:
-racket -e '
-(define mod (dynamic-require (file "example/todo-api.rkt") #f))
-(displayln "loaded OK")
-'
+# Inspect a paused Go program:
+tesl debug-inspect example/todo-api.tesl --break-at 42
 ```
 
 ---

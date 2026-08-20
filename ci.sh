@@ -1135,7 +1135,7 @@ else
         _snap_out="$(mktemp -d)"
         rm -rf "$_snap_out"
         if ! ( cd "$SCRIPT_DIR" && TESL_REPO_ROOT="$SCRIPT_DIR" \
-                 "$_main_exe" --backend go "$rel_tesl" --out "$_snap_out" ) >/dev/null 2>&1; then
+                 "$_main_exe" "$rel_tesl" --out "$_snap_out" ) >/dev/null 2>&1; then
             GO_SNAP_FAILS+=("$(basename "$rel_snap") (no longer emits)")
             rm -rf "$_snap_out"
             continue
@@ -1282,7 +1282,7 @@ else
         fi
 
         printf "  Running Go mutation backend: %s\n" "$(basename "$mutation_lesson")"
-        go_mutation_out=$(timeout "$_mutation_timeout" "$TESL_BIN" --mutate --backend go "$mutation_lesson" 2>&1)
+        go_mutation_out=$(timeout "$_mutation_timeout" "$TESL_BIN" --mutate "$mutation_lesson" 2>&1)
         _go_mut_exit=$?
         if [ "$_go_mut_exit" -ne 0 ]; then
             mutation_fail=1
@@ -1422,30 +1422,20 @@ EOF
             bash "$SCRIPT_DIR/nix/tesl-cli-body.sh" "$@" 2>&1 )
     }
 
-    # 1) multi-module test from the project root
-    _cli_out="$(_cli_run test --backend racket main.tesl)"; _cli_rc=$?
-    if [ "$_cli_rc" -eq 0 ] && printf '%s' "$_cli_out" | grep -q "1 test passed"; then
-        printf "  %s✓%s  tesl test compiles imported modules and runs tests\n" "$C_GREEN" "$C_RESET"
-    else
-        printf "  %s✗%s  multi-module tesl test failed (rc=%s):\n%s\n" "$C_RED" "$C_RESET" "$_cli_rc" "$_cli_out"
-        _cli_fail=1
-    fi
-
-    # 1b) Go backend: generated tests run in an isolated temporary module.
-    _cli_out="$(_cli_run test --backend go main.tesl)"; _cli_rc=$?
+    # 1) Go backend: generated tests run in an isolated temporary module.
+    _cli_out="$(_cli_run test main.tesl)"; _cli_rc=$?
     if [ "$_cli_rc" -eq 0 ] && printf '%s' "$_cli_out" | grep -qE "^ok[[:space:]]"; then
-        printf "  %s✓%s  tesl test --backend go runs generated Go tests\n" "$C_GREEN" "$C_RESET"
+        printf "  %s✓%s  tesl test runs generated Go tests\n" "$C_GREEN" "$C_RESET"
     else
         printf "  %s✗%s  Go backend tesl test failed (rc=%s):\n%s\n" "$C_RED" "$C_RESET" "$_cli_rc" "$_cli_out"
         _cli_fail=1
     fi
 
-    # 2) subdirectory module: mirrored tree under .tesl-stuff/build/
-    _cli_out="$(_cli_run test --backend racket sub/app.tesl)"; _cli_rc=$?
-    if [ "$_cli_rc" -eq 0 ] && printf '%s' "$_cli_out" | grep -q "1 test passed" \
-        && [ -f "$_cli_smoke_dir/.tesl-stuff/build/sub/app.rkt" ] \
-        && [ -f "$_cli_smoke_dir/.tesl-stuff/build/sub/util.rkt" ]; then
-        printf "  %s✓%s  subdirectory module builds into the mirrored .tesl-stuff/build/ tree\n" "$C_GREEN" "$C_RESET"
+    # 2) subdirectory module: imported Go source builds into .tesl-stuff/go-build.
+    _cli_out="$(_cli_run test sub/app.tesl)"; _cli_rc=$?
+    if [ "$_cli_rc" -eq 0 ] && printf '%s' "$_cli_out" | grep -qE "^ok[[:space:]]" \
+        && [ -f "$_cli_smoke_dir/.tesl-stuff/go-build/go.mod" ]; then
+        printf "  %s✓%s  subdirectory module builds into the Go .tesl-stuff/go-build tree\n" "$C_GREEN" "$C_RESET"
     else
         printf "  %s✗%s  subdirectory-module tesl test failed (rc=%s):\n%s\n" "$C_RED" "$C_RESET" "$_cli_rc" "$_cli_out"
         _cli_fail=1
@@ -1454,8 +1444,7 @@ EOF
     # 3) NO generated files outside .tesl-stuff/ (the whole point of the layout)
     _cli_stray="$(find "$_cli_smoke_dir" \( -name '*.rkt' -o -name 'compiled' \) \
         -not -path "$_cli_smoke_dir/.tesl-stuff/*" 2>/dev/null)"
-    if [ -z "$_cli_stray" ] && [ -f "$_cli_smoke_dir/.tesl-stuff/build/main.rkt" ] \
-        && [ -f "$_cli_smoke_dir/.tesl-stuff/build/lib.rkt" ]; then
+    if [ -z "$_cli_stray" ] && [ -f "$_cli_smoke_dir/.tesl-stuff/go-build/go.mod" ]; then
         printf "  %s✓%s  all generated output lives under .tesl-stuff/\n" "$C_GREEN" "$C_RESET"
     else
         printf "  %s✗%s  generated files leaked outside .tesl-stuff/:\n%s\n" "$C_RED" "$C_RESET" "$_cli_stray"
@@ -1464,8 +1453,8 @@ EOF
 
     # 4) always safe to delete: rm -rf .tesl-stuff, rerun, must pass
     rm -rf "$_cli_smoke_dir/.tesl-stuff"
-    _cli_out="$(_cli_run test --backend racket main.tesl)"; _cli_rc=$?
-    if [ "$_cli_rc" -eq 0 ] && printf '%s' "$_cli_out" | grep -q "1 test passed"; then
+    _cli_out="$(_cli_run test main.tesl)"; _cli_rc=$?
+    if [ "$_cli_rc" -eq 0 ] && printf '%s' "$_cli_out" | grep -qE "^ok[[:space:]]"; then
         printf "  %s✓%s  rm -rf .tesl-stuff && tesl test still passes (fresh rebuild)\n" "$C_GREEN" "$C_RESET"
     else
         printf "  %s✗%s  rerun after deleting .tesl-stuff failed (rc=%s):\n%s\n" "$C_RED" "$C_RESET" "$_cli_rc" "$_cli_out"

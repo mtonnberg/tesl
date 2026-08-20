@@ -135,8 +135,8 @@ The `define-checker` macro (in `dsl/private/check-runtime.rkt`) does the actual 
 ## Running the compiler manually
 
 ```bash
-# Inside the dev shell (`nix develop` or legacy `nix-shell`):
-tesl example/todo-api.tesl          # compile to Racket (stdout)
+# Inside the dev shell (`nix develop`):
+tesl compile example/todo-api.tesl  # emit a Go module
 tesl --check example/todo-api.tesl  # type-check only
 tesl --lint  example/todo-api.tesl  # lint warnings
 tesl --fmt   example/todo-api.tesl  # format in-place
@@ -147,18 +147,15 @@ tesl --fmt   example/todo-api.tesl  # format in-place
 ## Running the test suite
 
 ```bash
-nix develop --command raco test tests/all.rkt 2>&1
-# legacy: nix-shell --run "raco test tests/all.rkt 2>&1"
+bash scripts/run-go-test-manifest.sh --run-all
+bash scripts/run-go-example-manifest.sh --run-all
 ```
 
-The authoritative aggregate suite:
-- Calls the `tesl` OCaml binary as a subprocess to compile Tesl snippets
-- Loads the compiled `.rkt` files via `dynamic-require`
-- Uses rackunit assertions to verify behaviour
-- Includes PostgreSQL integration tests (skipped if neither a shared test cluster nor `initdb`/`pg_ctl` is available)
-- Reuses one temporary PostgreSQL cluster per aggregate run while still giving each PostgreSQL-backed test an isolated database
-- Routes through `tests/internal-all.rkt`, while `tests/frontend-all.rkt` remains the narrower frontend-only aggregate
-- `compile-examples.sh` now seeds the same `TESL_TEST_POSTGRES_SHARED_*` environment contract before its per-file `tesl test` sweep and final aggregate run, so repeated test invocations also reuse one temporary cluster when PostgreSQL tooling is available
+The authoritative test surfaces are Go source manifests plus OCaml compiler tests:
+- `scripts/run-go-test-manifest.sh --run-all` executes every tracked `tests/*.tesl` source in disposable Go modules.
+- `scripts/run-go-example-manifest.sh --run-all` executes every tracked example through Go.
+- `runtime/go/**/*_test.go` covers runtime, protocol, DAP, LSP, MCP, security, and integration behavior.
+- `compiler/test` covers parser, checker, proof, diagnostics, and emission invariants.
 
 See `dev-docs/09-adding-tests.md` for how to add tests.
 
