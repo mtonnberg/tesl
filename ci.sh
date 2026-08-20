@@ -1440,6 +1440,15 @@ EOF
         _cli_fail=1
     fi
 
+    # 1b) Go backend: generated tests run in an isolated temporary module.
+    _cli_out="$(_cli_run test --backend go main.tesl)"; _cli_rc=$?
+    if [ "$_cli_rc" -eq 0 ] && printf '%s' "$_cli_out" | grep -qE "^ok[[:space:]]"; then
+        printf "  %s✓%s  tesl test --backend go runs generated Go tests\n" "$C_GREEN" "$C_RESET"
+    else
+        printf "  %s✗%s  Go backend tesl test failed (rc=%s):\n%s\n" "$C_RED" "$C_RESET" "$_cli_rc" "$_cli_out"
+        _cli_fail=1
+    fi
+
     # 2) subdirectory module: mirrored tree under .tesl-stuff/build/
     _cli_out="$(_cli_run test sub/app.tesl)"; _cli_rc=$?
     if [ "$_cli_rc" -eq 0 ] && printf '%s' "$_cli_out" | grep -q "1 test passed" \

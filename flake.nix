@@ -248,6 +248,7 @@
           export TESL_TEMPLATES_DIR="${tesl-templates}/share/tesl-templates"
            export TESL_COLLECTIONS_DIR="${tesl-racket}/share/tesl-collections/tesl"
            export TESL_DEBUG_ATTACH_BIN="${tesl-go-tools}/bin/tesl-debug-attach"
+           export TESL_GO="${pkgs.go}/bin/go"
 
           export PATH="${pkgs.racket}/bin:${gnuUserland}:$PATH"
 

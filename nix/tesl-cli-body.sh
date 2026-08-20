@@ -125,6 +125,49 @@ _tesl_file_stamp() {
 _tesl_mktemp()     { mktemp  "${TMPDIR:-/tmp}/tesl.XXXXXXXX"; }
 _tesl_mktemp_dir() { mktemp -d "${TMPDIR:-/tmp}/tesl.XXXXXXXX"; }
 
+_tesl_test_go_file() {
+  local file="$1" test_name="$2" test_kind="$3" root out status
+  root="$(_tesl_mktemp_dir)" || return 1
+  out="$root/go"
+  if ! "$TESL_OCAML_COMPILER" --backend go "$file" --out "$out"; then
+    rm -rf "$root"
+    return 1
+  fi
+  (cd "$out" && TESL_TEST_NAME="$test_name" TESL_TEST_KIND="$test_kind" \
+    "${TESL_GO:-go}" test ./...)
+  status=$?
+  rm -rf "$root"
+  return "$status"
+}
+
+_tesl_run_go_file() {
+  local file="$1" debug="$2" project root out binary status
+  shift 2
+  project="$(_tesl_project_root "$file")" || return 1
+  root="$(_tesl_mktemp_dir)" || return 1
+  out="$root/go"
+  if [ "$debug" = "1" ]; then
+    "$TESL_OCAML_COMPILER" --backend go "$file" --out "$out" --debug || { rm -rf "$root"; return 1; }
+  else
+    "$TESL_OCAML_COMPILER" --backend go "$file" --out "$out" || { rm -rf "$root"; return 1; }
+  fi
+  if [ ! -d "$out/cmd/app" ]; then
+    echo "tesl run --backend go: $file does not define a main/server entrypoint" >&2
+    rm -rf "$root"
+    return 2
+  fi
+  binary="$root/tesl-app"
+  (cd "$out" && "${TESL_GO:-go}" build -o "$binary" ./cmd/app) || { rm -rf "$root"; return 1; }
+  if [ "$debug" = "1" ]; then
+    TESL_DEBUG=1 TESL_DEBUG_ROOT="$project" "$binary" "$@"
+  else
+    "$binary" "$@"
+  fi
+  status=$?
+  rm -rf "$root"
+  return "$status"
+}
+
 # Temp file for an emitted .rkt, created NEXT TO its destination so the
 # following `mv` is a same-filesystem rename (it also crossed /tmp → project
 # before). Replaces `mktemp --suffix=.rkt` (GNU-only); a fixed suffix cannot be
@@ -1425,14 +1468,29 @@ case "$CMD" in
     # debugger can attach to the RUNNING process — arm/re-arm breakpoints,
     # inspect, resume — without relaunching. Costs checkpoint overhead; a
     # plain `tesl run` stays byte-for-byte the zero-residue release build.
+    RUN_BACKEND="racket"
     TESL_RUN_DEBUG=0
-    if [ "${1:-}" = "--debug" ]; then TESL_RUN_DEBUG=1; shift; fi
+    while true; do
+      case "${1:-}" in
+        --backend) RUN_BACKEND="${2:?--backend requires a backend name}"; shift 2 ;;
+        --debug) TESL_RUN_DEBUG=1; shift ;;
+        *) break ;;
+      esac
+    done
     if [ $# -eq 0 ]; then
       _TESL_ENTRY="$(_tesl_default_entry "tesl run [--debug] [file.tesl] [args…]")" || exit 1
       set -- "$_TESL_ENTRY"
     fi
     FILE="$1"
     shift
+    if [ "$RUN_BACKEND" = "go" ]; then
+      _tesl_require_compiler
+      _tesl_run_go_file "$FILE" "$TESL_RUN_DEBUG" "$@"
+      exit $?
+    elif [ "$RUN_BACKEND" != "racket" ]; then
+      echo "tesl run: unsupported backend '$RUN_BACKEND' (use racket or go)" >&2
+      exit 2
+    fi
     # Everything after FILE is forwarded verbatim to the app, so a trailing
     # --debug does NOT enable debug mode — flag the likely mistake loudly.
     if [ "$TESL_RUN_DEBUG" = "0" ]; then
@@ -1514,23 +1572,38 @@ case "$CMD" in
     exit "$RET"
     ;;
   test)
+    # Optional: --backend go runs generated Go tests in a temporary module.
     # Optional: --test-name "name"  runs only the named test case.
     #           --test-kind KIND    (test|api-test|load-test|doctest) disambiguates
     #           same-named blocks of different kinds — required to run a single
     #           api-test / load-test / doctest in isolation.
     TEST_NAME=""
     TEST_KIND=""
+    TEST_BACKEND="racket"
     while true; do
       case "${1:-}" in
+        --backend) TEST_BACKEND="${2:?--backend requires a backend name}"; shift 2 ;;
         --test-name) TEST_NAME="${2:?--test-name requires a test name argument}"; shift 2 ;;
         --test-kind) TEST_KIND="${2:?--test-kind requires a kind argument}"; shift 2 ;;
         *) break ;;
       esac
     done
     if [ $# -eq 0 ]; then
-      _TESL_ENTRY="$(_tesl_default_entry "tesl test [--test-name <name>] [--test-kind <kind>] [file.tesl ...]")" || exit 1
+      _TESL_ENTRY="$(_tesl_default_entry "tesl test [--backend racket|go] [--test-name <name>] [--test-kind <kind>] [file.tesl ...]")" || exit 1
       set -- "$_TESL_ENTRY"
     fi
+    case "$TEST_BACKEND" in
+      go)
+        _tesl_require_compiler
+        RET=0
+        for FILE in "$@"; do
+          _tesl_test_go_file "$FILE" "$TEST_NAME" "$TEST_KIND" || RET=$?
+        done
+        exit "$RET"
+        ;;
+      racket) ;;
+      *) echo "tesl test: unsupported backend '$TEST_BACKEND' (use racket or go)" >&2; exit 2 ;;
+    esac
     RET=0
     for FILE in "$@"; do
       OUT="$(_tesl_out_path "$FILE")" || { RET=1; continue; }
@@ -1758,18 +1831,18 @@ Usage:
                            [--tag NAME] [--no-docker]        runnable Docker image
                            [--out DIR]                       ([deploy].target = "container")
   tesl compile             [file.tesl]                    Compile .tesl → .rkt (into .tesl-stuff/build/)
-  tesl compile --backend go <file.tesl> --out <dir>       Emit experimental standalone Go module
+   tesl compile --backend go <file.tesl> --out <dir>       Emit standalone Go module
   tesl clean                                              Delete the project's build output (.tesl-stuff/build/)
   tesl check               [file.tesl ...]               Type-check without output
   tesl lint                <file.tesl> [more.tesl ...]   Run the opinionated linter
   tesl fmt                 <file.tesl> [more.tesl ...]   Format in-place
   tesl fmt-check           <file.tesl> [more.tesl ...]   Check formatting without modifying
   tesl validate            [file.tesl ...]               Run check + lint + fmt-check
-  tesl run                 [--debug] [file.tesl] [args…]  Compile then execute
+   tesl run                 [--backend racket|go] [--debug] [file.tesl] [args…]  Compile then execute
                            (--debug: live checkpoints + attach endpoint under .tesl-stuff/)
   tesl debug-attach        [--project DIR] [command…]     Attach to a `tesl run --debug` process
                            (arm breakpoints, inspect, resume — see tesl debug-attach --help)
-  tesl test                [file.tesl ...]               Compile and run tests
+   tesl test                [--backend racket|go] [file.tesl ...]  Compile and run tests
   tesl mutate              [--backend racket|go] <file>  Run mutation testing
   tesl watch               [file.tesl] [args…]           Watch, recompile, and restart on changes
 

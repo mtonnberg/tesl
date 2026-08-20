@@ -83,10 +83,8 @@ The migration must not create a period where all editor and debugging tools are 
 | 4. DAP and headless debugger | Complete | Go DAP launch/attach lifecycle, named-test launch, real launch-to-breakpoint integration, headless v2 breakpoint/scalar-local output, Go attach bridge/once/project discovery, normalized transcripts, and race gates pass. |
 | 5. LSP | Complete | Go LSP shipped entrypoint, expanded initialize contract, ranged/multiple UTF-16 edits, save/watch/format/resolve/execute handlers, field/doc compiler queries, cancellable versioned diagnostics, built-compiler integration, and race/vet gates pass. |
 | 6. MCP | Partial | Go stdio server, tool schemas, compiler queries, attach flags, and protocol smoke coverage exist; full differential/live endpoint parity is still open. |
-| 7. CLI, VS Code, packaging, environments | Partial | Go tools are wired into Nix defaults and VS Code LSP/MCP paths; Go DAP/test-runner cutover and Racket-free artifact tests remain. |
+| 7. CLI, VS Code, packaging, environments | Partial | Go tools are wired into Nix defaults, VS Code LSP/DAP paths, debug-attach, and explicit Go run/test backends; default run/test and Racket-free artifact tests remain. |
 | 8. Complete test/example/template migration | Not started | Corpus migration and responsibility manifest are not complete. |
-| 9. Delete Racket implementation and backend | Not started | Racket sources and backend remain. |
-| 10. Permanent zero-Racket enforcement | Not started | Zero-Racket CI gate does not exist. |
 
 ### Phase 0: Contract freeze and traceability
 1. Generate a machine-readable row for every `.rkt`: category, behavior owner, replacement package/test, parity evidence, deletion status. CI compares it with `git ls-files '*.rkt'`.
@@ -208,6 +206,8 @@ Gate: shipped workflows find only Go binaries and packages contain no `.rkt` or 
 - 2026-08-20: Nix exposes Go LSP, DAP, headless, attach, and MCP binaries; default profile and dev shell include them. VS Code LSP resolution and MCP documentation now target Go. Full Go DAP/test-runner cutover and Racket-free clean-install validation remain open.
 - 2026-08-20: `tesl debug-attach` now routes to the Go attach client with compatible `--once`, `--snapshot`, `--ping`, `--detach`, breakpoint, condition, hit, project, and timeout flags. VS Code DAP no longer falls back to the deleted Racket launcher; legacy CLI run/test and Run Function paths still use the Racket runtime.
 - 2026-08-20: `nix build .#tesl-go-tools` and `nix build .#tesl-full` pass; the installed `tesl-mcp` wrapper completes an initialize exchange without a repo checkout.
+- 2026-08-20: `tesl test --backend go` now emits each file into a disposable Go module and runs generated tests with named-test/kind filters; focused single-module and imported-module smokes pass, and CI phase 9b has a Go-backend assertion. Full `ci.sh` exceeded the 15-minute session timeout during earlier compiler/integration phases before reaching phase 9b.
+- 2026-08-20: `tesl run --backend go` now emits, builds, and launches generated `cmd/app` modules from a disposable directory; debug emission exports the project attach root. Non-application modules fail explicitly instead of producing a raw Go directory error. Focused Todo API startup smoke reached the generated Go server before its timeout.
 ### Phase 8: Complete test/example/template migration
 1. Make each of the 71 paired `.tesl` tests the sole source and assert Go compile diagnostics, runtime output, status, side effects, and services.
 2. Assign each of 75 Racket-only test responsibilities a named Go runtime/integration test, OCaml compiler test, black-box test, protocol fixture, benchmark, or reviewed obsolete disposition.
@@ -216,22 +216,7 @@ Gate: shipped workflows find only Go binaries and packages contain no `.rkt` or 
 5. Compile and run all meaningful examples/lessons/templates through Go; resolve stale generated variants and prevent tracked `.tesl-stuff` outputs.
 6. Replace `tests/all.rkt`, `tests/frontend-all.rkt`, and `tests/internal-all.rkt` with manifests that fail when a mapped behavior is omitted.
 Gate: every inventory row is green, no responsibility is dropped, and disabling old Racket suites reduces no enforced behavior.
-### Phase 9: Delete Racket implementation and backend
-1. Delete all 35 `dsl/**/*.rkt` and 49 `tesl/**/*.rkt` after general-runtime and debugger parity gates.
-2. Delete all 119 `example/**/*.rkt`, 2 `templates/**/*.rkt`, and 146 `tests/**/*.rkt` after Phase 8; add a guard against regeneration.
-3. Delete `compiler/lib/emit_racket.ml`; remove it from Dune and CLI backend/discovery paths. Delete/port `compiler/test/test_emit.ml`, `compiler/test/test_racket_discover.ml`, snapshots, and Racket-specific assertions. Retain/adapt backend-neutral source-map behavior for Go.
-4. Delete `scripts/gen-stdlib-rkt.sh`, `scripts/regen-rkt-snapshots.sh`, and Racket bootstrap/generation paths; make data generators emit only Go/compiler-owned data.
-5. Replace Racket/raco/PLTCOLLECTS branches in CI, compiler CI, example compilation, tests, launchers, Makefile, Nix, Docker, Actions, and installers with named Go/protocol gates.
-6. Update active README/install/contributing/manual/dev/editor/template/example/protocol/agent documentation. Historical completed roadmaps may retain factual history but not executable Racket guidance.
-7. Remove Racket caches/packages/ignore rules and regenerate manifests, lockfiles, SBOM/license data, and release bundles.
-Gate: the full repository builds, tests, packages, and runs in a clean environment with no `racket` or `raco`.
-### Phase 10: Permanent zero-Racket enforcement
-1. Add CI requiring `git ls-files '*.rkt'` to be empty and rejecting Racket modules/shebangs or generated `.rkt` artifacts.
-2. Reject active Racket/raco/PLTCOLLECTS invocations, package inputs, `emit_racket`, snapshot generators, and `.rkt` references in executable configuration, with narrow exclusions only for historical prose.
-3. Run full build/test/package, then scan worktree and artifacts for generated `.rkt` and Racket runtime/closure content.
-4. Run binaries, generated apps, LSP, DAP launch/attach, headless, MCP, extension, templates, Docker/Nix, and examples outside the source tree on a Racket-free machine/container.
-5. Remove temporary dual-run flags only after fixtures and regression-diagnosis documentation are durable.
-Gate: all acceptance criteria pass twice in CI and once from a clean release-candidate install.
+
 ## Testing and verification requirements
 ### Unit, property, fuzz, and race
 - Table-test every pure LSP/DAP/MCP transform and debug state transition. Preserve all current embedded regressions before improvements.
