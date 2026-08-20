@@ -67,7 +67,7 @@
 #
 # Env knobs (all preserved from the originals):
 #   TESL_CI_JOBS               parallel worker count for fmt/validate (default: nproc)
-#   RKT_SUITES_SKIP=1          skip the Racket suites + AI suites (fast inner loop)
+#   RKT_SUITES_SKIP=0          opt into the legacy Racket suites + AI suites
 #   TESL_RACKET_SUITE_TIMEOUT  cap on the tests/all.rkt aggregate run (default 600s)
 #   TESL_MUTATION_TIMEOUT      cap on the full --mutate run (default 120s)
 #   TESL_TEST_FORCE_NIX_SHELL  force nix-shell wrapping even if racket is on PATH
@@ -1273,7 +1273,7 @@ for _mutation_spec in \
     fi
     _mutation_summary="Summary: $_mutation_expected mutants | $_mutation_expected killed | 0 survived"
     printf "  Running Go mutation backend: %s\n" "$(basename "$mutation_lesson")"
-    go_mutation_out=$(timeout "$_mutation_timeout" "$TESL_BIN" --mutate --backend go "$mutation_lesson" 2>&1)
+    go_mutation_out=$(timeout "$_mutation_timeout" "$TESL_BIN" --mutate "$mutation_lesson" 2>&1)
     _go_mut_exit=$?
     if [ "$_go_mut_exit" -ne 0 ]; then
         mutation_fail=1

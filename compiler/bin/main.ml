@@ -19,7 +19,7 @@
       tesl --ir <file>           emit API IR JSON
       tesl --deps <file>         list all transitively imported local .tesl files
       tesl --semantic-json <file>  emit full module semantic snapshot as JSON
-      tesl --mutate [--backend racket|go] <file> [test-file ...]  run mutation testing
+       tesl --mutate [--backend go] <file> [test-file ...]  run Go mutation testing
       tesl doc [name|Tesl.Module]  show a builtin's Tesl signature / a module's surface
       tesl --doc-json <name>     same, as JSON (editor/agent integration)
       tesl help [manual] [section]  show help and documentation
@@ -51,7 +51,7 @@ let usage = {|Usage:
   tesl agent-context <file>    emit a compact AI-agent snapshot (diagnostics+symbols+obligations) as JSON
   tesl --agent-context-json <file>  alias for `tesl agent-context`
   tesl debug-inspect <file> --break-at SPEC [...]  run to a breakpoint (headless) and dump paused runtime state as JSON
-  tesl --mutate [--backend racket|go] <file> [test-file ...]  run mutation testing; optionally merge tests from extra files
+  tesl --mutate [--backend go] <file> [test-file ...]  run Go mutation testing; optionally merge tests from extra files
   tesl --exe <file> [--out <path>]  build a standalone executable via `raco exe` (needs raco on PATH)
 
 Documentation:
@@ -1612,12 +1612,12 @@ let () =
     let backend, filename, extra_test_files = match args with
       | "--backend" :: ("go" | "racket" as backend) :: filename :: rest ->
         backend, filename, rest
-      | filename :: rest
-        when not (String.length filename > 2 && filename.[0] = '-')
+       | filename :: rest
+         when not (String.length filename > 2 && filename.[0] = '-')
              && List.for_all (fun s -> not (String.length s > 2 && s.[0] = '-' && s.[1] = '-')) rest ->
-        "racket", filename, rest
+         "go", filename, rest
       | _ ->
-        Printf.eprintf "usage: tesl --mutate [--backend racket|go] <file> [test-file ...]\n";
+         Printf.eprintf "usage: tesl --mutate [--backend go] <file> [test-file ...]\n";
         exit 2
     in
     let mutation_result =
