@@ -4641,7 +4641,7 @@ let mutate_go_file ?(extra_test_files=[]) filename : mutate_result =
                else { module_ with decls = module_.decls @ extra_test_decls }
              in
             let has_tests = List.exists (function DTest _ -> true | _ -> false) baseline.decls in
-            if not has_tests then MutateErr "Go mutation baseline has no runnable tests"
+            if not has_tests then MutateErr "Go mutation baseline has NO TESTS (no runnable tests)"
             else
               (match Emit_go.compile_module ~mode:Emit_go.Release baseline with
                | Error (error :: _) -> MutateErr ("Go mutation baseline emit failed: " ^ error.message)
