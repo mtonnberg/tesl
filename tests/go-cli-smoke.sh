@@ -25,6 +25,8 @@ run_cli() {
   bash "$BODY" "$@"
 }
 
+bash "$REPO_ROOT/scripts/check-go-test-inventory.sh"
+
 test_output="$(run_cli test example/learn/lesson00-hello-world.tesl 2>&1)" || {
   printf '%s\n' "$test_output" >&2
   echo "go-cli-smoke: default Go test failed" >&2

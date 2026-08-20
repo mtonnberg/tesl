@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "scope": "tests/*.rkt",
+  "paired": {
+    "source_suffix": ".tesl",
+    "expected_count": 71,
+    "owner": "Go backend corpus",
+    "evidence": "tests/go-cli-smoke.sh"
+  },
+  "racket_only": {
+    "expected_count": 75,
+    "owner": "named Go, OCaml, black-box, protocol, benchmark, or reviewed-obsolete row",
+    "evidence": "roadmap/next/go_debugging_and_lsp.md#phase-8-complete-test-example-template-migration"
+  }
+}

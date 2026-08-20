@@ -74,3 +74,5 @@ jq -e 'type == "object" and .version == 1 and (.symbols | type) == "array"' "$re
 jq -e 'type == "object" and .version == 1 and (.capabilities | type) == "array" and (.capabilities | length) > 0 and all(.capabilities[]; (.id | type) == "string" and .id != "" and (.owner | type) == "string" and .owner != "" and (.test | type) == "string" and .test != "")' "$matrix" >/dev/null
 jq -e 'type == "object" and ."$schema" != null and ."$id" != null and .properties.version.const == 1 and .properties.location != null and ."$defs".value != null' "$abi" >/dev/null
 printf 'capability matrix and ABI schema OK\n'
+
+"$repo_root/scripts/check-go-test-inventory.sh"
