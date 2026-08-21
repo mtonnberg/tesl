@@ -12,7 +12,7 @@
 
     Hardening: [should_fail] requires a non-zero exit AND a case-insensitive
     regex match AND that the output contains NO runtime-leak markers
-    (`raise-user-error`, `check-fail`, a Racket backtrace).  A negative whose
+    (a Go panic or stack trace). A negative whose
     rejection leaked to runtime is treated as a failure of this suite. *)
 
 open Alcotest
@@ -74,15 +74,11 @@ let with_temp_file content f =
       (try Unix.rmdir dir with _ -> ()))
     (fun () -> f path)
 
-(* Markers that a rejection escaped to RUNTIME rather than being caught
-   statically.  NB: the compiler's own *static* error text legitimately quotes
-   the tokens `check-ok`/`check-fail` when explaining why a lambda is invalid,
-   so those bare words must NOT be treated as leak markers — we match only
-   forms that indicate an actually-thrown runtime error. *)
+(* Markers that a rejection escaped to the Go runtime rather than being caught
+   statically. *)
 let runtime_leak_re =
   Str.regexp_case_fold
-    "raise-user-error\\|raise-argument-error\\|application: not a procedure\\|\
-     racket/[A-Za-z_./-]*\\.rkt:[0-9]\\|^ *context\\.\\.\\.:\\|contract violation"
+    "panic:\\|runtime error:\\|goroutine \\|_test\\.go:\\|\\.go:[0-9]"
 
 let assert_no_runtime_leak ctx out =
   try

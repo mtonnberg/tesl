@@ -1,25 +1,19 @@
 (** `asTool` on an exposing-imported fn (DESIGN: asTool cross-module class).
 
-    Before the fix, `asTool importedFn` TYPE-CHECKED and then either:
-      - tools-list / argument position: fell through to the generic app path
-        and emitted the literal unbound `(asTool importedFn)` — a module that
-        fails to LOAD (`asTool` has no runtime binding); or
-      - statement/tail position: hit the issue-#24 defense failwith — a
-        COMPILER crash ("please report this bug").
+    Before the checker fix, imported names were rejected inconsistently or hit
+    the issue-#24 defense failwith in statement/tail position.  The checker now
+    accepts exposed imported functions and validates their signatures; the Go
+    backend rejects them explicitly until cross-package tool dispatch exists.
     Meanwhile `check_agent_tool_refs` resolved tool names in m.decls only, so
     an imported fn in an Agent tools list inside a fn/const body was a FALSE
     check error, and Agent blocks inside `test` bodies escaped ALL tool
     validation.
 
-    The fix has three coordinated parts:
-      A. emitter harvest: fn_tool_decls/fn_return_specs are filled from
-         directly imported local modules (ImportExposing plain names, MainKind
-         excluded, locals win) with origin recorded in imported_tool_fns;
-      B. dispatch shape: an imported tool fn with concrete caps delegates them
-         through the issue-#30 procedure registry
-         (`call-with-delegated-capabilities`) — its capability IDENTIFIERS are
-         not require-bound cross-module; local fns keep byte-identical output;
-      C. checker: tool names resolve local-first then via exposing-imported
+    The contract has two coordinated parts:
+      A. Go backend boundary: imported tool refs fail closed with a targeted
+         diagnostic until cross-package dispatch is supported; local fns emit
+         executable teslrt.ToolOf dispatch;
+      B. checker: tool names resolve local-first then via exposing-imported
          fn decls (same AGENT-1 param rules), the agent walk covers DTest
          bodies, and a whole-module walk validates EVERY `asTool`-headed
          application (bare in-scope fn reference or a targeted error —
@@ -77,9 +71,24 @@ let check_fails what path =
   out
 
 let emit_ok what path =
-  let code, out = run_cc [path] in
-  if code <> 0 then failf "emit of %s failed:\n%s" what out;
-  out
+  match Compile.compile_go_file path with
+  | Compile.GoFailure diagnostics ->
+    failf "Go emit of %s failed:\n%s" what
+      (String.concat "\n"
+         (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  | Compile.GoSuccess artifacts ->
+    (match List.find_opt (fun (a : Emit_go.artifact) ->
+       Filename.basename a.path = "module.go"
+       && Filename.basename (Filename.dirname a.path) = "teslmodmain") artifacts with
+     | Some artifact -> artifact.contents
+     | None -> failf "Go emit of %s did not produce the Main module artifact" what)
+
+let emit_fails what path =
+  match Compile.compile_go_file path with
+  | Compile.GoSuccess _ -> failf "Go emit of %s must fail closed" what
+  | Compile.GoFailure diagnostics ->
+    String.concat "\n"
+      (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics)
 
 (* The shared tool library: a caps-free tool fn, a caps-carrying one, and one
    whose param violates the AGENT-1 prim whitelist. *)
@@ -131,40 +140,33 @@ fn makeAgent() -> Agent requires [bot] =
   }
 |}
 
-let imported_tools_list_checks_and_emits () =
+let imported_tools_list_checks_and_fails_closed () =
   with_project ~lib:tool_lib ~main:tools_list_main (fun ~lib_p:_ ~main_p ->
-    (* Before the fix this was a FALSE check error ("tool 'getWeather' is not
-       a function declared in this module") for the fn-body list, and the
-       agent-block list emitted the literal `(asTool getWeather)`. *)
+    (* This used to be a false checker error for the fn-body list. *)
     check_ok "main (imported tools list)" main_p;
-    let out = emit_ok "main (imported tools list)" main_p in
-    if contains "(asTool " out then
-      failf "imported tool fn must never emit the unbound literal (asTool ...):\n%s" out;
-    if not (contains {|(__tart_tool "getWeather"|} out) then
-      failf "imported tool fn must lower to __tart_tool:\n%s" out;
-    if not (contains {|\"city\":{\"type\":\"string\"}|} out) then
-      failf "tool schema must be derived from the imported fn's params:\n%s" out;
-    if not (contains {|(cons "city" 'string)|} out) then
-      failf "arg decode tags must be derived from the imported fn's params:\n%s" out;
-    if not (contains "(apply getWeather _decoded)" out) then
-      failf "caps-free imported fn keeps the bare apply dispatch:\n%s" out)
+    let out = emit_fails "main (imported tools list)" main_p in
+    if not (contains "supports a function declared in this module" out) then
+      failf "imported asTool must fail closed at the Go backend boundary:\n%s" out)
 
-let imported_caps_fn_delegates () =
-  with_project ~lib:tool_lib ~main:tools_list_main (fun ~lib_p:_ ~main_p ->
-    let out = emit_ok "main (caps delegation)" main_p in
-    (* stamp's capability IDENTIFIER (libStamp) is define-capability-bound in
-       lib.rkt only; the dispatch must delegate through the issue-#30 registry
-       instead of emitting `(with-capabilities (libStamp) ...)`. *)
-    if not (contains
-              "(lambda (_decoded) (call-with-delegated-capabilities stamp (lambda () (apply stamp _decoded))))"
-              out) then
-      failf "imported caps-carrying tool fn must delegate via the procedure registry:\n%s" out;
-    if contains "(with-capabilities (libStamp) (apply stamp" out then
-      failf "imported tool fn must NOT use the local with-capabilities shape (unbound cap identifier):\n%s" out)
+let imported_caps_fn_fails_closed () =
+  let main = {|module Main exposing []
+import Tesl.Prelude exposing [String]
+|} ^ agent_imports ^ {|import Lib exposing [stamp, libStamp]
+
+capability bot implies aiProvider, libStamp
+
+fn makeTool() -> Tool requires [bot] =
+  asTool stamp
+|} in
+  with_project ~lib:tool_lib ~main (fun ~lib_p:_ ~main_p ->
+    check_ok "main (imported caps tool)" main_p;
+    let out = emit_fails "main (imported caps tool)" main_p in
+    if not (contains "`stamp` is not one" out) then
+      failf "caps-carrying imported asTool must name its unsupported target:\n%s" out)
 
 (* ── accepted: statement/tail position (the old issue-#24 crash path) ────── *)
 
-let statement_position_imported_fn_emits () =
+let statement_position_imported_fn_fails_closed () =
   let main = {|module Main exposing []
 import Tesl.Prelude exposing [String]
 |} ^ agent_imports ^ {|import Lib exposing [getWeather]
@@ -174,11 +176,12 @@ fn makeTool() -> Tool =
 |} in
   with_project ~lib:tool_lib ~main (fun ~lib_p:_ ~main_p ->
     check_ok "main (statement-position asTool)" main_p;
-    let out = emit_ok "main (statement-position asTool)" main_p in
-    if not (contains {|(__tart_tool "getWeather"|} out) then
-      failf "statement-position asTool on an imported fn must lower to __tart_tool (was a compiler crash):\n%s" out)
+    let out = emit_fails "main (statement-position asTool)" main_p in
+    if contains "please report this bug" out
+       || not (contains "supports a function declared in this module" out) then
+      failf "statement-position imported asTool must be a targeted Go rejection, not a compiler crash:\n%s" out)
 
-(* ── local dispatch stays byte-identical (the harvest must not repaint it) ── *)
+(* ── local dispatch remains executable Go ───────────────────────────────── *)
 
 let local_fn_dispatch_byte_stable () =
   let main = {|module Main exposing []
@@ -197,10 +200,9 @@ fn makeTool() -> Tool requires [localCap] =
 |} in
   with_project ~lib:tool_lib ~main (fun ~lib_p:_ ~main_p ->
     let out = emit_ok "main (local dispatch)" main_p in
-    if not (contains "(with-capabilities (localCap) (apply echo _decoded))" out) then
-      failf "LOCAL caps-carrying tool fn must keep the with-capabilities shape byte-identical:\n%s" out;
-    if contains "call-with-delegated-capabilities echo" out then
-      failf "local tool fn must not switch to registry delegation:\n%s" out)
+    if not (contains {|teslrt.ToolOf("echo"|} out)
+       || not (contains "return echo(teslArgs[0].(string))" out) then
+      failf "local caps-carrying tool fn must emit executable Go dispatch:\n%s" out)
 
 (* Same-name policy (harvest risk 4): a local fn COLLIDING with an
    exposing-imported name is rejected up front by the existing shadow
@@ -242,10 +244,9 @@ fn makeTool() -> Tool requires [localCap] =
 |} in
   with_project ~lib:tool_lib ~main:main_local (fun ~lib_p:_ ~main_p ->
     let out = emit_ok "main (unexposed same-name)" main_p in
-    if not (contains "(with-capabilities (localCap) (apply stamp _decoded))" out) then
-      failf "a local fn whose name the import does not expose must keep the LOCAL dispatch shape:\n%s" out;
-    if contains "call-with-delegated-capabilities stamp" out then
-      failf "unexposed imported same-name fn must not be harvested over the local decl:\n%s" out)
+    if not (contains {|teslrt.ToolOf("stamp"|} out)
+       || not (contains "return stamp(teslArgs[0].(string))" out) then
+      failf "unexposed same-name fn must emit local Go dispatch:\n%s" out)
 
 (* ── rejected: fail-closed checker walk (no crash, no unbound emit) ──────── *)
 
@@ -350,12 +351,12 @@ agent BadAgent requires [bot] = Agent {
 let () =
   run "asTool-imported" [
     "accepted — imported fn as tool", [
-      test_case "tools list checks and emits __tart_tool" `Quick
-        imported_tools_list_checks_and_emits;
-      test_case "caps-carrying imported fn delegates via registry" `Quick
-        imported_caps_fn_delegates;
-      test_case "statement position emits (was compiler crash)" `Quick
-        statement_position_imported_fn_emits;
+      test_case "tools list checks; Go backend fails closed" `Quick
+        imported_tools_list_checks_and_fails_closed;
+      test_case "caps-carrying imported fn fails closed" `Quick
+        imported_caps_fn_fails_closed;
+      test_case "statement position rejects without compiler crash" `Quick
+        statement_position_imported_fn_fails_closed;
     ];
     "local paths unchanged", [
       test_case "local caps dispatch byte-stable" `Quick

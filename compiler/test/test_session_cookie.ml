@@ -27,20 +27,6 @@
 
 (* ── Helpers (same shape as test_jwt.ml) ─────────────────────────────────── *)
 
-let root =
-  match Sys.getenv_opt "TESL_REPO_ROOT" with
-  | Some p when p <> "" -> p
-  | _ ->
-    let rec find dir =
-      let candidate = Filename.concat dir "compiler" in
-      if (try Sys.file_exists candidate && Sys.is_directory candidate with _ -> false)
-      then dir
-      else
-        let parent = Filename.dirname dir in
-        if parent = dir then Filename.current_dir_name else find parent
-    in
-    find (Filename.dirname Sys.executable_name)
-
 let base_imports =
   "import Tesl.Prelude exposing [Int, String, Bool, Unit]\n\
    import Tesl.Maybe exposing [Maybe(..)]\n\
@@ -57,9 +43,13 @@ let module_ ?(name = "M") ?(exports = "") ?(imports = base_imports ^ http_import
   Printf.sprintf "module %s exposing [%s]\n%s\n%s" name exports imports body
 
 let compile_ok name src =
-  match Compile.compile_source ~root_path:root "<test>" src with
-  | Compile.Success racket -> racket
-  | Compile.Failure diags ->
+  match Compile.compile_go_source "<test>" src with
+  | Compile.GoSuccess artifacts ->
+    (match List.find_opt (fun (a : Emit_go.artifact) ->
+       a.path = "internal/teslmodm/module.go") artifacts with
+     | Some artifact -> artifact.contents
+     | None -> Alcotest.failf "%s: missing Go module artifact" name)
+  | Compile.GoFailure diags ->
     Alcotest.failf "%s: unexpected compile failure: %s" name
       (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diags))
 
@@ -121,9 +111,9 @@ fn setIt(userId: String) -> Bool requires [sessions] =
   True
 |})
   in
-  let racket = compile_ok "jwt_token_is_accepted" src in
-  if not (contains "Http.setSessionCookie" racket) then
-    Alcotest.failf "the setSessionCookie call must reach the emitted Racket:\n%s" racket
+  let go = compile_ok "jwt_token_is_accepted" src in
+  if not (contains "teslrt.SetSessionCookie(teslScope, token)" go) then
+    Alcotest.failf "the setSessionCookie call must reach the Go artifact:\n%s" go
 
 (* ── 2. cookieCap gates both writers, and arrives only by import ─────────── *)
 
@@ -255,9 +245,9 @@ let client_program ~with_cookie =
    probe is: check both programs compile, then compare the emitted clients. *)
 let generated name f =
   let of_src s =
-    (match Compile.compile_source ~root_path:root "ClientGen.tesl" s with
-     | Compile.Success _ -> ()
-     | Compile.Failure diags ->
+    (match Compile.compile_go_source "ClientGen.tesl" s with
+     | Compile.GoSuccess _ -> ()
+     | Compile.GoFailure diags ->
        Alcotest.failf "%s: probe program failed to compile: %s" name
          (String.concat "; "
             (List.map (fun (d : Compile.diagnostic) -> d.message) diags)));
@@ -306,9 +296,9 @@ auth slidingOwner(request: HttpRequest) -> user: String ::: Authenticated user
       ok (subjectOf claims) ::: Authenticated user
 |})
   in
-  let racket = compile_ok "sliding_auth_compiles" src in
-  if not (contains "JWT.renew" racket) then
-    Alcotest.failf "the JWT.renew call must reach the emitted Racket:\n%s" racket
+  let go = compile_ok "sliding_auth_compiles" src in
+  if not (contains "teslrt.JwtRenew(token, sessionKey())" go) then
+    Alcotest.failf "the JWT.renew call must reach the Go artifact:\n%s" go
 
 (* `JWT.renew` is check-shaped, so it inherits the argument-position rule: passing
    it straight into another call is refused, because on the failure path the raw

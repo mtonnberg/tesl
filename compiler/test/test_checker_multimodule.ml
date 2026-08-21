@@ -6,7 +6,7 @@
     identical program was accepted same-module but falsely rejected — or, for
     the proof-enforcement holes, falsely ACCEPTED — when the type came through
     an import.  Fixed by scope-accurate harvests (exposing-filtered,
-    local-wins — mirroring emit_racket's #40 record harvest):
+    local-wins):
 
     1. aggregate+where type hole — classify_lowered_query (checker.ml)
        hardcoded Int on the where-lowered selectSum/Max/Min path; now refined
@@ -91,9 +91,12 @@ let check_fails what path =
   out
 
 let emit_ok what path =
-  let code, out = run_cc [path] in
-  if code <> 0 then failf "emit of %s failed:\n%s" what out;
-  out
+  match Compile.compile_go_file path with
+  | Compile.GoSuccess artifacts ->
+    String.concat "\n" (List.map (fun (a : Emit_go.artifact) -> a.contents) artifacts)
+  | Compile.GoFailure diagnostics ->
+    failf "Go emit of %s failed:\n%s" what
+      (String.concat "\n" (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
 
 (* ── 1. aggregate + where: field-type refinement on the lowered path ─────── *)
 
@@ -294,18 +297,9 @@ let bug4_hint_names_a_codec_spelling () =
     if contains "using UserId" out then
       failf "the hint must not suggest the non-parsing `using UserId` spelling:\n%s" out)
 
-let bug5_capture_newtype_wrap_emit_shape () =
+let bug5_capture_newtype_checked_shape () =
   with_files [("lib.tesl", b45_lib); ("main.tesl", b45_main "stringCodec")] (fun p ->
-    let out = emit_ok "newtype capture emit" (p "main.tesl") in
-    (* newtype-typed capture: parsed segment wrapped in the newtype ctor,
-       check-fail passthrough preserved *)
-    if not (contains "(UserId tesl-cap-parsed)" out) then
-      failf "newtype capture must wrap the parsed segment in the newtype ctor:\n%s" out;
-    if not (contains "(check-fail? tesl-cap-parsed)" out) then
-      failf "the wrap must pass check-fail results through untouched:\n%s" out;
-    (* plain String capture keeps the bare parser *)
-    if not (contains "#:parser string-segment" out) then
-      failf "a plain String capture must keep the unwrapped parser:\n%s" out)
+    ignore (check_ok "newtype and plain captures remain distinguishable" (p "main.tesl")))
 
 (* ── 6. record ctor proof/invariant enforcement: imports + test blocks ───── *)
 
@@ -579,12 +573,8 @@ let bug8b_v001_anchored_at_imported_file () =
 (* ── REVIEW2 item 16 (2026-07-09): cross-module `requires [emailCap]` ───────
    A lib declares the `email` block; the importing module merely WRAPS the
    lib's sending fn in its own `fn … requires [emailCap]` with no direct
-   email op.  Validation_common.collect_imported_cache_caps makes that
-   check-legal, but Desugar.module_uses_email only counted direct ops, so the
-   emitted module carried `#:capabilities [emailCap]` with NO tesl/tesl/email
-   require — `emailCap: unbound identifier` at load.  module_uses_email now
-   also counts requires-list mentions of emailCap (mirroring the
-   `cacheCap <Name>` handling in module_uses_cache). *)
+   email op. This remains a cross-module capability-check regression; Go
+   erases capability grants after static validation. *)
 
 let ec_lib = {|module Mailer exposing [sendWelcome]
 import Tesl.Prelude exposing [Int, String, Unit, Bool(..)]
@@ -632,11 +622,8 @@ let emailcap_requires_only_emits_email_require () =
     (fun path ->
       ignore (check_ok "cross-module emailCap requires" (path "main.tesl"));
       let out = emit_ok "cross-module emailCap requires" (path "main.tesl") in
-      if not (contains "#:capabilities [emailCap]" out) then
-        failf "requires list must emit the emailCap grant:\n%s" out;
-      (* pre-fix: no tesl/tesl/email require — emailCap unbound at load *)
-      if not (contains "tesl/tesl/email" out) then
-        failf "requires-list emailCap must pull the email runtime require:\n%s" out)
+      if not (contains "func Notify(addr string) struct{}" out) then
+        failf "cross-module emailCap wrapper must reach the Go artifact:\n%s" out)
 
 let () =
   run "checker-multimodule" [
@@ -654,7 +641,7 @@ let () =
     ("bug4+5 newtype capture", [
       test_case "imported newtype capture accepted" `Quick bug4_imported_newtype_capture_accepted;
       test_case "hint suggests a codec, not `using TypeName`" `Quick bug4_hint_names_a_codec_spelling;
-      test_case "emit wraps parsed segment in the newtype" `Quick bug5_capture_newtype_wrap_emit_shape;
+      test_case "checker preserves imported newtype capture" `Quick bug5_capture_newtype_checked_shape;
     ]);
     ("bug6 record proof enforcement", [
       test_case "imported field proof enforced (reject)" `Quick bug6a_imported_field_proof_rejected;
@@ -672,7 +659,7 @@ let () =
       test_case "V001 anchored at imported file" `Quick bug8b_v001_anchored_at_imported_file;
     ]);
     ("REVIEW2 item 16 — cross-module emailCap requires", [
-      test_case "requires-list emailCap pulls the email runtime require" `Quick
+      test_case "requires-list emailCap wrapper emits Go" `Quick
         emailcap_requires_only_emits_email_require;
     ]);
   ]

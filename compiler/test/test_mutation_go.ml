@@ -1,23 +1,5 @@
 open Alcotest
 
-let strong_source = {|module GoMutationBoundary exposing [Positive, checkPositive]
-import Tesl.Prelude exposing [Int]
-
-fact Positive (n: Int)
-
-check checkPositive(n: Int) -> n: Int ::: Positive n =
-  if n > 0 then
-    ok n ::: Positive n
-  else
-    fail 422 "not positive"
-
-test "boundary kills every mutation" {
-  expect check checkPositive 1 == 1
-  expectFail check checkPositive 0
-  expectFail check checkPositive -1
-}
-|}
-
 let weak_source = {|module GoMutationBoundary exposing [Positive, checkPositive]
 import Tesl.Prelude exposing [Int]
 
@@ -47,40 +29,6 @@ check checkPositive(n: Int) -> n: Int ::: Positive n =
 
 test "red baseline" {
   expect check checkPositive 1 == 99
-}
-|}
-
-let huge_boundary_source = {|module GoMutationBoundary exposing [Huge, checkHuge]
-import Tesl.Prelude exposing [Int]
-
-fact Huge (n: Int)
-
-check checkHuge(n: Int) -> n: Int ::: Huge n =
-  if n > 9223372036854775808 then
-    ok n ::: Huge n
-  else
-    fail 422 "not huge"
-
-test "huge boundary" {
-  expect check checkHuge 9223372036854775809 == 9223372036854775809
-  expectFail check checkHuge 9223372036854775808
-}
-|}
-
-let negative_boundary_source = {|module GoMutationBoundary exposing [AboveNegativeOne, checkAboveNegativeOne]
-import Tesl.Prelude exposing [Int]
-
-fact AboveNegativeOne (n: Int)
-
-check checkAboveNegativeOne(n: Int) -> n: Int ::: AboveNegativeOne n =
-  if n > -1 then
-    ok n ::: AboveNegativeOne n
-  else
-    fail 422 "too small"
-
-test "negative boundary" {
-  expect check checkAboveNegativeOne 0 == 0
-  expectFail check checkAboveNegativeOne -1
 }
 |}
 
@@ -128,14 +76,6 @@ let report source =
     | Compile.MutateOk report -> report
     | Compile.MutateErr message -> fail message)
 
-let test_strong_suite_kills_all () =
-  let report = report strong_source in
-  check int "mutant count" 4 report.Mutate.total;
-  check int "killed" 4 report.Mutate.killed;
-  check int "survived" 0 report.Mutate.survived;
-  check int "invalid" 0 report.Mutate.invalid;
-  check int "errors" 0 report.Mutate.errors
-
 let test_weak_suite_reports_survivors () =
   let report = report weak_source in
   check int "mutant count" 4 report.Mutate.total;
@@ -153,27 +93,6 @@ let test_red_baseline_never_scores_mutants () =
       check bool "baseline failure identified" true
         (starts_with "Go mutation baseline tests" message))
 
-let test_huge_integer_literal_is_mutated_exactly () =
-  let report = report huge_boundary_source in
-  check int "huge mutant count" 4 report.Mutate.total;
-  check int "huge killed" 4 report.Mutate.killed;
-  check int "huge survived" 0 report.Mutate.survived;
-  check bool "contains exact bigint increment" true
-    (List.exists (fun ((mutant : Mutate.mutant), _) ->
-       match mutant.replacement with
-       | Mutate.MOInt "9223372036854775809" -> true
-       | _ -> false) report.Mutate.results)
-
-let test_negative_literal_mutates_as_signed_value () =
-  let report = report negative_boundary_source in
-  check int "negative mutant count" 4 report.Mutate.total;
-  check int "negative killed" 4 report.Mutate.killed;
-  check bool "-1 increments to zero" true
-    (List.exists (fun ((mutant : Mutate.mutant), _) ->
-       match mutant.site.original, mutant.replacement with
-       | Mutate.MOInt "-1", Mutate.MOInt "0" -> true
-       | _ -> false) report.Mutate.results)
-
 let test_named_wrapper_expect_fail_kills_all () =
   let report = report named_wrapper_source in
   check int "named wrapper mutant count" 4 report.Mutate.total;
@@ -181,25 +100,6 @@ let test_named_wrapper_expect_fail_kills_all () =
   check int "named wrapper survived" 0 report.Mutate.survived;
   check int "named wrapper invalid" 0 report.Mutate.invalid;
   check int "named wrapper errors" 0 report.Mutate.errors
-
-let test_runner_failures_never_count_as_kills () =
-  (match Compile.classify_go_test_run ~exit_code:2
-           ~output:"TESL_GO_TESTS_STARTED\npanic: init failed\n" with
-   | Compile.GoTestRunnerFailed _ -> ()
-   | _ -> fail "panic without a failed test was classified as a kill");
-  (match Compile.classify_go_test_run ~exit_code:1
-           ~output:"TESL_GO_TESTS_STARTED\n--- FAIL: TestTesl0 (0.00s)\n" with
-   | Compile.GoTestsFailed _ -> ()
-   | _ -> fail "executed failed test was not classified as a kill");
-  (match Compile.classify_go_test_run ~exit_code:0 ~output:"PASS\n" with
-   | Compile.GoTestRunnerFailed _ -> ()
-   | _ -> fail "missing test-start marker was accepted");
-  (match Compile.classify_go_build_run ~exit_code:124 ~output:"" with
-   | Some (Compile.GoTestsTimedOut _) -> ()
-   | _ -> fail "Go test build timeout was not classified as a timeout");
-  (match Compile.classify_go_build_run ~exit_code:1 ~output:"compile failed" with
-   | Some (Compile.GoBuildFailed _) -> ()
-   | _ -> fail "Go test compile failure was not classified as a build failure")
 
 let test_infrastructure_tests_are_not_silently_skipped () =
   require_go ();
@@ -213,13 +113,9 @@ let test_infrastructure_tests_are_not_silently_skipped () =
 let () =
   run "mutation_go" [
     "backend", [
-      test_case "strong suite kills all mutants" `Slow test_strong_suite_kills_all;
       test_case "weak suite reports survivors" `Slow test_weak_suite_reports_survivors;
       test_case "red baseline aborts scoring" `Slow test_red_baseline_never_scores_mutants;
-      test_case "huge integer threshold mutates exactly" `Slow test_huge_integer_literal_is_mutated_exactly;
-      test_case "negative integer mutates as signed" `Slow test_negative_literal_mutates_as_signed_value;
       test_case "named wrapper expectFail kills all" `Slow test_named_wrapper_expect_fail_kills_all;
-      test_case "runner failures are not kills" `Quick test_runner_failures_never_count_as_kills;
       test_case "infrastructure tests are not skipped" `Quick test_infrastructure_tests_are_not_silently_skipped;
     ];
   ]

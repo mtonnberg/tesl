@@ -40,12 +40,12 @@ Two things to know, because there are three names for one gate:
 
 - **`compile-examples.sh` and `compiler/ci.sh` are thin shims** that `exec` into `./ci.sh`. They
   exist only so older hooks and muscle memory keep working. Run the real one.
-- **`dune test` alone is not sufficient.** It is one phase of thirteen; it misses the `tesl validate`
-  sweep, the byte-exact `.rkt` snapshots, and the Racket suites. Passing `dune test` says nothing
-  about whether the tree is green.
+- **`dune test` alone is not sufficient.** It misses the `tesl validate` sweep, byte-exact Go
+  snapshots, corpus/runtime checks, and end-to-end gates. Passing `dune test` alone does not prove
+  the tree green.
 
-Fast inner loop: `RKT_SUITES_SKIP=1 ./ci.sh`. Run the full gate before you commit. For docs-only
-edits, `bash tests/doc-integrity.sh` is a two-second standalone subset.
+Run the full gate before you commit. For docs-only edits, `bash tests/doc-integrity.sh` is a
+two-second standalone subset.
 
 ## 3. Read the guides
 

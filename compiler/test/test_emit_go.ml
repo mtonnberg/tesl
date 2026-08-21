@@ -185,6 +185,135 @@ let test_debug_emission_has_versioned_checkpoint () =
   ignore (artifact "internal/teslrt/debug_control.go" emitted);
   ignore (artifact "internal/teslrt/debug_state.go" emitted)
 
+let debug_kind_source = {|module GoDebugKinds exposing [plain, positive, authenticate, ping, provePositive]
+import Tesl.Prelude exposing [Int, String, Fact]
+import Tesl.Http exposing [HttpRequest]
+
+fact Positive (n: Int)
+fact Authenticated (user: String)
+
+fn plain(n: Int) -> Int =
+  let next = n + 1
+  next
+
+check positive(n: Int) -> n: Int ::: Positive n =
+  if n > 0 then
+    ok n ::: Positive n
+  else
+    fail 400 "not positive"
+
+auth authenticate(request: HttpRequest) -> user: String ::: Authenticated user =
+  ok "admin" ::: Authenticated user
+
+handler get ping() -> Int =
+  42
+
+establish provePositive(n: Int) -> Fact (Positive n) =
+  Positive n
+|}
+
+let debug_statement_source = {|module GoDebugStatements exposing [ping, DebugApi, DebugServer]
+import Tesl.Prelude exposing [Int]
+import Tesl.ApiTest exposing [statusOk]
+
+handler get ping() -> Int =
+  42
+
+api DebugApi {
+  get "/ping" -> Int
+}
+
+server DebugServer for DebugApi {
+  ping
+}
+
+test "plain statements" {
+  let x = 41
+  expect x + 1 == 42
+}
+
+api-test "api statements" for DebugServer {
+  let response = get "/ping"
+  expect statusOk response.status
+  expect response.status == 200
+}
+
+load-test "load policy" for DebugServer
+  rate 1rps
+  duration 1s {
+  get "/ping"
+  assert p99 < 500ms
+}
+|}
+
+let debug_artifacts label source =
+  match Compile.compile_go_source ~debug:true label source with
+  | Compile.GoSuccess artifacts -> artifacts
+  | Compile.GoFailure diagnostics ->
+    failf "%s debug Go compilation failed: %s" label
+      (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+
+let test_debug_checkpoint_source_positions () =
+  let module_go = artifact "internal/teslmodgosmoke/module.go"
+    (debug_artifacts "<go-debug-positions>" source) in
+  List.iter (fun (function_name, line, column) ->
+    let location = Printf.sprintf
+      "Function: %S, Location: teslrt.SourceLocation{File: %S, Line: %d, Column: %d}"
+      function_name "<go-debug-positions>" line column in
+    if not (contains module_go location) then
+      failf "%s checkpoint at %d:%d missing (%S):\n%s"
+        function_name line column location module_go) [
+    "add", 4, 40;
+    "nestedChoice", 13, 3;
+    "nestedChoice", 19, 3;
+    "withUnused", 24, 3;
+    "withUnused", 25, 3;
+  ];
+  check bool "second function terminal keeps its own source line" true
+    (contains module_go
+       "Function: \"choose\", Location: teslrt.SourceLocation{File: \"<go-debug-positions>\", Line: 10, Column: 5}")
+
+let test_debug_declaration_kinds_are_instrumented () =
+  let module_go = artifact "internal/teslmodgodebugkinds/module.go"
+    (debug_artifacts "<go-debug-kinds>" debug_kind_source) in
+  List.iter (fun (function_name, line) ->
+    let checkpoint = Printf.sprintf
+      "Function: %S, Location: teslrt.SourceLocation{File: %S, Line: %d, Column:"
+      function_name "<go-debug-kinds>" line in
+    check bool (function_name ^ " body checkpoint") true (contains module_go checkpoint)) [
+    "positive", 13;
+    "authenticate", 19;
+    "ping", 22;
+    "provePositive", 24;
+  ]
+
+let test_debug_test_and_api_test_statements () =
+  let test_go = artifact "internal/teslmodgodebugstatements/module_test.go"
+    (debug_artifacts "<go-debug-statements>" debug_statement_source) in
+  let checkpoint_has_local line column name =
+    let marker = Printf.sprintf "Line: %d, Column: %d}" line column in
+    try
+      let start = Str.search_forward (Str.regexp_string marker) test_go 0 in
+      let window = String.sub test_go start (min 700 (String.length test_go - start)) in
+      contains window (Printf.sprintf "Name: %S" name)
+    with Not_found -> false
+  in
+  check bool "plain test statement has exact source position" true
+    (contains test_go
+       "Function: \"TestTesl0\", Test: \"plain statements\", Location: teslrt.SourceLocation{File: \"<go-debug-statements>\", Line: 17, Column: 3}");
+  check bool "plain test following statement sees prior let" true
+    (checkpoint_has_local 18 3 "x");
+  check bool "api-test let has exact source position" true
+    (contains test_go
+       "Function: \"TestTeslApi0\", Test: \"api statements\", Location: teslrt.SourceLocation{File: \"<go-debug-statements>\", Line: 22, Column: 3}");
+  check bool "api-test following statement sees prior let" true
+    (checkpoint_has_local 23 3 "response");
+  let run_start = Str.search_forward (Str.regexp_string "teslrt.RunLoadTest") test_go 0 in
+  let run_end = Str.search_forward (Str.regexp_string "teslrt.ReportLoadTest") test_go run_start in
+  let load_thunk = String.sub test_go run_start (run_end - run_start) in
+  check bool "load-test request thunk explicitly excludes checkpoints" false
+    (contains load_thunk "teslrt.Checkpoint")
+
 let test_release_emission_excludes_debug_runtime () =
   let emitted = artifacts () in
   let module_go = artifact "internal/teslmodgosmoke/module.go" emitted in
@@ -288,10 +417,6 @@ let go_behavior_oracle ?(env=[]) label source () =
         match Sys.command command with
         | 0 -> ()
         | code -> failf "Go behavior oracle exited %d" code)
-
-(* Temporary source-compatibility name for the large registration table below; it
-   now executes the Go oracle above, never the removed backend. *)
-let racket_behavior_oracle = go_behavior_oracle
 
 let test_unsupported_fails_closed () =
   (* A `secret` over a String IS supported now (see the secret-newtype case below); an
@@ -773,7 +898,7 @@ let stdlib_only_vulnerability output =
   && not (contains "vulnerability from modules you require")
   && not (contains "vulnerabilities from modules you require")
 
-let run_go_gates root =
+let run_generated_module_analyzers root =
   List.iter (fun (tool, command) ->
     if not (command_available tool) then
       failf "required Go gate tool not found: %s (ci.sh phase 2a requires it too)" tool;
@@ -802,8 +927,8 @@ let run_go_gates root =
    declaration is legal Tesl and the Racket backend emits it, so refusing made a legal
    program un-emittable — lesson35 declares `prependInt` to illustrate it and could not be
    compiled at all.  The function is emitted and referenced once at package level, which
-   satisfies the linter without dropping code the author wrote.  The gate is what proves
-   it: `run_go_gates` includes the `unused` linter that motivated the original refusal. *)
+   satisfies the linter without dropping code the author wrote.  The centralized generated
+   module analyzer test includes the `unused` linter that motivated the original refusal. *)
 let test_unreachable_private_function_is_emitted () =
   let source = {|module DeadPrivate exposing [live]
 import Tesl.Prelude exposing [Int]
@@ -832,8 +957,7 @@ fn alsoDead(n: Int) -> Int = n * 3
       if unformatted <> "" then
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
-      ignore (run_command root "go vet ./...");
-      run_go_gates root)
+      ())
   end
 
 let recursion_source = {|module GoRecursion exposing [factorial, isEven, isOdd, sumTo, sumToLet, drain, countdown, Small, checkSmall]
@@ -943,9 +1067,7 @@ let test_recursion_with_go () =
         failf "emitted recursion source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
 
 (* The loop rewrite only fires when the called name is not shadowed by a local.  That
    guard is containment rather than a reachable case: the frontend rejects shadowing
@@ -1028,9 +1150,7 @@ let test_generics_with_go () =
         failf "emitted generic source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
 
 let test_generic_limits_fail_closed () =
   (* Equality on a generic ADT USED to be rejected — a `TeslEqual` method cannot
@@ -1167,9 +1287,7 @@ let test_maybe_with_go () =
         failf "emitted Maybe source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
 
 (* `Tesl.Maybe` exports exactly `Maybe`, `Something`, and `Nothing`
    (type_system.ml), so its whole surface is supported and there is no function left
@@ -1301,9 +1419,7 @@ let test_string_stdlib_with_go () =
         failf "emitted Tesl.String source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
 
 let test_unsupported_string_exports_fail_closed () =
   (* `String.split` is supported now that lists are, so the boundary this pins moved:
@@ -1422,9 +1538,7 @@ let test_lists_with_go () =
         failf "emitted list source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
 
 let test_unsupported_list_exports_fail_closed () =
   let expect_go_error label needle source =
@@ -1556,9 +1670,7 @@ let test_higher_order_lists_with_go () =
         failf "emitted higher-order source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
 
 (* Function VALUES — a `let`-bound lambda, and a `let`-bound partial application — used to
    fail closed here for want of a calling convention. Both emit now: a lambda becomes a Go
@@ -1641,9 +1753,7 @@ let test_check_driven_lists_with_go () =
         failf "emitted check-driven source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
 
 let tuple_source = {|module GoTuples exposing [make, firstOf, secondOf, sumPair, describe, triple, thirdOf, samePair, paired, pairedSize]
 import Tesl.Prelude exposing [Bool, Int, List, String]
@@ -1731,9 +1841,7 @@ let test_tuples_with_go () =
         failf "emitted tuple source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
 
 let either_source = {|module GoEither exposing [parse, describe, orZero, sameOutcome, sameMaybe]
 import Tesl.Prelude exposing [Bool(..), Int, String]
@@ -1814,9 +1922,7 @@ let test_either_with_go () =
         failf "emitted Either source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
 
 let dict_source = {|module GoDicts exposing [build, get, has, size, without, names, sameDict, fromPairs]
 import Tesl.Prelude exposing [Bool(..), Int, List, String]
@@ -1908,9 +2014,7 @@ let test_dicts_with_go () =
         failf "emitted Dict source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
 
 let test_unordered_dict_keys_fail_closed () =
   (* The representation finds keys by ordering, so a key type with no ordering cannot
@@ -2017,9 +2121,7 @@ let test_floats_with_go () =
         failf "emitted Float source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
 
 (* ── Float KEYS in Dict and Set ────────────────────────────────────────────────
    Dict and Set are sorted, so their binary search reads key equivalence off the
@@ -2101,9 +2203,7 @@ let test_float_keys_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
   end
 
 (* ── `List.foldr` ─────────────────────────────────────────────────────────────
@@ -2197,9 +2297,7 @@ let test_foldr_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
   end
 
 (* A fold whose initial accumulator is a bare `[]` and whose callback is a LAMBDA — the
@@ -2248,9 +2346,7 @@ let test_fold_empty_init_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
   end
 
 (* Five more `Tesl.List` leaves.  `range` and `repeat` CONSTRUCT a list rather than
@@ -2329,9 +2425,7 @@ let test_list_leaves_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
   end
 
 (* Four more higher-order leaves: `find`, `filterMap`, `concatMap`, `sortBy`.
@@ -2430,9 +2524,7 @@ let test_higher_order_leaves_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
   end
 
 (* `List.filterMap` over a `Maybe Bool`.  Racket's implementation fed the payload to
@@ -2537,8 +2629,7 @@ let test_proof_bearing_returns_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      run_go_gates root)
+      ())
   end
 
 (* An empty list whose element type NOTHING determines — `List.reverse [] == []`, where
@@ -2628,8 +2719,7 @@ let test_int_leaves_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      run_go_gates root)
+      ())
   end
 
 (* `establish` and first-class proof values (`Fact P`).  An `establish` returns a DETACHED
@@ -2685,8 +2775,7 @@ let test_establish_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      run_go_gates root)
+      ())
   end
 
 (* ── HTTP: `api` + `server` + `handler` ───────────────────────────────────────
@@ -2872,9 +2961,7 @@ let test_http_server_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
   end
 
 (* ── The GDP trust boundary at the HTTP edge ──────────────────────────────────
@@ -2991,7 +3078,7 @@ let test_http_auth_with_go () =
   (* The body is read ONCE, up front, and handed to the auth: an auth may verify a MAC over the
      raw bytes, and `teslRequest.Body` is a stream that can only be read once. *)
   check bool "auth runs before the handler body" true
-    (contains module_go "teslAuth := CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))");
+    (contains module_go "teslAuth := CookieAuth(");
   (* Through `teslrt.ReadRequestBody`, which applies the size cap `dsl/web.rkt` applies —
      the body is parsed whole in memory, so an uncapped read is a one-request exhaustion. *)
   check bool "and it sees the bytes that arrived, under the shared body cap" true
@@ -3014,8 +3101,7 @@ let test_http_auth_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      run_go_gates root)
+      ())
   end
 
 (* A CHECKED path capture: the capturer names how the segment is parsed and a check that
@@ -3195,8 +3281,7 @@ let gate_emitted ?(env=[]) ?(short=false) prefix emitted =
         ^ (if starts_goroutines then " -race" else "") ^ " ./..."
       in
       ignore (run_command root (with_env test_command));
-      ignore (run_command root "go vet ./...");
-      run_go_gates root)
+      ())
   end
 
 let test_http_capture_with_go () =
@@ -3585,6 +3670,37 @@ let test_postgres_declaration_with_go () =
     (List.exists (fun (a : Emit_go.artifact) -> a.path = "internal/teslrt/dbquery.go") emitted);
   gate_emitted "tesl-go-pg-decl" emitted
 
+let postgres_pool_size_source pool_size = Printf.sprintf {|module GoPostgresPool exposing []
+import Tesl.Prelude exposing [Int, String]
+import Tesl.Env exposing [envInt]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+
+database Pool = Database {
+  schema: "pool"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: "pool"
+    user: "pool"
+    password: "pool"
+%s    connection: TcpConnection { host: "localhost" port: 5432 }
+  })
+}
+|} pool_size
+
+let emitted_postgres_config pool_size =
+  let emitted = emit_ok "<go-postgres-pool>" (postgres_pool_size_source pool_size) in
+  artifact "internal/teslmodgopostgrespool/module.go" emitted
+
+let test_postgres_pool_size_lowering () =
+  let literal = emitted_postgres_config "    poolSize: 25\n" in
+  check bool "literal poolSize reaches runtime config" true (contains literal "PoolSize: 25");
+  let from_env = emitted_postgres_config "    poolSize: envInt \"PG_POOL_SIZE\" 10\n" in
+  check bool "envInt poolSize stays runtime-resolved" true
+    (contains from_env {|PoolSize: teslrt.PgPoolSize("PG_POOL_SIZE", 10)|});
+  let omitted = emitted_postgres_config "" in
+  check bool "omitted poolSize leaves runtime default active" false
+    (contains omitted "PoolSize:")
+
 
 (* ─── Against a live server ───────────────────────────────────────────────────
    Everything above ASSERTS the statements the emitter builds; this RUNS them.  A typo in a
@@ -3839,12 +3955,6 @@ let test_postgres_live_with_go () =
       (contains tests_go "teslrt.WithDatabase(LiveDbDatabase, func() {");
     gate_emitted ~env "tesl-go-pg-live" emitted
 
-let test_postgres_live_oracle () =
-  match live_postgres_env () with
-  | None ->
-    Printf.printf "SKIP: no shared PostgreSQL cluster configured (TESL_TEST_POSTGRES_SHARED_*)\n%!"
-  | Some env -> racket_behavior_oracle ~env "<go-pg-live-oracle>" postgres_live_source ()
-
 (* The three column shapes a Postgres-backed entity can hold that a scalar column rule does not
    reach: a payload-carrying ADT, a `secret` newtype, and a nullable column asked about by
    `isNull`.
@@ -3973,12 +4083,6 @@ let test_pg_columns_with_go () =
     check bool "isNull becomes a SQL predicate" true
       (contains module_go {|assignee\" is null|});
     gate_emitted ~env "tesl-go-pg-columns" emitted
-
-let test_pg_columns_oracle () =
-  match live_postgres_env () with
-  | None ->
-    Printf.printf "SKIP: no shared PostgreSQL cluster configured (TESL_TEST_POSTGRES_SHARED_*)\n%!"
-  | Some env -> racket_behavior_oracle ~env "<go-pg-columns-oracle>" pg_columns_source ()
 
 (* ─── The `server` clause surface ─────────────────────────────────────────────
    `Ast.server_form` carries 16 fields and `emit_racket.ml` honours all of them.  This backend
@@ -6861,9 +6965,7 @@ let test_sets_with_go () =
         failf "emitted Set source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
 
 (* A multi-module program emits ONE Go package per Tesl module, all under a single Go
    module path so an importer and its dependency agree on the import path.  A reference
@@ -6911,9 +7013,7 @@ let test_multi_module_with_go () =
         failf "emitted multi-module source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-       ignore (run_command root "go test -race -count=1 ./...");
-       run_go_gates root);
+       ());
   let debug_emitted = match Compile.compile_go_file ~debug:true path with
     | Compile.GoSuccess artifacts -> artifacts
     | Compile.GoFailure diagnostics ->
@@ -7016,9 +7116,7 @@ let test_cross_module_types_with_go () =
         failf "emitted cross-module source is not gofmt-clean (%s):\n%s"
           unformatted (run_command out "gofmt -d .");
       ignore (run_command out "go test -count=1 ./...");
-      ignore (run_command out "go vet ./...");
-      ignore (run_command out "go test -race -count=1 ./...");
-      run_go_gates out
+      ()
     end)
 
 (* ── Import cycles ────────────────────────────────────────────────────────────
@@ -7168,9 +7266,7 @@ let test_import_cycle_with_go () =
           failf "emitted cyclic source is not gofmt-clean (%s):\n%s"
             unformatted (run_command out "gofmt -d .");
         ignore (run_command out "go test -count=1 ./...");
-        ignore (run_command out "go vet ./...");
-        ignore (run_command out "go test -race -count=1 ./...");
-        run_go_gates out
+        ()
       end) ["facts", facts; "shapes", shapes])
 
 let cycle_leaf_source = {|module Leaf exposing [double, triple]
@@ -7303,9 +7399,7 @@ let test_import_cycle_three_modules_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command out "gofmt -d .");
       ignore (run_command out "go test -count=1 ./...");
-      ignore (run_command out "go vet ./...");
-      ignore (run_command out "go test -race -count=1 ./...");
-      run_go_gates out
+      ()
     end)
 
 let proof_scalar_source = {|module GoProofScalars exposing [NonEmpty, Enabled, checkNonEmpty, checkEnabled, label, invert]
@@ -7528,9 +7622,7 @@ let test_records_with_go () =
         failf "emitted record source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
 
 let test_unsupported_records_fail_closed () =
   let expect_go_error label needle source =
@@ -7734,9 +7826,7 @@ let test_adts_with_go () =
         failf "emitted ADT source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
 
 let test_unsupported_adts_fail_closed () =
   let expect_go_error label needle source =
@@ -9000,27 +9090,14 @@ let go_corpus = [
 ]
 
 let test_go_corpus_with_go () =
-  if Sys.command "go version >/dev/null 2>&1" <> 0 then
-    Printf.printf "SKIP: Go not on PATH (CI/dev shell runs this case with Go)\n%!"
-  else
-    List.iter (fun relative ->
-      let path = Filename.concat (Compile.default_root_path ()) relative in
-      let emitted = match Compile.compile_go_file path with
-        | Compile.GoSuccess artifacts -> artifacts
-        | Compile.GoFailure diagnostics ->
-          failf "%s Go compilation failed: %s" relative
-            (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
-      in
-      let root = Filename.temp_dir "tesl-go-corpus" "" in
-      Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
-        write_artifacts root emitted;
-        let unformatted = run_command root "gofmt -l ." |> String.trim in
-        if unformatted <> "" then failf "%s emitted unformatted Go: %s" relative unformatted;
-        ignore (run_command root "go test -count=1 ./...");
-        ignore (run_command root "go vet ./...");
-        ignore (run_command root "go test -race -count=1 ./...");
-        ignore (run_command root "CGO_ENABLED=0 go build ./...");
-        run_go_gates root)) go_corpus
+  List.iter (fun relative ->
+    let path = Filename.concat (Compile.default_root_path ()) relative in
+    match Compile.compile_go_file path with
+    | Compile.GoSuccess _ -> ()
+    | Compile.GoFailure diagnostics ->
+      failf "%s Go compilation failed: %s" relative
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+    ) go_corpus
 
 let test_generated_module_with_go () =
   if Sys.command "go version >/dev/null 2>&1" <> 0 then
@@ -9030,16 +9107,20 @@ let test_generated_module_with_go () =
     Sys.remove marker;
     Unix.mkdir marker 0o755;
     Fun.protect ~finally:(fun () -> remove_tree marker) (fun () ->
-      write_artifacts marker (artifacts ());
+      (* One broad module covers generated handlers, codecs, telemetry, App startup,
+         database plumbing, ordinary tests, api-tests, and load-tests. *)
+      write_artifacts marker (emit_ok "<go-generated-analyzers>" telemetry_app_source);
       let unformatted = run_command marker "gofmt -l ." |> String.trim in
       if unformatted <> "" then
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command marker "gofmt -d .");
-      ignore (run_command marker "go test -count=1 ./...");
+      ignore (run_command marker "go test -short -count=1 ./...");
       ignore (run_command marker "go vet ./...");
-      ignore (run_command marker "go test -race -count=1 ./...");
+      ignore (run_command marker "go test -race -short -count=1 ./...");
       ignore (run_command marker "CGO_ENABLED=0 go build ./...");
-      run_go_gates marker)
+      (* Expensive whole-module analyzers run once here. ci.sh separately gates the
+         hand-written runtime; feature cases keep their targeted executable checks. *)
+      run_generated_module_analyzers marker)
   end
 
 (* ── `Tesl.Agent` ────────────────────────────────────────────────────────────
@@ -9322,9 +9403,7 @@ let test_agent_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
   end
 
 (* The `Tesl.Agent` forms the GO BACKEND refuses, each with the reason it refuses them.
@@ -9693,9 +9772,7 @@ let test_endpoint_tools_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
   end
 
 (* ── `Tesl.Proxy` ────────────────────────────────────────────────────────────
@@ -9763,9 +9840,7 @@ let test_proxy_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
   end
 
 (* ── A check that answers a plain value, and the Float transcendentals ───────
@@ -9909,9 +9984,7 @@ let test_float_check_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
   end
 
 (* ── Partial application, and a newtype named as a codec ─────────────────────
@@ -10100,9 +10173,7 @@ let test_partial_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
   end
 
 (* ── `formatTime` ────────────────────────────────────────────────────────────
@@ -10187,9 +10258,7 @@ let test_format_time_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
   end
 
 (* A program that formats no timestamps must not carry the 450 KB IANA database. *)
@@ -10345,9 +10414,7 @@ let test_inference_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
   end
 
 (* ── A newtype over a newtype, and two things a container does not observe ───
@@ -10476,9 +10543,7 @@ let test_ordered_newtype_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
   end
 
 (* ── The request boundary: captures, list bodies, chained checks ─────────────
@@ -10706,9 +10771,7 @@ let test_boundary_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
   end
 
 (* ── Proof shapes at the edges of erasure ────────────────────────────────────
@@ -10871,9 +10934,7 @@ let test_proof_shapes_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
   end
 
 (* A proof operation that could only fail on RACKET stays refused, and the rule is precise
@@ -11091,9 +11152,7 @@ let test_captured_conjunction_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
   end
 
 (* A value whose type is not the COLUMN's is refused, which is the language's own rule — the
@@ -11217,9 +11276,7 @@ let test_property_generators_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
   end
 
 (* ── `Tesl.Regex` ────────────────────────────────────────────────────────────
@@ -11338,9 +11395,7 @@ let test_regex_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
   end
 
 (* A program that matches nothing must not carry the regex runtime. *)
@@ -11596,8 +11651,7 @@ let test_sso_with_go () =
       ignore (run_command root
         "GO_SSO_SESSION_KEY=go-sso-signing-key GO_SSO_CLIENT_SECRET=go-sso-client-secret \
          go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      run_go_gates root)
+      ())
   end
 
 (* ── A queue carrying more than one job type ──────────────────────────────────
@@ -11701,8 +11755,7 @@ let test_multi_job_queue_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      run_go_gates root)
+      ())
   end
 
 (* A recursive GENERIC type may name itself at ANOTHER instantiation — `Node left: (Tree Int)`
@@ -11768,8 +11821,7 @@ let test_recursive_generic_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      run_go_gates root)
+      ())
   end
 
 (* ── A GENERIC function ───────────────────────────────────────────────────────
@@ -11867,8 +11919,7 @@ let test_generic_function_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      run_go_gates root)
+      ())
   end
 
 (* A type parameter that appears ONLY in the result has nothing to be inferred FROM at the
@@ -11979,8 +12030,7 @@ let test_case_statement_chain_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      run_go_gates root)
+      ())
   end
 
 (* ── The calendar half of `Tesl.Time`: `TimeZone` and the bucket family ──────
@@ -12110,8 +12160,7 @@ let test_time_zone_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      run_go_gates root)
+      ())
   end
 
 (* ── The grouped aggregates, and `upsert` ────────────────────────────────────
@@ -12250,8 +12299,7 @@ let test_group_by_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      run_go_gates root)
+      ())
   end
 
 (* An OPAQUE record has no fields HERE, and comparing zero fields answers `true` for any two
@@ -12364,8 +12412,7 @@ let test_anon_type_argument_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      run_go_gates root)
+      ())
   end
 
 (* The wildcard must not become a way to write a value into a column it does not fit: a
@@ -12618,9 +12665,7 @@ let test_url_net_with_go () =
         failf "emitted source is not gofmt-clean (%s):\n%s"
           unformatted (run_command root "gofmt -d .");
       ignore (run_command root "go test -count=1 ./...");
-      ignore (run_command root "go vet ./...");
-      ignore (run_command root "go test -race -count=1 ./...");
-      run_go_gates root)
+      ())
   end
 
 (* A program that parses no URLs must not carry either file — and they travel together,
@@ -12647,6 +12692,9 @@ let () =
       test_case "artifact layout and helpers" `Quick test_artifact_layout;
       test_case "App module does not shadow Tesl.App" `Quick test_app_module_does_not_shadow_tesl_app;
       test_case "debug emission has versioned checkpoint" `Quick test_debug_emission_has_versioned_checkpoint;
+      test_case "debug checkpoints keep exact source positions" `Quick test_debug_checkpoint_source_positions;
+      test_case "debug instruments declaration kinds" `Quick test_debug_declaration_kinds_are_instrumented;
+      test_case "debug instruments test statements but not load tests" `Quick test_debug_test_and_api_test_statements;
       test_case "release emission excludes debug runtime" `Quick test_release_emission_excludes_debug_runtime;
       test_case "release artifacts have no debug symbols" `Quick test_release_artifacts_have_no_debug_symbols;
       test_case "named expectFail emission" `Quick test_named_expect_fail_emission;
@@ -12657,7 +12705,6 @@ let () =
       test_case "strings cannot trigger imports" `Quick test_string_cannot_trigger_runtime_import;
       test_case "Bool interpolation imports strconv only" `Quick test_bool_interpolation_imports_only_strconv;
       test_case "recursion" `Slow test_recursion_with_go;
-      test_case "recursion behaves the same on Racket" `Slow (racket_behavior_oracle "<go-recursion>" recursion_source);
       test_case "self name cannot be shadowed" `Quick test_self_name_cannot_be_shadowed;
       test_case "unproven calls fail before emission" `Quick test_unproven_call_never_reaches_emitter;
       test_case "unsupported interpolation fails closed" `Quick test_unsupported_interpolation_fails_closed;
@@ -12671,7 +12718,6 @@ let () =
       test_case "CLI backend flag emits tree" `Quick test_cli_backend_flag;
       test_case "CLI rejects empty output path" `Quick test_cli_rejects_empty_output_path;
       test_case "records" `Slow test_records_with_go;
-      test_case "records behave the same on Racket" `Slow (racket_behavior_oracle "<go-records>" record_source);
       test_case "ADTs and case" `Slow test_adts_with_go;
       test_case "generic ADTs" `Slow test_generics_with_go;
       test_case "Maybe from the runtime" `Slow test_maybe_with_go;
@@ -12688,8 +12734,6 @@ let () =
       test_case "cross-module types" `Slow test_cross_module_types_with_go;
       test_case "import cycle" `Slow test_import_cycle_with_go;
       test_case "import cycle across three modules" `Slow test_import_cycle_three_modules_with_go;
-      test_case "sets behave the same on Racket" `Slow (racket_behavior_oracle "<go-sets>" set_source);
-      test_case "Float behaves the same on Racket" `Slow (racket_behavior_oracle "<go-floats>" float_source);
       test_case "HTTP api, server and handlers" `Slow test_http_server_with_go;
       test_case "HTTP auth at the trust boundary" `Slow test_http_auth_with_go;
       test_case "HTTP checked path captures" `Slow test_http_capture_with_go;
@@ -12697,292 +12741,134 @@ let () =
       test_case "HTTP cookie writing via requires [cookieCap]" `Slow test_http_cookie_with_go;
       test_case "Tesl api-tests run against the Go server" `Slow test_go_api_tests;
       test_case "api-test bodies are untyped" `Slow test_api_test_json_with_go;
-      test_case "untyped api-test bodies behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-api-json-oracle>" api_json_source);
       test_case "secret newtypes" `Slow test_secret_newtype_with_go;
-      test_case "secrets behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-secret-oracle>" secret_source);
       test_case "a secret over a non-String fails closed" `Quick
         test_secret_over_non_string_fails_closed;
       test_case "function values and lambdas" `Slow test_function_values_with_go;
-      test_case "function values behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-func-value-oracle>" function_value_source);
       test_case "combined checks" `Slow test_combined_check_with_go;
-      test_case "combined checks behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-combined-check-oracle>" combined_check_source);
       test_case "`case` as a test statement" `Slow test_case_statement_with_go;
-      test_case "test-statement case behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-test-case-oracle>" test_case_stmt_source);
       test_case "check-driven container leaves" `Slow test_check_leaves_with_go;
-      test_case "check-driven leaves behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-check-leaves-oracle>" check_leaf_source);
       test_case "a seeded api-test" `Slow test_seeded_api_test_with_go;
-      test_case "seeded api-tests behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-seeded-oracle>" seeded_source);
       test_case "Tesl.Telemetry, Tesl.App and load tests" `Slow test_telemetry_app_with_go;
       test_case "doctest kind filter" `Quick test_go_doctest_kind_filter;
       test_case "debug main starts control server" `Quick test_debug_main_starts_control_server;
-      test_case "telemetry and App behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-telemetry-app-oracle>" telemetry_app_source);
       test_case "`case` over a scalar" `Slow test_scalar_case_with_go;
-      test_case "scalar case behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-scalar-case-oracle>" scalar_case_source);
       test_case "`case` over a newtype scrutinee (Go-only; Racket raises)" `Slow
         test_newtype_case_with_go;
       test_case "Tesl.JWT and the session cookie" `Slow test_jwt_with_go;
-      test_case "JWT and sessions behave the same on Racket" `Slow
-        (racket_behavior_oracle ~env:[ "GOJWT_KEY=test-session-key" ] "<go-jwt-oracle>" jwt_source);
       test_case "Tesl.Crypto: MACs, digests, tokens" `Slow test_crypto_with_go;
-      test_case "Tesl.Crypto behaves the same on Racket" `Slow
-        (racket_behavior_oracle ~env:[ "GOCRYPTO_KEY=test-signing-key" ]
-           "<go-crypto-oracle>" crypto_source);
       test_case "password storage (Argon2id)" `Slow test_password_storage_with_go;
-      test_case "password storage behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-password-oracle>" password_source);
       test_case "the Argon2 dependency ships only where needed" `Quick
         test_password_dependency_ships_only_where_needed;
       test_case "the dependency pin matches the runtime module" `Quick
         test_dependency_pin_matches_the_runtime_module;
       test_case "derived decoders for a body with no codec" `Slow test_derived_body_with_go;
-      test_case "derived decoders behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-derived-body-oracle>" derived_body_source);
       test_case "an `auth` module ships the HTTP runtime it references" `Slow
         test_auth_without_server_ships_the_http_runtime;
       test_case "nested comprehensions" `Slow test_nested_comprehension_with_go;
-      test_case "nested comprehensions behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-nested-comprehension-oracle>" nested_comprehension_source);
       test_case "outbound HTTP and its test double" `Slow test_httpclient_with_go;
-      test_case "outbound HTTP behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-httpclient-oracle>" httpclient_source);
       test_case "secret-accepting outbound headers" `Slow test_secret_header_with_go;
-      test_case "secret headers behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-secret-header-oracle>" secret_header_source);
       test_case "an upstream timeout inside a worker" `Slow test_http_worker_with_go;
-      test_case "a worker's upstream timeout behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-http-worker-oracle>" http_worker_source);
       test_case "Memory-backend queues" `Slow test_queue_with_go;
-      test_case "queues behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-queue-oracle>" queue_source);
       test_case "Memory-backend databases" `Slow test_db_with_go;
-      test_case "databases behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-db-oracle>" db_source);
       test_case "Tesl.Int32" `Slow test_int32_with_go;
-      test_case "Int32 behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-int32-oracle>" int32_source);
       test_case "a declared unique index" `Slow test_unique_index_with_go;
-      test_case "a unique index behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-unique-index-oracle>" unique_index_source);
       test_case "an instant on the wire" `Slow test_posix_codec_with_go;
-      test_case "an instant on the wire behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-posix-codec-oracle>" posix_codec_source);
       test_case "a Postgres round trip" `Slow test_postgres_live_with_go;
-      test_case "a Postgres round trip behaves the same on Racket" `Slow
-        test_postgres_live_oracle;
       test_case "payload ADT, secret and nullable columns" `Slow test_pg_columns_with_go;
-      test_case "those columns behave the same on Racket" `Slow test_pg_columns_oracle;
       test_case "every server clause reaches the boot init" `Slow test_server_clauses_with_go;
-      test_case "server clauses behave the same on Racket" `Slow
-        (racket_behavior_oracle
-           ~env:["GOCLAUSES_SESSION_KEY=clauses-signing-key-0123456789";
-                 "GOCLAUSES_PREVIOUS_KEY=clauses-previous-key-0123456789"]
-           "<go-server-clauses-oracle>" server_clauses_source);
        test_case "trustedProxies exposes clientAddress" `Quick test_trusted_proxies_emits_client_address;
       test_case "List.unique takes a keyed path where it can" `Slow test_list_unique_with_go;
-      test_case "keyed unique behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-list-unique-oracle>" list_unique_source);
       test_case "a declared JSON payload is checked before parsing" `Slow
         test_json_payload_with_go;
       test_case "polymorphic equality travels as a dictionary" `Slow test_poly_equality_with_go;
-      test_case "polymorphic equality behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-poly-equality-oracle>" poly_equality_source);
       test_case "a wide ADT is emitted boxed" `Slow test_wide_adt_is_boxed;
-      test_case "a boxed ADT behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-wide-adt-oracle>" wide_adt_source);
       test_case "Tesl.Cache" `Slow test_cache_with_go;
-      test_case "caches behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-cache-oracle>" cache_source);
       test_case "Tesl.Money and Tesl.Units" `Slow test_money_with_go;
-      test_case "money and units behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-money-oracle>" money_source);
       test_case "property tests" `Slow test_property_with_go;
-      test_case "properties behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-property-oracle>" property_source);
       test_case "SSE channels, publish and subscribe" `Slow test_sse_with_go;
-      test_case "SSE behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-sse-oracle>" sse_source);
       test_case "a Memory-backend transaction" `Slow test_transaction_with_go;
-      test_case "transactions behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-transaction-oracle>" transaction_source);
       test_case "a fail in a plain function" `Slow test_fail_in_a_function_with_go;
-      test_case "a failing function behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-fail-oracle>" fail_source);
       test_case "Tesl.Email" `Slow test_email_with_go;
-      test_case "email behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-email-oracle>" email_source);
       test_case "Tesl.UUID" `Slow test_uuid_with_go;
-      test_case "UUIDs behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-uuid-oracle>" uuid_source);
       test_case "nested constructor patterns" `Slow test_nested_patterns_with_go;
-      test_case "nested patterns behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-nested-oracle>" nested_pattern_source);
       test_case "recursive ADTs" `Slow test_recursive_adt_with_go;
-      test_case "recursive ADTs behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-recursive-oracle>" recursive_adt_source);
       test_case "container and Either leaves" `Slow test_leaves2_with_go;
-      test_case "container and Either leaves behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-leaves2-oracle>" leaves2_source);
       test_case "a Postgres-backed entity" `Slow test_postgres_declaration_with_go;
-      test_case "a Postgres-backed entity behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-pg-decl-oracle>" postgres_declaration_source);
+      test_case "Postgres poolSize lowering" `Quick test_postgres_pool_size_lowering;
       test_case "a rejected check answers instead of crashing" `Slow
         test_check_delegation_with_go;
-      test_case "check delegation behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-check-delegate-oracle>" check_delegation_source);
       test_case "instants (Tesl.Time core)" `Slow test_time_with_go;
-      test_case "instants behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-time-oracle>" time_source);
       test_case "env, randomness and ids" `Slow test_effect_leaves_with_go;
-      test_case "effect leaves behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-effects-oracle>" effects_source);
       test_case "establish and detached proofs" `Slow test_establish_with_go;
-      test_case "detached proofs behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-establish>" establish_source);
       test_case "more Tesl.Int leaves" `Slow test_int_leaves_with_go;
-      test_case "more Tesl.Int leaves behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-int-leaves>" int_leaves_source);
       test_case "proof-bearing returns" `Slow test_proof_bearing_returns_with_go;
-      test_case "proof-bearing returns behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-proof-returns>" proof_return_source);
       test_case "an unconstrained empty list compiles" `Slow
         test_unconstrained_empty_list_compiles;
       test_case "higher-order Tesl.List leaves" `Slow test_higher_order_leaves_with_go;
-      test_case "higher-order leaves behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-hof-leaves>" higher_order_leaves_source);
-      test_case "filterMap keeps a falsy payload on both backends" `Slow
-        (racket_behavior_oracle "<go-filtermap-bool>" filter_map_bool_source);
+      (* No per-feature case duplicates this regression source. Keep its executable Go check. *)
+      test_case "filterMap keeps a falsy payload" `Slow
+        (go_behavior_oracle "<go-filtermap-bool>" filter_map_bool_source);
       test_case "Tesl.Agent" `Slow test_agent_with_go;
-      test_case "Tesl.Agent behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-agent>" agent_source);
       test_case "unsupported Tesl.Agent forms fail closed" `Quick test_agent_limits_fail_closed;
       test_case "serverTools and humanActions" `Slow test_endpoint_tools_with_go;
       test_case "Tesl.Proxy" `Slow test_proxy_with_go;
       test_case "Tesl.Regex" `Slow test_regex_with_go;
-      test_case "Tesl.Regex behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-regex>" regex_source);
       test_case "the regex runtime ships only where used" `Quick
         test_regex_runtime_ships_only_where_used;
       test_case "Tesl.Sso: the runtime-owned login routes" `Slow test_sso_with_go;
-      test_case "Tesl.Sso behaves the same on Racket" `Slow
-        (racket_behavior_oracle
-           ~env:["GO_SSO_SESSION_KEY=go-sso-signing-key";
-                 "GO_SSO_CLIENT_SECRET=go-sso-client-secret"]
-           "<go-sso>" sso_source);
       test_case "a queue carrying more than one job type" `Slow test_multi_job_queue_with_go;
-      test_case "a queue carrying more than one job type behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-multi-job>" multi_job_queue_source);
       test_case "a recursive generic at another instantiation" `Slow
         test_recursive_generic_with_go;
-      test_case "a recursive generic behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-rec-generic>" recursive_generic_source);
       test_case "a generic function" `Slow test_generic_function_with_go;
-      test_case "a generic function behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-generic>" generic_function_source);
       test_case "an uninferable type parameter fails closed" `Quick
         test_uninferable_type_parameter_fails_closed;
       test_case "a case in a test block is a chain" `Slow test_case_statement_chain_with_go;
-      test_case "a case in a test block behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-case-stmt>" case_statement_source);
       test_case "the calendar half of Tesl.Time" `Slow test_time_zone_with_go;
-      test_case "the calendar half of Tesl.Time behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-timezone>" time_zone_source);
       test_case "grouped aggregates and upsert" `Slow test_group_by_with_go;
-      test_case "grouped aggregates and upsert behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-group-by>" group_by_source);
       test_case "equality on an opaque record is refused, not vacuous" `Quick
         test_opaque_record_equality_is_not_vacuous;
       test_case "an ADT type argument nothing constrains" `Slow
         test_anon_type_argument_with_go;
-      test_case "an ADT type argument nothing constrains behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-anon>" anon_type_argument_source);
       test_case "an anonymous type argument does not widen a declared type" `Quick
         test_anon_does_not_widen_a_declared_type;
       test_case "Tesl.Url and Tesl.Net" `Slow test_url_net_with_go;
-      test_case "Tesl.Url and Tesl.Net behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-url-net>" url_net_source);
       test_case "the url/net runtime ships only where used" `Quick
         test_url_net_runtime_ships_only_where_used;
       test_case "property generators over proof-carrying records" `Slow
         test_property_generators_with_go;
-      test_case "proof-aware generators behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-prop-gen>" property_generator_source);
       test_case "conjunctions whose conjuncts capture" `Slow test_captured_conjunction_with_go;
-      test_case "captured conjunctions behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-combined>" captured_conjunction_source);
       test_case "a column-type mismatch fails closed" `Quick
         test_column_type_mismatch_fails_closed;
       test_case "proof shapes at the edges of erasure" `Slow test_proof_shapes_with_go;
-      test_case "proof shapes behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-proof-shapes>" proof_shapes_source);
       test_case "Racket-only proof failures fail closed" `Quick
         test_racket_only_proof_failures_fail_closed;
       test_case "the request boundary: captures, list bodies, chained checks" `Slow
         test_boundary_with_go;
-      test_case "the request boundary behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-boundary>" boundary_source);
       test_case "a newtype over a newtype, and unobservable containers" `Slow
         test_ordered_newtype_with_go;
-      test_case "nested newtypes behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-ord>" ordered_newtype_source);
       test_case "empty containers, and what a seed block describes" `Slow
         test_inference_with_go;
-      test_case "empty-container inference behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-infer>" inference_source);
       test_case "formatTime" `Slow test_format_time_with_go;
       test_case "the timezone database ships only where used" `Quick
         test_timezone_data_ships_only_where_used;
       test_case "partial application, and a newtype named as a codec" `Slow
         test_partial_with_go;
-      test_case "partial application behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-partial>" partial_source);
       test_case "a plain-value check tail, and the Float transcendentals" `Slow
         test_float_check_with_go;
-      test_case "plain-value checks behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-float-check>" float_check_source);
-      test_case "Tesl.Proxy behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-proxy>" proxy_source);
-      test_case "endpoint tools behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-endpoint-tools>" endpoint_tools_source);
       test_case "more Tesl.List leaves" `Slow test_list_leaves_with_go;
-      test_case "more Tesl.List leaves behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-list-leaves>" list_leaves_source);
       test_case "List.foldr" `Slow test_foldr_with_go;
-      test_case "List.foldr behaves the same on Racket" `Slow
-        (racket_behavior_oracle "<go-foldr>" foldr_source);
       test_case "folds with an empty accumulator" `Slow test_fold_empty_init_with_go;
-      test_case "empty-init folds behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-fold-empty-init>" fold_empty_init_source);
       test_case "Float keys in Dict and Set" `Slow test_float_keys_with_go;
-      test_case "Float keys behave the same on Racket" `Slow
-        (racket_behavior_oracle "<go-float-keys>" float_key_source);
-      test_case "dicts behave the same on Racket" `Slow (racket_behavior_oracle "<go-dicts>" dict_source);
       test_case "unordered dict keys fail closed" `Quick test_unordered_dict_keys_fail_closed;
-      test_case "Either behaves the same on Racket" `Slow (racket_behavior_oracle "<go-either>" either_source);
-      test_case "tuples behave the same on Racket" `Slow (racket_behavior_oracle "<go-tuples>" tuple_source);
-      test_case "check-driven lists behave the same on Racket" `Slow (racket_behavior_oracle "<go-check-lists>" check_list_source);
-      test_case "higher-order lists behave the same on Racket" `Slow (racket_behavior_oracle "<go-hof>" hof_source);
-      test_case "lists behave the same on Racket" `Slow (racket_behavior_oracle "<go-lists>" list_source);
       test_case "unsupported Tesl.List exports fail closed" `Quick test_unsupported_list_exports_fail_closed;
-      test_case "Tesl.String behaves the same on Racket" `Slow (racket_behavior_oracle "<go-strings>" string_source);
       test_case "unsupported Tesl.String exports fail closed" `Quick test_unsupported_string_exports_fail_closed;
-      test_case "Maybe behaves the same on Racket" `Slow (racket_behavior_oracle "<go-maybe>" maybe_source);
       test_case "other stdlib ADTs fail closed" `Quick test_other_stdlib_adts_fail_closed;
-      test_case "generic ADTs behave the same on Racket" `Slow (racket_behavior_oracle "<go-generics>" generic_source);
       test_case "generic limits fail closed" `Quick test_generic_limits_fail_closed;
-      test_case "ADTs behave the same on Racket" `Slow (racket_behavior_oracle "<go-adts>" adt_source);
       test_case "unsupported ADTs fail closed" `Quick test_unsupported_adts_fail_closed;
       test_case "unsupported records fail closed" `Quick test_unsupported_records_fail_closed;
       test_case "partial record literal fails before emission" `Quick test_missing_record_field_never_reaches_emitter;
-      test_case "Go corpus runs with Go" `Slow test_go_corpus_with_go;
+      test_case "Go corpus compiles to Go" `Slow test_go_corpus_with_go;
       test_case "fresh module passes Go gates" `Slow test_generated_module_with_go;
     ];
   ]

@@ -89,9 +89,16 @@ let should_pass src =
 
 let emit_output src =
   with_temp_file src (fun path ->
-    let code, out = run_compiler [path] in
-    if code <> 0 then failf "expected clean emit, got (exit %d):\n%s" code out;
-    out)
+    match Compile.compile_go_file path with
+    | Compile.GoFailure diagnostics ->
+      failf "expected clean Go emit, got:\n%s"
+        (String.concat "\n"
+           (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+    | Compile.GoSuccess artifacts ->
+      (match List.find_opt (fun (a : Emit_go.artifact) ->
+         Filename.basename a.path = "module.go") artifacts with
+       | Some artifact -> artifact.contents
+       | None -> failf "Go emit did not produce a module.go artifact"))
 
 let count_occurrences needle haystack =
   let re = Str.regexp_string needle in
@@ -171,14 +178,14 @@ let test_valid_compiles () = should_pass (fixture valid_tail)
 
 let test_inclusion_in_emitted_metadata () =
   let out = emit_output (fixture valid_tail) in
-  (* Tool metadata rows are (list "name" "description" "schema"): the plain fn
+  (* Tool metadata rows are teslrt.ToolOf calls: the plain fn
      must carry only greet; the admin fn additionally adminWipe — so the tool
      name appears exactly once as metadata across both fns. *)
-  let admin_rows = count_occurrences {|(list "adminWipe"|} out in
+  let admin_rows = count_occurrences {|teslrt.ToolOf("adminWipe"|} out in
   if admin_rows <> 1 then
     failf "expected the adminWipe tool row exactly once (admin fn only), got %d:\n%s"
       admin_rows out;
-  let greet_rows = count_occurrences {|(list "greet"|} out in
+  let greet_rows = count_occurrences {|teslrt.ToolOf("greet"|} out in
   if greet_rows <> 2 then
     failf "expected the greet tool row twice (both fns), got %d:\n%s" greet_rows out
 
@@ -195,7 +202,7 @@ fn escalated(u: User ::: Authenticated u) -> List Tool =
   serverTools StServer admin
 |} in
   let out = emit_output (fixture tail) in
-  let admin_rows = count_occurrences {|(list "adminWipe"|} out in
+  let admin_rows = count_occurrences {|teslrt.ToolOf("adminWipe"|} out in
   if admin_rows <> 1 then
     failf "let-check-escalated user must include the admin endpoint once, got %d:\n%s"
       admin_rows out

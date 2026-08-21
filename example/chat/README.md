@@ -16,8 +16,8 @@ bash example/chat/run-cluster.sh
 
 Then open **two browser tabs** at `http://localhost:8080` and chat in real time.
 
-Both scripts are self-contained — they use `nix-shell` internally, so no manual
-install of Racket, Elm, nginx, or PostgreSQL is needed beyond the Nix package
+The scripts are self-contained — they use `nix-shell` internally, so no manual
+install of Go, Elm, nginx, or PostgreSQL is needed beyond the Nix package
 manager. The nginx proxy makes frontend and API appear on the same origin
 (port 8080), so the `chatUserId` cookie is sent on every request.
 
@@ -65,7 +65,7 @@ operations commit together or roll back together.
 
 ## Key Tesl features demonstrated
 
-| Feature | Location in backend.tesl |
+| Feature | Location in chat-backend.tesl |
 |---|---|
 | REST endpoints (GET/POST) | `api ChatApi { ... }` |
 | Cookie authentication | `auth cookieAuth` — reads `chatUserId` cookie |
@@ -130,8 +130,7 @@ REST API.
 
 ```
 example/chat/
-  backend.tesl                Tesl source — compiles to Racket
-  backend.rkt                 Generated output (created by run-backend.sh)
+  chat-backend.tesl           Tesl source compiled and run through Go
   run-backend.sh              One-command backend launcher (supports CHAT_PORT)
   run-cluster.sh              Three-instance cluster + nginx load balancer
   run-frontend.sh             One-command frontend launcher (nginx reverse proxy)
@@ -160,9 +159,6 @@ example/chat/
 # From repo root, inside nix-shell:
 nix-shell
 
-# Bootstrap Racket package:
-bash scripts/bootstrap-tesl-lang.sh
-
 # Start Postgres:
 bash scripts/postgres-start.sh
 createdb -h 127.0.0.1 -p 55432 -U tesl chat
@@ -170,10 +166,10 @@ createdb -h 127.0.0.1 -p 55432 -U tesl chat
 # Set env vars:
 export CHAT_DB_NAME=chat CHAT_DB_USER=tesl CHAT_DB_PASSWORD=""
 export CHAT_DB_HOST=127.0.0.1 CHAT_DB_PORT=55432
-export CHAT_DB_SOCKET="$PWD/.tesl-postgres"
+export CHAT_DB_SOCKET=""
 
 # Compile and run:
-tesl run example/chat/backend.tesl
+tesl run example/chat/chat-backend.tesl
 ```
 
 ### Frontend

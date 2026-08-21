@@ -36,7 +36,7 @@
 #    5. Format                tesl fmt (in place), bounded xargs -P pool
 #    6. Validate              tesl validate (check+lint+fmt), xargs -P pool
 #    7. Exact-match snaps     byte-exact Go snapshots
-#    8. Tesl test files       Go source manifests
+#    8. Go corpus             recursive tracked-source compile/build
 #    9. Mutation              Go mutation testing on lesson42 + scalar proof corpus
 #   10. Integration           httpclient + email alcotest integration exes
 #   11. Boot smoke            Go App activation via `tesl run`
@@ -503,14 +503,14 @@ start_shared_postgres_async
 # ══════════════════════════════════════════════════════════════════════════════
 #  Migration gate — contracts and traceability
 # ══════════════════════════════════════════════════════════════════════════════
-phase_begin "Go migration contracts and traceability"
+phase_begin "Protocol contracts"
 migration_contract_fail=0
-    if ! "$SCRIPT_DIR/tests/protocol/check-go-migration-manifest.sh"; then
+    if ! "$SCRIPT_DIR/tests/protocol/check-contracts.sh"; then
     migration_contract_fail=1
 fi
 if [ "$migration_contract_fail" -eq 0 ]; then phase_end OK; else phase_end FAIL; fi
 if [ "$migration_contract_fail" -gt 0 ]; then
-    printf "\n  %sMigration contracts failed — aborting the gate.%s\n" "$C_RED" "$C_RESET"
+    printf "\n  %sProtocol contracts failed — aborting the gate.%s\n" "$C_RED" "$C_RESET"
     print_summary_and_exit
 fi
 
@@ -932,18 +932,14 @@ else
     fi
 fi
 
-phase_begin "Tesl test files (Go source manifests)"
+phase_begin "Recursive Go corpus compile/build"
 tesl_files_fail=0
 if ! command -v go >/dev/null 2>&1; then
     printf "  %s⚠%s  go not on PATH — skipping Go test manifests\n" "$C_YELLOW" "$C_RESET"
     phase_end SKIP
 else
     if ! TESL_REPO_ROOT="$SCRIPT_DIR" TESL_OCAML_COMPILER="$_main_exe" \
-        bash "$SCRIPT_DIR/scripts/run-go-test-manifest.sh" --run-all; then
-        tesl_files_fail=1
-    fi
-    if ! TESL_REPO_ROOT="$SCRIPT_DIR" TESL_OCAML_COMPILER="$_main_exe" \
-        bash "$SCRIPT_DIR/scripts/run-go-example-manifest.sh" --run-all; then
+        bash "$SCRIPT_DIR/scripts/run-go-corpus-build.sh" --build; then
         tesl_files_fail=1
     fi
     if [ "$tesl_files_fail" -eq 0 ]; then phase_end OK; else phase_end FAIL; fi

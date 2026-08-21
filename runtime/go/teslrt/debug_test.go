@@ -203,3 +203,41 @@ func TestDebuggerSnapshotsNestedScopes(t *testing.T) {
 		t.Fatalf("stack after leave = %#v", stack)
 	}
 }
+
+func TestDebuggerSnapshotKeepsCheckpointPositionAndVisibleLocals(t *testing.T) {
+	debugger := NewDebugger()
+	seen := make(chan DebugEvent, 1)
+	debugger.Attach(func(event DebugEvent) { seen <- event })
+	debugger.SetBreakpoints([]DebugBreakpoint{{File: "tests.tesl", Line: 23}})
+	done := make(chan struct{})
+	go func() {
+		debugger.Checkpoint(DebugFrame{
+			Version:  DebugABIVersion,
+			ID:       "api-statement",
+			Function: "TestTeslApi0",
+			Test:     "api statements",
+			Location: SourceLocation{File: "tests.tesl", Line: 23, Column: 3},
+			Locals: []DebugLocal{
+				{Name: "response", Type: "ApiResponse", Accessor: func() DebugValue {
+					return DebugValue{Type: "ApiResponse", Display: "status=200"}
+				}},
+				{Name: "attempt", Type: "Int", Accessor: func() DebugValue {
+					return DebugValue{Type: "Int", Display: "1"}
+				}},
+			},
+		})
+		close(done)
+	}()
+	event := <-seen
+	if event.Frame.Location != (SourceLocation{File: "tests.tesl", Line: 23, Column: 3}) {
+		t.Fatalf("location = %#v", event.Frame.Location)
+	}
+	if event.Frame.Test != "api statements" || len(event.Frame.Locals) != 2 {
+		t.Fatalf("frame = %#v", event.Frame)
+	}
+	if event.Frame.Locals[0].Name != "response" || event.Frame.Locals[0].Value.Display != "status=200" || event.Frame.Locals[0].Accessor != nil {
+		t.Fatalf("visible locals = %#v", event.Frame.Locals)
+	}
+	debugger.Continue()
+	<-done
+}

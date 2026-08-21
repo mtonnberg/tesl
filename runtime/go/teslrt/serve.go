@@ -111,8 +111,13 @@ func (server Server) handlerWith(options ServeOptions) http.Handler {
 		writer := &hardenedWriter{ResponseWriter: raw}
 		routed := request
 		if mount != "" {
-			trimmed := strings.TrimPrefix(strings.TrimPrefix(request.URL.Path, "/"), mount)
-			if !strings.HasPrefix(strings.TrimPrefix(request.URL.Path, "/"), mount) {
+			requestPath := strings.TrimPrefix(request.URL.Path, "/")
+			// SSO paths belong to the runtime, not the declared API, so they stay raw.
+			if _, _, matched := findSsoMatch(server.SsoRoutes, request.URL.Path); matched {
+				server.ServeHTTP(writer, request)
+				return
+			}
+			if requestPath != mount && !strings.HasPrefix(requestPath, mount+"/") {
 				// Not under the mount prefix: only the static surface can answer it.
 				if static != "" && serveStatic(writer, request, static) {
 					return
@@ -120,6 +125,7 @@ func (server Server) handlerWith(options ServeOptions) http.Handler {
 				writeResponse(writer, nil, Fail(404, "not found"))
 				return
 			}
+			trimmed := strings.TrimPrefix(requestPath, mount)
 			routed = request.Clone(request.Context())
 			if trimmed == "" {
 				trimmed = "/"
@@ -129,23 +135,24 @@ func (server Server) handlerWith(options ServeOptions) http.Handler {
 			}
 			routed.URL.Path = trimmed
 		}
-		if server.routeExists(routed) {
+		if server.declaredRouteExists(routed) {
 			server.ServeHTTP(writer, routed)
 			return
 		}
 		if static != "" && serveStatic(writer, request, static) {
 			return
 		}
+		if mount != "" {
+			writeResponse(writer, nil, Fail(404, "not found"))
+			return
+		}
 		server.ServeHTTP(writer, routed)
 	})
 }
 
-// routeExists reports whether the router has a route for this path at all — used to decide
-// between the API surface and the static one WITHOUT letting the router answer 404 first.
-func (server Server) routeExists(request *http.Request) bool {
-	if _, _, matched := findSsoMatch(server.SsoRoutes, request.URL.Path); matched {
-		return true
-	}
+// declaredRouteExists reports whether the declared API has this path — used to decide between
+// the mounted API and static surfaces without accidentally mounting runtime-owned SSO routes.
+func (server Server) declaredRouteExists(request *http.Request) bool {
 	for _, route := range server.Routes {
 		if pathMatches(route.Path, request.URL.Path) {
 			return true

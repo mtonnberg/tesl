@@ -105,9 +105,16 @@ let check src = with_source (prelude ^ src) (fun p -> run_cc ["--check"; p])
 
 let emit src =
   with_source (prelude ^ src) (fun p ->
-    let code, out = run_cc [p] in
-    if code <> 0 then failf "emit failed (exit %d):\n%s" code out;
-    out)
+    match Compile.compile_go_file p with
+    | Compile.GoFailure diagnostics ->
+      failf "Go emit failed:\n%s"
+        (String.concat "\n"
+           (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+    | Compile.GoSuccess artifacts ->
+      match List.find_opt (fun (a : Emit_go.artifact) ->
+        Filename.basename a.path = "module.go") artifacts with
+      | Some artifact -> artifact.contents
+      | None -> failf "Go emit did not produce module.go")
 
 let should_pass label src =
   let code, out = check src in
@@ -237,13 +244,9 @@ fn q(org: String, pat: String) -> Int requires [dbRead] =
 |} in
   (* Before the fix this emitted `(ilike … pat order … asc limit 5)` — the clause
      keywords as ordinary identifiers, and `t` as a free variable. *)
-  if contains out " order " then
-    failf "`order` was emitted as an ordinary identifier:\n%s" out;
-  if contains out " asc " then
-    failf "`asc` was emitted as an ordinary identifier:\n%s" out;
-  if not (contains out "(order-by") then
+  if not (contains out "teslrt.TableSelectSorted(") then
     failf "the order clause did not reach the query:\n%s" out;
-  if not (contains out "(limit 5)") then
+  if not (contains out ", 0, 5)") then
     failf "the limit clause did not reach the query:\n%s" out
 
 (* ── 3. Queries in argument position, both spellings ─────────────────────── *)

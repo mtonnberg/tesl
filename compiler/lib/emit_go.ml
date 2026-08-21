@@ -435,6 +435,36 @@ let go_config_int loc value =
     | None -> unsupported loc
       "Go backend cannot read `%s` as a numeric configuration value" value
 
+(* Pool sizes accept the same source forms as ports, but use strict envInt semantics and a
+   different range. Keep that distinction explicit instead of reusing PgPort's fallback. *)
+let go_config_pool_size loc value =
+  let prefixed prefix =
+    String.length value > String.length prefix
+    && String.sub value 0 (String.length prefix) = prefix
+    && value.[String.length value - 1] = ')'
+  in
+  let inner prefix =
+    String.sub value (String.length prefix)
+      (String.length value - String.length prefix - 1)
+  in
+  let unquote s =
+    let n = String.length s in
+    if n >= 2 && s.[0] = '"' && s.[n - 1] = '"' then String.sub s 1 (n - 2) else s
+  in
+  if prefixed "envInt(" then
+    (match String.index_opt (inner "envInt(") ',' with
+     | Some comma ->
+       let raw = inner "envInt(" in
+       let name = unquote (String.trim (String.sub raw 0 comma)) in
+       let fallback = String.trim (String.sub raw (comma + 1) (String.length raw - comma - 1)) in
+       Printf.sprintf "teslrt.PgPoolSize(%s, %s)" (go_quote name) fallback
+     | None -> unsupported loc "Go backend cannot read `%s` as a pool size" value)
+  else
+    match int_of_string_opt value with
+    | Some number when number > 0 -> string_of_int number
+    | Some _ -> unsupported loc "Go backend requires `poolSize` to be positive"
+    | None -> unsupported loc "Go backend cannot read `%s` as a pool size" value
+
 let directive_file file =
   let file = if file = "" then "generated.tesl" else Filename.basename file in
   String.map (function '\n' | '\r' -> '_' | c -> c) file
@@ -2148,6 +2178,15 @@ let recognise_sql expr =
         (Sql_query.extract_multiline_select_query expr));
     ]
   | _ -> None
+
+let sql_form_is_read = function
+  | SqlSelect _ -> true
+  | SqlInsert _ | SqlInsertMany _ | SqlUpsert _ | SqlUpdate _ | SqlDelete _ -> false
+
+let expr_is_sql_read expr =
+  match recognise_sql expr with
+  | Some form -> sql_form_is_read form
+  | None -> false
 
 (* A query names its entity, and the entity carries both its row type and its store.
    `Tesl.Database`'s own names (`Database`, `Memory`) never reach here — a query's `from`
@@ -9684,6 +9723,21 @@ let emit_tail ?self ?(debug=false) ?(debug_package="") ?(debug_function="")
         (String.concat ", " temporaries);
     Printf.bprintf buffer "%scontinue %s\n" indent loop_label
   in
+  let emit_debug_checkpoint env indent loc =
+    if debug then begin
+      let locals = env
+        |> List.filter (fun (name, _) -> name <> "_")
+        |> List.map (fun (name, ty) ->
+             Printf.sprintf
+               "{Name: %S, Type: %S, Accessor: func() teslrt.DebugValue {\n%s\treturn teslrt.DebugValue{Type: %S, Display: fmt.Sprint(%s)}\n%s}}"
+               name (go_type ty) indent (go_type ty) (local_ident name) indent)
+      in
+      Printf.bprintf buffer
+        "%steslrt.Checkpoint(teslrt.DebugFrame{Version: teslrt.DebugABIVersion, ID: %S, Function: %S, Location: teslrt.SourceLocation{File: %S, Line: %d, Column: %d}, Locals: []teslrt.DebugLocal{%s}})\n"
+        indent (debug_checkpoint_id debug_package debug_function loc) debug_function loc.file
+        (loc.start.line + 1) (loc.start.col + 1) (String.concat ", " locals)
+    end
+  in
   let rec go env indent expr =
     match self_name with
     | Some name when
@@ -9698,12 +9752,12 @@ let emit_tail ?self ?(debug=false) ?(debug_package="") ?(debug_function="")
       emit_self_tail_call env indent args
     | _ -> go_shape env indent expr
   and go_shape env indent expr =
-    (if debug then
-       Printf.bprintf buffer
-         "%steslrt.Checkpoint(teslrt.DebugFrame{Version: teslrt.DebugABIVersion, ID: %S, Function: %S, Location: teslrt.SourceLocation{File: %S, Line: %d, Column: %d}})\n"
-         indent (debug_checkpoint_id debug_package debug_function (Checker.expr_loc expr))
-         debug_function (Checker.expr_loc expr).file (Checker.expr_loc expr).start.line
-         (Checker.expr_loc expr).start.col);
+    let checkpoint_after =
+      expr_is_sql_read expr
+      || match expr with ELet { value; _ } -> expr_is_sql_read value | _ -> false
+    in
+    if not checkpoint_after then
+      emit_debug_checkpoint env indent (Checker.expr_loc expr);
     match expr with
     (* A MULTI-LINE query — `update p in E` / `delete p in E` / a `select` with its clauses
        on their own lines — is an underscore-`let` CHAIN in the surface tree, so it arrives
@@ -9714,8 +9768,14 @@ let emit_tail ?self ?(debug=false) ?(debug_package="") ?(debug_function="")
     | (ELet _ | EApp _ | EBinop _) when recognise_sql expr <> None ->
       ignore (type_of_arg signatures env expected expr);
       Buffer.add_string buffer (line_directive (Checker.expr_loc expr));
-      Printf.bprintf buffer "%sreturn %s\n" indent
-        (emit_expr ~expected ~indent signatures env expr)
+      if expr_is_sql_read expr && debug then begin
+        Printf.bprintf buffer "%steslDebugResult := %s\n" indent
+          (emit_expr ~expected ~indent signatures env expr);
+        emit_debug_checkpoint env indent (Checker.expr_loc expr);
+        Printf.bprintf buffer "%sreturn teslDebugResult\n" indent
+      end else
+        Printf.bprintf buffer "%sreturn %s\n" indent
+          (emit_expr ~expected ~indent signatures env expr)
     (* `with database D { … }` adds nothing at run time on the Memory backend, so its body
        is emitted in TAIL position — the block keeps statement form instead of collapsing
        into an immediately-called closure.  A capability scope is the same: the checker has
@@ -9851,6 +9911,8 @@ let emit_tail ?self ?(debug=false) ?(debug_package="") ?(debug_function="")
         Printf.bprintf buffer "%s\t%s := %s\n" indent (local_ident name) emitted_value;
         Printf.bprintf buffer "%s\t_ = %s\n" indent (local_ident name)
       end;
+      if expr_is_sql_read value then
+        emit_debug_checkpoint ((name, ty) :: env) (indent ^ "\t") loc;
       go ((name, ty) :: env) (indent ^ "\t") body;
       Printf.bprintf buffer "%s}\n" indent
     | EIf { cond; then_; else_; loc } ->
@@ -10486,6 +10548,7 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
           "Password", text "password";
           "Host", text "host";
           "Port", Option.map (go_config_int database.db_loc) (setting "port");
+          "PoolSize", Option.map (go_config_pool_size database.db_loc) (setting "poolSize");
           "SocketDir", text "socket";
           "Schema", (if database.db_schema = "" then None
                      else Some (go_quote database.db_schema)) ]
@@ -10679,7 +10742,8 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
      if debug then
        Printf.bprintf body
          "\tteslDebugScope := teslrt.DebugEnter(teslrt.DebugFrame{Version: teslrt.DebugABIVersion, ID: %S, Function: %S, Location: teslrt.SourceLocation{File: %S, Line: %d, Column: %d}})\n\tdefer teslDebugScope.Leave()\n"
-         (debug_frame_id package fd) fd.name fd.loc.file fd.loc.start.line fd.loc.start.col;
+          (debug_frame_id package fd) fd.name fd.loc.file (fd.loc.start.line + 1)
+          (fd.loc.start.col + 1);
      if debug then begin
        let locals = List.map (fun (name, ty) ->
          Printf.sprintf
@@ -10687,7 +10751,8 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
            name (go_type ty) (go_type ty) (local_ident name)) params in
        Printf.bprintf body
          "\tteslrt.Checkpoint(teslrt.DebugFrame{Version: teslrt.DebugABIVersion, ID: %S, Function: %S, Location: teslrt.SourceLocation{File: %S, Line: %d, Column: %d}, Locals: []teslrt.DebugLocal{%s}})\n"
-         (debug_frame_id package fd) fd.name fd.loc.file fd.loc.start.line fd.loc.start.col
+          (debug_frame_id package fd) fd.name fd.loc.file (fd.loc.start.line + 1)
+          (fd.loc.start.col + 1)
          (String.concat ", " locals)
      end;
     (* Emit the body once assuming it may loop.  If no self tail call actually turned
@@ -11684,7 +11749,38 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
     | _ -> unsupported loc
       "Go backend has no property generator for `%s`" (go_type ty)
   in
-  let rec emit_stmts env indent = function
+  (* The statement emitter is shared by `test` and `api-test`.  Keep the active test
+     identity outside its recursive arguments so every arm, including nested branches,
+     receives the same metadata while the lexical [env] supplies exactly the locals visible
+     before that statement executes.  Load tests deliberately use their own emitter below:
+     benchmark request thunks must not pay debugger checkpoint overhead. *)
+  let active_debug_test : (string * string) option ref = ref None in
+  let test_stmt_loc = function
+    | TsLet { loc; _ } | TsExpect { loc; _ } | TsExpr { loc; _ }
+    | TsExpectFail { loc; _ } | TsCase { loc; _ } | TsLetProof { loc; _ }
+    | TsProperty { loc; _ } | TsExpectHasProof { loc; _ } | TsIf { loc; _ } -> loc
+  in
+  let emit_test_checkpoint env indent loc =
+    match !active_debug_test with
+    | None -> ()
+    | Some (function_name, description) ->
+      let locals = env
+        |> List.filter (fun (name, _) -> name <> "_")
+        |> List.map (fun (name, ty) ->
+             Printf.sprintf
+               "{Name: %S, Type: %S, Accessor: func() teslrt.DebugValue {\n%s\treturn teslrt.DebugValue{Type: %S, Display: fmt.Sprint(%s)}\n%s}}"
+               name (go_type ty) indent (go_type ty) (local_ident name) indent)
+      in
+      Printf.bprintf body
+        "%steslrt.Checkpoint(teslrt.DebugFrame{Version: teslrt.DebugABIVersion, ID: %S, Function: %S, Test: %S, Location: teslrt.SourceLocation{File: %S, Line: %d, Column: %d}, Locals: []teslrt.DebugLocal{%s}})\n"
+        indent (debug_checkpoint_id package function_name loc) function_name description
+        loc.file (loc.start.line + 1) (loc.start.col + 1) (String.concat ", " locals)
+  in
+  let rec emit_stmts env indent stmts =
+    (match stmts with
+     | statement :: _ when debug -> emit_test_checkpoint env indent (test_stmt_loc statement)
+     | _ -> ());
+    match stmts with
     | [] -> ()
     | TsLet { name; value; loc; _ } :: rest ->
       let ty = let_binding_type signatures env name value
@@ -12131,14 +12227,16 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
        Printf.bprintf body
          "\tteslrt.Checkpoint(teslrt.DebugFrame{Version: teslrt.DebugABIVersion, ID: %S, Function: %S, Test: %S, Location: teslrt.SourceLocation{File: %S, Line: %d, Column: %d}})\n"
          (debug_test_id package index test) (Printf.sprintf "TestTesl%d" index)
-         test.description test.loc.file test.loc.start.line test.loc.start.col;
+         test.description test.loc.file (test.loc.start.line + 1) (test.loc.start.col + 1);
+     active_debug_test := Some (Printf.sprintf "TestTesl%d" index, test.description);
      (match bound with
-     | None -> emit_stmts [] "\t" test.stmts
-     | Some database ->
+      | None -> emit_stmts [] "\t" test.stmts
+      | Some database ->
        Printf.bprintf body "\tteslrt.WithDatabase(%s, func() {\n"
          (qualified database.db_owner database.db_go_var);
        emit_stmts [] "\t\t" test.stmts;
        Buffer.add_string body "\t})\n");
+     active_debug_test := None;
     Buffer.add_string body "}\n") tests;
   (* An `api-test` drives the emitted server IN PROCESS — no socket, so it is an ordinary
      `go test` case.  Legacy dispatches the same way, so both backends exercise the same
@@ -12157,9 +12255,17 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
         "\tif teslWanted := os.Getenv(\"TESL_TEST_NAME\"); teslWanted != \"\" && teslWanted != %s && teslWanted != %s {\n\t\tteslT.Skip(\"named test filter\")\n\t}\n\tif teslKind := os.Getenv(\"TESL_TEST_KIND\"); teslKind != \"\" && teslKind != \"api-test\" {\n\t\tteslT.Skip(\"test kind filter\")\n\t}\n"
         (go_quote api_test.description) (go_quote (Printf.sprintf "TestTeslApi%d" index));
      emit_reset ();
-    emit_seed api_test.loc api_test.seed_stmts;
-    current_api_server := Some (go_ident ~exported:true api_test.server_name);
-    emit_stmts [] "\t" api_test.stmts;
+     if debug then
+       Printf.bprintf body
+         "\tteslrt.Checkpoint(teslrt.DebugFrame{Version: teslrt.DebugABIVersion, ID: %S, Function: %S, Test: %S, Location: teslrt.SourceLocation{File: %S, Line: %d, Column: %d}})\n"
+         (debug_checkpoint_id package (Printf.sprintf "TestTeslApi%d" index) api_test.loc)
+         (Printf.sprintf "TestTeslApi%d" index) api_test.description api_test.loc.file
+         (api_test.loc.start.line + 1) (api_test.loc.start.col + 1);
+     emit_seed api_test.loc api_test.seed_stmts;
+     current_api_server := Some (go_ident ~exported:true api_test.server_name);
+     active_debug_test := Some (Printf.sprintf "TestTeslApi%d" index, api_test.description);
+     emit_stmts [] "\t" api_test.stmts;
+     active_debug_test := None;
     current_api_server := None;
     Buffer.add_string body "}\n") api_tests;
   (* The metric NAMES the runtime answers to, read by the metric assertion and by the regression

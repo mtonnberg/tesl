@@ -1,7 +1,7 @@
 (** Module-system bugs from the 2026-07-08 multi-module audit.
 
-    THE PROPERTY: check-pass must imply runtime-works; rejections must be
-    check-time with clear .tesl-anchored diagnostics, never raw Racket errors.
+    THE PROPERTY: check-pass must imply emitted Go builds; rejections must be
+    check-time with clear .tesl-anchored diagnostics, never raw backend errors.
 
     BUG 1 — re-export rejected only at EMIT: `module A exposing [X]` where X
             is imported passed `--check <entrypoint>` and died at A's own emit
@@ -11,8 +11,8 @@
             module ([Checker.export_locality_errors] +
             [Compile.cross_module_diags]).
 
-    BUG 2 — import cycles crashed at `raco make` with a raw
-            "standard-module-name-resolver: cycle in loading".  Two fixes:
+    BUG 2 — import cycles used to survive checking and fail in the removed
+             backend. Two fixes:
             (a) the SCC machinery keyed graph nodes by unnormalized path
                 STRINGS, so a bare CLI spelling (`main.tesl`) never matched a
                 dep's back-edge spelling (`./main.tesl`) and the inliner
@@ -24,16 +24,11 @@
                 remain supported (example/sandbox*.tesl class).  A module
                 importing itself is always rejected.
 
-    BUG 3 — CamelCase module filename: `--check` resolved `LibB.tesl` but the
-            emitted require was unconditionally kebab (`lib-b.rkt`), which no
-            emit step ever produces.  The require now uses the RESOLVED source
-            file's basename; kebab-case is only the resolver's probe order.
+    BUG 3 — CamelCase module filenames must resolve to the same Go dependency
+             package as kebab-case filenames.
 
-    BUG 4 — opaque ADT export: importer-side [expand_local_import_names]
-            expanded an imported ADT type name to name::all-ctors even when
-            the declaring module exported it BARE (`exposing [Opaque]`), so
-            the emitted `(only-in … Hidden)` failed at raco make.  Ctors are
-            now pulled in only by an explicit `Name(..)` import.
+    BUG 4 — opaque ADT export: a bare imported ADT type must not make hidden
+             constructors available. Constructors require `Name(..)`.
 
     BUG 5 — the systemic hole behind 1: `--check <entrypoint>` never checked
             imported modules' BODIES.  A dep with a hard type error in a fn
@@ -67,22 +62,6 @@ let compiler =
        let c2 = Filename.concat dir "../bin/main.exe" in
        if Sys.file_exists c1 then abs c1 else if Sys.file_exists c2 then abs c2 else "tesl")
 
-(** Repo root (for TESL_REPO_ROOT when invoking raco): env override, else walk
-    up from cwd looking for a directory containing `compiler/`. *)
-let repo_root =
-  match Sys.getenv_opt "TESL_REPO_ROOT" with
-  | Some p when p <> "" -> p
-  | _ ->
-    let rec find dir =
-      let candidate = Filename.concat dir "compiler" in
-      if (try Sys.file_exists candidate && Sys.is_directory candidate with _ -> false)
-      then dir
-      else
-        let parent = Filename.dirname dir in
-        if parent = dir then Filename.current_dir_name else find parent
-    in
-    find (Sys.getcwd ())
-
 let run_shell cmd =
   let ic = Unix.open_process_in (cmd ^ " 2>&1") in
   let out = In_channel.input_all ic in
@@ -101,13 +80,6 @@ let run_cc_in dir args =
                (Filename.quote dir)
                (String.concat " " (Filename.quote compiler :: List.map Filename.quote args)))
 
-let raco_available =
-  lazy (fst (run_shell "command -v raco") = 0)
-
-let raco_make dir rkt =
-  run_shell (Printf.sprintf "cd %s && TESL_REPO_ROOT=%s raco make %s"
-               (Filename.quote dir) (Filename.quote repo_root) (Filename.quote rkt))
-
 let failf fmt = Printf.ksprintf failwith fmt
 
 let contains needle hay =
@@ -122,7 +94,7 @@ let with_temp_project (files : (string * string) list) (f : string -> unit) =
   ) files in
   Fun.protect
     ~finally:(fun () ->
-      (* Remove everything the test (or raco) left behind. *)
+       (* Remove everything the test left behind. *)
       (try
          Array.iter (fun n ->
            let p = Filename.concat dir n in
@@ -137,14 +109,41 @@ let with_temp_project (files : (string * string) list) (f : string -> unit) =
       (try Unix.rmdir dir with _ -> ()))
     (fun () -> f dir)
 
-(* Emit [src_name] inside [dir] to [out_name]; fail the test on nonzero. *)
-let emit_to dir src_name out_name =
-  let code, out =
-    run_shell (Printf.sprintf "cd %s && %s %s > %s"
-                 (Filename.quote dir) (Filename.quote compiler)
-                 (Filename.quote src_name) (Filename.quote out_name)) in
-  if code <> 0 then failf "emit of %s failed:\n%s" src_name out;
-  In_channel.with_open_text (Filename.concat dir out_name) In_channel.input_all
+let compile_go dir src_name =
+  match Compile.compile_go_file (Filename.concat dir src_name) with
+  | Compile.GoSuccess artifacts -> artifacts
+  | Compile.GoFailure diagnostics ->
+    failf "Go emit of %s failed:\n%s" src_name
+      (String.concat "\n" (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+
+let artifact path artifacts =
+  match List.find_opt (fun (a : Emit_go.artifact) -> a.path = path) artifacts with
+  | Some a -> a.contents
+  | None -> failf "missing Go artifact %s" path
+
+let rec mkdir_p path =
+  if path = "" || path = Filename.current_dir_name || Sys.file_exists path then ()
+  else (mkdir_p (Filename.dirname path); Unix.mkdir path 0o755)
+
+let rec remove_tree path =
+  if Sys.file_exists path then
+    if Sys.is_directory path then begin
+      Array.iter (fun name -> remove_tree (Filename.concat path name)) (Sys.readdir path);
+      Unix.rmdir path
+    end else Sys.remove path
+
+let gate_go artifacts =
+  if fst (run_shell "command -v go") = 0 then begin
+    let root = Filename.temp_dir "tesl-modsys-go" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      List.iter (fun (a : Emit_go.artifact) ->
+        let path = Filename.concat root a.path in
+        mkdir_p (Filename.dirname path);
+        Out_channel.with_open_bin path (fun oc -> output_string oc a.contents)) artifacts;
+      let code, out = run_shell (Printf.sprintf "cd %s && go test -count=1 ./..."
+                                   (Filename.quote root)) in
+      if code <> 0 then failf "generated Go tests failed:\n%s" out)
+  end
 
 (* ── BUG 1: re-export must be rejected at CHECK time, guided ─────────────── *)
 
@@ -308,8 +307,7 @@ api-test "lib api-test for main server" for MainServer {
 
 (* A cycle whose members declare config decls (api/server here) cannot be
    lowered by the SCC inliner — must be rejected at CHECK time with the cycle
-   path, from BOTH members (previously exit 0, then raw "cycle in loading" at
-   raco make). *)
+   path, from BOTH members (previously exit 0, then failed during emission). *)
 let cycle_with_config_decls_rejected () =
   with_temp_project
     [("main.tesl", cyc_main_server); ("lib.tesl", cyc_lib_apitest)]
@@ -382,28 +380,20 @@ let pure_cycle_allowed_and_inlined () =
     (fun dir ->
        let code, out = run_cc_in dir ["--check"; "CycA.tesl"] in
        if code <> 0 then failf "pure fn cycle must still pass --check:\n%s" out;
-       let a_out = emit_to dir "CycA.tesl" "CycA.rkt" in
-       if not (contains "Inlined from cyclic module CycB" a_out) then
-         failf "SCC inliner must fire for a bare relative CLI spelling:\n%s" a_out;
-       if contains "CycB.rkt" a_out then
-         failf "cyclic sibling must be inlined, not required (raw racket \
-                'cycle in loading' otherwise):\n%s" a_out;
-       (* The other member emits standalone too. *)
-       let b_out = emit_to dir "CycB.tesl" "CycB.rkt" in
-       if not (contains "Inlined from cyclic module CycA" b_out) then
-         failf "SCC inliner must fire for CycB as entry too:\n%s" b_out;
-       if Lazy.force raco_available then begin
-         let code, out = raco_make dir "CycA.rkt" in
-         if code <> 0 then failf "raco make CycA.rkt (pure cycle) failed:\n%s" out
-       end)
+       let a_artifacts = compile_go dir "CycA.tesl" in
+       let a_out = artifact "internal/teslmodcyca/module.go" a_artifacts in
+       if not (contains "func PingA(" a_out && contains "func PingB(" a_out) then
+         failf "the cyclic SCC must collapse into one Go package:\n%s" a_out;
+       if List.exists (fun (a : Emit_go.artifact) ->
+            a.path = "internal/teslmodcycb/module.go") a_artifacts then
+         failf "cyclic sibling must not become a second Go package";
+       gate_go a_artifacts;
+       let b_artifacts = compile_go dir "CycB.tesl" in
+       ignore (artifact "internal/teslmodcyca/module.go" b_artifacts);
+       gate_go b_artifacts)
 
-(* Two members of a cycle declaring the SAME private name.  Both backends collapse a
-   cyclic SCC into one namespace — Racket inlines the members into one module, Go merges
-   them into one package — so the second declaration has nowhere to go.  The Racket
-   inliner used to SKIP it (to avoid a duplicate Racket definition), which silently
-   rebound CollideB's calls to CollideA's function: `twoEntry 5` returned 6 instead of
-   10, with no diagnostic.  Rejected at CHECK time now, so neither backend can reach the
-   collapse holding a collision. *)
+(* Two members of a cycle declaring the same private name can remain distinct in
+   the Go SCC package. The wider three-member collision below is rejected. *)
 let collide_a = {|module CollideA exposing [oneEntry, oneSeed]
 
 import Tesl.Prelude exposing [Int]
@@ -427,12 +417,9 @@ fn twoEntry(n: Int) -> Int = helper n
 |}
 
 (* A TWO-member cycle where each module declares its own `helper` is ACCEPTED, because it
-   works: measured 2026-08-14, `A <-> B` with a different `helper` in each keeps them apart
-   from either entry, and tests/tesl-test.rkt pins the runtime answers (for a function and
-   for a `Widget` record reached through qualified annotations).  A shared "two members of a
-   cycle share a name" error was tried and rejected programs the Racket backend runs
-   correctly.  What IS rejected is the shape below, where one member inlines two others that
-   collide. *)
+   works: `A <-> B` with a different `helper` in each keeps them apart from either
+   entry. What is rejected is the shape below, where one component contains two
+   sibling declarations that collide. *)
 let cycle_two_member_same_name_accepted () =
   with_temp_project [("CollideA.tesl", collide_a); ("CollideB.tesl", collide_b)]
     (fun dir ->
@@ -447,10 +434,7 @@ let cycle_two_member_same_name_accepted () =
    path.  Hub imports both Spoke1 and Spoke2 and both import Hub back, so all three are
    ONE strongly connected component — but the DFS back edges only ever produce
    [Hub; Spoke1] and [Hub; Spoke2], and the colliding pair is Spoke1 with Spoke2.  The
-   corpus shipped this exact shape (Sandbox/Sandbox2/Sandbox3, where Sandbox3's `ARecord`,
-   `ARecord2` and `doSomething2` were all silently dropped from the emitted Racket in
-   favour of Sandbox2's — and `Sandbox3.ARecord2` had a `foo3` field the surviving struct
-   did not, so a qualified read of it would have failed at runtime).  Checking the
+   corpus shipped this exact shape. Checking the
    component rather than the path is what catches it. *)
 let hub_source = {|module Hub exposing [hubSeed, viaOne, viaTwo]
 
@@ -526,34 +510,21 @@ let camelcase_filename_require_matches () =
     (fun dir ->
        let code, out = run_cc ["--check"; Filename.concat dir "main.tesl"] in
        if code <> 0 then failf "--check must accept the CamelCase filename:\n%s" out;
-       (* Emit each module to `${src%.tesl}.rkt` — exactly what the build
-          pipeline does — and the require must point at that file. *)
-       let _ = emit_to dir "LibB.tesl" "LibB.rkt" in
-       let main_out = emit_to dir "main.tesl" "main.rkt" in
-       if not (contains {|(file "LibB.rkt")|} main_out) then
-         failf "require must use the RESOLVED source basename LibB.rkt:\n%s" main_out;
-       if contains {|(file "lib-b.rkt")|} main_out then
-         failf "require must not kebab-case a CamelCase filename (no emit step \
-                ever produces lib-b.rkt):\n%s" main_out;
-       if Lazy.force raco_available then begin
-         let code, out = raco_make dir "LibB.rkt" in
-         if code <> 0 then failf "raco make LibB.rkt failed:\n%s" out;
-         let code, out = raco_make dir "main.rkt" in
-         if code <> 0 then failf "raco make main.rkt (CamelCase dep) failed:\n%s" out
-       end)
+       let emitted = compile_go dir "main.tesl" in
+       let main_out = artifact "internal/teslmodmain/module_test.go" emitted in
+       if not (contains "teslmodlibb" main_out) then
+         failf "CamelCase filename must resolve to the LibB Go package:\n%s" main_out;
+       gate_go emitted)
 
 (* Control: the kebab-case spelling keeps working unchanged. *)
 let kebab_filename_still_works () =
   with_temp_project [("lib-b.tesl", camel_lib); ("main.tesl", camel_main)]
     (fun dir ->
-       let _ = emit_to dir "lib-b.tesl" "lib-b.rkt" in
-       let main_out = emit_to dir "main.tesl" "main.rkt" in
-       if not (contains {|(file "lib-b.rkt")|} main_out) then
-         failf "kebab-case filename must resolve to lib-b.rkt:\n%s" main_out;
-       if Lazy.force raco_available then begin
-         let code, out = raco_make dir "main.rkt" in
-         if code <> 0 then failf "raco make main.rkt (kebab dep) failed:\n%s" out
-       end)
+       let emitted = compile_go dir "main.tesl" in
+       let main_out = artifact "internal/teslmodmain/module_test.go" emitted in
+       if not (contains "teslmodlibb" main_out) then
+         failf "kebab-case filename must resolve to the LibB Go package:\n%s" main_out;
+       gate_go emitted)
 
 (* ── BUG 4: opaque (bare) ADT export vs Name(..) ─────────────────────────── *)
 
@@ -585,27 +556,21 @@ test "opaque ADT via lib helpers" {
 }
 |}
 
-(* Bare `exposing [Opaque]` + `import … [Opaque]` (needed for annotations)
-   must NOT expand to constructors in the emitted only-in: lib.rkt's provide
-   correctly omits them, so raco make used to die with "identifier `Hidden'
-   not included in nested require spec". *)
+(* Bare `exposing [Opaque]` + `import ... [Opaque]` is needed for annotations,
+   but must not make `Hidden` available in the importing Go package. *)
 let opaque_bare_export_type_name_import () =
   with_temp_project [("lib.tesl", opaque_lib); ("main.tesl", opaque_main)]
     (fun dir ->
        let code, out = run_cc ["--check"; Filename.concat dir "main.tesl"] in
        if code <> 0 then failf "--check must accept the opaque import:\n%s" out;
-       let _ = emit_to dir "lib.tesl" "lib.rkt" in
-       let main_out = emit_to dir "main.tesl" "main.rkt" in
+       let emitted = compile_go dir "main.tesl" in
+       let main_out = artifact "internal/teslmodmain/module.go" emitted in
        if contains "Hidden" main_out then
          failf "bare type-name import must not pull the hidden ctor into the \
-                emitted require:\n%s" main_out;
+                 emitted Go import/use site:\n%s" main_out;
        if not (contains "Opaque" main_out) then
          failf "the opaque type name itself must be require-bound:\n%s" main_out;
-       if Lazy.force raco_available then begin
-         let code, out = raco_make dir "main.rkt" in
-         if code <> 0 then
-           failf "raco make main.rkt (opaque bare export) failed:\n%s" out
-       end)
+        gate_go emitted)
 
 let dotdot_lib = {|module Lib exposing [Color(..)]
 
@@ -635,14 +600,11 @@ test "ctor import with (..)" {
 let dotdot_export_still_expands_ctors () =
   with_temp_project [("lib.tesl", dotdot_lib); ("main.tesl", dotdot_main)]
     (fun dir ->
-       let _ = emit_to dir "lib.tesl" "lib.rkt" in
-       let main_out = emit_to dir "main.tesl" "main.rkt" in
+       let emitted = compile_go dir "main.tesl" in
+       let main_out = artifact "internal/teslmodmain/module.go" emitted in
        if not (contains "Red" main_out && contains "Green" main_out) then
          failf "Color(..) import must still require-bind the ctors:\n%s" main_out;
-       if Lazy.force raco_available then begin
-         let code, out = raco_make dir "main.rkt" in
-         if code <> 0 then failf "raco make main.rkt (Color(..)) failed:\n%s" out
-       end)
+       gate_go emitted)
 
 (* Importing `Opaque(..)` when the declaring module exports it BARE stays a
    check-time rejection (pre-existing guard the emit fix relies on). *)
@@ -862,7 +824,7 @@ let () =
       test_case "config-decl cycle rejected at check with cycle path" `Quick
         cycle_with_config_decls_rejected;
       test_case "self-import rejected" `Quick self_import_rejected;
-      test_case "pure fn cycle allowed + inlined from bare CLI spelling" `Quick
+      test_case "pure fn cycle allowed + merged from bare CLI spelling" `Quick
         pure_cycle_allowed_and_inlined;
       test_case "two-member cycle may share a name" `Quick
         cycle_two_member_same_name_accepted;
@@ -870,9 +832,9 @@ let () =
         cycle_collision_across_component_rejected;
     ];
     "bug3-camelcase-filename", [
-      test_case "require uses resolved basename (CamelCase)" `Quick
+      test_case "CamelCase filename resolves to dependency package" `Quick
         camelcase_filename_require_matches;
-      test_case "kebab-case filename control" `Quick kebab_filename_still_works;
+      test_case "kebab-case filename resolves to dependency package" `Quick kebab_filename_still_works;
     ];
     "bug4-opaque-adt-export", [
       test_case "bare export + type-name import compiles" `Quick

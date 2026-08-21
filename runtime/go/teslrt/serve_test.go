@@ -1,11 +1,137 @@
 package teslrt
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func mountedResponse(t *testing.T, server Server, options ServeOptions, path string) *http.Response {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	server.handlerWith(options).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+	return recorder.Result()
+}
+
+func responseText(t *testing.T, response *http.Response) string {
+	t.Helper()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	return string(body)
+}
+
+func TestHandlerWithMountsOnlyTheDeclaredAPI(t *testing.T) {
+	server := testServer()
+	options := ServeOptions{MountPath: "/api"}
+
+	mounted := mountedResponse(t, server, options, "/api/hello")
+	if mounted.StatusCode != http.StatusOK || !strings.Contains(responseText(t, mounted), `"message":"hi"`) {
+		t.Errorf("mounted API response = %d", mounted.StatusCode)
+	}
+	if got := mountedResponse(t, server, options, "/hello").StatusCode; got != http.StatusNotFound {
+		t.Errorf("unmounted API status = %d, want 404", got)
+	}
+	if got := mountedResponse(t, server, options, "/api").StatusCode; got != http.StatusNotFound {
+		t.Errorf("mount root status = %d, want 404", got)
+	}
+}
+
+func TestHandlerWithMountUsesSegmentBoundaries(t *testing.T) {
+	server := Server{
+		Routes: []Route{{Method: http.MethodGet, Path: "/x/hello", Endpoint: "boundary"}},
+		Handlers: map[string]HandlerFunc{"boundary": func(_ *RequestScope, _ *http.Request) Response {
+			return Response{Status: http.StatusOK, Body: "wrong mount"}
+		}},
+	}
+	if got := mountedResponse(t, server, ServeOptions{MountPath: "/api"}, "/apix/hello").StatusCode; got != http.StatusNotFound {
+		t.Errorf("non-segment prefix status = %d, want 404", got)
+	}
+}
+
+func TestHandlerWithComposesMountedAPIAndRawSPA(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "index.html"), []byte("SPA-INDEX"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "asset.txt"), []byte("STATIC-ASSET"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := testServer()
+	options := ServeOptions{MountPath: "/api", StaticDir: directory}
+
+	for _, testCase := range []struct {
+		path, body string
+	}{
+		{"/", "SPA-INDEX"},
+		{"/asset.txt", "STATIC-ASSET"},
+		{"/client/route", "SPA-INDEX"},
+		{"/hello", "SPA-INDEX"},
+		{"/api/hello", `"message":"hi"`},
+	} {
+		response := mountedResponse(t, server, options, testCase.path)
+		body := responseText(t, response)
+		if response.StatusCode != http.StatusOK || !strings.Contains(body, testCase.body) {
+			t.Errorf("GET %s = %d %q, want 200 containing %q", testCase.path, response.StatusCode, body, testCase.body)
+		}
+	}
+}
+
+func TestHandlerWithPreservesMountedHealthHostExemption(t *testing.T) {
+	t.Cleanup(func() { SetPublicOriginValue(""); SetHealthProbePath("") })
+	SetPublicOriginValue("https://app.example.test")
+	SetHealthProbePath("/healthz")
+	server := Server{
+		Routes: []Route{
+			{Method: http.MethodGet, Path: "/healthz", Endpoint: "health"},
+			{Method: http.MethodGet, Path: "/hello", Endpoint: "hello"},
+		},
+		Handlers: map[string]HandlerFunc{
+			"health": func(_ *RequestScope, _ *http.Request) Response { return Response{Status: 200, Body: "ok"} },
+			"hello":  func(_ *RequestScope, _ *http.Request) Response { return Response{Status: 200, Body: "hello"} },
+		},
+	}
+	handler := server.handlerWith(ServeOptions{MountPath: "/api"})
+	request := func(path string) int {
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Host = "evil.example.test"
+		handler.ServeHTTP(recorder, req)
+		return recorder.Code
+	}
+	if got := request("/api/healthz"); got != http.StatusOK {
+		t.Errorf("mounted health status = %d, want 200", got)
+	}
+	if got := request("/api/hello"); got != http.StatusMisdirectedRequest {
+		t.Errorf("ordinary mounted API status = %d, want 421", got)
+	}
+}
+
+func TestHandlerWithKeepsSsoRawAndApiMounted(t *testing.T) {
+	server := testServer()
+	server.SsoRoutes = []SsoRoute{{
+		Segment:    "idp",
+		Connection: func() SsoConnection { panic("matched raw SSO route") },
+	}}
+	options := ServeOptions{MountPath: "/api"}
+
+	for _, path := range []string{"/auth/idp/login", "/auth/idp/callback"} {
+		if got := mountedResponse(t, server, options, path).StatusCode; got == http.StatusNotFound {
+			t.Errorf("raw SSO path %s was not matched", path)
+		}
+	}
+	if got := mountedResponse(t, server, options, "/api/auth/idp/login").StatusCode; got != http.StatusNotFound {
+		t.Errorf("mounted SSO status = %d, want 404", got)
+	}
+	if got := mountedResponse(t, server, options, "/api/hello").StatusCode; got != http.StatusOK {
+		t.Errorf("mounted API alongside SSO status = %d, want 200", got)
+	}
+}
 
 // The response-header floor. Each of these headers exists because `dsl/web.rkt` adds it to every
 // response, and a Go-served deployment that carried none was a security regression the corpus

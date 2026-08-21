@@ -11,8 +11,7 @@
     - the grouped forms require exactly ONE groupBy, a resolvable key, and
       reject order/limit/offset/innerJoin;
     - Time.trunc* keys demand a PosixMillis column;
-    - the emitted Racket carries the sql-group-key lowering (the expression
-      form used to emit a module that failed to LOAD).
+    - the emitted Go carries both grouped-fold and calendar-key lowering.
 
     Harness modeled on compiler/test/test_server_tools.ml. *)
 
@@ -88,9 +87,16 @@ let should_pass src =
 
 let emit_output src =
   with_temp_file src (fun path ->
-    let code, out = run_compiler [path] in
-    if code <> 0 then failf "expected clean emit, got (exit %d):\n%s" code out;
-    out)
+    match Compile.compile_go_file path with
+    | Compile.GoFailure diagnostics ->
+      failf "expected clean Go emit, got:\n%s"
+        (String.concat "\n"
+           (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+    | Compile.GoSuccess artifacts ->
+      match List.find_opt (fun (a : Emit_go.artifact) ->
+        Filename.basename a.path = "module.go") artifacts with
+      | Some artifact -> artifact.contents
+      | None -> failf "Go emit did not produce module.go")
 
 let fixture tail = Printf.sprintf {|module GbFix exposing []
 
@@ -140,9 +146,10 @@ fn minutesPerDay(tz: TimeZone) -> List (Tuple2 PosixMillis Int)
   let contains needle =
     try ignore (Str.search_forward (Str.regexp_string needle) out 0); true
     with Not_found -> false in
-  if not (contains "select-sum-by (sql-group-key 'day") then
-    failf "expected select-sum-by with a 'day sql-group-key in the emitted \
-           Racket, got:\n%s" out
+  if not (contains "teslrt.TableGroupFold(") then
+    failf "expected grouped-fold lowering in emitted Go, got:\n%s" out;
+  if not (contains "teslrt.TimeTruncDay(") then
+    failf "expected calendar-key lowering in emitted Go, got:\n%s" out
 
 let test_wrong_key_type_is_type_error () =
   (* declared return says Tuple2 String Int, but a truncDay key is PosixMillis *)

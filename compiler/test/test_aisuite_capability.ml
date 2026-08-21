@@ -23,7 +23,7 @@
 
     Hardening: [should_fail] additionally fails if the compiler output contains
     any runtime-leak marker — the rejection must be STATIC and must never reach
-    emitted Racket where a dynamic guard would catch it.
+    emitted Go where a dynamic guard would catch it.
 
     Modeled byte-for-byte on the proofsuite harness in
     compiler/test/test_proofsuite_capability.ml. *)
@@ -85,11 +85,10 @@ let with_temp_file content f =
     ~finally:(fun () -> (try Sys.remove path with _ -> ()); (try Unix.rmdir dir with _ -> ()))
     (fun () -> f path)
 
-(* Runtime-leak markers: presence means the program reached emitted Racket and
+(* Runtime-leak markers: presence means the program reached emitted Go and
    relied on a dynamic guard, i.e. the static checker FAILED to reject it. *)
 let leak_markers = [
-  "raise-user-error"; "check-fail"; "context...:"; "context ...:";
-  ".rkt:"; "racket/"; "/collects/"; "errortrace"; "uncaught exception";
+  "panic:"; "runtime error:"; "goroutine "; "_test.go:"; ".go:";
 ]
 
 let assert_no_runtime_leak pat out =
@@ -543,15 +542,10 @@ demoAgent = Agent {
 }
 |}
 
-(* ── Issue #30: the emitted `asTool` dispatch must DELEGATE the tool fn's
-   declared capabilities.  The checker charges the Agent-construction site with
-   every tool fn's `requires`, but the tool EXECUTES later inside the agent
-   loop, whose ambient capability set need not include them (a live handler
-   turn runs under the serve grant, which only covers handlers/workers).
-   Without delegation the fn's own capability assertion traps at dispatch time
-   — passes `tesl test` (the test's `requires` fills ambient), fails live.
-   The emitter now wraps the dispatch in `(with-capabilities (<caps>) …)`;
-   a capability-free tool fn keeps the bare `(apply fn _decoded)` form. *)
+(* ── Issue #30: `asTool` dispatch of capability-requiring functions must remain
+   executable.  Capabilities are statically discharged and erase in Go, so the
+   artifact must route each tool through its generated typed dispatch helper;
+   no runtime ambient-capability trap remains. *)
 let issue30_delegation_src = {|module Issue30Delegation exposing [fmtLabel, plainTool, stampTool]
 
 import Tesl.Prelude exposing [Int, String, List]
@@ -562,8 +556,8 @@ fn fmtLabel(epochMillis: Int) -> String
   requires [time] =
   formatTime (Time.secondsToPosix (epochMillis / 1000)) "UTC" "%Y-%m-%d"
 
-fn plainTool(x: Int) -> Int =
-  x + 1
+fn plainTool(x: Int) -> String =
+  "plain"
 
 fn stampTool(ts: PosixMillis) -> String
   requires [time] =
@@ -582,16 +576,30 @@ fn probe() -> Agent
 let assert_contains what needle out =
   let re = Str.regexp_string needle in
   try ignore (Str.search_forward re out 0)
-  with Not_found -> failf "%s: emitted Racket does not contain %S:\n%s" what needle out
+  with Not_found -> failf "%s: emitted Go does not contain %S:\n%s" what needle out
 
-let test_issue30_astool_delegates_caps () =
+let test_issue30_astool_dispatches_after_static_discharge () =
   with_temp_file issue30_delegation_src (fun path ->
-    let code, out = run_compiler [path] in
-    if code <> 0 then failf "emit failed (exit %d):\n%s" code out;
-    assert_contains "capability-requiring tool fn"
-      "(lambda (_decoded) (with-capabilities (time) (apply fmtLabel _decoded)))" out;
-    assert_contains "capability-free tool fn keeps the bare dispatch"
-      "(lambda (_decoded) (apply plainTool _decoded))" out;
+    let out =
+      match Compile.compile_go_file path with
+      | Compile.GoFailure diagnostics ->
+        failf "Go emit failed:\n%s"
+          (String.concat "\n"
+             (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+      | Compile.GoSuccess artifacts ->
+        (match List.find_opt (fun (a : Emit_go.artifact) ->
+           Filename.basename a.path = "module.go") artifacts with
+         | Some artifact -> artifact.contents
+         | None -> failf "Go emit did not produce a module.go artifact")
+    in
+    assert_contains "capability-requiring tool is registered"
+      {|teslrt.ToolOf("fmtLabel"|} out;
+    assert_contains "capability-requiring tool has typed dispatch"
+      "return FmtLabel(teslArgs[0].(teslrt.Int))" out;
+    assert_contains "capability-free tool has typed dispatch"
+      "return PlainTool(teslArgs[0].(teslrt.Int))" out;
+    assert_contains "newtype capability-requiring tool has typed dispatch"
+      "return StampTool(teslArgs[0].(teslrt.PosixMillis))" out;
     (* Date-confusion follow-up: a PosixMillis tool parameter's schema must
        carry the epoch-millis semantics to the model, not a bare integer. *)
     assert_contains "PosixMillis param schema carries epoch-millis description"
@@ -603,8 +611,9 @@ let () =
       "N5 partial-application asTool rejected", test_issue24_partial_astool_rejected;
       "P5 bare asTool (const-bound agent) compiles", test_issue24_bare_astool_ok;
     ];
-    "P6-issue30-asTool-capability-delegation", to_cases [
-      "P6 asTool dispatch delegates declared caps", test_issue30_astool_delegates_caps;
+    "P6-issue30-asTool-capability-discharge", to_cases [
+      "P6 asTool dispatch executes after static capability discharge",
+        test_issue30_astool_dispatches_after_static_discharge;
     ];
     "N1-negative-matrix (ai-fn × consumer × insufficient-grant)",
       to_cases neg_matrix;

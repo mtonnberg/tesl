@@ -53,6 +53,9 @@ type PostgresConfig struct {
 	Password string
 	Host     string
 	Port     int
+	// PoolSize is the maximum number of live connections. Zero preserves Tesl's omitted
+	// poolSize default of 10.
+	PoolSize int
 	// SocketDir selects a Unix-socket connection (`SocketConnection`), which is how a local
 	// cluster is usually reached; when it is set, Host and Port are ignored.
 	SocketDir string
@@ -102,7 +105,8 @@ var postgresConnectOnce sync.Map // schema+dsn -> *PostgresDB
 // every other Postgres client already reads, so a deployment does not need a Tesl-specific one.
 func OpenPostgres(config PostgresConfig, tables []PostgresTable) *PostgresDB {
 	dsn := postgresDSN(config)
-	key := config.Schema + "\x00" + dsn
+	poolConfig := postgresPoolConfig(config, dsn)
+	key := fmt.Sprintf("%s\x00%s\x00%d", config.Schema, dsn, poolConfig.MaxConns)
 	if existing, found := postgresConnectOnce.Load(key); found {
 		if db, ok := existing.(*PostgresDB); ok {
 			return db
@@ -110,7 +114,7 @@ func OpenPostgres(config PostgresConfig, tables []PostgresTable) *PostgresDB {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	pool, err := pgxpool.New(ctx, dsn)
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		panic("database: cannot connect to PostgreSQL: " + err.Error())
 	}
@@ -118,6 +122,42 @@ func OpenPostgres(config PostgresConfig, tables []PostgresTable) *PostgresDB {
 	db.bootstrap(ctx, tables)
 	postgresConnectOnce.Store(key, db)
 	return db
+}
+
+const defaultPostgresPoolSize = 10
+
+func postgresPoolConfig(config PostgresConfig, dsn string) *pgxpool.Config {
+	poolConfig, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		panic("database: invalid PostgreSQL configuration: " + err.Error())
+	}
+	size := config.PoolSize
+	if size == 0 {
+		size = defaultPostgresPoolSize
+	}
+	poolConfig.MaxConns = int32(validPostgresPoolSize(size))
+	return poolConfig
+}
+
+func validPostgresPoolSize(size int) int {
+	const maxPoolSize = int64(1<<31 - 1)
+	if size < 1 || int64(size) > maxPoolSize {
+		panic(fmt.Sprintf("database: poolSize must be between 1 and %d", maxPoolSize))
+	}
+	return size
+}
+
+// PgPoolSize lowers `envInt name fallback` in PostgresConfig.poolSize.
+func PgPoolSize(name string, fallback int) int {
+	text := os.Getenv(name)
+	if text == "" {
+		return validPostgresPoolSize(fallback)
+	}
+	parsed, err := strconv.ParseInt(text, 10, 32)
+	if err != nil || parsed < 1 {
+		panic(fmt.Sprintf("envInt: invalid positive pool size environment value %s=%s", name, text))
+	}
+	return validPostgresPoolSize(int(parsed))
 }
 
 // PgPort reads a port out of the environment, falling back to the number the declaration

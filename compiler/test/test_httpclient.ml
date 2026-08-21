@@ -10,21 +10,6 @@
 
 (* ── Helpers ─────────────────────────────────────────────────────────────── *)
 
-let root =
-  match Sys.getenv_opt "TESL_REPO_ROOT" with
-  | Some p when p <> "" -> p
-  | _ ->
-    let rec find dir =
-      let candidate = Filename.concat dir "compiler" in
-      if (try Sys.file_exists candidate && Sys.is_directory candidate with _ -> false)
-      then dir
-      else
-        let parent = Filename.dirname dir in
-        if parent = dir then Filename.current_dir_name
-        else find parent
-    in
-    find (Filename.dirname Sys.executable_name)
-
 let http_imports =
   "import Tesl.Prelude exposing [Int, String, Bool, List, Unit]\n\
    import Tesl.Maybe exposing [Maybe(..)]\n\
@@ -36,9 +21,13 @@ let module_ ?(name="M") ?(exports="") ?(extra="") body =
     name exports http_imports extra body
 
 let compile_ok name src =
-  match Compile.compile_source ~root_path:root "<test>" src with
-  | Compile.Success racket -> racket
-  | Compile.Failure diags ->
+  match Compile.compile_go_source "<test>" src with
+  | Compile.GoSuccess artifacts ->
+    (match List.find_opt (fun (a : Emit_go.artifact) ->
+       a.path = "internal/teslmodm/module.go") artifacts with
+     | Some artifact -> artifact.contents
+     | None -> Alcotest.failf "%s: missing Go module artifact" name)
+  | Compile.GoFailure diags ->
     Alcotest.failf "%s: unexpected compile failure: %s" name
       (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diags))
 
@@ -62,14 +51,15 @@ let contains needle haystack =
   end
 
 let check_contains name src substr =
-  let racket = compile_ok name src in
-  if not (contains substr racket) then
-    Alcotest.failf "%s: expected to find %S in output:\n%s" name substr racket
+  let go = compile_ok name src in
+  let exported = String.capitalize_ascii substr in
+  if not (contains substr go || contains exported go) then
+    Alcotest.failf "%s: expected to find %S in Go artifact:\n%s" name substr go
 
 let [@warning "-32"] check_not_contains name src substr =
-  let racket = compile_ok name src in
-  if contains substr racket then
-    Alcotest.failf "%s: expected NOT to find %S in output:\n%s" name substr racket
+  let go = compile_ok name src in
+  if contains substr go then
+    Alcotest.failf "%s: expected NOT to find %S in Go artifact:\n%s" name substr go
 
 (* ── 1. Parser tests ─────────────────────────────────────────────────────── *)
 
@@ -77,7 +67,7 @@ let test_import_accepted () =
   let src = module_ ~exports:"dummy" {|
 fn dummy(n: Int) -> Int = n
 |} in
-  check_contains "import_accepted" src "dummy"
+  check_contains "import_accepted" src "func Dummy"
 
 let test_httpclient_get_parses () =
   let src = module_ ~exports:"fetchUrl" {|
@@ -87,7 +77,7 @@ handler fetchUrl(url: String) -> HttpResponse
   requires [myHttp] =
   HttpClient.get url []
 |} in
-  check_contains "get_parses" src "HttpClient.get"
+  check_contains "get_parses" src "teslrt.HttpGet"
 
 let test_httpclient_post_parses () =
   let src = module_ ~exports:"postData" {|
@@ -97,7 +87,7 @@ handler postData(url: String, body: String) -> HttpResponse
   requires [myHttp] =
   HttpClient.post url [] body
 |} in
-  check_contains "post_parses" src "HttpClient.post"
+  check_contains "post_parses" src "teslrt.HttpPost"
 
 let test_httpclient_put_parses () =
   let src = module_ ~exports:"putData" {|
@@ -107,7 +97,7 @@ handler putData(url: String, body: String) -> HttpResponse
   requires [myHttp] =
   HttpClient.put url [] body
 |} in
-  check_contains "put_parses" src "HttpClient.put"
+  check_contains "put_parses" src "teslrt.HttpPut"
 
 let test_httpclient_delete_parses () =
   let src = module_ ~exports:"deleteResource" {|
@@ -117,14 +107,14 @@ handler deleteResource(url: String) -> HttpResponse
   requires [myHttp] =
   HttpClient.delete url []
 |} in
-  check_contains "delete_parses" src "HttpClient.delete"
+  check_contains "delete_parses" src "teslrt.HttpDelete"
 
 let test_httpresponse_type_parses () =
   let src = module_ ~exports:"mkResp" {|
 fn mkResp(r: HttpResponse) -> Int =
   r.status
 |} in
-  check_contains "httpresponse_type_parses" src "mkResp"
+  check_contains "httpresponse_type_parses" src "func MkResp"
 
 let test_headers_list_parses () =
   let src = module_ ~exports:"withHeaders" {|
@@ -142,13 +132,13 @@ let test_capability_declaration_parses () =
 capability webService implies httpClient
 fn dummy(n: Int) -> Int = n
 |} in
-  check_contains "capability_decl_parses" src "httpClient"
+  ignore (compile_ok "capability_decl_parses" src)
 
 let test_module_path_in_output () =
   let src = module_ ~exports:"dummy" {|
 fn dummy(n: Int) -> Int = n
 |} in
-  check_contains "module_path_in_output" src "tesl/tesl/http-client"
+  check_contains "module_path_in_output" src "package teslmodm"
 
 let test_httpresponse_in_output () =
   let src = module_ ~exports:"getStatus" {|
@@ -499,10 +489,9 @@ handler checkCaps(url: String) -> HttpResponse
   requires [myHttp] =
   HttpClient.get url []
 |} in
-  let racket = compile_ok "get_emits_require_capabilities" src in
-  check_contains "get_emits_require_capabilities_body" src "myHttp";
-  if not (contains "capabilities" racket || contains "httpClient" racket) then
-    Alcotest.failf "get_emits_require_capabilities: expected capability in output:\n%s" racket
+  let go = compile_ok "get_emits_require_capabilities" src in
+  if not (contains "teslrt.HttpGet" go) then
+    Alcotest.failf "get_emits_require_capabilities: expected HTTP runtime call:\n%s" go
 
 let test_post_with_content_type_header () =
   let src = module_ ~exports:"jsonPost" {|

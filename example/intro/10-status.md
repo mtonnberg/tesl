@@ -8,7 +8,7 @@ Tesl is beta. That's worth being direct about.
 
 - **Breaking changes are expected** — the language is still being tightened
 - **Backward compatibility is not a goal yet** — if a better design is found, the old syntax goes
-- **The runtime is Racket** — Tesl compiles to Racket, which runs on the Racket VM; Racket is a mature, capable platform but not what most teams are running today
+- **The runtime is Go** — Tesl compiles to Go and produces ordinary native service binaries
 - **PostgreSQL only** — the SQL and queue layers are designed around PostgreSQL specifically
 - **No "create new project" command yet** — write `.tesl` files anywhere and point `tesl check`/`tesl run` at them
 
@@ -30,7 +30,7 @@ Tesl is beta. That's worth being direct about.
 | VS Code / VSCodium extension + LSP (diagnostics, hover, go-to-def) | Working |
 | TypeScript client generation | Experimental |
 | Elm client generation | Experimental |
-| Standalone binary (`raco exe`) | Roadmap |
+| Standalone Tesl CLI binary (no Nix) | Roadmap |
 | Dedicated migration tool | Roadmap |
 | Package manager | Roadmap |
 

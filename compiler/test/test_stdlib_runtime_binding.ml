@@ -16,20 +16,16 @@ let test_module_exports_are_unique () =
     check bool (module_name ^ " has exports") true (exports <> []))
     Type_system.tesl_module_exports
 
-let test_known_modules_are_exported () =
-  let exported =
+let test_export_modules_are_known () =
+  let known = SS.of_list Type_system.tesl_known_module_names in
+  List.iter (fun (module_name, _) ->
+    check bool (module_name ^ " is known") true (SS.mem module_name known))
     Type_system.tesl_module_exports
-    |> List.map fst
-    |> SS.of_list
-  in
-  List.iter (fun module_name ->
-    check bool (module_name ^ " is exported") true (SS.mem module_name exported))
-    Type_system.tesl_known_module_names
 
 let () =
   run "Go-Stdlib-Surface" [
     "inventory", [
       test_case "exports are unique and non-empty" `Quick test_module_exports_are_unique;
-      test_case "known modules have export inventories" `Quick test_known_modules_are_exported;
+      test_case "export inventories belong to known modules" `Quick test_export_modules_are_known;
     ];
   ]

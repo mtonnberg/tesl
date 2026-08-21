@@ -7,12 +7,11 @@
 # single super-set gate — see the header of ./ci.sh for the full phase list and
 # the roadmap item roadmap/next/combine_qa_scripts.md.  ci.sh runs a STRICT
 # SUPERSET of everything this script used to run (format → dune test →
-# validate-sweep → Tesl tests → mutation → integration → Racket aggregate suite
-# with the shared PostgreSQL cluster), plus the OCaml build, lifted-stdlib
-# snapshots, exact-match .rkt snapshots, and the Racket/AI suites.
+# validate-sweep → Tesl tests → mutation → integration with the shared PostgreSQL
+# cluster), plus the OCaml build, Go snapshots, corpus/runtime checks, and AI suites.
 #
 # We `exec` so this process is REPLACED by ci.sh: the exit code, all env-var
-# knobs (TESL_CI_JOBS, RKT_SUITES_SKIP, TESL_RACKET_SUITE_TIMEOUT, CI, …), and
+# knobs (TESL_CI_JOBS, TESL_MUTATION_TIMEOUT, CI, …), and
 # every argument pass straight through, so existing hooks and muscle-memory that
 # call `./compile-examples.sh` keep working unchanged.
 set -uo pipefail

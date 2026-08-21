@@ -1750,7 +1750,7 @@ let always_available_stdlib_names : string list = [
   "forgetFact"; "detachFact"; "attachFact"; "andLeft"; "andRight"; "introAnd";
 ]
 
-(** Bare (unqualified) stdlib value/function names whose runtime lives in an
+  (** Bare (unqualified) stdlib value/function names whose runtime lives in an
     import-gated module that has NO export list in {!tesl_module_exports}
     (Tesl.Telemetry / Tesl.Agent) or whose bare token needs an explicit
     home-module mapping (Env / Id / Time / Random / ApiTest / Cli / Queue / UUID
@@ -2035,7 +2035,7 @@ let tesl_known_module_names : string list = [
      consistency test also derives every `CivilTime.*` export's home module
      through it. *)
   "Tesl.CivilTime"; "Tesl.Random";
-  "Tesl.Uuid"; "Tesl.UUID"; "Tesl.Set"; "Tesl.Env";
+  "Tesl.UUID"; "Tesl.Set"; "Tesl.Env";
   "Tesl.Telemetry"; "Tesl.ApiTest"; "Tesl.Tuple"; "Tesl.Id";
   "Tesl.Queue"; "Tesl.Sse"; "Tesl.Logging";
   "Tesl.JWT"; "Tesl.Cache"; "Tesl.Email"; "Tesl.Database"; "Tesl.SSE"; "Tesl.App"; "Tesl.Agent";

@@ -101,8 +101,7 @@ Two things about it trip people up:
 - **`dune test` alone is NOT sufficient.** It misses the example sweep, generated
   Go snapshots, runtime manifests, tooling, and end-to-end gates.
 
-Run `./ci.sh` before you commit. Optional legacy compatibility suites are disabled
-by default; set `RKT_SUITES_SKIP=0` only when explicitly working on them.
+Run `./ci.sh` before you commit.
 
 ### 6. Never changed this compiler before?
 

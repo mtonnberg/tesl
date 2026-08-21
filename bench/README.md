@@ -1,15 +1,14 @@
-# Backend comparison benchmarks
+# Runtime benchmarks
 
-The same Tesl program, compiled by both backends and driven by the same in-process harness, so
-the numbers differ by RUNTIME rather than by what is being measured or how.
+Tesl programs compiled to Go and driven by the generated in-process load-test harness.
 
 ## What is here
 
 | file | what it measures |
 |---|---|
-| `BenchApi.tesl` | light load (200 rps) — dominated by the harness's timer granularity on both backends, so it says little about the runtime; kept because it is the shape a lesson uses |
-| `BenchLoad.tesl` | 2 000 rps for 5 s — the rate where the Racket runtime saturates |
-| `BenchCeiling.tesl` | 20 000 rps for 5 s — Go still holds the rate here; its ceiling is above this |
+| `BenchApi.tesl` | light load (200 rps), dominated by the harness timer granularity; kept because it matches the lesson shape |
+| `BenchLoad.tesl` | 2,000 rps for 5 s |
+| `BenchCeiling.tesl` | 20,000 rps for 5 s, used to probe the runtime ceiling |
 
 Two request paths in each, both free of sleeps and outbound calls, so the measurement is the
 runtime's own cost:
@@ -24,13 +23,18 @@ Insert correctness lives in an api-test instead, which is where a one-shot asser
 
 ## Running them
 
-    # Go
-    tesl --backend go bench/BenchLoad.tesl --out /tmp/benchload_go
-    cd /tmp/benchload_go && /usr/bin/time -v go test ./internal/teslmodbenchload -v -run TestTeslLoad
+Run one benchmark through the public CLI:
 
-    # Racket
-    tesl bench/BenchLoad.tesl > /tmp/benchload.rkt
-    /usr/bin/time -v raco test /tmp/benchload.rkt
+    tesl test --test-kind load-test bench/BenchLoad.tesl
+
+Run all benchmark sources:
+
+    for file in bench/*.tesl; do tesl test --test-kind load-test "$file"; done
+
+For process-level CPU/RSS measurements, build once and time the generated load test directly:
+
+    tesl compile bench/BenchLoad.tesl --out /tmp/benchload
+    (cd /tmp/benchload && /usr/bin/time -v go test ./... -run TestTeslLoad -count=1)
 
 `go test -short` skips load tests, so an ordinary test run does not pay for them.
 
@@ -38,9 +42,7 @@ Insert correctness lives in an api-test instead, which is where a one-shot asser
 
 * Latency is measured from the SCHEDULED send time on both backends (an open model), so a runtime
   that cannot keep up shows it as growing latency rather than as a lower request count.
-* At low rates both backends' p50 is a floor set by the scheduler's sleep granularity (~1 ms),
+* At low rates p50 is a floor set by the scheduler's sleep granularity (~1 ms),
   not by the request. Only a rate high enough to saturate says anything about the runtime.
-* Peak RSS from `/usr/bin/time -v` is the whole TEST PROCESS: `go test`'s toolchain or Racket's
-  VM plus the harness. The Go test BINARY alone is a much smaller number, and it is the honest
-  one for "what the runtime costs" — but it has no Racket counterpart, so the toolchain-to-
-  toolchain pairing is the comparable one.
+* Peak RSS from `/usr/bin/time -v go test` includes the Go test toolchain and harness. Build the
+  test binary first when measuring runtime-only RSS.

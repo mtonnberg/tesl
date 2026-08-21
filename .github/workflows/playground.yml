@@ -2,7 +2,7 @@
 #
 # The playground is the Tesl compiler compiled to JavaScript (js_of_ocaml): it
 # CHECKS Tesl — parser, type checker, proof checker, capability and validation
-# passes, linter, and the Racket/TypeScript/Elm emitters — and shows diagnostics
+# passes, linter, and the Go/TypeScript/Elm emitters — and shows diagnostics
 # with their stable codes, precise spans and machine-applicable fixes. It cannot
 # RUN a program (no HTTP, no database, no SSE); see playground/README.md.
 #
@@ -61,9 +61,6 @@ jobs:
         with:
           extra-conf: |
             experimental-features = nix-command flakes
-
-      - name: Enable Magic Nix Cache
-        uses: DeterminateSystems/magic-nix-cache-action@6221693898146dc97e38ad0e013488a16477a4c4 # v9
 
       # One script, the same one a developer runs. It reports the artifact size.
       - name: Build the playground

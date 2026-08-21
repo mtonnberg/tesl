@@ -424,8 +424,8 @@ cd "$TESL_REPO_ROOT" && ./ci.sh
 ```
 
 `./ci.sh` at the repo root is the authoritative gate. `compile-examples.sh` and `compiler/ci.sh`
-`exec` into it, and `dune test` alone is one phase of thirteen. `RKT_SUITES_SKIP=1 ./ci.sh` is the
-fast inner loop; run the full gate before committing.
+`exec` into it, and `dune test` alone omits corpus, runtime, tooling, and end-to-end checks. Run the
+full gate before committing.
 
 The finished diff is about 30 lines across five files:
 

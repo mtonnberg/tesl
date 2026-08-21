@@ -399,22 +399,30 @@ let secret_field_with_via_proof_src =
 let secret_field_with_via_proof_compiles () =
   should_pass secret_field_with_via_proof_src
 
-let compile_to_racket src =
+let compile_to_go src =
   with_temp_file src (fun path ->
-    let code, out = run_compiler [ path ] in
-    if code <> 0 then
-      failf "expected clean compile, got (exit %d):\n%s\n--- source ---\n%s" code out src;
-    out)
+    match Compile.compile_go_file path with
+    | Compile.GoFailure diagnostics ->
+      failf "expected clean Go compile:\n%s\n--- source ---\n%s"
+        (String.concat "\n"
+           (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics)) src
+    | Compile.GoSuccess artifacts ->
+      match List.find_opt (fun (a : Emit_go.artifact) ->
+        Filename.basename a.path = "module.go") artifacts with
+      | Some artifact -> artifact.contents
+      | None -> failf "Go emit did not produce module.go")
 
 let secret_field_with_via_proof_wraps_after_the_check () =
-  let out = compile_to_racket secret_field_with_via_proof_src in
-  if contains "(Password (tesl-decode-prim-field" out then
-    failf "the newtype wrap ran BEFORE the `via` check — the plaintext \
-           reached `isLongEnough` already wrapped, defeating the very \
-           signature (`text: String`) the checker validated it against:\n%s" out;
-  if not (contains "(Password (check-ok-value" out) then
-    failf "expected the newtype wrap to apply only to a successful check's \
-           value (post-check, not pre-check), got:\n%s" out
+  let out = compile_to_go secret_field_with_via_proof_src in
+  let position needle =
+    try Str.search_forward (Str.regexp_string needle) out 0
+    with Not_found -> failf "expected %S in emitted Go:\n%s" needle out
+  in
+  let checked = position "teslCheckedPassword := IsLongEnough(teslFieldPassword)" in
+  let extracted = position "teslFieldPassword, _ = teslCheckedPassword.Value()" in
+  let wrapped = position "Password{Value: teslrt.MakeSecret(teslFieldPassword)}" in
+  if not (checked < extracted && extracted < wrapped) then
+    failf "expected decode, via-check extraction, then secret wrapping; got:\n%s" out
 
 (* ── 7. Generated clients, direction-dependent ────────────────────────────── *)
 

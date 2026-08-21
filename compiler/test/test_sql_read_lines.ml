@@ -1,72 +1,42 @@
-(** The debugger's SQL lens on a query LINE (not only after it).
+(** The Go debugger's SQL lens on a query LINE (not only after it).
 
-    A checkpoint pauses BEFORE its statement, so a breakpoint on a query line
-    stopped with nothing captured yet: `dsl/sql.rkt` records the statement only
-    as it executes, so the "exact statement the driver runs" scope was not
-    advertised at all — and the workaround ("step to the next line") does not
-    exist when the query is the function's LAST statement.
+    A checkpoint normally pauses BEFORE its statement. On a query line that
+    would expose no SQL capture because the driver has not run yet, and there is
+    no next statement when the query is the function's LAST statement.
 
-    The compiler now emits, per module, the 1-based lines whose statement is a
-    READ-ONLY query; the runtime swaps those pauses to AFTER the statement
-    (dsl/debug/checkpoint.rkt `sql-read-line?`), so the capture is present and
-    the paused frame also shows the query's own result.  This test pins the
-    EMITTED table:
+    The Go emitter puts a READ checkpoint after the statement, so the SQL capture
+    and result are present. Writes retain their checkpoint before the statement.
+    This test pins the generated debug behavior:
 
-      - a read statement's line is listed;
-      - a WRITE line is never listed (a breakpoint on a mutation must still stop
-        before the world changes);
-      - a `with database D { … }` / `with transaction { … }` block is ONE
-        statement, so the only line you can break on is its head — the head is
-        attributed to the block's contents (read-only → listed, any write → not);
-      - a module with no query emits no table at all (no cost, no noise);
-      - the emitted binding name accompanies the checkpoint, so the after-pause
+      - a read statement's checkpoint follows its query;
+      - a WRITE checkpoint precedes its mutation;
+      - a module with no query emits no SQL operation;
+      - the result binding accompanies the checkpoint, so the after-pause
         can show the statement's result.
 
-    The runtime half (pause ordering, and labelling a capture as this line's
-    statement vs the previous one) is pinned by tests/sql-read-lines-tests.rkt. *)
+    Runtime SQL capture is pinned by the Go runtime tests. *)
 
 open Alcotest
-
-let compiler =
-  match Sys.getenv_opt "TESL_OCAML_COMPILER" with
-  | Some p when Sys.file_exists p -> p
-  | _ ->
-    (match Sys.getenv_opt "TESL_BIN" with
-     | Some v when Filename.basename v = "main.exe" && Sys.file_exists v -> v
-     | _ ->
-       let dir = Filename.dirname Sys.argv.(0) in
-       let c1 = Filename.concat (Filename.dirname dir) "bin/main.exe" in
-       let c2 = Filename.concat dir "../bin/main.exe" in
-       if Sys.file_exists c1 then c1 else if Sys.file_exists c2 then c2 else "tesl")
 
 let failf fmt = Printf.ksprintf failwith fmt
 
 let emit src =
-  let dir = Filename.temp_dir "tesl-sqlline" "" in
-  let path = Filename.concat dir "probe.tesl" in
-  let oc = open_out path in output_string oc src; close_out oc;
-  let quoted = [ Filename.quote compiler; Filename.quote path ] in
-  let ic = Unix.open_process_in (String.concat " " quoted ^ " 2>&1") in
-  let out = In_channel.input_all ic in
-  let code = match Unix.close_process_in ic with
-    | Unix.WEXITED c -> c | Unix.WSIGNALED n | Unix.WSTOPPED n -> 128 + n in
-  (try Sys.remove path with _ -> ());
-  (try Unix.rmdir dir with _ -> ());
-  if code <> 0 then failf "probe must compile; got (exit %d):\n%s" code out;
-  out
+  match Compile.compile_go_source ~debug:true "Probe.tesl" src with
+  | Compile.GoFailure diagnostics ->
+    failf "probe must compile: %s"
+      (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  | Compile.GoSuccess artifacts ->
+    match List.find_opt (fun (a : Emit_go.artifact) -> a.path = "internal/teslmodprobe/module.go") artifacts with
+    | Some artifact -> artifact.contents
+    | None -> failf "probe emitted no module.go artifact"
 
-(** The line list from the emitted [register-sql-read-lines!] form, or [] when
-    the module emitted no table. *)
-let read_lines src =
-  let out = emit src in
-  let re = Str.regexp "register-sql-read-lines! \"[^\"]*\" '(\\([0-9 ]*\\))" in
-  match Str.search_forward re out 0 with
-  | _ ->
-    Str.matched_group 1 out
-    |> String.split_on_char ' '
-    |> List.filter_map (fun s -> int_of_string_opt (String.trim s))
-    |> List.sort compare
-  | exception Not_found -> []
+let index_of hay needle =
+  try Str.search_forward (Str.regexp_string needle) hay 0
+  with Not_found -> failf "generated Go missing %S:\n%s" needle hay
+
+let index_of_from hay needle from =
+  try Str.search_forward (Str.regexp_string needle) hay from
+  with Not_found -> failf "generated Go missing %S after offset %d:\n%s" needle from hay
 
 let db_prelude = {|module Probe exposing [readOne, writeOne]
 import Tesl.Prelude exposing [Int, String, List, Bool(..)]
@@ -86,18 +56,18 @@ database D = Database {
 }
 |}
 
-let check_lines ~expected src =
-  let got = read_lines src in
-  if got <> expected then
-    failf "expected read-line table %s, got %s"
-      (String.concat "," (List.map string_of_int expected))
-      (String.concat "," (List.map string_of_int got))
+let check_order ~line ~query ~checkpoint_first src =
+  let out = emit src in
+  let checkpoint = index_of out (Printf.sprintf "Line: %d," line) in
+  let query = index_of out query in
+  if (checkpoint < query) <> checkpoint_first then
+    failf "line %d checkpoint has wrong query ordering:\n%s" line out
 
-(* ── A read statement's line is listed ───────────────────────────────────── *)
+(* ── Reads pause after execution ──────────────────────────────────────────── *)
 
 let t_read_statement_line_is_listed () =
   (* line 19 = the `let rows = select …` statement *)
-  check_lines ~expected:[ 19 ]
+  check_order ~line:19 ~query:"teslrt.TableSelect(" ~checkpoint_first:false
     (db_prelude ^ {|
 fn readOne() -> Int requires [dbRead] =
   let rows = select r from Row where r.name == "ada"
@@ -110,7 +80,7 @@ fn writeOne() -> Int requires [dbWrite] =
 let t_tail_read_is_listed () =
   (* The case that motivated this: the query IS the last statement, so there is
      no next line to step to. *)
-  check_lines ~expected:[ 19 ]
+  check_order ~line:19 ~query:"teslrt.TableSelect(" ~checkpoint_first:false
     (db_prelude ^ {|
 fn readOne() -> List Row requires [dbRead] =
   select r from Row where r.name == "ada"
@@ -122,7 +92,7 @@ fn writeOne() -> Int requires [dbWrite] =
 (* ── Writes keep pausing BEFORE ──────────────────────────────────────────── *)
 
 let t_write_line_is_not_listed () =
-  check_lines ~expected:[]
+  check_order ~line:22 ~query:"teslrt.TableInsert(" ~checkpoint_first:true
     (db_prelude ^ {|
 fn readOne() -> Int requires [dbRead] =
   1
@@ -136,7 +106,7 @@ let t_read_and_write_in_one_function_lists_only_the_read () =
   (* A function that both writes and reads lists the READ line and not the write:
      pausing after a read is safe whatever else the function does, and a breakpoint
      on a mutation must still stop before the world changes. *)
-  check_lines ~expected:[ 23 ]
+  let src =
     (db_prelude ^ {|
 fn readOne() -> Int requires [dbRead] =
   1
@@ -144,8 +114,10 @@ fn readOne() -> Int requires [dbRead] =
 fn writeOne() -> Int requires [dbRead, dbWrite] =
   let _ = insert Row { id: "r1", name: "ada" }
   let rows = select r from Row
-  List.length rows
-|})
+   List.length rows
+|}) in
+  check_order ~line:22 ~query:"teslrt.TableInsert(" ~checkpoint_first:true src;
+  check_order ~line:23 ~query:"teslrt.TableSelect(" ~checkpoint_first:false src
 
 (* The free-floating `with database D { … }` BLOCK is gone from the language — a database is
    connected by `main`, and a test binds one in its own header — so the two cases that pinned
@@ -153,17 +125,23 @@ fn writeOne() -> Int requires [dbRead, dbWrite] =
    really about, that a read line is listed and a write line is not, is pinned by the two
    cases above on ordinary statements. *)
 
-(* ── No query → no table ─────────────────────────────────────────────────── *)
+(* ── No query → no SQL artifact ──────────────────────────────────────────── *)
 
 let t_no_query_emits_no_table () =
-  check_lines ~expected:[]
-    {|module Probe exposing [f]
+  let out = emit {|module Probe exposing [f]
 import Tesl.Prelude exposing [Int]
 
 fn f(n: Int) -> Int =
   let m = n + 1
   m
-|}
+|} in
+  if List.exists (fun operation ->
+       try ignore (Str.search_forward (Str.regexp_string operation) out 0); true
+       with Not_found -> false)
+       [ "teslrt.TableSelect"; "teslrt.TableInsert"; "teslrt.TableUpdate";
+         "teslrt.TableDelete"; "teslrt.DbSelect"; "teslrt.DbInsert";
+         "teslrt.DbUpdate"; "teslrt.DbDelete" ] then
+    failf "query-free module emitted a SQL operation:\n%s" out
 
 (* ── The binding name travels with the checkpoint ────────────────────────── *)
 
@@ -178,31 +156,32 @@ fn writeOne() -> Int requires [dbWrite] =
   1
 |})
   in
-  let contains hay needle =
-    let n = String.length needle and h = String.length hay in
-    let rec go i = i + n <= h && (String.sub hay i n = needle || go (i + 1)) in
-    n = 0 || go 0
+  let checkpoint = index_of out "Line: 19," in
+  let binding = index_of_from out "Name: \"rows\"" checkpoint in
+  let next_checkpoint =
+    try Str.search_forward (Str.regexp_string "teslrt.Checkpoint(") out (checkpoint + 1)
+    with Not_found -> String.length out
   in
-  if not (contains out "'rows)") then
+  if binding >= next_checkpoint then
     failf
-      "the statement checkpoint must carry its binding name (`'rows`) so the \
+      "the statement checkpoint must carry its binding name (`rows`) so the \
        after-the-statement pause can show the query's result:\n%s" out
 
 let () =
   run "SQL-Read-Lines" [
     "reads", [
-      test_case "a read statement's line is listed" `Quick
+      test_case "a read checkpoint follows the statement" `Quick
         t_read_statement_line_is_listed;
-      test_case "a tail read (the last statement) is listed" `Quick
+      test_case "a tail read checkpoint follows the statement" `Quick
         t_tail_read_is_listed;
     ];
     "writes", [
-      test_case "a write line is not listed" `Quick t_write_line_is_not_listed;
-      test_case "a function that both reads and writes lists only the read" `Quick
+      test_case "a write checkpoint precedes the statement" `Quick t_write_line_is_not_listed;
+      test_case "mixed function preserves read/write ordering" `Quick
         t_read_and_write_in_one_function_lists_only_the_read;
     ];
     "shape", [
-      test_case "a module with no query emits no table" `Quick
+      test_case "a module with no query emits no SQL artifact" `Quick
         t_no_query_emits_no_table;
       test_case "the checkpoint carries the binding name" `Quick
         t_checkpoint_carries_the_binding_name;

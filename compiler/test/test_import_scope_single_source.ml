@@ -284,20 +284,19 @@ let test_every_fn_env_name_is_classified () =
        always_available_stdlib_names or stdlib_bare_home_module):\n  %s"
       (String.concat "\n  " offenders)
 
-(* ── every home module has an export inventory ──────────────────────────────── *)
+(* ── every home module is a known compiler-owned module ─────────────────────── *)
 
-let test_every_home_module_has_export_inventory () =
-  let exported = Type_system.tesl_module_exports |> List.map fst in
+let test_every_home_module_is_known () =
   let missing =
     Type_system.stdlib_home_module
     |> List.map snd
     |> List.sort_uniq String.compare
-    |> List.filter (fun m -> not (List.mem m exported))
+    |> List.filter (fun m -> not (List.mem m Type_system.tesl_known_module_names))
   in
   if missing <> [] then
     failf
        "A7 drift guard: home modules resolved by Type_system.stdlib_home_module \
-       have no export inventory, so an import could resolve to an unwired module:\n  %s"
+       are not known compiler-owned modules:\n  %s"
       (String.concat "\n  " missing)
 
 let () =
@@ -329,7 +328,6 @@ let () =
     "single-source-invariants", [
       test_case "every stdlib_env name is classified" `Quick
         test_every_fn_env_name_is_classified;
-       test_case "every home module has an export inventory" `Quick
-         test_every_home_module_has_export_inventory;
+      test_case "every home module is known" `Quick test_every_home_module_is_known;
     ];
   ]

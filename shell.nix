@@ -1,8 +1,7 @@
 # Pin nixpkgs to the SAME revision the flake locks (flake.lock), so the dev shell
-# (direnv `use nix`) and the flake-installed `tesl` share one racket/ocaml toolchain.
+# (direnv `use nix`) and the flake-installed `tesl` share one Go/OCaml toolchain.
 # Previously this used `import <nixpkgs>` (the ambient channel), which drifted from
-# the flake — the dev shell shipped racket 8.18 while `nix profile` shipped 9.2,
-# causing a compiled-collection version mismatch in the debugger. We read the rev
+# the flake, causing tool-version mismatches. We read the revision
 # straight out of flake.lock and fetchTree it (no copy of the working tree, so a
 # running .tesl-postgres socket can't break evaluation).
 { system ? builtins.currentSystem

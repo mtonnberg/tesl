@@ -61,6 +61,30 @@ func TestPostgresDSNSocketIgnoresHostAndPort(t *testing.T) {
 	}
 }
 
+func TestPostgresPoolSizeDefaultsToTen(t *testing.T) {
+	config := postgresPoolConfig(PostgresConfig{}, "")
+	if config.MaxConns != 10 {
+		t.Fatalf("default MaxConns = %d, want 10", config.MaxConns)
+	}
+}
+
+func TestPostgresPoolSizeLiteral(t *testing.T) {
+	config := postgresPoolConfig(PostgresConfig{PoolSize: 25}, "")
+	if config.MaxConns != 25 {
+		t.Fatalf("literal MaxConns = %d, want 25", config.MaxConns)
+	}
+}
+
+func TestPgPoolSizeReadsEnvironmentAndFallback(t *testing.T) {
+	t.Setenv("TESL_TEST_PG_POOL_SIZE", "41")
+	if got := PgPoolSize("TESL_TEST_PG_POOL_SIZE", 7); got != 41 {
+		t.Fatalf("environment pool size = %d, want 41", got)
+	}
+	if got := PgPoolSize("TESL_TEST_PG_POOL_SIZE_MISSING", 7); got != 7 {
+		t.Fatalf("fallback pool size = %d, want 7", got)
+	}
+}
+
 // An Int is unbounded, and NUMERIC is the column that keeps it so: the round trip has to hold at a
 // magnitude int64 cannot express, or the mapping is lossy exactly where it matters.
 func TestPgIntRoundTripsBeyondInt64(t *testing.T) {

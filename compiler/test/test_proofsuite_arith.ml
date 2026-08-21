@@ -74,8 +74,7 @@ let with_temp_file content f =
     (fun () -> f path)
 
 let leak_markers = [
-  "raise-user-error"; "check-fail"; "context...:"; "context ...:";
-  ".rkt:"; "racket/"; "/collects/"; "errortrace"; "uncaught exception";
+  "panic:"; "runtime error:"; "goroutine "; "_test.go:"; ".go:";
 ]
 
 let assert_no_runtime_leak pat out =

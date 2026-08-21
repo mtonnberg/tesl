@@ -30,13 +30,9 @@
     callee carrying a DIFFERENT fact, a fabricated branch, or an argument passed
     into the wrong proof-subject slot are all still rejected.
 
-    Two emit bugs sat underneath (both make the runtime reject the value with
-    "returned a value that does not satisfy declared existential return"):
-      * a pack in an `if`/`case` BRANCH tail was emitted as `(raw-value (pack …))`,
-        which unwraps the package — live in the shipped learn corpus (lesson20);
-      * the runtime matches witness names NOMINALLY while the checker matches
-        them POSITIONALLY, so packing a differently-named local was a
-        check-passes / test-fails trap.  Emit now binds the DECLARED name.
+    Go erases proof packages after static discharge. Emit tests therefore pin
+    that forwarding remains direct and a renamed witness returns the checked
+    value rather than its unchecked local source.
 
     The runtime companions live in tests/exists-forwarding-tests.tesl. *)
 
@@ -92,7 +88,19 @@ let with_modules mods f =
     (fun () -> f (List.nth paths (List.length paths - 1)))
 
 let check_modules mods = with_modules mods (fun main -> run_cc ["--check"; main])
-let emit_modules mods = with_modules mods (fun main -> run_cc [main])
+let emit_modules mods = with_modules mods (fun main ->
+  let module_name, _ = List.nth mods (List.length mods - 1) in
+  let package_dir = "teslmod" ^ String.lowercase_ascii module_name in
+  match Compile.compile_go_file main with
+  | Compile.GoFailure diagnostics ->
+    (1, String.concat "\n"
+          (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  | Compile.GoSuccess artifacts ->
+    match List.find_opt (fun (a : Emit_go.artifact) ->
+      Filename.basename a.path = "module.go"
+      && Filename.basename (Filename.dirname a.path) = package_dir) artifacts with
+    | Some artifact -> (0, artifact.contents)
+    | None -> (1, "Go emit did not produce the root module.go"))
 
 let contains hay needle =
   try ignore (Str.search_forward (Str.regexp_string needle) hay 0); true
@@ -395,9 +403,7 @@ fn wrapper(name: String) -> exists id: String => Thing ? FromDb (Id == id)
   core name
 |})
   in
-  if contains out "(raw-value (core name))" then
-    failf "the forwarded package was unwrapped by raw-value:\n%s" out;
-  if not (contains out "(core name)") then
+  if not (contains out "return core(name)") then
     failf "expected the bare forwarded call in tail position:\n%s" out
 
 let test_emit_pack_in_branch_not_raw_valued () =
@@ -415,12 +421,12 @@ fn branchy(name: String, flag: Bool) -> exists id: String => Thing ? FromDb (Id 
       insert Thing { id: id, name: "x", createdAt: nowMillis() }
 |})
   in
-  if contains out "(raw-value (pack " then
-    failf "a pack in a branch tail was unwrapped by raw-value:\n%s" out
+  if contains out "RawValue(" then
+    failf "a pack in a branch tail was unwrapped:\n%s" out
 
 let test_emit_witness_uses_declared_name () =
-  (* The checker matches witness names positionally; the runtime matches them
-     nominally.  Emit binds the DECLARED name so both agree. *)
+  (* The witness name is proof-only in Go. The checked value must survive
+     erasure; returning [internal] would bypass the check result. *)
   let out =
     emit_of "renamed witness"
       (tok {|
@@ -432,8 +438,10 @@ fn renamed(tag: String) -> exists tok: String => tok: String ::: TaggedWith tag 
     validated
 |})
   in
-  if not (contains out "(pack ([tok internal])") then
-    failf "expected the declared binder `tok` to name the package's witness:\n%s" out
+  if not (contains out "return validated") then
+    failf "expected the checked witness value to be returned:\n%s" out;
+  if contains out "return internal" then
+    failf "the unchecked witness source escaped instead of the checked value:\n%s" out
 
 let () =
   run "issue-73 existential forwarding" [
@@ -459,6 +467,7 @@ let () =
     "emit", [
       test_case "forwarded call not raw-valued" `Quick test_emit_forward_not_raw_valued;
       test_case "branch pack not raw-valued"    `Quick test_emit_pack_in_branch_not_raw_valued;
-      test_case "witness uses declared name"    `Quick test_emit_witness_uses_declared_name;
+      test_case "renamed witness returns checked value" `Quick
+        test_emit_witness_uses_declared_name;
     ];
   ]

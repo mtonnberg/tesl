@@ -11,7 +11,7 @@ context/
 ```
 
 The host build owns Go compilation. The image contains only the resulting
-binary; it does not contain Go, Racket, `raco`, `.rkt` files, or `PLTCOLLECTS`.
+binary; it does not contain Go, compiler sources, or generated Go sources.
 
 ## Database
 

@@ -7,16 +7,14 @@
        EVERY publish of a record-typed sseChannel payload arity-trapped at
        runtime (same-module and cross-module).  Fixed: the EPublish payload
        arm routes record literals through the same `TypeName { … }`
-       keyword-ctor arm as everywhere else (emit_racket.ml).  ADT-variant
-       payloads keep the positional emit.
+       record-construction arm. ADT variants keep their distinct Go shape.
 
     2. `--generate-ts` for a module with an SSE endpoint referenced undefined
        `Unit` / `UnitSchema` names — the whole generated client failed tsc
        (issue #11 was fixed on the Elm side only).  Fixed: Unit maps to
        `void` / a defined tolerant schema (emit_ts.ml).
 
-    3. EmailBody as a DATA type: (a) fn returns trapped at runtime (no
-       registered predicate — tesl/email.rkt now registers one); (b) an
+    3. EmailBody as a DATA type: (a) fn returns must emit; (b) an
        exhaustive 3-arm case was flagged V001 non-exhaustive (EmailBody
        variants now seeded in validation_common.builtin_ctor_info and the
        checker's stdlib_ctors_for_type); (c) EmailBody in ENDPOINT body/
@@ -31,7 +29,7 @@
 
     5. Newtype record-field codecs: `field -> "k" with_codec stringCodec` on
        a newtype-typed field failed ENCODE (prim encoders now unwrap
-       newtype-value — dsl/types.rkt), and `with_codec UserId` failed DECODE
+       the value), and `with_codec UserId` failed DECODE
        ("no decoder succeeded" — the emitter now decodes the newtype's base
        prim and applies the constructor; the prim-codec spelling wraps the
        decoded base the same way, restoring §11.6 transparency in BOTH
@@ -94,10 +92,46 @@ let check_fails what path =
   if code = 0 then failf "check of %s must FAIL, but passed" what;
   out
 
+let go_artifacts what path =
+  match Compile.compile_go_file path with
+  | Compile.GoSuccess artifacts -> artifacts
+  | Compile.GoFailure diagnostics ->
+    failf "Go emit of %s failed:\n%s" what
+      (String.concat "\n" (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+
 let emit_ok what path =
-  let code, out = run_cc [path] in
-  if code <> 0 then failf "emit of %s failed:\n%s" what out;
-  out
+  go_artifacts what path
+  |> List.map (fun (a : Emit_go.artifact) -> a.contents)
+  |> String.concat "\n"
+
+let rec mkdir_p path =
+  if path = "" || path = Filename.current_dir_name || Sys.file_exists path then ()
+  else (mkdir_p (Filename.dirname path); Unix.mkdir path 0o755)
+
+let rec remove_tree path =
+  if Sys.file_exists path then
+    if Sys.is_directory path then begin
+      Array.iter (fun name -> remove_tree (Filename.concat path name)) (Sys.readdir path);
+      Unix.rmdir path
+    end else Sys.remove path
+
+let run_go_tests ?(env="") ?(expect_success=true) what artifacts =
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-incidental-go" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      List.iter (fun (a : Emit_go.artifact) ->
+        let path = Filename.concat root a.path in
+        mkdir_p (Filename.dirname path);
+        Out_channel.with_open_bin path (fun oc -> output_string oc a.contents)) artifacts;
+      let command = Printf.sprintf "cd %s && %s go test -count=1 ./... 2>&1"
+          (Filename.quote root) env in
+      let ic = Unix.open_process_in command in
+      let out = In_channel.input_all ic in
+      let code = match Unix.close_process_in ic with
+        | Unix.WEXITED c -> c | Unix.WSIGNALED n | Unix.WSTOPPED n -> 128 + n in
+      if expect_success && code <> 0 then failf "%s: generated Go tests failed:\n%s" what out;
+      if not expect_success && code = 0 then failf "%s: generated Go tests unexpectedly passed" what)
+  end
 
 (* ── 1. publish with a RECORD payload ───────────────────────────────────── *)
 
@@ -168,11 +202,11 @@ let publish_record_payload_same_module () =
      | [main_p] ->
        check_ok "publish record payload (same-module)" main_p;
        let out = emit_ok "publish record payload (same-module)" main_p in
-       (* keyword record ctor, not the positional arity-trap *)
+       (* Record payload remains a typed composite literal before encoding. *)
        assert_contains ~what:"same-module publish payload"
-         "(publish-event! Notices (format \"~a\" \"u1\") (Notice #:message" out;
+         "teslrt.Publish(NoticesChannel, \"u1\", EncodeNoticeJSON(Notice{Message: msg}))" out;
        assert_not_contains ~what:"same-module publish payload"
-         "(Notice (raw-value" out
+         "EncodeNoticeJSON(Notice(msg))" out
      | _ -> assert false)
 
 let publish_record_payload_cross_module () =
@@ -185,7 +219,7 @@ let publish_record_payload_cross_module () =
        check_ok "publish record payload (cross-module)" main_p;
        let out = emit_ok "publish record payload (cross-module)" main_p in
        assert_contains ~what:"cross-module publish payload"
-         "(Notice #:message" out
+         "teslmodlib.Notice{Message: msg}" out
      | _ -> assert false)
 
 let publish_adt_payload_stays_positional () =
@@ -238,10 +272,10 @@ server MainServer for MainApi {
     | [main_p] ->
       check_ok "publish ADT payload" main_p;
       let out = emit_ok "publish ADT payload" main_p in
-      (* ADT variant ctors are positional lambdas — the record keyword arm
-         must NOT hijack them. *)
-      assert_contains ~what:"ADT publish payload" "(ItemCreated " out;
-      assert_not_contains ~what:"ADT publish payload" "(ItemCreated #:name" out
+       (* ADT payload uses the variant payload field, not the record field. *)
+       assert_contains ~what:"ADT publish payload"
+         "teslrt.Publish(ItemEventsChannel, \"u1\", teslEncode2(ItemEvent{ItemCreatedName: name}))" out;
+       assert_not_contains ~what:"ADT publish payload" "ItemEvent{Message:" out
     | _ -> assert false)
 
 (* ── 2. --generate-ts: SSE endpoint and Unit ────────────────────────────── *)
@@ -318,10 +352,9 @@ fn bodyKind(b: EmailBody) -> String =
          patterns leave uncovered values" despite all 3 arms *)
       check_ok "exhaustive EmailBody case" main_p;
       let out = emit_ok "exhaustive EmailBody case" main_p in
-      (* tagged-LIST pattern lowering, not the adt-value struct guard that
-         can never match an EmailBody value *)
-      assert_contains ~what:"EmailBody pattern guard" "(car " out;
-      assert_contains ~what:"EmailBody pattern guard" "'TextBody" out
+       assert_contains ~what:"EmailBody pattern switch" "switch teslScrut1.Tag" out;
+       assert_contains ~what:"EmailBody Text arm" "case teslrt.EmailBodyText:" out;
+       assert_contains ~what:"EmailBody Rich arm" "case teslrt.EmailBodyRich:" out
     | _ -> assert false)
 
 let emailbody_missing_arm_rejected () =
@@ -438,17 +471,10 @@ api-test "raw JSON body round-trips" for EchoServer {
     | _ -> assert false)
 
 (* GitHub #60 (second bug): `with_codec dictCodec`/`listCodec`/`setCodec`
-   decoded through a non-recursive passthrough (`tesl-decode-prim-dict` et al
-   in dsl/types.rkt) that only checked the JSON shape (hash?/list?) — it never
-   converted a Dict's symbol-keyed JSON into the declared `String` key type,
-   and never decoded nested values by the field's actual value type, so any
-   real request 400'd ("Invalid request payload") even though `tesl check`
-   passed clean (the compile-time check only compares the codec's head name
-   ("Dict"=="Dict"), never the key/value type arguments). Fixed: when the
-   codec is a container codec AND the field's declared type is the real
-   `Dict K V`/`List V`/`Set V` (not just the codec name), emit a call through
-   the generic, type-argument-aware `jsexpr->typed-value` path instead — the
-   same one already used for a plain (non-codec) Dict/List/Set field. *)
+   must recursively decode by the field's declared key/value types. The Go
+   backend does not expose these codecs yet, so this keeps whole-program check
+   coverage and pins that explicit emitter gap rather than silently dropping
+   the source case. *)
 let dict_list_set_codec_decode_recurses () =
   let src = {|module Main exposing []
 import Tesl.Prelude exposing [String, List]
@@ -474,21 +500,14 @@ codec PayloadBody {
 |} in
   with_files [ ("main.tesl", src) ] (function
     | [main_p] ->
-      let out = emit_ok "dictCodec/listCodec/setCodec decode" main_p in
-      assert_contains ~what:"dictCodec decode recurses through the generic Dict path"
-        "(jsexpr->typed-value '(Dict String String)" out;
-      assert_contains ~what:"listCodec decode recurses through the generic List path"
-        "(jsexpr->typed-value '(List String)" out;
-      assert_contains ~what:"setCodec decode recurses through the generic Set path"
-        "(jsexpr->typed-value '(Set String)" out;
-      (* the pre-fix naive passthrough helpers must no longer be the decoder
-         for these three fields *)
-      assert_not_contains ~what:"payload no longer uses the naive Dict passthrough"
-        "tesl-decode-prim-field _j \"payload\" tesl-decode-prim-dict" out;
-      assert_not_contains ~what:"tags no longer uses the naive List passthrough"
-        "tesl-decode-prim-field _j \"tags\" tesl-decode-prim-list" out;
-      assert_not_contains ~what:"uniqueTags no longer uses the naive Set passthrough"
-        "tesl-decode-prim-field _j \"uniqueTags\" tesl-decode-prim-set" out
+       check_ok "dictCodec/listCodec/setCodec decode" main_p;
+       (match Compile.compile_go_file main_p with
+        | Compile.GoSuccess _ -> failf "container codecs unexpectedly became Go-emittable without a behavior assertion"
+        | Compile.GoFailure diagnostics ->
+          let messages = String.concat "\n"
+              (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics) in
+          assert_contains ~what:"documented Go container-codec gap"
+            "does not emit the `Tesl.Json` export `dictCodec`" messages)
     | _ -> assert false)
 
 (* Item 10 (review 2026-07-09): the name-level endpoint rejection missed
@@ -657,12 +676,14 @@ test "named partial application" {
   with_files [ ("main.tesl", src) ] (function
     | [main_p] ->
       check_ok "partial application" main_p;
-      let out = emit_ok "partial application" main_p in
-      (* argument position must eta-expand exactly like the let-bound path *)
-      assert_contains ~what:"arg-position partial application"
-        "(applyTwice (lambda (tesl-p-" out;
-      assert_not_contains ~what:"arg-position partial application"
-        "(applyTwice (addN 3) 1)" out
+       let artifacts = go_artifacts "partial application" main_p in
+       let out = artifacts |> List.map (fun (a : Emit_go.artifact) -> a.contents)
+         |> String.concat "\n" in
+       assert_contains ~what:"arg-position partial application"
+         "applyTwice(teslrt.Apply1Of2(addN, teslrt.FromInt64(3))" out;
+       assert_not_contains ~what:"arg-position partial application"
+         "applyTwice(addN, teslrt.FromInt64(1))" out;
+       run_go_tests "partial application" artifacts
     | _ -> assert false)
 
 (* ── 5. newtype record-field codec, both spellings ──────────────────────── *)
@@ -698,16 +719,13 @@ let newtype_field_prim_codec_spelling () =
      | [main_p] ->
        check_ok "newtype field, stringCodec spelling" main_p;
        let out = emit_ok "newtype field, stringCodec spelling" main_p in
-       (* decode wraps the decoded base prim in the newtype constructor *)
+       (* Decode wraps the scalar in the nominal Go newtype. *)
        assert_contains ~what:"decode wrap"
-         "(define _f_id (UserId (tesl-decode-prim-field _j \"id\" tesl-decode-prim-string)))" out;
-       (* the non-newtype sibling field is untouched *)
+         "User{Id: UserId{Value: teslFieldId}, Name: teslFieldName}" out;
        assert_contains ~what:"plain field decode"
-         "(define _f_name (tesl-decode-prim-field _j \"name\" tesl-decode-prim-string))" out;
-       (* encode keeps the historical prim call — unwrap lives in the runtime
-          prim encoder (tesl-prim-encode-base, dsl/types.rkt) *)
+         "teslrt.DecodeStringField(teslJSON, \"name\")" out;
        assert_contains ~what:"encode call"
-         "(tesl-encode-prim-string (raw-value (hash-ref _fields 'id)))" out
+         "\"id\":   teslValue.Id.Value" out
      | _ -> assert false)
 
 let newtype_field_newtype_codec_spelling () =
@@ -716,25 +734,16 @@ let newtype_field_newtype_codec_spelling () =
      | [main_p] ->
        check_ok "newtype field, with_codec UserId spelling" main_p;
        let out = emit_ok "newtype field, with_codec UserId spelling" main_p in
-       (* pre-fix: `(tesl-codec-decode-field _j "id" 'UserId)` — no registry
-          decoder exists for a newtype, so every decode failed *)
        assert_contains ~what:"decode wrap"
-         "(define _f_id (UserId (tesl-decode-prim-field _j \"id\" tesl-decode-prim-string)))" out;
+         "User{Id: UserId{Value: teslFieldId}, Name: teslFieldName}" out;
        assert_not_contains ~what:"decode wrap"
-         "(tesl-codec-decode-field _j \"id\" 'UserId)" out
+         "Id: teslFieldId" out
      | _ -> assert false)
 
-(* ── 6. imported-module test submodules (silent-pass class) ─────────────────
-   `raco test main.rkt` instantiates only main's `test` submodule, so a failing
-   test/api-test/load-test block in an imported module passed silently.  The
-   emitter now requires each DIRECT local import's test submodule inside the
-   importing module's own test submodule — gated on the dep declaring a
-   test-ish decl directly OR TRANSITIVELY (exactly the condition under which
-   the dep's emitted .rkt has a test submodule; a dep with a fully testless
-   closure emits none, so an unconditional require would fail to resolve) and
-   suppressed under --test-name single-block selection.  The sandwich case
-   (testless middle module) is pinned in section 7
-   (transitive_dep_tests_compose). *)
+(* ── 6. imported-module tests (silent-pass class) ───────────────────────────
+   Every local dependency's test artifact must join the emitted Go project.
+   Testless dependencies emit none; named filtering skips non-selected blocks.
+   The transitive sandwich is pinned in section 7. *)
 
 let dep_with_test = {|module Lib exposing [add]
 
@@ -771,9 +780,11 @@ let dep_test_submodule_required () =
     [ ("lib.tesl", dep_with_test); ("main.tesl", main_importing_lib) ]
     (function
      | [_lib_p; main_p] ->
-       let out = emit_ok "main importing lib-with-tests" main_p in
-       assert_contains ~what:"dep test submodule require"
-         "(require (submod (file \"lib.rkt\") test))" out
+       let artifacts = go_artifacts "main importing lib-with-tests" main_p in
+       if not (List.exists (fun (a : Emit_go.artifact) ->
+           a.path = "internal/teslmodlib/module_test.go") artifacts) then
+         failf "dependency test artifact was not emitted";
+       run_go_tests "dependency tests" artifacts
      | _ -> assert false)
 
 let dep_without_tests_not_required () =
@@ -781,13 +792,11 @@ let dep_without_tests_not_required () =
     [ ("lib.tesl", dep_without_test); ("main.tesl", main_importing_lib) ]
     (function
      | [_lib_p; main_p] ->
-       let out = emit_ok "main importing testless lib" main_p in
-       (* a LEAF testless dep (testless transitive closure) emits NO test
-          submodule — requiring it would be a resolve error at raco test
-          time.  A testless MIDDLE module (transitively tested deps) DOES —
-          see transitive_dep_tests_compose. *)
-       assert_not_contains ~what:"testless dep gate"
-         "(submod (file \"lib.rkt\") test)" out
+       let artifacts = go_artifacts "main importing testless lib" main_p in
+       if List.exists (fun (a : Emit_go.artifact) ->
+           a.path = "internal/teslmodlib/module_test.go") artifacts then
+         failf "testless dependency emitted a Go test artifact";
+       run_go_tests "testless dependency" artifacts
      | _ -> assert false)
 
 let dep_doctest_counts_as_tests () =
@@ -804,11 +813,11 @@ fn add(a: Int, b: Int) -> Int =
     [ ("lib.tesl", lib); ("main.tesl", main_importing_lib) ]
     (function
      | [_lib_p; main_p] ->
-       let out = emit_ok "main importing doctest-only lib" main_p in
-       (* doctests are synthesized DTest decls at parse time, so the dep DOES
-          emit a test submodule — the gate must include them *)
-       assert_contains ~what:"doctest-only dep"
-         "(require (submod (file \"lib.rkt\") test))" out
+       let artifacts = go_artifacts "main importing doctest-only lib" main_p in
+       let out = artifacts |> List.map (fun (a : Emit_go.artifact) -> a.contents)
+         |> String.concat "\n" in
+       assert_contains ~what:"doctest-only dependency" {|teslWanted != "doctest: add"|} out;
+       run_go_tests "doctest dependency" artifacts
      | _ -> assert false)
 
 let single_test_selection_skips_dep_requires () =
@@ -816,47 +825,18 @@ let single_test_selection_skips_dep_requires () =
     [ ("lib.tesl", dep_with_test); ("main.tesl", main_importing_lib) ]
     (function
      | [_lib_p; main_p] ->
-       let code, out =
-         run_cc ["--test-name"; "main unit"; "--test-kind"; "test"; main_p] in
-       if code <> 0 then failf "single-test emit failed:\n%s" out;
-       (* --test-name means "run exactly this block of THIS entry file" *)
-       assert_not_contains ~what:"single-test selection"
-         "(submod (file \"lib.rkt\") test)" out;
+       let artifacts = go_artifacts "single-test selection" main_p in
+       let out = artifacts |> List.map (fun (a : Emit_go.artifact) -> a.contents)
+         |> String.concat "\n" in
        assert_contains ~what:"single-test selection keeps the named block"
-         "main unit" out
+         {|teslWanted != "main unit"|} out;
+       run_go_tests ~env:"TESL_TEST_NAME='main unit' TESL_TEST_KIND=test"
+         "single-test selection" artifacts
      | _ -> assert false)
 
 (* ── 7. REVIEW2 batch (2026-07-09) ──────────────────────────────────────────
    One case per confirmed finding fixed in this batch; see the per-case
    comments for the pre-fix failure mode. *)
-
-(** Repo root (for TESL_REPO_ROOT when invoking raco): env override, else walk
-    up from cwd looking for a directory containing `compiler/`. *)
-let repo_root =
-  match Sys.getenv_opt "TESL_REPO_ROOT" with
-  | Some p when p <> "" -> p
-  | _ ->
-    let rec find dir =
-      let candidate = Filename.concat dir "compiler" in
-      if (try Sys.file_exists candidate && Sys.is_directory candidate with _ -> false)
-      then dir
-      else
-        let parent = Filename.dirname dir in
-        if parent = dir then Filename.current_dir_name else find parent
-    in
-    find (Sys.getcwd ())
-
-let run_shell cmd =
-  let ic = Unix.open_process_in (cmd ^ " 2>&1") in
-  let out = In_channel.input_all ic in
-  let st = Unix.close_process_in ic in
-  let code = match st with Unix.WEXITED c -> c | Unix.WSIGNALED n | Unix.WSTOPPED n -> 128+n in
-  (code, out)
-
-let racket_available = lazy (fst (run_shell "command -v raco") = 0)
-
-let write_file path content =
-  let oc = open_out path in output_string oc content; close_out oc
 
 (* ITEM 4 (require filter): the ~700-name config-only require filter
    (currency ctors All/Try/Top, timezone ctors, SI aliases) applied to LOCAL
@@ -892,17 +872,14 @@ test "record named All" {
      | [_dep_p; main_p] ->
        check_ok "local `All` export" main_p;
        let out = emit_ok "main importing record All" main_p in
-       (* pre-fix: the require disappeared entirely (All was its only binding) *)
        assert_contains ~what:"local-module require not filtered"
-         "(only-in (file \"dep.rkt\") All" out
+         "teslmoddep.All{X: teslrt.FromInt64(4)}" out
      | _ -> assert false)
 
 (* ITEM 1 (capability implies): `capability admin implies cacheCap Sessions`
-   rendered the implies list via raw String.concat — two identifiers, the
-   first (`cacheCap`) unbound at raco make.  Now rendered through cap_ident;
-   and a DCapability implies naming an IMPORTED module's cache both counts as
-   a cache USE (tesl/tesl/cache require) and gets the synthesized
-   cacheCap_<Name> define. *)
+   used to be interpreted as two identifiers. Go erases capabilities, so the
+   artifact assertion verifies that local/imported cache declarations and calls
+   survive after the checker accepts the implication. *)
 let cap_implies_cache_cap_local = {|module Main exposing []
 
 import Tesl.Prelude exposing [Int, String]
@@ -935,10 +912,10 @@ let cap_implies_renders_cache_cap_ident () =
      | [main_p] ->
        check_ok "capability implies cacheCap (local cache)" main_p;
        let out = emit_ok "capability implies cacheCap" main_p in
-       assert_contains ~what:"implies via cap_ident"
-         "(define-capability admin (implies cacheCap_Sessions))" out;
-       assert_not_contains ~what:"implies via cap_ident"
-         "(implies cacheCap Sessions)" out
+       assert_contains ~what:"cache remains emitted after proof erasure"
+         "var SessionsStore = teslrt.NewCache[string](3600)" out;
+       assert_contains ~what:"cache operation remains emitted"
+         "teslrt.CacheGet(SessionsStore, k)" out
      | _ -> assert false)
 
 let cap_implies_imported_cache_lib = {|module CacheLib exposing [TestDB, Sessions, getSession]
@@ -984,13 +961,10 @@ let cap_implies_imported_cache_synthesized () =
      | [_lib_p; main_p] ->
        check_ok "capability implies imported cacheCap" main_p;
        let out = emit_ok "capability implies imported cacheCap" main_p in
-       (* the implies mention must synthesize the capability VALUE binding … *)
-       assert_contains ~what:"synthesized cacheCap define"
-         "(define cacheCap_Sessions (cache-spec-capability (cache-for-name 'Sessions)))" out;
-       (* … and count as a cache USE so cache-for-name is require-bound *)
-       assert_contains ~what:"cache runtime require" "tesl/tesl/cache" out;
-       assert_contains ~what:"implies via cap_ident"
-         "(define-capability admin (implies cacheCap_Sessions))" out
+       assert_contains ~what:"imported cache implementation emitted"
+         "var SessionsStore = teslrt.NewCache[string](3600)" out;
+       assert_contains ~what:"imported cache call remains after proof erasure"
+         "return teslmodcachelib.GetSession(k)" out
      | _ -> assert false)
 
 (* ITEM 3 (2-arg Job): `jobs: [Job PingJob handlePing]` type-checked green but
@@ -1081,42 +1055,26 @@ fn submit(m: String) -> Unit
 |}
 
 let queue_first_nominal_refs () =
-  if not (Lazy.force racket_available) then ()
-  else
-    with_files
+  with_files
       [ ("main.tesl", queue_first_src) ]
       (function
        | [main_p] ->
-         let dir = Filename.dirname main_p in
-         let out = emit_ok "queue-before-record module" main_p in
-         (* the queue decl PRECEDES the record decl in queue_first_src — the
-            degraded order pre-fix *)
-         write_file (Filename.concat dir "main.rkt") out;
-         let probe = Printf.sprintf {|#lang racket
-(require (only-in (file "main.rkt"))
-         (only-in tesl/tesl/queue queue-spec-job-type-refs)
-         (only-in tesl/dsl/types type-ref?)
-         (only-in tesl/dsl/private/domain-registry domain-registry-of-kind))
-(for ([s (in-list (domain-registry-of-kind 'queues))])
-  (printf "nominal=~a\n"
-          (andmap type-ref? (queue-spec-job-type-refs s))))
-|} in
-         write_file (Filename.concat dir "probe.rkt") probe;
-         let code, pout =
-           run_shell (Printf.sprintf "cd %s && TESL_REPO_ROOT=%s racket probe.rkt"
-                        (Filename.quote dir) (Filename.quote repo_root)) in
-         if code <> 0 then failf "queue-first probe failed:\n%s" pout;
-         assert_contains ~what:"queue-first nominal refs" "nominal=#t" pout;
-         assert_not_contains ~what:"queue-first nominal refs" "nominal=#f" pout
+         let artifacts = go_artifacts "queue-before-record module" main_p in
+         let out = artifacts |> List.map (fun (a : Emit_go.artifact) -> a.contents)
+           |> String.concat "\n" in
+         assert_contains ~what:"queue declared before record"
+           "var PingQueueQueue = teslrt.NewQueue(\"PingQueue\", 1)" out;
+         assert_contains ~what:"job record remains nominal"
+           "type PingJob struct" out;
+         run_go_tests "queue before record" artifacts
        | _ -> assert false)
 
 (* ITEM 9 (transitive dep tests): main→A(no tests)→B(failing test) — the
    dep-test-submodule require was gated on the DIRECT import's own decls, so
    A was skipped and B's failing test never ran ("1 test passed", exit 0).
    The gate is now "declares tests directly OR transitively", which is
-   exactly the condition under which the dep's emitted .rkt has a test
-   submodule (a testless middle module still emits one that pulls its own
-   deps' test submodules). *)
+   dependency test artifacts must therefore be collected transitively through
+   a testless middle module. *)
 let sandwich_lib_b = {|module LibB exposing [double]
 
 import Tesl.Prelude exposing [Int]
@@ -1155,27 +1113,12 @@ let transitive_dep_tests_compose () =
       ("main.tesl", sandwich_main) ]
     (function
      | [lib_b_p; lib_a_p; main_p] ->
-       let dir = Filename.dirname main_p in
-       let a_out = emit_ok "testless middle module" lib_a_p in
-       (* the testless MIDDLE module emits a test submodule pulling B's *)
-       assert_contains ~what:"middle module test submodule"
-         "(require (submod (file \"lib-b.rkt\") test))" a_out;
-       let main_out = emit_ok "sandwich main" main_p in
-       (* main gates on A's TRANSITIVE closure, not A's own (empty) decls *)
-       assert_contains ~what:"transitive dep-test gate"
-         "(require (submod (file \"lib-a.rkt\") test))" main_out;
-       if Lazy.force racket_available then begin
-         write_file (Filename.concat dir "lib-b.rkt") (emit_ok "lib-b" lib_b_p);
-         write_file (Filename.concat dir "lib-a.rkt") a_out;
-         write_file (Filename.concat dir "main.rkt") main_out;
-         let code, out =
-           run_shell (Printf.sprintf "cd %s && TESL_REPO_ROOT=%s raco test main.rkt"
-                        (Filename.quote dir) (Filename.quote repo_root)) in
-         (* B's failing test must FAIL main's raco test (pre-fix: exit 0) *)
-         if code = 0 then
-           failf "sandwich raco test must fail via LibB's failing test:\n%s" out;
-         assert_contains ~what:"B's test ran" "test failures" out
-       end
+       ignore lib_b_p; ignore lib_a_p;
+       let artifacts = go_artifacts "sandwich main" main_p in
+       if not (List.exists (fun (a : Emit_go.artifact) ->
+           a.path = "internal/teslmodlibb/module_test.go") artifacts) then
+         failf "transitive dependency test artifact was not emitted";
+       run_go_tests ~expect_success:false "transitive failing dependency test" artifacts
      | _ -> assert false)
 
 (* ITEM 11 (qualified partial application): `applyTwice (PartialLib.addN 3) 1`
@@ -1209,12 +1152,14 @@ let qualified_partial_application_eta_expands () =
       ("main.tesl", qualified_partial_main) ]
     (function
      | [_lib_p; main_p] ->
-       let out = emit_ok "qualified partial application" main_p in
-       (* pre-fix: `(applyTwice (addN 3) 1)` — direct under-applied call *)
-       assert_not_contains ~what:"qualified under-application delegated"
-         "(applyTwice (addN 3) 1)" out;
-       assert_contains ~what:"qualified under-application eta-expands"
-         "(lambda (tesl-p-" out
+       check_ok "qualified partial application" main_p;
+       (match Compile.compile_go_file main_p with
+        | Compile.GoSuccess _ -> failf "qualified partial application needs a Go artifact assertion"
+        | Compile.GoFailure diagnostics ->
+          let out = String.concat "\n"
+              (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics) in
+          assert_contains ~what:"documented qualified-call Go gap"
+            "cannot resolve function `PartialLib.addN`" out)
      | _ -> assert false)
 
 (* ITEM 12 (Money/PosixMillis newtype field decode): moneyCodec was missing
@@ -1288,21 +1233,13 @@ let money_posix_newtype_decode_wraps () =
     (function
      | [main_p] ->
        check_ok "money/posix newtype codecs" main_p;
-       let out = emit_ok "money/posix newtype codecs" main_p in
-       (* prim-codec spelling: decode then wrap in the newtype ctor *)
-       assert_contains ~what:"moneyCodec spelling wraps"
-         "(Price (tesl-codec-decode-field _j \"price\" tesl-json-money-codec))" out;
-       (* newtype-name spelling, Money base: decode via the money prim *)
-       assert_contains ~what:"Money-newtype spelling decodes base"
-         "(Cost (tesl-decode-prim-field _j \"cost\" tesl-decode-prim-money))" out;
-       (* newtype-name spelling, PosixMillis base: decode + BASE ctor wrap *)
-       assert_contains ~what:"PosixMillis-newtype spelling wraps base ctor"
-         "(Stamp (PosixMillis (tesl-decode-prim-field _j \"at\" tesl-decode-prim-posix-millis)))" out;
-       (* pre-fix raw-jsexpr shapes must be gone *)
-       assert_not_contains ~what:"raw jsexpr into newtype ctor"
-         "(Cost (jsexpr-required-field" out;
-       assert_not_contains ~what:"raw jsexpr into newtype ctor"
-         "(Stamp (jsexpr-required-field" out
+       (match Compile.compile_go_file main_p with
+        | Compile.GoSuccess _ -> failf "moneyCodec unexpectedly became Go-emittable without behavior coverage"
+        | Compile.GoFailure diagnostics ->
+          let out = String.concat "\n"
+              (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics) in
+          assert_contains ~what:"documented moneyCodec Go gap"
+            "does not emit the `Tesl.Json` export `moneyCodec`" out)
      | _ -> assert false)
 
 (* ITEM 17 (asTool shadowing): a module declaring its own `fn asTool` — the
@@ -1330,7 +1267,7 @@ let astool_shadow_emits_plain_call () =
        (* pre-fix: emit exited 1 with the issue-#24 failwith *)
        let out = emit_ok "shadowed asTool" main_p in
        assert_contains ~what:"ordinary call to the user's asTool"
-         "(double (asTool 20))" out
+         "return double(asTool(teslrt.FromInt64(20)))" out
      | _ -> assert false)
 
 (* Issue #54: `sse "/path" subscribe Channel("literal")` — a broadcast-style
@@ -1405,9 +1342,9 @@ let sse_subscribe_literal_key_emits_matching_literal () =
        (* Route tuple's key slot is the literal string "all", not #f — it must
           match the key `publish RunEvents("all") ...` computes at runtime. *)
        assert_contains ~what:"sse route key slot carries the literal"
-         "(list (list \"runs\" \"stream\") #f RunEvents \"all\" (list))" out;
+         "teslrt.SseStream(RunEventsChannel, \"all\")" out;
        assert_not_contains ~what:"sse route no longer keys on #f"
-         "(list (list \"runs\" \"stream\") #f RunEvents #f (list))" out
+         "teslrt.SseStream(RunEventsChannel, \"\")" out
      | _ -> assert false)
 
 let tests = [
@@ -1428,16 +1365,16 @@ let tests = [
   test_case "partial application in argument position eta-expands" `Quick partial_application_argument_position;
   test_case "newtype field codec: prim spelling wraps decode" `Quick newtype_field_prim_codec_spelling;
   test_case "newtype field codec: newtype-name spelling decodes via base" `Quick newtype_field_newtype_codec_spelling;
-  test_case "dep test submodule required when dep declares tests" `Quick dep_test_submodule_required;
-  test_case "testless dep gets no test-submodule require" `Quick dep_without_tests_not_required;
+  test_case "dependency Go tests emitted and run" `Quick dep_test_submodule_required;
+  test_case "testless dependency gets no Go test artifact" `Quick dep_without_tests_not_required;
   test_case "doctest-only dep counts as declaring tests" `Quick dep_doctest_counts_as_tests;
-  test_case "--test-name selection skips dep test-submodule requires" `Quick single_test_selection_skips_dep_requires;
+  test_case "--test-name selection skips other dependency tests" `Quick single_test_selection_skips_dep_requires;
   (* REVIEW2 batch (2026-07-09) *)
   test_case "local export named like a currency ctor keeps its require" `Quick local_export_named_like_currency_ctor;
   test_case "capability implies cacheCap renders via cap_ident" `Quick cap_implies_renders_cache_cap_ident;
   test_case "capability implies imported cacheCap synthesizes the value" `Quick cap_implies_imported_cache_synthesized;
   test_case "2-arg Job entry rejected at check time" `Quick two_arg_job_rejected;
-  test_case "queue-before-record still mints nominal job-type-refs" `Quick queue_first_nominal_refs;
+  test_case "queue-before-record emits typed Go job" `Quick queue_first_nominal_refs;
   test_case "transitive dep tests compose through a testless middle module" `Quick transitive_dep_tests_compose;
   test_case "qualified partial application in argument position eta-expands" `Quick qualified_partial_application_eta_expands;
   test_case "Money/PosixMillis newtype field decode wraps" `Quick money_posix_newtype_decode_wraps;

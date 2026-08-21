@@ -120,7 +120,7 @@ worker sendEmail(job: String)
   requires [queueRead] =
   job
 |} in
-  check_contains "worker uses define/pow" src "(define/pow"
+  check_contains "worker emits a Go function" src "func sendEmail(job string) string"
 
 (* ── Multi-line return specs ──────────────────────────────────────────────── *)
 
@@ -313,7 +313,8 @@ record R {
 fn scale(r: R, factor: Int) -> R =
   { r | x = r.x * factor }
 |} in
-  check_contains "tesl-record-update for record update" src "tesl-record-update"
+  check_contains "record update preserves unchanged fields" src
+    "return R{X: teslrt.Mul(r.X, factor), Y: r.Y}"
 
 (* ── Channel with key params ──────────────────────────────────────────────── *)
 
@@ -387,7 +388,7 @@ fn now() -> Int = 0
 fn f() -> Int =
   now()
 |} in
-  check_contains "zero arg call" src "(now)"
+  check_contains "zero arg call" src "return now()"
 
 let test_qualified_function_call_emit () =
   let src = {|module Foo exposing []
@@ -396,7 +397,7 @@ import Tesl.Prelude exposing [Int, String]
 fn f(s: String) -> Int =
   String.length s
 |} in
-  check_contains "renamed import" src "tesl_import_String_length"
+  check_contains "qualified stdlib call" src "return teslrt.StringLength(s)"
 
 let test_logical_or_in_where () =
   (* || in SQL where clauses *)
@@ -426,12 +427,12 @@ test "lambda" {
     | _ -> Alcotest.fail "expected DFunc")
 
 let test_lambda_emit () =
-  check_contains "lambda emits define/pow" {|module Foo exposing []
+  check_contains "lambda emits a Go closure" {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fn f(x: Int) -> Int =
   let g = fn(y: Int) -> y * 2
   g x
-|} "tesl-lambda-"
+|} "g := func(y teslrt.Int) teslrt.Int {"
 
 let test_lambda_multi_param () =
   (* Multi-param lambda *)
@@ -500,14 +501,14 @@ let () =
       Alcotest.test_case "main requires { }" `Quick test_main_with_requires;
     ];
     "record-update", [
-      Alcotest.test_case "record update emits hash-set*" `Quick test_record_update_emit;
+      Alcotest.test_case "record update preserves unchanged fields" `Quick test_record_update_emit;
     ];
     "channel", [
       Alcotest.test_case "channel with key params" `Quick test_channel_with_params;
     ];
     "lambda", [
       Alcotest.test_case "lambda parses correctly" `Quick test_lambda_parse;
-      Alcotest.test_case "lambda emits define/pow" `Quick test_lambda_emit;
+      Alcotest.test_case "lambda emits a Go closure" `Quick test_lambda_emit;
       Alcotest.test_case "multi-param lambda" `Quick test_lambda_multi_param;
       Alcotest.test_case "lambda returns constructor" `Quick test_lambda_no_body_issue;
       Alcotest.test_case "lambda with unit params" `Quick test_lambda_adversarial_empty_params;

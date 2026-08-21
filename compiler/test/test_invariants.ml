@@ -250,7 +250,7 @@ fn bad() -> String requires [random] =
   (* 7.10 — proof verification is COMPILE-TIME (proofs are erased; the checker is
      the sole contract). Semantic object: an unsafe program is rejected as a
      STATIC `error[…]` at `--check`, and the rejection does NOT leak to the
-     Racket runtime (no `.rkt:` / `raise-user-error` markers). The exercise
+      Go runtime (no panic / stack-frame markers). The exercise
      below is checked specially (see [assert_no_runtime_leak]); the [expect]
      regex pins the static `error[` marker. *)
   { section = "7.10";
@@ -444,12 +444,11 @@ let with_temp_file content f =
       (try Unix.rmdir dir with _ -> ()))
     (fun () -> f path)
 
-(* A static rejection that leaks to the Racket runtime is NOT a compile-time
+(* A static rejection that leaks to the Go runtime is NOT a compile-time
    guarantee (this is the semantic object of 7.10). *)
 let runtime_leak_re =
   Str.regexp_case_fold
-    "raise-user-error\\|raise-argument-error\\|application: not a procedure\\|\
-     \\.rkt:[0-9]\\|contract violation"
+    "panic:\\|runtime error:\\|goroutine \\|_test\\.go:\\|\\.go:[0-9]"
 
 (* Run one invariant's antagonistic [program], asserting NON-ZERO exit AND that
    the invariant-specific diagnostic [expect] matches. Returns [Ok ()] or

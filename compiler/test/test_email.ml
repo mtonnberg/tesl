@@ -9,21 +9,6 @@
 
 (* ── Helpers ─────────────────────────────────────────────────────────────── *)
 
-let root =
-  match Sys.getenv_opt "TESL_REPO_ROOT" with
-  | Some p when p <> "" -> p
-  | _ ->
-    let rec find dir =
-      let candidate = Filename.concat dir "compiler" in
-      if (try Sys.file_exists candidate && Sys.is_directory candidate with _ -> false)
-      then dir
-      else
-        let parent = Filename.dirname dir in
-        if parent = dir then Filename.current_dir_name
-        else find parent
-    in
-    find (Filename.dirname Sys.executable_name)
-
 let base_imports =
   "import Tesl.Prelude exposing [Int, String, Bool, List, Unit]\n\
    import Tesl.Maybe exposing [Maybe, Nothing, Something]\n\
@@ -47,9 +32,13 @@ let with_db body =
    }\n" ^ body
 
 let compile_ok name src =
-  match Compile.compile_source ~root_path:root "<test>" src with
-  | Compile.Success racket -> racket
-  | Compile.Failure diags ->
+  match Compile.compile_go_source "<test>" src with
+  | Compile.GoSuccess artifacts ->
+    (match List.find_opt (fun (a : Emit_go.artifact) ->
+       a.path = "internal/teslmodm/module.go") artifacts with
+     | Some artifact -> artifact.contents
+     | None -> Alcotest.failf "%s: missing Go module artifact" name)
+  | Compile.GoFailure diags ->
     Alcotest.failf "%s: unexpected compile failure: %s" name
       (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diags))
 
@@ -73,9 +62,9 @@ let contains needle haystack =
   end
 
 let check_contains name src substr =
-  let racket = compile_ok name src in
-  if not (contains substr racket) then
-    Alcotest.failf "%s: expected to find %S in output:\n%s" name substr racket
+  let go = compile_ok name src in
+  if not (contains substr go) then
+    Alcotest.failf "%s: expected to find %S in Go artifact:\n%s" name substr go
 
 let check_err_contains name src substr =
   let msg = compile_err name src in
@@ -116,15 +105,15 @@ let test_parse_email_block () =
   let src = module_ (with_db email_block) in
   ignore (compile_ok "parse_email_block" src)
 
-(** 1.2 Email block emits define-email *)
+(** 1.2 Email block emits one Go outbox *)
 let test_parse_email_emits_define_email () =
   let src = module_ (with_db email_block) in
-  check_contains "email_emits_define_email" src "define-email"
+  check_contains "email_emits_define_email" src "var AppEmailOutbox = teslrt.NewOutbox"
 
-(** 1.2b Email block emits tesl/tesl/email require so define-email macro is bound *)
+(** 1.2b Email block references the Go email runtime *)
 let test_parse_email_emits_runtime_require () =
   let src = module_ (with_db email_block) in
-  check_contains "email_emits_runtime_require" src "tesl/tesl/email"
+  check_contains "email_emits_runtime_require" src "teslrt.NewOutbox"
 
 (** 1.3 Email name appears in output *)
 let test_parse_email_name_emitted () =
@@ -134,28 +123,28 @@ let test_parse_email_name_emitted () =
 (** 1.4 Database reference emitted *)
 let test_parse_email_database_emitted () =
   let src = module_ (with_db email_block) in
-  check_contains "email_database_emitted" src "#:database MainDB"
+  check_contains "email_database_emitted" src "var AppEmailOutbox"
 
 (** 1.5 SMTP host emitted *)
 let test_parse_email_smtp_host () =
   let src = module_ (with_db email_block) in
-  check_contains "email_smtp_host" src "#:smtp-host"
+  check_contains "email_smtp_host" src "Host:"
 
 (** 1.6 SMTP port emitted *)
 let test_parse_email_smtp_port () =
   let src = module_ (with_db email_block) in
-  check_contains "email_smtp_port" src "#:smtp-port 587"
+  check_contains "email_smtp_port" src "Port:     587"
 
 (** 1.7 SMTP TLS emitted *)
 let test_parse_email_smtp_tls () =
   let src = module_ (with_db email_block) in
-  check_contains "email_smtp_tls" src "#:smtp-tls #t"
+  check_contains "email_smtp_tls" src "TLS:      true"
 
-(** 1.8 Email.send parses and emits send-email! *)
+(** 1.8 Email.send parses and emits SendEmail *)
 let test_parse_email_send () =
   let src = module_ ~extra:(with_db email_block)
     "fn sendWelcome(addr: String) -> Unit requires [emailCap] =\n  Email.send AppEmail {\n    to: addr\n    subject: \"Hello\"\n    body: TextBody \"Welcome!\"\n  }\n" in
-  check_contains "parse_email_send" src "send-email!"
+  check_contains "parse_email_send" src "teslrt.SendEmail(AppEmailOutbox"
 
 (** 1.9 Email.send emits email name *)
 let test_parse_email_send_name () =
@@ -163,41 +152,41 @@ let test_parse_email_send_name () =
     "fn sendWelcome(addr: String) -> Unit requires [emailCap] =\n  Email.send AppEmail {\n    to: addr\n    subject: \"Hello\"\n    body: TextBody \"Welcome!\"\n  }\n" in
   check_contains "email_send_name" src "AppEmail"
 
-(** 1.10 Email.send emits #:to *)
+(** 1.10 Email.send emits its recipient argument *)
 let test_parse_email_send_to () =
   let src = module_ ~extra:(with_db email_block)
     "fn sendWelcome(addr: String) -> Unit requires [emailCap] =\n  Email.send AppEmail {\n    to: addr\n    subject: \"Hello\"\n    body: TextBody \"Welcome!\"\n  }\n" in
-  check_contains "email_send_to" src "#:to"
+  check_contains "email_send_to" src "teslrt.SendEmail(AppEmailOutbox, addr"
 
-(** 1.11 Email.send emits #:subject *)
+(** 1.11 Email.send emits its subject argument *)
 let test_parse_email_send_subject () =
   let src = module_ ~extra:(with_db email_block)
     "fn sendWelcome(addr: String) -> Unit requires [emailCap] =\n  Email.send AppEmail {\n    to: addr\n    subject: \"Hello\"\n    body: TextBody \"Welcome!\"\n  }\n" in
-  check_contains "email_send_subject" src "#:subject"
+  check_contains "email_send_subject" src "addr, \"Hello\""
 
 (** 1.12 Email.send with TextBody emits make-text-body *)
 let test_parse_email_send_text () =
   let src = module_ ~extra:(with_db email_block)
     "fn f(addr: String) -> Unit requires [emailCap] =\n  Email.send AppEmail {\n    to: addr\n    subject: \"Hi\"\n    body: TextBody \"body text\"\n  }\n" in
-  check_contains "email_send_text" src "#:body"
+  check_contains "email_send_text" src "teslrt.EmailBodyText"
 
 (** 1.13 Email.send with HtmlBody emits make-html-body *)
 let test_parse_email_send_html () =
   let src = module_ ~extra:(with_db email_block)
     "fn f(addr: String) -> Unit requires [emailCap] =\n  Email.send AppEmail {\n    to: addr\n    subject: \"Hi\"\n    body: HtmlBody \"<h1>Hi</h1>\"\n  }\n" in
-  check_contains "email_send_html" src "#:body"
+  check_contains "email_send_html" src "teslrt.EmailBodyHTML"
 
-(** 1.14 Email.send with RichBody emits #:body *)
+(** 1.14 Email.send with RichBody emits the rich body variant *)
 let test_parse_email_send_no_text_is_false () =
   let src = module_ ~extra:(with_db email_block)
     "fn f(addr: String) -> Unit requires [emailCap] =\n  Email.send AppEmail {\n    to: addr\n    subject: \"Hi\"\n    body: RichBody \"plain\" \"<b>html</b>\"\n  }\n" in
-  check_contains "email_send_rich_body" src "#:body"
+  check_contains "email_send_rich_body" src "teslrt.EmailBodyRich"
 
-(** 1.15 startEmailWorker parses and emits start-email-worker! *)
+(** 1.15 startEmailWorker parses and emits StartEmailWorker *)
 let test_parse_start_email_worker () =
   let src = module_ ~extra:(with_db email_block)
     "fn start() -> Unit requires [emailCap] =\n  startEmailWorker AppEmail\n" in
-  check_contains "parse_start_email_worker" src "start-email-worker!"
+  check_contains "parse_start_email_worker" src "teslrt.StartEmailWorker(AppEmailOutbox)"
 
 (** 1.16 startEmailWorker emits the email name *)
 let test_parse_start_email_worker_name () =
@@ -209,8 +198,8 @@ let test_parse_start_email_worker_name () =
 let test_parse_multiple_email_blocks () =
   let block2 = "email Email2 = Email {\n  database: MainDB\n  smtp: SmtpConfig {\n    host: env(\"H\")\n    port: 465\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: true\n  }\n}\n" in
   let src = module_ (with_db (email_block ^ block2)) in
-  let racket = compile_ok "parse_multiple_emails" src in
-  assert (contains "AppEmail" racket && contains "Email2" racket)
+  let go = compile_ok "parse_multiple_emails" src in
+  assert (contains "AppEmail" go && contains "Email2" go)
 
 (** 1.18 Email.send in let binding is valid *)
 let test_parse_email_send_let () =
@@ -220,16 +209,16 @@ let test_parse_email_send_let () =
      Email.send AppEmail { to: addr subject: \"Bye\" body: TextBody \"Bye\" }\n" in
   ignore (compile_ok "email_send_let" src)
 
-(** 1.19 env() in smtp host is emitted as tesl-env-raw *)
+(** 1.19 env() in smtp host is emitted as an EnvString read *)
 let test_parse_email_env_host () =
   let src = module_ (with_db email_block) in
-  check_contains "email_env_host" src "tesl-env-raw"
+  check_contains "email_env_host" src "teslrt.EnvString(\"SMTP_HOST\", \"\")"
 
-(** 1.20 TLS false is emitted as #f *)
+(** 1.20 TLS false is emitted as false *)
 let test_parse_email_tls_false () =
   let no_tls_block = "email NoTlsEmail = Email {\n  database: MainDB\n  smtp: SmtpConfig {\n    host: env(\"H\")\n    port: 25\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: false\n  }\n}\n" in
   let src = module_ (with_db no_tls_block) in
-  check_contains "email_tls_false" src "#:smtp-tls #f"
+  check_contains "email_tls_false" src "TLS:      false"
 
 (* ── 2. Type inference tests ────────────────────────────────────────────── *)
 
@@ -425,7 +414,8 @@ let test_cap_email_send_requires_email () =
   let src = module_ ~extra:(with_db email_block)
     "fn f(addr: String) -> Unit =\n\
      Email.send AppEmail { to: addr subject: \"Hi\" body: TextBody \"Hi\" }\n" in
-  check_err_contains "cap_email_send_no_cap" src "email"
+  check_err_contains "cap_email_send_no_cap" src
+    "fn 'f' uses privileged operations and callees requiring [emailCap] but does not declare them"
 
 (** 4.2 Email.send with [emailCap] capability does not error *)
 let test_cap_email_send_with_capability () =
@@ -512,26 +502,26 @@ let () =
   run "Email" [
     "parser", [
       test_case "email block parses"                   `Quick test_parse_email_block;
-      test_case "emits define-email"                   `Quick test_parse_email_emits_define_email;
-      test_case "emits tesl/tesl/email require"         `Quick test_parse_email_emits_runtime_require;
+      test_case "emits Go outbox"                      `Quick test_parse_email_emits_define_email;
+      test_case "references Go email runtime"          `Quick test_parse_email_emits_runtime_require;
       test_case "name emitted"                         `Quick test_parse_email_name_emitted;
       test_case "database emitted"                     `Quick test_parse_email_database_emitted;
       test_case "smtp host emitted"                    `Quick test_parse_email_smtp_host;
       test_case "smtp port emitted"                    `Quick test_parse_email_smtp_port;
       test_case "smtp tls emitted"                     `Quick test_parse_email_smtp_tls;
-      test_case "Email.send emits send-email!"         `Quick test_parse_email_send;
+      test_case "Email.send emits SendEmail"           `Quick test_parse_email_send;
       test_case "Email.send emits name"                `Quick test_parse_email_send_name;
-      test_case "Email.send emits #:to"                `Quick test_parse_email_send_to;
-      test_case "Email.send emits #:subject"           `Quick test_parse_email_send_subject;
-      test_case "Email.send with TextBody emits #:body" `Quick test_parse_email_send_text;
-      test_case "Email.send with HtmlBody emits #:body" `Quick test_parse_email_send_html;
-      test_case "Email.send with RichBody emits #:body" `Quick test_parse_email_send_no_text_is_false;
-      test_case "startEmailWorker emits start-email-worker!" `Quick test_parse_start_email_worker;
+      test_case "Email.send emits recipient"            `Quick test_parse_email_send_to;
+      test_case "Email.send emits subject"              `Quick test_parse_email_send_subject;
+      test_case "Email.send emits TextBody"             `Quick test_parse_email_send_text;
+      test_case "Email.send emits HtmlBody"             `Quick test_parse_email_send_html;
+      test_case "Email.send emits RichBody"             `Quick test_parse_email_send_no_text_is_false;
+      test_case "startEmailWorker emits StartEmailWorker" `Quick test_parse_start_email_worker;
       test_case "startEmailWorker emits name"          `Quick test_parse_start_email_worker_name;
       test_case "multiple email blocks"                `Quick test_parse_multiple_email_blocks;
       test_case "Email.send in let binding"            `Quick test_parse_email_send_let;
-      test_case "env() emits tesl-env-raw"             `Quick test_parse_email_env_host;
-      test_case "tls: false emits #f"                   `Quick test_parse_email_tls_false;
+      test_case "env() emits EnvString"                `Quick test_parse_email_env_host;
+      test_case "tls: false emits false"               `Quick test_parse_email_tls_false;
     ];
     "type_inference", [
       test_case "Email.send returns Unit"              `Quick test_type_email_send_unit;
