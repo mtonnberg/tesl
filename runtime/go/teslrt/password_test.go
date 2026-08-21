@@ -1,6 +1,8 @@
 package teslrt
 
 import (
+	"encoding/base64"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -120,5 +122,42 @@ func TestOverlongPasswordIsRejectedAsABadRequest(t *testing.T) {
 	// The limit itself is not off by one: exactly 1024 bytes still hashes.
 	if hash := HashPassword(MakeSecret(strings.Repeat("x", 1024))); hash.Value == "" {
 		t.Fatal("a 1024-byte password did not hash")
+	}
+}
+
+// The cost floor is a POLICY, not an implementation detail: if someone lowers
+// argonMemoryKiB/argonTime (or the salt/tag widths), a minted hash must fail this gate.
+// Every parameter is parsed back out of the PHC string the runtime actually writes, so the
+// test cannot drift from the encoder.
+func TestMintedHashesMeetTheCostFloor(t *testing.T) {
+	hash := HashPassword(MakeSecret("policy-check")).Value
+	fields := strings.Split(hash, "$")
+	// "" / "argon2id" / "v=19" / "m=65536,t=2,p=1" / salt / tag
+	if len(fields) != 6 || fields[1] != "argon2id" {
+		t.Fatalf("not an argon2id PHC string: %q", hash)
+	}
+	var version, memory, time, threads int
+	if _, err := fmt.Sscanf(fields[2], "v=%d", &version); err != nil || version < 19 {
+		t.Fatalf("version %d below floor 19 (%v)", version, err)
+	}
+	if _, err := fmt.Sscanf(fields[3], "m=%d,t=%d,p=%d", &memory, &time, &threads); err != nil {
+		t.Fatalf("cost field %q: %v", fields[3], err)
+	}
+	if memory < 64*1024 {
+		t.Errorf("memory %d KiB below the interactive floor 65536", memory)
+	}
+	if time < 2 {
+		t.Errorf("time cost %d below the floor 2", time)
+	}
+	if threads < 1 {
+		t.Errorf("threads %d below the floor 1", threads)
+	}
+	salt, err := base64.RawStdEncoding.DecodeString(fields[4])
+	if err != nil || len(salt) < 16 {
+		t.Errorf("salt %q shorter than 16 bytes (err=%v)", fields[4], err)
+	}
+	tag, err := base64.RawStdEncoding.DecodeString(fields[5])
+	if err != nil || len(tag) < 32 {
+		t.Errorf("tag %q shorter than 32 bytes (err=%v)", fields[5], err)
 	}
 }

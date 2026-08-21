@@ -1,0 +1,75 @@
+// http_chain_test.go.tmpl — injected by scripts/run-go-integration.sh into a
+// freshly emitted Go module built from tests/integration/http_fullchain.tesl.
+//
+// This is the LIBRARY half of the full-chain proof: the emitted handler runs
+// for real, teslrt's HTTP client dials a real httptest upstream over real TCP,
+// and the assertions cover what crossed the wire in both directions. The
+// SERVER half (the compiled binary listening on its own port) lives in the
+// script itself.
+//
+// __PACKAGE__ is substituted with the emitted package name before injection.
+package __PACKAGE__
+
+import (
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func TestFullChainGetReachesARealUpstream(t *testing.T) {
+	var gotMethod, gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		_, _ = io.WriteString(w, "hello-from-upstream")
+	}))
+	defer upstream.Close()
+	t.Setenv("FULLCHAIN_UPSTREAM_URL", upstream.URL+"/chain")
+
+	body := FetchUpstream()
+	if body != "hello-from-upstream" {
+		t.Fatalf("emitted handler returned %q, want the upstream's body", body)
+	}
+	if gotMethod != "GET" || gotPath != "/chain" {
+		t.Fatalf("upstream saw %s %s, want GET /chain", gotMethod, gotPath)
+	}
+}
+
+func TestFullChainGetReportsANon2xxUpstream(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(w, "this must not leak through")
+	}))
+	defer upstream.Close()
+	t.Setenv("FULLCHAIN_UPSTREAM_URL", upstream.URL)
+
+	if body := FetchUpstream(); body != "UPSTREAM_FAILED" {
+		t.Fatalf("a 503 upstream produced %q, want the UPSTREAM_FAILED marker", body)
+	}
+}
+
+func TestFullChainPostSendsHeadersAndBody(t *testing.T) {
+	const payload = "chain-payload-42"
+	var gotMethod, gotType, gotBody string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotType = r.Header.Get("Content-Type")
+		raw, _ := io.ReadAll(r.Body)
+		gotBody = string(raw)
+		_, _ = io.WriteString(w, "echo:"+payload)
+	}))
+	defer upstream.Close()
+	t.Setenv("FULLCHAIN_UPSTREAM_URL", upstream.URL)
+
+	body := PostUpstream(payload)
+	if body != "echo:"+payload {
+		t.Fatalf("POST chain returned %q, want the upstream echo", body)
+	}
+	if gotMethod != "POST" || gotBody != payload {
+		t.Fatalf("upstream saw %s body %q, want POST body %q", gotMethod, gotBody, payload)
+	}
+	if !strings.HasPrefix(gotType, "text/plain") {
+		t.Fatalf("upstream saw Content-Type %q, want text/plain from the declared header", gotType)
+	}
+}

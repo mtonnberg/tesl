@@ -185,7 +185,7 @@ var NotesServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := cookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := cookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -199,7 +199,7 @@ var NotesServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := cookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := cookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -225,7 +225,7 @@ var NotesServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := adminAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := adminAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}

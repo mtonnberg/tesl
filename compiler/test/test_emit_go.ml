@@ -3986,13 +3986,14 @@ import Tesl.Database exposing [
 
 secret Token = String
 
-# A payload-carrying variant whose payload is itself a `Maybe`: the stored JSON holds the
-# TAGGED shape `{"tag": "Nothing"}`, never a JSON null, so a decoder that tests for null
-# would read every absent note as present.
+# The same secret newtype carried INSIDE a variant payload: the column decoder has to
+# rebuild the redacting wrapper (not a bare string), and the storage encoder has to bind
+# the plaintext. A bare `Token` column exercises only half of that machinery.
 type Priority
   = Low
   | Numbered level: Int
   | Named label: String note: (Maybe String)
+  | Guarded key: Token
 
 entity Ticket table "pg_column_tickets" primaryKey id {
   id: String
@@ -4030,6 +4031,7 @@ fn labelOf(wanted: String) -> String requires [dbRead] =
           case note of
             Nothing -> label
             Something extra -> label ++ "/" ++ extra
+        Guarded key -> if key == Token "g-5" then "guarded-ok" else "guarded-no"
 
 # A `secret` column: the column stores the newtype's BASE value, and what comes back is the
 # newtype again — so the only thing a caller can do with it is compare, which is the point.
@@ -4051,10 +4053,12 @@ test "a payload ADT, a secret and a nullable column all survive a round trip" wi
   let _ = store "t-2" (Numbered 3) (Token "k-2") Nothing
   let _ = store "t-3" (Named "urgent" Nothing) (Token "k-3") Nothing
   let _ = store "t-4" (Named "urgent" (Something "today")) (Token "k-4") (Something "grace")
+  let _ = store "t-5" (Guarded (Token "g-5")) (Token "k-5") Nothing
   expect labelOf "t-1" == "low"
   expect labelOf "t-2" == "n3"
   expect labelOf "t-3" == "urgent"
   expect labelOf "t-4" == "urgent/today"
+  expect labelOf "t-5" == "guarded-ok"
   expect labelOf "t-404" == "none"
   expect tokenMatches "t-1" (Token "k-1") == True
   expect tokenMatches "t-1" (Token "k-2") == False
@@ -4077,6 +4081,12 @@ let test_pg_columns_with_go () =
       (contains module_go ".Value.Reveal()");
     check bool "a secret column scans back into a secret" true
       (contains module_go "Token{Value: teslrt.MakeSecret(");
+    (* The same two rules inside an ADT payload: the storage encoder reveals, the column
+       decoder re-wraps — a decoded Guarded must print "[redacted]" like any other secret. *)
+    check bool "an ADT-carried secret binds its plaintext" true
+      (contains module_go "teslEncodeGuardedKey(teslValue.Value.Reveal())");
+    check bool "an ADT-carried secret scans back into a secret" true
+      (contains module_go "PriorityPayload{Key: Token{Value: teslrt.MakeSecret(");
     (* `isNull` asks the STORE, so it has to reach the statement rather than filtering rows
        here — a predicate evaluated in Go would answer the same on this data and the wrong
        thing on a table that does not fit in memory. *)
@@ -4206,6 +4216,62 @@ let test_server_clauses_with_go () =
   gate_emitted ~env:["GOCLAUSES_SESSION_KEY=clauses-signing-key-0123456789";
                      "GOCLAUSES_PREVIOUS_KEY=clauses-previous-key-0123456789"]
     "tesl-go-server-clauses" emitted
+
+(* ─── App.mountPath / App.static reach ServeOptions ──────────────────────────
+   The runtime's MountPath routing is well tested (serve_test.go), but nothing
+   proved the EMITTER forwards the App record's `mountPath`/`static` fields — a
+   dropped field here would silently serve the API at "/" and the SPA nowhere,
+   with zero diagnostics.  Both halves are asserted: present when declared
+   (as Go string literals inside the emitted ServeOptions) and absent when not. *)
+let app_mount_source = {|module GoMount exposing [hello]
+
+import Tesl.Prelude exposing [Int, String]
+import Tesl.App exposing [App]
+
+api MountApi {
+  get "/hello" -> String
+}
+
+handler get hello() -> String = "hi"
+
+server MountServer for MountApi {
+  hello
+}
+
+database MountDb = Database {
+  entities: []
+  backend: Memory
+}
+
+main() -> App =
+  App {
+    database: MountDb
+    api: MountServer
+    port: 8090
+    mountPath: "/app"
+    static: "public"
+  }
+|}
+
+let test_app_mount_fields_with_go () =
+  let emitted = emit_ok "<go-app-mount>" app_mount_source in
+  let module_go = artifact "internal/teslmodgomount/module.go" emitted in
+  check bool "mountPath reaches the serve options" true
+    (contains module_go "MountPath: \"/app\"");
+  check bool "static reaches the serve options" true
+    (contains module_go "StaticDir: \"public\"")
+
+let test_app_mount_fields_absent_when_undeclared () =
+  (* Same program without the two fields: no MountPath/StaticDir may appear in
+     any ServeOptions — an empty-string field would change routing semantics
+     (an empty MountPath trims to "" and matches everything). *)
+  let bare = Str.global_replace (Str.regexp_string "\n    mountPath: \"/app\"\n") "\n"
+      (Str.global_replace (Str.regexp_string "\n    static: \"public\"\n") "\n"
+         app_mount_source) in
+  let emitted = emit_ok "<go-app-bare>" bare in
+  let module_go = artifact "internal/teslmodgomount/module.go" emitted in
+  check bool "no MountPath without the App field" true (not (contains module_go "MountPath:"));
+  check bool "no StaticDir without the App field" true (not (contains module_go "StaticDir:"))
 
 let test_trusted_proxies_emits_client_address () =
   let emitted = emit_ok "<go-trusted-proxies>" server_clauses_source in
@@ -12777,7 +12843,11 @@ let () =
       test_case "a Postgres round trip" `Slow test_postgres_live_with_go;
       test_case "payload ADT, secret and nullable columns" `Slow test_pg_columns_with_go;
       test_case "every server clause reaches the boot init" `Slow test_server_clauses_with_go;
-       test_case "trustedProxies exposes clientAddress" `Quick test_trusted_proxies_emits_client_address;
+      test_case "trustedProxies exposes clientAddress" `Quick test_trusted_proxies_emits_client_address;
+      test_case "App.mountPath and App.static reach ServeOptions" `Quick
+        test_app_mount_fields_with_go;
+      test_case "no mount fields when the App declares none" `Quick
+        test_app_mount_fields_absent_when_undeclared;
       test_case "List.unique takes a keyed path where it can" `Slow test_list_unique_with_go;
       test_case "a declared JSON payload is checked before parsing" `Slow
         test_json_payload_with_go;

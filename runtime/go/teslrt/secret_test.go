@@ -59,3 +59,43 @@ func TestSecretEqualIsConstantTime(t *testing.T) {
 		t.Error("different lengths must not compare equal")
 	}
 }
+
+// Deep redaction: a secret nested inside slices, maps and deeper structs must stay
+// redacted through BOTH rendering paths — fmt (which reaches String on the field) and
+// JSON (which reaches MarshalJSON). One nested path that leaks is a breach; this walks
+// the shapes a real payload actually takes.
+func TestDeeplyNestedSecretsStayRedacted(t *testing.T) {
+	type apiKey struct {
+		Name string
+		Key  SecretString
+	}
+	type envelope struct {
+		Keys  []apiKey
+		Token SecretString
+		Meta  map[string]SecretString
+	}
+	payload := envelope{
+		Keys:  []apiKey{{Name: "prod", Key: MakeSecret("deep-plain")}},
+		Token: MakeSecret("shallow-plain"),
+		Meta:  map[string]SecretString{"billing": MakeSecret("map-plain")},
+	}
+	for label, rendered := range map[string]string{
+		"fmt": fmt.Sprintf("%v", payload),
+		"json": func() string {
+			encoded, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			return string(encoded)
+		}(),
+	} {
+		for _, plain := range []string{"deep-plain", "shallow-plain", "map-plain"} {
+			if strings.Contains(rendered, plain) {
+				t.Errorf("%s disclosed a nested secret payload %q: %s", label, plain, rendered)
+			}
+		}
+		if !strings.Contains(rendered, SecretRedaction) {
+			t.Errorf("%s did not carry the redaction marker: %s", label, rendered)
+		}
+	}
+}

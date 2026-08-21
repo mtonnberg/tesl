@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 )
 
@@ -147,10 +148,17 @@ type Debugger struct {
 	breakpoints    map[string]*DebugBreakpoint
 	paused         bool
 	pauseRequested bool
-	lastFrame      DebugFrame
-	stepMode       DebugStepMode
-	stepOrigin     DebugFrame
-	stack          []DebugFrame
+	// PauseTimeout bounds how long ONE stop may hold application goroutines
+	// before the debugger auto-resumes. Zero (the default) waits forever —
+	// correct while a human is stepping in a live session, because resuming
+	// under them would corrupt their mental model of "paused". The attach/DAP
+	// servers set this from TESL_DEBUG_PAUSE_TIMEOUT_MS so a client that dies
+	// mid-stop (SIGKILL, laptop sleep) cannot wedge a long-running service.
+	PauseTimeout time.Duration
+	lastFrame    DebugFrame
+	stepMode     DebugStepMode
+	stepOrigin   DebugFrame
+	stack        []DebugFrame
 }
 
 type DebugScope struct {
@@ -265,6 +273,18 @@ func (debugger *Debugger) Checkpoint(frame DebugFrame) {
 	debugger.mutex.Unlock()
 	listener(DebugEvent{Kind: "stopped", Frame: frame, Stack: stack})
 	debugger.mutex.Lock()
+	// The auto-resume guard: one timer per stop. It re-checks under the mutex
+	// (a human Continue may have won the race) and broadcasts so every waiting
+	// checkpoint re-evaluates `paused`. Stopped when the wait ends first.
+	if debugger.PauseTimeout > 0 {
+		timer := time.AfterFunc(debugger.PauseTimeout, func() {
+			debugger.mutex.Lock()
+			debugger.paused = false
+			debugger.mutex.Unlock()
+			debugger.condition.Broadcast()
+		})
+		defer timer.Stop()
+	}
 	for debugger.paused && debugger.listener != nil {
 		debugger.condition.Wait()
 	}

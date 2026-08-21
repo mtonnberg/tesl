@@ -121,6 +121,39 @@ _tesl_file_stamp() {
 # `mktemp`; both dialects accept an explicit trailing-X template.
 _tesl_mktemp()     { mktemp  "${TMPDIR:-/tmp}/tesl.XXXXXXXX"; }
 _tesl_mktemp_dir() { mktemp -d "${TMPDIR:-/tmp}/tesl.XXXXXXXX"; }
+
+# Project root for a DIRECTORY: the nearest ancestor (or itself) with tesl.toml.
+_tesl_project_root_of_dir() {
+  local d
+  d="$(cd -P "$1" 2>/dev/null && pwd -P)" || return 1
+  while :; do
+    if [ -f "$d/tesl.toml" ]; then echo "$d"; return 0; fi
+    [ "$d" = "/" ] && return 1
+    d="$(dirname "$d")"
+  done
+}
+
+# Project root for a .tesl FILE: nearest ancestor with tesl.toml, falling back
+# to the file's own directory (a bare single-file project with no manifest).
+_tesl_project_root() {
+  local dir
+  dir="$(cd -P "$(dirname "$1")" 2>/dev/null && pwd -P)" || return 1
+  _tesl_project_root_of_dir "$dir" || echo "$dir"
+}
+
+# Effective build root for a project root ($1), honoring TESL_BUILD_DIR.
+_tesl_build_root() {
+  local root="$1"
+  if [ -n "${TESL_BUILD_DIR:-}" ]; then
+    case "$TESL_BUILD_DIR" in
+      /*) echo "$TESL_BUILD_DIR" ;;
+      *)  echo "$root/$TESL_BUILD_DIR" ;;
+    esac
+  else
+    echo "$root/.tesl-stuff/build"
+  fi
+}
+
 _tesl_project_mktemp_dir() {
   local file="$1" prefix="$2" project
   project="$(_tesl_project_root "$file")" || return 1
@@ -903,6 +936,72 @@ _tesl_build_go() {
     (cd "$out" && "${TESL_GO:-go}" build ./...) || return 1
     echo "tesl build: $name compiled Go module — $entry → $out"
   fi
+}
+
+_tesl_build() {
+  _tesl_require_compiler
+  local VARIANT="" TAG="" NO_DOCKER=0 OUT="" MODE=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --app-only)      VARIANT="app-only";  MODE="container"; shift ;;
+      --with-postgres) VARIANT="all-in-one"; MODE="container"; shift ;;
+      --tag)           TAG="${2:?--tag needs a value}"; MODE="container"; shift 2 ;;
+      --no-docker)     NO_DOCKER=1; MODE="container"; shift ;;
+      --out)           OUT="${2:?--out needs a value}"; MODE="container"; shift 2 ;;
+      --container)     MODE="container"; shift ;;
+      --local)         MODE="local"; shift ;;
+      --help|-h)
+        echo "Usage: tesl build [--local|--container] [--app-only|--with-postgres]"
+        echo "                  [--tag NAME] [--no-docker] [--out DIR]"
+        echo "  Build the project named by tesl.toml. Without a flag the mode comes from"
+        echo "  [deploy].target: \"local\" compiles into .tesl-stuff/go-build/ (no Docker),"
+        echo "  \"container\" stages a Dockerfile and builds the image."
+        return 0 ;;
+      -*)              echo "tesl build: unknown flag $1" >&2; return 1 ;;
+      *)               echo "tesl build: unexpected arg $1" >&2; return 1 ;;
+    esac
+  done
+
+  local MANIFEST="./tesl.toml"
+  [ -f "$MANIFEST" ] || { echo "tesl build: no tesl.toml in $(pwd) (run 'tesl init' first)" >&2; return 1; }
+
+  local NAME ENTRY PORT DBMODE TARGET
+  NAME="$(tesl_manifest_get "$MANIFEST" project name 2>/dev/null || true)"; NAME="${NAME:-app}"
+  ENTRY="$(tesl_manifest_get "$MANIFEST" project entrypoint 2>/dev/null || true)"; ENTRY="${ENTRY:-app.tesl}"
+  PORT="$(tesl_manifest_get "$MANIFEST" env PORT 2>/dev/null || true)"; PORT="${PORT:-8086}"
+  DBMODE="$(tesl_manifest_get "$MANIFEST" database mode 2>/dev/null || true)"; DBMODE="${DBMODE:-none}"
+  TARGET="$(tesl_manifest_get "$MANIFEST" deploy target 2>/dev/null || true)"
+
+  [ -f "$ENTRY" ] || { echo "tesl build: entrypoint '$ENTRY' not found" >&2; return 1; }
+
+  if [ -z "$MODE" ]; then
+    case "$TARGET" in
+      local)     MODE="local" ;;
+      container) MODE="container" ;;
+      "")        MODE="container" ;;   # pre-[deploy] manifests: unchanged behaviour
+      *)         echo "tesl build: unknown [deploy].target \"$TARGET\" (local|container); assuming container" >&2
+                 MODE="container" ;;
+    esac
+  fi
+
+  # ── Local build: compile + go-build the binary, no Docker involved ──────────
+  if [ "$MODE" = "local" ]; then
+    _tesl_build_go "$ENTRY" "$NAME" "" || return 1
+    echo ""
+    echo "Run it:"
+    [ "$DBMODE" = "managed" ] && echo "  tesl db start          # start the project-local Postgres"
+    echo "  tesl run $ENTRY   # serve on http://localhost:$PORT"
+    echo ""
+    echo "For a Docker image instead: tesl build --container (or set [deploy].target = \"container\")."
+    return 0
+  fi
+
+  if [ -z "$VARIANT" ]; then
+    if [ "$DBMODE" = "managed" ]; then VARIANT="all-in-one"; else VARIANT="app-only"; fi
+  fi
+  [ -z "$TAG" ] && TAG="$NAME"
+
+  _tesl_build_go_container "$ENTRY" "$NAME" "$PORT" "$DBMODE" "$VARIANT" "$TAG" "$NO_DOCKER" "$OUT"
 }
 
 _tesl_build_go_container() {

@@ -8377,6 +8377,11 @@ and sql_adt_field_decoder loc ty raw =
   | TFloat -> Printf.sprintf "teslrt.MustDecodeFloat(%s)" raw
   | TString -> Printf.sprintf "teslrt.MustDecodeString(%s)" raw
   | TBool -> Printf.sprintf "teslrt.MustDecodeBool(%s)" raw
+  | TNewtype ({ secret = true; base; owner; go_name; _ }) ->
+    (* Read back into the redacting carrier — a secret inside a decoded ADT must print
+       "[redacted]" exactly like one the program built (same rule as sql_scan_carrier). *)
+    Printf.sprintf "%s{Value: teslrt.MakeSecret(%s)}"
+      (qualified owner go_name) (sql_adt_field_decoder loc base raw)
   | TNewtype newtype ->
     Printf.sprintf "%s{Value: %s}" (qualified newtype.owner newtype.go_name)
       (sql_adt_field_decoder loc newtype.base raw)
@@ -10290,6 +10295,15 @@ let rec value_encoder ty =
     remember_helper ~prefix:"teslEncode"
       ~signature:(Printf.sprintf "(teslValue %s) any" (go_type ty))
       ~body:"teslValue"
+  | TNewtype ({ secret = true; _ } as info) ->
+    (* A secret payload inside an ADT column binds its PLAINTEXT — the same rule as a bare
+       secret column (see sql_bound_value): storage is not rendering, and redaction is about
+       logs and prints, not about what the program explicitly declared it stores. The checker
+       refuses any secret in a response/wire position, so this arm only ever serves storage
+       paths; revealing here cannot leak onto a wire. *)
+    remember_helper ~prefix:"teslEncode"
+      ~signature:(Printf.sprintf "(teslValue %s) any" (go_type ty))
+      ~body:(encoded_field "teslValue.Value.Reveal()" info.base)
   | TNewtype info ->
     remember_helper ~prefix:"teslEncode"
       ~signature:(Printf.sprintf "(teslValue %s) any" (go_type ty))

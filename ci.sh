@@ -38,7 +38,10 @@
 #    7. Exact-match snaps     byte-exact Go snapshots
 #    8. Go corpus             recursive tracked-source compile/build
 #    9. Mutation              Go mutation testing on lesson42 + scalar proof corpus
-#   10. Integration           httpclient + email alcotest integration exes
+#   10. Integration           full-chain Go: HTTP library + server chain, SMTP
+#                             delivery (scripts/run-go-integration.sh)
+#   10a. Clean install        nix-built #tesl-go-cli wrapper: init/emit/build
+#                             under env -i (tests/go-clean-install.sh)
 #   11. Boot smoke            Go App activation via `tesl run`
 #   12. Playground parity     scripts/playground-parity.sh — the browser build's
 #                             teslCheck vs `tesl --check-json` over 30 lessons
@@ -114,7 +117,7 @@ phase_started_at=$SECONDS
 
 # ── Phase registry / progress bar ────────────────────────────────────────────
 # We know the phase count up front so each phase can print "[N/T] <name>".
-TOTAL_PHASES=20
+TOTAL_PHASES=21
 PHASE_NUM=0
 # Parallel arrays: name / status (OK|FAIL|SKIP) / elapsed seconds.
 PHASE_NAMES=()
@@ -889,7 +892,7 @@ else
         fi
         rm -rf "$_snap_out" "$_snap_fresh"
     done <<EOF
-$(find "$SCRIPT_DIR/example" -name '*.go.snap' 2>/dev/null | LC_ALL=C sort)
+$(find "$SCRIPT_DIR/example" "$SCRIPT_DIR/tests" "$SCRIPT_DIR/templates" -name '*.go.snap' 2>/dev/null | LC_ALL=C sort)
 EOF
     printf "  EXACT MATCH: %d snapshot(s); %d differ; %d orphan(s)\n" \
         "$GO_SNAP_OK" "${#GO_SNAP_FAILS[@]}" "${#GO_SNAP_MISSING[@]}"
@@ -925,7 +928,12 @@ elif [ "$shared_postgres_configured" -eq 0 ]; then
     printf "  %s⚠%s  no shared PostgreSQL cluster — skipping\n" "$C_YELLOW" "$C_RESET"
     phase_end SKIP
 else
-    if ( cd "$SCRIPT_DIR/runtime/go" && go test -count=1 ./teslrt -run 'Postgres|OpenPostgres' ); then
+    # The selection covers every test that needs the cluster: the Postgres
+    # backend's own (Postgres|OpenPostgres), the bound-vs-memory dispatch and
+    # grouped-aggregate/Money parity (Bound), transactions (Transaction), and
+    # pool saturation under a live server. Tests whose names match none of
+    # these are hermetic by construction and already ran in phase 2a.
+    if ( cd "$SCRIPT_DIR/runtime/go" && go test -count=1 ./teslrt -run 'Postgres|OpenPostgres|Bound|Transaction|MoneySum|GroupFold|PoolSaturates' ); then
         phase_end OK
     else
         phase_end FAIL
@@ -990,43 +998,54 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Phase 9 — Integration tests (httpclient + email)
+#  Phase 9 — Integration tests (full-chain httpclient + email)
 # ══════════════════════════════════════════════════════════════════════════════
+# The Racket-era OCaml executables this phase used to drive are gone with the
+# Racket backend. scripts/run-go-integration.sh is the Go-backend successor:
+# it compiles real fixtures (tests/integration/*.tesl), injects harness tests
+# into the emitted modules, and proves three live chains — an emitted handler
+# dialing a real upstream over TCP, the compiled binary serving its own route,
+# and generated email delivered through a real SMTP conversation.
 phase_begin "Integration tests (httpclient + email)"
-integration_fail=0
-_DUNE="$(command -v dune 2>/dev/null)"
-if [ -z "$_DUNE" ]; then
-    printf "  %s⚠%s  dune not found — skipping integration tests\n" "$C_YELLOW" "$C_RESET"
+if ! command -v go >/dev/null 2>&1; then
+    printf "  %s⚠%s  go not on PATH — skipping integration tests\n" "$C_YELLOW" "$C_RESET"
     phase_end SKIP
-elif [ ! -f "$_main_exe" ]; then
+elif [ ! -x "$_main_exe" ]; then
     printf "  %s⚠%s  compiler not built — skipping integration tests\n" "$C_YELLOW" "$C_RESET"
     phase_end SKIP
 else
-    integration_ran=0
-    for _suite in test_httpclient_integration test_email_integration; do
-        _exe="$COMPILER_DIR/_build/default/test/${_suite}.exe"
-        if [ ! -x "$_exe" ]; then
-            ( cd "$COMPILER_DIR" && dune build "test/${_suite}.exe" 2>/dev/null ) || true
-        fi
-        if [ -x "$_exe" ]; then
-            integration_ran=1
-            printf "  Running %s...\n" "$_suite"
-            if "$_exe" --color=never 2>&1 | grep -E "^\s+\[FAIL\]|Test Successful|failure" | grep -v "Test Successful"; then
-                integration_fail=$((integration_fail + 1))
-                printf "  %s✗%s  %s: failures detected\n" "$C_RED" "$C_RESET" "$_suite"
-            else
-                printf "  %s✓%s  %s\n" "$C_GREEN" "$C_RESET" "$_suite"
-            fi
-        else
-            printf "  %s⚠%s  %s not built — skipping\n" "$C_YELLOW" "$C_RESET" "$_suite"
-        fi
-    done
-    if [ "$integration_fail" -gt 0 ]; then
-        phase_end FAIL
-    elif [ "$integration_ran" -eq 0 ]; then
-        phase_end SKIP
-    else
+    if TESL_REPO_ROOT="$SCRIPT_DIR" TESL_OCAML_COMPILER="$_main_exe" \
+        bash "$SCRIPT_DIR/scripts/run-go-integration.sh"; then
         phase_end OK
+    else
+        phase_end FAIL
+    fi
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Phase 9a — Clean install (nix-built shipped profile)
+# ══════════════════════════════════════════════════════════════════════════════
+# The dev shell exercises the repo compiler directly, so a broken INSTALLED
+# wrapper ships unnoticed (it happened: the Racket-removal commit deleted the
+# _tesl_project_root helper block while keeping every call site — every
+# installed `tesl compile/build` died with "_tesl_project_root: command not
+# found"). This phase builds the actual flake profile (#tesl-go-cli) and drives
+# `init`/`emit`/`build --no-docker` through it under a scrubbed environment
+# (env -i), exactly what a fresh `nix profile install` user gets.
+phase_begin "Clean install (nix-built shipped wrapper)"
+if ! command -v nix >/dev/null 2>&1; then
+    printf "  %s⚠%s  nix not found — skipping clean-install gate\n" "$C_YELLOW" "$C_RESET"
+    phase_end SKIP
+elif ! command -v go >/dev/null 2>&1; then
+    printf "  %s⚠%s  go not found — skipping clean-install gate\n" "$C_YELLOW" "$C_RESET"
+    phase_end SKIP
+else
+    _clean_install_link="$(mktemp -d)/tesl-profile"
+    if nix build .#tesl-go-cli -o "$_clean_install_link" \
+        && TESL_BIN="$_clean_install_link/bin/tesl" bash "$SCRIPT_DIR/tests/go-clean-install.sh"; then
+        phase_end OK
+    else
+        phase_end FAIL
     fi
 fi
 

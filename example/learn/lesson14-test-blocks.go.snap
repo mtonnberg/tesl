@@ -316,7 +316,7 @@ func TestTesl8(teslT *testing.T) {
 	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "doctest: factorial" && teslWanted != "TestTesl8" {
 		teslT.Skip("named test filter")
 	}
-	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "doctest" {
 		teslT.Skip("test kind filter")
 	}
 	teslLeft23 := Factorial(teslrt.FromInt64(0))
@@ -340,7 +340,7 @@ func TestTesl9(teslT *testing.T) {
 	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "doctest: fibonacci" && teslWanted != "TestTesl9" {
 		teslT.Skip("named test filter")
 	}
-	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "doctest" {
 		teslT.Skip("test kind filter")
 	}
 	teslLeft26 := Fibonacci(teslrt.FromInt64(0))

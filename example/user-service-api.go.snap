@@ -713,7 +713,7 @@ var UserServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := jwtAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := jwtAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -727,7 +727,7 @@ var UserServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := jwtAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := jwtAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}

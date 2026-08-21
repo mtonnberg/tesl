@@ -646,7 +646,7 @@ var ChatServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := cookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := cookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -660,7 +660,7 @@ var ChatServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := cookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := cookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -686,7 +686,7 @@ var ChatServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := cookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := cookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -709,7 +709,7 @@ var ChatServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := cookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := cookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -740,7 +740,7 @@ var ChatServer = teslrt.Server{
 	},
 	Streams: map[string]teslrt.StreamFunc{
 		"sse:/events/rooms/:roomId": func(teslWriter http.ResponseWriter, teslRequest *http.Request) {
-			teslAuth := cookieAuth(teslrt.NewHttpRequest(teslRequest, ""))
+			teslAuth := cookieAuth(teslrt.NewHttpRequest(teslRequest, "", []string{}...))
 			if !teslAuth.OK() {
 				http.Error(teslWriter, teslAuth.Message(), teslAuth.Status())
 				return

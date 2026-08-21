@@ -213,7 +213,7 @@ func TestTesl5(teslT *testing.T) {
 	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "doctest: double" && teslWanted != "TestTesl5" {
 		teslT.Skip("named test filter")
 	}
-	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "doctest" {
 		teslT.Skip("test kind filter")
 	}
 	teslLeft14 := Double(teslrt.FromInt64(0))
@@ -232,7 +232,7 @@ func TestTesl6(teslT *testing.T) {
 	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "doctest: negate" && teslWanted != "TestTesl6" {
 		teslT.Skip("named test filter")
 	}
-	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "doctest" {
 		teslT.Skip("test kind filter")
 	}
 	teslLeft16 := Negate(teslrt.FromInt64(3))
@@ -252,7 +252,7 @@ func TestTesl7(teslT *testing.T) {
 	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "doctest: clamp" && teslWanted != "TestTesl7" {
 		teslT.Skip("named test filter")
 	}
-	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
+	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "doctest" {
 		teslT.Skip("test kind filter")
 	}
 	teslLeft18 := Clamp(teslrt.FromInt64(0), teslrt.FromInt64(10), teslrt.FromInt64(5))

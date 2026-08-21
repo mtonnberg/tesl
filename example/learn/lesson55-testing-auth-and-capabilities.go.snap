@@ -114,7 +114,7 @@ var AuthServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := sessionAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := sessionAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}

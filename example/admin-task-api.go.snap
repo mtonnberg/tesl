@@ -167,7 +167,7 @@ var AdminTaskServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := cookieUserAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := cookieUserAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}

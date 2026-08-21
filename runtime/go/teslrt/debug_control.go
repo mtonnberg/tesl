@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -135,6 +136,7 @@ func (debugger *Debugger) StartDebugControlTCP(port int) (*DebugControlServer, e
 // inert unless TESL_DEBUG is enabled, while explicit socket/port variables make
 // test and attach launchers deterministic.
 func StartDebugControlFromEnvironment() (*DebugControlServer, error) {
+	applyEnvPauseTimeout(DefaultDebugger)
 	if socket := os.Getenv("TESL_DEBUG_SOCKET"); socket != "" {
 		return DefaultDebugger.StartDebugControl(socket)
 	}
@@ -154,6 +156,17 @@ func StartDebugControlFromEnvironment() (*DebugControlServer, error) {
 		root = "."
 	}
 	return DefaultDebugger.StartDebugControl(filepath.Join(root, ".tesl-stuff", "debug.sock"))
+}
+
+// applyEnvPauseTimeout reads TESL_DEBUG_PAUSE_TIMEOUT_MS (milliseconds) into
+// debugger.PauseTimeout. Unset or invalid leaves the current value — zero by
+// default, i.e. an interactive session waits forever for its human.
+func applyEnvPauseTimeout(debugger *Debugger) {
+	if raw := os.Getenv("TESL_DEBUG_PAUSE_TIMEOUT_MS"); raw != "" {
+		if value, err := strconv.ParseInt(raw, 10, 64); err == nil && value > 0 {
+			debugger.PauseTimeout = time.Duration(value) * time.Millisecond
+		}
+	}
 }
 
 func newDebugControlServer(debugger *Debugger, listener net.Listener, path string) *DebugControlServer {

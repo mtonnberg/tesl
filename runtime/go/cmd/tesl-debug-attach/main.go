@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -48,21 +49,34 @@ func (values *stringFlags) Set(value string) error {
 }
 
 func main() {
-	project := flag.String("project", "", "project directory containing .tesl-stuff/debug.sock or debug.port")
-	socket := flag.String("socket", "", "Unix debug socket")
-	tcp := flag.String("tcp", "", "loopback debug address")
-	operation := flag.String("operation", "bridge", "bridge, once, snapshot, ping, or detach")
-	bridgeOnce := flag.Bool("bridge-once", false, "process one bridge request and exit")
-	once := flag.Bool("once", false, "arm breakpoints, wait for one stop, and return")
-	snapshot := flag.Bool("snapshot", false, "return the current paused snapshot")
-	ping := flag.Bool("ping", false, "check whether the endpoint is alive")
-	detach := flag.Bool("detach", false, "resume and detach from the endpoint")
-	timeoutMS := flag.Int("timeout-ms", 30000, "connection timeout in milliseconds")
+	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout))
+}
+
+// run carries the whole CLI so the lifecycle classes (timeout, EOF, re-arm,
+// NDJSON streaming) are exercisable in-process against a real control server.
+// It returns the process exit code; stdout/stderr are injectable for tests.
+func run(arguments []string, stdin io.Reader, stdout io.Writer) int {
+	flags := flag.NewFlagSet("tesl-debug-attach", flag.ContinueOnError)
+	project := flags.String("project", "", "project directory containing .tesl-stuff/debug.sock or debug.port")
+	socket := flags.String("socket", "", "Unix debug socket")
+	tcp := flags.String("tcp", "", "loopback debug address")
+	operation := flags.String("operation", "bridge", "bridge, once, snapshot, ping, or detach")
+	bridgeOnce := flags.Bool("bridge-once", false, "process one bridge request and exit")
+	once := flags.Bool("once", false, "arm breakpoints, wait for one stop, and return")
+	snapshot := flags.Bool("snapshot", false, "return the current paused snapshot")
+	ping := flags.Bool("ping", false, "check whether the endpoint is alive")
+	detach := flags.Bool("detach", false, "resume and detach from the endpoint")
+	timeoutMS := flags.Int("timeout-ms", 30000, "connection timeout in milliseconds")
 	var breakAt stringFlags
-	flag.Var(&breakAt, "break-at", "arm a breakpoint as FILE:LINE; repeatable")
-	when := flag.String("when", "", "condition applied to each --break-at")
-	hit := flag.String("hit", "", "hit condition applied to each --break-at")
-	flag.Parse()
+	flags.Var(&breakAt, "break-at", "arm a breakpoint as FILE:LINE; repeatable")
+	when := flags.String("when", "", "condition applied to each --break-at")
+	hit := flags.String("hit", "", "hit condition applied to each --break-at")
+	if err := flags.Parse(arguments); err != nil {
+		return fail("argument error: %v", err)
+	}
+	emit := func(value any) {
+		_ = json.NewEncoder(stdout).Encode(value)
+	}
 	if *once {
 		*operation = "once"
 	} else if *snapshot {
@@ -73,31 +87,31 @@ func main() {
 		*operation = "detach"
 	}
 	if *timeoutMS < 1 {
-		fail("-timeout-ms must be positive")
+		return fail("-timeout-ms must be positive")
 	}
 	if *operation != "bridge" && *operation != "once" && *operation != "snapshot" && *operation != "ping" && *operation != "detach" {
-		fail("unsupported operation %q", *operation)
+		return fail("unsupported operation %q", *operation)
 	}
 	if *socket != "" && *tcp != "" {
-		fail("-socket and -tcp are mutually exclusive")
+		return fail("-socket and -tcp are mutually exclusive")
 	}
 	if *socket == "" && *tcp == "" && *project == "" {
-		fail("one of -project, -socket, or -tcp is required")
+		return fail("one of -project, -socket, or -tcp is required")
 	}
 	if *project != "" && *socket == "" && *tcp == "" {
 		var err error
 		*socket, *tcp, err = projectEndpoint(*project)
 		if err != nil {
-			fail("discover debug endpoint: %v", err)
+			return fail("discover debug endpoint: %v", err)
 		}
 	}
 	connection, err := dial(*socket, *tcp, time.Duration(*timeoutMS)*time.Millisecond)
 	if err != nil {
-		fail("connect debug endpoint: %v", err)
+		return fail("connect debug endpoint: %v", err)
 	}
 	client, err := dap.NewControlClient(connection)
 	if err != nil {
-		fail("handshake: %v", err)
+		return fail("handshake: %v", err)
 	}
 	defer client.Close()
 	if len(breakAt) > 0 {
@@ -105,7 +119,7 @@ func main() {
 		for index, value := range breakAt {
 			file, line, err := parseBreakpoint(value)
 			if err != nil {
-				fail("invalid --break-at #%d: %v", index+1, err)
+				return fail("invalid --break-at #%d: %v", index+1, err)
 			}
 			specifications = append(specifications, teslrt.DebugBreakpointSpec{
 				ID: fmt.Sprintf("attach-bp-%d", index+1), File: file, Line: line,
@@ -114,37 +128,37 @@ func main() {
 		}
 		results, err := client.SetBreakpointSpecs(specifications)
 		if err != nil {
-			fail("set breakpoints: %v", err)
+			return fail("set breakpoints: %v", err)
 		}
 		for index, result := range results {
 			if !result.Verified {
-				fail("breakpoint #%d is not verified: %s", index+1, result.Message)
+				return fail("breakpoint #%d is not verified: %s", index+1, result.Message)
 			}
 		}
 	}
 
 	switch *operation {
 	case "bridge":
-		bridge(client, *bridgeOnce)
+		bridge(client, *bridgeOnce, stdin, emit)
 	case "ping":
 		if err := client.Ping(); err != nil {
-			fail("ping: %v", err)
+			return fail("ping: %v", err)
 		}
-		writeJSON(map[string]any{"version": 2, "ok": true})
+		emit(map[string]any{"version": 2, "ok": true})
 	case "detach":
 		if err := client.Detach(); err != nil {
-			fail("detach: %v", err)
+			return fail("detach: %v", err)
 		}
-		writeJSON(map[string]any{"version": 2, "detached": true})
+		emit(map[string]any{"version": 2, "detached": true})
 	case "snapshot":
 		snapshot, err := client.SnapshotState()
 		if err != nil {
-			fail("snapshot: %v", err)
+			return fail("snapshot: %v", err)
 		}
-		writeJSON(snapshotOutput(snapshot))
+		emit(snapshotOutput(snapshot))
 	case "once":
 		if len(breakAt) == 0 {
-			fail("once operation requires at least one --break-at")
+			return fail("once operation requires at least one --break-at")
 		}
 		stopped := make(chan struct{}, 1)
 		detach := client.Attach(func(event teslrt.DebugEvent) {
@@ -160,51 +174,54 @@ func main() {
 		case <-stopped:
 			snapshot, err := client.SnapshotState()
 			if err != nil {
-				fail("snapshot after breakpoint: %v", err)
+				return fail("snapshot after breakpoint: %v", err)
 			}
-			writeJSON(snapshotOutput(snapshot))
+			emit(snapshotOutput(snapshot))
 			_ = client.Continue()
 		case <-time.After(time.Duration(*timeoutMS) * time.Millisecond):
-			writeJSON(map[string]any{"version": 2, "stopped": false, "reason": "breakpoint-not-hit"})
+			// A quiet timeout is an ANSWER (the breakpoint never fired), not an
+			// error: the caller reads `stopped:false` and the exit code stays 0.
+			emit(map[string]any{"version": 2, "stopped": false, "reason": "breakpoint-not-hit"})
 		}
 	}
+	return 0
 }
 
-func bridge(client *dap.ControlClient, once bool) {
-	scanner := bufio.NewScanner(os.Stdin)
+func bridge(client *dap.ControlClient, once bool, stdin io.Reader, emit func(any)) {
+	scanner := bufio.NewScanner(stdin)
 	for scanner.Scan() {
 		var request struct {
 			Command     string                       `json:"command"`
 			Breakpoints []teslrt.DebugBreakpointSpec `json:"breakpoints,omitempty"`
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &request); err != nil {
-			writeJSON(map[string]any{"error": err.Error()})
+			emit(map[string]any{"error": err.Error()})
 		} else {
 			switch request.Command {
 			case "ping":
-				writeJSON(map[string]any{"ok": client.Ping() == nil})
+				emit(map[string]any{"ok": client.Ping() == nil})
 			case "set-breakpoints":
 				result, err := client.SetBreakpointSpecs(request.Breakpoints)
-				writeJSON(map[string]any{"result": result, "error": errorText(err)})
+				emit(map[string]any{"result": result, "error": errorText(err)})
 			case "clear-breakpoints":
 				err := client.ClearBreakpoints()
-				writeJSON(map[string]any{"ok": err == nil, "error": errorText(err)})
+				emit(map[string]any{"ok": err == nil, "error": errorText(err)})
 			case "continue":
 				err := client.Continue()
-				writeJSON(map[string]any{"ok": err == nil, "error": errorText(err)})
+				emit(map[string]any{"ok": err == nil, "error": errorText(err)})
 			case "snapshot":
 				snapshot, err := client.SnapshotState()
 				if err != nil {
-					writeJSON(map[string]any{"error": err.Error()})
+					emit(map[string]any{"error": err.Error()})
 				} else {
-					writeJSON(snapshotOutput(snapshot))
+					emit(snapshotOutput(snapshot))
 				}
 			case "detach":
 				_ = client.Detach()
-				writeJSON(map[string]any{"detached": true})
+				emit(map[string]any{"detached": true})
 				return
 			default:
-				writeJSON(map[string]any{"error": "unsupported command: " + request.Command})
+				emit(map[string]any{"error": "unsupported command: " + request.Command})
 			}
 		}
 		if once {
@@ -271,13 +288,7 @@ func errorText(err error) string {
 	return err.Error()
 }
 
-func writeJSON(value any) {
-	if err := json.NewEncoder(os.Stdout).Encode(value); err != nil {
-		fail("write JSON: %v", err)
-	}
-}
-
-func fail(format string, arguments ...any) {
-	_, _ = fmt.Fprintf(os.Stderr, "tesl-debug-attach: "+format+"\n", arguments...)
-	os.Exit(1)
+func fail(format string, arguments ...any) int {
+	fmt.Fprintf(os.Stderr, "tesl-debug-attach: "+format+"\n", arguments...)
+	return 1
 }

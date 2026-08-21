@@ -1,0 +1,106 @@
+// email_chain_test.go.tmpl — injected by scripts/run-go-integration.sh into a
+// freshly emitted Go module built from tests/integration/email_fullchain.tesl.
+//
+// This is the whole generated email chain in one test: the emitted send
+// function enqueues through teslrt's outbox, the emitted worker-start wires
+// the delivery loop, and DeliverEmail holds a real SMTP conversation with a
+// capture server listening on the FIXED port the fixture bakes into its
+// SmtpConfig (18025). The host arrives via SMTP_HOST, read at package init —
+// so the script must export it before `go test`, not this file.
+//
+// __PACKAGE__ is substituted with the emitted package name before injection.
+package __PACKAGE__
+
+import (
+	"bufio"
+	"net"
+	"strings"
+	"testing"
+	"time"
+)
+
+const chainSmtpPort = "18025"
+
+func TestFullChainEmailDeliversOverRealSMTP(t *testing.T) {
+	received := make(chan string, 4)
+	listener, err := net.Listen("tcp", "127.0.0.1:"+chainSmtpPort)
+	if err != nil {
+		t.Skipf("fixed port %s unavailable for the capture server: %v", chainSmtpPort, err)
+	}
+	defer func() { _ = listener.Close() }()
+	go serveChainSMTP(listener, received)
+
+	SendChainEmail("dest@example.com", "full-chain-subject")
+	StartChainWorker()
+
+	select {
+	case payload := <-received:
+		for _, want := range []string{
+			"From: chain-sender@example.com",
+			"To: dest@example.com",
+			"Subject: full-chain-subject",
+			"MIME-Version: 1.0",
+			"Content-Type: text/plain; charset=utf-8",
+			"full-chain-body",
+		} {
+			if !strings.Contains(payload, want) {
+				t.Errorf("delivered message missing %q\ngot:\n%s", want, payload)
+			}
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the delivery worker never reached the capture server within 30s")
+	}
+}
+
+// serveChainSMTP speaks just enough RFC 5321 to accept one message and hand
+// back its DATA payload — the same shape as runtime/go/teslrt/email_test.go's
+// fakeSMTP, self-contained here because this test lives inside an EMITTED
+// module that must not depend on the runtime's own tests.
+func serveChainSMTP(listener net.Listener, received chan<- string) {
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		go func() {
+			defer func() { _ = conn.Close() }()
+			reader := bufio.NewReader(conn)
+			write := func(line string) { _, _ = conn.Write([]byte(line + "\r\n")) }
+			write("220 chain-capture ESMTP")
+			inData := false
+			var payload strings.Builder
+			for {
+				line, err := reader.ReadString('\n')
+				if err != nil {
+					return
+				}
+				if inData {
+					if line == ".\r\n" {
+						received <- payload.String()
+						payload.Reset()
+						inData = false
+						write("250 queued")
+					} else {
+						payload.WriteString(line)
+					}
+					continue
+				}
+				command := strings.ToUpper(strings.TrimSpace(line))
+				switch {
+				case strings.HasPrefix(command, "EHLO"), strings.HasPrefix(command, "HELO"):
+					write("250 chain-capture")
+				case strings.HasPrefix(command, "MAIL"), strings.HasPrefix(command, "RCPT"):
+					write("250 ok")
+				case strings.HasPrefix(command, "DATA"):
+					write("354 send it")
+					inData = true
+				case strings.HasPrefix(command, "QUIT"):
+					write("221 bye")
+					return
+				default:
+					write("250 ok")
+				}
+			}
+		}()
+	}
+}

@@ -1,0 +1,68 @@
+# ── Full-chain email delivery integration fixture ─────────────────────────────
+#
+# Not a lesson: this module exists so scripts/run-go-integration.sh can prove
+# the WHOLE generated email chain — emitted Go function → outbox → delivery
+# worker → a real SMTP conversation over real TCP — the way the deleted Racket
+# test_email_integration did with MailHog for the Racket backend.
+#
+# The SMTP host arrives through the environment; the port and tls:false are
+# literals because SmtpConfig bakes them in at emission time. The harness's
+# capture server must listen on that same fixed port (18025).
+
+module Fullchain_email exposing [
+  sendChainEmail,
+  startChainWorker,
+]
+
+import Tesl.Prelude exposing [String, Unit, Bool(..)]
+import Tesl.Database exposing [
+  Database,
+  DatabaseBackend,
+  Postgres,
+  PostgresConfig,
+  TcpConnection,
+]
+import Tesl.Email exposing [Email, SmtpConfig, emailCap, EmailBody(..)]
+
+database ChainDatabase = Database {
+  schema: "public"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: ""
+    user: ""
+    password: ""
+    connection: TcpConnection {
+      host: ""
+      port: 5432
+    }
+  })
+}
+
+email ChainEmail = Email {
+  database: ChainDatabase
+  smtp: SmtpConfig {
+    host: env "SMTP_HOST"
+    port: 18025
+    username: "chain-sender@example.com"
+    password: ""
+    tls: false
+  }
+}
+
+fn sendChainEmail(addr: String, subject: String) -> Unit requires [emailCap] =
+  Email.send ChainEmail {
+    to: addr
+    subject: subject
+    body: TextBody "full-chain-body"
+  }
+
+fn startChainWorker() -> Unit requires [emailCap] =
+  startEmailWorker ChainEmail
+
+test "sendChainEmail compiles" {
+  expect True == True
+}
+
+test "startChainWorker compiles" {
+  expect True == True
+}

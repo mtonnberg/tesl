@@ -62,13 +62,13 @@ for arg in "$@"; do
   esac
 done
 
-# `example/` is the corpus this gate covers: the lessons and the worked examples are
-# what a reader compares against, and they are compiled by every other phase too.
-# `tests/` is NOT here — two of its files are refused by design (a `expectFail` on a
-# proof operation cannot pass where proofs erase), and a directory whose expected
-# state is "mostly snapshots plus two permanent refusals" trains the reader to
-# ignore the report.
-[ -n "${DIRS// /}" ] || DIRS="example"
+# `example/` is the reader-facing corpus; `tests/` is where every backend feature
+# is exercised (the corpus compile gate covers them, but only snapshots pin WHAT
+# was emitted); `templates/` is what every `tesl init` user starts from.  A file
+# the Go backend refuses BY DESIGN (a couple of tests/ use `expectFail` on a
+# proof operation) simply never gets a snapshot and is skipped silently — the
+# report stays meaningful because everything else mints.
+[ -n "${DIRS// /}" ] || DIRS="example tests templates"
 
 changed=0
 failed=0
@@ -160,7 +160,11 @@ done
 
 # The counters live in a subshell above (the `while` reads from a pipe), so the
 # summary is recomputed rather than accumulated: count what is on disk now.
-total=$(find "$REPO_ROOT/example" -name '*.go.snap' 2>/dev/null | wc -l | tr -d ' ')
+total=0
+for dir in $DIRS; do
+  count=$(find "$REPO_ROOT/$dir" -name '*.go.snap' 2>/dev/null | wc -l | tr -d ' ')
+  total=$((total + count))
+done
 echo ""
 echo "regen-go-snapshots: $total snapshot(s) on disk"
 exit 0

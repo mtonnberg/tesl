@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -397,4 +398,313 @@ func TestBoundInnerJoinExists(t *testing.T) {
 			t.Fatalf("the join answered %+v, want only b-1", joined)
 		}
 	})
+}
+
+// ── Grouped aggregates ───────────────────────────────────────────────────────
+
+type dbHit struct {
+	ID string
+	At Int // a PosixMillis-shaped BIGINT column value
+}
+
+func allHits(dbHit) bool { return true }
+
+func scanHitCount(row pgx.CollectableRow) (Tuple2[PosixMillis, Int], error) {
+	var bucket int64
+	var counted int64
+	if err := row.Scan(&bucket, &counted); err != nil {
+		return Tuple2[PosixMillis, Int]{}, err
+	}
+	return Tuple2[PosixMillis, Int]{
+		Tuple2First:  PosixMillis{Value: FromInt64(bucket)},
+		Tuple2Second: FromInt64(counted),
+	}, nil
+}
+
+// The grouped aggregate is the query where the two backends are most tempted to disagree,
+// because they bucket differently: the memory store folds runs of sorted keys, the server
+// GROUP BY … ORDER BY 1s. Both must answer ascending buckets with identical counts — the
+// order is part of the contract (a chart's series is only a series if its points are in
+// order), so it is asserted rather than sorted away.
+func TestBoundGroupFoldAgreesWithTheMemoryTable(t *testing.T) {
+	database := liveDatabase(t)
+	table := NewTable[dbBook]()
+	key := func(book dbBook) Int { return book.Pages }
+	less := func(left, right Int) bool { return Compare(left, right) < 0 }
+	equal := func(left, right Int) bool { return Equal(left, right) }
+	step := func(total Int, _ dbBook) Int { return Add(total, FromInt64(1)) }
+	scanPages := func(row pgx.CollectableRow) (Tuple2[Int, Int], error) {
+		pages := pgtype.Numeric{}
+		var counted int64
+		if err := row.Scan(&pages, &counted); err != nil {
+			return Tuple2[Int, Int]{}, err
+		}
+		return Tuple2[Int, Int]{Tuple2First: PgIntOf(pages), Tuple2Second: FromInt64(counted)}, nil
+	}
+
+	insert := func(id string, pages int64) {
+		DbInsert(database, table, "Book", dbBook{ID: id, Title: id, Pages: FromInt64(pages)},
+			bookConflicts,
+			`insert into "teslgotest"."books" ("id", "title", "pages") values ($1, $2, $3)`,
+			func(book dbBook) []any { return []any{book.ID, book.Title, PgInt(book.Pages)} })
+	}
+
+	// Memory answer first, unbound.
+	insert("a", 100)
+	insert("b", 220)
+	insert("c", 220)
+	want := TableGroupFold(table, allBooks, key, less, equal, step, FromInt64(0))
+
+	// The same rows on the server, answered by GROUP BY.
+	WithDatabase(database, func() {
+		DbTruncate(database, table, "books")
+		insert("a", 100)
+		insert("b", 220)
+		insert("c", 220)
+		got := DbGroupFold(database, table, allBooks, key, less, equal, step, FromInt64(0),
+			PgGroupPlan{
+				Aggregate: `count(*)`,
+				Table:     `"teslgotest"."books"`,
+				Column:    `"pages"`,
+			},
+			scanPages)
+		if len(got) != len(want) {
+			t.Fatalf("the server answered %d buckets, memory answered %d", len(got), len(want))
+		}
+		for index, pair := range got {
+			if !Equal(pair.Tuple2First, want[index].Tuple2First) ||
+				!Equal(pair.Tuple2Second, want[index].Tuple2Second) {
+				t.Fatalf("bucket %d = (%s × %s), want (%s × %s)", index,
+					pair.Tuple2First.String(), pair.Tuple2Second.String(),
+					want[index].Tuple2First.String(), want[index].Tuple2Second.String())
+			}
+		}
+	})
+}
+
+// A temporal bucket is where a silent unit mismatch would be worst: the SQL side floors the
+// millisecond column through date_trunc (named zone) or integer arithmetic (fixed offset),
+// while the memory side calls TimeTruncDay. The two must agree about where a day STARTS —
+// including for an instant before the epoch, where SQL's sign-keeping `%` would misfloor a
+// naive implementation. Both zone shapes of PgGroupPlan.statement get exercised, because the
+// statement TEXT is built per shape and only PostgreSQL can prove it parses.
+func TestBoundGroupFoldDayBucketsAgreeWithTimeTrunc(t *testing.T) {
+	database := liveDatabase(t)
+	table := NewTable[dbHit]()
+	zone := FixedOffsetZone(FromInt64(60)) // +01:00, so its days start at 23:00 UTC.
+
+	// Two hits inside one +01:00 day, one in the next, and one before the epoch.
+	instants := []int64{
+		time.Date(2024, 3, 10, 8, 0, 0, 0, time.UTC).UnixMilli(),
+		time.Date(2024, 3, 10, 22, 30, 0, 0, time.UTC).UnixMilli(), // next +01:00 day at 23:30 UTC
+		time.Date(2024, 3, 11, 6, 0, 0, 0, time.UTC).UnixMilli(),
+		time.Date(1965, 7, 1, 0, 30, 0, 0, time.UTC).UnixMilli(), // negative millis
+	}
+	keyAt := func(at Int) PosixMillis { return PosixMillis{Value: at} }
+
+	run := func(zone PgGroupZone, truncDay func(PosixMillis) PosixMillis) {
+		got := DbGroupFold(database, table, allHits,
+			func(hit dbHit) PosixMillis { return truncDay(keyAt(hit.At)) },
+			func(left, right PosixMillis) bool { return Compare(left.Value, right.Value) < 0 },
+			func(left, right PosixMillis) bool { return Equal(left.Value, right.Value) },
+			func(total Int, _ dbHit) Int { return Add(total, FromInt64(1)) },
+			FromInt64(0),
+			PgGroupPlan{
+				Aggregate: `count(*)`,
+				Table:     `"teslgotest"."hits"`,
+				Column:    `"at"`,
+				Unit:      "day",
+				Zone:      zone,
+			},
+			scanHitCount)
+		wantBuckets := map[int64]int64{}
+		for _, at := range instants {
+			bucket, _ := truncDay(PosixMillis{Value: FromInt64(at)}).Value.Int64()
+			wantBuckets[bucket]++
+		}
+		if len(got) != len(wantBuckets) {
+			t.Fatalf("zone %+v: %d buckets, want %d", zone, len(got), len(wantBuckets))
+		}
+		for _, pair := range got {
+			bucket, _ := pair.Tuple2First.Value.Int64()
+			count, _ := pair.Tuple2Second.Int64()
+			if wantBuckets[bucket] != count {
+				t.Fatalf("zone %+v: bucket %d counted %d, want %d", zone, bucket, count, wantBuckets[bucket])
+			}
+		}
+	}
+
+	WithDatabase(database, func() {
+		connection := database.bound()
+		if _, err := connection.pool.Exec(context.Background(),
+			`create table if not exists "teslgotest"."hits" ("id" TEXT PRIMARY KEY, "at" BIGINT)`); err != nil {
+			t.Fatalf("cannot create the hits table: %v", err)
+		}
+		PgTruncate(connection, "hits")
+		for index, at := range instants {
+			PgExec(connection, `insert into "teslgotest"."hits" ("id", "at") values ($1, $2)`,
+				[]any{fmt.Sprintf("hit-%d", index), PgBigint(FromInt64(at))})
+		}
+
+		// Fixed-offset zone: integer arithmetic in SQL against TimeTruncDay here. What the
+		// assertion checks is that the server's bucket arithmetic puts the same instants in
+		// the same buckets TimeTruncDay does.
+		run(PgZoneOf(zone), func(at PosixMillis) PosixMillis { return TimeTruncDay(zone, at) })
+
+		// Named zone: date_trunc in PG against TimeTruncDay under UTC.
+		utc := TimeZone{Name: "UTC"}
+		run(PgZoneOf(utc), func(at PosixMillis) PosixMillis { return TimeTruncDay(utc, at) })
+	})
+}
+
+// ── Money sums ───────────────────────────────────────────────────────────────
+
+type dbInvoice struct {
+	ID         string
+	MinorUnits Int
+	Currency   string
+}
+
+func allInvoices(dbInvoice) bool { return true }
+
+func moneyDatabase(t *testing.T) *Database {
+	t.Helper()
+	return &Database{
+		Name:   "Billing",
+		Config: liveCluster(t),
+		Tables: []PostgresTable{{
+			Name: "invoices",
+			Columns: []PostgresColumn{
+				{Name: "id", Type: "TEXT", PrimaryKey: true},
+				{Name: "minor_units", Type: "NUMERIC"},
+				{Name: "currency", Type: "TEXT"},
+			},
+		}},
+	}
+}
+
+func invoicePlan(_ *Database, statement string) PgPlan {
+	return PgSql(strings.ReplaceAll(statement, "@invoices", `"teslgotest"."invoices"`), nil)
+}
+
+func insertInvoice(database *Database, table *Table[dbInvoice], id string, units int64, code string) {
+	invoice := dbInvoice{ID: id, MinorUnits: FromInt64(units), Currency: code}
+	DbInsert(database, table, "Invoice", invoice,
+		func(existing, inserted dbInvoice) bool { return existing.ID == inserted.ID },
+		`insert into "teslgotest"."invoices" ("id", "minor_units", "currency") values ($1, $2, $3)`,
+		func(invoice dbInvoice) []any {
+			return []any{invoice.ID, PgInt(invoice.MinorUnits), invoice.Currency}
+		})
+}
+
+// sumInvoices is the ONE call both backends answer, asserted twice per case: once unbound
+// (memory folds the rows and adopts the first row's currency) and once bound (the server sums
+// NUMERIC minor units and reports the distinct currencies). A disagreement about totals, or
+// about WHICH programs trap, shows up as a failed case rather than as a drift.
+func sumInvoices(database *Database, table *Table[dbInvoice], match func(dbInvoice) bool) (answer Money, panicValue any) {
+	defer func() { panicValue = recover() }()
+	project := func(invoice dbInvoice) Money {
+		known := CurrencyFromCode(invoice.Currency)
+		if !known.IsSomething() {
+			panic("test fixture stored unknown currency " + invoice.Currency)
+		}
+		return MoneyFromMinorUnits(known.SomethingValue, invoice.MinorUnits)
+	}
+	return DbSumMoney(database, table, match, project, "Invoice", "amount",
+		invoicePlan(database, `select coalesce(sum("minor_units"), 0), count(distinct "currency"), min("currency") from @invoices`)), nil
+}
+
+func TestBoundMoneySumAgreesWithTheMemoryTable(t *testing.T) {
+	database := moneyDatabase(t)
+	table := NewTable[dbInvoice]()
+
+	// Single currency: both paths total the minor units exactly and carry USD out.
+	memoryAnswer, memoryPanic := func() (Money, any) {
+		insertInvoice(database, table, "in-1", 1050, "USD")
+		insertInvoice(database, table, "in-2", 250, "USD")
+		return sumInvoices(database, table, allInvoices)
+	}()
+	if memoryPanic != nil || !Equal(memoryAnswer.MinorUnits, FromInt64(1300)) ||
+		memoryAnswer.Currency.Code != "USD" {
+		t.Fatalf("memory sum = %+v (panic %v)", memoryAnswer, memoryPanic)
+	}
+
+	WithDatabase(database, func() {
+		connection := database.bound()
+		PgTruncate(connection, "invoices")
+		PgExec(connection, `insert into "teslgotest"."invoices" ("id", "minor_units", "currency") values ($1, $2, $3)`, []any{"in-1", PgInt(FromInt64(1050)), "USD"})
+		PgExec(connection, `insert into "teslgotest"."invoices" ("id", "minor_units", "currency") values ($1, $2, $3)`, []any{"in-2", PgInt(FromInt64(250)), "USD"})
+		serverAnswer, serverPanic := sumInvoices(database, table, allInvoices)
+		if serverPanic != nil || !Equal(serverAnswer.MinorUnits, memoryAnswer.MinorUnits) ||
+			serverAnswer.Currency.Code != memoryAnswer.Currency.Code {
+			t.Fatalf("server sum = %+v (panic %v), memory summed to %+v", serverAnswer, serverPanic, memoryAnswer)
+		}
+
+		// Mixed currencies: refused with the count named, on both paths — a SUM may not
+		// invent an exchange rate.
+		PgExec(connection, `insert into "teslgotest"."invoices" ("id", "minor_units", "currency") values ($1, $2, $3)`, []any{"in-3", PgInt(FromInt64(1)), "EUR"})
+		if _, mixed := sumInvoices(database, table, allInvoices); mixed == nil ||
+			!strings.Contains(fmt.Sprint(mixed), "(found 2)") {
+			t.Fatalf("mixed-currency server sum panicked with %v", mixed)
+		}
+
+		// Empty set: no currency for the zero total, so both paths refuse rather than
+		// fabricate $0.00.
+		PgTruncate(connection, "invoices")
+		if _, empty := sumInvoices(database, table, allInvoices); empty == nil ||
+			!strings.Contains(fmt.Sprint(empty), "empty row set") {
+			t.Fatalf("empty-set server sum panicked with %v", empty)
+		}
+
+		// Corrupt data: a code no ISO 4217 table knows is a trap, not a half-formed Money.
+		PgExec(connection, `insert into "teslgotest"."invoices" ("id", "minor_units", "currency") values ($1, $2, $3)`, []any{"bad", PgInt(FromInt64(5)), "XXY"})
+		if _, corrupt := sumInvoices(database, table, allInvoices); corrupt == nil ||
+			!strings.Contains(fmt.Sprint(corrupt), "not a known ISO 4217 currency") {
+			t.Fatalf("corrupt-currency server sum panicked with %v", corrupt)
+		}
+	})
+
+	// The same two refusals on the memory path.
+	if _, mixed := func() (Money, any) {
+		TableTruncate(table)
+		insertInvoice(database, table, "usd", 1, "USD")
+		insertInvoice(database, table, "eur", 1, "EUR")
+		return sumInvoices(database, table, allInvoices)
+	}(); mixed == nil || !strings.Contains(fmt.Sprint(mixed), "(found 2)") {
+		t.Fatalf("mixed-currency memory sum panicked with %v", mixed)
+	}
+	if _, empty := func() (Money, any) {
+		TableTruncate(table)
+		return sumInvoices(database, table, allInvoices)
+	}(); empty == nil || !strings.Contains(fmt.Sprint(empty), "empty row set") {
+		t.Fatalf("empty-set memory sum panicked with %v", empty)
+	}
+}
+
+// ── Pool saturation ──────────────────────────────────────────────────────────
+
+// A pool smaller than the demand on it must QUEUE, not deadlock: six concurrent statements
+// against a two-connection pool all complete, and the pool keeps answering after the burst.
+// This pins the pgxpool configuration path (MaxConns from poolSize) against a regression
+// where a saturated pool silently stopped serving.
+func TestPostgresPoolSaturatesAndRecovers(t *testing.T) {
+	config := liveCluster(t)
+	config.PoolSize = 2
+	db := OpenPostgres(config, nil)
+
+	const burst = 6
+	var waiting sync.WaitGroup
+	waiting.Add(burst)
+	for range burst {
+		go func() {
+			defer waiting.Done()
+			if got := PgCount(db, `select 1`, nil); !Equal(got, FromInt64(1)) {
+				t.Errorf("saturated pool answered %s", got.String())
+			}
+		}()
+	}
+	waiting.Wait()
+	if got := PgCount(db, `select 1`, nil); !Equal(got, FromInt64(1)) {
+		t.Fatalf("pool stopped serving after saturation: %s", got.String())
+	}
 }

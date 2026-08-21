@@ -1,6 +1,7 @@
 package teslrt
 
 import (
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -240,4 +241,73 @@ func TestDebuggerSnapshotKeepsCheckpointPositionAndVisibleLocals(t *testing.T) {
 	}
 	debugger.Continue()
 	<-done
+}
+
+// A stop whose client never resumes must not hold application goroutines
+// forever: with PauseTimeout set the checkpoint auto-releases after the bound,
+// and with it unset (interactive default) the wait stays unbounded.
+func TestDebuggerPauseTimeoutAutoResumesAndZeroWaits(t *testing.T) {
+	debugger := NewDebugger()
+	debugger.PauseTimeout = 80 * time.Millisecond
+	seen := make(chan DebugEvent, 1)
+	debugger.Attach(func(event DebugEvent) { seen <- event })
+	debugger.SetBreakpoints([]DebugBreakpoint{{ID: "bp", File: "m.tesl", Line: 3}})
+	released := make(chan struct{})
+	go func() {
+		debugger.Checkpoint(DebugFrame{Location: SourceLocation{File: "m.tesl", Line: 3}})
+		close(released)
+	}()
+	event := <-seen
+	if event.Kind != "stopped" {
+		t.Fatalf("event = %#v", event)
+	}
+	select {
+	case <-released:
+	case <-time.After(5 * time.Second):
+		t.Fatal("PauseTimeout did not release a stopped checkpoint")
+	}
+	if _, paused := debugger.Snapshot(); paused {
+		t.Fatal("debugger still reports paused after auto-resume")
+	}
+
+	// Zero (default): an interactive session waits indefinitely — Continue is
+	// the only way out. Prove the wait survives well past the timeout above.
+	plain := NewDebugger()
+	plain.Attach(func(event DebugEvent) { seen <- event })
+	plain.SetBreakpoints([]DebugBreakpoint{{ID: "bp", File: "m.tesl", Line: 3}})
+	held := make(chan struct{})
+	go func() {
+		plain.Checkpoint(DebugFrame{Location: SourceLocation{File: "m.tesl", Line: 3}})
+		close(held)
+	}()
+	<-seen
+	select {
+	case <-held:
+		t.Fatal("checkpoint released without Continue despite zero timeout")
+	case <-time.After(250 * time.Millisecond):
+	}
+	plain.Continue()
+	<-held
+}
+
+func TestApplyEnvPauseTimeoutParsesMillisOnly(t *testing.T) {
+	debugger := NewDebugger()
+	t.Setenv("TESL_DEBUG_PAUSE_TIMEOUT_MS", "1500")
+	applyEnvPauseTimeout(debugger)
+	if debugger.PauseTimeout != 1500*time.Millisecond {
+		t.Fatalf("PauseTimeout = %v", debugger.PauseTimeout)
+	}
+	for _, bad := range []string{"", "abc", "-5", "0"} {
+		if bad == "" {
+			os.Unsetenv("TESL_DEBUG_PAUSE_TIMEOUT_MS")
+		} else {
+			t.Setenv("TESL_DEBUG_PAUSE_TIMEOUT_MS", bad)
+		}
+		fresh := NewDebugger()
+		fresh.PauseTimeout = 42 * time.Millisecond
+		applyEnvPauseTimeout(fresh)
+		if fresh.PauseTimeout != 42*time.Millisecond {
+			t.Fatalf("input %q changed PauseTimeout to %v", bad, fresh.PauseTimeout)
+		}
+	}
 }

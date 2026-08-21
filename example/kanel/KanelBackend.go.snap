@@ -676,7 +676,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -702,7 +702,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -716,7 +716,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -739,7 +739,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -762,7 +762,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -797,7 +797,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -841,7 +841,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -873,7 +873,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -908,7 +908,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -931,7 +931,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -963,7 +963,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -995,7 +995,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -1039,7 +1039,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -1071,7 +1071,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -1103,7 +1103,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -1147,7 +1147,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -1191,7 +1191,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -1235,7 +1235,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -1267,7 +1267,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -1311,7 +1311,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -1343,7 +1343,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -1378,7 +1378,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -1401,7 +1401,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -1433,7 +1433,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -1465,7 +1465,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -1497,7 +1497,7 @@ var KanelServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -1525,7 +1525,7 @@ var KanelServer = teslrt.Server{
 	},
 	Streams: map[string]teslrt.StreamFunc{
 		"sse:/events/users/:userId": func(teslWriter http.ResponseWriter, teslRequest *http.Request) {
-			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, ""))
+			teslAuth := teslmodkanelauth.CookieAuth(teslrt.NewHttpRequest(teslRequest, "", []string{}...))
 			if !teslAuth.OK() {
 				http.Error(teslWriter, teslAuth.Message(), teslAuth.Status())
 				return

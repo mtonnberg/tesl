@@ -456,7 +456,7 @@ var ChatServer = teslrt.Server{
 				return teslrt.Fail(teslBodyStatus, teslBodyMessage)
 			}
 			teslBodyText := string(teslBodyBytes)
-			teslAuth := consumerAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText))
+			teslAuth := consumerAuth(teslrt.NewHttpRequest(teslRequest, teslBodyText, []string{}...))
 			if !teslAuth.OK() {
 				return teslrt.Fail(teslAuth.Status(), teslAuth.Message())
 			}
@@ -483,7 +483,7 @@ var ChatServer = teslrt.Server{
 	},
 	Streams: map[string]teslrt.StreamFunc{
 		"sse:/chat/:conversationId/events": func(teslWriter http.ResponseWriter, teslRequest *http.Request) {
-			teslAuth := consumerAuth(teslrt.NewHttpRequest(teslRequest, ""))
+			teslAuth := consumerAuth(teslrt.NewHttpRequest(teslRequest, "", []string{}...))
 			if !teslAuth.OK() {
 				http.Error(teslWriter, teslAuth.Message(), teslAuth.Status())
 				return

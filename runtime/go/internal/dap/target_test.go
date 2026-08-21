@@ -115,7 +115,24 @@ func TestProcessTargetLaunchesGeneratedGoTest(t *testing.T) {
 		}
 	})
 	defer detach()
-	if _, err := client.SetBreakpointSpecs([]teslrt.DebugBreakpointSpec{{ID: "factorial", File: source, Line: 74}}); err != nil {
+	// Locate the `test "factorial"` header line dynamically: the emitter puts a
+	// checkpoint on that exact source line, and a hardcoded number drifts every
+	// time the lesson's comment block gains or loses a line (it already did once).
+	contents, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	breakpointLine := 0
+	for index, text := range strings.Split(string(contents), "\n") {
+		if strings.Contains(text, `test "factorial"`) {
+			breakpointLine = index + 1
+			break
+		}
+	}
+	if breakpointLine == 0 {
+		t.Fatal("fixture lost its factorial test header")
+	}
+	if _, err := client.SetBreakpointSpecs([]teslrt.DebugBreakpointSpec{{ID: "factorial", File: source, Line: breakpointLine}}); err != nil {
 		t.Fatal(err)
 	}
 	select {
