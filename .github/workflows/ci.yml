@@ -19,7 +19,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, go_migration]
   pull_request:
 
 # Cancel superseded runs on the same ref to save runner minutes.
