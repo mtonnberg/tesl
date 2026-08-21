@@ -1374,16 +1374,25 @@ and parse_case s =
 and parse_case_arms s =
   let arms = ref [] in
   let continue_ = ref true in
+  let failure = ref None in
   while !continue_ && peek s <> DEDENT && peek s <> EOF do
     skip_newlines s;
     if peek s = DEDENT || peek s = EOF then continue_ := false
     else begin
       match parse_case_arm_group s with
       | Ok new_arms -> arms := List.rev_append new_arms !arms; skip_newlines s
-      | Err _ -> continue_ := false
+      | Err e -> continue_ := false; failure := Some e
     end
   done;
-  return (List.rev !arms)
+  (* A mid-arm failure (bad pattern, missing `->`, body error such as the
+     single-line-`if` layout rule) must surface with its real message and
+     position. Swallowing it here used to truncate the arm list silently, so
+     the checker later reported confusing secondary errors — a missing
+     `Guarded` branch and an "unknown name: else" — instead of the layout
+     diagnostic that fired first. *)
+  match !failure with
+  | Some e -> Err e
+  | None -> return (List.rev !arms)
 
 and parse_case_arm_group s =
   let loc0 = current_loc s in

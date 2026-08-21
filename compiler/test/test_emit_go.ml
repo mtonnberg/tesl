@@ -4034,7 +4034,8 @@ fn labelOf(wanted: String) -> String requires [dbRead] =
         Guarded key ->
           if key == Token "g-5" then
             "guarded-ok"
-          else "guarded-no"
+          else
+            "guarded-no"
 
 # A `secret` column: the column stores the newtype's BASE value, and what comes back is the
 # newtype again — so the only thing a caller can do with it is compare, which is the point.

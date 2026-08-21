@@ -779,6 +779,64 @@ let test_missing_module_header () =
   (* No #lang or module header *)
   assert_err "fn add(x: Int) -> Int = 42"
 
+(* A parse error inside one case arm must surface itself — not be swallowed by
+   the arm loop and reported later as confusing checker-level noise. Regression:
+   a single-line `if` in an arm used to truncate the arm list silently, so the
+   compiler answered "missing `Guarded` branch" + "unknown name: else" instead
+   of the layout diagnostic that actually fired. *)
+let contains_substring haystack needle =
+  let h = String.length haystack and n = String.length needle in
+  let rec go i =
+    if i + n > h then false
+    else if String.sub haystack i n = needle then true
+    else go (i + 1)
+  in
+  go 0
+
+let assert_err_msg fragment src =
+  match parse src with
+  | Err e ->
+    if not (contains_substring e.msg fragment) then
+      Alcotest.failf "expected error containing %S, got: %s" fragment e.msg
+  | Ok _ -> Alcotest.fail "expected parse error but succeeded"
+
+let test_case_arm_single_line_if_reports_layout_error () =
+  let src = {|module Repro exposing [f]
+import Tesl.Prelude exposing [Int, String]
+type Priority
+  = Low
+  | Numbered level: Int
+  | Guarded key: String
+
+fn f(p: Priority) -> String =
+  case p of
+    Low -> "low"
+    Numbered level -> String.fromInt level
+    Guarded key -> if key == "g" then "a" else "b"
+|}
+in
+  assert_err_msg "must be on an indented new line" src;
+  begin match parse src with
+  | Err e ->
+    Alcotest.(check bool) "the D9 machine-applicable fix survives" true
+      (match e.fix with Some _ -> true | None -> false)
+  | Ok _ -> Alcotest.fail "expected parse error but succeeded"
+  end
+
+let test_case_arm_body_error_is_not_silent_truncation () =
+  (* The failing arm is the LAST one, so swallowing its error would yield a
+     successfully-parsed module with fewer arms — the exact old failure mode. *)
+  let src = {|module Trunc exposing [f]
+import Tesl.Prelude exposing [Int]
+
+fn f(n: Int) -> Int =
+  case n of
+    0 -> 0
+    _ -> if n > 0 then n else 0
+|}
+in
+  assert_err_msg "indented new line" src
+
 let test_empty_module () =
   let src = "module Empty exposing []\n" in
   assert_ok src (fun m ->
@@ -1049,5 +1107,7 @@ let () =
     ];
     "adversarial", [
       Alcotest.test_case "missing module header" `Quick test_missing_module_header;
+      Alcotest.test_case "case arm single-line if reports layout error" `Quick test_case_arm_single_line_if_reports_layout_error;
+      Alcotest.test_case "case arm body error is not silent truncation" `Quick test_case_arm_body_error_is_not_silent_truncation;
     ];
   ]
