@@ -4066,7 +4066,7 @@ test "a payload ADT, a secret and a nullable column all survive a round trip" wi
   expect labelOf "t-404" == "none"
   expect tokenMatches "t-1" (Token "k-1") == True
   expect tokenMatches "t-1" (Token "k-2") == False
-  expect unnamed () == 2
+  expect unnamed () == 3
 }|}
 
 let test_pg_columns_with_go () =
@@ -4085,12 +4085,14 @@ let test_pg_columns_with_go () =
       (contains module_go ".Value.Reveal()");
     check bool "a secret column scans back into a secret" true
       (contains module_go "Token{Value: teslrt.MakeSecret(");
-    (* The same two rules inside an ADT payload: the storage encoder reveals, the column
-       decoder re-wraps — a decoded Guarded must print "[redacted]" like any other secret. *)
+    (* The same two rules inside an ADT payload: the storage encoder reveals (the
+       Guarded arm's Token column goes through the secret-aware base encoder),
+       the column decoder re-wraps — a decoded Guarded must print "[redacted]"
+       like any other secret. *)
     check bool "an ADT-carried secret binds its plaintext" true
-      (contains module_go "teslEncodeGuardedKey(teslValue.Value.Reveal())");
+      (contains module_go "func teslEncode4(teslValue Token) any {\n\treturn teslEncode2(teslValue.Value.Reveal())\n}");
     check bool "an ADT-carried secret scans back into a secret" true
-      (contains module_go "PriorityPayload{Key: Token{Value: teslrt.MakeSecret(");
+      (contains module_go "Priority{Tag: PriorityGuarded, GuardedKey: Token{Value: teslrt.MakeSecret(");
     (* `isNull` asks the STORE, so it has to reach the statement rather than filtering rows
        here — a predicate evaluated in Go would answer the same on this data and the wrong
        thing on a table that does not fit in memory. *)
