@@ -15,23 +15,23 @@ package teslmodsandbox
 import "tesl.generated/teslmodsandbox2test/internal/teslrt"
 
 //line sandbox2.tesl:11
-type ARecord struct {
+type Scc_x24_Sandbox2_x24_ARecord struct {
 	Title string
 }
 
 //line sandbox2.tesl:15
-type ARecord2 struct {
+type Scc_x24_Sandbox2_x24_ARecord2 struct {
 	Title string
 	Foo2  teslrt.Int
 }
 
 //line sandbox3.tesl:5
-type S3Record struct {
+type Scc_x24_Sandbox3_x24_ARecord struct {
 	Title string
 }
 
 //line sandbox3.tesl:9
-type S3Record2 struct {
+type Scc_x24_Sandbox3_x24_ARecord2 struct {
 	Title string
 	Foo3  teslrt.Int
 }
@@ -111,7 +111,7 @@ func shouldWork4(x teslrt.Int, y teslrt.Int) teslrt.Int {
 			xProof2 := struct{}{}
 			_ = xProof2
 //line sandbox.tesl:25
-			return DoSomething2(x)
+			return Scc_x24_Sandbox2_x24_doSomething2(x)
 		}
 	}
 }
@@ -130,25 +130,25 @@ func shouldWork41(x teslrt.Int, y teslrt.Int) teslrt.Int {
 			xProof2 := struct{}{}
 			_ = xProof2
 //line sandbox.tesl:30
-			return DoSomething2(x_withoutProof)
+			return Scc_x24_Sandbox2_x24_doSomething2(x_withoutProof)
 		}
 	}
 }
 
 //line sandbox.tesl:33
-func shouldWork5(x ARecord) teslrt.Int {
+func shouldWork5(x Scc_x24_Sandbox2_x24_ARecord) teslrt.Int {
 //line sandbox.tesl:34
 	return teslrt.FromInt64(2)
 }
 
 //line sandbox.tesl:35
-func shouldWork7(x S3Record2) teslrt.Int {
+func shouldWork7(x Scc_x24_Sandbox3_x24_ARecord2) teslrt.Int {
 //line sandbox.tesl:36
 	return x.Foo3
 }
 
 //line sandbox.tesl:37
-func shouldWork8(x ARecord2) teslrt.Int {
+func shouldWork8(x Scc_x24_Sandbox2_x24_ARecord2) teslrt.Int {
 //line sandbox.tesl:38
 	return x.Foo2
 }
@@ -202,7 +202,7 @@ func DoSomething(x teslrt.Int) teslrt.Int {
 }
 
 //line sandbox2.tesl:30
-func DoSomething2(x teslrt.Int) teslrt.Int {
+func Scc_x24_Sandbox2_x24_doSomething2(x teslrt.Int) teslrt.Int {
 //line sandbox2.tesl:31
 	return x
 }
@@ -238,7 +238,7 @@ func DoSomething3(x teslrt.Int) teslrt.Int {
 }
 
 //line sandbox3.tesl:17
-func DoSomething2Of3(x teslrt.Int) teslrt.Int {
+func Scc_x24_Sandbox3_x24_doSomething2(x teslrt.Int) teslrt.Int {
 //line sandbox3.tesl:18
 	return x
 }

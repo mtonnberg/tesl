@@ -2828,78 +2828,6 @@ let cycle_unsafe_decl_reason (d : Ast.top_decl) : string option =
   | Ast.DApi a        -> Some (Printf.sprintf "api `%s`" a.name)
   | Ast.DServer s     -> Some (Printf.sprintf "server `%s`" s.name)
 
-(* The name a declaration binds, for the collision check below.  Facts are included
-   because a fact's proof symbol is emitted as a definition too. *)
-let cycle_decl_bound_name (d : Ast.top_decl) : string option =
-  match d with
-  | Ast.DFunc fd -> Some fd.name
-  | Ast.DConst c -> Some c.name
-  | Ast.DRecord r -> Some r.name
-  | Ast.DEntity e -> Some e.name
-  | Ast.DFact f -> Some f.name
-  | Ast.DType (Ast.TypeAdt { name; _ })
-  | Ast.DType (Ast.TypeNewtype { name; _ }) -> Some name
-  | _ -> None
-
-(* A cyclic SCC is COLLAPSED into one namespace, and that is where a same-named
-   declaration can be lost.  The rule is not "two members of a cycle share a name" —
-   measured, that compiles and runs CORRECTLY for a two-member cycle: `A <-> B` where each
-   declares its own `helper` keeps them apart from either entry (tests/tesl-test.go.snap pins
-   it, for a function and for a record reached through qualified annotations).
-
-   What breaks is a member that inlines TWO other members which share a name: the
-   collapse keeps one definition and the other member's references silently rebind to it.
-   The corpus shipped exactly that — Sandbox imports Sandbox2 and Sandbox3, both import
-   Sandbox back, so all three are one component, and Sandbox3's `ARecord`, `ARecord2` and
-   `doSomething2` were dropped in favour of Sandbox2's; `Sandbox3.ARecord2` even had a
-   `foo3` field the surviving struct did not, so a qualified read of it failed at runtime.
-   Re-measured 2026-08-14 on the Hub/Spoke1/Spoke2 shape: `viaTwo 1` answered 7 where the
-   program says 105, with no diagnostic.
-
-   So the check is per INLINING member: for each member, the OTHER members it reaches
-   within the component, and a name declared by two of them. *)
-let cycle_inlined_name_collision
-    (graph : (string, string list) Hashtbl.t)
-    (component : string list)
-    (module_of : string -> Ast.module_form option) =
-  let in_component path = List.mem path component in
-  (* Members reachable from `start` within the component, excluding `start` itself. *)
-  let inlined_by start =
-    let seen : (string, unit) Hashtbl.t = Hashtbl.create 8 in
-    let rec walk path =
-      List.iter (fun dep ->
-        if in_component dep && dep <> start && not (Hashtbl.mem seen dep) then begin
-          Hashtbl.add seen dep ();
-          walk dep
-        end) (Option.value (Hashtbl.find_opt graph path) ~default:[])
-    in
-    walk start;
-    List.filter (fun path -> Hashtbl.mem seen path) component
-  in
-  let collision_among members =
-    let seen : (string, Ast.module_form) Hashtbl.t = Hashtbl.create 16 in
-    List.fold_left (fun found (mf : Ast.module_form) ->
-      List.fold_left (fun found decl ->
-        match found, cycle_decl_bound_name decl with
-        | Some _, _ | None, None -> found
-        | None, Some name ->
-          (match Hashtbl.find_opt seen name with
-           | Some owner when owner.Ast.module_name <> mf.Ast.module_name ->
-             Some (name, owner.Ast.module_name, mf.Ast.module_name, Ast.top_decl_loc decl)
-           | Some _ -> None
-           | None -> Hashtbl.replace seen name mf; None))
-        found mf.Ast.decls) None members
-  in
-  (* Sorted so the reported pair does not depend on traversal order. *)
-  let sorted = List.sort String.compare component in
-  List.fold_left (fun found start ->
-    match found with
-    | Some _ -> found
-    | None ->
-      let members = List.filter_map module_of
-        (List.sort String.compare (inlined_by start)) in
-      collision_among members) None sorted
-
 let cross_module_diags ?(skip_dep_body : string -> bool = fun _ -> false)
     (m : Ast.module_form) : diagnostic list =
   let entry = m.Ast.source_file in
@@ -3051,28 +2979,6 @@ let cross_module_diags ?(skip_dep_body : string -> bool = fun _ -> false)
       ) im.Ast.imports
     in
     dfs entry_canon m [];
-    (* Collisions are checked per COMPONENT, because the members that collapse together
-       need not sit next to each other on any single cycle path (see
-       {!cycle_inlined_name_collision}). *)
-    let cycle_graph = build_local_import_graph entry in
-    List.iter (fun component ->
-      if List.length component > 1 then
-        match cycle_inlined_name_collision cycle_graph component
-                (fun canon -> match parse_at ~spelling:canon ~canon with
-                   | Some (Parser.Ok mf) -> Some mf
-                   | _ -> None) with
-        | None -> ()
-        | Some (name, first_module, second_module, loc) ->
-          diags := mk_diag ~source:"validation" loc
-            (Printf.sprintf
-               "import cycle: `%s` and `%s` are both collapsed into one namespace here \
-                and both declare `%s`, so one declaration would REPLACE the other and \
-                the losing module's references would silently rebind. Rename it in one \
-                module, or move the shared declaration into a separate module imported \
-                by both sides."
-               first_module second_module name)
-            :: !diags)
-      (tarjan_sccs cycle_graph);
     (* ── Entrypoint-closure name-wired resolution (issue #41 class) ─────────
        Cache / email / publish / subscribe / enqueue sites resolve their NAME
        through the process-wide domain registry at runtime when the declaring
@@ -3251,8 +3157,8 @@ let diag_of_go_emit_error (error : Emit_go.emit_error) : diagnostic = {
    Source mapping survives because every emitted declaration carries its OWN
    `//line <file>:<n>`, so a merged file still points each declaration at the .tesl it
    came from.
-   The one thing merging loses is per-member scoping: two members that declare the same
-   Tesl name would become one binding. That is reported rather than silently resolved. *)
+   Merging would lose per-member scoping, so colliding declarations and their uses are
+   owner-alpha-renamed in the Go-only AST before this step. *)
 (* Two imports of the SAME module merge into one carrying the union of the exposed
    names.  Both callers need this: merging a cycle unions its members' outside imports
    (two members may import one module with different exposed lists), and rewriting an
@@ -3273,6 +3179,184 @@ let rec add_merged_import acc (imp : Ast.import_decl) =
     merge_exposed_imports existing imp :: rest
   | existing :: rest -> existing :: add_merged_import rest imp
 
+(* Go collapses an SCC into one package. Preserve the source module namespaces by
+   alpha-renaming only the copied emission AST. '$' cannot occur in a Tesl identifier,
+   and [Emit_go.go_ident] escapes it deterministically. *)
+let alpha_rename_cycle_members ~(targets : Ast.module_form list)
+    (members : Ast.module_form list) =
+  let member_names = List.map (fun (m : Ast.module_form) -> m.module_name) members in
+  let symbols (m : Ast.module_form) =
+    List.concat_map (function
+      | Ast.DFunc f -> [f.name]
+      | Ast.DConst c -> [c.name]
+      | Ast.DRecord r -> [r.name]
+      | Ast.DEntity e -> [e.name]
+      | Ast.DFact f -> [f.name]
+      | Ast.DCapture c -> [c.name]
+      | Ast.DType (Ast.TypeNewtype { name; _ }) -> [name]
+      | Ast.DType (Ast.TypeAdt { name; variants; _ }) ->
+        name :: List.map (fun (v : Ast.adt_variant) -> v.ctor) variants
+      | _ -> []) m.decls
+  in
+  let owners = Hashtbl.create 16 in
+  List.iter (fun (m : Ast.module_form) -> List.iter (fun name ->
+    let prior = Option.value (Hashtbl.find_opt owners name) ~default:[] in
+    if not (List.mem m.module_name prior) then
+      Hashtbl.replace owners name (m.module_name :: prior)) (symbols m)) members;
+  let renamed = Hashtbl.create 16 in
+  List.iter (fun (m : Ast.module_form) -> List.iter (fun name ->
+    if List.length (Option.value (Hashtbl.find_opt owners name) ~default:[]) > 1 then
+      Hashtbl.replace renamed (m.module_name, name)
+        (Printf.sprintf "Scc$%s$%s" m.module_name name)) (symbols m)) members;
+  let adt_constructors (m : Ast.module_form) type_name =
+    List.find_map (function
+      | Ast.DType (Ast.TypeAdt { name; variants; _ }) when name = type_name ->
+        Some (List.map (fun (v : Ast.adt_variant) -> v.ctor) variants)
+      | _ -> None) m.decls
+    |> Option.value ~default:[]
+  in
+  let imported_ctor_owner module_name exposed_type ctor =
+    List.find_opt (fun (owner : Ast.module_form) -> owner.module_name = module_name)
+      members
+    |> Option.map (fun owner -> List.mem ctor (adt_constructors owner exposed_type))
+    |> Option.value ~default:false
+  in
+  let local_owner (m : Ast.module_form) name =
+    if List.mem name (symbols m) then Some m.module_name
+    else List.find_map (fun (imp : Ast.import_decl) ->
+      match imp.names with
+      | Ast.ImportAll -> None
+      | Ast.ImportExposing names ->
+        let exposes item =
+          item = name || item = name ^ "(..)"
+          || (String.length item >= 4
+              && String.sub item (String.length item - 4) 4 = "(..)"
+              && imported_ctor_owner imp.module_name
+                   (String.sub item 0 (String.length item - 4)) name)
+        in
+        if List.exists exposes names then Some imp.module_name else None) m.imports
+  in
+  let split_qualified name =
+    match String.rindex_opt name '.' with
+    | None -> None
+    | Some i -> Some (String.sub name 0 i,
+                       String.sub name (i + 1) (String.length name - i - 1))
+  in
+  let rename m name =
+    let owner, bare = match split_qualified name with
+      | Some pair -> pair
+      | None -> Option.value (local_owner m name) ~default:m.Ast.module_name, name
+    in
+    match Hashtbl.find_opt renamed (owner, bare) with
+    | Some generated -> generated
+    | None when List.mem owner member_names -> bare
+    | None -> name
+  in
+  let rec ty m = function
+    | Ast.TName ({ name; _ } as n) -> Ast.TName { n with name = rename m name }
+    | Ast.TVar _ as t -> t
+    | Ast.TApp ({ head; arg; _ } as t) -> Ast.TApp { t with head = ty m head; arg = ty m arg }
+    | Ast.TFun ({ dom; cod; _ } as t) -> Ast.TFun { t with dom = ty m dom; cod = ty m cod }
+    | Ast.TTuple ({ elems; _ } as t) -> Ast.TTuple { t with elems = List.map (ty m) elems }
+  in
+  let proof m =
+    let rec go = function
+      | Ast.PredApp ({ pred; _ } as p) -> Ast.PredApp { p with pred = rename m pred }
+      | Ast.PredAnd ({ left; right; _ } as p) ->
+        Ast.PredAnd { p with left = go left; right = go right }
+    in go
+  in
+  let binding m (b : Ast.binding) =
+    { b with type_expr = ty m b.type_expr; proof_ann = Option.map (proof m) b.proof_ann }
+  in
+  let field m (f : Ast.field_def) =
+    { f with type_expr = ty m f.type_expr; proof_ann = Option.map (proof m) f.proof_ann }
+  in
+  let rec ret m = function
+    | Ast.RetPlain ({ ty = t; _ } as r) -> Ast.RetPlain { r with ty = ty m t }
+    | Ast.RetAttached ({ binding = b; _ } as r) -> Ast.RetAttached { r with binding = binding m b }
+    | Ast.RetNamedPack ({ ty = t; entity_proof; other_proof; _ } as r) ->
+      Ast.RetNamedPack { r with ty = ty m t; entity_proof = Option.map (proof m) entity_proof;
+                               other_proof = Option.map (proof m) other_proof }
+    | Ast.RetForAll ({ elem_ty; proof = p; _ } as r) -> Ast.RetForAll { r with elem_ty = ty m elem_ty; proof = proof m p }
+    | Ast.RetMaybeForAll ({ elem_ty; proof = p; _ } as r) -> Ast.RetMaybeForAll { r with elem_ty = ty m elem_ty; proof = proof m p }
+    | Ast.RetSetForAll ({ elem_ty; proof = p; _ } as r) -> Ast.RetSetForAll { r with elem_ty = ty m elem_ty; proof = proof m p }
+    | Ast.RetMaybeSetForAll ({ elem_ty; proof = p; _ } as r) -> Ast.RetMaybeSetForAll { r with elem_ty = ty m elem_ty; proof = proof m p }
+    | Ast.RetForAllDictValues ({ key_ty; val_ty; proof = p; _ } as r) -> Ast.RetForAllDictValues { r with key_ty = ty m key_ty; val_ty = ty m val_ty; proof = proof m p }
+    | Ast.RetForAllDictKeys ({ key_ty; val_ty; proof = p; _ } as r) -> Ast.RetForAllDictKeys { r with key_ty = ty m key_ty; val_ty = ty m val_ty; proof = proof m p }
+    | Ast.RetMaybeAttached ({ outer_ty; binding = b; _ } as r) -> Ast.RetMaybeAttached { r with outer_ty = Option.map (ty m) outer_ty; binding = binding m b }
+    | Ast.RetExists ({ binding = b; body; _ } as r) -> Ast.RetExists { r with binding = binding m b; body = ret m body }
+  in
+  let rec pattern m = function
+    | Ast.PCon ({ ctor; fields; _ } as p) -> Ast.PCon { p with ctor = rename m ctor; fields = List.map (fun (n, p) -> n, pattern m p) fields }
+    | Ast.PNullary ({ ctor; _ } as p) -> Ast.PNullary { p with ctor = rename m ctor }
+    | (Ast.PVar _ | Ast.PWild | Ast.PLit _) as p -> p
+  in
+  let rec expr m e =
+    let e = Ast_visitor.map_children (expr m) e in
+    match e with
+    | Ast.EVar ({ name; _ } as v) -> Ast.EVar { v with name = rename m name }
+    | Ast.EField { obj = Ast.EConstructor { name = owner; args = []; _ }; field = name; loc }
+      when Hashtbl.mem renamed (owner, name) ->
+        Ast.EVar { name = Hashtbl.find renamed (owner, name); loc }
+    | Ast.EField { obj = Ast.EConstructor c; field; loc }
+      when c.args = [] && List.mem c.name member_names ->
+        Ast.EVar { name = field; loc }
+    | Ast.EConstructor ({ name; _ } as c) -> Ast.EConstructor { c with name = rename m name }
+    | Ast.EEnqueue ({ job_type; _ } as q) ->
+      Ast.EEnqueue { q with job_type = rename m job_type }
+    | Ast.EPublish ({ event_ctor; _ } as p) ->
+      Ast.EPublish { p with event_ctor = rename m event_ctor }
+    | Ast.ERecord ({ type_hint; _ } as r) -> Ast.ERecord { r with type_hint = Option.map (rename m) type_hint }
+    | Ast.ELet ({ declared_type; declared_proof; _ } as l) ->
+      Ast.ELet { l with declared_type = Option.map (ty m) declared_type;
+                        declared_proof = Option.map (proof m) declared_proof }
+    | Ast.EOk ({ proof = p; _ } as ok) -> Ast.EOk { ok with proof = proof m p }
+    | Ast.ELambda ({ params; _ } as l) ->
+      Ast.ELambda { l with params = List.map (binding m) params }
+    | Ast.ECase ({ arms; _ } as c) -> Ast.ECase { c with arms = List.map (fun (a : Ast.case_arm) -> { a with pattern = pattern m a.pattern }) arms }
+    | other -> other
+  in
+  let rec test_stmts m stmts = List.map (function
+    | Ast.TsLet ({ declared_type; value; declared_proof; _ } as s) -> Ast.TsLet { s with declared_type = Option.map (ty m) declared_type; value = expr m value; declared_proof = Option.map (proof m) declared_proof }
+    | Ast.TsLetProof ({ value; _ } as s) -> Ast.TsLetProof { s with value = expr m value }
+    | Ast.TsExpect ({ left; right; _ } as s) -> Ast.TsExpect { s with left = expr m left; right = Option.map (expr m) right }
+    | Ast.TsExpectFail ({ fn; arg; _ } as s) -> Ast.TsExpectFail { s with fn = expr m fn; arg = expr m arg }
+    | Ast.TsExpectHasProof ({ fn; arg; _ } as s) -> Ast.TsExpectHasProof { s with fn = expr m fn; arg = expr m arg }
+    | Ast.TsProperty ({ params; body; _ } as s) -> Ast.TsProperty { s with params = List.map (fun (p : Ast.property_param) -> { p with binding = binding m p.binding; where_clause = Option.map (expr m) p.where_clause; generator = Option.map (rename m) p.generator }) params; body = expr m body }
+    | Ast.TsIf ({ cond; then_stmts; else_stmts; _ } as s) -> Ast.TsIf { s with cond = expr m cond; then_stmts = test_stmts m then_stmts; else_stmts = test_stmts m else_stmts }
+    | Ast.TsCase ({ scrut; arms; _ } as s) -> Ast.TsCase { s with scrut = expr m scrut; arms = List.map (fun (a : Ast.ts_case_arm) -> { a with ts_pattern = pattern m a.ts_pattern; ts_guard = Option.map (expr m) a.ts_guard; ts_body = test_stmts m a.ts_body }) arms }
+    | Ast.TsExpr ({ e; _ } as s) -> Ast.TsExpr { s with e = expr m e }) stmts
+  in
+  let decl m = function
+    | Ast.DFunc f -> Ast.DFunc { f with name = rename m f.name; params = List.map (binding m) f.params; return_spec = ret m f.return_spec; body = expr m f.body }
+    | Ast.DConst c -> Ast.DConst { c with name = rename m c.name; value = expr m c.value }
+    | Ast.DRecord r -> Ast.DRecord { r with name = rename m r.name; fields = List.map (field m) r.fields;
+      invariant = Option.map (fun (i : Ast.record_invariant) -> { i with proof_text = proof m i.proof_text;
+        checker_name = Option.map (rename m) i.checker_name }) r.invariant }
+    | Ast.DEntity e -> Ast.DEntity { e with name = rename m e.name; fields = List.map (field m) e.fields }
+    | Ast.DFact f -> Ast.DFact { f with name = rename m f.name; params = List.map (binding m) f.params }
+    | Ast.DCapture c -> Ast.DCapture { c with name = rename m c.name;
+      binding = binding m c.binding; parser = rename m c.parser;
+      checker = Option.map (rename m) c.checker }
+    | Ast.DType (Ast.TypeNewtype t) -> Ast.DType (Ast.TypeNewtype { t with name = rename m t.name; base_type = ty m t.base_type })
+    | Ast.DType (Ast.TypeAdt t) -> Ast.DType (Ast.TypeAdt { t with name = rename m t.name; variants = List.map (fun (v : Ast.adt_variant) -> { v with ctor = rename m v.ctor; fields = List.map (field m) v.fields }) t.variants })
+    | Ast.DTest t -> Ast.DTest { t with stmts = test_stmts m t.stmts }
+    | Ast.DApiTest t -> Ast.DApiTest { t with seed_stmts = List.map (expr m) t.seed_stmts; stmts = test_stmts m t.stmts }
+    | Ast.DLoadTest t -> Ast.DLoadTest { t with seed_stmts = List.map (expr m) t.seed_stmts; request_stmts = test_stmts m t.request_stmts }
+    | d -> d
+  in
+  List.map (fun (m : Ast.module_form) ->
+    let import (i : Ast.import_decl) = match i.names with
+      | Ast.ImportAll -> i
+      | Ast.ImportExposing names -> { i with names = Ast.ImportExposing (List.map (fun name ->
+          let suffix = if String.length name >= 4 && String.sub name (String.length name - 4) 4 = "(..)" then "(..)" else "" in
+          let bare = if suffix = "" then name else String.sub name 0 (String.length name - 4) in
+          Option.value (Hashtbl.find_opt renamed (i.module_name, bare)) ~default:bare ^ suffix) names) }
+    in
+    { m with decls = List.map (decl m) m.decls; imports = List.map import m.imports;
+             exports = List.map (function Ast.ExportName n -> Ast.ExportName (rename m n) | Ast.ExportAdt n -> Ast.ExportAdt (rename m n)) m.exports }) targets
+
 let merge_cycle_members (members : Ast.module_form list) =
   match List.sort (fun (left : Ast.module_form) (right : Ast.module_form) ->
           String.compare left.module_name right.module_name) members with
@@ -3280,19 +3364,7 @@ let merge_cycle_members (members : Ast.module_form list) =
   | [single] -> Ok single
   | first :: _ as sorted ->
     let names = List.map (fun (m : Ast.module_form) -> m.module_name) sorted in
-    let declared_names = List.concat_map (fun (m : Ast.module_form) ->
-      List.filter_map cycle_decl_bound_name m.decls) sorted in
-    let rec first_duplicate = function
-      | [] -> None
-      | name :: rest -> if List.mem name rest then Some name else first_duplicate rest
-    in
-    (match first_duplicate declared_names with
-     | Some name ->
-       Error (Printf.sprintf
-         "Go backend collapses the import cycle %s into one package, and `%s` is declared by more than one member; rename it in one of them"
-         (String.concat " <-> " names) name)
-     | None ->
-       Ok { first with
+    Ok { first with
             (* Deliberately keeps the first member's name and source_file: the package is
                named after it, and the file is only used for whole-module diagnostics. *)
             decls = List.concat_map (fun (m : Ast.module_form) -> m.decls) sorted;
@@ -3300,10 +3372,10 @@ let merge_cycle_members (members : Ast.module_form list) =
             imports =
               (* An import of a fellow member disappears with the boundary; everything
                  else is kept once. *)
-              List.fold_left (fun acc (m : Ast.module_form) ->
+               List.fold_left (fun acc (m : Ast.module_form) ->
                 List.fold_left (fun acc (imp : Ast.import_decl) ->
                   if List.mem imp.module_name names then acc
-                  else add_merged_import acc imp) acc m.imports) [] sorted })
+                   else add_merged_import acc imp) acc m.imports) [] sorted }
 
 (* Every LOCAL module the entry imports, transitively, parsed and checked.  Import
    resolution is this module's job, not the emitter's: `build_local_import_graph` already
@@ -3339,19 +3411,28 @@ let local_dependency_modules entry_path (entry : Ast.module_form) =
                               (Filename.basename path));
           None
     in
-    let originals = ref [] in
-    let collapsed = List.filter_map (fun component ->
-      let members = List.filter_map parsed component in
+    let component_modules = List.map (List.filter_map parsed) components in
+    let originals = List.concat component_modules in
+    (* Rewrite consumers too: after an SCC import target is collapsed, an outside
+       module must ask that package for the generated owner-specific export. *)
+    let emit_modules = List.fold_left (fun targets members ->
+      if List.length members > 1 then alpha_rename_cycle_members ~targets members
+      else targets) originals component_modules in
+    let emitted_member (original : Ast.module_form) =
+      List.find (fun (candidate : Ast.module_form) ->
+        candidate.module_name = original.module_name) emit_modules
+    in
+    let collapsed = List.filter_map (fun members ->
       if members = [] then None
       else begin
-        originals := !originals @ members;
-        match merge_cycle_members members with
+        let emit_members = List.map emitted_member members in
+        match merge_cycle_members emit_members with
         | Ok merged ->
           Some (merged, List.map (fun (m : Ast.module_form) -> m.module_name) members)
         | Error message ->
           if !failed = None then failed := Some message;
           None
-      end) components in
+       end) component_modules in
     (* A module OUTSIDE the cycle imports a MEMBER by name, but the merged module answers
        to only one name.  Rewriting those references here is what keeps the emitter free
        of any cycle concept: after this, no module name refers to a collapsed member. *)
@@ -3378,7 +3459,7 @@ let local_dependency_modules entry_path (entry : Ast.module_form) =
          | Some (merged, _) -> merged
          | None -> entry
        in
-       GoDeps { emit = List.map fst emit; originals = !originals; entry_emit })
+       GoDeps { emit = List.map fst emit; originals; entry_emit })
 
 let go_project_diag file message = {
   file; start_line = 1; start_col = 1; end_line = 1; end_col = 1;

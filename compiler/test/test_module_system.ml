@@ -392,9 +392,8 @@ let pure_cycle_allowed_and_inlined () =
        ignore (artifact "internal/teslmodcyca/module.go" b_artifacts);
        gate_go b_artifacts)
 
-(* Two members of a cycle declaring the same private name can remain distinct in
-   the Go SCC package. The wider three-member collision below is rejected. *)
-let collide_a = {|module CollideA exposing [oneEntry, oneSeed]
+(* Two members of a cycle declaring the same name remain distinct in the Go SCC package. *)
+let collide_a = {|module CollideA exposing [oneEntry, oneSeed, helper]
 
 import Tesl.Prelude exposing [Int]
 import CollideB exposing [twoEntry]
@@ -404,9 +403,13 @@ fn helper(n: Int) -> Int = n + 1
 fn oneEntry(n: Int) -> Int = helper (twoEntry n)
 
 fn oneSeed() -> Int = 7
+
+test "cycle helpers stay distinct" {
+  expect oneEntry 3 == 7
+}
 |}
 
-let collide_b = {|module CollideB exposing [twoEntry]
+let collide_b = {|module CollideB exposing [twoEntry, helper]
 
 import Tesl.Prelude exposing [Int]
 import CollideA exposing [oneSeed]
@@ -416,19 +419,33 @@ fn helper(n: Int) -> Int = n * 2
 fn twoEntry(n: Int) -> Int = helper n
 |}
 
-(* A TWO-member cycle where each module declares its own `helper` is ACCEPTED, because it
-   works: `A <-> B` with a different `helper` in each keeps them apart from either
-   entry. What is rejected is the shape below, where one component contains two
-   sibling declarations that collide. *)
+let collide_consumer = {|module CollideConsumer exposing []
+
+import Tesl.Prelude exposing [Int]
+import CollideA
+import CollideB
+
+test "qualified cycle exports retain owners" {
+  expect CollideA.helper 3 == 4
+  expect CollideB.helper 3 == 6
+}
+|}
+
+(* A TWO-member cycle where each module declares its own `helper` keeps both helpers,
+   including through qualified calls from outside the SCC. *)
 let cycle_two_member_same_name_accepted () =
-  with_temp_project [("CollideA.tesl", collide_a); ("CollideB.tesl", collide_b)]
+  with_temp_project [("CollideA.tesl", collide_a); ("CollideB.tesl", collide_b);
+                     ("CollideConsumer.tesl", collide_consumer)]
     (fun dir ->
        List.iter (fun entry ->
          let code, out = run_cc_in dir ["--check"; entry] in
          if code <> 0 then
            failf "a two-member cycle may declare the same name in both members (%s):\n%s"
              entry out)
-         ["CollideA.tesl"; "CollideB.tesl"])
+          ["CollideA.tesl"; "CollideB.tesl"];
+       let artifacts = compile_go dir "CollideA.tesl" in
+       gate_go artifacts;
+       gate_go (compile_go dir "CollideConsumer.tesl"))
 
 (* The collision need not be between two modules that sit next to each other on a cycle
    path.  Hub imports both Spoke1 and Spoke2 and both import Hub back, so all three are
@@ -447,6 +464,11 @@ fn hubSeed() -> Int = 5
 fn viaOne(n: Int) -> Int = oneOf n
 
 fn viaTwo(n: Int) -> Int = twoOf n
+
+test "sibling helpers stay distinct" {
+  expect viaOne 1 == 7
+  expect viaTwo 1 == 105
+}
 |}
 
 let spoke1_source = {|module Spoke1 exposing [oneOf]
@@ -469,21 +491,131 @@ fn shared(n: Int) -> Int = n * 100
 fn twoOf(n: Int) -> Int = shared n + hubSeed()
 |}
 
-let cycle_collision_across_component_rejected () =
+let hub_consumer_source = {|module Consumer exposing []
+
+import Tesl.Prelude exposing [Int]
+import Hub exposing [viaOne, viaTwo]
+
+test "outside SCC sees owner-specific helpers" {
+  expect viaOne 1 == 7
+  expect viaTwo 1 == 105
+}
+|}
+
+let cycle_collision_across_component_preserved () =
   with_temp_project [("Hub.tesl", hub_source); ("Spoke1.tesl", spoke1_source);
-                     ("Spoke2.tesl", spoke2_source)]
+                     ("Spoke2.tesl", spoke2_source); ("Consumer.tesl", hub_consumer_source)]
     (fun dir ->
        let code, out = run_cc_in dir ["--check"; "Hub.tesl"] in
-       if code = 0 then
-         failf "a collision between two members of one SCC must be rejected even when \
-                they never share a cycle path:\n%s" out;
-       if not (contains "declare `shared`" out) then
-         failf "the diagnostic must name the colliding declaration:\n%s" out;
-       (* The runtime consequence this guards, measured with the guard removed: `viaTwo 1`
-          answered 7 where the program says 105 — Spoke2's `shared` was dropped and its
-          references rebound to Spoke1's. *)
-       if not (contains "Spoke1" out && contains "Spoke2" out) then
-         failf "the diagnostic must name both colliding modules:\n%s" out)
+       if code <> 0 then failf "sibling collisions in one SCC must check:\n%s" out;
+       let artifacts = compile_go dir "Hub.tesl" in
+       gate_go artifacts;
+       let consumer_artifacts = compile_go dir "Consumer.tesl" in
+       gate_go consumer_artifacts)
+
+(* Type and constructor namespaces need the same owner-aware rewrite. Hub imports
+   AdtA's constructors through Choice(..), while AdtB declares the same source names
+   in the same SCC. The outside consumer then reaches both versions qualified. *)
+let adt_hub_source = {|module AdtHub exposing [hubSeed, viaImported]
+
+import Tesl.Prelude exposing [Int]
+import AdtA exposing [Choice(..)]
+import AdtB exposing [readB]
+
+fn hubSeed() -> Int = 5
+
+fn viaImported(x: Choice) -> Int =
+  case x of
+    Shared n -> n + 100
+    AOnly -> 0
+|}
+
+let adt_a_source = {|module AdtA exposing [Choice(..), readA, makeA]
+
+import Tesl.Prelude exposing [Int]
+import Tesl.Json exposing [intCodec]
+import AdtHub exposing [hubSeed]
+
+type Choice
+  = Shared Int
+  | AOnly
+
+fn readA(x: Choice) -> Int =
+  case x of
+    Shared n -> n + 1
+    AOnly -> hubSeed()
+
+fn makeA(n: Int) -> Choice = Shared n
+
+fn parseSegment(n: Int) -> Int = n + 1
+
+capturer sharedCapture: Int using intCodec via parseSegment
+|}
+
+let adt_b_source = {|module AdtB exposing [Choice(..), readB, makeB]
+
+import Tesl.Prelude exposing [Int]
+import Tesl.Json exposing [intCodec]
+import AdtHub exposing [hubSeed]
+
+type Choice
+  = Shared Int
+  | BOnly
+
+fn readB(x: Choice) -> Int =
+  case x of
+    Shared n -> n * 10
+    BOnly -> hubSeed()
+
+fn makeB(n: Int) -> Choice = Shared n
+
+fn parseSegment(n: Int) -> Int = n * 2
+
+capturer sharedCapture: Int using intCodec via parseSegment
+|}
+
+let adt_consumer_source = {|module AdtConsumer exposing []
+
+import Tesl.Prelude exposing [Int]
+import AdtA exposing [Choice, Shared, readA]
+import AdtB
+import AdtHub
+
+fn consumeA(x: Choice) -> Int = readA x
+
+fn consumeB(x: AdtB.Choice) -> Int = AdtB.readB x
+
+test "cyclic ADT owners stay distinct" {
+  expect consumeA (Shared 3) == 4
+  expect consumeB (AdtB.makeB 3) == 30
+  expect AdtHub.viaImported (Shared 3) == 103
+}
+|}
+
+let cycle_adt_and_capturer_collisions_preserved () =
+  let parse filename source = match Parser.parse_module filename source with
+    | Parser.Ok m -> m
+    | Parser.Err e -> failf "fixture %s failed to parse: %s" filename e.msg
+  in
+  let a = parse "AdtA.tesl" adt_a_source in
+  let b = parse "AdtB.tesl" adt_b_source in
+  let rewritten = Compile.alpha_rename_cycle_members ~targets:[a; b] [a; b] in
+  List.iter (fun (module_name, expected_name, expected_checker) ->
+    let m = List.find (fun (m : Ast.module_form) -> m.module_name = module_name) rewritten in
+    match List.find_map (function Ast.DCapture c -> Some c | _ -> None) m.decls with
+    | Some c when c.name = expected_name && c.checker = Some expected_checker -> ()
+    | Some c -> failf "%s capturer rewrite was %s via %s" module_name c.name
+        (Option.value c.checker ~default:"<none>")
+    | None -> failf "%s lost its capturer during SCC rewrite" module_name)
+    [("AdtA", "Scc$AdtA$sharedCapture", "Scc$AdtA$parseSegment");
+     ("AdtB", "Scc$AdtB$sharedCapture", "Scc$AdtB$parseSegment")];
+  with_temp_project [("AdtHub.tesl", adt_hub_source); ("AdtA.tesl", adt_a_source);
+                     ("AdtB.tesl", adt_b_source);
+                     ("AdtConsumer.tesl", adt_consumer_source)]
+    (fun dir ->
+       let code, out = run_cc_in dir ["--check"; "AdtConsumer.tesl"] in
+       if code <> 0 then failf "cyclic ADT/capturer collisions must check:\n%s" out;
+       gate_go (compile_go dir "AdtConsumer.tesl"))
 
 (* ── BUG 3: CamelCase module filename — require matches the emitted dep ──── *)
 
@@ -828,8 +960,10 @@ let () =
         pure_cycle_allowed_and_inlined;
       test_case "two-member cycle may share a name" `Quick
         cycle_two_member_same_name_accepted;
-      test_case "cycle name collision across an SCC rejected" `Quick
-        cycle_collision_across_component_rejected;
+      test_case "cycle sibling names retain distinct semantics" `Quick
+        cycle_collision_across_component_preserved;
+      test_case "cycle ADT constructors and capturers retain owners" `Quick
+        cycle_adt_and_capturer_collisions_preserved;
     ];
     "bug3-camelcase-filename", [
       test_case "CamelCase filename resolves to dependency package" `Quick

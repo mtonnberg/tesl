@@ -32,7 +32,7 @@ fn shouldWork41(x: Int ::: ValidPort x && IsPositive y, y: Int ::: IsPositive x)
 # a comment for shouldWork5
 fn shouldWork5(x: ARecord) -> Int =
   2
-fn shouldWork7(x: Sandbox3.S3Record2) -> Int =
+fn shouldWork7(x: Sandbox3.ARecord2) -> Int =
   x.foo3
 fn shouldWork8(x: Sandbox2.ARecord2) -> Int =
   x.foo2
