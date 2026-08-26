@@ -22,7 +22,7 @@ func TestDebugControlHandshakeAndContinue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +34,7 @@ func TestDebugControlHandshakeAndContinue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	reader := bufio.NewReader(connection)
 	send := func(request DebugControlRequest) map[string]any {
 		if err := json.NewEncoder(connection).Encode(request); err != nil {
@@ -100,7 +100,7 @@ func TestDebugControlWaitsForConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	done := make(chan struct{})
 	go func() {
 		server.WaitForConfiguration()
@@ -115,7 +115,7 @@ func TestDebugControlWaitsForConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	reader := bufio.NewReader(connection)
 	encoder := json.NewEncoder(connection)
 	if err := encoder.Encode(DebugControlRequest{ID: "1", Command: "set-breakpoints"}); err != nil {
@@ -141,12 +141,12 @@ func TestDebugControlEvaluatesWireConditions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	connection, err := net.Dial("unix", path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	if err := json.NewEncoder(connection).Encode(DebugControlRequest{
 		ID: "1", Command: "set-breakpoints", Breakpoints: []DebugBreakpointSpec{{File: "main.tesl", Line: 1, Condition: "n == 1"}},
 	}); err != nil {
@@ -178,7 +178,7 @@ func TestDebugControlTCPBindsLoopback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	if server.Endpoint() == "" {
 		t.Fatal("Endpoint() returned empty address")
 	}
@@ -186,7 +186,7 @@ func TestDebugControlTCPBindsLoopback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	if err := json.NewEncoder(connection).Encode(DebugControlRequest{ID: "1", Command: "handshake"}); err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestDebugControlEnvironmentDiscovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	if _, err := os.Stat(filepath.Join(root, ".tesl-stuff", "debug.sock")); err != nil {
 		t.Fatalf("discovered socket: %v", err)
 	}

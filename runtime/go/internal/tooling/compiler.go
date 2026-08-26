@@ -48,7 +48,7 @@ func (client Client) Run(ctx context.Context, args ...string) (Result, error) {
 	queryContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	command := exec.CommandContext(queryContext, client.Executable, args...)
+	command := exec.CommandContext(queryContext, client.Executable, args...) // #nosec G204 -- compiler is an explicit local tool.
 	configureProcess(command)
 	command.Dir = client.Directory
 	command.Env = append([]string(nil), client.Environment...)

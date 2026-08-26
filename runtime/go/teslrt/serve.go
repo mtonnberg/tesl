@@ -109,6 +109,13 @@ func (server Server) handlerWith(options ServeOptions) http.Handler {
 		// floor, which is where `dsl/web.rkt` puts it (`harden-servlet` wraps the servlet, after
 		// the two direct-response paths were found carrying none).
 		writer := &hardenedWriter{ResponseWriter: raw}
+		// Runtime-owned SSO routes must win over the static SPA fallback. Without
+		// this check, /auth/<segment>/login serves index.html and the browser never
+		// reaches the provider's login form.
+		if _, _, matched := findSsoMatch(server.SsoRoutes, request.URL.Path); matched {
+			server.ServeHTTP(writer, request)
+			return
+		}
 		routed := request
 		if mount != "" {
 			requestPath := strings.TrimPrefix(request.URL.Path, "/")

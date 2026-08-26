@@ -368,7 +368,7 @@ func TestControlClientBridgesRuntimeProtocol(t *testing.T) {
 	serverDone := make(chan struct{})
 	go func() {
 		defer close(serverDone)
-		defer serverConnection.Close()
+		defer func() { _ = serverConnection.Close() }()
 		scanner := bufio.NewScanner(serverConnection)
 		encoder := json.NewEncoder(serverConnection)
 		for scanner.Scan() {

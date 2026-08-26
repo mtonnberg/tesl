@@ -110,7 +110,7 @@ mcp_bin="$TMP/tesl-mcp"
 inspect_output=""
 inspect_ok=false
 for attempt in 1 2 3; do
-  if inspect_output="$(TESL_DEBUG_INSPECT_BIN="$inspect_bin" run_cli debug-inspect example/learn/lesson61-step-debugging.tesl --break-at 189 --mode test --timeout-ms 10000 2>&1)" &&
+  if inspect_output="$(TESL_DEBUG_INSPECT_BIN="$inspect_bin" run_cli debug-inspect example/learn/lesson61-step-debugging.tesl --break-at 193 --mode test --timeout-ms 10000 2>&1)" &&
      printf '%s\n' "$inspect_output" | grep -q '"stopped":true'; then
     inspect_ok=true
     break

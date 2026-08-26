@@ -122,6 +122,15 @@ _tesl_file_stamp() {
 _tesl_mktemp()     { mktemp  "${TMPDIR:-/tmp}/tesl.XXXXXXXX"; }
 _tesl_mktemp_dir() { mktemp -d "${TMPDIR:-/tmp}/tesl.XXXXXXXX"; }
 
+# Portable in-place sed. GNU accepts an optional suffix after -i; BSD requires
+# one. Rewriting through a sibling temp file keeps both dialects equivalent.
+_tesl_sed_inplace() {
+  local expr="$1" file="$2" tmp
+  tmp="$file.tesl-sed.$$"
+  sed "$expr" "$file" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
+  mv "$tmp" "$file"
+}
+
 # Project root for a DIRECTORY: the nearest ancestor (or itself) with tesl.toml.
 _tesl_project_root_of_dir() {
   local d

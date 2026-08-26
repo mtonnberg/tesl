@@ -234,6 +234,9 @@ func TestBridgeDetachEndsTheSessionAndServerSurvivesForReArm(t *testing.T) {
 		t.Fatalf("re-arm session exit = %d", code)
 	}
 	replies := strings.Split(strings.TrimSpace(stdout2.String()), "\n")
+	if len(replies) < 2 {
+		t.Fatalf("re-arm replies = %#v", replies)
+	}
 	setResult := decode(t, replies[0])
 	if setResult["error"] != "" {
 		t.Fatalf("re-arm set-breakpoints = %#v", setResult)

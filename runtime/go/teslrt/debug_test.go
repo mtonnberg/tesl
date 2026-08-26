@@ -299,7 +299,7 @@ func TestApplyEnvPauseTimeoutParsesMillisOnly(t *testing.T) {
 	}
 	for _, bad := range []string{"", "abc", "-5", "0"} {
 		if bad == "" {
-			os.Unsetenv("TESL_DEBUG_PAUSE_TIMEOUT_MS")
+			_ = os.Unsetenv("TESL_DEBUG_PAUSE_TIMEOUT_MS")
 		} else {
 			t.Setenv("TESL_DEBUG_PAUSE_TIMEOUT_MS", bad)
 		}

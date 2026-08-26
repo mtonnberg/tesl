@@ -17,7 +17,7 @@ func TestProcessTargetAttachesToTCPRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer control.Close()
+	defer func() { _ = control.Close() }()
 	target := NewProcessTarget()
 	backend, err := target.AttachBackend(json.RawMessage(`{"address":"` + control.Endpoint() + `"}`))
 	if err != nil {
@@ -153,6 +153,9 @@ func TestProcessTargetLaunchesGeneratedGoTest(t *testing.T) {
 }
 
 func TestProcessTargetLaunchesAndReportsLifecycle(t *testing.T) {
+	if len(os.Args) == 0 {
+		t.Fatal("test executable path unavailable")
+	}
 	arguments, err := json.Marshal(processLaunchArguments{
 		Program: os.Args[0], Cwd: t.TempDir(),
 		Args:     []string{"-test.run=TestProcessTargetLaunchHelper", "-test.v"},
@@ -202,6 +205,6 @@ func TestProcessTargetLaunchHelper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer control.Close()
+	defer func() { _ = control.Close() }()
 	select {}
 }

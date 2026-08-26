@@ -672,6 +672,9 @@ func (server *Server) writeCompletionDocumentation(ctx context.Context, id json.
 	if err := json.Unmarshal(raw, &item); err != nil {
 		return server.writeResult(writer, id, json.RawMessage(raw))
 	}
+	if item == nil {
+		return server.writeResult(writer, id, json.RawMessage(raw))
+	}
 	label, _ := item["label"].(string)
 	if label == "" || server.compiler == nil {
 		return server.writeResult(writer, id, item)
@@ -924,7 +927,7 @@ func (server *Server) writeLinkedEditing(ctx context.Context, id json.RawMessage
 	ranges := make([]protocol.Range, 0)
 	identifier := regexp.QuoteMeta(word)
 	pattern := regexp.MustCompile(`\b` + identifier + `\b`)
-	for currentLine := start; currentLine < end; currentLine++ {
+	for currentLine := start; currentLine < end && currentLine < len(lines); currentLine++ {
 		text := lines[currentLine]
 		for _, match := range pattern.FindAllStringIndex(text, -1) {
 			ranges = append(ranges, protocol.Range{

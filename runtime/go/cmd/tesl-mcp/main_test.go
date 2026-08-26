@@ -176,11 +176,17 @@ func TestMCPStdioProtocol(t *testing.T) {
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s' '{\"version\":1,\"ok\":true,\"diagnostics\":[],\"symbols\":[],\"proof_obligations\":[]}'\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	if len(os.Args) == 0 {
+		t.Fatal("test executable path unavailable")
+	}
 	command := exec.Command(os.Args[0], "-test.run=TestMCPStdioHelper")
 	command.Env = append(os.Environ(), "TESL_MCP_STDIO_HELPER=1", "TESL_COMPILER="+script)
 	input, err := command.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if input == nil {
+		t.Fatal("MCP helper stdin pipe is nil")
 	}
 	output, err := command.StdoutPipe()
 	if err != nil {
@@ -225,11 +231,17 @@ func TestMCPStdioCompilerToolMatrix(t *testing.T) {
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s' '{\"version\":1,\"ok\":true,\"diagnostics\":[],\"symbols\":[],\"proof_obligations\":[]}'\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	if len(os.Args) == 0 {
+		t.Fatal("test executable path unavailable")
+	}
 	command := exec.Command(os.Args[0], "-test.run=TestMCPStdioHelper")
 	command.Env = append(os.Environ(), "TESL_MCP_STDIO_HELPER=1", "TESL_COMPILER="+script)
 	input, err := command.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if input == nil {
+		t.Fatal("MCP helper stdin pipe is nil")
 	}
 	output, err := command.StdoutPipe()
 	if err != nil {
@@ -288,16 +300,29 @@ func TestMCPStdioRealCompilerAndHeadlessDebugger(t *testing.T) {
 	if _, err := os.Stat(compiler); err != nil {
 		t.Skipf("built compiler unavailable: %v", err)
 	}
+	inspectBin := filepath.Join(t.TempDir(), "tesl-debug-inspect")
+	inspectBuild := exec.Command("go", "build", "-o", inspectBin, "./cmd/tesl-debug-inspect")
+	inspectBuild.Dir = filepath.Join(root, "runtime", "go")
+	if output, err := inspectBuild.CombinedOutput(); err != nil {
+		t.Fatalf("build current debug inspect launcher: %v\n%s", err, output)
+	}
 	lesson := filepath.Join(root, "example", "learn", "lesson61-step-debugging.tesl")
+	if len(os.Args) == 0 {
+		t.Fatal("test executable path unavailable")
+	}
 	command := exec.Command(os.Args[0], "-test.run=TestMCPStdioHelper")
 	command.Env = append(os.Environ(),
 		"TESL_MCP_STDIO_HELPER=1",
 		"TESL_COMPILER="+compiler,
+		"TESL_DEBUG_INSPECT_BIN="+inspectBin,
 		"TESL_REPO_ROOT="+root,
 	)
 	input, err := command.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if input == nil {
+		t.Fatal("MCP helper stdin pipe is nil")
 	}
 	output, err := command.StdoutPipe()
 	if err != nil {
@@ -406,6 +431,9 @@ func TestMCPRacketCatalogAndCompilerDifferential(t *testing.T) {
 	racketInput, err := racketCommand.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if racketInput == nil {
+		t.Fatal("Racket MCP stdin pipe is nil")
 	}
 	racketOutput, err := racketCommand.StdoutPipe()
 	if err != nil {

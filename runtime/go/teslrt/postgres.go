@@ -109,6 +109,12 @@ func OpenPostgres(config PostgresConfig, tables []PostgresTable) *PostgresDB {
 	key := fmt.Sprintf("%s\x00%s\x00%d", config.Schema, dsn, poolConfig.MaxConns)
 	if existing, found := postgresConnectOnce.Load(key); found {
 		if db, ok := existing.(*PostgresDB); ok {
+			// A process can declare several databases with the same connection
+			// configuration but different tables. Reusing the pool is correct, but
+			// the first declaration must not prevent later tables from bootstrapping.
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			db.bootstrap(ctx, tables)
+			cancel()
 			return db
 		}
 	}
@@ -135,7 +141,8 @@ func postgresPoolConfig(config PostgresConfig, dsn string) *pgxpool.Config {
 	if size == 0 {
 		size = defaultPostgresPoolSize
 	}
-	poolConfig.MaxConns = int32(validPostgresPoolSize(size))
+	// validPostgresPoolSize proves size fits pgx's int32 limit.
+	poolConfig.MaxConns = int32(validPostgresPoolSize(size)) // #nosec G115 -- range validated above
 	return poolConfig
 }
 

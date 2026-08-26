@@ -541,7 +541,7 @@ func (server *Server) stackTrace(request Request) (Response, bool, error) {
 	last := snapshot.Frame
 	paused := snapshot.Paused
 	if !paused {
-		frames = nil
+		frames = []teslrt.DebugFrame{}
 	} else if len(frames) == 0 {
 		frames = []teslrt.DebugFrame{last}
 	}
@@ -811,11 +811,11 @@ func (server *Server) source(request Request) (Response, bool, error) {
 	if path == "" {
 		return server.failure(request, "source path is empty")
 	}
-	file, err := os.Open(path)
+	file, err := os.Open(path) // #nosec G304 -- DAP source path is an explicit local debug request.
 	if err != nil {
 		return server.failure(request, "cannot open source: "+err.Error())
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	if info, err := file.Stat(); err != nil {
 		return server.failure(request, "cannot stat source: "+err.Error())
 	} else if !info.Mode().IsRegular() {

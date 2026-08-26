@@ -88,6 +88,15 @@ func (target *ProcessTarget) LaunchBackend(data json.RawMessage) (DebugBackend, 
 	if !filepath.IsAbs(arguments.Program) && filepath.Dir(arguments.Program) != "." {
 		arguments.Program = filepath.Join(cwd, arguments.Program)
 	}
+	// Inspector-launched Tesl files need an isolated endpoint. Reusing the
+	// project-wide debug.sock lets a stale or concurrent target detach the next
+	// target before its snapshot, which surfaces as "endpoint closed". Explicit
+	// sockets/ports remain untouched for attach workflows.
+	if strings.EqualFold(filepath.Ext(arguments.Program), ".tesl") &&
+		arguments.DebugSocket == "" && arguments.DebugAddress == "" && arguments.DebugPort == 0 {
+		arguments.DebugSocket = filepath.Join(cwd, ".tesl-stuff",
+			fmt.Sprintf("debug-%d-%d.sock", os.Getpid(), time.Now().UnixNano()))
+	}
 	program, programArgs, cleanup, err := target.prepareProgram(arguments, cwd)
 	if err != nil {
 		return nil, err
@@ -110,7 +119,7 @@ func (target *ProcessTarget) LaunchBackend(data json.RawMessage) (DebugBackend, 
 	for name, value := range endpoint.environment {
 		environment = setEnvironment(environment, name, value)
 	}
-	command := exec.Command(program, programArgs...)
+	command := exec.Command(program, programArgs...) // #nosec G204 -- target is an explicit local debug launch.
 	command.Dir = cwd
 	command.Env = environment
 	target.mutex.Lock()
@@ -121,10 +130,18 @@ func (target *ProcessTarget) LaunchBackend(data json.RawMessage) (DebugBackend, 
 		cleanup()
 		return nil, fmt.Errorf("capture debug program stdout: %w", err)
 	}
+	if stdout == nil {
+		cleanup()
+		return nil, errors.New("capture debug program stdout: pipe is nil")
+	}
 	stderr, err := command.StderrPipe()
 	if err != nil {
 		cleanup()
 		return nil, fmt.Errorf("capture debug program stderr: %w", err)
+	}
+	if stderr == nil {
+		cleanup()
+		return nil, errors.New("capture debug program stderr: pipe is nil")
 	}
 	if err := command.Start(); err != nil {
 		cleanup()
@@ -196,7 +213,7 @@ func dialProjectEndpoint(project string) (*ControlClient, error) {
 		return nil, fmt.Errorf("inspect debug socket: %w", err)
 	}
 	portPath := filepath.Join(stuff, "debug.port")
-	contents, err := os.ReadFile(portPath)
+	contents, err := os.ReadFile(portPath) // #nosec G304 -- read only the selected project's debug port.
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("no debug endpoint under %s", stuff)
@@ -245,7 +262,7 @@ func (target *ProcessTarget) Close() error {
 }
 
 func (target *ProcessTarget) streamOutput(reader io.ReadCloser, category string) {
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 	buffer := make([]byte, 32<<10)
 	for {
 		count, err := reader.Read(buffer)
@@ -315,7 +332,7 @@ func (target *ProcessTarget) prepareProgram(arguments processLaunchArguments, cw
 	if compiler == "" {
 		compiler = "tesl"
 	}
-	emitCommand := exec.Command(compiler, "--backend", "go", arguments.Program, "--out", outDir, "--debug")
+	emitCommand := exec.Command(compiler, "--backend", "go", arguments.Program, "--out", outDir, "--debug") // #nosec G204,G702 -- compiler is an explicit local tool.
 	emitCommand.Dir = cwd
 	if output, err := emitCommand.CombinedOutput(); err != nil {
 		return fail(fmt.Errorf("emit debug Go for %s: %w\n%s", arguments.Program, err, strings.TrimSpace(string(output))))
@@ -325,7 +342,7 @@ func (target *ProcessTarget) prepareProgram(arguments processLaunchArguments, cw
 	if err != nil {
 		return fail(err)
 	}
-	buildCommand := exec.Command("go", buildArgs...)
+	buildCommand := exec.Command("go", buildArgs...) // #nosec G204 -- build arguments come from the generated local module.
 	buildCommand.Dir = outDir
 	if output, err := buildCommand.CombinedOutput(); err != nil {
 		return fail(fmt.Errorf("build debug Go for %s: %w\n%s", arguments.Program, err, strings.TrimSpace(string(output))))
@@ -438,7 +455,11 @@ func waitForControlEndpoint(endpoint launchEndpointSpec, command *exec.Cmd, wait
 		case <-time.After(25 * time.Millisecond):
 		}
 	}
-	return nil, fmt.Errorf("timed out waiting for debug endpoint for process %d", command.Process.Pid)
+	pid := 0
+	if command.Process != nil {
+		pid = command.Process.Pid
+	}
+	return nil, fmt.Errorf("timed out waiting for debug endpoint for process %d", pid)
 }
 
 func (target *ProcessTarget) processError() error {

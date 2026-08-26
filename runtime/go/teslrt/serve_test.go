@@ -133,6 +133,25 @@ func TestHandlerWithKeepsSsoRawAndApiMounted(t *testing.T) {
 	}
 }
 
+func TestHandlerWithSsoPrecedesStaticFallback(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "index.html"), []byte("SPA-INDEX"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := testServer()
+	server.SsoRoutes = []SsoRoute{{
+		Segment:    "idp",
+		Connection: func() SsoConnection { panic("matched raw SSO route") },
+	}}
+	response := mountedResponse(t, server, ServeOptions{StaticDir: directory}, "/auth/idp/login")
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("SSO route status = %d, want 401", response.StatusCode)
+	}
+	if body := responseText(t, response); strings.Contains(body, "SPA-INDEX") {
+		t.Fatal("SSO route fell through to the static SPA")
+	}
+}
+
 // The response-header floor. Each of these headers exists because `dsl/web.rkt` adds it to every
 // response, and a Go-served deployment that carried none was a security regression the corpus
 // could not see: no api-test asserts a header the program did not set.

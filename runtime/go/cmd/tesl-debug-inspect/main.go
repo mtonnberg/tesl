@@ -191,10 +191,16 @@ func sourceInspect(file, compiler, mode string, breakAt []string, when, hit stri
 		fail("encode launch arguments: %v", err)
 	}
 	target := dap.NewProcessTarget()
-	defer target.Close()
+	defer func() { _ = target.Close() }()
 	exited := make(chan struct{}, 1)
+	var targetOutput strings.Builder
 	target.SetEventListener(func(event dap.TargetEvent) {
-		if event.Event == "exited" {
+		switch event.Event {
+		case "output":
+			if body, ok := event.Body.(map[string]string); ok {
+				targetOutput.WriteString(body["output"])
+			}
+		case "exited":
 			select {
 			case exited <- struct{}{}:
 			default:
@@ -209,8 +215,11 @@ func sourceInspect(file, compiler, mode string, breakAt []string, when, hit stri
 	if !ok {
 		fail("Go debug target did not return a control client")
 	}
+	if client == nil {
+		fail("Go debug target did not return a control client")
+	}
 	stopped := make(chan teslrt.DebugFrame, 1)
-	detach := backend.Attach(func(event teslrt.DebugEvent) {
+	detach := client.Attach(func(event teslrt.DebugEvent) {
 		if event.Kind == "stopped" {
 			select {
 			case stopped <- event.Frame:
@@ -228,9 +237,6 @@ func sourceInspect(file, compiler, mode string, breakAt []string, when, hit stri
 			fail("breakpoint #%d is not verified: %s", index+1, result.Message)
 		}
 	}
-	if err := backend.Continue(); err != nil {
-		fail("start Go debug target: %v", err)
-	}
 	if continueMode {
 		snapshots := make([]inspectOutput, 0, len(specifications))
 		completed := false
@@ -239,12 +245,12 @@ func sourceInspect(file, compiler, mode string, breakAt []string, when, hit stri
 		for {
 			select {
 			case <-stopped:
-				snapshot, err := backend.SnapshotState()
+				snapshot, err := client.SnapshotState()
 				if err != nil {
 					fail("snapshot: %v", err)
 				}
 				snapshots = append(snapshots, snapshotOutput(snapshot, "", breakpointFromSnapshot(snapshot, breakAt, when, hit)))
-				if err := backend.Continue(); err != nil {
+				if err := client.Continue(); err != nil {
 					fail("continue Go debug target: %v", err)
 				}
 			case <-exited:
@@ -259,14 +265,14 @@ func sourceInspect(file, compiler, mode string, breakAt []string, when, hit stri
 	}
 	select {
 	case <-stopped:
-		snapshot, err := backend.SnapshotState()
+		snapshot, err := client.SnapshotState()
 		if err != nil {
-			fail("snapshot: %v", err)
+			fail("snapshot: %v\n%s", err, strings.TrimSpace(targetOutput.String()))
 		}
 		writeJSON(snapshotOutput(snapshot, "", breakpointFromSnapshot(snapshot, breakAt, when, hit)))
-		_ = backend.Continue()
+		_ = client.Continue()
 	case <-time.After(time.Duration(timeoutMS) * time.Millisecond):
-		snapshot, err := backend.SnapshotState()
+		snapshot, err := client.SnapshotState()
 		if err != nil {
 			fail("snapshot after breakpoint timeout: %v", err)
 		}
@@ -340,7 +346,8 @@ func breakpointFromSourceFlags(values []string, condition, hit string) *inspectB
 	if len(values) == 0 {
 		return nil
 	}
-	line, parsedCondition, parsedHit, err := parseSourceBreakpoint(strings.Split(values[0], ",")[0], condition, hit)
+	first, _, _ := strings.Cut(values[0], ",")
+	line, parsedCondition, parsedHit, err := parseSourceBreakpoint(first, condition, hit)
 	if err != nil {
 		return nil
 	}

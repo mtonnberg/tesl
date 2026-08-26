@@ -17,6 +17,9 @@ func TestClientRunsJSONQueryAndPreservesStderr(t *testing.T) {
 		_, _ = os.Stderr.WriteString("warning\n")
 		os.Exit(0)
 	}
+	if len(os.Args) == 0 {
+		t.Fatal("test executable path unavailable")
+	}
 	client := Client{
 		Executable:  os.Args[0],
 		Environment: append(os.Environ(), "TESL_COMPILER_HELPER=1"),
@@ -34,6 +37,9 @@ func TestClientAcceptsValidJSONFromDiagnosticExit(t *testing.T) {
 	if os.Getenv("TESL_COMPILER_HELPER") == "diagnostics" {
 		_, _ = os.Stdout.WriteString(`{"version":1,"diagnostics":[{"severity":"error"}]}`)
 		os.Exit(1)
+	}
+	if len(os.Args) == 0 {
+		t.Fatal("test executable path unavailable")
 	}
 	client := Client{
 		Executable:  os.Args[0],
@@ -68,6 +74,9 @@ func TestClientRejectsOutputBomb(t *testing.T) {
 	if os.Getenv("TESL_COMPILER_HELPER") == "bomb" {
 		_, _ = os.Stdout.WriteString(strings.Repeat("x", 100))
 		os.Exit(0)
+	}
+	if len(os.Args) == 0 {
+		t.Fatal("test executable path unavailable")
 	}
 	client := Client{
 		Executable:  os.Args[0],

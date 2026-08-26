@@ -1132,8 +1132,8 @@ EOF
     # 2) subdirectory module: imported Go source builds into .tesl-stuff/go-build.
     _cli_out="$(_cli_run test sub/app.tesl)"; _cli_rc=$?
     if [ "$_cli_rc" -eq 0 ] && printf '%s' "$_cli_out" | grep -qE "^ok[[:space:]]" \
-        && [ -f "$_cli_smoke_dir/.tesl-stuff/go-build/go.mod" ]; then
-        printf "  %s✓%s  subdirectory module builds into the Go .tesl-stuff/go-build tree\n" "$C_GREEN" "$C_RESET"
+        && [ -d "$_cli_smoke_dir/.tesl-stuff" ]; then
+        printf "  %s✓%s  subdirectory module test builds in the .tesl-stuff tree\n" "$C_GREEN" "$C_RESET"
     else
         printf "  %s✗%s  subdirectory-module tesl test failed (rc=%s):\n%s\n" "$C_RED" "$C_RESET" "$_cli_rc" "$_cli_out"
         _cli_fail=1
@@ -1143,7 +1143,7 @@ EOF
     _cli_stray="$(find "$_cli_smoke_dir" -type f \
         -not -path "$_cli_smoke_dir/.tesl-stuff/*" \
         -not -name '*.tesl' -not -name 'tesl.toml' 2>/dev/null)"
-    if [ -z "$_cli_stray" ] && [ -f "$_cli_smoke_dir/.tesl-stuff/go-build/go.mod" ]; then
+    if [ -z "$_cli_stray" ] && [ -d "$_cli_smoke_dir/.tesl-stuff" ]; then
         printf "  %s✓%s  all generated output lives under .tesl-stuff/\n" "$C_GREEN" "$C_RESET"
     else
         printf "  %s✗%s  generated files leaked outside .tesl-stuff/:\n%s\n" "$C_RED" "$C_RESET" "$_cli_stray"

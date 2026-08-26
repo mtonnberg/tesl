@@ -251,7 +251,7 @@ func projectEndpoint(project string) (string, string, error) {
 	if _, err := os.Stat(socket); err == nil {
 		return socket, "", nil
 	}
-	contents, err := os.ReadFile(filepath.Join(stuff, "debug.port"))
+	contents, err := os.ReadFile(filepath.Join(stuff, "debug.port")) // #nosec G304 -- read only the selected project's debug port.
 	if err != nil {
 		return "", "", err
 	}

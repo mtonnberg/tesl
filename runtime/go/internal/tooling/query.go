@@ -20,7 +20,7 @@ func (client Client) QuerySourceJSON(ctx context.Context, flag, logicalPath, sou
 		return nil, Result{}, fmt.Errorf("compiler: create temporary source: %w", err)
 	}
 	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
+	defer func() { _ = os.Remove(temporaryPath) }()
 	if _, err := temporary.WriteString(source); err != nil {
 		_ = temporary.Close()
 		return nil, Result{}, fmt.Errorf("compiler: write temporary source: %w", err)
@@ -56,7 +56,7 @@ func (client Client) FormatSource(ctx context.Context, logicalPath, source strin
 		return nil, Result{}, fmt.Errorf("compiler: create formatting source: %w", err)
 	}
 	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
+	defer func() { _ = os.Remove(temporaryPath) }()
 	if _, err := temporary.WriteString(source); err != nil {
 		_ = temporary.Close()
 		return nil, Result{}, fmt.Errorf("compiler: write formatting source: %w", err)
@@ -70,7 +70,7 @@ func (client Client) FormatSource(ctx context.Context, logicalPath, source strin
 	if err != nil {
 		return nil, result, err
 	}
-	formatted, err := os.ReadFile(temporaryPath)
+	formatted, err := os.ReadFile(temporaryPath) // #nosec G304 -- path was created by os.CreateTemp above.
 	if err != nil {
 		return nil, result, fmt.Errorf("compiler: read formatted source: %w", err)
 	}

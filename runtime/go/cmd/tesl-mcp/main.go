@@ -141,8 +141,14 @@ func (server *server) callTool(ctx context.Context, name string, arguments map[s
 		}
 		if command := debugInspectCommand(); command != "" {
 			inspectArgs := append([]string{"--file", file}, debugInspectArgs(arguments)...)
+			if server.compiler.Executable != "" {
+				inspectArgs = append(inspectArgs, "--compiler", server.compiler.Executable)
+			}
 			result, err := (tooling.Client{Executable: command}).Run(ctx, inspectArgs...)
 			if err != nil && len(result.Stdout) == 0 {
+				if len(strings.TrimSpace(string(result.Stderr))) > 0 {
+					return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(result.Stderr)))
+				}
 				return nil, err
 			}
 			return result.Stdout, nil
@@ -304,7 +310,7 @@ func discoverCompiler() (string, error) {
 	}
 	if root := os.Getenv("TESL_REPO_ROOT"); root != "" {
 		candidate := filepath.Join(root, "compiler", "_build", "default", "bin", "main.exe")
-		if _, err := os.Stat(candidate); err == nil {
+		if _, err := os.Stat(candidate); err == nil { // #nosec G703 -- root is the explicit local repository root.
 			return candidate, nil
 		}
 	}
