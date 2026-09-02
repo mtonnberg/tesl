@@ -73,14 +73,19 @@ func TestTesl1(teslT *testing.T) {
 	if !teslrt.Equal(teslLeft3, teslrt.FromInt64(3)) {
 		teslT.Fatal("Tesl expectation failed")
 	}
-	teslLeft4 := Add(teslrt.FromInt64(0), teslrt.FromInt64(0))
+	{
 //line lesson00-hello-world.tesl:38
-	if !teslrt.Equal(teslLeft4, teslrt.FromInt64(0)) {
-		teslT.Fatal("Tesl expectation failed")
-	}
-	teslLeft5 := Add(teslrt.FromInt64(10), teslrt.FromInt64(-3))
+		x := teslrt.FromInt64(1)
+		_ = x
+		teslLeft4 := Add(x, teslrt.FromInt64(0))
 //line lesson00-hello-world.tesl:39
-	if !teslrt.Equal(teslLeft5, teslrt.FromInt64(7)) {
-		teslT.Fatal("Tesl expectation failed")
+		if !teslrt.Equal(teslLeft4, teslrt.FromInt64(1)) {
+			teslT.Fatal("Tesl expectation failed")
+		}
+		teslLeft5 := Add(teslrt.FromInt64(10), teslrt.FromInt64(-3))
+//line lesson00-hello-world.tesl:40
+		if !teslrt.Equal(teslLeft5, teslrt.FromInt64(7)) {
+			teslT.Fatal("Tesl expectation failed")
+		}
 	}
 }

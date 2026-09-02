@@ -237,6 +237,9 @@ func sourceInspect(file, compiler, mode string, breakAt []string, when, hit stri
 			fail("breakpoint #%d is not verified: %s", index+1, result.Message)
 		}
 	}
+	if err := client.ConfigurationDone(); err != nil {
+		fail("finish breakpoint configuration: %v", err)
+	}
 	if continueMode {
 		snapshots := make([]inspectOutput, 0, len(specifications))
 		completed := false
