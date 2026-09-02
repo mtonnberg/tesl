@@ -27,7 +27,7 @@ const (
 	DebugTokenFile = "debug.token"
 	// DebugTokenEnv lets a launcher that already knows the port (it chose it) hand
 	// the child the token to require, instead of reading the token file back.
-	DebugTokenEnv   = "TESL_DEBUG_TOKEN"
+	DebugTokenEnv   = "TESL_DEBUG_TOKEN" // #nosec G101 -- the NAME of the variable, not a credential.
 	debugTokenBytes = 32
 )
 
@@ -760,7 +760,7 @@ func (server *DebugControlServer) Close() error {
 		}
 	}
 	if server.path != "" {
-		if err := os.Remove(server.path); err != nil && firstErr == nil {
+		if err := os.Remove(server.path); err != nil && firstErr == nil { // #nosec G703 -- the socket this server created.
 			firstErr = err
 		}
 	}

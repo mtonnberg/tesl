@@ -501,6 +501,11 @@ func hostClassTag(class addressClass) HostClassTag {
 		return HostClassUnspecified
 	case classPublic:
 		return HostClassPublic
+	case classReserved:
+		// IETF reserved / TEST-NET / benchmarking blocks have no `Tesl.Net` constructor of
+		// their own; they are never routable, so the surface reports them as Invalid (the
+		// SSRF guard refuses them through IPForbiddenReason regardless).
+		return HostClassInvalid
 	case classInvalid:
 		return HostClassInvalid
 	default:

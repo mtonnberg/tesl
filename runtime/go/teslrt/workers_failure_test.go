@@ -27,7 +27,7 @@ func (b *flakyBackend) enqueue(payload any) string {
 func (b *flakyBackend) complete(id string)              { b.trapIfBroken(); b.inner.complete(id) }
 func (b *flakyBackend) fail(id string, attempts int)    { b.trapIfBroken(); b.inner.fail(id, attempts) }
 func (b *flakyBackend) count(status string) int         { return b.inner.countWithStatus(status) }
-func (b *flakyBackend) deadJobs(queue *Queue) []DeadJob { return nil }
+func (b *flakyBackend) deadJobs(queue *Queue) []DeadJob { return []DeadJob{} }
 func (b *flakyBackend) requeue(id string) bool          { return false }
 func (b *flakyBackend) reset()                          { ResetQueue(b.inner) }
 func (b *flakyBackend) dequeue(status string) (string, any, int, bool) {

@@ -199,7 +199,7 @@ func TestRunawayToolLoopIsBounded(t *testing.T) {
 		steps = append(steps, ToolUseStep("loop", "call", "{}"))
 	}
 	agent := testAgent(MockToolProvider(steps), tool)
-	var events []string
+	events := []string{}
 	reply, transcript := runLoop(agent, agent.Provider, []AgentMessage{userMessage("go")},
 		func(event string) { events = append(events, event) }, false)
 	if ReplyStopReason(reply) != stopAborted || reply.Text != "" {

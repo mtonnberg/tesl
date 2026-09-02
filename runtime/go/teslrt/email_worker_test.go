@@ -284,8 +284,14 @@ func TestEmailWorkerIterationRecoversAnyTrap(t *testing.T) {
 			t.Fatalf("the iteration guard let a trap through: %v", trap)
 		}
 	}()
-	runEmailWorkerIteration(nil)
+	runEmailWorkerIteration(&Outbox{settings: SmtpSettings{Host: "smtp.example"}, backend: &claimTrapBackend{}})
 }
+
+// claimTrapBackend traps on the claim itself — the shape of a durable outbox whose database
+// connection is lost mid-iteration.
+type claimTrapBackend struct{ trappingOutboxBackend }
+
+func (*claimTrapBackend) claimDue(int) []EmailMessage { panic("claimDue: connection lost") }
 
 // Messages enqueued through SendEmail carry distinct, monotonically increasing ids: the identity
 // the worker relies on across the unlocked window.

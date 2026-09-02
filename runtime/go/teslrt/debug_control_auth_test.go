@@ -340,6 +340,9 @@ func TestDebugControlEnvironmentPublishesPortAndToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if server == nil {
+		t.Fatal("TESL_DEBUG_PORT did not start a control server")
+	}
 	stuff := filepath.Join(root, ".tesl-stuff")
 	portFile, tokenFile := filepath.Join(stuff, DebugPortFile), filepath.Join(stuff, DebugTokenFile)
 	for _, path := range []string{portFile, tokenFile} {
@@ -379,6 +382,9 @@ func TestDebugControlEnvironmentPublishesPortAndToken(t *testing.T) {
 	server, err = StartDebugControlFromEnvironment()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if server == nil {
+		t.Fatal("TESL_DEBUG_PORT did not start a control server")
 	}
 	if server.Token() != launcherToken {
 		t.Fatalf("Token() = %q, want launcher token", server.Token())

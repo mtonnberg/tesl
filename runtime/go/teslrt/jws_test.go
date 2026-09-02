@@ -28,10 +28,17 @@ func es256Token(t *testing.T) (string, jwkSet) {
 	}
 	// A JWS ES256 signature is r||s at 32 bytes each, fixed width.
 	signature := append(r.FillBytes(make([]byte, 32)), s.FillBytes(make([]byte, 32))...)
+	// The public point as the uncompressed encoding 0x04||X||Y (65 bytes), read through
+	// crypto/ecdh rather than the deprecated big.Int coordinates.
+	ecdhKey, err := private.PublicKey.ECDH()
+	if err != nil {
+		t.Fatalf("public key: %v", err)
+	}
+	point := ecdhKey.Bytes()
 	set := jwkSet{Keys: []jwkKey{{
 		Kid: "k1", Kty: "EC", Crv: "P-256",
-		X: encode(private.PublicKey.X.FillBytes(make([]byte, 32))),
-		Y: encode(private.PublicKey.Y.FillBytes(make([]byte, 32))),
+		X: encode(point[1:33]),
+		Y: encode(point[33:65]),
 	}}}
 	return header + "." + payload + "." + encode(signature), set
 }

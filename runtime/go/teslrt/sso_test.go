@@ -464,7 +464,7 @@ func TestSsoCallbackOpensAnInFlightCookieSealedUnderThePreviousKey(t *testing.T)
 	sessionCookie := ""
 	for _, line := range recorder.Header().Values("Set-Cookie") {
 		if strings.HasPrefix(line, sessionCookieName+"=") {
-			sessionCookie = strings.SplitN(strings.TrimPrefix(line, sessionCookieName+"="), ";", 2)[0]
+			sessionCookie, _, _ = strings.Cut(strings.TrimPrefix(line, sessionCookieName+"="), ";")
 		}
 	}
 	if sessionCookie == "" {

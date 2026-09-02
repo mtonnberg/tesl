@@ -90,7 +90,11 @@ func expectNoEvent(t *testing.T, listener *sseListener, within time.Duration) {
 }
 
 func pubsubOutboxTableOf(database *Database) string {
-	return database.bound().QualifiedTable(pubsubOutboxTable)
+	binding := database.bound()
+	if binding == nil {
+		panic("pubsubOutboxTableOf: database is not bound")
+	}
+	return binding.QualifiedTable(pubsubOutboxTable)
 }
 
 // (a) Two instances. A browser subscribed on B receives what a handler on A publishes — and

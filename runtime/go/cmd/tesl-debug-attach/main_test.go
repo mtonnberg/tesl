@@ -106,6 +106,9 @@ func TestRunDiscoversTCPPortAndTokenFromProject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if server == nil {
+		t.Fatal("TESL_DEBUG_PORT did not start a control server")
+	}
 	t.Cleanup(func() { _ = server.Close() })
 	stdout := &strings.Builder{}
 	if code := run([]string{"-project", project, "-operation", "ping"}, strings.NewReader(""), stdout); code != 0 {
