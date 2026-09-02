@@ -52,6 +52,13 @@ func TestServerHandlesCoreRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if event, ok := second.(Event); !ok || event.Event != "initialized" {
+		t.Fatalf("initialized event = %#v", second)
+	}
+	second, err = Read(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if response, ok := second.(Response); !ok || !response.Success || response.Command != "threads" {
 		t.Fatalf("threads response = %#v", second)
 	}
@@ -90,13 +97,17 @@ type recordingTarget struct {
 
 type recordingBackend struct {
 	specifications []teslrt.DebugBreakpointSpec
+	continued      int
 }
 
 func (backend *recordingBackend) Attach(teslrt.DebugListener) func() { return func() {} }
 func (backend *recordingBackend) ClearBreakpoints() error            { return nil }
 func (backend *recordingBackend) Pause() error                       { return nil }
-func (backend *recordingBackend) Continue() error                    { return nil }
-func (backend *recordingBackend) Step(teslrt.DebugStepMode) error    { return nil }
+func (backend *recordingBackend) Continue() error {
+	backend.continued++
+	return nil
+}
+func (backend *recordingBackend) Step(teslrt.DebugStepMode) error { return nil }
 func (backend *recordingBackend) SnapshotState() (teslrt.DebugSnapshot, error) {
 	return teslrt.DebugSnapshot{}, nil
 }
@@ -138,6 +149,61 @@ func TestServerUsesExplicitLaunchAttachTarget(t *testing.T) {
 	attach, _, err := server.handle(Request{Seq: 2, Type: "request", Command: "attach"})
 	if err != nil || !attach.Success || !target.attached {
 		t.Fatalf("attach = %#v, target = %#v, error = %v", attach, target, err)
+	}
+}
+
+func TestServerCompletesLaunchHandshake(t *testing.T) {
+	var input bytes.Buffer
+	inputWriter := protocol.NewWriter(&input)
+	for _, request := range []Request{
+		{Seq: 1, Type: "request", Command: "initialize"},
+		{Seq: 2, Type: "request", Command: "launch"},
+		{Seq: 3, Type: "request", Command: "configurationDone"},
+	} {
+		if err := Write(inputWriter, request); err != nil {
+			t.Fatal(err)
+		}
+	}
+	backend := &recordingBackend{}
+	target := &recordingBackendTarget{backend: backend}
+	var output bytes.Buffer
+	if err := NewServerWithTarget(&input, &output, teslrt.NewDebugger(), target).Serve(); err != nil {
+		t.Fatal(err)
+	}
+	reader := protocol.NewReader(&output)
+	message, err := Read(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response, ok := message.(Response); !ok || !response.Success || response.Command != "initialize" {
+		t.Fatalf("initialize response = %#v", message)
+	}
+	message, err = Read(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event, ok := message.(Event); !ok || event.Event != "initialized" {
+		t.Fatalf("initialized event = %#v", message)
+	}
+	for _, command := range []string{"launch"} {
+		message, err = Read(reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, ok := message.(Response)
+		if !ok || !response.Success || response.Command != command {
+			t.Fatalf("%s response = %#v", command, message)
+		}
+	}
+	message, err = Read(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response, ok := message.(Response); !ok || !response.Success || response.Command != "configurationDone" {
+		t.Fatalf("configurationDone response = %#v", message)
+	}
+	if backend.continued != 0 {
+		t.Fatalf("configurationDone continued backend %d times, want 0", backend.continued)
 	}
 }
 
@@ -284,7 +350,6 @@ func TestServerScopesAndVariablesAreStopScoped(t *testing.T) {
 	if len(variables.Variables) != 1 || variables.Variables[0].Name != "point" || variables.Variables[0].VariablesReference == 0 {
 		t.Fatalf("variables = %#v", variables)
 	}
-
 	childrenResponse, _, err := server.handle(Request{Seq: 5, Type: "request", Command: "variables", Arguments: mustJSON(variablesArguments{VariablesReference: variables.Variables[0].VariablesReference})})
 	if err != nil {
 		t.Fatal(err)
@@ -295,6 +360,15 @@ func TestServerScopesAndVariablesAreStopScoped(t *testing.T) {
 	}
 	if len(children.Variables) != 1 || children.Variables[0].Name != "[0]" || children.Variables[0].Value != "42" {
 		t.Fatalf("children = %#v", children)
+	}
+	var childrenWire struct {
+		Variables []map[string]json.RawMessage `json:"variables"`
+	}
+	if err := json.Unmarshal(childrenResponse.Body, &childrenWire); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := childrenWire.Variables[0]["variablesReference"]; !ok {
+		t.Fatal("leaf DAP variable is missing variablesReference")
 	}
 
 	debugger.Continue()

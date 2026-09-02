@@ -2,11 +2,44 @@ package teslrt
 
 import (
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
 )
+
+func TestDebuggerBreakpointsMatchRelativeAndAbsoluteSourcePaths(t *testing.T) {
+	debugger := NewDebugger()
+	seen := make(chan DebugEvent, 1)
+	detach := debugger.Attach(func(event DebugEvent) { seen <- event })
+	defer detach()
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	absoluteFile := filepath.Join(workingDirectory, "relative-source.tesl")
+	debugger.SetBreakpoints([]DebugBreakpoint{{File: absoluteFile, Line: 7}})
+	done := make(chan struct{})
+	go func() {
+		debugger.Checkpoint(DebugFrame{Location: SourceLocation{File: "relative-source.tesl", Line: 7}})
+		close(done)
+	}()
+	select {
+	case event := <-seen:
+		if event.Frame.Location.File != "relative-source.tesl" {
+			t.Fatalf("event = %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("relative source breakpoint did not stop")
+	}
+	debugger.Continue()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("checkpoint did not resume")
+	}
+}
 
 func TestDebuggerIsNoOpUntilAttached(t *testing.T) {
 	debugger := NewDebugger()

@@ -35,7 +35,8 @@ test "greet" {
 
 test "add" {
   expect add 1 2 == 3
-  expect add 0 0 == 0
+  let x = 1
+  expect add x 0 == 1
   expect add 10 -3 == 7
 }
 

@@ -60,4 +60,24 @@ t("genuine test failure (exit 1, blocks present) is not a compile error", () => 
   assert.ok(failures.size > 0);
 });
 
+const SINGLE_TEST_FAILURE = [
+  "emitted Go module: /tmp/.tesl-stuff/tesl.XYZ/go",
+  "TESL_GO_TESTS_STARTED",
+  "--- FAIL: TestTesl1 (0.00s)",
+  "    lesson00-hello-world.tesl:40: Tesl expectation failed",
+  "FAIL",
+  "FAIL\ttesl.generated/teslmodlesson00helloworld/internal/teslmodlesson00helloworld\t0.002s",
+  "?\ttesl.generated/teslmodlesson00helloworld/internal/teslrt\t[no test files]",
+  "FAIL",
+].join("\n");
+
+t("single named Go test failure parsed as TestTesl1", () => {
+  const { failures, compileError, reportedFailureCount } = parseTeslTestOutput(SINGLE_TEST_FAILURE, 1);
+  assert.strictEqual(compileError, null);
+  assert.strictEqual(reportedFailureCount, 1);
+  assert.strictEqual(failures.size, 1);
+  assert.ok(failures.has("TestTesl1"), "should contain TestTesl1");
+  assert.ok(failures.get("TestTesl1").message.includes("expectation failed"));
+});
+
 console.log("\nAll " + passed + " parser tests passed.");

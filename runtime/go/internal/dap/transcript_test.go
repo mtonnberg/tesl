@@ -52,19 +52,25 @@ func TestCoreDAPTranscript(t *testing.T) {
 		t.Fatal(err)
 	}
 	reader := protocol.NewReader(&output)
-	for index, expected := range transcript.Responses {
+	responseIndex := 0
+	for responseIndex < len(transcript.Responses) {
 		message, err := Read(reader)
 		if err != nil {
-			t.Fatalf("response %d: %v", index, err)
+			t.Fatalf("response %d: %v", responseIndex, err)
+		}
+		if _, ok := message.(Event); ok {
+			continue
 		}
 		response, ok := message.(Response)
 		if !ok {
-			t.Fatalf("response %d = %#v, want DAP response", index, message)
+			t.Fatalf("response %d = %#v, want DAP response", responseIndex, message)
 		}
+		expected := transcript.Responses[responseIndex]
 		if response.RequestSeq != expected.RequestSeq || response.Command != expected.Command || response.Success != expected.Success {
-			t.Fatalf("response %d = request %d/%s/%t, want %d/%s/%t", index,
+			t.Fatalf("response %d = request %d/%s/%t, want %d/%s/%t", responseIndex,
 				response.RequestSeq, response.Command, response.Success,
 				expected.RequestSeq, expected.Command, expected.Success)
 		}
+		responseIndex++
 	}
 }

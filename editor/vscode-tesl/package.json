@@ -2,11 +2,13 @@
   "name": "vscode-tesl",
   "displayName": "Tesl Language",
   "description": "Syntax highlighting, live diagnostics, go-to-definition, hover types, and completions for the Tesl (.tesl) language",
-  "version": "0.7.2",
+  "version": "0.7.9",
   "publisher": "Tesl",
   "namespace": "Tesl",
   "//extensionKind": "Run only on the workspace (remote/WSL) side. Without this, in a Remote-WSL session VSCode can run the extension on BOTH the local UI host and the remote workspace, starting two language-server clients that each publish diagnostics — so every error/warning appears twice.",
-  "extensionKind": ["workspace"],
+  "extensionKind": [
+    "workspace"
+  ],
   "license": "BSD-3-Clause",
   "repository": {
     "type": "git",
@@ -35,7 +37,7 @@
     "onLanguage:tesl",
     "workspaceContains:**/*.tesl"
   ],
-  "main": "./extension.js",
+  "main": "./dist/extension.js",
   "contributes": {
     "languages": [
       {
@@ -109,6 +111,15 @@
               "testName": {
                 "type": "string",
                 "description": "When mode is 'test', run only the test block with this exact name (optional)."
+              },
+              "testKind": {
+                "type": "string",
+                "enum": [
+                  "test",
+                  "api-test",
+                  "doctest"
+                ],
+                "description": "Kind of the named test, used to disambiguate equal names (optional)."
               }
             }
           },
@@ -290,14 +301,15 @@
     }
   },
   "scripts": {
-    "package": "npx @vscode/vsce package",
+    "test": "node --test test-output-parser.test.js extension.test.js",
+    "bundle": "esbuild extension.js --bundle --platform=node --format=cjs --target=node16 --minify --external:vscode --outfile=dist/extension.js",
+    "package": "npm run bundle && npx @vscode/vsce package",
     "publish:vsce": "npx @vscode/vsce publish",
     "publish:ovsx": "npx ovsx publish"
   },
-  "dependencies": {
-    "vscode-languageclient": "^9.0.1"
-  },
   "devDependencies": {
-    "@types/vscode": "^1.80.0"
+    "@types/vscode": "^1.80.0",
+    "esbuild": "^0.28.2",
+    "vscode-languageclient": "^9.0.1"
   }
 }

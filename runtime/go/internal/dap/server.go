@@ -168,6 +168,15 @@ func (server *Server) Serve() error {
 		if err := Write(server.writer, response); err != nil {
 			return err
 		}
+		if response.Success && request.Command == "initialize" {
+			initialized, eventErr := server.session.Event("initialized", nil)
+			if eventErr != nil {
+				return eventErr
+			}
+			if err := Write(server.writer, initialized); err != nil {
+				return err
+			}
+		}
 		if closeAfter {
 			return nil
 		}
@@ -264,7 +273,7 @@ type evaluateArguments struct {
 type evaluateBody struct {
 	Result             string `json:"result"`
 	Type               string `json:"type,omitempty"`
-	VariablesReference int    `json:"variablesReference,omitempty"`
+	VariablesReference int    `json:"variablesReference"`
 }
 
 type sourceArguments struct {
@@ -302,7 +311,7 @@ type variable struct {
 	Value              string `json:"value"`
 	Type               string `json:"type,omitempty"`
 	EvaluateName       string `json:"evaluateName,omitempty"`
-	VariablesReference int    `json:"variablesReference,omitempty"`
+	VariablesReference int    `json:"variablesReference"`
 }
 
 type variablesBody struct {
@@ -340,7 +349,9 @@ func (server *Server) handle(request Request) (Response, bool, error) {
 			SupportsClipboardContext:          true,
 			SupportsSteppingGranularity:       true,
 		})
-	case "configurationDone", "setExceptionBreakpoints":
+	case "configurationDone":
+		return server.success(request, map[string]bool{})
+	case "setExceptionBreakpoints":
 		return server.success(request, map[string]bool{})
 	case "setBreakpoints":
 		return server.setBreakpoints(request)

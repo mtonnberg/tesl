@@ -2,6 +2,7 @@ package teslrt
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -225,7 +226,7 @@ func (debugger *Debugger) updateStackFrame(frame DebugFrame) {
 
 func (debugger *Debugger) breakpointHit(frame DebugFrame) bool {
 	for _, breakpoint := range debugger.breakpoints {
-		if breakpoint.File != frame.Location.File || breakpoint.Line != frame.Location.Line {
+		if !sameSourceFile(breakpoint.File, frame.Location.File) || breakpoint.Line != frame.Location.Line {
 			continue
 		}
 		breakpoint.hitCount++
@@ -238,6 +239,15 @@ func (debugger *Debugger) breakpointHit(frame DebugFrame) bool {
 		return true
 	}
 	return false
+}
+
+func sameSourceFile(left, right string) bool {
+	if left == right {
+		return true
+	}
+	leftAbsolute, leftErr := filepath.Abs(left)
+	rightAbsolute, rightErr := filepath.Abs(right)
+	return leftErr == nil && rightErr == nil && filepath.Clean(leftAbsolute) == filepath.Clean(rightAbsolute)
 }
 
 func (debugger *Debugger) Checkpoint(frame DebugFrame) {
