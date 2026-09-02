@@ -857,17 +857,19 @@ func evaluateFrameValue(frame teslrt.DebugFrame, expression string) (string, tes
 			if name == "" {
 				return "", teslrt.DebugValue{}, "", false
 			}
-			childIndex := -1
-			for index, child := range value.Children {
+			var matchingChild teslrt.DebugValue
+			childFound := false
+			for _, child := range value.Children {
 				if child.Name == name {
-					childIndex = index
+					matchingChild = child
+					childFound = true
 					break
 				}
 			}
-			if childIndex < 0 {
+			if !childFound {
 				return "", teslrt.DebugValue{}, "", false
 			}
-			value = value.Children[childIndex]
+			value = matchingChild
 			valueType = value.Type
 			remaining = remaining[end:]
 		default:
