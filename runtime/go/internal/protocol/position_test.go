@@ -1,6 +1,9 @@
 package protocol
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestUTF16RoundTripWithAstralAndCombiningCharacters(t *testing.T) {
 	line := "a😀é"
@@ -45,13 +48,30 @@ func TestLineIndexHandlesCRLFAndClampsColumns(t *testing.T) {
 func FuzzUTF16PositionsNeverPanic(f *testing.F) {
 	f.Add("a😀e\u0301\r\nlast")
 	f.Add("")
+	// The former worst case (2048 empty lines): must stay well under a second.
+	f.Add(strings.Repeat("\n", 4096))
 	f.Fuzz(func(t *testing.T, source string) {
 		if len(source) > 4096 {
 			t.Skip()
 		}
 		index := NewLineIndex(source)
+		// Bound the work per input: every line is probed at every UTF-16 column it has plus
+		// two past its end (the clamp), and the length is computed once per line — the
+		// previous shape recomputed the whole document's length per column, which made an
+		// all-newline 4 KiB input take tens of seconds and time the fuzz worker out.
 		for line := 0; line < index.LineCount(); line++ {
-			for column := 0; column < UTF16Length(source)+2; column++ {
+			lineStart, err := index.Offset(Position{Line: line, Character: 0})
+			if err != nil {
+				t.Fatal(err)
+			}
+			lineEnd := len(source)
+			if line+1 < index.LineCount() {
+				if lineEnd, err = index.Offset(Position{Line: line + 1, Character: 0}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			columns := UTF16Length(source[lineStart:lineEnd]) + 2
+			for column := 0; column < columns; column++ {
 				offset, err := index.Offset(Position{Line: line, Character: column})
 				if err != nil {
 					t.Fatal(err)
