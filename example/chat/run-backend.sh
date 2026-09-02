@@ -2,7 +2,7 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # Tesl Chat — Backend runner
 #
-# Starts PostgreSQL, compiles backend.tesl → Racket, and runs the server.
+# Starts PostgreSQL, compiles chat-backend.tesl to Go, and runs the server.
 #
 # Usage (from repository root OR example/chat/):
 #   bash example/chat/run-backend.sh
@@ -18,16 +18,12 @@ REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
 
 # ─── Re-enter via nix-shell if needed ────────────────────────────────────────
 if [ -z "${IN_NIX_SHELL:-}" ]; then
-    echo "▶  Entering nix-shell (Racket + PostgreSQL)..."
+    echo "▶  Entering nix-shell (Go + PostgreSQL)..."
     exec nix-shell "$REPO_ROOT/shell.nix" \
         --run "IN_NIX_SHELL=1 bash \"$SCRIPT_DIR/run-backend.sh\""
 fi
 
 cd "$REPO_ROOT"
-
-# ─── Bootstrap tesl package (raco pkg link) ──────────────────────────────────
-echo "▶  Bootstrapping tesl Racket package..."
-bash scripts/bootstrap-tesl-lang.sh >/dev/null 2>&1 || true
 
 # ─── PostgreSQL ───────────────────────────────────────────────────────────────
 TESL_POSTGRES_PORT="${TESL_POSTGRES_PORT:-55432}"
@@ -47,8 +43,7 @@ createdb \
     || printf '   Database "chat" already exists\n'
 
 # ─── Environment variables for the backend ───────────────────────────────────
-# Use TCP (host + port) only — do NOT set socket when host is already set,
-# as the Racket PostgreSQL driver rejects both being specified simultaneously.
+# Use TCP (host + port) only; do not configure a Unix socket at the same time.
 export CHAT_DB_NAME=chat
 export CHAT_DB_USER="$TESL_POSTGRES_USER"
 export CHAT_DB_PASSWORD=""
@@ -68,4 +63,4 @@ echo "│  No nginx needed — API + frontend on one port.              │"
 echo "│  Press Ctrl-C to stop                                       │"
 echo "└──────────────────────────────────────────────────────────────┘"
 echo ""
-TESL_VERBOSE=1 exec tesl run example/chat/chatbackend.tesl
+TESL_VERBOSE=1 exec tesl run example/chat/chat-backend.tesl

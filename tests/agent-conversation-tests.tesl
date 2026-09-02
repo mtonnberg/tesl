@@ -22,8 +22,8 @@ import Tesl.Agent exposing [
 # Function-first: a Conversation carries the accumulated transcript; `converse`
 # threads ALL prior turns into the next provider call and returns the reply plus
 # the conversation advanced by that turn. The developer owns persistence via
-# conversationJson / conversationFrom (proved on a real DB in the racket-level
-# tests/agent-conversation-pg-test.rkt).
+# conversationJson / conversationFrom (proved on a real DB by the integration
+# test suite).
 # ────────────────────────────────────────────────────────────────────────────
 
 capability supportBot implies aiProvider

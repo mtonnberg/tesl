@@ -7,7 +7,7 @@
 
 Every lesson is a small runnable `.tesl` file with its explanation inline,
 and every one is also a regression test — each has a committed byte-exact
-`.rkt` snapshot and test blocks in the gate. Read one with:
+Go snapshot and test blocks in the gate. Read one with:
 
 ```bash
 tesl help manual <lesson-name>      # e.g. tesl help manual lesson05-intro-to-proofs

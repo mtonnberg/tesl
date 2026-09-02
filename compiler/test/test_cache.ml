@@ -9,21 +9,6 @@
 
 (* ── Helpers ─────────────────────────────────────────────────────────────── *)
 
-let root =
-  match Sys.getenv_opt "TESL_REPO_ROOT" with
-  | Some p when p <> "" -> p
-  | _ ->
-    let rec find dir =
-      let candidate = Filename.concat dir "compiler" in
-      if (try Sys.file_exists candidate && Sys.is_directory candidate with _ -> false)
-      then dir
-      else
-        let parent = Filename.dirname dir in
-        if parent = dir then Filename.current_dir_name
-        else find parent
-    in
-    find (Filename.dirname Sys.executable_name)
-
 let base_imports =
   "import Tesl.Prelude exposing [Int, String, Bool, List, Unit]\n\
    import Tesl.Maybe exposing [Maybe, Nothing, Something]\n\
@@ -42,9 +27,13 @@ let with_db body =
    }\n" ^ body
 
 let compile_ok name src =
-  match Compile.compile_source ~root_path:root "<test>" src with
-  | Compile.Success racket -> racket
-  | Compile.Failure diags ->
+  match Compile.compile_go_source "<test>" src with
+  | Compile.GoSuccess artifacts ->
+    (match List.find_opt (fun (a : Emit_go.artifact) ->
+       a.path = "internal/teslmodm/module.go") artifacts with
+     | Some artifact -> artifact.contents
+     | None -> Alcotest.failf "%s: missing Go module artifact" name)
+  | Compile.GoFailure diags ->
     Alcotest.failf "%s: unexpected compile failure: %s" name
       (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diags))
 
@@ -54,6 +43,13 @@ let compile_err name src =
     Alcotest.failf "%s: expected errors but compilation succeeded" name
   else
     String.concat "\n" (List.map (fun (d : Compile.diagnostic) -> d.message) diags)
+
+let check_ok name src =
+  match Compile.check_source "<test>" src with
+  | [] -> ()
+  | diags ->
+    Alcotest.failf "%s: unexpected checker failure: %s" name
+      (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diags))
 
 let contains needle haystack =
   let n = String.length needle in
@@ -68,14 +64,14 @@ let contains needle haystack =
   end
 
 let check_contains name src substr =
-  let racket = compile_ok name src in
-  if not (contains substr racket) then
-    Alcotest.failf "%s: expected to find %S in output:\n%s" name substr racket
+  let go = compile_ok name src in
+  if not (contains substr go) then
+    Alcotest.failf "%s: expected to find %S in Go artifact:\n%s" name substr go
 
 let _check_not_contains name src substr =
-  let racket = compile_ok name src in
-  if contains substr racket then
-    Alcotest.failf "%s: expected NOT to find %S in output:\n%s" name substr racket
+  let go = compile_ok name src in
+  if contains substr go then
+    Alcotest.failf "%s: expected NOT to find %S in Go artifact:\n%s" name substr go
 
 let check_err_contains name src substr =
   let msg = compile_err name src in
@@ -89,15 +85,15 @@ let test_parse_cache_block () =
   let src = module_ (with_db "cache UserProfileCache = Cache {\n  database: MainDB\n  defaultTtl: 3600\n  valueType: String\n}\n") in
   ignore (compile_ok "parse_cache_block" src)
 
-(** 1.2 Cache block emits define-cache *)
+(** 1.2 Cache block emits one typed Go store *)
 let test_parse_cache_emits_define_cache () =
   let src = module_ (with_db "cache UserProfileCache = Cache {\n  database: MainDB\n  defaultTtl: 3600\n  valueType: String\n}\n") in
-  check_contains "cache_emits_define_cache" src "define-cache"
+  check_contains "cache_emits_define_cache" src "var UserProfileCacheStore = teslrt.NewCache[string](3600)"
 
-(** 1.2b Cache block emits tesl/tesl/cache require so define-cache macro is bound *)
+(** 1.2b Cache block references the Go cache runtime *)
 let test_parse_cache_emits_runtime_require () =
   let src = module_ (with_db "cache UserProfileCache = Cache {\n  database: MainDB\n  defaultTtl: 3600\n  valueType: String\n}\n") in
-  check_contains "cache_emits_runtime_require" src "tesl/tesl/cache"
+  check_contains "cache_emits_runtime_require" src "teslrt.NewCache[string]"
 
 (** 1.3 Cache name appears in output *)
 let test_parse_cache_name_emitted () =
@@ -107,62 +103,62 @@ let test_parse_cache_name_emitted () =
 (** 1.4 Database reference appears in output *)
 let test_parse_cache_database_emitted () =
   let src = module_ (with_db "cache MyCache = Cache {\n  database: MainDB\n  valueType: String\n}\n") in
-  check_contains "cache_database_emitted" src "#:database MainDB"
+  check_contains "cache_database_emitted" src "var MyCacheStore = teslrt.NewCache[string]"
 
 (** 1.5 defaultTtl appears in output *)
 let test_parse_cache_ttl_emitted () =
   let src = module_ (with_db "cache TtlCache = Cache {\n  database: MainDB\n  defaultTtl: 900\n  valueType: String\n}\n") in
-  check_contains "cache_ttl_emitted" src "#:default-ttl 900"
+  check_contains "cache_ttl_emitted" src "teslrt.NewCache[string](900)"
 
-(** 1.6 Cache.get parses and emits cache-get! *)
+(** 1.6 Cache.get parses and emits CacheGet *)
 let test_parse_cache_get () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
     "fn getVal(k: String) -> Maybe String requires [cacheCap C] =\n  Cache.get C (k)\n" in
-  check_contains "parse_cache_get" src "cache-get!"
+  check_contains "parse_cache_get" src "teslrt.CacheGet(CStore, k)"
 
-(** 1.7 Cache.set parses and emits cache-set! *)
+(** 1.7 Cache.set parses and emits CacheSet *)
 let test_parse_cache_set () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
     "fn setVal(k: String, v: String) -> Unit requires [cacheCap C] =\n  Cache.set C (k) v\n" in
-  check_contains "parse_cache_set" src "cache-set!"
+  check_contains "parse_cache_set" src "teslrt.CacheSet(CStore, k, v)"
 
-(** 1.8 Cache.delete parses and emits cache-delete! *)
+(** 1.8 Cache.delete parses and emits CacheDelete *)
 let test_parse_cache_delete () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
     "fn delVal(k: String) -> Unit requires [cacheCap C] =\n  Cache.delete C (k)\n" in
-  check_contains "parse_cache_delete" src "cache-delete!"
+  check_contains "parse_cache_delete" src "teslrt.CacheDelete(CStore, k)"
 
 (** 1.9 Cache.invalidate parses and emits cache-invalidate-prefix! *)
 let test_parse_cache_invalidate () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
     "fn inv(prefix: String) -> Unit requires [cacheCap C] =\n  Cache.invalidate C (prefix)\n" in
-  check_contains "parse_cache_invalidate" src "cache-invalidate-prefix!"
+  check_contains "parse_cache_invalidate" src "teslrt.CacheInvalidatePrefix(CStore, prefix)"
 
 (** 1.10 Cache.get with string literal key *)
 let test_parse_cache_get_string_key () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
     "fn f() -> Maybe String requires [cacheCap C] =\n  Cache.get C (\"mykey\")\n" in
-  check_contains "cache_get_string_key" src "cache-get!"
+  check_contains "cache_get_string_key" src "teslrt.CacheGet(CStore, \"mykey\")"
 
 (** 1.11 Cache.set with explicit TTL *)
 let test_parse_cache_set_with_ttl () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
     "fn f(k: String, v: String) -> Unit requires [cacheCap C] =\n  Cache.set C (k) v 3600\n" in
-  check_contains "cache_set_with_ttl" src "cache-set!"
+  check_contains "cache_set_with_ttl" src "teslrt.CacheSetTTL(CStore, k, v, teslrt.FromInt64(3600))"
 
 (** 1.12 Cache.set with parenthesized TTL *)
 let test_parse_cache_set_ttl_paren () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
     "fn f(k: String, v: String) -> Unit requires [cacheCap C] =\n  Cache.set C (k) v (300)\n" in
-  check_contains "cache_set_ttl_paren" src "cache-set!"
+  check_contains "cache_set_ttl_paren" src "teslrt.CacheSetTTL(CStore, k, v, teslrt.FromInt64(300))"
 
 (** 1.13 Multiple cache blocks parse correctly *)
 let test_parse_multiple_caches () =
   let src = module_ (with_db
     "cache CacheA = Cache { database: MainDB valueType: String }\n\
      cache CacheB = Cache { database: MainDB valueType: Int }\n") in
-  let racket = compile_ok "parse_multiple_caches" src in
-  assert (contains "CacheA" racket && contains "CacheB" racket)
+  let go = compile_ok "parse_multiple_caches" src in
+  assert (contains "CacheAStore" go && contains "CacheBStore" go)
 
 (** 1.14 Cache block without defaultTtl is valid *)
 let test_parse_cache_no_default_ttl () =
@@ -172,14 +168,14 @@ let test_parse_cache_no_default_ttl () =
 (** 1.15 Cache block with complex value type (List String) *)
 let test_parse_cache_list_value_type () =
   let src = module_ (with_db "cache ListCache = Cache { database: MainDB valueType: List String }\n") in
-  ignore (compile_ok "parse_cache_list_value_type" src)
+  check_ok "parse_cache_list_value_type" src
 
 (** 1.16 Cache.get in let binding *)
 let test_parse_cache_get_let_binding () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
     "fn f(k: String) -> Maybe String requires [cacheCap C] =\n  let cached = Cache.get C (k)\n  cached\n" in
-  let racket = compile_ok "cache_get_let_binding" src in
-  assert (contains "cache-get!" racket)
+  let go = compile_ok "cache_get_let_binding" src in
+  assert (contains "teslrt.CacheGet(CStore, k)" go)
 
 (** 1.17 Cache.set in let _ = ... sequence *)
 let test_parse_cache_set_statement_sequence () =
@@ -199,7 +195,7 @@ let test_parse_cache_invalidate_stmt () =
     "fn f(pfx: String) -> Unit requires [cacheCap C] =\n  Cache.invalidate C (pfx)\n" in
   ignore (compile_ok "cache_invalidate_stmt" src)
 
-(** 1.20 Cache name emitted in cache-get! call *)
+(** 1.20 Cache name selects the emitted store *)
 let test_parse_cache_get_cache_name_in_output () =
   let src = module_ ~extra:(with_db "cache UserCache = Cache { database: MainDB valueType: String }\n")
     "fn f(k: String) -> Maybe String requires [cacheCap UserCache] =\n  Cache.get UserCache (k)\n" in
@@ -209,8 +205,8 @@ let test_parse_cache_get_cache_name_in_output () =
 let test_parse_cache_set_value_in_output () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
     "fn f(k: String, v: String) -> Unit requires [cacheCap C] =\n  Cache.set C (k) v\n" in
-  let racket = compile_ok "cache_set_value" src in
-  ignore racket  (* just check it compiles cleanly *)
+  let go = compile_ok "cache_set_value" src in
+  ignore go  (* just check it compiles cleanly *)
 
 (** 1.22 Cache in function body with other statements *)
 let test_parse_cache_mixed_body () =
@@ -575,14 +571,14 @@ let () =
   run "Cache" [
     "parser", [
       test_case "cache block parses" `Quick test_parse_cache_block;
-      test_case "emits define-cache" `Quick test_parse_cache_emits_define_cache;
-      test_case "emits tesl/tesl/cache require" `Quick test_parse_cache_emits_runtime_require;
+      test_case "emits typed Go store" `Quick test_parse_cache_emits_define_cache;
+      test_case "references Go cache runtime" `Quick test_parse_cache_emits_runtime_require;
       test_case "cache name emitted" `Quick test_parse_cache_name_emitted;
       test_case "database emitted" `Quick test_parse_cache_database_emitted;
       test_case "TTL emitted" `Quick test_parse_cache_ttl_emitted;
-      test_case "Cache.get emits cache-get!" `Quick test_parse_cache_get;
-      test_case "Cache.set emits cache-set!" `Quick test_parse_cache_set;
-      test_case "Cache.delete emits cache-delete!" `Quick test_parse_cache_delete;
+      test_case "Cache.get emits CacheGet" `Quick test_parse_cache_get;
+      test_case "Cache.set emits CacheSet" `Quick test_parse_cache_set;
+      test_case "Cache.delete emits CacheDelete" `Quick test_parse_cache_delete;
       test_case "Cache.invalidate emits cache-invalidate-prefix!" `Quick test_parse_cache_invalidate;
       test_case "Cache.get with string literal key" `Quick test_parse_cache_get_string_key;
       test_case "Cache.set with explicit TTL" `Quick test_parse_cache_set_with_ttl;
@@ -594,7 +590,7 @@ let () =
       test_case "Cache.set in stmt sequence" `Quick test_parse_cache_set_statement_sequence;
       test_case "Cache.delete statement" `Quick test_parse_cache_delete_stmt;
       test_case "Cache.invalidate statement" `Quick test_parse_cache_invalidate_stmt;
-      test_case "Cache name in cache-get!" `Quick test_parse_cache_get_cache_name_in_output;
+      test_case "Cache name selects store" `Quick test_parse_cache_get_cache_name_in_output;
       test_case "Cache.set value in output" `Quick test_parse_cache_set_value_in_output;
       test_case "Cache mixed body" `Quick test_parse_cache_mixed_body;
       test_case "Cache in case scrutinee" `Quick test_parse_cache_in_case;

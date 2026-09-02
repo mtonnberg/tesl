@@ -155,8 +155,8 @@ test "factorial growth" with 20 runs {
 # ─────────────────────────────────────────────
 # THEORY — the full model
 # ─────────────────────────────────────────────
-# Test blocks compile to Racket's "module+ test" submodule syntax.
-# When you run "raco test file.rkt", Racket runs the test submodule.
+# Test blocks compile to Go test functions in the generated module.
+# When you run `tesl test`, the generated Go tests run through `go test`.
 # Each "expect" compiles to a rackunit "check-equal?" or similar assertion.
 # Each "expectFail" compiles to "check-exn" (catches an exception).
 #

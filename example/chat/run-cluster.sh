@@ -27,16 +27,12 @@ RUN_DIR="/tmp/tesl-chat-cluster-nginx"
 
 # ─── Re-enter via nix-shell if needed ────────────────────────────────────────
 if [ -z "${IN_NIX_SHELL:-}" ]; then
-    echo "▶  Entering nix-shell (Racket + PostgreSQL)..."
+    echo "▶  Entering nix-shell (Go + PostgreSQL)..."
     exec nix-shell "$REPO_ROOT/shell.nix" \
         --run "IN_NIX_SHELL=1 bash \"$SCRIPT_DIR/run-cluster.sh\""
 fi
 
 cd "$REPO_ROOT"
-
-# ─── Bootstrap tesl package (raco pkg link) ──────────────────────────────────
-echo "▶  Bootstrapping tesl Racket package..."
-bash scripts/bootstrap-tesl-lang.sh >/dev/null 2>&1 || true
 
 # ─── Build Elm frontend ───────────────────────────────────────────────────────
 echo "▶  Building Elm frontend..."
@@ -72,9 +68,6 @@ export CHAT_DB_PORT="$TESL_POSTGRES_PORT"
 export CHAT_DB_SOCKET=""
 
 # ─── Start three backend instances ────────────────────────────────────────────
-echo "build backend"
-tesl compile example/chat/chat-backend.tesl
-
 echo "▶  Starting backend instance on port 3000..."
 CHAT_PORT=3000 TESL_VERBOSE=0 tesl run example/chat/chat-backend.tesl &
 PID_3000=$!

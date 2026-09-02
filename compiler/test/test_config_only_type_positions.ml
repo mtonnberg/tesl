@@ -339,7 +339,7 @@ let pre_refactor_literal =
 
 let test_require_suppressed_identity () =
   let expected = SS.of_list pre_refactor_literal in
-  let actual = SS.of_list Emit_racket.config_only_import_names in
+   let actual = SS.of_list Stdlib_config_names.require_suppressed in
   let missing = SS.diff expected actual and extra = SS.diff actual expected in
   if not (SS.is_empty missing && SS.is_empty extra) then
     Alcotest.failf

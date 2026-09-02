@@ -1,12 +1,7 @@
 (tests
- (names test_pinpoint_tests test_formatter test_linter test_lexer test_parser test_emit test_integration test_advanced test_types test_proofs test_validation test_diagnostics test_diag_snapshots test_ir test_frontend test_review18_antagonistic test_review19_antagonistic test_review20_antagonistic test_review24_antagonistic test_review25_antagonistic test_review26_antagonistic test_review27_antagonistic test_mutation test_review29_antagonistic test_review30_antagonistic test_review31_antagonistic test_review32_antagonistic test_dict_forall test_review34_antagonistic test_review36_antagonistic test_review37_antagonistic test_review38_antagonistic test_review39_antagonistic test_review40_antagonistic test_review41_antagonistic test_review42_antagonistic test_review43_antagonistic test_review44_antagonistic test_review45_antagonistic test_review47_antagonistic test_review48_antagonistic test_review49_antagonistic test_review50_antagonistic test_review51_antagonistic test_review52_antagonistic test_review53_antagonistic test_review54_antagonistic test_review55_antagonistic test_review56_antagonistic test_review57_antagonistic test_review58_antagonistic test_review59_antagonistic test_review59_antagonistic_backend test_review60_antagonistic test_review61_antagonistic test_review62_antagonistic test_review63_antagonistic test_review64_antagonistic test_review65_antagonistic test_stdlib_consistency test_review66_api_validation test_review67_block_validation test_capability_polymorphism test_proof_negatives test_review68_newcomer_feedback test_review69_critical_language_validation test_review70_codegen_safety test_review72_critical_002 test_jwt test_agent_decode test_httpclient test_debug test_cache test_email test_linter_w080 test_review74_proof test_review74_misc test_review74_gibberish test_proofsuite_attack test_proofsuite_produce test_proofsuite_consume test_proofsuite_flow test_proofsuite_conjunction test_proofsuite_crossparam test_proofsuite_forall test_proofsuite_transport test_proofsuite_existential test_proofsuite_newtype test_proofsuite_identity test_proofsuite_codec test_proofsuite_capability test_proofsuite_exhaustive test_proofsuite_arith test_proofsuite_record test_proofsuite_negspace test_aisuite_capability test_aisuite_entitlement test_aisuite_structured test_p0_soundness_fixes test_eval_review_fixes test_wave2_soundness test_s7_generative test_literal_subject_identity test_b6_structural_proof_eq test_fromdb_where_unification test_a6_unnamed_proof_return test_s13_fail_closed_boundary test_a2_capability_launder test_import_scope_single_source test_a9_bigint test_a3_proof_identity test_a2_sql_provenance test_a4_capability_completeness test_a5_decoder_comparison test_b1_client_gen test_b5_diagnostics test_a2b_update_provenance test_review75_reviewfixes test_review76_soundness_fixes test_review77_soundness_fixes test_metamorphic test_hole12_cross_module_caps test_discharge_fail_closed test_discharge_normalize test_fail_closed_hardening test_server_tools test_human_actions test_group_by test_import_suggestions test_fix_apply test_units_money test_app_main_typecheck test_issues_40_41_42 test_module_system test_config_only_type_positions test_astool_imported test_checker_multimodule test_emit_incidentals test_stdlib_docs test_fix_titles test_stdlib_signature_coverage test_int32_surface test_issue45_computed_path test_sql_read_lines test_regex_surface test_secret_surface test_security_lints test_fail_open_tightening test_session_cookie test_check_binding_gap test_sso_surface test_sso_adversarial test_issues_70_71 test_url_net_surface test_issue_72 test_elm_api_helpers_cycle test_exists_forwarding test_issue_74 test_issue_76 test_mint_structural_proof_eq test_get_no_mutate test_database_indexes test_index_lint test_activation_lint test_ambiguous_handler_lint test_mount_path_integration test_app_config_context test_http_method_surface test_issue_77 test_partial_application_statement test_import_gated_ctors)
+ (names test_pinpoint_tests test_formatter test_linter test_lexer test_parser test_advanced test_types test_proofs test_validation test_diagnostics test_diag_snapshots test_ir test_frontend test_review18_antagonistic test_review19_antagonistic test_review20_antagonistic test_review24_antagonistic test_review25_antagonistic test_review26_antagonistic test_review27_antagonistic test_mutation test_review29_antagonistic test_review30_antagonistic test_review31_antagonistic test_review32_antagonistic test_dict_forall test_review34_antagonistic test_review36_antagonistic test_review37_antagonistic test_review38_antagonistic test_review39_antagonistic test_review40_antagonistic test_review41_antagonistic test_review42_antagonistic test_review43_antagonistic test_review44_antagonistic test_review45_antagonistic test_review47_antagonistic test_review48_antagonistic test_review49_antagonistic test_review50_antagonistic test_review51_antagonistic test_review52_antagonistic test_review53_antagonistic test_review54_antagonistic test_review55_antagonistic test_review56_antagonistic test_review57_antagonistic test_review58_antagonistic test_review59_antagonistic test_review59_antagonistic_backend test_review60_antagonistic test_review61_antagonistic test_review62_antagonistic test_review63_antagonistic test_review64_antagonistic test_review65_antagonistic test_stdlib_consistency test_review66_api_validation test_review67_block_validation test_capability_polymorphism test_proof_negatives test_review68_newcomer_feedback test_review69_critical_language_validation test_review70_codegen_safety test_review72_critical_002 test_jwt test_agent_decode test_httpclient test_cache test_email test_linter_w080 test_review74_proof test_review74_misc test_review74_gibberish test_proofsuite_attack test_proofsuite_produce test_proofsuite_consume test_proofsuite_flow test_proofsuite_conjunction test_proofsuite_crossparam test_proofsuite_forall test_proofsuite_transport test_proofsuite_existential test_proofsuite_newtype test_proofsuite_identity test_proofsuite_codec test_proofsuite_capability test_proofsuite_exhaustive test_proofsuite_arith test_proofsuite_record test_proofsuite_negspace test_aisuite_capability test_aisuite_entitlement test_aisuite_structured test_p0_soundness_fixes test_eval_review_fixes test_wave2_soundness test_s7_generative test_literal_subject_identity test_b6_structural_proof_eq test_fromdb_where_unification test_a6_unnamed_proof_return test_s13_fail_closed_boundary test_a2_capability_launder test_import_scope_single_source test_a9_bigint test_a3_proof_identity test_a2_sql_provenance test_a4_capability_completeness test_a5_decoder_comparison test_b1_client_gen test_b5_diagnostics test_a2b_update_provenance test_review75_reviewfixes test_review76_soundness_fixes test_review77_soundness_fixes test_metamorphic test_hole12_cross_module_caps test_discharge_fail_closed test_discharge_normalize test_fail_closed_hardening test_server_tools test_human_actions test_group_by test_import_suggestions test_fix_apply test_units_money test_app_main_typecheck test_issues_40_41_42 test_module_system test_config_only_type_positions test_astool_imported test_checker_multimodule test_emit_incidentals test_stdlib_docs test_fix_titles test_stdlib_signature_coverage test_int32_surface test_issue45_computed_path test_sql_read_lines test_regex_surface test_secret_surface test_security_lints test_fail_open_tightening test_session_cookie test_check_binding_gap test_sso_surface test_sso_adversarial test_issues_70_71 test_url_net_surface test_issue_72 test_elm_api_helpers_cycle test_exists_forwarding test_issue_74 test_issue_76 test_mint_structural_proof_eq test_get_no_mutate test_database_indexes test_index_lint test_activation_lint test_ambiguous_handler_lint test_app_config_context test_http_method_surface test_issue_77 test_partial_application_statement test_import_gated_ctors)
  (flags (:standard -warn-error +8))
  (libraries tesl_compiler_lib alcotest unix str)
- (deps ../bin/main.exe))
-
-(tests
- (names test_httpclient_integration test_email_integration)
- (libraries alcotest unix str)
  (deps ../bin/main.exe))
 
 (executables
@@ -82,20 +77,6 @@
  (modules test_proof_kind_registry)
  (libraries tesl_compiler_lib))
 
-; Cross-seam SQL effect conformance (B1/S3b): the read/write EFFECT in
-; Validation_common.sql_op_effect must AGREE with the db-read/db-write
-; require-capabilities! guard on the Racket fn each op EMITS to.  The op->head
-; map is an exhaustive OCaml match (a new op can't compile without a head); the
-; guard set is PARSED from dsl/sql.rkt so it tracks the real runtime.  Also
-; compiles example/learn/lesson21-sql-reference.tesl and checks each head is
-; emit-truthful.  Pure OCaml (str + unix); needs the repo tree at
-; TESL_REPO_ROOT / repo_root_default:
-;   dune exec test/test_sql_crossseam.exe
-(test
- (name test_sql_crossseam)
- (modules test_sql_crossseam)
- (libraries tesl_compiler_lib str unix))
-
 ; Pure-OCaml test for the surface-lowering pass (lib/desugar.ml).  Asserts the
 ; pass's contract: identity on every un-lowered expr variant (every loc
 ; preserved, every variant carried through), and for the lowered families
@@ -111,20 +92,17 @@
 ; Differential check that the {!Mutate} walks (now on {!Ast_visitor}) produce
 ; byte-identical site indices / replacements vs a reference of the original
 ; hand-rolled walk, over the real lesson corpus.  Pure OCaml; no Racket.  A
-; standalone executable (not a `test`) because it reads the lesson corpus by
-; relative path from the invocation CWD, which is stable only under `dune exec`
-; from the compiler/ root, not the runtest sandbox:
+; Uses Compile.default_root_path, so it is stable under the runtest sandbox:
 ;   dune exec test/test_mutate_differential.exe
-(executable
+(test
  (name test_mutate_differential)
  (modules test_mutate_differential)
  (libraries tesl_compiler_lib))
 
 ; Pure-OCaml unit test for the mutation-testing classification logic.
-; Standalone executable (no alcotest / no Racket) so it builds and runs even
-; when the integration test deps are unavailable:
+; No alcotest / no Racket, so it builds and runs in every gate:
 ;   dune exec test/test_mutate_classify.exe
-(executable
+(test
  (name test_mutate_classify)
  (modules test_mutate_classify)
  (libraries tesl_compiler_lib str))
@@ -170,22 +148,30 @@
  (name test_suite_registration)
  (modules test_suite_registration))
 
-; Racket run-set completeness meta-test (S2b, Racket half).  Fails the build if
-; any tests/*.rkt is run by NO gate and not excluded-with-reason — the Racket
-; analogue of test_suite_registration.  Derives the gated set from the actual
-; gate config (compile-examples.sh auto-detect rule + internal-all.rkt +
-; ci.sh).  Pure OCaml (str + unix); runs under `dune runtest`:
-;   dune exec test/test_racket_discover.exe
+; Go test-set completeness meta-test.  The Go runtime and Tesl corpus are the
+; only shipped execution path, so this guards their gate entry point:
+;   dune exec test/test_go_discover.exe
 (tests
- (names test_racket_discover)
- (modules test_racket_discover)
+ (names test_go_discover)
+ (modules test_go_discover)
  (libraries str unix))
 
-; Stdlib binding-existence seam test (stdlib-surface-drift class closer): every
-; name the checker accepts an import of must resolve to a REAL runtime provide
-; (via racket module->exports), and every module_path_table row must point to a
-; file that exists.  The racket-backed case self-skips (loudly) when racket is
-; not on PATH; the table/file checks always run:
+; First Go-backend vertical slice: pure emission assertions always run. When Go
+; is on PATH (mandatory in the project dev shell/CI), it also compiles, tests,
+; vets, and race-tests a freshly emitted module.
+(test
+ (name test_emit_go)
+ (modules test_emit_go)
+ (libraries tesl_compiler_lib alcotest unix)
+ (deps ../bin/main.exe))
+
+(test
+ (name test_mutation_go)
+ (modules test_mutation_go)
+ (libraries tesl_compiler_lib alcotest unix))
+
+; Go stdlib surface seam test: compiler-owned export inventories stay internally
+; consistent. Runtime coverage is handled by test_go_stdlib_export_seam:
 ;   dune exec test/test_stdlib_runtime_binding.exe
 (tests
  (names test_stdlib_runtime_binding)
@@ -205,3 +191,25 @@
  (names test_stdlib_ctor_labels)
  (modules test_stdlib_ctor_labels)
  (libraries tesl_compiler_lib alcotest str unix))
+
+; Go stdlib EXPORT seam test: every (module, export) in the checker's own allowlist is
+; compiled through the Go emitter, and the set the fallthrough catches is pinned against an
+; explicit list.  Without this, adding a stdlib export routes it straight to the
+; `| other -> unsupported …` arm — refused at the USER's compile time with no signal at ours,
+; so the fallthrough would quietly eat every future addition:
+;   dune exec test/test_go_stdlib_export_seam.exe
+(tests
+ (names test_go_stdlib_export_seam)
+ (modules test_go_stdlib_export_seam)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+; Go runtime FILE-GATE seam test: the runtime ships by reference, and the gates are exclusion
+; filters — so a declaration in a file gated on one condition, used by a file gated on another,
+; builds fine until a program with the wrong combination appears.  That happened three times in
+; one session (PgGroupZone, the session policy), each found by a corpus program rather than a
+; check.  This builds the always-shipped set alone and then each gate on top of it:
+;   dune exec test/test_go_runtime_gates.exe
+(tests
+ (names test_go_runtime_gates)
+ (modules test_go_runtime_gates)
+ (libraries tesl_compiler_lib alcotest unix))

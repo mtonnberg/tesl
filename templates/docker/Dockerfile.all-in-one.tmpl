@@ -1,101 +1,11 @@
 # syntax=docker/dockerfile:1
-#
-# Tesl "all-in-one" image (TEMPLATE) — the "just `docker run` it" image.
-# ---------------------------------------------------------------------------
-# `tesl build` substitutes every __PLACEHOLDER__ below before `docker build`.
-# This image bundles the Tesl Racket runtime, your pre-compiled app, AND an
-# internal PostgreSQL. On first run the entrypoint creates a project-local
-# Postgres cluster, starts it, waits for readiness, then launches the app.
-# The Tesl runtime auto-creates its tables on boot (auto-migrate? defaults #t,
-# via ensure-database-ready!), so:
-#
-#     docker run -p __PORT__:__PORT__ <image>
-#
-# serves the full app with NO external database.
-#
-# Placeholders (see templates/docker/README.md for the full contract):
-#   __RACKET_BASE__   official Racket base image tag, e.g. racket/racket:8.18-full
-#   __APP_NAME__      human-readable app name (label only)
-#   __APP_RKT__       compiled entrypoint .rkt, relative to build context
-#   __PORT__          TCP port the Tesl web server listens on, e.g. 8086
-#
-# Build context layout `tesl build` MUST stage before building (identical to
-# the app-only image, PLUS the entrypoint script):
-#   <context>/
-#     collections/tesl/{dsl,tesl}/   (copies of repo dsl/ tesl//)
-#     __APP_RKT__                          (output of `tesl compile`)
-#     <any dependency .rkt>                (compiled imports)
-#     entrypoint.sh                        (from entrypoint.sh.tmpl, substituted)
-# ---------------------------------------------------------------------------
-FROM __RACKET_BASE__
-
+# Legacy template name: PostgreSQL remains external and is not installed here.
+FROM debian:bookworm-slim
 LABEL org.opencontainers.image.title="__APP_NAME__" \
-      org.opencontainers.image.description="Tesl app (all-in-one, embedded Postgres)"
-
-# Embedded PostgreSQL. The Racket base is Debian-based, so apt is available.
-# DEBIAN_FRONTEND=noninteractive silences the "unable to initialize frontend:
-# Dialog / TERM is not set" debconf warnings during the build (the postgresql
-# postinst is interactive by default). The lone "pg_lsclusters: not found"
-# notice from postgresql-common's postinst is harmless (the cluster is created
-# at runtime by `tesl db`, not at build time).
-#
-# libsodium is installed in the same layer: it is the native library Tesl.Crypto
-# reaches through the FFI (Argon2id, HMAC, digests, constant-time compare).  The
-# name-stable `-dev` package is used deliberately — the runtime package carries
-# the soname in its name (libsodium23 → libsodium26) and would break on a base
-# image bump, and the dev package also drops the unversioned `libsodium.so`
-# symlink the FFI lookup prefers.
-RUN apt-get update \
- && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends postgresql postgresql-client libsodium-dev \
- && rm -rf /var/lib/apt/lists/*
-
-# Make the postgres tools (initdb, pg_ctl, postgres) reachable on PATH without
-# hard-coding a version number; Debian installs them under /usr/lib/postgresql/<ver>/bin.
-ENV PATH="/usr/lib/postgresql/bin:${PATH}"
-RUN PG_BIN="$(dirname "$(ls /usr/lib/postgresql/*/bin/initdb | head -n1)")" \
- && ln -sfn "$PG_BIN" /usr/lib/postgresql/bin
-
-ENV TESL_COLLECTIONS=/opt/tesl/collections
-ENV PLTCOLLECTS="/usr/share/racket/collects:${TESL_COLLECTIONS}"
-
+      org.opencontainers.image.description="Tesl Go app (external PostgreSQL)"
 WORKDIR /opt/tesl/app
-
-# Runtime collections (require tesl/dsl/… tesl/tesl/…).
-COPY collections/ ${TESL_COLLECTIONS}/
-RUN raco make ${TESL_COLLECTIONS}/tesl/dsl/*.rkt \
-               ${TESL_COLLECTIONS}/tesl/tesl/*.rkt 2>/dev/null || true
-
-# Compiled application (+ any compiled dependency .rkt files).
-COPY __APP_RKT__ /opt/tesl/app/__APP_RKT__
-
-# Entrypoint: initdb (first run) → pg_ctl start → wait → racket app.rkt.
-COPY entrypoint.sh /opt/tesl/entrypoint.sh
-RUN chmod +x /opt/tesl/entrypoint.sh
-
-# Internal Postgres lives here. Persist across runs with `-v` on this path.
-ENV TESL_PG_DATA=/var/lib/tesl-postgres
-
-# Embedded-DB connection the app uses (consumed by env("TESL_POSTGRES_*")).
-# These point at the in-container cluster the entrypoint manages; override
-# only if you know what you are doing.
-ENV TESL_POSTGRES_HOST=127.0.0.1 \
-    TESL_POSTGRES_PORT=5432 \
-    TESL_POSTGRES_DATABASE=app \
-    TESL_POSTGRES_USER=app \
-    TESL_POSTGRES_PASSWORD=app
-
-# Web server port.
+COPY tesl-app /usr/local/bin/tesl-app
 ENV PORT=__PORT__
 EXPOSE __PORT__
-
-# Which compiled app the entrypoint launches (so the script stays generic).
-ENV TESL_APP_RKT=/opt/tesl/app/__APP_RKT__
-
-# The entrypoint itself still starts as root (it bootstraps the embedded
-# Postgres cluster as the `postgres` OS user via `su`), but the Tesl app
-# process it execs at the end runs as this unprivileged user, not root.
-RUN useradd --system --no-create-home tesl \
- && chown -R tesl:tesl /opt/tesl/app ${TESL_COLLECTIONS}
-ENV TESL_APP_USER=tesl
-
-ENTRYPOINT ["/opt/tesl/entrypoint.sh"]
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/tesl-app"]

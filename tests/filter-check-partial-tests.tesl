@@ -13,8 +13,9 @@ module FilterCheckPartialTests exposing []
 #     test-fails trap, now a compile error;
 #   * combined (`checkA a && checkB b`), the emitter did not recognise an
 #     under-applied operand as a function reference, so it fell through to
-#     Racket's boolean `(and proc1 proc2)` — which evaluates to proc2, SILENTLY
-#     DROPPING the first check.  `combinedBounds` below is data-discriminating:
+#     boolean short-circuiting `(and proc1 proc2)` — which evaluates to proc2,
+#     SILENTLY DROPPING the first check.  `combinedBounds` below is data-
+#     discriminating:
 #     -7 is rejected only by the lower bound, 200 only by the upper.
 #
 # The static side (a forged `ForAll` predicate, a closed-over subject that does

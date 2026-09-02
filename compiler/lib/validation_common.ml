@@ -834,10 +834,11 @@ let builtin_ctor_info : ctor_info = [
      nine `Net.isX` predicates: a forgotten range has to be a compile error,
      because the bug the issue reports IS a forgotten spelling.
 
-     RECORDED, not fixed here: `DeleteResult` and `JobResult` are stdlib ADTs
-     with no rows in this table either, so a `case` over them is silently
-     unchecked for exhaustiveness — the same shape as the EmailBody gap above,
-     and a wider change than this issue authorises. *)
+     `DeleteResult` was the same gap and is fixed below.  `JobResult` still has
+     no rows: `tesl/api-test.rkt` declares it `(define-adt (JobResult job error)
+     [JobOk job] [JobFailed job error])` — TWO type parameters — while the rest
+     of the compiler carries only its constructor NAMES and no signatures, so a
+     row here would be an arity guess rather than a fact. *)
   ("Loopback",    ([], mk_name_type "HostClass"));
   ("PrivateIp",   ([], mk_name_type "HostClass"));
   ("LinkLocal",   ([], mk_name_type "HostClass"));
@@ -853,6 +854,14 @@ let builtin_ctor_info : ctor_info = [
      exhaustiveness-checked, and without a variant list here a TOTAL case is
      flagged non-exhaustive instead — the same false positive the EmailBody and
      HostClass rows above exist to remove. *)
+  (* DeleteResult (Tesl.DB) — what `deleteAndReturnResult` answers.  Without these rows a
+     `case` naming BOTH constructors was reported non-exhaustive and a catch-all `_` was
+     required, which is the opposite of what an exhaustiveness check is for: the total match
+     was refused and the ignorable one accepted.  NOTE the payload is an unconstrained `Int`,
+     so `RowsDeleted 0` is inhabited and means what `NoRowDeleted` means — see the roadmap on
+     whether this type should be a count with a proof instead. *)
+  ("NoRowDeleted", ([], mk_name_type "DeleteResult"));
+  ("RowsDeleted",  ([mk_name_type "Int"], mk_name_type "DeleteResult"));
   ("January",   ([], mk_name_type "Month"));
   ("February",  ([], mk_name_type "Month"));
   ("March",     ([], mk_name_type "Month"));
@@ -881,8 +890,7 @@ let build_ctor_info (decls : top_decl list) : ctor_info =
       List.map (fun (v : adt_variant) ->
         (v.ctor, (List.map (fun (f : field_def) -> f.type_expr) v.fields, result_ty))
       ) variants
-    | DType (TypeNewtype { name; base_type; _ })
-    | DType (TypeAlias { name; base_type; _ }) ->
+    | DType (TypeNewtype { name; base_type; _ }) ->
       [ (name, ([base_type], mk_name_type name)) ]
     | _ -> []
   ) decls in
@@ -910,8 +918,7 @@ let build_ctor_info (decls : top_decl list) : ctor_info =
      builtin rows describe a different type. *)
   let local_type_names = List.filter_map (function
     | DType (TypeAdt { name; _ })
-    | DType (TypeNewtype { name; _ })
-    | DType (TypeAlias { name; _ }) -> Some name
+    | DType (TypeNewtype { name; _ }) -> Some name
     | DRecord (r : record_form) -> Some r.name
     | DEntity (e : entity_form) -> Some e.name
     | _ -> None) decls in
@@ -1106,8 +1113,7 @@ let load_imported_type_decls (m : module_form) : top_decl list =
       | DRecord (r : record_form) -> [r.name]
       | DEntity (e : entity_form) -> [e.name]
       | DType (TypeAdt { name; _ })
-      | DType (TypeNewtype { name; _ })
-      | DType (TypeAlias { name; _ }) -> [name]
+      | DType (TypeNewtype { name; _ }) -> [name]
       | _ -> []
     ) m.decls
   in
@@ -1136,8 +1142,7 @@ let load_imported_type_decls (m : module_form) : top_decl list =
             | DRecord (r : record_form) -> in_scope r.name
             | DEntity (e : entity_form) -> in_scope e.name
             | DType (TypeAdt { name; _ })
-            | DType (TypeNewtype { name; _ })
-            | DType (TypeAlias { name; _ }) -> in_scope name
+            | DType (TypeNewtype { name; _ }) -> in_scope name
             | _ -> false
           ) imported.decls
   ) m.imports
@@ -1218,6 +1223,19 @@ let stdlib_func_infos : (string * func_info) list =
      { fi_name = "Float.requireNonZero"; fi_kind = CheckKind;
        fi_params = [ plain "f" "Float" ];
        fi_return = ret_attached "f" "Float" "FloatNonZero"; fi_loc = g; fi_http_methods = [] });
+    (* Float.sqrt: the argument must carry FloatNonNegative.  Racket's `sqrt` returns a
+       COMPLEX number for a negative flonum, which Tesl's Float cannot represent; the
+       proof rules the case out instead of leaving each backend to differ. *)
+    ("Float.sqrt",
+     { fi_name = "Float.sqrt"; fi_kind = FnKind;
+       fi_params = [ with_proof "f" "Float" "FloatNonNegative" ];
+       fi_return = ret "Float"; fi_loc = g; fi_http_methods = [] });
+    (* Float.requireNonNegative: check function returning f ::: FloatNonNegative f *)
+    ("Float.requireNonNegative",
+     { fi_name = "Float.requireNonNegative"; fi_kind = CheckKind;
+       fi_params = [ plain "f" "Float" ];
+       fi_return = ret_attached "f" "Float" "FloatNonNegative"; fi_loc = g;
+       fi_http_methods = [] });
     (* Int.nonZero: check function returning n ::: IsNonZero n *)
     ("Int.nonZero",
      { fi_name = "Int.nonZero"; fi_kind = CheckKind;
@@ -2190,7 +2208,6 @@ let check_self_referential_aliases (decls : top_decl list) : validation_error li
     | TTuple { elems; _ } -> List.exists (mentions_name name) elems
   in
   List.concat_map (function
-    | DType (TypeAlias { name; base_type; loc })
     | DType (TypeNewtype { name; base_type; loc; _ }) ->
       if mentions_name name base_type then
         [ make_error loc
@@ -2256,7 +2273,7 @@ let expr_of_test_stmts (stmts : test_stmt list) : expr option =
           es rest_e
       in
       (match stmt with
-       | TsLet { name; declared_type; value; declared_proof; loc } ->
+       | TsLet { name; declared_type; value; declared_proof; loc; _ } ->
          let body = match rest_e with Some b -> b | None -> leaf loc in
          Some (ELet { name; declared_type; declared_proof; value; body; loc })
        | TsLetProof { value_name; proof_names; value; loc } ->
@@ -2339,8 +2356,13 @@ let rec infer_sql_aggregate_type (e : expr) : type_expr option =
   | EApp _ ->
     let (head, _) = collect_call_head_and_args [] e in
     (match function_name_of_expr head with
-     | Some ("selectCount" | "selectSum" | "selectMin" | "selectMax") ->
+     | Some ("selectCount" | "selectSum") ->
        Some (mk_name_type "Int")
+     (* MAX/MIN are OPTIONAL: no matching row has no maximum.  The element type is not
+        recovered here (this pass only needs the OUTER shape, so a `case` over the result
+        sees `Maybe`), which is the same approximation `selectOne` uses. *)
+     | Some ("selectMin" | "selectMax") ->
+       Some (mk_app_type (mk_name_type "Maybe") (mk_var_type "a"))
      | Some ("select" | "selectMany") ->
        Some (mk_app_type (mk_name_type "List") (mk_var_type "a"))
      | Some "selectOne" ->
@@ -2516,8 +2538,10 @@ let rec infer_expr_type
             Some (unwind head_ty (List.length args))
           | _ ->
          (match fn_name with
-          | "selectCount" | "selectSum" | "selectMin" | "selectMax" ->
+          | "selectCount" | "selectSum" ->
             Some (mk_name_type "Int")
+          | "selectMin" | "selectMax" ->
+            Some (mk_app_type (mk_name_type "Maybe") (mk_var_type "a"))
           | "select" | "selectMany" ->
             Some (mk_app_type (mk_name_type "List") (mk_var_type "a"))
           | "selectOne" ->
@@ -2528,7 +2552,6 @@ let rec infer_expr_type
   | ECacheGet _ -> Some (mk_app_type (mk_name_type "Maybe") (mk_name_type "a"))
   | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _ -> Some (mk_name_type "Unit")
   | ESendEmail _ | EStartEmailWorker _ -> Some (mk_name_type "Unit")
-  | ERuntimeCall _ -> Some (mk_name_type "Unit")  (* desugar-only infra call → Unit *)
 
 let rec pattern_bindings (scrut_ty : type_expr option) (ctors : ctor_info) (pat : pattern) : type_env =
   match pat with

@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "scope": ["example/**/*.tesl", "tests/**/*.tesl", "templates/**/*.tesl"],
+  "expected_count": 185,
+  "expected_by_root": {
+    "example": 107,
+    "tests": 76,
+    "templates": 2
+  },
+  "owner": "Go compiler and generated-module build gate",
+  "evidence": "scripts/run-go-corpus-build.sh",
+  "status": "green"
+}

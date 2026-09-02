@@ -9,12 +9,9 @@
 #
 # ENV CONTRACT (the preamble MUST set these before this body runs):
 #   TESL_OCAML_COMPILER   path to the OCaml compiler binary (main.exe)
-#   PLTCOLLECTS           racket collects + the tesl runtime collections
-#   PATH                  must contain `racket`
+#   PATH                  must contain the Go toolchain for Go build/test flows
 # OPTIONAL (set by the installed preamble so assets resolve without a repo):
 #   TESL_TEMPLATES_DIR    store path holding templates/{minimal,api,docker}
-#   TESL_COLLECTIONS_DIR  store path holding the tesl/{dsl,tesl} tree
-#                         (the tesl-racket derivation's …/share/tesl-collections/tesl)
 # DEV fallback:
 #   TESL_REPO_ROOT        repo checkout; templates + collections come from here.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -48,7 +45,7 @@ _tesl_check() {
 # #46: this body used GNU-only tool flags — `mktemp --suffix=`, `readlink -f`,
 # `realpath --relative-to`, `stat -c`, `sed -i <expr>`, `xargs -d` — so on a BSD
 # userland (macOS) `tesl run`/`compile`/`test`/`init` failed, often with a
-# CONFUSING secondary error: `$(mktemp --suffix=.rkt)` came back empty and the
+# CONFUSING secondary error: `$(mktemp --suffix=.go)` came back empty and the
 # redirect then reported a bare `: No such file or directory`.
 #
 # Two independent defences, so a fresh macOS install works with zero user action:
@@ -125,23 +122,8 @@ _tesl_file_stamp() {
 _tesl_mktemp()     { mktemp  "${TMPDIR:-/tmp}/tesl.XXXXXXXX"; }
 _tesl_mktemp_dir() { mktemp -d "${TMPDIR:-/tmp}/tesl.XXXXXXXX"; }
 
-# Temp file for an emitted .rkt, created NEXT TO its destination so the
-# following `mv` is a same-filesystem rename (it also crossed /tmp → project
-# before). Replaces `mktemp --suffix=.rkt` (GNU-only); a fixed suffix cannot be
-# expressed as a BSD mktemp template, so the name is derived deterministically.
-# Prints the path; rc 1 (with a real message, not a bare redirect error) when it
-# cannot be created.
-_tesl_tmp_rkt() {
-  local out="$1" tmp
-  [ -n "$out" ] || { echo "error: internal: _tesl_tmp_rkt needs a destination path" >&2; return 1; }
-  tmp="$out.tmp.$$.rkt"
-  : > "$tmp" 2>/dev/null || {
-    echo "error: cannot create temporary file $tmp (is $(dirname -- "$out") writable?)" >&2; return 1; }
-  printf '%s\n' "$tmp"
-}
-
-# In-place sed: GNU takes an OPTIONAL suffix after -i, BSD requires one, so
-# `sed -i <expr> f` is unportable. Rewrite through a temp file instead.
+# Portable in-place sed. GNU accepts an optional suffix after -i; BSD requires
+# one. Rewriting through a sibling temp file keeps both dialects equivalent.
 _tesl_sed_inplace() {
   local expr="$1" file="$2" tmp
   tmp="$file.tesl-sed.$$"
@@ -149,24 +131,7 @@ _tesl_sed_inplace() {
   mv "$tmp" "$file"
 }
 
-# ── Build-output location (.tesl-stuff/build/) ──────────────────────────────
-# Compiled .rkt files do NOT go next to the .tesl sources: they land under
-# <project-root>/.tesl-stuff/build/, MIRRORING the source tree
-# (<root>/.tesl-stuff/build/<path-of-.tesl-relative-to-root>.rkt).  Racket then
-# drops its compiled/ bytecode next to each emitted .rkt, i.e. also inside
-# .tesl-stuff/.  The mirrored layout preserves the relative positions of the
-# emitted modules, so the emitter's basename `(file "X.rkt")` requires keep
-# resolving (local imports are same-directory-only by language design).
-# Everything under .tesl-stuff/ is transient: deleting it and rerunning any
-# command is always safe (at the cost of a fresh compile) — `tesl clean` does
-# exactly that for build/.  Override the build root with TESL_BUILD_DIR
-# (absolute, or relative to the project root).
-
-# Nearest ancestor of DIR (inclusive) containing tesl.toml. rc 1 if none.
-# PHYSICAL path (`cd -P`/`pwd -P`): it is compared against, and prefix-matched
-# with, paths from _tesl_abspath, which is also physical. A logical $PWD would
-# disagree on macOS, where /tmp and /var are symlinks into /private — the
-# mismatch made every file look like it "resolves outside the project root".
+# Project root for a DIRECTORY: the nearest ancestor (or itself) with tesl.toml.
 _tesl_project_root_of_dir() {
   local d
   d="$(cd -P "$1" 2>/dev/null && pwd -P)" || return 1
@@ -198,115 +163,98 @@ _tesl_build_root() {
   fi
 }
 
-# Map a .tesl file to its build-output .rkt path (mirrored tree) and create
-# the parent directory.  Prints the path.  A file that resolves OUTSIDE the
-# project root is a hard error: local imports cannot escape the project by
-# language design, so this only fires on a genuinely misplaced file.
-_tesl_out_path() {
-  local FILE="$1" abs root rel build_root out
-  abs="$(_tesl_abspath "$FILE" 2>/dev/null)" || abs="$FILE"
-  root="$(_tesl_project_root "$FILE")" || {
-    echo "error: cannot resolve directory of $FILE" >&2; return 1; }
-  rel="$(_tesl_relpath "$root" "$abs" || true)"
-  case "$rel" in
-    ""|.|/*|..|../*)
-      echo "error: $FILE resolves outside the project root $root (nearest tesl.toml); cannot place its build output" >&2
-      return 1 ;;
-  esac
-  build_root="$(_tesl_build_root "$root")"
-  out="$build_root/${rel%.tesl}.rkt"
-  mkdir -p "$(dirname "$out")" || {
-    echo "error: cannot create build directory $(dirname "$out")" >&2; return 1; }
-  echo "$out"
+_tesl_project_mktemp_dir() {
+  local file="$1" prefix="$2" project
+  project="$(_tesl_project_root "$file")" || return 1
+  mkdir -p "$project/.tesl-stuff" || return 1
+  TMPDIR="$project/.tesl-stuff" _tesl_mktemp_dir
 }
 
-# #18: a cheap, stable identity for the CURRENT compiler build. In nix the binary
-# lives at an immutable per-revision store path (so the resolved path changes on a
-# flake bump); in a dev shell the path is stable but the binary's size+mtime move
-# on every rebuild. Combining resolved-path + size + mtime changes the id exactly
-# when the compiler does, under both install modes.
-_tesl_compiler_id() {
-  _tesl_require_compiler
-  local real; real="$(_tesl_resolve_link "$TESL_OCAML_COMPILER" 2>/dev/null || echo "$TESL_OCAML_COMPILER")"
-  local meta; meta="$(_tesl_file_stamp "$real")"
-  printf '%s|%s' "$real" "$meta"
-}
-
-# #18: Racket caches an emitted module's bytecode in <dir>/compiled/<name>_rkt.zo
-# and reuses it by mtime. After a Tesl compiler UPGRADE, `tesl run`'s "only rewrite
-# .rkt when the bytes changed" optimization can preserve the old .rkt mtime (so the
-# old .zo stays valid), or the .zo can otherwise outlive the compiler that built it
-# — so `tesl run` silently executes the PREVIOUS compiler's codegen even though a
-# fix landed. Key artifact freshness on the compiler build id: when it changes,
-# drop the stale .zo/.dep for this artifact so Racket rebuilds it, and say why.
-# Call AFTER the .rkt has been (re)written and BEFORE racket runs it.
-_tesl_freshen_bytecode() {
-  local rkt="$1"
-  [ -n "$rkt" ] || return 0
-  local dir base id_file cur prev mangled
-  dir="$(dirname "$rkt")"
-  base="$(basename "$rkt")"                 # e.g. app.rkt
-  id_file="$dir/compiled/.tesl-buildid-${base}"
-  cur="$(_tesl_compiler_id)"
-  prev=""
-  [ -f "$id_file" ] && prev="$(cat "$id_file" 2>/dev/null)"
-  if [ "$prev" != "$cur" ]; then
-    if [ -n "$prev" ]; then
-      mangled="$(printf '%s' "$base" | sed 's/\.rkt$/_rkt/; s/\./_/g')"
-      if [ -f "$dir/compiled/${mangled}.zo" ] || [ -f "$dir/compiled/${mangled}.dep" ]; then
-        rm -f "$dir/compiled/${mangled}.zo" "$dir/compiled/${mangled}.dep"
-        echo "[tesl] compiler changed since $base was last built — recompiling (dropped stale bytecode cache)" >&2
-      fi
-    fi
-    mkdir -p "$dir/compiled" 2>/dev/null || true
-    printf '%s' "$cur" > "$id_file" 2>/dev/null || true
+_tesl_test_go_file() {
+  local file="$1" test_name="$2" test_kind="$3" root out status
+  root="$(_tesl_project_mktemp_dir "$file" test-go)" || return 1
+  out="$root/go"
+  if ! "$TESL_OCAML_COMPILER" "$file" --out "$out"; then
+    rm -rf "$root"
+    return 1
   fi
+  (cd "$out" && TESL_TEST_NAME="$test_name" TESL_TEST_KIND="$test_kind" \
+    "${TESL_GO:-go}" test ./...)
+  status=$?
+  rm -rf "$root"
+  return "$status"
 }
 
-# Attach debugging: Racket bytecode caches the EXPANSION of a module, and the
-# thsl-src! checkpoints are erased-or-kept at expansion time (TESL_DEBUG, see
-# dsl/debug/checkpoint.rkt B5). A .zo built in release mode therefore has NO
-# checkpoints baked in — reusing it under `tesl run --debug` would silently
-# make every breakpoint dead (and the reverse wastes release runs on checkpoint
-# overhead). Key the whole build tree on the mode: when it flips, drop every
-# compiled/ dir under the build root so Racket re-expands in the new mode.
-_tesl_debug_mode_sync() {
-  local root="$1" mode="$2" build_root marker prev
-  build_root="$(_tesl_build_root "$root")"
-  mkdir -p "$build_root" 2>/dev/null || true
-  marker="$build_root/.debug-mode"
-  prev=""
-  [ -f "$marker" ] && prev="$(cat "$marker" 2>/dev/null)"
-  if [ "$prev" != "$mode" ]; then
-    if [ -n "$prev" ]; then
-      echo "[tesl] debug mode changed — dropping cached bytecode so checkpoints match" >&2
-    fi
-    find "$build_root" -type d -name compiled -prune -exec rm -rf {} + 2>/dev/null || true
-    printf '%s' "$mode" > "$marker" 2>/dev/null || true
+_tesl_run_go_file() {
+  local file="$1" debug="$2" project root out binary status
+  shift 2
+  project="$(_tesl_project_root "$file")" || return 1
+  root="$(_tesl_project_mktemp_dir "$file" run-go)" || return 1
+  out="$root/go"
+  if [ "$debug" = "1" ]; then
+    "$TESL_OCAML_COMPILER" "$file" --out "$out" --debug || { rm -rf "$root"; return 1; }
+  else
+    "$TESL_OCAML_COMPILER" "$file" --out "$out" || { rm -rf "$root"; return 1; }
   fi
+  if [ ! -d "$out/cmd/app" ]; then
+    echo "tesl run --backend go: $file does not define a main/server entrypoint" >&2
+    rm -rf "$root"
+    return 2
+  fi
+  binary="$root/tesl-app"
+  (cd "$out" && "${TESL_GO:-go}" build -o "$binary" ./cmd/app) || { rm -rf "$root"; return 1; }
+  if [ "$debug" = "1" ]; then
+    TESL_DEBUG=1 TESL_DEBUG_ROOT="$project" "$binary" "$@"
+  else
+    "$binary" "$@"
+  fi
+  status=$?
+  rm -rf "$root"
+  return "$status"
 }
 
-# #33: emit every transitive local import of FILE to its build-dir .rkt
-# (.tesl-stuff/build/, mirrored tree) so racket can load them. Shared by
-# compile/run/test/watch — `tesl test` previously skipped this step, so on a
-# fresh checkout (no build dir yet) a multi-module project's tests failed with
-# a swallowed "cannot open module file" and the misleading "(no test results)".
-_tesl_emit_dep_rkts() {
-  local FILE="$1" DEP DEP_RKT DEPS RET=0
-  DEPS="$(_tesl_compile_deps "$FILE" 2>/dev/null)"
-  for DEP in $DEPS; do
-    if [ -n "$DEP" ] && [ "$DEP" != "$FILE" ]; then
-      DEP_RKT="$(_tesl_out_path "$DEP")" || { RET=1; continue; }
-      if ! _tesl_compile_to_stdout "$DEP" > "$DEP_RKT" 2>&1; then
-        echo "error: Failed to compile dependency: $DEP" >&2
-        rm -f "$DEP_RKT"
-        RET=1
+_tesl_watch_go() {
+  local file="$1" project root out binary pid="" previous="" current status
+  shift
+  project="$(_tesl_project_root "$file")" || return 1
+  cleanup() {
+    [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+    [ -n "$pid" ] && wait "$pid" 2>/dev/null || true
+    [ -n "$root" ] && rm -rf "$root"
+  }
+  trap 'exit 130' INT TERM HUP
+  trap cleanup EXIT
+  echo "[tesl watch] Watching $(_tesl_abspath "$file") and its imports (Ctrl+C to stop)"
+  while true; do
+    current="$file"
+    deps="$(${TESL_OCAML_COMPILER} --deps "$file" 2>/dev/null || true)"
+    while IFS= read -r dep; do
+      [ -n "$dep" ] && current="${current}
+$dep"
+    done <<< "$deps"
+    current="$(printf '%s\n' "$current" | while IFS= read -r dep; do printf '%s ' "$dep"; _tesl_file_mtime "$dep"; done | sort)"
+    if [ "$current" != "$previous" ]; then
+      previous="$current"
+      [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+      [ -n "$pid" ] && wait "$pid" 2>/dev/null || true
+      [ -n "$root" ] && rm -rf "$root"
+      root="$(_tesl_project_mktemp_dir "$file" watch-go)" || return 1
+      out="$root/go"
+      echo "[tesl watch] Compiling Go module..."
+      if "$TESL_OCAML_COMPILER" "$file" --out "$out" && [ -d "$out/cmd/app" ] && \
+          (cd "$out" && "${TESL_GO:-go}" build -o "$root/tesl-app" ./cmd/app); then
+        binary="$root/tesl-app"
+        echo "[tesl watch] Starting Go app..."
+        "$binary" "$@" &
+        pid=$!
+        echo "[tesl watch] Go server running (pid $pid)"
       else
-        _tesl_freshen_bytecode "$DEP_RKT"   # #18: drop stale .zo on compiler change
+        echo "[tesl watch] Go compile failed — previous server was stopped" >&2
+        pid=""
       fi
     fi
+    sleep 0.3
   done
-  return "$RET"
 }
 
 # Locate the templates dir (holds minimal/ api/ docker/).
@@ -376,27 +324,6 @@ tesl_manifest_get() {
     }
     END { if (!found) exit 1 }
   ' "$file"
-}
-
-# Locate the Tesl runtime collections source dir (contains dsl/ tesl/).
-# Order: live repo (dev) -> baked store path -> any PLTCOLLECTS entry.
-_tesl_collections_root() {
-  if [ -n "${TESL_REPO_ROOT:-}" ] && [ -d "$TESL_REPO_ROOT/dsl" ] && [ -d "$TESL_REPO_ROOT/tesl" ]; then
-    echo "$TESL_REPO_ROOT"; return 0
-  fi
-  if [ -n "${TESL_COLLECTIONS_DIR:-}" ] && [ -d "$TESL_COLLECTIONS_DIR/dsl" ] && [ -d "$TESL_COLLECTIONS_DIR/tesl" ]; then
-    echo "$TESL_COLLECTIONS_DIR"; return 0
-  fi
-  if [ -n "${PLTCOLLECTS:-}" ]; then
-    local IFS=':' entry
-    for entry in $PLTCOLLECTS; do
-      [ -n "$entry" ] || continue
-      if [ -d "$entry/tesl/dsl" ] && [ -d "$entry/tesl/tesl" ]; then
-        echo "$entry/tesl"; return 0
-      fi
-    done
-  fi
-  return 1
 }
 
 # Resolve postgres binaries: prefer PATH, else the flake's .#postgresql output.
@@ -930,7 +857,7 @@ _tesl_init() {
     echo ".env"
     echo "# Nix build symlink"
     echo "result"
-    echo "# Tesl build output (compiled .rkt + Racket bytecode; recreate with any tesl command)"
+    echo "# Tesl build output (compiled Go module; recreate with any tesl command)"
     echo ".tesl-stuff/"
   } > "$DEST/.gitignore"
 
@@ -972,36 +899,6 @@ _tesl_init() {
   echo "Learn more: tesl help manual   |   agent guide: AGENTS.md"
 }
 
-# Issue #54: `racket/racket:9.2-full` (the default container base) publishes
-# only a linux/amd64 manifest. On an arm64 host `docker build` still succeeds
-# — Docker transparently pulls the amd64 layers — but the resulting image
-# runs Racket under emulation, which aborted at boot for the reporter
-# ("Error: error reading from ~a (\"petite\")"). Best-effort and
-# NON-BLOCKING: skips silently if `uname`/`docker` are missing, the host
-# isn't arm64, or `docker manifest inspect` fails (offline, no experimental
-# manifest support, private registry auth) — a failed check must never block
-# a build that might otherwise have worked.
-_tesl_warn_arch_mismatch() {
-  local racket_base="$1"
-  command -v docker >/dev/null 2>&1 || return 0
-  local host_arch; host_arch="$(uname -m 2>/dev/null || true)"
-  case "$host_arch" in
-    arm64|aarch64) ;;
-    *) return 0 ;;
-  esac
-  local manifest
-  manifest="$(docker manifest inspect "$racket_base" 2>/dev/null)" || return 0
-  [ -n "$manifest" ] || return 0
-  if ! printf '%s' "$manifest" | grep -q '"architecture"[[:space:]]*:[[:space:]]*"arm64"'; then
-    echo "tesl build: warning — base image '$racket_base' has no linux/arm64 manifest;" >&2
-    echo "  this host is $host_arch, so the image will run Racket under amd64 emulation" >&2
-    echo "  (this has been reported to abort at container boot). Set TESL_RACKET_BASE to" >&2
-    echo "  an arm64-capable Racket image to build a native image instead — see" >&2
-    echo "  'tesl help manual deploy#building-on-apple-silicon-arm64'." >&2
-  fi
-  return 0
-}
-
 # ── tesl build ───────────────────────────────────────────────────────────
 # The MODE comes from [deploy].target in tesl.toml (#46 — `tesl build` used to
 # stage a Dockerfile and shell out to `docker` even for target = "local", whose
@@ -1009,15 +906,47 @@ _tesl_warn_arch_mismatch() {
 # require Docker where the manifest said it should not):
 #
 #   target = "local"      -> compile the project (proofs enforced) into
-#                            .tesl-stuff/build/ and print how to run it. No
-#                            Dockerfile, no docker, no daemon needed.
-#   target = "container"  -> stage a Dockerfile + build the image (as before).
+#                            .tesl-stuff/go-build/ and build tesl-app for
+#                            application modules. No Dockerfile, no docker,
+#                            no daemon needed.
+#   target = "container"  -> build a Linux tesl-app, stage a runtime-only
+#                            Dockerfile, and build the image.
 #   [deploy] absent       -> container, preserving the historical behaviour of
 #                            manifests written before this key existed.
 #
 # `--local` / `--container` override the manifest; so do the container-only
 # flags (--app-only/--with-postgres/--tag/--out/--no-docker), since asking for
 # an image variant is itself a request for the container path.
+_tesl_compile_go_file() {
+  local entry="$1" requested_out="$2" project out
+  project="$(_tesl_project_root "$entry")" || return 1
+  if [ -n "$requested_out" ]; then
+    out="$requested_out"
+    case "$out" in /*) ;; *) out="$PWD/$out" ;; esac
+    if [ -e "$out" ]; then
+      echo "tesl build --backend go: output directory already exists: $out" >&2
+      return 1
+    fi
+  else
+    out="$project/.tesl-stuff/go-build"
+    rm -rf "$out"
+  fi
+  "$TESL_OCAML_COMPILER" "$entry" --out "$out" >/dev/null || return 1
+  printf '%s\n' "$out"
+}
+
+_tesl_build_go() {
+  local entry="$1" name="$2" requested_out="$3" out
+  out="$(_tesl_compile_go_file "$entry" "$requested_out")" || return 1
+  if [ -d "$out/cmd/app" ]; then
+    (cd "$out" && "${TESL_GO:-go}" build -trimpath -o "$out/tesl-app" ./cmd/app) || return 1
+    echo "tesl build: $name built Go binary — $entry → $out/tesl-app"
+  else
+    (cd "$out" && "${TESL_GO:-go}" build ./...) || return 1
+    echo "tesl build: $name compiled Go module — $entry → $out"
+  fi
+}
+
 _tesl_build() {
   _tesl_require_compiler
   local VARIANT="" TAG="" NO_DOCKER=0 OUT="" MODE=""
@@ -1034,7 +963,7 @@ _tesl_build() {
         echo "Usage: tesl build [--local|--container] [--app-only|--with-postgres]"
         echo "                  [--tag NAME] [--no-docker] [--out DIR]"
         echo "  Build the project named by tesl.toml. Without a flag the mode comes from"
-        echo "  [deploy].target: \"local\" compiles into .tesl-stuff/build/ (no Docker),"
+        echo "  [deploy].target: \"local\" compiles into .tesl-stuff/go-build/ (no Docker),"
         echo "  \"container\" stages a Dockerfile and builds the image."
         return 0 ;;
       -*)              echo "tesl build: unknown flag $1" >&2; return 1 ;;
@@ -1064,19 +993,9 @@ _tesl_build() {
     esac
   fi
 
-  # ── Local build: compile only (this is what [deploy].target = "local" means) ─
+  # ── Local build: compile + go-build the binary, no Docker involved ──────────
   if [ "$MODE" = "local" ]; then
-    local L_OUT
-    L_OUT="$(_tesl_out_path "$ENTRY")" || return 1
-    _tesl_emit_dep_rkts "$ENTRY" || return 1
-    local L_TMP; L_TMP="$(_tesl_tmp_rkt "$L_OUT")" || return 1
-    if ! _tesl_compile_to_stdout "$ENTRY" > "$L_TMP"; then
-      rm -f "$L_TMP"
-      echo "tesl build: failed to compile $ENTRY" >&2; return 1
-    fi
-    if cmp -s "$L_TMP" "$L_OUT"; then rm -f "$L_TMP"; else mv "$L_TMP" "$L_OUT"; fi
-    _tesl_freshen_bytecode "$L_OUT"
-    echo "tesl build: $NAME compiled ([deploy].target = local) — $ENTRY → $L_OUT"
+    _tesl_build_go "$ENTRY" "$NAME" "" || return 1
     echo ""
     echo "Run it:"
     [ "$DBMODE" = "managed" ] && echo "  tesl db start          # start the project-local Postgres"
@@ -1091,269 +1010,132 @@ _tesl_build() {
   fi
   [ -z "$TAG" ] && TAG="$NAME"
 
-  local RACKET_BASE="${TESL_RACKET_BASE:-racket/racket:9.2-full}"
-  _tesl_warn_arch_mismatch "$RACKET_BASE"
-  local APP_RKT="app.rkt"
-
-  local CTX
-  if [ -n "$OUT" ]; then CTX="$OUT"; mkdir -p "$CTX"; else CTX="$(_tesl_mktemp_dir)" || { echo "tesl build: cannot create a temporary build context" >&2; return 1; }; fi
-  echo "tesl build: staging context at $CTX (variant=$VARIANT, port=$PORT)"
-
-  if ! "$TESL_OCAML_COMPILER" "$ENTRY" > "$CTX/$APP_RKT"; then
-    echo "tesl build: failed to compile $ENTRY" >&2; return 1
-  fi
-  local dep deps rel; deps="$("$TESL_OCAML_COMPILER" --deps "$ENTRY" 2>/dev/null || true)"
-  if [ -n "$deps" ]; then
-    while IFS= read -r dep; do
-      [ -n "$dep" ] || continue
-      rel="${dep%.tesl}.rkt"
-      mkdir -p "$CTX/$(dirname "$rel")"
-      "$TESL_OCAML_COMPILER" "$dep" > "$CTX/$rel" || { echo "tesl build: failed to compile dep $dep" >&2; return 1; }
-    done <<< "$deps"
-  fi
-
-  local COLL_ROOT; COLL_ROOT="$(_tesl_collections_root)" || { echo "tesl build: cannot locate Tesl runtime collections (dsl/tesl/lang)" >&2; return 1; }
-  mkdir -p "$CTX/collections/tesl"
-  local c
-  for c in dsl tesl; do cp -R "$COLL_ROOT/$c" "$CTX/collections/tesl/$c"; done
-  chmod -R u+w "$CTX/collections" 2>/dev/null || true
-  find "$CTX/collections" -type d -name compiled -prune -exec rm -rf {} + 2>/dev/null || true
-
-  local TPL_ROOT; TPL_ROOT="$(_tesl_templates_dir)" || { echo "tesl build: cannot locate templates dir (set TESL_REPO_ROOT or reinstall)" >&2; return 1; }
-  local TPL_DIR="$TPL_ROOT/docker"
-  local DF_SRC
-  if [ "$VARIANT" = "all-in-one" ]; then DF_SRC="$TPL_DIR/Dockerfile.all-in-one.tmpl"; else DF_SRC="$TPL_DIR/Dockerfile.app-only.tmpl"; fi
-  sed -e "s|__RACKET_BASE__|$RACKET_BASE|g" \
-      -e "s|__APP_NAME__|$NAME|g" \
-      -e "s|__APP_RKT__|$APP_RKT|g" \
-      -e "s|__PORT__|$PORT|g" \
-      "$DF_SRC" > "$CTX/Dockerfile"
-  if [ "$VARIANT" = "all-in-one" ]; then
-    sed -e "s|__RACKET_BASE__|$RACKET_BASE|g" \
-        -e "s|__APP_NAME__|$NAME|g" \
-        -e "s|__APP_RKT__|$APP_RKT|g" \
-        -e "s|__PORT__|$PORT|g" \
-        "$TPL_DIR/entrypoint.sh.tmpl" > "$CTX/entrypoint.sh"
-    chmod +x "$CTX/entrypoint.sh"
-  fi
-  echo "tesl build: staged Dockerfile ($VARIANT) + app.rkt + collections"
-
-  if [ "$NO_DOCKER" = "1" ]; then
-    echo "tesl build: --no-docker set; build context ready at $CTX"
-    echo "  docker build -t $TAG \"$CTX\""
-    return 0
-  fi
-  command -v docker >/dev/null 2>&1 || { echo "tesl build: docker not found; context staged at $CTX" >&2; return 1; }
-  echo "tesl build: building image '$TAG' ..."
-  local BUILD_LOG; BUILD_LOG="$(_tesl_mktemp)" || return 1
-  # Capture stderr to a log (then replay it) so we can synchronously inspect it
-  # for a Docker-daemon permission error and print actionable guidance.
-  if ! docker build -t "$TAG" "$CTX" 2>"$BUILD_LOG"; then
-    cat "$BUILD_LOG" >&2
-    if grep -qiE "permission denied.*docker\.sock|connect: permission denied|/var/run/docker\.sock" "$BUILD_LOG"; then
-      echo "" >&2
-      echo "tesl build: cannot reach the Docker daemon — permission denied on /var/run/docker.sock." >&2
-      echo "This is a Docker setup issue, not a Tesl error. The build context is staged at:" >&2
-      echo "  $CTX" >&2
-      echo "" >&2
-      echo "Fix it one of these ways (then re-run 'tesl build'):" >&2
-      echo "  1. Add yourself to the 'docker' group (rootful Docker):" >&2
-      echo "       sudo usermod -aG docker \"\$USER\"   # then log out/in (or: newgrp docker)" >&2
-      echo "  2. Use rootless Docker (no sudo / no group):" >&2
-      echo "       dockerd-rootless-setuptool.sh install" >&2
-      echo "       export DOCKER_HOST=unix://\$XDG_RUNTIME_DIR/docker.sock" >&2
-      echo "  3. Build the staged context yourself with whatever runtime you have:" >&2
-      echo "       docker build -t $TAG \"$CTX\"   # or: podman build -t $TAG \"$CTX\"" >&2
-      echo "" >&2
-      echo "  (Note: 'sudo tesl build' usually fails too — tesl is on your user nix profile, not root's.)" >&2
-      rm -f "$BUILD_LOG"; return 1
-    fi
-    rm -f "$BUILD_LOG"
-    echo "tesl build: docker build failed" >&2; return 1
-  fi
-  rm -f "$BUILD_LOG"
-
-  echo ""
-  echo "Built image: $TAG ($VARIANT)"
-  if [ "$VARIANT" = "all-in-one" ]; then
-    echo "Run it (embedded Postgres, no external DB):"
-    echo "  docker run -p $PORT:$PORT $TAG"
-  else
-    echo "Run it (app-only — supply an external Postgres if the app has a database):"
-    if [ "$DBMODE" = "none" ]; then
-      echo "  docker run -p $PORT:$PORT $TAG"
-    else
-      echo "  docker run -p $PORT:$PORT \\"
-      echo "    -e TESL_POSTGRES_HOST=<host> -e TESL_POSTGRES_PORT=<port> \\"
-      echo "    -e TESL_POSTGRES_DATABASE=<db> -e TESL_POSTGRES_USER=<user> -e TESL_POSTGRES_PASSWORD=<pw> \\"
-      echo "    $TAG"
-    fi
-  fi
+  _tesl_build_go_container "$ENTRY" "$NAME" "$PORT" "$DBMODE" "$VARIANT" "$TAG" "$NO_DOCKER" "$OUT"
 }
 
-# Reformat raco/rackunit test output into a developer-legible summary that maps
-# each failure back to the .tesl test name + source line + a readable message.
-#   $1 = .tesl source file   $2 = compiled .rkt   $3 = raco combined output
-# rackunit prints failure blocks delimited by dashed lines:
-#   --------------------
-#   <test-case name>
-#   FAILURE | ERROR
-#   name:       check-true
-#   location:   app.rkt:179:2
-#   params:     '(#f)
-#   message:    ...            (sometimes)
-#   --------------------
-# Each emitted check sits on a .rkt line carrying (thsl-src! "<file>" <line> …),
-# so we resolve the .rkt location to the original .tesl file:line.
-_tesl_test_format() {
-  local src="$1" rkt="$2" out="$3" status="${4:-0}"
-  [ -f "$out" ] || return 0
-  awk -v rkt="$rkt" '
-    # Resolve a .rkt line number to its original .tesl "file:line" by reading the
-    # (thsl-src! "<file>" <line> …) marker that every emitted check carries.
-    function tesl_loc(n,   i, ln, seg, fn, lno, res) {
-      res = ""
-      i = 0
-      while ((getline ln < rkt) > 0) {
-        i++
-        if (i == n) {
-          if (match(ln, /thsl-src![ \t]+"[^"]+"[ \t]+[0-9]+/)) {
-            seg = substr(ln, RSTART, RLENGTH)
-            split(seg, q, "\""); fn = q[2]
-            if (match(seg, /[0-9]+[ \t]*$/)) { lno = substr(seg, RSTART, RLENGTH); gsub(/[ \t]/, "", lno) }
-            if (fn != "" && lno != "") res = fn ":" lno
-          }
-          break
-        }
-      }
-      close(rkt)
-      return res
-    }
-    function flush_block(   tloc, rl, a) {
-      if (!(in_block && name != "")) return
-      tloc = ""
-      if (rktloc ~ /:[0-9]+:/) { split(rktloc, a, ":"); rl = a[2]; tloc = tesl_loc(rl) }
-      printf "  FAILED  %s\n", name
-      if (tloc != "")        printf "    at %s\n", tloc
-      else if (rktloc != "") printf "    at %s (generated)\n", rktloc
-      if (kind == "ERROR" && msg != "") printf "    error: %s\n", msg
-      else if (msg != "")               printf "    %s\n", msg
-      else                              printf "    assertion did not hold\n"
-      emitted_any = 1
-    }
-    BEGIN { in_block=0; emitted_any=0; summary="" }
-    /^-{5,}$/ {
-      flush_block()
-      in_block=1; name=""; kind=""; rktloc=""; msg=""; expect_name=1; next
-    }
-    {
-      # The run summary ("N/M test failures", "N tests passed") trails the final
-      # delimiter; capture it directly and never mistake it for a test-case name.
-      if ($0 ~ /test(s)? (passed|failure)/ || $0 ~ /^[0-9]+\/[0-9]+ test/) {
-        summary=$0; in_block=0; expect_name=0; next
-      }
-      if (in_block) {
-        if (expect_name && $0 !~ /^(FAILURE|ERROR|name:|location:|params:|message:|actual:|expected:)/ && $0 != "") {
-          name=$0; expect_name=0; next
-        }
-        if ($0 ~ /^(FAILURE|ERROR)[ \t]*$/) { kind=$0; gsub(/[ \t]/,"",kind); next }
-        if ($0 ~ /^location:/) { sub(/^location:[ \t]*/,""); rktloc=$0; next }
-        if ($0 ~ /^message:/)  { sub(/^message:[ \t]*/,""); msg=$0; next }
-        if ($0 ~ /^(name|params|actual|expected):/) { next }
-      }
-    }
-    END {
-      flush_block()
-      if (summary != "") { if (emitted_any) printf "  %s\n", summary; else print summary }
-      else if (!emitted_any) print "  (no test results)"
-    }
-  ' "$out" > "$out.fmt" 2>/dev/null
-
-  # #33: a hard racket error (e.g. a missing imported-module .rkt) produces no
-  # parseable test blocks; "(no test results)" used to swallow the real error.
-  # When the run FAILED and nothing was parsed, show the raw output instead.
-  if [ "$status" -ne 0 ] && grep -q "(no test results)" "$out.fmt" 2>/dev/null; then
-    grep -Ev "^raco (setup|make|link|test):" "$out" >&2 || true
-  elif [ -s "$out.fmt" ] && grep -q "FAILED\|test\|results" "$out.fmt"; then
-    cat "$out.fmt" >&2
+_tesl_build_go_container() {
+  local entry="$1" name="$2" port="$3" dbmode="$4" variant="$5" tag="$6" no_docker="$7" requested_out="$8"
+  local ctx generated template go
+  if [ -n "$requested_out" ]; then
+    ctx="$requested_out"
+    mkdir -p "$ctx"
   else
-    grep -Ev "^raco (setup|make|link|test):" "$out" >&2 || true
+    ctx="$(_tesl_project_mktemp_dir "$entry" container)" || return 1
   fi
-  rm -f "$out.fmt"
+  generated="$ctx/generated"
+  rm -rf "$generated"
+  if ! "$TESL_OCAML_COMPILER" "$entry" --out "$generated" >/dev/null; then
+    echo "tesl build --backend go: failed to emit $entry" >&2
+    return 1
+  fi
+  [ -d "$generated/cmd/app" ] || {
+    echo "tesl build --backend go: $entry does not define a main/server entrypoint" >&2
+    return 2
+  }
+  go="${TESL_GO:-go}"
+  (cd "$generated" && GOOS=linux CGO_ENABLED=0 "$go" build -trimpath -o "$ctx/tesl-app" ./cmd/app) || {
+    echo "tesl build --backend go: failed to build $entry for Linux" >&2
+    return 1
+  }
+  rm -rf "$generated"
+  if [ "$variant" = "all-in-one" ]; then
+    template="$(_tesl_templates_dir)/docker/Dockerfile.all-in-one.tmpl"
+  else
+    template="$(_tesl_templates_dir)/docker/Dockerfile.app-only.tmpl"
+  fi
+  [ -f "$template" ] || {
+    echo "tesl build --backend go: Docker template not found: $template" >&2
+    return 1
+  }
+  sed -e "s|__APP_NAME__|$name|g" -e "s|__PORT__|$port|g" "$template" > "$ctx/Dockerfile"
+  echo "tesl build: staged Go binary Docker context at $ctx (port=$port)"
+  if [ "$no_docker" = "1" ]; then
+    echo "tesl build: --no-docker set; build context ready at $ctx"
+    echo "  docker build -t $tag \"$ctx\""
+    return 0
+  fi
+  command -v docker >/dev/null 2>&1 || { echo "tesl build: docker not found; context staged at $ctx" >&2; return 1; }
+  docker build -t "$tag" "$ctx" || { echo "tesl build: docker build failed" >&2; return 1; }
+  echo "Built Go image: $tag"
 }
 
 CMD="${1:-help}"
 shift || true
 
+# Public Go source emission command. `compile` remains an unadvertised
+# compatibility alias for older scripts and editor integrations.
+if [ "$CMD" = "emit" ]; then
+  [ "${1:-}" = "go" ] || { echo "Usage: tesl emit go [file.tesl] [--out DIR]" >&2; exit 1; }
+  shift
+  CMD="compile"
+fi
+
 case "$CMD" in
   --test-name)
-    # Top-level passthrough: `tesl --test-name "NAME" [--test-kind KIND] file.tesl`
-    # emits a .rkt to stdout containing ONLY the named test block. The vscodium
-    # codelens invokes the `tesl` binary this way (then pipes to `raco test`), so the
-    # wrapper must forward it to the compiler rather than reporting "unknown command".
-    # Remaining args are forwarded verbatim so the optional `--test-kind KIND`
-    # disambiguator (test|api-test|load-test|doctest) reaches the compiler unchanged.
+    # Top-level convenience form for running one Go test block.
     [ $# -ge 2 ] || { echo "Usage: tesl --test-name <name> [--test-kind <kind>] <file.tesl>" >&2; exit 1; }
+    TEST_NAME="$1"; shift
+    TEST_KIND=""
+    if [ "${1:-}" = "--test-kind" ]; then
+      TEST_KIND="${2:?--test-kind requires a kind argument}"
+      shift 2
+    fi
+    [ $# -eq 1 ] || { echo "Usage: tesl --test-name <name> [--test-kind <kind>] <file.tesl>" >&2; exit 1; }
     _tesl_require_compiler
-    exec "$TESL_OCAML_COMPILER" --test-name "$@"
+    _tesl_test_go_file "$1" "$TEST_NAME" "$TEST_KIND"
+    exit $?
     ;;
   --debug)
-    # Top-level passthrough for the DAP debug adapter, which invokes the resolved
-    # `tesl` binary (TESL_COMPILER) as `tesl --debug [--test-name "NAME"] file.tesl`
-    # to emit a debug-instrumented .rkt. The OCaml compiler accepts both
-    # `--debug <file>` and `--debug --test-name <name> <file>`, so forward the
-    # remaining args verbatim instead of reporting "unknown command: --debug".
+    # Top-level Go debug emission. The compiler writes a temporary Go module and
+    # prints its path; use `tesl run --debug` for launch/attach workflows.
     [ $# -ge 1 ] || { echo "Usage: tesl --debug [--test-name <name>] <file.tesl>" >&2; exit 1; }
     _tesl_require_compiler
     exec "$TESL_OCAML_COMPILER" --debug "$@"
     ;;
+  --exe)
+    [ $# -ge 1 ] || { echo "Usage: tesl --exe <file.tesl> [--out <path>]" >&2; exit 1; }
+    _tesl_require_compiler
+    exec "$TESL_OCAML_COMPILER" --exe "$@"
+    ;;
   --deps)
-    # Passthrough: print all transitively imported local .tesl files, one per
-    # line. Used by the DAP debug adapter (dsl/debug/dap-server.rkt) to emit the
-    # debug-instrumented .rkt closure for a multi-module program.
+    # Print all transitively imported local .tesl files, one per line. Used by
+    # Go watch/debug tooling to build the dependency set to monitor.
     [ $# -ge 1 ] || { echo "Usage: tesl --deps <file.tesl>" >&2; exit 1; }
     _tesl_require_compiler
     exec "$TESL_OCAML_COMPILER" --deps "$@"
     ;;
   debug-inspect)
-    # Headless step-debugger: run to breakpoint(s) and dump paused state as JSON.
-    # Forward all args (--break-at/--when/--hit/--mode and --continue for headless
-    # F5) to the compiler, which drives dsl/debug/headless-inspect.rkt. The verb
-    # was previously unrouted here, so `tesl debug-inspect` reported "unknown
-    # command" even though the compiler implements it.
-    [ $# -gt 0 ] || { echo "Usage: tesl debug-inspect <file.tesl> --break-at SPEC [...] [--continue]" >&2; exit 1; }
-    _tesl_require_compiler
-    exec "$TESL_OCAML_COMPILER" debug-inspect "$@"
+    FILE="${1:?debug-inspect requires a source file}"
+    shift
+    TESL_COMPILER="${TESL_COMPILER:-$TESL_OCAML_COMPILER}" \
+      exec "${TESL_DEBUG_INSPECT_BIN:-tesl-debug-inspect}" --file "$FILE" "$@"
     ;;
   debug-attach)
-    # Live attach to an ALREADY-RUNNING `tesl run --debug` process: arm/re-arm
-    # breakpoints, receive stop events, inspect, resume, detach — the server
-    # keeps serving throughout. Thin NDJSON client over the control channel
-    # (dsl/debug/control-channel.rkt); all args are handled by the client
-    # (--break-at FILE:LINE, --once, --snapshot, --ping, --detach, --project,
-    # --help). The endpoint defaults to <project>/.tesl-stuff/debug.sock.
-    exec racket -l tesl/dsl/debug/attach-client -- "$@"
+    # Live attach to an ALREADY-RUNNING `tesl run --debug` process. The Go
+    # client preserves the public flags and endpoint discovery.
+    exec "${TESL_DEBUG_ATTACH_BIN:-tesl-debug-attach}" "$@"
     ;;
   compile)
+    if [ "${1:-}" = "--backend" ]; then
+      [ "${2:-}" = "go" ] || { echo "tesl emit go: only the Go backend is supported" >&2; exit 2; }
+      shift 2
+    fi
     if [ $# -eq 0 ]; then
-      _TESL_ENTRY="$(_tesl_default_entry "tesl compile [file.tesl]")" || exit 1
+      _TESL_ENTRY="$(_tesl_default_entry "tesl emit go [file.tesl]")" || exit 1
       set -- "$_TESL_ENTRY"
     fi
     FILE="$1"
-    OUT="$(_tesl_out_path "$FILE")" || exit 1
-    OUT_TMP="$(_tesl_tmp_rkt "$OUT")" || exit 1
-
-    # Compile all dependencies (transitive imports) first
-    if ! _tesl_emit_dep_rkts "$FILE"; then
-      rm -f "$OUT_TMP"; exit 1
+    shift
+    OUT_GO=""
+    if [ "${1:-}" = "--out" ]; then
+      OUT_GO="${2:?--out requires a directory}"
+      shift 2
     fi
-
-    if _tesl_compile_to_stdout "$FILE" > "$OUT_TMP"; then
-      mv "$OUT_TMP" "$OUT"
-      echo "compiled $FILE → $OUT"
-    else
-      RET=$?; rm -f "$OUT_TMP"; exit "$RET"
-    fi
+    [ $# -eq 0 ] || { echo "tesl emit go: unexpected argument $1" >&2; exit 2; }
+    _tesl_require_compiler
+    OUT_GO="$(_tesl_compile_go_file "$FILE" "$OUT_GO")" || exit 1
+    echo "compiled Go module: $FILE → $OUT_GO"
+    exit 0
     ;;
   check)
     if [ $# -eq 0 ]; then
@@ -1423,228 +1205,85 @@ case "$CMD" in
     # debugger can attach to the RUNNING process — arm/re-arm breakpoints,
     # inspect, resume — without relaunching. Costs checkpoint overhead; a
     # plain `tesl run` stays byte-for-byte the zero-residue release build.
+    RUN_BACKEND="${TESL_BACKEND:-${TESL_DEFAULT_BACKEND:-go}}"
     TESL_RUN_DEBUG=0
-    if [ "${1:-}" = "--debug" ]; then TESL_RUN_DEBUG=1; shift; fi
+    while true; do
+      case "${1:-}" in
+        --backend) RUN_BACKEND="${2:?--backend requires a backend name}"; shift 2 ;;
+        --debug) TESL_RUN_DEBUG=1; shift ;;
+        *) break ;;
+      esac
+    done
     if [ $# -eq 0 ]; then
       _TESL_ENTRY="$(_tesl_default_entry "tesl run [--debug] [file.tesl] [args…]")" || exit 1
       set -- "$_TESL_ENTRY"
     fi
     FILE="$1"
     shift
-    # Everything after FILE is forwarded verbatim to the app, so a trailing
-    # --debug does NOT enable debug mode — flag the likely mistake loudly.
-    if [ "$TESL_RUN_DEBUG" = "0" ]; then
-      for _tesl_arg in "$@"; do
-        if [ "$_tesl_arg" = "--debug" ]; then
-          echo "[tesl] note: '--debug' after the file is passed to YOUR APP as an argument; to enable attach/debug mode put it before the file: tesl run --debug $FILE" >&2
-          break
-        fi
-      done
-    fi
-    # Convenience: load ./.env so the app sees TESL_POSTGRES_*/PORT without manual sourcing.
-    _tesl_load_dotenv
-    # Managed-mode projects: auto-start the project-local Postgres if needed.
-    _tesl_db_autostart_if_managed
-    if [ "$TESL_RUN_DEBUG" = "1" ]; then
-      # Absolute source path: the emitter bakes the compiler's input path into
-      # each thsl-src! checkpoint, and attach clients (VSCode setBreakpoints,
-      # tesl debug-attach) identify files absolutely — compile from the
-      # absolute spelling so breakpoint file matching never misses.
-      FILE="$(_tesl_abspath "$FILE" 2>/dev/null || echo "$FILE")"
-    fi
-    PROJ_ROOT="$(_tesl_project_root "$FILE")" || exit 1
-    OUT="$(_tesl_out_path "$FILE")" || exit 1
-    # Keep cached bytecode mode-consistent (see _tesl_debug_mode_sync).
-    _tesl_debug_mode_sync "$PROJ_ROOT" "$TESL_RUN_DEBUG"
-    if [ "$TESL_RUN_DEBUG" = "1" ]; then
-      export TESL_DEBUG=1
-      export TESL_DEBUG_CONTROL_DIR="$PROJ_ROOT/.tesl-stuff"
-      echo "[tesl] debug mode: attach endpoint at $TESL_DEBUG_CONTROL_DIR/debug.sock (or debug.port)" >&2
-    fi
-    RET=0
-
-    # Compile all dependencies (transitive imports) first
-    _tesl_emit_dep_rkts "$FILE" || RET=1
-
-    if [ "$RET" -eq 0 ]; then
-      OUT_TMP="$(_tesl_tmp_rkt "$OUT")" || exit 1
-      if _tesl_compile_to_stdout "$FILE" > "$OUT_TMP"; then
-        # Only update $OUT if content changed — preserves mtime for Racket's .zo cache
-        if ! cmp -s "$OUT_TMP" "$OUT"; then
-          mv "$OUT_TMP" "$OUT"
-        else
-          rm -f "$OUT_TMP"
-        fi
-        # #18: even when the .rkt bytes are unchanged, a compiler upgrade must not
-        # reuse bytecode built by the previous compiler — invalidate it here.
-        _tesl_freshen_bytecode "$OUT"
-        echo "[tesl] Starting..." >&2
-        # #20: run the server as a background child and forward stop signals to
-        # it, then wait. A supervisor that stops the server with `kill <run-pid>`
-        # (SIGTERM/SIGINT/SIGHUP) previously killed only this wrapper and ORPHANED
-        # the racket server — it kept holding its port. Now the signal is
-        # forwarded to the child and we block until it has actually exited (so the
-        # port is freed before `tesl run` returns). Interactive Ctrl-C already
-        # worked (the TTY signals the whole group); this fixes the non-foreground
-        # supervisor case.
-        if [ "${TESL_VERBOSE:-0}" = "1" ]; then
-          racket "$OUT" "$@" &
-          _tesl_srv=$!
-          trap 'kill -TERM "$_tesl_srv" 2>/dev/null' TERM INT HUP
-          wait "$_tesl_srv"; RET=$?
-          [ "$RET" -gt 128 ] && { wait "$_tesl_srv" 2>/dev/null; RET=$?; }
-          trap - TERM INT HUP
-        else
-          STDERR_TMP="$(_tesl_mktemp)" || exit 1
-          racket "$OUT" "$@" 2>"$STDERR_TMP" &
-          _tesl_srv=$!
-          trap 'kill -TERM "$_tesl_srv" 2>/dev/null' TERM INT HUP
-          wait "$_tesl_srv"; RET=$?
-          [ "$RET" -gt 128 ] && { wait "$_tesl_srv" 2>/dev/null; RET=$?; }
-          trap - TERM INT HUP
-          grep -Ev "^raco (setup|make|link|test):" "$STDERR_TMP" >&2 || true
-          rm -f "$STDERR_TMP"
-        fi
-      else
-        RET=$?; rm -f "$OUT_TMP"
-      fi
-    fi
-    exit "$RET"
+    [ "$RUN_BACKEND" = "go" ] || { echo "tesl run: only the Go backend is supported" >&2; exit 2; }
+    _tesl_require_compiler
+    _tesl_run_go_file "$FILE" "$TESL_RUN_DEBUG" "$@"
+    exit $?
     ;;
   test)
+    # Run generated Go tests in a temporary module.
     # Optional: --test-name "name"  runs only the named test case.
     #           --test-kind KIND    (test|api-test|load-test|doctest) disambiguates
     #           same-named blocks of different kinds — required to run a single
     #           api-test / load-test / doctest in isolation.
     TEST_NAME=""
     TEST_KIND=""
+    TEST_BACKEND="go"
     while true; do
       case "${1:-}" in
+        --backend)
+          [ "${2:-}" = "go" ] || { echo "tesl test: only the Go backend is supported" >&2; exit 2; }
+          shift 2
+          ;;
         --test-name) TEST_NAME="${2:?--test-name requires a test name argument}"; shift 2 ;;
         --test-kind) TEST_KIND="${2:?--test-kind requires a kind argument}"; shift 2 ;;
         *) break ;;
       esac
     done
     if [ $# -eq 0 ]; then
-      _TESL_ENTRY="$(_tesl_default_entry "tesl test [--test-name <name>] [--test-kind <kind>] [file.tesl ...]")" || exit 1
+       _TESL_ENTRY="$(_tesl_default_entry "tesl test [--test-name <name>] [--test-kind <kind>] [file.tesl ...]")" || exit 1
       set -- "$_TESL_ENTRY"
     fi
-    RET=0
-    for FILE in "$@"; do
-      OUT="$(_tesl_out_path "$FILE")" || { RET=1; continue; }
-      OUT_TMP="$(_tesl_tmp_rkt "$OUT")" || exit 1
-      _tesl_require_compiler
-      # #33: like `run`, emit imported local modules' .rkt first — otherwise
-      # raco test dies on "cannot open module file" for a fresh checkout.
-      if ! _tesl_emit_dep_rkts "$FILE"; then
-        rm -f "$OUT_TMP"; RET=1; continue
-      fi
-      if [ -n "$TEST_NAME" ] && [ -n "$TEST_KIND" ]; then
-        "$TESL_OCAML_COMPILER" --test-name "$TEST_NAME" --test-kind "$TEST_KIND" "$FILE" > "$OUT_TMP"
-      elif [ -n "$TEST_NAME" ]; then
-        "$TESL_OCAML_COMPILER" --test-name "$TEST_NAME" "$FILE" > "$OUT_TMP"
-      else
-        _tesl_compile_to_stdout "$FILE" > "$OUT_TMP"
-      fi
-      if [ $? -eq 0 ]; then
-        mv "$OUT_TMP" "$OUT"
-        _tesl_freshen_bytecode "$OUT"   # #18: drop stale .zo on compiler change
-        if [ "${TESL_VERBOSE:-0}" = "1" ]; then
-          raco test "$OUT" || RET=$?
-        else
-          # Capture raco's combined output and reformat rackunit failures back
-          # to the .tesl test name + source line + a readable message. The raw
-          # output ("name: check-true / location: app.rkt:179:2 / params: '(#f)")
-          # is unreadable for someone who wrote a .tesl test, not Racket.
-          OUTPUT_TMP="$(_tesl_mktemp)" || { RET=1; continue; }
-          raco test "$OUT" >"$OUTPUT_TMP" 2>&1; STATUS=$?
-          _tesl_test_format "$FILE" "$OUT" "$OUTPUT_TMP" "$STATUS"
-          rm -f "$OUTPUT_TMP"
-          [ "$STATUS" -ne 0 ] && RET="$STATUS"
-        fi
-      else
-        rm -f "$OUT_TMP"; RET=1
-      fi
-    done
-    exit "$RET"
+    case "$TEST_BACKEND" in
+      go)
+        _tesl_require_compiler
+        RET=0
+        for FILE in "$@"; do
+          _tesl_test_go_file "$FILE" "$TEST_NAME" "$TEST_KIND" || RET=$?
+        done
+        exit "$RET"
+        ;;
+    esac
     ;;
   mutate)
     # Mutation testing: perturb the program and confirm the tests catch it.
-    # Forwards to the compiler's `--mutate <file> [extra-test-files…]`, which
+     # Forwards to the compiler's `--mutate <file>
+    # [extra-test-files…]`, which
     # compiles + runs each mutant and prints a "Mutation score" report. This is
     # the first-class command the docs (best-practices) reference as `tesl mutate`.
-    [ $# -gt 0 ] || { echo "Usage: tesl mutate <file.tesl> [more-test-files.tesl ...]" >&2; exit 1; }
+     [ $# -gt 0 ] || { echo "Usage: tesl mutate <file.tesl> [more-test-files.tesl ...]" >&2; exit 1; }
     _tesl_require_compiler
     exec "$TESL_OCAML_COMPILER" --mutate "$@"
     ;;
   watch)
+    if [ "${1:-}" = "--backend" ]; then
+      [ "${2:-}" = "go" ] || { echo "tesl watch: only the Go backend is supported" >&2; exit 2; }
+      shift 2
+    fi
     if [ $# -eq 0 ]; then
       _TESL_ENTRY="$(_tesl_default_entry "tesl watch [file.tesl]")" || exit 1
       set -- "$_TESL_ENTRY"
     fi
     FILE="$1"
     shift
-    OUT="$(_tesl_out_path "$FILE")" || exit 1
-    RACKET_PID=""
-    PREV_SNAP=""
-    trap '[ -n "$RACKET_PID" ] && kill "$RACKET_PID" 2>/dev/null' EXIT
-    # #20 (same class): a bare SIGTERM/SIGINT/SIGHUP to `tesl watch` would
-    # otherwise terminate the shell WITHOUT running the EXIT trap, orphaning the
-    # backgrounded server. Route these signals through `exit` so the EXIT cleanup
-    # above runs and the child server is stopped.
-    trap 'exit' TERM INT HUP
-
-    _tesl_dep_snapshot() {
-      local f="$1" deps
-      if command -v "$TESL_OCAML_COMPILER" >/dev/null 2>&1; then
-        deps="$("$TESL_OCAML_COMPILER" --deps "$f" 2>/dev/null)"
-        deps="$f${deps:+$'\n'$deps}"
-      else
-        local dir; dir="$(dirname "$(_tesl_abspath "$f")")"
-        deps="$(find "$dir" -name "*.tesl" 2>/dev/null)"
-      fi
-      # One "<file> <mtime>" line per dep, portably: `xargs -d` and `stat -c`
-      # are both GNU-only (#46).
-      printf '%s\n' "$deps" | sort -u | while IFS= read -r _dep_f; do
-        [ -n "$_dep_f" ] || continue
-        printf '%s %s\n' "$_dep_f" "$(_tesl_file_mtime "$_dep_f")"
-      done | sort
-    }
-
-    echo "[tesl watch] Watching $(_tesl_abspath "$FILE") and its imports (Ctrl+C to stop)"
-    while true; do
-      CURR_SNAP="$(_tesl_dep_snapshot "$FILE")"
-      if [ "$CURR_SNAP" != "$PREV_SNAP" ]; then
-        PREV_SNAP="$CURR_SNAP"
-        echo "[tesl watch] Compiling..."
-        STDERR_TMP="$(_tesl_mktemp)" || exit 1
-        OUT_TMP="$(_tesl_tmp_rkt "$OUT")" || exit 1
-        # #33 (watch): (re)emit imported modules' .rkt into the build dir too —
-        # the entry .rkt alone cannot load if a dep's .rkt is missing or stale.
-        # A dep failure surfaces via the entry compile below (same diagnostics).
-        _tesl_emit_dep_rkts "$FILE" >/dev/null 2>&1 || true
-        if _tesl_compile_to_stdout "$FILE" > "$OUT_TMP" 2>"$STDERR_TMP"; then
-          grep -Ev "^raco (setup|make|link|test):" "$STDERR_TMP" >&2 || true
-          rm -f "$STDERR_TMP"
-          if ! cmp -s "$OUT_TMP" "$OUT"; then
-            mv "$OUT_TMP" "$OUT"
-          else
-            rm -f "$OUT_TMP"
-          fi
-          [ -n "$RACKET_PID" ] && { kill "$RACKET_PID" 2>/dev/null; wait "$RACKET_PID" 2>/dev/null; }
-          echo "[tesl watch] Starting..." >&2
-          racket "$OUT" "$@" &
-          RACKET_PID=$!
-          echo "[tesl watch] Server running (pid $RACKET_PID)"
-        else
-          grep -Ev "^raco (setup|make|link|test):" "$STDERR_TMP" >&2 || true
-          rm -f "$STDERR_TMP"
-          rm -f "$OUT_TMP"
-          echo "[tesl watch] Compile error — previous server kept running" >&2
-        fi
-      fi
-      sleep 0.3
-    done
+    _tesl_require_compiler
+    _tesl_watch_go "$FILE" "$@"
+    exit $?
     ;;
   generate)
     SUBCMD="${1:-help}"
@@ -1700,18 +1339,22 @@ case "$CMD" in
     _tesl_build "$@"
     ;;
   clean)
-    # Remove the project's transient build output (.tesl-stuff/build, or the
-    # TESL_BUILD_DIR override).  Deliberately scoped to the build output only:
-    # other .tesl-stuff/ subdirectories (e.g. a future on-disk cache with its
-    # own lifecycle) survive, and .tesl-postgres/ (real data) is never touched.
+    # Remove known transient compiler, binary, test, and debug outputs. Keep
+    # unrelated .tesl-stuff subdirectories (for example a future cache) and
+    # never touch .tesl-postgres/ (real data).
     ROOT="$(_tesl_project_root_of_dir "$PWD")" || ROOT="$PWD"
     BUILD_ROOT="$(_tesl_build_root "$ROOT")"
-    if [ -d "$BUILD_ROOT" ]; then
-      rm -rf "$BUILD_ROOT"
-      echo "tesl clean: removed $BUILD_ROOT"
-    else
-      echo "tesl clean: nothing to remove ($BUILD_ROOT does not exist)"
-    fi
+    STUFF_ROOT="$ROOT/.tesl-stuff"
+    removed=0
+    for path in "$BUILD_ROOT" "$ROOT/.tesl-stuff/go-build" \
+                "$ROOT/.tesl-stuff/debug.sock" "$ROOT/.tesl-stuff/debug.port" \
+                "$ROOT/.tesl-stuff"/tesl.* "$ROOT/.tesl-stuff"/go-emit-*; do
+      [ -e "$path" ] || [ -L "$path" ] || continue
+      rm -rf "$path"
+      echo "tesl clean: removed $path"
+      removed=1
+    done
+    [ "$removed" -eq 1 ] || echo "tesl clean: nothing to remove ($STUFF_ROOT has no generated output)"
     ;;
   version|--version|-v)
     # A stable version string plus the resolved compiler path — the latter's Nix
@@ -1750,12 +1393,12 @@ Usage:
   tesl init                [name] [--template api|minimal]   Scaffold a new project
                            [--postgres managed|existing|none] [--yes] [--no-git]
   tesl db                  start|stop|status                 Manage the project-local Postgres
-  tesl build               [--local|--container]             Build the project: compile only
+    tesl build               [--local|--container]  Build the project
                            [--app-only|--with-postgres]      ([deploy].target = "local") or a
                            [--tag NAME] [--no-docker]        runnable Docker image
                            [--out DIR]                       ([deploy].target = "container")
-  tesl compile             [file.tesl]                    Compile .tesl → .rkt (into .tesl-stuff/build/)
-  tesl clean                                              Delete the project's build output (.tesl-stuff/build/)
+    tesl emit go             [file.tesl]  Emit Go source (advanced)
+  tesl clean                                              Delete the project's build output (.tesl-stuff/)
   tesl check               [file.tesl ...]               Type-check without output
   tesl lint                <file.tesl> [more.tesl ...]   Run the opinionated linter
   tesl fmt                 <file.tesl> [more.tesl ...]   Format in-place
@@ -1765,8 +1408,9 @@ Usage:
                            (--debug: live checkpoints + attach endpoint under .tesl-stuff/)
   tesl debug-attach        [--project DIR] [command…]     Attach to a `tesl run --debug` process
                            (arm breakpoints, inspect, resume — see tesl debug-attach --help)
-  tesl test                [file.tesl ...]               Compile and run tests
-  tesl watch               [file.tesl] [args…]           Watch, recompile, and restart on changes
+    tesl test                [file.tesl ...]  Compile and run tests
+   tesl mutate              <file>  Run mutation testing
+    tesl watch               [file.tesl] [args…]  Watch and restart on changes
 
   A [file.tesl] argument is OPTIONAL inside a project: with none, the verb uses
   [project].entrypoint from the nearest tesl.toml.

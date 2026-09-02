@@ -182,7 +182,7 @@ record Doc {
 }
 
 handler get act() -> List Doc requires [dbRead] =
-  select Doc
+  select d from Doc
 
 api ActApi {
   get "/act" -> List Doc

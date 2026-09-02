@@ -40,7 +40,7 @@ You get:
 | `AGENTS.md` / `CLAUDE.md` | Instructions for AI coding agents working in this project (see [AGENTS.md](../AGENTS.md)). |
 | `.gitignore`, `README.md`, `.vscode/launch.json` | Sensible defaults: `.tesl-stuff/` ignored, a project README, and a debugger launch config. |
 
-> `.tesl-stuff/build/` holds the generated `.rkt` files and Racket bytecode. It is always safe to
+> `.tesl-stuff/go-build/` holds the generated Go module. It is always safe to
 > delete (`tesl clean`) at the cost of a fresh compile, and it should never be committed.
 
 ---
@@ -133,7 +133,7 @@ tesl fmt app.tesl          # format in place (--check to verify only)
 tesl test app.tesl         # run the file's `test` / `api-test` / `load-test` blocks
 tesl run app.tesl          # serve it (TESL_VERBOSE=1 for detailed logs)
 tesl mutate app.tesl       # mutate the validation logic and confirm your tests catch it
-tesl build --with-postgres # an all-in-one Docker image (see deploy.md)
+tesl build                 # build a local binary; use --container for an image
 ```
 
 Add files as the project grows and `tesl check` them together: `tesl check app.tesl db.tesl`.

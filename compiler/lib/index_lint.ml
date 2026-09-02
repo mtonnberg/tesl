@@ -11,7 +11,7 @@
 
     {2 The queries are read through the EMITTER}
 
-    Query shapes are extracted with {!Emit_racket.extract_select_query} and its
+    Query shapes are extracted with {!Sql_query.extract_select_query} and its
     siblings — the same functions that produce the SQL.  A private re-parse
     would drift, and then the lint would be reasoning about a query the program
     does not actually run.  Anything those functions decline to parse is simply
@@ -90,21 +90,21 @@ type finding = {
 (* ── Columns a query constrains in a way a B-tree index can serve ─────────── *)
 
 (* `like`/`ilike` are excluded on purpose: see the module header. *)
-let rec clause_fields (c : Emit_racket.sql_clause) : string list =
+let rec clause_fields (c : Sql_query.sql_clause) : string list =
   match c with
-  | Emit_racket.SqlPred { field; _ } -> [ field ]
-  | Emit_racket.SqlOr cs -> List.concat_map clause_fields cs
-  | Emit_racket.SqlIsNull { field } -> [ field ]
-  | Emit_racket.SqlIsNotNull { field } -> [ field ]
-  | Emit_racket.SqlIn { field; _ } -> [ field ]
-  | Emit_racket.SqlNotIn { field; _ } -> [ field ]
-  | Emit_racket.SqlLike _ -> []
-  | Emit_racket.SqlILike _ -> []
+  | Sql_query.SqlPred { field; _ } -> [ field ]
+  | Sql_query.SqlOr cs -> List.concat_map clause_fields cs
+  | Sql_query.SqlIsNull { field } -> [ field ]
+  | Sql_query.SqlIsNotNull { field } -> [ field ]
+  | Sql_query.SqlIn { field; _ } -> [ field ]
+  | Sql_query.SqlNotIn { field; _ } -> [ field ]
+  | Sql_query.SqlLike _ -> []
+  | Sql_query.SqlILike _ -> []
 
-let group_key_fields (k : Emit_racket.sql_group_key) : string list =
+let group_key_fields (k : Sql_query.sql_group_key) : string list =
   match k with
-  | Emit_racket.GField f -> [ f ]
-  | Emit_racket.GTimeTrunc _ -> []
+  | Sql_query.GField f -> [ f ]
+  | Sql_query.GTimeTrunc _ -> []
 
 (* One entity's worth of constrained columns at one source location.  A query
    with an `innerJoin` produces several: the join column on the main entity and
@@ -124,7 +124,7 @@ type usage = {
 
 (* A rebuilt or synthesised node carries `Location.dummy_loc`.  The multi-line
    clause form goes through exactly such a rebuild
-   ({!Emit_racket.extract_multiline_select_query}), so its usage arrives with no
+   ({!Sql_query.extract_multiline_select_query}), so its usage arrives with no
    position and must not be reported at 1:1 — nor counted as a second, separate
    query.  Both are handled by keying usages on query identity and then choosing
    the earliest REAL location among them. *)
@@ -138,19 +138,19 @@ let dedup lst =
   List.rev
     (List.fold_left (fun acc x -> if List.mem x acc then acc else x :: acc) [] lst)
 
-let select_usages (seed : Emit_racket.sql_select_seed)
-                  (dyn : Emit_racket.sql_clause list) loc : usage list =
+let select_usages (seed : Sql_query.sql_select_seed)
+                  (dyn : Sql_query.sql_clause list) loc : usage list =
   let own =
     (match seed.where_field with Some f -> [ f ] | None -> [])
     @ List.concat_map clause_fields seed.static_clauses
     @ List.concat_map clause_fields dyn
     @ (match seed.order with Some (f, _) -> [ f ] | None -> [])
     @ List.concat_map group_key_fields seed.group_by
-    @ List.map (fun (j : Emit_racket.sql_join) -> j.main_field) seed.joins
+    @ List.map (fun (j : Sql_query.sql_join) -> j.main_field) seed.joins
   in
   { u_entity = seed.entity; u_binder = seed.binder; u_fields = dedup own;
     u_loc = loc; u_demands_index = true }
-  :: List.map (fun (j : Emit_racket.sql_join) ->
+  :: List.map (fun (j : Sql_query.sql_join) ->
          { u_entity = j.join_entity; u_binder = seed.binder ^ "/join";
            u_fields = [ j.join_field ]; u_loc = loc; u_demands_index = true })
        seed.joins
@@ -158,29 +158,29 @@ let select_usages (seed : Emit_racket.sql_select_seed)
 let usages_of_expr (e : expr) : usage list =
   let loc = Parser.expr_loc e in
   let selects =
-    match Emit_racket.extract_select_query e with
+    match Sql_query.extract_select_query e with
     | Some (seed, dyn) -> select_usages seed dyn loc
     | None ->
-      (match Emit_racket.extract_multiline_select_query e with
+      (match Sql_query.extract_multiline_select_query e with
        | Some (seed, dyn) -> select_usages seed dyn loc
        | None -> [])
   in
   let deletes =
-    let of_seed (seed : Emit_racket.sql_delete_seed) dyn =
+    let of_seed (seed : Sql_query.sql_delete_seed) dyn =
       [ { u_entity = seed.entity; u_binder = seed.binder;
           u_fields = dedup ((match seed.where_field with Some f -> [ f ] | None -> [])
                             @ List.concat_map clause_fields dyn);
           u_loc = loc; u_demands_index = true } ]
     in
-    match Emit_racket.extract_delete_query e with
+    match Sql_query.extract_delete_query e with
     | Some (seed, dyn) -> of_seed seed dyn
     | None ->
-      (match Emit_racket.extract_delete e with
+      (match Sql_query.extract_delete e with
        | Some (seed, dyn) -> of_seed seed dyn
        | None -> [])
   in
   let updates =
-    match Emit_racket.extract_update e with
+    match Sql_query.extract_update e with
     | Some u ->
       [ { u_entity = u.entity; u_binder = u.binder;
           u_fields = dedup (List.concat_map clause_fields u.clauses);
@@ -189,7 +189,7 @@ let usages_of_expr (e : expr) : usage list =
   in
   (* `onConflict` marks the unique index as used; it never demands a new one. *)
   let upserts =
-    match Emit_racket.parse_upsert_expr e with
+    match Sql_query.parse_upsert_expr e with
     | Some u when u.conflict <> [] ->
       [ { u_entity = u.entity; u_binder = "#upsert"; u_fields = dedup u.conflict;
           u_loc = loc; u_demands_index = false } ]

@@ -5,6 +5,13 @@
 .vscode/**
 .vscode-test/**
 **/*.test.js
+**/*.spec.js
+test/**
+tests/**
+extension.js
+test-output-parser.js
+node_modules/**
+package-lock.json
 
 # Source maps and TypeScript sources (none currently, future-proofing)
 **/*.map

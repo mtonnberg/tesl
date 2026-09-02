@@ -259,9 +259,9 @@ fn showcaseFoo(x: Foo Int String) -> Int =
 # during type inference so you never need to write explicit type arguments.
 #
 # At runtime, type parameters are erased — they exist only for compile-time
-# checking. A Box Int and a Box String produce the same Racket runtime code
-# because Racket is dynamically typed. The Tesl compiler enforces the types;
-# the Racket runtime trusts those checks.
+# checking. A Box Int and a Box String produce the same Go runtime shape
+# because the generated representation is erased. The Tesl compiler enforces
+# the types; the Go runtime receives values after those checks.
 #
 # Pattern matching on parameterized ADTs works exactly like non-parameterized
 # ones. The type parameter controls what type you get when you bind a field,

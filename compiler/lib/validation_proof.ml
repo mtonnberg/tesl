@@ -662,12 +662,12 @@ let rec check_expr_call_proofs
                  | ELambda { params; body = b; _ } ->
                    if not (List.exists (fun (p : binding) -> p.name = name) params)
                    then visit b
-                 | ELit _ | EVar _ | EStartWorkers _ -> ()
+                  | ELit { lit = LInterp segments; _ } ->
+                    List.iter (function ILiteral _ -> () | IExpr e -> visit e) segments
+                  | ELit _ | EVar _ | EStartWorkers _ -> ()
                  | ECacheGet _ | ECacheDelete _ | ECacheInvalidate _ -> ()
                  | ECacheSet { value; _ } -> visit value
                  | ESendEmail _ | EStartEmailWorker _ -> ()
-                 | ERuntimeCall { segments; _ } ->
-                   List.iter (function RLit _ | RRawVar _ -> () | RArg e -> visit e) segments
                in
                visit body;
                let non_call_errors =
@@ -751,12 +751,12 @@ let rec check_expr_call_proofs
           | ELambda { params = ps; body = b; _ } ->
             if not (List.exists (fun (p : binding) -> p.name = name) ps)
             then visit b
+          | ELit { lit = LInterp segments; _ } ->
+            List.iter (function ILiteral _ -> () | IExpr e -> visit e) segments
           | ELit _ | EVar _ | EStartWorkers _ -> ()
           | ECacheGet _ | ECacheDelete _ | ECacheInvalidate _ -> ()
           | ECacheSet { value; _ } -> visit value
           | ESendEmail _ | EStartEmailWorker _ -> ()
-          | ERuntimeCall { segments; _ } ->
-            List.iter (function RLit _ | RRawVar _ -> () | RArg e -> visit e) segments
         in
         visit body;
         let non_call_errors =
@@ -1124,24 +1124,112 @@ let rec check_expr_call_proofs
       in
       (* PFC-2 (a): propagate CONSTRUCTOR FIELD proofs to pattern binders,
          positionally.  `case t of Node l cur r -> …` gives `cur` the `value`
-         field's `::: P` proof (subject renamed field_name -> binder).  Sound
-         because field proofs are now enforced at construction (PFC-2b / a0). *)
-      let proof_env', subject_env' = match arm.pattern with
-        | PCon { ctor; fields; _ } ->
-          (match List.assoc_opt ctor !ctor_field_proof_registry with
-           | Some fps when List.length fps = List.length fields ->
-             List.fold_left2 (fun (penv, senv) (fname, proof_opt) (_lbl, pat) ->
-               match proof_opt, pat with
-               | Some proof, PVar var ->
-                 ((var, [Proof_kernel.elaborated Proof_kernel.FieldProof
-                           (subst_proof [(fname, var)] proof)]) :: penv,
-                  (var, var) :: senv)
-               | _ -> (penv, senv)
-             ) (proof_env', subject_env') fps fields
-           | _ -> (proof_env', subject_env'))
-        | _ -> (proof_env', subject_env')
+          field's `::: P` proof (subject renamed field_name -> binder).  Sound
+          because field proofs are now enforced at construction (PFC-2b / a0). *)
+      let proof_mentions_field field proof =
+        let arg_mentions arg =
+          let is_ident_char = function
+            | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' -> true
+            | _ -> false
+          in
+          let length = String.length arg in
+          let rec loop index token_start =
+            if index = length then
+              match token_start with
+              | Some start -> String.sub arg start (index - start) = field
+              | None -> false
+            else if is_ident_char arg.[index] then
+              loop (index + 1) (match token_start with Some _ -> token_start | None -> Some index)
+            else
+              let matched = match token_start with
+                | Some start -> String.sub arg start (index - start) = field
+                | None -> false
+              in
+              matched || loop (index + 1) None
+          in
+          loop 0 None
+        in
+        let rec mentions = function
+          | PredApp { args; _ } -> List.exists arg_mentions args
+          | PredAnd { left; right; _ } -> mentions left || mentions right
+        in
+        mentions proof
       in
-      check_expr_call_proofs subject_env' proof_env' funcs arm.body
+      let subst_pattern_proof mapping proof =
+        let subst_arg arg =
+          match List.assoc_opt arg mapping with
+          | Some replacement -> replacement
+          | None ->
+            let is_ident_char = function
+              | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' -> true
+              | _ -> false
+            in
+            let buffer = Buffer.create (String.length arg) in
+            let length = String.length arg in
+            let rec loop index =
+              if index = length then Buffer.contents buffer
+              else if is_ident_char arg.[index] then begin
+                let finish = ref index in
+                while !finish < length && is_ident_char arg.[!finish] do incr finish done;
+                let token = String.sub arg index (!finish - index) in
+                let is_member = index > 0 && arg.[index - 1] = '.' in
+                Buffer.add_string buffer
+                  (if is_member then token
+                   else Option.value (List.assoc_opt token mapping) ~default:token);
+                loop !finish
+              end else begin
+                Buffer.add_char buffer arg.[index];
+                loop (index + 1)
+              end
+            in
+            loop 0
+        in
+        let rec subst = function
+          | PredApp ({ args; _ } as app) ->
+            PredApp { app with args = List.map subst_arg args }
+          | PredAnd ({ left; right; _ } as conjunction) ->
+            PredAnd { conjunction with left = subst left; right = subst right }
+        in
+        subst proof
+      in
+      let rec add_pattern_field_proofs (penv, senv) = function
+        | PCon { ctor; fields; _ } ->
+          let field_proofs = match List.assoc_opt ctor !ctor_field_proof_registry with
+            | Some fps when List.length fps = List.length fields -> fps
+            | _ -> List.map (fun _ -> ("", None)) fields
+          in
+          let field_names = List.map fst field_proofs in
+          let field_mapping = List.fold_left2 (fun mapping (fname, _) (_label, pat) ->
+            match pat with
+            | PVar var when fname <> "" -> (fname, var) :: mapping
+            | _ -> mapping) [] field_proofs fields in
+          List.fold_left2 (fun env (_fname, proof_opt) (_label, pat) ->
+            let env = match proof_opt, pat with
+              | Some proof, PVar var ->
+                let unresolved_field =
+                  List.exists (fun field ->
+                    not (List.mem_assoc field field_mapping) && proof_mentions_field field proof)
+                    field_names
+                in
+                if unresolved_field then env
+                else
+                  ((var, [Proof_kernel.elaborated Proof_kernel.FieldProof
+                            (subst_pattern_proof field_mapping proof)]) :: fst env,
+                   (var, var) :: snd env)
+              | _ -> env
+            in
+            add_pattern_field_proofs env pat
+          ) (penv, senv) field_proofs fields
+        | PVar _ | PWild | PNullary _ | PLit _ -> (penv, senv)
+      in
+      let proof_env', subject_env' =
+        add_pattern_field_proofs (proof_env', subject_env') arm.pattern
+      in
+      let guard_errors = match arm.guard with
+        | Some guard -> check_expr_call_proofs subject_env' proof_env' funcs guard
+        | None -> []
+      in
+      guard_errors @ check_expr_call_proofs subject_env' proof_env' funcs arm.body
     ) arms in
     scrut_errors @ arm_errors
   | EBinop { op = (BDiv | BMod) as op; left; right; loc; _ } ->
@@ -1208,13 +1296,19 @@ let rec check_expr_call_proofs
         (b.name, List.map Proof_kernel.assume_param (flatten_proof_conj proof)) :: acc
     ) proof_env params in
     check_expr_call_proofs subject_env proof_env' funcs body
+  | ELit { lit = LInterp segments; _ } ->
+    List.concat_map (function
+      | ILiteral _ -> []
+      | IExpr expr -> check_expr_call_proofs subject_env proof_env funcs expr)
+      segments
   (* Explicit no-obligation LEAVES.  EField is deliberately a leaf here (it does
      NOT descend into its [obj]): the original arm returned [] and that omission
      is load-bearing — qualified-name field accesses like `Module.fn` are not
      call sites and carry no proof obligation, so we must NOT start walking into
-     [obj].  EVar/ELit/EFail/EStartWorkers/EStartEmailWorker have no proof-bearing
-     children either. *)
-  | ELit _ | EVar _ | EField _ | EFail _ | EStartWorkers _ | EStartEmailWorker _ -> []
+     [obj]. Plain literals, EVar, EStartWorkers, and EStartEmailWorker have no
+     proof-bearing children. Interpolated literals are handled above; EFail
+     falls through because its message may contain an interpolation. *)
+  | ELit _ | EVar _ | EField _ | EStartWorkers _ | EStartEmailWorker _ -> []
   (* Purely-MECHANICAL structural descent: thread the SAME (subject_env, proof_env,
      funcs) context UNCHANGED into every immediate child and concatenate the
      resulting error lists left-to-right.  Migrated onto the shared
@@ -1695,13 +1789,20 @@ pass a `check` function or a `&&` combination of check functions"
        let (head, args) = collect_call_head_and_args [] e in
        walk head;
        List.iter walk args
-     | ELit _ | EVar _ | EConstructor _ | EFail _ | EStartWorkers _ | EServe _ | EField _ -> ()
+     | ELit { lit = LInterp segments; _ } ->
+       List.iter (function ILiteral _ -> () | IExpr e -> walk e) segments
+     | ELit _ | EVar _ | EStartWorkers _ | EField _ -> ()
+     | EConstructor { args; _ } -> List.iter walk args
+     | EFail { message; _ } -> walk message
+     | EServe { port; _ } -> walk port
      | EBinop { left; right; _ } -> walk left; walk right
      | EUnop { arg; _ } -> walk arg
      | EIf { cond; then_; else_; _ } -> walk cond; walk then_; walk else_
-     | ECase { scrut; arms; _ } ->
-       walk scrut;
-       List.iter (fun (arm : case_arm) -> walk arm.body) arms
+      | ECase { scrut; arms; _ } ->
+        walk scrut;
+        List.iter (fun (arm : case_arm) ->
+          Option.iter walk arm.guard;
+          walk arm.body) arms
      | ELet { value; body; _ } | ELetProof { value; body; _ } ->
        walk value; walk body
      | ERecord { fields; _ } | ETelemetry { fields; _ } ->
@@ -1721,9 +1822,7 @@ pass a `check` function or a `&&` combination of check functions"
      | ECacheInvalidate { prefix; _ } -> walk prefix
      | ESendEmail { to_; subject; body; _ } ->
        walk to_; walk subject; walk body
-     | EStartEmailWorker _ -> ()
-     | ERuntimeCall { segments; _ } ->
-       List.iter (function RLit _ | RRawVar _ -> () | RArg e -> walk e) segments);
+     | EStartEmailWorker _ -> ())
   in
   List.iter (function
     | DFunc fd -> walk fd.body
@@ -2252,10 +2351,15 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
        Ast.expr variant becomes a COMPILE error here rather than silently
        escaping this ForAll-consistency walk.  None of these are ForAll-producing
        / ForAll-return-tail forms, so their behaviour is unchanged (no descent). *)
-    | ELit _ | EConstructor _ | EFail _ | EStartWorkers _ | EServe _
+    | ELit { lit = LInterp segments; _ } ->
+      List.iter (function
+        | ILiteral _ -> ()
+        | IExpr expr -> walk forall_env None expr) segments
+    | EFail { message; _ } -> walk forall_env None message
+    | ELit _ | EConstructor _ | EStartWorkers _ | EServe _
     | EBinop _ | EUnop _ | ERecord _ | ETelemetry _ | EOk _ | EEnqueue _
     | EPublish _ | ELambda _ | ECacheGet _ | ECacheSet _ | ECacheDelete _
-    | ECacheInvalidate _ | ESendEmail _ | EStartEmailWorker _ | ERuntimeCall _ -> ()
+    | ECacheInvalidate _ | ESendEmail _ | EStartEmailWorker _ -> ()
   in
   (* A `ForAll (P1 && P2) xs` proof annotation is stored as
      `PredApp { pred="ForAll"; args=["(P1 && P2)"; "xs"] }` — the inner
@@ -2320,42 +2424,6 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
 
 (* ── 6. Exists binding proof tracking ────────────────────────────────────── *)
 
-let rec exists_witnesses (e : expr) : string list =
-  match e with
-  | EApp { fn = EVar { name = "make-witness"; _ };
-           arg = EApp { fn = EVar { name = witness; _ }; arg = body; _ }; _ } ->
-    witness :: exists_witnesses body
-  | EApp { fn; arg; _ } -> exists_witnesses fn @ exists_witnesses arg
-  | ELet { value; body; _ } | ELetProof { value; body; _ } -> exists_witnesses value @ exists_witnesses body
-  | EIf { cond; then_; else_; _ } -> exists_witnesses cond @ exists_witnesses then_ @ exists_witnesses else_
-  | ECase { scrut; arms; _ } -> exists_witnesses scrut @ List.concat_map (fun (arm : case_arm) -> exists_witnesses arm.body) arms
-  | EBinop { left; right; _ } -> exists_witnesses left @ exists_witnesses right
-  | EUnop { arg; _ } -> exists_witnesses arg
-  | ERecord { fields; _ } -> List.concat_map (fun (_, v) -> exists_witnesses v) fields
-  | EList { elems; _ } -> List.concat_map exists_witnesses elems
-  | EOk { value; _ } -> exists_witnesses value
-  | ETelemetry { fields; _ } -> List.concat_map (fun (_, v) -> exists_witnesses v) fields
-  | EEnqueue { payload; _ } -> exists_witnesses payload
-  | EPublish { key; payload; _ } ->
-    (match key with Some e -> exists_witnesses e | None -> [])
-    @ (match payload with Some e -> exists_witnesses e | None -> [])
-  | EStartWorkers _ -> []
-  | EWithDatabase { body; _ } | EWithCapabilities { body; _ } | EWithTransaction { body; _ } -> exists_witnesses body
-  | EServe { port; _ } -> exists_witnesses port
-  | ELambda { body; _ } -> exists_witnesses body
-  | ELit _ | EVar _ | EField _ | EConstructor _ | EFail _ -> []
-  | ECacheGet { key; _ } -> exists_witnesses key
-  | ECacheSet { key; value; ttl; _ } ->
-    exists_witnesses key @ exists_witnesses value
-    @ (match ttl with Some e -> exists_witnesses e | None -> [])
-  | ECacheDelete { key; _ } -> exists_witnesses key
-  | ECacheInvalidate { prefix; _ } -> exists_witnesses prefix
-  | ESendEmail { to_; subject; body; _ } ->
-    exists_witnesses to_ @ exists_witnesses subject @ exists_witnesses body
-  | EStartEmailWorker _ -> []
-  | ERuntimeCall { segments; _ } ->
-    List.concat_map (function RLit _ | RRawVar _ -> [] | RArg e -> exists_witnesses e) segments
-
 (* R51_E01 — existential-return proof enforcement.
    A function `... -> exists x: T => T ::: P x` is supposed to guarantee
    that the packed value satisfies `P`. Prior to this check, the compiler
@@ -2380,9 +2448,9 @@ let rec inner_return_proof_spec = function
    A `fn` whose declared return type is `exists w: T => …` normally has to
    introduce the pack itself (`exists w => …`).  But a value of that exact type
    already IS a pack: if the body's tail is a call to a function whose OWN
-   return spec is the same existential (same binder arity, and a proof that
-   entails the declared one after alpha-renaming binders and parameters to the
-   call site), forwarding it is a zero-cost pass-through — the packed value that
+   return spec is the same single-witness existential (same binder name/type,
+   and a proof that entails the declared one after substituting parameters at
+   the call site), forwarding it is a zero-cost pass-through — the packed value that
    reaches the caller is bit-for-bit the callee's, so nothing is minted here and
    no proof is forged.  Before this, the only way to satisfy such a signature was
    to re-derive the fact with a fresh `insert`/`select` in the SAME function, and
@@ -2409,6 +2477,25 @@ let rec exists_binder_names (rs : return_spec) : string list =
   match rs with
   | RetExists { binding; body; _ } -> binding.name :: exists_binder_names body
   | _ -> []
+
+let rec exists_binder_bindings (rs : return_spec) : binding list =
+  match rs with
+  | RetExists { binding; body; _ } -> binding :: exists_binder_bindings body
+  | _ -> []
+
+let rec resolve_forward_alias aliases seen expr =
+  match expr with
+  | EVar { name; _ } when not (List.mem name seen) ->
+    (match List.assoc_opt name aliases with
+     | Some value -> resolve_forward_alias aliases (name :: seen) value
+     | None -> expr)
+  | _ -> expr
+
+let rec safe_forward_binder_type = function
+  | TName _ -> true
+  | TApp { head; arg; _ } -> safe_forward_binder_type head && safe_forward_binder_type arg
+  | TTuple { elems; _ } -> List.for_all safe_forward_binder_type elems
+  | TVar _ | TFun _ -> false
 
 (* Rename identifiers inside a proof argument.  Parenthesised args (`(Id == id)`)
    reach us as opaque strings from the parser, so the substitution is token-wise:
@@ -2455,6 +2542,7 @@ let call_spine (e : expr) : (string * expr list) option =
 
 (* Does forwarding [callee], called with [args], satisfy [declared]? *)
 let exists_forward_entails ~(callee : func_info) ~(args : expr list)
+    ~(aliases : (string * expr) list)
     ~(declared : return_spec) : bool =
   (* `f()` parses as one empty-list argument — the zero-arg call marker. *)
   let args = match args, callee.fi_params with
@@ -2464,18 +2552,26 @@ let exists_forward_entails ~(callee : func_info) ~(args : expr list)
   | RetExists _, RetExists _ ->
     let declared_binders = exists_binder_names declared in
     let callee_binders = exists_binder_names callee.fi_return in
-    List.length declared_binders = List.length callee_binders
+    let declared_binder_types =
+      exists_binder_bindings declared in
+    let callee_binder_types = exists_binder_bindings callee.fi_return in
+    declared_binders = callee_binders
+    && List.length declared_binders = 1
+    && List.for_all (fun (b : binding) -> safe_forward_binder_type b.type_expr)
+         (declared_binder_types @ callee_binder_types)
+    && List.map (fun (b : binding) -> type_key b.type_expr) declared_binder_types
+       = List.map (fun (b : binding) -> type_key b.type_expr) callee_binder_types
     && List.length args = List.length callee.fi_params
     &&
-    (* Alpha-rename the callee's view of the world into the caller's: witness
-       binders positionally, and each parameter to the identifier passed at the
+    (* Substitute the callee's view of the world into the caller's: the exact
+       witness binder, and each parameter to the identifier passed at the
        call site.  A non-identifier argument gets a name that cannot occur in a
        proof, so a proof mentioning that parameter simply fails to match. *)
     let subst =
       List.map2 (fun c d -> (c, d)) callee_binders declared_binders
-      @ List.map2 (fun (b : binding) (a : expr) ->
-          match a with
-          | EVar { name; _ } -> (b.name, name)
+       @ List.map2 (fun (b : binding) (a : expr) ->
+           match resolve_forward_alias aliases [] a with
+           | EVar { name; _ } -> (b.name, name)
           | _ -> (b.name, "#tesl-non-identifier-argument#"))
           callee.fi_params args
     in
@@ -2491,18 +2587,129 @@ let exists_forward_entails ~(callee : func_info) ~(args : expr list)
 (* Tail positions of a body — the expressions that can BE the result — together
    with the `let` bindings in scope there.  Block wrappers are transparent;
    `if`/`case` fork into one tail per branch. *)
-let rec exists_tail_exprs (env : (string * expr) list) (e : expr)
+let rec exists_tail_exprs ?(resolving = []) (env : (string * expr) list) (e : expr)
     : (expr * (string * expr) list) list =
   match e with
-  | ELet { name; value; body; _ } -> exists_tail_exprs ((name, value) :: env) body
+  | EVar { name; _ } when not (List.mem name resolving) ->
+    (match List.assoc_opt name env with
+     | Some value -> exists_tail_exprs ~resolving:(name :: resolving) env value
+     | None -> [(e, env)])
+  | ELet { name; value; body; _ } ->
+    exists_tail_exprs ~resolving ((name, value) :: env) body
   | ELetProof { value_name; value; body; _ } ->
-    exists_tail_exprs ((value_name, value) :: env) body
+    exists_tail_exprs ~resolving ((value_name, value) :: env) body
   | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
-  | EWithTransaction { body; _ } -> exists_tail_exprs env body
-  | EIf { then_; else_; _ } -> exists_tail_exprs env then_ @ exists_tail_exprs env else_
+  | EWithTransaction { body; _ } -> exists_tail_exprs ~resolving env body
+  | EIf { then_; else_; _ } ->
+    exists_tail_exprs ~resolving env then_ @ exists_tail_exprs ~resolving env else_
   | ECase { arms; _ } ->
-    List.concat_map (fun (a : case_arm) -> exists_tail_exprs env a.body) arms
+    List.concat_map (fun (a : case_arm) -> exists_tail_exprs ~resolving env a.body) arms
   | e -> [(e, env)]
+
+let exists_pack_body = function
+  | EApp {
+      fn = EVar { name = "make-witness"; _ };
+      arg = EApp { fn = EVar _; arg = body; _ };
+      _ } -> Some body
+  | _ -> None
+
+let is_exists_pack expr = exists_pack_body expr <> None
+
+let expr_uses_name name expr =
+  let used = ref false in
+  Ast_visitor.iter (function
+    | EVar { name = candidate; _ } when candidate = name -> used := true
+    | _ -> ()) expr;
+  !used
+
+let is_existential_producer funcs expr =
+  is_exists_pack expr ||
+  match call_spine expr with
+  | Some (name, _) ->
+    (match List.assoc_opt name funcs with
+     | Some { fi_return = RetExists _; _ } -> true
+     | _ -> false)
+  | None -> false
+
+let rec invalid_packed_value_computation funcs expr =
+  let invalid_option = function
+    | Some expr -> invalid_packed_value_computation funcs expr
+    | None -> false
+  in
+  match expr with
+  | EFail _ -> true
+  | _ when is_exists_pack expr -> true
+  | EApp { fn; arg; _ } ->
+    is_existential_producer funcs expr
+    || invalid_packed_value_computation funcs fn
+    || invalid_packed_value_computation funcs arg
+  | ELet { name; value; body; _ } ->
+    let discarded_package =
+      not (expr_uses_name name body) && is_existential_producer funcs value in
+    (not discarded_package && invalid_packed_value_computation funcs value)
+    || invalid_packed_value_computation funcs body
+  | ELetProof { value; body; _ } ->
+    invalid_packed_value_computation funcs value
+    || invalid_packed_value_computation funcs body
+  | ELit { lit = LInterp segments; _ } ->
+    List.exists (function
+      | ILiteral _ -> false
+      | IExpr expr -> invalid_packed_value_computation funcs expr) segments
+  | EConstructor { args; _ } | EList { elems = args; _ } ->
+    List.exists (invalid_packed_value_computation funcs) args
+  | EField { obj; _ } -> invalid_packed_value_computation funcs obj
+  | EBinop { left; right; _ } ->
+    invalid_packed_value_computation funcs left
+    || invalid_packed_value_computation funcs right
+  | EUnop { arg; _ } -> invalid_packed_value_computation funcs arg
+  | EIf { cond; then_; else_; _ } ->
+    invalid_packed_value_computation funcs cond
+    || invalid_packed_value_computation funcs then_
+    || invalid_packed_value_computation funcs else_
+  | ECase { scrut; arms; _ } ->
+    invalid_packed_value_computation funcs scrut
+    || List.exists (fun (arm : case_arm) ->
+         invalid_option arm.guard
+         || invalid_packed_value_computation funcs arm.body) arms
+  | ERecord { fields; _ } | ETelemetry { fields; _ } ->
+    List.exists (fun (_, value) -> invalid_packed_value_computation funcs value) fields
+  | EOk { value; _ } -> invalid_packed_value_computation funcs value
+  | EEnqueue { payload; _ } -> invalid_packed_value_computation funcs payload
+  | EPublish { key; payload; _ } ->
+    invalid_option key || invalid_option payload
+  | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
+  | EWithTransaction { body; _ } -> invalid_packed_value_computation funcs body
+  | EServe { port; _ } -> invalid_packed_value_computation funcs port
+  | ELambda { body; _ } -> invalid_packed_value_computation funcs body
+  | ECacheGet { key; _ } | ECacheDelete { key; _ } ->
+    invalid_packed_value_computation funcs key
+  | ECacheSet { key; value; ttl; _ } ->
+    invalid_packed_value_computation funcs key
+    || invalid_packed_value_computation funcs value
+    || invalid_option ttl
+  | ECacheInvalidate { prefix; _ } -> invalid_packed_value_computation funcs prefix
+  | ESendEmail { to_; subject; body; _ } ->
+    invalid_packed_value_computation funcs to_
+    || invalid_packed_value_computation funcs subject
+    || invalid_packed_value_computation funcs body
+  | ELit _ | EVar _ | EStartWorkers _ | EStartEmailWorker _ -> false
+
+let rec exact_exists_pack_shape funcs spec env expr =
+  match expr with
+  | EFail _ -> true
+  | _ ->
+    match spec, exists_pack_body expr with
+    | RetExists { body = inner_spec; _ }, Some packed_body ->
+      let tails = exists_tail_exprs env packed_body in
+      not (invalid_packed_value_computation funcs packed_body)
+      && tails <> [] && List.for_all (fun (tail, tail_env) ->
+        match inner_spec with
+        | RetExists _ -> exact_exists_pack_shape funcs inner_spec tail_env tail
+        | _ -> (match tail with EFail _ -> false | _ -> not (is_exists_pack tail))
+      ) tails
+    | RetExists _, None -> false
+    | _, Some _ -> false
+    | _, None -> true
 
 let check_exists_bindings ?(extra_funcs = []) (decls : top_decl list) : validation_error list =
   let funcs = build_func_info decls @ extra_funcs in
@@ -2511,70 +2718,85 @@ let check_exists_bindings ?(extra_funcs = []) (decls : top_decl list) : validati
     | DFunc fd ->
       (match fd.return_spec with
        | RetExists { binding; _ } ->
-         let witnesses = exists_witnesses fd.body |> List.sort_uniq String.compare in
-         if witnesses = [] then begin
-           (* No pack anywhere in the body: the only other legitimate producer is
-              forwarding an already-packed value of the SAME existential type. *)
-           let tails = exists_tail_exprs [] fd.body in
-           (* Resolve a let-bound tail (`let r = core name  r`) to its value. *)
-           let rec resolve env depth e =
-             if depth > 8 then e
-             else match e with
-               | EVar { name; _ } ->
-                 (match List.assoc_opt name env with
-                  | Some v -> resolve env (depth + 1) v
-                  | None -> e)
-               | e -> e
-           in
-           let generic_hint =
-             Printf.sprintf
-               "use `exists %s => ...` in the function body, or return the result of a \
-                function whose return type is the same `exists` type (forwarding an \
-                already-packed value is allowed when the proofs match)"
-               binding.name in
-           let tail_error (tail, env) =
-             match call_spine (resolve env 0 tail) with
-             | Some (callee_name, args) ->
-               (match List.assoc_opt callee_name funcs with
-                | Some callee when exists_forward_entails ~callee ~args ~declared:fd.return_spec ->
-                  None
-                | Some _ ->
-                  Some (make_error fd.loc
-                          ~hint:generic_hint
-                          (Printf.sprintf
-                             "function '%s' returns the result of '%s', but '%s' does not return \
-                              the same `exists` type carrying the declared proof%s — the packed \
-                              value cannot be forwarded"
-                             fd.name callee_name callee_name
-                             (match inner_return_proofs fd.return_spec with
-                              | [] -> ""
-                              | ps -> " `" ^ String.concat " && " (List.map pp_proof ps) ^ "`")))
+         let binders = exists_binder_bindings fd.return_spec in
+         if List.length binders > 1 then
+           errors := make_error fd.loc
+             ~hint:"return one existential witness, or wrap multiple hidden values in a declared record type"
+             "nested `exists` return types are not supported; multi-witness runtime validation is not implemented"
+             :: !errors;
+         List.iter (fun (b : binding) ->
+           match b.proof_ann with
+           | None -> ()
+           | Some _ ->
+             errors := make_error b.loc
+               ~hint:"move the proof to the existential body return, e.g. `exists w: T => value: U ::: Proof w`"
+               "proof annotations on an `exists` witness binder are not supported; the runtime contract cannot carry this annotation"
+               :: !errors
+          ) binders;
+         let tails = exists_tail_exprs [] fd.body in
+         let generic_hint =
+           Printf.sprintf
+             "use `exists %s => ...` directly on every returning path, or return the result of a \
+              function whose return type is the same `exists` type (forwarding an \
+              already-packed value is allowed when the proofs match)"
+             binding.name in
+         let tail_error (tail, env) =
+           if exact_exists_pack_shape funcs fd.return_spec env tail then None
+           else if is_exists_pack tail then
+             Some (make_error fd.loc
+                     ~hint:generic_hint
+                     (Printf.sprintf
+                        "function '%s' must produce exactly %d nested `exists` pack%s with a value body on every returning path"
+                        fd.name (List.length binders)
+                        (if List.length binders = 1 then "" else "s")))
+           else match tail with
+             | EFail _ -> None
+             | _ ->
+               (match call_spine tail with
+                | Some (callee_name, args) ->
+                  (match List.assoc_opt callee_name funcs with
+                   | Some callee when exists_forward_entails ~callee ~args
+                       ~aliases:env ~declared:fd.return_spec ->
+                     None
+                   | Some _ ->
+                     Some (make_error fd.loc
+                             ~hint:generic_hint
+                             (Printf.sprintf
+                                "function '%s' returns the result of '%s', but '%s' does not return \
+                                 the same `exists` type carrying the declared proof%s — the packed \
+                                 value cannot be forwarded"
+                                fd.name callee_name callee_name
+                                (match inner_return_proofs fd.return_spec with
+                                 | [] -> ""
+                                 | ps -> " `" ^ String.concat " && " (List.map pp_proof ps) ^ "`")))
+                   | None ->
+                     Some (make_error fd.loc
+                             ~hint:generic_hint
+                             (Printf.sprintf
+                                "function '%s' declares an `exists` return type, but a return path \
+                                 does not produce a top-level `exists` pack"
+                                fd.name)))
                 | None ->
                   Some (make_error fd.loc
                           ~hint:generic_hint
                           (Printf.sprintf
-                             "function '%s' declares exists return type but body has no exists expression"
+                             "function '%s' declares an `exists` return type, but a return path \
+                              does not produce a top-level `exists` pack"
                              fd.name)))
-             | None ->
-               Some (make_error fd.loc
-                       ~hint:generic_hint
-                       (Printf.sprintf
-                          "function '%s' declares exists return type but body has no exists expression"
-                          fd.name))
-           in
-           match tails with
-           | [] ->
-             errors := make_error fd.loc ~hint:generic_hint
-                 (Printf.sprintf
-                    "function '%s' declares exists return type but body has no exists expression"
-                    fd.name)
-               :: !errors
-           | tails ->
-             (* Fail-closed: EVERY tail must be a valid forwarding site. *)
-             (match List.filter_map tail_error tails with
-              | [] -> ()
-              | e :: _ -> errors := e :: !errors)
-         end
+         in
+         (* Fail-closed: a nested witness in a condition, interpolation, constructor,
+            or discarded let value cannot satisfy an existential return contract. *)
+         (match tails with
+          | [] ->
+            errors := make_error fd.loc ~hint:generic_hint
+                (Printf.sprintf
+                   "function '%s' declares an `exists` return type, but has no returning path"
+                   fd.name)
+              :: !errors
+          | tails ->
+            (match List.filter_map tail_error tails with
+             | [] -> ()
+             | e :: _ -> errors := e :: !errors))
          (* Note: we do NOT enforce that the witness NAME in the body matches the declared name.
             The implementation may use a different internal name (e.g. `i`) while the public
             return spec uses a different name (e.g. `itemId`). The names are matched positionally. *)
@@ -2625,7 +2847,7 @@ let looks_proof_carrying (funcs : (string * func_info) list) (e : expr) : bool =
          "select"; "selectOne"; "selectCount"; "selectSum";
          "selectMax"; "selectMin"; "insert"; "insertMany";
          "upsert"; "update"; "updateAndReturnOne";
-         "check"; "make-witness"; "attachFact"; "#record-update#";
+          "check"; "attachFact"; "#record-update#";
        ]
        || (match List.assoc_opt name funcs with
            | Some info ->
@@ -2657,8 +2879,12 @@ let packed_body_exprs_with_locals (e : expr)
     | PCon { fields; _ } -> List.fold_left (fun acc (_, p) -> pat_binders acc p) acc fields
     | _ -> acc
   in
-  let rec go let_env case_env (e : expr) =
+  let rec go resolving let_env case_env (e : expr) =
     match e with
+    | EVar { name; _ } when not (List.mem name resolving) ->
+      (match List.assoc_opt name let_env with
+       | Some value -> go (name :: resolving) let_env case_env value
+       | None -> [])
     | EApp {
         fn = EVar { name = "make-witness"; _ };
         arg = EApp { arg = body; _ };
@@ -2681,7 +2907,8 @@ let packed_body_exprs_with_locals (e : expr)
       in
       let (tail, le') = unwrap let_env body in
       [(tail, le', case_env)]
-    | EIf { then_; else_; _ } -> go let_env case_env then_ @ go let_env case_env else_
+    | EIf { then_; else_; _ } ->
+      go resolving let_env case_env then_ @ go resolving let_env case_env else_
     | ECase { scrut; arms; _ } ->
       (* Resolve a let-bound scrutinee to its value so provenance (e.g. `let x =
          selectOne …  ; case x of …`) is not lost when the binder is checked. *)
@@ -2691,15 +2918,16 @@ let packed_body_exprs_with_locals (e : expr)
       List.concat_map (fun (a : case_arm) ->
         let case_env' =
           List.map (fun n -> (n, scrut')) (pat_binders [] a.pattern) @ case_env in
-        go let_env case_env' a.body) arms
-    | ELet { name; value; body; _ } -> go ((name, value) :: let_env) case_env body
+         go resolving let_env case_env' a.body) arms
+    | ELet { name; value; body; _ } ->
+      go resolving ((name, value) :: let_env) case_env body
     | ELetProof { value_name; value; body; _ } ->
-      go ((value_name, value) :: let_env) case_env body
+      go resolving ((value_name, value) :: let_env) case_env body
     | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
-    | EWithTransaction { body; _ } -> go let_env case_env body
+    | EWithTransaction { body; _ } -> go resolving let_env case_env body
     | _ -> []
   in
-  go [] [] e
+  go [] [] [] e
 
 let check_existential_proof_enforcement ?(extra_funcs = []) (decls : top_decl list) : validation_error list =
   let funcs = build_func_info decls @ extra_funcs in
@@ -3279,7 +3507,11 @@ if every guard fails at runtime, the case has no match"
       List.rev !errs
     in
     scrut_errors @ case_errors @ arity_errors @ literal_errors @ recursive_errors @ redundancy_errors @ arm_errors
-  | ELit _ | EVar _ | EConstructor _ | EFail _ -> []
+  | ELit { lit = LInterp segments; _ } ->
+    List.concat_map (function ILiteral _ -> [] | IExpr expr -> recurse expr) segments
+  | EConstructor { args; _ } -> List.concat_map recurse args
+  | EFail { message; _ } -> recurse message
+  | ELit _ | EVar _ -> []
   | EField { obj; _ } -> recurse obj
   | EApp { fn; arg; _ } -> recurse fn @ recurse arg
   | EBinop { left; right; _ } -> recurse left @ recurse right
@@ -3324,6 +3556,3 @@ if every guard fails at runtime, the case has no match"
   | ESendEmail { to_; subject; body; _ } ->
     recurse to_ @ recurse subject @ recurse body
   | EStartEmailWorker _ -> []
-  | ERuntimeCall { segments; _ } ->
-    List.concat_map (function RLit _ | RRawVar _ -> [] | RArg e -> recurse e) segments
-

@@ -620,7 +620,7 @@ let collect_decl_names acc (d : Ast.top_decl) =
         collect_type_expr_names a2 f.type_expr
       ) a v.fields
     ) acc variants
-  | DType (TypeNewtype { base_type; _ }) | DType (TypeAlias { base_type; _ }) ->
+  | DType (TypeNewtype { base_type; _ })  ->
     collect_type_expr_names acc base_type
   | DRecord rf ->
     List.fold_left (fun a (f : Ast.field_def) ->
@@ -1177,7 +1177,7 @@ let rec collect_start_email_workers (acc : string list) (e : Ast.expr) : string 
   | Ast.ECacheSet _ | Ast.ECacheDelete _ | Ast.ECacheInvalidate _
   | Ast.ELambda _ | Ast.ERecord _ | Ast.EList _ | Ast.EOk _ | Ast.EFail _
   | Ast.EConstructor _ | Ast.EField _ | Ast.EVar _ | Ast.ELit _
-  | Ast.ERuntimeCall _ -> acc
+  -> acc
 
 (** The names a module's own `main` activates under one `App` field.
 
@@ -1514,7 +1514,6 @@ let lint_unexported_signature_names filename (source : string) (out : lint_diag 
       | Ast.DRecord r -> Some r.name
       | Ast.DType (Ast.TypeAdt { name; _ }) -> Some name
       | Ast.DType (Ast.TypeNewtype { name; _ }) -> Some name
-      | Ast.DType (Ast.TypeAlias { name; _ }) -> Some name
       | Ast.DFact f -> Some f.name
       | Ast.DCapability cap -> Some cap.name
       | _ -> None

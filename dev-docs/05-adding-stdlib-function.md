@@ -130,13 +130,6 @@ generated snapshots (exactly like the byte-exact `example/learn/*.rkt`):
 - **Type-display must stay byte-identical.** Choose the `.tesl` type-variable
   names so `decl_scheme`'s alphabetical rigid-id assignment (`a`=-1, `b`=-2,
   `c`=-3) reproduces the deleted `stdlib_env` rows exactly.
-- **Behavioral parity.** Keep a `<mod>` parity test (e.g.
-  `tests/lifted-list-tests.{tesl,rkt}`) that exercises every lifted function;
-  run it via `raco test` against the lifted runtime. Run `test_diag_snapshots`
-  after each module — diagnostics for lifted functions must be byte-identical.
-- **Leave proof machinery alone.** Never lift `check`/`establish`-backed
-  functions or proof-consuming ones (`Int.divide`, `Dict.get`, `List.take`); they
-  must remain Racket leaves.
 
 ## Constructors, types, and proof helpers
 If the stdlib change introduces:

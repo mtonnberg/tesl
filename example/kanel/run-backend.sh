@@ -2,8 +2,8 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # Kanel — Backend runner
 #
-# Builds the Elm frontend, starts PostgreSQL, compiles KanelBackend.tesl →
-# Racket, and runs the server.  The Racket server serves both the API and the
+# Builds the Elm frontend, starts PostgreSQL, compiles KanelBackend.tesl to Go,
+# and runs the server. The Go server serves both the API and the
 # Elm SPA on the same port — no nginx needed.
 #
 # Usage (from repository root OR example/kanel/):
@@ -21,16 +21,12 @@ FRONTEND_DIR="$SCRIPT_DIR/frontend"
 
 # ─── Re-enter via nix-shell if needed ────────────────────────────────────────
 if [ -z "${IN_NIX_SHELL:-}" ]; then
-    echo "▶  Entering nix-shell (Racket + PostgreSQL + Elm)..."
+    echo "▶  Entering nix-shell (Go + PostgreSQL + Elm)..."
     exec nix-shell "$REPO_ROOT/shell.nix" \
         --run "IN_NIX_SHELL=1 bash \"$SCRIPT_DIR/run-backend.sh\""
 fi
 
 cd "$REPO_ROOT"
-
-# ─── Bootstrap tesl package (raco pkg link) ──────────────────────────────────
-echo "▶  Bootstrapping tesl Racket package..."
-bash scripts/bootstrap-tesl-lang.sh >/dev/null 2>&1 || true
 
 # ─── Build Elm frontend ───────────────────────────────────────────────────────
 echo "▶  Building Elm frontend..."

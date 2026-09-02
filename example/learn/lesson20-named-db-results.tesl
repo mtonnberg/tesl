@@ -74,7 +74,7 @@ import Tesl.Maybe exposing [Maybe(..)]
 #
 # At runtime, the fact is stored as:
 #   '(FromDb (Id == pk-sym) entity-sym)
-# where pk-sym and entity-sym are distinct Racket symbols in the named-value's
+# where pk-sym and entity-sym are distinct runtime names in the named-value's
 # bindings map. pk-sym maps to the actual primary-key string; entity-sym is the
 # identity of the entity.
 #

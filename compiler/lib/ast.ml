@@ -57,7 +57,6 @@ type field_def = {
   name      : string;
   type_expr : type_expr;
   proof_ann : proof_expr option;
-  checker   : string option;   (** via checker name (for codec fields) *)
   db_type   : string option;   (** @db(type) override *)
   loc       : loc;
 }
@@ -120,8 +119,14 @@ and expr =
   | ERecord of { fields : (string * expr) list; type_hint : string option; loc : loc }
                (** record literal { k: v, ... } — type_hint from let x: Type = { } *)
   | EList   of { elems : expr list; loc : loc }
-  | EOk     of { value : expr; proof : proof_expr; loc : loc }
-               (** ok expr ::: Proof *)
+  | EOk     of { value : expr; proof : proof_expr; keyword : bool; loc : loc }
+               (** [ok expr ::: Proof] ([keyword = true]) and the bare attachment
+                   [expr ::: proof] ([keyword = false]).  ONE node for both, because they
+                   mean the same thing to the checker — a value carrying a proof — and the
+                   spelling is what tells a CONSUMER whether the result is a check's answer
+                   (a [Check]) or an ordinary value with an erased proof.  The Go backend
+                   needs that distinction: [let outcome = if … then ok n ::: P else fail …]
+                   is a check result, while [let reat = v ::: proof] is just [v]. *)
   | EFail   of { status : int; message : expr; loc : loc }
                (** fail 400 "..." or fail 400 "... ${expr} ..." *)
   | ETelemetry of { name : string; fields : (string * expr) list; loc : loc }
@@ -142,32 +147,6 @@ and expr =
                (** Constructor applied to zero or more args *)
   | ELambda of { params : binding list; body : expr; loc : loc }
                (** Anonymous function: fn(x: T, y: T) -> body *)
-  | ERuntimeCall of { segments : rcall_seg list; loc : loc }
-               (** Desugar-only lowering target (reduce_language_size, Wave 2).
-                   A pre-rendered Racket runtime call: an alternation of verbatim
-                   token strings ([RLit]), argument sub-expressions ([RArg],
-                   emitted through the context-aware {!Emit_racket.emit_expr_simple}
-                   path) and raw bare-variable operands ([RRawVar], emitted as
-                   [*name]).  Produced ONLY by {!Desugar} from fixed-shape effect
-                   forms (EEnqueue / EStartWorkers / EServe / ETelemetry) whose
-                   templates are fully determined at desugar time; the emitter
-                   walks [segments] verbatim.  This is never produced by the
-                   parser, so all
-                   surface-form enforcement/diagnostics (which run BEFORE desugar)
-                   still see the original variant. *)
-
-and rcall_seg =
-  | RLit of string   (** verbatim Racket tokens emitted as-is *)
-  | RArg of expr     (** argument sub-expression, emitted via emit_expr_simple *)
-  | RRawVar of string
-      (** a bare-variable operand emitted as the raw value [*name].  The
-          context-dependent raw-param unwrapping the emitter performs for a bare
-          [EVar] operand cannot be reproduced by routing the operand through
-          [RArg] (which would render a plain [name] via emit_expr_simple), so the
-          desugarer — which has already determined the operand is a raw bare-var
-          in function context — emits this segment, which the [ERuntimeCall] arm
-          renders verbatim as ["*" ^ name].  Carries no child [expr]. *)
-
 and binop =
   | BAdd | BSub | BMul | BDiv | BMod
   | BConcat (* ++ — string concatenation *)
@@ -290,8 +269,6 @@ type type_form =
                        precisely because everything else about it is identical:
                        [TypeNewtype] is matched at ~55 sites, and every
                        [{ name; base_type; _ }] pattern keeps working. *)
-  | TypeAlias   of { name : string; base_type : type_expr; loc : loc }
-                   (** transparent alias — currently same as newtype at surface *)
   | TypeAdt     of { name : string; params : string list; variants : adt_variant list; loc : loc }
                    (** type Status = Open | Closed | Pending reason:String *)
 
@@ -375,7 +352,10 @@ and codec_decode_alt = codec_decode_entry list
 
 and codec_decode_entry =
   | DecodeField  of { field_name : string; json_key : string; codec : string; via : string list; loc : loc }
-  | DecodeDefault of { field_name : string; default_expr : string; loc : loc }
+  | DecodeDefault of { field_name : string; default_lit : lit; loc : loc }
+      (** `field <- default <literal>`.  Carries the LITERAL, not a rendered string: it
+          used to hold pre-rendered Racket source (`#t`, Racket string escaping, Racket
+          float syntax), which no other backend could consume without parsing Racket. *)
   | DecodeCrossCheck of { checker : string; loc : loc }
 
 type codec_form = {
@@ -813,7 +793,6 @@ let top_decl_loc (decl : top_decl) : loc =
   match decl with
   | DFunc fd -> fd.loc
   | DType (TypeNewtype { loc; _ })
-  | DType (TypeAlias { loc; _ })
   | DType (TypeAdt { loc; _ }) -> loc
   | DRecord r -> r.loc
   | DEntity e -> e.loc

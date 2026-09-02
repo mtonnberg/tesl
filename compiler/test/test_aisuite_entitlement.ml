@@ -28,7 +28,7 @@
 
     Hardening (mirrors the ProofSuite harness): [should_fail] requires a non-zero
     exit AND a case-insensitive regex match AND that the output contains NO
-    runtime-leak markers — a static rejection must NOT leak a .rkt / raco trace. *)
+    runtime-leak markers — a static rejection must NOT leak a Go stack trace. *)
 
 open Alcotest
 
@@ -93,8 +93,7 @@ let with_temp_file content f =
    statically. *)
 let runtime_leak_re =
   Str.regexp_case_fold
-    "raise-user-error\\|raise-argument-error\\|application: not a procedure\\|\
-     racket/[A-Za-z_./-]*\\.rkt:[0-9]\\|^ *context\\.\\.\\.:\\|contract violation"
+    "panic:\\|runtime error:\\|goroutine \\|_test\\.go:\\|\\.go:[0-9]"
 
 let assert_no_runtime_leak ctx out =
   try

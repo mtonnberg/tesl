@@ -1,6 +1,6 @@
 # 09 — Adding Tests
 
-> Audience: contributors adding or changing tests across the Tesl (`.tesl`), Racket, and OCaml test layers.
+> Audience: contributors adding or changing tests across the Tesl (`.tesl`), Go runtime, and OCaml compiler test layers.
 
 Tesl has three test layers.  The most important rule is: **write tests in
 `.tesl` files first.**  Drop to Racket or OCaml only when the Tesl surface
@@ -14,19 +14,19 @@ cannot express what you need. If you need to write tesl that *should* not compil
 |---|---|---|---|
 | **Tesl test blocks** (primary) | `example/learn/*.tesl`, `tests/*.tesl`, `example/*.tesl` | All user-facing behaviour: proofs, types, ADTs, SQL, queues, SSE, codecs, pattern matching, stdlib | `tesl test <file>` |
 | **OCaml compiler tests** | `compiler/test/*.ml` | To write **should not compile** tests. Compiler internals: parser, lexer, emitter, type-system, proof-checker, IR, diagnostics | `cd compiler && dune runtest` |
-| **Racket runtime tests** | `tests/*.rkt` | Runtime substrate: `named-value` structs, `define-checker` machinery, `dispatch-with-server` HTTP boundary, PostgreSQL integration | `racket tests/all.rkt` |
+| **Go runtime tests** | `runtime/go/**/*_test.go` | Runtime substrate: HTTP, databases, queues, DAP, MCP, security, telemetry, and integration behavior | `cd runtime/go && go test ./...` |
 
 ### Why Tesl-first?
 
 The `.tesl` surface is what users write.  A test in a `.tesl` file exercises
 the full pipeline: parser → checker → proof-checker → linter → emitter →
-Racket runtime.  If a `.tesl` test passes, you know the feature works
+Go runtime.  If a `.tesl` test passes, you know the feature works
 end-to-end.  If it only passes in Racket or OCaml, you know nothing about
 whether a Tesl user can actually use it.
 
-Racket tests exist for cases where you need to test the runtime substrate
-directly (e.g. `named-value` struct internals, HTTP dispatch, PostgreSQL
-connection pooling).  OCaml tests exist for compiler-internal invariants
+Go tests exist for cases where you need to test the runtime substrate
+directly (e.g. value internals, HTTP dispatch, PostgreSQL connection pooling).
+OCaml tests exist for compiler-internal invariants
 (parser edge cases, emitter output shape, diagnostic formatting).
 
 ---
@@ -200,8 +200,9 @@ cd compiler && dune runtest -f
 | `tesl validate <file>` | Compile + lint + format-check (no execution) |
 | `tesl test <file>` | Compile + run test blocks |
 | `bash compiler/ci.sh` | Build OCaml compiler + run all OCaml tests + verify all `.tesl` files compile |
-| `bash compile-examples.sh` | Full pipeline: validate + Tesl tests + mutation testing + Racket aggregate suite |
-| `racket tests/all.rkt` | Racket aggregate test suite |
+| `bash tests/go-cli-smoke.sh` | Go test/example manifests, templates, Docker staging, headless inspection, and live MCP attach |
+| `bash scripts/run-go-test-manifest.sh --run-all` | Run every tracked `tests/*.tesl` source through Go |
+| `bash scripts/run-go-example-manifest.sh --run-all` | Run every tracked example through Go |
 
 ---
 

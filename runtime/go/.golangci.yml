@@ -1,0 +1,10 @@
+# The hand-written Tesl runtime is held to the same lint contract as emitted code
+# (compiler/lib/emit_go.ml writes the same configuration into every emitted
+# project): a finding here is a runtime bug, never a suppression.
+version: "2"
+linters:
+  enable:
+    - exhaustive
+  settings:
+    exhaustive:
+      default-signifies-exhaustive: false

@@ -1106,7 +1106,7 @@ let is_statement_starter_ident = function
 (* ── Single-line SQL clause placement (issue #77) ───────────────────────────
    `select` is not a keyword: a query parses as an ordinary application spine
    whose atoms (`from`, `where`, `order`, `asc`, `limit`, …) are reinterpreted
-   structurally downstream by {!Emit_racket.extract_select_query}.  Application
+   structurally downstream by {!Sql_query.extract_select_query}.  Application
    binds tighter than every binary operator, so the moment the `where`
    predicate contains an operator the spine SPLITS and the trailing clause
    keywords are swallowed by the LAST operand's own application chain instead
@@ -1374,16 +1374,35 @@ and parse_case s =
 and parse_case_arms s =
   let arms = ref [] in
   let continue_ = ref true in
+  let failure = ref None in
+  let terminator tok =
+    match tok with
+    (* A closing delimiter ends the scrutinee's enclosing construct (`(case …)`,
+       `[case …; …]`): stop cleanly so the caller consumes it. Treating these as
+       arm errors would both reject valid corpus syntax and hide real failures
+       behind confusing secondary diagnostics. *)
+    | RPAREN | RBRACKET | RBRACE | COMMA -> true
+    | _ -> false
+  in
   while !continue_ && peek s <> DEDENT && peek s <> EOF do
     skip_newlines s;
     if peek s = DEDENT || peek s = EOF then continue_ := false
+    else if terminator (peek s) then continue_ := false
     else begin
       match parse_case_arm_group s with
       | Ok new_arms -> arms := List.rev_append new_arms !arms; skip_newlines s
-      | Err _ -> continue_ := false
+      (* A mid-arm failure (bad pattern, missing `->`, body error such as the
+         single-line-`if` layout rule) must surface with its real message and
+         position. Swallowing it here used to truncate the arm list silently,
+         so the checker later reported confusing secondary errors — a missing
+         `Guarded` branch and an "unknown name: else" — instead of the layout
+         diagnostic that fired first. *)
+      | Err e -> continue_ := false; failure := Some e
     end
   done;
-  return (List.rev !arms)
+  match !failure with
+  | Some e -> Err e
+  | None -> return (List.rev !arms)
 
 and parse_case_arm_group s =
   let loc0 = current_loc s in
@@ -1786,7 +1805,7 @@ and parse_ok s =
   let* _ = expect s PROOF_ANNOT in
   let* proof = parse_proof_expr s in
   let loc = span loc0 (current_loc s) in
-  return (EOk { value; proof; loc })
+  return (EOk { value; proof; keyword = true; loc })
 
 and parse_stringish_expr s =
   let loc0 = current_loc s in
@@ -1894,7 +1913,7 @@ and parse_pipe_right s =
       (match parse_proof_expr s with
        | Ok proof ->
          let loc = expr_loc left in
-         return (EOk { value = left; proof; loc })
+         return (EOk { value = left; proof; keyword = false; loc })
        | Err _ -> return left)
     end else return left
   in
@@ -2621,7 +2640,6 @@ and expr_loc = function
   | EConstructor e -> e.loc | ELambda e -> e.loc
   | ECacheGet e -> e.loc | ECacheSet e -> e.loc | ECacheDelete e -> e.loc | ECacheInvalidate e -> e.loc
   | ESendEmail e -> e.loc | EStartEmailWorker e -> e.loc
-  | ERuntimeCall e -> e.loc
 
 (* ── Top-level parsers ────────────────────────────────────────────────────── *)
 
@@ -2682,31 +2700,6 @@ and parse_start_email_worker_stmt s =
   let* email_name = expect_uident s in
   let loc = span loc0 (current_loc s) in
   return (EStartEmailWorker { email_name; loc })
-
-and parse_with_stmt s =
-  (* `with database X { … }` — bind a named database for the block body.  (The
-     `database` keyword is intentionally retained here: dropping it would collide with
-     the `database X = Database { … }` declaration keyword.  `with transaction` was
-     migrated to the bare `transaction { … }` form — see [parse_transaction_block].) *)
-  let loc0 = current_loc s in
-  let* _ =
-    match peek s with
-    | IDENT "with" -> advance s; return ()
-    | t -> err s (Printf.sprintf "expected with block, got %s" (tok_to_string t))
-  in
-  match peek s with
-  | DATABASE ->
-    advance s;
-    let* database_name = expect_uident s in
-    let* _ = expect s LBRACE in
-    skip_newlines s;
-    if peek s = INDENT then advance s;
-    let* body = parse_stmt_seq s in
-    skip_layout s;
-    let* _ = expect s RBRACE in
-    let loc = span loc0 (current_loc s) in
-    return (EWithDatabase { database_name; body; loc })
-  | t -> err s (Printf.sprintf "expected `database` after `with`, got %s" (tok_to_string t))
 
 and parse_transaction_block s =
   (* `transaction { … }` — wrap multiple writes in one atomic transaction.  (Formerly
@@ -2840,9 +2833,16 @@ and parse_stmt_seq s =
   | IDENT "transaction" when peek2 s = LBRACE ->
     let* e = parse_transaction_block s in
     continue_stmt_seq s e
+  (* `with database D { … }` as a free-floating block is GONE (2026-08-17).  A database is
+     connected by `main`'s `App { database: D }` — which is what every real program already
+     relies on, and what `Desugar.lower_main_app` builds the binding from — and a test binds one
+     with the `test "…" with database D { … }` header.  Every free-floating use in the corpus
+     named a MEMORY database, where the block did nothing at all, and the one position where it
+     was not a no-op (inside a test body) silently DROPPED the binding.  Removing the form
+     closes that hole by construction rather than by fixing it. *)
   | IDENT "with" when peek2 s = DATABASE ->
-    let* e = parse_with_stmt s in
-    continue_stmt_seq s e
+    err s "`with database` is not a statement: a database is connected by `main`'s \
+           `App { database: D }`, and a test binds one with `test \"…\" with database D { … }`"
   | IDENT "set" ->
     let loc0 = current_loc s in
     advance s;
@@ -3215,8 +3215,8 @@ let parse_fn_decl_named ?(http_methods = []) kind name loc0 s =
       ELet { name; declared_type; declared_proof; value; body = propagate_return_hint body th; loc }
     | ELetProof { value_name; proof_name; proof_index; value; body; loc } ->
       ELetProof { value_name; proof_name; proof_index; value; body = propagate_return_hint body th; loc }
-    | EOk { value; proof; loc } ->
-      EOk { value = propagate_return_hint value th; proof; loc }
+    | EOk { value; proof; keyword; loc } ->
+      EOk { value = propagate_return_hint value th; proof; keyword; loc }
     | EWithDatabase { database_name; body; loc } ->
       EWithDatabase { database_name; body = propagate_return_hint body th; loc }
     | EWithCapabilities { capabilities; body; loc } ->
@@ -3334,13 +3334,13 @@ let parse_field_defs_ext ~allow_indexes s =
            (match parse_type_expr s with
             | Ok ty ->
               (* optional proof annotation *)
-              let proof_ann, checker =
+              let proof_ann =
                 if peek s = PROOF_ANNOT then begin
                   advance s;
                   match parse_proof_expr s with
-                  | Ok p -> Some p, None
-                  | Err _ -> None, None
-                end else None, None
+                  | Ok p -> Some p
+                  | Err _ -> None
+                end else None
               in
               (* optional @db(type) *)
               let db_type =
@@ -3359,7 +3359,7 @@ let parse_field_defs_ext ~allow_indexes s =
                 end else None
               in
               let loc = span loc0 (current_loc s) in
-              fields := { name = fname; type_expr = ty; proof_ann; checker; db_type; loc } :: !fields;
+              fields := { name = fname; type_expr = ty; proof_ann; db_type; loc } :: !fields;
               skip_layout s;
               if peek s = COMMA then (advance s; skip_layout s)
             | Err _ -> continue_ := false)
@@ -3552,7 +3552,7 @@ and parse_adt_variants_flat s =
                       end else None
                     in
                     let fd = { name = fname; type_expr = ty; proof_ann;
-                               checker = None; db_type = None; loc = floc } in
+                               db_type = None; loc = floc } in
                     fields := fd :: !fields;
                     if peek s = COMMA then advance s
                   | Err _ -> brace_continue := false)
@@ -3581,7 +3581,7 @@ and parse_adt_variants_flat s =
                 if peek s = RPAREN then begin
                   advance s;
                   let fd = { name = fname; type_expr = ty; proof_ann;
-                             checker = None; db_type = None; loc = floc } in
+                             db_type = None; loc = floc } in
                   fields := fd :: !fields
                 end else begin
                   s.pos <- saved; continue2 := false
@@ -3603,7 +3603,7 @@ and parse_adt_variants_flat s =
                end else None
              in
              let fd = { name = fname; type_expr = ty; proof_ann;
-                        checker = None; db_type = None; loc = floc } in
+                        db_type = None; loc = floc } in
              fields := fd :: !fields
            | Err _ -> continue2 := false)
         | PIPE | NEWLINE | INDENT | DEDENT | EOF | RBRACE -> continue2 := false
@@ -3685,7 +3685,7 @@ and parse_adt_variant_line s =
                   end else None
                 in
                 fields := { name = fname; type_expr = ty; proof_ann;
-                            checker = None; db_type = None; loc = floc } :: !fields;
+                            db_type = None; loc = floc } :: !fields;
                 if peek s = COMMA then advance s
               | Err _ -> brace_continue := false)
            | _ -> brace_continue := false)
@@ -3707,7 +3707,7 @@ and parse_adt_variant_line s =
            end else None
          in
          fields := { name = fname; type_expr = ty; proof_ann;
-                     checker = None; db_type = None; loc = floc } :: !fields
+                     db_type = None; loc = floc } :: !fields
        | Err _ -> continue_ := false)
     | LPAREN ->
       (* Could be:
@@ -3733,7 +3733,7 @@ and parse_adt_variant_line s =
             if peek s = RPAREN then begin
               advance s;  (* consume ) *)
               fields := { name = fname; type_expr = ty; proof_ann;
-                          checker = None; db_type = None; loc = floc } :: !fields
+                          db_type = None; loc = floc } :: !fields
             end else begin
               s.pos <- saved;
               (* Fall through to positional *)
@@ -3742,7 +3742,7 @@ and parse_adt_variant_line s =
                  let pos = List.length !fields in
                  let label = if pos = 0 then "value" else Printf.sprintf "value%d" (pos + 1) in
                  fields := { name = label; type_expr = ty2; proof_ann = None;
-                             checker = None; db_type = None; loc = floc } :: !fields
+                             db_type = None; loc = floc } :: !fields
                | Err _ -> continue_ := false)
             end
           | Err _ ->
@@ -3752,7 +3752,7 @@ and parse_adt_variant_line s =
                let pos = List.length !fields in
                let label = if pos = 0 then "value" else Printf.sprintf "value%d" (pos + 1) in
                fields := { name = label; type_expr = ty; proof_ann = None;
-                           checker = None; db_type = None; loc = floc } :: !fields
+                           db_type = None; loc = floc } :: !fields
              | Err _ -> continue_ := false))
        | _ ->
          s.pos <- saved;
@@ -3761,7 +3761,7 @@ and parse_adt_variant_line s =
             let pos = List.length !fields in
             let label = if pos = 0 then "value" else Printf.sprintf "value%d" (pos + 1) in
             fields := { name = label; type_expr = ty; proof_ann = None;
-                        checker = None; db_type = None; loc = floc } :: !fields
+                        db_type = None; loc = floc } :: !fields
           | Err _ -> continue_ := false))
     | UIDENT _ ->
       (* Positional (unlabeled) field: each bare TypeName is ONE field.
@@ -3774,7 +3774,7 @@ and parse_adt_variant_line s =
          let pos = List.length !fields in
          let label = if pos = 0 then "value" else Printf.sprintf "value%d" (pos + 1) in
          fields := { name = label; type_expr = ty; proof_ann = None;
-                     checker = None; db_type = None; loc = floc } :: !fields
+                     db_type = None; loc = floc } :: !fields
        | Err _ -> continue_ := false)
     | NEWLINE | DEDENT | EOF | PIPE -> continue_ := false
     | _ -> continue_ := false
@@ -3843,6 +3843,9 @@ let parse_codec_form s name type_name =
      and a type with neither was silently non-serializable).  Require both. *)
   let to_set = ref false in
   let from_set = ref false in
+  (* An entry inside a `fromJson` alternative that the parser cannot classify.  Reported
+     after the form is parsed, so the loop still makes progress. *)
+  let unknown_entry_name = ref None in
   while peek s <> RBRACE && peek s <> EOF do
     skip_layout s;
     (match peek s with
@@ -3893,11 +3896,13 @@ let parse_codec_form s name type_name =
        if peek s = LBRACKET then begin
          advance s; skip_layout s;
          let alts = ref [] in
+         let unknown_alt_entry = ref None in
          while peek s <> RBRACKET && peek s <> EOF do
            skip_layout s;
            if peek s = LBRACE then begin
              advance s; skip_layout s;
              let entries = ref [] in
+             let unknown_entry = ref None in
              while peek s <> RBRACE && peek s <> EOF do
                skip_layout s;
                if peek s = RBRACE then ()
@@ -3945,15 +3950,15 @@ let parse_codec_form s name type_name =
                             advance s;
                             (match parse_expr s with
                              | Ok lit_e ->
-                               let racket = (match lit_e with
-                                 | ELit { lit = LInt n; _ } -> Some (string_of_int n)
-                                 | ELit { lit = LBool b; _ } -> Some (if b then "#t" else "#f")
-                                 | ELit { lit = LString str; _ } -> Some (Printf.sprintf "%S" str)
-                                 | ELit { lit = LFloat f; _ } -> Some (Float_fmt.to_faithful_literal f)
+                               (* Only a LITERAL may be a default, and it is stored as
+                                  one so each backend renders it in its own syntax. *)
+                               let literal = (match lit_e with
+                                 | ELit { lit = (LInt _ | LBool _ | LString _ | LFloat _) as lit; _ } ->
+                                   Some lit
                                  | _ -> None) in
-                               (match racket with
-                                | Some default_expr ->
-                                  let e = DecodeDefault { field_name = fname; default_expr;
+                               (match literal with
+                                | Some default_lit ->
+                                  let e = DecodeDefault { field_name = fname; default_lit;
                                     loc = span entry_loc0 (current_loc s) } in
                                   entries := e :: !entries;
                                   skip_layout s;
@@ -3982,13 +3987,28 @@ let parse_codec_form s name type_name =
                                 | Err _ -> ())
                              | Err _ -> ())
                           | Err _ -> ()))
-                       | _ -> advance s (* skip unknown *))
+                       | _ ->
+                         (* An entry that is neither `field <- …` nor `via checker` used to
+                            be skipped silently, so a mis-spelled validator simply
+                            DISAPPEARED: `check foo` in place of `via foo` compiled clean
+                            and the validation never ran.  The offender is remembered and
+                            reported once the alternative closes. *)
+                         if !unknown_entry = None then
+                           unknown_entry := Some (fname, current_loc s);
+                         advance s)
                     | Err _ ->
                       (* Not an identifier/keyword name — skip one token to make progress. *)
                       s.pos <- saved; advance s)
                end
              done;
              if peek s = RBRACE then advance s;
+             (* A `fromJson` alternative is a decode CONTRACT, so an entry the parser does
+                not understand has to be reported rather than dropped — dropping one makes
+                a declared validation disappear with no compile-time signal. *)
+             (match !unknown_entry with
+              | Some (name, _) ->
+                unknown_alt_entry := Some name
+              | None -> ());
              (* Check for } via checker — outer cross-check after the alt block *)
              skip_layout s;
              let alt_entries = ref (List.rev !entries) in
@@ -4007,6 +4027,9 @@ let parse_codec_form s name type_name =
             if peek s <> RBRACKET && peek s <> EOF then advance s (* skip *)
          done;
          if peek s = RBRACKET then advance s;
+         (match !unknown_alt_entry with
+          | Some name -> unknown_entry_name := Some name
+          | None -> ());
          from_json := FromJsonAlts (List.rev !alts)
        end
      | FROM_JSON_FORBIDDEN ->
@@ -4026,6 +4049,14 @@ let parse_codec_form s name type_name =
   done;
   let* _ = expect s RBRACE in
   let loc = span loc0 (current_loc s) in
+  match !unknown_entry_name with
+  | Some entry ->
+    err s (Printf.sprintf
+      "codec '%s': `%s` is not a valid entry in a `fromJson` alternative. A field mapping \
+       is `field <- \"key\" with_codec codecName`, and a cross-field validator is \
+       `via checkerName`. (An unrecognised entry used to be dropped silently, which made \
+       the validation it declared disappear.)" name entry)
+  | None ->
   if not !to_set || not !from_set then
     let missing =
       match !to_set, !from_set with
@@ -4996,17 +5027,14 @@ and parse_test_stmt_items s =
            | Err _ -> return [])
         | Err _ -> return [])
      | Err _ -> return [])
-  | IDENT "with" when peek2 s = DATABASE || (match peek2 s with IDENT _ -> true | _ -> false) ->
-    advance s;
-    while peek s <> LBRACE && peek s <> EOF && peek s <> NEWLINE do advance s done;
-    if peek s = LBRACE then begin
-      advance s; skip_layout s;
-      let* nested = parse_test_body_until_with_skip s skip_layout (fun tok -> tok = RBRACE || tok = EOF) in
-      skip_layout s;
-      if peek s = RBRACE then advance s;
-      return nested
-    end else
-      return []
+  (* `with database D { … }` inside a test BODY is gone with the free-floating form.  It never
+     bound anything: this arm skipped to the `{` and spliced the statements, so the database
+     name was discarded and the block read the in-memory store while the author asked for the
+     server.  The binding belongs in the header — `test "…" with database D { … }` — which is
+     parsed by `parse_test_form` and does bind. *)
+  | IDENT "with" when peek2 s = DATABASE ->
+    err s "`with database` is not a statement: bind it in the test header instead — \
+           `test \"…\" with database D { … }`"
   (* SQL write statements (`update`/`delete`) carry indented `where … set … = …`
      continuation clauses.  The test-body expression parser runs with
      `allow_test_multiline_request_continuations` on (for api-test request

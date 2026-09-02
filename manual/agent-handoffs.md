@@ -113,7 +113,7 @@ direction of the pool/SSE work).
 ## New moving parts (the point was to add as few as possible)
 
 - **`humanActions`** — one new builtin (mirrors `serverTools`: a checker special
-  form + inert `__tht_human-actions` lowering + a small `tesl/human-actions.rkt`
+  form + inert `__tht_human-actions` lowering + a small Go runtime adapter
   that only builds inert descriptors), plus a generated frontend decoder. No new
   runtime subsystem, no new agent loop, no discharge logic.
 - **Long-running work** — **nothing new**. It is a documented, tested pattern

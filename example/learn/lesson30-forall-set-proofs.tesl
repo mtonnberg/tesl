@@ -19,7 +19,7 @@ module Lesson30ForallSetProofs exposing [run, doublePositive, mapAndCount]
 #      → result: Maybe (Set T::: ForAll (P_of_checkFn))
 #
 # ZERO runtime overhead — the ForAll annotation is stripped at compile time.
-# At runtime, the value is a plain Racket set.
+# At runtime, the value is a plain runtime set.
 
 # ─────────────────────────────────────────────
 # List.map AND ForAll proofs

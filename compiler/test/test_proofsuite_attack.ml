@@ -7,9 +7,8 @@
     that net (plan: "i-would-like-to-mellow-sky" → Item A → Top gap-hunters).
 
     Hardening: `should_fail` additionally asserts the rejection did NOT leak to
-    runtime — `tesl --check` must not execute, so a Racket-level proof failure
-    (`raise-user-error`, `check-fail`, a Racket stack trace) appearing in the
-    output is itself a test failure.  The whole point is *static* rejection.
+    runtime — `tesl --check` must not execute, so a Go panic or stack trace in
+    the output is itself a test failure. The whole point is *static* rejection.
 
     Gap-hunter families (see the plan):
       1.  ForAll element leak (runtime net already OFF here → static-only today)
@@ -102,8 +101,7 @@ let with_two_files a_name a_src b_name b_src f =
    these markers in the output means the static gate was bypassed. *)
 
 let runtime_leak_markers =
-  [ "raise-user-error"; "check-fail"; "context...:"; "context ...:";
-    ".rkt:"; "/racket/"; "raco "; "expander" ]
+  [ "panic:"; "runtime error:"; "goroutine "; "_test.go:"; ".go:" ]
 
 let assert_no_runtime_leak ~who out =
   List.iter (fun marker ->
@@ -206,7 +204,7 @@ let no_satisfy = "does not statically satisfy\\|requires proof\\|has no tracked 
 (* ════════════════════════════════════════════════════════════════════════ *)
 (* 1. ForAll element leak                                                     *)
 (*    The runtime net is already OFF for ForAll elements                      *)
-(*    (check-runtime.rkt:764) → these are static-only TODAY.                  *)
+(*    Runtime fallback is off here, so these are static-only today.           *)
 (* ════════════════════════════════════════════════════════════════════════ *)
 
 let forall_imports = "import Tesl.List exposing [List.filterCheck, List.allCheck, List.length, List.map]\n"

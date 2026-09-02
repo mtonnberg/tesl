@@ -26,7 +26,7 @@
 
 open Alcotest
 open Parser
-open Emit_racket
+open Emit_go
 
 (* ── In-process compile (parse + emit), no filesystem, no validation pass ──── *)
 

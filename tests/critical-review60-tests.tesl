@@ -331,7 +331,7 @@ test "R60_UC01 unannotated field loses proof requiring re-check" {
 
 # ─── R60_RU — Record update preserves proof on proof-annotated fields (FIXED) ──
 # Previously a bug: { record | field: v } stripped the proof from proof-annotated
-# fields at runtime. Now fixed in emit_racket.ml — both update code paths check
+# fields at runtime. Now fixed in the Go emitter — both update code paths check
 # field_has_proof and preserve the named-value wrapper for annotated fields.
 
 fn updateTitle(item: SafeItem, newTitle: String) -> SafeItem =

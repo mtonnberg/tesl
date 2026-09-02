@@ -81,6 +81,59 @@ let build_adt_ctor_field_bindings (decls : top_decl list)
         when `foo` is not bound);
       - a `Maybe T` check for `isNull`/`isNotNull` (rejects these on
         non-nullable columns). *)
+(* A SQL keyword that is not part of a RECOGNISED query shape.
+
+   Tesl writes a query as ordinary application syntax, so `selectOne t frm Task where …`
+   (a typo'd `from`) parses fine, type-checks fine, and only failed when the RACKET
+   emitter reached the leftover `selectOne` as a free variable and raised.  Two problems
+   with that: `tesl --check` — the fast loop, and what the editor runs — said nothing, and
+   the guard lived in one backend, so the Go backend would have had to reimplement it or
+   silently emit a call to a function that does not exist.
+
+   The recognised shapes are the ones {!Sql_query} can recover, so the check is: walk the
+   body, skip any subtree that recovers as a query, and report any SQL builtin still
+   standing.  A user-defined function of the same name shadows the keyword and is fine. *)
+let check_sql_patterns_recognised ?facts ?(extra_funcs=[]) (decls : top_decl list)
+    : validation_error list =
+  ignore (facts_or_compute ?facts ~extra_funcs decls);
+  let declared_functions =
+    List.filter_map (function
+      | DFunc (fd : func_decl) -> Some fd.name
+      | _ -> None) decls
+  in
+  let errors = ref [] in
+  let recognised (e : expr) =
+    Sql_query.extract_select_query e <> None
+    || Sql_query.parse_insert_expr e <> None
+    || Sql_query.parse_insert_many_expr e <> None
+    || Sql_query.parse_upsert_expr e <> None
+    || Sql_query.extract_delete_query e <> None
+    || Sql_query.extract_update e <> None
+    || Sql_query.extract_delete e <> None
+  in
+  let rec walk (bound : string list) (e : expr) =
+    if recognised e then ()      (* the keywords inside belong to the query *)
+    else match e with
+      | EVar { name; loc } ->
+        if Validation_common.is_sql_builtin name
+           && not (List.mem name bound)
+           && not (List.mem name declared_functions) then
+          errors := make_error loc
+            ~hint:"a SQL operation is written in the multi-line form, e.g. `update p in Entity` / `where p.field == value` / `set p.field = value` — check the clause keywords (`from`, `in`, `where`, `set`) for a typo"
+            (Printf.sprintf
+               "`%s` is a SQL operation, but this expression is not a recognised query shape, so it would compile to a call to a function that does not exist"
+               name)
+            :: !errors
+      | ELet { name; value; body; _ } -> walk bound value; walk (name :: bound) body
+      | ELambda { params; body; _ } ->
+        walk (List.map (fun (b : binding) -> b.name) params @ bound) body
+      | _ -> Ast_visitor.iter_children (fun child -> walk bound child) e
+  in
+  List.iter (function
+    | DFunc (fd : func_decl) -> walk [] fd.body
+    | _ -> ()) decls;
+  List.rev !errors
+
 let check_sql_where_clauses
     ?facts
     ?(extra_funcs : (string * func_info) list = [])
@@ -431,7 +484,7 @@ let check_sql_where_clauses
        behaviour is unchanged (no descent). *)
     | ELit _ | EVar _ | EConstructor _ | EFail _ | EStartWorkers _ | EField _
     | ECacheGet _ | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _
-    | ESendEmail _ | EStartEmailWorker _ | ERuntimeCall _ -> ()
+    | ESendEmail _ | EStartEmailWorker _ -> ()
   in
   List.iter (function
     | DFunc fd ->
@@ -641,6 +694,138 @@ let check_group_by_rules (decls : top_decl list) : validation_error list =
     Decide-by-resolution (as everywhere else on this surface): a user-declared
     `fn select` — or any local binding of a SQL op name — stands the rule down
     for that name. *)
+(** `limit` / `offset` on a `selectOne`, and on an AGGREGATE, decide nothing.
+
+    `selectOne` answers the first matching row, which `order` decides; a `limit` on top of
+    that cannot change the answer, and an `offset` silently would — it would name a DIFFERENT
+    row while reading like a no-op. An aggregate answers one value over the whole matching
+    set, so neither clause has anything to apply to.
+
+    Both were accepted, and the two backends then disagreed about the SAME program: the
+    Racket runtime reads only the predicates and the order for these forms (`select-one` in
+    `dsl/sql.rkt` never looks at limit/offset), so the clause was silently dropped, while the
+    Go emitter refused to emit a query whose clause it could not honour. A clause that means
+    nothing is a mistake in the program, so it is a compile error for both. *)
+let check_meaningless_limit_offset (decls : top_decl list) : validation_error list =
+  let errors = ref [] in
+  let seen : (Location.loc, unit) Hashtbl.t = Hashtbl.create 16 in
+  let head_of kind = match kind with
+    | Sql_query.SelectOne -> Some "selectOne"
+    | Sql_query.SelectCount -> Some "selectCount"
+    | Sql_query.SelectSum _ -> Some "selectSum"
+    | Sql_query.SelectMax _ -> Some "selectMax"
+    | Sql_query.SelectMin _ -> Some "selectMin"
+    | Sql_query.SelectCountBy -> Some "selectCountBy"
+    | Sql_query.SelectSumBy _ -> Some "selectSumBy"
+    | Sql_query.SelectMany -> None
+  in
+  let visit expr =
+    Ast_visitor.iter (fun node ->
+      match Sql_query.extract_select_query node with
+      | None -> ()
+      | Some (seed, _) ->
+        let loc = Checker.expr_loc node in
+        if not (Hashtbl.mem seen loc) then begin
+          Hashtbl.add seen loc ();
+          (* `order` decides WHICH row `selectOne` answers, so it is meaningful there and
+             meaningless on an aggregate — the clause list differs by form. *)
+          let offending = match seed.kind with
+            | Sql_query.SelectMany -> None
+            | Sql_query.SelectOne ->
+              if seed.limit <> None then Some "limit"
+              else if seed.offset <> None then Some "offset" else None
+            | _ ->
+              if seed.limit <> None then Some "limit"
+              else if seed.offset <> None then Some "offset"
+              else if seed.order <> None then Some "order" else None
+          in
+          match head_of seed.kind, offending with
+          | None, _ | _, None -> ()
+          | Some head, Some clause ->
+            let why = match seed.kind with
+              | Sql_query.SelectOne ->
+                "`selectOne` answers the first matching row, which `order` decides"
+              | _ -> "an aggregate answers one value over the whole matching set"
+            in
+            errors := make_error loc
+              ~hint:(Printf.sprintf
+                "drop the `%s`; to read a bounded WINDOW of rows use `select` with `order` \
+                 and `limit`, then take what you need from the list" clause)
+              (Printf.sprintf
+                 "`%s` on `%s` decides nothing: %s, so the clause would be silently dropped"
+                 clause head why)
+              :: !errors
+        end)
+      expr
+  in
+  List.iter (function
+    | DFunc (fd : func_decl) -> visit fd.body
+    | DTest (t : test_form) ->
+      List.iter (fun stmt -> List.iter visit (Ast.test_stmt_exprs stmt)) t.stmts
+    | _ -> ()) decls;
+  List.rev !errors
+
+(** A `set` value that READS the row it is updating.
+
+    `set c.count = c.count + 1` reads naturally and does not survive either lowering:
+
+      - the Racket emitter binds the SET values before the update runs, so the emitted code
+        references the row binder where nothing binds it — `c: unbound identifier`, a module
+        that does not LOAD, from a program that type-checks;
+      - the PostgreSQL path binds every SET value as a parameter, so there is no row to read
+        from on that side at all — Racket's `postgres-update-many!` has the same shape.
+
+    Go's in-memory path happens to manage it (it applies a function to each matching row), and
+    one backend's memory store being able to do it is not the language supporting it. Read the
+    row, then write what you computed:
+
+      case selectOne c from Counter where c.id == id of
+        Nothing -> …
+        Something row -> update c in Counter where c.id == id set c.count = row.count + 1 *)
+let check_set_value_reads_row (decls : top_decl list) : validation_error list =
+  let errors = ref [] in
+  let seen : (Location.loc, unit) Hashtbl.t = Hashtbl.create 16 in
+  let mentions binder expr =
+    let found = ref false in
+    Ast_visitor.iter (fun node ->
+      match node with
+      | EVar { name; _ } when name = binder -> found := true
+      | EField { obj = EVar { name; _ }; _ } when name = binder -> found := true
+      | _ -> ()) expr;
+    !found
+  in
+  let visit expr =
+    Ast_visitor.iter (fun node ->
+      match Sql_query.extract_update node with
+      | None -> ()
+      | Some (update : Sql_query.sql_update) ->
+        let loc = Checker.expr_loc node in
+        if not (Hashtbl.mem seen loc) then begin
+          Hashtbl.add seen loc ();
+          List.iter (fun (field, value) ->
+            if mentions update.binder value then
+              errors := make_error loc
+                ~hint:(Printf.sprintf
+                  "read the row first, then write what you computed: `case selectOne %s from … \
+                   of … Something row -> update %s in … set %s.%s = row.%s + 1`"
+                  update.binder update.binder update.binder field field)
+                (Printf.sprintf
+                   "the `set` value for `%s.%s` reads the row it is updating, which no backend \
+                    can lower: the update's values are computed BEFORE it runs, so there is no \
+                    row to read from"
+                   update.binder field)
+                :: !errors)
+            update.updates
+        end)
+      expr
+  in
+  List.iter (function
+    | DFunc (fd : func_decl) -> visit fd.body
+    | DTest (t : test_form) ->
+      List.iter (fun stmt -> List.iter visit (Ast.test_stmt_exprs stmt)) t.stmts
+    | _ -> ()) decls;
+  List.rev !errors
+
 let check_sql_query_shape (decls : top_decl list) : validation_error list =
   let errors = ref [] in
   let emit err = errors := err :: !errors in
@@ -672,19 +857,19 @@ let check_sql_query_shape (decls : top_decl list) : validation_error list =
      the two arities codegen uses it at, so adding an extractor there cannot
      leave this gate behind: a new form is accepted by both or by neither. *)
   let expr_accepted e =
-    Option.is_some (Emit_racket.extract_select_query e)
-    || Option.is_some (Emit_racket.extract_delete_query e)
-    || Option.is_some (Emit_racket.parse_insert_expr e)
-    || Option.is_some (Emit_racket.parse_insert_many_expr e)
-    || Option.is_some (Emit_racket.parse_upsert_expr e)
+    Option.is_some (Sql_query.extract_select_query e)
+    || Option.is_some (Sql_query.extract_delete_query e)
+    || Option.is_some (Sql_query.parse_insert_expr e)
+    || Option.is_some (Sql_query.parse_insert_many_expr e)
+    || Option.is_some (Sql_query.parse_upsert_expr e)
   in
   (* The statement-chain forms: multi-line `update`/`delete`/`select` lower to a
      chain of underscore-lets, so they are recognised at the CHAIN node, one
      level above the spine itself. *)
   let chain_accepted e =
-    Option.is_some (Emit_racket.extract_update e)
-    || Option.is_some (Emit_racket.extract_delete e)
-    || Option.is_some (Emit_racket.extract_multiline_select_query e)
+    Option.is_some (Sql_query.extract_update e)
+    || Option.is_some (Sql_query.extract_delete e)
+    || Option.is_some (Sql_query.extract_multiline_select_query e)
   in
   let sql_spine_head e =
     let rec go = function
@@ -1061,8 +1246,6 @@ let check_record_field_proof_construction
         walk_expr type_env subject_env proof_env subject;
         walk_expr type_env subject_env proof_env body
       | EStartEmailWorker _ -> ()
-      | ERuntimeCall { segments; _ } ->
-        List.iter (function RLit _ | RRawVar _ -> () | RArg e -> walk_expr type_env subject_env proof_env e) segments
     in
     List.iter (function
       | DFunc fd ->
@@ -1225,8 +1408,10 @@ let check_ghost_witness_predicates
     let resolve_witness_proofs subject_env proof_env (witness : proof_expr) loc
         : proof_expr list =
       let wrapper =
+        (* A synthetic wrapper, only so the witness can be walked: the spelling is irrelevant
+           here, and `keyword` says "written `ok …`" because that is the shape being modelled. *)
         EOk { value = EFail { status = 0; message = ELit { lit = LString ""; loc }; loc };
-              proof = witness; loc }
+              proof = witness; keyword = true; loc }
       in
       match carried_proofs_of_expr ~funcs subject_env proof_env wrapper with
       | Some proofs -> List.map Proof_kernel.fact_of proofs
@@ -1340,7 +1525,7 @@ let check_ghost_witness_predicates
     let rec walk_expr (type_env : type_env) (subject_env : subject_env)
         (proof_env : proof_env) (e : expr) =
       match e with
-      | EOk { value; proof; loc } ->
+      | EOk { value; proof; loc; _ } ->
         (match value with
          | EApp { fn = EConstructor { name = rname; args = []; _ };
                   arg = ERecord { fields = witnessed_fields; _ }; _ }

@@ -7,7 +7,7 @@ This document defines the protocol boundary between the Tesl compiler and editor
 Today that primarily means:
 
 - `tesl --check-json` from `compiler/bin/main.ml`
-- the Tesl LSP in `editor/tesl-lsp/tesl-lsp.rkt`
+- the Go Tesl LSP in `runtime/go/cmd/tesl-lsp`
 
 Future compiler implementations must match this contract before editor cutover.
 
@@ -146,7 +146,7 @@ This contract is shared across compiler implementations.
 That means:
 
 - the current OCaml compiler must conform to it
-- the current Racket LSP must consume it directly
+- the current Go LSP must consume it directly
 - a future compiler rewrite must preserve it unless the protocol version changes deliberately
 
 A compiler rewrite is not an excuse to change the editor payload casually.
@@ -252,7 +252,7 @@ emits no JSON on a parse error; consumers must treat that as "no snapshot availa
 
 ## LSP methods backed by the above flags
 
-The Racket LSP (`editor/tesl-lsp/tesl-lsp.rkt`) advertises and implements these read-only methods.
+The Go LSP advertises and implements these read-only methods.
 None of them modify the compiler contract; each shells out to a frozen `--*-json` / `--fmt` flag.
 
 - `textDocument/documentSymbol` — flat `SymbolInformation[]` built from `--semantic-json`

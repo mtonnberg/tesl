@@ -11,6 +11,6 @@
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$DIR/../.." && pwd)"
-# racket + the linked `tesl` collections come from the repo dev shell; run.sh
-# then re-execs into a `nix shell` that adds dex/openssl/mkpasswd.
+# Go, the compiler, and Tesl tools come from the repo dev shell; run.sh then
+# re-execs into a `nix shell` that adds dex/openssl/mkpasswd.
 exec env SSO_E2E_SERVE=1 nix develop "$REPO_ROOT" --command bash "$DIR/run.sh" "$@"

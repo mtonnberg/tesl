@@ -1,3 +1,7 @@
 (executable
  (name gen_docs)
  (libraries unix))
+
+(executable
+ (name gen_go_runtime)
+ (libraries unix))

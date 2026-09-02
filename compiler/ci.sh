@@ -9,12 +9,12 @@
 # runs a STRICT SUPERSET of everything this OCaml-centric script used to run:
 # dune build, dune test (with the same explicit, dated, ID-keyed failure-waiver
 # list), lifted-stdlib snapshots, compile-all (subsumed by the `tesl validate`
-# sweep), exact-match .rkt snapshots, the Racket suites, and the AI suites —
-# plus the format/Tesl-test/mutation/integration/aggregate phases.
+# sweep), exact-match Go snapshots, Go corpus/runtime checks, and AI suites —
+# plus format, Tesl-test, mutation, integration, and tooling phases.
 #
 # We `exec` so this process is REPLACED by ci.sh: the exit code, all env-var
-# knobs (RKT_SUITES_SKIP, TESL_CI_JOBS, TESL_RACKET_SUITE_TIMEOUT, …), and every
-# argument pass straight through, so existing hooks and muscle-memory that call
+# knobs (TESL_CI_JOBS, TESL_MUTATION_TIMEOUT, CI, …), and every argument pass
+# straight through, so existing hooks and muscle-memory that call
 # `compiler/ci.sh` keep working unchanged.
 set -uo pipefail
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"

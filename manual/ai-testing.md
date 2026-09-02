@@ -18,7 +18,7 @@ The complete, runnable showcase is
 capability-bounded support assistant with a read-only lookup tool, a guarded
 mutating refund tool, and structured ticket triage — with eight developer-written
 deterministic tests covering every primitive described below. Run them with
-`tesl test example/support-assistant.tesl` (emit → `raco test`); all eight pass
+`tesl test example/support-assistant.tesl` (emit and run Go tests); all eight pass
 with zero external dependencies.
 
 ## The mock providers

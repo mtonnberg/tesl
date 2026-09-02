@@ -477,7 +477,7 @@ whose diagnostic carries a delete-line fix.
 Tesl uses two structural mechanisms:
 
 - indentation for function bodies and nested body constructs such as `if`, `case`, and existential packing bodies;
-- braces for top-level blocks such as `record`, `entity`, `database`, `api`, `server`, the `App { ... }` record returned by `main`, and for body blocks such as `with database { ... }` and `transaction { ... }`.
+- braces for top-level blocks such as `record`, `entity`, `database`, `api`, `server`, the `App { ... }` record returned by `main`, and for the `transaction { ... }` body block.
 
 Unexpected indentation is a parse error.
 
@@ -838,7 +838,7 @@ fn f(s: String) -> String = String.trim(s)
 <prop-param> ::= <identifier> ":" <type> [ "where" <expr> ]
 ```
 
-Test blocks are first-class top-level declarations. They compile to Racket `module+ test` submodules using rackunit.
+Test blocks are first-class top-level declarations. They compile to Go test functions and run with `go test`.
 
 **`expect`** checks equality, comparison, or truthiness. **`expectFail`** asserts that an expression returns a check-fail or raises an exception.
 
@@ -1378,15 +1378,18 @@ build an agent.
 
 ```text
 <binding> ::= <identifier> ":" <gdp-expr> [ ":::" <gdp-expr> ]
+<exists-binding> ::= <identifier> ":" <gdp-expr>
 
-<return-spec> ::= "exists" <binding> "=>" <return-spec>
-                | <binding>
-                | <gdp-expr> " ? " <gdp-expr> ":::" <gdp-expr>   -- new canonical form
-                | <gdp-expr> " ? " <gdp-expr>                    -- new canonical form, no other proofs
-                | "?" <gdp-expr> ":::" <gdp-expr>                -- legacy form (still accepted)
-                | "?" <gdp-expr>                                  -- legacy form (still accepted)
-                | <gdp-expr> ":::" <gdp-expr>
-                | <gdp-expr>
+<return-spec> ::= "exists" <exists-binding> "=>" <plain-return-spec>
+                | <plain-return-spec>
+
+<plain-return-spec> ::= <binding>
+                      | <gdp-expr> " ? " <gdp-expr> ":::" <gdp-expr>   -- new canonical form
+                      | <gdp-expr> " ? " <gdp-expr>                    -- new canonical form, no other proofs
+                      | "?" <gdp-expr> ":::" <gdp-expr>                -- legacy form (still accepted)
+                      | "?" <gdp-expr>                                  -- legacy form (still accepted)
+                      | <gdp-expr> ":::" <gdp-expr>
+                      | <gdp-expr>
 ```
 
 Interpretation:
@@ -1396,7 +1399,7 @@ Interpretation:
 - a binding return spec such as `x: Int ::: Positive x` means the return is conceptually a named value whose proof may refer to that binder;
 - a **named-pack** return spec such as `Todo ? FromDb (Id == id)` means the returned entity is automatically named by the caller's `let` binder (see section 7.13); the entity-append rule appends `_entity` to every leaf predicate in the `?` group;
 - a **ForAll** return spec such as `List Note ::: ForAll (FromDb (AuthorId == user))` means every element of the returned list satisfies the given proof predicate (see section 16.9); compile-time only with zero runtime overhead;
-- an existential return spec packages a witness and then a body return spec.
+- an existential return spec packages one unannotated witness and then a non-existential body return spec. Nested/multi-witness returns and `:::` annotations on the witness binder are rejected until their runtime contract is implemented.
 
 Note: the current `.tesl` surface uses lowercase `exists ... => ...`. The elaborated Racket core currently uses `Exists`.
 
@@ -2186,7 +2189,6 @@ The runtime automatically starts (with PostgreSQL) a pub/sub LISTEN thread when 
               | <if-statement>
               | <case-statement>
               | <exists-pack-statement>
-              | <with-database-statement>
               | <update-statement>
               | <telemetry-statement>
               | <init-telemetry-statement>
@@ -2417,11 +2419,14 @@ This statement does not bind a fresh variable. It packages an existing named val
 
 #### Resource blocks
 
-```text
-<with-database-statement> ::= "with database" <identifier> "{" <body> "}"
-```
-
-`with database X { ... }` opens a SQL database context for the enclosed body (used in handler bodies that run queries). There is no `with capabilities { ... }` block — that construct has been removed. Capabilities flow from each declaration's `requires` and are granted at the App root (§11.13).
+There are none. A database is connected by the `App { database: X }` field `main` returns
+(§11.13), which binds it for the whole program, and a test binds one with the
+`test "..." with database X { ... }` header (see **Test databases**). The free-floating
+`with database X { ... }` block was removed (2026-08-17): wherever the named database was
+Memory-backed it did nothing at all, which was every use of it, and in a test body it silently
+DISCARDED the name — the block read the in-memory store while the author had asked for the
+server. There is no `with capabilities { ... }` block either; capabilities flow from each
+declaration's `requires` and are granted at the App root (§11.13).
 
 #### Success and failure
 
@@ -2778,7 +2783,7 @@ select u from User
   innerJoin Profile on u.profileId Profile.id
 ```
 
-**Aggregate queries.**  All aggregate forms require the `dbRead` capability. `selectCount` always returns `Int`. `selectSum`, `selectMax`, `selectMin` return the same type as the target field (e.g. `Int` for an integer field, `Float` for a float field).
+**Aggregate queries.**  All aggregate forms require the `dbRead` capability. `selectCount` always returns `Int`. `selectSum` returns the same type as the target field (e.g. `Int` for an integer field, `Float` for a float field) — zero is its identity, so no matching row is `0`, not an absence. `selectMax` and `selectMin` return **`Maybe <field type>`**: over no matching row there is no value of the column's type to return, and inventing one (or handing back a SQL `NULL` typed as the column) would be unsound. Callers `case` on the result.
 
 **Grouped aggregates (GitHub #29).** `selectCountBy` / `selectSumBy` return **one row per
 group** as a `List (Tuple2 key aggregate)`, ordered by key ascending, and require exactly
@@ -2826,8 +2831,17 @@ are plain proof-free values (no `FromDb` — no entity row flows out).
 ```tesl
 let total  = selectCount u from User where u.active == True     # Int
 let total  = selectSum   u.score from User                      # Int (or Float)
-let top    = selectMax   u.score from User where u.active == True
-let bottom = selectMin   u.score from User
+let top    = selectMax   u.score from User where u.active == True   # Maybe Int
+let bottom = selectMin   u.score from User                          # Maybe Int
+```
+
+`selectMax`/`selectMin` are optional, so a caller decides what "no rows" means:
+
+```tesl
+fn highestScore() -> Int requires [dbRead] =
+  case selectMax u.score from User of
+    Nothing -> 0
+    Something score -> score
 ```
 
 **`upsert` — INSERT … ON CONFLICT DO UPDATE.**  Inserts a record; if the conflict column(s) already exist, updates only the listed fields.  `onConflict` takes the column(s) to conflict on (usually the unique/PK columns); `doUpdate` lists the columns to overwrite on conflict.
@@ -3243,9 +3257,9 @@ f 4                      # 7
 ### 16.3 Final public existential surface
 **Accepted design, Implemented.**
 
-Existential packaging uses `exists witness => body` in function bodies. The witness variable is scoped to the body block and cannot escape. Return types use `exists name: T => InnerType` syntax. The compiler enforces that ordinary functions with existential return types actually return a pack, while the runtime/core still enforces witness escape prevention at evaluation time. This surface is settled.
+Existential packaging uses `exists witness => body` in function bodies. The witness variable is scoped to the body block and cannot escape. Return types use `exists name: T => InnerType` syntax with exactly one unannotated witness; nested existential returns and proof annotations on the witness binder are rejected. The compiler enforces that ordinary functions with existential return types actually return a pack, while the runtime/core still enforces witness escape prevention at evaluation time. This surface is settled.
 
-A function may also **forward** an existential instead of introducing one: if every tail of the body is a call to a function whose own return type is the same `exists` type — same binder arity, and a proof that entails the declared one once the callee's binders and parameters are read at the call site — the package the caller receives is the callee's, unchanged. This is what lets several thin handlers share one proof-carrying core:
+A function may also **forward** an existential instead of introducing one: if every tail of the body is a call to a function whose own return type has the same single binder name, the same ground non-function witness type, and a proof that entails the declared one once the callee's parameters are read at the call site, the package the caller receives is the callee's, unchanged. Generic/function-typed witnesses and alpha-renamed binder forwarding fail closed until package renaming and scoped type instantiation are implemented. This is what lets several thin handlers share one proof-carrying core:
 
 ```tesl
 fn createThing(name: String) -> exists id: String => Thing ? FromDb (Id == id) ... =
@@ -4594,49 +4608,49 @@ Tesl provides a source-level step debugger using the Debug Adapter Protocol (DAP
 VSCode
   │  DAP JSON-RPC over stdio
   ▼
-dsl/debug/dap-server.rkt    — DAP protocol handler
-  │  spawns compiled .rkt with debug instrumentation
+runtime/go/cmd/tesl-dap     — DAP protocol handler
+  │  launches or attaches to a Go program with debug instrumentation
   ▼
-dsl/debug/checkpoint.rkt    — (thsl-src file line expr) macro
-  │  signals stopped events via Racket channels
+runtime/go/teslrt/debug.go  — source checkpoints and value snapshots
+  │  signals stopped events through the Go control channel
   ▼
-dap-server.rkt              — receives stopped events, serves variables/stackTrace
+tesl-dap                    — serves variables, stackTrace, and stepping
 ```
 
 ### 22.2 Compiling with debug instrumentation
 
-Pass `--debug` to the Tesl compiler:
+Pass `--debug` to the Go compiler:
 
 ```bash
-tesl --debug file.tesl
+tesl --debug file.tesl --out .tesl-stuff/go-debug
 ```
 
 When `--debug` is active:
-1. Every emitted expression is wrapped with `(thsl-src "file.tesl" LINE expr)` using the `loc` of the AST node.
-2. A `.tesl.srcmap.json` sidecar file is written alongside the compiled `.rkt` (when the `tesl` CLI manages the output, that pair lives under the project's `.tesl-stuff/build/` directory). It maps Tesl source lines to generated Racket lines:
+1. Debug checkpoints retain Tesl source locations and local-value accessors using the AST node locations.
+2. Debug metadata is emitted into the Go module under `.tesl-stuff/go-debug/` and maps Tesl source lines to generated Go lines:
 
 ```json
 {
   "tesl_file": "foo.tesl",
   "entries": [
-    { "tesl_line": 12, "rkt_line": 47 },
+    { "tesl_line": 12, "go_line": 47 },
     ...
   ]
 }
 ```
 
-The sidecar allows the DAP server to translate VSCode breakpoint line numbers into the correct Racket positions.
+The metadata allows the DAP server to translate VSCode breakpoint line numbers into generated Go positions.
 
 ### 22.3 VSCode integration
 
 The `editor/vscode-tesl` extension contributes a `debuggers` entry in `package.json`. Launching `Debug Tesl Program` via VSCode:
 
-1. Invokes `editor/vscode-tesl/debug/launch-dap.sh` which starts `dsl/debug/dap-server.rkt` via Racket.
-2. The DAP server compiles the `.tesl` file with `--debug`, loads the compiled `.rkt`, and runs it with `debug-enabled? = true`.
-3. Breakpoints set in VSCode are sent via `setBreakpoints` DAP messages. The `(thsl-src ...)` macro checks for a matching breakpoint, sends a stopped event, and waits on a resume channel.
-4. The variables panel calls `variables` → the `locals-thunk` captured at the pause point, which uses `thsl-display-value` to unwrap GDP proof wrappers and show plain user-level values.
+1. Starts the Go DAP server from `runtime/go/cmd/tesl-dap`.
+2. The DAP server compiles the `.tesl` file with Go debug instrumentation and launches the generated program.
+3. Breakpoints set in VSCode are sent via `setBreakpoints` DAP messages. Go checkpoints match source locations, send stopped events, and wait for resume commands.
+4. The variables panel calls `variables` and receives proof-unwrapped Go runtime values.
 
-**GDP value unwrapping in the debugger.** The `thsl-display-value` helper unwraps the runtime evidence layer before display: `named-value` structs are shown as their raw value (with proof tags listed as annotations), `newtype-value` is shown as its inner value, and `record-value` fields are recursed. The user sees the application-level value, not the proof-carrying runtime wrapper.
+**GDP value unwrapping in the debugger.** The Go value renderer unwraps the runtime evidence layer before display. The user sees the application-level value, not the proof-carrying runtime wrapper.
 
 ### 22.4 Phase 1 capabilities (implemented)
 

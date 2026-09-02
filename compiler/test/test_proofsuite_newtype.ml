@@ -6,9 +6,8 @@
     `String`) are distinct, and a raw base value is not a newtype value.
 
     This file proves rejection happens at COMPILE time (no runtime safety net):
-    `should_fail` additionally fails if the compiler output contains a Racket
-    runtime token (`raise-user-error`, `check-fail`, a `.rkt` trace) — a static
-    rejection must never leak to runtime.
+    `should_fail` additionally fails if compiler output contains a Go runtime
+    token (panic or stack trace) — static rejection must never leak to runtime.
 
     Breadth: a matrix over base types {String, Int} × positions
     {param, return, record field, fn arg, list element} × the two mistakes
@@ -73,7 +72,7 @@ let with_temp_file content f =
 
 (* Hardening: a static rejection must not leak a runtime token. *)
 let runtime_leak_re =
-  Str.regexp_case_fold "raise-user-error\\|check-fail\\|\\.rkt:[0-9]\\|context\\.\\.\\.:\\|raco "
+  Str.regexp_case_fold "panic:\\|runtime error:\\|goroutine \\|_test\\.go:\\|\\.go:[0-9]"
 
 let assert_no_runtime_leak ~ctx out =
   try

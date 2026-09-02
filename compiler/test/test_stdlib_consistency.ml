@@ -158,27 +158,15 @@ let test_every_stdlib_env_fn_is_in_exports () =
 (* ── Test: emit_racket adt_constructors is a subset of stdlib_adt_ctors ──── *)
 
 let test_adt_constructors_subset_of_stdlib_adt_ctors () =
-  (* emit_racket.adt_constructors maps ADT type names to their constructors.
-     validation.stdlib_adt_ctors maps Tesl modules to (type_name, ctors).
-     Every type in adt_constructors that belongs to a known Tesl stdlib ADT module
-     should appear in stdlib_adt_ctors so conflicts are caught at compile time. *)
-  let adt_ctors_type_names =
-    Validation_names.stdlib_adt_ctors
-    |> List.map (fun (_, (type_name, _)) -> type_name)
-  in
-  Hashtbl.iter (fun type_name _ctors ->
-    (* Only care about names that are in tesl_module_exports somewhere *)
-    let in_exports = Type_system.tesl_module_exports
-      |> List.exists (fun (_, exports) -> List.mem type_name exports)
-    in
-    if in_exports && not (List.mem type_name adt_ctors_type_names) then
+  (* Every compiler-owned stdlib ADT group must have a corresponding derived
+     validation row, so constructor conflicts are caught at compile time. *)
+  List.iter (fun (module_name, type_name, _ctors) ->
+    if not (List.exists (fun (m, (t, _)) -> m = module_name && t = type_name)
+        Validation_names.stdlib_adt_ctors) then
       fail (Printf.sprintf
-        "emit_racket.ml adt_constructors has entry for ADT type %S which appears \
-         in tesl_module_exports, but validation.ml stdlib_adt_ctors does not have \
-         an entry for it.  Add it to stdlib_adt_ctors so local constructor \
-         conflicts are detected at compile time."
-        type_name)
-  ) Emit_racket.adt_constructors
+        "stdlib ADT %s/%s is missing from the validation constructor table"
+        module_name type_name))
+    Type_system.stdlib_adt_ctor_groups
 
 (* ── Test runner ─────────────────────────────────────────────────────────── *)
 
@@ -193,7 +181,7 @@ let () =
     "adt-coverage", [
       test_case "stdlib_adt_ctors entries are consistent with tesl_module_exports" `Quick
         test_stdlib_adt_ctors_consistent_with_exports;
-      test_case "emit_racket adt_constructors ADTs are covered by stdlib_adt_ctors" `Quick
+       test_case "Go ADTs are covered by stdlib_adt_ctors" `Quick
         test_adt_constructors_subset_of_stdlib_adt_ctors;
     ];
     "env-coverage", [

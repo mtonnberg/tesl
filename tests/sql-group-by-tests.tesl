@@ -38,7 +38,7 @@ import Tesl.Database exposing [Database, DatabaseBackend, Memory]
 #
 # Rows are ordered by key ascending.  These tests run on the Memory backend,
 # which buckets through the SAME engine (tesl-time-trunc) the emitted
-# PostgreSQL expressions are tested against in sql-group-by-pg-test.rkt.
+# PostgreSQL expressions are tested against by the PostgreSQL integration suite.
 # ────────────────────────────────────────────────────────────────────────────
 
 entity Entry table "entries" primaryKey id {

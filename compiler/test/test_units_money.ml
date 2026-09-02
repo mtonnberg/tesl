@@ -650,9 +650,7 @@ entity Row table "rows" primaryKey id {
 }
 database Db = Database { entities: [Row], backend: Memory }
 fn cheap() -> List Row requires [dbRead] =
-  with database Db {
-    select r from Row where r.hourly < MoneyRate.perHour (Money.sek 1000)
-  }
+  select r from Row where r.hourly < MoneyRate.perHour (Money.sek 1000)
 |} "materialize Money first"
 
 (* The where-clause value operand is unified against the QUANTITY column's
@@ -670,9 +668,7 @@ entity Run table "runs" primaryKey id {
 }
 database Db = Database { entities: [Run], backend: Memory }
 fn fast() -> List Run requires [dbRead] =
-  with database Db {
-    select r from Run where r.velocity > Length.meters 1.0
-  }
+  select r from Run where r.velocity > Length.meters 1.0
 |} "the where clause compares column `r.velocity` (declared `Speed`)"
 
 (* A bare dimensionless Float never sneaks past a quantity column either. *)
@@ -688,9 +684,7 @@ entity Run table "runs" primaryKey id {
 }
 database Db = Database { entities: [Run], backend: Memory }
 fn exact() -> List Run requires [dbRead] =
-  with database Db {
-    select r from Run where r.velocity == 5.0
-  }
+  select r from Run where r.velocity == 5.0
 |} "cannot unify Float with Speed"
 
 (* ══ 6. Proof obligations (binary --check; V001 validation layer) ══════════ *)
@@ -878,7 +872,7 @@ entity Row table "rows" primaryKey id {
 database SeedDatabase = Database { entities: [Row], backend: Memory }
 
 handler get listRows() -> List Row requires [dbRead] =
-  with database SeedDatabase { select r from Row }
+  select r from Row
 api SeedApi { get "/rows" -> List Row }
 server SeedServer for SeedApi { listRows }
 

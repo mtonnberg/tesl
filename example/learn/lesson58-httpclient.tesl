@@ -171,7 +171,7 @@ handler postJson(url: String, jsonBody: String, token: String) -> HttpResponse
 #   TESL_HTTP_STREAM_IDLE_TIMEOUT_MS   60000   SSE: the max GAP between bytes
 #
 # A blown deadline surfaces the same way any other HttpClient failure does — a
-# clean error, never a raw Racket exception — so inside a worker it simply fails
+# clean error, never a raw runtime exception — so inside a worker it simply fails
 # the job and the normal retry/backoff/dead-letter machinery takes over.
 #
 # TESTING CODE THAT CALLS OUT

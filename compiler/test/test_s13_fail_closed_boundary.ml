@@ -1,40 +1,11 @@
-(** S13 — fail-closed runtime boundary type checks.
+(** S13 — fail-closed Go boundary types.
 
-    The runtime function [runtime-type-satisfied?] (dsl/types.rkt) used to fail
-    OPEN when a type had no registered runtime predicate: every unregistered
-    concrete type-key (`Bogus`, an unregistered record, …) was silently
-    accepted at a retained §7.10 boundary position (param / return / payload).
-    S13 registers the residual reachable types and flips the default to
-    fail-closed:
-
-      - Surface aliases Int/Bool/Float (passed as bare symbols by hand-written
-        stdlib .rkt files) map to integer?/boolean?/real?.
-      - Genuinely-unconstrained Unit/Fact register an explicit always-true
-        predicate (fail-open by intent: `-> Unit` returns (void)/DB results;
-        Fact carries an erased proof).
-      - Type VARIABLES (lowercase-initial names) keep fail-open by construction.
-      - Every other concrete type with no predicate now fails CLOSED.
-
-    S13-full ADDS the root fix that made the flip safe: [runtime-type-predicate]
-    now resolves a `type-ref` STRUCT to its bare NAME before the registry
-    lookups.  Previously a type-ref (every user record/ADT/newtype, plus the
-    built-in ADTs like DeleteResult) missed the registry — its owner differs from
-    the registration site — so every type-ref reached the no-predicate default
-    with the checks DORMANT, and closing there would have rejected valid returns.
-    With resolution on, the registered record/ADT/newtype/built-in predicate IS
-    found, so a mismatched value against a KNOWN type is rejected by the
-    predicate, and only a genuinely UNKNOWN concrete type falls through to the
-    now-closed default.
-
-    The POSITIVE half below confirms the flip does not break the two constructs
-    the naive flip broke — side-effecting `-> Unit` handlers and polymorphic
-    (type-variable) returns — and that the emitter still annotates them
-    (`#:returns Unit` / `#:returns a`).  The NEGATIVE half ([fail_closed]
-    section) drives the runtime directly: it runs a Racket snippet against
-    dsl/types.rkt asserting that (a) a mismatched value vs a registered
-    record/ADT/newtype type-ref is REJECTED, (b) a legit record/ADT/newtype/Unit/
-    DeleteResult value PASSES, (c) a type variable PASSES, and (d) an unknown
-    concrete type-ref fails CLOSED. *)
+    Go has no dynamic type registry. Concrete boundary types become Go types, so
+    known mismatches are rejected by Tesl's type checker and unknown/unsupported
+    concrete types are refused before artifacts escape. Records, ADTs, newtypes,
+    Unit, runtime-provided DeleteResult, and type variables must still compile to
+    typed Go and execute successfully. This suite proves both halves: compiler
+    rejection for bad boundaries and a real generated-Go test for valid ones. *)
 
 open Alcotest
 
@@ -98,109 +69,158 @@ let should_check src =
     let code, out = run_compiler ["--check"; path] in
     if code <> 0 then failf "expected --check success, got:\n%s" out)
 
-(* --check exits 0 AND compiling to Racket emits [needle] in the output. *)
-let should_check_and_emit needle src =
+let should_reject pat src =
   with_temp_file src (fun path ->
     let code, out = run_compiler ["--check"; path] in
-    if code <> 0 then failf "expected --check success, got:\n%s" out;
-    let ecode, emitted = run_compiler [path] in
-    if ecode <> 0 then failf "expected emit success, got:\n%s" emitted;
-    if not (contains ~needle emitted) then
-      failf "expected emitted Racket to contain %S, got:\n%s" needle emitted)
+    if code = 0 then failf "expected static rejection matching %S" pat;
+    let re = Str.regexp_case_fold pat in
+    try ignore (Str.search_forward re out 0)
+    with Not_found -> failf "expected rejection matching %S, got:\n%s" pat out)
 
-(* ── Fail-closed runtime proof: drive dsl/types.rkt directly via racket ─────── *)
+let should_emit_go needles src =
+  match Compile.compile_go_source "<s13-go-boundaries>" src with
+  | Compile.GoFailure diagnostics ->
+    failf "expected Go emission, got: %s"
+      (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  | Compile.GoSuccess artifacts ->
+    let emitted = String.concat "\n" (List.map (fun (a : Emit_go.artifact) -> a.contents) artifacts) in
+    List.iter (fun needle ->
+      if not (contains ~needle emitted) then
+        failf "expected emitted Go to contain %S" needle) needles
 
-(* Locate the repo root so we can [require] dsl/types.rkt from the racket snippet. *)
-let repo_root =
-  match Sys.getenv_opt "TESL_REPO_ROOT" with
-  | Some p when p <> "" -> p
-  | _ ->
-    let rec find dir =
-      let candidate = Filename.concat dir "dsl" in
-      if (try Sys.is_directory candidate with _ -> false) then dir
-      else
-        let parent = Filename.dirname dir in
-        if parent = dir then Filename.current_dir_name else find parent
-    in
-    find (Filename.dirname Sys.argv.(0))
+let rec remove_tree path =
+  if Sys.file_exists path then
+    if Sys.is_directory path then begin
+      Sys.readdir path |> Array.iter (fun name -> remove_tree (Filename.concat path name));
+      Unix.rmdir path
+    end else Sys.remove path
 
-let racket_available =
-  let code, _ = run_command "command -v racket >/dev/null 2>&1; echo $?" in
-  code = 0
+let rec mkdir_p path =
+  if path = "" || path = Filename.current_dir_name || Sys.file_exists path then ()
+  else begin
+    mkdir_p (Filename.dirname path);
+    Unix.mkdir path 0o755
+  end
 
-(* The runtime proof.  Each [chk] asserts a concrete runtime-type-satisfied?
-   verdict.  A type-ref carrying a FOREIGN owner (as an emitted handler-return
-   type would) is constructed with make-prefab-struct, exactly the shape the
-   compiler emits, so this exercises the cross-module resolution path directly. *)
-let fail_closed_proof_snippet = {|#lang racket
-(require "dsl/types.rkt")
-(define (mk-ref owner name) (make-prefab-struct 'type-ref owner name))
-(define ok #t)
-(define (chk label got want)
-  (unless (equal? got want)
-    (set! ok #f)
-    (eprintf "MISMATCH ~a => ~s (want ~s)\n" label got want))
-  (printf "  ~a => ~s (want ~s) ~a\n" label got want (if (equal? got want) "OK" "MISMATCH")))
-(define-record Widget [id : Integer] [name : String])
-(define-adt Color [Red] [Green] [Blue])
-(define-newtype Score Integer)
-(define w (Widget #:id 1 #:name "hi"))
-(define c Green)
-(define sc (Score 10))
-;; (a) mismatched value vs a REGISTERED record/ADT/newtype type-ref => #f
-(chk "mismatch 42 vs record Widget"   (runtime-type-satisfied? (mk-ref 'foreign 'Widget) 42) #f)
-(chk "mismatch str vs ADT Color"      (runtime-type-satisfied? (mk-ref 'foreign 'Color) "s") #f)
-(chk "mismatch 99 vs newtype Score"   (runtime-type-satisfied? (mk-ref 'foreign 'Score) 99) #f)
-;; (b) legit record/ADT/newtype/Unit/DeleteResult value => #t (no over-rejection)
-(chk "legit record Widget"            (runtime-type-satisfied? (mk-ref 'foreign 'Widget) w) #t)
-(chk "legit ADT Color"                (runtime-type-satisfied? (mk-ref 'foreign 'Color) c) #t)
-(chk "legit newtype Score"            (runtime-type-satisfied? (mk-ref 'foreign 'Score) sc) #t)
-(chk "legit Unit (void)"              (runtime-type-satisfied? (mk-ref 'foreign 'Unit) (void)) #t)
-(chk "legit DeleteResult NoRow"       (runtime-type-satisfied? (mk-ref 'foreign 'DeleteResult) NoRowDeleted) #t)
-(chk "legit DeleteResult Rows"        (runtime-type-satisfied? (mk-ref 'foreign 'DeleteResult) (RowsDeleted 3)) #t)
-;; (c) type VARIABLE (lowercase-initial) => #t (fail-open by construction)
-(chk "type-var a vs 42"               (runtime-type-satisfied? 'a 42) #t)
-(chk "type-var ref b vs str"          (runtime-type-satisfied? (mk-ref 'foreign 'b) "x") #t)
-;; (d) UNKNOWN concrete type with no predicate => #f (the newly-closed hole)
-(chk "unknown concrete Bogus ref"     (runtime-type-satisfied? (mk-ref 'foreign 'Bogus) 42) #f)
-(chk "unknown concrete Bogus sym"     (runtime-type-satisfied? 'Bogus 42) #f)
-(printf "FAIL-CLOSED PROOF: ~a\n" (if ok "ALL PASS" "FAILED"))
-(exit (if ok 0 1))
+let write_artifacts root artifacts =
+  List.iter (fun (artifact : Emit_go.artifact) ->
+    let path = Filename.concat root artifact.path in
+    mkdir_p (Filename.dirname path);
+    Out_channel.with_open_bin path (fun channel -> output_string channel artifact.contents)) artifacts
+
+let should_fail_go_emit needle src =
+  match Compile.compile_go_source "<s13-unsupported-boundary>" src with
+  | Compile.GoSuccess _ -> failf "unsupported boundary emitted Go artifacts"
+  | Compile.GoFailure diagnostics ->
+    if not (List.exists (fun (d : Compile.diagnostic) ->
+      d.source = "go-emitter" && contains ~needle d.message) diagnostics) then
+      failf "expected Go emitter rejection containing %S, got: %s" needle
+        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+
+let runtime_proof = {|module DesignS13Go exposing [Widget, Color, Score, firstOr, countDeleted]
+import Tesl.Prelude exposing [Int, String, Unit]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.DB exposing [DeleteResult(..)]
+
+record Widget { id: Int name: String }
+type Color =
+  | Red
+  | Green
+  | Blue
+type Score = Int
+
+fn firstOr(value: Maybe a, dflt: a) -> a =
+  case value of
+    Something found -> found
+    Nothing -> dflt
+
+fn countDeleted(result: DeleteResult) -> Int =
+  case result of
+    RowsDeleted count -> count
+    NoRowDeleted -> 0
+
+fn colorCode(color: Color) -> Int =
+  case color of
+    Red -> 1
+    Green -> 2
+    Blue -> 3
+
+fn scoreValue(score: Score) -> Int = score.value
+fn unitValue() -> Unit = Unit
+
+test "typed Go boundaries" {
+  let widget = Widget { id: 1, name: "ok" }
+  let id = widget.id
+  let color = colorCode (firstOr (Something Green) Red)
+  let number = firstOr (Something 7) 0
+  let score = scoreValue (Score 7)
+  let rows = countDeleted (RowsDeleted 3)
+  let none = countDeleted NoRowDeleted
+  let _unit = unitValue()
+  expect id == 1
+  expect color == 2
+  expect number == 7
+  expect score == 7
+  expect rows == 3
+  expect none == 0
+}
 |}
 
 let test_S13_fail_closed_runtime_proof () =
-  if not racket_available then
-    (* The gate always has racket; a bare dune-test box may not.  Skip cleanly
-       there rather than fail — the gate step still enforces this. *)
-    ()
-  else begin
-    let path = Filename.concat repo_root "tesl-s13-fail-closed-proof.rkt" in
-    let oc = open_out path in
-    output_string oc fail_closed_proof_snippet; close_out oc;
-    Fun.protect
-      ~finally:(fun () -> try Sys.remove path with _ -> ())
-      (fun () ->
-        let cmd =
-          Printf.sprintf "cd %s && racket %s 2>&1"
-            (Filename.quote repo_root) (Filename.quote (Filename.basename path))
-        in
-        let code, out = run_command cmd in
-        if code <> 0 || not (contains ~needle:"FAIL-CLOSED PROOF: ALL PASS" out) then
-          failf "runtime fail-closed proof failed (exit %d):\n%s" code out)
-  end
+  if Sys.command "go version >/dev/null 2>&1" <> 0 then
+    failf "Go is required for the S13 runtime boundary proof";
+  match Compile.compile_go_source "<s13-go-runtime-proof>" runtime_proof with
+  | Compile.GoFailure diagnostics ->
+    failf "runtime proof did not compile: %s"
+      (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  | Compile.GoSuccess artifacts ->
+    let root = Filename.temp_dir "tesl-s13-go" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_artifacts root artifacts;
+      let cmd = Printf.sprintf "cd %s && go test -count=1 ./... 2>&1" (Filename.quote root) in
+      let code, out = run_command cmd in
+      if code <> 0 then failf "generated Go boundary proof failed (exit %d):\n%s" code out)
 
-(* ── Unit return: side-effecting handler stays green under the flip ─────────── *)
+let test_S13_go_types_are_concrete () =
+  should_emit_go
+    [ "type Widget struct"; "type ColorTag int"; "type Score struct";
+      "teslrt.DeleteResult"; "func FirstOr[A any]" ]
+    runtime_proof
+
+let test_S13_known_mismatches_rejected () =
+  List.iter (fun (label, ty, value) ->
+    should_reject ("cannot unify.*" ^ ty)
+      (Printf.sprintf {|module DesignS13Bad%s exposing []
+import Tesl.Prelude exposing [Int, String]
+record Widget { id: Int }
+type Color =
+  | Red
+  | Green
+type Score = Int
+fn bad() -> %s = %s
+|} label ty value))
+    [ "Record", "Widget", "42";
+      "Adt", "Color", "\"red\"";
+      "Newtype", "Score", "99" ]
+
+let test_S13_unknown_concrete_rejected () =
+  should_reject "Bogus.*not in scope\\|unknown type.*Bogus\\|type.*Bogus.*not in scope"
+    {|module DesignS13Unknown exposing []
+fn bad(value: Bogus) -> Bogus = value
+|}
+
+let test_S13_unsupported_runtime_type_rejected () =
+  should_fail_go_emit "`Tesl.Telemetry` export `Span`"
+    {|module DesignS13Unsupported exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.Telemetry exposing [Span]
+fn describe(_span: Span) -> String = "span"
+|}
+
+(* ── Unit return: emitted as Go's zero-sized value ─────────────────────────── *)
 
 let test_S13_unit_return_compiles () =
-  (* A `-> Unit` function returns a runtime (void)/side-effect value, never the
-     'Unit symbol.  With Unit registered as always-true it fails OPEN by intent;
-     the naive flip (no registration) would have rejected this. *)
-  (* The body used to be `print msg`. `print` was REMOVED from the surface
-     language 2026-07-29 — it was ambient and typed `a -> Unit`, so that bare type
-     variable also accepted a `secret` and wrote the plaintext to stdout. The
-     fixture only ever needed *a Unit-valued body*, so it uses the `Unit` value
-     directly and no longer depends on a name that should not exist. *)
-  should_check_and_emit "#:returns Unit" {|
+  should_emit_go ["func LogIt(_msg string) struct{}"] {|
 module DesignS13Unit exposing [logIt]
 import Tesl.Prelude exposing [String, Unit]
 
@@ -208,14 +228,10 @@ fn logIt(_msg: String) -> Unit =
   Unit
 |}
 
-(* ── Polymorphic return: type-variable stays green under the flip ──────────── *)
+(* ── Polymorphic return: emitted as a Go type parameter ────────────────────── *)
 
 let test_S13_polymorphic_return_compiles () =
-  (* `-> a` is a type VARIABLE (lowercase-initial); type-variable-key? keeps it
-     fail-open.  These are the stdlib return heads (maximum/minimum/foldr) that
-     the naive flip broke with 4 `returned a value that does not satisfy
-     declared return type … a|b` errors. *)
-  should_check_and_emit "#:returns a" {|
+  should_emit_go ["func FirstOr[A any]"] {|
 module DesignS13Poly exposing [firstOr]
 import Tesl.Prelude exposing [List]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -228,10 +244,7 @@ fn firstOr(xs: List a, dflt: a) -> a =
 |}
 
 let test_S13_polymorphic_param_emits_typevar () =
-  (* The polymorphic parameter is emitted as `[dflt : a]` — a bare type var at a
-     boundary position; confirms the param path also carries the type var
-     through so the runtime sees the unconstrained key, not a concrete one. *)
-  should_check_and_emit "[dflt : a]" {|
+  should_emit_go ["dflt A"] {|
 module DesignS13Poly2 exposing [firstOr]
 import Tesl.Prelude exposing [List]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -243,7 +256,7 @@ fn firstOr(xs: List a, dflt: a) -> a =
     Nothing -> dflt
 |}
 
-(* ── Concrete registered return still compiles (no over-rejection) ─────────── *)
+(* ── Concrete builtin return still compiles (no over-rejection) ────────────── *)
 
 let test_S13_concrete_return_still_compiles () =
   should_check {|
@@ -257,13 +270,17 @@ fn ident(x: Int) -> Int =
 let () =
   run "s13-fail-closed-boundary" [
     "positive", [
-      test_case "-> Unit compiles and emits #:returns Unit" `Quick test_S13_unit_return_compiles;
-      test_case "polymorphic fn compiles and emits #:returns a" `Quick test_S13_polymorphic_return_compiles;
-      test_case "polymorphic param emits [dflt : a]" `Quick test_S13_polymorphic_param_emits_typevar;
-      test_case "concrete registered return still compiles" `Quick test_S13_concrete_return_still_compiles;
+      test_case "-> Unit compiles to struct{}" `Quick test_S13_unit_return_compiles;
+      test_case "polymorphic fn emits a Go type parameter" `Quick test_S13_polymorphic_return_compiles;
+      test_case "polymorphic param uses the Go type parameter" `Quick test_S13_polymorphic_param_emits_typevar;
+      test_case "concrete builtin return still compiles" `Quick test_S13_concrete_return_still_compiles;
     ];
     "fail_closed", [
-      test_case "runtime rejects mismatch, accepts legit record/ADT/newtype/Unit/DeleteResult, accepts type-var, closes unknown"
+      test_case "generated Go accepts typed record/ADT/newtype/Unit/DeleteResult/type-var"
         `Quick test_S13_fail_closed_runtime_proof;
+      test_case "generated Go keeps concrete and generic boundary types" `Quick test_S13_go_types_are_concrete;
+      test_case "known record/ADT/newtype mismatches are rejected" `Quick test_S13_known_mismatches_rejected;
+      test_case "unknown concrete type is rejected" `Quick test_S13_unknown_concrete_rejected;
+      test_case "unsupported runtime type is rejected before Go escapes" `Quick test_S13_unsupported_runtime_type_rejected;
     ];
   ]

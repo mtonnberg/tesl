@@ -231,8 +231,7 @@ let check_sql_field_names ?facts ?(extra_funcs=[]) (decls : top_decl list) : val
 let local_declared_type_names (decls : top_decl list) : string list =
   List.concat_map (function
     | DType (TypeAdt { name; _ }) -> [name]
-    | DType (TypeNewtype { name; _ })
-    | DType (TypeAlias { name; _ }) -> [name]
+    | DType (TypeNewtype { name; _ }) -> [name]
     | DRecord r -> [r.name]
     | DEntity e -> [e.name]
     | _ -> []
@@ -257,8 +256,7 @@ let codec_target_kinds (decls : top_decl list) : (string * codec_target_kind) li
     | DRecord r -> [(r.name, Record)]
     | DEntity e -> [(e.name, Record)]
     | DType (TypeNewtype { name; secret = true; _ }) -> [(name, Secret)]
-    | DType (TypeNewtype { name; _ })
-    | DType (TypeAlias { name; _ }) -> [(name, Other)]
+    | DType (TypeNewtype { name; _ }) -> [(name, Other)]
     | _ -> []
   ) decls
 
@@ -431,6 +429,7 @@ let check_codec_proof_coverage ?facts ?(extra_funcs=[]) (decls : top_decl list) 
 let check_codec_alt_completeness ?facts ?(extra_funcs=[]) (decls : top_decl list) : validation_error list =
   let mf = facts_or_compute ?facts ~extra_funcs decls in
   let codecs = mf.mf_codecs in
+  let funcs = mf.mf_funcs in
   let named_fields_of = function
     | DRecord r -> Some (r.name, List.map (fun (f : field_def) -> f.name) r.fields)
     | DEntity e -> Some (e.name, List.map (fun (f : field_def) -> f.name) e.fields)
@@ -451,6 +450,30 @@ let check_codec_alt_completeness ?facts ?(extra_funcs=[]) (decls : top_decl list
              | DecodeDefault { field_name; _ } -> Some field_name
              | DecodeCrossCheck _ -> None) alt in
            let missing = List.filter (fun f -> not (List.mem f covered)) all_fields in
+           (* A cross-field validator is called with the alternative's decoded FIELDS, in
+              declaration order — `(checkComplete _f_name _f_retries _f_role)`.  Nothing
+              used to check that the checker actually takes that many arguments, so a
+              checker written over the record (`check f(p: Payload)`) compiled, then raised
+              an arity error at runtime that the codec registry swallowed as "this decoder
+              did not match" — turning a VALID payload into a generic 400.  A declared
+              validation must not silently become a blanket rejection. *)
+           List.iter (function
+             | DecodeCrossCheck { checker; loc } ->
+               (match List.assoc_opt checker funcs with
+                | None -> ()  (* an unresolved name is reported elsewhere *)
+                | Some info ->
+                  let expected = List.length covered in
+                  let actual = List.length info.fi_params in
+                  if actual <> expected then
+                    errors := make_error loc
+                      ~hint:(Printf.sprintf
+                        "a codec cross-check receives the alternative's decoded fields in order: `check %s(%s)`"
+                        checker (String.concat ", " (List.map (fun f -> f ^ ": …") covered)))
+                      (Printf.sprintf
+                        "codec '%s': cross-check `%s` takes %d argument(s), but alternative %d decodes %d field(s) and passes each one"
+                        cf.name checker actual (i + 1) expected)
+                      :: !errors)
+             | _ -> ()) alt;
            if missing <> [] then begin
              let alt_loc = match alt with
                | DecodeField { loc; _ } :: _

@@ -180,5 +180,5 @@ auth adminAuth(request: HttpRequest) -> String ? IsAdmin
 # any function could assert any fact about any value, defeating the validation model.
 #
 # The "establish" body returns proof constructors directly (e.g., "Trusted n").
-# This is compiled to "(trusted-proof (Trusted n))" at the Racket level.
+# This is compiled to a trusted proof value at the runtime level.
 # The establish body returns the proof constructor directly.

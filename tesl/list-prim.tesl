@@ -3,7 +3,7 @@
 #
 # These three leaves are the deconstruction/reconstruction primitives that pure
 # Tesl cannot express (no car/cdr/cons, no `[h | t]` patterns).  Their RUNTIME
-# lives in `tesl/list-prim.rkt`; the DERIVED combinators in `tesl/list.tesl`
+# lives in the Go runtime; the DERIVED combinators in `tesl/list.tesl`
 # import them to build map/filter/sum/… in real Tesl.
 #
 # The bodies below are trivial stubs that exist only so this module type-checks

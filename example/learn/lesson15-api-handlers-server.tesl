@@ -175,7 +175,7 @@ server TaskServer for TaskApi {
 # ─────────────────────────────────────────────
 # THEORY — the full model
 # ─────────────────────────────────────────────
-# "handler" lowers to Racket's "define-handler" macro.
+# "handler" lowers to a Go handler function.
 # define-handler generates a function that:
 #   1. Receives the raw HttpRequest
 #   2. Runs auth functions, extracting authenticated subjects with proofs
@@ -189,6 +189,6 @@ server TaskServer for TaskApi {
 # All proven at compile time (via the proof annotations) and enforced at runtime
 # (via the auth/check/capture machinery).
 #
-# "api" lowers to "define-api" — a Racket data structure describing the routes.
-# "server" lowers to "define-server" — a Racket hash map from endpoint names to handlers.
+# "api" lowers to a Go route table describing the routes.
+# "server" lowers to a Go server value mapping endpoint names to handlers.
 # The router combines these two to dispatch incoming HTTP requests.

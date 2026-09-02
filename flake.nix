@@ -9,14 +9,52 @@
   outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = nixpkgs.legacyPackages.${system};
+        # Go is PINNED to a patch release nixpkgs has not packaged yet.
+        #
+        # `govulncheck` is a mandatory gate (ci.sh phase 2a), and go1.26.4 — what
+        # nixpkgs-unstable carried — is subject to three advisories that are all in the
+        # standard library and therefore unavoidable from Tesl's side: GO-2026-6218
+        # (quadratic `net/url.resolvePath`), GO-2026-6090 (`crypto/tls`) and GO-2026-6089
+        # (`net/http`).  All three are fixed in go1.26.6.
+        #
+        # Bumping the whole channel does NOT deliver it: nixpkgs-unstable was at go1.26.5 when
+        # this was written, which still trips all three, while moving staticcheck,
+        # golangci-lint and every other pinned tool underneath the gates for no gain.  So the
+        # OVERLAY pins exactly the one thing the gate is about and leaves the rest of the
+        # channel where it is.
+        #
+        # Remove this the moment nixpkgs carries go1.26.6 or newer — `nix flake update
+        # nixpkgs` then gives the same result with no local patch to maintain.
+        goOverlay = final: prev: {
+          go = prev.go.overrideAttrs (old: rec {
+            version = "1.26.6";
+            src = final.fetchurl {
+              url = "https://go.dev/dl/go${version}.src.tar.gz";
+              sha256 = "1c9czy9wnbp9h89qkzsm0xrp9i57gvnb7nbssx419448qra1qwm0";
+            };
+          });
+        };
+        pkgs = import nixpkgs { inherit system; overlays = [ goOverlay ]; };
+        staticcheck = pkgs.buildGoModule rec {
+          pname = "staticcheck";
+          version = "2026.1";
+          src = pkgs.fetchFromGitHub {
+            owner = "dominikh";
+            repo = "go-tools";
+            rev = version;
+            hash = "sha256-cj/pHKwp7eGuOO1zhv5bFmuPHgsFytktLQmihhdYkfY=";
+          };
+          vendorHash = "sha256-Wu8+e0r0bkztLbxekbHktoKjg6c8q7ls5APSEdO8CKs=";
+          subPackages = [ "cmd/staticcheck" ];
+          meta.mainProgram = "staticcheck";
+        };
 
         # ── OCaml compiler binary ─────────────────────────────────────────────
         # Builds compiler/_build/default/bin/main.exe via dune.
         # Dependencies: ocaml, dune_3, findlib (all stdlib — no opam packages).
         tesl-compiler = pkgs.stdenv.mkDerivation {
           pname   = "tesl-compiler";
-          version = "0.1.0";
+          version = "0.3.1";
 
           src = ./.;
 
@@ -49,61 +87,9 @@
           '';
 
           meta = {
-            description = "Tesl OCaml compiler — compiles .tesl → Racket";
+            description = "Tesl OCaml compiler — compiles .tesl → Go";
             mainProgram = "tesl-compiler";
           };
-        };
-
-        # ── Racket runtime collections ────────────────────────────────────────
-        # Lays out three Racket collection trees that compiled Tesl programs
-        # depend on, mirroring how `raco pkg install --link` exposes them:
-        #
-        #   $out/share/tesl-collections/tesl/dsl/   → (require tesl/dsl/…)
-        #   $out/share/tesl-collections/tesl/tesl/  → (require tesl/tesl/…)
-        #
-        # Pre-compiling the .rkt sources here means the first `tesl run` is
-        # instant.  The build uses `|| true` so a pre-compile failure (e.g. a
-        # Racket version mismatch in CI) degrades gracefully — the wrapper's
-        # PLTCOMPILEDROOTS user cache picks up the slack at runtime.
-        tesl-racket = pkgs.stdenv.mkDerivation {
-          pname   = "tesl-racket-collections";
-          version = "0.1.0";
-
-          src = pkgs.lib.cleanSourceWith {
-            src    = ./.;
-            filter = path: _type:
-              let rel = pkgs.lib.removePrefix (toString ./. + "/") (toString path);
-              in  pkgs.lib.any (p: pkgs.lib.hasPrefix p rel)
-                    [ "dsl/" "tesl/" "dsl" "tesl" ]
-                  # Drop in-repo .zo caches — we recompile inside the sandbox
-                  # to guarantee they match the nixpkgs Racket version.
-                  && !(pkgs.lib.hasInfix "/compiled/" (toString path));
-          };
-
-          nativeBuildInputs = [ pkgs.racket ];
-
-          buildPhase = ''
-            # Build the PLTCOLLECTS tree:
-            #   build/collections/tesl/{dsl,tesl}
-            mkdir -p build/collections/tesl
-            cp -r dsl  build/collections/tesl/dsl
-            cp -r tesl build/collections/tesl/tesl
-
-            export HOME=$(mktemp -d)
-            export PLTCOLLECTS="${pkgs.racket}/share/racket/collects:$(pwd)/build/collections"
-
-            # Pre-compile all .rkt files; non-fatal (see comment above).
-            find build/collections -name "*.rkt" -print0 \
-              | xargs -0 -P"$(nproc)" raco make 2>&1 \
-              || echo "warning: tesl-racket: raco pre-compilation failed — first run will be slower" >&2
-          '';
-
-          installPhase = ''
-            mkdir -p $out/share/tesl-collections
-            cp -r build/collections/tesl $out/share/tesl-collections/tesl
-          '';
-
-          meta.description = "Tesl Racket runtime collections (dsl, tesl)";
         };
 
         # ── Project templates ────────────────────────────────────────────────
@@ -114,7 +100,7 @@
         # fallback.
         tesl-templates = pkgs.stdenv.mkDerivation {
           pname   = "tesl-templates";
-          version = "0.1.0";
+          version = "0.3.1";
 
           src = pkgs.lib.cleanSourceWith {
             src    = ./templates;
@@ -131,48 +117,27 @@
           meta.description = "Tesl project templates (minimal, api, docker)";
         };
 
-        # ── LSP Racket script ─────────────────────────────────────────────────
-        # Bundle the LSP entry-point so tesl-lsp can reference it by absolute
-        # store path without assuming a live repo checkout.
-        tesl-lsp-script = pkgs.stdenv.mkDerivation {
-          pname   = "tesl-lsp-script";
-          version = "0.1.0";
-
-          src = pkgs.lib.cleanSourceWith {
-            src    = ./editor/tesl-lsp;
-            filter = path: _type:
-              !(pkgs.lib.hasInfix "/compiled/" (toString path));
-          };
-
-          dontBuild    = true;
-          installPhase = ''
-            install -Dm644 tesl-lsp.rkt $out/share/tesl-lsp/tesl-lsp.rkt
-          '';
-        };
-
-        # ── MCP Racket script ─────────────────────────────────────────────────
-        # Bundle the MCP server entry-point so tesl-mcp can reference it by
-        # absolute store path without assuming a live repo checkout.
-        tesl-mcp-script = pkgs.stdenv.mkDerivation {
-          pname   = "tesl-mcp-script";
-          version = "0.1.0";
-
-          src = pkgs.lib.cleanSourceWith {
-            src    = ./editor/tesl-mcp;
-            filter = path: _type:
-              !(pkgs.lib.hasInfix "/compiled/" (toString path));
-          };
-
-          dontBuild    = true;
-          installPhase = ''
-            install -Dm644 tesl-mcp.rkt $out/share/tesl-mcp/tesl-mcp.rkt
-          '';
+        # ── Go editor/debug/MCP tools ─────────────────────────────────────────
+        tesl-go-tools = pkgs.buildGoModule {
+          pname = "tesl-go-tools";
+          version = "0.3.1";
+          src = ./.;
+          modRoot = "runtime/go";
+          vendorHash = "sha256-SMXMkfkj5ehtjri4CCWPMwOyLIGcaoSgBv8k4DVG86c=";
+          subPackages = [
+            "cmd/tesl-dap"
+            "cmd/tesl-debug-attach"
+            "cmd/tesl-debug-inspect"
+            "cmd/tesl-lsp"
+            "cmd/tesl-mcp"
+          ];
+          meta.description = "Tesl Go LSP, DAP, headless debugger, and MCP tools";
         };
 
         # ── GNU userland pinned into the wrappers' PATH ────────────────────────
         # #46: on macOS the BSD variants of these tools are what a fresh
-        # `nix profile install` finds on PATH, and the CLI (plus the Racket
-        # runtime's own shell-outs) expects GNU semantics.  Prepending the store
+        # `nix profile install` finds on PATH, and the CLI expects GNU semantics.
+        # Prepending the store
         # paths here makes them real runtime dependencies of the installed
         # package — correctly GC-rooted, identical on Linux and macOS, zero user
         # action.  The CLI body is ALSO written to be BSD-clean (see the
@@ -187,108 +152,78 @@
           pkgs.diffutils   # cmp
         ];
 
-        # ── Native shared libraries the Racket runtime dlopen()s ───────────────
-        # `tesl/crypto.rkt` reaches libsodium through `ffi/unsafe`.  Relying on
-        # the ambient loader path is not portable: a `nix profile install` user
-        # has no libsodium on the default search path at all, and on macOS
-        # DYLD_LIBRARY_PATH is unreliable.  So we bake the ABSOLUTE store path of
-        # the library into the wrappers and have crypto.rkt prefer it, falling
-        # back to a plain `ffi-lib "libsodium"` lookup for non-Nix installs
-        # (Docker images, distro packages).  That makes libsodium a real,
-        # GC-rooted runtime dependency of the installed package.
-        #
-        # extensions.sharedLibrary is ".so" on Linux and ".dylib" on Darwin, so
-        # one expression covers both.
-        libsodiumPath =
-          "${pkgs.libsodium}/lib/libsodium${pkgs.stdenv.hostPlatform.extensions.sharedLibrary}";
-
-        # ── Shared preamble injected at the top of all installed wrappers ─────
-        # Sets the Racket collection path so the wrapper works with the
-        # pre-compiled .zo files baked into the tesl-racket Nix derivation.
-        #
-        # PLTCOLLECTS order matters: ${pkgs.racket}/share/racket/collects MUST
-        # come first.  In Racket 9.x (nixpkgs) the compiler-lib package is
-        # registered as providing the raco/ collection but is missing
-        # raco/main.rkt (moved to collects/).  When any PLTCOLLECTS is set the
-        # package-link lookup shadows the built-in collects path, causing raco
-        # to fail.  Prepending the collects dir ensures the path-based lookup
-        # wins before the broken package link is reached.
-        #
-        # PLTCOMPILEDROOTS is intentionally NOT set.  On Racket 9.x (nixpkgs)
-        # setting PLTCOMPILEDROOTS to any non-empty value triggers a slow
-        # startup path (≥60 s on typical hardware).  The default compiled/
-        # directory lookup (equivalent to "@") finds the pre-compiled .zo files
-        # in the Nix store automatically and is fast (≈2 s).
-        runtimePreamble = ''
-          export TESL_VERSION="0.1.0"
+        # Go-only shipped profile.
+        goRuntimePreamble = ''
+           export TESL_VERSION="0.3.1"
           export TESL_OCAML_COMPILER="${tesl-compiler}/bin/tesl-compiler"
-          export PLTCOLLECTS="${pkgs.racket}/share/racket/collects:${tesl-racket}/share/tesl-collections''${PLTCOLLECTS:+:$PLTCOLLECTS}"
-
-          # Assets baked into the store so the installed binary works with NO
-          # repo checkout.  `tesl init`/`tesl build` read templates from here and
-          # `tesl build` stages the runtime collections from the tesl-racket
-          # derivation.  A live $TESL_REPO_ROOT (dev) takes precedence in the body.
+          export TESL_DEFAULT_BACKEND="''${TESL_DEFAULT_BACKEND:-go}"
           export TESL_TEMPLATES_DIR="${tesl-templates}/share/tesl-templates"
-          export TESL_COLLECTIONS_DIR="${tesl-racket}/share/tesl-collections/tesl"
-
-          export PATH="${pkgs.racket}/bin:${gnuUserland}:$PATH"
-
-          # Native library for Tesl.Crypto (see libsodiumPath above).
-          export TESL_LIBSODIUM="''${TESL_LIBSODIUM:-${libsodiumPath}}"
+          export TESL_DEBUG_ATTACH_BIN="${tesl-go-tools}/bin/tesl-debug-attach"
+          export TESL_DEBUG_INSPECT_BIN="${tesl-go-tools}/bin/tesl-debug-inspect"
+          export TESL_GO="${pkgs.go}/bin/go"
+          export PATH="${gnuUserland}:$PATH"
         '';
 
         # ── CLI body (shared between installed and dev wrappers) ──────────────
         # Everything after the preamble — the case statement and helpers.
         cliBody = builtins.readFile ./nix/tesl-cli-body.sh;
 
-        # ── Installed tesl CLI ────────────────────────────────────────────────
-        # For `nix run`, `nix profile install`, home-manager, etc.
-        # All paths are baked into the Nix store; no live repo checkout needed.
-        tesl-cli = pkgs.writeShellScriptBin "tesl" (runtimePreamble + cliBody);
+        tesl-go-cli = pkgs.writeShellScriptBin "tesl" (goRuntimePreamble + cliBody);
         
         # ── Dev tesl CLI ──────────────────────────────────────────────────────
         # Used inside devShells.default so developers run against their local
         # compiler/_build/  rather than the pinned store binary.
         tesl-cli-dev = pkgs.writeShellScriptBin "tesl" (''
-          export TESL_REPO_ROOT="''${TESL_REPO_ROOT:-${toString ./.}}"
-          export TESL_OCAML_COMPILER="''${TESL_OCAML_COMPILER:-$TESL_REPO_ROOT/compiler/_build/default/bin/main.exe}"
-          export PLTCOLLECTS="${pkgs.racket}/share/racket/collects:${tesl-racket}/share/tesl-collections''${PLTCOLLECTS:+:$PLTCOLLECTS}"
-
-          export PATH="${pkgs.racket}/bin:${gnuUserland}:$PATH"
-          export TESL_LIBSODIUM="''${TESL_LIBSODIUM:-${libsodiumPath}}"
+           export TESL_REPO_ROOT="''${TESL_REPO_ROOT:-${toString ./.}}"
+           export TESL_OCAML_COMPILER="''${TESL_OCAML_COMPILER:-$TESL_REPO_ROOT/compiler/_build/default/bin/main.exe}"
+           export TESL_DEFAULT_BACKEND="''${TESL_DEFAULT_BACKEND:-go}"
+           export TESL_TEMPLATES_DIR="''${TESL_TEMPLATES_DIR:-$TESL_REPO_ROOT/templates}"
+           export TESL_DEBUG_ATTACH_BIN="''${TESL_DEBUG_ATTACH_BIN:-${tesl-go-tools}/bin/tesl-debug-attach}"
+           export TESL_DEBUG_INSPECT_BIN="''${TESL_DEBUG_INSPECT_BIN:-${tesl-go-tools}/bin/tesl-debug-inspect}"
+           export TESL_GO="''${TESL_GO:-${pkgs.go}/bin/go}"
+           export PATH="${gnuUserland}:$PATH"
         '' + cliBody);
 
         # ── tesl-lsp wrapper ──────────────────────────────────────────────────
-        # Sets TESL_COMPILER so the LSP Racket script finds the binary without
-        # needing TESL_REPO_ROOT.  An INHERITED TESL_COMPILER wins: the editor
+         # Sets TESL_COMPILER for the Go LSP without needing TESL_REPO_ROOT. An
+         # inherited TESL_COMPILER wins: the editor
         # extension points a repo checkout's LSP at that checkout's fresh
         # compiler/_build binary, and clobbering it here is what silently pinned
         # every diagnostic to the store compiler of whatever revision the user
         # last ran `nix profile install` on — new checks looked simply absent.
-        tesl-lsp = pkgs.writeShellScriptBin "tesl-lsp" (runtimePreamble + ''
+        tesl-lsp = pkgs.writeShellScriptBin "tesl-lsp" (''
+          export TESL_OCAML_COMPILER="${tesl-compiler}/bin/tesl-compiler"
           export TESL_COMPILER="''${TESL_COMPILER:-$TESL_OCAML_COMPILER}"
-          exec racket "${tesl-lsp-script}/share/tesl-lsp/tesl-lsp.rkt" "$@"
+          exec "${tesl-go-tools}/bin/tesl-lsp" "$@"
         '');
 
         # ── tesl-mcp wrapper ──────────────────────────────────────────────────
         # MCP stdio server exposing the Tesl agent API to AI agents (Claude Code,
         # etc.). Same compiler discovery as tesl-lsp — sets TESL_COMPILER, so no
         # TESL_REPO_ROOT / repo checkout is needed.
-        tesl-mcp = pkgs.writeShellScriptBin "tesl-mcp" (runtimePreamble + ''
+        tesl-mcp = pkgs.writeShellScriptBin "tesl-mcp" (''
+          export TESL_OCAML_COMPILER="${tesl-compiler}/bin/tesl-compiler"
           export TESL_COMPILER="''${TESL_COMPILER:-$TESL_OCAML_COMPILER}"
-          exec racket "${tesl-mcp-script}/share/tesl-mcp/tesl-mcp.rkt" "$@"
+          export TESL_DEBUG_ATTACH="${tesl-go-tools}/bin/tesl-debug-attach"
+          export TESL_DEBUG_INSPECT_BIN="${tesl-go-tools}/bin/tesl-debug-inspect"
+          exec "${tesl-go-tools}/bin/tesl-mcp" "$@"
         '');
+
+        tesl-debug-tools = pkgs.symlinkJoin {
+          name = "tesl-debug-tools";
+          paths = [ tesl-go-tools ];
+        };
 
         # ── Combined default: CLI + LSP + MCP in one profile install ───────────
         tesl-full = pkgs.symlinkJoin {
           name = "tesl";
-          paths = [ tesl-cli tesl-lsp tesl-mcp ];
+          paths = [ tesl-go-cli tesl-compiler tesl-lsp tesl-mcp tesl-debug-tools ];
         };
 
       in {
         # ── Packages ──────────────────────────────────────────────────────────
-        packages = {
-          inherit tesl-compiler tesl-racket tesl-cli tesl-lsp tesl-mcp tesl-full;
+          packages = {
+           inherit tesl-compiler tesl-go-cli tesl-lsp tesl-mcp tesl-go-tools tesl-debug-tools tesl-full staticcheck;
           default = tesl-full;
           # Reusable PostgreSQL so the managed-PG lifecycle (`tesl db`) can source
           # initdb / pg_ctl / createdb via nix without entering a dev shell.
@@ -297,21 +232,27 @@
 
         # ── Apps (for `nix run github:mtonnberg/tesl`) ────────────────────────
         apps = {
-          default  = { type = "app"; program = "${tesl-cli}/bin/tesl"; };
+          default  = { type = "app"; program = "${tesl-go-cli}/bin/tesl"; };
           tesl-lsp = { type = "app"; program = "${tesl-lsp}/bin/tesl-lsp"; };
           tesl-mcp = { type = "app"; program = "${tesl-mcp}/bin/tesl-mcp"; };
         };
 
         # ── Dev shell ─────────────────────────────────────────────────────────
         # `nix develop` gives the same workflow as the legacy `nix-shell`,
-        # while the shellHook retains the auto-build + raco-link logic.
+        # while the shellHook retains compiler auto-build logic.
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
             tesl-cli-dev
-            racket
+            tesl-go-tools
             curl
             jq
             postgresql
+            go
+            staticcheck
+            gosec
+            govulncheck
+            golangci-lint
+            nilaway
             ocamlPackages.ocaml
             ocamlPackages.dune_3
             ocamlPackages.findlib
@@ -325,31 +266,23 @@
             # Integration test mock servers
             mailhog   # SMTP mock for email integration tests (MailHog binary in PATH as MailHog)
             python3   # HTTP mock server for httpclient integration tests
-            libsodium # Tesl.Crypto: Argon2id / HMAC / digests / constant-time compare
           ];
 
           shellHook = ''
-            export TESL_REPO_ROOT="''${TESL_REPO_ROOT:-${toString ./.}}"
+            # `${toString ./.}` is an immutable Nix-store source during `nix develop`,
+            # so compiler auto-builds must resolve the live checkout from the shell cwd.
+            _tesl_root="''${PWD}"
+            while [ "$_tesl_root" != "/" ] && [ ! -f "$_tesl_root/flake.nix" ]; do
+              _tesl_root="$(dirname "$_tesl_root")"
+            done
+            export TESL_REPO_ROOT="''${TESL_REPO_ROOT:-$_tesl_root}"
+            unset _tesl_root
             export TESL_OCAML_COMPILER="''${TESL_OCAML_COMPILER:-$TESL_REPO_ROOT/compiler/_build/default/bin/main.exe}"
-
-            # Tesl.Crypto's libsodium — absolute store path, same as the
-            # installed wrappers use.  `racket` invoked directly in the dev shell
-            # (ci.sh does this a lot) therefore resolves it identically to a
-            # `nix profile install`.
-            export TESL_LIBSODIUM="''${TESL_LIBSODIUM:-${libsodiumPath}}"
 
             if [ -z "''${TESL_SKIP_AUTO_BUILD:-}" ] && [ ! -x "$TESL_OCAML_COMPILER" ]; then
               echo "[tesl] OCaml compiler not built; building compiler/bin/main.exe..."
               (cd "$TESL_REPO_ROOT/compiler" && dune build bin/main.exe) || \
                 echo "[tesl] warning: automatic OCaml compiler build failed" >&2
-            fi
-
-            if ! raco pkg show tesl 2>/dev/null | grep -qF "link $TESL_REPO_ROOT"; then
-              if raco pkg show tesl 2>/dev/null | grep -Eq '^[[:space:]]*tesl([[:space:]]|$)'; then
-                raco pkg update --auto --link "$TESL_REPO_ROOT" 2>/dev/null || true
-              else
-                raco pkg install --auto --link "$TESL_REPO_ROOT" 2>/dev/null || true
-              fi
             fi
 
             # CI: skip the convenience PostgreSQL. Its PGDATA would sit in the

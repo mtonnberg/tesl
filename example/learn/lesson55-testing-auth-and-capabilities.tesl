@@ -108,7 +108,7 @@ server AuthServer for AuthApi {
 # api-test blocks let you write HTTP-level tests against your server.
 # For authenticated endpoints, set the session cookie in the request. The name
 # `__Host-session` is spelled out here only because a .tesl file cannot reach the
-# runtime constant `session-cookie-name` in tesl/http.rkt, which is the single
+# runtime constant `session-cookie-name` in the HTTP runtime, which is the single
 # source of truth `Http.sessionToken` reads.
 # ─────────────────────────────────────────────────────────────────────────────
 

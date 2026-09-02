@@ -36,14 +36,40 @@ let tesl =
 let check_subcmd =
   if Filename.basename tesl = "main.exe" then "--check" else "check"
 
+(* Each source gets its OWN directory rather than a bare temp file in the shared build
+   sandbox.  Under a parallel `dune test` this suite intermittently failed with
+   "unterminated string literal at EOF" — the compiler reading a PARTIAL file, which a
+   plain write-then-close cannot produce on its own; the shared sandbox directory being
+   cleaned underneath it can.  A private directory removes the interference, and
+   `with_open_bin` closes the file even if writing raises, so the compiler never sees a
+   half-written source. *)
+(* The compiler resolves imports by FILE NAME and rejects a module header that does not
+   match it, so the probe is named after the module it declares.  (The old flat temp name
+   satisfied that check only by accident: `tesl-r77<hex>.tesl` happened to contain the
+   `r77…` module spelling.) *)
+let module_name_of src =
+  match String.index_opt src 'm' with
+  | _ ->
+    let words = String.split_on_char ' ' (String.trim src) in
+    let rec after = function
+      | "module" :: name :: _ -> Some name
+      | _ :: rest -> after rest
+      | [] -> None
+    in
+    (match after (List.concat_map (String.split_on_char '\n') words) with
+     | Some name when name <> "" -> name
+     | _ -> "Probe")
+
 let compile_string src =
-  let tmp = Filename.temp_file "tesl-r77" ".tesl" in
-  let oc = open_out tmp in output_string oc src; close_out oc;
+  let dir = Filename.temp_dir "tesl-r77" "" in
+  let tmp = Filename.concat dir (module_name_of src ^ ".tesl") in
+  Out_channel.with_open_bin tmp (fun oc -> Out_channel.output_string oc src);
   let cmd = Printf.sprintf "%s %s %s 2>&1" tesl check_subcmd tmp in
   let ic = Unix.open_process_in cmd in
   let out = In_channel.input_all ic in
   let _ = Unix.close_process_in ic in
   (try Sys.remove tmp with _ -> ());
+  (try Sys.rmdir dir with _ -> ());
   out
 
 let has_error out =
@@ -133,13 +159,45 @@ fn forge(rawId: String, rawName: String)
     W wid -> exists w => wid
 |})
 
+(* The witness of a pack is a VISIBLE BOUND NAME of the declared witness type
+   (LANGUAGE-SPEC 13.3 and 16.3): `exists <name> => body` packages an existing
+   binder, it does not introduce one.  This is the spelling the whole corpus uses
+   (lesson20 `existentialFetch`), and the two `should_fail` cases below pin the
+   near-miss spellings that must stay rejected. *)
 let r772_legit_case_select () =
   should_pass "77.2 legit case-over-select existential"
     (exists_hdr "R77f" ^ {|
 fn fetch(id: String) -> exists w: String => Widget ? FromDb (Id == w) requires [dbRead] =
   case selectOne x from Widget where x.id == id of
     Nothing -> fail 404 "no"
-    Something wgt -> exists w => wgt
+    Something wgt ->
+      exists id =>
+        wgt
+|})
+
+(* The return type's witness binder is a TYPE-level name; using it as the packed
+   witness would pack a name that does not exist at runtime. *)
+let r772_return_binder_is_not_a_value () =
+  should_fail "77.2 return-type witness binder as value" "unknown name: w"
+    (exists_hdr "R77h" ^ {|
+fn fetch(id: String) -> exists w: String => Widget ? FromDb (Id == w) requires [dbRead] =
+  case selectOne x from Widget where x.id == id of
+    Nothing -> fail 404 "no"
+    Something wgt ->
+      exists w =>
+        wgt
+|})
+
+(* Packing a value of the wrong type would let the caller unpack a witness that
+   never had the declared witness type. *)
+let r772_witness_type_must_match () =
+  should_fail "77.2 packed witness type mismatch" "cannot unify"
+    (exists_hdr "R77i" ^ {|
+fn insertWidget(rawName: String) -> exists w: String => Widget ? FromDb (Id == w)
+  requires [dbRead, dbWrite] =
+  let created = insert Widget { id: rawName, name: rawName }
+  exists created =>
+    created
 |})
 
 (* A let-ESTABLISHED existential (the idiomatic form, cf. lesson19) must keep
@@ -150,7 +208,7 @@ let r772_legit_let_established () =
 fn insertWidget(rawName: String) -> exists w: String => Widget ? FromDb (Id == w)
   requires [dbRead, dbWrite] =
   let created = insert Widget { id: rawName, name: rawName }
-  exists created =>
+  exists rawName =>
     created
 |})
 
@@ -216,7 +274,9 @@ let () =
       ("77.2 existential case-arm laundering",
        [ test_case "case-arm launder → reject" `Quick r772_case_arm_launder;
          test_case "legit case-over-select → accept" `Quick r772_legit_case_select;
-         test_case "legit let-established → accept" `Quick r772_legit_let_established ]);
+         test_case "legit let-established → accept" `Quick r772_legit_let_established;
+         test_case "return-type binder as witness → reject" `Quick r772_return_binder_is_not_a_value;
+         test_case "packed witness type mismatch → reject" `Quick r772_witness_type_must_match ]);
       ("77.3 auth clause drop",
        [ test_case "missing via → parse error" `Quick r773_auth_missing_via ]);
       ("77.4 capability spelling launder",

@@ -94,6 +94,8 @@ flow's own network calls mean an `sso` server forces `main` to grant
   the unspoofable socket peer; with one it is the rightmost untrusted
   `X-Forwarded-For` hop (a spoofed, prepended entry is never reached), and a
   chain that disagrees with the declaration is refused rather than guessed.
+   The Go backend enforces this declaration and uses the same
+   rightmost-untrusted-hop rule and fails closed on an all-trusted chain.
 - `healthProbePath "/healthz"` — when `publicOrigin` is set, the request `Host`
   must name that origin (a Host-header attack otherwise mints links/cookies for
   another origin); this ONE path is exempt so a host-blind load-balancer probe

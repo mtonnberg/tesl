@@ -33,7 +33,7 @@ blocks; **Debug** is offered for `test`, `api-test`, and `doctest` blocks.
 A `load-test` is run-only — it is a throughput benchmark, so stepping through it
 is not meaningful.
 
-Behind the scenes the adapter compiles the file with `tesl --debug`, runs the
+Behind the scenes the adapter starts the file with `tesl run --debug`, runs the
 chosen `main` (program mode) or `test` blocks (test mode), and pauses at your
 breakpoints. The **Variables** panel shows each local's raw runtime value
 overlaid with its **compile-time type and proof** — the proof annotation is
@@ -65,7 +65,7 @@ This puts both `tesl` and `tesl-lsp` on your PATH. The extension finds `tesl-lsp
 
 **Alternative: repo checkout**
 
-If you have the Tesl repository open as your workspace and have run `nix develop` (or `nix-shell`), the extension finds `tesl-lsp.rkt` in the repo automatically.
+If you have Tesl installed with Nix, the extension finds the Go `tesl-lsp` binary from PATH.
 
 ---
 
@@ -73,7 +73,7 @@ If you have the Tesl repository open as your workspace and have run `nix develop
 
 | Setting | Default | Description |
 |---|---|---|
-| `tesl.lspScript` | `""` | Advanced override: absolute path to `tesl-lsp.rkt`. Leave empty to use the `tesl-lsp` binary from PATH or auto-detect from the workspace. |
+| `tesl.lspBinary` | `""` | Advanced override: absolute path to the Go `tesl-lsp` binary. Leave empty to use `tesl-lsp` from PATH. |
 
 ---
 

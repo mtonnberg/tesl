@@ -74,9 +74,16 @@ let should_pass src =
 
 let emit_output src =
   with_temp_file src (fun path ->
-    let code, out = run_compiler [path] in
-    if code <> 0 then failf "expected clean emit, got (exit %d):\n%s" code out;
-    out)
+    match Compile.compile_go_file path with
+    | Compile.GoFailure diagnostics ->
+      failf "expected clean Go emit, got:\n%s"
+        (String.concat "\n"
+           (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+    | Compile.GoSuccess artifacts ->
+      (match List.find_opt (fun (a : Emit_go.artifact) ->
+         Filename.basename a.path = "module.go") artifacts with
+       | Some artifact -> artifact.contents
+       | None -> failf "Go emit did not produce a module.go artifact"))
 
 let count_occurrences needle haystack =
   let re = Str.regexp_string needle in
@@ -164,28 +171,27 @@ let test_complement_in_emitted_metadata () =
      proof does NOT cover); adminHuman's complement is empty.  So the adminWipe
      human-action row appears exactly once, and greet — always covered, never a
      human action — appears zero times. *)
-  let admin_rows = count_occurrences {|(list "adminWipe"|} out in
+  let admin_rows = count_occurrences {|teslrt.HumanActionOf("adminWipe"|} out in
   if admin_rows <> 1 then
     failf "expected the adminWipe human-action row exactly once (plain fn only), got %d:\n%s"
       admin_rows out;
-  let greet_rows = count_occurrences {|(list "greet"|} out in
+  let greet_rows = count_occurrences {|teslrt.HumanActionOf("greet"|} out in
   if greet_rows <> 0 then
     failf "greet is always covered and must never be a human action, got %d rows:\n%s"
       greet_rows out;
   (* Two humanActions call sites both lower (adminHuman emits an empty list). *)
-  let sites = count_occurrences "__tht_human-actions" out in
+  let sites = count_occurrences "teslrt.HumanActions(" out in
   if sites <> 2 then
     failf "expected 2 humanActions lowering sites, got %d:\n%s" sites out
 
 let test_lowering_is_inert () =
   let out = emit_output (fixture valid_tail) in
-  (* Inert: the lowering passes the server NAME as a string literal, never the
-     user value or the server value.  `(__tht_human-actions "HaServer" (list …)`
-     is the tell — a quoted server name and no user argument. *)
-  if not (contains {|(__tht_human-actions "HaServer" (list|} out) then
-    failf "expected inert lowering `(__tht_human-actions \"HaServer\" (list …`:\n%s" out;
+  (* Inert: the lowering passes the server NAME plus inert specs, never the user
+     value or executable endpoint dispatch. *)
+  if not (contains {|teslrt.HumanActions("HaServer", []teslrt.HumanActionSpec{|} out) then
+    failf "expected inert teslrt.HumanActions lowering with a quoted server name:\n%s" out;
   (* It must NOT reuse the executing serverTools runtime entry. *)
-  if contains "__tst_server-tools" out then
+  if contains "teslrt.ToolDispatchWith" out then
     failf "humanActions must not lower to the executing serverTools runtime:\n%s" out
 
 let test_disjoint_from_server_tools () =
@@ -199,13 +205,13 @@ fn both(u: User ::: Authenticated u) -> List Tool =
   let out = emit_output (fixture tail) in
   (* greet is an executing serverTools row; adminWipe is an inert humanActions
      row.  Neither crosses over. *)
-  if count_occurrences {|(list "greet"|} out <> 1 then
+  if count_occurrences {|teslrt.ToolOf("greet"|} out <> 1 then
     failf "greet must be exactly one serverTools row:\n%s" out;
-  if count_occurrences {|(list "adminWipe"|} out <> 1 then
+  if count_occurrences {|teslrt.HumanActionOf("adminWipe"|} out <> 1 then
     failf "adminWipe must be exactly one humanActions row:\n%s" out;
-  if not (contains "__tst_server-tools" out) then
+  if not (contains "teslrt.ToolDispatchWith" out) then
     failf "expected a serverTools lowering:\n%s" out;
-  if not (contains "__tht_human-actions" out) then
+  if not (contains "teslrt.HumanActions(" out) then
     failf "expected a humanActions lowering:\n%s" out
 
 (* The capability OPPOSITE of serverTools: humanActions charges NOTHING, even

@@ -551,10 +551,19 @@ let codec_decode_entry_json = function
       json_field "codec" (json_string codec);
       json_field "via" (json_string_array via);
     ]
-  | DecodeDefault { field_name; default_expr; _ } ->
+  | DecodeDefault { field_name; default_lit; _ } ->
+    (* The IR is a backend-neutral interchange format, so the default is rendered as a
+       JSON value rather than the Racket source this used to carry. *)
+    let default_value = match default_lit with
+      | LInt n -> string_of_int n
+      | LBool b -> if b then "true" else "false"
+      | LString str -> json_string str
+      | LFloat f -> Float_fmt.to_faithful_literal f
+      | _ -> "null"
+    in
     json_object [
       json_field "name" (json_string field_name);
-      json_field "default" (json_string default_expr);
+      json_field "default" default_value;
     ]
   | DecodeCrossCheck { checker; _ } ->
     json_object [json_field "checker" (json_string checker)]
@@ -624,8 +633,7 @@ let adt_variant_json (variant : adt_variant) =
   ]
 
 let type_decl_json ~(codec_names : string list) = function
-  | TypeNewtype { name; base_type; _ }
-  | TypeAlias { name; base_type; _ } ->
+  | TypeNewtype { name; base_type; _ } ->
     Some (json_object [
       json_field "name" (json_string name);
       json_field "base" (json_string (type_expr_to_text base_type));
@@ -979,7 +987,7 @@ let module_to_json ~(source_name : string) (m : module_form) =
         (match type_decl with
          | TypeAdt _ ->
            (match type_decl_json ~codec_names type_decl with Some json -> adts := json :: !adts | None -> ())
-         | TypeNewtype _ | TypeAlias _ ->
+         | TypeNewtype _ ->
            (match type_decl_json ~codec_names type_decl with Some json -> newtypes := json :: !newtypes | None -> ()))
       | DFunc func ->
         (match fact_json_of_func ~fact_decls func with

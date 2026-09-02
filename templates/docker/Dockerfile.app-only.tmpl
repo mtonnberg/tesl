@@ -1,83 +1,10 @@
 # syntax=docker/dockerfile:1
-#
-# Tesl "app-only" production image (TEMPLATE).
-# ---------------------------------------------------------------------------
-# `tesl build` substitutes every __PLACEHOLDER__ below before `docker build`.
-# This image carries ONLY the Tesl Racket runtime + your pre-compiled app.
-# It has NO database; it connects to an EXTERNAL Postgres configured purely
-# through environment variables at `docker run` time.
-#
-# Placeholders (see templates/docker/README.md for the full contract):
-#   __RACKET_BASE__   official Racket base image tag, e.g. racket/racket:8.18-full
-#   __APP_NAME__      human-readable app name (label only)
-#   __APP_RKT__       path of the compiled entrypoint .rkt RELATIVE to the build
-#                     context, e.g. app.rkt
-#   __PORT__          TCP port the Tesl web server listens on, e.g. 8086
-#
-# Build context layout `tesl build` MUST stage before building:
-#   <context>/
-#     collections/tesl/dsl/    (copy of repo dsl/)
-#     collections/tesl/tesl/   (copy of repo tesl/)
-#     __APP_RKT__              (output of `tesl compile <app>.tesl`)
-#     <any dependency .rkt>    (compiled imports, same relative paths)
-# ---------------------------------------------------------------------------
-FROM __RACKET_BASE__
-
+FROM debian:bookworm-slim
 LABEL org.opencontainers.image.title="__APP_NAME__" \
-      org.opencontainers.image.description="Tesl app (app-only, external Postgres)"
-
-# Native library the Tesl runtime dlopen()s: libsodium, used by Tesl.Crypto for
-# Argon2id password hashing, HMAC, digests and constant-time comparison.
-# Installed unconditionally and by the NAME-STABLE dev package — the runtime
-# package is version-suffixed (libsodium23 on bookworm, libsodium26 later) and
-# would silently break on a base-image bump, whereas `libsodium-dev` keeps its
-# name across Debian releases and pulls the correct runtime lib as a dependency.
-# It also provides the unversioned `libsodium.so` symlink, so the FFI lookup
-# succeeds regardless of soname. An app that never calls Tesl.Crypto pays one
-# small layer; an app that does would otherwise fail at runtime, not build time,
-# which is the worse trade.
-RUN apt-get update \
- && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libsodium-dev \
- && rm -rf /var/lib/apt/lists/*
-
-# The Tesl runtime collections are required by the compiled app via
-#   (require tesl/dsl/… tesl/tesl/…)
-# We expose them as a Racket collection root through PLTCOLLECTS. The base
-# image's own collects dir MUST come first (so raco/the reader resolve), then
-# our collection root containing the single `tesl` collection.
-ENV TESL_COLLECTIONS=/opt/tesl/collections
-ENV PLTCOLLECTS="/usr/share/racket/collects:${TESL_COLLECTIONS}"
-
+      org.opencontainers.image.description="Tesl Go app (external PostgreSQL)"
 WORKDIR /opt/tesl/app
-
-# Runtime collections first (changes rarely → better layer caching).
-COPY collections/ ${TESL_COLLECTIONS}/
-
-# Pre-compile the runtime collections to .zo so app startup is fast.
-# Non-fatal: if it fails the app still runs (compiled on first load).
-RUN raco make ${TESL_COLLECTIONS}/tesl/dsl/*.rkt \
-               ${TESL_COLLECTIONS}/tesl/tesl/*.rkt 2>/dev/null || true
-
-# The compiled application (+ any compiled dependency .rkt files).
-COPY __APP_RKT__ /opt/tesl/app/__APP_RKT__
-
-# Network port the Tesl web server binds. Honored via PORT below.
+COPY tesl-app /usr/local/bin/tesl-app
 ENV PORT=__PORT__
 EXPOSE __PORT__
-
-# External Postgres connection — supply these at `docker run` time.
-# Defaults match Tesl's `env("TESL_POSTGRES_*")` database config convention.
-# (Leave unset for apps that declare no `database` block.)
-#   TESL_POSTGRES_HOST       e.g. db.internal
-#   TESL_POSTGRES_PORT       e.g. 5432
-#   TESL_POSTGRES_DATABASE   e.g. appdb
-#   TESL_POSTGRES_USER       e.g. appuser
-#   TESL_POSTGRES_PASSWORD   e.g. (secret)
-ENV TESL_POSTGRES_PORT=5432
-
-# Run the network-facing app as an unprivileged user, not root.
-RUN useradd --system --no-create-home tesl \
- && chown -R tesl:tesl /opt/tesl
-USER tesl
-
-ENTRYPOINT ["racket", "/opt/tesl/app/__APP_RKT__"]
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/tesl-app"]

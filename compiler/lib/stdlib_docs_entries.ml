@@ -631,11 +631,14 @@ let float_ : entry list = [
     ~doc:"Double-precision floating point (never use for money — see Tesl.Money).";
   e "FloatNonZero" ~m:"Tesl.Float" ~kind:(KFact "fact FloatNonZero (f: Float)")
     ~doc:"The float is != 0.0; minted by Float.requireNonZero, required as the denominator proof of Float.div.";
+  e "FloatNonNegative" ~m:"Tesl.Float" ~kind:(KFact "fact FloatNonNegative (f: Float)")
+    ~doc:"The float is >= 0.0; minted by Float.requireNonNegative, required as the argument proof of Float.sqrt (a negative input has no real square root).";
   f "Float.add" [ "a"; "b" ] ~m:"Tesl.Float" ~doc:"Float addition.";
   f "Float.sub" [ "a"; "b" ] ~m:"Tesl.Float" ~doc:"Float subtraction.";
   f "Float.mul" [ "a"; "b" ] ~m:"Tesl.Float" ~doc:"Float multiplication.";
   f "Float.div" [ "a"; "b" ] ~m:"Tesl.Float" ~doc:"Float division; the denominator must carry a FloatNonZero proof (from Float.requireNonZero).";
   f "Float.requireNonZero" [ "f" ] ~m:"Tesl.Float" ~doc:"Check function: passes f != 0.0, minting FloatNonZero.";
+  f "Float.requireNonNegative" [ "f" ] ~m:"Tesl.Float" ~doc:"Check function: passes f >= 0.0, minting FloatNonNegative. Zero is accepted, since sqrt 0.0 is 0.0.";
   f "Float.round" [ "f" ] ~m:"Tesl.Float" ~doc:"Rounds to the nearest integer.";
   f "Float.floor" [ "f" ] ~m:"Tesl.Float" ~doc:"Largest integer <= f.";
   f "Float.ceil" [ "f" ] ~m:"Tesl.Float" ~doc:"Smallest integer >= f.";
@@ -666,7 +669,7 @@ let float_ : entry list = [
 (* ── Tesl.Dict ─────────────────────────────────────────────────────────────── *)
 
 let dict : entry list = [
-  e "Dict" ~m:"Tesl.Dict" ~kind:(KType "type Dict k v   # immutable key-value map") ~doc:"An immutable dictionary from keys to values.";
+  e "Dict" ~m:"Tesl.Dict" ~kind:(KType "type Dict k v   # immutable key-value map") ~doc:"An immutable dictionary from keys to values. An UNORDERED datatype: lookup, membership, insertion, removal, equality, and size are independent of storage order, and no iteration order is promised. A backend may return a deterministic internal order, but that is an implementation detail and must not be relied on.";
   e "HasKey" ~m:"Tesl.Dict" ~kind:(KFact "fact HasKey (key: k, d: Dict k v)")
     ~doc:"The dict contains the key; minted by Dict.requireKey, required by Dict.get.";
   v "Dict.empty" ~m:"Tesl.Dict" ~doc:"The empty dictionary.";
@@ -680,10 +683,10 @@ let dict : entry list = [
   f "Dict.member" [ "key"; "d" ] ~m:"Tesl.Dict" ~doc:"True when key is present.";
   f "Dict.size" [ "d" ] ~m:"Tesl.Dict" ~doc:"Number of entries.";
   f "Dict.isEmpty" [ "d" ] ~m:"Tesl.Dict" ~doc:"True when the dict has no entries.";
-  f "Dict.keys" [ "d" ] ~m:"Tesl.Dict" ~doc:"The keys as a list.";
-  f "Dict.values" [ "d" ] ~m:"Tesl.Dict" ~doc:"The values as a list.";
+  f "Dict.keys" [ "d" ] ~m:"Tesl.Dict" ~doc:"The keys as a list, each once, in UNSPECIFIED order. Sort explicitly when order matters (presentation, pagination, snapshots, signatures, hashing, canonical serialization). Dict.keys and Dict.values have no promised positional relationship — use Dict.toList to pair them.";
+  f "Dict.values" [ "d" ] ~m:"Tesl.Dict" ~doc:"One value per binding (multiplicity preserved), in UNSPECIFIED order. See Dict.keys.";
   f "Dict.fromList" [ "pairs" ] ~m:"Tesl.Dict" ~doc:"Builds a dict from (key, value) pairs; later duplicates win.";
-  f "Dict.toList" [ "d" ] ~m:"Tesl.Dict" ~doc:"The entries as (key, value) pairs.";
+  f "Dict.toList" [ "d" ] ~m:"Tesl.Dict" ~doc:"The entries as (key, value) pairs, each binding once, in UNSPECIFIED order. Pairing is guaranteed; order is not.";
   f "Dict.map" [ "f"; "d" ] ~m:"Tesl.Dict" ~doc:"Maps f over the values.";
   f "Dict.filter" [ "pred"; "d" ] ~m:"Tesl.Dict" ~doc:"Keeps the entries whose value satisfies pred.";
   f "Dict.filterCheckValues" [ "checkFn"; "d" ] ~m:"Tesl.Dict" ~doc:"Keeps the entries whose value passes a check, with a ForAllValues proof attached.";
@@ -703,7 +706,7 @@ let dict : entry list = [
 (* ── Tesl.Set ──────────────────────────────────────────────────────────────── *)
 
 let set_ : entry list = [
-  e "Set" ~m:"Tesl.Set" ~kind:(KType "type Set a   # immutable set of distinct values") ~doc:"An immutable set of distinct values.";
+  e "Set" ~m:"Tesl.Set" ~kind:(KType "type Set a   # immutable set of distinct values") ~doc:"An immutable set of distinct values. An UNORDERED datatype: membership, size, equality, and set algebra are independent of storage order, and no iteration order is promised. A backend may return a deterministic internal order, but that is an implementation detail and must not be relied on.";
   v "Set.empty" ~m:"Tesl.Set" ~doc:"The empty set.";
   f "Set.singleton" [ "x" ] ~m:"Tesl.Set" ~doc:"A one-element set.";
   f "Set.insert" [ "x"; "s" ] ~m:"Tesl.Set" ~doc:"Adds an element.";
@@ -712,7 +715,7 @@ let set_ : entry list = [
   f "Set.member" [ "x"; "s" ] ~m:"Tesl.Set" ~doc:"True when x is in the set.";
   f "Set.size" [ "s" ] ~m:"Tesl.Set" ~doc:"Number of elements.";
   f "Set.isEmpty" [ "s" ] ~m:"Tesl.Set" ~doc:"True when the set has no elements.";
-  f "Set.toList" [ "s" ] ~m:"Tesl.Set" ~doc:"The elements as a list.";
+  f "Set.toList" [ "s" ] ~m:"Tesl.Set" ~doc:"Every member exactly once, in UNSPECIFIED order. Sort explicitly when order matters.";
   f "Set.fromList" [ "xs" ] ~m:"Tesl.Set" ~doc:"Builds a set from a list (duplicates collapse).";
   f "Set.union" [ "s1"; "s2" ] ~m:"Tesl.Set" ~doc:"Union of two sets.";
   f "Set.intersection" [ "s1"; "s2" ] ~m:"Tesl.Set" ~doc:"Intersection of two sets.";

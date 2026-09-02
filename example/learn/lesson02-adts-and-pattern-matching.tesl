@@ -142,11 +142,11 @@ test "safeDivide" {
 # ─────────────────────────────────────────────
 # THEORY — the full model
 # ─────────────────────────────────────────────
-# ADTs lower to Racket tagged structs. Each constructor becomes a struct type.
+# ADTs lower to Go tagged values. Each constructor becomes a tagged value.
 # "Red" becomes a zero-field struct; "Something 5" becomes a one-field struct.
-# The case expression lowers to Racket's "match" with structural patterns.
+# The case expression lowers to a Go switch with structural pattern checks.
 #
-# The exhaustiveness check runs during Tesl compilation (not at Racket runtime).
+# The exhaustiveness check runs during Tesl compilation (not at Go runtime).
 # The compiler tracks which constructors belong to each ADT and verifies every
 # constructor appears at least once in the case branches.
 #
@@ -184,7 +184,7 @@ test "safeDivide" {
 # ─────────────────────────────────────────────
 # THEORY — the full model
 # ─────────────────────────────────────────────
-# Tagged-union representation: each fielded constructor lowers to a Racket struct
+# Tagged-union representation: each fielded constructor lowers to a Go value
 # with hash-stored fields keyed by label name.
 # GDP introduces fresh hidden subjects for each bound field in a case branch —
 # the bound name (e.g. radius) is a new GDP-named value whose subject is separate

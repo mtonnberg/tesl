@@ -59,9 +59,37 @@ type diagnostic = {
   manual     : string option;
 }
 
-type compile_result =
-  | Success of string            (** Racket source code *)
-  | Failure of diagnostic list   (** Parse or type errors *)
+type go_compile_result =
+  | GoSuccess of Emit_go.artifact list
+  | GoFailure of diagnostic list
+
+(* Mutation results are backend-neutral. A failing test marker means the mutant was
+   detected; a non-zero process without evidence that tests ran is only an invalid
+   mutant, not a kill. *)
+let output_lines output = String.split_on_char '\n' output
+
+let output_indicates_failure output =
+  List.exists (fun line ->
+    line = "FAILURE" || line = "ERROR" || line = "FAIL" ||
+    String.length line >= 7 && String.sub line 0 7 = "--- FAIL")
+    (output_lines output)
+
+let output_indicates_tests_ran output =
+  output_indicates_failure output ||
+  List.exists (fun line ->
+    line = "PASS" || line = "ok" ||
+    String.length line >= 3 && String.sub line 0 3 = "ok " ||
+    String.length line >= 12 && String.sub line (String.length line - 12) 12 = " test passed")
+    (output_lines output)
+
+let classify_mutant_run ~exit_code ~output =
+  exit_code = 0 && not (output_indicates_failure output)
+
+let classify_mutant_outcome ~exit_code ~output =
+  if output_indicates_failure output then `Killed
+  else if output_indicates_tests_ran output then
+    if exit_code = 0 then `Survived else `Killed
+  else `Invalid
 
 type local_binding = {
   file : string;
@@ -717,8 +745,6 @@ let rec definition_in_expr env locals line col (expr : Ast.expr) =
        | None ->
          definition_in_expr env locals line col body)
   | Ast.EStartEmailWorker _ -> None
-  | Ast.ERuntimeCall { segments; _ } ->
-    List.find_map (function Ast.RLit _ | Ast.RRawVar _ -> None | Ast.RArg e -> recurse e) segments
   | Ast.EConstructor { name; args; loc } ->
     let ctor_loc = precise_name_loc loc name in
     if loc_contains_position ctor_loc line col then
@@ -819,8 +845,7 @@ let definition_in_top_decl env line col (decl : Ast.top_decl) =
        match definition_in_return_spec env line col fd.return_spec with
        | Some _ as found -> found
        | None -> definition_in_expr env (extend_locals_with_params [] fd.params) line col fd.body)
-  | Ast.DType (Ast.TypeNewtype { base_type; _ })
-  | Ast.DType (Ast.TypeAlias { base_type; _ }) ->
+  | Ast.DType (Ast.TypeNewtype { base_type; _ }) ->
     definition_in_type_expr env line col base_type
   | Ast.DType (Ast.TypeAdt { variants; _ }) ->
     find_map_list (fun (variant : Ast.adt_variant) ->
@@ -934,8 +959,7 @@ let collect_definition_env (m : Ast.module_form) =
   List.fold_left (fun env decl ->
     match decl with
     | Ast.DFunc fd -> add_term_def env fd.name (precise_name_loc fd.loc fd.name)
-    | Ast.DType (Ast.TypeNewtype { name; loc; _ })
-    | Ast.DType (Ast.TypeAlias { name; loc; _ }) ->
+    | Ast.DType (Ast.TypeNewtype { name; loc; _ }) ->
       add_type_def env name (precise_name_loc loc name)
     | Ast.DType (Ast.TypeAdt { name; params = _; variants; loc }) ->
       let env = add_type_def env name (precise_name_loc loc name) in
@@ -1210,8 +1234,6 @@ let rec resolve_symbol_in_expr env locals line col (expr : Ast.expr) =
        | None ->
          resolve_symbol_in_expr env locals line col body)
   | Ast.EStartEmailWorker _ -> None
-  | Ast.ERuntimeCall { segments; _ } ->
-    List.find_map (function Ast.RLit _ | Ast.RRawVar _ -> None | Ast.RArg e -> recurse e) segments
   | Ast.EConstructor { name; args; loc } ->
     let ctor_loc = precise_name_loc loc name in
     if loc_contains_position ctor_loc line col then find_ctor_symbol env.ctor_defs name
@@ -1317,8 +1339,7 @@ let resolve_symbol_in_top_decl env line col (decl : Ast.top_decl) =
          match resolve_symbol_in_expr env param_locals line col fd.body with
          | Some _ as found -> found
          | None -> if loc_contains_position name_loc line col then Some (term_symbol fd.name name_loc) else None)
-  | Ast.DType (Ast.TypeNewtype { name; base_type; loc; _ })
-  | Ast.DType (Ast.TypeAlias { name; base_type; loc }) ->
+  | Ast.DType (Ast.TypeNewtype { name; base_type; loc; _ }) ->
     let name_loc = precise_name_loc loc name in
     (match resolve_symbol_in_type_expr env line col base_type with
      | Some _ as result -> result
@@ -1631,8 +1652,6 @@ let rec collect_occurrences_in_expr env locals target (expr : Ast.expr) =
     @ collect_occurrences_in_expr env locals target subject
     @ collect_occurrences_in_expr env locals target body
   | Ast.EStartEmailWorker _ -> []
-  | Ast.ERuntimeCall { segments; _ } ->
-    List.concat_map (function Ast.RLit _ | Ast.RRawVar _ -> [] | Ast.RArg e -> recurse e) segments
   | Ast.EConstructor { name; args; loc } ->
     (match find_ctor_symbol env.ctor_defs name with
      | Some symbol when symbol_equal symbol target -> loc :: List.concat_map (collect_occurrences_in_expr env locals target) args
@@ -1699,8 +1718,7 @@ let rec collect_occurrences_in_top_decl env target (decl : Ast.top_decl) =
     @ List.concat_map (collect_occurrences_in_binding ~locals:param_locals env target) fd.params
     @ collect_occurrences_in_return_spec ~locals:param_locals env target fd.return_spec
     @ collect_occurrences_in_expr env param_locals target fd.body
-  | Ast.DType (Ast.TypeNewtype { name; base_type; loc; _ })
-  | Ast.DType (Ast.TypeAlias { name; base_type; loc }) ->
+  | Ast.DType (Ast.TypeNewtype { name; base_type; loc; _ }) ->
     let name_loc = precise_name_loc loc name in
     (if symbol_equal (type_symbol name name_loc) target then [name_loc] else [])
     @ collect_occurrences_in_type_expr env target base_type
@@ -2551,8 +2569,7 @@ let legacy_bool_diagnostics _filename source (m : module_form) =
         visit_expr fd.body
     | DRecord r -> List.iter visit_field_def r.fields
     | DEntity e -> List.iter visit_field_def e.fields
-    | DType (TypeNewtype { base_type; _ })
-    | DType (TypeAlias { base_type; _ }) -> visit_type_expr base_type
+    | DType (TypeNewtype { base_type; _ }) -> visit_type_expr base_type
     | DType (TypeAdt { variants; _ }) ->
         List.iter (fun (v : adt_variant) -> List.iter visit_field_def v.fields) variants
     | DConst c -> visit_expr c.value
@@ -2606,11 +2623,20 @@ let parse_module_file path =
    [resolve_local_import_path] spells the same file differently depending on
    the importing file (`main.tesl` on the CLI vs `./main.tesl` reached through
    a dep's back-edge), and raw-string nodes made the SCC containing the entry
-   invisible — the emitter then fell back to plain requires and `raco make`
+   invisible — the emitter then fell back to plain requires and `go-tool make`
    died with a raw "cycle in loading" (2026-07-08 audit). *)
 let canonical_import_path = Validation_common.canonical_import_path
 
-let build_local_import_graph entry_path =
+(* The ONE lifted stdlib module the Go backend compiles from its Tesl SOURCE rather than
+   binding to a runtime file.  `Tesl.CivilTime` has no Go runtime of its own and is ordinary
+   Tesl — ADTs, opaque types, checks, proof-carrying returns — so compiling it is both the
+   smallest way to have it and the most demanding thing the backend is asked to do.
+
+   `Tesl.List` and `Tesl.Either` are lifted too and are deliberately NOT here: their leaves
+   bind to `teslrt` functions, and compiling them as well would give a program two of each. *)
+let go_lifted_module_names = ["Tesl.CivilTime"]
+
+let build_local_import_graph ?(lifted=[]) entry_path =
   let graph : (string, string list) Hashtbl.t = Hashtbl.create 16 in
   let rec visit path =
     if Hashtbl.mem graph path then ()
@@ -2620,7 +2646,10 @@ let build_local_import_graph entry_path =
         | None -> []
         | Some m ->
           List.filter_map (fun (imp : Ast.import_decl) ->
-            if is_tesl_stdlib_module_name imp.module_name then None
+            if List.mem imp.module_name lifted then
+              Option.map canonical_import_path
+                (Validation_common.lifted_stdlib_source_path imp.module_name)
+            else if is_tesl_stdlib_module_name imp.module_name then None
             else Some (canonical_import_path
                          (resolve_local_import_path m.source_file imp.module_name))
           ) m.imports
@@ -2686,7 +2715,7 @@ let cyclic_local_import_paths_for_entry entry_path =
 (* ── WS1: opt-in per-phase wall-clock timing ────────────────────────────────
    When the environment variable [TESL_PHASE_TIMING=1] is set, each compiler
    phase (parse / typecheck / proof / validation / emit) prints its wall-clock
-   duration in milliseconds to *stderr* so it never pollutes the emitted Racket
+   duration in milliseconds to *stderr* so it never pollutes the emitted code
    on stdout.  When the flag is unset the cost is a single [Sys.getenv_opt]
    lookup per [compile_source] call and the phase thunks run unwrapped — no
    timing, no allocation, no stderr writes. *)
@@ -2745,7 +2774,7 @@ let module_local_diags source (m : Ast.module_form) : diagnostic list =
 (* ── Cross-module structural validation (2026-07-08 multi-module audit) ─────
    `--check <entrypoint>` historically validated the entrypoint plus module
    INTERFACES only, so two classes of dependency errors surfaced one phase too
-   late (at that module's own emit, or as a raw Racket error at `raco make`):
+   late (at that module's own emit, or as a raw runtime error at `go-tool make`):
 
    1. EXPORT LOCALITY — a dependency whose `exposing` list re-exports an
       imported name passed the whole-program check, then its emit failed T001.
@@ -2753,7 +2782,7 @@ let module_local_diags source (m : Ast.module_form) : diagnostic list =
       only pure declarations (fn/type/record/entity/const/fact/tests/capturers);
       a cycle containing config decls (server/database/queue/sseChannel/api/
       codec/capability/agent/email/cache/workers/`main`) emitted provides with
-      no definition, and `raco make` rejected the require graph with a raw
+      no definition, and `go-tool make` rejected the require graph with a raw
       "standard-module-name-resolver: cycle in loading".
 
    3. (2026-07-09, the systemic hole behind both) MODULE BODIES — the
@@ -2781,10 +2810,6 @@ let module_local_diags source (m : Ast.module_form) : diagnostic list =
    own per-file run), never re-reported under each consumer.  The graph is
    still traversed through skipped modules (their deps may not be CLI args),
    and cycle/self-import detection is unaffected. *)
-(* KEEP IN SYNC with the emitter's cyclic-SCC inliner (emit_racket.ml): the
-   None arms below are exactly the decl kinds the inliner can lower inside an
-   import cycle.  The user-facing diagnostic further down enumerates the same
-   set — extend all three together when the inliner grows. *)
 let cycle_unsafe_decl_reason (d : Ast.top_decl) : string option =
   match d with
   | Ast.DFunc fd when fd.kind = Ast.MainKind -> Some "`main()`"
@@ -3098,117 +3123,399 @@ let check_module ?skip_dep_body source (m : Ast.module_form) : diagnostic list =
 
 let default_root_path () =
   match Sys.getenv_opt "TESL_REPO_ROOT" with
-  | Some p when p <> "" -> p
+  | Some path when path <> "" -> path
   | _ ->
     let rec find dir =
-      let candidate = Filename.concat dir "compiler" in
-      if (try Sys.file_exists candidate && Sys.is_directory candidate with _ -> false)
-      then dir
+      if Sys.file_exists (Filename.concat dir "compiler") then dir
       else
         let parent = Filename.dirname dir in
-        if parent = dir then Filename.current_dir_name
-        else find parent
+        if parent = dir then Filename.current_dir_name else find parent
     in
     find (Filename.dirname Sys.executable_name)
 
-(** Compile a source string: parse + (optional) type-check + emit Racket.
-    When type_check=true (the default), returns Failure if any errors exist — no
-    Racket is emitted for a module that would fail `tesl check`. *)
-let compile_source ?(root_path=default_root_path ()) ?(type_check=true) ?(debug=false) filename source =
-  (* Read the timing flag exactly once per compile; [time_phase] is a no-op
-     wrapper when it is false, so the non-timing path is unchanged. *)
-  let timing = phase_timing_enabled () in
-  match time_phase timing "parse" (fun () -> parse_module filename source) with
-  | Err e -> Failure [diag_of_parse_error e]
-  | Ok m ->
-    let diags =
-      if not type_check then []
-      else
-        (* Same phases, same order as [check_module]; split here only so each
-           wall-clock segment can be reported independently.  The list built is
-           byte-identical to [check_module source m]. *)
-        let type_diags =
-          time_phase timing "typecheck" (fun () ->
-            legacy_bool_diagnostics m.source_file source m
-            @ regex_literal_diagnostics m
-            @ type_diags_of source m)
+let diag_of_go_emit_error (error : Emit_go.emit_error) : diagnostic = {
+  file       = error.loc.file;
+  start_line = error.loc.start.line;
+  start_col  = error.loc.start.col;
+  end_line   = error.loc.stop.line;
+  end_col    = error.loc.stop.col;
+  severity   = "error";
+  code       = "V001";
+  message    = error.message;
+  fix        = None;
+  source     = "go-emitter";
+  manual     = None;
+}
+
+(** Compile a checked Tesl module into a complete standalone Go module tree.
+    Go receives the surface AST *)
+(* An import CYCLE collapses into ONE Go module: Go files in the same package reference each other
+   freely — no ordering, no forward declarations — so mutual recursion needs no inlining
+   at all, just a shared package.
+   Merging the members into one synthetic module reuses the whole single-module path,
+   including the two-phase type registration that makes A's type visible to B and back.
+   Source mapping survives because every emitted declaration carries its OWN
+   `//line <file>:<n>`, so a merged file still points each declaration at the .tesl it
+   came from.
+   Merging would lose per-member scoping, so colliding declarations and their uses are
+   owner-alpha-renamed in the Go-only AST before this step. *)
+(* Two imports of the SAME module merge into one carrying the union of the exposed
+   names.  Both callers need this: merging a cycle unions its members' outside imports
+   (two members may import one module with different exposed lists), and rewriting an
+   outside importer's references to collapsed members turns several imports into one. *)
+let merge_exposed_imports (left : Ast.import_decl) (right : Ast.import_decl) =
+  match left.names, right.names with
+  (* ImportAll is rejected by the Go emitter with its own message; keep it visible rather
+     than silently widening or narrowing the import. *)
+  | Ast.ImportAll, _ | _, Ast.ImportAll -> { left with names = Ast.ImportAll }
+  | Ast.ImportExposing ours, Ast.ImportExposing theirs ->
+    { left with names = Ast.ImportExposing
+                  (ours @ List.filter (fun name -> not (List.mem name ours)) theirs) }
+
+let rec add_merged_import acc (imp : Ast.import_decl) =
+  match acc with
+  | [] -> [imp]
+  | (existing : Ast.import_decl) :: rest when existing.module_name = imp.module_name ->
+    merge_exposed_imports existing imp :: rest
+  | existing :: rest -> existing :: add_merged_import rest imp
+
+(* Go collapses an SCC into one package. Preserve the source module namespaces by
+   alpha-renaming only the copied emission AST. '$' cannot occur in a Tesl identifier,
+   and [Emit_go.go_ident] escapes it deterministically. *)
+let alpha_rename_cycle_members ~(targets : Ast.module_form list)
+    (members : Ast.module_form list) =
+  let member_names = List.map (fun (m : Ast.module_form) -> m.module_name) members in
+  let symbols (m : Ast.module_form) =
+    List.concat_map (function
+      | Ast.DFunc f -> [f.name]
+      | Ast.DConst c -> [c.name]
+      | Ast.DRecord r -> [r.name]
+      | Ast.DEntity e -> [e.name]
+      | Ast.DFact f -> [f.name]
+      | Ast.DCapture c -> [c.name]
+      | Ast.DType (Ast.TypeNewtype { name; _ }) -> [name]
+      | Ast.DType (Ast.TypeAdt { name; variants; _ }) ->
+        name :: List.map (fun (v : Ast.adt_variant) -> v.ctor) variants
+      | _ -> []) m.decls
+  in
+  let owners = Hashtbl.create 16 in
+  List.iter (fun (m : Ast.module_form) -> List.iter (fun name ->
+    let prior = Option.value (Hashtbl.find_opt owners name) ~default:[] in
+    if not (List.mem m.module_name prior) then
+      Hashtbl.replace owners name (m.module_name :: prior)) (symbols m)) members;
+  let renamed = Hashtbl.create 16 in
+  List.iter (fun (m : Ast.module_form) -> List.iter (fun name ->
+    if List.length (Option.value (Hashtbl.find_opt owners name) ~default:[]) > 1 then
+      Hashtbl.replace renamed (m.module_name, name)
+        (Printf.sprintf "Scc$%s$%s" m.module_name name)) (symbols m)) members;
+  let adt_constructors (m : Ast.module_form) type_name =
+    List.find_map (function
+      | Ast.DType (Ast.TypeAdt { name; variants; _ }) when name = type_name ->
+        Some (List.map (fun (v : Ast.adt_variant) -> v.ctor) variants)
+      | _ -> None) m.decls
+    |> Option.value ~default:[]
+  in
+  let imported_ctor_owner module_name exposed_type ctor =
+    List.find_opt (fun (owner : Ast.module_form) -> owner.module_name = module_name)
+      members
+    |> Option.map (fun owner -> List.mem ctor (adt_constructors owner exposed_type))
+    |> Option.value ~default:false
+  in
+  let local_owner (m : Ast.module_form) name =
+    if List.mem name (symbols m) then Some m.module_name
+    else List.find_map (fun (imp : Ast.import_decl) ->
+      match imp.names with
+      | Ast.ImportAll -> None
+      | Ast.ImportExposing names ->
+        let exposes item =
+          item = name || item = name ^ "(..)"
+          || (String.length item >= 4
+              && String.sub item (String.length item - 4) 4 = "(..)"
+              && imported_ctor_owner imp.module_name
+                   (String.sub item 0 (String.length item - 4)) name)
         in
-        let proof_diags =
-          time_phase timing "proof" (fun () ->
-            List.map diag_of_proof_error (Proof_checker.check_module m))
-        in
-        let validation_diags =
-          time_phase timing "validation" (fun () ->
-            List.map diag_of_validation_error (Validation.check_module m))
-        in
-        let graph_diags =
-          time_phase timing "modgraph" (fun () -> cross_module_diags m)
-        in
-        type_diags @ proof_diags @ validation_diags @ graph_diags
+        if List.exists exposes names then Some imp.module_name else None) m.imports
+  in
+  let split_qualified name =
+    match String.rindex_opt name '.' with
+    | None -> None
+    | Some i -> Some (String.sub name 0 i,
+                       String.sub name (i + 1) (String.length name - i - 1))
+  in
+  let rename m name =
+    let owner, bare = match split_qualified name with
+      | Some pair -> pair
+      | None -> Option.value (local_owner m name) ~default:m.Ast.module_name, name
     in
-    if diags <> [] then Failure diags
-    else begin
-      Emit_racket.set_debug_mode debug;
-      (* Desugar AFTER all enforcement/diagnostics ran on the surface forms,
-         BEFORE emit.  Identity-preserving today (see Desugar). *)
-      let m = time_phase timing "desugar" (fun () -> Desugar.desugar_module m) in
-      let racket =
-        time_phase timing "emit" (fun () ->
-          Emit_racket.compile_to_string ~root_path m)
-      in
-      Emit_racket.set_debug_mode false;
-      Success racket
-    end
+    match Hashtbl.find_opt renamed (owner, bare) with
+    | Some generated -> generated
+    | None when List.mem owner member_names -> bare
+    | None -> name
+  in
+  let rec ty m = function
+    | Ast.TName ({ name; _ } as n) -> Ast.TName { n with name = rename m name }
+    | Ast.TVar _ as t -> t
+    | Ast.TApp ({ head; arg; _ } as t) -> Ast.TApp { t with head = ty m head; arg = ty m arg }
+    | Ast.TFun ({ dom; cod; _ } as t) -> Ast.TFun { t with dom = ty m dom; cod = ty m cod }
+    | Ast.TTuple ({ elems; _ } as t) -> Ast.TTuple { t with elems = List.map (ty m) elems }
+  in
+  let proof m =
+    let rec go = function
+      | Ast.PredApp ({ pred; _ } as p) -> Ast.PredApp { p with pred = rename m pred }
+      | Ast.PredAnd ({ left; right; _ } as p) ->
+        Ast.PredAnd { p with left = go left; right = go right }
+    in go
+  in
+  let binding m (b : Ast.binding) =
+    { b with type_expr = ty m b.type_expr; proof_ann = Option.map (proof m) b.proof_ann }
+  in
+  let field m (f : Ast.field_def) =
+    { f with type_expr = ty m f.type_expr; proof_ann = Option.map (proof m) f.proof_ann }
+  in
+  let rec ret m = function
+    | Ast.RetPlain ({ ty = t; _ } as r) -> Ast.RetPlain { r with ty = ty m t }
+    | Ast.RetAttached ({ binding = b; _ } as r) -> Ast.RetAttached { r with binding = binding m b }
+    | Ast.RetNamedPack ({ ty = t; entity_proof; other_proof; _ } as r) ->
+      Ast.RetNamedPack { r with ty = ty m t; entity_proof = Option.map (proof m) entity_proof;
+                               other_proof = Option.map (proof m) other_proof }
+    | Ast.RetForAll ({ elem_ty; proof = p; _ } as r) -> Ast.RetForAll { r with elem_ty = ty m elem_ty; proof = proof m p }
+    | Ast.RetMaybeForAll ({ elem_ty; proof = p; _ } as r) -> Ast.RetMaybeForAll { r with elem_ty = ty m elem_ty; proof = proof m p }
+    | Ast.RetSetForAll ({ elem_ty; proof = p; _ } as r) -> Ast.RetSetForAll { r with elem_ty = ty m elem_ty; proof = proof m p }
+    | Ast.RetMaybeSetForAll ({ elem_ty; proof = p; _ } as r) -> Ast.RetMaybeSetForAll { r with elem_ty = ty m elem_ty; proof = proof m p }
+    | Ast.RetForAllDictValues ({ key_ty; val_ty; proof = p; _ } as r) -> Ast.RetForAllDictValues { r with key_ty = ty m key_ty; val_ty = ty m val_ty; proof = proof m p }
+    | Ast.RetForAllDictKeys ({ key_ty; val_ty; proof = p; _ } as r) -> Ast.RetForAllDictKeys { r with key_ty = ty m key_ty; val_ty = ty m val_ty; proof = proof m p }
+    | Ast.RetMaybeAttached ({ outer_ty; binding = b; _ } as r) -> Ast.RetMaybeAttached { r with outer_ty = Option.map (ty m) outer_ty; binding = binding m b }
+    | Ast.RetExists ({ binding = b; body; _ } as r) -> Ast.RetExists { r with binding = binding m b; body = ret m body }
+  in
+  let rec pattern m = function
+    | Ast.PCon ({ ctor; fields; _ } as p) -> Ast.PCon { p with ctor = rename m ctor; fields = List.map (fun (n, p) -> n, pattern m p) fields }
+    | Ast.PNullary ({ ctor; _ } as p) -> Ast.PNullary { p with ctor = rename m ctor }
+    | (Ast.PVar _ | Ast.PWild | Ast.PLit _) as p -> p
+  in
+  let rec expr m e =
+    let e = Ast_visitor.map_children (expr m) e in
+    match e with
+    | Ast.EVar ({ name; _ } as v) -> Ast.EVar { v with name = rename m name }
+    | Ast.EField { obj = Ast.EConstructor { name = owner; args = []; _ }; field = name; loc }
+      when Hashtbl.mem renamed (owner, name) ->
+        Ast.EVar { name = Hashtbl.find renamed (owner, name); loc }
+    | Ast.EField { obj = Ast.EConstructor c; field; loc }
+      when c.args = [] && List.mem c.name member_names ->
+        Ast.EVar { name = field; loc }
+    | Ast.EConstructor ({ name; _ } as c) -> Ast.EConstructor { c with name = rename m name }
+    | Ast.EEnqueue ({ job_type; _ } as q) ->
+      Ast.EEnqueue { q with job_type = rename m job_type }
+    | Ast.EPublish ({ event_ctor; _ } as p) ->
+      Ast.EPublish { p with event_ctor = rename m event_ctor }
+    | Ast.ERecord ({ type_hint; _ } as r) -> Ast.ERecord { r with type_hint = Option.map (rename m) type_hint }
+    | Ast.ELet ({ declared_type; declared_proof; _ } as l) ->
+      Ast.ELet { l with declared_type = Option.map (ty m) declared_type;
+                        declared_proof = Option.map (proof m) declared_proof }
+    | Ast.EOk ({ proof = p; _ } as ok) -> Ast.EOk { ok with proof = proof m p }
+    | Ast.ELambda ({ params; _ } as l) ->
+      Ast.ELambda { l with params = List.map (binding m) params }
+    | Ast.ECase ({ arms; _ } as c) -> Ast.ECase { c with arms = List.map (fun (a : Ast.case_arm) -> { a with pattern = pattern m a.pattern }) arms }
+    | other -> other
+  in
+  let rec test_stmts m stmts = List.map (function
+    | Ast.TsLet ({ declared_type; value; declared_proof; _ } as s) -> Ast.TsLet { s with declared_type = Option.map (ty m) declared_type; value = expr m value; declared_proof = Option.map (proof m) declared_proof }
+    | Ast.TsLetProof ({ value; _ } as s) -> Ast.TsLetProof { s with value = expr m value }
+    | Ast.TsExpect ({ left; right; _ } as s) -> Ast.TsExpect { s with left = expr m left; right = Option.map (expr m) right }
+    | Ast.TsExpectFail ({ fn; arg; _ } as s) -> Ast.TsExpectFail { s with fn = expr m fn; arg = expr m arg }
+    | Ast.TsExpectHasProof ({ fn; arg; _ } as s) -> Ast.TsExpectHasProof { s with fn = expr m fn; arg = expr m arg }
+    | Ast.TsProperty ({ params; body; _ } as s) -> Ast.TsProperty { s with params = List.map (fun (p : Ast.property_param) -> { p with binding = binding m p.binding; where_clause = Option.map (expr m) p.where_clause; generator = Option.map (rename m) p.generator }) params; body = expr m body }
+    | Ast.TsIf ({ cond; then_stmts; else_stmts; _ } as s) -> Ast.TsIf { s with cond = expr m cond; then_stmts = test_stmts m then_stmts; else_stmts = test_stmts m else_stmts }
+    | Ast.TsCase ({ scrut; arms; _ } as s) -> Ast.TsCase { s with scrut = expr m scrut; arms = List.map (fun (a : Ast.ts_case_arm) -> { a with ts_pattern = pattern m a.ts_pattern; ts_guard = Option.map (expr m) a.ts_guard; ts_body = test_stmts m a.ts_body }) arms }
+    | Ast.TsExpr ({ e; _ } as s) -> Ast.TsExpr { s with e = expr m e }) stmts
+  in
+  let decl m = function
+    | Ast.DFunc f -> Ast.DFunc { f with name = rename m f.name; params = List.map (binding m) f.params; return_spec = ret m f.return_spec; body = expr m f.body }
+    | Ast.DConst c -> Ast.DConst { c with name = rename m c.name; value = expr m c.value }
+    | Ast.DRecord r -> Ast.DRecord { r with name = rename m r.name; fields = List.map (field m) r.fields;
+      invariant = Option.map (fun (i : Ast.record_invariant) -> { i with proof_text = proof m i.proof_text;
+        checker_name = Option.map (rename m) i.checker_name }) r.invariant }
+    | Ast.DEntity e -> Ast.DEntity { e with name = rename m e.name; fields = List.map (field m) e.fields }
+    | Ast.DFact f -> Ast.DFact { f with name = rename m f.name; params = List.map (binding m) f.params }
+    | Ast.DCapture c -> Ast.DCapture { c with name = rename m c.name;
+      binding = binding m c.binding; parser = rename m c.parser;
+      checker = Option.map (rename m) c.checker }
+    | Ast.DType (Ast.TypeNewtype t) -> Ast.DType (Ast.TypeNewtype { t with name = rename m t.name; base_type = ty m t.base_type })
+    | Ast.DType (Ast.TypeAdt t) -> Ast.DType (Ast.TypeAdt { t with name = rename m t.name; variants = List.map (fun (v : Ast.adt_variant) -> { v with ctor = rename m v.ctor; fields = List.map (field m) v.fields }) t.variants })
+    | Ast.DTest t -> Ast.DTest { t with stmts = test_stmts m t.stmts }
+    | Ast.DApiTest t -> Ast.DApiTest { t with seed_stmts = List.map (expr m) t.seed_stmts; stmts = test_stmts m t.stmts }
+    | Ast.DLoadTest t -> Ast.DLoadTest { t with seed_stmts = List.map (expr m) t.seed_stmts; request_stmts = test_stmts m t.request_stmts }
+    | d -> d
+  in
+  List.map (fun (m : Ast.module_form) ->
+    let import (i : Ast.import_decl) = match i.names with
+      | Ast.ImportAll -> i
+      | Ast.ImportExposing names -> { i with names = Ast.ImportExposing (List.map (fun name ->
+          let suffix = if String.length name >= 4 && String.sub name (String.length name - 4) 4 = "(..)" then "(..)" else "" in
+          let bare = if suffix = "" then name else String.sub name 0 (String.length name - 4) in
+          Option.value (Hashtbl.find_opt renamed (i.module_name, bare)) ~default:bare ^ suffix) names) }
+    in
+    { m with decls = List.map (decl m) m.decls; imports = List.map import m.imports;
+             exports = List.map (function Ast.ExportName n -> Ast.ExportName (rename m n) | Ast.ExportAdt n -> Ast.ExportAdt (rename m n)) m.exports }) targets
+
+let merge_cycle_members (members : Ast.module_form list) =
+  match List.sort (fun (left : Ast.module_form) (right : Ast.module_form) ->
+          String.compare left.module_name right.module_name) members with
+  | [] -> Error "Go backend found an empty import cycle"
+  | [single] -> Ok single
+  | first :: _ as sorted ->
+    let names = List.map (fun (m : Ast.module_form) -> m.module_name) sorted in
+    Ok { first with
+            (* Deliberately keeps the first member's name and source_file: the package is
+               named after it, and the file is only used for whole-module diagnostics. *)
+            decls = List.concat_map (fun (m : Ast.module_form) -> m.decls) sorted;
+            exports = List.concat_map (fun (m : Ast.module_form) -> m.exports) sorted;
+            imports =
+              (* An import of a fellow member disappears with the boundary; everything
+                 else is kept once. *)
+               List.fold_left (fun acc (m : Ast.module_form) ->
+                List.fold_left (fun acc (imp : Ast.import_decl) ->
+                  if List.mem imp.module_name names then acc
+                   else add_merged_import acc imp) acc m.imports) [] sorted }
+
+(* Every LOCAL module the entry imports, transitively, parsed and checked.  Import
+   resolution is this module's job, not the emitter's: `build_local_import_graph` already
+   knows how a module name becomes a file path, and it canonicalises so the same file
+   reached two ways is one node.  A cyclic SCC collapses into ONE Go package. *)
+type go_dependencies =
+  (* The collapsed graph handed to the emitter, plus the ORIGINAL per-file modules.  Both
+     are needed: the emitter wants one node per SCC, while checking must run per file,
+     because a merged module's decls come from several source texts. *)
+  (* [entry_emit] is the module the ENTRY landed in: after collapsing it may be a merged
+     module named after a different member, and the emitter needs that one to derive the
+     Go module path. *)
+  | GoDeps of { emit : Ast.module_form list; originals : Ast.module_form list;
+                entry_emit : Ast.module_form }
+  | GoDepsError of string
+
+let local_dependency_modules entry_path (entry : Ast.module_form) =
+  if entry_path = "" || Filename.check_suffix entry_path ">" then GoDeps { emit = [entry]; originals = [entry]; entry_emit = entry }
+  else
+    let graph = build_local_import_graph ~lifted:go_lifted_module_names entry_path in
+    let entry_canon = canonical_import_path entry_path in
+    (* One node per SCC: a cycle becomes ONE Go package, so the emitter never sees the
+       members separately. *)
+    let components = tarjan_sccs graph in
+    let failed = ref None in
+    let parsed path =
+      if path = entry_canon then Some entry
+      else match parse_module_file path with
+        | Some m -> Some m
+        | None ->
+          if !failed = None then
+            failed := Some (Printf.sprintf "Go backend could not parse imported module %s"
+                              (Filename.basename path));
+          None
+    in
+    let component_modules = List.map (List.filter_map parsed) components in
+    let originals = List.concat component_modules in
+    (* Rewrite consumers too: after an SCC import target is collapsed, an outside
+       module must ask that package for the generated owner-specific export. *)
+    let emit_modules = List.fold_left (fun targets members ->
+      if List.length members > 1 then alpha_rename_cycle_members ~targets members
+      else targets) originals component_modules in
+    let emitted_member (original : Ast.module_form) =
+      List.find (fun (candidate : Ast.module_form) ->
+        candidate.module_name = original.module_name) emit_modules
+    in
+    let collapsed = List.filter_map (fun members ->
+      if members = [] then None
+      else begin
+        let emit_members = List.map emitted_member members in
+        match merge_cycle_members emit_members with
+        | Ok merged ->
+          Some (merged, List.map (fun (m : Ast.module_form) -> m.module_name) members)
+        | Error message ->
+          if !failed = None then failed := Some message;
+          None
+       end) component_modules in
+    (* A module OUTSIDE the cycle imports a MEMBER by name, but the merged module answers
+       to only one name.  Rewriting those references here is what keeps the emitter free
+       of any cycle concept: after this, no module name refers to a collapsed member. *)
+    let rename_table = List.concat_map (fun ((merged : Ast.module_form), members) ->
+      List.filter_map (fun member ->
+        if member = merged.module_name then None else Some (member, merged.module_name))
+        members) collapsed in
+    let rewrite (m : Ast.module_form) =
+      { m with imports = List.fold_left (fun acc (imp : Ast.import_decl) ->
+          let target = match List.assoc_opt imp.module_name rename_table with
+            | Some merged_name -> merged_name
+            | None -> imp.module_name
+          in
+          (* A member importing its own merged self is the cycle boundary disappearing. *)
+          if target = m.module_name then acc
+          else add_merged_import acc { imp with module_name = target }) [] m.imports }
+    in
+    (match !failed with
+     | Some message -> GoDepsError message
+     | None ->
+       let emit = List.map (fun (merged, members) -> (rewrite merged, members)) collapsed in
+       let entry_emit =
+         match List.find_opt (fun (_, members) -> List.mem entry.module_name members) emit with
+         | Some (merged, _) -> merged
+         | None -> entry
+       in
+       GoDeps { emit = List.map fst emit; originals; entry_emit })
+
+let go_project_diag file message = {
+  file; start_line = 1; start_col = 1; end_line = 1; end_col = 1;
+  severity = "error"; code = "V001"; message; fix = None; source = "go-emitter";
+  manual = None;
+}
+
+let compile_go_source ?(debug=false) ?(path="") filename source =
+  match parse_module filename source with
+  | Err error -> GoFailure [diag_of_parse_error error]
+  | Ok m ->
+    let diags = check_module source m in
+    if diags <> [] then GoFailure diags
+    else
+      (match local_dependency_modules path m with
+       | GoDepsError message -> GoFailure [go_project_diag filename message]
+       | GoDeps { emit = modules; originals; entry_emit } ->
+         (* Each dependency is checked in its own right: an importer only sees names its
+            dependency exports, so a dependency that does not compile must not be
+            emitted as if it did. *)
+         let dependency_diags = List.concat_map (fun (dependency : Ast.module_form) ->
+           if dependency.source_file = m.source_file then []
+           else
+             match In_channel.with_open_text dependency.source_file In_channel.input_all with
+             | dependency_source -> check_module dependency_source dependency
+             | exception Sys_error _ -> []) originals in
+         if dependency_diags <> [] then GoFailure dependency_diags
+         else
+            let mode = if debug then Emit_go.Debug else Emit_go.Release in
+            match Emit_go.compile_project ~mode ~entry:entry_emit modules with
+           | Ok artifacts -> GoSuccess artifacts
+           | Error errors -> GoFailure (List.map diag_of_go_emit_error errors))
+
+let compile_go_file ?(debug=false) filename =
+  let source = In_channel.with_open_text filename In_channel.input_all in
+  compile_go_source ~debug ~path:filename filename source
+
+type compile_result =
+  | Success of string
+  | Failure of diagnostic list
+
+let artifacts_text artifacts =
+  String.concat "\n" (List.map (fun (artifact : Emit_go.artifact) -> artifact.contents) artifacts)
+
+let compile_source ?(root_path=default_root_path ()) ?(type_check=true) ?(debug=false) filename source =
+  ignore root_path;
+  ignore type_check;
+  match compile_go_source ~debug ~path:filename filename source with
+  | GoSuccess artifacts -> Success (artifacts_text artifacts)
+  | GoFailure diagnostics -> Failure diagnostics
 
 let compile_file ?(root_path=default_root_path ()) ?(type_check=true) filename =
-  (* WS1: same opt-in per-phase timing as [compile_source].  This is the entry
-     point the CLI file-compile path (`tesl <file>`) actually uses, so timing
-     must live here too.  No-op when TESL_PHASE_TIMING is unset. *)
-  let timing = phase_timing_enabled () in
   let source = In_channel.with_open_text filename In_channel.input_all in
-  match time_phase timing "parse" (fun () -> parse_module filename source) with
-  | Err e -> Failure [diag_of_parse_error e]
-  | Ok m ->
-    let diags =
-      if not type_check then []
-      else
-        let type_diags =
-          time_phase timing "typecheck" (fun () ->
-            legacy_bool_diagnostics m.source_file source m
-            @ regex_literal_diagnostics m
-            @ type_diags_of source m)
-        in
-        let proof_diags =
-          time_phase timing "proof" (fun () ->
-            List.map diag_of_proof_error (Proof_checker.check_module m))
-        in
-        let validation_diags =
-          time_phase timing "validation" (fun () ->
-            List.map diag_of_validation_error (Validation.check_module m))
-        in
-        let graph_diags =
-          time_phase timing "modgraph" (fun () -> cross_module_diags m)
-        in
-        type_diags @ proof_diags @ validation_diags @ graph_diags
-    in
-    if diags <> [] then Failure diags
-    else
-      (* Desugar AFTER enforcement/diagnostics, BEFORE emit (identity today). *)
-      let m = time_phase timing "desugar" (fun () -> Desugar.desugar_module m) in
-      let racket =
-        time_phase timing "emit" (fun () ->
-          let cyclic_local_import_paths =
-            if m.source_file = "" || m.source_file = "<test>" then []
-            else cyclic_local_import_paths_for_entry m.source_file
-          in
-          Emit_racket.compile_to_string
-            ~root_path
-            ~cyclic_local_import_paths
-            m)
-      in
-      Success racket
+  compile_source ~root_path ~type_check filename source
 
-(** Check only — return diagnostics without emitting Racket. *)
+(** Check only — return diagnostics without emitting code. *)
 let local_binding_of_checker (b : Checker.local_binding_info) : local_binding = {
   file = b.loc.file;
   line = b.loc.start.line;
@@ -3370,8 +3677,7 @@ let merge_imported_client_decls (entry : Ast.module_form) : Ast.module_form =
   let decl_key = function
     | Ast.DFact (f : Ast.fact_form) -> Some ("fact:" ^ f.name)
     | Ast.DType (Ast.TypeAdt { name; _ })
-    | Ast.DType (Ast.TypeNewtype { name; _ })
-    | Ast.DType (Ast.TypeAlias { name; _ }) -> Some ("type:" ^ name)
+    | Ast.DType (Ast.TypeNewtype { name; _ }) -> Some ("type:" ^ name)
     | Ast.DRecord (r : Ast.record_form) -> Some ("type:" ^ r.name)
     | Ast.DEntity (e : Ast.entity_form) -> Some ("type:" ^ e.name)
     | Ast.DCodec (c : Ast.codec_form) -> Some ("codec:" ^ c.name)
@@ -3766,9 +4072,6 @@ let agent_symbols_of_module (m : Ast.module_form) : string list =
     | Ast.DType (Ast.TypeNewtype { name; base_type; _ }) ->
       Some (agent_symbol_json ~name ~kind:"newtype"
               ~signature:(Type_system.pp_ty (Checker.ty_of_type_expr base_type)))
-    | Ast.DType (Ast.TypeAlias { name; base_type; _ }) ->
-      Some (agent_symbol_json ~name ~kind:"alias"
-              ~signature:(Type_system.pp_ty (Checker.ty_of_type_expr base_type)))
     | Ast.DType (Ast.TypeAdt { name; variants; _ }) ->
       let ctors = List.map (fun (v : Ast.adt_variant) -> v.ctor) variants in
       Some (agent_symbol_json ~name ~kind:"type"
@@ -3870,564 +4173,207 @@ let collect_extra_test_decls test_files =
          match parse_module path src with
          | Err e -> `Err (Printf.sprintf "parse error in %s:%d: %s" path (e.loc.start.line + 1) e.msg)
          | Ok m ->
-           let tests = List.filter (function Ast.DTest _ -> true | _ -> false) m.decls in
-           go (List.rev tests @ acc) rest)
+            if List.exists (function Ast.DApiTest _ | Ast.DLoadTest _ -> true | _ -> false) m.decls then
+              `Err (Printf.sprintf
+                "mutation testing does not support api-test/load-test from extra file %s yet; refusing to skip them"
+                path)
+            else
+              let tests = List.filter (function Ast.DTest _ -> true | _ -> false) m.decls in
+              go (List.rev tests @ acc) rest)
   in
   go [] test_files
 
-(** Per-mutant wall-clock budget (seconds) for one [raco test] run.  Generous
-    enough for a real DSL test suite to warm up and run, but bounded so a mutant
-    that introduces a non-terminating loop cannot hang the whole session. *)
 let mutant_timeout_secs =
-  (* Per-mutant wall-clock ceiling (DSL warmed, so runs are fast — this only
-     bounds hangs).  Honors TESL_MUTATE_TIMEOUT (main's knob); default 120s. *)
   match Sys.getenv_opt "TESL_MUTATE_TIMEOUT" with
-  | Some s -> (try int_of_string s with _ -> 120)
-  | None   -> 120
+  | Some value -> (try int_of_string value with _ -> 120)
+  | None -> 120
 
-(** Shell prefix that bounds a command's wall-clock time, when the coreutils
-    [timeout] utility is available; empty otherwise (so the command still runs,
-    just unbounded).  Computed once.  [timeout] exits 124 when the budget is
-    exceeded, which [classify_mutant_run] treats as a kill. *)
 let timeout_prefix = lazy (
   if Sys.command "command -v timeout >/dev/null 2>&1" = 0
   then Printf.sprintf "timeout %d " mutant_timeout_secs
   else "")
 
-(** Run [cmd] via the shell, capturing its combined stdout+stderr and exit code.
-    Output is redirected to a temporary file and read back, so this depends only
-    on [Sys.command] (whose result is the shell exit code, already decoded — a
-    process killed by a signal surfaces as a non-zero [128 + signo] code, and
-    [timeout] surfaces as 124).  Callers that treat "non-zero ⇒ failure" thus
-    handle test failures, crashes, and timeouts uniformly.  Returns
-    [(exit_code, output)]. *)
 let run_capture cmd : int * string =
-  let out_tmp = Filename.temp_file "tesl_mutant_out_" ".txt" in
+  let output_file = Filename.temp_file "tesl_process_" ".txt" in
   Fun.protect
-    ~finally:(fun () -> (try Sys.remove out_tmp with Sys_error _ -> ()))
+    ~finally:(fun () -> try Sys.remove output_file with Sys_error _ -> ())
     (fun () ->
-       let full = Printf.sprintf "%s > %s 2>&1" cmd (Filename.quote out_tmp) in
+       let full = Printf.sprintf "%s > %s 2>&1" cmd (Filename.quote output_file) in
        let exit_code = Sys.command full in
        let output =
-         try In_channel.with_open_text out_tmp In_channel.input_all
+         try In_channel.with_open_text output_file In_channel.input_all
          with Sys_error _ -> ""
        in
-       (exit_code, output))
+       exit_code, output)
 
-(** [true] when [output] contains a rackunit failure/error marker.  rackunit
-    prints a "FAILURE" banner for every failed check ([exn:test:check]) and an
-    "ERROR" banner for any other raised exception, each on its own line.  This
-    mirrors the failure detection in [tests/example-test-batch.rkt]. *)
-let output_indicates_failure output =
-  (* Implemented with a plain line scan rather than [Str]: this predicate runs
-     on worker domains during parallel mutant evaluation, and [Str]'s matcher
-     keeps global, non-reentrant match state that is unsafe to touch from
-     several domains at once.  A line scan is allocation-light and trivially
-     thread-safe.  Equivalent to the regex "(^|\n)(FAILURE|ERROR)(\n|$)": true
-     iff some line of [output] is exactly "FAILURE" or exactly "ERROR". *)
-  List.exists (fun line -> line = "FAILURE" || line = "ERROR")
-    (String.split_on_char '\n' output)
+let mutation_test_count (m : module_form) =
+  List.fold_left (fun count -> function
+    | DTest _ | DApiTest _ | DLoadTest _ -> count + 1
+    | _ -> count) 0 m.decls
 
-(** [true] when [output] carries a signal that [raco test] actually loaded and
-    RAN the test module — i.e. the mutant compiled and expanded successfully so
-    the suite got a chance to run.  A run that never reaches the tests (a module
-    load / macro-expansion / compile error) is a fundamentally different outcome
-    from a run whose tests executed and failed, and must not be scored as a
-    kill.
-
-    rackunit prints one summary line per module — either a per-check
-    "FAILURE"/"ERROR" banner (a check ran and failed / raised) or, on a clean
-    module, a "N test(s) passed" / "raco test:" progress line.  We treat the
-    presence of ANY of these as proof the suite ran.  A non-zero exit with NONE
-    of them means Racket bailed out before running a single test (the compile /
-    expand error case), which {!classify_mutant_outcome} maps to [`Invalid]. *)
-let output_indicates_tests_ran output =
-  output_indicates_failure output
-  || List.exists (fun line ->
-       (* rackunit / raco-test progress and pass banners. *)
-       let l = String.trim line in
-       (String.length l >= 4
-        && (let contains sub =
-              let n = String.length sub and m = String.length l in
-              let rec at i = i + n <= m && (String.sub l i n = sub || at (i + 1)) in
-              at 0
-            in
-            contains "test passed" || contains "tests passed"
-            || contains "raco test:"))
-     ) (String.split_on_char '\n' output)
-
-(** Classify a single mutant's [raco test] run.  Returns [true] when the mutant
-    SURVIVED (the test suite demonstrably ran and passed), [false] when it was
-    KILLED.
-
-    A mutant is a survivor ONLY when the run exited 0 AND produced no rackunit
-    failure/error marker.  Any non-zero exit (test failure, raised exception,
-    module load/expansion error, crash, or a timeout — [timeout] exits 124) is
-    a kill.  Crucially, an exit of 0 that is nonetheless accompanied by a
-    "FAILURE"/"ERROR" marker is ALSO a kill: this guards against the case where
-    [raco test] reports success without actually exercising the test suite to a
-    clean pass, which previously caused genuinely-killed mutants to be reported
-    as false survivors.
-
-    NOTE: this boolean survivor/non-survivor predicate does NOT distinguish a
-    genuine kill from a mutant that failed to compile — both are "not a
-    survivor".  {!classify_mutant_outcome} refines the non-survivor case into
-    [`Killed] vs [`Invalid]; prefer it for scoring. *)
-let classify_mutant_run ~exit_code ~output =
-  exit_code = 0 && not (output_indicates_failure output)
-
-(** Three-way classification of a single mutant's [raco test] run, used for
-    scoring.  Timeouts are handled by the caller (they surface as exit 124).
-
-    - [`Survived]: exit 0 with no rackunit failure marker — the suite ran clean
-      and did not detect the mutant (a real coverage gap).
-    - [`Killed]: the suite RAN and the mutant was detected — either a rackunit
-      "FAILURE"/"ERROR" banner was printed (regardless of exit code), or the
-      run exited non-zero AFTER the tests demonstrably ran.
-    - [`Invalid]: the mutant did NOT compile / expand (non-zero exit with no
-      evidence the tests ever ran).  A mutant that fails to compile proves
-      NOTHING about the tests, so it must NOT be credited as a kill; the caller
-      excludes it from the kill-rate denominator.
-
-    The distinction between [`Killed] and [`Invalid] is exactly "did the test
-    suite get to run?": a compile/expand error aborts before any test executes
-    (no failure marker, no pass/progress banner), whereas a genuine kill is a
-    test that ran and failed. *)
-let classify_mutant_outcome ~exit_code ~output =
-  if exit_code = 0 && not (output_indicates_failure output) then `Survived
-  else if output_indicates_tests_ran output then `Killed
-  else `Invalid
-
-(** Number of mutant [raco test] processes to run concurrently.  Defaults to
-    the machine's available parallelism (≈ [nproc]), capped at 16 so a very
-    large core count doesn't spawn an unreasonable number of Racket processes,
-    and floored at 1.  [TESL_MUTATE_JOBS] overrides it (1 ⇒ fully serial, which
-    is handy for A/B'ing the parallel path against the historical behaviour). *)
-let mutate_jobs =
-  let detected =
-    let n = Domain.recommended_domain_count () in
-    if n < 1 then 1 else if n > 16 then 16 else n
+let prepare_mutation_suite extra_test_decls (m : module_form) =
+  let merged =
+    if extra_test_decls = [] then m
+    else { m with decls = m.decls @ extra_test_decls }
   in
-  match Sys.getenv_opt "TESL_MUTATE_JOBS" with
-  | Some s -> (match int_of_string_opt s with Some n when n >= 1 -> n | _ -> detected)
-  | None   -> detected
+  let stripped = Mutate.strip_infra_tests merged in
+  let removed = mutation_test_count merged - mutation_test_count stripped in
+  if removed > 0 then
+    Result.Error (Printf.sprintf
+      "mutation testing would skip %d infrastructure/api/load test block(s); refusing to report a partial score"
+      removed)
+  else Result.Ok stripped
 
-(** Run [f 0], …, [f (n-1)] across a bounded pool of at most [jobs] worker
-    domains and return their results in an array indexed by [i] (so the output
-    order is independent of which worker ran which item).
+let rec remove_tree path =
+  if Sys.file_exists path then
+    if Sys.is_directory path then begin
+      Sys.readdir path |> Array.iter (fun name -> remove_tree (Filename.concat path name));
+      Unix.rmdir path
+    end else Sys.remove path
 
-    Each worker repeatedly claims the next index via a single mutex-guarded
-    counter and stores [f i] at [results.(i)].  This is the canonical
-    "shared work queue" pattern: the only mutable state shared across domains is
-    the [next] counter (protected by [mu]) and disjoint cells of [results]
-    (each written by exactly one worker), so there are no data races and the
-    collated result array is deterministic.  [f] is expected to do its heavy
-    lifting in an external process (here, [raco test]), so blocking workers
-    simply let the OS schedule those subprocesses concurrently.
+let fresh_temp_dir prefix =
+  Filename.temp_dir prefix ""
 
-    With [jobs <= 1] (or [n <= 1]) it runs inline on the calling domain, so the
-    fully-serial path spawns no domains at all. *)
-let parallel_map ~jobs (n : int) (f : int -> 'a) : 'a array =
-  if n = 0 then [||]
+let rec mkdir_p path =
+  if path = "" || path = Filename.current_dir_name then ()
+  else if Sys.file_exists path then ()
   else begin
-    (* Results land in an [option] array so the array can be allocated before
-       any element is computed without needing a dummy ['a] value; each cell is
-       filled exactly once (by the worker that claimed that index) and unwrapped
-       at the end. *)
-    let results : 'a option array = Array.make n None in
-    let store i v = results.(i) <- Some v in
-    if jobs <= 1 || n = 1 then
-      for i = 0 to n - 1 do store i (f i) done
-    else begin
-      let mu = Mutex.create () in
-      let next = ref 0 in
-      let claim () =
-        Mutex.lock mu;
-        let i = !next in
-        if i < n then incr next;
-        Mutex.unlock mu;
-        if i < n then Some i else None
-      in
-      let worker () =
-        let rec loop () =
-          match claim () with
-          | None   -> ()
-          | Some i -> store i (f i); loop ()
-        in
-        loop ()
-      in
-      let pool = min jobs n in
-      let domains = List.init pool (fun _ -> Domain.spawn worker) in
-      List.iter Domain.join domains
-    end;
-    Array.map (function Some v -> v | None -> assert false) results
+    mkdir_p (Filename.dirname path);
+    Unix.mkdir path 0o755
   end
 
-(** Run mutation testing on [filename].  Returns a [Mutate.mutation_report]
-    or an error string if the file doesn't parse / type-check.
-    [extra_test_files] provides additional .tesl files whose test blocks are
-    merged into each mutant, enabling cross-file mutation testing. *)
-let mutate_file ?(root_path=default_root_path ()) ?(extra_test_files=[]) filename : mutate_result =
-  let source = In_channel.with_open_text filename In_channel.input_all in
-  match parse_module filename source with
-  | Err e ->
-    MutateErr (Printf.sprintf "parse error at %s:%d: %s"
-                 e.loc.file (e.loc.start.line + 1) e.msg)
-  | Ok m  ->
-    let diags = check_module source m in
-    (match List.filter (fun (d : diagnostic) -> d.severity = "error") diags with
-     | d :: _ -> MutateErr (Printf.sprintf "type error: %s" d.message)
-     | [] ->
-       (* Collect extra test declarations from companion test files *)
-       (match collect_extra_test_decls extra_test_files with
-        | `Err msg -> MutateErr msg
-        | `Ok extra_test_decls ->
-       let mutants = Mutate.generate_mutants m in
-       (* Warm the Tesl DSL bytecode ONCE before timing any mutant.  The first
-          per-mutant `raco test` otherwise cold-compiles the whole DSL (~10-13s),
-          which can exceed [timeout_secs] and misclassify a genuinely-killed mutant
-          as [Error] (124).  Compiling the original module's emitted .rkt with
-          `raco make` builds the shared DSL .zo so each subsequent `raco test` just
-          loads it.  Best-effort: any failure here is harmless (mutants still run). *)
-       (let base_module =
-          if extra_test_decls = [] then m
-          else { m with decls = m.decls @ extra_test_decls }
-        in
-        match (try Some (Emit_racket.compile_to_string ~root_path base_module)
-               with _ -> None) with
-        | None -> ()
-        | Some r ->
-          let warm = Filename.temp_file "tesl_mutant_warm_" ".rkt" in
-          Fun.protect
-            ~finally:(fun () -> (try Sys.remove warm with Sys_error _ -> ()))
-            (fun () ->
-              Out_channel.with_open_text warm
-                (fun oc -> Out_channel.output_string oc r);
-              ignore (Sys.command
-                (Printf.sprintf "raco make %s >/dev/null 2>&1" (Filename.quote warm)))));
-       (* ── Phase 1 (SERIAL): emit + prepare every mutant ─────────────────────
-          [Emit_racket.compile_to_string] mutates module-level tables
-          (qualified imports, queue map, …), so it is NOT safe to call from
-          several domains at once; doing so could corrupt the emitted Racket and
-          silently change which mutants are killed.  We therefore emit all
-          mutants here, in deterministic order, on the calling domain.  Emission
-          is pure OCaml and cheap relative to a `raco test` run, so keeping it
-          serial costs little.  Each mutant becomes either a *final* result
-          (emit failure ⇒ [Error]; no test block ⇒ [NoTests]) or a [`Run]
-          carrying the temp `.rkt` path whose `raco test` must still run.
+let write_go_artifacts root (artifacts : Emit_go.artifact list) =
+  List.iter (fun (artifact : Emit_go.artifact) ->
+    if not (Filename.is_relative artifact.path)
+       || List.mem ".." (String.split_on_char '/' artifact.path) then
+      invalid_arg ("unsafe Go artifact path: " ^ artifact.path);
+    let path = Filename.concat root artifact.path in
+    mkdir_p (Filename.dirname path);
+    Out_channel.with_open_bin path (fun channel ->
+      output_string channel artifact.contents)) artifacts
 
-          DB stub: infrastructure-touching test blocks (Postgres DB / server /
-          queue / cache / email) are stripped from each mutant via
-          [Mutate.strip_infra_tests] so they cannot hang a DB-less mutant run.
-          Files with no such tests (lesson42, lesson44, …) are unaffected, so
-          their mutation score is identical to the un-stubbed serial run. *)
-       let arr = Array.of_list mutants in
-       let n = Array.length arr in
-       let prepared = Array.map (fun (mut : Mutate.mutant) ->
-         (* Merge extra tests into this mutant's module, then strip the
-            infrastructure-touching ones before emitting. *)
-         let module_with_tests =
-           let merged =
-             if extra_test_decls = [] then mut.module_
-             else { mut.module_ with decls = mut.module_.decls @ extra_test_decls }
-           in
-           Mutate.strip_infra_tests merged
-         in
-         (* Emit without type-checking — the mutant may be semantically
-            invalid from the proof perspective, but Racket will still run
-            the runtime checks and tests. *)
-         match (try Some (Emit_racket.compile_to_string ~root_path module_with_tests)
-                with _ -> None)
-         with
-         | None   -> `Done (Mutate.Error "emit error")
-         | Some r ->
-           let has_test = List.exists (function Ast.DTest _ -> true | _ -> false) module_with_tests.decls in
-           if not has_test then `Done Mutate.NoTests
-           else begin
-             let tmp = Filename.temp_file "tesl_mutant_" ".rkt" in
-             Out_channel.with_open_text tmp
-               (fun oc -> Out_channel.output_string oc r);
-             `Run tmp
-           end
-       ) arr in
-       (* ── Phase 2 (PARALLEL): run the `raco test` of each prepared mutant ────
-          Only the external [raco test] subprocess is parallelized, across a
-          bounded pool of [mutate_jobs] worker domains.  Classification is
-          byte-for-byte identical to the serial path: a mutant SURVIVES only on
-          exit 0 with no rackunit FAILURE/ERROR marker; exit 124 (timeout, e.g.
-          an unavailable DB) is [Error]; everything else is KILLED.  Results are
-          collated by mutant index, so the report order — and thus the score —
-          is independent of which worker ran which mutant. *)
-       (* Force the [lazy] timeout prefix ONCE here, on the calling domain:
-          [Lazy.force] is not safe to evaluate concurrently from several domains
-          (it raises [CamlinternalLazy.Undefined]), so resolve it before the
-          pool starts and pass the plain string to the workers. *)
-       let timeout_pfx = Lazy.force timeout_prefix in
-       let run_one i =
-         match prepared.(i) with
-         | `Done result -> result
-         | `Run tmp ->
-           Fun.protect
-             ~finally:(fun () -> (try Sys.remove tmp with Sys_error _ -> ()))
-             (fun () ->
-               let cmd = Printf.sprintf "%sraco test --quiet %s"
-                           timeout_pfx (Filename.quote tmp) in
-               let exit_code, output = run_capture cmd in
-               if exit_code = 124 then Mutate.Error "raco test timed out (no DB?)"
-               else match classify_mutant_outcome ~exit_code ~output with
-                 | `Survived -> Mutate.Survived
-                 | `Killed   -> Mutate.Killed
-                 (* Compile/expand error: the mutant never ran the tests, so it
-                    is INVALID (skipped), NOT credited as a kill. *)
-                 | `Invalid  -> Mutate.Invalid "mutant did not compile")
-       in
-       let result_arr = parallel_map ~jobs:mutate_jobs n run_one in
-       let results = List.mapi (fun i mut -> (mut, result_arr.(i))) mutants in
-       let killed   = List.length (List.filter (fun (_, r) -> r = Mutate.Killed)   results) in
-       let survived = List.length (List.filter (fun (_, r) -> r = Mutate.Survived) results) in
-       let invalid  = List.length (List.filter (fun (_, r) -> match r with Mutate.Invalid _ -> true | _ -> false) results) in
-       let errors   = List.length (List.filter (fun (_, r) -> match r with Mutate.Error _ -> true | _ -> false) results) in
-       MutateOk { Mutate.total = List.length mutants; killed; survived; invalid; errors; results }))
+type go_test_outcome =
+  | GoTestsPassed
+  | GoTestsFailed of string
+  | GoBuildFailed of string
+  | GoTestsTimedOut of string
+  | GoTestRunnerFailed of string
 
-(* ── WS6: standalone-executable build (`tesl --exe`) ─────────────────────────
-   Emit the program's Racket *exactly* as `tesl <file>` would (byte-identical
-   — this reuses [compile_file], so the distribution path never changes the
-   emitted source) and then bundle it into a standalone native executable with
-   `raco exe`.
+let string_contains value needle =
+  try ignore (Str.search_forward (Str.regexp_string needle) value 0); true
+  with Not_found -> false
 
-   The emitted module closure is staged FLAT into a fresh temp directory (the
-   same approach as [debug_inspect] below).  Emitted local-import requires use
-   *relative* `(file "X.rkt")` paths resolved against the requiring module's
-   own directory, and local imports are same-directory-only by language design
-   — so one flat temp dir holding every emitted `.rkt` keeps them resolving,
-   and no generated file lands in the user's source tree.  `raco exe` then
-   inlines every required module — including the `tesl/...` DSL collection — so
-   the resulting binary starts without paying the Racket source cold-start and
-   needs no `raco link`.  (Data files referenced at runtime, e.g. a server's
-   `#:static-dir`, are not bundled by `raco exe`; that is a `raco distribute`
-   concern, out of scope here.) *)
-type build_result =
-  | BuildOk      of string          (** path to the produced executable *)
-  | BuildDiags   of diagnostic list (** compile/type errors — nothing emitted *)
-  | BuildErr     of string          (** raco/IO failure with combined output *)
+let classify_go_test_run ~exit_code ~output =
+  let started = string_contains output "TESL_GO_TESTS_STARTED" in
+  let failed_test = string_contains output "--- FAIL:" in
+  if exit_code = 0 && started then GoTestsPassed
+  else if exit_code <> 0 && started && failed_test then GoTestsFailed output
+  else GoTestRunnerFailed output
 
-(** Compile [filename] and bundle it into a standalone executable.
-    [out] overrides the executable path (default: source basename without the
-    `.tesl` suffix).  Requires `raco` on PATH. *)
-let build_exe ?(root_path=default_root_path ()) ?out filename : build_result =
-  if not (Sys.file_exists filename) then
-    BuildErr (Printf.sprintf "%s: No such file" filename)
+let classify_go_build_run ~exit_code ~output =
+  if exit_code = 0 then None
+  else if exit_code = 124 then Some (GoTestsTimedOut output)
+  else Some (GoBuildFailed output)
+
+let run_go_test_artifacts artifacts =
+  let test_artifact = List.find_opt (fun (artifact : Emit_go.artifact) ->
+    Filename.check_suffix artifact.path "_test.go") artifacts in
+  match test_artifact with
+  | None -> GoBuildFailed "emitted project has no Go test package"
+  | Some test_artifact ->
+    let timeout_pfx = Lazy.force timeout_prefix in
+    if timeout_pfx = "" then GoTestRunnerFailed "Go mutation testing requires `timeout` on PATH"
+    else
+    let root = fresh_temp_dir "tesl_go_mutant_" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      write_go_artifacts root artifacts;
+      let package = "./" ^ Filename.dirname test_artifact.path in
+      let binary = Filename.concat root "tesl-tests" in
+       let build_cmd = Printf.sprintf "cd %s && %sgo test -c -o %s %s"
+         (Filename.quote root) timeout_pfx (Filename.quote binary) (Filename.quote package) in
+       let build_code, build_output = run_capture build_cmd in
+       match classify_go_build_run ~exit_code:build_code ~output:build_output with
+       | Some outcome -> outcome
+       | None ->
+         let run_cmd = Printf.sprintf "%s%s -test.v"
+           timeout_pfx (Filename.quote binary) in
+        let run_code, run_output = run_capture run_cmd in
+        if run_code = 124 then GoTestsTimedOut run_output
+        else classify_go_test_run ~exit_code:run_code ~output:run_output)
+
+(** Go mutation runner. Mutation generation remains backend-neutral: each
+    surface-AST mutant passes through [Emit_go], is compiled first, then its test
+    binary runs. A Go compile failure is invalid and can never inflate kills. *)
+let mutate_go_file ?(extra_test_files=[]) filename : mutate_result =
+  let timeout_pfx = Lazy.force timeout_prefix in
+  if timeout_pfx = "" then
+    MutateErr "Go mutation testing requires `timeout` on PATH"
+  else if fst (run_capture (timeout_pfx ^ "go version")) <> 0 then
+    MutateErr "Go mutation testing requires `go` on PATH"
   else
-    match compile_file ~root_path ~type_check:true filename with
-    | Failure diags -> BuildDiags diags
-    | Success racket ->
-      let stem =
-        if Filename.check_suffix filename ".tesl"
-        then Filename.chop_suffix filename ".tesl"
-        else filename
-      in
-      let exe_path = match out with Some p -> p | None -> stem in
-      (* Stage the emitted closure (entry + every transitive local import)
-         flat into a temp dir — see the header comment above.  Basenames are
-         unique because local imports are same-directory-only. *)
-      let abs_src =
-        let p = if Filename.is_relative filename
-                then Filename.concat (Sys.getcwd ()) filename
-                else filename in
-        (try Unix.realpath p with _ -> p)
-      in
-      let deps =
-        let graph = build_local_import_graph abs_src in
-        let entry_canon = canonical_import_path abs_src in
-        Hashtbl.fold (fun path _ acc ->
-          if path = entry_canon then acc else path :: acc) graph []
-      in
-      let compiled_deps =
-        List.fold_left (fun acc path ->
-          match acc with
-          | Error _ -> acc
-          | Ok xs ->
-            (match compile_file ~root_path ~type_check:true path with
-             | Failure diags -> Error diags
-             | Success dep_racket -> Ok ((path, dep_racket) :: xs))
-        ) (Ok []) deps
-      in
-      (match compiled_deps with
-       | Error diags -> BuildDiags diags
-       | Ok dep_rkts ->
-         (try
-            let tmp_dir = Filename.temp_dir "tesl-exe-" "" in
-            let rkt_name src =
-              Filename.remove_extension (Filename.basename src) ^ ".rkt" in
-            List.iter (fun (dep_abs, dep_racket) ->
-              Out_channel.with_open_text
-                (Filename.concat tmp_dir (rkt_name dep_abs))
-                (fun oc -> Out_channel.output_string oc dep_racket)
-            ) dep_rkts;
-            let rkt_path = Filename.concat tmp_dir (rkt_name abs_src) in
-            Out_channel.with_open_text rkt_path
-              (fun oc -> Out_channel.output_string oc racket);
-            (* [exe_path] may be relative: it resolves against the caller's
-               cwd (unchanged — raco runs from here, only the .rkt moved). *)
-            let cmd =
-              Printf.sprintf "raco exe -o %s %s"
-                (Filename.quote exe_path) (Filename.quote rkt_path)
-            in
-            let exit_code, output = run_capture cmd in
-            if exit_code = 0 then BuildOk exe_path
-            else BuildErr
-                (Printf.sprintf "raco exe failed (exit %d):\n%s" exit_code output)
-          with Sys_error msg -> BuildErr msg))
-
-(* ── AC2: headless `tesl debug-inspect` ──────────────────────────────────────
-   Compile a .tesl with debug instrumentation, then run it headlessly to a single
-   breakpoint via the Racket driver dsl/debug/headless-inspect.rkt, which dumps the
-   paused runtime state (locals + live domain registry + SQL capture) as ONE JSON
-   object on stdout.  No DAP client, no interactive protocol.
-
-   The compiled .rkt bakes its breakpointable source positions from the path
-   handed to the parser, so we compile with the COMPLETE (absolute) path and hand
-   that SAME absolute path to the driver — only then does the breakpoint line we
-   register match the file string in the emitted thsl-src! checkpoints. *)
-type debug_inspect_result =
-  | InspectDiags of diagnostic list   (* compile failed *)
-  | InspectErr of string              (* setup/exec failure *)
-  (* InspectOk never returns: a successful run execs the racket driver, which
-     streams its JSON to stdout and exits — replacing this process. *)
-
-(** Locate the `racket` executable: honour TESL_RACKET, else search PATH. *)
-let find_racket_binary () : string option =
-  match Sys.getenv_opt "TESL_RACKET" with
-  | Some p when p <> "" -> Some p
-  | _ ->
-    let exit_code, out = run_capture "command -v racket" in
-    if exit_code = 0 then
-      (match String.trim out with "" -> None | s -> Some s)
-    else None
-
-(** Run [file] to the FIRST matching breakpoint and dump the paused runtime state
-    as JSON.  [breakpoints] is a list of [(line, condition, hit)] triples — the
-    agent's requested breakpoints, each a 1-based [line] with an optional boolean
-    [condition] string (evaluated over the paused frame's locals) and/or an
-    optional [hit] hit-condition string (e.g. ["%3"] / [">=5"]).  Multiple
-    breakpoints are all registered; the inspector stops at whichever fires first
-    and the JSON's "breakpoint" field reports which.  [mode] is "program" (run the
-    `main` block) or "test" (run the `test` blocks).  On success this execs the
-    Racket driver and never returns; the JSON appears on the inherited stdout. *)
-let debug_inspect ?(root_path=default_root_path ()) ?(continue_mode=false) ~breakpoints ~mode filename
-  : debug_inspect_result =
-  if not (Sys.file_exists filename) then
-    InspectErr (Printf.sprintf "%s: No such file" filename)
-  else begin
-    (* Absolute source path — must match the file string the emitter bakes into
-       the thsl-src! checkpoints so the registered breakpoint line lines up. *)
-    let abs_src =
-      let p = if Filename.is_relative filename
-              then Filename.concat (Sys.getcwd ()) filename
-              else filename in
-      (try Unix.realpath p with _ -> p)
-    in
-    (* Compile with debug instrumentation, parsing under the absolute path. *)
-    let source = In_channel.with_open_text abs_src In_channel.input_all in
-    match compile_source ~root_path ~type_check:true ~debug:true abs_src source with
-    | Failure diags -> InspectDiags diags
-    | Success racket ->
-      (* Multi-module: the emitter requires local imports as RELATIVE
-         `(file "dep.rkt")` paths, resolved against the requiring module's own
-         directory — a lone entry .rkt in the system temp dir dies on its first
-         local import with "cannot open module file".  Compile the whole
-         debug-instrumented closure into a fresh temp DIRECTORY instead. *)
-      let deps =
-        let graph = build_local_import_graph abs_src in
-        let entry_canon = canonical_import_path abs_src in
-        Hashtbl.fold (fun path _ acc ->
-          if path = entry_canon then acc else path :: acc) graph []
-      in
-      let compiled_deps =
-        List.fold_left (fun acc path ->
-          match acc with
-          | Error _ -> acc
-          | Ok xs ->
-            let dep_abs = (try Unix.realpath path with _ -> path) in
-            let dep_source =
-              In_channel.with_open_text dep_abs In_channel.input_all in
-            (match compile_source ~root_path ~type_check:true ~debug:true
-                     dep_abs dep_source with
-             | Failure diags -> Error diags
-             | Success dep_racket -> Ok ((dep_abs, dep_racket) :: xs))
-        ) (Ok []) deps
-      in
-      (match compiled_deps with
-       | Error diags -> InspectDiags diags
-       | Ok dep_rkts ->
-      (try
-         let tmp_dir = Filename.temp_dir "tesl-debug-inspect-" "" in
-         let rkt_name src =
-           Filename.remove_extension (Filename.basename src) ^ ".rkt" in
-         List.iter (fun (dep_abs, dep_racket) ->
-           Out_channel.with_open_text (Filename.concat tmp_dir (rkt_name dep_abs))
-             (fun oc -> Out_channel.output_string oc dep_racket)
-         ) dep_rkts;
-         let tmp_rkt = Filename.concat tmp_dir (rkt_name abs_src) in
-         Out_channel.with_open_text tmp_rkt
-           (fun oc -> Out_channel.output_string oc racket);
-         let driver =
-           let primary = Filename.concat root_path "dsl/debug/headless-inspect.rkt" in
-           if Sys.file_exists primary then primary
-           else
-             (* Installed (no repo checkout): the inspector ships inside the
-                tesl-racket collections, located via TESL_COLLECTIONS_DIR (set by
-                the Nix wrappers to <store>/share/tesl-collections/tesl). *)
-             (match Sys.getenv_opt "TESL_COLLECTIONS_DIR" with
-              | Some d when d <> "" ->
-                let c = Filename.concat d "dsl/debug/headless-inspect.rkt" in
-                if Sys.file_exists c then c else primary
-              | _ -> primary)
-         in
-         if not (Sys.file_exists driver) then
-           InspectErr (Printf.sprintf
-             "headless inspector not found at %s (set TESL_REPO_ROOT or TESL_COLLECTIONS_DIR)" driver)
-         else
-           (match find_racket_binary () with
-            | None -> InspectErr "racket not found; set TESL_RACKET or install Racket"
-            | Some racket_bin ->
-              (* TESL_DEBUG must be set so the driver's in-process expansion of the
-                 debuggee keeps its thsl-src! checkpoints.  Forward the existing env
-                 (including any PLTCOLLECTS a dev worktree set to repoint the `tesl`
-                 collection) and add TESL_DEBUG=1. *)
-              Unix.putenv "TESL_DEBUG" "1";
-              (* Encode the requested breakpoints as a JSON array the driver
-                 parses: [{"line":N,"condition":STR?,"hit":STR?}, ...].  The driver
-                 distinguishes this STRUCTURED form (argv[2]=mode, argv[3]=json)
-                 from the LEGACY single-line form (argv[2]=number) by argv[2]. *)
-              let bp_json =
-                let one (line, cond_opt, hit_opt) =
-                  let fields =
-                    (Printf.sprintf {|"line":%d|} line)
-                    :: (match cond_opt with
-                        | Some c -> [Printf.sprintf {|"condition":%s|} (json_encode_string c)]
-                        | None -> [])
-                    @  (match hit_opt with
-                        | Some h -> [Printf.sprintf {|"hit":%s|} (json_encode_string h)]
-                        | None -> [])
-                  in
-                  "{" ^ String.concat "," fields ^ "}"
-                in
-                "[" ^ String.concat "," (List.map one breakpoints) ^ "]"
-              in
-              (* Trailing "continue" enables headless F5 (run through every
-                 breakpoint, resuming after each, until completion); "once" keeps
-                 the one-shot dump. *)
-              let argv =
-                [| racket_bin; driver; tmp_rkt; abs_src; mode; bp_json;
-                   (if continue_mode then "continue" else "once") |]
-              in
-              flush stdout; flush stderr;
-              (* exec replaces this process: the driver's single JSON object is
-                 written straight to our inherited stdout, then it exits 0. *)
-              (try Unix.execv racket_bin argv
-               with Unix.Unix_error (e, _, _) ->
-                 InspectErr (Printf.sprintf "exec racket failed: %s"
-                               (Unix.error_message e))))
-       with Sys_error msg -> InspectErr msg))
-  end
+    let source = In_channel.with_open_text filename In_channel.input_all in
+    match parse_module filename source with
+    | Err error ->
+      MutateErr (Printf.sprintf "parse error at %s:%d: %s"
+        error.loc.file (error.loc.start.line + 1) error.msg)
+    | Ok m ->
+      let diags = check_module source m in
+      (match List.filter (fun (d : diagnostic) -> d.severity = "error") diags with
+       | diagnostic :: _ -> MutateErr ("type error: " ^ diagnostic.message)
+       | [] ->
+         (match collect_extra_test_decls extra_test_files with
+           | `Err message -> MutateErr message
+           | `Ok extra_test_decls ->
+             (match prepare_mutation_suite extra_test_decls m with
+              | Error message -> MutateErr message
+              | Ok baseline ->
+             let suite_diags = check_module source baseline in
+             (match List.filter (fun (d : diagnostic) -> d.severity = "error") suite_diags with
+              | diagnostic :: _ -> MutateErr ("mutation test suite error: " ^ diagnostic.message)
+              | [] ->
+             let with_tests module_ =
+               if extra_test_decls = [] then module_
+               else { module_ with decls = module_.decls @ extra_test_decls }
+             in
+            let has_tests = List.exists (function DTest _ -> true | _ -> false) baseline.decls in
+            if not has_tests then MutateErr "Go mutation baseline has NO TESTS (no runnable tests)"
+            else
+              (match Emit_go.compile_module ~mode:Emit_go.Release baseline with
+               | Error (error :: _) -> MutateErr ("Go mutation baseline emit failed: " ^ error.message)
+               | Error [] -> MutateErr "Go mutation baseline emit failed"
+               | Ok (artifacts, _exports) ->
+                 (match run_go_test_artifacts artifacts with
+                  | GoBuildFailed output -> MutateErr ("Go mutation baseline did not compile:\n" ^ output)
+                  | GoTestsFailed output -> MutateErr ("Go mutation baseline tests fail:\n" ^ output)
+                  | GoTestsTimedOut output -> MutateErr ("Go mutation baseline timed out:\n" ^ output)
+                  | GoTestRunnerFailed output -> MutateErr ("Go mutation baseline runner failed:\n" ^ output)
+                  | GoTestsPassed ->
+                    let mutants = Mutate.generate_mutants m in
+                    let results = List.map (fun (mutant : Mutate.mutant) ->
+                      let module_ = with_tests mutant.module_ in
+                      let result =
+                        match Emit_go.compile_module ~mode:Emit_go.Release module_ with
+                        | Error (error :: _) -> Mutate.Error ("Go emit failed: " ^ error.message)
+                        | Error [] -> Mutate.Error "Go emit failed"
+                        | Ok (artifacts, _exports) ->
+                          (match run_go_test_artifacts artifacts with
+                           | GoTestsPassed -> Mutate.Survived
+                           | GoTestsFailed _ -> Mutate.Killed
+                           | GoBuildFailed output -> Mutate.Invalid output
+                           | GoTestsTimedOut output -> Mutate.Error ("Go test timed out: " ^ output)
+                           | GoTestRunnerFailed output -> Mutate.Error ("Go test runner failed: " ^ output))
+                      in
+                      mutant, result) mutants in
+                    let count predicate = List.length (List.filter predicate results) in
+                    let killed = count (fun (_, result) -> result = Mutate.Killed) in
+                    let survived = count (fun (_, result) -> result = Mutate.Survived) in
+                    let invalid = count (fun (_, result) -> match result with Mutate.Invalid _ -> true | _ -> false) in
+                    let errors = count (fun (_, result) -> match result with Mutate.Error _ -> true | _ -> false) in
+                    MutateOk {
+                      Mutate.total = List.length mutants;
+                      killed;
+                      survived;
+                      invalid;
+                      errors;
+                      results;
+                    }))))))

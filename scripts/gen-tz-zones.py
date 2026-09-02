@@ -6,8 +6,8 @@ strings — a typo is a compile error, and completion lists every zone), one per
 canonical IANA zone from zone1970.tab, plus `Utc` and `FixedOffset`.  This
 script bakes the (constructor name, IANA name) table the compiler uses for
 typing, exports, and lowering; the runtime resolves the IANA name against the
-system tzdata (dsl/private/tzif.rkt), and tests/timezone-zones-test.rkt is the
-seam that every baked zone actually resolves there.
+typing, exports, and lowering; the Go runtime resolves the IANA name against
+the system tzdata, and the timezone integration tests verify every baked zone.
 
 Regenerate (and commit the result) when tzdata adds a zone:
 
@@ -24,7 +24,7 @@ OUT = ROOT / "compiler" / "lib" / "tz_zones.ml"
 
 # The standard Area/Location naming scheme.  Links (Europe/Stockholm →
 # Europe/Berlin, etc.) are deliberately INCLUDED — they are the familiar names —
-# while the legacy aliases (W-SU, GB-Eire, EST5EDT, Etc/*, …) are excluded.
+# while historical aliases (W-SU, GB-Eire, EST5EDT, Etc/*, …) are excluded.
 AREAS = {"Africa", "America", "Antarctica", "Arctic", "Asia", "Atlantic",
          "Australia", "Europe", "Indian", "Pacific"}
 

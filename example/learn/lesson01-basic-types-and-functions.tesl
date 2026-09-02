@@ -134,7 +134,7 @@ test "clamp is bounded" with 200 runs {
 #
 # You use a parameter directly (`n`); there is no surface raw-access operator.
 # The compile-time named-value carrier is erased during compilation, so the
-# emitted Racket passes the plain payload to arithmetic — the subject and proofs
+# emitted Go passes the plain payload to arithmetic — the subject and proofs
 # exist only in the static checker, never at run time.
 #
 # "let x = expr" creates a new named value binding. The compiler assigns a fresh

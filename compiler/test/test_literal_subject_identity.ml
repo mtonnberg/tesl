@@ -8,7 +8,7 @@
     `Clamped 1 100 n`, `HasMin 10 n`, `Named "http" port`) still match.
 
     These tests assert the STATIC checker (`tesl --check`) rejects the leaks
-    WITHOUT running the program (proofs are erased — no runtime backstop), and
+    WITHOUT running the program (proofs are erased, so no runtime backstop), and
     that the legitimate content-parameter patterns still compile. *)
 
 open Alcotest
@@ -70,10 +70,10 @@ let with_temp_file content f =
     ~finally:(fun () -> (try Sys.remove path with _ -> ()); (try Unix.rmdir dir with _ -> ()))
     (fun () -> f path)
 
-(* Static-rejection leaked to runtime → test failure (the whole point is a
-   compile-time reject, never a Racket execution). *)
+(* Static rejection leaking into code generation is a test failure: the whole
+   point is a compile-time rejection, never execution of an emitted program. *)
 let runtime_leak_markers =
-  [ "raise-user-error"; "check-fail"; ".rkt:"; "/racket/"; "raco " ]
+  [ "panic:"; "runtime error"; ".go:"; "go test" ]
 
 let assert_no_runtime_leak ~who out =
   List.iter (fun marker ->

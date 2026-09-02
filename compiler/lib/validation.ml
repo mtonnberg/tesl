@@ -94,6 +94,12 @@ let check_module (m : module_form) : validation_error list =
      query shape can be lowered — an unrecognised one used to reach Racket as
      free variables. *)
   @ (TDatabase @: check_sql_query_shape decls)
+  (* A `limit`/`offset` that decides nothing: silently dropped by the Racket runtime and
+     refused by the Go emitter, so the same program behaved differently per backend. *)
+  @ (TDatabase @: check_meaningless_limit_offset decls)
+  (* A `set` value that reads its own row: unloadable Racket, and no row to read from on the
+     server — one backend's memory store managing it is not the language supporting it. *)
+  @ (TDatabase @: check_set_value_reads_row decls)
   @ (TProof @: Proof_discharge.check_fn_return_proof_annotations ~facts decls)
   @ (TNaming @: check_circular_const_bindings decls)
   @ (TProof @: check_ghost_witness_predicates ~facts decls_with_imported_types)
@@ -129,6 +135,11 @@ let check_module (m : module_form) : validation_error list =
      checkable `(Column == subject)` form, so the dataflow verifiers above can
      never be silently bypassed by a non-canonical spelling. *)
   @ (TDatabase @: check_provenance_spelling decls)
+  (* A SQL keyword left outside a recognised query shape (a typo'd `from`/`where`) used to
+     reach the RACKET emitter as a free variable and raise there — invisible to
+     `tesl --check` and to the editor, and a guard the Go backend would have had to
+     reimplement.  Checked here so both backends inherit it. *)
+  @ (TDatabase @: check_sql_patterns_recognised decls)
   @ (TStructural @: check_cookies_field_access decls)
   @ (TNaming @: check_adt_variant_names decls)
   (* 2026-07-03 hole #8: reject `fact FromDb`/`fact ForAll`/… re-declarations of

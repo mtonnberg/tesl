@@ -1,0 +1,62 @@
+{
+  "requests": [
+    {
+      "seq": 1,
+      "type": "request",
+      "command": "initialize",
+      "arguments": {
+        "clientID": "protocol-fixture",
+        "adapterID": "tesl"
+      }
+    },
+    {
+      "seq": 2,
+      "type": "request",
+      "command": "setBreakpoints",
+      "arguments": {
+        "source": {
+          "path": "fixture.tesl"
+        },
+        "breakpoints": [
+          {
+            "line": 12,
+            "condition": "n == 3",
+            "hitCondition": "==2"
+          }
+        ]
+      }
+    },
+    {
+      "seq": 3,
+      "type": "request",
+      "command": "threads"
+    },
+    {
+      "seq": 4,
+      "type": "request",
+      "command": "disconnect"
+    }
+  ],
+  "responses": [
+    {
+      "requestSeq": 1,
+      "command": "initialize",
+      "success": true
+    },
+    {
+      "requestSeq": 2,
+      "command": "setBreakpoints",
+      "success": true
+    },
+    {
+      "requestSeq": 3,
+      "command": "threads",
+      "success": true
+    },
+    {
+      "requestSeq": 4,
+      "command": "disconnect",
+      "success": true
+    }
+  ]
+}

@@ -5,7 +5,7 @@
     2.  Type inference: nominal type safety (JwtToken ≠ String, Secret ≠ JwtToken)
     3.  Capability enforcement: JWT.sign/verify/decode require [jwt]
     4.  Module validation: Tesl.JWT known module, export list validated
-    5.  Emit: Racket output includes jwt.rkt require
+    5.  Emit: Go output includes JWT runtime calls/artifact
 
     THE KEY TYPE IS `Secret`, FROM Tesl.Crypto.  `Tesl.JWT` had a key newtype of
     its own until 2026-07-30; it was deleted, not aliased, because
@@ -23,21 +23,6 @@
 
 (* ── Helpers ─────────────────────────────────────────────────────────────── *)
 
-let root =
-  match Sys.getenv_opt "TESL_REPO_ROOT" with
-  | Some p when p <> "" -> p
-  | _ ->
-    let rec find dir =
-      let candidate = Filename.concat dir "compiler" in
-      if (try Sys.file_exists candidate && Sys.is_directory candidate with _ -> false)
-      then dir
-      else
-        let parent = Filename.dirname dir in
-        if parent = dir then Filename.current_dir_name
-        else find parent
-    in
-    find (Filename.dirname Sys.executable_name)
-
 let jwt_imports =
   "import Tesl.Prelude exposing [Int, String, Bool, List, Unit]\n\
    import Tesl.Maybe exposing [Maybe(..)]\n\
@@ -51,12 +36,19 @@ let module_ ?(name="M") ?(exports="") ?(extra="") body =
   Printf.sprintf "module %s exposing [%s]\n%s%s\n%s"
     name exports jwt_imports extra body
 
-let compile_ok name src =
-  match Compile.compile_source ~root_path:root "<test>" src with
-  | Compile.Success racket -> racket
-  | Compile.Failure diags ->
+let compile_artifacts name src =
+  match Compile.compile_go_source "<test>" src with
+  | Compile.GoSuccess artifacts -> artifacts
+  | Compile.GoFailure diags ->
     Alcotest.failf "%s: unexpected compile failure: %s" name
       (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diags))
+
+let compile_ok name src =
+  let artifacts = compile_artifacts name src in
+  match List.find_opt (fun (a : Emit_go.artifact) ->
+    a.path = "internal/teslmodm/module.go") artifacts with
+  | Some artifact -> artifact.contents
+  | None -> Alcotest.failf "%s: missing Go module artifact" name
 
 let compile_err name src =
   let diags = Compile.check_source "<test>" src in
@@ -78,14 +70,9 @@ let contains needle haystack =
   end
 
 let check_contains name src substr =
-  let racket = compile_ok name src in
-  if not (contains substr racket) then
-    Alcotest.failf "%s: expected to find %S in output:\n%s" name substr racket
-
-let check_not_contains name src substr =
-  let racket = compile_ok name src in
-  if contains substr racket then
-    Alcotest.failf "%s: expected NOT to find %S in output:\n%s" name substr racket
+  let go = compile_ok name src in
+  if not (contains substr go) then
+    Alcotest.failf "%s: expected to find %S in Go artifact:\n%s" name substr go
 
 let check_err_contains name src substr =
   let msg = compile_err name src in
@@ -102,7 +89,7 @@ capability myAuth implies jwt, time
 fn makeToken(userId: String, secret: Secret) requires [myAuth] -> JwtToken =
   JWT.sign (Dict.singleton "sub" userId) secret
 |} in
-  check_contains "parse_jwt_import" src "JWT.sign"
+  check_contains "parse_jwt_import" src "teslrt.JwtSign"
 
 let test_parse_jwt_sign () =
   let src = module_ ~exports:"sign" {|
@@ -111,7 +98,7 @@ capability myJwt implies jwt, time
 fn sign(claims: Dict String String, secret: Secret) requires [myJwt] -> JwtToken =
   JWT.sign claims secret
 |} in
-  check_contains "parse_jwt_sign" src "JWT.sign"
+  check_contains "parse_jwt_sign" src "teslrt.JwtSign"
 
 let test_parse_jwt_verify () =
   let src = module_ ~exports:"verify" {|
@@ -123,7 +110,7 @@ fn verify(token: JwtToken, secret: Secret) requires [myJwt] -> String =
     Nothing -> ""
     Something s -> s
 |} in
-  check_contains "parse_jwt_verify" src "JWT.verify"
+  check_contains "parse_jwt_verify" src "teslrt.JwtVerify"
 
 let test_parse_jwt_decode () =
   let src = module_ ~exports:"decode" {|
@@ -134,7 +121,7 @@ fn decode(token: JwtToken) requires [myJwt] -> String =
     Nothing -> ""
     Something s -> s
 |} in
-  check_contains "parse_jwt_decode" src "JWT.decode"
+  check_contains "parse_jwt_decode" src "teslrt.JwtDecode"
 
 let test_parse_jwt_newtype_jwtsecret () =
   let src = module_ ~exports:"wrapSecret" {|
@@ -183,9 +170,9 @@ fn verify(token: JwtToken, secret: Secret) requires [myJwt] -> String =
     Nothing -> ""
     Something s -> s
 |} in
-  let racket = compile_ok "parse_jwt_multiple" src in
-  if not (contains "JWT.sign" racket && contains "JWT.verify" racket) then
-    Alcotest.failf "parse_jwt_multiple: expected both JWT.sign and JWT.verify in output"
+  let go = compile_ok "parse_jwt_multiple" src in
+  if not (contains "teslrt.JwtSign" go && contains "teslrt.JwtVerify" go) then
+    Alcotest.failf "parse_jwt_multiple: expected both JWT calls in Go artifact"
 
 let test_parse_jwt_import_exposing () =
   (* All Tesl.JWT exports are valid names *)
@@ -205,7 +192,7 @@ capability myJwt implies jwt, time
 fn getToken(secret: Secret) requires [myJwt] -> JwtToken =
   JWT.sign (Dict.singleton "sub" "user:123") secret
 |} in
-  check_contains "types_sign_returns_token" src "JWT.sign"
+  check_contains "types_sign_returns_token" src "teslrt.JwtSign"
 
 let test_types_jwttoken_not_string () =
   (* JwtToken should not be assignable to String directly *)
@@ -330,9 +317,9 @@ fn v(t: JwtToken, s: Secret) requires [myJwt] -> String =
     Nothing -> ""
     Something u -> u
 |} in
-  let racket = compile_ok "types_verify_args" src in
-  if not (contains "JWT.verify" racket) then
-    Alcotest.failf "types_verify_args: expected JWT.verify in output"
+  let go = compile_ok "types_verify_args" src in
+  if not (contains "teslrt.JwtVerify" go) then
+    Alcotest.failf "types_verify_args: expected teslrt.JwtVerify in Go artifact"
 
 let test_types_chain_sign_and_verify () =
   let src = module_ ~exports:"roundtrip" {|
@@ -796,19 +783,21 @@ let test_module_jwt_emits_require () =
 fn mk(s: String) -> JwtToken =
   JwtToken s
 |} in
-  check_contains "module_jwt_emits_require" src "tesl/tesl/jwt"
+  let artifacts = compile_artifacts "module_jwt_emits_require" src in
+  if not (List.exists (fun (a : Emit_go.artifact) ->
+      a.path = "internal/teslrt/jwt.go") artifacts) then
+    Alcotest.fail "module_jwt_emits_require: missing internal/teslrt/jwt.go"
 
-let test_module_jwt_racket_output () =
+let test_module_jwt_go_output () =
   let src = module_ ~exports:"sign" {|
 capability myJwt implies jwt, time
 
 fn sign(claims: Dict String String, s: Secret) requires [myJwt] -> JwtToken =
   JWT.sign claims s
 |} in
-  let racket = compile_ok "module_jwt_racket_output" src in
-  (* Output should have JWT.sign and jwt.rkt *)
-  if not (contains "JWT.sign" racket) then
-    Alcotest.failf "module_jwt_racket_output: expected JWT.sign in output:\n%s" racket
+  let go = compile_ok "module_jwt_go_output" src in
+  if not (contains "teslrt.JwtSign" go) then
+    Alcotest.failf "module_jwt_go_output: expected teslrt.JwtSign:\n%s" go
 
 let test_module_jwt_all_exports_usable () =
   let src = module_ ~exports:"sign, verify, decode, mkSecret, mkToken" {|
@@ -837,7 +826,7 @@ fn mkToken(s: String) -> JwtToken =
   let _ = compile_ok "module_jwt_all_exports" src in
   ()
 
-(* ── 5. Emit / Racket output tests ───────────────────────────────────────── *)
+(* ── 5. Go emission tests ────────────────────────────────────────────────── *)
 
 let test_emit_jwt_sign_output () =
   let src = module_ ~exports:"sign" {|
@@ -846,7 +835,7 @@ capability myJwt implies jwt, time
 fn sign(claims: Dict String String, s: Secret) requires [myJwt] -> JwtToken =
   JWT.sign claims s
 |} in
-  check_contains "emit_jwt_sign" src "JWT.sign"
+  check_contains "emit_jwt_sign" src "teslrt.JwtSign"
 
 let test_emit_jwt_verify_output () =
   let src = module_ ~exports:"verify" {|
@@ -858,7 +847,7 @@ fn verify(t: JwtToken, s: Secret) requires [myJwt] -> String =
     Nothing -> ""
     Something u -> u
 |} in
-  check_contains "emit_jwt_verify" src "JWT.verify"
+  check_contains "emit_jwt_verify" src "teslrt.JwtVerify"
 
 let test_emit_jwt_decode_output () =
   let src = module_ ~exports:"decode" {|
@@ -869,14 +858,17 @@ fn decode(t: JwtToken) requires [myJwt] -> String =
     Nothing -> ""
     Something u -> u
 |} in
-  check_contains "emit_jwt_decode" src "JWT.decode"
+  check_contains "emit_jwt_decode" src "teslrt.JwtDecode"
 
-let test_emit_jwt_requires_jwt_rkt () =
+let test_emit_jwt_requires_go_runtime () =
   let src = module_ ~exports:"mk" {|
 fn mk(s: String) -> JwtToken =
   JwtToken s
 |} in
-  check_contains "emit_jwt_requires_rkt" src "tesl/tesl/jwt"
+  let artifacts = compile_artifacts "emit_jwt_requires_go_runtime" src in
+  if not (List.exists (fun (a : Emit_go.artifact) ->
+      a.path = "internal/teslrt/jwt.go") artifacts) then
+    Alcotest.fail "emit_jwt_requires_go_runtime: missing JWT runtime artifact"
 
 (** The key unification, end to end at the EMIT boundary: a program can go
     `Env.requireSecret` → `JWT.sign` with no `String` of key material anywhere,
@@ -889,11 +881,11 @@ capability sessions implies jwt, time, envRead
 fn mk(userId: String) -> JwtToken requires [sessions] =
   JWT.sign (Dict.singleton "sub" userId) (requireSecret "SESSION_JWT_SECRET")
 |} in
-  let racket = compile_ok "emit_require_secret_feeds_sign" src in
-  if not (contains "requireSecret" racket && contains "tesl/tesl/jwt" racket) then
+  let go = compile_ok "emit_require_secret_feeds_sign" src in
+  if not (contains "teslrt.RequireSecret" go && contains "teslrt.JwtSign" go) then
     Alcotest.failf
       "emit_require_secret_feeds_sign: expected requireSecret and the jwt require:\n%s"
-      racket
+      go
 
 (** NEGATIVE: a plain `String` where the key goes is a type error.  This is the
     property the unification buys — before it, the corpus had to write
@@ -940,7 +932,9 @@ let test_emit_jwt_not_required_when_not_imported () =
   let src = "module M exposing [f]\n\
              import Tesl.Prelude exposing [Int, String]\n\
              fn f(n: Int) -> Int = n + 1\n" in
-  check_not_contains "emit_jwt_not_imported" src "jwt.rkt"
+  let go = compile_ok "emit_jwt_not_imported" src in
+  if contains "teslrt.Jwt" go then
+    Alcotest.fail "JWT runtime reference emitted without Tesl.JWT import"
 
 (* ── Test runner ─────────────────────────────────────────────────────────── *)
 
@@ -1025,15 +1019,15 @@ let () =
       Alcotest.test_case "neither the old key type nor Secret is a Tesl.JWT export" `Quick
         test_module_jwt_secret_export_is_gone;
 
-      Alcotest.test_case "emits jwt.rkt require" `Quick test_module_jwt_emits_require;
-      Alcotest.test_case "Racket output correct" `Quick test_module_jwt_racket_output;
+      Alcotest.test_case "emits JWT runtime artifact" `Quick test_module_jwt_emits_require;
+      Alcotest.test_case "Go output correct" `Quick test_module_jwt_go_output;
       Alcotest.test_case "all exports usable" `Quick test_module_jwt_all_exports_usable;
     ];
     "emit", [
       Alcotest.test_case "JWT.sign in output" `Quick test_emit_jwt_sign_output;
       Alcotest.test_case "JWT.verify in output" `Quick test_emit_jwt_verify_output;
       Alcotest.test_case "JWT.decode in output" `Quick test_emit_jwt_decode_output;
-      Alcotest.test_case "requires jwt.rkt" `Quick test_emit_jwt_requires_jwt_rkt;
+      Alcotest.test_case "requires Go JWT runtime" `Quick test_emit_jwt_requires_go_runtime;
       Alcotest.test_case "not imported means not required" `Quick test_emit_jwt_not_required_when_not_imported;
       Alcotest.test_case "Env.requireSecret feeds JWT.sign with no String key" `Quick
         test_emit_require_secret_feeds_sign;

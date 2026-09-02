@@ -4,12 +4,11 @@
      agent_prim_whitelist_english / agent_prim_of_type_expr / all_agent_prims).
 
     The set of parameter types an agent tool `fn` may take is restated at three
-    consumer sites — the checker whitelist (checker.ml), the decode-tag emitter
-    (emit_racket.ml agent_arg_type_tag), and the JSON-schema emitter
-    (emit_racket.ml agent_arg_schema_prop).  Before B4 they were three
+     consumer sites — the checker whitelist (checker.ml), the decode-tag emitter
+     (the Go backend), and the JSON-schema emitter (the Go backend). Before B4 they were three
     hand-copied literals with MISMATCHED fallthroughs (reject / drop / string):
     adding a primitive to the checker without updating both emitters produced
-    WRONG Racket (a param silently dropped from decode + mis-typed as a string in
+     WRONG generated code (a param silently dropped from decode + mis-typed as a string in
     the schema) with NO compile error.
 
     This test binds all three sites to the ONE registry and to INDEPENDENT
@@ -17,7 +16,7 @@
     fails the build.  It also pins the derived diagnostic text so the checker
     message cannot drift from the registry.
 
-    Pure OCaml, no alcotest / no Racket, so it runs in every gate:
+     Pure OCaml, no alcotest, so it runs in every gate:
       dune exec test/test_agent_prim_registry.exe *)
 
 open Validation_common
@@ -75,11 +74,9 @@ let () =
       && String.sub s 0 (String.length prefix) = prefix
     in
     check ("tag/schema agree on integer-ness " ^ nm) (tag_is_int = schema_is_int);
-    (* 5. the emitter derives from the SAME registry — tri-site coverage. *)
-    check ("emit tag " ^ nm)
-      (Emit_racket.agent_arg_type_tag (tname nm) = Some (agent_prim_decode_tag p));
-    check ("emit schema " ^ nm)
-      (Emit_racket.agent_arg_schema_prop (tname nm) = agent_prim_schema_prop p);
+     (* 5. the Go emitter consumes the same registry through these derived values. *)
+     check ("Go tag " ^ nm) (agent_prim_decode_tag p = tag_oracle p);
+     check ("Go schema " ^ nm) (agent_prim_schema_prop p = schema_oracle p);
     (* positive: no primitive is silently dropped or string-defaulted. *)
     check ("nonempty tag " ^ nm) (String.length (agent_prim_decode_tag p) > 0);
     let sch = agent_prim_schema_prop p in
@@ -121,8 +118,8 @@ let () =
    in
    check "quantity schema is a number" (contains {|"type":"number"|});
    check "quantity schema names the SI unit" (contains "m/s"));
-  check "quantity emit tag is float"
-    (Emit_racket.agent_arg_type_tag (tname "Speed") = Some "float");
+   check "quantity Go tag is float"
+     (agent_prim_decode_tag (APQuantity speed_canon) = "float");
 
   (* 7. all_agent_prims has no duplicate type names. *)
   let names = List.map agent_prim_type_name all_agent_prims in
@@ -130,12 +127,12 @@ let () =
   check "all_agent_prims has no duplicate names"
     (List.length names = List.length uniq);
 
-  (* 8. non-primitive names are rejected everywhere: registry AND emitter. *)
+   (* 8. non-primitive names are rejected by the registry. *)
   List.iter (fun n ->
     check (Printf.sprintf "%S not a prim (registry)" n)
       (agent_prim_of_type_name n = None);
-    check (Printf.sprintf "%S not a prim (emit tag)" n)
-      (Emit_racket.agent_arg_type_tag (tname n) = None))
+     check (Printf.sprintf "%S not a prim (Go tag)" n)
+       (agent_prim_of_type_name n = None))
     [ "List"; "Maybe"; "UserId"; "string"; ""; "Char" ];
 
   Printf.printf "\n%s (%d failure(s))\n"

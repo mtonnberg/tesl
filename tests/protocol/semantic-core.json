@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "symbols": [
+    {"name": "double", "kind": "fn", "signature": "(Int) -> Int"}
+  ],
+  "tokens": [],
+  "proof_obligations": []
+}

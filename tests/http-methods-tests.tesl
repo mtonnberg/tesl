@@ -16,7 +16,7 @@ import Tesl.Database exposing [Database, Memory]
 # The tests are written against OBSERVABLE behaviour only: each request is made
 # through `api-test` and judged by its status and body, and the state it left
 # behind is read back with a following GET.  Nothing here names the runtime, the
-# router, or the generated Racket, so the file keeps its meaning if the runtime
+# router, or generated code, so the file keeps its meaning if the runtime
 # is replaced wholesale — it fails only if a verb stops being routed, stops
 # being dispatched to its own handler, or stops carrying its body.
 #

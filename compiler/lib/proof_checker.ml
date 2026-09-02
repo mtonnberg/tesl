@@ -710,7 +710,7 @@ let validate_check_return (all_funcs : func_decl list) (fd : func_decl) : proof_
     ignore param_names; ignore binding_env;
     let rec validate_ok_expr (e : Ast.expr) =
       match e with
-      | EOk { value; proof; loc } ->
+      | EOk { value; proof; loc; _ } ->
         (* Check for dotted paths in proof subjects *)
         errors := check_proof_no_dotted_path proof loc @ !errors;
         (match fd.return_spec with
@@ -966,7 +966,7 @@ use the named constructor instead: `ok %s { ... } ::: ...`" b.name } :: !errors
       | EPublish _ | EStartWorkers _ | ECacheGet _ | ECacheSet _
       | ECacheDelete _ | ECacheInvalidate _ | ESendEmail _
       | EStartEmailWorker _ | EServe _ | EConstructor _ | ELambda _
-      | ERuntimeCall _ -> ()
+      -> ()
     in
     validate_ok_expr fd.body;
     List.rev !errors
@@ -1221,6 +1221,7 @@ let stdlib_predicates : string list =
   Type_system.framework_proof_predicates
   @ [ "IsNonZero"; "IsNonNegative"; "IsNonEmpty"; "IsUpperCase"; "IsLowerCase"
     ; "IsTrimmed"; "IsSorted"; "HasKey"; "Authenticated"; "Fact"; "FloatNonZero"
+    ; "FloatNonNegative"
     (* Money (First-Class Units) predicates, owned by Tesl.Money *)
     ; "SameCurrency"; "NonNegativeMoney"; "RateFor"
     (* Crypto predicates, owned by Tesl.Crypto.  Deliberately NOT in
@@ -1523,8 +1524,6 @@ let check_module (m : module_form) : proof_error list =
     | ECacheGet _ | ECacheDelete _ | ECacheInvalidate _ -> false
     | ECacheSet { value; _ } -> expr_contains_transaction value
     | ESendEmail _ | EStartEmailWorker _ -> false
-    | ERuntimeCall { segments; _ } ->
-      List.exists (function RLit _ | RRawVar _ -> false | RArg e -> expr_contains_transaction e) segments
   in
   let rec expr_called_functions (e : expr) : string list =
     let dedup = List.sort_uniq String.compare in
@@ -1562,8 +1561,6 @@ let check_module (m : module_form) : proof_error list =
     | ECacheGet _ | ECacheDelete _ | ECacheInvalidate _ -> []
     | ECacheSet { value; _ } -> expr_called_functions value
     | ESendEmail _ | EStartEmailWorker _ -> []
-    | ERuntimeCall { segments; _ } ->
-      dedup (List.concat_map (function RLit _ | RRawVar _ -> [] | RArg e -> expr_called_functions e) segments)
   in
   let rec close_transaction_functions txn_funcs =
     let grown =
@@ -1937,8 +1934,6 @@ supplies the wrong arguments (%s); the body must return the declared fact about 
         | ECacheGet _ | ECacheDelete _ | ECacheInvalidate _ -> ()
         | ECacheSet { value; _ } -> check_nested_txn in_txn value
         | ESendEmail _ | EStartEmailWorker _ -> ()
-        | ERuntimeCall { segments; _ } ->
-          List.iter (function RLit _ | RRawVar _ -> () | RArg e -> check_nested_txn in_txn e) segments
       in
       check_nested_txn false fd.body;
 
@@ -2021,10 +2016,10 @@ supplies the wrong arguments (%s); the body must return the declared fact about 
           let init_fact_names = fact_type_params in
           let rec check_gw param_map fact_names e =
             match e with
-            | EOk { value = ERecord { fields; type_hint = Some type_name; _ }; proof; loc }
+            | EOk { value = ERecord { fields; type_hint = Some type_name; _ }; proof; loc; _ }
             | EOk { value = EApp { fn = EConstructor { name = type_name; args = []; _ };
                                    arg = ERecord { fields; _ }; _ };
-                    proof; loc } ->
+                    proof; loc; _ } ->
               (match List.assoc_opt type_name record_inv_map with
                | None -> ()
                | Some (_, inv) ->
@@ -2328,10 +2323,10 @@ supplies the wrong arguments (%s); the body must return the declared fact about 
               |> Option.map fst
             in
             (match value with
-             | EOk { value = ERecord { fields; type_hint; _ }; proof; loc }
+             | EOk { value = ERecord { fields; type_hint; _ }; proof; loc; _ }
              | EOk { value = EApp { fn = EConstructor { name = _; args = []; _ };
                                     arg = ERecord { fields; type_hint; _ }; _ };
-                     proof; loc } ->
+                     proof; loc; _ } ->
                (* Normalize: for EApp case, synthesize type_hint from constructor name *)
                let type_hint_for_app = match value with
                  | EOk { value = EApp { fn = EConstructor { name; _ }; _ }; _ } -> Some name

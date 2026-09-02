@@ -125,7 +125,7 @@ Tesl's architecture is designed for simplicity and reliability:
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
-│                   Runtime (Racket)                               │
+│                   Runtime (Go)                                   │
 │  - Executes compiled code                                      │
 │  - Provides database, queue, and pub/sub support                │
 │  - Proofs are erased before it runs (see proof cost model)       │

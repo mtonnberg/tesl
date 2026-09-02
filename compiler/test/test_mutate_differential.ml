@@ -45,8 +45,6 @@ let ref_collect body =
     | EServe { port; _ } -> walk port
     | ELit { lit = LInterp segs; _ } ->
       List.iter (function IExpr e -> walk e | ILiteral _ -> ()) segs
-    | ERuntimeCall { segments; _ } ->
-      List.iter (function RLit _ | RRawVar _ -> () | RArg e -> walk e) segments
     | ELit _ | EVar _ | EStartWorkers _
     | ECacheGet _ | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _
     | ESendEmail _ | EStartEmailWorker _ -> ()
@@ -58,13 +56,14 @@ let check name c = if c then Printf.printf "ok   - %s\n" name
   else (incr failed; Printf.printf "FAIL - %s\n" name)
 
 let () =
-  let dir = "../example/learn" in
+  let dir = Filename.concat (Compile.default_root_path ()) "example/learn" in
   let files =
     (try Sys.readdir dir with _ -> [||]) |> Array.to_list
     |> List.filter (fun f -> Filename.check_suffix f ".tesl")
     |> List.map (fun f -> Filename.concat dir f)
     |> List.sort compare in
   let total_sites = ref 0 in
+  check "lesson corpus is present" (files <> []);
   List.iter (fun path ->
     match (try Compile.parse_module_file path with _ -> None) with
     | None -> ()

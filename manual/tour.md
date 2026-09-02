@@ -326,8 +326,8 @@ the ceremony.
 timestamp is expected. It auto-maps to `BIGINT` in PostgreSQL with no annotation, and `Date.now()` on
 the frontend reads it directly — no conversion layer, no timezone surprises.
 
-**Grouped aggregates and time bucketing.** `selectCount`/`selectSum`/`selectMax`/`selectMin` return
-one scalar; `selectCountBy`/`selectSumBy … groupBy <key>` return **one row per group** as a
+**Grouped aggregates and time bucketing.** `selectCount`/`selectSum` return one scalar and
+`selectMax`/`selectMin` return `Maybe` of the column type (no matching row has no maximum); `selectCountBy`/`selectSumBy … groupBy <key>` return **one row per group** as a
 `List (Tuple2 key aggregate)`, ordered by key — the server-side series a chart wants.
 `Time.truncHour/Day/Week/Month/Year zone ts` give the calendar bucket (ISO Monday weeks) both as
 the `groupBy` key and as a plain function for computing range bounds. `TimeZone` is a **fixed
@@ -588,7 +588,7 @@ per-element boxing, no extra allocations, and no measurable overhead versus a re
 ### Tesl-native API tests
 
 Tesl can test the full HTTP boundary from inside the language. `api-test` blocks exercise routing,
-auth, codecs, database effects, queues, and SSE without dropping to Racket.
+auth, codecs, database effects, queues, and SSE without dropping to Go.
 
 ```tesl
 import Tesl.ApiTest exposing [statusOk, subscribe, collect, processNextJob, expectJobOk, pendingJobCount]
@@ -899,13 +899,12 @@ review.
 
 ### How Tesl is implemented
 
-Tesl compiles to [Racket](https://racket-lang.org/), a Lisp dialect with a strong macro system. The
-compiler is centered on a large OCaml frontend (plus a trusted Racket runtime substrate), with
-explicit stages: parsing/module loading, structural type checking, proof-aware checking, and Racket
+Tesl compiles to Go. The compiler is centered on a large OCaml frontend and a Go runtime, with
+explicit stages: parsing/module loading, structural type checking, proof-aware checking, and Go
 emission. This means:
 
 - The generated code is readable and debuggable
-- The Racket ecosystem (libraries, tooling, REPL) is available for advanced use cases
+- The generated service is a conventional Go module that can use Go tooling directly
 - Proof annotations drive the static-checking pass; the proof is then erased (see the
   [proof cost model](best-practices.md#proof-cost-model)) and exists only at compile time
 
@@ -920,10 +919,9 @@ obtaining the required proof (`IsNonZero`, `FloatNonZero`, `IsNonNegative`, `Has
 errors. Function values remain first-class: bare `f` is the function, while `f()` is an explicit
 zero-argument call. This pass uses Robinson unification and let-generalisation.
 
-**Integer range.** `Int` in Tesl is **arbitrary-precision** (unbounded), matching the Racket
-integer runtime, which transparently spans fixnums and bignums. Integer literals of any size are
-accepted — there is no compile-time range check — and arithmetic never overflows: results that
-exceed the native fixnum range are automatically represented as bignums.
+**Integer range.** `Int` in Tesl is **arbitrary-precision** (unbounded), matching the Go runtime's
+checked integer representation. Integer literals of any size are accepted — there is no
+compile-time range check — and arithmetic reports overflow rather than silently wrapping.
 
 **GDP proof checking** — verifies that proof predicates (`ValidTitle title`, `Authenticated user`,
 `FromDb id`) flow correctly through the call graph. This is a fixed set of structural rules applied
@@ -935,7 +933,7 @@ requires a proof:
 
 ```text
 $ tesl validate api.tesl
-api.tesl:47: tesl compile error
+api.tesl:47: tesl validation error
   argument `email` in call to `sendWelcome` requires proof `ValidEmail email`
   the value has type `String` but does not carry the `ValidEmail` proof
   hint: use a `check` function to validate it first:
@@ -946,11 +944,10 @@ No stack traces. No type variable soup. Just what went wrong and how to fix it.
 
 ### Deployment
 
-Tesl produces Racket source (`.rkt` files, kept out of your way under the project's
-`.tesl-stuff/build/` directory) that run on the Racket VM. The standard production deploy
-is a Docker image built by `tesl build` — see [Deploying a Tesl web API](deploy.md) for the image
-flavours, runtime config, and CI workflow. A standalone-executable builder is also available today via
-`tesl --exe <file> [--out <path>]` (it shells out to `raco exe`; needs `raco` on PATH).
+Tesl produces a Go module under the project's `.tesl-stuff/go-build/` directory. The standard
+production deploy is a Docker image built by `tesl build` — see [Deploying a Tesl web API](deploy.md)
+for image flavours, runtime config, and CI workflow. Build a standalone Go binary with the normal
+Go toolchain or `tesl build`.
 
 ### Structured logging
 
@@ -982,8 +979,8 @@ instructions.
 ### Package ecosystem
 
 Tesl's standard library covers strings, lists, time, HTTP, and basic types. For anything outside it —
-JWT parsing, Stripe integration, email — a thin Racket shim works today, since Tesl compiles to
-Racket. A first-party Tesl package manager is on the roadmap.
+JWT parsing, Stripe integration, email — use a Go package through the generated module. A first-party
+Tesl package manager is on the roadmap.
 
 ### Scope
 

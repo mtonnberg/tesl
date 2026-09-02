@@ -1,0 +1,9 @@
+{
+  "type": "Point",
+  "display": "{...}",
+  "children": [
+    {"name":"x","type":"Int","display":"1"},
+    {"name":"y","type":"Int","display":"2"}
+  ],
+  "bounds": {"maxDepth":8,"maxChildren":100,"maxStringBytes":4096}
+}

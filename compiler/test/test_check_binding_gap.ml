@@ -23,20 +23,6 @@
     language documented the very shape this rule refuses.  The rule and the
     dimension-preserving `check` land together, so the tests do too. *)
 
-let root =
-  match Sys.getenv_opt "TESL_REPO_ROOT" with
-  | Some p when p <> "" -> p
-  | _ ->
-    let rec find dir =
-      let candidate = Filename.concat dir "compiler" in
-      if (try Sys.file_exists candidate && Sys.is_directory candidate with _ -> false)
-      then dir
-      else
-        let parent = Filename.dirname dir in
-        if parent = dir then Filename.current_dir_name else find parent
-    in
-    find (Filename.dirname Sys.executable_name)
-
 let contains needle haystack =
   let n = String.length needle and m = String.length haystack in
   if n > m then false
@@ -53,10 +39,21 @@ let errors_of src =
     (Compile.check_source "<test>" src)
 
 let compile_ok name src =
-  match Compile.compile_source ~root_path:root "<test>" src with
-  | Compile.Success racket -> racket
-  | Compile.Failure diags ->
+  match Compile.compile_go_source "<test>" src with
+  | Compile.GoSuccess artifacts ->
+    (match List.find_opt (fun (a : Emit_go.artifact) ->
+       a.path = "internal/teslmodm/module.go") artifacts with
+     | Some artifact -> artifact.contents
+     | None -> Alcotest.failf "%s: missing Go module artifact" name)
+  | Compile.GoFailure diags ->
     Alcotest.failf "%s: unexpected compile failure:\n%s" name
+      (String.concat "\n" (List.map (fun (d : Compile.diagnostic) -> d.message) diags))
+
+let check_ok name src =
+  match errors_of src with
+  | [] -> ()
+  | diags ->
+    Alcotest.failf "%s: unexpected checker failure:\n%s" name
       (String.concat "\n" (List.map (fun (d : Compile.diagnostic) -> d.message) diags))
 
 (* The rule's own diagnostic, isolated from any other error in the module. *)
@@ -267,7 +264,7 @@ let test_partial_application_is_not_a_call () =
     \  Dict.size checked\n"
   in
   expect_no_binding_error "partial_application" src;
-  ignore (compile_ok "partial_application" src)
+  check_ok "partial_application" src
 
 let test_saturating_call_of_the_same_callee_is_refused () =
   let src =
@@ -337,9 +334,9 @@ fn pace(d: Length, t: Duration) -> Speed =
 |}
   in
   expect_no_binding_error "checked_units_require_non_zero" src;
-  let racket = compile_ok "checked_units_require_non_zero" src in
-  if not (contains "Units.requireNonZero" racket) then
-    Alcotest.failf "the checked call must reach the emitted Racket:\n%s" racket
+  let go = compile_ok "checked_units_require_non_zero" src in
+  if not (contains "teslrt.MustCheck(teslrt.UnitsRequireNonZero(t))" go) then
+    Alcotest.failf "the checked call must reach the Go artifact:\n%s" go
 
 (* And the dimension is really CHECKED, not merely passed through: dividing a
    Length by a checked Duration is a Speed, so annotating it Length still fails. *)
@@ -616,7 +613,7 @@ let test_partial_application_as_list_element_compiles () =
     \  [Dict.requireKey \"sub\"]\n"
   in
   expect_no_value_position_error "partial_application_list_element" src;
-  ignore (compile_ok "partial_application_list_element" src)
+  check_ok "partial_application_list_element" src
 
 (* A bare reference to a user check function is a check FUNCTION too, same as
    `check f a b`'s own head — not a call, so not this rule's business. *)
@@ -629,7 +626,7 @@ fn f() -> List (Int -> Int) =
 |}
   in
   expect_no_value_position_error "bare_reference_list_element" src;
-  ignore (compile_ok "bare_reference_list_element" src)
+  check_ok "bare_reference_list_element" src
 
 (* A check function's own tail verdict — the composing case the rule must
    leave alone — still compiles from inside a case arm's body, which is a

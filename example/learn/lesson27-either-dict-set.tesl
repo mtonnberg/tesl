@@ -258,7 +258,7 @@ fn permissionsForRoles(roles: Set String) -> Set String =
 #
 # DICT: immutable, persistent, equal?-based
 #
-# Tesl's Dict is Racket's immutable hash table. Every Dict.insert /
+# Tesl's Dict is an immutable Go map wrapper. Every Dict.insert /
 # Dict.remove returns a NEW dict — the original is unchanged.
 # This is safe to share across handlers and threads without copying.
 # Key types can be strings, integers, or any value comparable with equal?.
@@ -268,7 +268,7 @@ fn permissionsForRoles(roles: Set String) -> Set String =
 #
 # SET: for uniqueness and membership testing
 #
-# Set is backed by an equal?-based Racket immutable set.
+# Set is backed by a value-equality-based immutable set.
 # Set.insert deduplicates automatically.
 # Set.member is O(1) — prefer it over List.contains for large collections.
 # Typical use cases:
@@ -281,7 +281,7 @@ fn permissionsForRoles(roles: Set String) -> Set String =
 # ─────────────────────────────────────────────
 # EITHER IMPLEMENTATION
 #
-# Either is implemented via two Racket structs: either-left and either-right.
+# Either is implemented via two tagged Go values: left and right.
 # These are opaque from Tesl's perspective — you interact via the function API.
 # Either.toMaybe / Either.fromMaybe bridge to Maybe for interop.
 # Either.partition splits a List (Either a b) into [lefts, rights].
@@ -294,12 +294,12 @@ fn permissionsForRoles(roles: Set String) -> Set String =
 #
 # DICT AND SET IMMUTABILITY
 #
-# Both Dict and Set are fully persistent data structures (backed by Racket's
+# Both Dict and Set are fully persistent data structures (backed by Go runtime
 # functional hash and set implementations). Operations like insert/remove/union
 # are O(log n) and return a new data structure without modifying the original.
 # This makes them safe to use in concurrent handler code.
 #
-# CURRENT LIMITATION: Dict and Set are opaque Racket values from Tesl's
+# CURRENT LIMITATION: Dict and Set are opaque runtime values from Tesl's
 # perspective. You cannot declare an entity field of type Dict or Set.
 # For database storage, serialize to JSON (for Dict) or a comma-joined
 # String (for simple Set) at the persistence boundary.

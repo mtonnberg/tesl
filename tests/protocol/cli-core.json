@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "commands": [
+    {"argv":["agent-context","fixture.tesl"],"exit":0,"stdout":"json"},
+    {"argv":["--check-json","fixture.tesl"],"exit":0,"stdout":"json"},
+    {"argv":["--fmt-check","fixture.tesl"],"exit":0,"stdout":"text"}
+  ]
+}

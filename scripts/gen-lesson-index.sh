@@ -79,6 +79,8 @@ trap 'rm -f "$META" "$META.gen" 2>/dev/null' EXIT
 for f in "$LEARN_DIR"/*.tesl; do
   [ -f "$f" ] || continue
   base="$(basename "$f")"
+  # Editor scratch files are gitignored and are not part of the lesson catalog.
+  case "$base" in tesl-lsp-*.tesl) continue ;; esac
   slug="${base%.tesl}"
   # Metadata must appear in the first 40 lines — after the module header (which
   # the parser requires on line 1) and before the prose banner.
@@ -194,7 +196,7 @@ summary_of() { awk -F'\t' -v s="$1" '$1==s{print $5}' "$META"; }
   echo ""
   echo "Every lesson is a small runnable \`.tesl\` file with its explanation inline,"
   echo "and every one is also a regression test — each has a committed byte-exact"
-  echo "\`.rkt\` snapshot and test blocks in the gate. Read one with:"
+  echo "Go snapshot and test blocks in the gate. Read one with:"
   echo ""
   echo '```bash'
   echo "tesl help manual <lesson-name>      # e.g. tesl help manual lesson05-intro-to-proofs"

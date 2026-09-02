@@ -8,7 +8,7 @@ module KanelBackend exposing [KanelServer]
 
 import Tesl.Prelude exposing [Bool(..), String, Unit, List]
 import Tesl.Env exposing [env, envInt, envRead]
-import Tesl.Time exposing [time]
+import Tesl.Time exposing [time, Time.secondsToPosix]
 import Tesl.Id exposing [generatePrefixedId]
 import Tesl.Random exposing [random]
 import Tesl.Queue exposing [
@@ -533,20 +533,20 @@ api-test "seed can prepare organization membership for authenticated reads" for 
       email: "seeded@example.com",
       passwordHash: "password123",
       displayName: "Seeded Alice",
-      createdAt: 0
+      createdAt: Time.secondsToPosix 0
     }
     insert Org {
       id: "org-seeded",
       name: "Seeded Org",
       slug: "seeded-org",
-      createdAt: 0
+      createdAt: Time.secondsToPosix 0
     }
     insert OrgMembership {
       id: "mem-seeded",
       orgId: "org-seeded",
       userId: "usr-seeded",
       role: RoleAdmin,
-      joinedAt: 0
+      joinedAt: Time.secondsToPosix 0
     }
   }
 
@@ -572,34 +572,34 @@ api-test "comment notifications enqueue work and publish delivery events" for Ka
       email: "reporter@example.com",
       passwordHash: "password123",
       displayName: "Reporter",
-      createdAt: 0
+      createdAt: Time.secondsToPosix 0
     }
     insert KanelUser {
       id: "usr-commenter",
       email: "commenter@example.com",
       passwordHash: "password123",
       displayName: "Commenter",
-      createdAt: 0
+      createdAt: Time.secondsToPosix 0
     }
     insert Org {
       id: "org-notify",
       name: "Notify Org",
       slug: "notify-org",
-      createdAt: 0
+      createdAt: Time.secondsToPosix 0
     }
     insert OrgMembership {
       id: "mem-reporter",
       orgId: "org-notify",
       userId: "usr-reporter",
       role: RoleAdmin,
-      joinedAt: 0
+      joinedAt: Time.secondsToPosix 0
     }
     insert OrgMembership {
       id: "mem-commenter",
       orgId: "org-notify",
       userId: "usr-commenter",
       role: RoleMember,
-      joinedAt: 0
+      joinedAt: Time.secondsToPosix 0
     }
     insert Project {
       id: "proj-notify",
@@ -607,7 +607,7 @@ api-test "comment notifications enqueue work and publish delivery events" for Ka
       name: "Notify project",
       description: "Exercise api tests",
       archived: False,
-      createdAt: 0
+      createdAt: Time.secondsToPosix 0
     }
     insert Issue {
       id: "iss-notify",
@@ -620,8 +620,8 @@ api-test "comment notifications enqueue work and publish delivery events" for Ka
       reporterId: "usr-reporter",
       estimate: 60,
       dueAt: Nothing,
-      createdAt: 0,
-      updatedAt: 0
+      createdAt: Time.secondsToPosix 0,
+      updatedAt: Time.secondsToPosix 0
     }
   }
 
@@ -656,34 +656,34 @@ api-test "blocked notification jobs reach dead-letter and publish failure events
       email: "blocked@example.com",
       passwordHash: "password123",
       displayName: "Blocked Reporter",
-      createdAt: 0
+      createdAt: Time.secondsToPosix 0
     }
     insert KanelUser {
       id: "usr-commenter",
       email: "commenter@example.com",
       passwordHash: "password123",
       displayName: "Commenter",
-      createdAt: 0
+      createdAt: Time.secondsToPosix 0
     }
     insert Org {
       id: "org-failed-notify",
       name: "Failed Notify Org",
       slug: "failed-notify-org",
-      createdAt: 0
+      createdAt: Time.secondsToPosix 0
     }
     insert OrgMembership {
       id: "mem-blocked",
       orgId: "org-failed-notify",
       userId: "usr-blocked",
       role: RoleAdmin,
-      joinedAt: 0
+      joinedAt: Time.secondsToPosix 0
     }
     insert OrgMembership {
       id: "mem-commenter",
       orgId: "org-failed-notify",
       userId: "usr-commenter",
       role: RoleMember,
-      joinedAt: 0
+      joinedAt: Time.secondsToPosix 0
     }
     insert Project {
       id: "proj-failed-notify",
@@ -691,7 +691,7 @@ api-test "blocked notification jobs reach dead-letter and publish failure events
       name: "Failure project",
       description: "Exercise dead-letter handling",
       archived: False,
-      createdAt: 0
+      createdAt: Time.secondsToPosix 0
     }
     insert Issue {
       id: "iss-failed-notify",
@@ -704,8 +704,8 @@ api-test "blocked notification jobs reach dead-letter and publish failure events
       reporterId: "usr-blocked",
       estimate: 30,
       dueAt: Nothing,
-      createdAt: 0,
-      updatedAt: 0
+      createdAt: Time.secondsToPosix 0,
+      updatedAt: Time.secondsToPosix 0
     }
   }
 
@@ -752,20 +752,20 @@ api-test "issue status can be updated through valid transitions" for KanelServer
       email: "statustest@example.com",
       passwordHash: "password123",
       displayName: "Status Tester",
-      createdAt: 0
+      createdAt: Time.secondsToPosix 0
     }
     insert Org {
       id: "org-status-test",
       name: "Status Test Org",
       slug: "status-test-org",
-      createdAt: 0
+      createdAt: Time.secondsToPosix 0
     }
     insert OrgMembership {
       id: "mem-status-test",
       orgId: "org-status-test",
       userId: "usr-status-test",
       role: RoleAdmin,
-      joinedAt: 0
+      joinedAt: Time.secondsToPosix 0
     }
     insert Project {
       id: "proj-status-test",
@@ -773,7 +773,7 @@ api-test "issue status can be updated through valid transitions" for KanelServer
       name: "Status Test Project",
       description: "For testing status transitions",
       archived: False,
-      createdAt: 0
+      createdAt: Time.secondsToPosix 0
     }
     insert Issue {
       id: "iss-status-test",
@@ -786,8 +786,8 @@ api-test "issue status can be updated through valid transitions" for KanelServer
       reporterId: "usr-status-test",
       estimate: 30,
       dueAt: Nothing,
-      createdAt: 0,
-      updatedAt: 0
+      createdAt: Time.secondsToPosix 0,
+      updatedAt: Time.secondsToPosix 0
     }
   }
 

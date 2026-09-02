@@ -1926,7 +1926,7 @@ check your fact declaration or the type of `%s`"
     (* Walk an expression looking for ok ::: proof sites and let bindings *)
     let rec walk_expr local_env (e : expr) =
       match e with
-      | EOk { value; proof; loc } ->
+      | EOk { value; proof; loc; _ } ->
         check_proof local_env loc proof;
         walk_expr local_env value
       | ELet { name; declared_type; value; body; _ } ->
@@ -1969,8 +1969,6 @@ check your fact declaration or the type of `%s`"
         walk_expr local_env to_; walk_expr local_env subject;
         walk_expr local_env body
       | EStartEmailWorker _ -> ()
-      | ERuntimeCall { segments; _ } ->
-        List.iter (function RLit _ | RRawVar _ -> () | RArg e -> walk_expr local_env e) segments
     in
     List.iter (function
       | DFunc fd ->

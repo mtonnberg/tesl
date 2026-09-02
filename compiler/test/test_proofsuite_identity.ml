@@ -18,9 +18,8 @@
              `auth`, even through a re-export chain.  Error: `fact ownership
              violation … can only be produced` (`error[T001]`/`P001`).
 
-    Hardening: a static rejection must never leak a runtime token
-    (`raise-user-error`, `check-fail`, `.rkt` trace).  `should_fail` asserts
-    this.
+    Hardening: a static rejection must never leak a Go runtime token (panic or
+    stack trace). `should_fail` asserts this.
 
     Companion to NEG-ATTACK (fabrication ×8, shadowing ×4, cross-module ×5);
     this file supplies the systematic breadth (every kind × nook) plus the
@@ -114,7 +113,7 @@ let with_three_files a_src b_src c_src f =
 
 (* Hardening *)
 let runtime_leak_re =
-  Str.regexp_case_fold "raise-user-error\\|check-fail\\|\\.rkt:[0-9]\\|context\\.\\.\\.:\\|raco "
+  Str.regexp_case_fold "panic:\\|runtime error:\\|goroutine \\|_test\\.go:\\|\\.go:[0-9]"
 
 let assert_no_runtime_leak ~ctx out =
   try

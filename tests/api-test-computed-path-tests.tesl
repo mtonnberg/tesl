@@ -9,7 +9,7 @@ module ApiTestComputedPathTests exposing [PathServer]
 # on a non-list.  `tesl check` passed and the crash surfaced as a bare
 # "assertion did not hold" for the whole test body, so it read as an
 # application bug.  The split now happens at the dispatch boundary
-# (dsl/test-support.rkt api-test-path->segments+query), so a literal, a
+# (the API test support path splitter), so a literal, a
 # `let`-bound string, a `++` concatenation and an interpolation are the same
 # request — which is what makes a create-then-read flow testable when the id is
 # only knowable from the create response.

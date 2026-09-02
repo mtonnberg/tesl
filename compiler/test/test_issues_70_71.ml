@@ -4,16 +4,16 @@
     #70 — a `fact` INDEXED BY AN ADT CONSTRUCTOR
     ------------------------------------------------------------------------
     `fact MayUse (c: Caller) (p: Permission)` demanded as
-    `MayUse c WriteCostRates` passed `tesl check` and then trapped at Racket
-    codegen with `unbound GDP name in return annotation: (WriteCostRates)`.
+    `MayUse c WriteCostRates` passed `tesl check` and then trapped during
+    code generation with an unbound proof-template name.
 
     Root cause was kernel-vs-frontend DRIFT about what an uppercase-initial
     proof argument means.  The frontend has always read it as a CONSTANT (both
     [Proof_checker.proof_subjects] and [Validation_common.proof_subjects] keep
     only lowercase-initial args as GDP subjects — and the Tesl lexer makes that
     exhaustive, since an uppercase-initial VALUE name is a parse error).  The
-    Racket GDP kernel ([proof-arg-unbound-names] in dsl/types.rkt) instead read
-    every symbol as a GDP name, so the constructor looked unbound.
+    The removed runtime instead read every symbol as a GDP name, so the
+    constructor looked unbound.
 
     The kernel now shares the frontend's rule, and this pass owns what the
     kernel's guard used to catch by accident: a constructor argument must
@@ -22,11 +22,6 @@
     pinned below, because "make it compile" without the second half would have
     turned a codegen trap into a SILENT hole (`MayUse c Bogus` compiling and
     testing green).
-
-    The Racket half of #70 — the erased proof template actually expanding and
-    the test running — is covered end-to-end by
-    tests/adt-indexed-fact-tests.tesl and by the constant-reference cases in
-    tests/body-proof-test.rkt.
 
     #71 — a same-module SUM TYPE as an api `auth` binding
     ------------------------------------------------------------------------
@@ -67,6 +62,35 @@ let run_compiler args =
 
 let failf fmt = Printf.ksprintf failwith fmt
 
+let rec mkdir_p path =
+  if path = "" || path = Filename.current_dir_name || Sys.file_exists path then ()
+  else (mkdir_p (Filename.dirname path); Unix.mkdir path 0o755)
+
+let rec remove_tree path =
+  if Sys.file_exists path then
+    if Sys.is_directory path then begin
+      Array.iter (fun name -> remove_tree (Filename.concat path name)) (Sys.readdir path);
+      Unix.rmdir path
+    end else Sys.remove path
+
+let build_go_artifacts label artifacts =
+  if Sys.command "go version >/dev/null 2>&1" = 0 then begin
+    let root = Filename.temp_dir "tesl-i7071-go" "" in
+    Fun.protect ~finally:(fun () -> remove_tree root) (fun () ->
+      List.iter (fun (a : Emit_go.artifact) ->
+        let path = Filename.concat root a.path in
+        mkdir_p (Filename.dirname path);
+        Out_channel.with_open_bin path (fun oc -> output_string oc a.contents)) artifacts;
+      let command = Printf.sprintf "cd %s && go build ./... 2>&1" (Filename.quote root) in
+      let ic = Unix.open_process_in command in
+      let out = In_channel.input_all ic in
+      match Unix.close_process_in ic with
+      | Unix.WEXITED 0 -> ()
+      | Unix.WEXITED code -> failf "%s: generated Go build exited %d:\n%s" label code out
+      | Unix.WSIGNALED signal | Unix.WSTOPPED signal ->
+        failf "%s: generated Go build stopped by signal %d:\n%s" label signal out)
+  end
+
 let contains hay needle =
   let n = String.length needle and h = String.length hay in
   let rec go i = i + n <= h && (String.sub hay i n = needle || go (i + 1)) in
@@ -89,7 +113,12 @@ let with_project files entry args =
   result
 
 let check_one src = with_project [ ("app.tesl", src) ] "app.tesl" [ "--check" ]
-let emit_one src = with_project [ ("app.tesl", src) ] "app.tesl" []
+let emit_one src =
+  match Compile.compile_go_source "app.tesl" src with
+  | Compile.GoSuccess artifacts ->
+    (0, String.concat "\n" (List.map (fun (a : Emit_go.artifact) -> a.contents) artifacts))
+  | Compile.GoFailure diagnostics ->
+    (1, String.concat "\n" (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
 
 (* ── #70 fixtures ───────────────────────────────────────────────────────── *)
 
@@ -129,18 +158,13 @@ let t_adt_indexed_fact_checks () =
     failf "a fact indexed by an ADT constructor must check cleanly; got (exit %d):\n%s"
       code out
 
-(* The actual #70 trap: the emitted define-checker must EXPAND.  The constructor
-   argument survives into the erased return annotation, which is exactly the
-   position the kernel rejected. *)
+(* The actual #70 trap: check-clean source must also reach Go emission. Proofs
+   erase in Go, so successful artifact production is the relevant assertion. *)
 let t_adt_indexed_fact_emits_the_constructor () =
   let code, out = emit_one (adt_fact_app "WriteCostRates") in
   if code <> 0 then
     failf "emitting a fact indexed by an ADT constructor must succeed; got (exit %d):\n%s"
-      code out;
-  if not (contains out "#:returns [c : Caller ::: (MayUse c WriteCostRates)]") then
-    failf
-      "the constructor must reach the erased return annotation unchanged — that \
-       template is what the Racket GDP kernel validates.\n%s" out
+      code out
 
 let t_misspelled_constructor_is_rejected_at_check_time () =
   let code, out = check_one (adt_fact_app "Bogus") in
@@ -286,8 +310,8 @@ let t_same_module_sum_type_auth_emits () =
   let code, out = emit_one (api_auth_app sum_type_decl "Simple") in
   if code <> 0 then
     failf "the same-module sum-type auth app must emit; got (exit %d):\n%s" code out;
-  if not (contains out "(define-adt Simple") then
-    failf "the sum type must still be emitted as an ADT.\n%s" out
+  if not (contains out "type Simple struct") then
+    failf "the sum type must still be emitted as a Go ADT.\n%s" out
 
 (* An api type position that names nothing must STILL be an error — the fix adds
    the ADT/alias tables to the known-type list, it does not disable the check. *)
@@ -347,8 +371,8 @@ let t_cross_module_sum_type_auth_still_checks () =
 
 (* The known-type list is built from the checker's ADT table, so it must not care
    whether the type is declared BEFORE or AFTER the api block — the emitted
-   Racket follows source order, and a scope-order-sensitive fix would leave the
-   trailing-declaration spelling broken. *)
+   emission follows source order, and a scope-order-sensitive fix would leave
+   the trailing-declaration spelling broken. *)
 let t_sum_type_declared_after_the_api_block_checks () =
   let src = {|module App exposing []
 import Tesl.Prelude exposing [String, Bool(..)]
@@ -385,38 +409,19 @@ type Simple
       "the api `auth` type lookup must be declaration-order independent; got \
        (exit %d):\n%s" code out
 
-(* ── #70's CLASS: check-clean ⇒ the GDP kernel accepts it ────────────────────
+(* ── #70's CLASS: check-clean implies Go emission accepts it ─────────────────
 
    #70 was not "constructors were forgotten once".  Its shape is that TWO
-   implementations independently decide whether a proof-template atom is a GDP
-   name — [Validation_common.proof_subjects] / [Proof_checker.proof_subjects] in
-   OCaml, [proof-arg-unbound-names] in dsl/types.rkt — and ANY disagreement is a
-   `tesl check` passes / codegen traps bug.  A unit-level parity assertion would
-   be wrong, because the two are allowed to differ on spellings the frontend
-   rejects outright (a dotted arg is a P001 "not a valid GDP subject", so it never
-   reaches the kernel).  The invariant that actually matters is the end-to-end
-   one, and it is what this test states:
+   frontend passes independently decide whether a proof-template atom is a GDP
+   name. Any disagreement is a `tesl check` passes / codegen traps bug. The
+   invariant that matters is end-to-end:
 
      for every proof-argument spelling, either `tesl check` rejects it, or the
-     Racket GDP kernel loads the emitted module without an unbound-GDP-name error.
+     Go emission accepts it without an unbound proof-name error.
 
    Each row below is one spelling in the second slot of a two-parameter fact.  A
    future divergence in either implementation fails here regardless of which side
    changed. *)
-
-let raco_available () = Sys.command "raco help >/dev/null 2>&1" = 0
-
-let repo_root =
-  match Sys.getenv_opt "TESL_REPO_ROOT" with
-  | Some p when p <> "" -> p
-  | _ ->
-    let rec find dir =
-      if Sys.file_exists (Filename.concat dir "dsl/types.rkt") then dir
-      else
-        let parent = Filename.dirname dir in
-        if parent = dir then "." else find parent
-    in
-    find (Filename.dirname Sys.executable_name)
 
 (* The second proof argument is [arg]; [decls] adds whatever declares it. *)
 let proof_arg_probe ~decls ~param_type ~arg = Printf.sprintf {|module App exposing []
@@ -456,61 +461,23 @@ let proof_arg_rows = [
 ]
 
 let t_check_clean_implies_the_kernel_accepts () =
-  if not (raco_available ()) then skip ();
-  let dir = Filename.temp_dir "tesl-i70cls" "" in
-  let cleanup () =
-    List.iter (fun n ->
-      try Sys.remove (Filename.concat dir n) with _ -> ())
-      [ "app.tesl"; "app.rkt" ];
-    (try
-       let c = Filename.concat dir "compiled" in
-       if Sys.file_exists c then
-         Array.iter (fun f -> try Sys.remove (Filename.concat c f) with _ -> ())
-           (Sys.readdir c);
-       Unix.rmdir c
-     with _ -> ());
-    try Unix.rmdir dir with _ -> ()
-  in
-  let tesl_path = Filename.concat dir "app.tesl" in
-  let rkt_path = Filename.concat dir "app.rkt" in
-  Fun.protect ~finally:cleanup (fun () ->
-    List.iter (fun (label, decls, param_type, arg) ->
+  List.iter (fun (label, decls, param_type, arg) ->
       let src = proof_arg_probe ~decls ~param_type ~arg in
-      let oc = open_out tesl_path in output_string oc src; close_out oc;
-      let check_code, check_out = run_compiler [ "--check"; tesl_path ] in
+      let check_code, check_out = check_one src in
       if check_code <> 0 then
-        (* Rejected at check time — the kernel is never reached.  That satisfies
-           the invariant; it is the OTHER acceptable outcome. *)
+        (* Rejected at check time: code generation is never reached. *)
         ignore check_out
-      else begin
-        (* Redirect rather than capture: the .rkt must be exactly stdout, with no
-           chance of a stderr line being folded into the emitted source. *)
-        let emit_code =
-          Sys.command
-            (Printf.sprintf "%s %s > %s 2>/dev/null"
-               (Filename.quote compiler) (Filename.quote tesl_path)
-               (Filename.quote rkt_path))
-        in
-        if emit_code <> 0 then
-          failf "%s: `tesl check` passed but emit failed (exit %d)" label emit_code;
-        let cmd =
-          Printf.sprintf
-            "TESL_REPO_ROOT=%s raco make %s 2>&1"
-            (Filename.quote repo_root) (Filename.quote rkt_path)
-        in
-        let ic = Unix.open_process_in cmd in
-        let load_out = In_channel.input_all ic in
-        let load_code = match Unix.close_process_in ic with
-          | Unix.WEXITED c -> c | Unix.WSIGNALED n | Unix.WSTOPPED n -> 128 + n in
-        if load_code <> 0 then
+      else
+        match Compile.compile_go_source "app.tesl" src with
+        | Compile.GoSuccess artifacts -> build_go_artifacts label artifacts
+        | Compile.GoFailure diagnostics ->
+          let emit_out = String.concat "\n"
+              (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics) in
           failf
-            "%s: `tesl check` passed but the Racket GDP kernel rejected the \
-             emitted module — this is exactly issue #70's shape (check-clean, \
-             codegen traps).  Either the frontend must reject `%s` in a proof \
-             argument, or the kernel must accept it.\n%s"
-            label arg load_out
-      end)
-      proof_arg_rows)
+            "%s: `tesl check` passed but Go emission rejected `%s`; this is \
+             issue #70's check-clean/codegen-trap shape.\n%s"
+            label arg emit_out)
+    proof_arg_rows
 
 (* ── #71's CLASS: every type-declaring form is visible to a type-position check ──
 
@@ -615,7 +582,7 @@ let () =
     "issue-70-adt-indexed-fact", [
       test_case "an ADT-constructor-indexed fact checks" `Quick
         t_adt_indexed_fact_checks;
-      test_case "the constructor reaches the erased return annotation" `Quick
+       test_case "an ADT-indexed fact reaches Go emission" `Quick
         t_adt_indexed_fact_emits_the_constructor;
       test_case "a misspelled constructor fails at check time" `Quick
         t_misspelled_constructor_is_rejected_at_check_time;
@@ -640,7 +607,7 @@ let () =
       test_case "the sum type may be declared after the api block" `Quick
         t_sum_type_declared_after_the_api_block_checks;
     ];
-    "issue-70-class-check-clean-implies-kernel-accepts", [
+    "issue-70-class-check-clean-implies-go-builds", [
       test_case "no proof-argument spelling passes check and traps at codegen" `Slow
         t_check_clean_implies_the_kernel_accepts;
     ];

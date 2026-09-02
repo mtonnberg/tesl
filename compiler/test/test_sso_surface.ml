@@ -6,69 +6,46 @@
 
 open Alcotest
 
-let compiler =
-  match Sys.getenv_opt "TESL_OCAML_COMPILER" with
-  | Some p when Sys.file_exists p -> p
-  | _ ->
-    (match Sys.getenv_opt "TESL_BIN" with
-     | Some v when Filename.basename v = "main.exe" && Sys.file_exists v -> v
-     | _ ->
-       let dir = Filename.dirname Sys.argv.(0) in
-       let c1 = Filename.concat (Filename.dirname dir) "bin/main.exe" in
-       let c2 = Filename.concat dir "../bin/main.exe" in
-       if Sys.file_exists c1 then c1 else if Sys.file_exists c2 then c2 else "tesl")
-
-let run_compiler args =
-  let quoted = Filename.quote compiler :: List.map Filename.quote args in
-  let ic = Unix.open_process_in (String.concat " " quoted ^ " 2>&1") in
-  let out = In_channel.input_all ic in
-  let code = match Unix.close_process_in ic with
-    | Unix.WEXITED c -> c | Unix.WSIGNALED n | Unix.WSTOPPED n -> 128 + n in
-  (code, out)
-
 let failf fmt = Printf.ksprintf failwith fmt
 
-let with_temp_file content f =
-  let dir = Filename.temp_dir "tesl-sso" "" in
-  let path = Filename.concat dir "probe.tesl" in
-  let oc = open_out path in output_string oc content; close_out oc;
-  Fun.protect
-    ~finally:(fun () ->
-      (try Sys.remove path with _ -> ());
-      (try Unix.rmdir dir with _ -> ()))
-    (fun () -> f path)
-
 let should_pass src =
-  with_temp_file src (fun path ->
-    let code, out = run_compiler ["--check"; path] in
-    if code <> 0 then failf "expected clean compile, got (exit %d):\n%s" code out)
+  let diagnostics = Compile.check_source "probe.tesl" src in
+  if diagnostics <> [] then
+    failf "expected clean compile, got:\n%s"
+      (String.concat "\n" (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
 
 let should_fail pattern src =
-  with_temp_file src (fun path ->
-    let code, out = run_compiler ["--check"; path] in
-    if code = 0 then failf "expected failure matching %S, but it compiled clean" pattern;
-    let re = Str.regexp_case_fold pattern in
-    try ignore (Str.search_forward re out 0)
-    with Not_found -> failf "expected failure matching %S, got:\n%s" pattern out)
+  let diagnostics = Compile.check_source "probe.tesl" src in
+  if diagnostics = [] then failf "expected failure matching %S, but it compiled clean" pattern;
+  let out = String.concat "\n"
+    (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics) in
+  let re = Str.regexp_case_fold pattern in
+  try ignore (Str.search_forward re out 0)
+  with Not_found -> failf "expected failure matching %S, got:\n%s" pattern out
 
-(* Emit the Racket (no --check -> compile to stdout) and assert on its text. *)
+(* Compile through the Go API and inspect the exact module artifact. *)
 let emitted src =
-  with_temp_file src (fun path ->
-    let code, out = run_compiler [path] in
-    if code <> 0 then failf "expected a clean emit, got (exit %d):\n%s" code out;
-    out)
+  match Compile.compile_go_source "probe.tesl" src with
+  | Compile.GoFailure diagnostics ->
+    failf "expected a clean emit, got:\n%s"
+      (String.concat "\n" (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  | Compile.GoSuccess artifacts ->
+    (match List.find_opt (fun (a : Emit_go.artifact) ->
+       a.path = "internal/teslmodprobe/module.go") artifacts with
+     | Some artifact -> artifact.contents
+     | None -> failf "missing Go artifact internal/teslmodprobe/module.go")
 
 let should_emit pattern src =
   let out = emitted src in
   let re = Str.regexp pattern in
   try ignore (Str.search_forward re out 0)
-  with Not_found -> failf "expected emitted Racket to match %S, got:\n%s" pattern out
+  with Not_found -> failf "expected Go artifact to match %S, got:\n%s" pattern out
 
 let should_not_emit pattern src =
   let out = emitted src in
   let re = Str.regexp pattern in
   match (try Some (Str.search_forward re out 0) with Not_found -> None) with
-  | Some _ -> failf "expected emitted Racket NOT to match %S, but it did" pattern
+  | Some _ -> failf "expected Go artifact NOT to match %S, but it did" pattern
   | None -> ()
 
 (* One module Probe in probe.tesl (Tesl.Sso stdlib surface). *)
@@ -170,48 +147,48 @@ let t_sso_flow_requires_httpclient () =
 (* ── The `sessionPolicy` server clause (Phase 3) ──────────────────────────── *)
 
 let t_short_session_sets_the_policy () =
-  should_emit "current-session-policy.*short-session"
+  should_emit "SetSessionPolicy.*ShortSession"
     (server_prog "sessionPolicy ShortSession")
 
 let t_standard_session_sets_the_policy () =
-  should_emit "current-session-policy.*standard-session"
+  should_emit "SetSessionPolicy.*StandardSession"
     (server_prog "sessionPolicy StandardSession")
 
 let t_no_clause_sets_no_policy () =
-  should_not_emit "current-session-policy" (server_prog "")
+  should_not_emit "SetSessionPolicy" (server_prog "")
 
 let t_unknown_policy_takes_no_effect () =
   (* CLOSED keyword set — an unrecognised name cannot turn the policy the unsafe
      way; it simply does not take effect. *)
-  should_not_emit "current-session-policy" (server_prog "sessionPolicy Forever")
+  should_not_emit "SetSessionPolicy" (server_prog "sessionPolicy Forever")
 
 (* ── The `publicOrigin` server clause (Phase 3) ───────────────────────────── *)
 
 let t_public_origin_is_set () =
-  should_emit "current-public-origin.*https://app.example.com"
+  should_emit "SetPublicOriginValue.*https://app.example.com"
     (server_prog "publicOrigin \"https://app.example.com\"")
 
 let t_no_public_origin_sets_none () =
-  should_not_emit "current-public-origin" (server_prog "")
+  should_not_emit "SetPublicOriginValue" (server_prog "")
 
 let t_both_clauses_coexist () =
   let out =
     emitted (server_prog "sessionPolicy ShortSession\n  publicOrigin \"https://app.example.com\"") in
-  (if not (Str.string_match (Str.regexp ".*short-session") out 0)
-      && (try ignore (Str.search_forward (Str.regexp "short-session") out 0); false
+  (if not (Str.string_match (Str.regexp ".*ShortSession") out 0)
+      && (try ignore (Str.search_forward (Str.regexp "ShortSession") out 0); false
           with Not_found -> true)
-   then failf "expected short-session in:\n%s" out);
-  (try ignore (Str.search_forward (Str.regexp "current-public-origin") out 0)
-   with Not_found -> failf "expected current-public-origin in:\n%s" out)
+   then failf "expected ShortSession in:\n%s" out);
+  (try ignore (Str.search_forward (Str.regexp "SetPublicOriginValue") out 0)
+   with Not_found -> failf "expected SetPublicOriginValue in:\n%s" out)
 
 (* OQ11: `publicOrigin fromEnv "VAR"` reads the origin from the env var at boot. *)
 let t_public_origin_from_env_is_set () =
-  should_emit "current-public-origin.*public-origin-from-env.*PUBLIC_ORIGIN"
+  should_emit "SetPublicOriginValue.*RequireEnv.*PUBLIC_ORIGIN"
     (server_prog "publicOrigin fromEnv \"PUBLIC_ORIGIN\"")
 
 (* OQ11: a loopback http origin is accepted (dev). *)
 let t_public_origin_loopback_http_ok () =
-  should_emit "current-public-origin.*http://localhost:8080"
+  should_emit "SetPublicOriginValue.*http://localhost:8080"
     (server_prog "publicOrigin \"http://localhost:8080\"")
 
 (* OQ11: an invalid literal origin (no scheme / a path / a query) is rejected
@@ -223,20 +200,21 @@ let t_public_origin_invalid_literal_rejected () =
 (* #51: the `trustedProxies [ ... ]` edge declaration sets the runtime trusted
    proxy set at boot (enables a trustworthy request.clientAddress). *)
 let t_trusted_proxies_is_set () =
-  should_emit "current-trusted-proxies.*10[.]0[.]0[.]1"
-    (server_prog "trustedProxies [ \"10.0.0.1\", \"10.0.0.2\" ]")
+  (* Go carries this list at each auth boundary; this minimal server has none, so
+     this probe remains a checker contract rather than inventing a boot setter. *)
+  should_pass (server_prog "trustedProxies [ \"10.0.0.1\", \"10.0.0.2\" ]")
 
 let t_no_trusted_proxies_sets_none () =
-  should_not_emit "current-trusted-proxies" (server_prog "")
+  should_not_emit "10[.]0[.]0[.]1" (server_prog "")
 
 (* Risk 50/60: the healthProbePath clause sets the Host-validation-exempt path. *)
 let t_health_probe_path_is_set () =
-  should_emit "current-health-probe-path.*/healthz"
+  should_emit "SetHealthProbePath.*/healthz"
     (server_prog "healthProbePath \"/healthz\"")
 
 (* OQ17/#50.1: the contentSecurityPolicy clause sets the server default CSP. *)
 let t_content_security_policy_is_set () =
-  should_emit "current-content-security-policy.*default-src"
+  should_emit "SetContentSecurityPolicy.*default-src"
     (server_prog "contentSecurityPolicy \"default-src 'self'\"")
 
 (* A server program with extra top-level fn definitions [defs] and a server-block
@@ -317,11 +295,14 @@ let revoked_fn =
   "fn revoked(_s: String, _iat: PosixMillis) -> Bool = False"
 
 let t_session_revoked_sets_hook () =
-  should_emit "current-session-revoked-hook.*revoked.*Time.secondsToPosix"
-    (revoked_prog revoked_fn "sessionRevoked revoked")
+  let out = emitted (revoked_prog revoked_fn "sessionRevoked revoked") in
+  List.iter (fun expected ->
+    try ignore (Str.search_forward (Str.regexp expected) out 0)
+    with Not_found -> failf "expected %S in:\n%s" expected out)
+    [ "SetSessionRevokedHook"; "revoked"; "SecondsToPosix" ]
 
 let t_no_session_revoked_sets_none () =
-  should_not_emit "current-session-revoked-hook" (revoked_prog "" "")
+  should_not_emit "SetSessionRevokedHook" (revoked_prog "" "")
 
 let t_session_revoked_unknown_fn () =
   should_fail "no such function is defined"
@@ -332,11 +313,11 @@ let t_session_revoked_unknown_fn () =
 let t_previous_key_sets_the_param () =
   (* Sets current-previous-session-key at boot, wrapped in the bootstrap-trust
      marker (a load-time provider read).  Requires a current key too. *)
-  should_emit "with-env-bootstrap.*current-previous-session-key.*PREV"
+  should_emit "SetPreviousSessionKey.*RequireSecret.*PREV"
     (server_prog "sessionKey \"CUR\"\n  sessionPreviousKey \"PREV\"")
 
 let t_no_previous_key_sets_none () =
-  should_not_emit "current-previous-session-key" (server_prog "")
+  should_not_emit "SetPreviousSessionKey" (server_prog "")
 
 let t_previous_key_requires_current () =
   (* A previous key with no current key is a misconfiguration (fail-closed). *)
@@ -346,19 +327,19 @@ let t_previous_key_requires_current () =
 (* ── The `listenAddress` server clause (Phase 3): bind interface ──────────── *)
 
 let t_loopback_registers_127 () =
-  should_emit "register-listen-address!.*HealthServer.*127.0.0.1"
+  should_emit "ListenAddress:.*127.0.0.1"
     (server_prog "listenAddress Loopback")
 
 let t_all_interfaces_registers_false () =
-  should_emit "register-listen-address!.*HealthServer.*#f"
-    (server_prog "listenAddress AllInterfaces")
+  (* Empty ServeOptions.ListenAddress is Go's all-interface default. *)
+  should_not_emit "ListenAddress:" (server_prog "listenAddress AllInterfaces")
 
 let t_no_listen_address_registers_nothing () =
-  should_not_emit "register-listen-address!" (server_prog "")
+  should_not_emit "ListenAddress:" (server_prog "")
 
 let t_unknown_listen_address_takes_no_effect () =
   (* CLOSED keyword set — an unrecognised name registers nothing. *)
-  should_not_emit "register-listen-address!" (server_prog "listenAddress Elsewhere")
+  should_not_emit "ListenAddress:" (server_prog "listenAddress Elsewhere")
 
 (* ── The `loginMethods` server clause (Phase 3): fail-closed allowlist ────── *)
 
@@ -534,7 +515,7 @@ let () =
     ];
     "listen-address-clause", [
       test_case "listenAddress Loopback binds 127.0.0.1" `Quick t_loopback_registers_127;
-      test_case "listenAddress AllInterfaces binds all (#f)" `Quick
+      test_case "listenAddress AllInterfaces uses Go default" `Quick
         t_all_interfaces_registers_false;
       test_case "no clause registers no bind address" `Quick
         t_no_listen_address_registers_nothing;

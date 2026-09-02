@@ -78,7 +78,7 @@ fn emailAddress(email: Email) -> String =
 # ─────────────────────────────────────────────
 # THEORY — the full model
 # ─────────────────────────────────────────────
-# The "define-newtype" macro creates a Racket struct of type "newtype-value".
+# The generated Go code creates a tagged value of type "newtype-value".
 # This struct holds two fields: a type-name tag (the symbol 'UserId, 'ProjectId, etc.)
 # and the wrapped raw value.
 #

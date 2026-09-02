@@ -20,9 +20,8 @@
     K-BYPASS — a `capture` that establishes no proof wired to a proof-carrying
               handler param is rejected at the HTTP boundary.
 
-    Hardening: a static rejection must never leak a runtime token
-    (`raise-user-error`, `check-fail`, `.rkt` trace).  `should_fail` asserts
-    this. *)
+    Hardening: a static rejection must never leak a Go runtime token (panic or
+    stack trace). `should_fail` asserts this. *)
 
 open Alcotest
 
@@ -80,7 +79,7 @@ let with_temp_file content f =
 
 (* Hardening *)
 let runtime_leak_re =
-  Str.regexp_case_fold "raise-user-error\\|check-fail\\|\\.rkt:[0-9]\\|context\\.\\.\\.:\\|raco "
+  Str.regexp_case_fold "panic:\\|runtime error:\\|goroutine \\|_test\\.go:\\|\\.go:[0-9]"
 
 let assert_no_runtime_leak ~ctx out =
   try

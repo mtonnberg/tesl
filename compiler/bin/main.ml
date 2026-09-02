@@ -1,7 +1,8 @@
 (** Tesl compiler CLI.
 
     Usage:
-      tesl <file>                compile .tesl file to Racket (stdout)
+       tesl <file> --out <dir>    emit a Go module (Go is the default backend)
+      tesl --backend go <file> --out <dir>  emit an experimental Go module
       tesl --check <file> ...    check for parse + type errors (exit 1 if any)
       tesl --check-batch <file> ...  batch-check many files in one process (per-file summary)
       tesl --check-all <dir>     recursively batch-check every .tesl file under <dir>
@@ -18,14 +19,15 @@
       tesl --ir <file>           emit API IR JSON
       tesl --deps <file>         list all transitively imported local .tesl files
       tesl --semantic-json <file>  emit full module semantic snapshot as JSON
-      tesl --mutate <file> [test-file ...]  run mutation testing
+       tesl --mutate [--backend go] <file> [test-file ...]  run Go mutation testing
       tesl doc [name|Tesl.Module]  show a builtin's Tesl signature / a module's surface
       tesl --doc-json <name>     same, as JSON (editor/agent integration)
       tesl help [manual] [section]  show help and documentation
 *)
 
 let usage = {|Usage:
-  tesl <file>                  compile .tesl file to Racket (stdout)
+  tesl <file> --out <dir>      emit a Go module tree (Go is the default backend)
+  tesl --backend go <file> --out <dir>  emit a Go module tree
   tesl --check <file> [...]    check for parse + type errors (exit 1 if any)
   tesl --check-batch <file> [...]  batch-check many files in one process (shared import cache, per-file summary)
   tesl --check-all <dir>       recursively batch-check every .tesl file under <dir>
@@ -48,9 +50,8 @@ let usage = {|Usage:
   tesl --semantic-json <file>  emit full module semantic snapshot as JSON (IR-1 foundation)
   tesl agent-context <file>    emit a compact AI-agent snapshot (diagnostics+symbols+obligations) as JSON
   tesl --agent-context-json <file>  alias for `tesl agent-context`
-  tesl debug-inspect <file> --break-at SPEC [...]  run to a breakpoint (headless) and dump paused runtime state as JSON
-  tesl --mutate <file> [test-file ...]  run mutation testing; optionally merge tests from extra files
-  tesl --exe <file> [--out <path>]  build a standalone executable via `raco exe` (needs raco on PATH)
+  tesl --mutate [--backend go] <file> [test-file ...]  run Go mutation testing; optionally merge tests from extra files
+   tesl --exe <file> [--out <path>]  build a standalone Go executable
 
 Documentation:
   tesl doc                     list all stdlib modules (the builtin surface)
@@ -92,6 +93,31 @@ let read_file filename =
     close_in ic;
     Some contents
   with Sys_error _ -> None
+
+let rec ensure_directory path =
+  if path = "" || path = Filename.current_dir_name then ()
+  else if Sys.file_exists path then begin
+    if not (Sys.is_directory path) then
+      failwith (Printf.sprintf "%s exists and is not a directory" path)
+  end else begin
+    ensure_directory (Filename.dirname path);
+    Unix.mkdir path 0o755
+  end
+
+let write_go_project out_dir (artifacts : Emit_go.artifact list) =
+  if String.trim out_dir = "" then
+    failwith "Go output directory must not be empty"
+  else if Sys.file_exists out_dir then
+    failwith (Printf.sprintf "Go output directory already exists: %s" out_dir);
+  ensure_directory out_dir;
+  List.iter (fun (artifact : Emit_go.artifact) ->
+    if not (Filename.is_relative artifact.path)
+       || List.mem ".." (String.split_on_char '/' artifact.path) then
+      failwith (Printf.sprintf "unsafe Go artifact path: %s" artifact.path);
+    let path = Filename.concat out_dir artifact.path in
+    ensure_directory (Filename.dirname path);
+    Out_channel.with_open_bin path (fun channel ->
+        output_string channel artifact.contents)) artifacts
 
 (** Read a file from disk; fall back to the embedded content store when the
     file is not present on disk (e.g. in an installed nix-flake binary with
@@ -914,8 +940,72 @@ let print_diagnostic (d : Compile.diagnostic) =
            is documented in the registry. *)
         (match Error_codes.lookup d.code with
          | Some _ ->
-           Printf.eprintf "  hint: run `tesl help %s` for an explanation\n" d.code
+            Printf.eprintf "  hint: run `tesl help %s` for an explanation\n" d.code
          | None -> ())))
+
+let require_checked filename =
+  let diagnostics = Compile.check_file filename in
+  List.iter print_diagnostic diagnostics;
+  if List.exists (fun (d : Compile.diagnostic) -> d.severity = "error") diagnostics then
+    exit 1
+
+let project_root_for_file filename =
+  let absolute =
+    if Filename.is_relative filename then Filename.concat (Sys.getcwd ()) filename else filename
+  in
+  let rec seek dir =
+    if Sys.file_exists (Filename.concat dir "tesl.toml") then dir
+    else
+      let parent = Filename.dirname dir in
+      if parent = dir then Sys.getcwd () else seek parent
+  in
+  seek (Filename.dirname absolute)
+
+let fresh_go_output_dir filename =
+  let stuff = Filename.concat (project_root_for_file filename) ".tesl-stuff" in
+  ensure_directory stuff;
+  let path = Filename.temp_file ~temp_dir:stuff "go-emit-" "" in
+  Sys.remove path;
+  path
+
+let emit_go_file ?(debug=false) filename out_dir =
+  match Compile.compile_go_file ~debug filename with
+  | Compile.GoFailure diags -> List.iter print_diagnostic diags; exit 1
+  | Compile.GoSuccess artifacts ->
+    write_go_project out_dir artifacts;
+    Printf.printf "emitted Go module: %s\n" out_dir
+
+let build_go_executable filename out_opt =
+  let stem =
+    if Filename.check_suffix filename ".tesl"
+    then Filename.chop_suffix filename ".tesl"
+    else filename
+  in
+  let exe_path = match out_opt with Some path -> path | None -> stem in
+  let temp_dir = fresh_go_output_dir filename in
+  let cleanup () = ignore (Sys.command (Printf.sprintf "rm -rf %s" (Filename.quote temp_dir))) in
+  try
+    match Compile.compile_go_file filename with
+    | Compile.GoFailure diags ->
+      cleanup (); List.iter print_diagnostic diags; exit 1
+    | Compile.GoSuccess artifacts ->
+      write_go_project temp_dir artifacts;
+      ensure_directory (Filename.dirname exe_path);
+      let go = match Sys.getenv_opt "TESL_GO" with Some value -> value | None -> "go" in
+      let command = Printf.sprintf "cd %s && %s build -o %s ./cmd/app"
+          (Filename.quote temp_dir) (Filename.quote go) (Filename.quote exe_path) in
+      let status = Sys.command command in
+      cleanup ();
+      if status = 0 then
+        Printf.eprintf "%sbuilt%s %s\n" (col "1;32") (col "0") exe_path
+      else begin
+        Printf.eprintf "%serror%s: Go build failed (exit %d)\n"
+          (col "1;31") (col "0") status;
+        exit 1
+      end
+  with
+  | Sys_error msg -> cleanup (); Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
+  | Failure msg -> cleanup (); Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
 
 (** WS4: print per-file results for a batch / whole-project check, then a
     one-line summary, and exit (1 if any file has an error diagnostic, else 0).
@@ -947,7 +1037,6 @@ let print_batch_results (results : (string * Compile.diagnostic list) list) =
 
 let () =
   let args = Array.to_list Sys.argv |> List.tl in
-  let root_path = find_repo_root () in
 
   (* Outermost safety net (review LSP-crash class): convert ANY uncaught
      exception into a clean `error:`/exit-1 instead of the OCaml runtime's
@@ -1210,9 +1299,7 @@ let () =
           it is gated behind the FULL whole-program checker exactly like
           --generate-ts/--generate-elm — a program that fails `--check` must
           not still yield a plausible machine-consumed IR artifact. *)
-       (match Compile.compile_file ~root_path ~type_check:true filename with
-        | Compile.Failure diags -> List.iter print_diagnostic diags; exit 1
-        | Compile.Success _ -> ());
+        require_checked filename;
        let source = In_channel.with_open_text filename In_channel.input_all in
        match Parser.parse_module filename source with
        | Ok m ->
@@ -1232,9 +1319,7 @@ let () =
        (* B1 / review §8.2: gate the client generator behind the FULL checker
           (type + proof + validation), so a program that fails `--check` cannot
           still emit a plausible client (the checker-bypass hole). *)
-       (match Compile.compile_file ~root_path ~type_check:true filename with
-        | Compile.Failure diags -> List.iter print_diagnostic diags; exit 1
-        | Compile.Success _ -> ());
+        require_checked filename;
        let source = In_channel.with_open_text filename In_channel.input_all in
        match Parser.parse_module filename source with
        | Ok m ->
@@ -1258,9 +1343,7 @@ let () =
     let out_file = match rest with ["--out"; f] -> Some f | _ -> None in
     (try
        (* B1 / review §8.2: gate the client generator behind the FULL checker. *)
-       (match Compile.compile_file ~root_path ~type_check:true filename with
-        | Compile.Failure diags -> List.iter print_diagnostic diags; exit 1
-        | Compile.Success _ -> ());
+        require_checked filename;
        let source = In_channel.with_open_text filename In_channel.input_all in
        match Parser.parse_module filename source with
        | Ok m ->
@@ -1318,231 +1401,85 @@ let () =
      with Sys_error msg ->
        Printf.eprintf "error: %s\n" msg; exit 1)
 
-  | ["--debug"; filename] ->
-    (try
-       Emit_racket.set_debug_mode true;
-       match Compile.compile_file ~root_path ~type_check:true filename with
-       | Compile.Success racket -> print_string racket
-       | Compile.Failure diags ->
-         List.iter print_diagnostic diags;
-         exit 1
-     with
-     | Failure msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
-     | Sys_error msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
+   | ["--debug"; filename] ->
+     emit_go_file ~debug:true filename (fresh_go_output_dir filename)
 
-  | ["--test-name"; test_name; filename] ->
-    (try
-       Emit_racket.set_test_name_filter (Some test_name);
-       match Compile.compile_file ~root_path ~type_check:true filename with
-       | Compile.Success racket -> print_string racket
-       | Compile.Failure diags ->
-         List.iter print_diagnostic diags;
-         exit 1
-     with
-     | Failure msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
-     | Sys_error msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
+   | ["--debug"; filename; "--out"; out_dir] ->
+     emit_go_file ~debug:true filename out_dir
 
-  (* `--test-kind KIND` (test|api-test|load-test|doctest) pins single-test selection to
-     one kind, so a named api-test/load-test can be run in isolation. *)
-  | ["--test-name"; test_name; "--test-kind"; test_kind; filename] ->
-    (try
-       Emit_racket.set_test_name_filter (Some test_name);
-       Emit_racket.set_test_kind_filter (Some test_kind);
-       match Compile.compile_file ~root_path ~type_check:true filename with
-       | Compile.Success racket -> print_string racket
-       | Compile.Failure diags ->
-         List.iter print_diagnostic diags;
-         exit 1
-     with
-     | Failure msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
-     | Sys_error msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
+   | "--debug" :: "--test-name" :: _ ->
+     Printf.eprintf "error: named debug tests use `tesl debug-inspect --mode test ...`\n";
+     exit 2
 
-  | ["--debug"; "--test-name"; test_name; filename] ->
-    (try
-       Emit_racket.set_debug_mode true;
-       Emit_racket.set_test_name_filter (Some test_name);
-       match Compile.compile_file ~root_path ~type_check:true filename with
-       | Compile.Success racket -> print_string racket
-       | Compile.Failure diags ->
-         List.iter print_diagnostic diags;
-         exit 1
-     with
-     | Failure msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
-     | Sys_error msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
+   | "--test-name" :: _ ->
+     Printf.eprintf "error: --test-name is a test-runner option; use `tesl test --test-name ...`\n";
+     exit 2
+   | [filename; "--out"; out_dir]
+     when not (String.length filename > 2 && filename.[0] = '-') ->
+     (match Compile.compile_go_file filename with
+      | Compile.GoFailure diags -> List.iter print_diagnostic diags; exit 1
+      | Compile.GoSuccess artifacts ->
+        write_go_project out_dir artifacts;
+        Printf.printf "emitted Go module: %s\n" out_dir)
 
-  | ["--debug"; "--test-name"; test_name; "--test-kind"; test_kind; filename] ->
-    (try
-       Emit_racket.set_debug_mode true;
-       Emit_racket.set_test_name_filter (Some test_name);
-       Emit_racket.set_test_kind_filter (Some test_kind);
-       match Compile.compile_file ~root_path ~type_check:true filename with
-       | Compile.Success racket -> print_string racket
-       | Compile.Failure diags ->
-         List.iter print_diagnostic diags;
-         exit 1
-     with
-     | Failure msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
-     | Sys_error msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
+   | [filename; "--out"; out_dir; "--debug"]
+     when not (String.length filename > 2 && filename.[0] = '-') ->
+     (match Compile.compile_go_file ~debug:true filename with
+      | Compile.GoFailure diags -> List.iter print_diagnostic diags; exit 1
+      | Compile.GoSuccess artifacts ->
+        write_go_project out_dir artifacts;
+        Printf.printf "emitted debug Go module: %s\n" out_dir)
 
-  (* AC2: headless breakpoint inspector — agent-set breakpoints, full control.
-       tesl debug-inspect <file.tesl> --break-at SPEC [--break-at SPEC ...]
-                          [--when EXPR] [--hit SPEC] [--mode program|test]
-     Compiles the .tesl with debug instrumentation, registers ALL requested
-     breakpoints, runs to whichever fires FIRST (with stop-the-world active), and
-     emits the paused runtime state (locals + live domain registry + SQL capture)
-     plus the breakpoint that stopped it as ONE JSON object on stdout.
+   | [filename] when not (String.length filename > 2 && filename.[0] = '-') ->
+     emit_go_file filename (fresh_go_output_dir filename)
 
-     --break-at SPEC, where SPEC is one of:
-        LINE                bare, unconditional            e.g. 42
-        LINE:COL            column accepted and ignored    e.g. 42:7
-        LINE: <expr>        conditional (boolean over locals)  e.g. "42: n == 100"
-        LINE: <hit>         hit-count (==|>=|<=|>|<|% N)   e.g. "42: %3"
-        L1,L2,L3            comma-separated bare lines     e.g. 10,22,40
-     --break-at is repeatable; all breakpoints are registered.
-     --when EXPR  default boolean condition for breakpoints with no inline one.
-     --hit  SPEC  default hit-condition for breakpoints with no inline one.
-     A bad condition FAILS OPEN (treated as true) so a typo never silently drops a
-     breakpoint — same semantics as the DAP conditional breakpoints. *)
-  | "debug-inspect" :: filename :: rest
-    when not (String.length filename > 2 && filename.[0] = '-') ->
-    let inspect_usage () =
-      Printf.eprintf "usage: tesl debug-inspect <file.tesl> --break-at SPEC [--break-at SPEC ...] [--when EXPR] [--hit SPEC] [--mode program|test] [--continue]\n";
-      Printf.eprintf "  SPEC := LINE | LINE:COL | \"LINE: <cond-expr>\" | \"LINE: <hit-spec>\" | L1,L2,L3\n";
-      Printf.eprintf "  --continue : stop at each breakpoint in turn, resume after each, and let the program finish (headless F5); emits {snapshots:[...],completed}\n"
-    in
-    (* A single --break-at spec may carry several comma-separated bare lines OR one
-       conditional/hit breakpoint.  We classify the text after the first ':' the
-       SAME way the Racket driver's parse-bp-spec does:
-         - a bare integer after ':'         → a COLUMN (legacy), ignored
-         - an operator+int (==|>=|<=|>|<|%) → a hit-condition
-         - anything else                    → a boolean condition expression.
-       Comma-splitting only applies to a spec with NO ':' (a pure line list); a
-       spec containing ':' is treated as ONE breakpoint so commas inside an
-       expression are never mis-split. *)
-    let is_hit_spec s =                       (* (==|>=|<=|>|<|%) <digits> *)
-      let s = String.trim s in
-      let n = String.length s in
-      if n = 0 then false
-      else
-        let op_len =
-          if n >= 2 && (let p = String.sub s 0 2 in p="=="||p=">="||p="<=") then 2
-          else if (s.[0]='>'||s.[0]='<'||s.[0]='%') then 1
-          else 0
-        in
-        op_len > 0 &&
-        (let rest = String.trim (String.sub s op_len (n - op_len)) in
-         String.length rest > 0 &&
-         String.for_all (fun c -> c >= '0' && c <= '9') rest)
-    in
-    let is_all_digits s =
-      let s = String.trim s in
-      String.length s > 0 && String.for_all (fun c -> c >= '0' && c <= '9') s
-    in
-    (* Parse one chunk "LINE[: rest]" into (line, condition opt, hit opt). *)
-    let parse_chunk chunk : (int * string option * string option) option =
-      match String.index_opt chunk ':' with
-      | None ->
-        (match int_of_string_opt (String.trim chunk) with
-         | Some l when l > 0 -> Some (l, None, None)
-         | _ -> None)
-      | Some i ->
-        let line_str = String.trim (String.sub chunk 0 i) in
-        let rest = String.trim (String.sub chunk (i+1) (String.length chunk - i - 1)) in
-        (match int_of_string_opt line_str with
-         | Some l when l > 0 ->
-           if rest = "" || is_all_digits rest then Some (l, None, None)   (* COL ignored *)
-           else if is_hit_spec rest then Some (l, None, Some rest)
-           else Some (l, Some rest, None)
-         | _ -> None)
-    in
-    let parse_break_at spec : (int * string option * string option) list =
-      if String.contains spec ':' then
-        (match parse_chunk spec with Some bp -> [bp] | None -> [])
-      else
-        String.split_on_char ',' spec
-        |> List.filter_map (fun part ->
-             let part = String.trim part in
-             if part = "" then None else parse_chunk part)
-    in
-    let continue_mode = ref false in
-    let rec parse_opts bps when_opt hit_opt mode = function
-      | [] -> (List.rev bps, when_opt, hit_opt, mode)
-      | "--break-at" :: spec :: tl ->
-        let parsed = parse_break_at spec in
-        if parsed = [] then begin
-          Printf.eprintf "%serror%s: --break-at expects LINE[:COL]/LINE:<cond>/LINE:<hit>/L1,L2, got %s\n"
-            (col "1;31") (col "0") spec;
-          inspect_usage (); exit 2
-        end;
-        parse_opts (List.rev_append parsed bps) when_opt hit_opt mode tl
-      | "--when" :: w :: tl -> parse_opts bps (Some w) hit_opt mode tl
-      | "--hit"  :: h :: tl -> parse_opts bps when_opt (Some h) mode tl
-      | "--mode" :: m :: tl -> parse_opts bps when_opt hit_opt (Some m) tl
-      (* Headless F5: stop at each breakpoint in turn, resume after each, and let
-         the program finish — instead of one-shot (issue #16). *)
-      | ("--continue" | "--step-through") :: tl -> continue_mode := true; parse_opts bps when_opt hit_opt mode tl
-      | other :: _ ->
-        Printf.eprintf "%serror%s: unexpected argument to debug-inspect: %s\n"
-          (col "1;31") (col "0") other;
-        inspect_usage (); exit 2
-    in
-    let (bps, when_opt, hit_opt, mode_opt) = parse_opts [] None None None rest in
-    if bps = [] then begin
-      Printf.eprintf "%serror%s: debug-inspect requires at least one --break-at SPEC\n"
-        (col "1;31") (col "0");
-      inspect_usage (); exit 2
-    end;
-    (* Apply the global --when / --hit defaults to any breakpoint that has no
-       inline condition / hit-condition. *)
-    let breakpoints =
-      List.map (fun (line, c, h) ->
-        (line,
-         (match c with Some _ -> c | None -> when_opt),
-         (match h with Some _ -> h | None -> hit_opt)))
-        bps
-    in
-    let mode = match mode_opt with
-      | Some ("program" | "test" as m) -> m
-      | None -> "program"
-      | Some bad ->
-        Printf.eprintf "%serror%s: --mode must be program or test, got %s\n"
-          (col "1;31") (col "0") bad;
+    | ["--backend"; "go"; filename; "--out"; out_dir] ->
+     (match Compile.compile_go_file filename with
+      | Compile.GoFailure diags -> List.iter print_diagnostic diags; exit 1
+      | Compile.GoSuccess artifacts ->
+        write_go_project out_dir artifacts;
+        Printf.printf "emitted Go module: %s\n" out_dir)
+
+   | ["--backend"; "go"; filename; "--out"; out_dir; "--debug"] ->
+     (match Compile.compile_go_file ~debug:true filename with
+      | Compile.GoFailure diags -> List.iter print_diagnostic diags; exit 1
+      | Compile.GoSuccess artifacts ->
+        write_go_project out_dir artifacts;
+        Printf.printf "emitted debug Go module: %s\n" out_dir)
+
+  | "--backend" :: backend :: _ ->
+    Printf.eprintf "%serror%s: unsupported backend or arguments: %s\n"
+      (col "1;31") (col "0") backend;
+      Printf.eprintf "usage: tesl --backend go <file> --out <dir> [--debug]\n";
+    exit 2
+
+   | "--exe" :: filename :: rest
+     when not (String.length filename > 2 && filename.[0] = '-')
+          && (rest = [] || (match rest with ["--out"; _] -> true | _ -> false)) ->
+     let out = match rest with ["--out"; path] -> Some path | _ -> None in
+     build_go_executable filename out
+
+   | "--exe" :: _ ->
+     Printf.eprintf "usage: tesl --exe <file.tesl> [--out <path>]\n";
+     exit 2
+
+  | "--mutate" :: args ->
+    let backend, filename, extra_test_files = match args with
+       | "--backend" :: ("go" as backend) :: filename :: rest ->
+        backend, filename, rest
+       | filename :: rest
+         when not (String.length filename > 2 && filename.[0] = '-')
+             && List.for_all (fun s -> not (String.length s > 2 && s.[0] = '-' && s.[1] = '-')) rest ->
+         "go", filename, rest
+      | _ ->
+         Printf.eprintf "usage: tesl --mutate [--backend go] <file> [test-file ...]\n";
         exit 2
     in
-    (match Compile.debug_inspect ~root_path ~continue_mode:!continue_mode ~breakpoints ~mode filename with
-     | Compile.InspectDiags diags -> List.iter print_diagnostic diags; exit 1
-     | Compile.InspectErr msg ->
-       Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
-
-  | [filename] when not (String.length filename > 2 && filename.[0] = '-') ->
-    (try
-       match Compile.compile_file ~root_path ~type_check:true filename with
-       | Compile.Success racket -> print_string racket
-       | Compile.Failure diags ->
-         List.iter print_diagnostic diags;
-         exit 1
-     with
-     | Failure msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
-     | Sys_error msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
-
-  | "--exe" :: filename :: rest
-    when not (String.length filename > 2 && filename.[0] = '-')
-         && (rest = [] || (match rest with ["--out"; _] -> true | _ -> false)) ->
-    (* WS6: build a standalone executable via `raco exe`.  Emits byte-identical
-       Racket (same as `tesl <file>`) into a temp dir, then bundles it — no
-       generated files land next to the source. *)
-    let out = match rest with ["--out"; f] -> Some f | _ -> None in
-    (match Compile.build_exe ~root_path ?out filename with
-     | Compile.BuildOk exe_path ->
-       Printf.eprintf "%sbuilt%s %s\n" (col "1;32") (col "0") exe_path; exit 0
-     | Compile.BuildDiags diags ->
-       List.iter print_diagnostic diags; exit 1
-     | Compile.BuildErr msg ->
-       Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
-
-  | "--mutate" :: filename :: rest when rest = [] || List.for_all (fun s -> not (String.length s > 2 && s.[0] = '-' && s.[1] = '-')) rest ->
-    let extra_test_files = rest in
-    (match Compile.mutate_file ~root_path ~extra_test_files filename with
+    let mutation_result =
+      if backend = "go" then Compile.mutate_go_file ~extra_test_files filename
+       else Compile.mutate_go_file ~extra_test_files filename
+    in
+    (match mutation_result with
      | Compile.MutateErr msg ->
        Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg;
        exit 1
@@ -1567,8 +1504,12 @@ let () =
            | Mutate.Invalid _ -> "INVALID",  "1;33"
            | Mutate.Error _   -> "ERROR",    "1;33"
          in
-         Printf.printf "  [%s%s%s] %s\n"
-           (col colour) marker (col "0") mut.description
+          Printf.printf "  [%s%s%s] %s\n"
+            (col colour) marker (col "0") mut.description;
+          (match result with
+           | Mutate.Invalid message | Mutate.Error message ->
+             Printf.printf "      %s\n" (String.trim message)
+           | Mutate.Killed | Mutate.Survived | Mutate.NoTests -> ())
        ) report.Mutate.results;
        Printf.printf "\n%sSummary%s: %d mutants | %s%d killed%s | %s%d survived%s"
          (col "1") (col "0")
@@ -1594,16 +1535,23 @@ let () =
           Invalid/Error/NoTests) proves nothing about test strength — reporting
           "100%" for it read as "perfectly tested" when coverage was actually
           nil.  Report "n/a" for the no-coverage case instead of a misleading
-          perfect score.  (Exit is unchanged: survived = 0 here.) *)
-       if scored = 0 then
-         Printf.printf "\n%sMutation score%s: n/a %s(0 scorable mutants — no effective coverage)%s\n"
+           perfect score. Incomplete runs exit non-zero below. *)
+        let incomplete = invalid + errors + no_tests in
+        if total = 0 then
+          Printf.printf "\n%sMutation score%s: n/a %s(no mutable sites)%s\n"
+            (col "1") (col "0") (col "2") (col "0")
+        else if incomplete > 0 then
+          Printf.printf "\n%sMutation score%s: n/a %s(incomplete: %d mutant(s) did not execute)%s\n"
+            (col "1") (col "0") (col "2") incomplete (col "0")
+        else if scored = 0 then
+          Printf.printf "\n%sMutation score%s: n/a %s(0 scorable mutants — no effective coverage)%s\n"
            (col "1") (col "0") (col "2") (col "0")
        else begin
          let score = float_of_int killed /. float_of_int scored *. 100.0 in
          Printf.printf "\n%sMutation score%s: %.0f%%" (col "1") (col "0") score;
          Printf.printf " %s(%d killed / %d scored)%s\n" (col "2") killed scored (col "0")
        end;
-       if survived > 0 then exit 1)
+        if total = 0 || survived > 0 || incomplete > 0 then exit 1)
 
   | _ -> print_string usage; exit 1)
   with

@@ -23,10 +23,10 @@
     Two consequences had to be handled, both of which this file pins:
 
     * EMIT.  `is_fn_ref` (the `&&` arm) recognised only a bare name, so an
-      under-applied operand fell through to the boolean arm and emitted Racket's
-      `(and proc1 proc2)`, which evaluates to proc2 — the first check was
+      under-applied operand fell through to the boolean arm and emitted a
+      boolean conjunction, which evaluates the wrong shape — the first check was
       SILENTLY DROPPED and the filter kept elements it should have rejected.
-      Now both operands route through `check-and`.
+      Now both operands route through a generated sequential-check helper.
 
     * PROOF.  The ForAll layer keys on predicate NAMES, which was complete only
       while a check callback's sole subject was the element.  A partial
@@ -110,9 +110,14 @@ let check src =
 
 let emit src =
   with_source (prelude ^ src) (fun p ->
-    let code, out = run_cc [p] in
-    if code <> 0 then failf "emit failed (exit %d):\n%s" code out;
-    out)
+    match Compile.compile_go_file p with
+    | Compile.GoFailure diagnostics ->
+      failf "Go emit failed:\n%s"
+        (String.concat "\n"
+           (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+    | Compile.GoSuccess artifacts ->
+      String.concat "\n"
+        (List.map (fun (a : Emit_go.artifact) -> a.contents) artifacts))
 
 let should_pass label src =
   let code, out = check src in
@@ -241,7 +246,7 @@ fn atMost100(xs: List Int) -> List Int ::: ForAll (AtMost 100) =
   List.filterCheck (checkAtMost 50) xs
 |}
 
-(* ── Emit: the combination must not collapse to a boolean `and` ──────────── *)
+(* ── Emit: the combination must use the generated sequential-check helper ── *)
 
 let test_emit_uses_check_and () =
   let out =
@@ -253,9 +258,9 @@ test "combined" {
 }
 |}
   in
-  if not (contains out "check-and") then
-    failf "a combination of partial applications must lower to `check-and`, \
-           not a boolean `and` (which evaluates to its LAST operand and drops \
+  if not (contains out "teslCheckAll") then
+    failf "a combination of partial applications must lower to a generated \
+           sequential-check helper, not a boolean conjunction (which drops \
            the first check):\n%s" out
 
 let test_emit_eta_expands_partial_application () =
@@ -268,10 +273,12 @@ test "partially applied" {
 }
 |}
   in
-  (* The callback the runtime applies is unary; the emitter must close over the
-     given arguments rather than call `checkInBounds` with too few. *)
-  if not (contains out "(lambda (") then
-    failf "the partial application must be eta-expanded into a lambda:\n%s" out
+  (* The generated callback invocation must retain both captured arguments and
+     supply the list element as the final, saturating argument. *)
+  if not (contains out
+            "checkInBounds(teslrt.FromInt64(0), teslrt.FromInt64(100), Value") then
+    failf "the partial check callback must be invoked with its captured bounds \
+           and the list element:\n%s" out
 
 let () =
   run "issue-74 partially applied check callbacks" [
@@ -292,7 +299,7 @@ let () =
       test_case "wrong literal rejected"         `Quick test_reject_wrong_literal_subject;
     ];
     "emit", [
-      test_case "combination uses check-and"     `Quick test_emit_uses_check_and;
-      test_case "partial application eta-expands" `Quick test_emit_eta_expands_partial_application;
+      test_case "combination uses sequential helper" `Quick test_emit_uses_check_and;
+      test_case "partial callback invocation saturates" `Quick test_emit_eta_expands_partial_application;
     ];
   ]

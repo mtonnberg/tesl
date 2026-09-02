@@ -181,8 +181,8 @@ fn rateLabeled(x: Labeled String) -> String =
 # ─────────────────────────────────────────────
 # THEORY — the full model
 # ─────────────────────────────────────────────
-# Case-where guards lower to Racket cond expressions with inline boolean tests.
-# The generated Racket code evaluates the constructor tag first, then evaluates
+# Case-where guards lower to Go switch cases with inline boolean tests.
+# The generated Go code evaluates the constructor tag first, then evaluates
 # the guard expression. If the guard returns #f, the next cond clause is tried.
 #
 # In the compiler AST (ast.ml), each case arm is:

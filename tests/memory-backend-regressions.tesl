@@ -6,24 +6,24 @@ module MemoryBackendRegressions exposing []
 #   1. `select … order p.field asc/desc` was SILENTLY IGNORED on the Memory
 #      backend (rows came back in hash order) — postgres-select-many passed the
 #      order clause to SQL, the in-memory branch only applied offset/limit.
-#      Fixed by in-memory-order-rows (dsl/sql.rkt).
+#      Fixed by in-memory-order-rows in the SQL runtime.
 #   2. `selectMax` / `selectMin` over a newtype-typed column (PosixMillis, a
-#      user `type Code = Int`) fed raw newtype-value structs to Racket max/min
+#      user `type Code = Int`) fed raw newtype-value values to max/min
 #      ("contract violation expected: real?") — the GitHub #28 class
 #      (unwrap-non-null) resurfacing in the aggregate path.  Fixed by
-#      in-memory-extreme (dsl/sql.rkt), which compares unwrapped values and
+#      in-memory-extreme in the SQL runtime, which compares unwrapped values and
 #      returns the stored (still-wrapped) value.
 #   3. In-memory queue FIFO: the job store is a hash keyed by the job-id string,
 #      so processNextJob dequeued in arbitrary hash order while the PostgreSQL
 #      path is FIFO (`order by created_at asc`).  Fixed by a monotonic enqueue
-#      sequence number in job-entry + sorted pending-jobs (tesl/queue.rkt).
+#      sequence number in job-entry + sorted pending-jobs in the queue runtime.
 #   4. `selectSum l.price from L where …` over a Money column: the COMPILER
 #      hole is fixed (checker.ml classify_lowered_query hardcoded Int on the
 #      where-lowered aggregate path, so the correct `-> Money` annotation was
 #      rejected and the checker-demanded `-> Int` trapped at runtime); the
 #      "money sum with a where-clause" test below now exercises the — always
 #      correct — runtime path from Tesl source.  (Runtime-only coverage lives
-#      in tests/sql-money-tests.rkt.)
+#      in the SQL runtime tests.)
 
 import Tesl.Prelude exposing [Bool(..), Int, String, List, Unit]
 import Tesl.List exposing [List.map]
@@ -71,8 +71,14 @@ entity L table "mem_reg_lines" primaryKey id {
   price: Money
 }
 
+# An entity nothing ever writes to, so an aggregate over it has no rows by construction.
+entity Empty table "mem_reg_empty" primaryKey id {
+  id: String
+  qty: Int
+}
+
 database D = Database {
-  entities: [P, L]
+  entities: [P, L, Empty]
   backend: Memory
 }
 
@@ -83,38 +89,49 @@ fn names(ps: List P) -> List String =
   List.map (fn(p: P) -> p.name) ps
 
 fn orderedAsc() -> List P requires [dbRead] =
-  with database D { select p from P order p.qty asc }
-
+  select p from P order p.qty asc
 fn orderedDesc() -> List P requires [dbRead] =
-  with database D { select p from P order p.qty desc }
-
+  select p from P order p.qty desc
 fn orderedByName() -> List P requires [dbRead] =
-  with database D { select p from P order p.name asc }
-
+  select p from P order p.name asc
 fn orderedByDone() -> List P requires [dbRead] =
-  with database D { select p from P order p.done asc }
-
+  select p from P order p.done asc
 fn orderedByDoneDesc() -> List P requires [dbRead] =
-  with database D { select p from P order p.done desc }
-
+  select p from P order p.done desc
+# selectMax/selectMin answer a Maybe: no matching row has no maximum.  These helpers
+# unwrap with a default so the assertions below still speak in plain values, and the
+# newtype-column regression (#2) is unchanged by that.
 fn newest() -> PosixMillis requires [dbRead] =
-  with database D { selectMax p.at from P }
+  let latest = selectMax p.at from P
+  case latest of
+    Nothing -> Time.secondsToPosix 0
+    Something at -> at
 
 fn oldest() -> PosixMillis requires [dbRead] =
-  with database D { selectMin p.at from P }
+  let earliest = selectMin p.at from P
+  case earliest of
+    Nothing -> Time.secondsToPosix 0
+    Something at -> at
 
 fn maxQty() -> Int requires [dbRead] =
-  with database D { selectMax p.qty from P }
+  let biggest = selectMax p.qty from P
+  case biggest of
+    Nothing -> 0
+    Something qty -> qty
 
 fn minCode() -> Code requires [dbRead] =
-  with database D { selectMin p.code from P }
+  let smallest = selectMin p.code from P
+  case smallest of
+    Nothing -> Code 0
+    Something code -> code
 
+# The empty answer itself: an entity with no rows yields Nothing, not a zero.
+fn maxOfEmpty() -> Maybe Int requires [dbRead] =
+  selectMax e.qty from Empty
 test "order by asc/desc is applied on the Memory backend" requires [dbRead, dbWrite] {
-  with database D {
-    let _ = insert P { id: "a", qty: 3, name: "cherry", at: Time.secondsToPosix 300, code: Code 7, done: True }
-    let _ = insert P { id: "b", qty: 1, name: "apple", at: Time.secondsToPosix 100, code: Code 9, done: False }
-    let _ = insert P { id: "c", qty: 2, name: "banana", at: Time.secondsToPosix 200, code: Code 3, done: True }
-  }
+  let _ = insert P { id: "a", qty: 3, name: "cherry", at: Time.secondsToPosix 300, code: Code 7, done: True }
+  let _ = insert P { id: "b", qty: 1, name: "apple", at: Time.secondsToPosix 100, code: Code 9, done: False }
+  let _ = insert P { id: "c", qty: 2, name: "banana", at: Time.secondsToPosix 200, code: Code 3, done: True }
   expect qtys (orderedAsc ()) == [1, 2, 3]
   expect qtys (orderedDesc ()) == [3, 2, 1]
 }
@@ -125,20 +142,16 @@ test "order by asc/desc is applied on the Memory backend" requires [dbRead, dbWr
 # only: Bool has two values, so a third row would make the tie order
 # hash-dependent under the stable sort.
 test "order by on a Bool column sorts false before true (PG parity)" requires [dbRead, dbWrite] {
-  with database D {
-    let _ = insert P { id: "b", qty: 1, name: "apple", at: Time.secondsToPosix 100, code: Code 9, done: False }
-    let _ = insert P { id: "a", qty: 3, name: "cherry", at: Time.secondsToPosix 300, code: Code 7, done: True }
-  }
+  let _ = insert P { id: "b", qty: 1, name: "apple", at: Time.secondsToPosix 100, code: Code 9, done: False }
+  let _ = insert P { id: "a", qty: 3, name: "cherry", at: Time.secondsToPosix 300, code: Code 7, done: True }
   expect names (orderedByDone ()) == ["apple", "cherry"]
   expect names (orderedByDoneDesc ()) == ["cherry", "apple"]
 }
 
 test "order by on a String column sorts lexicographically" requires [dbRead, dbWrite] {
-  with database D {
-    let _ = insert P { id: "a", qty: 3, name: "cherry", at: Time.secondsToPosix 300, code: Code 7, done: True }
-    let _ = insert P { id: "b", qty: 1, name: "apple", at: Time.secondsToPosix 100, code: Code 9, done: False }
-    let _ = insert P { id: "c", qty: 2, name: "banana", at: Time.secondsToPosix 200, code: Code 3, done: True }
-  }
+  let _ = insert P { id: "a", qty: 3, name: "cherry", at: Time.secondsToPosix 300, code: Code 7, done: True }
+  let _ = insert P { id: "b", qty: 1, name: "apple", at: Time.secondsToPosix 100, code: Code 9, done: False }
+  let _ = insert P { id: "c", qty: 2, name: "banana", at: Time.secondsToPosix 200, code: Code 3, done: True }
   expect names (orderedByName ()) == ["apple", "banana", "cherry"]
 }
 
@@ -146,28 +159,27 @@ test "order by on a String column sorts lexicographically" requires [dbRead, dbW
 # by the queried FIELD's declared type, so `-> Money` is the accepted (and
 # only runtime-correct) annotation for a Money-column sum with a where-clause.
 fn sumIn(c: String) -> Money requires [dbRead] =
-  with database D { selectSum l.price from L where l.cat == c }
-
+  selectSum l.price from L where l.cat == c
 test "money sum with a where-clause" requires [dbRead, dbWrite] {
-  with database D {
-    let _ = insert L { id: "l1", cat: "x", price: Money.usd 100 }
-    let _ = insert L { id: "l2", cat: "x", price: Money.usd 250 }
-    let _ = insert L { id: "l3", cat: "y", price: Money.usd 999 }
-  }
+  let _ = insert L { id: "l1", cat: "x", price: Money.usd 100 }
+  let _ = insert L { id: "l2", cat: "x", price: Money.usd 250 }
+  let _ = insert L { id: "l3", cat: "y", price: Money.usd 999 }
   expect Money.minorUnits (sumIn "x") == 350
   expect Money.minorUnits (sumIn "y") == 999
 }
 
 test "selectMax/selectMin over newtype columns on the Memory backend" requires [dbRead, dbWrite] {
-  with database D {
-    let _ = insert P { id: "a", qty: 3, name: "cherry", at: Time.secondsToPosix 300, code: Code 7, done: True }
-    let _ = insert P { id: "b", qty: 1, name: "apple", at: Time.secondsToPosix 100, code: Code 9, done: False }
-    let _ = insert P { id: "c", qty: 2, name: "banana", at: Time.secondsToPosix 200, code: Code 3, done: True }
-  }
+  let _ = insert P { id: "a", qty: 3, name: "cherry", at: Time.secondsToPosix 300, code: Code 7, done: True }
+  let _ = insert P { id: "b", qty: 1, name: "apple", at: Time.secondsToPosix 100, code: Code 9, done: False }
+  let _ = insert P { id: "c", qty: 2, name: "banana", at: Time.secondsToPosix 200, code: Code 3, done: True }
   expect Time.posixToSeconds (newest ()) == 300
   expect Time.posixToSeconds (oldest ()) == 100
   expect minCode () == Code 3
   expect maxQty () == 3
+}
+
+test "selectMax over no matching row is Nothing" requires [dbRead] {
+  expect maxOfEmpty () == Nothing
 }
 
 # ── In-memory queue FIFO (processNextJob must dequeue in enqueue order) ──────

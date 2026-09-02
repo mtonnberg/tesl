@@ -189,7 +189,7 @@ checks at function return time.
 
 ## Auto-migration on startup
 
-`ensure-database-ready!` runs when a `with database` block first activates:
+`ensure-database-ready!` runs when a database is first connected (`call-with-database`, which `main`'s `App { database: X }` lowers to):
 
 1. `(create schema if not exists schema-name)` — creates the schema
 2. For each entity: `postgres-ensure-entity!`

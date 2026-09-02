@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "diagnostics": [
+    {
+      "file": "fixture.tesl",
+      "start": {"line": 0, "col": 0},
+      "end": {"line": 0, "col": 3},
+      "severity": "error",
+      "code": "E001",
+      "message": "fixture diagnostic",
+      "source": "type-checker",
+      "fix": null
+    }
+  ]
+}

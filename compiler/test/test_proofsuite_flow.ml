@@ -64,7 +64,7 @@ let with_temp_file content f =
     (fun () -> f path)
 
 let runtime_leak_re =
-  Str.regexp_case_fold "raise-user-error\\|check-fail\\|context\\.\\.\\.:\\|/racket/\\|collects/racket"
+  Str.regexp_case_fold "panic:\\|runtime error:\\|goroutine \\|_test\\.go:\\|\\.go:[0-9]"
 
 let should_fail pat src =
   with_temp_file src (fun path ->
@@ -72,7 +72,7 @@ let should_fail pat src =
     if code = 0 then
       failf "expected STATIC failure matching %S, but compiled cleanly:\n%s" pat out;
     (try ignore (Str.search_forward runtime_leak_re out 0);
-       failf "rejection leaked to RUNTIME (not static) for %S, got:\n%s" pat out
+       failf "rejection leaked to Go RUNTIME (not static) for %S, got:\n%s" pat out
      with Not_found -> ());
     let re = Str.regexp_case_fold pat in
     try ignore (Str.search_forward re out 0)

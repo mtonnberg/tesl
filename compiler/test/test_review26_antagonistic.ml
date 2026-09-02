@@ -408,11 +408,9 @@ database TestDB = Database {
 }
 
 fn findMatched(minVal: Int) -> List A requires [dbRead] =
-  with database TestDB {
-    select a from A
-    innerJoin B on a.bId B.id
-    where a.val > minVal
-  }
+  select a from A
+  innerJoin B on a.bId B.id
+  where a.val > minVal
 |} in
   should_pass src
 
@@ -432,11 +430,9 @@ database IJWhereDB = Database {
 }
 
 fn query(userId: String) -> List Post requires [dbRead] =
-  with database IJWhereDB {
-    select p from Post
-    innerJoin User on p.userId User.id
-    where p.userId == userId
-  }
+  select p from Post
+  innerJoin User on p.userId User.id
+  where p.userId == userId
 |} in
   should_pass src
 
@@ -456,12 +452,10 @@ database IJOrderDB = Database {
 }
 
 fn topPosts(n: Int) -> List Article requires [dbRead] =
-  with database IJOrderDB {
-    select a from Article
-    innerJoin Author on a.authorId Author.id
-    order a.score desc
-    limit 5
-  }
+  select a from Article
+  innerJoin Author on a.authorId Author.id
+  order a.score desc
+  limit 5
 |} in
   should_pass src
 
@@ -481,10 +475,8 @@ database IJRuntimeDB = Database {
 }
 
 fn doQuery() -> List Widget requires [dbRead] =
-  with database IJRuntimeDB {
-    select w from Widget
-    innerJoin Thing on w.thingId Thing.id
-  }
+  select w from Widget
+  innerJoin Thing on w.thingId Thing.id
 |} in
   should_pass src
 
@@ -505,11 +497,9 @@ database MultiJoinDB = Database {
 }
 
 fn query() -> List Order requires [dbRead] =
-  with database MultiJoinDB {
-    select o from Order
-    innerJoin Customer on o.customerId Customer.id
-    innerJoin Product on o.productId Product.id
-  }
+  select o from Order
+  innerJoin Customer on o.customerId Customer.id
+  innerJoin Product on o.productId Product.id
 |} in
   should_pass src
 

@@ -23,8 +23,10 @@
     it is a compile error, decided on the INFERRED type (which is why it covers
     both callees).  What it must NOT do is fire on the many statement forms that
     legitimately discard a value — a query, an enqueue, a telemetry event, a
-    `with database` block — or on an unresolved type variable, which is not
-    evidence of anything. *)
+    a telemetry event — or on an unresolved type variable, which is not evidence
+    of anything.  (The free-floating `with database` block this used to name is
+    gone from the language: a database is connected by `main`, and a test binds
+    one in its own header.) *)
 
 open Alcotest
 
@@ -142,15 +144,13 @@ fn tailPos(a: String) -> String =
 (* ── What must keep compiling ────────────────────────────────────────────── *)
 
 let test_effect_statements_still_accepted () =
-  should_pass "queries, inserts and a with-database block as statements"
+  should_pass "queries and inserts as statements"
     {|
 fn seed() -> Int requires [dbRead, dbWrite] =
-  with database D {
-    let _ = insert Row { id: "a", qty: 1 }
-    let _ = insert Row { id: "b", qty: 2 }
-    let rows = select r from Row
-    List.length rows
-  }
+  let _ = insert Row { id: "a", qty: 1 }
+  let _ = insert Row { id: "b", qty: 2 }
+  let rows = select r from Row
+  List.length rows
 |}
 
 let test_saturated_call_statement_accepted () =

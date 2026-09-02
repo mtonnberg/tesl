@@ -921,7 +921,7 @@ let test_exists_missing_body () =
 import Tesl.Prelude exposing [String]
 fn bad() -> exists name: String => name: String ::: IsToken name =
   "token-123"
-|} "no exists expression"
+|} "does not produce a top-level `exists` pack"
 
 let test_exists_different_witness_name_is_ok () =
   assert_no_errors {|module Foo exposing []

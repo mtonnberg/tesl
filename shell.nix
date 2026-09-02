@@ -1,8 +1,7 @@
 # Pin nixpkgs to the SAME revision the flake locks (flake.lock), so the dev shell
-# (direnv `use nix`) and the flake-installed `tesl` share one racket/ocaml toolchain.
+# (direnv `use nix`) and the flake-installed `tesl` share one Go/OCaml toolchain.
 # Previously this used `import <nixpkgs>` (the ambient channel), which drifted from
-# the flake — the dev shell shipped racket 8.18 while `nix profile` shipped 9.2,
-# causing a compiled-collection version mismatch in the debugger. We read the rev
+# the flake, causing tool-version mismatches. We read the revision
 # straight out of flake.lock and fetchTree it (no copy of the working tree, so a
 # running .tesl-postgres socket can't break evaluation).
 { system ? builtins.currentSystem
@@ -17,18 +16,51 @@ let
   # body resolves templates + runtime collections from the live checkout.
   tesl-cli = pkgs.writeShellScriptBin "tesl" (''
     #!/usr/bin/env bash
-    export TESL_REPO_ROOT="${toString ./.}"
+    export TESL_REPO_ROOT="''${TESL_REPO_ROOT:-$PWD}"
     export TESL_OCAML_COMPILER="$TESL_REPO_ROOT/compiler/_build/default/bin/main.exe"
   '' + builtins.readFile ./nix/tesl-cli-body.sh);
+  tesl-go-tool = name: pkgs.writeShellScriptBin name ''
+    set -euo pipefail
+    root="''${TESL_REPO_ROOT:-$PWD}"
+    cd "$root/runtime/go"
+    exec ${pkgs.go}/bin/go run "./cmd/${name}" "$@"
+  '';
+  tesl-dap = tesl-go-tool "tesl-dap";
+  tesl-debug-attach = tesl-go-tool "tesl-debug-attach";
+  tesl-debug-inspect = tesl-go-tool "tesl-debug-inspect";
+  tesl-lsp = tesl-go-tool "tesl-lsp";
+  tesl-mcp = tesl-go-tool "tesl-mcp";
+  staticcheck = pkgs.buildGoModule rec {
+    pname = "staticcheck";
+    version = "2026.1";
+    src = pkgs.fetchFromGitHub {
+      owner = "dominikh";
+      repo = "go-tools";
+      rev = version;
+      hash = "sha256-cj/pHKwp7eGuOO1zhv5bFmuPHgsFytktLQmihhdYkfY=";
+    };
+    vendorHash = "sha256-Wu8+e0r0bkztLbxekbHktoKjg6c8q7ls5APSEdO8CKs=";
+    subPackages = [ "cmd/staticcheck" ];
+    meta.mainProgram = "staticcheck";
+  };
 in
 pkgs.mkShell {
   buildInputs = with pkgs; [
-    racket
     curl
     jq
     postgresql
-    libsodium   # dlopen()ed by tesl/crypto.rkt — see TESL_LIBSODIUM below
+    go
+    staticcheck
+    gosec
+    govulncheck
+    golangci-lint
+    nilaway
     tesl-cli
+    tesl-dap
+    tesl-debug-attach
+    tesl-debug-inspect
+    tesl-lsp
+    tesl-mcp
     ocamlPackages.ocaml
     ocamlPackages.dune_3
     ocamlPackages.findlib
@@ -45,34 +77,19 @@ pkgs.mkShell {
   ];
 
   shellHook = ''
-    export TESL_REPO_ROOT="${toString ./.}"
+    _tesl_root="''${PWD}"
+    while [ "$_tesl_root" != "/" ] && [ ! -f "$_tesl_root/flake.nix" ]; do
+      _tesl_root="$(dirname "$_tesl_root")"
+    done
+    export TESL_REPO_ROOT="''${TESL_REPO_ROOT:-$_tesl_root}"
+    unset _tesl_root
     export TESL_OCAML_COMPILER="$TESL_REPO_ROOT/compiler/_build/default/bin/main.exe"
-
-    # Native library for Tesl.Crypto: `tesl/crypto.rkt` dlopen()s libsodium
-    # through `ffi/unsafe` and prefers this absolute store path, falling back to
-    # a plain `ffi-lib "libsodium"` lookup off the ambient loader path.  The
-    # flake's installed wrappers export it (flake.nix `libsodiumPath`); this dev
-    # shell did NOT, so `./ci.sh` inside it failed every crypto/JWT/session test
-    # with "libsodium is required by Tesl.Crypto and could not be loaded" — the
-    # dev shell could not run the gate the flake-installed CLI passes.  Same
-    # `:-` idiom as the wrappers, so an explicit TESL_LIBSODIUM still wins, and
-    # `extensions.sharedLibrary` covers .so (Linux) and .dylib (Darwin) alike.
-    export TESL_LIBSODIUM="''${TESL_LIBSODIUM:-${pkgs.libsodium}/lib/libsodium${pkgs.stdenv.hostPlatform.extensions.sharedLibrary}}"
+    export TESL_DEFAULT_BACKEND="''${TESL_DEFAULT_BACKEND:-go}"
 
     if [ -z "''${TESL_SKIP_AUTO_BUILD:-}" ] && [ ! -x "$TESL_OCAML_COMPILER" ]; then
       echo "[tesl] OCaml compiler not built; building compiler/bin/main.exe..."
       (cd "$TESL_REPO_ROOT/compiler" && dune build bin/main.exe) || \
         echo "[tesl] warning: automatic OCaml compiler build failed" >&2
-    fi
-
-    # Keep the tesl Racket package linked to this repo.
-    # Skip entirely if the package is already linked to the correct path.
-    if ! raco pkg show tesl 2>/dev/null | grep -qF "link $TESL_REPO_ROOT"; then
-      if raco pkg show tesl 2>/dev/null | grep -Eq '^[[:space:]]*tesl([[:space:]]|$)'; then
-        raco pkg update --auto --link "$TESL_REPO_ROOT" 2>/dev/null || true
-      else
-        raco pkg install --auto --link "$TESL_REPO_ROOT" 2>/dev/null || true
-      fi
     fi
 
     # Never let a Postgres connection attempt hang the shell hook. On WSL2

@@ -1,6 +1,6 @@
 module ProofHot exposing [hotPath, checkBound]
 
-# A proof-heavy hot path used by tests/bench/proof-overhead.rkt as a
+# A proof-heavy hot path used by the proof-overhead benchmark as a
 # realistic shape reference: a `fn` with three proof-annotated parameters,
 # each carrying a `Bounded` fact, called in a tight loop.
 #
@@ -10,7 +10,7 @@ module ProofHot exposing [hotPath, checkBound]
 # those cost sites vanish (proof-annotated params keep at most one allocation
 # via `tesl-establish-param-proof`; proof-free params allocate nothing).
 #
-# The .rkt benchmark measures the underlying DSL primitives directly so the
+# The benchmark measures the underlying runtime primitives directly so the
 # numbers are stable across compiler revisions; this .tesl file documents the
 # equivalent surface program and is compiled by the bench as a smoke check.
 

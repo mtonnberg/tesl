@@ -201,8 +201,8 @@ test "checkDiscount: equality check — kills == → != mutant" {
 #   3. For each (function, operator_index, replacement_operator) triple:
 #        a. Clone the module AST.
 #        b. Replace the single operator at operator_index in that function.
-#        c. Compile the mutant to a temporary Racket file.
-#        d. Run: raco test --quiet <temp.rkt>
+#        c. Compile the mutant to a temporary Go module.
+#        d. Run: go test <temp-module>
 #        e. Exit code 0 → SURVIVED; exit code != 0 → KILLED.
 #   4. Print the per-mutant result and final score.
 #

@@ -1,0 +1,76 @@
+# ── Full-chain outbound HTTP integration fixture ──────────────────────────────
+#
+# This module is not a lesson: it exists so scripts/run-go-integration.sh can
+# prove the WHOLE generated chain — emitted Go handler → teslrt HTTP client →
+# a real upstream server over real TCP — end to end, the way the deleted Racket
+# test_httpclient_integration did for the Racket backend.
+#
+# The upstream URL arrives through the environment (requireEnv), so the same
+# compiled artifact can be pointed at whatever upstream the harness starts.
+# The App port is likewise environmental, so the harness can serve on a free
+# port and exercise the binary's real listener over HTTP.
+
+module Fullchain_http exposing [
+  fetchUpstream,
+  postUpstream,
+]
+
+import Tesl.Prelude exposing [Int, String, Bool(..)]
+import Tesl.Tuple exposing [Tuple2]
+import Tesl.Env exposing [envInt, requireEnv, envRead]
+import Tesl.HttpClient exposing [
+  httpClient,
+  HttpResponse,
+  HttpClient.get,
+  HttpClient.post,
+]
+import Tesl.Database exposing [Database, DatabaseBackend, Memory]
+import Tesl.App exposing [App]
+
+capability chainClient implies httpClient, envRead
+
+fn isSuccess(code: Int) -> Bool =
+  code >= 200 && code < 300
+
+# GET the upstream and surface its body. A non-2xx is reported as a distinct
+# marker rather than the body, so the harness can tell "upstream said 500"
+# from "upstream said 500-shaped text".
+handler get fetchUpstream() -> String
+  requires [chainClient] =
+  let response = HttpClient.get (requireEnv "FULLCHAIN_UPSTREAM_URL") []
+  if isSuccess response.status then
+    response.body
+  else
+    "UPSTREAM_FAILED"
+
+# POST a payload upstream with an explicit content type, and echo whatever the
+# upstream answers — proving headers AND body survive the whole chain.
+handler postUpstream(payload: String) -> String
+  requires [chainClient] =
+  let contentType = Tuple2 "Content-Type" "text/plain"
+  let response = HttpClient.post (requireEnv "FULLCHAIN_UPSTREAM_URL") [contentType] payload
+  if isSuccess response.status then
+    response.body
+  else
+    "UPSTREAM_FAILED"
+
+api ChainApi {
+  get "/upstream" -> String
+}
+
+server ChainServer for ChainApi {
+  fetchUpstream
+}
+
+database ChainDatabase = Database {
+  schema: "fullchain"
+  entities: []
+  backend: Memory
+}
+
+main() -> App requires [chainClient] =
+  App {
+    database: ChainDatabase
+    api: ChainServer
+    port: envInt "FULLCHAIN_PORT" 18081
+  }

@@ -150,9 +150,9 @@ let map_children (f : expr -> expr) (e : expr) : expr =
   | EList { elems; loc } ->
     let elems' = List.map f elems in
     EList { elems = elems'; loc }
-  | EOk { value; proof; loc } ->
+  | EOk { value; proof; keyword; loc } ->
     let value' = f value in
-    EOk { value = value'; proof; loc }
+    EOk { value = value'; proof; keyword; loc }
   | EFail { status; message; loc } ->
     let message' = f message in
     EFail { status; message = message'; loc }
@@ -203,11 +203,6 @@ let map_children (f : expr -> expr) (e : expr) : expr =
   | ELambda { params; body; loc } ->
     let body' = f body in
     ELambda { params; body = body'; loc }
-  | ERuntimeCall { segments; loc } ->
-    let segments' = List.map (function
-      | (RLit _ | RRawVar _) as s -> s
-      | RArg e -> RArg (f e)) segments in
-    ERuntimeCall { segments = segments'; loc }
 
 (* ── fold_children ──────────────────────────────────────────────────────────
    Thread [acc] left-to-right through each immediate child expr.  Defined in the
@@ -254,10 +249,6 @@ let fold_children (f : 'a -> expr -> 'a) (acc : 'a) (e : expr) : 'a =
   | EServe { port; _ } -> f acc port
   | EConstructor { args; _ } -> List.fold_left f acc args
   | ELambda { body; _ } -> f acc body
-  | ERuntimeCall { segments; _ } ->
-    List.fold_left (fun acc -> function
-      | RLit _ | RRawVar _ -> acc
-      | RArg e -> f acc e) acc segments
 
 (* ── fold_children_env ───────────────────────────────────────────────────────
    Like [fold_children], but ALSO threads an explicit read-only [env] DOWN to

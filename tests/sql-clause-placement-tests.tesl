@@ -15,7 +15,7 @@ module SqlClausePlacementTests exposing []
 #
 #   * when the last conjunct was a FUNCTIONAL predicate (`ilike`), the clause
 #     atoms hid inside its argument list — `tesl check` was clean and the
-#     generated Racket referenced the row binder `t` outside the query, so the
+#     generated code referenced the row binder `t` outside the query, so the
 #     module could not even LOAD ("t: unbound identifier");
 #   * every other shape reported the misleading "unknown name: order" and
 #     rejected code that reads as valid Tesl.
@@ -55,75 +55,55 @@ fn names(ts: List Thing) -> List String =
 # ── The shapes under test, single-line ───────────────────────────────────────
 
 fn oneWhereOrder(org: String) -> List Thing requires [dbRead] =
-  with database D { select t from Thing where t.orgId == org order t.name asc }
-
+  select t from Thing where t.orgId == org order t.name asc
 fn oneWhereOrderLimit(org: String) -> List Thing requires [dbRead] =
-  with database D { select t from Thing where t.orgId == org order t.name asc limit 2 }
-
+  select t from Thing where t.orgId == org order t.name asc limit 2
 fn andWhereOrder(org: String) -> List Thing requires [dbRead] =
-  with database D {
-    select t from Thing where t.orgId == org && t.archived == False order t.name asc
-  }
+  select t from Thing where t.orgId == org && t.archived == False order t.name asc
 
 fn andWhereLimitOffset(org: String) -> List Thing requires [dbRead] =
-  with database D {
-    select t from Thing where t.orgId == org && t.archived == False order t.name asc limit 2 offset 1
-  }
+  select t from Thing where t.orgId == org && t.archived == False order t.name asc limit 2 offset 1
 
 # The exact shape from the issue: two comparisons and a functional predicate,
 # then order + limit — the variant that used to pass `check` and die on load.
 fn andIlikeOrderLimit(org: String, pat: String) -> List Thing requires [dbRead] =
-  with database D {
-    select t from Thing where t.orgId == org && t.archived == False && ilike t.name pat order t.name asc limit 5
-  }
+  select t from Thing where t.orgId == org && t.archived == False && ilike t.name pat order t.name asc limit 5
 
 fn orWhereOrder(org: String) -> List Thing requires [dbRead] =
-  with database D {
-    select t from Thing where t.orgId == org || t.archived == True order t.name asc
-  }
+  select t from Thing where t.orgId == org || t.archived == True order t.name asc
 
 # ── The same queries, multi-line (the documented workaround = the oracle) ────
 
 fn oneWhereOrderMulti(org: String) -> List Thing requires [dbRead] =
-  with database D {
-    select t from Thing
-      where t.orgId == org
-      order t.name asc
-  }
+  select t from Thing
+    where t.orgId == org
+    order t.name asc
 
 fn andWhereOrderMulti(org: String) -> List Thing requires [dbRead] =
-  with database D {
-    select t from Thing
-      where t.orgId == org && t.archived == False
-      order t.name asc
-  }
+  select t from Thing
+    where t.orgId == org && t.archived == False
+    order t.name asc
 
 fn andWhereLimitOffsetMulti(org: String) -> List Thing requires [dbRead] =
-  with database D {
-    select t from Thing
-      where t.orgId == org && t.archived == False
-      order t.name asc
-      limit 2
-      offset 1
-  }
+  select t from Thing
+    where t.orgId == org && t.archived == False
+    order t.name asc
+    limit 2
+    offset 1
 
 # A multi-line `||` predicate: found while gating #77's class.  The continuation
 # merge handled `&&` only, so `||` spliced the whole left comparison in as one
 # application argument and the query silently failed to lower.
 fn orWhereOrderMulti(org: String) -> List Thing requires [dbRead] =
-  with database D {
-    select t from Thing
-      where t.orgId == org || t.archived == True
-      order t.name asc
-  }
+  select t from Thing
+    where t.orgId == org || t.archived == True
+    order t.name asc
 
 fn andIlikeOrderLimitMulti(org: String, pat: String) -> List Thing requires [dbRead] =
-  with database D {
-    select t from Thing
-      where t.orgId == org && t.archived == False && ilike t.name pat
-      order t.name asc
-      limit 5
-  }
+  select t from Thing
+    where t.orgId == org && t.archived == False && ilike t.name pat
+    order t.name asc
+    limit 5
 
 # ── A query in ARGUMENT position — both spellings ────────────────────────────
 # `List.length (select … where … order …)`: the single-line spelling used to
@@ -131,58 +111,47 @@ fn andIlikeOrderLimitMulti(org: String, pat: String) -> List Thing requires [dbR
 # NEWLINE", so a query could not be passed straight to a function at all.
 
 fn countInline(org: String) -> Int requires [dbRead] =
-  with database D {
-    List.length (select t from Thing where t.orgId == org && t.archived == False order t.name asc limit 5)
-  }
+  List.length (select t from Thing where t.orgId == org && t.archived == False order t.name asc limit 5)
 
 fn countInlineMultiLine(org: String) -> Int requires [dbRead] =
-  with database D {
-    List.length (select t from Thing
-      where t.orgId == org && t.archived == False
-      order t.name asc
-      limit 5)
-  }
+  List.length (select t from Thing
+    where t.orgId == org && t.archived == False
+    order t.name asc
+    limit 5)
 
 # ── Non-`select` query heads take the same spine ─────────────────────────────
 
 fn oneRow(org: String) -> Maybe Thing requires [dbRead] =
-  with database D {
-    selectOne t from Thing where t.orgId == org && t.archived == False order t.name asc
-  }
+  selectOne t from Thing where t.orgId == org && t.archived == False order t.name asc
 
 fn countRows(org: String) -> Int requires [dbRead] =
-  with database D {
-    selectCount t from Thing where t.orgId == org && t.archived == False
-  }
+  selectCount t from Thing where t.orgId == org && t.archived == False
 
+# selectMax answers a Maybe (no matching row has no maximum); the one-line spine this
+# test is about is unchanged by that.
 fn maxQty(org: String) -> Int requires [dbRead] =
-  with database D {
-    selectMax t.qty from Thing where t.orgId == org && t.archived == False
-  }
+  let biggest = selectMax t.qty from Thing where t.orgId == org && t.archived == False
+  case biggest of
+    Nothing -> 0
+    Something qty -> qty
 
 # A dynamic threshold in the PREDICATE (values there may be any expression —
 # unlike `limit`/`offset`, which take an integer literal), so the property below
 # can vary the query without varying the spelling.
 fn aboveOneLine(org: String, k: Int) -> List Thing requires [dbRead] =
-  with database D {
-    select t from Thing where t.orgId == org && t.qty >= k order t.name asc
-  }
+  select t from Thing where t.orgId == org && t.qty >= k order t.name asc
 
 fn aboveMultiLine(org: String, k: Int) -> List Thing requires [dbRead] =
-  with database D {
-    select t from Thing
-      where t.orgId == org && t.qty >= k
-      order t.name asc
-  }
+  select t from Thing
+    where t.orgId == org && t.qty >= k
+    order t.name asc
 
 fn seed() -> Thing requires [dbRead, dbWrite] =
-  with database D {
-    let _ = insert Thing { id: "a", orgId: "o1", name: "alpha", qty: 3, archived: False }
-    let _ = insert Thing { id: "b", orgId: "o1", name: "beta", qty: 7, archived: False }
-    let _ = insert Thing { id: "c", orgId: "o1", name: "gamma", qty: 5, archived: True }
-    let _ = insert Thing { id: "d", orgId: "o2", name: "delta", qty: 9, archived: False }
-    insert Thing { id: "e", orgId: "o1", name: "epsilon", qty: 1, archived: False }
-  }
+  let _ = insert Thing { id: "a", orgId: "o1", name: "alpha", qty: 3, archived: False }
+  let _ = insert Thing { id: "b", orgId: "o1", name: "beta", qty: 7, archived: False }
+  let _ = insert Thing { id: "c", orgId: "o1", name: "gamma", qty: 5, archived: True }
+  let _ = insert Thing { id: "d", orgId: "o2", name: "delta", qty: 9, archived: False }
+  insert Thing { id: "e", orgId: "o1", name: "epsilon", qty: 1, archived: False }
 
 # ── Tests ───────────────────────────────────────────────────────────────────
 

@@ -77,7 +77,7 @@ type ctx = {
   env      : (string * scheme) list;
   records  : (string * record_def) list;
   adts     : (string * adt_def) list;      (* type name → ADT def *)
-  type_aliases : (string * ty) list;        (* newtype/alias name → base type (for Eq/Ord resolution) *)
+  type_aliases : (string * ty) list;        (* newtype name → base type (for Eq/Ord resolution) *)
   secret_types : string list;
   (** Names declared `secret X = T` — local decls and the exported types of
       imported modules (see [load_imported_ctors], which re-parses the source, so
@@ -196,7 +196,6 @@ let make_ctx ?(source_lines = [||]) ~filename ~env () = {
       [DRecord] / [DEntity]           → [records]
       [DType (TypeAdt …)]             → [adts]
       [DType (TypeNewtype …)]         → [type_aliases] (+ [secret_types])
-      [DType (TypeAlias …)]           → [type_aliases]
 
     That derivation is the point.  Issue #71 was a consumer
     ({!check_api_decl_types}) rebuilding this list from [records] + [ctors] and
@@ -459,7 +458,7 @@ let check_units_name_collisions (m : module_form) : type_error list =
         match decl with
         | DType tf ->
           let (name, loc) = match tf with
-            | TypeNewtype { name; loc; _ } | TypeAlias { name; loc; _ }
+            | TypeNewtype { name; loc; _ }
             | TypeAdt { name; loc; _ } -> (name, loc) in
           let alias_clash =
             imports_units && List.mem_assoc name Units_catalog.aliases in
@@ -693,9 +692,6 @@ let collect_type_defs ctx (decls : top_decl list) : ctx =
         ctors = (name, (name, ctor_sch)) :: ctx.ctors;
         type_aliases = (name, base) :: ctx.type_aliases;
         secret_types = (if secret then name :: ctx.secret_types else ctx.secret_types) }
-    | DType (TypeAlias { name; base_type; _ }) ->
-      (* Transparent alias — record its base so Eq/Ord resolution can chase it. *)
-      { ctx with type_aliases = (name, ty_of_type_expr base_type) :: ctx.type_aliases }
     | DCodec cf ->
       (* Register the target type as decodable iff it has a non-forbidden
          fromJson codec; this drives the decide-by-resolution check for
@@ -1083,7 +1079,7 @@ let load_imported_func_sigs (m : module_form) : (string * scheme) list =
           (* Collect locally-defined type names from the imported module *)
           let local_types = List.concat_map (function
             | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ })
-            | DType (TypeAlias { name; _ }) | DRecord { name; _ } -> [name]
+             | DRecord { name; _ } -> [name]
             | _ -> []
           ) imported.decls in
           let strip_dotdot s =
@@ -1390,7 +1386,7 @@ let expr_loc (e : expr) =
   | EWithTransaction { loc; _ } | EServe { loc; _ } | EConstructor { loc; _ } | ELambda { loc; _ }
   | ECacheGet { loc; _ } | ECacheSet { loc; _ } | ECacheDelete { loc; _ } | ECacheInvalidate { loc; _ }
   | ESendEmail { loc; _ } | EStartEmailWorker { loc; _ }
-  | ERuntimeCall { loc; _ } -> loc
+  -> loc
 
 let rec flatten_app_expr acc = function
   | EApp { fn; arg; _ } -> flatten_app_expr (arg :: acc) fn
@@ -2012,9 +2008,10 @@ let select_entity_type args =
     | _ -> None
   ) args
 
-(** Infer the return type of a scalar aggregate (selectSum / selectMax / selectMin)
-    by looking up the field type in the entity definition.
-    Falls back to [t_int] if the entity or field cannot be resolved. *)
+(** The COLUMN type of a scalar aggregate (selectSum / selectMax / selectMin), looked up
+    in the entity definition.  Falls back to [t_int] if the entity or field cannot be
+    resolved.  `selectSum` returns this type directly; `selectMax`/`selectMin` wrap it in
+    [t_maybe], since over no matching row they have no value to return. *)
 
 let select_aggregate_field_type ctx args =
   let field_opt = List.find_map (function
@@ -2280,9 +2277,7 @@ let rec classify_lowered_query ctx e =
     | EVar { name = "selectOne"; _ } -> Some (t_maybe (Option.value (select_entity_type args) ~default:(fresh ())))
     | EVar { name = "select"; _ } -> Some (t_list (Option.value (select_entity_type args) ~default:(fresh ())))
     | EVar { name = "selectCount"; _ } -> Some t_int
-    | EVar { name = "selectSum"; _ }
-    | EVar { name = "selectMax"; _ }
-    | EVar { name = "selectMin"; _ } ->
+    | EVar { name = "selectSum"; _ } ->
       (* Aggregate + where lowering: refine by the queried FIELD's declared type
          exactly like the plain (non-where) path — a `selectSum l.price … where …`
          over a Money column is Money, over a newtype column that newtype.
@@ -2290,6 +2285,14 @@ let rec classify_lowered_query ctx e =
          REJECTED ("cannot unify Int with Money") while the checker-demanded
          `-> Int` then trapped at runtime (the runtime value really is Money). *)
       Some (select_aggregate_field_type ctx args)
+    | EVar { name = "selectMax"; _ }
+    | EVar { name = "selectMin"; _ } ->
+      (* `Maybe V`, not `V`: over no matching row MAX/MIN have no value of the column's
+         type to return.  SUM does (zero is its identity), which is why only these two
+         are optional.  They previously typed as the column type while the runtime
+         answered `#f` / SQL NULL — a value of a type the program was promised it could
+         not receive, which then failed wherever it was used. *)
+      Some (t_maybe (select_aggregate_field_type ctx args))
     | EVar { name = ("selectCountBy" | "selectSumBy"); _ } ->
       (* grouped aggregates (GitHub #29): List (Tuple2 K V); K/V are refined by
          [grouped_query_type] at the infer sites (needs ctx + the FULL expr) *)
@@ -2375,7 +2378,7 @@ let rec ty_is_ground (t : ty) : bool =
   | TCon name -> not (is_ty_var_name name)
   | TApp (h, a) | TFun (h, a) -> ty_is_ground h && ty_is_ground a
 
-(* [ctx.type_aliases] holds both newtype and transparent-alias bases (populated in
+(* [ctx.type_aliases] holds newtype bases (populated in
    collect_type_defs); resolving through it makes `type Celsius = Float` orderable
    and `type Callback = (Int) -> Int` non-equatable.  Nominal identity is unaffected
    (unification still distinguishes the TCons); this only decides comparability. *)
@@ -3314,10 +3317,10 @@ let rec infer_expr ctx (e : expr) : ty =
              apply !(ctx.subst) result_ty
            end else
              infer_direct_call base_fn args)
-     | EVar { name = "make-witness"; _ } ->
-        (match args with
-         | [EApp { fn = EVar { name = _; _ }; arg = body; _ }] -> infer_expr ctx body
-         | _ -> fresh ())
+      | EVar { name = "make-witness"; _ } ->
+         (match args with
+          | [EApp { fn = EVar { name = _; _ }; arg = body; _ }] -> infer_expr ctx body
+          | _ -> fresh ())
      (* BUG-1 fix: user-defined functions named `select`, `selectOne`, `insert`, `update`,
         `delete`, `upsert` must be type-checked as normal function calls when they appear
         in ctx.env (user-defined). Only treat them as SQL operations when NOT user-defined. *)
@@ -3332,10 +3335,12 @@ let rec infer_expr ctx (e : expr) : ty =
         t_list (Option.value (select_entity_type args) ~default:(fresh ()))
      | EVar { name = "selectCount"; _ } ->
         t_int
-     | EVar { name = "selectSum"; _ }
+     | EVar { name = "selectSum"; _ } ->
+        select_aggregate_field_type ctx args
+     (* MAX/MIN are optional; SUM is not (see the lowering path above). *)
      | EVar { name = "selectMax"; _ }
      | EVar { name = "selectMin"; _ } ->
-        select_aggregate_field_type ctx args
+        t_maybe (select_aggregate_field_type ctx args)
      | EVar { name = ("selectCountBy" | "selectSumBy"); _ } ->
         (match grouped_query_type app with
          | Some ty -> ty
@@ -3523,17 +3528,27 @@ let rec infer_expr ctx (e : expr) : ty =
 
   | ECase { scrut; arms; loc } ->
     (* ── Exhaustiveness helper (defined inline to close over ctx/loc) ──────── *)
-    let stdlib_ctors_for_type = function
-      | "Bool"         -> Some ["True"; "False"]
-      | "Maybe"        -> Some ["Nothing"; "Something"]
-      | "Either"       -> Some ["Left"; "Right"]
-      | "Result"       -> Some ["Ok"; "Err"]
-      | "DeleteResult" -> Some ["NoRowDeleted"; "RowsDeleted"]
-      (* Tesl.Email's EmailBody is a real stdlib ADT (tesl/email.rkt); seeding
-         its variants makes exhaustive matches recognized as such (2026-07
-         matrix email-cache: all-3-arm case was flagged non-exhaustive). *)
-      | "EmailBody"    -> Some ["TextBody"; "HtmlBody"; "RichBody"]
-      | _              -> None
+    (* The stdlib ADTs' constructor sets come from ONE table,
+       `Validation_common.builtin_ctor_info`, which is also what the nested-pattern
+       exhaustiveness check reads.  They used to be two lists, and they disagreed: this one
+       knew `DeleteResult` and that one did not, so a `case` naming both of its constructors
+       passed the top-level check and was then reported non-exhaustive by the nested one —
+       a total match refused, with a catch-all `_` demanded in its place.  A constructor set
+       written twice is a constructor set that drifts, so it is written once.
+       `Bool` stays here: its constructors are literals rather than rows in that table. *)
+    let stdlib_ctors_for_type name =
+      if name = "Bool" then Some ["True"; "False"]
+      else
+        let rec head (t : type_expr) = match t with
+          | TApp { head = inner; _ } -> head inner
+          | TName { name; _ } -> Some name
+          | _ -> None
+        in
+        match List.filter_map (fun (ctor, (_, result_ty)) ->
+          if head result_ty = Some name then Some ctor else None)
+          Validation_common.builtin_ctor_info with
+        | [] -> None
+        | ctors -> Some ctors
     in
     let all_ctors_for_type type_name =
       match stdlib_ctors_for_type type_name with
@@ -3744,7 +3759,7 @@ let rec infer_expr ctx (e : expr) : ty =
         ) elems;
         t_list (apply !(ctx.subst) elem_ty))
 
-  | EOk { value; proof; loc } ->
+  | EOk { value; proof; loc; _ } ->
     let ty = infer_expr ctx value in
     (* Verify conjunction proofs against the value's tracked binding meta.
        When the programmer writes ok xs ::: P && Q (or ok xs ::: ForAll (P && Q)),
@@ -3882,11 +3897,6 @@ let rec infer_expr ctx (e : expr) : ty =
     let ctx' = { ctx with env = param_schemes @ ctx.env } in
     let body_ty = infer_expr ctx' body in
     List.fold_right (fun (_, t) acc -> TFun (t, acc)) param_tys body_ty
-  | ERuntimeCall { segments; _ } ->
-    (* Desugar-only node: never present during type-checking (desugar runs
-       AFTER the checker).  Infer children defensively, result is Unit. *)
-    List.iter (function RLit _ | RRawVar _ -> () | RArg e -> ignore (infer_expr ctx e)) segments;
-    t_unit
   in
   let expr_meta = match binding_meta_of_expr ctx e with Some m -> m | None -> PlainBinding in
   record_expr_type_with_meta ctx (expr_loc e) inferred expr_meta;
@@ -4514,7 +4524,41 @@ and bind_pattern_vars ctx scrut_ty (pat : pattern) : (string * scheme) list =
   in
   match pat with
   | PVar n -> [(n, mono scrut_ty)]
-  | PWild | PLit _ -> []
+  | PWild -> []
+  (* A LITERAL arm has to be a literal OF THE SCRUTINEE'S TYPE.  Unchecked, `case p of 3 -> …`
+     over an ADT type-checked and then died at run time on Racket (`=: contract violation`,
+     because the arm compiles to `(= p 3)`) while the Go backend refused to emit it — a
+     compile-clean program that no backend can run.  Every literal shape goes through this,
+     interpolation included: an interpolated pattern is unparseable today, so admitting one
+     silently would be a hole the day the parser grows one. *)
+  | PLit { value; loc } ->
+    let lit_ty = infer_lit value in
+    (* A NEWTYPE scrutinee matches a literal of its BASE: `type Code = Int` then
+       `case code of 404 -> …` compares through the payload, which is what both backends emit
+       and what `tests`' own newtype-case program relies on.  Resolved transitively, so a
+       newtype over a newtype behaves the same. *)
+    let rec underlying seen ty =
+      match apply !(ctx.subst) ty with
+      | TCon name when not (List.mem name seen) ->
+        (match List.assoc_opt name ctx.type_aliases with
+         | Some base -> underlying (name :: seen) base
+         | None -> apply !(ctx.subst) ty)
+      | resolved -> resolved
+    in
+    (match unify !(ctx.subst) scrut_ty lit_ty with
+     | subst' -> ctx.subst := subst'; []
+     | exception TypeMismatch _ ->
+     match unify !(ctx.subst) (underlying [] scrut_ty) lit_ty with
+     | subst' -> ctx.subst := subst'; []
+     | exception TypeMismatch _ ->
+       add_error ctx loc
+         (Printf.sprintf
+            "this `case` arm matches a literal of type `%s`, but the scrutinee is a `%s`\n\
+             Hint: match a constructor of `%s`, or a wildcard branch `_ -> ...`"
+            (pp_ty (apply !(ctx.subst) lit_ty))
+            (pp_ty (apply !(ctx.subst) scrut_ty))
+            (pp_ty (apply !(ctx.subst) scrut_ty)));
+       [])
   | PNullary { ctor; loc } ->
     ignore (bind_constructor_pattern ctor [] loc);
     []
@@ -5199,6 +5243,53 @@ let check_func_decl ?(user_fn_names : string list = []) ctx (fd : func_decl) =
     | RetMaybeAttached { binding = b; _ } -> t_maybe (ty_of_type_expr b.type_expr)
     | RetExists { body; _ } -> ret_spec_type body
   in
+  (* Existential construction erases to its body type during ordinary inference,
+     so witness types need a return-path-scoped check.  Following only tail aliases
+     avoids applying this function's contract to discarded local packs. *)
+  let rec check_exists_witnesses ctx aliases resolving spec expr =
+    match expr with
+    | EVar { name; _ } when not (List.mem name resolving) ->
+      (match List.assoc_opt name aliases with
+       | Some (value, value_ctx) ->
+         check_exists_witnesses value_ctx aliases (name :: resolving) spec value
+       | None -> ())
+    | ELet { name; value; body; _ } ->
+      let value_ty = infer_expr ctx value in
+      let sch = generalize (free_vars_env ctx.env) !(ctx.subst) value_ty in
+      let body_ctx = { ctx with env = env_extend name sch ctx.env } in
+      check_exists_witnesses body_ctx ((name, (value, ctx)) :: aliases) resolving spec body
+    | ELetProof { value_name; proof_name; value; body; _ } ->
+      let value_ty = infer_expr ctx value in
+      let sch = generalize (free_vars_env ctx.env) !(ctx.subst) value_ty in
+      let env = env_extend proof_name (mono t_fact) (env_extend value_name sch ctx.env) in
+      let body_ctx = { ctx with env } in
+      check_exists_witnesses body_ctx ((value_name, (value, ctx)) :: aliases) resolving spec body
+    | EIf { then_; else_; _ } ->
+      check_exists_witnesses ctx aliases resolving spec then_;
+      check_exists_witnesses ctx aliases resolving spec else_
+    | ECase { scrut; arms; _ } ->
+      let scrut_ty = infer_expr ctx scrut in
+      List.iter (fun (arm : case_arm) ->
+        let arm_env = bind_pattern_vars ctx scrut_ty arm.pattern in
+        let arm_ctx = { ctx with env = arm_env @ ctx.env } in
+        check_exists_witnesses arm_ctx aliases resolving spec arm.body
+      ) arms
+    | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
+    | EWithTransaction { body; _ } ->
+      check_exists_witnesses ctx aliases resolving spec body
+    | EFail _ -> ()
+    | EApp {
+        fn = EVar { name = "make-witness"; _ };
+        arg = EApp { fn = EVar { name; loc }; arg = body; _ };
+        _ } ->
+      (match spec with
+       | RetExists { binding; body = inner_spec; _ } ->
+         let witness_ty = infer_expr ctx (EVar { name; loc }) in
+         unify_at ctx loc witness_ty (ty_of_type_expr binding.type_expr);
+         check_exists_witnesses ctx aliases [] inner_spec body
+       | _ -> ())
+    | _ -> ()
+  in
   (* App-pass entry point: `main() -> App = … App { … }` is declarative
      configuration whose fields reference declarations (databases/queues/servers)
      by name, not as values. It is validated structurally and lowered by the
@@ -5252,10 +5343,14 @@ let check_func_decl ?(user_fn_names : string list = []) ctx (fd : func_decl) =
        | _ -> ()  (* the App { … } tail — owned by the structural pass *)
      in
      check_app_main_lets ctx' fd.body
-   else
-   check_stmt ctx' fd.body
-     (mk_expectation ~origin:fd.loc ~role:(ReturnBody fd.name)
-       ~reason:(return_reason fd.name expected) expected));
+    else begin
+      check_stmt ctx' fd.body
+        (mk_expectation ~origin:fd.loc ~role:(ReturnBody fd.name)
+          ~reason:(return_reason fd.name expected) expected);
+      (match fd.return_spec with
+       | RetExists _ -> check_exists_witnesses ctx' [] [] fd.return_spec fd.body
+       | _ -> ())
+    end);
   (* Eq/Ord Stage 3: record this fn's harvested obligations for call-site discharge. *)
   finalize_ord_eq_constraints ctx fd.name fd.params fd.return_spec
 
@@ -5418,7 +5513,7 @@ let export_locality_errors (m : module_form) : type_error list =
     | DConst c -> [c.name]
     | DType (TypeAdt { name; variants; _ }) ->
       name :: List.map (fun (v : Ast.adt_variant) -> v.ctor) variants
-    | DType (TypeNewtype { name; _ }) | DType (TypeAlias { name; _ }) -> [name]
+    | DType (TypeNewtype { name; _ })  -> [name]
     | DRecord r -> [r.name]
     | DEntity e -> [e.name]
     | DDatabase db -> [db.name]
@@ -5581,7 +5676,7 @@ let collect_scope_type_names_split (m : module_form) : string list * string list
   let always_in_scope = ["Fact"] in
   let local_types = List.filter_map (function
     | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ })
-    | DType (TypeAlias { name; _ }) | DRecord { name; _ }
+     | DRecord { name; _ }
     | DEntity { name; _ } | DFact { name; _ }
     | DQueue { name; _ } | DChannel { name; _ } | DCache { name; _ }
     | DAgent { name; _ } -> Some name
@@ -5602,7 +5697,7 @@ let collect_scope_type_names_split (m : module_form) : string list * string list
              | Some (Ok imp_m) ->
                let names = List.filter_map (function
                  | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ })
-                 | DType (TypeAlias { name; _ }) | DRecord { name; _ }
+                  | DRecord { name; _ }
                  | DFact { name; _ } -> Some name
                  | _ -> None
                ) imp_m.decls in
@@ -5839,8 +5934,6 @@ let check_type_names_in_scope ~(suggest : string -> Import_suggest.suggestion op
           | DType (TypeNewtype { name; base_type; secret; _ }) ->
             if secret then wire_secret_names := name :: !wire_secret_names;
             [ (name, [ ("", base_type) ]) ]
-          | DType (TypeAlias { name; base_type; _ }) ->
-            [ (name, [ ("", base_type) ]) ]
           | _ -> []
         ) dm.decls
       in
@@ -6004,8 +6097,6 @@ let check_type_names_in_scope ~(suggest : string -> Import_suggest.suggestion op
       ) variants
     | DType (TypeNewtype { base_type; _ }) ->
       check_te base_type
-    | DType (TypeAlias { base_type; _ }) ->
-      check_te base_type
     | DTest t ->
       List.concat_map (function
         | TsLetProof _ -> []
@@ -6146,7 +6237,7 @@ let tesl_module_predicate_exports : (string * string list) list = [
      them from both Tesl.Int and Tesl.Int32 in one file is a V001 ambiguous
      import (the existing single-source rule), which is the intended answer. *)
   ("Tesl.Int32",   ["IsNonNegative"; "IsNonZero"]);
-  ("Tesl.Float",   ["FloatNonZero"]);
+  ("Tesl.Float",   ["FloatNonZero"; "FloatNonNegative"]);
   ("Tesl.Dict",    ["HasKey"]);
 ]
 
@@ -6251,8 +6342,6 @@ let collect_bound_names (m : module_form) : (string, unit) Hashtbl.t =
     | ECacheDelete { key; _ } -> walk key
     | ECacheInvalidate { prefix; _ } -> walk prefix
     | ESendEmail { to_; subject; body; _ } -> walk to_; walk subject; walk body
-    | ERuntimeCall { segments; _ } ->
-      List.iter (function RLit _ | RRawVar _ -> () | RArg e -> walk e) segments
     | ELit _ | EVar _ | EStartWorkers _ | EStartEmailWorker _ -> ()
   in
   List.iter (function
@@ -6269,7 +6358,7 @@ let collect_bound_names (m : module_form) : (string, unit) Hashtbl.t =
        shadowing error (`check_name_shadowing`). *)
     | DType (TypeAdt { name; variants; _ }) ->
       add name; List.iter (fun (v : adt_variant) -> add v.ctor) variants
-    | DType (TypeNewtype { name; _ }) | DType (TypeAlias { name; _ }) -> add name
+    | DType (TypeNewtype { name; _ })  -> add name
     | DRecord r -> add r.name
     | DEntity e -> add e.name
     | _ -> ()

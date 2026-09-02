@@ -87,7 +87,15 @@ import Tesl.DB exposing [dbWrite]
 
 let check src = with_source (prelude ^ src) (fun p -> run_cc ["--check"; p])
 
-let emit src = with_source (prelude ^ src) (fun p -> run_cc [p])
+let emit_go src =
+  match Compile.compile_go_source "Indexes.tesl" (prelude ^ src) with
+  | Compile.GoFailure diagnostics ->
+    failf "Go emit failed: %s"
+      (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
+  | Compile.GoSuccess artifacts ->
+    match List.find_opt (fun (a : Emit_go.artifact) -> a.path = "internal/teslmodindexes/module.go") artifacts with
+    | Some artifact -> artifact.contents
+    | None -> failf "Go emit produced no module.go artifact"
 
 let should_pass label src =
   let code, out = check src in
@@ -255,31 +263,57 @@ let test_index_still_a_record_field () =
 }
 |}
 
-(* ── The emitter is the authority ─────────────────────────────────────────── *)
+(* ── The Go artifacts and memory behavior are the authority ───────────────── *)
 
-let test_emitted_racket_carries_the_indexes () =
-  (* A validation pass proves nothing about the SQL that ships.  The emitted
-     `#:indexes` datum is what the runtime turns into DDL, so pin its exact
-     shape — including that field KEYS (not columns) are emitted, because the
-     field→column mapping deliberately lives in the runtime. *)
-  let code, out =
-    emit (entity {|  index [orgId, createdAt]
+let test_entity_metadata_carries_all_indexes () =
+  let src = prelude ^ entity {|  index [orgId, createdAt]
   unique index [orgId, slug]
-  index [slug] as "kanel_issues_by_slug"|})
+  index [slug] as "kanel_issues_by_slug"|} in
+  let metadata = match Parser.parse_module "Indexes.tesl" src with
+    | Ok module_ -> Ir.module_to_json ~source_name:"Indexes.tesl" module_
+    | Err _ -> failf "entity metadata source did not parse"
   in
-  if code <> 0 then failf "emit failed with exit %d:\n%s" code out;
   let expected =
-    "#:indexes ((plain (orgId createdAt) #f) (unique (orgId slug) #f) \
-     (plain (slug) \"kanel_issues_by_slug\"))"
+    {|"indexes":[{"fields":["orgId","createdAt"],"unique":false,"name":null},{"fields":["orgId","slug"],"unique":true,"name":null},{"fields":["slug"],"unique":false,"name":"kanel_issues_by_slug"}]|}
   in
-  if not (contains out expected) then
-    failf "emitted Racket does not carry the index list (wanted %S):\n%s" expected out
+  if not (contains metadata expected) then
+    failf "entity metadata does not carry every declared index (wanted %S):\n%s"
+      expected metadata
 
-let test_no_indexes_emits_no_keyword () =
-  let code, out = emit (entity "") in
-  if code <> 0 then failf "emit failed with exit %d:\n%s" code out;
-  if contains out "#:indexes" then
-    failf "an entity with no indexes must not emit #:indexes:\n%s" out
+let test_emitted_go_enforces_unique_index () =
+  (* Memory has no physical index artifact. The observable contract is emitted at
+     each write: the exact unique key is handed to the table implementation. *)
+  let out = emit_go {|
+entity Issue table "kanel_issues" primaryKey id {
+  id: String
+  orgId: String
+  slug: String
+  unique index [orgId, slug]
+}
+
+database MainDb = Database {
+  schema: "app"
+  entities: [Issue]
+  backend: Memory
+}
+
+fn add(issue: Issue) -> Issue requires [dbWrite] =
+  insert Issue {
+    id: issue.id,
+    orgId: issue.orgId,
+    slug: issue.slug
+  }
+|} in
+  List.iter (fun expected ->
+    if not (contains out expected) then
+      failf "emitted Go does not enforce the unique index (wanted %S):\n%s" expected out)
+    [ "teslrt.UniqueIndexOf("; "[]string{\"org_id\", \"slug\"}";
+      "(teslLeft.OrgId == teslRight.OrgId) && (teslLeft.Slug == teslRight.Slug)" ]
+
+let test_no_indexes_emits_no_index_artifact () =
+  let out = emit_go (entity "") in
+  if contains out "UniqueIndexOf" || contains out "PostgresIndexOf" then
+    failf "an entity with no indexes emitted an index artifact:\n%s" out
 
 (* ── `onConflict` needs a unique index ───────────────────────────────────── *)
 
@@ -370,9 +404,10 @@ let () =
       test_case "`index` still a variable name"       `Quick test_index_is_still_an_ordinary_variable_name;
       test_case "`index` still a record field"        `Quick test_index_still_a_record_field;
     ];
-    "emitter", [
-      test_case "emitted Racket carries indexes"      `Quick test_emitted_racket_carries_the_indexes;
-      test_case "no indexes emits no keyword"         `Quick test_no_indexes_emits_no_keyword;
+    "Go artifacts", [
+      test_case "entity metadata carries all indexes" `Quick test_entity_metadata_carries_all_indexes;
+      test_case "emitted Go enforces unique index"    `Quick test_emitted_go_enforces_unique_index;
+      test_case "no indexes emits no artifact"        `Quick test_no_indexes_emits_no_index_artifact;
     ];
     "upsert onConflict", [
       test_case "primary-key conflict accepted"       `Quick test_conflict_on_primary_key_ok;

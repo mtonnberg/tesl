@@ -8,8 +8,8 @@ Use `tesl help manual deploy` to access this from the CLI.
 
 | `[deploy].target` | What `tesl build` does | Needs Docker |
 |---|---|---|
-| `"local"` (what `tesl init` scaffolds) | Type-checks and compiles the `[project].entrypoint` into `.tesl-stuff/build/`, then tells you to `tesl run`. | no |
-| `"container"` | Stages a Dockerfile + the Tesl runtime and builds the image (the rest of this page). | yes |
+| `"local"` (what `tesl init` scaffolds) | Type-checks and compiles the `[project].entrypoint` into `.tesl-stuff/go-build/`, including a runnable `tesl-app` binary when it is an application. | no |
+| `"container"` | Compiles a Linux `tesl-app`, stages it with a runtime-only Dockerfile, and builds the image (the rest of this page). | yes |
 | key absent | `"container"` (the behaviour that predates the key). | yes |
 
 Override the manifest per invocation with `tesl build --local` /
@@ -17,8 +17,8 @@ Override the manifest per invocation with `tesl build --local` /
 (`--app-only`, `--with-postgres`, `--tag`, `--out`, `--no-docker`) imply
 `--container`, so asking for an image variant always builds one.
 
-A local build produces no artifact to ship — `tesl run` executes the compiled
-program in place. The rest of this page is the **container** mode.
+A local build leaves the compiled module and application binary in
+`.tesl-stuff/go-build/`. The rest of this page is the **container** mode.
 
 ## The container mode
 
@@ -26,15 +26,14 @@ A Tesl project ships as a **Docker image you can just run** — `tesl build`
 compiles the app, stages the Tesl runtime, generates a Dockerfile, and builds
 the image. No runtime code changes, no hand-written Dockerfile.
 
-There are two flavours, chosen by a flag (or by `[database].mode` in `tesl.toml`):
+There is one Go image flavour. The old flavour flags remain accepted as
+compatibility aliases, but neither image embeds PostgreSQL:
 
 | Image | Command | What it contains | Use when |
 |---|---|---|---|
-| **All-in-one** | `tesl build --with-postgres` | app **+ an embedded PostgreSQL** + an entrypoint that starts the DB then the app | demos, self-contained deploys, "just run it" — **no external database** |
-| **App-only** | `tesl build --app-only` | app only; connects to a database you run | production with a managed/external PostgreSQL |
+| **Runtime image** | `tesl build --container` | prebuilt app binary only; connects to an external PostgreSQL service when needed | deployments using a separate database |
 
-With no flag, `tesl build` picks all-in-one when `[database].mode = "managed"`
-and app-only otherwise.
+`--app-only` and `--with-postgres` select the same runtime image for now.
 
 ## Worked example
 
@@ -44,11 +43,11 @@ tesl init myapi --template api --yes
 cd myapi
 
 # --- local: compile + run in place ([deploy].target = "local", the default) ---
-tesl build                            # → .tesl-stuff/build/app.rkt (no Docker)
+tesl build                            # → .tesl-stuff/go-build (no Docker)
 tesl run                              # serve it
 
-# --- all-in-one: runs anywhere, no external database ---
-tesl build --with-postgres            # → image tagged "myapi" (the [project].name)
+# --- container: binary plus runtime image; PostgreSQL remains external ---
+tesl build --container                # → image tagged "myapi" (the [project].name)
 docker run -d -p 8086:8086 myapi
 curl -s localhost:8086/todos/todo-1 -H 'Cookie: user=demo'
 #   → 200 {"id":"todo-1","ownerId":"demo","title":"Read the Tesl tutorial",...}
@@ -67,22 +66,19 @@ The app is configured entirely through environment variables — set them with
 | Variable | Meaning |
 |---|---|
 | `PORT` | port the HTTP server binds (default from `tesl.toml [env]`) |
-| `TESL_POSTGRES_HOST` / `_PORT` / `_DATABASE` / `_USER` / `_PASSWORD` | database connection (app-only image, or to override the all-in-one defaults) |
+| `TESL_POSTGRES_HOST` / `_PORT` / `_DATABASE` / `_USER` / `_PASSWORD` | external PostgreSQL connection |
 
 The Tesl runtime **creates its own tables on first boot** (`ensure-database-ready!`),
 so there is no separate migration step for the system tables.
 
 ```bash
-# app-only image against your own PostgreSQL:
-tesl build --app-only
+# container image against your own PostgreSQL:
+tesl build --container
 docker run -d -p 8086:8086 \
   -e TESL_POSTGRES_HOST=db.internal -e TESL_POSTGRES_DATABASE=myapi \
   -e TESL_POSTGRES_USER=myapi -e TESL_POSTGRES_PASSWORD=… \
   myapi
 ```
-
-For the all-in-one image, mount a volume at `/var/lib/tesl-postgres` to persist
-the embedded database across restarts.
 
 ## Continuous deployment (GitHub Actions)
 
@@ -93,12 +89,9 @@ Copy it to your project's `.github/workflows/deploy.yml` and set `APP_NAME`.
 
 ## How it works (and what is intentionally not here)
 
-- `tesl build` stages the Tesl runtime collections (`dsl`/`tesl`/`lang`) and your
-  freshly compiled `app.rkt` into its own build context (it never touches your
-  source tree or `.tesl-stuff/`), instantiates one of the templates in
-  [`templates/docker/`](../templates/docker/), and runs `docker build`. The
-  Racket base image is matched to the compiler's Racket (`racket/racket:9.2-full`
-  by default; override with `TESL_RACKET_BASE`).
+- `tesl build --container` compiles a Linux Go binary, stages a runtime-only
+  container context, instantiates a template in [`templates/docker/`](../templates/docker/),
+  and runs `docker build`.
 - The deployment story is deliberately **just an image** — the app serves HTTP
   the same way it does locally. Health-check endpoints, graceful-shutdown
   signalling, a reproducible Nix `dockerTools` image, multi-arch builds, and
@@ -107,27 +100,13 @@ Copy it to your project's `.github/workflows/deploy.yml` and set `APP_NAME`.
 
 ### Building on Apple Silicon / arm64
 
-The default base image, `racket/racket:9.2-full`, publishes only a
-`linux/amd64` manifest. `tesl build --container` still succeeds on an arm64
-host — Docker transparently pulls the amd64 layers — but the resulting
-image runs Racket under emulation, which can abort at boot (`Error: error
-reading from ~a ("petite")`) depending on your Docker Desktop/QEMU version.
-`docker build --platform linux/arm64 ...` on the staged context does not fix
-this: it just falls back to the same amd64 base with an
-`InvalidBaseImagePlatform` warning, since no arm64 manifest exists to select.
+The Go/Debian base image supports the host architectures published by the Go
+container template. `tesl build --container` stages the Dockerfile without
+requiring a language-runtime image from the host.
 
-`tesl build` warns at build time when it detects this mismatch (host is
-arm64 and the base image's manifest is amd64-only), so the amd64 fallback is
-never silent. If you have a Racket base image with a native arm64 manifest
-(self-built or from another registry), point `TESL_RACKET_BASE` at it:
-
-```bash
-TESL_RACKET_BASE=ghcr.io/you/racket:9.2-full-arm64 tesl build --container
-```
-
-There is currently no first-party native-arm64 base image; producing one
-(e.g. from the Nix flake's `aarch64-linux` package via `dockerTools`) is
-tracked as future work, not shipped today.
+The Go image remains ordinary Docker output, so platform-specific publishing
+can use Docker Buildx or the registry workflow without a language-runtime
+override.
 
 ## See also
 

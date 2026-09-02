@@ -89,7 +89,7 @@ fn permalink(slug: String ::: ValidSlug slug) -> String =
 #   fn dynamic(p: String, s: String) -> Bool = Regex.matches p s
 #     error[VREGEX002]: needs its pattern written as a string literal
 #
-# VREGEX002 is not a limitation, it is the feature. Racket's matcher (like
+# VREGEX002 is not a limitation, it is the feature. The Go matcher (like
 # almost every matcher) backtracks, so a pattern that can come from a request
 # body is a denial-of-service endpoint. Removing the dynamic form removes the
 # hole, and it is what makes the two rules below enforceable at all.

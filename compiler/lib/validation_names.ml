@@ -544,7 +544,6 @@ let imported_plain_exposed_ctor_entries (m : module_form) : (string * string * s
 let local_type_entries (decls : top_decl list) : (string * loc) list =
   List.concat_map (function
     | DType (TypeNewtype { name; loc; _ }) -> [ (name, loc) ]
-    | DType (TypeAlias { name; loc; _ }) -> [ (name, loc) ]
     | DType (TypeAdt { name; loc; _ }) -> [ (name, loc) ]
     | DRecord rf -> [ (rf.name, rf.loc) ]
     | DEntity ef -> [ (ef.name, ef.loc) ]
@@ -697,7 +696,6 @@ let check_duplicate_top_level_names (decls : top_decl list) : validation_error l
   List.iter (function
     | DFunc fd -> check seen_funcs fd.name fd.loc "function"
     | DType (TypeNewtype { name; loc; _ }) -> check seen_types name loc "type"
-    | DType (TypeAlias { name; loc; _ }) -> check seen_types name loc "type"
     | DType (TypeAdt { name; loc; _ }) -> check seen_types name loc "type"
     | DRecord rf -> check seen_types rf.name rf.loc "record"
     | DEntity ef -> check seen_types ef.name ef.loc "entity"
