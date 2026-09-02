@@ -1430,6 +1430,12 @@ let rec merge_anon left right =
 
 let record_field_go_name name = go_ident ~exported:true name
 
+(* Debug values are built by the runtime so records, maps, lists, and api-test JSON all expose
+   the same bounded expandable tree.  The source expression travels with the value for DAP
+   evaluateName and field inspection. *)
+let debug_value_expr expression name =
+  Printf.sprintf "teslrt.DebugValueOf(%s, %S)" expression name
+
 (* `!(!(x))` is a staticcheck finding (SA4013) on emitted code, so negation
    cancels an existing top-level `!(...)` instead of stacking on it.  The scan
    skips Go string literals, where a parenthesis is data rather than structure. *)
@@ -9734,8 +9740,8 @@ let emit_tail ?self ?(debug=false) ?(debug_package="") ?(debug_function="")
         |> List.filter (fun (name, _) -> name <> "_")
         |> List.map (fun (name, ty) ->
              Printf.sprintf
-               "{Name: %S, Type: %S, Accessor: func() teslrt.DebugValue {\n%s\treturn teslrt.DebugValue{Type: %S, Display: fmt.Sprint(%s)}\n%s}}"
-               name (go_type ty) indent (go_type ty) (local_ident name) indent)
+                "{Name: %S, Type: %S, Accessor: func() teslrt.DebugValue {\n%s\treturn %s\n%s}}"
+                name (go_type ty) indent (debug_value_expr (local_ident name) name) indent)
       in
       Printf.bprintf buffer
         "%steslrt.Checkpoint(teslrt.DebugFrame{Version: teslrt.DebugABIVersion, ID: %S, Function: %S, Location: teslrt.SourceLocation{File: %S, Line: %d, Column: %d}, Locals: []teslrt.DebugLocal{%s}})\n"
@@ -9788,6 +9794,15 @@ let emit_tail ?self ?(debug=false) ?(debug_package="") ?(debug_function="")
     | EWithDatabase { database_name; body; loc } ->
       (match postgres_database loc database_name with
        | None -> go env indent body
+       | Some database when debug ->
+         Buffer.add_string buffer (line_directive loc);
+         Printf.bprintf buffer "%s{\n%s\tvar teslBound %s\n" indent indent (go_type expected);
+         Printf.bprintf buffer "%s\tteslrt.WithDatabase(%s, func() {\n" indent
+           (qualified database.db_owner database.db_go_var);
+         Printf.bprintf buffer "%s\t\tteslBound = func() %s {\n" indent (go_type expected);
+         go env (indent ^ "\t\t\t") body;
+         Printf.bprintf buffer "%s\t\t}()\n%s\t})\n%s\treturn teslBound\n%s}\n"
+           indent indent indent indent
        | Some _ ->
          Buffer.add_string buffer (line_directive loc);
          Printf.bprintf buffer "%sreturn %s\n" indent
@@ -10761,8 +10776,8 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
      if debug then begin
        let locals = List.map (fun (name, ty) ->
          Printf.sprintf
-           "{Name: %S, Type: %S, Accessor: func() teslrt.DebugValue { return teslrt.DebugValue{Type: %S, Display: fmt.Sprint(%s)} }}"
-           name (go_type ty) (go_type ty) (local_ident name)) params in
+            "{Name: %S, Type: %S, Accessor: func() teslrt.DebugValue { return %s }}"
+            name (go_type ty) (debug_value_expr (local_ident name) name)) params in
        Printf.bprintf body
          "\tteslrt.Checkpoint(teslrt.DebugFrame{Version: teslrt.DebugABIVersion, ID: %S, Function: %S, Location: teslrt.SourceLocation{File: %S, Line: %d, Column: %d}, Locals: []teslrt.DebugLocal{%s}})\n"
           (debug_frame_id package fd) fd.name fd.loc.file (fd.loc.start.line + 1)
@@ -11782,8 +11797,8 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
         |> List.filter (fun (name, _) -> name <> "_")
         |> List.map (fun (name, ty) ->
              Printf.sprintf
-               "{Name: %S, Type: %S, Accessor: func() teslrt.DebugValue {\n%s\treturn teslrt.DebugValue{Type: %S, Display: fmt.Sprint(%s)}\n%s}}"
-               name (go_type ty) indent (go_type ty) (local_ident name) indent)
+                "{Name: %S, Type: %S, Accessor: func() teslrt.DebugValue {\n%s\treturn %s\n%s}}"
+                name (go_type ty) indent (debug_value_expr (local_ident name) name) indent)
       in
       Printf.bprintf body
         "%steslrt.Checkpoint(teslrt.DebugFrame{Version: teslrt.DebugABIVersion, ID: %S, Function: %S, Test: %S, Location: teslrt.SourceLocation{File: %S, Line: %d, Column: %d}, Locals: []teslrt.DebugLocal{%s}})\n"

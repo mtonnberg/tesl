@@ -265,7 +265,6 @@ func (server *DebugControlServer) handleRequest(request DebugControlRequest) (De
 	case "ping":
 		return result(map[string]bool{"ok": true}), false
 	case "set-breakpoints":
-		server.configuredOnce.Do(func() { close(server.configured) })
 		breakpoints := make([]DebugBreakpoint, 0, len(request.Breakpoints))
 		for _, specification := range request.Breakpoints {
 			condition, err := compileDebugCondition(specification.Condition)
@@ -283,6 +282,12 @@ func (server *DebugControlServer) handleRequest(request DebugControlRequest) (De
 			})
 		}
 		return result(server.debugger.SetBreakpoints(breakpoints)), false
+	case "configuration-done":
+		// DAP sends this only after all per-source breakpoint updates. Releasing on
+		// the first set-breakpoints request races when VS Code has breakpoints in
+		// several files and sends the target file later.
+		server.configuredOnce.Do(func() { close(server.configured) })
+		return result(map[string]bool{"ok": true}), false
 	case "clear-breakpoints":
 		server.debugger.ClearBreakpoints()
 		return result(map[string]bool{"ok": true}), false

@@ -177,9 +177,10 @@ let test_debug_emission_has_versioned_checkpoint () =
   let module_again = artifact "internal/teslmodgosmoke/module.go" emitted_again in
   check bool "debug checkpoint call" true (contains module_go "teslrt.Checkpoint(teslrt.DebugFrame{");
   check bool "debug function scope" true (contains module_go "teslrt.DebugEnter(teslrt.DebugFrame{");
-  check bool "debug ABI version" true (contains module_go "teslrt.DebugABIVersion");
-  check bool "debug function locals" true (contains module_go "Accessor: func() teslrt.DebugValue");
-  check bool "debug test identity" true (contains test_go "Test: ");
+   check bool "debug ABI version" true (contains module_go "teslrt.DebugABIVersion");
+   check bool "debug function locals" true (contains module_go "Accessor: func() teslrt.DebugValue");
+   check bool "debug locals use expandable value trees" true (contains module_go "teslrt.DebugValueOf(");
+   check bool "debug test identity" true (contains test_go "Test: ");
   check string "debug IDs are stable" module_go module_again;
   ignore (artifact "internal/teslrt/debug.go" emitted);
   ignore (artifact "internal/teslrt/debug_control.go" emitted);

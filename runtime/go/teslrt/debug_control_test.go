@@ -127,8 +127,19 @@ func TestDebugControlWaitsForConfiguration(t *testing.T) {
 	}
 	select {
 	case <-done:
+		t.Fatal("breakpoint update released configuration wait")
+	case <-time.After(20 * time.Millisecond):
+	}
+	if err := encoder.Encode(DebugControlRequest{ID: "2", Command: "configuration-done"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.NewDecoder(reader).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
 	case <-time.After(time.Second):
-		t.Fatal("configuration wait did not return")
+		t.Fatal("configuration-done did not release wait")
 	}
 }
 

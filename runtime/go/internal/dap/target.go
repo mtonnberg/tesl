@@ -122,6 +122,7 @@ func (target *ProcessTarget) LaunchBackend(data json.RawMessage) (DebugBackend, 
 	command := exec.Command(program, programArgs...) // #nosec G204 -- target is an explicit local debug launch.
 	command.Dir = cwd
 	command.Env = environment
+	configureChildProcess(command)
 	target.mutex.Lock()
 	target.processErr = nil
 	target.mutex.Unlock()

@@ -24,6 +24,73 @@ type JsonValue struct {
 	raw any
 }
 
+// DebugValue exposes the parsed api-test body as the same expandable tree as typed records.
+// JsonValue's raw payload stays private to the assertion runtime, but the debugger still needs
+// to show the keys a test can read (for example, response.body.message).
+func (value JsonValue) DebugValue(evaluateName string) DebugValue {
+	return debugJSONValue(value.raw, evaluateName, 0)
+}
+
+func debugJSONValue(value any, evaluateName string, depth int) DebugValue {
+	result := DebugValue{Type: debugJSONType(value), Display: debugJSONDisplay(value), EvaluateName: evaluateName}
+	if depth >= 8 {
+		return result
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			child := debugJSONValue(typed[key], debugJSONJoinField(evaluateName, key), depth+1)
+			child.Name = key
+			result.Children = append(result.Children, child)
+		}
+	case []any:
+		for index, item := range typed {
+			child := debugJSONValue(item, fmt.Sprintf("%s[%d]", evaluateName, index), depth+1)
+			child.Name = fmt.Sprintf("[%d]", index)
+			result.Children = append(result.Children, child)
+		}
+	}
+	return result
+}
+
+func debugJSONType(value any) string {
+	switch value.(type) {
+	case nil:
+		return "JsonNull"
+	case string:
+		return "String"
+	case bool:
+		return "Bool"
+	case json.Number:
+		return "Number"
+	case []any:
+		return "JsonArray"
+	case map[string]any:
+		return "JsonObject"
+	default:
+		return "JsonValue"
+	}
+}
+
+func debugJSONDisplay(value any) string {
+	if value == nil {
+		return "null"
+	}
+	return fmt.Sprint(value)
+}
+
+func debugJSONJoinField(base, field string) string {
+	if base == "" {
+		return field
+	}
+	return base + "." + field
+}
+
 func JsonNull() JsonValue { return JsonValue{} }
 
 // JsonOf wraps an already-parsed shape.

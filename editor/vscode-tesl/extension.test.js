@@ -88,15 +88,19 @@ class TestController {
   dispose() {}
 }
 
-function makeVscode(files, debugCalls, terminalCalls) {
-  const workspaceFolder = { uri: Uri.file(repoRoot) };
+function makeVscode(files, debugCalls, terminalCalls, workspacePath = repoRoot) {
+  const workspaceFolder = { uri: Uri.file(workspacePath) };
   const commands = new Map();
   const codeLensProviders = [];
   const controllers = [];
+  const debugFactories = [];
   const vscode = {
     Uri,
     Range,
     CodeLens,
+    DebugAdapterExecutable: class {
+      constructor(command, args, options) { this.command = command; this.args = args; this.options = options; }
+    },
     TestTag: class { constructor(value) { this.id = value; } },
     TestMessage: class { constructor(message) { this.message = message; } },
     Location: class { constructor(uri, range) { this.uri = uri; this.range = range; } },
@@ -159,11 +163,14 @@ function makeVscode(files, debugCalls, terminalCalls) {
     },
     debug: {
       startDebugging: async (_folder, config) => { debugCalls.push(config); return true; },
-      registerDebugAdapterDescriptorFactory: () => new Disposable(),
+      registerDebugAdapterDescriptorFactory: (_type, factory) => {
+        debugFactories.push(factory);
+        return new Disposable();
+      },
       registerDebugConfigurationProvider: () => new Disposable(),
     },
   };
-  return { vscode, commands, codeLensProviders, controllers };
+  return { vscode, commands, codeLensProviders, controllers, debugFactories };
 }
 
 function loadExtension(vscode) {
@@ -190,11 +197,11 @@ function loadExtension(vscode) {
   }
 }
 
-async function activateWithFile(file, cleanup) {
+async function activateWithFile(file, cleanup, workspacePath = repoRoot) {
   const uri = Uri.file(file);
   const debugCalls = [];
   const terminalCalls = [];
-  const host = makeVscode([uri], debugCalls, terminalCalls);
+  const host = makeVscode([uri], debugCalls, terminalCalls, workspacePath);
   const extension = loadExtension(host.vscode);
   const context = { extensionPath: __dirname, subscriptions: { push() {} } };
   extension.activate(context);
@@ -216,8 +223,8 @@ async function activatedFixture(source) {
   return activateWithFile(file, () => fs.rmSync(directory, { recursive: true, force: true }));
 }
 
-async function activatedExistingFixture(relativeFile) {
-  return activateWithFile(path.join(repoRoot, relativeFile));
+async function activatedExistingFixture(relativeFile, workspacePath = repoRoot) {
+  return activateWithFile(path.join(repoRoot, relativeFile), undefined, workspacePath);
 }
 
 async function testCodeLensCommands() {
@@ -407,17 +414,10 @@ function dapEvent(state, eventName) {
   });
 }
 
-async function testDapScalarLocalHasZeroVariablesReference() {
-  const source = `module Fixture exposing []
-
-test "locals" {
-  let answer = 42
-  expect answer == 42
-}
-`;
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "tesl-dap-extension-test-"));
-  const file = path.join(directory, "fixture.tesl");
-  fs.writeFileSync(file, source, "utf8");
+async function withDapSession({ source, file: existingFile, breakpointLine, launch, cwd = repoRoot }, inspect) {
+  const directory = source ? fs.mkdtempSync(path.join(os.tmpdir(), "tesl-dap-extension-test-")) : null;
+  const file = existingFile || path.join(directory, "fixture.tesl");
+  if (source) fs.writeFileSync(file, source, "utf8");
   const child = spawn("go", ["run", "./cmd/tesl-dap"], {
     cwd: path.join(repoRoot, "runtime", "go"),
     detached: process.platform !== "win32",
@@ -473,39 +473,129 @@ test "locals" {
       linesStartAt1: true,
       columnsStartAt1: true,
     });
+    await dapRequest(child, state, "launch", {
+      ...launch,
+      program: file,
+      cwd,
+    });
     await dapRequest(child, state, "setBreakpoints", {
       source: { path: file },
-      breakpoints: [{ line: 5 }],
-    });
-    await dapRequest(child, state, "launch", {
-      program: file,
-      cwd: repoRoot,
-      mode: "test",
-      testName: "locals",
-      testKind: "test",
+      breakpoints: [{ line: breakpointLine }],
     });
     const stopped = dapEvent(state, "stopped");
     await dapRequest(child, state, "configurationDone");
     await stopped;
-    const stack = await dapRequest(child, state, "stackTrace", { threadId: 1 });
-    const frame = stack.body.stackFrames[0];
-    const scopes = await dapRequest(child, state, "scopes", { frameId: frame.id });
-    const locals = scopes.body.scopes.find((scope) => scope.name === "Locals");
-    assert.ok(locals && locals.variablesReference > 0);
-    const variables = await dapRequest(child, state, "variables", {
-      variablesReference: locals.variablesReference,
-    });
-    const answer = variables.body.variables.find((variable) => variable.name === "answer");
-    assert.ok(answer, JSON.stringify(variables.body));
-    assert.strictEqual(Object.prototype.hasOwnProperty.call(answer, "variablesReference"), true);
-    assert.strictEqual(answer.variablesReference, 0);
+    await inspect((command, args) => dapRequest(child, state, command, args));
     await dapRequest(child, state, "disconnect");
   } finally {
     if (process.platform === "win32") child.kill();
     else {
       try { process.kill(-child.pid, "SIGKILL"); } catch (_e) { child.kill(); }
     }
-    fs.rmSync(directory, { recursive: true, force: true });
+    if (directory) fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+async function testDapScalarLocalHasZeroVariablesReference() {
+  const source = `module Fixture exposing []
+
+test "locals" {
+  let answer = 42
+  expect answer == 42
+}
+`;
+  await withDapSession({ source, breakpointLine: 5, launch: {
+    mode: "test", testName: "locals", testKind: "test",
+  } }, async (request) => {
+    const stack = await request("stackTrace", { threadId: 1 });
+    const frame = stack.body.stackFrames[0];
+    const scopes = await request("scopes", { frameId: frame.id });
+    const locals = scopes.body.scopes.find((scope) => scope.name === "Locals");
+    assert.ok(locals && locals.variablesReference > 0);
+    const variables = await request("variables", { variablesReference: locals.variablesReference });
+    const answer = variables.body.variables.find((variable) => variable.name === "answer");
+    assert.ok(answer, JSON.stringify(variables.body));
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(answer, "variablesReference"), true);
+    assert.strictEqual(answer.variablesReference, 0);
+  });
+}
+
+async function testDapApiResponseExposesJsonFields() {
+  const file = path.join(repoRoot, "example", "learn", "lesson32-api-tests.tesl");
+  const line = fs.readFileSync(file, "utf8").split("\n")
+    .findIndex((text) => text.includes('expect echoResp.body.message ==')) + 1;
+  await withDapSession({ file, breakpointLine: line, launch: {
+    mode: "test",
+    testName: "raw JSON body and dynamic response fields",
+    testKind: "api-test",
+  } }, async (request) => {
+    const stack = await request("stackTrace", { threadId: 1 });
+    const frame = stack.body.stackFrames[0];
+    const scopes = await request("scopes", { frameId: frame.id });
+    const locals = scopes.body.scopes.find((scope) => scope.name === "Locals");
+    const localVariables = await request("variables", { variablesReference: locals.variablesReference });
+    const response = localVariables.body.variables.find((variable) => variable.name === "echoResp");
+    assert.ok(response && response.variablesReference > 0, JSON.stringify(localVariables.body));
+    const responseVariables = await request("variables", { variablesReference: response.variablesReference });
+    assert.deepStrictEqual(responseVariables.body.variables.map((variable) => variable.name), ["status", "body", "headers"]);
+    const body = responseVariables.body.variables.find((variable) => variable.name === "body");
+    assert.ok(body && body.variablesReference > 0, JSON.stringify(responseVariables.body));
+    const bodyVariables = await request("variables", { variablesReference: body.variablesReference });
+    const message = bodyVariables.body.variables.find((variable) => variable.name === "message");
+    assert.ok(message, JSON.stringify(bodyVariables.body));
+    assert.strictEqual(message.value, "hello from api-test");
+    assert.strictEqual(message.type, "String");
+    assert.strictEqual(message.evaluateName, "echoResp.body.message");
+    const evaluated = await request("evaluate", { expression: "echoResp.body.message", frameId: frame.id });
+    assert.strictEqual(evaluated.body.result, "hello from api-test");
+  });
+}
+
+async function testDapProgramBreakpointHitsLessonMain() {
+  const file = path.join(repoRoot, "example", "learn", "lesson31-worker-concurrency.tesl");
+  const line = fs.readFileSync(file, "utf8").split("\n")
+    .findIndex((text) => text.includes("let port = 8090")) + 1;
+  await withDapSession({ file, breakpointLine: line, launch: { mode: "program" } }, async (request) => {
+    const stack = await request("stackTrace", { threadId: 1 });
+    const frame = stack.body.stackFrames[0];
+    assert.strictEqual(frame.source.path, file);
+    assert.strictEqual(frame.line, line);
+  });
+}
+
+async function testDapApiBreakpointHitsFromNestedWorkspaceCwd() {
+  const file = path.join(repoRoot, "example", "learn", "lesson32-api-tests.tesl");
+  const line = fs.readFileSync(file, "utf8").split("\n")
+    .findIndex((text) => text.includes('expect echoResp.body.message ==')) + 1;
+  await withDapSession({ file, breakpointLine: line, cwd: path.join(repoRoot, "example", "learn"), launch: {
+    mode: "test",
+    testName: "raw JSON body and dynamic response fields",
+    testKind: "api-test",
+  } }, async () => {});
+}
+
+async function testNestedWorkspaceUsesCheckoutTools() {
+  const file = path.join(repoRoot, "example", "learn", "lesson32-api-tests.tesl");
+  const workspacePath = path.join(repoRoot, "example", "learn");
+  const fixture = await activatedExistingFixture("example/learn/lesson32-api-tests.tesl", workspacePath);
+  try {
+    const descriptor = fixture.debugFactories[0].createDebugAdapterDescriptor({
+      workspaceFolder: { uri: Uri.file(workspacePath) },
+      configuration: { program: file },
+    });
+    assert.match(descriptor.command, /^\/nix\/store\/.*\/bin\/go$/);
+    assert.deepStrictEqual(descriptor.args, ["run", "./cmd/tesl-dap"]);
+    assert.strictEqual(descriptor.options.cwd, path.join(repoRoot, "runtime", "go"));
+    assert.strictEqual(descriptor.options.env.TESL_REPO_ROOT, repoRoot);
+    assert.strictEqual(descriptor.options.env.TESL_POSTGRES_HOST, "127.0.0.1");
+    assert.strictEqual(descriptor.options.env.TESL_POSTGRES_PORT, "55432");
+    assert.strictEqual(descriptor.options.env.TESL_POSTGRES_USER, "tesl");
+    assert.strictEqual(
+      descriptor.options.env.TESL_COMPILER,
+      path.join(repoRoot, "compiler", "_build", "default", "bin", "main.exe")
+    );
+  } finally {
+    fixture.cleanup();
   }
 }
 
@@ -518,3 +608,7 @@ test("cache test runs in Test Explorer", testApiTestWithCacheRunsInExplorer);
 test("load-test runs in Test Explorer", testLoadTestRunsInExplorer);
 test("full queue and cache applications run and debug in program mode", testFullApplicationRunAndDebugUsesProgramMode);
 test("DAP scalar locals include zero variablesReference", testDapScalarLocalHasZeroVariablesReference);
+test("DAP API response locals expose JSON fields", testDapApiResponseExposesJsonFields);
+test("DAP program breakpoint hits full application main", testDapProgramBreakpointHitsLessonMain);
+test("DAP API breakpoint hits from nested workspace cwd", testDapApiBreakpointHitsFromNestedWorkspaceCwd);
+test("nested workspaces use checkout debugger and compiler", testNestedWorkspaceUsesCheckoutTools);

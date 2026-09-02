@@ -135,6 +135,9 @@ func TestProcessTargetLaunchesGeneratedGoTest(t *testing.T) {
 	if _, err := client.SetBreakpointSpecs([]teslrt.DebugBreakpointSpec{{ID: "factorial", File: source, Line: breakpointLine}}); err != nil {
 		t.Fatal(err)
 	}
+	if err := client.ConfigurationDone(); err != nil {
+		t.Fatal(err)
+	}
 	select {
 	case <-stopped:
 	case <-time.After(3 * time.Second):

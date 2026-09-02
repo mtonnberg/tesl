@@ -89,6 +89,23 @@ func TestDebugValueBoundsAndPanicRecovery(t *testing.T) {
 	}
 }
 
+func TestDebugValueOfExposesApiResponseAndJSONFields(t *testing.T) {
+	value := DebugValueOf(ApiResponse{
+		Status: FromInt64(200),
+		Body:   JsonOf(map[string]any{"message": "hello from api-test"}),
+	}, "echoResp")
+	if len(value.Children) != 3 {
+		t.Fatalf("api response children = %#v", value.Children)
+	}
+	if value.Children[0].Name != "status" || value.Children[1].Name != "body" || value.Children[2].Name != "headers" {
+		t.Fatalf("api response fields = %#v", value.Children)
+	}
+	body := value.Children[1]
+	if len(body.Children) != 1 || body.Children[0].Name != "message" || body.Children[0].Type != "String" || body.Children[0].EvaluateName != "echoResp.body.message" {
+		t.Fatalf("JSON body tree = %#v", body)
+	}
+}
+
 func TestDebuggerConcurrentCheckpointsDoNotDeadlock(t *testing.T) {
 	debugger := NewDebugger()
 	debugger.SetBreakpoints([]DebugBreakpoint{{File: "stress.tesl", Line: 7}})

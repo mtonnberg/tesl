@@ -13,6 +13,60 @@ function commandOnPath(name) {
   return spawnSync(cmd, [name], { encoding: "utf8" }).status === 0;
 }
 
+function findNixShell() {
+  if (commandOnPath("nix-shell")) return "nix-shell";
+  const candidates = [
+    path.join(os.homedir(), ".nix-profile", "bin", "nix-shell"),
+    "/nix/var/nix/profiles/default/bin/nix-shell",
+    "/run/current-system/sw/bin/nix-shell",
+  ];
+  return candidates.find((candidate) => fs.existsSync(candidate)) || null;
+}
+
+const repoToolchains = new Map();
+
+function findRepoToolchain(repoRoot) {
+  if (!repoRoot) return null;
+  if (repoToolchains.has(repoRoot)) return repoToolchains.get(repoRoot);
+  const nixShell = findNixShell();
+  const shellFile = path.join(repoRoot, "shell.nix");
+  if (!nixShell || !fs.existsSync(shellFile)) return null;
+  const marker = "__TESL_ENV__";
+  const result = spawnSync(
+    nixShell,
+    [shellFile, "--run", `export TESL_RESOLVED_GO="$(command -v go)"; printf '${marker}\\n'; env`],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: { ...process.env, TESL_SKIP_AUTO_BUILD: "1" },
+    }
+  );
+  const lines = (result.stdout || "").split(/\r?\n/);
+  const markerIndex = lines.lastIndexOf(marker);
+  if (result.status !== 0 || markerIndex < 0) {
+    repoToolchains.set(repoRoot, null);
+    return null;
+  }
+  const environment = {};
+  for (const line of lines.slice(markerIndex + 1)) {
+    const separator = line.indexOf("=");
+    if (separator > 0) environment[line.slice(0, separator)] = line.slice(separator + 1);
+  }
+  const go = environment.TESL_RESOLVED_GO;
+  delete environment.TESL_RESOLVED_GO;
+  delete environment.PWD;
+  delete environment.OLDPWD;
+  delete environment.SHLVL;
+  delete environment._;
+  const resolved = go && fs.existsSync(go) ? { go, environment } : null;
+  repoToolchains.set(repoRoot, resolved);
+  return resolved;
+}
+
+function findRepoGo(repoRoot) {
+  return findRepoToolchain(repoRoot)?.go || null;
+}
+
 function stableTempDir() {
   const candidate = os.tmpdir();
   if (process.platform !== "win32") return "/tmp";
@@ -86,9 +140,32 @@ function findWorkspaceCompiler(wsPath) {
   return fs.existsSync(local) ? local : null;
 }
 
-function findTeslCompiler(wsPath) {
+function findTeslRepoRoot(startPath) {
+  if (!startPath) return null;
+  let current = startPath;
+  try {
+    if (!fs.statSync(current).isDirectory()) current = path.dirname(current);
+  } catch (_) {
+    current = path.dirname(current);
+  }
+  while (true) {
+    if (findWorkspaceCompiler(current) &&
+        fs.existsSync(path.join(current, "runtime", "go", "cmd", "tesl-dap", "main.go"))) {
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+function resolveTeslRoot(wsPath, filePath) {
+  return findTeslRepoRoot(filePath) || findTeslRepoRoot(wsPath) || wsPath;
+}
+
+function findTeslCompiler(wsPath, filePath) {
   // 1. Locally compiled binary in the workspace repo
-  const local = findWorkspaceCompiler(wsPath);
+  const local = findWorkspaceCompiler(resolveTeslRoot(wsPath, filePath));
   if (local) return local;
 
   // 2. TESL_COMPILER env var
@@ -118,13 +195,19 @@ function findTeslCompiler(wsPath) {
   return null;
 }
 
-function findGoDap(wsPath) {
+function findGoDap(wsPath, filePath) {
   const override = vscode.workspace.getConfiguration("tesl").get("dapBinary");
   if (override && fs.existsSync(override)) return { command: override, args: [], cwd: undefined };
 
-  const runtime = wsPath ? path.join(wsPath, "runtime", "go") : null;
-  if (runtime && fs.existsSync(path.join(runtime, "cmd", "tesl-dap", "main.go")) && commandOnPath("go")) {
-    return { command: "go", args: ["run", "./cmd/tesl-dap"], cwd: runtime };
+  const runtimeRoot = resolveTeslRoot(wsPath, filePath);
+  const runtime = runtimeRoot ? path.join(runtimeRoot, "runtime", "go") : null;
+  const go = findRepoGo(runtimeRoot);
+  if (runtime && go && fs.existsSync(path.join(runtime, "cmd", "tesl-dap", "main.go"))) {
+    return {
+      command: go,
+      args: ["run", "./cmd/tesl-dap"],
+      cwd: runtime,
+    };
   }
 
   const candidates = [
@@ -362,27 +445,30 @@ function activate(context) {
   }
   function teslProcessOptions(file) {
     const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(file));
-    const root = folder ? folder.uri.fsPath : wsPath;
+    const root = resolveTeslRoot(folder ? folder.uri.fsPath : wsPath, file);
     const compiler = findWorkspaceCompiler(root);
+    const toolchain = compiler ? findRepoToolchain(root) : null;
     return {
       cwd: path.dirname(file),
       env: {
-        ...process.env,
+        ...(toolchain ? toolchain.environment : process.env),
         ...teslTempEnvironment(),
         ...(compiler ? {
           TESL_REPO_ROOT: root,
           TESL_OCAML_COMPILER: compiler,
           TESL_COMPILER: compiler,
+          ...(toolchain ? { TESL_GO: toolchain.go } : {}),
         } : {}),
       },
     };
   }
   function teslLauncher(file) {
     const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(file));
-    const root = folder ? folder.uri.fsPath : wsPath;
+    const root = resolveTeslRoot(folder ? folder.uri.fsPath : wsPath, file);
     const localBody = path.join(root, "nix", "tesl-cli-body.sh");
-    if (findWorkspaceCompiler(root) && fs.existsSync(localBody) && commandOnPath("bash")) {
-      return { command: "bash", prefixArgs: [localBody] };
+    const bash = fs.existsSync("/bin/bash") ? "/bin/bash" : "bash";
+    if (findWorkspaceCompiler(root) && findRepoGo(root) && fs.existsSync(localBody)) {
+      return { command: bash, prefixArgs: [localBody] };
     }
     return { command: findTeslWrapper(), prefixArgs: [] };
   }
@@ -986,7 +1072,9 @@ function activate(context) {
     vscode.debug.registerDebugAdapterDescriptorFactory("tesl", {
       createDebugAdapterDescriptor(session) {
         const sessionRoot = session.workspaceFolder?.uri?.fsPath || wsPath;
-        const goDap = findGoDap(sessionRoot);
+        const program = session.configuration.program;
+        const projectRoot = resolveTeslRoot(sessionRoot, program);
+        const goDap = findGoDap(sessionRoot, program);
         if (!goDap) {
           vscode.window.showErrorMessage(
             "Tesl debugger: Go tesl-dap not found. Install Tesl or add tesl-dap to PATH."
@@ -994,11 +1082,13 @@ function activate(context) {
           return null;
         }
 
-        const compiler = findTeslCompiler(sessionRoot);
+        const compiler = findTeslCompiler(sessionRoot, program);
+        const toolchain = findTeslRepoRoot(program) ? findRepoToolchain(projectRoot) : null;
         const env = {
-          ...process.env,
+          ...(toolchain ? toolchain.environment : process.env),
           ...teslTempEnvironment(),
-          ...(sessionRoot ? { TESL_REPO_ROOT: sessionRoot } : {}),
+          TESL_DAP_TRACE: "1",
+          ...(projectRoot ? { TESL_REPO_ROOT: projectRoot } : {}),
           ...(compiler ? { TESL_COMPILER: compiler } : {}),
         };
         const dbgOut = vscode.window.createOutputChannel("Tesl Debugger");

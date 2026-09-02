@@ -98,6 +98,7 @@ type recordingTarget struct {
 type recordingBackend struct {
 	specifications []teslrt.DebugBreakpointSpec
 	continued      int
+	configured     int
 }
 
 func (backend *recordingBackend) Attach(teslrt.DebugListener) func() { return func() {} }
@@ -107,13 +108,21 @@ func (backend *recordingBackend) Continue() error {
 	backend.continued++
 	return nil
 }
+func (backend *recordingBackend) ConfigurationDone() error {
+	backend.configured++
+	return nil
+}
 func (backend *recordingBackend) Step(teslrt.DebugStepMode) error { return nil }
 func (backend *recordingBackend) SnapshotState() (teslrt.DebugSnapshot, error) {
 	return teslrt.DebugSnapshot{}, nil
 }
 func (backend *recordingBackend) SetBreakpointSpecs(specifications []teslrt.DebugBreakpointSpec) ([]teslrt.DebugBreakpointResult, error) {
 	backend.specifications = append([]teslrt.DebugBreakpointSpec(nil), specifications...)
-	return []teslrt.DebugBreakpointResult{{ID: "bp", Verified: true}}, nil
+	results := make([]teslrt.DebugBreakpointResult, len(specifications))
+	for index, specification := range specifications {
+		results[index] = teslrt.DebugBreakpointResult{ID: specification.ID, Verified: true}
+	}
+	return results, nil
 }
 
 type recordingBackendTarget struct{ backend *recordingBackend }
@@ -205,6 +214,9 @@ func TestServerCompletesLaunchHandshake(t *testing.T) {
 	if backend.continued != 0 {
 		t.Fatalf("configurationDone continued backend %d times, want 0", backend.continued)
 	}
+	if backend.configured != 1 {
+		t.Fatalf("configurationDone notified backend %d times, want 1", backend.configured)
+	}
 }
 
 func TestServerAppliesPreLaunchBreakpointsToNewBackend(t *testing.T) {
@@ -223,6 +235,33 @@ func TestServerAppliesPreLaunchBreakpointsToNewBackend(t *testing.T) {
 	}
 	if len(target.backend.specifications) != 1 || target.backend.specifications[0].File != "main.tesl" || target.backend.specifications[0].Line != 19 || target.backend.specifications[0].Condition != "n == 3" {
 		t.Fatalf("applied breakpoints = %#v", target.backend.specifications)
+	}
+}
+
+func TestServerKeepsBreakpointsForEachSource(t *testing.T) {
+	target := &recordingBackendTarget{backend: &recordingBackend{}}
+	server := NewServerWithTarget(strings.NewReader(""), io.Discard, teslrt.NewDebugger(), target)
+	defer server.Close()
+	for _, request := range []Request{
+		{Seq: 1, Type: "request", Command: "setBreakpoints", Arguments: mustJSON(setBreakpointsArguments{
+			Source: source{Path: "first.tesl"}, Breakpoints: []breakpointRequest{{Line: 10}},
+		})},
+		{Seq: 2, Type: "request", Command: "setBreakpoints", Arguments: mustJSON(setBreakpointsArguments{
+			Source: source{Path: "second.tesl"}, Breakpoints: []breakpointRequest{{Line: 20}},
+		})},
+	} {
+		response, _, err := server.handle(request)
+		if err != nil || !response.Success {
+			t.Fatalf("setBreakpoints = %#v, error = %v", response, err)
+		}
+	}
+	if response, _, err := server.handle(Request{Seq: 3, Type: "request", Command: "launch"}); err != nil || !response.Success {
+		t.Fatalf("launch = %#v, error = %v", response, err)
+	}
+	if len(target.backend.specifications) != 2 ||
+		target.backend.specifications[0].File != "first.tesl" ||
+		target.backend.specifications[1].File != "second.tesl" {
+		t.Fatalf("aggregated breakpoints = %#v", target.backend.specifications)
 	}
 }
 
@@ -406,6 +445,22 @@ func TestServerAddsDomainAndSQLScopes(t *testing.T) {
 	}
 	if len(variables.Variables) == 0 || variables.Variables[0].Name != "sql" {
 		t.Fatalf("SQL variables = %#v", variables.Variables)
+	}
+}
+
+func TestEvaluateFrameValueTraversesNamedChildren(t *testing.T) {
+	frame := teslrt.DebugFrame{Locals: []teslrt.DebugLocal{{
+		Name: "echoResp", Type: "Response", Value: teslrt.DebugValue{
+			Type: "Response", Display: "{...}", Children: []teslrt.DebugValue{{
+				Name: "body", Type: "JsonValue", Display: "{...}", Children: []teslrt.DebugValue{{
+					Name: "message", Type: "String", Display: "hello",
+				}},
+			}},
+		},
+	}}}
+	name, value, valueType, ok := evaluateFrameValue(frame, "echoResp.body.message")
+	if !ok || name != "echoResp" || value.Display != "hello" || valueType != "String" {
+		t.Fatalf("named evaluation = %q, %#v, %q, %t", name, value, valueType, ok)
 	}
 }
 

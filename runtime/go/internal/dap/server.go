@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,19 +16,21 @@ import (
 )
 
 type Server struct {
-	backend     DebugBackend
-	target      Target
-	reader      *protocol.Reader
-	writer      *protocol.Writer
-	session     *Session
-	detach      func()
-	close       sync.Once
-	mutex       sync.Mutex
-	frames      map[int]teslrt.DebugFrame
-	values      map[int]variableReference
-	nextRef     int
-	runtime     teslrt.DebugRuntimeState
-	breakpoints []teslrt.DebugBreakpointSpec
+	backend             DebugBackend
+	target              Target
+	reader              *protocol.Reader
+	writer              *protocol.Writer
+	session             *Session
+	detach              func()
+	close               sync.Once
+	mutex               sync.Mutex
+	frames              map[int]teslrt.DebugFrame
+	values              map[int]variableReference
+	nextRef             int
+	nextBreakpointID    int
+	runtime             teslrt.DebugRuntimeState
+	breakpoints         []teslrt.DebugBreakpointSpec
+	breakpointsBySource map[string][]teslrt.DebugBreakpointSpec
 }
 
 type DebugBackend interface {
@@ -117,14 +120,15 @@ func NewServerWithBackend(input io.Reader, output io.Writer, backend DebugBacken
 
 func NewServerWithBackendAndTarget(input io.Reader, output io.Writer, backend DebugBackend, target Target) *Server {
 	server := &Server{
-		backend: backend,
-		target:  target,
-		reader:  protocol.NewReader(input),
-		writer:  protocol.NewWriter(output),
-		session: NewSession(),
-		frames:  make(map[int]teslrt.DebugFrame),
-		values:  make(map[int]variableReference),
-		nextRef: 1,
+		backend:             backend,
+		target:              target,
+		reader:              protocol.NewReader(input),
+		writer:              protocol.NewWriter(output),
+		session:             NewSession(),
+		frames:              make(map[int]teslrt.DebugFrame),
+		values:              make(map[int]variableReference),
+		nextRef:             1,
+		breakpointsBySource: make(map[string][]teslrt.DebugBreakpointSpec),
 	}
 	server.detach = backend.Attach(server.stopped)
 	if eventTarget, ok := target.(TargetEventListener); ok {
@@ -350,6 +354,11 @@ func (server *Server) handle(request Request) (Response, bool, error) {
 			SupportsSteppingGranularity:       true,
 		})
 	case "configurationDone":
+		if backend, ok := server.backend.(interface{ ConfigurationDone() error }); ok {
+			if err := backend.ConfigurationDone(); err != nil {
+				return server.failure(request, err.Error())
+			}
+		}
 		return server.success(request, map[string]bool{})
 	case "setExceptionBreakpoints":
 		return server.success(request, map[string]bool{})
@@ -481,17 +490,38 @@ func (server *Server) setBreakpoints(request Request) (Response, bool, error) {
 	}
 	var results []teslrt.DebugBreakpointResult
 	specifications := make([]teslrt.DebugBreakpointSpec, 0, len(arguments.Breakpoints))
-	for index, specification := range arguments.Breakpoints {
+	for _, specification := range arguments.Breakpoints {
+		server.mutex.Lock()
+		server.nextBreakpointID++
+		breakpointID := fmt.Sprintf("dap-bp-%d", server.nextBreakpointID)
+		server.mutex.Unlock()
 		specifications = append(specifications, teslrt.DebugBreakpointSpec{
-			ID: fmt.Sprintf("dap-bp-%d", index+1), File: arguments.Source.Path, Line: specification.Line,
+			ID: breakpointID, File: arguments.Source.Path, Line: specification.Line,
 			Condition: specification.Condition, Hit: specification.HitCondition,
 		})
 	}
+	server.mutex.Lock()
+	if len(specifications) == 0 {
+		delete(server.breakpointsBySource, arguments.Source.Path)
+	} else {
+		server.breakpointsBySource[arguments.Source.Path] = specifications
+	}
+	sources := make([]string, 0, len(server.breakpointsBySource))
+	for sourcePath := range server.breakpointsBySource {
+		sources = append(sources, sourcePath)
+	}
+	sort.Strings(sources)
+	allBreakpoints := make([]teslrt.DebugBreakpointSpec, 0)
+	for _, sourcePath := range sources {
+		allBreakpoints = append(allBreakpoints, server.breakpointsBySource[sourcePath]...)
+	}
+	server.breakpoints = allBreakpoints
+	server.mutex.Unlock()
 	if backend, ok := server.backend.(interface {
 		SetBreakpointSpecs([]teslrt.DebugBreakpointSpec) ([]teslrt.DebugBreakpointResult, error)
 	}); ok {
 		var err error
-		results, err = backend.SetBreakpointSpecs(specifications)
+		results, err = backend.SetBreakpointSpecs(allBreakpoints)
 		if err != nil {
 			return server.failure(request, err.Error())
 		}
@@ -502,28 +532,30 @@ func (server *Server) setBreakpoints(request Request) (Response, bool, error) {
 		if !ok {
 			return server.failure(request, "debug backend does not support breakpoints")
 		}
-		debugBreakpoints := make([]teslrt.DebugBreakpoint, 0, len(arguments.Breakpoints))
-		for index, specification := range arguments.Breakpoints {
+		debugBreakpoints := make([]teslrt.DebugBreakpoint, 0, len(allBreakpoints))
+		for _, specification := range allBreakpoints {
 			condition, err := teslrt.CompileDebugCondition(specification.Condition)
 			if err != nil {
 				return server.failure(request, "invalid condition: "+err.Error())
 			}
-			hitCondition, err := teslrt.ParseHitCondition(specification.HitCondition)
+			hitCondition, err := teslrt.ParseHitCondition(specification.Hit)
 			if err != nil {
 				return server.failure(request, "invalid hit condition: "+err.Error())
 			}
 			debugBreakpoints = append(debugBreakpoints, teslrt.DebugBreakpoint{
-				ID: fmt.Sprintf("dap-bp-%d", index+1), File: arguments.Source.Path, Line: specification.Line,
+				ID: specification.ID, File: specification.File, Line: specification.Line,
 				Condition: condition, HitCondition: hitCondition,
 			})
 		}
 		results = backend.SetBreakpoints(debugBreakpoints)
 	}
-	server.mutex.Lock()
-	server.breakpoints = append([]teslrt.DebugBreakpointSpec(nil), specifications...)
-	server.mutex.Unlock()
-	body := breakpointsBody{Breakpoints: make([]breakpoint, len(results))}
-	for index, result := range results {
+	body := breakpointsBody{Breakpoints: make([]breakpoint, len(specifications))}
+	resultsByID := make(map[string]teslrt.DebugBreakpointResult, len(results))
+	for _, result := range results {
+		resultsByID[result.ID] = result
+	}
+	for index, specification := range specifications {
+		result := resultsByID[specification.ID]
 		line := 0
 		if index < len(arguments.Breakpoints) {
 			line = arguments.Breakpoints[index].Line
@@ -555,6 +587,11 @@ func (server *Server) stackTrace(request Request) (Response, bool, error) {
 		frames = []teslrt.DebugFrame{}
 	} else if len(frames) == 0 {
 		frames = []teslrt.DebugFrame{last}
+	} else {
+		// The runtime stack stores function-entry frames. A statement checkpoint
+		// has its own stable ID, so it cannot update that entry by ID. The active
+		// top frame must still show the exact stopped line and statement locals.
+		frames[len(frames)-1] = last
 	}
 	all := make([]stackFrame, 0, len(frames))
 	server.mutex.Lock()
@@ -768,9 +805,12 @@ func (server *Server) evaluate(request Request) (Response, bool, error) {
 }
 
 func evaluateFrameValue(frame teslrt.DebugFrame, expression string) (string, teslrt.DebugValue, string, bool) {
-	baseEnd := strings.IndexByte(expression, '[')
-	if baseEnd < 0 {
-		baseEnd = len(expression)
+	baseEnd := len(expression)
+	for index, character := range expression {
+		if character == '[' || character == '.' {
+			baseEnd = index
+			break
+		}
 	}
 	name := expression[:baseEnd]
 	if name == "" {
@@ -792,20 +832,47 @@ func evaluateFrameValue(frame teslrt.DebugFrame, expression string) (string, tes
 	}
 	remaining := expression[baseEnd:]
 	for remaining != "" {
-		if remaining[0] != '[' {
+		switch remaining[0] {
+		case '[':
+			end := strings.IndexByte(remaining, ']')
+			if end < 2 {
+				return "", teslrt.DebugValue{}, "", false
+			}
+			index, err := strconv.Atoi(remaining[1:end])
+			if err != nil || index < 0 || index >= len(value.Children) {
+				return "", teslrt.DebugValue{}, "", false
+			}
+			value = value.Children[index]
+			valueType = value.Type
+			remaining = remaining[end+1:]
+		case '.':
+			end := len(remaining)
+			for index, character := range remaining[1:] {
+				if character == '[' || character == '.' {
+					end = index + 1
+					break
+				}
+			}
+			name := remaining[1:end]
+			if name == "" {
+				return "", teslrt.DebugValue{}, "", false
+			}
+			childIndex := -1
+			for index, child := range value.Children {
+				if child.Name == name {
+					childIndex = index
+					break
+				}
+			}
+			if childIndex < 0 {
+				return "", teslrt.DebugValue{}, "", false
+			}
+			value = value.Children[childIndex]
+			valueType = value.Type
+			remaining = remaining[end:]
+		default:
 			return "", teslrt.DebugValue{}, "", false
 		}
-		end := strings.IndexByte(remaining, ']')
-		if end < 2 {
-			return "", teslrt.DebugValue{}, "", false
-		}
-		index, err := strconv.Atoi(remaining[1:end])
-		if err != nil || index < 0 || index >= len(value.Children) {
-			return "", teslrt.DebugValue{}, "", false
-		}
-		value = value.Children[index]
-		valueType = value.Type
-		remaining = remaining[end+1:]
 	}
 	return name, value, valueType, true
 }

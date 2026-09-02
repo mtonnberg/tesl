@@ -127,6 +127,11 @@ func (client *ControlClient) SetBreakpointSpecs(specifications []teslrt.DebugBre
 	return breakpoints, nil
 }
 
+func (client *ControlClient) ConfigurationDone() error {
+	_, err := client.call(teslrt.DebugControlRequest{Command: "configuration-done"})
+	return err
+}
+
 func (client *ControlClient) Pause() error {
 	_, err := client.call(teslrt.DebugControlRequest{Command: "pause"})
 	return err

@@ -3,6 +3,8 @@ package teslrt
 import (
 	"fmt"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -18,13 +20,82 @@ type SourceLocation struct {
 	Column int    `json:"column"`
 }
 
-type DebugValue struct {
-	Name         string       `json:"name,omitempty"`
-	EvaluateName string       `json:"evaluateName,omitempty"`
-	Type         string       `json:"type"`
-	Display      string       `json:"display"`
-	Children     []DebugValue `json:"children,omitempty"`
-	Truncated    bool         `json:"truncated,omitempty"`
+type debugValueProvider interface {
+	DebugValue(string) DebugValue
+}
+
+// DebugValueOf builds the expandable value tree used by the DAP adapter. The evaluator name is
+// carried into children so a client can inspect a field using the same expression it sees in the
+// Tesl source. Feature-specific values can provide DebugValue without making the core debugger
+// depend on an optional runtime file.
+func DebugValueOf(value any, evaluateName string) DebugValue {
+	if provider, ok := value.(debugValueProvider); ok {
+		return provider.DebugValue(evaluateName)
+	}
+	return debugReflectValue(reflect.ValueOf(value), evaluateName, 0)
+}
+
+func debugReflectValue(value reflect.Value, evaluateName string, depth int) DebugValue {
+	if !value.IsValid() {
+		return DebugValue{Type: "null", Display: "null", EvaluateName: evaluateName}
+	}
+	for value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return DebugValue{Type: value.Type().String(), Display: "nil", EvaluateName: evaluateName}
+		}
+		value = value.Elem()
+	}
+	if value.CanInterface() {
+		if provider, ok := value.Interface().(debugValueProvider); ok {
+			return provider.DebugValue(evaluateName)
+		}
+		if integer, ok := value.Interface().(Int); ok {
+			return DebugValue{Type: "Int", Display: integer.String(), EvaluateName: evaluateName}
+		}
+	}
+	result := DebugValue{Type: value.Type().String(), Display: fmt.Sprint(value.Interface()), EvaluateName: evaluateName}
+	if depth >= 8 {
+		return result
+	}
+	switch value.Kind() {
+	case reflect.Struct:
+		for index := 0; index < value.NumField(); index++ {
+			field := value.Type().Field(index)
+			if field.PkgPath != "" || !value.Field(index).CanInterface() {
+				continue
+			}
+			name := strings.ToLower(field.Name[:1]) + field.Name[1:]
+			child := debugReflectValue(value.Field(index), joinDebugField(evaluateName, name), depth+1)
+			child.Name = name
+			result.Children = append(result.Children, child)
+		}
+	case reflect.Slice, reflect.Array:
+		for index := 0; index < value.Len(); index++ {
+			name := fmt.Sprintf("[%d]", index)
+			child := debugReflectValue(value.Index(index), evaluateName+name, depth+1)
+			child.Name = name
+			result.Children = append(result.Children, child)
+		}
+	case reflect.Map:
+		keys := value.MapKeys()
+		sort.Slice(keys, func(left, right int) bool {
+			return fmt.Sprint(keys[left].Interface()) < fmt.Sprint(keys[right].Interface())
+		})
+		for _, key := range keys {
+			name := fmt.Sprint(key.Interface())
+			child := debugReflectValue(value.MapIndex(key), joinDebugField(evaluateName, name), depth+1)
+			child.Name = name
+			result.Children = append(result.Children, child)
+		}
+	}
+	return result
+}
+
+func joinDebugField(base, field string) string {
+	if base == "" {
+		return field
+	}
+	return base + "." + field
 }
 
 // Bounded returns a copy safe for a wire value tree. It limits depth, child count,
