@@ -1,7 +1,9 @@
 package teslrt
 
 import (
+	"fmt"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 )
@@ -29,7 +31,7 @@ type ApiResponse struct {
 // a header value is transport text, not JSON.
 func ApiRequest(server Server, method, path, body string, cookies []string,
 	headers []Tuple2[string, string]) ApiResponse {
-	request := httptest.NewRequest(method, path, strings.NewReader(body))
+	request := newApiTestRequest(method, path, body)
 	// A REQUEST cookie is just `name=value` on the wire — it carries none of the
 	// Secure/HttpOnly/SameSite attributes a response cookie does, so the header is built
 	// directly rather than through http.Cookie (which would also make gosec flag a
@@ -99,6 +101,23 @@ func ApiRequest(server Server, method, path, body string, cookies []string,
 		Body:    JsonParseBody(string(raw)),
 		Headers: responseHeaders,
 	}
+}
+
+// newApiTestRequest builds the in-process request. `httptest.NewRequest` PANICS on a path it
+// cannot parse — it assembles a request line and reads it back, so a space or a bad escape in
+// the path surfaces as Go's `malformed HTTP version "b HTTP/1.0"`. Since issue #45 the path may
+// be any String expression, so that is reachable from a test, and left alone it would crash the
+// whole test binary with a message about HTTP versions. The trap here names the path and the
+// test it belongs to instead — a trap rather than a 400-shaped response, because every other
+// mistake in an api-test's own text (a `fieldAt` on a non-object, an `arrayAt` out of range)
+// is a trap too, and a 400 would read as the SERVER's verdict on a request it never saw.
+func newApiTestRequest(method, path, body string) (request *http.Request) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			panic(fmt.Sprintf("api-test: cannot build the request %s %q: %v", method, path, recovered))
+		}
+	}()
+	return httptest.NewRequest(method, path, strings.NewReader(body))
 }
 
 // The status predicates Tesl.ApiTest exposes.

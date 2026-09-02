@@ -333,7 +333,7 @@ let check_codec_proof_coverage ?facts ?(extra_funcs=[]) (decls : top_decl list) 
     | Some (name, fields) ->
       let field_proofs = List.filter_map (fun (f : field_def) ->
         match f.proof_ann with
-        | Some proof -> Some (f.name, List.sort_uniq String.compare (proof_predicates proof))
+        | Some proof -> Some (f.name, proof)
         | None -> None
       ) fields in
       if field_proofs = [] then None else Some (name, field_proofs)
@@ -351,7 +351,10 @@ let check_codec_proof_coverage ?facts ?(extra_funcs=[]) (decls : top_decl list) 
                 | DecodeField { field_name; via; loc; _ } ->
                   (match List.assoc_opt field_name field_requirements with
                    | None -> ()
-                   | Some required_preds ->
+                   | Some required_proof ->
+                     let required_preds =
+                       List.sort_uniq String.compare (proof_predicates required_proof) in
+                     let required_apps = proof_apps_of ~subject:field_name required_proof in
                      if via = [] then
                        errors := make_error loc
                          ~hint:(Printf.sprintf "add `via <checkFn>` so field '%s' is validated before decoding succeeds" field_name)
@@ -383,15 +386,22 @@ let check_codec_proof_coverage ?facts ?(extra_funcs=[]) (decls : top_decl list) 
                                  | AuthKind -> "auth"))
                              :: !errors
                          | Some info ->
-                           covered := pred_names_of_return_spec info.fi_return @ !covered
+                           covered := proof_apps_of_return_spec info.fi_return @ !covered
                        ) via;
-                       let covered = List.sort_uniq String.compare !covered in
-                       let uncovered = List.filter (fun pred -> not (List.mem pred covered)) required_preds in
+                       let uncovered = uncovered_proof_apps ~declared:required_apps ~covered:!covered in
                        if uncovered <> [] then
                          errors := make_error loc
-                           ~hint:(Printf.sprintf "via functions provided: %s" (String.concat ", " via))
-                           (Printf.sprintf "codec '%s': decoder field '%s' requires proof predicates %s that are not established by any `via` function"
-                              cf.name field_name (String.concat ", " uncovered))
+                           ~hint:(Printf.sprintf
+                                    "via functions provided: %s — they establish %s; a `via` must \
+                                     establish the declared proof with the SAME arguments (only the \
+                                     value's own name may differ)"
+                                    (String.concat ", " via)
+                                    (if !covered = [] then "no proof"
+                                     else String.concat ", "
+                                         (List.map (fun app -> "`" ^ describe_proof_app app ^ "`") !covered)))
+                           (Printf.sprintf "codec '%s': decoder field '%s' requires proof %s that is not established by any `via` function"
+                              cf.name field_name
+                              (String.concat ", " (List.map (fun app -> "`" ^ describe_proof_app app ^ "`") uncovered)))
                            :: !errors
                      end)
                 | DecodeDefault { field_name; loc; _ } ->
@@ -401,7 +411,9 @@ let check_codec_proof_coverage ?facts ?(extra_funcs=[]) (decls : top_decl list) 
                      unproven field.  Fail closed for such fields; non-proof
                      fields (no requirement) keep defaulting freely. *)
                   (match List.assoc_opt field_name field_requirements with
-                   | Some (_ :: _ as required_preds) ->
+                   | Some required_proof when proof_predicates required_proof <> [] ->
+                     let required_preds =
+                       List.sort_uniq String.compare (proof_predicates required_proof) in
                      errors := make_error loc
                        ~hint:(Printf.sprintf
                          "field '%s' carries a proof; decode it with `via <checkFn>` that establishes it, not from a default value"
@@ -410,7 +422,7 @@ let check_codec_proof_coverage ?facts ?(extra_funcs=[]) (decls : top_decl list) 
                          "codec '%s': decoder field '%s' requires proof predicates %s but is populated from a default value with no `via` validation"
                          cf.name field_name (String.concat ", " required_preds))
                        :: !errors
-                   | Some [] | None -> ())
+                   | Some _ | None -> ())
                 | DecodeCrossCheck _ -> ()
               ) alt
             ) alts))

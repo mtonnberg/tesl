@@ -329,6 +329,63 @@ fn good(u: User ::: Authenticated u) -> List Tool
           {|import Tesl.String exposing [String.concat]
 import Tesl.Time exposing [nowMillis, PosixMillis, time]|})
 
+
+(* ── Cookie confinement (review 2026-09-02, H9) ──────────────────────────────
+   The Racket suite `session-cookie-tool-confinement-test.rkt` pinned that a tool
+   cannot write the OUTER request's session cookie.  On Go the emitter refuses to
+   offer a scope-writing handler as a tool at all — a tool call has no HTTP
+   response to attach a cookie to — so the property is decided at compile time.
+   This is the Go home of that test. *)
+let test_cookie_writing_handler_not_offered_as_tool () =
+  let src = {|module StCookie exposing []
+
+import Tesl.Prelude exposing [String, Bool(..), List]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Http exposing [HttpRequest, cookieCap, Http.clearSessionCookie]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Agent exposing [Tool, serverTools]
+
+record User {
+  id: String
+}
+
+fact Authenticated (u: User)
+
+auth cookieAuth(request: HttpRequest) -> u: User ::: Authenticated u =
+  case Dict.lookup "user" request.cookies of
+    Something userId -> ok (User { id: userId }) ::: Authenticated u
+    Nothing -> fail 401 "Missing user cookie"
+
+handler post logout(u: User ::: Authenticated u) -> String requires [cookieCap] =
+  let _ = Http.clearSessionCookie()
+  "bye"
+
+api CookieApi {
+  post "/logout"
+    auth u: User ::: Authenticated u via cookieAuth
+    -> String
+}
+
+server CookieServer for CookieApi {
+  logout
+}
+
+fn tools(u: User ::: Authenticated u) -> List Tool requires [cookieCap] =
+  serverTools CookieServer u
+|} in
+  with_temp_file src (fun path ->
+    match Compile.compile_go_file path with
+    | Compile.GoFailure diagnostics ->
+      let text = String.concat "\n"
+          (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics) in
+      let re = Str.regexp_case_fold "cannot offer `logout` as a tool: it writes a cookie" in
+      (try ignore (Str.search_forward re text 0)
+       with Not_found ->
+         failf "expected the cookie-writing handler to be refused as a tool, got:\n%s" text)
+    | Compile.GoSuccess _ ->
+      fail "a handler that writes the session cookie was offered to the agent as a tool")
+
 let () =
   run "server-tools"
     [
@@ -353,6 +410,8 @@ let () =
           test_case "bare reference rejected" `Quick test_rejects_bare_reference;
           test_case "heterogeneous auth types rejected" `Quick
             test_rejects_heterogeneous_auth_types;
+          test_case "cookie-writing handler is not offered as a tool" `Quick
+            test_cookie_writing_handler_not_offered_as_tool;
           test_case "handler capabilities charged at the serverTools site" `Quick
             test_charges_handler_capabilities;
         ] );

@@ -170,12 +170,18 @@ func TestTeslApi0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson55-testing-auth-and-capabilities.tesl:117
 		resp := teslrt.ApiRequest(AuthServer, "GET", "/health", "", nil, nil)
 		_ = resp
 //line lesson55-testing-auth-and-capabilities.tesl:118
 		if !(teslrt.StatusOk(resp.Status)) {
+//line lesson55-testing-auth-and-capabilities.tesl:118
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -191,12 +197,18 @@ func TestTeslApi1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson55-testing-auth-and-capabilities.tesl:123
 		resp := teslrt.ApiRequest(AuthServer, "GET", "/profile", "", nil, nil)
 		_ = resp
 //line lesson55-testing-auth-and-capabilities.tesl:124
 		if !(teslrt.StatusClientError(resp.Status)) {
+//line lesson55-testing-auth-and-capabilities.tesl:124
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -212,12 +224,18 @@ func TestTeslApi2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson55-testing-auth-and-capabilities.tesl:129
 		resp := teslrt.ApiRequest(AuthServer, "GET", "/profile", "", []string{"__Host-session=" + mintSession("alice")}, nil)
 		_ = resp
 //line lesson55-testing-auth-and-capabilities.tesl:130
 		if !(teslrt.StatusOk(resp.Status)) {
+//line lesson55-testing-auth-and-capabilities.tesl:130
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -233,12 +251,18 @@ func TestTeslApi3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson55-testing-auth-and-capabilities.tesl:137
 		resp := teslrt.ApiRequest(AuthServer, "GET", "/profile", "", []string{"__Host-session=" + "alice"}, nil)
 		_ = resp
 //line lesson55-testing-auth-and-capabilities.tesl:138
 		if !(teslrt.StatusClientError(resp.Status)) {
+//line lesson55-testing-auth-and-capabilities.tesl:138
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -254,12 +278,18 @@ func TestTeslApi4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson55-testing-auth-and-capabilities.tesl:145
 		resp := teslrt.ApiRequest(AuthServer, "GET", "/profile", "", []string{"__Host-session=" + forgedSession("alice")}, nil)
 		_ = resp
 //line lesson55-testing-auth-and-capabilities.tesl:146
 		if !(teslrt.StatusClientError(resp.Status)) {
+//line lesson55-testing-auth-and-capabilities.tesl:146
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}

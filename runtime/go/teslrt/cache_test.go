@@ -185,3 +185,72 @@ func TestCacheIsSafeUnderConcurrentUse(t *testing.T) {
 	}
 	waiting.Wait()
 }
+
+// ── Bounds ────────────────────────────────────────────────────────────────────
+
+// fakeCacheClock replaces the cache's clock for the test and answers a function that moves it.
+func fakeCacheClock(t *testing.T) func(seconds int64) {
+	t.Helper()
+	now := time.Now().Unix()
+	previous := cacheNow
+	cacheNow = func() int64 { return now }
+	t.Cleanup(func() { cacheNow = previous })
+	return func(seconds int64) { now += seconds }
+}
+
+// Expired entries no longer wait for a read that may never come: the next write after the
+// clock moves sweeps them, and the entry count never passes the bound meanwhile.
+func TestCacheExpiredEntriesDoNotStayResident(t *testing.T) {
+	advance := fakeCacheClock(t)
+	cache := NewCache[string](1)
+	for i := 0; i <= defaultCacheMaxEntries; i++ {
+		CacheSet(cache, fmt.Sprintf("user_%d", i), "v")
+	}
+	if len(cache.entries) != defaultCacheMaxEntries {
+		t.Fatalf("%d entries resident, want the %d bound", len(cache.entries), defaultCacheMaxEntries)
+	}
+	advance(2)
+	CacheSet(cache, "fresh", "v")
+	if len(cache.entries) != 1 {
+		t.Fatalf("%d entries resident after every TTL passed, want just the fresh one", len(cache.entries))
+	}
+	if got := CacheGet(cache, "fresh"); !got.IsSomething() {
+		t.Fatal("the fresh entry must survive the sweep")
+	}
+}
+
+// At the bound, expired entries go first and then the OLDEST write; a live, recent entry is
+// never the victim while an older one exists.
+func TestCacheBoundEvictsExpiredThenOldest(t *testing.T) {
+	advance := fakeCacheClock(t)
+	cache := NewCache[string](0)
+	cache.maxEntries = 3
+	CacheSet(cache, "a", "v")
+	CacheSetTTL(cache, "b", "v", FromInt64(1))
+	CacheSet(cache, "c", "v")
+	advance(2)
+	CacheSet(cache, "d", "v") // b has expired: it is the one to go
+	if _, still := cache.entries["b"]; still || len(cache.entries) != 3 {
+		t.Fatalf("entries after d = %v", keysOf(cache))
+	}
+	CacheSet(cache, "e", "v") // nothing expired: the oldest live write (a) goes
+	if _, still := cache.entries["a"]; still || len(cache.entries) != 3 {
+		t.Fatalf("entries after e = %v", keysOf(cache))
+	}
+	CacheSet(cache, "c", "v2") // an overwrite is not a new entry and evicts nothing
+	if len(cache.entries) != 3 {
+		t.Fatalf("an overwrite changed the count: %v", keysOf(cache))
+	}
+	CacheSet(cache, "f", "v") // c was rewritten, so d is now the oldest
+	if _, still := cache.entries["d"]; still {
+		t.Fatalf("entries after f = %v, want d evicted (c was rewritten)", keysOf(cache))
+	}
+}
+
+func keysOf[V any](cache *Cache[V]) []string {
+	keys := make([]string, 0, len(cache.entries))
+	for key := range cache.entries {
+		keys = append(keys, key)
+	}
+	return keys
+}

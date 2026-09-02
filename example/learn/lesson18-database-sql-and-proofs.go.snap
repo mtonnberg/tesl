@@ -231,8 +231,10 @@ func updateNoteTitle(user string, noteId string, body NewNote) Note {
 					teslNext := note
 					teslNext.Title = body.Title
 					return teslNext
-				}, teslrt.PgSql("update \"notes_app\".\"notes\" set \"title\" = $1 where \"id\" = $2 returning \"id\", \"title\", \"content\", \"author_id\", \"created_at\"", func() []any {
+				}, teslrt.PgSqlProbed("update \"notes_app\".\"notes\" set \"title\" = $1 where \"id\" = $2 and (select count(*) from \"notes_app\".\"notes\" where \"id\" = $2) = 1 returning \"id\", \"title\", \"content\", \"author_id\", \"created_at\"", func() []any {
 					return []any{body.Title, noteId}
+				}, "select count(*) from \"notes_app\".\"notes\" where \"id\" = $1", func() []any {
+					return []any{noteId}
 				}), teslScanNote)
 			}
 			panic("unreachable: checker guarantees case exhaustiveness")

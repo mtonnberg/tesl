@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -57,9 +56,10 @@ func main() {
 // It returns the process exit code; stdout/stderr are injectable for tests.
 func run(arguments []string, stdin io.Reader, stdout io.Writer) int {
 	flags := flag.NewFlagSet("tesl-debug-attach", flag.ContinueOnError)
-	project := flags.String("project", "", "project directory containing .tesl-stuff/debug.sock or debug.port")
+	project := flags.String("project", "", "project directory containing .tesl-stuff/debug.sock or debug.port (+ debug.token)")
 	socket := flags.String("socket", "", "Unix debug socket")
 	tcp := flags.String("tcp", "", "loopback debug address")
+	token := flags.String("token", "", "hex token for a loopback debug address (read from .tesl-stuff/debug.token with -project)")
 	operation := flags.String("operation", "bridge", "bridge, once, snapshot, ping, or detach")
 	bridgeOnce := flags.Bool("bridge-once", false, "process one bridge request and exit")
 	once := flags.Bool("once", false, "arm breakpoints, wait for one stop, and return")
@@ -99,17 +99,20 @@ func run(arguments []string, stdin io.Reader, stdout io.Writer) int {
 		return fail("one of -project, -socket, or -tcp is required")
 	}
 	if *project != "" && *socket == "" && *tcp == "" {
-		var err error
-		*socket, *tcp, err = projectEndpoint(*project)
+		endpoint, err := projectEndpoint(*project)
 		if err != nil {
 			return fail("discover debug endpoint: %v", err)
+		}
+		*socket, *tcp = endpoint.Socket, endpoint.Address
+		if *token == "" {
+			*token = endpoint.Token
 		}
 	}
 	connection, err := dial(*socket, *tcp, time.Duration(*timeoutMS)*time.Millisecond)
 	if err != nil {
 		return fail("connect debug endpoint: %v", err)
 	}
-	client, err := dap.NewControlClient(connection)
+	client, err := dap.NewControlClientWithToken(connection, *token)
 	if err != nil {
 		return fail("handshake: %v", err)
 	}
@@ -245,21 +248,10 @@ func snapshotOutput(snapshot teslrt.DebugSnapshot) output {
 	return result
 }
 
-func projectEndpoint(project string) (string, string, error) {
-	stuff := filepath.Join(project, ".tesl-stuff")
-	socket := filepath.Join(stuff, "debug.sock")
-	if _, err := os.Stat(socket); err == nil {
-		return socket, "", nil
-	}
-	contents, err := os.ReadFile(filepath.Join(stuff, "debug.port")) // #nosec G304 -- read only the selected project's debug port.
-	if err != nil {
-		return "", "", err
-	}
-	port := strings.TrimSpace(string(contents))
-	if _, err := strconv.Atoi(port); err != nil {
-		return "", "", err
-	}
-	return "", "127.0.0.1:" + port, nil
+// projectEndpoint discovers the socket, or the port AND its token, under
+// <project>/.tesl-stuff — the same rule the DAP adapter applies.
+func projectEndpoint(project string) (dap.ProjectEndpoint, error) {
+	return dap.DiscoverProjectEndpoint(project)
 }
 
 func parseBreakpoint(value string) (string, int, error) {

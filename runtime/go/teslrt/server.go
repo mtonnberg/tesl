@@ -82,15 +82,19 @@ func callHandler(handler HandlerFunc, scope *RequestScope, request *http.Request
 			response = Fail(rejection.Status, rejection.Message)
 			return
 		}
-		// ANY other trap becomes a SANITIZED 500. The message is deliberately generic and the
-		// trap text never reaches the client: a trap message carries whatever the program was
-		// holding (a path, a key, a row), and an `auth` block is exactly where a malformed
-		// cookie can provoke one — so a client-triggerable trap must not become a
-		// client-readable disclosure. The detail is still available to the operator, on stderr.
-		fmt.Fprintf(os.Stderr, "tesl: handler trapped: %v\n%s", recovered, debug.Stack())
-		response = Fail(500, "Internal server error")
+		response = sanitizedTrap(recovered)
 	}()
 	return handler(scope, request)
+}
+
+// sanitizedTrap is what ANY other trap becomes: a 500 whose message is deliberately generic.
+// The trap text never reaches the client: a trap message carries whatever the program was
+// holding (a path, a key, a row), and an `auth` block is exactly where a malformed cookie can
+// provoke one — so a client-triggerable trap must not become a client-readable disclosure. The
+// detail is still available to the operator, on stderr.
+func sanitizedTrap(recovered any) Response {
+	fmt.Fprintf(os.Stderr, "tesl: handler trapped: %v\n%s", recovered, debug.Stack())
+	return Fail(500, "Internal server error")
 }
 
 func (server Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -113,12 +117,14 @@ func (server Server) ServeHTTP(writer http.ResponseWriter, request *http.Request
 		handleSsoRequest(route, kind, writer, request)
 		return
 	}
-	pathMatched := false
+	// The methods declared for a path that matched, for the `Allow` header a 405 MUST carry
+	// (RFC 9110 §15.5.6) — the answer to "wrong method" is useless without the right ones.
+	var allowed []string
 	for _, route := range server.Routes {
 		if !pathMatches(route.Path, request.URL.Path) {
 			continue
 		}
-		pathMatched = true
+		allowed = append(allowed, route.Method)
 		if route.Method != request.Method {
 			continue
 		}
@@ -137,7 +143,8 @@ func (server Server) ServeHTTP(writer http.ResponseWriter, request *http.Request
 		writeResponse(writer, scope, callHandler(handler, scope, request))
 		return
 	}
-	if pathMatched {
+	if len(allowed) > 0 {
+		writer.Header().Set("Allow", strings.Join(allowed, ", "))
 		writeResponse(writer, nil, Fail(405, "method not allowed"))
 		return
 	}
@@ -180,6 +187,16 @@ func PathParam(pattern, path, name string) (string, bool) {
 }
 
 func writeResponse(writer http.ResponseWriter, scope *RequestScope, response Response) {
+	// The body is encoded BEFORE the status is chosen, because encoding can trap — a Float that
+	// overflowed to +Inf has no JSON spelling — and the handler's `callHandler` recover is
+	// already behind us by now. Left to net/http the trap would close the connection with a
+	// stack on stderr and no response; here it becomes the same sanitized 500 every other trap
+	// is, and a 500 attaches no cookie, so the status is decided before the cookie loop.
+	body, encoded := encodeResponseBody(response.Body)
+	if !encoded {
+		response = Fail(500, "Internal server error")
+		body = EncodeJSONValue(response.Body)
+	}
 	// Cookies attach to 2xx responses only, matching dsl/web.rkt: a handler that sets a
 	// cookie and then fails mints no session.
 	if scope != nil && response.Status >= 200 && response.Status < 300 {
@@ -189,7 +206,20 @@ func writeResponse(writer http.ResponseWriter, scope *RequestScope, response Res
 	}
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(response.Status)
-	_, _ = writer.Write([]byte(EncodeJSONValue(response.Body)))
+	_, _ = writer.Write([]byte(body))
+}
+
+// encodeResponseBody renders a response body, reporting a trap as `false` after logging it
+// the way `callHandler` logs a handler trap — the encoder is the last program-controlled step
+// before the bytes leave, and its failure is the program's, not the client's.
+func encodeResponseBody(value any) (body string, encoded bool) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			_ = sanitizedTrap(recovered)
+			body, encoded = "", false
+		}
+	}()
+	return EncodeJSONValue(value), true
 }
 
 // IntegerSegment parses a path capture declared with `intCodec`.
@@ -205,7 +235,13 @@ func writeResponse(writer http.ResponseWriter, scope *RequestScope, response Res
 func IntegerSegment(segment string) Check[Int] {
 	value, err := ParseDecimal(segment)
 	if err != nil {
-		return Reject[Int](400, "Expected an integer path segment, got "+segment)
+		// The echoed segment is bounded: a client that sent a megabyte of digits does not get
+		// a megabyte back, and an operator log line stays a line.
+		shown := segment
+		if len(shown) > 64 {
+			shown = shown[:64] + "…"
+		}
+		return Reject[Int](400, "Expected an integer path segment, got "+shown)
 	}
 	return Accept(value)
 }

@@ -172,6 +172,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson23-maybe-and-optional-values.tesl:109
 		xs := []teslrt.Int{}
@@ -180,6 +185,7 @@ func TestTesl0(teslT *testing.T) {
 		teslRight1 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}
 //line lesson23-maybe-and-optional-values.tesl:110
 		if teslLeft1.Tag != teslRight1.Tag || (teslLeft1.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft1.SomethingValue, teslRight1.SomethingValue)) {
+//line lesson23-maybe-and-optional-values.tesl:110
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -192,10 +198,16 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft2 := SafeDivideInt(teslrt.FromInt64(10), teslrt.FromInt64(0))
 	teslRight2 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}
 //line lesson23-maybe-and-optional-values.tesl:114
 	if teslLeft2.Tag != teslRight2.Tag || (teslLeft2.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft2.SomethingValue, teslRight2.SomethingValue)) {
+//line lesson23-maybe-and-optional-values.tesl:114
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -207,6 +219,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson23-maybe-and-optional-values.tesl:118
 		result := SafeDivideInt(teslrt.FromInt64(10), teslrt.FromInt64(2))
@@ -214,6 +231,7 @@ func TestTesl2(teslT *testing.T) {
 		teslRight3 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(5)}
 //line lesson23-maybe-and-optional-values.tesl:119
 		if result.Tag != teslRight3.Tag || (result.Tag == teslrt.MaybeSomething && !teslrt.Equal(result.SomethingValue, teslRight3.SomethingValue)) {
+//line lesson23-maybe-and-optional-values.tesl:119
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -226,10 +244,16 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft4 := CombineOptionals(teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}, teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(5)})
 	teslRight4 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}
 //line lesson23-maybe-and-optional-values.tesl:123
 	if teslLeft4.Tag != teslRight4.Tag || (teslLeft4.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft4.SomethingValue, teslRight4.SomethingValue)) {
+//line lesson23-maybe-and-optional-values.tesl:123
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -241,10 +265,16 @@ func TestTesl4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft5 := CombineOptionals(teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(3)}, teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing})
 	teslRight5 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}
 //line lesson23-maybe-and-optional-values.tesl:127
 	if teslLeft5.Tag != teslRight5.Tag || (teslLeft5.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft5.SomethingValue, teslRight5.SomethingValue)) {
+//line lesson23-maybe-and-optional-values.tesl:127
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -256,10 +286,16 @@ func TestTesl5(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft6 := CombineOptionals(teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(3)}, teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(4)})
 	teslRight6 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(7)}
 //line lesson23-maybe-and-optional-values.tesl:131
 	if teslLeft6.Tag != teslRight6.Tag || (teslLeft6.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft6.SomethingValue, teslRight6.SomethingValue)) {
+//line lesson23-maybe-and-optional-values.tesl:131
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -271,9 +307,15 @@ func TestTesl6(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft7 := GetUserName(teslrt.Maybe[User]{Tag: teslrt.MaybeNothing})
 //line lesson23-maybe-and-optional-values.tesl:135
 	if teslLeft7 != "unknown" {
+//line lesson23-maybe-and-optional-values.tesl:135
 		teslT.Fatal("Tesl expectation failed")
 	}
 }

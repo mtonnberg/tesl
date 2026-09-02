@@ -317,16 +317,23 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft1 := ParseAge("25")
 	teslRight1 := teslrt.Either[string, teslrt.Int]{Tag: teslrt.EitherRight, RightValue: teslrt.FromInt64(25)}
 //line lesson27-either-dict-set.tesl:308
 	if teslLeft1.Tag != teslRight1.Tag || (teslLeft1.Tag == teslrt.EitherLeft && (teslLeft1.LeftValue != teslRight1.LeftValue)) || (teslLeft1.Tag == teslrt.EitherRight && !teslrt.Equal(teslLeft1.RightValue, teslRight1.RightValue)) {
+//line lesson27-either-dict-set.tesl:308
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft2 := ParseAge("0")
 	teslRight2 := teslrt.Either[string, teslrt.Int]{Tag: teslrt.EitherRight, RightValue: teslrt.FromInt64(0)}
 //line lesson27-either-dict-set.tesl:309
 	if teslLeft2.Tag != teslRight2.Tag || (teslLeft2.Tag == teslrt.EitherLeft && (teslLeft2.LeftValue != teslRight2.LeftValue)) || (teslLeft2.Tag == teslrt.EitherRight && !teslrt.Equal(teslLeft2.RightValue, teslRight2.RightValue)) {
+//line lesson27-either-dict-set.tesl:309
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -338,20 +345,29 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line lesson27-either-dict-set.tesl:319
 	if !(isLeft(ParseAge(""))) {
+//line lesson27-either-dict-set.tesl:319
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson27-either-dict-set.tesl:320
 	if !(isLeft(ParseAge("abc"))) {
+//line lesson27-either-dict-set.tesl:320
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson27-either-dict-set.tesl:321
 	if !(isLeft(ParseAge("-1"))) {
+//line lesson27-either-dict-set.tesl:321
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson27-either-dict-set.tesl:322
 	if !(isLeft(ParseAge("200"))) {
+//line lesson27-either-dict-set.tesl:322
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -363,18 +379,26 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft3 := parseAdultAge("25")
 	teslRight3 := teslrt.Either[string, teslrt.Int]{Tag: teslrt.EitherRight, RightValue: teslrt.FromInt64(25)}
 //line lesson27-either-dict-set.tesl:326
 	if teslLeft3.Tag != teslRight3.Tag || (teslLeft3.Tag == teslrt.EitherLeft && (teslLeft3.LeftValue != teslRight3.LeftValue)) || (teslLeft3.Tag == teslrt.EitherRight && !teslrt.Equal(teslLeft3.RightValue, teslRight3.RightValue)) {
+//line lesson27-either-dict-set.tesl:326
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson27-either-dict-set.tesl:327
 	if !(isLeft(parseAdultAge("16"))) {
+//line lesson27-either-dict-set.tesl:327
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson27-either-dict-set.tesl:328
 	if !(isLeft(parseAdultAge("abc"))) {
+//line lesson27-either-dict-set.tesl:328
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -386,26 +410,35 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft4 := ageCategory("17")
 	teslRight4 := teslrt.Either[string, string]{Tag: teslrt.EitherRight, RightValue: "minor"}
 //line lesson27-either-dict-set.tesl:332
 	if teslLeft4.Tag != teslRight4.Tag || (teslLeft4.Tag == teslrt.EitherLeft && (teslLeft4.LeftValue != teslRight4.LeftValue)) || (teslLeft4.Tag == teslrt.EitherRight && (teslLeft4.RightValue != teslRight4.RightValue)) {
+//line lesson27-either-dict-set.tesl:332
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft5 := ageCategory("30")
 	teslRight5 := teslrt.Either[string, string]{Tag: teslrt.EitherRight, RightValue: "adult"}
 //line lesson27-either-dict-set.tesl:333
 	if teslLeft5.Tag != teslRight5.Tag || (teslLeft5.Tag == teslrt.EitherLeft && (teslLeft5.LeftValue != teslRight5.LeftValue)) || (teslLeft5.Tag == teslrt.EitherRight && (teslLeft5.RightValue != teslRight5.RightValue)) {
+//line lesson27-either-dict-set.tesl:333
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft6 := ageCategory("70")
 	teslRight6 := teslrt.Either[string, string]{Tag: teslrt.EitherRight, RightValue: "senior"}
 //line lesson27-either-dict-set.tesl:334
 	if teslLeft6.Tag != teslRight6.Tag || (teslLeft6.Tag == teslrt.EitherLeft && (teslLeft6.LeftValue != teslRight6.LeftValue)) || (teslLeft6.Tag == teslrt.EitherRight && (teslLeft6.RightValue != teslRight6.RightValue)) {
+//line lesson27-either-dict-set.tesl:334
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson27-either-dict-set.tesl:335
 	if !(isLeftStr(ageCategory("abc"))) {
+//line lesson27-either-dict-set.tesl:335
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -417,6 +450,11 @@ func TestTesl4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson27-either-dict-set.tesl:339
 		d := teslrt.DictFromList([]teslrt.Tuple2[string, teslrt.Int]{teslrt.Tuple2[string, teslrt.Int]{Tuple2First: "a", Tuple2Second: teslrt.FromInt64(1)}, teslrt.Tuple2[string, teslrt.Int]{Tuple2First: "b", Tuple2Second: teslrt.FromInt64(2)}, teslrt.Tuple2[string, teslrt.Int]{Tuple2First: "c", Tuple2Second: teslrt.FromInt64(3)}}, teslKeyLessString)
@@ -432,31 +470,37 @@ func TestTesl4(teslT *testing.T) {
 				teslLeft7 := teslrt.DictSize(d)
 //line lesson27-either-dict-set.tesl:342
 				if !teslrt.Equal(teslLeft7, teslrt.FromInt64(3)) {
+//line lesson27-either-dict-set.tesl:342
 					teslT.Fatal("Tesl expectation failed")
 				}
 				teslLeft8 := teslrt.DictLookup(d, "a", teslKeyLessString)
 				teslRight8 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(1)}
 //line lesson27-either-dict-set.tesl:343
 				if teslLeft8.Tag != teslRight8.Tag || (teslLeft8.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft8.SomethingValue, teslRight8.SomethingValue)) {
+//line lesson27-either-dict-set.tesl:343
 					teslT.Fatal("Tesl expectation failed")
 				}
 				teslLeft9 := teslrt.DictLookup(d, "z", teslKeyLessString)
 				teslRight9 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}
 //line lesson27-either-dict-set.tesl:344
 				if teslLeft9.Tag != teslRight9.Tag || (teslLeft9.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft9.SomethingValue, teslRight9.SomethingValue)) {
+//line lesson27-either-dict-set.tesl:344
 					teslT.Fatal("Tesl expectation failed")
 				}
 				teslLeft10 := teslrt.DictGet(checkedB, keyB, teslKeyLessString)
 //line lesson27-either-dict-set.tesl:345
 				if !teslrt.Equal(teslLeft10, teslrt.FromInt64(2)) {
+//line lesson27-either-dict-set.tesl:345
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line lesson27-either-dict-set.tesl:346
 				if !(teslrt.DictMember(d, "a", teslKeyLessString)) {
+//line lesson27-either-dict-set.tesl:346
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line lesson27-either-dict-set.tesl:347
 				if teslrt.DictMember(d, "z", teslKeyLessString) {
+//line lesson27-either-dict-set.tesl:347
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -471,6 +515,11 @@ func TestTesl5(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson27-either-dict-set.tesl:351
 		d := teslrt.DictSingleton("x", teslrt.FromInt64(42))
@@ -486,15 +535,18 @@ func TestTesl5(teslT *testing.T) {
 				teslLeft11 := teslrt.DictSize(d2)
 //line lesson27-either-dict-set.tesl:354
 				if !teslrt.Equal(teslLeft11, teslrt.FromInt64(2)) {
+//line lesson27-either-dict-set.tesl:354
 					teslT.Fatal("Tesl expectation failed")
 				}
 				teslLeft12 := teslrt.DictSize(d3)
 //line lesson27-either-dict-set.tesl:355
 				if !teslrt.Equal(teslLeft12, teslrt.FromInt64(1)) {
+//line lesson27-either-dict-set.tesl:355
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line lesson27-either-dict-set.tesl:356
 				if teslrt.DictMember(d3, "x", teslKeyLessString) {
+//line lesson27-either-dict-set.tesl:356
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -509,6 +561,11 @@ func TestTesl6(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson27-either-dict-set.tesl:360
 		d1 := teslrt.DictFromList([]teslrt.Tuple2[string, teslrt.Int]{teslrt.Tuple2[string, teslrt.Int]{Tuple2First: "a", Tuple2Second: teslrt.FromInt64(1)}, teslrt.Tuple2[string, teslrt.Int]{Tuple2First: "b", Tuple2Second: teslrt.FromInt64(2)}}, teslKeyLessString)
@@ -548,16 +605,19 @@ func TestTesl6(teslT *testing.T) {
 										teslLeft13 := teslrt.DictGet(checkedA, keyA, teslKeyLessString)
 //line lesson27-either-dict-set.tesl:369
 										if !teslrt.Equal(teslLeft13, teslrt.FromInt64(1)) {
+//line lesson27-either-dict-set.tesl:369
 											teslT.Fatal("Tesl expectation failed")
 										}
 										teslLeft14 := teslrt.DictGet(checkedB, keyB, teslKeyLessString)
 //line lesson27-either-dict-set.tesl:370
 										if !teslrt.Equal(teslLeft14, teslrt.FromInt64(2)) {
+//line lesson27-either-dict-set.tesl:370
 											teslT.Fatal("Tesl expectation failed")
 										}
 										teslLeft15 := teslrt.DictGet(checkedC, keyC, teslKeyLessString)
 //line lesson27-either-dict-set.tesl:371
 										if !teslrt.Equal(teslLeft15, teslrt.FromInt64(3)) {
+//line lesson27-either-dict-set.tesl:371
 											teslT.Fatal("Tesl expectation failed")
 										}
 									}
@@ -578,6 +638,11 @@ func TestTesl7(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson27-either-dict-set.tesl:375
 		counts := CountByStatus([]string{"active", "inactive", "active", "pending"})
@@ -609,16 +674,19 @@ func TestTesl7(teslT *testing.T) {
 								teslLeft16 := teslrt.DictGet(checkedActive, active, teslKeyLessString)
 //line lesson27-either-dict-set.tesl:382
 								if !teslrt.Equal(teslLeft16, teslrt.FromInt64(2)) {
+//line lesson27-either-dict-set.tesl:382
 									teslT.Fatal("Tesl expectation failed")
 								}
 								teslLeft17 := teslrt.DictGet(checkedInactive, inactive, teslKeyLessString)
 //line lesson27-either-dict-set.tesl:383
 								if !teslrt.Equal(teslLeft17, teslrt.FromInt64(1)) {
+//line lesson27-either-dict-set.tesl:383
 									teslT.Fatal("Tesl expectation failed")
 								}
 								teslLeft18 := teslrt.DictGet(checkedPending, pending, teslKeyLessString)
 //line lesson27-either-dict-set.tesl:384
 								if !teslrt.Equal(teslLeft18, teslrt.FromInt64(1)) {
+//line lesson27-either-dict-set.tesl:384
 									teslT.Fatal("Tesl expectation failed")
 								}
 							}
@@ -637,6 +705,11 @@ func TestTesl8(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson27-either-dict-set.tesl:388
 		raw := teslrt.DictFromList([]teslrt.Tuple2[string, teslrt.Int]{teslrt.Tuple2[string, teslrt.Int]{Tuple2First: "alice", Tuple2Second: teslrt.FromInt64(95)}, teslrt.Tuple2[string, teslrt.Int]{Tuple2First: "bob", Tuple2Second: teslrt.FromInt64(0)}, teslrt.Tuple2[string, teslrt.Int]{Tuple2First: "carol", Tuple2Second: teslrt.Neg(teslrt.FromInt64(5))}, teslrt.Tuple2[string, teslrt.Int]{Tuple2First: "dave", Tuple2Second: teslrt.FromInt64(80)}}, teslKeyLessString)
@@ -648,22 +721,27 @@ func TestTesl8(teslT *testing.T) {
 			teslLeft19 := teslrt.DictSize(scores)
 //line lesson27-either-dict-set.tesl:391
 			if !teslrt.Equal(teslLeft19, teslrt.FromInt64(2)) {
+//line lesson27-either-dict-set.tesl:391
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line lesson27-either-dict-set.tesl:392
 			if !(teslrt.DictMember(scores, "alice", teslKeyLessString)) {
+//line lesson27-either-dict-set.tesl:392
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line lesson27-either-dict-set.tesl:393
 			if teslrt.DictMember(scores, "bob", teslKeyLessString) {
+//line lesson27-either-dict-set.tesl:393
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line lesson27-either-dict-set.tesl:394
 			if teslrt.DictMember(scores, "carol", teslKeyLessString) {
+//line lesson27-either-dict-set.tesl:394
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line lesson27-either-dict-set.tesl:395
 			if !(teslrt.DictMember(scores, "dave", teslKeyLessString)) {
+//line lesson27-either-dict-set.tesl:395
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -677,6 +755,11 @@ func TestTesl9(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson27-either-dict-set.tesl:399
 		raw := teslrt.DictFromList([]teslrt.Tuple2[string, teslrt.Int]{}, teslKeyLessString)
@@ -688,6 +771,7 @@ func TestTesl9(teslT *testing.T) {
 			teslLeft20 := teslrt.DictSize(scores)
 //line lesson27-either-dict-set.tesl:401
 			if !teslrt.Equal(teslLeft20, teslrt.FromInt64(0)) {
+//line lesson27-either-dict-set.tesl:401
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -701,6 +785,11 @@ func TestTesl10(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson27-either-dict-set.tesl:405
 		raw := teslrt.DictFromList([]teslrt.Tuple2[string, teslrt.Int]{teslrt.Tuple2[string, teslrt.Int]{Tuple2First: "", Tuple2Second: teslrt.FromInt64(1)}, teslrt.Tuple2[string, teslrt.Int]{Tuple2First: "x", Tuple2Second: teslrt.FromInt64(2)}, teslrt.Tuple2[string, teslrt.Int]{Tuple2First: "y", Tuple2Second: teslrt.FromInt64(3)}}, teslKeyLessString)
@@ -712,14 +801,17 @@ func TestTesl10(teslT *testing.T) {
 			teslLeft21 := teslrt.DictSize(good)
 //line lesson27-either-dict-set.tesl:408
 			if !teslrt.Equal(teslLeft21, teslrt.FromInt64(2)) {
+//line lesson27-either-dict-set.tesl:408
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line lesson27-either-dict-set.tesl:409
 			if !(teslrt.DictMember(good, "x", teslKeyLessString)) {
+//line lesson27-either-dict-set.tesl:409
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line lesson27-either-dict-set.tesl:410
 			if !(teslrt.DictMember(good, "y", teslKeyLessString)) {
+//line lesson27-either-dict-set.tesl:410
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -733,6 +825,11 @@ func TestTesl11(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson27-either-dict-set.tesl:414
 		s := teslrt.SetFromList([]teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(2), teslrt.FromInt64(3), teslrt.FromInt64(2), teslrt.FromInt64(1)}, teslKeyLessTeslrtInt)
@@ -740,22 +837,27 @@ func TestTesl11(teslT *testing.T) {
 		teslLeft22 := teslrt.SetSize(s)
 //line lesson27-either-dict-set.tesl:415
 		if !teslrt.Equal(teslLeft22, teslrt.FromInt64(3)) {
+//line lesson27-either-dict-set.tesl:415
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line lesson27-either-dict-set.tesl:416
 		if !(teslrt.SetMember(teslrt.FromInt64(1), s, teslKeyLessTeslrtInt)) {
+//line lesson27-either-dict-set.tesl:416
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line lesson27-either-dict-set.tesl:417
 		if teslrt.SetMember(teslrt.FromInt64(9), s, teslKeyLessTeslrtInt) {
+//line lesson27-either-dict-set.tesl:417
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line lesson27-either-dict-set.tesl:418
 		if teslrt.SetIsEmpty(s) {
+//line lesson27-either-dict-set.tesl:418
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line lesson27-either-dict-set.tesl:419
 		if !(teslrt.SetIsEmpty(teslrt.SetEmpty[teslrt.Int]())) {
+//line lesson27-either-dict-set.tesl:419
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -768,6 +870,11 @@ func TestTesl12(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson27-either-dict-set.tesl:423
 		s1 := teslrt.SetFromList([]teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(2), teslrt.FromInt64(3)}, teslKeyLessTeslrtInt)
@@ -779,20 +886,24 @@ func TestTesl12(teslT *testing.T) {
 			teslLeft23 := teslrt.SetSize(teslrt.SetUnion(s1, s2, teslKeyLessTeslrtInt))
 //line lesson27-either-dict-set.tesl:425
 			if !teslrt.Equal(teslLeft23, teslrt.FromInt64(4)) {
+//line lesson27-either-dict-set.tesl:425
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft24 := teslrt.SetSize(teslrt.SetIntersection(s1, s2, teslKeyLessTeslrtInt))
 //line lesson27-either-dict-set.tesl:426
 			if !teslrt.Equal(teslLeft24, teslrt.FromInt64(2)) {
+//line lesson27-either-dict-set.tesl:426
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft25 := teslrt.SetSize(teslrt.SetDifference(s1, s2, teslKeyLessTeslrtInt))
 //line lesson27-either-dict-set.tesl:427
 			if !teslrt.Equal(teslLeft25, teslrt.FromInt64(1)) {
+//line lesson27-either-dict-set.tesl:427
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line lesson27-either-dict-set.tesl:428
 			if !(teslrt.SetMember(teslrt.FromInt64(1), teslrt.SetDifference(s1, s2, teslKeyLessTeslrtInt), teslKeyLessTeslrtInt)) {
+//line lesson27-either-dict-set.tesl:428
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -806,6 +917,11 @@ func TestTesl13(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson27-either-dict-set.tesl:432
 		roles := UniqueRoles([]string{"admin", "member", "admin", "guest", "member"})
@@ -813,10 +929,12 @@ func TestTesl13(teslT *testing.T) {
 		teslLeft26 := teslrt.SetSize(roles)
 //line lesson27-either-dict-set.tesl:433
 		if !teslrt.Equal(teslLeft26, teslrt.FromInt64(3)) {
+//line lesson27-either-dict-set.tesl:433
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line lesson27-either-dict-set.tesl:434
 		if !(teslrt.SetMember("admin", roles, teslKeyLessString)) {
+//line lesson27-either-dict-set.tesl:434
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -829,16 +947,23 @@ func TestTesl14(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft27 := LookupUser("usr-1")
 	teslRight27 := teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: "alice"}
 //line lesson27-either-dict-set.tesl:438
 	if teslLeft27.Tag != teslRight27.Tag || (teslLeft27.Tag == teslrt.MaybeSomething && (teslLeft27.SomethingValue != teslRight27.SomethingValue)) {
+//line lesson27-either-dict-set.tesl:438
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft28 := LookupUser("usr-99")
 	teslRight28 := teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}
 //line lesson27-either-dict-set.tesl:439
 	if teslLeft28.Tag != teslRight28.Tag || (teslLeft28.Tag == teslrt.MaybeSomething && (teslLeft28.SomethingValue != teslRight28.SomethingValue)) {
+//line lesson27-either-dict-set.tesl:439
 		teslT.Fatal("Tesl expectation failed")
 	}
 }

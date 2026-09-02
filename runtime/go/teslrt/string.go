@@ -1,6 +1,7 @@
 package teslrt
 
 import (
+	"fmt"
 	"strings"
 	"unicode/utf8"
 )
@@ -163,10 +164,27 @@ func padding(s string, width Int, pad string) (string, int) {
 	return string(fill), int(target - current)
 }
 
+// maxRepeatBytes bounds the byte length of a String.repeat result. A denial-of-service
+// bound, not a language limit: strings.Repeat only panics on int OVERFLOW, so a
+// request-controlled count of, say, 2^40 would otherwise attempt a terabyte allocation and
+// end the process with an uncatchable out-of-memory fatal rather than a recoverable trap.
+const maxRepeatBytes = 64 << 20
+
+// StringRepeat is total over the counts a program can mean: negative or beyond-int64 counts
+// yield the empty string (mirroring `padding` above). A count whose result would exceed
+// maxRepeatBytes is different — it is not a value the program could have wanted, and answering
+// "" would be a silent wrong result — so it TRAPS, which `callHandler` turns into a sanitized
+// 500 rather than the uncatchable out-of-memory the allocation would have been. The bound is
+// decided from len(s) and the count BEFORE strings.Repeat runs; the division form cannot
+// overflow.
 func StringRepeat(s string, times Int) string {
 	count, ok := times.Int64()
-	if !ok || count <= 0 {
+	if !ok || count <= 0 || s == "" {
 		return ""
+	}
+	if count > int64(maxRepeatBytes)/int64(len(s)) {
+		panic(fmt.Sprintf("String.repeat: the result would be %d × %d bytes, over the %d-byte bound",
+			count, len(s), maxRepeatBytes))
 	}
 	return strings.Repeat(s, int(count))
 }

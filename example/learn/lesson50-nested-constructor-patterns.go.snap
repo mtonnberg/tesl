@@ -374,24 +374,33 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft1 := DescribeShape(Shape{Tag: ShapeCircle, CircleRadius: teslrt.FromInt64(5)})
 //line lesson50-nested-constructor-patterns.tesl:155
 	if teslLeft1 != "circle r=5" {
+//line lesson50-nested-constructor-patterns.tesl:155
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft2 := DescribeShape(Shape{Tag: ShapeColoredCircle, ColoredCircleColor: "red", ColoredCircleRadius: teslrt.FromInt64(3)})
 //line lesson50-nested-constructor-patterns.tesl:156
 	if teslLeft2 != "red circle r=3" {
+//line lesson50-nested-constructor-patterns.tesl:156
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft3 := DescribeShape(Shape{Tag: ShapeWrapped, WrappedInner: teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(42)}})
 //line lesson50-nested-constructor-patterns.tesl:157
 	if teslLeft3 != "wrapped value: 42" {
+//line lesson50-nested-constructor-patterns.tesl:157
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft4 := DescribeShape(Shape{Tag: ShapeWrapped, WrappedInner: teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}})
 //line lesson50-nested-constructor-patterns.tesl:158
 	if teslLeft4 != "empty wrapper" {
+//line lesson50-nested-constructor-patterns.tesl:158
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -403,31 +412,41 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft5 := EvalExpr(Expr{Tag: ExprLit, LitValue: teslrt.FromInt64(7)})
 //line lesson50-nested-constructor-patterns.tesl:162
 	if !teslrt.Equal(teslLeft5, teslrt.FromInt64(7)) {
+//line lesson50-nested-constructor-patterns.tesl:162
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft6 := EvalExpr(Expr{Tag: ExprNeg, NegInner: teslrt.Boxed(Expr{Tag: ExprLit, LitValue: teslrt.FromInt64(3)})})
 	teslRight6 := teslrt.Neg(teslrt.FromInt64(3))
 //line lesson50-nested-constructor-patterns.tesl:163
 	if !teslrt.Equal(teslLeft6, teslRight6) {
+//line lesson50-nested-constructor-patterns.tesl:163
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft7 := EvalExpr(Expr{Tag: ExprNeg, NegInner: teslrt.Boxed(Expr{Tag: ExprAdd, AddLeft: teslrt.Boxed(Expr{Tag: ExprLit, LitValue: teslrt.FromInt64(1)}), AddRight: teslrt.Boxed(Expr{Tag: ExprLit, LitValue: teslrt.FromInt64(2)})})})
 	teslRight7 := teslrt.Neg(teslrt.FromInt64(3))
 //line lesson50-nested-constructor-patterns.tesl:164
 	if !teslrt.Equal(teslLeft7, teslRight7) {
+//line lesson50-nested-constructor-patterns.tesl:164
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft8 := EvalExpr(Expr{Tag: ExprAdd, AddLeft: teslrt.Boxed(Expr{Tag: ExprLit, LitValue: teslrt.FromInt64(1)}), AddRight: teslrt.Boxed(Expr{Tag: ExprLit, LitValue: teslrt.FromInt64(2)})})
 //line lesson50-nested-constructor-patterns.tesl:165
 	if !teslrt.Equal(teslLeft8, teslrt.FromInt64(3)) {
+//line lesson50-nested-constructor-patterns.tesl:165
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft9 := EvalExpr(Expr{Tag: ExprAdd, AddLeft: teslrt.Boxed(Expr{Tag: ExprNeg, NegInner: teslrt.Boxed(Expr{Tag: ExprLit, LitValue: teslrt.FromInt64(5)})}), AddRight: teslrt.Boxed(Expr{Tag: ExprLit, LitValue: teslrt.FromInt64(10)})})
 //line lesson50-nested-constructor-patterns.tesl:166
 	if !teslrt.Equal(teslLeft9, teslrt.FromInt64(5)) {
+//line lesson50-nested-constructor-patterns.tesl:166
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -439,19 +458,27 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft10 := DescribeResult(teslrt.Maybe[InnerResult]{Tag: teslrt.MaybeNothing})
 //line lesson50-nested-constructor-patterns.tesl:170
 	if teslLeft10 != "no result" {
+//line lesson50-nested-constructor-patterns.tesl:170
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft11 := DescribeResult(teslrt.Maybe[InnerResult]{Tag: teslrt.MaybeSomething, SomethingValue: InnerResult{Tag: InnerResultSuccess, SuccessValue: teslrt.FromInt64(42)}})
 //line lesson50-nested-constructor-patterns.tesl:171
 	if teslLeft11 != "success: 42" {
+//line lesson50-nested-constructor-patterns.tesl:171
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft12 := DescribeResult(teslrt.Maybe[InnerResult]{Tag: teslrt.MaybeSomething, SomethingValue: InnerResult{Tag: InnerResultFailure, FailureMessage: "oops"}})
 //line lesson50-nested-constructor-patterns.tesl:172
 	if teslLeft12 != "failure: oops" {
+//line lesson50-nested-constructor-patterns.tesl:172
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -463,6 +490,11 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson50-nested-constructor-patterns.tesl:176
 		xs := []teslrt.Maybe[teslrt.Int]{teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(1)}, teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}, teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(2)}, teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}, teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(3)}}
@@ -470,16 +502,19 @@ func TestTesl3(teslT *testing.T) {
 		teslLeft13 := CountSomethings(xs)
 //line lesson50-nested-constructor-patterns.tesl:177
 		if !teslrt.Equal(teslLeft13, teslrt.FromInt64(3)) {
+//line lesson50-nested-constructor-patterns.tesl:177
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft14 := CountSomethings([]teslrt.Maybe[teslrt.Int]{teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}, teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}})
 //line lesson50-nested-constructor-patterns.tesl:178
 		if !teslrt.Equal(teslLeft14, teslrt.FromInt64(0)) {
+//line lesson50-nested-constructor-patterns.tesl:178
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft15 := CountSomethings([]teslrt.Maybe[teslrt.Int]{})
 //line lesson50-nested-constructor-patterns.tesl:179
 		if !teslrt.Equal(teslLeft15, teslrt.FromInt64(0)) {
+//line lesson50-nested-constructor-patterns.tesl:179
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}

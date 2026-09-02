@@ -135,6 +135,11 @@ func TestTeslApi0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line sse-literal-subscribe-key-tests.tesl:72
 		stream := teslrt.SubscribeStream(MainServer, "/runs/stream", nil)
@@ -146,6 +151,7 @@ func TestTeslApi0(teslT *testing.T) {
 			_ = resp
 //line sse-literal-subscribe-key-tests.tesl:74
 			if !(teslrt.StatusOk(resp.Status)) {
+//line sse-literal-subscribe-key-tests.tesl:74
 				teslT.Fatal("Tesl expectation failed")
 			}
 			{
@@ -154,10 +160,12 @@ func TestTeslApi0(teslT *testing.T) {
 				_ = events
 //line sse-literal-subscribe-key-tests.tesl:76
 				if !(teslrt.JsonIsNotEmpty(events)) {
+//line sse-literal-subscribe-key-tests.tesl:76
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line sse-literal-subscribe-key-tests.tesl:77
 				if !(teslrt.JsonIncludesWhere(teslrt.JsonParseBody("{\"runId\":\"run-abc123\"}").JsonRaw(), events)) {
+//line sse-literal-subscribe-key-tests.tesl:77
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}

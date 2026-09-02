@@ -134,6 +134,61 @@ let check_sql_patterns_recognised ?facts ?(extra_funcs=[]) (decls : top_decl lis
     | _ -> ()) decls;
   List.rev !errors
 
+(* `inList` / `notInList` take a LIST LITERAL.  Until 2026-09-02 a non-literal operand —
+   a parameter, a `let`, a call — parsed as an EMPTY member list, and both renderers turned an
+   empty list into a constant predicate: `where false` for `inList`, `where true` for
+   `notInList`.  So `select t from T where notInList t.ownerId blocked` compiled cleanly and
+   returned EVERY row, the blocked ones included, on the Memory store and on Postgres alike —
+   an access-control filter silently inverted, with no test able to see it because the two
+   backends agreed.  `Sql_query` now fails closed on that shape; this rule is what names the
+   operand for the author instead of letting the query fall out of the recognised shapes. *)
+let check_sql_list_membership_operands (decls : top_decl list) : validation_error list =
+  let errors = ref [] in
+  let refuse op list_expr =
+    errors := make_error (Checker.expr_loc list_expr)
+      ~hint:(Printf.sprintf
+               "write the members as a list literal, e.g. `where %s p.field [\"a\", \"b\"]`; a \
+                list held in a variable is not supported inside a query yet (it would have \
+                compiled to a constant `where %s` and returned %s row)"
+               op
+               (if op = "inList" then "false" else "true")
+               (if op = "inList" then "no" else "every"))
+      (Printf.sprintf
+         "`%s` needs a list literal as its member list; this operand is a `%s`, which the \
+          query cannot bind"
+         op
+         (match list_expr with
+          | EVar _ -> "variable"
+          | EApp _ -> "call"
+          | EField _ -> "field read"
+          | _ -> "computed expression"))
+      :: !errors
+  in
+  (* A query is one flat application chain (`select p from T where notInList p.f xs` is
+     `select` applied to seven arguments), or several (one per clause line), so the operator
+     is found by scanning each chain's argument SEQUENCE rather than by matching a head. *)
+  let rec scan = function
+    | EVar { name = ("inList" | "notInList") as op; _ } :: _field :: list_expr :: rest ->
+      (match list_expr with
+       | EList _ -> ()
+       | _ -> refuse op list_expr);
+      scan rest
+    | _ :: rest -> scan rest
+    | [] -> ()
+  in
+  let rec walk (e : expr) =
+    (match e with
+     | EApp _ ->
+       let head, args = Sql_query.flatten_app_expr [] e in
+       scan (head :: args)
+     | _ -> ());
+    Ast_visitor.iter_children walk e
+  in
+  List.iter (function
+    | DFunc (fd : func_decl) -> walk fd.body
+    | _ -> ()) decls;
+  List.rev !errors
+
 let check_sql_where_clauses
     ?facts
     ?(extra_funcs : (string * func_info) list = [])
@@ -1713,6 +1768,109 @@ let check_ghost_witness_predicates
     from a plain `fn`, `check`, `establish`, `worker`, or `deadWorker` body is
     rejected because auth functions are HTTP-level identity gates — their `fail 401`
     is meaningful only inside the request/response cycle of a handler. *)
+(* A route declared with a `:param` segment SHADOWS a later literal route at the same
+   position: the router matches in declaration order and takes the first pattern that fits,
+   so `get "/tasks/:id"` followed by `get "/tasks/new"` leaves `/tasks/new` unreachable — it
+   is answered by the `:id` handler (and its `auth`, which may be the weaker one).  Nothing
+   reported it; the whole endpoint was dead depending on textual order (language review
+   2026-09-02, M4).  Same method, same segment count, and every segment of the earlier route
+   either equal to or a parameter over the later route's segment is a subsumption, reported at
+   the later (unreachable) endpoint. *)
+(* A query's row binder must not SHADOW a name already in scope.  `fn f(r: Row) = select r
+   from Row where r.n == r.small` compiles, and the two backends read the two `r`s differently:
+   the Memory predicate compares the row with itself while the SQL text binds the OUTER `r`'s
+   field as a parameter — a filter that passes its tests and means something else in
+   production (whitebox campaign, 2026-09-02).  The `set` side already has
+   `check_set_value_reads_row`; this is the `where` side's rule, and it is simpler: the
+   binder is a fresh name, so it may not be one the surrounding code can already see. *)
+let check_query_binder_shadowing (decls : top_decl list) : validation_error list =
+  let declared = List.filter_map (function
+    | DFunc (fd : func_decl) -> Some fd.name
+    | _ -> None) decls in
+  let errors = ref [] in
+  let binder_of (e : expr) =
+    match Sql_query.extract_select_query e with
+    | Some (seed, _) -> Some (seed.Sql_query.binder, "select")
+    | None ->
+      (match Sql_query.extract_update e with
+       | Some update -> Some (update.Sql_query.binder, "update")
+       | None ->
+         (match Sql_query.extract_delete e with
+          | Some (seed, _) -> Some (seed.Sql_query.binder, "delete")
+          | None ->
+            (match Sql_query.extract_delete_query e with
+             | Some (seed, _) -> Some (seed.Sql_query.binder, "delete")
+             | None -> None)))
+  in
+  let rec walk (bound : string list) (e : expr) =
+    (match binder_of e with
+     | Some (binder, kind) when List.mem binder bound || List.mem binder declared ->
+       errors := make_error (Checker.expr_loc e)
+         ~hint:(Printf.sprintf
+                  "rename the row binder (`%s p in …` / `select p from …`); the name `%s` is \
+                   already a parameter, a local or a function, and the Memory store and the \
+                   SQL server would read the two `%s`s differently"
+                  kind binder binder)
+         (Printf.sprintf
+            "query binder `%s` shadows a name in scope; a `where`/`set` clause mentioning \
+             `%s.<field>` would mean the row on one backend and the outer `%s` on the other"
+            binder binder binder)
+         :: !errors
+     | _ -> ());
+    match e with
+    | ELet { name; value; body; _ } -> walk bound value; walk (name :: bound) body
+    | ELetProof { value_name; value; body; _ } -> walk bound value; walk (value_name :: bound) body
+    | ELambda { params; body; _ } ->
+      walk (List.map (fun (b : binding) -> b.name) params @ bound) body
+    | _ -> Ast_visitor.iter_children (fun child -> walk bound child) e
+  in
+  List.iter (function
+    | DFunc (fd : func_decl) ->
+      walk (List.map (fun (b : binding) -> b.name) fd.params) fd.body
+    | _ -> ()) decls;
+  List.rev !errors
+
+let check_route_shadowing (decls : top_decl list) : validation_error list =
+  let segments path =
+    List.filter (fun segment -> segment <> "") (String.split_on_char '/' path) in
+  let is_param segment = String.length segment > 0 && segment.[0] = ':' in
+  let subsumes earlier later =
+    List.length earlier = List.length later
+    && List.for_all2 (fun first second -> is_param first || first = second) earlier later
+  in
+  let method_name = function
+    | GET -> "get" | POST -> "post" | PUT -> "put" | DELETE -> "delete"
+    | PATCH -> "patch" | SSE -> "sse" in
+  let errors = ref [] in
+  List.iter (function
+    | DApi (api : api_form) ->
+      let rec scan seen = function
+        | [] -> ()
+        | (ep : api_endpoint) :: rest ->
+          List.iter (fun (earlier : api_endpoint) ->
+            if earlier.method_ = ep.method_
+               && earlier.path <> ep.path
+               && subsumes (segments earlier.path) (segments ep.path)
+            then
+              errors := make_error ep.loc
+                ~hint:(Printf.sprintf
+                         "declare `%s \"%s\"` BEFORE `%s \"%s\"`, or give the parameterised \
+                          route a segment that does not cover the literal one"
+                         (method_name ep.method_) ep.path
+                         (method_name earlier.method_) earlier.path)
+                (Printf.sprintf
+                   "route `%s \"%s\"` is unreachable: `%s \"%s\"`, declared earlier, matches \
+                    every path it matches, and the router takes the first match — requests for \
+                    it would run the earlier endpoint's handler and auth"
+                   (method_name ep.method_) ep.path
+                   (method_name earlier.method_) earlier.path)
+                :: !errors) seen;
+          scan (ep :: seen) rest
+      in
+      scan [] api.endpoints
+    | _ -> ()) decls;
+  List.rev !errors
+
 let check_auth_call_restriction (decls : top_decl list) : validation_error list =
   let auth_names =
     List.filter_map (function

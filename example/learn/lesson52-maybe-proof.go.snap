@@ -610,6 +610,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson52-maybe-proof.tesl:229
 		t0 := PositiveTree{Tag: PositiveTreeLeaf}
@@ -621,6 +626,7 @@ func TestTesl0(teslT *testing.T) {
 			teslLeft1 := treeSize(t1)
 //line lesson52-maybe-proof.tesl:231
 			if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1)) {
+//line lesson52-maybe-proof.tesl:231
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -634,6 +640,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson52-maybe-proof.tesl:235
 		t0 := PositiveTree{Tag: PositiveTreeLeaf}
@@ -653,6 +664,7 @@ func TestTesl1(teslT *testing.T) {
 					teslLeft2 := treeSize(t3)
 //line lesson52-maybe-proof.tesl:239
 					if !teslrt.Equal(teslLeft2, teslrt.FromInt64(3)) {
+//line lesson52-maybe-proof.tesl:239
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -668,6 +680,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson52-maybe-proof.tesl:243
 		t0 := PositiveTree{Tag: PositiveTreeLeaf}
@@ -686,6 +703,11 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson52-maybe-proof.tesl:248
 		t0 := PositiveTree{Tag: PositiveTreeLeaf}
@@ -704,6 +726,11 @@ func TestTesl4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson52-maybe-proof.tesl:253
 		t := PositiveTree{Tag: PositiveTreeLeaf}
@@ -719,11 +746,13 @@ func TestTesl4(teslT *testing.T) {
 				case teslrt.EitherLeft:
 //line lesson52-maybe-proof.tesl:256
 					if false {
+//line lesson52-maybe-proof.tesl:256
 						teslT.Fatal("Tesl expectation failed")
 					}
 				case teslrt.EitherRight:
 //line lesson52-maybe-proof.tesl:257
 					if true {
+//line lesson52-maybe-proof.tesl:257
 						teslT.Fatal("Tesl expectation failed")
 					}
 				default:
@@ -741,6 +770,11 @@ func TestTesl5(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson52-maybe-proof.tesl:261
 		t := insertRaw(PositiveTree{Tag: PositiveTreeLeaf}, teslrt.FromInt64(7))
@@ -756,6 +790,7 @@ func TestTesl5(teslT *testing.T) {
 				case teslrt.EitherLeft:
 //line lesson52-maybe-proof.tesl:264
 					if true {
+//line lesson52-maybe-proof.tesl:264
 						teslT.Fatal("Tesl expectation failed")
 					}
 				case teslrt.EitherRight:
@@ -763,6 +798,7 @@ func TestTesl5(teslT *testing.T) {
 					_ = v
 //line lesson52-maybe-proof.tesl:266
 					if !teslrt.Equal(v, teslrt.FromInt64(7)) {
+//line lesson52-maybe-proof.tesl:266
 						teslT.Fatal("Tesl expectation failed")
 					}
 				default:
@@ -780,6 +816,11 @@ func TestTesl6(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson52-maybe-proof.tesl:270
 		t := insertRaw(insertRaw(insertRaw(PositiveTree{Tag: PositiveTreeLeaf}, teslrt.FromInt64(3)), teslrt.FromInt64(1)), teslrt.FromInt64(5))
@@ -799,6 +840,7 @@ func TestTesl6(teslT *testing.T) {
 					case teslrt.EitherLeft:
 //line lesson52-maybe-proof.tesl:274
 						if true {
+//line lesson52-maybe-proof.tesl:274
 							teslT.Fatal("Tesl expectation failed")
 						}
 					case teslrt.EitherRight:
@@ -811,6 +853,7 @@ func TestTesl6(teslT *testing.T) {
 							case CustomEitherCustomLeft:
 //line lesson52-maybe-proof.tesl:277
 								if true {
+//line lesson52-maybe-proof.tesl:277
 									teslT.Fatal("Tesl expectation failed")
 								}
 							case CustomEitherCustomRight:
@@ -826,6 +869,7 @@ func TestTesl6(teslT *testing.T) {
 										_ = nAlt
 //line lesson52-maybe-proof.tesl:282
 										if !teslrt.Equal(n, nAlt) {
+//line lesson52-maybe-proof.tesl:282
 											teslT.Fatal("Tesl expectation failed")
 										}
 									}
@@ -850,6 +894,11 @@ func TestTesl7(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson52-maybe-proof.tesl:286
 		t := insertRaw(insertRaw(insertRaw(PositiveTree{Tag: PositiveTreeLeaf}, teslrt.FromInt64(3)), teslrt.FromInt64(1)), teslrt.FromInt64(5))
@@ -865,6 +914,7 @@ func TestTesl7(teslT *testing.T) {
 				case teslrt.MaybeNothing:
 //line lesson52-maybe-proof.tesl:289
 					if true {
+//line lesson52-maybe-proof.tesl:289
 						teslT.Fatal("Tesl expectation failed")
 					}
 				case teslrt.MaybeSomething:
@@ -876,6 +926,7 @@ func TestTesl7(teslT *testing.T) {
 						_ = n
 //line lesson52-maybe-proof.tesl:292
 						if !teslrt.Equal(n, teslrt.FromInt64(5)) {
+//line lesson52-maybe-proof.tesl:292
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}
@@ -894,6 +945,11 @@ func TestTesl8(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson52-maybe-proof.tesl:296
 		t := exampleTree()
@@ -901,6 +957,7 @@ func TestTesl8(teslT *testing.T) {
 		teslLeft6 := doubleMin(t)
 //line lesson52-maybe-proof.tesl:297
 		if !teslrt.Equal(teslLeft6, teslrt.FromInt64(2)) {
+//line lesson52-maybe-proof.tesl:297
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -913,6 +970,11 @@ func TestTesl9(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson52-maybe-proof.tesl:301
 		t := exampleTree()
@@ -920,6 +982,7 @@ func TestTesl9(teslT *testing.T) {
 		teslLeft7 := sumMinMax(t)
 //line lesson52-maybe-proof.tesl:302
 		if !teslrt.Equal(teslLeft7, teslrt.FromInt64(6)) {
+//line lesson52-maybe-proof.tesl:302
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -932,6 +995,11 @@ func TestTesl10(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson52-maybe-proof.tesl:306
 		t := exampleTree()
@@ -939,6 +1007,7 @@ func TestTesl10(teslT *testing.T) {
 		teslLeft8 := treeSize(t)
 //line lesson52-maybe-proof.tesl:307
 		if !teslrt.Equal(teslLeft8, teslrt.FromInt64(4)) {
+//line lesson52-maybe-proof.tesl:307
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -951,6 +1020,11 @@ func TestTesl11(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson52-maybe-proof.tesl:311
 		t := exampleTree()
@@ -958,6 +1032,7 @@ func TestTesl11(teslT *testing.T) {
 		teslLeft9 := treeSum(t)
 //line lesson52-maybe-proof.tesl:312
 		if !teslrt.Equal(teslLeft9, teslrt.FromInt64(11)) {
+//line lesson52-maybe-proof.tesl:312
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -970,6 +1045,11 @@ func TestTesl12(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson52-maybe-proof.tesl:316
 		ta := insertRaw(PositiveTree{Tag: PositiveTreeLeaf}, teslrt.FromInt64(10))
@@ -993,6 +1073,7 @@ func TestTesl12(teslT *testing.T) {
 						case teslrt.EitherLeft:
 //line lesson52-maybe-proof.tesl:321
 							if true {
+//line lesson52-maybe-proof.tesl:321
 								teslT.Fatal("Tesl expectation failed")
 							}
 						case teslrt.EitherRight:
@@ -1005,6 +1086,7 @@ func TestTesl12(teslT *testing.T) {
 								case teslrt.EitherLeft:
 //line lesson52-maybe-proof.tesl:324
 									if true {
+//line lesson52-maybe-proof.tesl:324
 										teslT.Fatal("Tesl expectation failed")
 									}
 								case teslrt.EitherRight:
@@ -1012,10 +1094,12 @@ func TestTesl12(teslT *testing.T) {
 									_ = b
 //line lesson52-maybe-proof.tesl:326
 									if !teslrt.Equal(a, teslrt.FromInt64(10)) {
+//line lesson52-maybe-proof.tesl:326
 										teslT.Fatal("Tesl expectation failed")
 									}
 //line lesson52-maybe-proof.tesl:327
 									if !teslrt.Equal(b, teslrt.FromInt64(20)) {
+//line lesson52-maybe-proof.tesl:327
 										teslT.Fatal("Tesl expectation failed")
 									}
 									{
@@ -1029,6 +1113,7 @@ func TestTesl12(teslT *testing.T) {
 											teslLeft12 := teslrt.Add(na, nb)
 //line lesson52-maybe-proof.tesl:331
 											if !teslrt.Equal(teslLeft12, teslrt.FromInt64(30)) {
+//line lesson52-maybe-proof.tesl:331
 												teslT.Fatal("Tesl expectation failed")
 											}
 										}

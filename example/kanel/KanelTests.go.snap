@@ -748,12 +748,19 @@ func CreateProjectHandler(session teslmodkanelauth.KanelSession, orgId string, r
 //line KanelIssues.tesl:295
 						projectId := teslrt.GeneratePrefixedId("proj")
 						_ = projectId
-						{
+//line KanelIssues.tesl:296
+						var teslCommitted teslmodkanelmodels.Project
+						teslrt.WithMemoryTransaction(func() {
+							teslCommitted = func() teslmodkanelmodels.Project {
+								{
 //line KanelIssues.tesl:297
-							_ = teslrt.TableInsert(teslmodkanelmodels.ProjectMembershipTable, "ProjectMembership", teslmodkanelmodels.ProjectMembership{Id: memberId, ProjectId: projectId, UserId: session.UserId, JoinedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.ProjectMembership) bool { return (teslRow.Id == teslNew.Id) })
+									_ = teslrt.TableInsert(teslmodkanelmodels.ProjectMembershipTable, "ProjectMembership", teslmodkanelmodels.ProjectMembership{Id: memberId, ProjectId: projectId, UserId: session.UserId, JoinedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.ProjectMembership) bool { return (teslRow.Id == teslNew.Id) })
 //line KanelIssues.tesl:303
-							return teslrt.TableInsert(teslmodkanelmodels.ProjectTable, "Project", teslmodkanelmodels.Project{Id: projectId, OrgId: orgId, Name: projName, Description: projDesc, Archived: false, CreatedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.Project) bool { return (teslRow.Id == teslNew.Id) })
-						}
+									return teslrt.TableInsert(teslmodkanelmodels.ProjectTable, "Project", teslmodkanelmodels.Project{Id: projectId, OrgId: orgId, Name: projName, Description: projDesc, Archived: false, CreatedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.Project) bool { return (teslRow.Id == teslNew.Id) })
+								}
+							}()
+						})
+						return teslCommitted
 					}
 				}
 			}
@@ -1034,15 +1041,22 @@ func UpdateIssueStatusHandler(session teslmodkanelauth.KanelSession, orgId strin
 //line KanelIssues.tesl:456
 									_closerId := teslrt.MustCheckRequest(CheckCanClose(session.UserId, issueId, orgId))
 									_ = _closerId
+//line KanelIssues.tesl:457
+									var teslCommitted teslmodkanelmodels.Issue
+									teslrt.WithMemoryTransaction(func() {
+										teslCommitted = func() teslmodkanelmodels.Issue {
 //line KanelIssues.tesl:458
-									return teslrt.TableUpdateReturnOne(teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
-										return (i.Id == issueId)
-									}, func(i teslmodkanelmodels.Issue) teslmodkanelmodels.Issue {
-										teslNext := i
-										teslNext.Status = newStatus
-										teslNext.UpdatedAt = teslrt.NowMillis()
-										return teslNext
+											return teslrt.TableUpdateReturnOne(teslmodkanelmodels.IssueTable, func(i teslmodkanelmodels.Issue) bool {
+												return (i.Id == issueId)
+											}, func(i teslmodkanelmodels.Issue) teslmodkanelmodels.Issue {
+												teslNext := i
+												teslNext.Status = newStatus
+												teslNext.UpdatedAt = teslrt.NowMillis()
+												return teslNext
+											})
+										}()
 									})
+									return teslCommitted
 								}
 							case teslmodkanelmodels.IssueStatusBacklog:
 //line KanelIssues.tesl:469
@@ -2154,12 +2168,19 @@ func CreateOrgHandler(session teslmodkanelauth.KanelSession, req teslmodkanelmod
 //line KanelOrg.tesl:210
 								memberId := teslrt.GeneratePrefixedId("mem")
 								_ = memberId
-								{
+//line KanelOrg.tesl:211
+								var teslCommitted teslmodkanelmodels.Org
+								teslrt.WithMemoryTransaction(func() {
+									teslCommitted = func() teslmodkanelmodels.Org {
+										{
 //line KanelOrg.tesl:214
-									_ = teslrt.TableInsert(teslmodkanelmodels.OrgMembershipTable, "OrgMembership", teslmodkanelmodels.OrgMembership{Id: memberId, OrgId: orgId, UserId: session.UserId, Role: teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleAdmin}, JoinedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.OrgMembership) bool { return (teslRow.Id == teslNew.Id) })
+											_ = teslrt.TableInsert(teslmodkanelmodels.OrgMembershipTable, "OrgMembership", teslmodkanelmodels.OrgMembership{Id: memberId, OrgId: orgId, UserId: session.UserId, Role: teslmodkanelmodels.OrgRole{Tag: teslmodkanelmodels.OrgRoleRoleAdmin}, JoinedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.OrgMembership) bool { return (teslRow.Id == teslNew.Id) })
 //line KanelOrg.tesl:221
-									return teslrt.TableInsert(teslmodkanelmodels.OrgTable, "Org", teslmodkanelmodels.Org{Id: orgId, Name: orgName, Slug: slug, CreatedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.Org) bool { return (teslRow.Id == teslNew.Id) })
-								}
+											return teslrt.TableInsert(teslmodkanelmodels.OrgTable, "Org", teslmodkanelmodels.Org{Id: orgId, Name: orgName, Slug: slug, CreatedAt: teslrt.NowMillis()}, func(teslRow, teslNew teslmodkanelmodels.Org) bool { return (teslRow.Id == teslNew.Id) })
+										}
+									}()
+								})
+								return teslCommitted
 							}
 						}
 					default:
@@ -2649,6 +2670,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelTests.tesl:35
 		n1 := teslrt.MustCheck(teslmodkanelorg.CheckOrgName("Acme Corp"))
@@ -2659,11 +2685,13 @@ func TestTesl0(teslT *testing.T) {
 			_ = n2
 //line KanelTests.tesl:37
 			if teslrt.Compare(teslrt.StringLength(n1), teslrt.FromInt64(2)) < 0 {
+//line KanelTests.tesl:37
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft1 := teslrt.StringLength(n2)
 //line KanelTests.tesl:38
 			if !teslrt.Equal(teslLeft1, teslrt.FromInt64(2)) {
+//line KanelTests.tesl:38
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -2677,6 +2705,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line KanelTests.tesl:42
 	if (teslmodkanelorg.CheckOrgName("")).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -2694,6 +2727,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelTests.tesl:48
 		tooLong := "aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeeeeeeeeeffffffffff gggggggggg hhhhhhh"
@@ -2707,6 +2745,7 @@ func TestTesl2(teslT *testing.T) {
 		} else {
 //line KanelTests.tesl:52
 			if false {
+//line KanelTests.tesl:52
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -2720,6 +2759,11 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelTests.tesl:56
 		raw1 := "acme-corp"
@@ -2738,10 +2782,12 @@ func TestTesl3(teslT *testing.T) {
 					_ = s2
 //line KanelTests.tesl:60
 					if teslrt.Compare(teslrt.StringLength(s1), teslrt.FromInt64(2)) < 0 {
+//line KanelTests.tesl:60
 						teslT.Fatal("Tesl expectation failed")
 					}
 //line KanelTests.tesl:61
 					if teslrt.Compare(teslrt.StringLength(s2), teslrt.FromInt64(2)) < 0 {
+//line KanelTests.tesl:61
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -2757,6 +2803,11 @@ func TestTesl4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line KanelTests.tesl:65
 	if (teslmodkanelorg.CheckSlug("")).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -2770,6 +2821,11 @@ func TestTesl5(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelTests.tesl:69
 		rawEmail := "user@example.com"
@@ -2780,6 +2836,7 @@ func TestTesl5(teslT *testing.T) {
 			_ = e
 //line KanelTests.tesl:71
 			if teslrt.Compare(teslrt.StringLength(e), teslrt.FromInt64(0)) <= 0 {
+//line KanelTests.tesl:71
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -2793,6 +2850,11 @@ func TestTesl6(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line KanelTests.tesl:75
 	if (teslmodkanelorg.CheckEmail("notanemail")).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -2810,6 +2872,11 @@ func TestTesl7(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelTests.tesl:80
 		rawTitle := "Fix the login bug"
@@ -2820,6 +2887,7 @@ func TestTesl7(teslT *testing.T) {
 			_ = t
 //line KanelTests.tesl:82
 			if teslrt.Compare(teslrt.StringLength(t), teslrt.FromInt64(1)) < 0 {
+//line KanelTests.tesl:82
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line KanelTests.tesl:83
@@ -2837,6 +2905,11 @@ func TestTesl8(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelTests.tesl:88
 		rawDesc := ""
@@ -2848,6 +2921,7 @@ func TestTesl8(teslT *testing.T) {
 			teslLeft2 := teslrt.StringLength(d)
 //line KanelTests.tesl:90
 			if !teslrt.Equal(teslLeft2, teslrt.FromInt64(0)) {
+//line KanelTests.tesl:90
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -2861,6 +2935,11 @@ func TestTesl9(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelTests.tesl:94
 		n0 := teslrt.FromInt64(0)
@@ -2887,14 +2966,17 @@ func TestTesl9(teslT *testing.T) {
 							_ = e2
 //line KanelTests.tesl:100
 							if !teslrt.Equal(e0, teslrt.FromInt64(0)) {
+//line KanelTests.tesl:100
 								teslT.Fatal("Tesl expectation failed")
 							}
 //line KanelTests.tesl:101
 							if !teslrt.Equal(e1, teslrt.FromInt64(60)) {
+//line KanelTests.tesl:101
 								teslT.Fatal("Tesl expectation failed")
 							}
 //line KanelTests.tesl:102
 							if !teslrt.Equal(e2, teslrt.FromInt64(480)) {
+//line KanelTests.tesl:102
 								teslT.Fatal("Tesl expectation failed")
 							}
 						}
@@ -2912,6 +2994,11 @@ func TestTesl10(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line KanelTests.tesl:106
 	if (teslmodkanelissues.CheckEstimate(teslrt.FromInt64(-1))).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -2929,6 +3016,11 @@ func TestTesl11(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelTests.tesl:111
 		raw1 := teslrt.FromInt64(1)
@@ -2955,10 +3047,12 @@ func TestTesl11(teslT *testing.T) {
 							_ = m3
 //line KanelTests.tesl:117
 							if !teslrt.Equal(m1, teslrt.FromInt64(1)) {
+//line KanelTests.tesl:117
 								teslT.Fatal("Tesl expectation failed")
 							}
 //line KanelTests.tesl:118
 							if !teslrt.Equal(m3, teslrt.FromInt64(1440)) {
+//line KanelTests.tesl:118
 								teslT.Fatal("Tesl expectation failed")
 							}
 						}
@@ -2976,6 +3070,11 @@ func TestTesl12(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line KanelTests.tesl:122
 	if (teslmodkanelissues.CheckPositiveMinutes(teslrt.FromInt64(0))).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -2997,6 +3096,11 @@ func TestTesl13(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelTests.tesl:128
 		rawBody := "This is a comment."
@@ -3007,6 +3111,7 @@ func TestTesl13(teslT *testing.T) {
 			_ = b
 //line KanelTests.tesl:130
 			if teslrt.Compare(teslrt.StringLength(b), teslrt.FromInt64(0)) <= 0 {
+//line KanelTests.tesl:130
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -3020,6 +3125,11 @@ func TestTesl14(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line KanelTests.tesl:134
 	if (teslmodkanelissues.CheckCommentBody("")).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -3033,6 +3143,11 @@ func TestTesl15(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelTests.tesl:142
 		from1 := teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusBacklog}
@@ -3059,6 +3174,7 @@ func TestTesl15(teslT *testing.T) {
 							_ = t2
 //line KanelTests.tesl:148
 							if false {
+//line KanelTests.tesl:148
 								teslT.Fatal("Tesl expectation failed")
 							}
 						}
@@ -3076,6 +3192,11 @@ func TestTesl16(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelTests.tesl:152
 		from1 := teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusTodo}
@@ -3114,6 +3235,7 @@ func TestTesl16(teslT *testing.T) {
 										_ = t3
 //line KanelTests.tesl:161
 										if false {
+//line KanelTests.tesl:161
 											teslT.Fatal("Tesl expectation failed")
 										}
 									}
@@ -3134,6 +3256,11 @@ func TestTesl17(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelTests.tesl:165
 		from1 := teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusInProgress}
@@ -3160,6 +3287,7 @@ func TestTesl17(teslT *testing.T) {
 							_ = t2
 //line KanelTests.tesl:171
 							if false {
+//line KanelTests.tesl:171
 								teslT.Fatal("Tesl expectation failed")
 							}
 						}
@@ -3177,6 +3305,11 @@ func TestTesl18(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelTests.tesl:175
 		from1 := teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusInReview}
@@ -3203,6 +3336,7 @@ func TestTesl18(teslT *testing.T) {
 							_ = t2
 //line KanelTests.tesl:181
 							if false {
+//line KanelTests.tesl:181
 								teslT.Fatal("Tesl expectation failed")
 							}
 						}
@@ -3220,6 +3354,11 @@ func TestTesl19(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelTests.tesl:185
 		from1 := teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusCancelled}
@@ -3234,6 +3373,7 @@ func TestTesl19(teslT *testing.T) {
 				_ = t1
 //line KanelTests.tesl:188
 				if false {
+//line KanelTests.tesl:188
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -3248,6 +3388,11 @@ func TestTesl20(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line KanelTests.tesl:192
 	if (teslmodkanelissues.CheckTransition(teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusBacklog}, teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusDone})).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -3261,6 +3406,11 @@ func TestTesl21(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line KanelTests.tesl:196
 	if (teslmodkanelissues.CheckTransition(teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusBacklog}, teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusInProgress})).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -3274,6 +3424,11 @@ func TestTesl22(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line KanelTests.tesl:200
 	if (teslmodkanelissues.CheckTransition(teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusBacklog}, teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusInReview})).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -3287,6 +3442,11 @@ func TestTesl23(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line KanelTests.tesl:204
 	if (teslmodkanelissues.CheckTransition(teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusDone}, teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusBacklog})).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -3320,6 +3480,11 @@ func TestTesl24(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line KanelTests.tesl:213
 	if (teslmodkanelissues.CheckTransition(teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusTodo}, teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusDone})).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -3333,6 +3498,11 @@ func TestTesl25(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line KanelTests.tesl:217
 	if (teslmodkanelissues.CheckTransition(teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusInProgress}, teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusDone})).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -3346,6 +3516,11 @@ func TestTesl26(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line KanelTests.tesl:221
 	if (teslmodkanelissues.CheckTransition(teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusCancelled}, teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusTodo})).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -3367,6 +3542,11 @@ func TestTesl27(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	for teslPropRun1 := 0; teslPropRun1 < 100; teslPropRun1++ {
 //line KanelTests.tesl:235
 		n := teslrt.PropInt()
@@ -3386,6 +3566,11 @@ func TestTesl28(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	for teslPropRun1 := 0; teslPropRun1 < 50; teslPropRun1++ {
 //line KanelTests.tesl:239
 		n := teslrt.PropInt()
@@ -3405,6 +3590,11 @@ func TestTesl29(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	for teslPropRun1 := 0; teslPropRun1 < 100; teslPropRun1++ {
 //line KanelTests.tesl:243
 		n := teslrt.PropInt()
@@ -3424,6 +3614,11 @@ func TestTesl30(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	for teslPropRun1 := 0; teslPropRun1 < 100; teslPropRun1++ {
 //line KanelTests.tesl:247
 		n := teslrt.PropInt()
@@ -3443,6 +3638,11 @@ func TestTesl31(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	for teslPropRun1 := 0; teslPropRun1 < 50; teslPropRun1++ {
 //line KanelTests.tesl:251
 		a := teslrt.PropInt()
@@ -3464,6 +3664,11 @@ func TestTesl32(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelTests.tesl:256
 		entries := []teslrt.Int{teslrt.FromInt64(30), teslrt.FromInt64(60), teslrt.FromInt64(45), teslrt.FromInt64(120), teslrt.FromInt64(15)}
@@ -3483,6 +3688,7 @@ func TestTesl32(teslT *testing.T) {
 			_ = total
 //line KanelTests.tesl:258
 			if !teslrt.Equal(total, teslrt.FromInt64(270)) {
+//line KanelTests.tesl:258
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -3496,6 +3702,11 @@ func TestTesl33(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	for teslPropRun1 := 0; teslPropRun1 < 50; teslPropRun1++ {
 //line KanelTests.tesl:265
 		n := teslrt.PropInt()
@@ -3515,12 +3726,18 @@ func TestTesl34(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelTests.tesl:278
 		validName := teslrt.MustCheck(teslmodkanelorg.CheckOrgName("Test Organization"))
 		_ = validName
 //line KanelTests.tesl:281
 		if teslrt.Compare(teslrt.StringLength(validName), teslrt.FromInt64(0)) <= 0 {
+//line KanelTests.tesl:281
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -3533,6 +3750,11 @@ func TestTesl35(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelTests.tesl:287
 		from := teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusTodo}
@@ -3548,6 +3770,7 @@ func TestTesl35(teslT *testing.T) {
 				teslRight9 := teslmodkanelmodels.IssueStatus{Tag: teslmodkanelmodels.IssueStatusInProgress}
 //line KanelTests.tesl:290
 				if !newStatus.TeslEqual(teslRight9) {
+//line KanelTests.tesl:290
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -3562,6 +3785,11 @@ func TestTesl36(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelTests.tesl:296
 		rawTitle := "Implement user auth"
@@ -3588,10 +3816,12 @@ func TestTesl36(teslT *testing.T) {
 							_ = validDesc
 //line KanelTests.tesl:303
 							if teslrt.Compare(teslrt.StringLength(validTitle), teslrt.FromInt64(0)) <= 0 {
+//line KanelTests.tesl:303
 								teslT.Fatal("Tesl expectation failed")
 							}
 //line KanelTests.tesl:304
 							if !teslrt.Equal(validEstimate, teslrt.FromInt64(120)) {
+//line KanelTests.tesl:304
 								teslT.Fatal("Tesl expectation failed")
 							}
 						}
@@ -3609,6 +3839,11 @@ func TestTesl37(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelTests.tesl:313
 		raw1 := teslrt.FromInt64(30)
@@ -3639,6 +3874,7 @@ func TestTesl37(teslT *testing.T) {
 								_ = total
 //line KanelTests.tesl:320
 								if !teslrt.Equal(total, teslrt.FromInt64(180)) {
+//line KanelTests.tesl:320
 									teslT.Fatal("Tesl expectation failed")
 								}
 							}
@@ -3657,6 +3893,11 @@ func TestTesl38(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelTests.tesl:327
 		emptyList := []teslrt.Int{}
@@ -3664,6 +3905,7 @@ func TestTesl38(teslT *testing.T) {
 		teslLeft12 := teslrt.ListLength(emptyList)
 //line KanelTests.tesl:328
 		if !teslrt.Equal(teslLeft12, teslrt.FromInt64(0)) {
+//line KanelTests.tesl:328
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -3676,6 +3918,11 @@ func TestTesl39(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelTests.tesl:333
 		m1 := teslrt.FromInt64(30)
@@ -3694,6 +3941,7 @@ func TestTesl39(teslT *testing.T) {
 					_ = total
 //line KanelTests.tesl:337
 					if !teslrt.Equal(total, teslrt.FromInt64(135)) {
+//line KanelTests.tesl:337
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -3709,6 +3957,11 @@ func TestTesl40(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelTests.tesl:347
 		rawSlug := "my-project"
@@ -3719,6 +3972,7 @@ func TestTesl40(teslT *testing.T) {
 			_ = s
 //line KanelTests.tesl:349
 			if teslrt.Compare(teslrt.StringLength(s), teslrt.FromInt64(0)) <= 0 {
+//line KanelTests.tesl:349
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -3732,6 +3986,11 @@ func TestTesl41(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelTests.tesl:354
 		longTitle := "This is a very long title that describes the issue in great detail and should be accepted by the validation function for the purpose of testing"
@@ -3746,12 +4005,14 @@ func TestTesl41(teslT *testing.T) {
 				teslRight14 := teslrt.StringLength(longTitle)
 //line KanelTests.tesl:357
 				if !teslrt.Equal(teslLeft14, teslRight14) {
+//line KanelTests.tesl:357
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
 		} else {
 //line KanelTests.tesl:359
 			if false {
+//line KanelTests.tesl:359
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -3765,6 +4026,11 @@ func TestTesl42(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelTests.tesl:364
 		n := teslrt.FromInt64(0)
@@ -3775,6 +4041,7 @@ func TestTesl42(teslT *testing.T) {
 			_ = e
 //line KanelTests.tesl:366
 			if !teslrt.Equal(e, teslrt.FromInt64(0)) {
+//line KanelTests.tesl:366
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -3788,6 +4055,11 @@ func TestTesl43(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line KanelTests.tesl:370
 		n := teslrt.FromInt64(1440)
@@ -3798,6 +4070,7 @@ func TestTesl43(teslT *testing.T) {
 			_ = m
 //line KanelTests.tesl:372
 			if !teslrt.Equal(m, teslrt.FromInt64(1440)) {
+//line KanelTests.tesl:372
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -3811,6 +4084,11 @@ func TestTesl44(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line KanelTests.tesl:376
 	if (teslmodkanelissues.CheckPositiveMinutes(teslrt.FromInt64(1441))).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -3824,6 +4102,11 @@ func TestTesl45(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	for teslPropRun1 := 0; teslPropRun1 < 1; teslPropRun1++ {
 //line KanelTests.tesl:380
 		n := teslrt.PropInt()

@@ -12,6 +12,7 @@ import (
 func main() {
 	socket := flag.String("socket", "", "attach directly to a Unix debug socket")
 	tcp := flag.String("tcp", "", "attach directly to a loopback debug address")
+	token := flag.String("token", "", "hex token for -tcp (.tesl-stuff/debug.token of the running app)")
 	flag.Parse()
 	if *socket != "" && *tcp != "" {
 		fail("-socket and -tcp are mutually exclusive")
@@ -23,7 +24,7 @@ func main() {
 		if *socket != "" {
 			backend, err = dap.DialControlUnix(*socket)
 		} else {
-			backend, err = dap.DialControlTCP(*tcp)
+			backend, err = dap.DialControlTCP(*tcp, *token)
 		}
 		if err != nil {
 			fail("connect debug endpoint: %v", err)

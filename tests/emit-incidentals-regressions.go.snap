@@ -301,6 +301,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line emit-incidentals-regressions.tesl:42
 		b := mkBody("x")
@@ -308,6 +313,7 @@ func TestTesl0(teslT *testing.T) {
 		teslLeft1 := bodyKind(b)
 //line emit-incidentals-regressions.tesl:43
 		if teslLeft1 != "rich" {
+//line emit-incidentals-regressions.tesl:43
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -317,11 +323,13 @@ func TestTesl0(teslT *testing.T) {
 			teslLeft2 := bodyKind(t)
 //line emit-incidentals-regressions.tesl:45
 			if teslLeft2 != "text" {
+//line emit-incidentals-regressions.tesl:45
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft3 := bodyKind(teslrt.EmailBody{Tag: teslrt.EmailBodyHTML, HTML: "<i>h</i>"})
 //line emit-incidentals-regressions.tesl:46
 			if teslLeft3 != "html" {
+//line emit-incidentals-regressions.tesl:46
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -335,9 +343,15 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft4 := applyTwice(teslrt.Apply1Of2(addN, teslrt.FromInt64(3)), teslrt.FromInt64(1))
 //line emit-incidentals-regressions.tesl:58
 	if !teslrt.Equal(teslLeft4, teslrt.FromInt64(7)) {
+//line emit-incidentals-regressions.tesl:58
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -349,6 +363,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line emit-incidentals-regressions.tesl:62
 		addTen := teslrt.Apply1Of2(addN, teslrt.FromInt64(10))
@@ -356,6 +375,7 @@ func TestTesl2(teslT *testing.T) {
 		teslLeft5 := addTen(teslrt.FromInt64(5))
 //line emit-incidentals-regressions.tesl:63
 		if !teslrt.Equal(teslLeft5, teslrt.FromInt64(15)) {
+//line emit-incidentals-regressions.tesl:63
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -371,20 +391,28 @@ func TestTeslApi0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line emit-incidentals-regressions.tesl:150
 		r := teslrt.ApiRequest(MainServer, "GET", "/users/u-9", "", nil, nil)
 		_ = r
 //line emit-incidentals-regressions.tesl:151
 		if !(teslrt.StatusOk(r.Status)) {
+//line emit-incidentals-regressions.tesl:151
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line emit-incidentals-regressions.tesl:152
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, "id"), "u-9") {
+//line emit-incidentals-regressions.tesl:152
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line emit-incidentals-regressions.tesl:153
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, "name"), "user-u-9") {
+//line emit-incidentals-regressions.tesl:153
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -400,20 +428,28 @@ func TestTeslApi1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line emit-incidentals-regressions.tesl:157
 		r := teslrt.ApiRequest(MainServer, "POST", "/users/echo", "{\"id\":\"ignored\",\"name\":\"bob\"}", nil, nil)
 		_ = r
 //line emit-incidentals-regressions.tesl:158
 		if !(teslrt.StatusOk(r.Status)) {
+//line emit-incidentals-regressions.tesl:158
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line emit-incidentals-regressions.tesl:159
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, "id"), "echoed") {
+//line emit-incidentals-regressions.tesl:159
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line emit-incidentals-regressions.tesl:160
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, "name"), "bob") {
+//line emit-incidentals-regressions.tesl:160
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -429,20 +465,28 @@ func TestTeslApi2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line emit-incidentals-regressions.tesl:164
 		r := teslrt.ApiRequest(MainServer, "GET", "/accts/a-1", "", nil, nil)
 		_ = r
 //line emit-incidentals-regressions.tesl:165
 		if !(teslrt.StatusOk(r.Status)) {
+//line emit-incidentals-regressions.tesl:165
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line emit-incidentals-regressions.tesl:166
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, "id"), "a-1") {
+//line emit-incidentals-regressions.tesl:166
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line emit-incidentals-regressions.tesl:167
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, "name"), "acct-a-1") {
+//line emit-incidentals-regressions.tesl:167
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -458,20 +502,28 @@ func TestTeslApi3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line emit-incidentals-regressions.tesl:171
 		r := teslrt.ApiRequest(MainServer, "POST", "/accts/echo", "{\"id\":\"ignored\",\"name\":\"eve\"}", nil, nil)
 		_ = r
 //line emit-incidentals-regressions.tesl:172
 		if !(teslrt.StatusOk(r.Status)) {
+//line emit-incidentals-regressions.tesl:172
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line emit-incidentals-regressions.tesl:173
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, "id"), "echoed") {
+//line emit-incidentals-regressions.tesl:173
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line emit-incidentals-regressions.tesl:174
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, "name"), "eve") {
+//line emit-incidentals-regressions.tesl:174
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}

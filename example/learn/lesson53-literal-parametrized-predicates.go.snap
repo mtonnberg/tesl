@@ -272,19 +272,27 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft1 := TestAllBounds(teslrt.FromInt64(10))
 //line lesson53-literal-parametrized-predicates.tesl:188
 	if !teslrt.Equal(teslLeft1, teslrt.FromInt64(10)) {
+//line lesson53-literal-parametrized-predicates.tesl:188
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft2 := TestAllBounds(teslrt.FromInt64(50))
 //line lesson53-literal-parametrized-predicates.tesl:189
 	if !teslrt.Equal(teslLeft2, teslrt.FromInt64(50)) {
+//line lesson53-literal-parametrized-predicates.tesl:189
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft3 := TestAllBounds(teslrt.FromInt64(100))
 //line lesson53-literal-parametrized-predicates.tesl:190
 	if !teslrt.Equal(teslLeft3, teslrt.FromInt64(100)) {
+//line lesson53-literal-parametrized-predicates.tesl:190
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson53-literal-parametrized-predicates.tesl:193
@@ -306,6 +314,7 @@ func TestTesl0(teslT *testing.T) {
 			teslLeft4 := NeedAbove10(v10)
 //line lesson53-literal-parametrized-predicates.tesl:199
 			if !teslrt.Equal(teslLeft4, teslrt.FromInt64(10)) {
+//line lesson53-literal-parametrized-predicates.tesl:199
 				teslT.Fatal("Tesl expectation failed")
 			}
 			{
@@ -319,6 +328,7 @@ func TestTesl0(teslT *testing.T) {
 					teslLeft5 := NeedAbove20(v20)
 //line lesson53-literal-parametrized-predicates.tesl:204
 					if !teslrt.Equal(teslLeft5, teslrt.FromInt64(20)) {
+//line lesson53-literal-parametrized-predicates.tesl:204
 						teslT.Fatal("Tesl expectation failed")
 					}
 					{
@@ -343,6 +353,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson53-literal-parametrized-predicates.tesl:212
 		port80 := teslrt.FromInt64(80)
@@ -350,6 +365,7 @@ func TestTesl1(teslT *testing.T) {
 		teslLeft6 := TestStringTag(port80)
 //line lesson53-literal-parametrized-predicates.tesl:213
 		if !teslrt.Equal(teslLeft6, teslrt.FromInt64(80)) {
+//line lesson53-literal-parametrized-predicates.tesl:213
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -366,6 +382,7 @@ func TestTesl1(teslT *testing.T) {
 					_ = result
 //line lesson53-literal-parametrized-predicates.tesl:218
 					if !teslrt.Equal(result, teslrt.FromInt64(443)) {
+//line lesson53-literal-parametrized-predicates.tesl:218
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -381,19 +398,27 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft8 := testClampedLet(teslrt.FromInt64(50))
 //line lesson53-literal-parametrized-predicates.tesl:222
 	if !teslrt.Equal(teslLeft8, teslrt.FromInt64(50)) {
+//line lesson53-literal-parametrized-predicates.tesl:222
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft9 := testClampedLet(teslrt.FromInt64(1))
 //line lesson53-literal-parametrized-predicates.tesl:223
 	if !teslrt.Equal(teslLeft9, teslrt.FromInt64(1)) {
+//line lesson53-literal-parametrized-predicates.tesl:223
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft10 := testClampedLet(teslrt.FromInt64(100))
 //line lesson53-literal-parametrized-predicates.tesl:224
 	if !teslrt.Equal(teslLeft10, teslrt.FromInt64(100)) {
+//line lesson53-literal-parametrized-predicates.tesl:224
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson53-literal-parametrized-predicates.tesl:225
@@ -413,24 +438,33 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft11 := FilterInRange1to100([]teslrt.Int{teslrt.FromInt64(10), teslrt.FromInt64(20), teslrt.FromInt64(5), teslrt.FromInt64(30)})
 //line lesson53-literal-parametrized-predicates.tesl:231
 	if !teslrt.Equal(teslLeft11, teslrt.FromInt64(3)) {
+//line lesson53-literal-parametrized-predicates.tesl:231
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft12 := FilterInRange1to100([]teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(2), teslrt.FromInt64(13)})
 //line lesson53-literal-parametrized-predicates.tesl:232
 	if !teslrt.Equal(teslLeft12, teslrt.FromInt64(1)) {
+//line lesson53-literal-parametrized-predicates.tesl:232
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft13 := FilterInRange1to100([]teslrt.Int{teslrt.FromInt64(5), teslrt.FromInt64(8), teslrt.FromInt64(9)})
 //line lesson53-literal-parametrized-predicates.tesl:233
 	if !teslrt.Equal(teslLeft13, teslrt.FromInt64(0)) {
+//line lesson53-literal-parametrized-predicates.tesl:233
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft14 := FilterInRange1to100([]teslrt.Int{teslrt.FromInt64(10), teslrt.FromInt64(100), teslrt.FromInt64(110)})
 //line lesson53-literal-parametrized-predicates.tesl:234
 	if !teslrt.Equal(teslLeft14, teslrt.FromInt64(2)) {
+//line lesson53-literal-parametrized-predicates.tesl:234
 		teslT.Fatal("Tesl expectation failed")
 	}
 	{
@@ -440,6 +474,7 @@ func TestTesl3(teslT *testing.T) {
 		teslLeft15 := needForAllAbove10(xs10)
 //line lesson53-literal-parametrized-predicates.tesl:238
 		if !teslrt.Equal(teslLeft15, teslrt.FromInt64(45)) {
+//line lesson53-literal-parametrized-predicates.tesl:238
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -449,6 +484,7 @@ func TestTesl3(teslT *testing.T) {
 			teslLeft16 := needForAllAbove20(xs20)
 //line lesson53-literal-parametrized-predicates.tesl:242
 			if !teslrt.Equal(teslLeft16, teslrt.FromInt64(2)) {
+//line lesson53-literal-parametrized-predicates.tesl:242
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}

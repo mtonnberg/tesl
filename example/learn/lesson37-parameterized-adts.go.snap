@@ -479,6 +479,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson37-parameterized-adts.tesl:68
 		b := Wrap(teslrt.FromInt64(42))
@@ -486,6 +491,7 @@ func TestTesl0(teslT *testing.T) {
 		teslLeft1 := Unwrap(b)
 //line lesson37-parameterized-adts.tesl:69
 		if !teslrt.Equal(teslLeft1, teslrt.FromInt64(42)) {
+//line lesson37-parameterized-adts.tesl:69
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft2 := Unwrap(MapBox(b, func(x teslrt.Int) teslrt.Int {
@@ -493,11 +499,13 @@ func TestTesl0(teslT *testing.T) {
 		}))
 //line lesson37-parameterized-adts.tesl:70
 		if !teslrt.Equal(teslLeft2, teslrt.FromInt64(43)) {
+//line lesson37-parameterized-adts.tesl:70
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft3 := Unwrap(Box[teslrt.Int]{MkBoxValue: teslrt.FromInt64(0)})
 //line lesson37-parameterized-adts.tesl:71
 		if !teslrt.Equal(teslLeft3, teslrt.FromInt64(0)) {
+//line lesson37-parameterized-adts.tesl:71
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -510,14 +518,21 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft4 := FromOption(Option[teslrt.Int]{Tag: OptionSome, SomeValue: teslrt.FromInt64(7)}, teslrt.FromInt64(0))
 //line lesson37-parameterized-adts.tesl:101
 	if !teslrt.Equal(teslLeft4, teslrt.FromInt64(7)) {
+//line lesson37-parameterized-adts.tesl:101
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft5 := FromOption(Option[teslrt.Int]{Tag: OptionNone}, teslrt.FromInt64(99))
 //line lesson37-parameterized-adts.tesl:102
 	if !teslrt.Equal(teslLeft5, teslrt.FromInt64(99)) {
+//line lesson37-parameterized-adts.tesl:102
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft6 := FromOption(MapOption(Option[teslrt.Int]{Tag: OptionSome, SomeValue: teslrt.FromInt64(5)}, func(x teslrt.Int) teslrt.Int {
@@ -525,6 +540,7 @@ func TestTesl1(teslT *testing.T) {
 	}), teslrt.FromInt64(0))
 //line lesson37-parameterized-adts.tesl:103
 	if !teslrt.Equal(teslLeft6, teslrt.FromInt64(10)) {
+//line lesson37-parameterized-adts.tesl:103
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft7 := FromOption(MapOption(Option[teslrt.Int]{Tag: OptionNone}, func(x teslrt.Int) teslrt.Int {
@@ -532,6 +548,7 @@ func TestTesl1(teslT *testing.T) {
 	}), teslrt.FromInt64(0))
 //line lesson37-parameterized-adts.tesl:104
 	if !teslrt.Equal(teslLeft7, teslrt.FromInt64(0)) {
+//line lesson37-parameterized-adts.tesl:104
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft8 := FromOption(BindOption(Option[teslrt.Int]{Tag: OptionSome, SomeValue: teslrt.FromInt64(4)}, func(x teslrt.Int) Option[teslrt.Int] {
@@ -539,6 +556,7 @@ func TestTesl1(teslT *testing.T) {
 	}), teslrt.FromInt64(0))
 //line lesson37-parameterized-adts.tesl:105
 	if !teslrt.Equal(teslLeft8, teslrt.FromInt64(5)) {
+//line lesson37-parameterized-adts.tesl:105
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft9 := FromOption(BindOption(Option[teslrt.Int]{Tag: OptionNone}, func(x teslrt.Int) Option[teslrt.Int] {
@@ -546,6 +564,7 @@ func TestTesl1(teslT *testing.T) {
 	}), teslrt.FromInt64(0))
 //line lesson37-parameterized-adts.tesl:106
 	if !teslrt.Equal(teslLeft9, teslrt.FromInt64(0)) {
+//line lesson37-parameterized-adts.tesl:106
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -557,14 +576,21 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft10 := FromRight(Either[string, teslrt.Int]{Tag: EitherRight, RightValue: teslrt.FromInt64(42)}, teslrt.FromInt64(0))
 //line lesson37-parameterized-adts.tesl:145
 	if !teslrt.Equal(teslLeft10, teslrt.FromInt64(42)) {
+//line lesson37-parameterized-adts.tesl:145
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft11 := FromRight(Either[string, teslrt.Int]{Tag: EitherLeft, LeftValue: "oops"}, teslrt.FromInt64(0))
 //line lesson37-parameterized-adts.tesl:146
 	if !teslrt.Equal(teslLeft11, teslrt.FromInt64(0)) {
+//line lesson37-parameterized-adts.tesl:146
 		teslT.Fatal("Tesl expectation failed")
 	}
 	{
@@ -576,6 +602,7 @@ func TestTesl2(teslT *testing.T) {
 		teslLeft12 := FromRight(doubled, teslrt.FromInt64(0))
 //line lesson37-parameterized-adts.tesl:149
 		if !teslrt.Equal(teslLeft12, teslrt.FromInt64(10)) {
+//line lesson37-parameterized-adts.tesl:149
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -587,17 +614,20 @@ func TestTesl2(teslT *testing.T) {
 			teslLeft13 := FromRight(unchanged, teslrt.FromInt64(0))
 //line lesson37-parameterized-adts.tesl:152
 			if !teslrt.Equal(teslLeft13, teslrt.FromInt64(0)) {
+//line lesson37-parameterized-adts.tesl:152
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft14 := FromRight(SafeDivide(teslrt.FromInt64(10), teslrt.FromInt64(2)), teslrt.Neg(teslrt.FromInt64(1)))
 //line lesson37-parameterized-adts.tesl:154
 			if !teslrt.Equal(teslLeft14, teslrt.FromInt64(5)) {
+//line lesson37-parameterized-adts.tesl:154
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft15 := FromRight(SafeDivide(teslrt.FromInt64(10), teslrt.FromInt64(0)), teslrt.Neg(teslrt.FromInt64(1)))
 			teslRight15 := teslrt.Neg(teslrt.FromInt64(1))
 //line lesson37-parameterized-adts.tesl:155
 			if !teslrt.Equal(teslLeft15, teslRight15) {
+//line lesson37-parameterized-adts.tesl:155
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -611,6 +641,11 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson37-parameterized-adts.tesl:216
 		empty := Tree[teslrt.Int]{Tag: TreeLeaf}
@@ -634,64 +669,78 @@ func TestTesl3(teslT *testing.T) {
 						teslLeft16 := TreeSize(Tree[teslrt.Int]{Tag: TreeLeaf})
 //line lesson37-parameterized-adts.tesl:222
 						if !teslrt.Equal(teslLeft16, teslrt.FromInt64(0)) {
+//line lesson37-parameterized-adts.tesl:222
 							teslT.Fatal("Tesl expectation failed")
 						}
 						teslLeft17 := TreeSize(t1)
 //line lesson37-parameterized-adts.tesl:223
 						if !teslrt.Equal(teslLeft17, teslrt.FromInt64(1)) {
+//line lesson37-parameterized-adts.tesl:223
 							teslT.Fatal("Tesl expectation failed")
 						}
 						teslLeft18 := TreeSize(t3)
 //line lesson37-parameterized-adts.tesl:224
 						if !teslrt.Equal(teslLeft18, teslrt.FromInt64(3)) {
+//line lesson37-parameterized-adts.tesl:224
 							teslT.Fatal("Tesl expectation failed")
 						}
 						teslLeft19 := TreeSize(t4)
 //line lesson37-parameterized-adts.tesl:225
 						if !teslrt.Equal(teslLeft19, teslrt.FromInt64(4)) {
+//line lesson37-parameterized-adts.tesl:225
 							teslT.Fatal("Tesl expectation failed")
 						}
 						teslLeft20 := TreeDepth(Tree[teslrt.Int]{Tag: TreeLeaf})
 //line lesson37-parameterized-adts.tesl:227
 						if !teslrt.Equal(teslLeft20, teslrt.FromInt64(0)) {
+//line lesson37-parameterized-adts.tesl:227
 							teslT.Fatal("Tesl expectation failed")
 						}
 						teslLeft21 := TreeDepth(t1)
 //line lesson37-parameterized-adts.tesl:228
 						if !teslrt.Equal(teslLeft21, teslrt.FromInt64(1)) {
+//line lesson37-parameterized-adts.tesl:228
 							teslT.Fatal("Tesl expectation failed")
 						}
 						teslLeft22 := TreeDepth(t3)
 //line lesson37-parameterized-adts.tesl:229
 						if !teslrt.Equal(teslLeft22, teslrt.FromInt64(2)) {
+//line lesson37-parameterized-adts.tesl:229
 							teslT.Fatal("Tesl expectation failed")
 						}
 //line lesson37-parameterized-adts.tesl:231
 						if !(TreeContains(t3, teslrt.FromInt64(5))) {
+//line lesson37-parameterized-adts.tesl:231
 							teslT.Fatal("Tesl expectation failed")
 						}
 //line lesson37-parameterized-adts.tesl:232
 						if !(TreeContains(t3, teslrt.FromInt64(3))) {
+//line lesson37-parameterized-adts.tesl:232
 							teslT.Fatal("Tesl expectation failed")
 						}
 //line lesson37-parameterized-adts.tesl:233
 						if !(TreeContains(t3, teslrt.FromInt64(7))) {
+//line lesson37-parameterized-adts.tesl:233
 							teslT.Fatal("Tesl expectation failed")
 						}
 //line lesson37-parameterized-adts.tesl:234
 						if !(TreeContains(t4, teslrt.FromInt64(1))) {
+//line lesson37-parameterized-adts.tesl:234
 							teslT.Fatal("Tesl expectation failed")
 						}
 //line lesson37-parameterized-adts.tesl:235
 						if !(TreeContains(t4, teslrt.FromInt64(5))) {
+//line lesson37-parameterized-adts.tesl:235
 							teslT.Fatal("Tesl expectation failed")
 						}
 //line lesson37-parameterized-adts.tesl:236
 						if TreeContains(t3, teslrt.FromInt64(99)) {
+//line lesson37-parameterized-adts.tesl:236
 							teslT.Fatal("Tesl expectation failed")
 						}
 //line lesson37-parameterized-adts.tesl:237
 						if TreeContains(Tree[teslrt.Int]{Tag: TreeLeaf}, teslrt.FromInt64(1)) {
+//line lesson37-parameterized-adts.tesl:237
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}

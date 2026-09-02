@@ -1,6 +1,11 @@
 package teslrt
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+)
 
 // Tesl lengths and indices are CODE POINTS, because the Racket backend counts
 // Racket chars. A byte-based implementation passes every ASCII test and is wrong the
@@ -157,6 +162,38 @@ func TestStringRepeatIsTotal(t *testing.T) {
 		if got := StringRepeat("ab", times); got != "" {
 			t.Errorf("Repeat(%s) = %q, want empty", times.String(), got)
 		}
+	}
+}
+
+// strings.Repeat only panics on int overflow, so a request-controlled count of 2^40
+// would attempt a terabyte allocation and die with an uncatchable OOM. The byte bound is
+// decided before strings.Repeat runs and follows the file's totality convention.
+func TestStringRepeatRefusesOversizedResultsQuickly(t *testing.T) {
+	refused := func(unit string, count int64) time.Duration {
+		started := time.Now()
+		defer func() {
+			if recovered := recover(); recovered == nil {
+				t.Fatalf("Repeat(%d bytes, %d) did not trap", len(unit), count)
+			} else if !strings.Contains(fmt.Sprint(recovered), "String.repeat") {
+				t.Fatalf("trap = %v", recovered)
+			}
+		}()
+		_ = StringRepeat(unit, FromInt64(count))
+		return time.Since(started)
+	}
+	if elapsed := refused("ab", 1<<40); elapsed > 10*time.Millisecond {
+		t.Fatalf("Repeat(ab, 2^40) took %v; the bound must be decided without allocating", elapsed)
+	}
+	// A long unit with a small count is the same total size and is refused the same way.
+	unit := strings.Repeat("x", 1<<20)
+	refused(unit, 65)
+	// Exactly at the bound still materialises: the bound is a DoS limit, not a feature cap.
+	if got := StringRepeat(unit, FromInt64(64)); len(got) != maxRepeatBytes {
+		t.Errorf("Repeat(1 MiB, 64) = %d bytes, want %d", len(got), maxRepeatBytes)
+	}
+	// An empty unit never allocates, whatever the count.
+	if got := StringRepeat("", FromInt64(1<<62)); got != "" {
+		t.Errorf("Repeat(\"\", 2^62) = %q", got)
 	}
 }
 

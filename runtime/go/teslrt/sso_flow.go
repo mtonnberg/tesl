@@ -1,6 +1,7 @@
 package teslrt
 
 import (
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -14,10 +15,13 @@ import (
 // The SSO ORCHESTRATION layer: it drives the HTTP client, which is what makes it stubbable
 // through the same hook an api-test's `stubHttp` installs.
 //
-// Every outbound leg is https-only and SSRF-preflighted, and it does not follow redirects.
-// A provider's own `error`/`error_description` text is NEVER reflected — a failure is a
-// fixed reason of our own — and the client secret travels in the Authorization header
-// (client_secret_basic), never in a URL.
+// Every outbound leg is https-only and SSRF-preflighted, and it does not follow redirects:
+// `fetch` asks the client for `redirectRefused`, so a 3xx from a provider is the leg's final
+// answer and, being non-200, a failed leg. Following it would re-run the https and SSRF
+// checks on a URL the provider chose — not the configured one — and would carry the
+// client_secret_basic Authorization header along. A provider's own `error`/
+// `error_description` text is NEVER reflected — a failure is a fixed reason of our own — and
+// the client secret travels in the Authorization header (client_secret_basic), never in a URL.
 
 // ssoOutcome is what the callback produced: an identity, or a fixed reason.
 type ssoOutcome struct {
@@ -86,12 +90,13 @@ func fetch(who, method, target string, headers []Tuple2[string, string], body st
 	if err := requireHTTPS(who, target); err != nil {
 		return "", err
 	}
-	var response HttpResponse
+	var bodyPointer *string
 	if method == "POST" {
-		response = HttpPost(target, headers, body)
-	} else {
-		response = HttpGet(target, headers)
+		bodyPointer = &body
 	}
+	// The same client path `HttpClient.get`/`post` take — same header guard, same api-test
+	// stubs, same egress and TLS treatment — but with redirects REFUSED rather than followed.
+	response := httpRequestPolicy(method, target, headers, bodyPointer, redirectRefused)
 	status, _ := response.Status.Int64()
 	if status != 200 {
 		return "", ssoError{who + ": non-200 response"}
@@ -230,7 +235,16 @@ func ssoHandleCallback(conn SsoConnection, segment, code, cookie, redirectURI st
 	if !opened {
 		return ssoFail("invalid or missing login state")
 	}
-	if presentedState != "" && presentedState != state.State {
+	// The `state` check is UNCONDITIONAL (RFC 6749 §10.12). It used to be skipped when the
+	// parameter was absent, which made it optional to the attacker: start a login in your own
+	// browser, capture your `code`, send the victim (who holds a legitimate cookie from a
+	// forced `/login` navigation) to `/callback?code=<yours>` with no `state` — and the
+	// victim is signed in as YOU (login CSRF / session planting). The sealed cookie and PKCE
+	// bind the flow to the victim's browser, not to the victim's `code`; for an `oidc`
+	// connection the id_token `nonce` still catches it, but a plain `oauth2` provider that
+	// ignores PKCE has nothing else. Constant-time, so a byte-by-byte guess learns nothing.
+	if presentedState == "" ||
+		subtle.ConstantTimeCompare([]byte(presentedState), []byte(state.State)) != 1 {
 		return ssoFail("state mismatch")
 	}
 	// Single-use `state`, honestly scoped to this process: a second presentation — a user

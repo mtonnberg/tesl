@@ -124,6 +124,19 @@ func (route SsoRoute) sessionKeyText() string {
 	return route.SessionKey().Value.Reveal()
 }
 
+// sessionKeyCandidates is the [current, previous] pair the in-flight cookie is opened under —
+// the SAME helper `JWT.verify` uses, so a `sessionPreviousKey` rotation that keeps existing
+// sessions alive also keeps logins that were in flight when the key turned over. Opening
+// under the current key only (the earlier shape) failed every such login with "invalid or
+// missing login state": fail-closed, but an availability hole exactly during a rotation.
+// No configured key answers one empty candidate, which `oauthCookieOpen` skips — fail closed.
+func (route SsoRoute) sessionKeyCandidates() []string {
+	if route.SessionKey == nil {
+		return []string{""}
+	}
+	return sessionKeys(route.SessionKey())
+}
+
 // handleSsoRequest runs one runtime-owned route. A TRAP inside it is a failed sign-in, not a
 // 500: the connection thunk reads the environment and `onIdentity` is app code, and neither
 // may turn a login into a stack trace on the client.
@@ -166,9 +179,8 @@ func handleSsoCallback(route SsoRoute, writer http.ResponseWriter, request *http
 		ssoFailure(writer)
 		return
 	}
-	key := route.sessionKeyText()
 	outcome := ssoHandleCallback(route.Connection(), route.Segment, code, oauthCookie.Value,
-		route.redirectURI(), []string{key}, time.Now().Unix(), presentedState)
+		route.redirectURI(), route.sessionKeyCandidates(), time.Now().Unix(), presentedState)
 	if !outcome.OK {
 		// Fail closed to the fixed client page, and log the reason server-side: a silently
 		// swallowed callback failure is undebuggable in production.

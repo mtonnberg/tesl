@@ -161,3 +161,43 @@ func TestMintedHashesMeetTheCostFloor(t *testing.T) {
 		t.Errorf("tag %q shorter than 32 bytes (err=%v)", fields[5], err)
 	}
 }
+
+// The stored PHC string's parameters drive verification, and the hash column is data. A row
+// poisoned with `m=4194304` used to make the next login attempt against it a 4 GiB
+// allocation; above the ceiling the row now reads as unparseable — does not verify, needs
+// re-minting — with no allocation and no trap.
+func TestStoredParametersAboveTheCeilingDoNotVerify(t *testing.T) {
+	fields := strings.Split(libsodiumHunter2, "$")
+	withParams := func(params string) string {
+		return "$argon2id$v=19$" + params + "$" + fields[4] + "$" + fields[5]
+	}
+	for _, poisoned := range []string{
+		"m=4194304,t=1,p=1", // 4 GiB
+		"m=1048577,t=2,p=1", // one KiB over the 1 GiB ceiling
+		"m=65536,t=65,p=1",
+		"m=65536,t=2,p=17",
+		"m=4294967295,t=4294967295,p=255",
+	} {
+		stored := PasswordHash{Value: withParams(poisoned)}
+		if _, ok := parseArgon2id(stored.Value); ok {
+			t.Errorf("%s parsed; the ceiling did not apply", poisoned)
+		}
+		result := CheckPassword(Something(stored), MakeSecret("hunter2"))
+		if result.OK() {
+			t.Errorf("%s verified", poisoned)
+		}
+		if result.Message() != "invalid credentials" {
+			t.Errorf("%s: rejection = %q, want the ordinary one", poisoned, result.Message())
+		}
+		if !NeedsRehash(stored) {
+			t.Errorf("%s did not ask to be re-minted", poisoned)
+		}
+	}
+	// AT the ceiling still parses (not executed: 1 GiB is a legitimate libsodium SENSITIVE
+	// hash, and a real one must keep verifying), as does everything this runtime mints.
+	for _, allowed := range []string{"m=1048576,t=64,p=16", "m=65536,t=2,p=1", "m=262144,t=3,p=1"} {
+		if _, ok := parseArgon2id(withParams(allowed)); !ok {
+			t.Errorf("%s did not parse; the ceiling is too low", allowed)
+		}
+	}
+}

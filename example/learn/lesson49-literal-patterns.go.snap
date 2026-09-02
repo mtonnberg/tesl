@@ -205,24 +205,33 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft1 := DescribeInt(teslrt.FromInt64(0))
 //line lesson49-literal-patterns.tesl:126
 	if teslLeft1 != "zero" {
+//line lesson49-literal-patterns.tesl:126
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft2 := DescribeInt(teslrt.FromInt64(1))
 //line lesson49-literal-patterns.tesl:127
 	if teslLeft2 != "one" {
+//line lesson49-literal-patterns.tesl:127
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft3 := DescribeInt(teslrt.FromInt64(2))
 //line lesson49-literal-patterns.tesl:128
 	if teslLeft3 != "two" {
+//line lesson49-literal-patterns.tesl:128
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft4 := DescribeInt(teslrt.FromInt64(99))
 //line lesson49-literal-patterns.tesl:129
 	if teslLeft4 != "many (99)" {
+//line lesson49-literal-patterns.tesl:129
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -234,19 +243,27 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft5 := HttpStatusText(teslrt.FromInt64(200))
 //line lesson49-literal-patterns.tesl:133
 	if teslLeft5 != "OK" {
+//line lesson49-literal-patterns.tesl:133
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft6 := HttpStatusText(teslrt.FromInt64(404))
 //line lesson49-literal-patterns.tesl:134
 	if teslLeft6 != "Not Found" {
+//line lesson49-literal-patterns.tesl:134
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft7 := HttpStatusText(teslrt.FromInt64(999))
 //line lesson49-literal-patterns.tesl:135
 	if teslLeft7 != "Unknown" {
+//line lesson49-literal-patterns.tesl:135
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -258,19 +275,27 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft8 := ParseCommand("help")
 //line lesson49-literal-patterns.tesl:139
 	if teslLeft8 != "show help" {
+//line lesson49-literal-patterns.tesl:139
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft9 := ParseCommand("version")
 //line lesson49-literal-patterns.tesl:140
 	if teslLeft9 != "show version" {
+//line lesson49-literal-patterns.tesl:140
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft10 := ParseCommand("deploy")
 //line lesson49-literal-patterns.tesl:141
 	if teslLeft10 != "unknown command: deploy" {
+//line lesson49-literal-patterns.tesl:141
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -282,19 +307,27 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft11 := ClassifyChar("a")
 //line lesson49-literal-patterns.tesl:145
 	if teslLeft11 != "vowel" {
+//line lesson49-literal-patterns.tesl:145
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft12 := ClassifyChar("b")
 //line lesson49-literal-patterns.tesl:146
 	if teslLeft12 != "consonant or other" {
+//line lesson49-literal-patterns.tesl:146
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft13 := ClassifyChar("i")
 //line lesson49-literal-patterns.tesl:147
 	if teslLeft13 != "vowel" {
+//line lesson49-literal-patterns.tesl:147
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -306,29 +339,39 @@ func TestTesl4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft14 := DiscountForTier(Tier{Tag: TierEnterprise}, "any")
 //line lesson49-literal-patterns.tesl:151
 	if !teslrt.Equal(teslLeft14, teslrt.FromInt64(40)) {
+//line lesson49-literal-patterns.tesl:151
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft15 := DiscountForTier(Tier{Tag: TierGold}, "any")
 //line lesson49-literal-patterns.tesl:152
 	if !teslrt.Equal(teslLeft15, teslrt.FromInt64(25)) {
+//line lesson49-literal-patterns.tesl:152
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft16 := DiscountForTier(Tier{Tag: TierFree}, "WELCOME10")
 //line lesson49-literal-patterns.tesl:153
 	if !teslrt.Equal(teslLeft16, teslrt.FromInt64(10)) {
+//line lesson49-literal-patterns.tesl:153
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft17 := DiscountForTier(Tier{Tag: TierFree}, "SUMMER20")
 //line lesson49-literal-patterns.tesl:154
 	if !teslrt.Equal(teslLeft17, teslrt.FromInt64(20)) {
+//line lesson49-literal-patterns.tesl:154
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft18 := DiscountForTier(Tier{Tag: TierFree}, "INVALID")
 //line lesson49-literal-patterns.tesl:155
 	if !teslrt.Equal(teslLeft18, teslrt.FromInt64(0)) {
+//line lesson49-literal-patterns.tesl:155
 		teslT.Fatal("Tesl expectation failed")
 	}
 }

@@ -38,15 +38,6 @@ package teslmodcachetests
 
 import "tesl.generated/teslmodcachetests/internal/teslrt"
 
-//line cache-tests.tesl:38
-var IntCacheStore = teslrt.NewCache[teslrt.Int](60)
-
-//line cache-tests.tesl:44
-var NoTtlCacheStore = teslrt.NewCache[string](0)
-
-//line cache-tests.tesl:32
-var StringCacheStore = teslrt.NewCache[string](3600)
-
 //line cache-tests.tesl:16
 var TestDBDatabase = teslrt.NewDatabase(
 	"TestDB",
@@ -148,6 +139,47 @@ func getMultiple(k1 string, k2 string) []teslrt.Maybe[string] {
 	return []teslrt.Maybe[string]{teslrt.CacheGet(StringCacheStore, k1), teslrt.CacheGet(StringCacheStore, k2)}
 }
 
+//line cache-tests.tesl:38
+func teslCacheEncodeIntCache(teslValue teslrt.Int) any {
+	return teslEncode1(teslValue)
+}
+
+func teslCacheDecodeIntCache(teslRaw any) (teslrt.Int, error) {
+	return teslrt.DecodeIntValue(teslRaw)
+}
+
+var IntCacheStore = teslrt.NewCacheOn[teslrt.Int](TestDBDatabase, "IntCache", 60, teslCacheEncodeIntCache, teslCacheDecodeIntCache)
+
+//line cache-tests.tesl:44
+func teslCacheEncodeNoTtlCache(teslValue string) any {
+	return teslEncode2(teslValue)
+}
+
+func teslCacheDecodeNoTtlCache(teslRaw any) (string, error) {
+	return teslrt.DecodeStringValue(teslRaw)
+}
+
+var NoTtlCacheStore = teslrt.NewCacheOn[string](TestDBDatabase, "NoTtlCache", 0, teslCacheEncodeNoTtlCache, teslCacheDecodeNoTtlCache)
+
+//line cache-tests.tesl:32
+func teslCacheEncodeStringCache(teslValue string) any {
+	return teslEncode2(teslValue)
+}
+
+func teslCacheDecodeStringCache(teslRaw any) (string, error) {
+	return teslrt.DecodeStringValue(teslRaw)
+}
+
+var StringCacheStore = teslrt.NewCacheOn[string](TestDBDatabase, "StringCache", 3600, teslCacheEncodeStringCache, teslCacheDecodeStringCache)
+
+func teslEncode1(teslValue teslrt.Int) any {
+	return teslValue
+}
+
+func teslEncode2(teslValue string) any {
+	return teslValue
+}
+
 //tesl-snapshot: internal/teslmodcachetests/module_test.go
 package teslmodcachetests
 
@@ -176,10 +208,16 @@ func TestTesl0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft1 := true
 	teslRight1 := true
 //line cache-tests.tesl:94
 	if teslLeft1 != teslRight1 {
+//line cache-tests.tesl:94
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -192,6 +230,11 @@ func TestTesl1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line cache-tests.tesl:98
 		result := getCached("test-key")
@@ -199,6 +242,7 @@ func TestTesl1(teslT *testing.T) {
 		teslRight2 := teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}
 //line cache-tests.tesl:99
 		if result.Tag != teslRight2.Tag || (result.Tag == teslrt.MaybeSomething && (result.SomethingValue != teslRight2.SomethingValue)) {
+//line cache-tests.tesl:99
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -212,6 +256,11 @@ func TestTesl2(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line cache-tests.tesl:103
 		_ = setCached("hello-key", "hello")
@@ -222,6 +271,7 @@ func TestTesl2(teslT *testing.T) {
 			teslRight3 := teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: "hello"}
 //line cache-tests.tesl:105
 			if result.Tag != teslRight3.Tag || (result.Tag == teslrt.MaybeSomething && (result.SomethingValue != teslRight3.SomethingValue)) {
+//line cache-tests.tesl:105
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -236,6 +286,11 @@ func TestTesl3(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line cache-tests.tesl:109
 		_ = setCached("delete-me", "gone")
@@ -253,6 +308,7 @@ func TestTesl3(teslT *testing.T) {
 					teslRight4 := teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: "gone"}
 //line cache-tests.tesl:113
 					if before.Tag != teslRight4.Tag || (before.Tag == teslrt.MaybeSomething && (before.SomethingValue != teslRight4.SomethingValue)) {
+//line cache-tests.tesl:113
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -269,12 +325,18 @@ func TestTesl4(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line cache-tests.tesl:117
 		result := getOrDefault("miss", "default")
 		_ = result
 //line cache-tests.tesl:118
 		if result != "default" {
+//line cache-tests.tesl:118
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -288,6 +350,11 @@ func TestTesl5(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line cache-tests.tesl:122
 		_ = setCached("my-key", "my-value")
@@ -297,6 +364,7 @@ func TestTesl5(teslT *testing.T) {
 			_ = result
 //line cache-tests.tesl:124
 			if result != "my-value" {
+//line cache-tests.tesl:124
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -311,6 +379,11 @@ func TestTesl6(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line cache-tests.tesl:128
 		_ = setCachedTtl("ttl-key", "ttl-value")
@@ -321,6 +394,7 @@ func TestTesl6(teslT *testing.T) {
 			teslRight7 := teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: "ttl-value"}
 //line cache-tests.tesl:130
 			if result.Tag != teslRight7.Tag || (result.Tag == teslrt.MaybeSomething && (result.SomethingValue != teslRight7.SomethingValue)) {
+//line cache-tests.tesl:130
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -335,6 +409,11 @@ func TestTesl7(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line cache-tests.tesl:134
 		_ = setInt("count", teslrt.FromInt64(42))
@@ -345,6 +424,7 @@ func TestTesl7(teslT *testing.T) {
 			teslRight8 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(42)}
 //line cache-tests.tesl:136
 			if result.Tag != teslRight8.Tag || (result.Tag == teslrt.MaybeSomething && !teslrt.Equal(result.SomethingValue, teslRight8.SomethingValue)) {
+//line cache-tests.tesl:136
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -359,6 +439,11 @@ func TestTesl8(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line cache-tests.tesl:140
 		_ = setInt("del-int", teslrt.FromInt64(100))
@@ -372,6 +457,7 @@ func TestTesl8(teslT *testing.T) {
 				teslRight9 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}
 //line cache-tests.tesl:143
 				if result.Tag != teslRight9.Tag || (result.Tag == teslrt.MaybeSomething && !teslrt.Equal(result.SomethingValue, teslRight9.SomethingValue)) {
+//line cache-tests.tesl:143
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -387,6 +473,11 @@ func TestTesl9(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line cache-tests.tesl:147
 		_ = setCached("user_1", "alice")
@@ -407,6 +498,7 @@ func TestTesl9(teslT *testing.T) {
 						teslRight10 := teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}
 //line cache-tests.tesl:152
 						if r1.Tag != teslRight10.Tag || (r1.Tag == teslrt.MaybeSomething && (r1.SomethingValue != teslRight10.SomethingValue)) {
+//line cache-tests.tesl:152
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}
@@ -424,6 +516,11 @@ func TestTesl10(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line cache-tests.tesl:156
 		result := cacheAndReturn("k", "v")
@@ -431,6 +528,7 @@ func TestTesl10(teslT *testing.T) {
 		teslRight11 := teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: "v"}
 //line cache-tests.tesl:157
 		if result.Tag != teslRight11.Tag || (result.Tag == teslrt.MaybeSomething && (result.SomethingValue != teslRight11.SomethingValue)) {
+//line cache-tests.tesl:157
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -444,6 +542,11 @@ func TestTesl11(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line cache-tests.tesl:161
 		result := teslrt.CacheGet(NoTtlCacheStore, "any-key")
@@ -451,6 +554,7 @@ func TestTesl11(teslT *testing.T) {
 		teslRight12 := teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}
 //line cache-tests.tesl:162
 		if result.Tag != teslRight12.Tag || (result.Tag == teslrt.MaybeSomething && (result.SomethingValue != teslRight12.SomethingValue)) {
+//line cache-tests.tesl:162
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -464,6 +568,11 @@ func TestTesl12(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line cache-tests.tesl:166
 		r := getCached("brand-new-key-xyz")
@@ -471,6 +580,7 @@ func TestTesl12(teslT *testing.T) {
 		teslRight13 := teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}
 //line cache-tests.tesl:167
 		if r.Tag != teslRight13.Tag || (r.Tag == teslrt.MaybeSomething && (r.SomethingValue != teslRight13.SomethingValue)) {
+//line cache-tests.tesl:167
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -484,6 +594,11 @@ func TestTesl13(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line cache-tests.tesl:171
 		_ = setMultiple("a", "1", "b", "2")
@@ -494,6 +609,7 @@ func TestTesl13(teslT *testing.T) {
 			teslRight14 := []teslrt.Maybe[string]{teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: "1"}, teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: "2"}}
 //line cache-tests.tesl:173
 			if !teslrt.ListEqualBy(results, teslRight14, teslEqualTeslrtMaybeString) {
+//line cache-tests.tesl:173
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -508,6 +624,11 @@ func TestTesl14(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line cache-tests.tesl:177
 		_ = setCached("overwrite", "first")
@@ -521,6 +642,7 @@ func TestTesl14(teslT *testing.T) {
 				teslRight15 := teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: "second"}
 //line cache-tests.tesl:180
 				if result.Tag != teslRight15.Tag || (result.Tag == teslrt.MaybeSomething && (result.SomethingValue != teslRight15.SomethingValue)) {
+//line cache-tests.tesl:180
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -536,6 +658,11 @@ func TestTesl15(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line cache-tests.tesl:184
 		_ = setCached("seq-key", "v1")
@@ -560,6 +687,7 @@ func TestTesl15(teslT *testing.T) {
 							teslRight16 := teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: "v1"}
 //line cache-tests.tesl:190
 							if r1.Tag != teslRight16.Tag || (r1.Tag == teslrt.MaybeSomething && (r1.SomethingValue != teslRight16.SomethingValue)) {
+//line cache-tests.tesl:190
 								teslT.Fatal("Tesl expectation failed")
 							}
 						}
@@ -578,6 +706,11 @@ func TestTesl16(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line cache-tests.tesl:194
 		prefix := "profile_"
@@ -600,6 +733,7 @@ func TestTesl16(teslT *testing.T) {
 						teslRight17 := teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: "profile-data"}
 //line cache-tests.tesl:199
 						if result.Tag != teslRight17.Tag || (result.Tag == teslrt.MaybeSomething && (result.SomethingValue != teslRight17.SomethingValue)) {
+//line cache-tests.tesl:199
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}
@@ -617,6 +751,11 @@ func TestTesl17(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line cache-tests.tesl:203
 		_ = setCached("sess_1", "s1")
@@ -640,6 +779,7 @@ func TestTesl17(teslT *testing.T) {
 							teslRight18 := teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: "d1"}
 //line cache-tests.tesl:209
 							if r2.Tag != teslRight18.Tag || (r2.Tag == teslrt.MaybeSomething && (r2.SomethingValue != teslRight18.SomethingValue)) {
+//line cache-tests.tesl:209
 								teslT.Fatal("Tesl expectation failed")
 							}
 						}
@@ -658,6 +798,11 @@ func TestTesl18(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line cache-tests.tesl:213
 		cached := getCached("if-key")
@@ -665,6 +810,7 @@ func TestTesl18(teslT *testing.T) {
 		teslRight19 := teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}
 //line cache-tests.tesl:214
 		if cached.Tag != teslRight19.Tag || (cached.Tag == teslrt.MaybeSomething && (cached.SomethingValue != teslRight19.SomethingValue)) {
+//line cache-tests.tesl:214
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -678,6 +824,11 @@ func TestTesl19(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line cache-tests.tesl:218
 		_ = setInt("num", teslrt.FromInt64(99))
@@ -688,6 +839,7 @@ func TestTesl19(teslT *testing.T) {
 			teslRight20 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(99)}
 //line cache-tests.tesl:220
 			if r.Tag != teslRight20.Tag || (r.Tag == teslrt.MaybeSomething && !teslrt.Equal(r.SomethingValue, teslRight20.SomethingValue)) {
+//line cache-tests.tesl:220
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -702,10 +854,16 @@ func TestTesl20(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft21 := true
 	teslRight21 := true
 //line cache-tests.tesl:224
 	if teslLeft21 != teslRight21 {
+//line cache-tests.tesl:224
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -718,10 +876,16 @@ func TestTesl21(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft22 := true
 	teslRight22 := true
 //line cache-tests.tesl:228
 	if teslLeft22 != teslRight22 {
+//line cache-tests.tesl:228
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -734,6 +898,11 @@ func TestTesl22(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line cache-tests.tesl:232
 		_ = setCached("", "empty-key-val")
@@ -744,6 +913,7 @@ func TestTesl22(teslT *testing.T) {
 			teslRight23 := teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: "empty-key-val"}
 //line cache-tests.tesl:234
 			if result.Tag != teslRight23.Tag || (result.Tag == teslrt.MaybeSomething && (result.SomethingValue != teslRight23.SomethingValue)) {
+//line cache-tests.tesl:234
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -758,6 +928,11 @@ func TestTesl23(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line cache-tests.tesl:238
 		_ = setCached("idem", "v")
@@ -774,6 +949,7 @@ func TestTesl23(teslT *testing.T) {
 					teslRight24 := teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}
 //line cache-tests.tesl:242
 					if r.Tag != teslRight24.Tag || (r.Tag == teslrt.MaybeSomething && (r.SomethingValue != teslRight24.SomethingValue)) {
+//line cache-tests.tesl:242
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -790,6 +966,11 @@ func TestTesl24(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line cache-tests.tesl:246
 		k := "very_long_key_that_is_quite_long_for_testing_purposes_xyz_abc_def"
@@ -804,6 +985,7 @@ func TestTesl24(teslT *testing.T) {
 				teslRight25 := teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: "long-key-val"}
 //line cache-tests.tesl:249
 				if result.Tag != teslRight25.Tag || (result.Tag == teslrt.MaybeSomething && (result.SomethingValue != teslRight25.SomethingValue)) {
+//line cache-tests.tesl:249
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -819,6 +1001,11 @@ func TestTesl25(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line cache-tests.tesl:253
 		_ = setCached("shared", "string-val")
@@ -836,6 +1023,7 @@ func TestTesl25(teslT *testing.T) {
 					teslRight26 := teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: "string-val"}
 //line cache-tests.tesl:257
 					if r1.Tag != teslRight26.Tag || (r1.Tag == teslrt.MaybeSomething && (r1.SomethingValue != teslRight26.SomethingValue)) {
+//line cache-tests.tesl:257
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -852,6 +1040,11 @@ func TestTesl26(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line cache-tests.tesl:261
 		_ = setCached("x1", "v1")
@@ -872,6 +1065,7 @@ func TestTesl26(teslT *testing.T) {
 						teslRight27 := teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}
 //line cache-tests.tesl:266
 						if r1.Tag != teslRight27.Tag || (r1.Tag == teslrt.MaybeSomething && (r1.SomethingValue != teslRight27.SomethingValue)) {
+//line cache-tests.tesl:266
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}
@@ -889,6 +1083,11 @@ func TestTesl27(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line cache-tests.tesl:270
 		r := getCached("pattern-key")
@@ -896,6 +1095,7 @@ func TestTesl27(teslT *testing.T) {
 		teslRight28 := teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}
 //line cache-tests.tesl:271
 		if r.Tag != teslRight28.Tag || (r.Tag == teslrt.MaybeSomething && (r.SomethingValue != teslRight28.SomethingValue)) {
+//line cache-tests.tesl:271
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -909,6 +1109,11 @@ func TestTesl28(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line cache-tests.tesl:275
 		_ = teslrt.CacheSet(NoTtlCacheStore, "ntk", "ntv")
@@ -919,6 +1124,7 @@ func TestTesl28(teslT *testing.T) {
 			teslRight29 := teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: "ntv"}
 //line cache-tests.tesl:277
 			if r.Tag != teslRight29.Tag || (r.Tag == teslrt.MaybeSomething && (r.SomethingValue != teslRight29.SomethingValue)) {
+//line cache-tests.tesl:277
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -933,10 +1139,16 @@ func TestTesl29(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft30 := true
 	teslRight30 := true
 //line cache-tests.tesl:281
 	if teslLeft30 != teslRight30 {
+//line cache-tests.tesl:281
 		teslT.Fatal("Tesl expectation failed")
 	}
 }

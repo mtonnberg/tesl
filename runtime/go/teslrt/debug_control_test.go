@@ -118,10 +118,16 @@ func TestDebugControlWaitsForConfiguration(t *testing.T) {
 	defer func() { _ = connection.Close() }()
 	reader := bufio.NewReader(connection)
 	encoder := json.NewEncoder(connection)
+	var response DebugControlResponse
+	if err := encoder.Encode(DebugControlRequest{ID: "0", Command: "handshake", Token: server.Token()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.NewDecoder(reader).Decode(&response); err != nil || response.Error != nil {
+		t.Fatalf("handshake = %#v, %v", response, err)
+	}
 	if err := encoder.Encode(DebugControlRequest{ID: "1", Command: "set-breakpoints"}); err != nil {
 		t.Fatal(err)
 	}
-	var response DebugControlResponse
 	if err := json.NewDecoder(reader).Decode(&response); err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +204,7 @@ func TestDebugControlTCPBindsLoopback(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = connection.Close() }()
-	if err := json.NewEncoder(connection).Encode(DebugControlRequest{ID: "1", Command: "handshake"}); err != nil {
+	if err := json.NewEncoder(connection).Encode(DebugControlRequest{ID: "1", Command: "handshake", Token: server.Token()}); err != nil {
 		t.Fatal(err)
 	}
 	var response DebugControlResponse

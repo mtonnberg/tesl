@@ -85,6 +85,11 @@ func TestTesl0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line trace-propagation-tests.tesl:119
 	_ = teslrt.StubHttp("GET", "https://billing.internal/invoice/42", teslrt.FromInt64(200), "billed")
 	{
@@ -94,11 +99,13 @@ func TestTesl0(teslT *testing.T) {
 		teslLeft1 := r.Status
 //line trace-propagation-tests.tesl:121
 		if !teslrt.Equal(teslLeft1, teslrt.FromInt64(200)) {
+//line trace-propagation-tests.tesl:121
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft2 := teslrt.HttpCallCount("GET", "https://billing.internal/invoice/42")
 //line trace-propagation-tests.tesl:122
 		if !teslrt.Equal(teslLeft2, teslrt.FromInt64(1)) {
+//line trace-propagation-tests.tesl:122
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -115,6 +122,11 @@ func TestTeslApi0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line trace-propagation-tests.tesl:57
 	_ = teslrt.StubHttp("GET", "https://billing.internal/*", teslrt.FromInt64(200), "billed")
 	{
@@ -123,10 +135,12 @@ func TestTeslApi0(teslT *testing.T) {
 		_ = r
 //line trace-propagation-tests.tesl:59
 		if !(teslrt.StatusOk(r.Status)) {
+//line trace-propagation-tests.tesl:59
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line trace-propagation-tests.tesl:60
 		if !teslrt.JsonEqual(r.Body, "charged") {
+//line trace-propagation-tests.tesl:60
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -143,6 +157,11 @@ func TestTeslApi1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line trace-propagation-tests.tesl:64
 	_ = teslrt.StubHttp("GET", "https://billing.internal/*", teslrt.FromInt64(200), "billed")
 	{
@@ -151,10 +170,12 @@ func TestTeslApi1(teslT *testing.T) {
 		_ = r
 //line trace-propagation-tests.tesl:66
 		if !(teslrt.StatusOk(r.Status)) {
+//line trace-propagation-tests.tesl:66
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line trace-propagation-tests.tesl:67
 		if !teslrt.JsonEqual(r.Body, "charged") {
+//line trace-propagation-tests.tesl:67
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -171,6 +192,11 @@ func TestTeslApi2(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line trace-propagation-tests.tesl:71
 	_ = teslrt.StubHttp("GET", "https://billing.internal/*", teslrt.FromInt64(200), "billed")
 	{
@@ -179,10 +205,12 @@ func TestTeslApi2(teslT *testing.T) {
 		_ = r
 //line trace-propagation-tests.tesl:73
 		if !(teslrt.StatusOk(r.Status)) {
+//line trace-propagation-tests.tesl:73
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line trace-propagation-tests.tesl:74
 		if !teslrt.JsonEqual(r.Body, "charged") {
+//line trace-propagation-tests.tesl:74
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -199,6 +227,11 @@ func TestTeslApi3(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line trace-propagation-tests.tesl:78
 	_ = teslrt.StubHttp("GET", "https://billing.internal/*", teslrt.FromInt64(200), "billed")
 	{
@@ -207,6 +240,7 @@ func TestTeslApi3(teslT *testing.T) {
 		_ = zeros
 //line trace-propagation-tests.tesl:80
 		if !(teslrt.StatusOk(zeros.Status)) {
+//line trace-propagation-tests.tesl:80
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -215,10 +249,12 @@ func TestTeslApi3(teslT *testing.T) {
 			_ = crlf
 //line trace-propagation-tests.tesl:82
 			if !(teslrt.StatusOk(crlf.Status)) {
+//line trace-propagation-tests.tesl:82
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line trace-propagation-tests.tesl:83
 			if !teslrt.JsonEqual(crlf.Body, "charged") {
+//line trace-propagation-tests.tesl:83
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -236,6 +272,11 @@ func TestTeslApi4(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line trace-propagation-tests.tesl:87
 	_ = teslrt.StubHttp("GET", "https://billing.internal/*", teslrt.FromInt64(200), "billed")
 	{
@@ -244,10 +285,12 @@ func TestTeslApi4(teslT *testing.T) {
 		_ = r
 //line trace-propagation-tests.tesl:92
 		if !(teslrt.StatusOk(r.Status)) {
+//line trace-propagation-tests.tesl:92
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line trace-propagation-tests.tesl:93
 		if !teslrt.JsonEqual(r.Body, "charged") {
+//line trace-propagation-tests.tesl:93
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -264,6 +307,11 @@ func TestTeslApi5(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line trace-propagation-tests.tesl:99
 	_ = teslrt.StubHttp("GET", "https://billing.internal/invoice/42", teslrt.FromInt64(200), "billed")
 	{
@@ -272,15 +320,18 @@ func TestTeslApi5(teslT *testing.T) {
 		_ = r
 //line trace-propagation-tests.tesl:101
 		if !(teslrt.StatusOk(r.Status)) {
+//line trace-propagation-tests.tesl:101
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line trace-propagation-tests.tesl:102
 		if !(teslrt.HttpCalled("GET", "https://billing.internal/invoice/42")) {
+//line trace-propagation-tests.tesl:102
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft3 := teslrt.HttpCallCount("GET", "https://billing.internal/invoice/42")
 //line trace-propagation-tests.tesl:105
 		if !teslrt.Equal(teslLeft3, teslrt.FromInt64(1)) {
+//line trace-propagation-tests.tesl:105
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -297,6 +348,11 @@ func TestTeslApi6(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line trace-propagation-tests.tesl:109
 	_ = teslrt.StubHttp("GET", "https://billing.internal/*", teslrt.FromInt64(503), "unavailable")
 	{
@@ -305,15 +361,18 @@ func TestTeslApi6(teslT *testing.T) {
 		_ = r
 //line trace-propagation-tests.tesl:111
 		if !(teslrt.StatusOk(r.Status)) {
+//line trace-propagation-tests.tesl:111
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line trace-propagation-tests.tesl:112
 		if !teslrt.JsonEqual(r.Body, "declined") {
+//line trace-propagation-tests.tesl:112
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft4 := teslrt.HttpCallCount("GET", "https://billing.internal/invoice/42")
 //line trace-propagation-tests.tesl:113
 		if !teslrt.Equal(teslLeft4, teslrt.FromInt64(1)) {
+//line trace-propagation-tests.tesl:113
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}

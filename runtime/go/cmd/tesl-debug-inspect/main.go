@@ -58,6 +58,7 @@ func (values *stringFlags) Set(value string) error {
 func main() {
 	socket := flag.String("socket", "", "Unix debug socket")
 	tcp := flag.String("tcp", "", "loopback debug address")
+	token := flag.String("token", "", "hex token for a loopback debug address (.tesl-stuff/debug.token of the running app)")
 	file := flag.String("file", "", "Tesl source file to compile and inspect")
 	compiler := flag.String("compiler", "", "Tesl compiler executable for source inspection")
 	mode := flag.String("mode", "program", "source inspection mode: program or test")
@@ -87,7 +88,7 @@ func main() {
 	if err != nil {
 		fail("connect debug endpoint: %v", err)
 	}
-	client, err := dap.NewControlClient(connection)
+	client, err := dap.NewControlClientWithToken(connection, *token)
 	if err != nil {
 		fail("handshake: %v", err)
 	}

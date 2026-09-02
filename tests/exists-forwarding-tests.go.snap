@@ -132,16 +132,23 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line exists-forwarding-tests.tesl:88
 		tok := forwardToken()
 		_ = tok
 //line exists-forwarding-tests.tesl:89
 		if !(teslrt.StringStartsWith(tok, "tok")) {
+//line exists-forwarding-tests.tesl:89
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line exists-forwarding-tests.tesl:90
 		if teslrt.Compare(teslrt.StringLength(tok), teslrt.FromInt64(3)) <= 0 {
+//line exists-forwarding-tests.tesl:90
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -154,12 +161,18 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line exists-forwarding-tests.tesl:94
 		tok := forwardTokenViaLet()
 		_ = tok
 //line exists-forwarding-tests.tesl:95
 		if !(teslrt.StringStartsWith(tok, "tok")) {
+//line exists-forwarding-tests.tesl:95
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -172,6 +185,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line exists-forwarding-tests.tesl:99
 		a := forwardTokenBranching(true)
@@ -182,10 +200,12 @@ func TestTesl2(teslT *testing.T) {
 			_ = b
 //line exists-forwarding-tests.tesl:101
 			if !(teslrt.StringStartsWith(a, "tok")) {
+//line exists-forwarding-tests.tesl:101
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line exists-forwarding-tests.tesl:102
 			if !(teslrt.StringStartsWith(b, "tok")) {
+//line exists-forwarding-tests.tesl:102
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -199,12 +219,18 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line exists-forwarding-tests.tesl:106
 		tok := packInBranch(true)
 		_ = tok
 //line exists-forwarding-tests.tesl:107
 		if !(teslrt.StringStartsWith(tok, "tok")) {
+//line exists-forwarding-tests.tesl:107
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -217,12 +243,18 @@ func TestTesl4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line exists-forwarding-tests.tesl:111
 		tok := renamedWitness()
 		_ = tok
 //line exists-forwarding-tests.tesl:112
 		if !(teslrt.StringStartsWith(tok, "tok")) {
+//line exists-forwarding-tests.tesl:112
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}

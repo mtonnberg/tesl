@@ -484,12 +484,19 @@ func TestTesl0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line app.tesl:217
 	if teslrt.Compare(teslrt.StringLength("Read the Tesl tutorial"), teslrt.FromInt64(4)) < 0 {
+//line app.tesl:217
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line app.tesl:218
 	if teslrt.Compare(teslrt.StringLength("abc"), teslrt.FromInt64(4)) >= 0 {
+//line app.tesl:218
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -502,12 +509,19 @@ func TestTesl1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line app.tesl:222
 	if teslrt.Compare(teslrt.StringLength("todo-1"), teslrt.FromInt64(5)) <= 0 {
+//line app.tesl:222
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line app.tesl:223
 	if teslrt.Compare(teslrt.StringLength("x"), teslrt.FromInt64(5)) > 0 {
+//line app.tesl:223
 		teslT.Fatal("Tesl expectation failed")
 	}
 }

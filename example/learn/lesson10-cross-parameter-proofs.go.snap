@@ -78,6 +78,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson10-cross-parameter-proofs.tesl:106
 		lo1 := teslrt.FromInt64(1)
@@ -116,15 +121,18 @@ func TestTesl0(teslT *testing.T) {
 										_ = r3
 //line lesson10-cross-parameter-proofs.tesl:115
 										if !teslrt.Equal(r1, teslrt.FromInt64(1)) {
+//line lesson10-cross-parameter-proofs.tesl:115
 											teslT.Fatal("Tesl expectation failed")
 										}
 										teslRight2 := teslrt.Neg(teslrt.FromInt64(5))
 //line lesson10-cross-parameter-proofs.tesl:116
 										if !teslrt.Equal(r2, teslRight2) {
+//line lesson10-cross-parameter-proofs.tesl:116
 											teslT.Fatal("Tesl expectation failed")
 										}
 //line lesson10-cross-parameter-proofs.tesl:117
 										if !teslrt.Equal(r3, teslrt.FromInt64(0)) {
+//line lesson10-cross-parameter-proofs.tesl:117
 											teslT.Fatal("Tesl expectation failed")
 										}
 									}
@@ -145,6 +153,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line lesson10-cross-parameter-proofs.tesl:121
 	if (CheckValidRange(teslrt.FromInt64(5), teslrt.FromInt64(5))).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -162,12 +175,18 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson10-cross-parameter-proofs.tesl:126
 		r1 := SafePair(teslrt.FromInt64(0), teslrt.FromInt64(10), teslrt.FromInt64(5))
 		_ = r1
 //line lesson10-cross-parameter-proofs.tesl:127
 		if !teslrt.Equal(r1, teslrt.FromInt64(5)) {
+//line lesson10-cross-parameter-proofs.tesl:127
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -176,6 +195,7 @@ func TestTesl2(teslT *testing.T) {
 			_ = r2
 //line lesson10-cross-parameter-proofs.tesl:129
 			if !teslrt.Equal(r2, teslrt.FromInt64(0)) {
+//line lesson10-cross-parameter-proofs.tesl:129
 				teslT.Fatal("Tesl expectation failed")
 			}
 			{
@@ -184,6 +204,7 @@ func TestTesl2(teslT *testing.T) {
 				_ = r3
 //line lesson10-cross-parameter-proofs.tesl:131
 				if !teslrt.Equal(r3, teslrt.FromInt64(10)) {
+//line lesson10-cross-parameter-proofs.tesl:131
 					teslT.Fatal("Tesl expectation failed")
 				}
 				{
@@ -192,6 +213,7 @@ func TestTesl2(teslT *testing.T) {
 					_ = r4
 //line lesson10-cross-parameter-proofs.tesl:133
 					if !teslrt.Equal(r4, teslrt.FromInt64(3)) {
+//line lesson10-cross-parameter-proofs.tesl:133
 						teslT.Fatal("Tesl expectation failed")
 					}
 					{
@@ -200,6 +222,7 @@ func TestTesl2(teslT *testing.T) {
 						_ = r5
 //line lesson10-cross-parameter-proofs.tesl:135
 						if !teslrt.Equal(r5, teslrt.FromInt64(7)) {
+//line lesson10-cross-parameter-proofs.tesl:135
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}

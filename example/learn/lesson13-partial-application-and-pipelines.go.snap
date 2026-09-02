@@ -89,19 +89,27 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft1 := Add(teslrt.FromInt64(3), teslrt.FromInt64(7))
 //line lesson13-partial-application-and-pipelines.tesl:115
 	if !teslrt.Equal(teslLeft1, teslrt.FromInt64(10)) {
+//line lesson13-partial-application-and-pipelines.tesl:115
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft2 := Add(teslrt.FromInt64(0), teslrt.FromInt64(0))
 //line lesson13-partial-application-and-pipelines.tesl:116
 	if !teslrt.Equal(teslLeft2, teslrt.FromInt64(0)) {
+//line lesson13-partial-application-and-pipelines.tesl:116
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft3 := Add(teslrt.FromInt64(-5), teslrt.FromInt64(5))
 //line lesson13-partial-application-and-pipelines.tesl:117
 	if !teslrt.Equal(teslLeft3, teslrt.FromInt64(0)) {
+//line lesson13-partial-application-and-pipelines.tesl:117
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -113,19 +121,27 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft4 := Double(teslrt.FromInt64(5))
 //line lesson13-partial-application-and-pipelines.tesl:121
 	if !teslrt.Equal(teslLeft4, teslrt.FromInt64(10)) {
+//line lesson13-partial-application-and-pipelines.tesl:121
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft5 := Double(teslrt.FromInt64(0))
 //line lesson13-partial-application-and-pipelines.tesl:122
 	if !teslrt.Equal(teslLeft5, teslrt.FromInt64(0)) {
+//line lesson13-partial-application-and-pipelines.tesl:122
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft6 := Triple(teslrt.FromInt64(3))
 //line lesson13-partial-application-and-pipelines.tesl:123
 	if !teslrt.Equal(teslLeft6, teslrt.FromInt64(9)) {
+//line lesson13-partial-application-and-pipelines.tesl:123
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -137,25 +153,34 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft7 := Increment(teslrt.FromInt64(4))
 //line lesson13-partial-application-and-pipelines.tesl:127
 	if !teslrt.Equal(teslLeft7, teslrt.FromInt64(5)) {
+//line lesson13-partial-application-and-pipelines.tesl:127
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft8 := Increment(teslrt.FromInt64(0))
 //line lesson13-partial-application-and-pipelines.tesl:128
 	if !teslrt.Equal(teslLeft8, teslrt.FromInt64(1)) {
+//line lesson13-partial-application-and-pipelines.tesl:128
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft9 := Decrement(teslrt.FromInt64(5))
 //line lesson13-partial-application-and-pipelines.tesl:129
 	if !teslrt.Equal(teslLeft9, teslrt.FromInt64(4)) {
+//line lesson13-partial-application-and-pipelines.tesl:129
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft10 := Decrement(teslrt.FromInt64(0))
 	teslRight10 := teslrt.Neg(teslrt.FromInt64(1))
 //line lesson13-partial-application-and-pipelines.tesl:130
 	if !teslrt.Equal(teslLeft10, teslRight10) {
+//line lesson13-partial-application-and-pipelines.tesl:130
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -167,19 +192,27 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft11 := Pipeline(teslrt.FromInt64(3))
 //line lesson13-partial-application-and-pipelines.tesl:134
 	if !teslrt.Equal(teslLeft11, teslrt.FromInt64(12)) {
+//line lesson13-partial-application-and-pipelines.tesl:134
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft12 := Pipeline(teslrt.FromInt64(1))
 //line lesson13-partial-application-and-pipelines.tesl:135
 	if !teslrt.Equal(teslLeft12, teslrt.FromInt64(4)) {
+//line lesson13-partial-application-and-pipelines.tesl:135
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft13 := Pipeline(teslrt.FromInt64(0))
 //line lesson13-partial-application-and-pipelines.tesl:136
 	if !teslrt.Equal(teslLeft13, teslrt.FromInt64(0)) {
+//line lesson13-partial-application-and-pipelines.tesl:136
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -191,14 +224,21 @@ func TestTesl4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft14 := pipeline2(teslrt.FromInt64(2))
 //line lesson13-partial-application-and-pipelines.tesl:140
 	if !teslrt.Equal(teslLeft14, teslrt.FromInt64(12)) {
+//line lesson13-partial-application-and-pipelines.tesl:140
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft15 := pipeline2(teslrt.FromInt64(1))
 //line lesson13-partial-application-and-pipelines.tesl:141
 	if !teslrt.Equal(teslLeft15, teslrt.FromInt64(6)) {
+//line lesson13-partial-application-and-pipelines.tesl:141
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -210,6 +250,11 @@ func TestTesl5(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	for teslPropRun1 := 0; teslPropRun1 < 50; teslPropRun1++ {
 //line lesson13-partial-application-and-pipelines.tesl:145
 		n := teslrt.PropInt()

@@ -141,16 +141,23 @@ func TestTeslApi0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-test-template-tests.tesl:92
 		r := teslrt.ApiRequest(TemplateServer, "GET", "/empty", "", nil, nil)
 		_ = r
 //line api-test-template-tests.tesl:93
 		if !(teslrt.StatusOk(r.Status)) {
+//line api-test-template-tests.tesl:93
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line api-test-template-tests.tesl:94
 		if !teslrt.JsonEqual(r.Body, "{}") {
+//line api-test-template-tests.tesl:94
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -166,16 +173,23 @@ func TestTeslApi1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-test-template-tests.tesl:98
 		r := teslrt.ApiRequest(TemplateServer, "GET", "/json", "", nil, nil)
 		_ = r
 //line api-test-template-tests.tesl:99
 		if !(teslrt.StatusOk(r.Status)) {
+//line api-test-template-tests.tesl:99
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line api-test-template-tests.tesl:100
 		if !teslrt.JsonEqual(r.Body, "{\"id\": 1}") {
+//line api-test-template-tests.tesl:100
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -191,16 +205,23 @@ func TestTeslApi2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-test-template-tests.tesl:104
 		r := teslrt.ApiRequest(TemplateServer, "GET", "/quote", "", nil, nil)
 		_ = r
 //line api-test-template-tests.tesl:105
 		if !(teslrt.StatusOk(r.Status)) {
+//line api-test-template-tests.tesl:105
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line api-test-template-tests.tesl:106
 		if !teslrt.JsonEqual(r.Body, "{\"}") {
+//line api-test-template-tests.tesl:106
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -216,16 +237,23 @@ func TestTeslApi3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-test-template-tests.tesl:110
 		r := teslrt.ApiRequest(TemplateServer, "GET", "/unclosed", "", nil, nil)
 		_ = r
 //line api-test-template-tests.tesl:111
 		if !(teslrt.StatusOk(r.Status)) {
+//line api-test-template-tests.tesl:111
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line api-test-template-tests.tesl:112
 		if !teslrt.JsonEqual(r.Body, "a { b") {
+//line api-test-template-tests.tesl:112
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -241,16 +269,23 @@ func TestTeslApi4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-test-template-tests.tesl:116
 		r := teslrt.ApiRequest(TemplateServer, "GET", "/nested", "", nil, nil)
 		_ = r
 //line api-test-template-tests.tesl:117
 		if !(teslrt.StatusOk(r.Status)) {
+//line api-test-template-tests.tesl:117
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line api-test-template-tests.tesl:118
 		if !teslrt.JsonEqual(r.Body, "{\"a\": {\"b\": 2}}") {
+//line api-test-template-tests.tesl:118
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -266,17 +301,24 @@ func TestTeslApi5(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-test-template-tests.tesl:122
 		r := teslrt.ApiRequest(TemplateServer, "GET", "/empty", "", nil, nil)
 		_ = r
 //line api-test-template-tests.tesl:123
 		if !(teslrt.StatusOk(r.Status)) {
+//line api-test-template-tests.tesl:123
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft1 := ("payload: " + teslrt.JsonAsString(r.Body))
 //line api-test-template-tests.tesl:124
 		if teslLeft1 != "payload: {}" {
+//line api-test-template-tests.tesl:124
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -292,6 +334,11 @@ func TestTeslApi6(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-test-template-tests.tesl:130
 		id := "9"
@@ -302,10 +349,12 @@ func TestTeslApi6(teslT *testing.T) {
 			_ = r
 //line api-test-template-tests.tesl:132
 			if !(teslrt.StatusOk(r.Status)) {
+//line api-test-template-tests.tesl:132
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line api-test-template-tests.tesl:133
 			if !teslrt.JsonEqual(r.Body, "thing-9") {
+//line api-test-template-tests.tesl:133
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -322,6 +371,11 @@ func TestTeslApi7(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-test-template-tests.tesl:137
 		id := "9"
@@ -332,6 +386,7 @@ func TestTeslApi7(teslT *testing.T) {
 			_ = r
 //line api-test-template-tests.tesl:139
 			if !teslrt.JsonEqual(r.Body, ("thing-" + teslrt.ApiTestFragment(teslEncode1(id)))) {
+//line api-test-template-tests.tesl:139
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -348,12 +403,18 @@ func TestTeslApi8(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-test-template-tests.tesl:143
 		first := teslrt.ApiRequest(TemplateServer, "GET", "/things/7", "", nil, nil)
 		_ = first
 //line api-test-template-tests.tesl:144
 		if !teslrt.JsonEqual(first.Body, "thing-7") {
+//line api-test-template-tests.tesl:144
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -362,10 +423,12 @@ func TestTeslApi8(teslT *testing.T) {
 			_ = r
 //line api-test-template-tests.tesl:146
 			if !(teslrt.StatusOk(r.Status)) {
+//line api-test-template-tests.tesl:146
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line api-test-template-tests.tesl:147
 			if !teslrt.JsonEqual(r.Body, "thing-thing-7") {
+//line api-test-template-tests.tesl:147
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -382,6 +445,11 @@ func TestTeslApi9(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-test-template-tests.tesl:151
 		id := "5"
@@ -392,10 +460,12 @@ func TestTeslApi9(teslT *testing.T) {
 			_ = r
 //line api-test-template-tests.tesl:153
 			if !(teslrt.StatusOk(r.Status)) {
+//line api-test-template-tests.tesl:153
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line api-test-template-tests.tesl:154
 			if !teslrt.JsonEqual(r.Body, "thing-5") {
+//line api-test-template-tests.tesl:154
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}

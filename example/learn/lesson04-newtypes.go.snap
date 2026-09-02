@@ -79,6 +79,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson04-newtypes.tesl:105
 		uid := MakeUserId("user-123")
@@ -86,6 +91,7 @@ func TestTesl0(teslT *testing.T) {
 		teslLeft1 := UserId_(uid)
 //line lesson04-newtypes.tesl:106
 		if teslLeft1 != "user-123" {
+//line lesson04-newtypes.tesl:106
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -98,6 +104,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson04-newtypes.tesl:110
 		pid := MakeProjectId("proj-456")
@@ -105,6 +116,7 @@ func TestTesl1(teslT *testing.T) {
 		teslLeft2 := ProjectId_(pid)
 //line lesson04-newtypes.tesl:111
 		if teslLeft2 != "proj-456" {
+//line lesson04-newtypes.tesl:111
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}

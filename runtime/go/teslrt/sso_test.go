@@ -3,6 +3,8 @@ package teslrt
 import (
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -341,5 +343,135 @@ func TestIdentityAccessorsHideAnUnverifiedAddress(t *testing.T) {
 	}
 	if _, present := SsoTenant(identity).Value(); present {
 		t.Error("an empty tenant answered")
+	}
+}
+
+// ── The callback against a stubbed provider ──────────────────────────────────
+
+// A plain-OAuth2 connection with both legs stubbed — the shape of a GitHub login without the
+// network. The connection has NO nonce (oauth2 has none), so `state` is the only CSRF binding
+// the flow has, which is what makes it the right shape for the state tests.
+func stubbedOauth2Connection(t *testing.T) SsoConnection {
+	t.Helper()
+	withStubs(t)
+	_ = StubHttp("POST", "https://idp.test/token", FromInt64(200), `{"access_token":"at-1"}`)
+	_ = StubHttp("GET", "https://idp.test/userinfo", FromInt64(200), `{"id":424242,"login":"mallory"}`)
+	SsoSpentStatesReset()
+	t.Cleanup(SsoSpentStatesReset)
+	return SsoConnection{
+		Kind: "oauth2", TokenURL: "https://idp.test/token", UserinfoURL: "https://idp.test/userinfo",
+		SubjectField: "id", ClientID: "cid", ClientSecret: testKey("cs"),
+	}
+}
+
+// RFC 6749 §10.12: the client MUST verify `state`. It used to be verified only when PRESENT,
+// which made the check optional to the attacker — start your own login, capture your `code`,
+// send the victim (holding a legitimate cookie from a forced /login navigation) to
+// `/callback?code=<yours>` with no `state`, and the victim is signed in as you. For an oauth2
+// connection nothing else stands in the way, because there is no nonce.
+func TestCallbackWithoutStateIsRefusedBeforeTheTokenLeg(t *testing.T) {
+	conn := stubbedOauth2Connection(t)
+	const redirectURI = "https://app.test/auth/idp/callback"
+	// The VICTIM's cookie: a legitimate in-flight login on this browser.
+	_, victimCookie, err := ssoBeginLogin(conn, "idp", redirectURI, "session-key",
+		"victim-state", "victim-nonce", "victim-verifier", 1000)
+	if err != nil {
+		t.Fatalf("begin login: %v", err)
+	}
+	for _, presented := range []string{"", "attacker-state", "victim-stat", "victim-state "} {
+		outcome := ssoHandleCallback(conn, "idp", "attacker-code", victimCookie, redirectURI,
+			[]string{"session-key"}, 1001, presented)
+		if outcome.OK {
+			t.Fatalf("state=%q: the callback signed in subject %q", presented, outcome.Identity.Subject)
+		}
+		if outcome.Reason != "state mismatch" {
+			t.Fatalf("state=%q: reason = %q, want \"state mismatch\"", presented, outcome.Reason)
+		}
+	}
+	// Refused BEFORE the exchange: the attacker's code was never presented to the provider.
+	if HttpCalled("POST", "https://idp.test/token") {
+		t.Fatal("the token leg ran for a callback whose state did not verify")
+	}
+	// The matching state, on the same cookie, completes — so the refusals above were the
+	// state's and not some other rule's.
+	outcome := ssoHandleCallback(conn, "idp", "real-code", victimCookie, redirectURI,
+		[]string{"session-key"}, 1001, "victim-state")
+	if !outcome.OK || outcome.Identity.Subject != "424242" {
+		t.Fatalf("the legitimate callback failed: %q", outcome.Reason)
+	}
+}
+
+// A 3xx from a provider is a failed leg: the redirect is never followed, so the https and
+// SSRF preflight that judged the configured URL cannot be walked around by a Location header
+// — and the client_secret_basic Authorization header goes nowhere the configuration did not
+// name. `fetch` treats any non-200 as the leg's failure; the transport half (the 302 comes
+// back as the response, the target is not requested) is pinned in httpclient_test.go.
+func TestSsoLegTreatsARedirectAsAFailedLeg(t *testing.T) {
+	withStubs(t)
+	_ = StubHttp("GET", "https://idp.test/.well-known/openid-configuration", FromInt64(302), "")
+	_, err := getJSON("sso-discovery", "https://idp.test/.well-known/openid-configuration", nil)
+	if err == nil || err.Error() != "sso-discovery: non-200 response" {
+		t.Fatalf("a redirecting leg answered %v, want the fixed non-200 reason", err)
+	}
+	_ = StubHttp("POST", "https://idp.test/token", FromInt64(301), `{"access_token":"never"}`)
+	if _, err := postJSON("sso-token", "https://idp.test/token", nil, "grant_type=x"); err == nil ||
+		err.Error() != "sso-token: non-200 response" {
+		t.Fatalf("a redirecting token leg answered %v", err)
+	}
+}
+
+// The runtime-owned callback route opens the in-flight cookie under [current, previous] —
+// the same pair `JWT.verify` uses — so a login that was in flight when `sessionPreviousKey`
+// rotation happened still completes. Opening under the current key only failed every such
+// login with "invalid or missing login state".
+func TestSsoCallbackOpensAnInFlightCookieSealedUnderThePreviousKey(t *testing.T) {
+	conn := stubbedOauth2Connection(t)
+	current, previous := testKey("rotated-in-key"), testKey("rotated-out-key")
+	route := SsoRoute{
+		Segment:      "idp",
+		Connection:   func() SsoConnection { return conn },
+		OnIdentity:   func(identity SsoIdentity) string { return "user:" + identity.Subject },
+		SessionKey:   func() Secret { return current },
+		PublicOrigin: "https://app.test",
+		AfterLogin:   "/home",
+	}
+	callback := func(state string) *httptest.ResponseRecorder {
+		// Sealed under the PREVIOUS key: the login began before the rotation.
+		_, cookie, err := ssoBeginLogin(conn, "idp", route.redirectURI(), previous.Value.Reveal(),
+			state, "n", "v", 1000)
+		if err != nil {
+			t.Fatalf("begin login: %v", err)
+		}
+		request := httptest.NewRequest(http.MethodGet, "/auth/idp/callback?code=c&state="+state, nil)
+		request.AddCookie(&http.Cookie{Name: ssoOauthCookieName, Value: cookie})
+		recorder := httptest.NewRecorder()
+		handleSsoRequest(route, "callback", recorder, request)
+		return recorder
+	}
+
+	// Without the overlap installed the cookie is foreign, and the flow fails closed.
+	if got := callback("state-no-overlap").Code; got != http.StatusUnauthorized {
+		t.Fatalf("a cookie under an unknown key completed the login: status %d", got)
+	}
+	SetPreviousSessionKey(&previous)
+	t.Cleanup(func() { SetPreviousSessionKey(nil) })
+	recorder := callback("state-with-overlap")
+	if recorder.Code != http.StatusSeeOther || recorder.Header().Get("Location") != "/home" {
+		t.Fatalf("the in-flight login did not complete after rotation: %d %q",
+			recorder.Code, recorder.Header().Get("Location"))
+	}
+	// And the session it minted is signed with the CURRENT key — the rotation completed.
+	sessionCookie := ""
+	for _, line := range recorder.Header().Values("Set-Cookie") {
+		if strings.HasPrefix(line, sessionCookieName+"=") {
+			sessionCookie = strings.SplitN(strings.TrimPrefix(line, sessionCookieName+"="), ";", 2)[0]
+		}
+	}
+	if sessionCookie == "" {
+		t.Fatal("no session cookie was written")
+	}
+	SetPreviousSessionKey(nil)
+	if result := JwtVerify(JwtToken{Value: sessionCookie}, current); !result.OK() {
+		t.Fatalf("the minted session is not signed by the current key: %s", result.Message())
 	}
 }

@@ -61,6 +61,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson07-home.tesl:86
 		n1 := teslrt.FromInt64(0)
@@ -87,6 +92,7 @@ func TestTesl0(teslT *testing.T) {
 							_ = r3
 //line lesson07-home.tesl:92
 							if !teslrt.Equal(teslrt.FromInt64(1), teslrt.FromInt64(1)) {
+//line lesson07-home.tesl:92
 								teslT.Fatal("Tesl expectation failed")
 							}
 						}
@@ -104,6 +110,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line lesson07-home.tesl:96
 	if (CheckInBounds(teslrt.FromInt64(-1))).OK() {
 		teslT.Fatal("expected Tesl check failure")
@@ -121,6 +132,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson07-home.tesl:101
 		s1 := ""
@@ -139,6 +155,7 @@ func TestTesl2(teslT *testing.T) {
 					_ = r2
 //line lesson07-home.tesl:105
 					if !teslrt.Equal(teslrt.FromInt64(1), teslrt.FromInt64(1)) {
+//line lesson07-home.tesl:105
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -154,6 +171,11 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line lesson07-home.tesl:109
 	if (Sanitize("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")).OK() {
 		teslT.Fatal("expected Tesl check failure")

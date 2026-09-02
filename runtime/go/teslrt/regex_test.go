@@ -148,3 +148,25 @@ func TestRegexCacheReturnsTheSamePattern(t *testing.T) {
 		t.Fatal("the cached pattern should still match")
 	}
 }
+
+// The compile cache is an LRU of regexCacheCapacity entries: a stream of distinct patterns
+// churns it without growing it, and the patterns in use stay hot.
+func TestRegexCacheIsBounded(t *testing.T) {
+	hot := RegexCompile("Regex.matches", "^hot-[a-z]+$")
+	for i := 0; i < 4*regexCacheCapacity; i++ {
+		RegexCompile("Regex.matches", "^distinct-"+strconvItoa(i)+"$")
+		if i%16 == 0 {
+			// Touched regularly, so it is never the least recently used.
+			RegexCompile("Regex.matches", "^hot-[a-z]+$")
+		}
+	}
+	if size := regexCacheSize(); size > regexCacheCapacity {
+		t.Fatalf("cache holds %d patterns, want at most %d", size, regexCacheCapacity)
+	}
+	if again := RegexCompile("Regex.matches", "^hot-[a-z]+$"); again != hot {
+		t.Fatal("the hot pattern was evicted")
+	}
+	if RegexCompile("Regex.matches", "^distinct-0$") == nil || !RegexMatches("^distinct-0$", "distinct-0") {
+		t.Fatal("an evicted pattern must simply recompile")
+	}
+}

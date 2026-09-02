@@ -116,14 +116,21 @@ func TestTesl0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft1 := RecordSignup("pro")
 //line lesson73-metrics.tesl:117
 	if teslLeft1 != "welcome to pro" {
+//line lesson73-metrics.tesl:117
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft2 := RecordSignup("free")
 //line lesson73-metrics.tesl:118
 	if teslLeft2 != "welcome to free" {
+//line lesson73-metrics.tesl:118
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -139,16 +146,23 @@ func TestTeslApi0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson73-metrics.tesl:122
 		r := teslrt.ApiRequest(MetricsServer, "GET", "/run", "", nil, nil)
 		_ = r
 //line lesson73-metrics.tesl:123
 		if !(teslrt.StatusOk(r.Status)) {
+//line lesson73-metrics.tesl:123
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line lesson73-metrics.tesl:124
 		if !teslrt.JsonEqual(r.Body, "welcome to pro") {
+//line lesson73-metrics.tesl:124
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}

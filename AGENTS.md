@@ -146,7 +146,7 @@ launch-under-inspector fallback for servers started WITHOUT `--debug`):
 
 ## MCP server (`editor/tesl-mcp`)
 
-For MCP-capable agents, `editor/tesl-mcp/tesl-mcp.rkt` exposes the surface above as
+For MCP-capable agents, the `tesl-mcp` server (`runtime/go/cmd/tesl-mcp`) exposes the surface above as
 discoverable tools over stdio (agent-context, diagnostics, type/signature/completion
 queries, definition, references, proof obligations, the headless step-debugger
 with full breakpoint-setting, and live attach to a running `tesl run --debug`
@@ -164,12 +164,15 @@ claude mcp add tesl -- tesl-mcp           # Claude Code
 { "mcpServers": { "tesl": { "command": "tesl-mcp" } } }   # generic client
 ```
 
-From a repo checkout, run the script directly with `TESL_REPO_ROOT` set:
+From a repo checkout, build and run the Go server directly with `TESL_REPO_ROOT` set:
+
+```sh
+(cd runtime/go && go build -o ../../.tesl-stuff/tesl-mcp ./cmd/tesl-mcp)
+```
 
 ```json
 { "mcpServers": { "tesl": {
-    "command": "racket",
-    "args": ["editor/tesl-mcp/tesl-mcp.rkt"],
+    "command": "/path/to/tesl/.tesl-stuff/tesl-mcp",
     "env": { "TESL_REPO_ROOT": "/path/to/tesl" } } } }
 ```
 See `editor/tesl-mcp/README.md` for details.

@@ -906,9 +906,15 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft1 := useBothFacts(teslrt.FromInt64(50))
 //line critical-review-48-adversarial-deep.tesl:444
 	if !teslrt.Equal(teslLeft1, teslrt.FromInt64(51)) {
+//line critical-review-48-adversarial-deep.tesl:444
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -923,16 +929,23 @@ func TestTeslApi0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:97
 		resp := teslrt.ApiRequest(Fix1Server, "POST", "/single", "{\"value\":5}", nil, nil)
 		_ = resp
 //line critical-review-48-adversarial-deep.tesl:98
 		if !(teslrt.StatusOk(resp.Status)) {
+//line critical-review-48-adversarial-deep.tesl:98
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-adversarial-deep.tesl:99
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "result"), teslrt.FromInt64(51)) {
+//line critical-review-48-adversarial-deep.tesl:99
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -948,6 +961,11 @@ func TestTeslApi1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:103
 		resp := teslrt.ApiRequest(Fix1Server, "POST", "/single", "{\"value\":0}", nil, nil)
@@ -955,6 +973,7 @@ func TestTeslApi1(teslT *testing.T) {
 		teslLeft2 := resp.Status
 //line critical-review-48-adversarial-deep.tesl:104
 		if !teslrt.Equal(teslLeft2, teslrt.FromInt64(400)) {
+//line critical-review-48-adversarial-deep.tesl:104
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -970,16 +989,23 @@ func TestTeslApi2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:108
 		resp := teslrt.ApiRequest(Fix1Server, "POST", "/conj", "{\"value\":1}", nil, nil)
 		_ = resp
 //line critical-review-48-adversarial-deep.tesl:109
 		if !(teslrt.StatusOk(resp.Status)) {
+//line critical-review-48-adversarial-deep.tesl:109
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-adversarial-deep.tesl:110
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "result"), teslrt.FromInt64(1000)) {
+//line critical-review-48-adversarial-deep.tesl:110
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -995,16 +1021,23 @@ func TestTeslApi3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:114
 		resp := teslrt.ApiRequest(Fix1Server, "POST", "/conj", "{\"value\":1000}", nil, nil)
 		_ = resp
 //line critical-review-48-adversarial-deep.tesl:115
 		if !(teslrt.StatusOk(resp.Status)) {
+//line critical-review-48-adversarial-deep.tesl:115
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-adversarial-deep.tesl:116
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "result"), teslrt.FromInt64(1999)) {
+//line critical-review-48-adversarial-deep.tesl:116
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1020,6 +1053,11 @@ func TestTeslApi4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:120
 		resp := teslrt.ApiRequest(Fix1Server, "POST", "/conj", "{\"value\":0}", nil, nil)
@@ -1027,6 +1065,7 @@ func TestTeslApi4(teslT *testing.T) {
 		teslLeft3 := resp.Status
 //line critical-review-48-adversarial-deep.tesl:121
 		if !teslrt.Equal(teslLeft3, teslrt.FromInt64(400)) {
+//line critical-review-48-adversarial-deep.tesl:121
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1042,6 +1081,11 @@ func TestTeslApi5(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:125
 		resp := teslrt.ApiRequest(Fix1Server, "POST", "/conj", "{\"value\":1001}", nil, nil)
@@ -1049,6 +1093,7 @@ func TestTeslApi5(teslT *testing.T) {
 		teslLeft4 := resp.Status
 //line critical-review-48-adversarial-deep.tesl:126
 		if !teslrt.Equal(teslLeft4, teslrt.FromInt64(400)) {
+//line critical-review-48-adversarial-deep.tesl:126
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1064,16 +1109,23 @@ func TestTeslApi6(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:130
 		resp := teslrt.ApiRequest(Fix1Server, "POST", "/inline", "{\"value\":50}", nil, nil)
 		_ = resp
 //line critical-review-48-adversarial-deep.tesl:131
 		if !(teslrt.StatusOk(resp.Status)) {
+//line critical-review-48-adversarial-deep.tesl:131
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-adversarial-deep.tesl:132
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "result"), teslrt.FromInt64(100)) {
+//line critical-review-48-adversarial-deep.tesl:132
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1089,16 +1141,23 @@ func TestTeslApi7(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:136
 		resp := teslrt.ApiRequest(Fix1Server, "POST", "/fn", "{\"value\":7}", nil, nil)
 		_ = resp
 //line critical-review-48-adversarial-deep.tesl:137
 		if !(teslrt.StatusOk(resp.Status)) {
+//line critical-review-48-adversarial-deep.tesl:137
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-adversarial-deep.tesl:138
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "result"), teslrt.FromInt64(107)) {
+//line critical-review-48-adversarial-deep.tesl:138
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1114,6 +1173,11 @@ func TestTeslApi8(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:143
 		resp := teslrt.ApiRequest(Fix1Server, "POST", "/fn", "{\"value\":0}", nil, nil)
@@ -1121,6 +1185,7 @@ func TestTeslApi8(teslT *testing.T) {
 		teslLeft5 := resp.Status
 //line critical-review-48-adversarial-deep.tesl:144
 		if !teslrt.Equal(teslLeft5, teslrt.FromInt64(500)) {
+//line critical-review-48-adversarial-deep.tesl:144
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1136,16 +1201,23 @@ func TestTeslApi9(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:268
 		resp := teslrt.ApiRequest(Fix2MultiArgServer, "GET", "/simple", "", []string{"user=alice"}, nil)
 		_ = resp
 //line critical-review-48-adversarial-deep.tesl:269
 		if !(teslrt.StatusOk(resp.Status)) {
+//line critical-review-48-adversarial-deep.tesl:269
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-adversarial-deep.tesl:270
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "userId"), "alice") {
+//line critical-review-48-adversarial-deep.tesl:270
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1161,6 +1233,11 @@ func TestTeslApi10(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:274
 		resp := teslrt.ApiRequest(Fix2MultiArgServer, "GET", "/simple", "", nil, nil)
@@ -1168,6 +1245,7 @@ func TestTeslApi10(teslT *testing.T) {
 		teslLeft6 := resp.Status
 //line critical-review-48-adversarial-deep.tesl:275
 		if !teslrt.Equal(teslLeft6, teslrt.FromInt64(401)) {
+//line critical-review-48-adversarial-deep.tesl:275
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1183,16 +1261,23 @@ func TestTeslApi11(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:279
 		resp := teslrt.ApiRequest(Fix2MultiArgServer, "GET", "/identity", "", []string{"user=bob"}, nil)
 		_ = resp
 //line critical-review-48-adversarial-deep.tesl:280
 		if !(teslrt.StatusOk(resp.Status)) {
+//line critical-review-48-adversarial-deep.tesl:280
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-adversarial-deep.tesl:281
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "userId"), "bob") {
+//line critical-review-48-adversarial-deep.tesl:281
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1208,16 +1293,23 @@ func TestTeslApi12(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:285
 		resp := teslrt.ApiRequest(Fix2MultiArgServer, "GET", "/conj", "", []string{"user=carol; session=abc"}, nil)
 		_ = resp
 //line critical-review-48-adversarial-deep.tesl:286
 		if !(teslrt.StatusOk(resp.Status)) {
+//line critical-review-48-adversarial-deep.tesl:286
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-adversarial-deep.tesl:287
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "userId"), "carol") {
+//line critical-review-48-adversarial-deep.tesl:287
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1233,6 +1325,11 @@ func TestTeslApi13(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:291
 		resp := teslrt.ApiRequest(Fix2MultiArgServer, "GET", "/conj", "", []string{"user=carol"}, nil)
@@ -1240,6 +1337,7 @@ func TestTeslApi13(teslT *testing.T) {
 		teslLeft7 := resp.Status
 //line critical-review-48-adversarial-deep.tesl:292
 		if !teslrt.Equal(teslLeft7, teslrt.FromInt64(401)) {
+//line critical-review-48-adversarial-deep.tesl:292
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1255,16 +1353,23 @@ func TestTeslApi14(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:296
 		resp := teslrt.ApiRequest(Fix2MultiArgServer, "GET", "/delegated", "", []string{"user=admin_dave"}, nil)
 		_ = resp
 //line critical-review-48-adversarial-deep.tesl:297
 		if !(teslrt.StatusOk(resp.Status)) {
+//line critical-review-48-adversarial-deep.tesl:297
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-adversarial-deep.tesl:298
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "userId"), "admin_dave") {
+//line critical-review-48-adversarial-deep.tesl:298
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1280,6 +1385,11 @@ func TestTeslApi15(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:302
 		resp := teslrt.ApiRequest(Fix2MultiArgServer, "GET", "/delegated", "", []string{"user=dave"}, nil)
@@ -1287,6 +1397,7 @@ func TestTeslApi15(teslT *testing.T) {
 		teslLeft8 := resp.Status
 //line critical-review-48-adversarial-deep.tesl:303
 		if !teslrt.Equal(teslLeft8, teslrt.FromInt64(403)) {
+//line critical-review-48-adversarial-deep.tesl:303
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1302,16 +1413,23 @@ func TestTeslApi16(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:307
 		resp := teslrt.ApiRequest(Fix2MultiArgServer, "GET", "/double", "", []string{"user=eve"}, nil)
 		_ = resp
 //line critical-review-48-adversarial-deep.tesl:308
 		if !(teslrt.StatusOk(resp.Status)) {
+//line critical-review-48-adversarial-deep.tesl:308
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-adversarial-deep.tesl:309
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "userId"), "eve") {
+//line critical-review-48-adversarial-deep.tesl:309
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1327,6 +1445,11 @@ func TestTeslApi17(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:313
 		resp := teslrt.ApiRequest(Fix2MultiArgServer, "GET", "/double", "", []string{"user="}, nil)
@@ -1334,6 +1457,7 @@ func TestTeslApi17(teslT *testing.T) {
 		teslLeft9 := resp.Status
 //line critical-review-48-adversarial-deep.tesl:314
 		if !teslrt.Equal(teslLeft9, teslrt.FromInt64(400)) {
+//line critical-review-48-adversarial-deep.tesl:314
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1349,16 +1473,23 @@ func TestTeslApi18(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:398
 		resp := teslrt.ApiRequest(Fix3ProofVarServer, "GET", "/single-pv", "", []string{"user=v_alice"}, nil)
 		_ = resp
 //line critical-review-48-adversarial-deep.tesl:399
 		if !(teslrt.StatusOk(resp.Status)) {
+//line critical-review-48-adversarial-deep.tesl:399
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-adversarial-deep.tesl:400
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "userId"), "v_alice") {
+//line critical-review-48-adversarial-deep.tesl:400
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1374,6 +1505,11 @@ func TestTeslApi19(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:404
 		resp := teslrt.ApiRequest(Fix3ProofVarServer, "GET", "/single-pv", "", []string{"user=alice"}, nil)
@@ -1381,6 +1517,7 @@ func TestTeslApi19(teslT *testing.T) {
 		teslLeft10 := resp.Status
 //line critical-review-48-adversarial-deep.tesl:405
 		if !teslrt.Equal(teslLeft10, teslrt.FromInt64(403)) {
+//line critical-review-48-adversarial-deep.tesl:405
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1396,16 +1533,23 @@ func TestTeslApi20(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:409
 		resp := teslrt.ApiRequest(Fix3ProofVarServer, "GET", "/mixed-pv", "", []string{"user=v_bob"}, nil)
 		_ = resp
 //line critical-review-48-adversarial-deep.tesl:410
 		if !(teslrt.StatusOk(resp.Status)) {
+//line critical-review-48-adversarial-deep.tesl:410
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-adversarial-deep.tesl:411
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "userId"), "v_bob") {
+//line critical-review-48-adversarial-deep.tesl:411
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1421,6 +1565,11 @@ func TestTeslApi21(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:415
 		resp := teslrt.ApiRequest(Fix3ProofVarServer, "GET", "/mixed-pv", "", []string{"user=bob"}, nil)
@@ -1428,6 +1577,7 @@ func TestTeslApi21(teslT *testing.T) {
 		teslLeft11 := resp.Status
 //line critical-review-48-adversarial-deep.tesl:416
 		if !teslrt.Equal(teslLeft11, teslrt.FromInt64(403)) {
+//line critical-review-48-adversarial-deep.tesl:416
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1443,16 +1593,23 @@ func TestTeslApi22(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:420
 		resp := teslrt.ApiRequest(Fix3ProofVarServer, "GET", "/nested-pv", "", []string{"user=v_charlie"}, nil)
 		_ = resp
 //line critical-review-48-adversarial-deep.tesl:421
 		if !(teslrt.StatusOk(resp.Status)) {
+//line critical-review-48-adversarial-deep.tesl:421
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-adversarial-deep.tesl:422
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "userId"), "v_charlie") {
+//line critical-review-48-adversarial-deep.tesl:422
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1468,6 +1625,11 @@ func TestTeslApi23(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:426
 		resp := teslrt.ApiRequest(Fix3ProofVarServer, "GET", "/nested-pv", "", []string{"user="}, nil)
@@ -1475,6 +1637,7 @@ func TestTeslApi23(teslT *testing.T) {
 		teslLeft12 := resp.Status
 //line critical-review-48-adversarial-deep.tesl:427
 		if !teslrt.Equal(teslLeft12, teslrt.FromInt64(400)) {
+//line critical-review-48-adversarial-deep.tesl:427
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1490,6 +1653,11 @@ func TestTeslApi24(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:431
 		resp := teslrt.ApiRequest(Fix3ProofVarServer, "GET", "/nested-pv", "", []string{"user=charlie"}, nil)
@@ -1497,6 +1665,7 @@ func TestTeslApi24(teslT *testing.T) {
 		teslLeft13 := resp.Status
 //line critical-review-48-adversarial-deep.tesl:432
 		if !teslrt.Equal(teslLeft13, teslrt.FromInt64(403)) {
+//line critical-review-48-adversarial-deep.tesl:432
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1512,20 +1681,28 @@ func TestTeslApi25(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:514
 		resp := teslrt.ApiRequest(Fix4RoutingCaptureServer, "GET", "/items/42", "", []string{"item-token=alice"}, nil)
 		_ = resp
 //line critical-review-48-adversarial-deep.tesl:515
 		if !(teslrt.StatusOk(resp.Status)) {
+//line critical-review-48-adversarial-deep.tesl:515
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-adversarial-deep.tesl:516
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "itemId"), "42") {
+//line critical-review-48-adversarial-deep.tesl:516
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-adversarial-deep.tesl:517
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "fetchedBy"), "alice") {
+//line critical-review-48-adversarial-deep.tesl:517
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1541,20 +1718,28 @@ func TestTeslApi26(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:521
 		resp := teslrt.ApiRequest(Fix4RoutingCaptureServer, "GET", "/users/bob", "", []string{"user-token=charlie"}, nil)
 		_ = resp
 //line critical-review-48-adversarial-deep.tesl:522
 		if !(teslrt.StatusOk(resp.Status)) {
+//line critical-review-48-adversarial-deep.tesl:522
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-adversarial-deep.tesl:523
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "uid"), "bob") {
+//line critical-review-48-adversarial-deep.tesl:523
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-adversarial-deep.tesl:524
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "fetchedBy"), "charlie") {
+//line critical-review-48-adversarial-deep.tesl:524
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1570,6 +1755,11 @@ func TestTeslApi27(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:528
 		resp := teslrt.ApiRequest(Fix4RoutingCaptureServer, "GET", "/items/42", "", []string{"user-token=alice"}, nil)
@@ -1577,6 +1767,7 @@ func TestTeslApi27(teslT *testing.T) {
 		teslLeft14 := resp.Status
 //line critical-review-48-adversarial-deep.tesl:529
 		if !teslrt.Equal(teslLeft14, teslrt.FromInt64(401)) {
+//line critical-review-48-adversarial-deep.tesl:529
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1592,6 +1783,11 @@ func TestTeslApi28(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:533
 		resp := teslrt.ApiRequest(Fix4RoutingCaptureServer, "GET", "/users/bob", "", []string{"item-token=alice"}, nil)
@@ -1599,6 +1795,7 @@ func TestTeslApi28(teslT *testing.T) {
 		teslLeft15 := resp.Status
 //line critical-review-48-adversarial-deep.tesl:534
 		if !teslrt.Equal(teslLeft15, teslrt.FromInt64(401)) {
+//line critical-review-48-adversarial-deep.tesl:534
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1614,6 +1811,11 @@ func TestTeslApi29(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:538
 		resp := teslrt.ApiRequest(Fix4RoutingCaptureServer, "GET", "/items/99", "", nil, nil)
@@ -1621,6 +1823,7 @@ func TestTeslApi29(teslT *testing.T) {
 		teslLeft16 := resp.Status
 //line critical-review-48-adversarial-deep.tesl:539
 		if !teslrt.Equal(teslLeft16, teslrt.FromInt64(401)) {
+//line critical-review-48-adversarial-deep.tesl:539
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1636,6 +1839,11 @@ func TestTeslApi30(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:543
 		resp := teslrt.ApiRequest(Fix4RoutingCaptureServer, "GET", "/users/zz", "", nil, nil)
@@ -1643,6 +1851,7 @@ func TestTeslApi30(teslT *testing.T) {
 		teslLeft17 := resp.Status
 //line critical-review-48-adversarial-deep.tesl:544
 		if !teslrt.Equal(teslLeft17, teslrt.FromInt64(401)) {
+//line critical-review-48-adversarial-deep.tesl:544
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1658,16 +1867,23 @@ func TestTeslApi31(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:548
 		resp := teslrt.ApiRequest(Fix4RoutingCaptureServer, "GET", "/items/77", "", []string{"item-token=alice; user-token=bob"}, nil)
 		_ = resp
 //line critical-review-48-adversarial-deep.tesl:549
 		if !(teslrt.StatusOk(resp.Status)) {
+//line critical-review-48-adversarial-deep.tesl:549
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-adversarial-deep.tesl:550
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "fetchedBy"), "alice") {
+//line critical-review-48-adversarial-deep.tesl:550
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1683,16 +1899,23 @@ func TestTeslApi32(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-adversarial-deep.tesl:554
 		resp := teslrt.ApiRequest(Fix4RoutingCaptureServer, "GET", "/users/xx", "", []string{"item-token=alice; user-token=bob"}, nil)
 		_ = resp
 //line critical-review-48-adversarial-deep.tesl:555
 		if !(teslrt.StatusOk(resp.Status)) {
+//line critical-review-48-adversarial-deep.tesl:555
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-adversarial-deep.tesl:556
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "fetchedBy"), "bob") {
+//line critical-review-48-adversarial-deep.tesl:556
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}

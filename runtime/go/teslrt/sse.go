@@ -36,6 +36,26 @@ type SseChannel struct {
 	// active counts live connections per channel, mirroring registry membership rather than
 	// being derived from it: the gauge must not drift when metrics are off for a while.
 	active int
+	// backend is the cross-instance fan-out for a channel declared on a Postgres-backed
+	// database (`NewSseChannelOn`, pgpubsub.go), and nil for a Memory-backed one. It is set
+	// once, at construction, before the channel is shared, so reading it needs no lock.
+	backend pubsubBackend
+}
+
+// pubsubBackend is what a channel on a Postgres-backed database delegates a publish to.
+//
+// The interface lives here, in the file every program ships, so that `Publish` can ask
+// without this file knowing anything about a database: the one implementation is
+// pgpubsub.go, which ships only with a Postgres-backed program.
+type pubsubBackend interface {
+	// active answers whether a publish should go through the backend NOW — for the
+	// Postgres backend, whether its database is bound. Off a binding (a `test` block over a
+	// Postgres-backed entity, with no server anywhere) the channel behaves like a Memory one.
+	active() bool
+	// publish hands the event to the backend, which delivers it to THIS process's listeners
+	// too, the same way it reaches every other instance's. `encoded` is the payload's JSON
+	// text — the form that crosses the wire, and the form that is stored.
+	publish(channel, key string, encoded string)
 }
 
 func NewSseChannel(name string) *SseChannel {
@@ -51,7 +71,26 @@ func sseChannelAttribute(name string) []Tuple2[string, string] {
 // shape is decided by the codec, and deciding it twice is how the two ends drift.
 //
 // Delivery is non-blocking by construction — see the buffer note above.
+//
+// On a channel with an ACTIVE backend (a Postgres-backed database that is bound) the event is
+// not delivered here at all: it goes to the outbox, and this process's listeners receive it
+// through the same LISTEN path as every other instance's. That is what makes the instances
+// agree — a publish inside a rolled-back `transaction { }` reaches nobody, including the
+// browser connected to the instance that rolled back, and every instance delivers in outbox
+// order.
 func Publish(channel *SseChannel, key string, payload any) struct{} {
+	if channel.backend != nil && channel.backend.active() {
+		channel.backend.publish(channel.name, key, EncodeJSONValue(payload))
+		return struct{}{}
+	}
+	deliverLocal(channel, key, payload)
+	return struct{}{}
+}
+
+// deliverLocal fans one event out to THIS process's listeners on `key`. It is the whole of
+// `Publish` for a Memory-backed channel, and the last step of the backend's path for a
+// Postgres-backed one.
+func deliverLocal(channel *SseChannel, key string, payload any) {
 	channel.mutex.Lock()
 	listeners := make([]*sseListener, len(channel.listeners[key]))
 	copy(listeners, channel.listeners[key])
@@ -65,7 +104,6 @@ func Publish(channel *SseChannel, key string, payload any) struct{} {
 			Counter("tesl.sse.events.dropped", FromInt64(1), sseChannelAttribute(channel.name))
 		}
 	}
-	return struct{}{}
 }
 
 // ResetChannel drops every listener, for a test block that starts from a channel nobody is on.

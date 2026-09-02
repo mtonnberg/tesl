@@ -35,6 +35,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line agent-conversation-tests.tesl:36
 		agent := teslrt.Agent{Provider: teslrt.MockProvider([]string{"First reply about cats", "Second reply still about cats"}), SystemPrompt: "You are a helpful bot.", MaxTokens: teslrt.FromInt64(128), Tools: []teslrt.Tool{}}
@@ -54,11 +59,13 @@ func TestTesl0(teslT *testing.T) {
 					teslLeft1 := teslrt.ReplyText(teslrt.TurnReply(turn1))
 //line agent-conversation-tests.tesl:43
 					if teslLeft1 != "First reply about cats" {
+//line agent-conversation-tests.tesl:43
 						teslT.Fatal("Tesl expectation failed")
 					}
 					teslLeft2 := teslrt.ConversationLength(conv1)
 //line agent-conversation-tests.tesl:45
 					if !teslrt.Equal(teslLeft2, teslrt.FromInt64(2)) {
+//line agent-conversation-tests.tesl:45
 						teslT.Fatal("Tesl expectation failed")
 					}
 					{
@@ -72,11 +79,13 @@ func TestTesl0(teslT *testing.T) {
 							teslLeft3 := teslrt.ReplyText(teslrt.TurnReply(turn2))
 //line agent-conversation-tests.tesl:50
 							if teslLeft3 != "Second reply still about cats" {
+//line agent-conversation-tests.tesl:50
 								teslT.Fatal("Tesl expectation failed")
 							}
 							teslLeft4 := teslrt.ConversationLength(conv2)
 //line agent-conversation-tests.tesl:52
 							if !teslrt.Equal(teslLeft4, teslrt.FromInt64(4)) {
+//line agent-conversation-tests.tesl:52
 								teslT.Fatal("Tesl expectation failed")
 							}
 							{
@@ -85,14 +94,17 @@ func TestTesl0(teslT *testing.T) {
 								_ = history
 //line agent-conversation-tests.tesl:57
 								if !(teslrt.StringContains(history, "Tell me about cats")) {
+//line agent-conversation-tests.tesl:57
 									teslT.Fatal("Tesl expectation failed")
 								}
 //line agent-conversation-tests.tesl:58
 								if !(teslrt.StringContains(history, "First reply about cats")) {
+//line agent-conversation-tests.tesl:58
 									teslT.Fatal("Tesl expectation failed")
 								}
 //line agent-conversation-tests.tesl:59
 								if !(teslrt.StringContains(history, "What did I just ask about?")) {
+//line agent-conversation-tests.tesl:59
 									teslT.Fatal("Tesl expectation failed")
 								}
 							}
@@ -111,6 +123,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line agent-conversation-tests.tesl:65
 		agent := teslrt.Agent{Provider: teslrt.MockProvider([]string{"Reply one", "Reply two"}), SystemPrompt: "x", MaxTokens: teslrt.FromInt64(64), Tools: []teslrt.Tool{}}
@@ -138,6 +155,7 @@ func TestTesl1(teslT *testing.T) {
 							teslLeft5 := teslrt.ConversationLength(reloaded)
 //line agent-conversation-tests.tesl:74
 							if !teslrt.Equal(teslLeft5, teslrt.FromInt64(2)) {
+//line agent-conversation-tests.tesl:74
 								teslT.Fatal("Tesl expectation failed")
 							}
 							{
@@ -151,11 +169,13 @@ func TestTesl1(teslT *testing.T) {
 									teslLeft6 := teslrt.ReplyText(teslrt.TurnReply(turn2))
 //line agent-conversation-tests.tesl:79
 									if teslLeft6 != "Reply two" {
+//line agent-conversation-tests.tesl:79
 										teslT.Fatal("Tesl expectation failed")
 									}
 									teslLeft7 := teslrt.ConversationLength(conv2)
 //line agent-conversation-tests.tesl:80
 									if !teslrt.Equal(teslLeft7, teslrt.FromInt64(4)) {
+//line agent-conversation-tests.tesl:80
 										teslT.Fatal("Tesl expectation failed")
 									}
 									{
@@ -164,10 +184,12 @@ func TestTesl1(teslT *testing.T) {
 										_ = history2
 //line agent-conversation-tests.tesl:82
 										if !(teslrt.StringContains(history2, "first question")) {
+//line agent-conversation-tests.tesl:82
 											teslT.Fatal("Tesl expectation failed")
 										}
 //line agent-conversation-tests.tesl:83
 										if !(teslrt.StringContains(history2, "Reply one")) {
+//line agent-conversation-tests.tesl:83
 											teslT.Fatal("Tesl expectation failed")
 										}
 									}

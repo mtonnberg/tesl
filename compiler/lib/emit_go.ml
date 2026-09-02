@@ -207,6 +207,9 @@ let go_predeclared = [
    a silent capture. *)
 let go_emitter_owned =
   ["fmt"; "os"; "strconv"; "testing"; "teslrt";
+   (* The emitted test harness declares `TestMain`; a Tesl `fn testMain` exported into the
+      same package would redeclare it. *)
+   "testmain";
    (* The PostgreSQL driver's two packages: a row scanner names both, so a Tesl module called
       `Pgx` would otherwise capture one of them. *)
    "pgx"; "pgtype"]
@@ -234,6 +237,12 @@ let reserved_go_ident name =
 
 let go_ident ~exported name =
   let cleaned = sanitize_chars name in
+  (* A name that starts with `_` has no case to raise: `_secret` stayed `_secret`, an
+     UNEXPORTED Go field, and a record crossing a module boundary did not build.  Exported
+     spellings get a letter in front so Go sees an exported identifier. *)
+  let cleaned =
+    if exported && String.length cleaned > 0 && cleaned.[0] = '_' then "X" ^ cleaned
+    else cleaned in
   let cased =
     if exported then String.capitalize_ascii cleaned
     else String.uncapitalize_ascii cleaned
@@ -587,6 +596,12 @@ type queue_info = {
   qu_worker : string;              (* the worker function's Tesl name *)
   qu_dead_worker : string option;
   qu_max_attempts : int;
+  (* The `database:` the declaration names, and the retry schedule.  A Postgres-backed
+     database makes the queue DURABLE (rows in `tesl_jobs`, claimed with SKIP LOCKED, shared
+     by every instance); a Memory-backed one keeps the in-process store. *)
+  qu_database : string;
+  qu_backoff : string;             (* "exponential" | "fixed" | "linear" | "" *)
+  qu_initial_delay : int;          (* seconds *)
   qu_loc : Location.loc;
 }
 
@@ -603,6 +618,7 @@ type cache_info = {
      a queue's `maxAttempts` is: the expiry rule belongs to the declaration, and a `Cache.set`
      with no TTL of its own is exactly the call that asks for it. *)
   ca_default_ttl : int;
+  ca_database : string;
   ca_loc : Location.loc;
 }
 
@@ -624,6 +640,7 @@ type email_info = {
   em_username : string;
   em_password : string;
   em_tls : bool;
+  em_database : string;
   em_loc : Location.loc;
 }
 
@@ -642,6 +659,7 @@ type channel_info = {
   (* The declaration's key parameters.  Zero or one today; more would need a composite key,
      which the surface has no syntax for. *)
   ch_key_params : int;
+  ch_database : string;
   ch_loc : Location.loc;
 }
 
@@ -6754,19 +6772,22 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
     let info = email_of_name loc email_name in
     Printf.sprintf "teslrt.StartEmailWorker(%s)" (qualified info.em_owner info.em_go_var)
   | EWithTransaction { body; _ } ->
-    if not (module_has_postgres_database ()) then
-      emit_expr ?expected ~indent signatures env body
-    else begin
-      let ty = match expected with
-        | Some ty -> ty
-        | None -> type_of_expr signatures env body in
-      let inner = indent ^ "\t" in
-      Printf.sprintf
-        "func() %s {\n%svar teslCommitted %s\n%steslrt.WithTransaction(func() {\n%steslCommitted = %s\n%s})\n%sreturn teslCommitted\n%s}()"
-        (go_type ty) inner (go_type ty) inner
-        (inner ^ "\t") (emit_expr ~expected:ty ~indent:(inner ^ "\t") signatures env body)
-        inner inner indent
-    end
+    (* A Memory-only module used to INLINE the body, so `transaction { }` there had no
+       rollback at all — the spec promises one, and a test asserting atomicity passed on
+       Memory only by not being able to observe it.  The Memory store now rolls back by
+       restore (table.go, `WithMemoryTransaction`), and the block is emitted through it. *)
+    let wrapper =
+      if module_has_postgres_database () then "teslrt.WithTransaction"
+      else "teslrt.WithMemoryTransaction" in
+    let ty = match expected with
+      | Some ty -> ty
+      | None -> type_of_expr signatures env body in
+    let inner = indent ^ "\t" in
+    Printf.sprintf
+      "func() %s {\n%svar teslCommitted %s\n%s%s(func() {\n%steslCommitted = %s\n%s})\n%sreturn teslCommitted\n%s}()"
+      (go_type ty) inner (go_type ty) inner wrapper
+      (inner ^ "\t") (emit_expr ~expected:ty ~indent:(inner ^ "\t") signatures env body)
+      inner inner indent
   | EPublish { channel_name; key; event_ctor; payload; loc } ->
     let info = channel_of_name loc channel_name in
     ignore (type_of_expr signatures env expr);
@@ -8305,13 +8326,13 @@ and sql_bound_value loc ty value =
   | TFloat | TString | TBool -> value
   | TNewtype { tesl_name = "PosixMillis"; _ } ->
     Printf.sprintf "teslrt.PgBigint(%s.Value)" value
-  (* A `secret` column BINDS its plaintext, because storage is not rendering: the redaction a
-     secret newtype provides is about what a log line, a print or a span carries, and a column
-     the program declared has to receive the value itself. `dsl/sql.tesl` binds it the same way
-     and states the same reason ("a `secret` column's bound parameter really is the secret"),
-     and neither runtime puts a parameter on a span or in a log. *)
+  (* A `secret` column receives its plaintext — storage is the one legitimate disclosure — but
+     it travels as a `SecretParam`, which hands the driver the value through `driver.Valuer`
+     and shows every RENDERING path (the `--debug` SQL capture, a trap quoting its arguments)
+     the redaction.  Binding `.Value.Reveal()` here put the plaintext into the debug SQL
+     preview (whitebox campaign, 2026-09-02). *)
   | TNewtype { secret = true; _ } ->
-    Printf.sprintf "%s.Value.Reveal()" (selector_operand value)
+    Printf.sprintf "teslrt.PgSecret(%s.Value)" (selector_operand value)
   | TNewtype newtype -> sql_bound_value loc newtype.base (value ^ ".Value")
   | TAdt (info, _) when info.adt_tesl_name <> "Maybe" ->
     Printf.sprintf "teslrt.EncodeJSONValue(%s(%s))" (!value_encoder_hook ty) value
@@ -8569,7 +8590,17 @@ and sql_where_text ?(joins=[]) ~indent signatures env loc (info : entity_info) b
          `Sql_query.is_sql_comparison` does not admit (bug in compiler/lib/sql_query.ml or \
          this table)"
     in
-    Printf.sprintf "%s %s %s" (column field) symbol (bind field expr)
+    (* A `Maybe` column compares as a VALUE on the Memory store — `Nothing == Nothing` is
+       true, `Nothing == Something x` is false — and `=`/`<>` against a NULL parameter is
+       never true in SQL, so `where s.revokedAt == notRevoked` matched every unrevoked
+       session in the test store and none in production (whitebox campaign, 2026-09-02).
+       `IS [NOT] DISTINCT FROM` is SQL's value equality with NULL as a value, which is the
+       Memory semantics exactly. Non-Maybe columns keep the plain operators. *)
+    let nullable = maybe_element (entity_column loc info field) <> None in
+    match op, nullable with
+    | BEq, true -> Printf.sprintf "%s is not distinct from %s" (column field) (bind field expr)
+    | BNeq, true -> Printf.sprintf "%s is distinct from %s" (column field) (bind field expr)
+    | _ -> Printf.sprintf "%s %s %s" (column field) symbol (bind field expr)
   in
   let rec clause (c : Sql_query.sql_clause) =
     match c with
@@ -8754,6 +8785,19 @@ and sql_plan ~indent statement (builder : sql_arguments) =
     | args ->
       Printf.sprintf "teslrt.PgSql(%s, func() []any {\n%s\treturn []any{%s}\n%s})"
         (go_quote statement) indent (String.concat ", " args) indent in
+  if !current_debug then "teslrt.DebugPgSql(" ^ rendered ^ ")" else rendered
+
+(* A plan with an explaining probe (`PgPlan.Probe`): the probe's arguments are a SEPARATE
+   thunk, evaluated only when the runtime consults it. *)
+and sql_plan_probed ~indent statement (builder : sql_arguments) probe (probe_builder : sql_arguments) =
+  let thunk = function
+    | [] -> "nil"
+    | args ->
+      Printf.sprintf "func() []any {\n%s\treturn []any{%s}\n%s}" indent
+        (String.concat ", " args) indent in
+  let rendered =
+    Printf.sprintf "teslrt.PgSqlProbed(%s, %s, %s, %s)"
+      (go_quote statement) (thunk builder.sql_args) (go_quote probe) (thunk probe_builder.sql_args) in
   if !current_debug then "teslrt.DebugPgSql(" ^ rendered ^ ")" else rendered
 
 and emit_sql_form ?(indent="") signatures env loc form =
@@ -9297,13 +9341,32 @@ and emit_sql_form ?(indent="") signatures env loc form =
        let where =
          sql_where_text ~indent signatures env loc info update.binder update.clauses builder in
        if update.returning_one then
+         (* `updateAndReturnOne` names ONE row.  A bare `update … where … returning` updates
+            every row the predicate matches, while the Memory backend updated the first match
+            only — the two backends disagreed, and the disagreement was invisible to `tesl
+            test` (Memory).  The statement therefore guards on the match COUNT: with two or
+            more matches it updates nothing, and the plan's PROBE (the same count over the
+            same predicate) then tells the runtime whether the empty result was "no row" or
+            "more than one row", which is the Memory table's trap.  A `ctid` scalar subquery
+            was tried first and missed the row under contention (the outer TID scan keeps the
+            statement snapshot while a concurrent writer moves the row); the count form
+            re-checks the predicate on the row's latest version. *)
+         let table = sql_qualified_table database info in
+         let count_guard = Printf.sprintf "(select count(*) from %s%s) = 1" table where in
+         let condition =
+           if where = "" then " where " ^ count_guard else where ^ " and " ^ count_guard in
          let statement =
-           Printf.sprintf "update %s set %s%s returning %s"
-             (sql_qualified_table database info) sets where (sql_column_list info) in
+           Printf.sprintf "update %s set %s%s returning %s" table sets condition
+             (sql_column_list info) in
+         let probe_builder = { sql_args = [] } in
+         let probe_where =
+           sql_where_text ~indent signatures env loc info update.binder update.clauses
+             probe_builder in
+         let probe = Printf.sprintf "select count(*) from %s%s" table probe_where in
          Printf.sprintf "teslrt.DbUpdateReturnOne(%s, %s, %s, %s, %s, %s%s)"
            (qualified database.db_owner database.db_go_var) (sql_table_ref info) predicate
-           apply (sql_plan ~indent statement builder) (sql_scanner loc info)
-           (sql_unique_arguments ~indent loc info)
+           apply (sql_plan_probed ~indent statement builder probe probe_builder)
+           (sql_scanner loc info) (sql_unique_arguments ~indent loc info)
        else
          let statement =
            Printf.sprintf "update %s set %s%s" (sql_qualified_table database info) sets where in
@@ -9812,12 +9875,19 @@ let emit_tail ?self ?(debug=false) ?(debug_package="") ?(debug_function="")
        change nothing but the shape of the emitted code.  Where a Postgres database is
        declared the block IS a runtime form (BEGIN/COMMIT) and takes the expression shape. *)
     | EWithTransaction { body; loc } ->
-      if not (module_has_postgres_database ()) then go env indent body
-      else begin
-        Buffer.add_string buffer (line_directive loc);
-        Printf.bprintf buffer "%sreturn %s\n" indent
-          (emit_expr ~expected ~indent signatures env expr)
-      end
+      (* Both backends go through a wrapper (see the expression form): a Memory-only module
+         no longer inlines the body, so its rollback-by-restore is reached.  The body keeps
+         the STATEMENT emitter — `update`/`delete`/`enqueue` lines are statements, not
+         expressions — so it becomes an inner function literal whose `return`s hand the tail
+         to the captured result. *)
+      let wrapper =
+        if module_has_postgres_database () then "teslrt.WithTransaction"
+        else "teslrt.WithMemoryTransaction" in
+      Buffer.add_string buffer (line_directive loc);
+      Printf.bprintf buffer "%svar teslCommitted %s\n%s%s(func() {\n%s\tteslCommitted = func() %s {\n"
+        indent (go_type expected) indent wrapper indent (go_type expected);
+      go env (indent ^ "\t\t") body;
+      Printf.bprintf buffer "%s\t}()\n%s})\n%sreturn teslCommitted\n" indent indent indent
     | EWithCapabilities { body; _ } -> go env indent body
     (* `let (v ::: p) = check g x` inside a CHECK or an AUTH: the rejection PROPAGATES, exactly
        as it does for a plain `let v = check g x` below.  The proof-DECOMPOSING form was left
@@ -10065,7 +10135,8 @@ let runtime_file_gates : (string * string list) list = [
   (* The PostgreSQL half ships ONLY to a program that declares a Postgres-backed database, for
      the reason the HTTP half does: it pulls a third-party driver and its whole dependency
      chain into a binary that would otherwise require nothing. *)
-   "postgres", [ "postgres.go"; "database.go"; "dbquery.go"; "debug_sql.go" ];
+   "postgres", [ "postgres.go"; "database.go"; "dbquery.go"; "debug_sql.go"; "pgstores.go";
+                 "pgpubsub.go" ];
   (* `agent.go` ships only to a program that talks to a model.  Not a dependency argument —
      everything in it is standard library — but a runtime file a program has no use for is
      still surface a reader has to rule out, and the gate costs nothing. *)
@@ -10296,11 +10367,11 @@ let field_codec_kind name =
    padding for the same reason. *)
 let aligned_map_entries indent entries =
   let width = List.fold_left (fun width (key, _) ->
-    max width (String.length key + 3)) 0 entries in
+    max width (String.length (go_quote key) + 1)) 0 entries in
   String.concat "\n" (List.map (fun (key, value) ->
-    let key = Printf.sprintf "%S:" key in
+    let key = go_quote key ^ ":" in
     Printf.sprintf "%s%s%s %s," indent key
-      (String.make (width - String.length key) ' ') value) entries)
+      (String.make (max 0 (width - String.length key)) ' ') value) entries)
 
 let rec value_encoder ty =
   let encoded_field operand field_ty =
@@ -10496,8 +10567,17 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
   |> List.iter (fun info ->
     Buffer.add_char body '\n';
      Buffer.add_string body (line_directive info.qu_loc);
-     Printf.bprintf body "var %s = teslrt.NewQueue(%s, %d)\n"
-       info.qu_go_var (go_quote info.qu_tesl_name) info.qu_max_attempts;
+     (match postgres_database info.qu_loc info.qu_database with
+      | Some db ->
+        (* Durable: rows in `tesl_jobs` on the declared database, claimed with SKIP LOCKED
+           and shared by every instance; the job codecs are registered below, once the
+           decoders they need exist. *)
+        Printf.bprintf body "var %s = teslrt.NewQueueOn(%s, %s, %d, %s, %d)\n"
+          info.qu_go_var (qualified db.db_owner db.db_go_var) (go_quote info.qu_tesl_name)
+          info.qu_max_attempts (go_quote info.qu_backoff) info.qu_initial_delay
+      | None ->
+        Printf.bprintf body "var %s = teslrt.NewQueue(%s, %d)\n"
+          info.qu_go_var (go_quote info.qu_tesl_name) info.qu_max_attempts);
      if debug then
        Printf.bprintf body "var _ = teslrt.RegisterDebugQueue(%s)\n" info.qu_go_var);
   (* The store for a `cache` declaration.  `defaultTtl:` is baked in for the reason
@@ -10507,14 +10587,17 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
   |> List.of_seq
   |> List.sort (fun left right -> String.compare left.ca_tesl_name right.ca_tesl_name)
   |> List.filter (fun info -> declared_here info.ca_owner)
+  (* A cache on a Postgres-backed database is emitted BELOW, once the value codecs it needs
+     exist (`NewCacheOn` takes them); the in-process one is emitted here. *)
+  |> List.filter (fun info -> postgres_database info.ca_loc info.ca_database = None)
   |> List.iter (fun info ->
     Buffer.add_char body '\n';
      Buffer.add_string body (line_directive info.ca_loc);
      Printf.bprintf body "var %s = teslrt.NewCache[%s](%d)\n"
        info.ca_go_var (go_type info.ca_value) info.ca_default_ttl;
      if debug then
-       Printf.bprintf body "var _ = teslrt.RegisterDebugCache(%s, %S)\n"
-         info.ca_go_var info.ca_tesl_name);
+       Printf.bprintf body "var _ = teslrt.RegisterDebugCache(%s, %s)\n"
+         info.ca_go_var (go_quote info.ca_tesl_name));
   (* The outbox for an `email` declaration.  Its SMTP settings are the declaration's, and an
      `env` among them is a call here rather than a baked-in string: the variable belongs to
      the deployment, not to the build. *)
@@ -10525,9 +10608,18 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
   |> List.iter (fun info ->
     Buffer.add_char body '\n';
     Buffer.add_string body (line_directive info.em_loc);
-     Printf.bprintf body
-       "var %s = teslrt.NewOutbox(teslrt.SmtpSettings{\n\tHost:     %s,\n\tPort:     %d,\n\tUsername: %s,\n\tPassword: %s,\n\tTLS:      %b,\n})\n"
-       info.em_go_var info.em_host info.em_port info.em_username info.em_password info.em_tls;
+     let settings =
+       Printf.sprintf "teslrt.SmtpSettings{\n\tHost:     %s,\n\tPort:     %d,\n\tUsername: %s,\n\tPassword: %s,\n\tTLS:      %b,\n}"
+         info.em_host info.em_port info.em_username info.em_password info.em_tls in
+     (match postgres_database info.em_loc info.em_database with
+      | Some db ->
+        (* Durable outbox: `Email.send` inserts a `tesl_email_outbox` row on the goroutine's
+           transaction, and the worker claims due rows with SKIP LOCKED — so a rolled-back
+           request sends nothing and two instances never deliver one mail twice. *)
+        Printf.bprintf body "var %s = teslrt.NewOutboxOn(%s, %s)\n"
+          info.em_go_var (qualified db.db_owner db.db_go_var) settings
+      | None ->
+        Printf.bprintf body "var %s = teslrt.NewOutbox(%s)\n" info.em_go_var settings);
      if debug then
        Printf.bprintf body "var _ = teslrt.RegisterDebugOutbox(%s, %S)\n"
          info.em_go_var info.em_tesl_name);
@@ -10540,8 +10632,16 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
   |> List.iter (fun info ->
     Buffer.add_char body '\n';
      Buffer.add_string body (line_directive info.ch_loc);
-     Printf.bprintf body "var %s = teslrt.NewSseChannel(%s)\n"
-       info.ch_go_var (go_quote info.ch_tesl_name);
+     (match postgres_database info.ch_loc info.ch_database with
+      | Some db ->
+        (* Cross-instance fan-out: a publish writes a `tesl_pubsub_outbox` row on the
+           goroutine's transaction and every instance's LISTEN loop delivers it to its own
+           subscribers. *)
+        Printf.bprintf body "var %s = teslrt.NewSseChannelOn(%s, %s)\n"
+          info.ch_go_var (qualified db.db_owner db.db_go_var) (go_quote info.ch_tesl_name)
+      | None ->
+        Printf.bprintf body "var %s = teslrt.NewSseChannel(%s)\n"
+          info.ch_go_var (go_quote info.ch_tesl_name));
      if debug then
        Printf.bprintf body "var _ = teslrt.RegisterDebugSSE(%s)\n" info.ch_go_var);
   (* The store for a `backend: Memory` entity.  One variable per entity, initialised at
@@ -10935,8 +11035,8 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
                   | `PosixMillis -> "DecodeIntField"
                 in
                 Printf.bprintf body
-                  "\t%s, teslErr%s := teslrt.%s(teslJSON, %S)\n\tif teslErr%s != nil {\n\t\treturn teslrt.RejectShape[%s](teslErr%s.Error())\n\t}\n"
-                  binder suffix decoder json_key suffix go_type_name suffix
+                  "\t%s, teslErr%s := teslrt.%s(teslJSON, %s)\n\tif teslErr%s != nil {\n\t\treturn teslrt.RejectShape[%s](teslErr%s.Error())\n\t}\n"
+                  binder suffix decoder (go_quote json_key) suffix go_type_name suffix
               (* A CONTAINER codec (`listCodec`/`setCodec`/`dictCodec`) decodes by the FIELD'S
                  DECLARED TYPE rather than by the codec name: the element type is what says how
                  to read each element, and the codec name only says "this is a container".
@@ -10945,8 +11045,8 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
                  which made a declared `List String` accept anything an array held. *)
               | None when List.mem field_codec ["listCodec"; "setCodec"; "dictCodec"] ->
                 Printf.bprintf body
-                  "\tteslRaw%s, teslErr%s := teslrt.JSONFieldValue(teslJSON, %S)\n\tif teslErr%s != nil {\n\t\treturn teslrt.RejectShape[%s](teslErr%s.Error())\n\t}\n\t%s, teslDecodeErr%s := %s(teslRaw%s)\n\tif teslDecodeErr%s != nil {\n\t\treturn teslrt.RejectShape[%s](teslDecodeErr%s.Error())\n\t}\n"
-                  suffix suffix json_key suffix go_type_name suffix
+                  "\tteslRaw%s, teslErr%s := teslrt.JSONFieldValue(teslJSON, %s)\n\tif teslErr%s != nil {\n\t\treturn teslrt.RejectShape[%s](teslErr%s.Error())\n\t}\n\t%s, teslDecodeErr%s := %s(teslRaw%s)\n\tif teslDecodeErr%s != nil {\n\t\treturn teslrt.RejectShape[%s](teslDecodeErr%s.Error())\n\t}\n"
+                  suffix suffix (go_quote json_key) suffix go_type_name suffix
                   binder suffix
                   (json_value_decoder ~package ~loc:codec.loc
                      ~what:(Printf.sprintf "%s.%s" type_name field_name) (field_type field_name))
@@ -10954,8 +11054,8 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
               | None ->
                 (* A nested codec decodes the field's own JSON value. *)
                 Printf.bprintf body
-                  "\tteslRaw%s, teslErr%s := teslrt.JSONFieldValue(teslJSON, %S)\n\tif teslErr%s != nil {\n\t\treturn teslrt.RejectShape[%s](teslErr%s.Error())\n\t}\n\tteslNested%s := %s(teslRaw%s)\n\tif !teslNested%s.OK() {\n\t\treturn teslrt.Reject[%s](teslNested%s.Status(), teslNested%s.Message())\n\t}\n\t%s, _ := teslNested%s.Value()\n"
-                  suffix suffix json_key suffix go_type_name suffix
+                  "\tteslRaw%s, teslErr%s := teslrt.JSONFieldValue(teslJSON, %s)\n\tif teslErr%s != nil {\n\t\treturn teslrt.RejectShape[%s](teslErr%s.Error())\n\t}\n\tteslNested%s := %s(teslRaw%s)\n\tif !teslNested%s.OK() {\n\t\treturn teslrt.Reject[%s](teslNested%s.Status(), teslNested%s.Message())\n\t}\n\t%s, _ := teslNested%s.Value()\n"
+                  suffix suffix (go_quote json_key) suffix go_type_name suffix
                   suffix (codec_decode_ref field_codec) suffix
                   suffix go_type_name suffix suffix
                   binder suffix);
@@ -10985,7 +11085,7 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
              let rendered = match default_lit, field_type field_name with
                | LInt n, _ -> Printf.sprintf "teslrt.FromInt64(%d)" n
                | LBool b, _ -> if b then "true" else "false"
-               | LString text, _ -> Printf.sprintf "%S" text
+               | LString text, _ -> go_quote text
                | LFloat f, _ -> emit_float_literal f
                | _ -> unsupported codec.loc
                  "Go backend codec `%s` default for `%s` is not a literal" type_name field_name
@@ -11116,6 +11216,55 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
       | Http { body = Some (binding : binding); _ } ->
         derive_decoder endpoint.loc (type_of_type_expr types binding.type_expr)
       | _ -> ()) api.endpoints) apis;
+  (* ── Durable stores: job codecs and Postgres-backed caches ─────────────────
+     A `tesl_jobs` row holds its payload as JSONB, so every job type a durable queue carries
+     needs a JSON encoder and decoder; a `tesl_cache` row likewise for its value type.  The
+     same derived codecs the HTTP boundary uses — which is why this sits after the endpoint
+     decoders are derived: a job record with no `codec` block gets the derived one here. *)
+  let durable_codec loc what ty =
+    derive_decoder loc ty;
+    (!value_encoder_hook ty, json_value_decoder ~package ~loc ~what ty)
+  in
+  Hashtbl.to_seq_values types.queues
+  |> List.of_seq
+  |> List.sort_uniq (fun left right -> String.compare left.qu_tesl_name right.qu_tesl_name)
+  |> List.filter (fun info -> info.qu_owner = package)
+  |> List.iter (fun info ->
+    match postgres_database info.qu_loc info.qu_database with
+    | None -> ()
+    | Some _ ->
+      List.iter (fun (job_type, _, _) ->
+        let row = match Hashtbl.find_opt types.records job_type with
+          | Some row -> TRecord row
+          | None -> unsupported info.qu_loc "Go backend cannot resolve job type `%s`" job_type in
+        let encoder, decoder = durable_codec info.qu_loc job_type row in
+        Printf.bprintf body
+          "\nvar _ = teslrt.RegisterJobCodec(%s, %s, func(teslJob any) any {\n\treturn %s(teslJob.(%s))\n}, func(teslJSON any) (any, error) {\n\tteslDecoded, teslErr := %s(teslJSON)\n\tif teslErr != nil {\n\t\treturn nil, teslErr\n\t}\n\treturn teslDecoded, nil\n})\n"
+          info.qu_go_var (go_quote job_type) encoder (go_type row) decoder)
+        info.qu_jobs);
+  Hashtbl.to_seq_values types.caches
+  |> List.of_seq
+  |> List.sort (fun left right -> String.compare left.ca_tesl_name right.ca_tesl_name)
+  |> List.filter (fun info -> declared_here info.ca_owner)
+  |> List.iter (fun info ->
+    match postgres_database info.ca_loc info.ca_database with
+    | None -> ()
+    | Some db ->
+      let encoder, decoder = durable_codec info.ca_loc info.ca_tesl_name info.ca_value in
+      (* The codecs are wrapped in named functions: a derived decoder is a function literal
+         indented for a function body, and gofmt would re-indent it inside a package-level
+         call. *)
+      let suffix = go_ident ~exported:true info.ca_tesl_name in
+      Buffer.add_char body '\n';
+      Buffer.add_string body (line_directive info.ca_loc);
+      Printf.bprintf body
+        "func teslCacheEncode%s(teslValue %s) any {\n\treturn %s(teslValue)\n}\n\nfunc teslCacheDecode%s(teslRaw any) (%s, error) {\n\treturn %s(teslRaw)\n}\n\nvar %s = teslrt.NewCacheOn[%s](%s, %s, %d, teslCacheEncode%s, teslCacheDecode%s)\n"
+        suffix (go_type info.ca_value) encoder suffix (go_type info.ca_value) decoder
+        info.ca_go_var (go_type info.ca_value) (qualified db.db_owner db.db_go_var)
+        (go_quote info.ca_tesl_name) info.ca_default_ttl suffix suffix;
+      if debug then
+        Printf.bprintf body "var _ = teslrt.RegisterDebugCache(%s, %s)\n"
+          info.ca_go_var (go_quote info.ca_tesl_name));
   (* ── HTTP servers ───────────────────────────────────────────────────────── *)
   List.iter (fun (server : server_form) ->
     let api = match List.find_opt (fun (a : api_form) -> a.name = server.api_name) apis with
@@ -11142,13 +11291,13 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
      in
     Printf.bprintf body "\nvar %s = teslrt.Server{\n\tRoutes: []teslrt.Route{\n" server_name;
     List.iter (fun ((ep : api_endpoint), handler) ->
-      Printf.bprintf body "\t\t{Method: %S, Path: %S, Endpoint: %S},\n"
-        (http_method_name ep.method_) ep.path handler) bound;
+      Printf.bprintf body "\t\t{Method: %s, Path: %s, Endpoint: %s},\n"
+        (go_quote (http_method_name ep.method_)) (go_quote ep.path) (go_quote handler)) bound;
     (* An SSE route is a GET whose endpoint name is the PATH: it has no handler to name it
        after, and a path is what a subscriber addresses. *)
     List.iter (fun (ep : api_endpoint) ->
-      Printf.bprintf body "\t\t{Method: \"GET\", Path: %S, Endpoint: %S},\n"
-        ep.path ("sse:" ^ ep.path)) sse_endpoints;
+      Printf.bprintf body "\t\t{Method: \"GET\", Path: %s, Endpoint: %s},\n"
+        (go_quote ep.path) (go_quote ("sse:" ^ ep.path))) sse_endpoints;
     Buffer.add_string body "\t},\n\tHandlers: map[string]teslrt.HandlerFunc{\n";
     List.iter (fun ((endpoint : api_endpoint), handler) ->
       let endpoint_loc = endpoint.loc in
@@ -11243,8 +11392,8 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
         let raw_binder =
           if parser = "intCodec" then "teslRaw" ^ suffix else local_ident name in
         Printf.bprintf body
-          "\t\t\t%s, teslFound%s := teslrt.PathParam(%S, teslRequest.URL.Path, %S)\n\t\t\tif !teslFound%s {\n\t\t\t\treturn teslrt.Fail(404, \"not found\")\n\t\t\t}\n"
-          raw_binder suffix endpoint_path name suffix;
+          "\t\t\t%s, teslFound%s := teslrt.PathParam(%s, teslRequest.URL.Path, %s)\n\t\t\tif !teslFound%s {\n\t\t\t\treturn teslrt.Fail(404, \"not found\")\n\t\t\t}\n"
+          raw_binder suffix (go_quote endpoint_path) (go_quote name) suffix;
         (* A segment that is not an integer is the CLIENT's error, not a missing route: the
            path shape matched and the value in it did not. *)
         if parser = "intCodec" then
@@ -11404,8 +11553,8 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
            | _ -> unsupported endpoint_loc
              "Go backend supports String path captures only for now");
           Printf.bprintf body
-            "\t\t\tteslSegment%s, teslFound%s := teslrt.PathParam(%S, teslRequest.URL.Path, %S)\n\t\t\tif !teslFound%s {\n\t\t\t\thttp.Error(teslWriter, \"not found\", 404)\n\t\t\t\treturn\n\t\t\t}\n"
-            suffix suffix endpoint_path name suffix;
+            "\t\t\tteslSegment%s, teslFound%s := teslrt.PathParam(%s, teslRequest.URL.Path, %s)\n\t\t\tif !teslFound%s {\n\t\t\t\thttp.Error(teslWriter, \"not found\", 404)\n\t\t\t\treturn\n\t\t\t}\n"
+            suffix suffix (go_quote endpoint_path) (go_quote name) suffix;
           (match checker with
            | None -> Printf.bprintf body "\t\t\t_ = teslSegment%s\n" suffix
            | Some check_fn ->
@@ -11431,8 +11580,8 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
             Printf.sprintf "teslrt.SseStream(%s, %s)"
               (qualified info.ch_owner info.ch_go_var) (go_quote key)
           | Some (SubscribeKeyParam param) ->
-            Printf.sprintf "teslrt.SseStreamParam(%s, %S, %S)"
-              (qualified info.ch_owner info.ch_go_var) endpoint_path param
+            Printf.sprintf "teslrt.SseStreamParam(%s, %s, %s)"
+              (qualified info.ch_owner info.ch_go_var) (go_quote endpoint_path) (go_quote param)
           (* No key argument: every connection lands on the one key the declaration has,
              which is the empty string a keyless `publish` uses. *)
           | None ->
@@ -11481,14 +11630,14 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
         let field name value =
           Printf.bprintf body "\t\t\t%-13s %s,\n" (name ^ ":") value in
         Buffer.add_string body "\t\t{\n";
-        field "Segment" (Printf.sprintf "%S" segment);
+        field "Segment" (go_quote segment);
         field "Connection" (resolve connection_fn "connection");
         field "OnIdentity" (resolve on_identity_fn "onIdentity");
         field "SessionKey"
           (Printf.sprintf "func() teslrt.Secret { return teslrt.RequireSecret(%s) }"
              (go_quote session_key_env));
         field "PublicOrigin" public_origin;
-        field "AfterLogin" (Printf.sprintf "%S" after_login);
+        field "AfterLogin" (go_quote after_login);
         Buffer.add_string body "\t\t},\n")
         server.sso_clauses;
       Buffer.add_string body "\t},\n"
@@ -11801,9 +11950,10 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
                 name (go_type ty) indent (debug_value_expr (local_ident name) name) indent)
       in
       Printf.bprintf body
-        "%steslrt.Checkpoint(teslrt.DebugFrame{Version: teslrt.DebugABIVersion, ID: %S, Function: %S, Test: %S, Location: teslrt.SourceLocation{File: %S, Line: %d, Column: %d}, Locals: []teslrt.DebugLocal{%s}})\n"
-        indent (debug_checkpoint_id package function_name loc) function_name description
-        loc.file (loc.start.line + 1) (loc.start.col + 1) (String.concat ", " locals)
+        "%steslrt.Checkpoint(teslrt.DebugFrame{Version: teslrt.DebugABIVersion, ID: %s, Function: %s, Test: %s, Location: teslrt.SourceLocation{File: %s, Line: %d, Column: %d}, Locals: []teslrt.DebugLocal{%s}})\n"
+        indent (go_quote (debug_checkpoint_id package function_name loc)) (go_quote function_name)
+        (go_quote description)
+        (go_quote loc.file) (loc.start.line + 1) (loc.start.col + 1) (String.concat ", " locals)
   in
   let rec emit_stmts env indent stmts =
     (match stmts with
@@ -11937,8 +12087,11 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
           end
       in
       Buffer.add_string body (line_directive loc);
-      Printf.bprintf body "%sif %s {\n%s\tteslT.Fatal(\"Tesl expectation failed\")\n%s}\n"
-        indent failure_condition indent indent;
+      (* The directive is repeated before the `Fatal` line: a `//line` maps the NEXT line
+         only, and `go test` reports the position of the `Fatal`, which sits one line below
+         the `if` — so without this a failing `expect` on line N was reported at N+1. *)
+      Printf.bprintf body "%sif %s {\n%s%s\tteslT.Fatal(\"Tesl expectation failed\")\n%s}\n"
+        indent failure_condition (line_directive loc) indent indent;
       emit_stmts env indent rest
     | TsExpr { e; loc } :: rest ->
       ignore (type_of_expr signatures env e);
@@ -12254,15 +12407,39 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
      emit_reset ();
      if debug then
        Printf.bprintf body
-         "\tteslrt.Checkpoint(teslrt.DebugFrame{Version: teslrt.DebugABIVersion, ID: %S, Function: %S, Test: %S, Location: teslrt.SourceLocation{File: %S, Line: %d, Column: %d}})\n"
-         (debug_test_id package index test) (Printf.sprintf "TestTesl%d" index)
-         test.description test.loc.file (test.loc.start.line + 1) (test.loc.start.col + 1);
+         "\tteslrt.Checkpoint(teslrt.DebugFrame{Version: teslrt.DebugABIVersion, ID: %s, Function: %s, Test: %s, Location: teslrt.SourceLocation{File: %s, Line: %d, Column: %d}})\n"
+         (go_quote (debug_test_id package index test)) (go_quote (Printf.sprintf "TestTesl%d" index))
+         (go_quote test.description) (go_quote test.loc.file) (test.loc.start.line + 1) (test.loc.start.col + 1);
      active_debug_test := Some (Printf.sprintf "TestTesl%d" index, test.description);
+     (* A trap in a test body is a Go panic, and an unrecovered panic aborts the WHOLE test
+        binary — every later block in the file goes unrun.  It is reported as this block's
+        failure instead.  `expectFail` is unaffected: its own recover sits closer. *)
+     Buffer.add_string body
+       "\tdefer func() {\n\t\tif teslTrap := recover(); teslTrap != nil {\n\t\t\tteslT.Fatalf(\"Tesl test trapped: %v\", teslTrap)\n\t\t}\n\t}()\n";
      (match bound with
       | None -> emit_stmts [] "\t" test.stmts
       | Some database ->
        Printf.bprintf body "\tteslrt.WithDatabase(%s, func() {\n"
          (qualified database.db_owner database.db_go_var);
+       (* Isolation on the SERVER too: `teslResetTestState` truncated only the in-memory
+          table, so two `with database D` blocks inserting the same key collided on the real
+          database and rows outlived the test run.  Each of D's entities is truncated on the
+          server before the block runs. *)
+       (match !current_types with
+        | Some types ->
+          Hashtbl.to_seq_values types.entities
+          |> List.of_seq
+          |> List.filter (fun (info : entity_info) ->
+               match info.ent_database with
+               | Some db -> db.db_go_var = database.db_go_var && db.db_owner = database.db_owner
+               | None -> false)
+          |> List.sort (fun (a : entity_info) (b : entity_info) ->
+               compare a.ent_table_var b.ent_table_var)
+          |> List.iter (fun (info : entity_info) ->
+               Printf.bprintf body "\t\tteslrt.DbTruncate(%s, %s, %s)\n"
+                 (qualified database.db_owner database.db_go_var)
+                 (sql_table_ref info) (go_quote info.ent_table_name))
+        | None -> ());
        emit_stmts [] "\t\t" test.stmts;
        Buffer.add_string body "\t})\n");
      active_debug_test := None;
@@ -12284,11 +12461,14 @@ let test_source ?(debug=false) ?(imported_packages=[]) ?(api_tests=[]) ?(load_te
         "\tif teslWanted := os.Getenv(\"TESL_TEST_NAME\"); teslWanted != \"\" && teslWanted != %s && teslWanted != %s {\n\t\tteslT.Skip(\"named test filter\")\n\t}\n\tif teslKind := os.Getenv(\"TESL_TEST_KIND\"); teslKind != \"\" && teslKind != \"api-test\" {\n\t\tteslT.Skip(\"test kind filter\")\n\t}\n"
         (go_quote api_test.description) (go_quote (Printf.sprintf "TestTeslApi%d" index));
      emit_reset ();
+     Buffer.add_string body
+       "\tdefer func() {\n\t\tif teslTrap := recover(); teslTrap != nil {\n\t\t\tteslT.Fatalf(\"Tesl test trapped: %v\", teslTrap)\n\t\t}\n\t}()\n";
      if debug then
        Printf.bprintf body
-         "\tteslrt.Checkpoint(teslrt.DebugFrame{Version: teslrt.DebugABIVersion, ID: %S, Function: %S, Test: %S, Location: teslrt.SourceLocation{File: %S, Line: %d, Column: %d}})\n"
-         (debug_checkpoint_id package (Printf.sprintf "TestTeslApi%d" index) api_test.loc)
-         (Printf.sprintf "TestTeslApi%d" index) api_test.description api_test.loc.file
+         "\tteslrt.Checkpoint(teslrt.DebugFrame{Version: teslrt.DebugABIVersion, ID: %s, Function: %s, Test: %s, Location: teslrt.SourceLocation{File: %s, Line: %d, Column: %d}})\n"
+         (go_quote (debug_checkpoint_id package (Printf.sprintf "TestTeslApi%d" index) api_test.loc))
+         (go_quote (Printf.sprintf "TestTeslApi%d" index)) (go_quote api_test.description)
+         (go_quote api_test.loc.file)
          (api_test.loc.start.line + 1) (api_test.loc.start.col + 1);
      emit_seed api_test.loc api_test.seed_stmts;
      current_api_server := Some (go_ident ~exported:true api_test.server_name);
@@ -13172,6 +13352,9 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
            qu_worker = worker;
            qu_dead_worker = dead_worker;
            qu_max_attempts = Option.value lowered.max_attempts ~default:1;
+           qu_database = lowered.database;
+           qu_backoff = Option.value lowered.backoff ~default:"";
+           qu_initial_delay = Option.value lowered.initial_delay ~default:0;
            qu_loc = q.loc;
          } in
          Hashtbl.replace types.queues q.name info;
@@ -14419,6 +14602,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         ca_owner = package;
         ca_value = value;
         ca_default_ttl = Option.value c.default_ttl ~default:0;
+        ca_database = c.database;
         ca_loc = c.loc;
       })
       (List.filter_map (function DCache c -> Some c | _ -> None) m.decls);
@@ -14435,6 +14619,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         em_username = go_config_value e.loc e.smtp.username;
         em_password = go_config_value e.loc e.smtp.password;
         em_tls = e.smtp.tls;
+        em_database = e.database;
         em_loc = e.loc;
       })
       (List.filter_map (function DEmail e -> Some e | _ -> None) m.decls);
@@ -14458,6 +14643,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         ch_owner = package;
         ch_payload = payload;
         ch_key_params = List.length c.key_params;
+        ch_database = c.database;
         ch_loc = c.loc;
       })
       (List.filter_map (function DChannel c -> Some c | _ -> None) m.decls);
@@ -15845,8 +16031,33 @@ let compile_project ?(mode=Release) ~(entry : module_form) (modules : module_for
   (* Topological order.  A cycle cannot appear here — compile.ml rejects one before this
      point — but the counter keeps a malformed graph from looping forever rather than
      failing. *)
+  (* Two module names that FOLD to one Go package — `FooBar`/`Foobar`/`Foo_bar` all become
+     `teslmodfoobar` — used to emit two `module.go` files on one path, and the artifact dedupe
+     below kept the first: the second module's code was silently replaced by the first's, so a
+     dependency mirroring a trusted module's exposed names hijacked them with no diagnostic
+     (whitebox campaign, 2026-09-02).  Refused before anything is emitted. *)
+  let package_collisions =
+    let by_package = Hashtbl.create 16 in
+    List.iter (fun name ->
+      let package = package_name name in
+      Hashtbl.replace by_package package
+        (name :: (Option.value (Hashtbl.find_opt by_package package) ~default:[])))
+      local_names;
+    Hashtbl.fold (fun package names acc ->
+      if List.length names > 1 then (package, List.sort compare names) :: acc else acc)
+      by_package []
+  in
   let rec order done_names remaining passes =
-    if remaining = [] then Ok (List.rev done_names)
+    if package_collisions <> [] then
+      Error (List.map (fun (package, names) ->
+        { loc = Location.dummy_loc entry.source_file;
+          message = Printf.sprintf
+            "Go backend: modules %s all map to the Go package `%s` (package names keep letters \
+             and digits only, lower-cased); rename one of them so no two modules share a \
+             package — otherwise one module's code would silently replace the other's"
+            (String.concat ", " (List.map (fun n -> "`" ^ n ^ "`") names)) package })
+        package_collisions)
+    else if remaining = [] then Ok (List.rev done_names)
     else if passes = 0 then
       Error [{ loc = Location.dummy_loc entry.source_file;
                message = "Go backend could not order the module graph" }]

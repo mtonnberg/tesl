@@ -213,3 +213,67 @@
  (names test_go_runtime_gates)
  (modules test_go_runtime_gates)
  (libraries tesl_compiler_lib alcotest unix))
+
+; Embedded Go runtime seam test (review 2026-09-02, H8): the runtime the compiler bakes into
+; every emitted module (compiler/lib/embedded_go_runtime.ml) must be byte-identical to
+; runtime/go/teslrt, and every non-test runtime file must be embedded.  CI phase 2a tests the
+; source tree; users receive the embedded copy — four files were once missing from the dune
+; rule's deps, so a fix there would have passed CI and not shipped.
+;   dune exec test/test_embedded_go_runtime_seam.exe
+(tests
+ (names test_embedded_go_runtime_seam)
+ (modules test_embedded_go_runtime_seam)
+ (libraries tesl_compiler_lib alcotest unix))
+
+; `inList`/`notInList` need a list literal (review 2026-09-02, H1): a non-literal member list
+; used to compile to a CONSTANT predicate on both backends.  Pins the checker rule and the
+; fail-closed Sql_query parser.
+;   dune exec test/test_sql_list_membership.exe
+(tests
+ (names test_sql_list_membership)
+ (modules test_sql_list_membership)
+ (deps ../bin/main.exe)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+; Route shadowing (review 2026-09-02, M4): a `:param` route declared before a literal route at
+; the same position made the literal one unreachable with no diagnostic.
+;   dune exec test/test_route_shadowing.exe
+(tests
+ (names test_route_shadowing)
+ (modules test_route_shadowing)
+ (deps ../bin/main.exe)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+; `via` coverage compares proof ARGUMENTS (whitebox campaign 2026-09-02): a check establishing
+; `P u "guest"` must not satisfy a boundary declared `P user "admin"`.
+;   dune exec test/test_via_proof_arguments.exe
+(tests
+ (names test_via_proof_arguments)
+ (modules test_via_proof_arguments)
+ (deps ../bin/main.exe)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+; SQL parity rules from the whitebox campaign (2026-09-02): null-safe Maybe equality and the
+; query-binder shadowing refusal.
+;   dune exec test/test_sql_maybe_equality.exe
+(tests
+ (names test_sql_maybe_equality)
+ (modules test_sql_maybe_equality)
+ (deps ../bin/main.exe)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+; Folded Go package-name collisions are refused (whitebox campaign 2026-09-02): `FooBar` and
+; `Foobar` both became `teslmodfoobar` and one module's code silently replaced the other's.
+;   dune exec test/test_package_collision.exe
+(tests
+ (names test_package_collision)
+ (modules test_package_collision)
+ (libraries tesl_compiler_lib alcotest str unix))
+
+; Durable stores (2026-09-02): Postgres-backed queue/email/cache/sseChannel declarations are
+; emitted through the database-bound constructors, with registered job codecs.
+;   dune exec test/test_durable_stores.exe
+(tests
+ (names test_durable_stores)
+ (modules test_durable_stores)
+ (libraries tesl_compiler_lib alcotest str unix))

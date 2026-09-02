@@ -1312,9 +1312,15 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft1 := dayNumOf(teslrt.FromInt64(1970), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1))
 //line civil-time-tests.tesl:76
 	if !teslrt.Equal(teslLeft1, teslrt.FromInt64(0)) {
+//line civil-time-tests.tesl:76
 		teslT.Fatal("Tesl expectation failed")
 	}
 	{
@@ -1324,16 +1330,19 @@ func TestTesl0(teslT *testing.T) {
 		teslLeft2 := teslmodciviltime.Year(d)
 //line civil-time-tests.tesl:78
 		if !teslrt.Equal(teslLeft2, teslrt.FromInt64(1970)) {
+//line civil-time-tests.tesl:78
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft3 := teslmodciviltime.MonthNumber(teslmodciviltime.Month_(d))
 //line civil-time-tests.tesl:79
 		if !teslrt.Equal(teslLeft3, teslrt.FromInt64(1)) {
+//line civil-time-tests.tesl:79
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft4 := teslmodciviltime.Day(d)
 //line civil-time-tests.tesl:80
 		if !teslrt.Equal(teslLeft4, teslrt.FromInt64(1)) {
+//line civil-time-tests.tesl:80
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1346,9 +1355,15 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft5 := dayNumOf(teslrt.FromInt64(2021), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1))
 //line civil-time-tests.tesl:84
 	if !teslrt.Equal(teslLeft5, teslrt.FromInt64(18628)) {
+//line civil-time-tests.tesl:84
 		teslT.Fatal("Tesl expectation failed")
 	}
 	{
@@ -1358,16 +1373,19 @@ func TestTesl1(teslT *testing.T) {
 		teslLeft6 := teslmodciviltime.Year(d)
 //line civil-time-tests.tesl:86
 		if !teslrt.Equal(teslLeft6, teslrt.FromInt64(2021)) {
+//line civil-time-tests.tesl:86
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft7 := teslmodciviltime.MonthNumber(teslmodciviltime.Month_(d))
 //line civil-time-tests.tesl:87
 		if !teslrt.Equal(teslLeft7, teslrt.FromInt64(1)) {
+//line civil-time-tests.tesl:87
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft8 := teslmodciviltime.Day(d)
 //line civil-time-tests.tesl:88
 		if !teslrt.Equal(teslLeft8, teslrt.FromInt64(1)) {
+//line civil-time-tests.tesl:88
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -1377,16 +1395,19 @@ func TestTesl1(teslT *testing.T) {
 			teslLeft9 := teslmodciviltime.Year(e)
 //line civil-time-tests.tesl:90
 			if !teslrt.Equal(teslLeft9, teslrt.FromInt64(2023)) {
+//line civil-time-tests.tesl:90
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft10 := teslmodciviltime.MonthNumber(teslmodciviltime.Month_(e))
 //line civil-time-tests.tesl:91
 			if !teslrt.Equal(teslLeft10, teslrt.FromInt64(11)) {
+//line civil-time-tests.tesl:91
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft11 := teslmodciviltime.Day(e)
 //line civil-time-tests.tesl:92
 			if !teslrt.Equal(teslLeft11, teslrt.FromInt64(14)) {
+//line civil-time-tests.tesl:92
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -1400,10 +1421,16 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft12 := dayNumOf(teslrt.FromInt64(1900), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1))
 	teslRight12 := teslrt.Sub(teslrt.FromInt64(0), teslrt.FromInt64(25567))
 //line civil-time-tests.tesl:96
 	if !teslrt.Equal(teslLeft12, teslRight12) {
+//line civil-time-tests.tesl:96
 		teslT.Fatal("Tesl expectation failed")
 	}
 	{
@@ -1413,21 +1440,25 @@ func TestTesl2(teslT *testing.T) {
 		teslLeft13 := teslmodciviltime.Year(d)
 //line civil-time-tests.tesl:98
 		if !teslrt.Equal(teslLeft13, teslrt.FromInt64(1900)) {
+//line civil-time-tests.tesl:98
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft14 := teslmodciviltime.MonthNumber(teslmodciviltime.Month_(d))
 //line civil-time-tests.tesl:99
 		if !teslrt.Equal(teslLeft14, teslrt.FromInt64(1)) {
+//line civil-time-tests.tesl:99
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft15 := teslmodciviltime.Day(d)
 //line civil-time-tests.tesl:100
 		if !teslrt.Equal(teslLeft15, teslrt.FromInt64(1)) {
+//line civil-time-tests.tesl:100
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft16 := isoOf(teslrt.FromInt64(1900), teslmodciviltime.Month{Tag: teslmodciviltime.MonthFebruary}, teslrt.FromInt64(28))
 //line civil-time-tests.tesl:101
 		if teslLeft16 != "1900-02-28" {
+//line civil-time-tests.tesl:101
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1440,6 +1471,11 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line civil-time-tests.tesl:105
 		feb29 := dateOf(teslrt.FromInt64(2020), teslmodciviltime.Month{Tag: teslmodciviltime.MonthFebruary}, teslrt.FromInt64(29))
@@ -1447,11 +1483,13 @@ func TestTesl3(teslT *testing.T) {
 		teslLeft17 := teslmodciviltime.MonthNumber(teslmodciviltime.Month_(feb29))
 //line civil-time-tests.tesl:106
 		if !teslrt.Equal(teslLeft17, teslrt.FromInt64(2)) {
+//line civil-time-tests.tesl:106
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft18 := teslmodciviltime.Day(feb29)
 //line civil-time-tests.tesl:107
 		if !teslrt.Equal(teslLeft18, teslrt.FromInt64(29)) {
+//line civil-time-tests.tesl:107
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -1461,11 +1499,13 @@ func TestTesl3(teslT *testing.T) {
 			teslLeft19 := teslmodciviltime.MonthNumber(teslmodciviltime.Month_(next))
 //line civil-time-tests.tesl:109
 			if !teslrt.Equal(teslLeft19, teslrt.FromInt64(3)) {
+//line civil-time-tests.tesl:109
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft20 := teslmodciviltime.Day(next)
 //line civil-time-tests.tesl:110
 			if !teslrt.Equal(teslLeft20, teslrt.FromInt64(1)) {
+//line civil-time-tests.tesl:110
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -1479,40 +1519,53 @@ func TestTesl4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line civil-time-tests.tesl:114
 	if teslmodciviltime.IsLeapYear(teslrt.FromInt64(1900)) {
+//line civil-time-tests.tesl:114
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line civil-time-tests.tesl:115
 	if !(teslmodciviltime.IsLeapYear(teslrt.FromInt64(2000))) {
+//line civil-time-tests.tesl:115
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line civil-time-tests.tesl:116
 	if !(teslmodciviltime.IsLeapYear(teslrt.FromInt64(2024))) {
+//line civil-time-tests.tesl:116
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line civil-time-tests.tesl:117
 	if teslmodciviltime.IsLeapYear(teslrt.FromInt64(2026)) {
+//line civil-time-tests.tesl:117
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft21 := teslrt.Sub(dayNumOf(teslrt.FromInt64(1900), teslmodciviltime.Month{Tag: teslmodciviltime.MonthMarch}, teslrt.FromInt64(1)), dayNumOf(teslrt.FromInt64(1900), teslmodciviltime.Month{Tag: teslmodciviltime.MonthFebruary}, teslrt.FromInt64(28)))
 //line civil-time-tests.tesl:118
 	if !teslrt.Equal(teslLeft21, teslrt.FromInt64(1)) {
+//line civil-time-tests.tesl:118
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft22 := teslrt.Sub(dayNumOf(teslrt.FromInt64(2000), teslmodciviltime.Month{Tag: teslmodciviltime.MonthMarch}, teslrt.FromInt64(1)), dayNumOf(teslrt.FromInt64(2000), teslmodciviltime.Month{Tag: teslmodciviltime.MonthFebruary}, teslrt.FromInt64(29)))
 //line civil-time-tests.tesl:119
 	if !teslrt.Equal(teslLeft22, teslrt.FromInt64(1)) {
+//line civil-time-tests.tesl:119
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft23 := teslmodciviltime.DaysInMonth(teslrt.FromInt64(1900), teslmodciviltime.Month{Tag: teslmodciviltime.MonthFebruary})
 //line civil-time-tests.tesl:120
 	if !teslrt.Equal(teslLeft23, teslrt.FromInt64(28)) {
+//line civil-time-tests.tesl:120
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft24 := teslmodciviltime.DaysInMonth(teslrt.FromInt64(2000), teslmodciviltime.Month{Tag: teslmodciviltime.MonthFebruary})
 //line civil-time-tests.tesl:121
 	if !teslrt.Equal(teslLeft24, teslrt.FromInt64(29)) {
+//line civil-time-tests.tesl:121
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -1524,29 +1577,39 @@ func TestTesl5(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft25 := teslrt.Sub(dayNumOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthFebruary}, teslrt.FromInt64(1)), dayNumOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1)))
 //line civil-time-tests.tesl:125
 	if !teslrt.Equal(teslLeft25, teslrt.FromInt64(31)) {
+//line civil-time-tests.tesl:125
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft26 := teslrt.Sub(dayNumOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthMarch}, teslrt.FromInt64(1)), dayNumOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthFebruary}, teslrt.FromInt64(1)))
 //line civil-time-tests.tesl:126
 	if !teslrt.Equal(teslLeft26, teslrt.FromInt64(28)) {
+//line civil-time-tests.tesl:126
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft27 := teslrt.Sub(dayNumOf(teslrt.FromInt64(2027), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1)), dayNumOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthDecember}, teslrt.FromInt64(1)))
 //line civil-time-tests.tesl:127
 	if !teslrt.Equal(teslLeft27, teslrt.FromInt64(31)) {
+//line civil-time-tests.tesl:127
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft28 := teslrt.Sub(dayNumOf(teslrt.FromInt64(2027), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1)), dayNumOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1)))
 //line civil-time-tests.tesl:128
 	if !teslrt.Equal(teslLeft28, teslrt.FromInt64(365)) {
+//line civil-time-tests.tesl:128
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft29 := teslrt.Sub(dayNumOf(teslrt.FromInt64(2021), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1)), dayNumOf(teslrt.FromInt64(2020), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1)))
 //line civil-time-tests.tesl:129
 	if !teslrt.Equal(teslLeft29, teslrt.FromInt64(366)) {
+//line civil-time-tests.tesl:129
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -1558,6 +1621,11 @@ func TestTesl6(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line civil-time-tests.tesl:133
 	{
 		teslScrut1 := teslmodciviltime.FromParts(teslrt.UtcZone(), teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthFebruary}, teslrt.FromInt64(30))
@@ -1567,6 +1635,7 @@ func TestTesl6(teslT *testing.T) {
 			teslRight30 := true
 //line civil-time-tests.tesl:134
 			if teslLeft30 != teslRight30 {
+//line civil-time-tests.tesl:134
 				teslT.Fatal("Tesl expectation failed")
 			}
 		case teslrt.MaybeNothing:
@@ -1574,6 +1643,7 @@ func TestTesl6(teslT *testing.T) {
 			teslRight31 := true
 //line civil-time-tests.tesl:135
 			if teslLeft31 != teslRight31 {
+//line civil-time-tests.tesl:135
 				teslT.Fatal("Tesl expectation failed")
 			}
 		default:
@@ -1589,6 +1659,7 @@ func TestTesl6(teslT *testing.T) {
 			teslRight32 := true
 //line civil-time-tests.tesl:137
 			if teslLeft32 != teslRight32 {
+//line civil-time-tests.tesl:137
 				teslT.Fatal("Tesl expectation failed")
 			}
 		case teslrt.MaybeNothing:
@@ -1596,6 +1667,7 @@ func TestTesl6(teslT *testing.T) {
 			teslRight33 := true
 //line civil-time-tests.tesl:138
 			if teslLeft33 != teslRight33 {
+//line civil-time-tests.tesl:138
 				teslT.Fatal("Tesl expectation failed")
 			}
 		default:
@@ -1611,6 +1683,7 @@ func TestTesl6(teslT *testing.T) {
 			teslRight34 := true
 //line civil-time-tests.tesl:140
 			if teslLeft34 != teslRight34 {
+//line civil-time-tests.tesl:140
 				teslT.Fatal("Tesl expectation failed")
 			}
 		case teslrt.MaybeNothing:
@@ -1618,6 +1691,7 @@ func TestTesl6(teslT *testing.T) {
 			teslRight35 := true
 //line civil-time-tests.tesl:141
 			if teslLeft35 != teslRight35 {
+//line civil-time-tests.tesl:141
 				teslT.Fatal("Tesl expectation failed")
 			}
 		default:
@@ -1633,29 +1707,39 @@ func TestTesl7(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft36 := teslmodciviltime.WeekdayNumber(teslmodciviltime.Weekday_(dateOf(teslrt.FromInt64(1970), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1))))
 //line civil-time-tests.tesl:145
 	if !teslrt.Equal(teslLeft36, teslrt.FromInt64(4)) {
+//line civil-time-tests.tesl:145
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft37 := teslmodciviltime.WeekdayNumber(teslmodciviltime.Weekday_(dateOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthAugust}, teslrt.FromInt64(5))))
 //line civil-time-tests.tesl:146
 	if !teslrt.Equal(teslLeft37, teslrt.FromInt64(3)) {
+//line civil-time-tests.tesl:146
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft38 := teslmodciviltime.DayOfYear(dateOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthDecember}, teslrt.FromInt64(31)))
 //line civil-time-tests.tesl:147
 	if !teslrt.Equal(teslLeft38, teslrt.FromInt64(365)) {
+//line civil-time-tests.tesl:147
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft39 := teslmodciviltime.DayOfYear(dateOf(teslrt.FromInt64(2024), teslmodciviltime.Month{Tag: teslmodciviltime.MonthDecember}, teslrt.FromInt64(31)))
 //line civil-time-tests.tesl:148
 	if !teslrt.Equal(teslLeft39, teslrt.FromInt64(366)) {
+//line civil-time-tests.tesl:148
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft40 := teslmodciviltime.DayOfYear(dateOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1)))
 //line civil-time-tests.tesl:149
 	if !teslrt.Equal(teslLeft40, teslrt.FromInt64(1)) {
+//line civil-time-tests.tesl:149
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -1667,59 +1751,75 @@ func TestTesl8(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft41 := weekLabelOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthAugust}, teslrt.FromInt64(5))
 //line civil-time-tests.tesl:155
 	if teslLeft41 != "2026-W32" {
+//line civil-time-tests.tesl:155
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft42 := weekLabelOf(teslrt.FromInt64(2027), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1))
 //line civil-time-tests.tesl:156
 	if teslLeft42 != "2026-W53" {
+//line civil-time-tests.tesl:156
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft43 := weekLabelOf(teslrt.FromInt64(2021), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1))
 //line civil-time-tests.tesl:157
 	if teslLeft43 != "2020-W53" {
+//line civil-time-tests.tesl:157
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft44 := weekLabelOf(teslrt.FromInt64(2020), teslmodciviltime.Month{Tag: teslmodciviltime.MonthDecember}, teslrt.FromInt64(31))
 //line civil-time-tests.tesl:158
 	if teslLeft44 != "2020-W53" {
+//line civil-time-tests.tesl:158
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft45 := weekLabelOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1))
 //line civil-time-tests.tesl:159
 	if teslLeft45 != "2026-W01" {
+//line civil-time-tests.tesl:159
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft46 := weekLabelOf(teslrt.FromInt64(2024), teslmodciviltime.Month{Tag: teslmodciviltime.MonthDecember}, teslrt.FromInt64(30))
 //line civil-time-tests.tesl:160
 	if teslLeft46 != "2025-W01" {
+//line civil-time-tests.tesl:160
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft47 := weekLabelOf(teslrt.FromInt64(2004), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1))
 //line civil-time-tests.tesl:161
 	if teslLeft47 != "2004-W01" {
+//line civil-time-tests.tesl:161
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft48 := weekLabelOf(teslrt.FromInt64(2005), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1))
 //line civil-time-tests.tesl:162
 	if teslLeft48 != "2004-W53" {
+//line civil-time-tests.tesl:162
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft49 := weekLabelOf(teslrt.FromInt64(2005), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(3))
 //line civil-time-tests.tesl:163
 	if teslLeft49 != "2005-W01" {
+//line civil-time-tests.tesl:163
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft50 := weekLabelOf(teslrt.FromInt64(2006), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1))
 //line civil-time-tests.tesl:164
 	if teslLeft50 != "2005-W52" {
+//line civil-time-tests.tesl:164
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft51 := weekLabelOf(teslrt.FromInt64(2007), teslmodciviltime.Month{Tag: teslmodciviltime.MonthDecember}, teslrt.FromInt64(31))
 //line civil-time-tests.tesl:165
 	if teslLeft51 != "2008-W01" {
+//line civil-time-tests.tesl:165
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -1731,6 +1831,11 @@ func TestTesl9(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line civil-time-tests.tesl:169
 		w := teslmodciviltime.IsoWeekOf(dateOf(teslrt.FromInt64(2027), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1)))
@@ -1738,16 +1843,19 @@ func TestTesl9(teslT *testing.T) {
 		teslLeft52 := teslmodciviltime.WeekYear(w)
 //line civil-time-tests.tesl:170
 		if !teslrt.Equal(teslLeft52, teslrt.FromInt64(2026)) {
+//line civil-time-tests.tesl:170
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft53 := teslmodciviltime.WeekNumber(w)
 //line civil-time-tests.tesl:171
 		if !teslrt.Equal(teslLeft53, teslrt.FromInt64(53)) {
+//line civil-time-tests.tesl:171
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft54 := teslmodciviltime.Year(dateOf(teslrt.FromInt64(2027), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1)))
 //line civil-time-tests.tesl:172
 		if !teslrt.Equal(teslLeft54, teslrt.FromInt64(2027)) {
+//line civil-time-tests.tesl:172
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1760,6 +1868,11 @@ func TestTesl10(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line civil-time-tests.tesl:176
 		jan31 := dateOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(31))
@@ -1767,26 +1880,31 @@ func TestTesl10(teslT *testing.T) {
 		teslLeft55 := teslmodciviltime.ToIso(teslmodciviltime.AddMonths(jan31, teslrt.FromInt64(1)))
 //line civil-time-tests.tesl:177
 		if teslLeft55 != "2026-02-28" {
+//line civil-time-tests.tesl:177
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft56 := teslmodciviltime.ToIso(teslmodciviltime.AddMonths(dateOf(teslrt.FromInt64(2024), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(31)), teslrt.FromInt64(1)))
 //line civil-time-tests.tesl:178
 		if teslLeft56 != "2024-02-29" {
+//line civil-time-tests.tesl:178
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft57 := teslmodciviltime.ToIso(teslmodciviltime.AddMonths(jan31, teslrt.FromInt64(12)))
 //line civil-time-tests.tesl:179
 		if teslLeft57 != "2027-01-31" {
+//line civil-time-tests.tesl:179
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft58 := teslmodciviltime.ToIso(teslmodciviltime.AddMonths(jan31, teslrt.Sub(teslrt.FromInt64(0), teslrt.FromInt64(1))))
 //line civil-time-tests.tesl:180
 		if teslLeft58 != "2025-12-31" {
+//line civil-time-tests.tesl:180
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft59 := teslmodciviltime.ToIso(teslmodciviltime.AddMonths(dateOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthMarch}, teslrt.FromInt64(15)), teslrt.FromInt64(0)))
 //line civil-time-tests.tesl:181
 		if teslLeft59 != "2026-03-15" {
+//line civil-time-tests.tesl:181
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1799,29 +1917,39 @@ func TestTesl11(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft60 := teslmodciviltime.ToIso(teslmodciviltime.StartOfMonth(dateOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthAugust}, teslrt.FromInt64(5))))
 //line civil-time-tests.tesl:185
 	if teslLeft60 != "2026-08-01" {
+//line civil-time-tests.tesl:185
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft61 := teslmodciviltime.ToIso(teslmodciviltime.EndOfMonth(dateOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthFebruary}, teslrt.FromInt64(5))))
 //line civil-time-tests.tesl:186
 	if teslLeft61 != "2026-02-28" {
+//line civil-time-tests.tesl:186
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft62 := teslmodciviltime.ToIso(teslmodciviltime.EndOfMonth(dateOf(teslrt.FromInt64(2024), teslmodciviltime.Month{Tag: teslmodciviltime.MonthFebruary}, teslrt.FromInt64(5))))
 //line civil-time-tests.tesl:187
 	if teslLeft62 != "2024-02-29" {
+//line civil-time-tests.tesl:187
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft63 := teslmodciviltime.ToIso(teslmodciviltime.StartOfWeek(dateOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthAugust}, teslrt.FromInt64(5))))
 //line civil-time-tests.tesl:188
 	if teslLeft63 != "2026-08-03" {
+//line civil-time-tests.tesl:188
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft64 := teslmodciviltime.ToIso(teslmodciviltime.StartOfWeek(dateOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthAugust}, teslrt.FromInt64(3))))
 //line civil-time-tests.tesl:189
 	if teslLeft64 != "2026-08-03" {
+//line civil-time-tests.tesl:189
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -1833,6 +1961,11 @@ func TestTesl12(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line civil-time-tests.tesl:193
 		a := dateOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthAugust}, teslrt.FromInt64(1))
@@ -1848,6 +1981,7 @@ func TestTesl12(teslT *testing.T) {
 				teslLeft65 := teslrt.ListLength(teslmodciviltime.DatesBetween(a, bb))
 //line civil-time-tests.tesl:196
 				if !teslrt.Equal(teslLeft65, teslrt.FromInt64(3)) {
+//line civil-time-tests.tesl:196
 					teslT.Fatal("Tesl expectation failed")
 				}
 				teslLeft66 := (func() []string {
@@ -1861,6 +1995,7 @@ func TestTesl12(teslT *testing.T) {
 				teslRight66 := []string{"2026-08-01", "2026-08-02", "2026-08-03"}
 //line civil-time-tests.tesl:197
 				if !teslrt.ListEqualBy(teslLeft66, teslRight66, teslEqualString) {
+//line civil-time-tests.tesl:197
 					teslT.Fatal("Tesl expectation failed")
 				}
 				{
@@ -1870,6 +2005,7 @@ func TestTesl12(teslT *testing.T) {
 					teslLeft67 := teslrt.ListLength(teslmodciviltime.DatesBetween(a, same))
 //line civil-time-tests.tesl:199
 					if !teslrt.Equal(teslLeft67, teslrt.FromInt64(0)) {
+//line civil-time-tests.tesl:199
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -1885,6 +2021,11 @@ func TestTesl13(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line civil-time-tests.tesl:203
 		a := dateOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthAugust}, teslrt.FromInt64(1))
@@ -1904,12 +2045,14 @@ func TestTesl13(teslT *testing.T) {
 					teslLeft68 := teslmodciviltime.DiffDays(b, aa)
 //line civil-time-tests.tesl:207
 					if !teslrt.Equal(teslLeft68, teslrt.FromInt64(30)) {
+//line civil-time-tests.tesl:207
 						teslT.Fatal("Tesl expectation failed")
 					}
 					teslLeft69 := teslmodciviltime.DiffDays(a, bb)
 					teslRight69 := teslrt.Sub(teslrt.FromInt64(0), teslrt.FromInt64(30))
 //line civil-time-tests.tesl:208
 					if !teslrt.Equal(teslLeft69, teslRight69) {
+//line civil-time-tests.tesl:208
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -1925,14 +2068,21 @@ func TestTesl14(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft70 := isoOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthAugust}, teslrt.FromInt64(5))
 //line civil-time-tests.tesl:212
 	if teslLeft70 != "2026-08-05" {
+//line civil-time-tests.tesl:212
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft71 := isoOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthJanuary}, teslrt.FromInt64(1))
 //line civil-time-tests.tesl:213
 	if teslLeft71 != "2026-01-01" {
+//line civil-time-tests.tesl:213
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line civil-time-tests.tesl:214
@@ -1945,6 +2095,7 @@ func TestTesl14(teslT *testing.T) {
 			teslLeft72 := teslmodciviltime.ToIso(d)
 //line civil-time-tests.tesl:215
 			if teslLeft72 != "2026-08-05" {
+//line civil-time-tests.tesl:215
 				teslT.Fatal("Tesl expectation failed")
 			}
 		case teslrt.MaybeNothing:
@@ -1952,6 +2103,7 @@ func TestTesl14(teslT *testing.T) {
 			teslRight73 := true
 //line civil-time-tests.tesl:216
 			if teslLeft73 != teslRight73 {
+//line civil-time-tests.tesl:216
 				teslT.Fatal("Tesl expectation failed")
 			}
 		default:
@@ -1967,6 +2119,7 @@ func TestTesl14(teslT *testing.T) {
 			teslRight74 := true
 //line civil-time-tests.tesl:218
 			if teslLeft74 != teslRight74 {
+//line civil-time-tests.tesl:218
 				teslT.Fatal("Tesl expectation failed")
 			}
 		case teslrt.MaybeNothing:
@@ -1974,6 +2127,7 @@ func TestTesl14(teslT *testing.T) {
 			teslRight75 := true
 //line civil-time-tests.tesl:219
 			if teslLeft75 != teslRight75 {
+//line civil-time-tests.tesl:219
 				teslT.Fatal("Tesl expectation failed")
 			}
 		default:
@@ -1989,6 +2143,7 @@ func TestTesl14(teslT *testing.T) {
 			teslRight76 := true
 //line civil-time-tests.tesl:221
 			if teslLeft76 != teslRight76 {
+//line civil-time-tests.tesl:221
 				teslT.Fatal("Tesl expectation failed")
 			}
 		case teslrt.MaybeNothing:
@@ -1996,6 +2151,7 @@ func TestTesl14(teslT *testing.T) {
 			teslRight77 := true
 //line civil-time-tests.tesl:222
 			if teslLeft77 != teslRight77 {
+//line civil-time-tests.tesl:222
 				teslT.Fatal("Tesl expectation failed")
 			}
 		default:
@@ -2011,6 +2167,7 @@ func TestTesl14(teslT *testing.T) {
 			teslRight78 := true
 //line civil-time-tests.tesl:224
 			if teslLeft78 != teslRight78 {
+//line civil-time-tests.tesl:224
 				teslT.Fatal("Tesl expectation failed")
 			}
 		case teslrt.MaybeNothing:
@@ -2018,6 +2175,7 @@ func TestTesl14(teslT *testing.T) {
 			teslRight79 := true
 //line civil-time-tests.tesl:225
 			if teslLeft79 != teslRight79 {
+//line civil-time-tests.tesl:225
 				teslT.Fatal("Tesl expectation failed")
 			}
 		default:
@@ -2033,6 +2191,11 @@ func TestTesl15(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line civil-time-tests.tesl:230
 		d := dateOf(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthAugust}, teslrt.FromInt64(5))
@@ -2044,6 +2207,7 @@ func TestTesl15(teslT *testing.T) {
 			teslLeft80 := needsDayOfMonth(dd)
 //line civil-time-tests.tesl:232
 			if !teslrt.Equal(teslLeft80, teslrt.FromInt64(5)) {
+//line civil-time-tests.tesl:232
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -2057,6 +2221,11 @@ func TestTesl16(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line civil-time-tests.tesl:237
 		ts := teslrt.SecondsToPosix(teslrt.FromInt64(1780000000))
@@ -2069,11 +2238,13 @@ func TestTesl16(teslT *testing.T) {
 			teslRight81 := teslrt.PosixToSeconds(teslrt.TimeTruncDay(teslrt.UtcZone(), ts))
 //line civil-time-tests.tesl:239
 			if !teslrt.Equal(teslLeft81, teslRight81) {
+//line civil-time-tests.tesl:239
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft82 := teslrt.Sub(teslrt.PosixToSeconds(teslmodciviltime.EndOfDay(d)), teslrt.PosixToSeconds(teslmodciviltime.StartOfDay(d)))
 //line civil-time-tests.tesl:240
 			if !teslrt.Equal(teslLeft82, teslrt.FromInt64(86400)) {
+//line civil-time-tests.tesl:240
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -2087,6 +2258,11 @@ func TestTesl17(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	for teslPropRun1 := 0; teslPropRun1 < 200; teslPropRun1++ {
 //line civil-time-tests.tesl:244
 		n := teslrt.PropInt()
@@ -2106,6 +2282,11 @@ func TestTesl18(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	for teslPropRun1 := 0; teslPropRun1 < 200; teslPropRun1++ {
 //line civil-time-tests.tesl:250
 		n := teslrt.PropInt()
@@ -2125,6 +2306,11 @@ func TestTesl19(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	for teslPropRun1 := 0; teslPropRun1 < 200; teslPropRun1++ {
 //line civil-time-tests.tesl:261
 		n := teslrt.PropInt()
@@ -2144,6 +2330,11 @@ func TestTesl20(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	for teslPropRun1 := 0; teslPropRun1 < 200; teslPropRun1++ {
 //line civil-time-tests.tesl:275
 		k := teslrt.PropInt()
@@ -2163,22 +2354,30 @@ func TestTesl21(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft83 := dayLengthSeconds(stockholmDay(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthMarch}, teslrt.FromInt64(29)))
 	teslRight83 := teslrt.Mul(teslrt.FromInt64(23), teslrt.FromInt64(3600))
 //line civil-time-tests.tesl:300
 	if !teslrt.Equal(teslLeft83, teslRight83) {
+//line civil-time-tests.tesl:300
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft84 := dayLengthSeconds(stockholmDay(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthOctober}, teslrt.FromInt64(25)))
 	teslRight84 := teslrt.Mul(teslrt.FromInt64(25), teslrt.FromInt64(3600))
 //line civil-time-tests.tesl:301
 	if !teslrt.Equal(teslLeft84, teslRight84) {
+//line civil-time-tests.tesl:301
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft85 := dayLengthSeconds(stockholmDay(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthAugust}, teslrt.FromInt64(5)))
 	teslRight85 := teslrt.Mul(teslrt.FromInt64(24), teslrt.FromInt64(3600))
 //line civil-time-tests.tesl:302
 	if !teslrt.Equal(teslLeft85, teslRight85) {
+//line civil-time-tests.tesl:302
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -2190,6 +2389,11 @@ func TestTesl22(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line civil-time-tests.tesl:309
 		noonAfterSpringForward := teslrt.AddMs(teslmodciviltime.StartOfDay(stockholmDay(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthMarch}, teslrt.FromInt64(29))), teslrt.Mul(teslrt.FromInt64(14), teslrt.FromInt64(3600000)))
@@ -2201,22 +2405,26 @@ func TestTesl22(teslT *testing.T) {
 			teslLeft86 := teslmodciviltime.ToIso(d)
 //line civil-time-tests.tesl:311
 			if teslLeft86 != "2026-03-29" {
+//line civil-time-tests.tesl:311
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft87 := teslrt.PosixToSeconds(teslmodciviltime.StartOfDay(d))
 			teslRight87 := teslrt.PosixToSeconds(teslrt.TimeTruncDay(teslrt.NamedZone("Europe/Stockholm"), noonAfterSpringForward))
 //line civil-time-tests.tesl:312
 			if !teslrt.Equal(teslLeft87, teslRight87) {
+//line civil-time-tests.tesl:312
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft88 := teslrt.TimeOffsetAt(teslrt.NamedZone("Europe/Stockholm"), teslmodciviltime.StartOfDay(d))
 //line civil-time-tests.tesl:313
 			if !teslrt.Equal(teslLeft88, teslrt.FromInt64(60)) {
+//line civil-time-tests.tesl:313
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft89 := teslrt.TimeOffsetAt(teslrt.NamedZone("Europe/Stockholm"), teslmodciviltime.EndOfDay(d))
 //line civil-time-tests.tesl:314
 			if !teslrt.Equal(teslLeft89, teslrt.FromInt64(120)) {
+//line civil-time-tests.tesl:314
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -2230,6 +2438,11 @@ func TestTesl23(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line civil-time-tests.tesl:321
 		start := teslmodciviltime.StartOfDay(stockholmDay(teslrt.FromInt64(2026), teslmodciviltime.Month{Tag: teslmodciviltime.MonthMarch}, teslrt.FromInt64(29)))
@@ -2245,11 +2458,13 @@ func TestTesl23(teslT *testing.T) {
 				teslLeft90 := teslrt.Sub(teslrt.PosixToSeconds(msNextDay), teslrt.PosixToSeconds(civilNextDay))
 //line civil-time-tests.tesl:324
 				if !teslrt.Equal(teslLeft90, teslrt.FromInt64(3600)) {
+//line civil-time-tests.tesl:324
 					teslT.Fatal("Tesl expectation failed")
 				}
 				teslLeft91 := teslmodciviltime.ToIso(teslmodciviltime.FromInstant(teslrt.NamedZone("Europe/Stockholm"), civilNextDay))
 //line civil-time-tests.tesl:325
 				if teslLeft91 != "2026-03-30" {
+//line civil-time-tests.tesl:325
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -2264,6 +2479,11 @@ func TestTesl24(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line civil-time-tests.tesl:338
 		inUtc := teslmodciviltime.FromDayNumber(teslrt.UtcZone(), teslrt.FromInt64(20000))
@@ -2276,6 +2496,7 @@ func TestTesl24(teslT *testing.T) {
 			teslRight92 := teslmodciviltime.DayNumber(inStockholm)
 //line civil-time-tests.tesl:340
 			if !teslrt.Equal(teslLeft92, teslRight92) {
+//line civil-time-tests.tesl:340
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line civil-time-tests.tesl:341

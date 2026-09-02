@@ -37,6 +37,7 @@ golang.org/x/text v0.41.0/go.mod h1:jvf1O8ajNzZqhSrQBPbutR/EB83Cc0CFrezNQIwbb5M=
 package teslmodagentruntests
 
 import (
+	"errors"
 	"net/http"
 	"tesl.generated/teslmodagentruntests/internal/teslrt"
 )
@@ -85,10 +86,10 @@ func teslEqualRunEventStep(teslLeft, teslRight RunEvent) bool {
 }
 
 //line agent-run-tests.tesl:121
-var RunQueueQueue = teslrt.NewQueue("RunQueue", 1)
+var RunQueueQueue = teslrt.NewQueueOn(RunDatabaseDatabase, "RunQueue", 1, "exponential", 0)
 
 //line agent-run-tests.tesl:131
-var RunStepsChannel = teslrt.NewSseChannel("RunSteps")
+var RunStepsChannel = teslrt.NewSseChannelOn(RunDatabaseDatabase, "RunSteps")
 
 //line agent-run-tests.tesl:103
 var RunLogTable = teslrt.NewTable[RunLog]()
@@ -129,18 +130,20 @@ func startRun(req RunJob) RunLog {
 		logId := "run-1"
 		_ = logId
 //line agent-run-tests.tesl:154
-		return func() RunLog {
-			var teslCommitted RunLog
-			teslrt.WithTransaction(func() {
-				teslCommitted = (func() RunLog {
+		var teslCommitted RunLog
+		teslrt.WithTransaction(func() {
+			teslCommitted = func() RunLog {
+				{
+//line agent-run-tests.tesl:155
 					_ = teslrt.EnqueueJob(RunQueueQueue, RunJob{Prompt: req.Prompt})
+//line agent-run-tests.tesl:156
 					return teslrt.DbInsert(RunDatabaseDatabase, RunLogTable, "RunLog", RunLog{Id: logId}, func(teslRow, teslNew RunLog) bool { return (teslRow.Id == teslNew.Id) }, "insert into \"agent_run\".\"run_log\" (\"id\") values ($1)", func(teslRow RunLog) []any {
 						return []any{teslRow.Id}
 					})
-				}())
-			})
-			return teslCommitted
-		}()
+				}
+			}()
+		})
+		return teslCommitted
 	}
 }
 
@@ -227,6 +230,23 @@ func DecodeEchoArgsJSON(teslJSON any) teslrt.Check[EchoArgs] {
 	}
 	return teslrt.Reject[EchoArgs](400, "no decode alternative matched")
 }
+
+var _ = teslrt.RegisterJobCodec(RunQueueQueue, "RunJob", func(teslJob any) any {
+	return EncodeRunJobJSON(teslJob.(RunJob))
+}, func(teslJSON any) (any, error) {
+	teslDecoded, teslErr := func(teslRaw any) (RunJob, error) {
+		teslNested := DecodeRunJobJSON(teslRaw)
+		if !teslNested.OK() {
+			return RunJob{}, errors.New(teslNested.Message())
+		}
+		teslValue, _ := teslNested.Value()
+		return teslValue, nil
+	}(teslJSON)
+	if teslErr != nil {
+		return nil, teslErr
+	}
+	return teslDecoded, nil
+})
 
 var AgentRunServer = teslrt.Server{
 	Routes: []teslrt.Route{
@@ -327,6 +347,11 @@ func TestTeslApi0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line agent-run-tests.tesl:190
 		stream := teslrt.SubscribeStream(AgentRunServer, "/events/runs/run-1", nil)
@@ -338,11 +363,13 @@ func TestTeslApi0(teslT *testing.T) {
 			_ = posted
 //line agent-run-tests.tesl:193
 			if !(teslrt.StatusOk(posted.Status)) {
+//line agent-run-tests.tesl:193
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft1 := teslrt.PendingJobCount(RunQueueQueue)
 //line agent-run-tests.tesl:194
 			if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1)) {
+//line agent-run-tests.tesl:194
 				teslT.Fatal("Tesl expectation failed")
 			}
 			{
@@ -375,11 +402,13 @@ func TestTeslApi0(teslT *testing.T) {
 					teslLeft2 := job.Prompt
 //line agent-run-tests.tesl:199
 					if teslLeft2 != "please echo" {
+//line agent-run-tests.tesl:199
 						teslT.Fatal("Tesl expectation failed")
 					}
 					teslLeft3 := teslrt.PendingJobCount(RunQueueQueue)
 //line agent-run-tests.tesl:200
 					if !teslrt.Equal(teslLeft3, teslrt.FromInt64(0)) {
+//line agent-run-tests.tesl:200
 						teslT.Fatal("Tesl expectation failed")
 					}
 					{
@@ -388,6 +417,7 @@ func TestTeslApi0(teslT *testing.T) {
 						_ = events
 //line agent-run-tests.tesl:204
 						if !(teslrt.JsonHasLength(teslrt.FromInt64(2), events)) {
+//line agent-run-tests.tesl:204
 							teslT.Fatal("Tesl expectation failed")
 						}
 						{
@@ -400,26 +430,32 @@ func TestTeslApi0(teslT *testing.T) {
 								_ = second
 //line agent-run-tests.tesl:210
 								if !teslrt.JsonEqual(teslrt.JsonFieldAt("tag", first), "Step") {
+//line agent-run-tests.tesl:210
 									teslT.Fatal("Tesl expectation failed")
 								}
 //line agent-run-tests.tesl:211
 								if !teslrt.JsonEqual(teslrt.JsonFieldAt("tag", second), "Step") {
+//line agent-run-tests.tesl:211
 									teslT.Fatal("Tesl expectation failed")
 								}
 //line agent-run-tests.tesl:212
 								if !teslrt.JsonEqual(teslrt.JsonFieldOf(teslrt.JsonFieldOf(first, "fields"), "content"), "tool: echo") {
+//line agent-run-tests.tesl:212
 									teslT.Fatal("Tesl expectation failed")
 								}
 //line agent-run-tests.tesl:213
 								if !teslrt.JsonEqual(teslrt.JsonFieldOf(teslrt.JsonFieldOf(second, "fields"), "content"), "text: All done.") {
+//line agent-run-tests.tesl:213
 									teslT.Fatal("Tesl expectation failed")
 								}
 //line agent-run-tests.tesl:214
 								if !(teslrt.JsonIncludesWhere(teslrt.JsonParseBody("{\"tag\":\"Step\",\"fields\":{\"content\":\"tool: echo\"}}").JsonRaw(), events)) {
+//line agent-run-tests.tesl:214
 									teslT.Fatal("Tesl expectation failed")
 								}
 //line agent-run-tests.tesl:215
 								if !(teslrt.JsonIncludesWhere(teslrt.JsonParseBody("{\"tag\":\"Step\",\"fields\":{\"content\":\"text: All done.\"}}").JsonRaw(), events)) {
+//line agent-run-tests.tesl:215
 									teslT.Fatal("Tesl expectation failed")
 								}
 							}

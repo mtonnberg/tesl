@@ -133,3 +133,71 @@ func TestEnvTruthyAcceptsTheFourSpellings(t *testing.T) {
 		}
 	}
 }
+
+// NAT64 and 6to4 spellings reach the IPv4 host they embed, through a translator or a tunnel.
+// A classifier that judged them as native IPv6 called them all "public", so on a host with a
+// NAT64 path `64:ff9b::a9fe:a9fe` reached the metadata service.
+func TestIPForbiddenReasonFoldsNat64And6to4(t *testing.T) {
+	cases := map[string]string{
+		// NAT64 well-known prefix 64:ff9b::/96 — the IPv4 address is the last 32 bits.
+		"64:ff9b::7f00:1":    "loopback 127.0.0.0/8",
+		"64:ff9b::127.0.0.1": "loopback 127.0.0.0/8",
+		"64:ff9b::a9fe:a9fe": "link-local 169.254.0.0/16",
+		"64:ff9b::a00:1":     "private 10.0.0.0/8",
+		"64:ff9b::c0a8:101":  "private 192.168.0.0/16",
+		"64:ff9b::808:808":   "",
+		"64:ff9b::":          "0.0.0.0/8 (this network)",
+		// NAT64 local-use prefix 64:ff9b:1::/48 (RFC 8215), same layout.
+		"64:ff9b:1::7f00:1":         "loopback 127.0.0.0/8",
+		"64:ff9b:1:abcd::a9fe:a9fe": "link-local 169.254.0.0/16",
+		"64:ff9b:1::808:808":        "",
+		// 6to4 2002::/16 — the IPv4 address is bits 16..47.
+		"2002:7f00:1::":     "loopback 127.0.0.0/8",
+		"2002:a9fe:a9fe::1": "link-local 169.254.0.0/16",
+		"2002:ac10:1::":     "private 172.16.0.0/12",
+		"2002:808:808::":    "",
+		// Neighbours that are NOT the prefixes stay native IPv6 (public).
+		"64:ff9c::7f00:1":   "",
+		"64:ff9b:2::7f00:1": "",
+		"2003:7f00:1::":     "",
+	}
+	for address, want := range cases {
+		if got := IPForbiddenReason(address); got != want {
+			t.Errorf("IPForbiddenReason(%q) = %q, want %q", address, got, want)
+		}
+	}
+}
+
+// The IETF special-purpose IPv4 blocks are never routed on the public Internet, so a name
+// resolving into one is misconfiguration or a probe for whatever answers there locally.
+func TestIPForbiddenReasonRefusesIETFReservedBlocks(t *testing.T) {
+	cases := map[string]string{
+		"192.0.0.1":        "reserved 192.0.0.0/24 (IETF protocol assignments)",
+		"192.0.0.170":      "reserved 192.0.0.0/24 (IETF protocol assignments)",
+		"192.0.2.1":        "documentation 192.0.2.0/24 (TEST-NET-1)",
+		"198.18.0.1":       "benchmarking 198.18.0.0/15",
+		"198.19.255.255":   "benchmarking 198.18.0.0/15",
+		"198.51.100.7":     "documentation 198.51.100.0/24 (TEST-NET-2)",
+		"203.0.113.9":      "documentation 203.0.113.0/24 (TEST-NET-3)",
+		"::ffff:192.0.2.1": "documentation 192.0.2.0/24 (TEST-NET-1)",
+		"64:ff9b::c612:1":  "benchmarking 198.18.0.0/15",
+		// The neighbouring /24s and /15s are ordinary public space.
+		"192.0.1.1":    "",
+		"192.0.3.1":    "",
+		"198.17.255.1": "",
+		"198.20.0.1":   "",
+		"198.51.101.1": "",
+		"203.0.112.1":  "",
+		"203.0.114.1":  "",
+	}
+	for address, want := range cases {
+		if got := IPForbiddenReason(address); got != want {
+			t.Errorf("IPForbiddenReason(%q) = %q, want %q", address, got, want)
+		}
+	}
+	// The egress verdict inherits the refusal — the reserved blocks are not the loopback
+	// exception, so they stay refused in a non-deployed build too.
+	if got := SsrfEgressRefusal("198.18.0.1"); got != "benchmarking 198.18.0.0/15" {
+		t.Errorf("SsrfEgressRefusal(198.18.0.1) = %q", got)
+	}
+}

@@ -600,6 +600,11 @@ func TestTeslApi0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-auth-api-tests.tesl:220
 		resp := teslrt.ApiRequest(R48AuthServer, "POST", "/double", "{\"value\":5}", nil, nil)
@@ -607,6 +612,7 @@ func TestTeslApi0(teslT *testing.T) {
 		teslLeft1 := resp.Status
 //line critical-review-48-auth-api-tests.tesl:221
 		if !teslrt.Equal(teslLeft1, teslrt.FromInt64(401)) {
+//line critical-review-48-auth-api-tests.tesl:221
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -622,16 +628,23 @@ func TestTeslApi1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-auth-api-tests.tesl:225
 		resp := teslrt.ApiRequest(R48AuthServer, "POST", "/double", "{\"value\":5}", []string{"user=alice"}, nil)
 		_ = resp
 //line critical-review-48-auth-api-tests.tesl:226
 		if !(teslrt.StatusOk(resp.Status)) {
+//line critical-review-48-auth-api-tests.tesl:226
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-auth-api-tests.tesl:227
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "result"), teslrt.FromInt64(10)) {
+//line critical-review-48-auth-api-tests.tesl:227
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -647,6 +660,11 @@ func TestTeslApi2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-auth-api-tests.tesl:231
 		resp := teslrt.ApiRequest(R48AuthServer, "POST", "/double", "{\"value\":0}", []string{"user=alice"}, nil)
@@ -654,6 +672,7 @@ func TestTeslApi2(teslT *testing.T) {
 		teslLeft2 := resp.Status
 //line critical-review-48-auth-api-tests.tesl:232
 		if !teslrt.Equal(teslLeft2, teslrt.FromInt64(400)) {
+//line critical-review-48-auth-api-tests.tesl:232
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -669,6 +688,11 @@ func TestTeslApi3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-auth-api-tests.tesl:236
 		resp := teslrt.ApiRequest(R48AuthServer, "POST", "/double", "{\"value\":-5}", []string{"user=alice"}, nil)
@@ -676,6 +700,7 @@ func TestTeslApi3(teslT *testing.T) {
 		teslLeft3 := resp.Status
 //line critical-review-48-auth-api-tests.tesl:237
 		if !teslrt.Equal(teslLeft3, teslrt.FromInt64(400)) {
+//line critical-review-48-auth-api-tests.tesl:237
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -691,16 +716,23 @@ func TestTeslApi4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-auth-api-tests.tesl:245
 		resp := teslrt.ApiRequest(R48AuthServer, "POST", "/triple-conj", "{\"value\":50}", []string{"user=alice"}, nil)
 		_ = resp
 //line critical-review-48-auth-api-tests.tesl:246
 		if !(teslrt.StatusOk(resp.Status)) {
+//line critical-review-48-auth-api-tests.tesl:246
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-auth-api-tests.tesl:247
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "tripled"), teslrt.FromInt64(150)) {
+//line critical-review-48-auth-api-tests.tesl:247
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -716,16 +748,23 @@ func TestTeslApi5(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-auth-api-tests.tesl:251
 		resp := teslrt.ApiRequest(R48AuthServer, "POST", "/triple-conj", "{\"value\":1}", []string{"user=alice"}, nil)
 		_ = resp
 //line critical-review-48-auth-api-tests.tesl:252
 		if !(teslrt.StatusOk(resp.Status)) {
+//line critical-review-48-auth-api-tests.tesl:252
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-auth-api-tests.tesl:253
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "tripled"), teslrt.FromInt64(3)) {
+//line critical-review-48-auth-api-tests.tesl:253
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -741,16 +780,23 @@ func TestTeslApi6(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-auth-api-tests.tesl:257
 		resp := teslrt.ApiRequest(R48AuthServer, "POST", "/triple-conj", "{\"value\":99}", []string{"user=alice"}, nil)
 		_ = resp
 //line critical-review-48-auth-api-tests.tesl:258
 		if !(teslrt.StatusOk(resp.Status)) {
+//line critical-review-48-auth-api-tests.tesl:258
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-auth-api-tests.tesl:259
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "tripled"), teslrt.FromInt64(297)) {
+//line critical-review-48-auth-api-tests.tesl:259
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -766,6 +812,11 @@ func TestTeslApi7(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-auth-api-tests.tesl:263
 		resp := teslrt.ApiRequest(R48AuthServer, "POST", "/triple-conj", "{\"value\":0}", []string{"user=alice"}, nil)
@@ -773,6 +824,7 @@ func TestTeslApi7(teslT *testing.T) {
 		teslLeft4 := resp.Status
 //line critical-review-48-auth-api-tests.tesl:264
 		if !teslrt.Equal(teslLeft4, teslrt.FromInt64(400)) {
+//line critical-review-48-auth-api-tests.tesl:264
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -788,6 +840,11 @@ func TestTeslApi8(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-auth-api-tests.tesl:268
 		resp := teslrt.ApiRequest(R48AuthServer, "POST", "/triple-conj", "{\"value\":100}", []string{"user=alice"}, nil)
@@ -795,6 +852,7 @@ func TestTeslApi8(teslT *testing.T) {
 		teslLeft5 := resp.Status
 //line critical-review-48-auth-api-tests.tesl:269
 		if !teslrt.Equal(teslLeft5, teslrt.FromInt64(400)) {
+//line critical-review-48-auth-api-tests.tesl:269
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -810,16 +868,23 @@ func TestTeslApi9(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-auth-api-tests.tesl:273
 		resp := teslrt.ApiRequest(R48AuthServer, "POST", "/inline-conj", "{\"value\":50}", []string{"user=bob"}, nil)
 		_ = resp
 //line critical-review-48-auth-api-tests.tesl:274
 		if !(teslrt.StatusOk(resp.Status)) {
+//line critical-review-48-auth-api-tests.tesl:274
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-auth-api-tests.tesl:275
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "tripled"), teslrt.FromInt64(150)) {
+//line critical-review-48-auth-api-tests.tesl:275
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -835,6 +900,11 @@ func TestTeslApi10(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-auth-api-tests.tesl:279
 		resp := teslrt.ApiRequest(R48AuthServer, "POST", "/inline-conj", "{\"value\":0}", []string{"user=bob"}, nil)
@@ -842,6 +912,7 @@ func TestTeslApi10(teslT *testing.T) {
 		teslLeft6 := resp.Status
 //line critical-review-48-auth-api-tests.tesl:280
 		if !teslrt.Equal(teslLeft6, teslrt.FromInt64(400)) {
+//line critical-review-48-auth-api-tests.tesl:280
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -857,16 +928,23 @@ func TestTeslApi11(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-auth-api-tests.tesl:288
 		resp := teslrt.ApiRequest(R48AuthServer, "GET", "/whoami-checked", "", []string{"user=alice"}, nil)
 		_ = resp
 //line critical-review-48-auth-api-tests.tesl:289
 		if !(teslrt.StatusOk(resp.Status)) {
+//line critical-review-48-auth-api-tests.tesl:289
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-auth-api-tests.tesl:290
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "userId"), "alice") {
+//line critical-review-48-auth-api-tests.tesl:290
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -882,6 +960,11 @@ func TestTeslApi12(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-auth-api-tests.tesl:294
 		resp := teslrt.ApiRequest(R48AuthServer, "GET", "/whoami-checked", "", []string{"user="}, nil)
@@ -889,6 +972,7 @@ func TestTeslApi12(teslT *testing.T) {
 		teslLeft7 := resp.Status
 //line critical-review-48-auth-api-tests.tesl:295
 		if !teslrt.Equal(teslLeft7, teslrt.FromInt64(400)) {
+//line critical-review-48-auth-api-tests.tesl:295
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -904,6 +988,11 @@ func TestTeslApi13(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-auth-api-tests.tesl:299
 		resp := teslrt.ApiRequest(R48AuthServer, "GET", "/whoami-checked", "", nil, nil)
@@ -911,6 +1000,7 @@ func TestTeslApi13(teslT *testing.T) {
 		teslLeft8 := resp.Status
 //line critical-review-48-auth-api-tests.tesl:300
 		if !teslrt.Equal(teslLeft8, teslrt.FromInt64(401)) {
+//line critical-review-48-auth-api-tests.tesl:300
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -926,16 +1016,23 @@ func TestTeslApi14(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-auth-api-tests.tesl:304
 		resp := teslrt.ApiRequest(R48AuthServer, "GET", "/whoami-admin", "", []string{"user=admin_alice"}, nil)
 		_ = resp
 //line critical-review-48-auth-api-tests.tesl:305
 		if !(teslrt.StatusOk(resp.Status)) {
+//line critical-review-48-auth-api-tests.tesl:305
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-auth-api-tests.tesl:306
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "userId"), "admin_alice") {
+//line critical-review-48-auth-api-tests.tesl:306
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -951,6 +1048,11 @@ func TestTeslApi15(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-auth-api-tests.tesl:310
 		resp := teslrt.ApiRequest(R48AuthServer, "GET", "/whoami-admin", "", []string{"user=alice"}, nil)
@@ -958,6 +1060,7 @@ func TestTeslApi15(teslT *testing.T) {
 		teslLeft9 := resp.Status
 //line critical-review-48-auth-api-tests.tesl:311
 		if !teslrt.Equal(teslLeft9, teslrt.FromInt64(403)) {
+//line critical-review-48-auth-api-tests.tesl:311
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -973,6 +1076,11 @@ func TestTeslApi16(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-auth-api-tests.tesl:315
 		resp := teslrt.ApiRequest(R48AuthServer, "GET", "/whoami-admin", "", nil, nil)
@@ -980,6 +1088,7 @@ func TestTeslApi16(teslT *testing.T) {
 		teslLeft10 := resp.Status
 //line critical-review-48-auth-api-tests.tesl:316
 		if !teslrt.Equal(teslLeft10, teslrt.FromInt64(401)) {
+//line critical-review-48-auth-api-tests.tesl:316
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -995,16 +1104,23 @@ func TestTeslApi17(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-auth-api-tests.tesl:324
 		resp := teslrt.ApiRequest(R48ConjAuthServer, "GET", "/conj-whoami", "", []string{"user=alice; session=abc123"}, nil)
 		_ = resp
 //line critical-review-48-auth-api-tests.tesl:325
 		if !(teslrt.StatusOk(resp.Status)) {
+//line critical-review-48-auth-api-tests.tesl:325
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-auth-api-tests.tesl:326
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "userId"), "alice") {
+//line critical-review-48-auth-api-tests.tesl:326
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1020,6 +1136,11 @@ func TestTeslApi18(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-auth-api-tests.tesl:330
 		resp := teslrt.ApiRequest(R48ConjAuthServer, "GET", "/conj-whoami", "", []string{"user=alice"}, nil)
@@ -1027,6 +1148,7 @@ func TestTeslApi18(teslT *testing.T) {
 		teslLeft11 := resp.Status
 //line critical-review-48-auth-api-tests.tesl:331
 		if !teslrt.Equal(teslLeft11, teslrt.FromInt64(401)) {
+//line critical-review-48-auth-api-tests.tesl:331
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1042,6 +1164,11 @@ func TestTeslApi19(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-auth-api-tests.tesl:335
 		resp := teslrt.ApiRequest(R48ConjAuthServer, "GET", "/conj-whoami", "", nil, nil)
@@ -1049,6 +1176,7 @@ func TestTeslApi19(teslT *testing.T) {
 		teslLeft12 := resp.Status
 //line critical-review-48-auth-api-tests.tesl:336
 		if !teslrt.Equal(teslLeft12, teslrt.FromInt64(401)) {
+//line critical-review-48-auth-api-tests.tesl:336
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1064,16 +1192,23 @@ func TestTeslApi20(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-auth-api-tests.tesl:385
 		resp := teslrt.ApiRequest(R48ConjInAuthServer, "GET", "/conj-manual", "", []string{"user=alice; session=abc"}, nil)
 		_ = resp
 //line critical-review-48-auth-api-tests.tesl:386
 		if !(teslrt.StatusOk(resp.Status)) {
+//line critical-review-48-auth-api-tests.tesl:386
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-auth-api-tests.tesl:387
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "userId"), "alice") {
+//line critical-review-48-auth-api-tests.tesl:387
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1089,6 +1224,11 @@ func TestTeslApi21(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-auth-api-tests.tesl:391
 		resp := teslrt.ApiRequest(R48ConjInAuthServer, "GET", "/conj-manual", "", []string{"user=alice"}, nil)
@@ -1096,6 +1236,7 @@ func TestTeslApi21(teslT *testing.T) {
 		teslLeft13 := resp.Status
 //line critical-review-48-auth-api-tests.tesl:392
 		if !teslrt.Equal(teslLeft13, teslrt.FromInt64(401)) {
+//line critical-review-48-auth-api-tests.tesl:392
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1111,6 +1252,11 @@ func TestTeslApi22(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-auth-api-tests.tesl:396
 		resp := teslrt.ApiRequest(R48ConjInAuthServer, "GET", "/conj-manual", "", nil, nil)
@@ -1118,6 +1264,7 @@ func TestTeslApi22(teslT *testing.T) {
 		teslLeft14 := resp.Status
 //line critical-review-48-auth-api-tests.tesl:397
 		if !teslrt.Equal(teslLeft14, teslrt.FromInt64(401)) {
+//line critical-review-48-auth-api-tests.tesl:397
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1133,16 +1280,23 @@ func TestTeslApi23(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-auth-api-tests.tesl:401
 		resp := teslrt.ApiRequest(R48ConjInAuthServer, "GET", "/conj-check", "", []string{"user=admin_bob"}, nil)
 		_ = resp
 //line critical-review-48-auth-api-tests.tesl:402
 		if !(teslrt.StatusOk(resp.Status)) {
+//line critical-review-48-auth-api-tests.tesl:402
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line critical-review-48-auth-api-tests.tesl:403
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "userId"), "admin_bob") {
+//line critical-review-48-auth-api-tests.tesl:403
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1158,6 +1312,11 @@ func TestTeslApi24(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-auth-api-tests.tesl:407
 		resp := teslrt.ApiRequest(R48ConjInAuthServer, "GET", "/conj-check", "", []string{"user=bob"}, nil)
@@ -1165,6 +1324,7 @@ func TestTeslApi24(teslT *testing.T) {
 		teslLeft15 := resp.Status
 //line critical-review-48-auth-api-tests.tesl:408
 		if !teslrt.Equal(teslLeft15, teslrt.FromInt64(403)) {
+//line critical-review-48-auth-api-tests.tesl:408
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -1180,6 +1340,11 @@ func TestTeslApi25(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line critical-review-48-auth-api-tests.tesl:412
 		resp := teslrt.ApiRequest(R48ConjInAuthServer, "GET", "/conj-check", "", nil, nil)
@@ -1187,6 +1352,7 @@ func TestTeslApi25(teslT *testing.T) {
 		teslLeft16 := resp.Status
 //line critical-review-48-auth-api-tests.tesl:413
 		if !teslrt.Equal(teslLeft16, teslrt.FromInt64(401)) {
+//line critical-review-48-auth-api-tests.tesl:413
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}

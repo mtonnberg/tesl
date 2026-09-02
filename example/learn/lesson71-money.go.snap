@@ -132,6 +132,11 @@ func TestTesl0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson71-money.tesl:129
 		price := teslrt.MoneyOf(teslrt.FromInt64(1050), "USD", 2)
@@ -139,26 +144,31 @@ func TestTesl0(teslT *testing.T) {
 		teslLeft1 := teslrt.MoneyMinorUnits(price)
 //line lesson71-money.tesl:130
 		if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1050)) {
+//line lesson71-money.tesl:130
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft2 := teslrt.MoneyDisplay(price)
 //line lesson71-money.tesl:131
 		if teslLeft2 != "$10.50" {
+//line lesson71-money.tesl:131
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft3 := teslrt.MoneyDisplay(teslrt.MoneyFromMinorUnits(teslrt.CurrencyOf("JPY", 0), teslrt.FromInt64(1000)))
 //line lesson71-money.tesl:132
 		if teslLeft3 != "\xc2\xa51000" {
+//line lesson71-money.tesl:132
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft4 := teslrt.MoneyDisplay(teslrt.MoneyOf(teslrt.FromInt64(1050), "SEK", 2))
 //line lesson71-money.tesl:133
 		if teslLeft4 != "10.50 SEK" {
+//line lesson71-money.tesl:133
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft5 := ShowPrice()
 //line lesson71-money.tesl:134
 		if teslLeft5 != "$10.50" {
+//line lesson71-money.tesl:134
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -172,6 +182,11 @@ func TestTesl1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson71-money.tesl:138
 		unitPrice := teslrt.MoneyOf(teslrt.FromInt64(199), "USD", 2)
@@ -179,6 +194,7 @@ func TestTesl1(teslT *testing.T) {
 		teslLeft6 := teslrt.MoneyMinorUnits(LineTotal(unitPrice, teslrt.FromInt64(3)))
 //line lesson71-money.tesl:139
 		if !teslrt.Equal(teslLeft6, teslrt.FromInt64(597)) {
+//line lesson71-money.tesl:139
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -192,6 +208,11 @@ func TestTesl2(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson71-money.tesl:143
 		a := teslrt.MoneyOf(teslrt.FromInt64(1000), "USD", 2)
@@ -203,6 +224,7 @@ func TestTesl2(teslT *testing.T) {
 			teslLeft7 := teslrt.MoneyDisplay(AddSameCurrency(a, b))
 //line lesson71-money.tesl:145
 			if teslLeft7 != "$12.50" {
+//line lesson71-money.tesl:145
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -217,6 +239,11 @@ func TestTesl3(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson71-money.tesl:150
 		rate := teslrt.ExchangeRateMake(teslrt.CurrencyOf("USD", 2), teslrt.CurrencyOf("EUR", 2), float64(0.9155), teslrt.SecondsToPosix(teslrt.FromInt64(1751900000)))
@@ -224,6 +251,7 @@ func TestTesl3(teslT *testing.T) {
 		teslLeft8 := ConvertToDisplay(rate, teslrt.MoneyOf(teslrt.FromInt64(1000), "USD", 2))
 //line lesson71-money.tesl:151
 		if teslLeft8 != "\xe2\x82\xac9.16" {
+//line lesson71-money.tesl:151
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -237,6 +265,11 @@ func TestTesl4(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson71-money.tesl:155
 		eurRate := teslrt.ExchangeRateMake(teslrt.CurrencyOf("EUR", 2), teslrt.CurrencyOf("USD", 2), float64(1.0922), teslrt.SecondsToPosix(teslrt.FromInt64(1751900000)))
@@ -244,6 +277,7 @@ func TestTesl4(teslT *testing.T) {
 		teslLeft9 := ConvertToDisplay(eurRate, teslrt.MoneyOf(teslrt.FromInt64(1000), "USD", 2))
 //line lesson71-money.tesl:156
 		if teslLeft9 != "exchange rate is FROM EUR but amount is in USD" {
+//line lesson71-money.tesl:156
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -257,6 +291,11 @@ func TestTesl5(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson71-money.tesl:160
 		rate := teslrt.ExchangeRateMake(teslrt.CurrencyOf("USD", 2), teslrt.CurrencyOf("EUR", 2), float64(0.9155), teslrt.SecondsToPosix(teslrt.FromInt64(1751900000)))
@@ -264,6 +303,7 @@ func TestTesl5(teslT *testing.T) {
 		teslLeft10 := teslrt.MoneyMinorUnits(ConvertChecked(rate, teslrt.MoneyOf(teslrt.FromInt64(1000), "USD", 2)))
 //line lesson71-money.tesl:161
 		if !teslrt.Equal(teslLeft10, teslrt.FromInt64(916)) {
+//line lesson71-money.tesl:161
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -277,6 +317,11 @@ func TestTesl6(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson71-money.tesl:165
 		_ = teslrt.TableInsert(OrderLineTable, "OrderLine", OrderLine{Id: "l1", Price: teslrt.MoneyOf(teslrt.FromInt64(1050), "USD", 2), Quantity: teslrt.FromInt64(1)}, func(teslRow, teslNew OrderLine) bool { return (teslRow.Id == teslNew.Id) })
@@ -286,6 +331,7 @@ func TestTesl6(teslT *testing.T) {
 			teslLeft11 := teslrt.MoneyDisplay(TotalRevenue())
 //line lesson71-money.tesl:167
 			if teslLeft11 != "$15.50" {
+//line lesson71-money.tesl:167
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -300,6 +346,11 @@ func TestTesl7(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson71-money.tesl:180
 		hourly := teslrt.MoneyRateOfLabel(teslrt.MoneyOf(teslrt.FromInt64(95000), "SEK", 2), 3600, 1, "h")
@@ -307,16 +358,19 @@ func TestTesl7(teslT *testing.T) {
 		teslLeft12 := teslrt.MoneyRateDisplay(hourly)
 //line lesson71-money.tesl:181
 		if teslLeft12 != "950.00 SEK/h" {
+//line lesson71-money.tesl:181
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft13 := teslrt.MoneyDisplay(consultantInvoice(hourly, teslrt.DurationHours(float64(1.5))))
 //line lesson71-money.tesl:182
 		if teslLeft13 != "1425.00 SEK" {
+//line lesson71-money.tesl:182
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft14 := teslrt.MoneyDisplay(consultantInvoice(hourly, teslrt.DurationMinutes(float64(3e+01))))
 //line lesson71-money.tesl:183
 		if teslLeft14 != "475.00 SEK" {
+//line lesson71-money.tesl:183
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -330,6 +384,11 @@ func TestTesl8(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson71-money.tesl:203
 		_ = teslrt.TableInsert(ConsultantTable, "Consultant", Consultant{Id: "c1", Hourly: teslrt.MoneyRateOfLabel(teslrt.MoneyOf(teslrt.FromInt64(95000), "SEK", 2), 3600, 1, "h")}, func(teslRow, teslNew Consultant) bool { return (teslRow.Id == teslNew.Id) })
@@ -355,6 +414,7 @@ func TestTesl8(teslT *testing.T) {
 					}
 				}
 			}()) {
+//line lesson71-money.tesl:205
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}

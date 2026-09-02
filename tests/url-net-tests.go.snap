@@ -116,13 +116,20 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft1 := hostOf("https://localhost:6379/hook")
 //line url-net-tests.tesl:56
 	if teslLeft1 != "localhost" {
+//line url-net-tests.tesl:56
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line url-net-tests.tesl:57
 	if allowed("https://localhost:6379/hook") {
+//line url-net-tests.tesl:57
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -134,13 +141,20 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft2 := hostOf("https://LOCALHOST/hook")
 //line url-net-tests.tesl:61
 	if teslLeft2 != "localhost" {
+//line url-net-tests.tesl:61
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line url-net-tests.tesl:62
 	if allowed("https://LOCALHOST/hook") {
+//line url-net-tests.tesl:62
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -152,13 +166,20 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft3 := hostOf("https://localhost./hook")
 //line url-net-tests.tesl:66
 	if teslLeft3 != "localhost" {
+//line url-net-tests.tesl:66
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line url-net-tests.tesl:67
 	if allowed("https://localhost./hook") {
+//line url-net-tests.tesl:67
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -170,26 +191,36 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft4 := hostOf("https://2130706433/hook")
 //line url-net-tests.tesl:71
 	if teslLeft4 != "127.0.0.1" {
+//line url-net-tests.tesl:71
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line url-net-tests.tesl:72
 	if allowed("https://2130706433/hook") {
+//line url-net-tests.tesl:72
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft5 := hostOf("https://[::ffff:127.0.0.1]/hook")
 //line url-net-tests.tesl:73
 	if teslLeft5 != "127.0.0.1" {
+//line url-net-tests.tesl:73
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line url-net-tests.tesl:74
 	if allowed("https://[::ffff:127.0.0.1]/hook") {
+//line url-net-tests.tesl:74
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line url-net-tests.tesl:75
 	if !(teslrt.NetIsIPv4Mapped("[::ffff:127.0.0.1]")) {
+//line url-net-tests.tesl:75
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -201,13 +232,20 @@ func TestTesl4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft6 := hostOf("https://trusted.example.com@127.0.0.1/x")
 //line url-net-tests.tesl:81
 	if teslLeft6 != "127.0.0.1" {
+//line url-net-tests.tesl:81
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line url-net-tests.tesl:82
 	if allowed("https://trusted.example.com@127.0.0.1/x") {
+//line url-net-tests.tesl:82
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line url-net-tests.tesl:83
@@ -219,6 +257,7 @@ func TestTesl4(teslT *testing.T) {
 			teslRight7 := true
 //line url-net-tests.tesl:84
 			if teslLeft7 != teslRight7 {
+//line url-net-tests.tesl:84
 				teslT.Fatal("Tesl expectation failed")
 			}
 		case teslrt.MaybeSomething:
@@ -228,6 +267,7 @@ func TestTesl4(teslT *testing.T) {
 			teslRight8 := teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: "trusted.example.com"}
 //line url-net-tests.tesl:85
 			if teslLeft8.Tag != teslRight8.Tag || (teslLeft8.Tag == teslrt.MaybeSomething && (teslLeft8.SomethingValue != teslRight8.SomethingValue)) {
+//line url-net-tests.tesl:85
 				teslT.Fatal("Tesl expectation failed")
 			}
 		default:
@@ -243,6 +283,11 @@ func TestTesl5(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line url-net-tests.tesl:91
 	{
 		teslScrut1 := teslrt.UrlParse("HTTPS://Example.COM:8443/a/b?x=1#frag")
@@ -252,6 +297,7 @@ func TestTesl5(teslT *testing.T) {
 			teslRight9 := true
 //line url-net-tests.tesl:92
 			if teslLeft9 != teslRight9 {
+//line url-net-tests.tesl:92
 				teslT.Fatal("Tesl expectation failed")
 			}
 		case teslrt.MaybeSomething:
@@ -260,6 +306,7 @@ func TestTesl5(teslT *testing.T) {
 			teslLeft10 := teslrt.UrlScheme(u)
 //line url-net-tests.tesl:93
 			if teslLeft10 != "https" {
+//line url-net-tests.tesl:93
 				teslT.Fatal("Tesl expectation failed")
 			}
 		default:
@@ -275,6 +322,7 @@ func TestTesl5(teslT *testing.T) {
 			teslRight11 := true
 //line url-net-tests.tesl:95
 			if teslLeft11 != teslRight11 {
+//line url-net-tests.tesl:95
 				teslT.Fatal("Tesl expectation failed")
 			}
 		case teslrt.MaybeSomething:
@@ -283,6 +331,7 @@ func TestTesl5(teslT *testing.T) {
 			teslLeft12 := teslrt.UrlHost(u)
 //line url-net-tests.tesl:96
 			if teslLeft12 != "example.com" {
+//line url-net-tests.tesl:96
 				teslT.Fatal("Tesl expectation failed")
 			}
 		default:
@@ -298,6 +347,7 @@ func TestTesl5(teslT *testing.T) {
 			teslRight13 := true
 //line url-net-tests.tesl:98
 			if teslLeft13 != teslRight13 {
+//line url-net-tests.tesl:98
 				teslT.Fatal("Tesl expectation failed")
 			}
 		case teslrt.MaybeSomething:
@@ -307,6 +357,7 @@ func TestTesl5(teslT *testing.T) {
 			teslRight14 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(8443)}
 //line url-net-tests.tesl:99
 			if teslLeft14.Tag != teslRight14.Tag || (teslLeft14.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft14.SomethingValue, teslRight14.SomethingValue)) {
+//line url-net-tests.tesl:99
 				teslT.Fatal("Tesl expectation failed")
 			}
 		default:
@@ -322,6 +373,7 @@ func TestTesl5(teslT *testing.T) {
 			teslRight15 := true
 //line url-net-tests.tesl:101
 			if teslLeft15 != teslRight15 {
+//line url-net-tests.tesl:101
 				teslT.Fatal("Tesl expectation failed")
 			}
 		case teslrt.MaybeSomething:
@@ -330,6 +382,7 @@ func TestTesl5(teslT *testing.T) {
 			teslLeft16 := teslrt.UrlPath(u)
 //line url-net-tests.tesl:102
 			if teslLeft16 != "/a/b" {
+//line url-net-tests.tesl:102
 				teslT.Fatal("Tesl expectation failed")
 			}
 		default:
@@ -345,6 +398,11 @@ func TestTesl6(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line url-net-tests.tesl:106
 	{
 		teslScrut1 := teslrt.UrlParse("https://example.com/x")
@@ -354,6 +412,7 @@ func TestTesl6(teslT *testing.T) {
 			teslRight17 := true
 //line url-net-tests.tesl:107
 			if teslLeft17 != teslRight17 {
+//line url-net-tests.tesl:107
 				teslT.Fatal("Tesl expectation failed")
 			}
 		case teslrt.MaybeSomething:
@@ -363,6 +422,7 @@ func TestTesl6(teslT *testing.T) {
 			teslRight18 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}
 //line url-net-tests.tesl:108
 			if teslLeft18.Tag != teslRight18.Tag || (teslLeft18.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft18.SomethingValue, teslRight18.SomethingValue)) {
+//line url-net-tests.tesl:108
 				teslT.Fatal("Tesl expectation failed")
 			}
 		default:
@@ -378,6 +438,7 @@ func TestTesl6(teslT *testing.T) {
 			teslRight19 := true
 //line url-net-tests.tesl:110
 			if teslLeft19 != teslRight19 {
+//line url-net-tests.tesl:110
 				teslT.Fatal("Tesl expectation failed")
 			}
 		case teslrt.MaybeSomething:
@@ -387,6 +448,7 @@ func TestTesl6(teslT *testing.T) {
 			teslRight20 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeSomething, SomethingValue: teslrt.FromInt64(443)}
 //line url-net-tests.tesl:111
 			if teslLeft20.Tag != teslRight20.Tag || (teslLeft20.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft20.SomethingValue, teslRight20.SomethingValue)) {
+//line url-net-tests.tesl:111
 				teslT.Fatal("Tesl expectation failed")
 			}
 		default:
@@ -402,6 +464,11 @@ func TestTesl7(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line url-net-tests.tesl:115
 	{
 		teslScrut1 := teslrt.UrlParse("https://LOCALHOST.:8443/a?q=1")
@@ -411,6 +478,7 @@ func TestTesl7(teslT *testing.T) {
 			teslRight21 := true
 //line url-net-tests.tesl:116
 			if teslLeft21 != teslRight21 {
+//line url-net-tests.tesl:116
 				teslT.Fatal("Tesl expectation failed")
 			}
 		case teslrt.MaybeSomething:
@@ -419,6 +487,7 @@ func TestTesl7(teslT *testing.T) {
 			teslLeft22 := teslrt.UrlToString(u)
 //line url-net-tests.tesl:117
 			if teslLeft22 != "https://localhost:8443/a?q=1" {
+//line url-net-tests.tesl:117
 				teslT.Fatal("Tesl expectation failed")
 			}
 		default:
@@ -434,34 +503,44 @@ func TestTesl8(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft23 := teslrt.UrlParse("mailto:someone@example.com")
 	teslRight23 := teslrt.Maybe[teslrt.Url]{Tag: teslrt.MaybeNothing}
 //line url-net-tests.tesl:121
 	if teslLeft23.Tag != teslRight23.Tag || (teslLeft23.Tag == teslrt.MaybeSomething && !teslrt.UrlEqual(teslLeft23.SomethingValue, teslRight23.SomethingValue)) {
+//line url-net-tests.tesl:121
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft24 := teslrt.UrlParse("https://exa mple.com/")
 	teslRight24 := teslrt.Maybe[teslrt.Url]{Tag: teslrt.MaybeNothing}
 //line url-net-tests.tesl:122
 	if teslLeft24.Tag != teslRight24.Tag || (teslLeft24.Tag == teslrt.MaybeSomething && !teslrt.UrlEqual(teslLeft24.SomethingValue, teslRight24.SomethingValue)) {
+//line url-net-tests.tesl:122
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft25 := teslrt.UrlParse("https://host:/p")
 	teslRight25 := teslrt.Maybe[teslrt.Url]{Tag: teslrt.MaybeNothing}
 //line url-net-tests.tesl:123
 	if teslLeft25.Tag != teslRight25.Tag || (teslLeft25.Tag == teslrt.MaybeSomething && !teslrt.UrlEqual(teslLeft25.SomethingValue, teslRight25.SomethingValue)) {
+//line url-net-tests.tesl:123
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft26 := teslrt.UrlParse("https://host:70000/")
 	teslRight26 := teslrt.Maybe[teslrt.Url]{Tag: teslrt.MaybeNothing}
 //line url-net-tests.tesl:124
 	if teslLeft26.Tag != teslRight26.Tag || (teslLeft26.Tag == teslrt.MaybeSomething && !teslrt.UrlEqual(teslLeft26.SomethingValue, teslRight26.SomethingValue)) {
+//line url-net-tests.tesl:124
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft27 := teslrt.UrlParse("https://a:1:2/p")
 	teslRight27 := teslrt.Maybe[teslrt.Url]{Tag: teslrt.MaybeNothing}
 //line url-net-tests.tesl:125
 	if teslLeft27.Tag != teslRight27.Tag || (teslLeft27.Tag == teslrt.MaybeSomething && !teslrt.UrlEqual(teslLeft27.SomethingValue, teslRight27.SomethingValue)) {
+//line url-net-tests.tesl:125
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -473,74 +552,93 @@ func TestTesl9(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft28 := label("127.0.0.1")
 //line url-net-tests.tesl:145
 	if teslLeft28 != "loopback" {
+//line url-net-tests.tesl:145
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft29 := label("LOCALHOST.")
 //line url-net-tests.tesl:146
 	if teslLeft29 != "loopback" {
+//line url-net-tests.tesl:146
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft30 := label("0177.0.0.1")
 //line url-net-tests.tesl:147
 	if teslLeft30 != "loopback" {
+//line url-net-tests.tesl:147
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft31 := label("[::1]")
 //line url-net-tests.tesl:148
 	if teslLeft31 != "loopback" {
+//line url-net-tests.tesl:148
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft32 := label("10.1.2.3")
 //line url-net-tests.tesl:149
 	if teslLeft32 != "private" {
+//line url-net-tests.tesl:149
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft33 := label("[fd12:3456::1]")
 //line url-net-tests.tesl:150
 	if teslLeft33 != "private" {
+//line url-net-tests.tesl:150
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft34 := label("169.254.169.254")
 //line url-net-tests.tesl:151
 	if teslLeft34 != "link-local" {
+//line url-net-tests.tesl:151
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft35 := label("[::ffff:a9fe:a9fe]")
 //line url-net-tests.tesl:152
 	if teslLeft35 != "link-local" {
+//line url-net-tests.tesl:152
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft36 := label("100.64.0.1")
 //line url-net-tests.tesl:153
 	if teslLeft36 != "cgnat" {
+//line url-net-tests.tesl:153
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft37 := label("224.0.0.1")
 //line url-net-tests.tesl:154
 	if teslLeft37 != "multicast" {
+//line url-net-tests.tesl:154
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft38 := label("0.0.0.0")
 //line url-net-tests.tesl:155
 	if teslLeft38 != "unspecified" {
+//line url-net-tests.tesl:155
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft39 := label("8.8.8.8")
 //line url-net-tests.tesl:156
 	if teslLeft39 != "public" {
+//line url-net-tests.tesl:156
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft40 := label("[2606:4700:4700::1111]")
 //line url-net-tests.tesl:157
 	if teslLeft40 != "public" {
+//line url-net-tests.tesl:157
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft41 := label("example.com")
 //line url-net-tests.tesl:158
 	if teslLeft41 != "name" {
+//line url-net-tests.tesl:158
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -552,29 +650,39 @@ func TestTesl10(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft42 := label("exa mple.com")
 //line url-net-tests.tesl:162
 	if teslLeft42 != "invalid" {
+//line url-net-tests.tesl:162
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft43 := label("999.999.999.999")
 //line url-net-tests.tesl:163
 	if teslLeft43 != "invalid" {
+//line url-net-tests.tesl:163
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft44 := label("")
 //line url-net-tests.tesl:164
 	if teslLeft44 != "invalid" {
+//line url-net-tests.tesl:164
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line url-net-tests.tesl:165
 	if !(teslrt.NetIsForbiddenHost("999.999.999.999")) {
+//line url-net-tests.tesl:165
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft45 := teslrt.NormalizeHostMaybe("exa mple.com")
 	teslRight45 := teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}
 //line url-net-tests.tesl:166
 	if teslLeft45.Tag != teslRight45.Tag || (teslLeft45.Tag == teslrt.MaybeSomething && (teslLeft45.SomethingValue != teslRight45.SomethingValue)) {
+//line url-net-tests.tesl:166
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -586,22 +694,30 @@ func TestTesl11(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft46 := teslrt.NormalizeHostMaybe("LOCALHOST.")
 	teslRight46 := teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: "localhost"}
 //line url-net-tests.tesl:170
 	if teslLeft46.Tag != teslRight46.Tag || (teslLeft46.Tag == teslrt.MaybeSomething && (teslLeft46.SomethingValue != teslRight46.SomethingValue)) {
+//line url-net-tests.tesl:170
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft47 := teslrt.NormalizeHostMaybe("2130706433")
 	teslRight47 := teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: "127.0.0.1"}
 //line url-net-tests.tesl:171
 	if teslLeft47.Tag != teslRight47.Tag || (teslLeft47.Tag == teslrt.MaybeSomething && (teslLeft47.SomethingValue != teslRight47.SomethingValue)) {
+//line url-net-tests.tesl:171
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft48 := teslrt.NormalizeHostMaybe("[::FFFF:127.0.0.1]")
 	teslRight48 := teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: "127.0.0.1"}
 //line url-net-tests.tesl:172
 	if teslLeft48.Tag != teslRight48.Tag || (teslLeft48.Tag == teslrt.MaybeSomething && (teslLeft48.SomethingValue != teslRight48.SomethingValue)) {
+//line url-net-tests.tesl:172
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -613,32 +729,44 @@ func TestTesl12(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line url-net-tests.tesl:176
 	if !(teslrt.NetIsLoopback("2130706433")) {
+//line url-net-tests.tesl:176
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line url-net-tests.tesl:177
 	if !(teslrt.NetIsPrivate("192.168.1.1")) {
+//line url-net-tests.tesl:177
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line url-net-tests.tesl:178
 	if !(teslrt.NetIsLinkLocal("169.254.169.254")) {
+//line url-net-tests.tesl:178
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line url-net-tests.tesl:179
 	if !(teslrt.NetIsIPLiteral("8.8.8.8")) {
+//line url-net-tests.tesl:179
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line url-net-tests.tesl:180
 	if teslrt.NetIsIPLiteral("example.com") {
+//line url-net-tests.tesl:180
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line url-net-tests.tesl:181
 	if !(teslrt.NetIsLoopback("localhost")) {
+//line url-net-tests.tesl:181
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line url-net-tests.tesl:182
 	if teslrt.NetIsIPLiteral("localhost") {
+//line url-net-tests.tesl:182
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -650,13 +778,20 @@ func TestTesl13(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line url-net-tests.tesl:186
 	if !(allowed("https://api.example.com/webhook")) {
+//line url-net-tests.tesl:186
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft49 := hostOf("https://api.example.com/webhook")
 //line url-net-tests.tesl:187
 	if teslLeft49 != "api.example.com" {
+//line url-net-tests.tesl:187
 		teslT.Fatal("Tesl expectation failed")
 	}
 }

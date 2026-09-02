@@ -86,6 +86,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson09-proof-composition.tesl:118
 		n1 := teslrt.FromInt64(1)
@@ -112,6 +117,7 @@ func TestTesl0(teslT *testing.T) {
 							_ = r3
 //line lesson09-proof-composition.tesl:124
 							if !teslrt.Equal(teslrt.FromInt64(1), teslrt.FromInt64(1)) {
+//line lesson09-proof-composition.tesl:124
 								teslT.Fatal("Tesl expectation failed")
 							}
 						}
@@ -129,6 +135,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson09-proof-composition.tesl:128
 		zero := teslrt.FromInt64(0)
@@ -156,6 +167,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson09-proof-composition.tesl:135
 		s1 := "a"
@@ -174,6 +190,7 @@ func TestTesl2(teslT *testing.T) {
 					_ = r2
 //line lesson09-proof-composition.tesl:139
 					if !teslrt.Equal(teslrt.FromInt64(1), teslrt.FromInt64(1)) {
+//line lesson09-proof-composition.tesl:139
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -189,6 +206,11 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson09-proof-composition.tesl:143
 		empty := ""
@@ -207,6 +229,11 @@ func TestTesl4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson09-proof-composition.tesl:148
 		rawN := teslrt.FromInt64(5)
@@ -229,6 +256,7 @@ func TestTesl4(teslT *testing.T) {
 						_ = r1
 //line lesson09-proof-composition.tesl:153
 						if r1 != "5: item" {
+//line lesson09-proof-composition.tesl:153
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}

@@ -96,6 +96,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line filter-check-partial-tests.tesl:54
 		xs := []teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(50), teslrt.FromInt64(200), teslrt.FromInt64(99)}
@@ -115,6 +120,7 @@ func TestTesl0(teslT *testing.T) {
 			teslLeft1 := teslrt.ListLength(result)
 //line filter-check-partial-tests.tesl:56
 			if !teslrt.Equal(teslLeft1, teslrt.FromInt64(3)) {
+//line filter-check-partial-tests.tesl:56
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -128,6 +134,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line filter-check-partial-tests.tesl:60
 		xs := []teslrt.Int{teslrt.Neg(teslrt.FromInt64(7)), teslrt.FromInt64(1), teslrt.FromInt64(50), teslrt.FromInt64(200), teslrt.FromInt64(99)}
@@ -147,6 +158,7 @@ func TestTesl1(teslT *testing.T) {
 			teslLeft2 := teslrt.ListLength(result)
 //line filter-check-partial-tests.tesl:62
 			if !teslrt.Equal(teslLeft2, teslrt.FromInt64(3)) {
+//line filter-check-partial-tests.tesl:62
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -160,6 +172,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line filter-check-partial-tests.tesl:66
 		result := atMostAll([]teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(500), teslrt.FromInt64(7)}, teslrt.FromInt64(100))
@@ -167,6 +184,7 @@ func TestTesl2(teslT *testing.T) {
 		teslLeft3 := teslrt.ListLength(result)
 //line filter-check-partial-tests.tesl:67
 		if !teslrt.Equal(teslLeft3, teslrt.FromInt64(2)) {
+//line filter-check-partial-tests.tesl:67
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}

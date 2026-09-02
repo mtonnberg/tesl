@@ -80,6 +80,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson62-ai-agents.tesl:105
 		call := teslrt.ToolUseStep("getWeather", "c1", "{\"city\":\"Paris\"}")
@@ -99,11 +104,13 @@ func TestTesl0(teslT *testing.T) {
 					teslLeft1 := teslrt.ReplyText(reply)
 //line lesson62-ai-agents.tesl:109
 					if teslLeft1 != "It is sunny in Paris right now." {
+//line lesson62-ai-agents.tesl:109
 						teslT.Fatal("Tesl expectation failed")
 					}
 					teslLeft2 := teslrt.ReplyToolCalls(reply)
 //line lesson62-ai-agents.tesl:110
 					if !teslrt.Equal(teslLeft2, teslrt.FromInt64(1)) {
+//line lesson62-ai-agents.tesl:110
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -119,6 +126,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson62-ai-agents.tesl:116
 		call := teslrt.ToolUseStep("bookTable", "c1", "{\"restaurant\":\"Chez Tesl\",\"guests\":4}")
@@ -138,11 +150,13 @@ func TestTesl1(teslT *testing.T) {
 					teslLeft3 := teslrt.ReplyText(reply)
 //line lesson62-ai-agents.tesl:120
 					if teslLeft3 != "All set!" {
+//line lesson62-ai-agents.tesl:120
 						teslT.Fatal("Tesl expectation failed")
 					}
 					teslLeft4 := teslrt.ReplyToolCalls(reply)
 //line lesson62-ai-agents.tesl:121
 					if !teslrt.Equal(teslLeft4, teslrt.FromInt64(1)) {
+//line lesson62-ai-agents.tesl:121
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -158,6 +172,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson62-ai-agents.tesl:127
 		call := teslrt.ToolUseStep("getWeather", "c1", "{\"wrong\":\"field\"}")
@@ -177,11 +196,13 @@ func TestTesl2(teslT *testing.T) {
 					teslLeft5 := teslrt.ReplyText(reply)
 //line lesson62-ai-agents.tesl:131
 					if teslLeft5 != "I could not look that up." {
+//line lesson62-ai-agents.tesl:131
 						teslT.Fatal("Tesl expectation failed")
 					}
 					teslLeft6 := teslrt.ReplyToolCalls(reply)
 //line lesson62-ai-agents.tesl:132
 					if !teslrt.Equal(teslLeft6, teslrt.FromInt64(1)) {
+//line lesson62-ai-agents.tesl:132
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}

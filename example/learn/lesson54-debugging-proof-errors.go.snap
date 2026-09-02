@@ -135,12 +135,18 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson54-debugging-proof-errors.tesl:165
 		result := DiagnoseCommonMistakes(teslrt.FromInt64(75))
 		_ = result
 //line lesson54-debugging-proof-errors.tesl:166
 		if result != "score: 75" {
+//line lesson54-debugging-proof-errors.tesl:166
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -153,6 +159,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line lesson54-debugging-proof-errors.tesl:170
 	teslExpectFailure(teslT, func() {
 		_ = DiagnoseCommonMistakes(teslrt.FromInt64(150))
@@ -166,6 +177,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson54-debugging-proof-errors.tesl:174
 		n := teslrt.FromInt64(80)
@@ -180,6 +196,7 @@ func TestTesl2(teslT *testing.T) {
 				_ = result
 //line lesson54-debugging-proof-errors.tesl:177
 				if result != "score: 40" {
+//line lesson54-debugging-proof-errors.tesl:177
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -194,12 +211,18 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson54-debugging-proof-errors.tesl:181
 		result := roundtripProof(teslrt.FromInt64(50))
 		_ = result
 //line lesson54-debugging-proof-errors.tesl:182
 		if result != "score: 50" {
+//line lesson54-debugging-proof-errors.tesl:182
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}

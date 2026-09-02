@@ -73,6 +73,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson05-intro-to-proofs.tesl:113
 		port1 := teslrt.FromInt64(1)
@@ -107,6 +112,7 @@ func TestTesl0(teslT *testing.T) {
 									_ = x4
 //line lesson05-intro-to-proofs.tesl:121
 									if !teslrt.Equal(teslrt.FromInt64(1), teslrt.FromInt64(1)) {
+//line lesson05-intro-to-proofs.tesl:121
 										teslT.Fatal("Tesl expectation failed")
 									}
 								}
@@ -126,6 +132,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson05-intro-to-proofs.tesl:125
 		port1 := teslrt.FromInt64(80)
@@ -145,11 +156,13 @@ func TestTesl1(teslT *testing.T) {
 					teslLeft2 := ListenOnPort(p1)
 //line lesson05-intro-to-proofs.tesl:129
 					if teslLeft2 != "listening on port 80" {
+//line lesson05-intro-to-proofs.tesl:129
 						teslT.Fatal("Tesl expectation failed")
 					}
 					teslLeft3 := ListenOnPort(p2)
 //line lesson05-intro-to-proofs.tesl:130
 					if teslLeft3 != "listening on port 8080" {
+//line lesson05-intro-to-proofs.tesl:130
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -165,6 +178,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson05-intro-to-proofs.tesl:134
 		port0 := teslrt.FromInt64(0)
@@ -201,6 +219,11 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson05-intro-to-proofs.tesl:143
 		n1 := teslrt.FromInt64(1)
@@ -219,6 +242,7 @@ func TestTesl3(teslT *testing.T) {
 					_ = x2
 //line lesson05-intro-to-proofs.tesl:147
 					if !teslrt.Equal(teslrt.FromInt64(1), teslrt.FromInt64(1)) {
+//line lesson05-intro-to-proofs.tesl:147
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -234,6 +258,11 @@ func TestTesl4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson05-intro-to-proofs.tesl:151
 		zero := teslrt.FromInt64(0)

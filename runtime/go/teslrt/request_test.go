@@ -2,6 +2,7 @@ package teslrt
 
 import (
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -99,4 +100,28 @@ func TestClientAddressRejectsAllTrustedForwardedChain(t *testing.T) {
 		}
 	}()
 	_ = NewHttpRequest(request, "", "10.0.0.1", "10.0.0.2")
+}
+
+// The cookie's Max-Age and the token's `exp` are ONE number, the session policy's. A cookie
+// hard-coded to 3600 under `ShortSession` kept a dead 900-second token in the browser for 45
+// minutes, and disagreed with the SSO callback, which already honoured the policy.
+func TestSetSessionCookieMaxAgeFollowsTheSessionPolicy(t *testing.T) {
+	t.Cleanup(func() { SetSessionPolicy(jwtTTLSeconds) })
+	key := testKey("cookie-policy-key")
+	for _, policy := range []struct {
+		name   string
+		maxAge string
+	}{{"ShortSession", "Max-Age=900"}, {"StandardSession", "Max-Age=3600"}} {
+		SetSessionPolicy(SessionPolicyTTL(policy.name))
+		scope := NewRequestScope()
+		_ = SetSessionCookie(scope, JwtSign(claimsOf("sub", "u"), key))
+		cookies := scope.CookieHeaders()
+		if len(cookies) != 1 || !strings.HasSuffix(cookies[0], "; "+policy.maxAge) {
+			t.Errorf("%s: session cookie = %v, want a %s suffix", policy.name, cookies, policy.maxAge)
+		}
+		if !strings.HasPrefix(cookies[0], "__Host-session=") ||
+			!strings.Contains(cookies[0], "; Path=/; HttpOnly; Secure; SameSite=Lax; ") {
+			t.Errorf("%s: cookie attributes drifted: %q", policy.name, cookies[0])
+		}
+	}
 }

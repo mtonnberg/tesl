@@ -19,7 +19,7 @@ nix develop            # or: direnv allow  (the repo ships a .envrc containing `
 cd compiler && dune build
 ```
 
-The nix dev shell is the **only** supported environment — it pins Racket 9.2, OCaml + dune and
+The nix dev shell is the **only** supported environment — it pins Go 1.26, OCaml + dune and
 PostgreSQL, and starts a project-local database. `dune build` produces
 `compiler/_build/default/bin/main.exe`, which every script, test and editor integration expects.
 

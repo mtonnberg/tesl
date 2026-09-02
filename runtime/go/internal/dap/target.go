@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"tesl.dev/runtime/go/teslrt"
 )
 
 const targetConnectTimeout = 10 * time.Second
@@ -47,6 +49,62 @@ type processAttachArguments struct {
 	Socket  string `json:"socket,omitempty"`
 	Address string `json:"address,omitempty"`
 	Port    int    `json:"port,omitempty"`
+	// Token authenticates a TCP attach. When omitted alongside an explicit
+	// address/port, it is read from <project>/.tesl-stuff/debug.token if project is set.
+	Token string `json:"token,omitempty"`
+}
+
+// ProjectEndpoint is the attach endpoint discovered under <project>/.tesl-stuff/:
+// either a Unix socket, or a loopback address plus the token that authenticates it.
+type ProjectEndpoint struct {
+	Socket  string
+	Address string
+	Token   string
+}
+
+// DiscoverProjectEndpoint prefers the Unix socket, then falls back to the TCP
+// port file, which the runtime always writes together with its token file.
+func DiscoverProjectEndpoint(project string) (ProjectEndpoint, error) {
+	stuff := filepath.Join(project, ".tesl-stuff")
+	socket := filepath.Join(stuff, "debug.sock")
+	if _, err := os.Stat(socket); err == nil {
+		return ProjectEndpoint{Socket: socket}, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return ProjectEndpoint{}, fmt.Errorf("inspect debug socket: %w", err)
+	}
+	portPath := filepath.Join(stuff, teslrt.DebugPortFile)
+	contents, err := os.ReadFile(portPath) // #nosec G304 -- read only the selected project's debug port.
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ProjectEndpoint{}, fmt.Errorf("no debug endpoint under %s", stuff)
+		}
+		return ProjectEndpoint{}, fmt.Errorf("read debug port: %w", err)
+	}
+	port := strings.TrimSpace(string(contents))
+	if _, err := strconv.Atoi(port); err != nil || port == "" {
+		return ProjectEndpoint{}, fmt.Errorf("debug port file %s is not a port number", portPath)
+	}
+	token, err := ReadDebugToken(filepath.Join(stuff, teslrt.DebugTokenFile))
+	if err != nil {
+		return ProjectEndpoint{}, err
+	}
+	return ProjectEndpoint{Address: "127.0.0.1:" + port, Token: token}, nil
+}
+
+// ReadDebugToken reads the credential the runtime wrote beside its port file.
+func ReadDebugToken(path string) (string, error) {
+	contents, err := os.ReadFile(path) // #nosec G304 -- read only the selected project's debug token.
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("debug endpoint is TCP but %s is missing; the runtime writes it beside %s", path, teslrt.DebugPortFile)
+		}
+		return "", fmt.Errorf("read debug token: %w", err)
+	}
+	token := strings.TrimSpace(string(contents))
+	if err := teslrt.ValidateDebugToken(token); err != nil {
+		return "", fmt.Errorf("%s: %w", path, err)
+	}
+	return token, nil
 }
 
 func NewProcessTarget() *ProcessTarget { return &ProcessTarget{} }
@@ -188,9 +246,9 @@ func (target *ProcessTarget) AttachBackend(data json.RawMessage) (DebugBackend, 
 	case arguments.Socket != "":
 		client, err = DialControlUnix(arguments.Socket)
 	case arguments.Address != "":
-		client, err = DialControlTCP(arguments.Address)
+		client, err = DialControlTCP(arguments.Address, attachToken(arguments))
 	case arguments.Port > 0:
-		client, err = DialControlTCP("127.0.0.1:" + strconv.Itoa(arguments.Port))
+		client, err = DialControlTCP("127.0.0.1:"+strconv.Itoa(arguments.Port), attachToken(arguments))
 	case arguments.Project != "":
 		client, err = dialProjectEndpoint(arguments.Project)
 	default:
@@ -205,27 +263,29 @@ func (target *ProcessTarget) AttachBackend(data json.RawMessage) (DebugBackend, 
 	return client, nil
 }
 
-func dialProjectEndpoint(project string) (*ControlClient, error) {
-	stuff := filepath.Join(project, ".tesl-stuff")
-	socket := filepath.Join(stuff, "debug.sock")
-	if _, err := os.Stat(socket); err == nil {
-		return DialControlUnix(socket)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("inspect debug socket: %w", err)
+// attachToken resolves the credential for an explicit TCP attach: the token
+// argument, else the project's token file (the editor's `port` + default
+// `project` configuration), else nothing — the endpoint will refuse.
+func attachToken(arguments processAttachArguments) string {
+	if arguments.Token != "" || arguments.Project == "" {
+		return arguments.Token
 	}
-	portPath := filepath.Join(stuff, "debug.port")
-	contents, err := os.ReadFile(portPath) // #nosec G304 -- read only the selected project's debug port.
+	token, err := ReadDebugToken(filepath.Join(arguments.Project, ".tesl-stuff", teslrt.DebugTokenFile))
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("no debug endpoint under %s", stuff)
-		}
-		return nil, fmt.Errorf("read debug port: %w", err)
+		return ""
 	}
-	port := strings.TrimSpace(string(contents))
-	if port == "" {
-		return nil, fmt.Errorf("debug port file is empty: %s", portPath)
+	return token
+}
+
+func dialProjectEndpoint(project string) (*ControlClient, error) {
+	endpoint, err := DiscoverProjectEndpoint(project)
+	if err != nil {
+		return nil, err
 	}
-	return DialControlTCP("127.0.0.1:" + port)
+	if endpoint.Socket != "" {
+		return DialControlUnix(endpoint.Socket)
+	}
+	return DialControlTCP(endpoint.Address, endpoint.Token)
 }
 
 func (target *ProcessTarget) Close() error {
@@ -383,34 +443,39 @@ func (target *ProcessTarget) notify(event TargetEvent) {
 type launchEndpointSpec struct {
 	socket      string
 	address     string
+	token       string
 	environment map[string]string
 }
 
+// launchEndpoint chooses the child's control endpoint. For TCP launches the
+// launcher mints the token itself and hands it to the child through
+// teslrt.DebugTokenEnv, so it can dial without waiting for the token file.
 func launchEndpoint(arguments processLaunchArguments, cwd string) (launchEndpointSpec, error) {
-	if arguments.DebugAddress != "" {
-		if arguments.DebugPort > 0 {
+	if arguments.DebugAddress != "" || arguments.DebugPort > 0 {
+		if arguments.DebugAddress != "" && arguments.DebugPort > 0 {
 			return launchEndpointSpec{}, errors.New("launch cannot set both debugAddress and debugPort")
 		}
-		_, port, err := splitAddress(arguments.DebugAddress)
+		address, port := arguments.DebugAddress, arguments.DebugPort
+		if address != "" {
+			var err error
+			if _, port, err = splitAddress(address); err != nil {
+				return launchEndpointSpec{}, err
+			}
+		} else {
+			address = "127.0.0.1:" + strconv.Itoa(port)
+		}
+		token, err := teslrt.NewDebugToken()
 		if err != nil {
 			return launchEndpointSpec{}, err
 		}
 		environment := map[string]string{
-			"TESL_DEBUG": "1", "TESL_DEBUG_PORT": strconv.Itoa(port),
+			"TESL_DEBUG": "1", "TESL_DEBUG_PORT": strconv.Itoa(port), "TESL_DEBUG_ROOT": cwd,
+			teslrt.DebugTokenEnv: token,
 		}
 		if strings.EqualFold(filepath.Ext(arguments.Program), ".tesl") {
 			environment["TESL_DEBUG_WAIT"] = "1"
 		}
-		return launchEndpointSpec{address: arguments.DebugAddress, environment: environment}, nil
-	}
-	if arguments.DebugPort > 0 {
-		environment := map[string]string{
-			"TESL_DEBUG": "1", "TESL_DEBUG_PORT": strconv.Itoa(arguments.DebugPort),
-		}
-		if strings.EqualFold(filepath.Ext(arguments.Program), ".tesl") {
-			environment["TESL_DEBUG_WAIT"] = "1"
-		}
-		return launchEndpointSpec{address: "127.0.0.1:" + strconv.Itoa(arguments.DebugPort), environment: environment}, nil
+		return launchEndpointSpec{address: address, token: token, environment: environment}, nil
 	}
 	socket := arguments.DebugSocket
 	if socket == "" {
@@ -445,7 +510,7 @@ func waitForControlEndpoint(endpoint launchEndpointSpec, command *exec.Cmd, wait
 		if endpoint.socket != "" {
 			client, err = DialControlUnix(endpoint.socket)
 		} else {
-			client, err = DialControlTCP(endpoint.address)
+			client, err = DialControlTCP(endpoint.address, endpoint.token)
 		}
 		if err == nil {
 			return client, nil

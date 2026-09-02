@@ -1,0 +1,49 @@
+module SqlListMembershipTests exposing []
+
+# `inList` / `notInList` take a LIST LITERAL.  A non-literal operand used to compile to a
+# constant predicate (`where false` / `where true`) on both backends — an exclusion filter
+# over a runtime list returned every row it was meant to exclude, silently.  The compiler now
+# refuses that shape (see compiler/test/test_sql_list_membership.ml); this file pins that the
+# literal form still means what it says (language review 2026-09-02, H1).
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, DatabaseBackend, Memory]
+import Tesl.List exposing [List.length]
+
+entity Post table "posts" primaryKey id {
+  id: String
+  author: String
+}
+
+# Named so each test block starts from an empty store (an entity outside every `database`
+# declaration shares one store across the file's test blocks).
+database TestDb = Database {
+  schema: "sql_list_membership"
+  entities: [Post]
+  backend: Memory
+}
+
+fn visiblePosts() -> Int requires [dbRead] =
+  let rows = select p from Post
+    where notInList p.author ["mallory", "trudy"]
+  List.length rows
+
+fn staffPosts() -> Int requires [dbRead] =
+  let rows = select p from Post
+    where inList p.author ["alice", "bob"]
+  List.length rows
+
+test "notInList with a literal list excludes exactly those authors" requires [dbRead, dbWrite] {
+  let _ = insert Post { id: "1", author: "alice" }
+  let _ = insert Post { id: "2", author: "mallory" }
+  let _ = insert Post { id: "3", author: "trudy" }
+  expect visiblePosts () == 1
+}
+
+test "inList with a literal list keeps exactly those authors" requires [dbRead, dbWrite] {
+  let _ = insert Post { id: "1", author: "alice" }
+  let _ = insert Post { id: "2", author: "mallory" }
+  let _ = insert Post { id: "3", author: "bob" }
+  expect staffPosts () == 2
+}

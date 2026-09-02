@@ -3,8 +3,10 @@ package teslrt
 import (
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -101,5 +103,58 @@ func TestServerFailureShape(t *testing.T) {
 	// Cookies attach to 2xx only: a handler that fails mints no session.
 	if got := response.Header.Get("Set-Cookie"); got != "" {
 		t.Errorf("a failure must not set cookies, got %q", got)
+	}
+}
+
+// A handler whose Float overflowed answers a sanitized 500, not a 200 whose body is `+Inf`
+// (review M3). The encode happens in writeResponse, AFTER callHandler's recover, so the trap
+// has to be caught there — left to net/http it would close the connection with no response.
+func TestServerNonFiniteFloatAnswersSanitized500(t *testing.T) {
+	server := Server{
+		Routes: []Route{{Method: "GET", Path: "/stat", Endpoint: "stat"}},
+		Handlers: map[string]HandlerFunc{
+			"stat": func(scope *RequestScope, _ *http.Request) Response {
+				// A cookie set on the way: a 500 must not carry it.
+				_ = ClearSessionCookie(scope)
+				return Response{Status: 200, Body: map[string]any{"label": "overflow", "value": math.Inf(1)}}
+			},
+		},
+	}
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, httptest.NewRequest("GET", "/stat", nil))
+	response := recorder.Result()
+	body, _ := io.ReadAll(response.Body)
+	if response.StatusCode != 500 {
+		t.Fatalf("status = %d, body %s", response.StatusCode, body)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("500 body is not JSON: %v (%s)", err, body)
+	}
+	if decoded["error"] != "Internal server error" || strings.Contains(string(body), "Inf") {
+		t.Errorf("500 body = %s, want the sanitized envelope", body)
+	}
+	if response.Header.Get("Content-Type") != "application/json" {
+		t.Errorf("Content-Type = %q", response.Header.Get("Content-Type"))
+	}
+	if len(response.Header.Values("Set-Cookie")) != 0 {
+		t.Error("a 500 must not carry the handler's cookies")
+	}
+}
+
+// RFC 9110 §15.5.6: a 405 MUST list the methods the path does accept.
+func TestServer405CarriesAllow(t *testing.T) {
+	response := serve(t, "PUT", "/hello")
+	if response.StatusCode != 405 {
+		t.Fatalf("status = %d", response.StatusCode)
+	}
+	if got := response.Header.Get("Allow"); got != "GET, POST" {
+		t.Errorf("Allow = %q, want %q", got, "GET, POST")
+	}
+	if got := serve(t, "DELETE", "/items/7").Header.Get("Allow"); got != "GET" {
+		t.Errorf("Allow for a single-method path = %q, want GET", got)
+	}
+	if got := serve(t, "GET", "/nowhere"); got.StatusCode != 404 || got.Header.Get("Allow") != "" {
+		t.Errorf("a 404 carries no Allow: %d %q", got.StatusCode, got.Header.Get("Allow"))
 	}
 }

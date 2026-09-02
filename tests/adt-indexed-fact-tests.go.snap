@@ -244,6 +244,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line adt-indexed-fact-tests.tesl:153
 		c := mkCaller("alice", []Permission{Permission{Tag: PermissionWriteCostRates}})
@@ -255,6 +260,7 @@ func TestTesl0(teslT *testing.T) {
 			teslLeft1 := writeCostRatesCore(proven)
 //line adt-indexed-fact-tests.tesl:155
 			if teslLeft1 != "wrote cost rates" {
+//line adt-indexed-fact-tests.tesl:155
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -268,6 +274,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line adt-indexed-fact-tests.tesl:159
 		c := mkCaller("bob", []Permission{Permission{Tag: PermissionReadProjects}})
@@ -279,6 +290,7 @@ func TestTesl1(teslT *testing.T) {
 			teslLeft2 := readProjectsCore(proven)
 //line adt-indexed-fact-tests.tesl:161
 			if teslLeft2 != "read projects" {
+//line adt-indexed-fact-tests.tesl:161
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -292,6 +304,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line adt-indexed-fact-tests.tesl:165
 		c := mkCaller("root", []Permission{Permission{Tag: PermissionWriteCostRates}, Permission{Tag: PermissionReadProjects}, Permission{Tag: PermissionManageUsers}})
@@ -299,6 +316,7 @@ func TestTesl2(teslT *testing.T) {
 		teslLeft3 := grantedCount(c)
 //line adt-indexed-fact-tests.tesl:166
 		if !teslrt.Equal(teslLeft3, teslrt.FromInt64(3)) {
+//line adt-indexed-fact-tests.tesl:166
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -308,6 +326,7 @@ func TestTesl2(teslT *testing.T) {
 			teslLeft4 := writeCostRatesCore(w)
 //line adt-indexed-fact-tests.tesl:168
 			if teslLeft4 != "wrote cost rates" {
+//line adt-indexed-fact-tests.tesl:168
 				teslT.Fatal("Tesl expectation failed")
 			}
 			{
@@ -317,6 +336,7 @@ func TestTesl2(teslT *testing.T) {
 				teslLeft5 := readProjectsCore(r)
 //line adt-indexed-fact-tests.tesl:170
 				if teslLeft5 != "read projects" {
+//line adt-indexed-fact-tests.tesl:170
 					teslT.Fatal("Tesl expectation failed")
 				}
 				{
@@ -326,6 +346,7 @@ func TestTesl2(teslT *testing.T) {
 					teslLeft6 := manageUsersCore(m)
 //line adt-indexed-fact-tests.tesl:172
 					if teslLeft6 != "managed users" {
+//line adt-indexed-fact-tests.tesl:172
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -341,6 +362,11 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line adt-indexed-fact-tests.tesl:176
 		c := mkCaller("dave", []Permission{Permission{Tag: PermissionReadProjects}})
@@ -352,6 +378,7 @@ func TestTesl3(teslT *testing.T) {
 			teslLeft7 := describeGrant(proven)
 //line adt-indexed-fact-tests.tesl:178
 			if teslLeft7 != "dave may read projects" {
+//line adt-indexed-fact-tests.tesl:178
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -368,16 +395,23 @@ func TestTeslApi0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line adt-indexed-fact-tests.tesl:137
 		resp := teslrt.ApiRequest(PermissionServer, "GET", "/cost-rates", "", []string{"perm=write"}, nil)
 		_ = resp
 //line adt-indexed-fact-tests.tesl:138
 		if !(teslrt.StatusOk(resp.Status)) {
+//line adt-indexed-fact-tests.tesl:138
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line adt-indexed-fact-tests.tesl:139
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "outcome"), "wrote cost rates") {
+//line adt-indexed-fact-tests.tesl:139
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -393,6 +427,11 @@ func TestTeslApi1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line adt-indexed-fact-tests.tesl:143
 		resp := teslrt.ApiRequest(PermissionServer, "GET", "/cost-rates", "", []string{"perm=read"}, nil)
@@ -400,6 +439,7 @@ func TestTeslApi1(teslT *testing.T) {
 		teslLeft8 := resp.Status
 //line adt-indexed-fact-tests.tesl:144
 		if !teslrt.Equal(teslLeft8, teslrt.FromInt64(403)) {
+//line adt-indexed-fact-tests.tesl:144
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -415,6 +455,11 @@ func TestTeslApi2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line adt-indexed-fact-tests.tesl:148
 		resp := teslrt.ApiRequest(PermissionServer, "GET", "/cost-rates", "", nil, nil)
@@ -422,6 +467,7 @@ func TestTeslApi2(teslT *testing.T) {
 		teslLeft9 := resp.Status
 //line adt-indexed-fact-tests.tesl:149
 		if !teslrt.Equal(teslLeft9, teslrt.FromInt64(401)) {
+//line adt-indexed-fact-tests.tesl:149
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}

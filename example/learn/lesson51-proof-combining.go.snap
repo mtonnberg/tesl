@@ -181,9 +181,15 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft1 := validateAndProcess("Alice")
 //line lesson51-proof-combining.tesl:184
 	if teslLeft1 != "Alice / Alice" {
+//line lesson51-proof-combining.tesl:184
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -195,9 +201,15 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft2 := validateEmail("alice@example.com")
 //line lesson51-proof-combining.tesl:188
 	if teslLeft2 != "alice@example.com / alice@example.com" {
+//line lesson51-proof-combining.tesl:188
 		teslT.Fatal("Tesl expectation failed")
 	}
 }

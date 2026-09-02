@@ -67,22 +67,34 @@ func DialControlUnix(path string) (*ControlClient, error) {
 	return NewControlClient(connection)
 }
 
-func DialControlTCP(address string) (*ControlClient, error) {
+// DialControlTCP connects to a loopback endpoint. TCP endpoints require the
+// per-launch token (teslrt.DebugTokenFile beside teslrt.DebugPortFile, or the
+// value the launcher passed through teslrt.DebugTokenEnv) in the handshake.
+func DialControlTCP(address, token string) (*ControlClient, error) {
 	connection, err := net.Dial("tcp4", address)
 	if err != nil {
 		return nil, fmt.Errorf("dap: connect to TCP debug endpoint: %w", err)
 	}
-	return NewControlClient(connection)
+	return NewControlClientWithToken(connection, token)
 }
 
+// NewControlClient performs the handshake without a token — sufficient for Unix
+// endpoints, whose socket permissions are the credential.
 func NewControlClient(connection net.Conn) (*ControlClient, error) {
+	return NewControlClientWithToken(connection, "")
+}
+
+// NewControlClientWithToken performs the handshake, presenting token when it is
+// non-empty. The handshake is the FIRST message on the wire: a TCP endpoint
+// closes any connection whose first message is not an authenticated handshake.
+func NewControlClientWithToken(connection net.Conn, token string) (*ControlClient, error) {
 	client := &ControlClient{
 		connection: connection,
 		pending:    make(map[string]chan controlResult),
 		done:       make(chan struct{}),
 	}
 	go client.readLoop()
-	result, err := client.call(teslrt.DebugControlRequest{Command: "handshake"})
+	result, err := client.call(teslrt.DebugControlRequest{Command: "handshake", Token: token})
 	if err != nil {
 		client.Close()
 		return nil, err

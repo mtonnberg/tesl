@@ -221,19 +221,27 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft1 := describe(Caller{Tag: CallerHumanActs, HumanActsValue: "bob"})
 //line api-auth-sum-type-tests.tesl:128
 	if teslLeft1 != "human:bob" {
+//line api-auth-sum-type-tests.tesl:128
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft2 := describe(Caller{Tag: CallerAppActs, AppActsValue: "ci"})
 //line api-auth-sum-type-tests.tesl:129
 	if teslLeft2 != "app:ci" {
+//line api-auth-sum-type-tests.tesl:129
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft3 := describe(Caller{Tag: CallerSystemActs})
 //line api-auth-sum-type-tests.tesl:130
 	if teslLeft3 != "system" {
+//line api-auth-sum-type-tests.tesl:130
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -245,6 +253,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-auth-sum-type-tests.tesl:134
 		t := TenantId{Value: "acme"}
@@ -256,6 +269,7 @@ func TestTesl1(teslT *testing.T) {
 			teslLeft4 := tenantLabel(scoped)
 //line api-auth-sum-type-tests.tesl:136
 			if teslLeft4 != "tenant:acme" {
+//line api-auth-sum-type-tests.tesl:136
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -272,16 +286,23 @@ func TestTeslApi0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-auth-sum-type-tests.tesl:105
 		resp := teslrt.ApiRequest(CallerServer, "GET", "/whoami", "", []string{"actor=alice"}, nil)
 		_ = resp
 //line api-auth-sum-type-tests.tesl:106
 		if !(teslrt.StatusOk(resp.Status)) {
+//line api-auth-sum-type-tests.tesl:106
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line api-auth-sum-type-tests.tesl:107
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "actor"), "human:alice") {
+//line api-auth-sum-type-tests.tesl:107
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -297,16 +318,23 @@ func TestTeslApi1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-auth-sum-type-tests.tesl:111
 		resp := teslrt.ApiRequest(CallerServer, "GET", "/whoami", "", []string{"actor=app"}, nil)
 		_ = resp
 //line api-auth-sum-type-tests.tesl:112
 		if !(teslrt.StatusOk(resp.Status)) {
+//line api-auth-sum-type-tests.tesl:112
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line api-auth-sum-type-tests.tesl:113
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "actor"), "app:deploy-bot") {
+//line api-auth-sum-type-tests.tesl:113
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -322,16 +350,23 @@ func TestTeslApi2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-auth-sum-type-tests.tesl:117
 		resp := teslrt.ApiRequest(CallerServer, "GET", "/whoami", "", []string{"actor=system"}, nil)
 		_ = resp
 //line api-auth-sum-type-tests.tesl:118
 		if !(teslrt.StatusOk(resp.Status)) {
+//line api-auth-sum-type-tests.tesl:118
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line api-auth-sum-type-tests.tesl:119
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(resp.Body, "actor"), "system") {
+//line api-auth-sum-type-tests.tesl:119
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -347,6 +382,11 @@ func TestTeslApi3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line api-auth-sum-type-tests.tesl:123
 		resp := teslrt.ApiRequest(CallerServer, "GET", "/whoami", "", nil, nil)
@@ -354,6 +394,7 @@ func TestTeslApi3(teslT *testing.T) {
 		teslLeft5 := resp.Status
 //line api-auth-sum-type-tests.tesl:124
 		if !teslrt.Equal(teslLeft5, teslrt.FromInt64(401)) {
+//line api-auth-sum-type-tests.tesl:124
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}

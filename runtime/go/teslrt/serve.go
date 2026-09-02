@@ -56,15 +56,7 @@ func Serve(server Server, options ServeOptions) struct{} {
 		port = 8080
 	}
 	handler := server.handlerWith(options)
-	address := bindAddress(options)
-	httpServer := &http.Server{
-		Addr:              address,
-		Handler:           handler,
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      60 * time.Second,
-		IdleTimeout:       120 * time.Second,
-	}
+	httpServer := newHTTPServer(handler, bindAddress(options), serveWriteTimeout)
 	// Graceful: an interrupt stops accepting and lets in-flight requests finish, so a deploy does
 	// not answer a request with a truncated response.
 	shutdown, stop := signal.NotifyContext(context.Background(),
@@ -85,6 +77,27 @@ func Serve(server Server, options ServeOptions) struct{} {
 		panic("serve: " + err.Error())
 	}
 	return struct{}{}
+}
+
+// serveWriteTimeout is the per-response write deadline `Serve` installs. Go arms it ONCE per
+// request, so it bounds a whole response — the right shape for a JSON answer and the wrong one
+// for an `sse` stream that lives for the connection; the stream re-arms its own rolling deadline
+// (see `sseWriteDeadline`) instead of inheriting this one.
+const serveWriteTimeout = 60 * time.Second
+
+// newHTTPServer is the ONE place the production `http.Server` is configured, so a test can run
+// the same server with a shortened `writeTimeout` and meet exactly the deadlines a deployment
+// does. An `httptest.Server` has no timeouts at all, which is how "WriteTimeout cuts every SSE
+// stream at 60 s" stayed invisible to every api-test.
+func newHTTPServer(handler http.Handler, address string, writeTimeout time.Duration) *http.Server {
+	return &http.Server{
+		Addr:              address,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       120 * time.Second,
+	}
 }
 
 // bindAddress is where the listener goes: the `listenAddress` clause's interface and the port.
@@ -141,16 +154,27 @@ func (server Server) handlerWith(options ServeOptions) http.Handler {
 				trimmed = "/" + trimmed
 			}
 			routed.URL.Path = trimmed
+			// UNDER the mount prefix the declared API is the only surface. The prefix exists to
+			// separate the API from the SPA sharing the origin, so a mounted path the API does
+			// not declare is an API miss and gets the API's JSON 404 (or 405) — not index.html
+			// with a 200, which is what a client that mistyped `/api/task` would otherwise be
+			// told to parse as JSON.
+			//
+			// The runtime-owned SSO routes are excluded: they answer on the RAW path (matched
+			// above) and are not part of the declared API, so `/api/auth/<seg>/login` is a miss
+			// rather than a second door to the login flow.
+			if _, _, matched := findSsoMatch(server.SsoRoutes, routed.URL.Path); matched {
+				writeResponse(writer, nil, Fail(404, "not found"))
+				return
+			}
+			server.ServeHTTP(writer, routed)
+			return
 		}
 		if server.declaredRouteExists(routed) {
 			server.ServeHTTP(writer, routed)
 			return
 		}
 		if static != "" && serveStatic(writer, request, static) {
-			return
-		}
-		if mount != "" {
-			writeResponse(writer, nil, Fail(404, "not found"))
 			return
 		}
 		server.ServeHTTP(writer, routed)
@@ -171,38 +195,95 @@ func (server Server) declaredRouteExists(request *http.Request) bool {
 // serveStatic answers a GET from the static directory, falling back to index.html so a
 // single-page app's client-side routes load. Reports whether it answered.
 //
-// The path is resolved and then CHECKED to be inside the directory: `..` segments and absolute
-// paths are how a static handler becomes an arbitrary-file read, and the check is on the
-// resolved path rather than on the request text so an encoded traversal cannot slip past.
+// Three rules keep this from becoming an arbitrary-file read, and they are checked in the order
+// a request meets them:
+//
+//   - The path is cleaned and checked LEXICALLY to be inside the directory: `..` segments and
+//     absolute paths are the textbook traversal, and an encoded one has been decoded by the
+//     time it is here.
+//   - A segment beginning with `.` is never served. A static directory is usually a build
+//     output, and build outputs carry `.env`, `.git/config`, editor backups — files that are
+//     next to the SPA rather than part of it. (`.well-known/` falls under this too; it is a
+//     deliberate trade, since nothing here can tell it from `.git/`.)
+//   - Symlinks are RESOLVED — on the candidate AND on the root — and containment is re-checked
+//     on the resolved paths. `pnpm` and nix both link build inputs from outside the tree, and
+//     `http.ServeFile` follows a link wherever it points; resolving the root as well means a
+//     root that is itself a symlink (a `current -> release-N` deploy) still contains its files.
+//
+// A dotfile path is not served AND does not fall back to index.html: it reaches the router's
+// own 404, because answering the SPA for `/.env` would be a 200 that says nothing was wrong. A
+// symlink that leaves the root is treated as a file that is not there — its target is never
+// read, and the path gets whatever any unknown path gets (the SPA index, or the 404).
 func serveStatic(writer http.ResponseWriter, request *http.Request, directory string) bool {
 	if request.Method != http.MethodGet && request.Method != http.MethodHead {
 		return false
 	}
-	root, err := filepath.Abs(directory)
+	root, err := resolvedStaticRoot(directory)
 	if err != nil {
 		return false
 	}
 	relative := strings.TrimPrefix(path.Clean("/"+request.URL.Path), "/")
+	if hasDotSegment(relative) {
+		return false
+	}
 	if relative == "" {
 		relative = "index.html"
 	}
-	candidate := filepath.Join(root, filepath.FromSlash(relative))
-	if !strings.HasPrefix(candidate, root+string(os.PathSeparator)) && candidate != root {
-		return false
-	}
-	if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-		http.ServeFile(writer, request, candidate)
+	if file := containedStaticFile(root, relative); file != "" {
+		http.ServeFile(writer, request, file)
 		return true
 	}
 	// The SPA fallback: an unknown path serves index.html, so client-side routing works on a
 	// cold load. Only when there IS an index.html — otherwise the router's own 404 is the honest
 	// answer.
-	index := filepath.Join(root, "index.html")
-	if info, err := os.Stat(index); err == nil && !info.IsDir() {
-		http.ServeFile(writer, request, index)
+	if file := containedStaticFile(root, "index.html"); file != "" {
+		http.ServeFile(writer, request, file)
 		return true
 	}
 	return false
+}
+
+// resolvedStaticRoot is the static directory with every symlink followed, so that the
+// containment check below compares resolved paths on both sides.
+func resolvedStaticRoot(directory string) (string, error) {
+	absolute, err := filepath.Abs(directory)
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(absolute)
+}
+
+// hasDotSegment reports whether any segment of a cleaned, root-relative path begins with `.`.
+func hasDotSegment(relative string) bool {
+	for _, segment := range strings.Split(relative, "/") {
+		if strings.HasPrefix(segment, ".") {
+			return true
+		}
+	}
+	return false
+}
+
+// containedStaticFile is the regular file `relative` names inside `root`, as its resolved path,
+// or "" when there is no such file — including when the path exists but resolves through a
+// symlink to somewhere outside the root, which is treated exactly like a file that is not there.
+func containedStaticFile(root, relative string) string {
+	separator := string(os.PathSeparator)
+	candidate := filepath.Join(root, filepath.FromSlash(relative))
+	if !strings.HasPrefix(candidate, root+separator) {
+		return ""
+	}
+	resolved, err := filepath.EvalSymlinks(candidate)
+	if err != nil {
+		return ""
+	}
+	if !strings.HasPrefix(resolved, root+separator) {
+		return ""
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || info.IsDir() {
+		return ""
+	}
+	return resolved
 }
 
 // ── Request-level guards ──────────────────────────────────────────────────────
@@ -335,6 +416,13 @@ func (writer *hardenedWriter) Flush() {
 	}
 }
 
+// Unwrap is what lets `http.NewResponseController` reach the connection behind this wrapper.
+// Without it `SetWriteDeadline` answers ErrNotSupported and the SSE stream cannot move the
+// server's per-response write deadline — the connection is then cut at `serveWriteTimeout`.
+func (writer *hardenedWriter) Unwrap() http.ResponseWriter {
+	return writer.ResponseWriter
+}
+
 func applySecurityHeaders(header http.Header) {
 	setIfAbsent := func(name, value string) {
 		if value != "" && header.Get(name) == "" {
@@ -364,8 +452,8 @@ func applySecurityHeaders(header http.Header) {
 func requestRefusal(request *http.Request) (Response, bool) {
 	switch request.Method {
 	case http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch:
-		if strings.EqualFold(strings.TrimSpace(request.Header.Get("Sec-Fetch-Site")), "cross-site") {
-			return Fail(403, "cross-site request refused"), true
+		if refusal, refused := crossSiteRefusal(request); refused {
+			return refusal, true
 		}
 	}
 	origin := PublicOrigin()
@@ -376,6 +464,52 @@ func requestRefusal(request *http.Request) (Response, bool) {
 		return Response{}, false
 	}
 	return Fail(421, "Host does not match the configured public origin"), true
+}
+
+// crossSiteRefusal is the CSRF guard a state-changing method meets. It matters most for the
+// cookies a PROGRAM sets and reads in its `auth` block: the runtime's own `__Host-session` is
+// `SameSite=Lax`, but a program-defined cookie has whatever attributes the program gave it, and
+// this guard is then the only thing between a form on another site and the handler.
+//
+// Two sources, in order of trust:
+//
+//   - `Sec-Fetch-Site`, when the browser sent one. `cross-site` is refused; `same-origin`,
+//     `same-site` and `none` are the browser vouching for the request and pass.
+//   - When it is ABSENT — an older browser (Safari before 16.4, Firefox before 90) or a
+//     non-browser client — the initiator the request names itself: `Origin`, else `Referer`.
+//     If one is present and its host is not the configured public origin's host, the request
+//     came from another site and is refused. `Origin: null` (a sandboxed frame, a redirect
+//     from another origin) has host "null" and is refused too.
+//
+// A request naming NEITHER passes: curl, a service client and a same-origin fetch that stripped
+// the referrer all look like that, and refusing them would break every non-browser caller for no
+// protection a browser needs. And with NO public origin configured the initiator is ignored
+// rather than compared against the request's own `Host`: that header is only validated when a
+// public origin exists, so without one the comparison would be between two values the same
+// client chose — a check that passes for exactly the requests it is meant to refuse.
+func crossSiteRefusal(request *http.Request) (Response, bool) {
+	site := strings.ToLower(strings.TrimSpace(request.Header.Get("Sec-Fetch-Site")))
+	if site == "cross-site" {
+		return Fail(403, "cross-site request refused"), true
+	}
+	if site != "" {
+		return Response{}, false
+	}
+	initiator := strings.TrimSpace(request.Header.Get("Origin"))
+	if initiator == "" {
+		initiator = strings.TrimSpace(request.Header.Get("Referer"))
+	}
+	if initiator == "" {
+		return Response{}, false
+	}
+	origin := PublicOrigin()
+	if origin == "" {
+		return Response{}, false
+	}
+	if hostOf(initiator) != hostOf(origin) {
+		return Fail(403, "cross-site request refused"), true
+	}
+	return Response{}, false
 }
 
 // hostOf takes the host out of either a bare Host header or a full origin, without its port: a

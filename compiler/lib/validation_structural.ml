@@ -1359,20 +1359,24 @@ let check_capture_proof_via
                      | EstablishKind -> "establish" | MainKind -> "main"
                      | CheckKind -> "check" | AuthKind -> "auth")))
              | Some info ->
-               let covered = pred_names_of_return_spec info.fi_return in
-               let uncovered =
-                 List.filter (fun p -> not (List.mem p covered)) required_preds in
+               ignore required_preds;
+               let covered = proof_apps_of_return_spec info.fi_return in
+               let declared = proof_apps_of ~subject:cf.binding.name proof in
+               let uncovered = uncovered_proof_apps ~declared ~covered in
+               let show apps = String.concat ", "
+                   (List.map (fun app -> "`" ^ describe_proof_app app ^ "`") apps) in
                if uncovered = [] then None
                else
                  Some (make_error cf.binding.loc
                    ~hint:(Printf.sprintf
-                     "`via %s` establishes %s; use a check function that produces %s"
+                     "`via %s` establishes %s; use a check function that produces %s with the \
+                      same arguments (only the value's own name may differ)"
                      via_fn
-                     (if covered = [] then "no proof" else String.concat ", " covered)
-                     (String.concat ", " uncovered))
+                     (if covered = [] then "no proof" else show covered)
+                     (show uncovered))
                    (Printf.sprintf
                      "capture `%s` declares proof %s that is not established by `via %s`"
-                     cf.name (String.concat ", " uncovered) via_fn)))))
+                     cf.name (show uncovered) via_fn)))))
     | _ -> None
   ) decls
 
@@ -1419,20 +1423,24 @@ let check_auth_proof_via
                   (Printf.sprintf "endpoint `%s`: auth `via %s` is a %s, not a check/auth function"
                      ep.name via_fn (kind_label info.fi_kind)))
               | Some info ->
-                let covered = pred_names_of_return_spec info.fi_return in
-                let uncovered =
-                  List.filter (fun p -> not (List.mem p covered)) required_preds in
+                ignore required_preds;
+                let covered = proof_apps_of_return_spec info.fi_return in
+                let declared = proof_apps_of ~subject:a.binding.name proof in
+                let uncovered = uncovered_proof_apps ~declared ~covered in
+                let show apps = String.concat ", "
+                    (List.map (fun app -> "`" ^ describe_proof_app app ^ "`") apps) in
                 if uncovered = [] then None
                 else
                   Some (make_error a.binding.loc
                     ~hint:(Printf.sprintf
-                      "`via %s` establishes %s; use an auth function that produces %s"
+                      "`via %s` establishes %s; use an auth function that produces %s with the \
+                       same arguments (only the value's own name may differ)"
                       via_fn
-                      (if covered = [] then "no proof" else String.concat ", " covered)
-                      (String.concat ", " uncovered))
+                      (if covered = [] then "no proof" else show covered)
+                      (show uncovered))
                     (Printf.sprintf
                        "endpoint `%s` declares auth proof %s that is not established by `via %s`"
-                       ep.name (String.concat ", " uncovered) via_fn))))
+                       ep.name (show uncovered) via_fn))))
       ) api.endpoints
     | _ -> []
   ) decls

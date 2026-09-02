@@ -137,6 +137,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line agent-tools-tests.tesl:101
 		weatherTool := teslrt.ToolOf("get_weather", "Look up the weather for a city", "{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"]}", validateWeather, dispatchWeather)
@@ -160,11 +165,13 @@ func TestTesl0(teslT *testing.T) {
 						teslLeft1 := teslrt.ReplyText(reply)
 //line agent-tools-tests.tesl:111
 						if teslLeft1 != "It is sunny." {
+//line agent-tools-tests.tesl:111
 							teslT.Fatal("Tesl expectation failed")
 						}
 						teslLeft2 := teslrt.ReplyToolCalls(reply)
 //line agent-tools-tests.tesl:112
 						if !teslrt.Equal(teslLeft2, teslrt.FromInt64(1)) {
+//line agent-tools-tests.tesl:112
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}
@@ -181,6 +188,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line agent-tools-tests.tesl:120
 		step1 := teslrt.ToolUseStep("lookupWeather", "call_1", "{\"city\":\"Malmo\"}")
@@ -200,11 +212,13 @@ func TestTesl1(teslT *testing.T) {
 					teslLeft3 := teslrt.ReplyText(reply)
 //line agent-tools-tests.tesl:124
 					if teslLeft3 != "It is sunny." {
+//line agent-tools-tests.tesl:124
 						teslT.Fatal("Tesl expectation failed")
 					}
 					teslLeft4 := teslrt.ReplyToolCalls(reply)
 //line agent-tools-tests.tesl:125
 					if !teslrt.Equal(teslLeft4, teslrt.FromInt64(1)) {
+//line agent-tools-tests.tesl:125
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -220,6 +234,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line agent-tools-tests.tesl:136
 		weatherTool := teslrt.ToolOf("get_weather", "Look up the weather for a city", "{}", validateWeather, dispatchWeather)
@@ -243,11 +262,13 @@ func TestTesl2(teslT *testing.T) {
 						teslLeft5 := teslrt.ReplyText(reply)
 //line agent-tools-tests.tesl:148
 						if teslLeft5 != "Sorry, I could not look that up." {
+//line agent-tools-tests.tesl:148
 							teslT.Fatal("Tesl expectation failed")
 						}
 						teslLeft6 := teslrt.ReplyToolCalls(reply)
 //line agent-tools-tests.tesl:149
 						if !teslrt.Equal(teslLeft6, teslrt.FromInt64(1)) {
+//line agent-tools-tests.tesl:149
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}
@@ -264,6 +285,11 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line agent-tools-tests.tesl:157
 		agent := teslrt.Agent{Provider: teslrt.MockProvider([]string{"{\"title\":\"All good\",\"score\":42}"}), SystemPrompt: "Reply with JSON.", MaxTokens: teslrt.FromInt64(128), Tools: []teslrt.Tool{}}
@@ -275,11 +301,13 @@ func TestTesl3(teslT *testing.T) {
 			teslLeft7 := summary.Title
 //line agent-tools-tests.tesl:159
 			if teslLeft7 != "All good" {
+//line agent-tools-tests.tesl:159
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft8 := summary.Score
 //line agent-tools-tests.tesl:160
 			if !teslrt.Equal(teslLeft8, teslrt.FromInt64(42)) {
+//line agent-tools-tests.tesl:160
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -293,6 +321,11 @@ func TestTesl4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line agent-tools-tests.tesl:170
 		agent := teslrt.Agent{Provider: teslrt.MockProvider([]string{"not json at all", "{\"title\":\"Recovered\",\"score\":7}"}), SystemPrompt: "Reply with JSON.", MaxTokens: teslrt.FromInt64(128), Tools: []teslrt.Tool{}}
@@ -304,11 +337,13 @@ func TestTesl4(teslT *testing.T) {
 			teslLeft9 := summary.Title
 //line agent-tools-tests.tesl:172
 			if teslLeft9 != "Recovered" {
+//line agent-tools-tests.tesl:172
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft10 := summary.Score
 //line agent-tools-tests.tesl:173
 			if !teslrt.Equal(teslLeft10, teslrt.FromInt64(7)) {
+//line agent-tools-tests.tesl:173
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -322,6 +357,11 @@ func TestTesl5(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line agent-tools-tests.tesl:183
 		agent := teslrt.Agent{Provider: teslrt.MockProvider([]string{"default reply"}), SystemPrompt: "x", MaxTokens: teslrt.FromInt64(64), Tools: []teslrt.Tool{}}
@@ -337,6 +377,7 @@ func TestTesl5(teslT *testing.T) {
 				teslLeft11 := teslrt.ReplyText(reply)
 //line agent-tools-tests.tesl:186
 				if teslLeft11 != "override reply" {
+//line agent-tools-tests.tesl:186
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -351,6 +392,11 @@ func TestTesl6(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line agent-tools-tests.tesl:191
 		agent := teslrt.Agent{Provider: teslrt.MockProvider([]string{"plain text"}), SystemPrompt: "x", MaxTokens: teslrt.FromInt64(64), Tools: []teslrt.Tool{}}
@@ -358,6 +404,7 @@ func TestTesl6(teslT *testing.T) {
 		teslLeft12 := teslrt.Ask(agent, "hi")
 //line agent-tools-tests.tesl:192
 		if teslLeft12 != "plain text" {
+//line agent-tools-tests.tesl:192
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}

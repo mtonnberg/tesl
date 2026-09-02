@@ -256,6 +256,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line webhook-signature-tests.tesl:186
 		payload := "{\"event\":\"ping\"}"
@@ -264,15 +269,18 @@ func TestTesl0(teslT *testing.T) {
 		teslRight1 := hexSignature(senderKey(), payload)
 //line webhook-signature-tests.tesl:187
 		if teslLeft1 != teslRight1 {
+//line webhook-signature-tests.tesl:187
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line webhook-signature-tests.tesl:188
 		if hexSignature(senderKey(), payload) == hexSignature(otherSenderKey(), payload) {
+//line webhook-signature-tests.tesl:188
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft2 := teslrt.StringLength(hexSignature(senderKey(), payload))
 //line webhook-signature-tests.tesl:190
 		if !teslrt.Equal(teslLeft2, teslrt.FromInt64(64)) {
+//line webhook-signature-tests.tesl:190
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -285,6 +293,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line webhook-signature-tests.tesl:194
 		payload := "{\"event\":\"ping\"}"
@@ -299,10 +312,12 @@ func TestTesl1(teslT *testing.T) {
 				_ = b64
 //line webhook-signature-tests.tesl:197
 				if hex == b64 {
+//line webhook-signature-tests.tesl:197
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line webhook-signature-tests.tesl:200
 				if teslrt.Compare(teslrt.StringLength(b64), teslrt.StringLength(hex)) >= 0 {
+//line webhook-signature-tests.tesl:200
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -317,6 +332,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line webhook-signature-tests.tesl:204
 		payload := "{\"event\":\"ping\"}"
@@ -327,6 +347,7 @@ func TestTesl2(teslT *testing.T) {
 			_ = tampered
 //line webhook-signature-tests.tesl:206
 			if hexSignature(senderKey(), payload) == hexSignature(senderKey(), tampered) {
+//line webhook-signature-tests.tesl:206
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -343,16 +364,23 @@ func TestTeslApi0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line webhook-signature-tests.tesl:217
 		e := teslrt.ApiRequest(WebhookServer, "POST", "/echo", "{\"event\":\"ping\"}", nil, nil)
 		_ = e
 //line webhook-signature-tests.tesl:218
 		if !(teslrt.StatusOk(e.Status)) {
+//line webhook-signature-tests.tesl:218
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line webhook-signature-tests.tesl:219
 		if !teslrt.JsonEqual(teslrt.JsonFieldOf(e.Body, "raw"), "{\"event\":\"ping\"}") {
+//line webhook-signature-tests.tesl:219
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -368,6 +396,11 @@ func TestTeslApi1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line webhook-signature-tests.tesl:227
 		payload := "{\"event\":\"ping\"}"
@@ -378,10 +411,12 @@ func TestTeslApi1(teslT *testing.T) {
 			_ = r
 //line webhook-signature-tests.tesl:229
 			if !(teslrt.StatusOk(r.Status)) {
+//line webhook-signature-tests.tesl:229
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line webhook-signature-tests.tesl:230
 			if !teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, "seen"), payload) {
+//line webhook-signature-tests.tesl:230
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -398,6 +433,11 @@ func TestTeslApi2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line webhook-signature-tests.tesl:234
 		r := teslrt.ApiRequest(WebhookServer, "POST", "/hook/hex", "{\"event\":\"ping\"}", nil, nil)
@@ -405,6 +445,7 @@ func TestTeslApi2(teslT *testing.T) {
 		teslLeft3 := r.Status
 //line webhook-signature-tests.tesl:235
 		if !teslrt.Equal(teslLeft3, teslrt.FromInt64(401)) {
+//line webhook-signature-tests.tesl:235
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -420,6 +461,11 @@ func TestTeslApi3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line webhook-signature-tests.tesl:239
 		r := teslrt.ApiRequest(WebhookServer, "POST", "/hook/hex", "{\"event\":\"ping\"}", nil, []teslrt.Tuple2[string, string]{{Tuple2First: "x-signature", Tuple2Second: ""}})
@@ -427,6 +473,7 @@ func TestTeslApi3(teslT *testing.T) {
 		teslLeft4 := r.Status
 //line webhook-signature-tests.tesl:240
 		if !teslrt.Equal(teslLeft4, teslrt.FromInt64(401)) {
+//line webhook-signature-tests.tesl:240
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -442,6 +489,11 @@ func TestTeslApi4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line webhook-signature-tests.tesl:246
 		notHex := teslrt.ApiRequest(WebhookServer, "POST", "/hook/hex", "{\"event\":\"ping\"}", nil, []teslrt.Tuple2[string, string]{{Tuple2First: "x-signature", Tuple2Second: "zzzz-not-hex-at-all"}})
@@ -449,6 +501,7 @@ func TestTeslApi4(teslT *testing.T) {
 		teslLeft5 := notHex.Status
 //line webhook-signature-tests.tesl:247
 		if !teslrt.Equal(teslLeft5, teslrt.FromInt64(401)) {
+//line webhook-signature-tests.tesl:247
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -458,6 +511,7 @@ func TestTeslApi4(teslT *testing.T) {
 			teslLeft6 := oddLength.Status
 //line webhook-signature-tests.tesl:249
 			if !teslrt.Equal(teslLeft6, teslrt.FromInt64(401)) {
+//line webhook-signature-tests.tesl:249
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -474,6 +528,11 @@ func TestTeslApi5(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line webhook-signature-tests.tesl:253
 		payload := "{\"event\":\"ping\"}"
@@ -493,6 +552,7 @@ func TestTeslApi5(teslT *testing.T) {
 					teslLeft7 := r.Status
 //line webhook-signature-tests.tesl:257
 					if !teslrt.Equal(teslLeft7, teslrt.FromInt64(401)) {
+//line webhook-signature-tests.tesl:257
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -511,6 +571,11 @@ func TestTeslApi6(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line webhook-signature-tests.tesl:261
 		payload := "{\"event\":\"ping\"}"
@@ -522,6 +587,7 @@ func TestTeslApi6(teslT *testing.T) {
 			teslLeft8 := r.Status
 //line webhook-signature-tests.tesl:263
 			if !teslrt.Equal(teslLeft8, teslrt.FromInt64(401)) {
+//line webhook-signature-tests.tesl:263
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -538,6 +604,11 @@ func TestTeslApi7(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line webhook-signature-tests.tesl:269
 		signedPayload := "{\"event\":\"ping\"}"
@@ -549,6 +620,7 @@ func TestTeslApi7(teslT *testing.T) {
 			teslLeft9 := r.Status
 //line webhook-signature-tests.tesl:271
 			if !teslrt.Equal(teslLeft9, teslrt.FromInt64(401)) {
+//line webhook-signature-tests.tesl:271
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -565,6 +637,11 @@ func TestTeslApi8(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line webhook-signature-tests.tesl:277
 		other := "{\"event\":\"charge.refunded\"}"
@@ -576,6 +653,7 @@ func TestTeslApi8(teslT *testing.T) {
 			teslLeft10 := r.Status
 //line webhook-signature-tests.tesl:279
 			if !teslrt.Equal(teslLeft10, teslrt.FromInt64(401)) {
+//line webhook-signature-tests.tesl:279
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -592,6 +670,11 @@ func TestTeslApi9(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line webhook-signature-tests.tesl:287
 		payload := "{\"event\":\"ping\"}"
@@ -606,10 +689,12 @@ func TestTeslApi9(teslT *testing.T) {
 				_ = r
 //line webhook-signature-tests.tesl:290
 				if !(teslrt.StatusOk(r.Status)) {
+//line webhook-signature-tests.tesl:290
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line webhook-signature-tests.tesl:291
 				if !teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, "seen"), payload) {
+//line webhook-signature-tests.tesl:291
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -627,6 +712,11 @@ func TestTeslApi10(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line webhook-signature-tests.tesl:299
 		payload := "{\"event\":\"ping\"}"
@@ -637,10 +727,12 @@ func TestTeslApi10(teslT *testing.T) {
 			_ = r
 //line webhook-signature-tests.tesl:301
 			if !(teslrt.StatusOk(r.Status)) {
+//line webhook-signature-tests.tesl:301
 				teslT.Fatal("Tesl expectation failed")
 			}
 //line webhook-signature-tests.tesl:302
 			if !teslrt.JsonEqual(teslrt.JsonFieldOf(r.Body, "seen"), payload) {
+//line webhook-signature-tests.tesl:302
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -657,6 +749,11 @@ func TestTeslApi11(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line webhook-signature-tests.tesl:306
 		notB64 := teslrt.ApiRequest(WebhookServer, "POST", "/hook/base64", "{\"event\":\"ping\"}", nil, []teslrt.Tuple2[string, string]{{Tuple2First: "webhook-signature", Tuple2Second: "!!!not-base64!!!"}})
@@ -664,6 +761,7 @@ func TestTeslApi11(teslT *testing.T) {
 		teslLeft11 := notB64.Status
 //line webhook-signature-tests.tesl:307
 		if !teslrt.Equal(teslLeft11, teslrt.FromInt64(401)) {
+//line webhook-signature-tests.tesl:307
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -673,6 +771,7 @@ func TestTeslApi11(teslT *testing.T) {
 			teslLeft12 := empty.Status
 //line webhook-signature-tests.tesl:309
 			if !teslrt.Equal(teslLeft12, teslrt.FromInt64(401)) {
+//line webhook-signature-tests.tesl:309
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -689,6 +788,11 @@ func TestTeslApi12(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line webhook-signature-tests.tesl:313
 		payload := "{\"event\":\"ping\"}"
@@ -700,6 +804,7 @@ func TestTeslApi12(teslT *testing.T) {
 			teslLeft13 := r.Status
 //line webhook-signature-tests.tesl:315
 			if !teslrt.Equal(teslLeft13, teslrt.FromInt64(401)) {
+//line webhook-signature-tests.tesl:315
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -716,6 +821,11 @@ func TestTeslApi13(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line webhook-signature-tests.tesl:319
 		signedPayload := "{\"event\":\"ping\"}"
@@ -727,6 +837,7 @@ func TestTeslApi13(teslT *testing.T) {
 			teslLeft14 := r.Status
 //line webhook-signature-tests.tesl:321
 			if !teslrt.Equal(teslLeft14, teslrt.FromInt64(401)) {
+//line webhook-signature-tests.tesl:321
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -743,6 +854,11 @@ func TestTeslApi14(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line webhook-signature-tests.tesl:329
 		payload := "{\"event\":\"ping\"}"
@@ -754,6 +870,7 @@ func TestTeslApi14(teslT *testing.T) {
 			teslLeft15 := r.Status
 //line webhook-signature-tests.tesl:331
 			if !teslrt.Equal(teslLeft15, teslrt.FromInt64(401)) {
+//line webhook-signature-tests.tesl:331
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -770,6 +887,11 @@ func TestTeslApi15(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line webhook-signature-tests.tesl:335
 		payload := "{\"event\":\"ping\"}"
@@ -781,6 +903,7 @@ func TestTeslApi15(teslT *testing.T) {
 			teslLeft16 := r.Status
 //line webhook-signature-tests.tesl:337
 			if !teslrt.Equal(teslLeft16, teslrt.FromInt64(401)) {
+//line webhook-signature-tests.tesl:337
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -797,6 +920,11 @@ func TestTeslApi16(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line webhook-signature-tests.tesl:343
 		payload := "{\"event\":\"ping\"}"
@@ -808,6 +936,7 @@ func TestTeslApi16(teslT *testing.T) {
 			teslLeft17 := hexRoute.Status
 //line webhook-signature-tests.tesl:345
 			if !teslrt.Equal(teslLeft17, teslrt.FromInt64(401)) {
+//line webhook-signature-tests.tesl:345
 				teslT.Fatal("Tesl expectation failed")
 			}
 			{
@@ -817,6 +946,7 @@ func TestTeslApi16(teslT *testing.T) {
 				teslLeft18 := b64Route.Status
 //line webhook-signature-tests.tesl:347
 				if !teslrt.Equal(teslLeft18, teslrt.FromInt64(401)) {
+//line webhook-signature-tests.tesl:347
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -834,6 +964,11 @@ func TestTeslApi17(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "api-test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line webhook-signature-tests.tesl:351
 		payload := "{\"event\":\"ping\"}"
@@ -845,6 +980,7 @@ func TestTeslApi17(teslT *testing.T) {
 			teslLeft19 := bad.Status
 //line webhook-signature-tests.tesl:353
 			if !teslrt.Equal(teslLeft19, teslrt.FromInt64(401)) {
+//line webhook-signature-tests.tesl:353
 				teslT.Fatal("Tesl expectation failed")
 			}
 			{
@@ -853,10 +989,12 @@ func TestTeslApi17(teslT *testing.T) {
 				_ = good
 //line webhook-signature-tests.tesl:355
 				if !(teslrt.StatusOk(good.Status)) {
+//line webhook-signature-tests.tesl:355
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line webhook-signature-tests.tesl:356
 				if !teslrt.JsonEqual(teslrt.JsonFieldOf(good.Body, "seen"), payload) {
+//line webhook-signature-tests.tesl:356
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}

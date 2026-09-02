@@ -55,6 +55,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line proof_hot.tesl:31
 		one := teslrt.FromInt64(1)
@@ -82,6 +87,7 @@ func TestTesl0(teslT *testing.T) {
 							teslLeft1 := HotPath(a, b, c)
 //line proof_hot.tesl:37
 							if !teslrt.Equal(teslLeft1, teslrt.FromInt64(6)) {
+//line proof_hot.tesl:37
 								teslT.Fatal("Tesl expectation failed")
 							}
 						}

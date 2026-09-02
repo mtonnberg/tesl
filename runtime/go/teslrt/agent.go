@@ -2,10 +2,13 @@ package teslrt
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 	"sync"
+	"time"
+	"unicode/utf8"
 )
 
 // The `Tesl.Agent` surface: an LLM provider, an agent spec, and the tool-calling loop
@@ -16,6 +19,9 @@ import (
 // gets. What does survive is the loop's structure, which is where the guarantees live:
 //
 //	bounded iteration    a provider that keeps asking for tools cannot spin forever;
+//	bounded budgets      tool calls per step, tool-result bytes per result and per turn,
+//	                     and wall-clock per turn are capped (see Budgets); running out ends
+//	                     the turn with the transcript so far rather than trapping;
 //	contained tools      a tool whose arguments do not validate, or whose body traps,
 //	                     becomes an is_error tool_result the model SEES, never an error
 //	                     the caller has to catch — the model gets to correct itself;
@@ -31,6 +37,55 @@ import (
 // maxAgentIterations bounds the tool-calling loop. A provider that answers every
 // tool_result with another tool_use would otherwise never return.
 const maxAgentIterations = 16
+
+// ── Budgets ──────────────────────────────────────────────────────────────────
+//
+// Iterations alone did not contain a hostile (or prompt-injected) model: one provider step
+// may carry any number of tool_use blocks, each tool result is fed back verbatim on every
+// later round-trip, and a tool that runs for minutes holds the request handler for as long.
+// Every budget below ends the TURN — the loop answers the transcript so far under a stop
+// reason the caller can distinguish — rather than trapping, because a trap would discard
+// the tool results already produced (including writes a `serverTools` tool performed) while
+// their side effects stayed.
+//
+//	maxToolCallsPerStep     tool calls dispatched from one provider response; the rest are
+//	                        answered as is_error results the model reads, not run;
+//	maxToolResultBytes      one tool result's content, truncated with a marker the model sees;
+//	maxTurnToolResultBytes  every tool result's content summed over one turn;
+//	TESL_AI_TURN_TIMEOUT_MS wall-clock for one turn (default 300000); a tool already running
+//	                        is not interrupted — the budget is checked between steps.
+const (
+	maxToolCallsPerStep    = 32
+	maxToolResultBytes     = 64 * 1024
+	maxTurnToolResultBytes = 4 * 1024 * 1024
+)
+
+func agentTurnTimeoutMs() int { return envPositiveInt("TESL_AI_TURN_TIMEOUT_MS", 300000) }
+
+// The two stop reasons the loop itself produces, alongside the provider's own
+// (end-turn, tool-use, max-tokens, refusal, other). `aborted` is the loop giving up on the
+// provider — an iteration overflow or a provider call that timed out; `budget-exceeded`
+// is the turn's own resource budget running out. Both answer the transcript accumulated so
+// far, and neither carries model text.
+const (
+	stopAborted        = "aborted"
+	stopBudgetExceeded = "budget-exceeded"
+)
+
+// providerTimeout is what a provider raises when its call blew TESL_AI_TIMEOUT_MS. It is a
+// distinct type so runLoop can end the turn as `aborted` for exactly this failure and let
+// every other provider failure (a 401, a non-JSON body) trap as before: a timeout is an
+// operational condition the caller can retry, a bad key is a configuration bug that must be
+// seen.
+type providerTimeout struct {
+	who    string
+	millis int
+}
+
+func (failure providerTimeout) Error() string {
+	return fmt.Sprintf("%s: provider call timed out after %dms (TESL_AI_TIMEOUT_MS)",
+		failure.who, failure.millis)
+}
 
 // ── Provider protocol ────────────────────────────────────────────────────────
 
@@ -266,6 +321,31 @@ func dispatchTool(tool Tool, call LlmToolCall) (result toolResult) {
 	return toolResult{ID: call.ID, Content: answer}
 }
 
+// boundedToolResult truncates a result's content to maxToolResultBytes, with a marker in
+// place of what was cut so the model knows it is reading a prefix and does not reason
+// over a list it believes to be complete. The cut lands on a rune boundary: a split UTF-8
+// sequence would reach the provider as U+FFFD, which reads as corruption rather than
+// truncation.
+func boundedToolResult(result toolResult) toolResult {
+	if len(result.Content) <= maxToolResultBytes {
+		return result
+	}
+	cut := maxToolResultBytes
+	for cut > 0 && !utf8.RuneStart(result.Content[cut]) {
+		cut--
+	}
+	result.Content = result.Content[:cut] + fmt.Sprintf(
+		"\n…[truncated: tool result was %d bytes, limit %d]", len(result.Content), maxToolResultBytes)
+	return result
+}
+
+// refusedToolResult answers a tool call the loop did not dispatch. The call is refused, not
+// dropped: an is_error result keeps the transcript well-formed (every tool_use has its
+// tool_result, which Anthropic requires) and tells the model why.
+func refusedToolResult(call LlmToolCall, reason string) toolResult {
+	return toolResult{ID: call.ID, Content: reason, IsError: true}
+}
+
 // recovered runs body and reports a panic as a message rather than unwinding. The empty
 // string means "no failure" — a tool that fails with an empty message still reports the
 // panic value's rendering, which is never empty for the values the runtime raises.
@@ -309,7 +389,26 @@ type Agent struct {
 // NewAgent builds an Agent positionally. The emitted code uses the keyed literal; this is
 // for runtime-internal construction and for tests.
 func NewAgent(provider LlmProvider, systemPrompt string, maxTokens Int, tools []Tool) Agent {
+	requireDistinctToolNames(tools)
 	return Agent{Provider: provider, SystemPrompt: systemPrompt, MaxTokens: maxTokens, Tools: tools}
+}
+
+// requireDistinctToolNames refuses two tools under one name. The dispatch is a name lookup,
+// so a duplicate meant the first silently won — a program composing tool lists
+// (`List.append (serverTools …) [tool …]`) could shadow an endpoint tool with a different
+// implementation and never learn it, and the vendors reject the duplicate declaration
+// with a 400 anyway. Failing closed here names the collision. The emitted `Agent { … }`
+// literal does not pass through NewAgent, so runLoop checks again before the first call.
+func requireDistinctToolNames(tools []Tool) {
+	seen := make(map[string]struct{}, len(tools))
+	for _, tool := range tools {
+		if _, duplicate := seen[tool.Name]; duplicate {
+			panic(fmt.Sprintf("Tesl.Agent: duplicate tool name %q — every tool offered to the "+
+				"model must have a distinct name (a later tool would silently shadow the first)",
+				tool.Name))
+		}
+		seen[tool.Name] = struct{}{}
+	}
 }
 
 // AgentReply is one completed turn: the final assistant text, what it cost, and how many
@@ -330,6 +429,11 @@ func ReplyTokens(reply AgentReply) Int {
 }
 
 func ReplyToolCalls(reply AgentReply) Int { return reply.toolCalls }
+
+// ReplyStopReason is why the turn ended: the provider's reason (end-turn, tool-use,
+// max-tokens, refusal, other) or the loop's own (aborted, budget-exceeded). A caller that
+// persists the transcript of an aborted turn should know it is persisting a partial one.
+func ReplyStopReason(reply AgentReply) string { return reply.stopReason }
 
 // ── Transcript ───────────────────────────────────────────────────────────────
 
@@ -397,19 +501,50 @@ func mergeUsage(into, from LlmUsage) LlmUsage {
 //
 // onStep, when non-nil, is called once per loop step: as each tool is dispatched, and
 // once with the final text. It never runs while a database connection is held.
+//
+// An aborted or over-budget turn is answered, not raised: the reply carries no text and a
+// stop reason of `aborted` or `budget-exceeded`, and the transcript holds every step that
+// completed — each tool_use paired with its tool_result — so a conversation persisted from
+// it is well-formed and the next turn can continue it. The step stream sees
+// "aborted: <why>" and then the closing "text: " a consumer waits for.
 func runLoop(agent Agent, provider LlmProvider, messages []AgentMessage,
 	onStep func(string), streamTokens bool) (AgentReply, []AgentMessage) {
+	requireDistinctToolNames(agent.Tools)
+	if err := validateTranscript(messages); err != nil {
+		panic("Tesl.Agent: conversation rejected: " + err.Error())
+	}
 	usage := LlmUsage{}
 	toolCalls := 0
+	toolResultBytes := 0
+	started := time.Now()
+	deadline := millisDuration(agentTurnTimeoutMs())
 	step := func(event string) {
 		if onStep != nil {
 			onStep(event)
 		}
 	}
+	endTurn := func(stopReason, why string) (AgentReply, []AgentMessage) {
+		step("aborted: " + why)
+		step("text: ")
+		return AgentReply{
+			usage:      usage,
+			toolCalls:  FromInt64(int64(toolCalls)),
+			stopReason: stopReason,
+		}, messages
+	}
 	for iteration := 0; ; iteration++ {
 		if iteration >= maxAgentIterations {
-			panic(fmt.Sprintf("askReply: tool-calling loop exceeded %d iterations",
-				maxAgentIterations))
+			return endTurn(stopAborted, fmt.Sprintf(
+				"tool-calling loop exceeded %d iterations", maxAgentIterations))
+		}
+		if elapsed := time.Since(started); elapsed > deadline {
+			return endTurn(stopBudgetExceeded, fmt.Sprintf(
+				"turn exceeded its %dms wall-clock budget (TESL_AI_TURN_TIMEOUT_MS)",
+				agentTurnTimeoutMs()))
+		}
+		if toolResultBytes > maxTurnToolResultBytes {
+			return endTurn(stopBudgetExceeded, fmt.Sprintf(
+				"tool results exceeded the turn's %d-byte budget", maxTurnToolResultBytes))
 		}
 		request := LlmRequest{
 			System:    agent.SystemPrompt,
@@ -420,7 +555,10 @@ func runLoop(agent Agent, provider LlmProvider, messages []AgentMessage,
 		if onStep != nil && streamTokens {
 			request.OnDelta = func(partial string) { step("text-delta: " + partial) }
 		}
-		response := provider.call(request)
+		response, timedOut := callProvider(provider, request)
+		if timedOut != nil {
+			return endTurn(stopAborted, timedOut.Error())
+		}
 		usage = mergeUsage(usage, response.Usage)
 		if len(response.ToolCalls) == 0 {
 			if response.Text != "" {
@@ -434,16 +572,59 @@ func runLoop(agent Agent, provider LlmProvider, messages []AgentMessage,
 				stopReason: response.StopReason,
 			}, messages
 		}
-		for _, call := range response.ToolCalls {
+		dispatched := response.ToolCalls
+		if len(dispatched) > maxToolCallsPerStep {
+			dispatched = dispatched[:maxToolCallsPerStep]
+		}
+		for _, call := range dispatched {
 			step("tool: " + call.Name)
 		}
 		results := make([]toolResult, 0, len(response.ToolCalls))
-		for _, call := range response.ToolCalls {
-			results = append(results, runToolCall(agent, call))
+		// The wall-clock budget is re-checked BEFORE EACH dispatch, not once per iteration:
+		// a step of 32 slow tools would otherwise run to completion however far past the
+		// budget it went (the whitebox campaign measured a 6× overshoot). A call that finds
+		// the budget spent is answered as is_error, never run.
+		ran := 0
+		for _, call := range dispatched {
+			if elapsed := time.Since(started); elapsed > deadline {
+				break
+			}
+			result := boundedToolResult(runToolCall(agent, call))
+			toolResultBytes += len(result.Content)
+			results = append(results, result)
+			ran++
+		}
+		for _, call := range dispatched[ran:] {
+			results = append(results, refusedToolResult(call,
+				"turn budget exhausted before this tool call: not dispatched"))
+		}
+		for _, call := range response.ToolCalls[len(dispatched):] {
+			results = append(results, refusedToolResult(call, fmt.Sprintf(
+				"too many tool calls in one step (limit %d): not dispatched", maxToolCallsPerStep)))
 		}
 		messages = append(messages, assistantMessage(response), toolMessage(results))
-		toolCalls += len(response.ToolCalls)
+		toolCalls += len(dispatched)
 	}
+}
+
+// callProvider runs one round-trip, reporting a provider TIMEOUT as a value and letting every
+// other failure propagate. Only the timeout is the loop's to absorb: the turn so far is
+// intact and worth answering. A mock's exhaustion trap, a 401, a non-JSON body are bugs the
+// caller must see.
+func callProvider(provider LlmProvider, request LlmRequest) (response LlmResponse, timedOut error) {
+	defer func() {
+		raised := recover()
+		if raised == nil {
+			return
+		}
+		var timeout providerTimeout
+		if err, isError := raised.(error); isError && errors.As(err, &timeout) {
+			response, timedOut = LlmResponse{}, timeout
+			return
+		}
+		panic(raised)
+	}()
+	return provider.call(request), nil
 }
 
 // toolDecls renders the agent's tools as the provider sees them. A tool whose schema is
@@ -523,6 +704,11 @@ func AskFor[A any](agent Agent, prompt string, decode func(string) A, maxRetries
 	attempt := prompt
 	for left := retries; ; left-- {
 		reply := AskReply(agent, attempt)
+		// An aborted turn has no text to decode, and re-asking would spend the same budget
+		// again for the same reason. There is no partial value to answer, so this is a trap.
+		if reply.stopReason == stopAborted || reply.stopReason == stopBudgetExceeded {
+			panic("askFor: the turn ended without a reply (" + reply.stopReason + ")")
+		}
 		decoded, failure := recovered(func() any { return decode(reply.Text) })
 		if failure == "" {
 			typed, ok := decoded.(A)
@@ -605,29 +791,127 @@ func ConversationLength(conversation Conversation) Int {
 // ConversationJSON serialises the transcript for the program to persist. The shape is
 // this runtime's own — ConversationFrom is its only reader — but it is deliberately
 // legible: the prompts and replies appear as themselves, so a stored row can be read.
+//
+// The shape is versioned: `{"v":1,"messages":[…]}`. The version is what lets a later
+// runtime read a row this one wrote and know which rules it was written under; the bare
+// array the first Go runtime wrote is read as v1, because it IS v1 — the same messages,
+// validated by the same rules.
 func ConversationJSON(conversation Conversation) string {
 	messages := conversation.messages
 	if messages == nil {
 		messages = []AgentMessage{}
 	}
-	encoded, err := json.Marshal(messages)
+	encoded, err := json.Marshal(conversationEnvelope{Version: conversationVersion, Messages: messages})
 	if err != nil {
 		panic("conversationJson: history could not be serialized: " + err.Error())
 	}
 	return string(encoded)
 }
 
+const conversationVersion = 1
+
+type conversationEnvelope struct {
+	Version  int            `json:"v"`
+	Messages []AgentMessage `json:"messages"`
+}
+
+// A persisted transcript is INPUT. The program stores it and reads it back, typically one
+// row per user, and whoever can write that row — a DB-write bug elsewhere, an import
+// feature, a shared table — would otherwise write straight into the model's context: a
+// stored `{"role":"system"}` became a second system message on the OpenAI wire, an unknown
+// block kind trapped in the Anthropic renderer on every later turn, and there was no size
+// bound at all. So the decode is a validation, and the renderers may assume its outcome.
+const (
+	maxConversationBytes    = 16 * 1024 * 1024
+	maxConversationMessages = 10000
+)
+
 // ConversationFrom restores a transcript previously produced by ConversationJSON and
-// binds it to agent.
+// binds it to agent. A history that is not one this runtime could have written is refused
+// here, at the boundary, with a message naming what was wrong — not later, inside a
+// provider renderer.
 func ConversationFrom(agent Agent, history string) Conversation {
 	if strings.TrimSpace(history) == "" {
 		return Conversation{agent: agent}
 	}
-	var messages []AgentMessage
-	if err := json.Unmarshal([]byte(history), &messages); err != nil {
-		panic("conversationFrom: history is not valid JSON: " + err.Error())
+	messages, err := decodeConversationHistory(history)
+	if err != nil {
+		panic("conversationFrom: " + err.Error())
 	}
 	return Conversation{agent: agent, messages: messages}
+}
+
+func decodeConversationHistory(history string) ([]AgentMessage, error) {
+	if len(history) > maxConversationBytes {
+		return nil, fmt.Errorf("history of %d bytes exceeds the %d-byte limit",
+			len(history), maxConversationBytes)
+	}
+	trimmed := strings.TrimSpace(history)
+	var messages []AgentMessage
+	if strings.HasPrefix(trimmed, "[") {
+		// The unversioned shape of the first Go runtime: a bare message array, read as v1.
+		if err := json.Unmarshal([]byte(trimmed), &messages); err != nil {
+			return nil, errors.New("history is not valid JSON: " + err.Error())
+		}
+	} else {
+		var envelope conversationEnvelope
+		if err := json.Unmarshal([]byte(trimmed), &envelope); err != nil {
+			return nil, errors.New("history is not valid JSON: " + err.Error())
+		}
+		if envelope.Version != conversationVersion {
+			return nil, fmt.Errorf("history version %d is not supported (this runtime reads v%d)",
+				envelope.Version, conversationVersion)
+		}
+		messages = envelope.Messages
+	}
+	if err := validateTranscript(messages); err != nil {
+		return nil, err
+	}
+	return messages, nil
+}
+
+// validateTranscript admits exactly the messages the loop itself produces — the roles it
+// writes, the block kinds it writes, each kind under the role it writes it under — and
+// nothing else. The renderers in agent_provider.go rely on this: a kind not listed here
+// never reaches them.
+func validateTranscript(messages []AgentMessage) error {
+	if len(messages) > maxConversationMessages {
+		return fmt.Errorf("history of %d messages exceeds the %d-message limit",
+			len(messages), maxConversationMessages)
+	}
+	for index, message := range messages {
+		where := fmt.Sprintf("message %d", index)
+		switch message.Role {
+		case "user":
+			if len(message.Content) != 0 {
+				return errors.New(where + ": a user turn carries text, not content blocks")
+			}
+		case "assistant":
+			for _, block := range message.Content {
+				switch block.Kind {
+				case "text", "tool-use":
+				case "tool-result":
+					return errors.New(where + ": a tool-result block belongs to a tool turn, not an assistant turn")
+				default:
+					return fmt.Errorf("%s: unknown content block kind %q", where, block.Kind)
+				}
+			}
+		case "tool":
+			if len(message.Content) == 0 {
+				return errors.New(where + ": a tool turn carries tool-result blocks")
+			}
+			for _, block := range message.Content {
+				if block.Kind != "tool-result" {
+					return fmt.Errorf("%s: a tool turn may only carry tool-result blocks, not %q",
+						where, block.Kind)
+				}
+			}
+		default:
+			return fmt.Errorf("%s: role %q is not one this runtime writes (user, assistant, tool)",
+				where, message.Role)
+		}
+	}
+	return nil
 }
 
 // ── Typed decoding at the model boundary ─────────────────────────────────────

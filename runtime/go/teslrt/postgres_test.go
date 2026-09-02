@@ -2,9 +2,12 @@ package teslrt
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"math/big"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -118,9 +121,61 @@ func TestPgIntOfRefusesFraction(t *testing.T) {
 	PgIntOf(pgtype.Numeric{Int: big.NewInt(125), Exp: -1, Valid: true})
 }
 
-func TestPgIntOfNullIsZero(t *testing.T) {
-	if got := PgIntOf(pgtype.Numeric{}); !Equal(got, FromInt64(0)) {
-		t.Fatalf("PgIntOf(NULL) = %s", got.String())
+// A NULL in a column Tesl typed as plain `Int` is a trap, not a zero: the only way one arrives
+// here is schema drift or a row another tool wrote, and 0 would be a fabricated balance. The
+// `Maybe Int` path never calls this on a NULL (`MaybeOfPointer` skips the decode).
+func TestPgIntOfNullTraps(t *testing.T) {
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatal("PgIntOf(NULL) answered instead of trapping")
+		}
+		message := fmt.Sprint(recovered)
+		if !strings.Contains(message, "NUMERIC") || !strings.Contains(message, "NULL") ||
+			!strings.Contains(message, "Maybe Int") {
+			t.Fatalf("the trap does not name the column type and the remedy: %s", message)
+		}
+	}()
+	PgIntOf(pgtype.Numeric{})
+}
+
+// The lease knob: unset is the documented 10 s, a value is milliseconds, and garbage is refused
+// rather than silently replaced by the default.
+func TestPgLeaseTimeoutReadsTheEnvironment(t *testing.T) {
+	t.Setenv("TESL_PG_POOL_LEASE_TIMEOUT_MS", "")
+	if got := pgLeaseTimeout(); got != 10*time.Second {
+		t.Fatalf("default lease = %v", got)
+	}
+	t.Setenv("TESL_PG_POOL_LEASE_TIMEOUT_MS", " 250 ")
+	if got := pgLeaseTimeout(); got != 250*time.Millisecond {
+		t.Fatalf("lease from environment = %v", got)
+	}
+	for _, bad := range []string{"0", "-5", "soon", "1.5"} {
+		t.Setenv("TESL_PG_POOL_LEASE_TIMEOUT_MS", bad)
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("TESL_PG_POOL_LEASE_TIMEOUT_MS=%q was accepted", bad)
+				}
+			}()
+			pgLeaseTimeout()
+		}()
+	}
+}
+
+// Only the lease running out becomes the 503 rejection; any other driver error keeps its text
+// for the operator log, under the caller's prefix.
+func TestPgFailureMapsOnlyTheLeaseTo503(t *testing.T) {
+	if got, ok := pgFailure("database", context.DeadlineExceeded).(RequestRejection); !ok ||
+		got.Status != 503 {
+		t.Fatalf("deadline mapped to %#v", pgFailure("database", context.DeadlineExceeded))
+	}
+	wrapped := fmt.Errorf("acquire: %w", context.DeadlineExceeded)
+	if got, ok := pgFailure("database", wrapped).(RequestRejection); !ok || got.Status != 503 {
+		t.Fatalf("wrapped deadline mapped to %#v", pgFailure("database", wrapped))
+	}
+	if got := pgFailure("transaction: cannot begin", errors.New("boom")); got != "transaction: cannot begin: boom" {
+		t.Fatalf("ordinary error mapped to %#v", got)
 	}
 }
 
@@ -304,4 +359,49 @@ func TestOpenPostgresIsIdempotent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	first.bootstrap(ctx, tables)
+}
+
+// The live half of the NULL rule: a nullable NUMERIC column read through the plain-`Int`
+// scanner traps and names the column type, while the `Maybe Int` scanner (a pointer carrier
+// through MaybeOfPointer) reads the same row as Nothing — which is the emitted shape for each.
+func TestBoundNullNumericIntoIntTrapsAndIntoMaybeIsNothing(t *testing.T) {
+	config := liveCluster(t)
+	db := OpenPostgres(config, []PostgresTable{{
+		Name: "nullable_amounts",
+		Columns: []PostgresColumn{
+			{Name: "id", Type: "text", PrimaryKey: true},
+			{Name: "amount", Type: "numeric", Nullable: true},
+		},
+	}})
+	table := db.QualifiedTable("nullable_amounts")
+	PgTruncate(db, "nullable_amounts")
+	PgExec(db, `insert into `+table+` ("id", "amount") values ($1, $2)`, []any{"n", nil})
+
+	trapped := func() (recovered any) {
+		defer func() { recovered = recover() }()
+		PgQuery(db, `select "amount" from `+table, nil,
+			func(row pgx.CollectableRow) (Int, error) {
+				amount := pgtype.Numeric{}
+				if err := row.Scan(&amount); err != nil {
+					return FromInt64(0), err
+				}
+				return PgIntOf(amount), nil
+			})
+		return nil
+	}()
+	if trapped == nil || !strings.Contains(fmt.Sprint(trapped), "NUMERIC column holds NULL") {
+		t.Fatalf("a NULL NUMERIC read into a plain Int answered with %v", trapped)
+	}
+
+	maybes := PgQuery(db, `select "amount" from `+table, nil,
+		func(row pgx.CollectableRow) (Maybe[Int], error) {
+			var amount *pgtype.Numeric
+			if err := row.Scan(&amount); err != nil {
+				return Nothing[Int](), err
+			}
+			return MaybeOfPointer(amount, func() Int { return PgIntOf(*amount) }), nil
+		})
+	if len(maybes) != 1 || maybes[0].IsSomething() {
+		t.Fatalf("a NULL NUMERIC read into a Maybe Int answered %+v", maybes)
+	}
 }

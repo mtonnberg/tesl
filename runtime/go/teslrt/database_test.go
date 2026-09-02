@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -706,5 +707,419 @@ func TestPostgresPoolSaturatesAndRecovers(t *testing.T) {
 	waiting.Wait()
 	if got := PgCount(db, `select 1`, nil); !Equal(got, FromInt64(1)) {
 		t.Fatalf("pool stopped serving after saturation: %s", got.String())
+	}
+}
+
+// The bound half of the same rule: the emitted statement guards on the match count, so two
+// matches update nothing, and the plan's probe lets the runtime raise the Memory table's trap.
+func TestBoundUpdateReturnOneRefusesAnAmbiguousPredicate(t *testing.T) {
+	database := liveDatabase(t)
+	table := NewTable[dbBook]()
+	WithDatabase(database, func() {
+		DbTruncate(database, table, "books")
+		for _, book := range []dbBook{
+			{ID: "a", Title: "Alpha", Pages: FromInt64(100)},
+			{ID: "b", Title: "Beta", Pages: FromInt64(100)},
+			{ID: "c", Title: "Gamma", Pages: FromInt64(7)},
+		} {
+			DbInsert(database, table, "Book", book, bookConflicts,
+				`insert into "teslgotest"."books" ("id", "title", "pages") values ($1, $2, $3)`,
+				func(book dbBook) []any { return []any{book.ID, book.Title, PgInt(book.Pages)} })
+		}
+		hundredPages := func(book dbBook) bool { return Equal(book.Pages, FromInt64(100)) }
+		rename := func(book dbBook) dbBook { book.Title = "Renamed"; return book }
+		ambiguous := PgSqlProbed(
+			strings.ReplaceAll(`update @books set "title" = $1 where "pages" = $2 and (select count(*) from @books where "pages" = $2) = 1 returning "id", "title", "pages"`, "@books", `"teslgotest"."books"`),
+			func() []any { return []any{"Renamed", PgInt(FromInt64(100))} },
+			strings.ReplaceAll(`select count(*) from @books where "pages" = $1`, "@books", `"teslgotest"."books"`),
+			func() []any { return []any{PgInt(FromInt64(100))} })
+		func() {
+			defer func() {
+				recovered := recover()
+				if recovered == nil {
+					t.Fatal("updateAndReturnOne over two matching rows must trap on Postgres too")
+				}
+				if recovered != updateReturnOneAmbiguous {
+					t.Fatalf("trap = %v", recovered)
+				}
+			}()
+			DbUpdateReturnOne(database, table, hundredPages, rename, ambiguous, scanDbBook)
+		}()
+		renamed := DbSelect(database, table, func(book dbBook) bool { return book.Title == "Renamed" },
+			nil, 0, -1, bookPlan(database, `select "id", "title", "pages" from @books where "title" = $1`, "Renamed"),
+			scanDbBook)
+		if len(renamed) != 0 {
+			t.Fatalf("rows were updated before the ambiguity was detected: %+v", renamed)
+		}
+		one := PgSqlProbed(
+			strings.ReplaceAll(`update @books set "title" = $1 where "pages" = $2 and (select count(*) from @books where "pages" = $2) = 1 returning "id", "title", "pages"`, "@books", `"teslgotest"."books"`),
+			func() []any { return []any{"Renamed", PgInt(FromInt64(7))} },
+			strings.ReplaceAll(`select count(*) from @books where "pages" = $1`, "@books", `"teslgotest"."books"`),
+			func() []any { return []any{PgInt(FromInt64(7))} })
+		updated := DbUpdateReturnOne(database, table,
+			func(book dbBook) bool { return Equal(book.Pages, FromInt64(7)) }, rename, one, scanDbBook)
+		if updated.ID != "c" || updated.Title != "Renamed" {
+			t.Fatalf("the single match was not updated: %+v", updated)
+		}
+	})
+}
+
+// ── Memory transactions ──────────────────────────────────────────────────────
+
+// The spec says a transaction rolls back on any exception and does not exempt the Memory
+// store; `tesl test` runs there, so a test asserting atomicity has to see what production sees.
+// Insert, update, delete and a second table all return to their pre-transaction rows.
+func TestMemoryTransactionRollsBackOnPanic(t *testing.T) {
+	database := &Database{Name: "Library"}
+	books := NewTable[dbBook]()
+	notes := NewTable[row]()
+	DbInsert(database, books, "Book", dbBook{ID: "kept", Title: "Kept", Pages: FromInt64(10)},
+		bookConflicts, "insert into nowhere", func(dbBook) []any { return nil })
+	TableInsert(notes, "Row", row{ID: "n1", Title: "before"}, sameID)
+
+	recovered := func() (recovered any) {
+		defer func() { recovered = recover() }()
+		WithTransaction(func() {
+			DbInsert(database, books, "Book", dbBook{ID: "new", Title: "New", Pages: FromInt64(1)},
+				bookConflicts, "insert into nowhere", func(dbBook) []any { return nil })
+			DbUpdate(database, books, func(book dbBook) bool { return book.ID == "kept" },
+				func(book dbBook) dbBook { book.Title = "Renamed"; return book }, PgSql("update nowhere", nil))
+			TableDelete(notes, byID("n1"))
+			TableInsert(notes, "Row", row{ID: "n2"}, sameID)
+			panic("the second statement failed its check")
+		})
+		return nil
+	}()
+	if recovered == nil {
+		t.Fatal("the trap did not propagate out of the transaction")
+	}
+	rows := DbSelect(database, books, allBooks, nil, 0, -1, PgSql("select from nowhere", nil), scanDbBook)
+	if len(rows) != 1 || rows[0].ID != "kept" || rows[0].Title != "Kept" {
+		t.Fatalf("the books table after rollback: %+v", rows)
+	}
+	if remaining := TableSelect(notes, every); len(remaining) != 1 || remaining[0].Title != "before" {
+		t.Fatalf("the notes table after rollback: %+v", remaining)
+	}
+	// The store keeps working afterwards, and a later transaction is not confused by the
+	// rolled-back one: nothing about the first is left registered.
+	WithTransaction(func() {
+		TableInsert(notes, "Row", row{ID: "n3"}, sameID)
+	})
+	if remaining := TableSelect(notes, every); len(remaining) != 2 {
+		t.Fatalf("a committed transaction after a rolled-back one left %+v", remaining)
+	}
+}
+
+// A body that returns commits: the writes stay, and the rollback record is discarded.
+func TestMemoryTransactionCommits(t *testing.T) {
+	table := NewTable[row]()
+	WithTransaction(func() {
+		TableInsert(table, "Row", row{ID: "a"}, sameID)
+		TableUpdate(table, byID("a"), func(r row) row { r.Title = "committed"; return r })
+	})
+	rows := TableSelect(table, every)
+	if len(rows) != 1 || rows[0].Title != "committed" {
+		t.Fatalf("after commit: %+v", rows)
+	}
+	if memoryTransactionsOpen.Load() != 0 {
+		t.Fatalf("%d Memory transactions still registered after commit", memoryTransactionsOpen.Load())
+	}
+}
+
+// Rollback restores the FIRST state the transaction saw, not the state before the last
+// statement: three writes to one table undo as one.
+func TestMemoryTransactionRollsBackToTheStateBeforeTheBlock(t *testing.T) {
+	table := NewTable[row]()
+	TableInsert(table, "Row", row{ID: "a", Size: FromInt64(1)}, sameID)
+	func() {
+		defer func() { _ = recover() }()
+		WithTransaction(func() {
+			TableUpdate(table, byID("a"), func(r row) row { r.Size = FromInt64(2); return r })
+			TableUpdate(table, byID("a"), func(r row) row { r.Size = FromInt64(3); return r })
+			TableTruncate(table)
+			panic("trap")
+		})
+	}()
+	got := TableSelectOne(table, byID("a"))
+	if !got.IsSomething() || !Equal(got.SomethingValue.Size, FromInt64(1)) {
+		t.Fatalf("after rollback: %+v", got)
+	}
+}
+
+// Nesting is refused on the Memory store exactly as on Postgres, so a program cannot pass its
+// tests with a shape that traps in production.
+func TestMemoryTransactionRefusesNesting(t *testing.T) {
+	recovered := func() (recovered any) {
+		defer func() { recovered = recover() }()
+		WithTransaction(func() {
+			WithTransaction(func() {})
+		})
+		return nil
+	}()
+	if recovered == nil || !strings.Contains(fmt.Sprint(recovered), "already open") {
+		t.Fatalf("nested Memory transaction answered %v", recovered)
+	}
+	if memoryTransactionsOpen.Load() != 0 {
+		t.Fatal("the refused nesting left a Memory transaction registered")
+	}
+}
+
+// A goroutine started inside the body does not join the transaction — the Postgres rule — so
+// its writes survive the rollback, and the rollback restores a fresh slice rather than
+// reusing storage a concurrent reader may still be walking (proved under -race).
+func TestMemoryTransactionIsPerGoroutine(t *testing.T) {
+	table := NewTable[row]()
+	func() {
+		defer func() { _ = recover() }()
+		WithTransaction(func() {
+			TableInsert(table, "Row", row{ID: "inside"}, sameID)
+			var wait sync.WaitGroup
+			wait.Add(1)
+			go func() {
+				defer wait.Done()
+				TableInsert(table, "Row", row{ID: "outside"}, sameID)
+				_ = TableSelect(table, every)
+			}()
+			wait.Wait()
+			panic("trap")
+		})
+	}()
+	rows := TableSelect(table, every)
+	// "outside" was written by a goroutine that was not in the transaction, to a table the
+	// transaction had ALREADY recorded — so the restore undoes it too. That is the documented
+	// non-isolation of the Memory store (rollback is per-trap atomicity, not isolation), pinned
+	// here so a change to it is a deliberate one.
+	if len(rows) != 0 {
+		t.Fatalf("after rollback: %+v", rows)
+	}
+	if memoryTransactionsOpen.Load() != 0 {
+		t.Fatal("a Memory transaction is still registered")
+	}
+}
+
+// ── Pool lease ───────────────────────────────────────────────────────────────
+
+// The documented lease: a request that cannot get a connection within
+// TESL_PG_POOL_LEASE_TIMEOUT_MS is answered 503 "database busy", not held for 30 s and then
+// reported as a 500. Two held transactions saturate a pool of two; the third statement is
+// rejected within roughly the lease; releasing the transactions makes the pool serve again.
+func TestPoolLeaseTimesOutWithA503(t *testing.T) {
+	config := liveCluster(t)
+	config.PoolSize = 2
+	db := OpenPostgres(config, nil)
+	t.Setenv("TESL_PG_POOL_LEASE_TIMEOUT_MS", "400")
+
+	held := make([]pgx.Tx, 0, 2)
+	for range 2 {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		transaction, err := db.pool.Begin(ctx)
+		cancel()
+		if err != nil {
+			t.Fatalf("cannot hold a connection: %v", err)
+		}
+		held = append(held, transaction)
+	}
+	release := func() {
+		for _, transaction := range held {
+			_ = transaction.Rollback(context.Background())
+		}
+		held = nil
+	}
+	defer release()
+
+	started := time.Now()
+	recovered := func() (recovered any) {
+		defer func() { recovered = recover() }()
+		PgCount(db, `select 1`, nil)
+		return nil
+	}()
+	waited := time.Since(started)
+	rejection, isRejection := recovered.(RequestRejection)
+	if !isRejection || rejection.Status != 503 || rejection.Message != "database busy, try again" {
+		t.Fatalf("a saturated pool answered %#v after %v", recovered, waited)
+	}
+	if waited < 300*time.Millisecond || waited > 3*time.Second {
+		t.Fatalf("the rejection took %v, expected about the 400 ms lease", waited)
+	}
+
+	// The same bound and answer for `transaction { }` itself, whose BEGIN needs a connection.
+	database := &Database{Name: "Library", Config: config}
+	database.mutex.Lock()
+	database.open = db
+	database.mutex.Unlock()
+	previous := boundDatabase.Swap(database)
+	defer boundDatabase.Store(previous)
+	recovered = func() (recovered any) {
+		defer func() { recovered = recover() }()
+		WithTransaction(func() { t.Error("the body ran without a connection") })
+		return nil
+	}()
+	if rejection, isRejection := recovered.(RequestRejection); !isRejection || rejection.Status != 503 {
+		t.Fatalf("transaction on a saturated pool answered %#v", recovered)
+	}
+
+	release()
+	if got := PgCount(db, `select 1`, nil); !Equal(got, FromInt64(1)) {
+		t.Fatalf("pool did not recover after the lease timeout: %s", got.String())
+	}
+}
+
+// `updateAndReturnOne` once selected its row by ctid through a scalar subquery; a concurrent
+// writer moved the row to a new ctid between the subquery and the outer TID lookup and the
+// statement found nothing — 148 spurious "no row matched" traps in 400 contended calls
+// (whitebox campaign, 2026-09-02). The count-guarded form re-checks the predicate on the
+// row's latest version, so every contended call lands.
+func TestBoundUpdateReturnOneIsExactUnderContention(t *testing.T) {
+	database := liveDatabase(t)
+	table := NewTable[dbBook]()
+	// One binding for the whole test, as a served program has: `WithDatabase` swaps the
+	// database's connection in and restores the previous one on exit, so concurrent
+	// `WithDatabase` calls on one Database would unbind each other.
+	WithDatabase(database, func() {
+		DbTruncate(database, table, "books")
+		DbInsert(database, table, "Book", dbBook{ID: "hot", Title: "0", Pages: FromInt64(0)}, bookConflicts,
+			`insert into "teslgotest"."books" ("id", "title", "pages") values ($1, $2, $3)`,
+			func(book dbBook) []any { return []any{book.ID, book.Title, PgInt(book.Pages)} })
+		const writers, rounds = 4, 50
+		var wait sync.WaitGroup
+		var traps atomic.Int64
+		for writer := 0; writer < writers; writer++ {
+			wait.Add(1)
+			go func() {
+				defer wait.Done()
+				for round := 0; round < rounds; round++ {
+					func() {
+						defer func() {
+							if recovered := recover(); recovered != nil {
+								traps.Add(1)
+								t.Logf("trap: %v", recovered)
+							}
+						}()
+						plan := PgSqlProbed(
+							strings.ReplaceAll(`update @books set "pages" = "pages" + 1 where "id" = $1 and (select count(*) from @books where "id" = $1) = 1 returning "id", "title", "pages"`, "@books", `"teslgotest"."books"`),
+							func() []any { return []any{"hot"} },
+							strings.ReplaceAll(`select count(*) from @books where "id" = $1`, "@books", `"teslgotest"."books"`),
+							func() []any { return []any{"hot"} })
+						DbUpdateReturnOne(database, table,
+							func(book dbBook) bool { return book.ID == "hot" },
+							func(book dbBook) dbBook { book.Pages = Add(book.Pages, FromInt64(1)); return book },
+							plan, scanDbBook)
+					}()
+				}
+			}()
+		}
+		wait.Wait()
+		if got := traps.Load(); got != 0 {
+			t.Fatalf("%d contended updateAndReturnOne calls trapped on a row that exists", got)
+		}
+		final := DbSelectOne(database, table, func(book dbBook) bool { return book.ID == "hot" }, nil,
+			bookPlan(database, `select "id", "title", "pages" from @books where "id" = $1 limit 1`, "hot"),
+			scanDbBook)
+		if !final.IsSomething() || !Equal(final.SomethingValue.Pages, FromInt64(writers*rounds)) {
+			t.Fatalf("final pages = %+v, want %d", final, writers*rounds)
+		}
+	})
+}
+
+// A `Maybe` column compares as a value on the Memory store (`Nothing == Nothing`), and the
+// emitter now renders that equality as `is not distinct from` so the server agrees: `=`
+// against a NULL parameter is never true in SQL, which made `where s.revokedAt == none`
+// revoke every session in the test store and none in production (whitebox campaign,
+// 2026-09-02). Pinned here on the server; the emitted text is pinned by the OCaml test
+// test_sql_maybe_equality.ml.
+func TestBoundMaybeEqualityIsNullSafe(t *testing.T) {
+	database := &Database{
+		Name:   "Sessions",
+		Config: liveCluster(t),
+		Tables: []PostgresTable{{
+			Name: "sessions",
+			Columns: []PostgresColumn{
+				{Name: "id", Type: "TEXT", PrimaryKey: true},
+				{Name: "revoked_at", Type: "TEXT", Nullable: true},
+			},
+		}},
+	}
+	type session struct {
+		ID        string
+		RevokedAt Maybe[string]
+	}
+	table := NewTable[session]()
+	scan := func(row pgx.CollectableRow) (session, error) {
+		found := session{}
+		var revoked *string
+		if err := row.Scan(&found.ID, &revoked); err != nil {
+			return found, err
+		}
+		found.RevokedAt = MaybeOfPointer(revoked, func() string { return *revoked })
+		return found, nil
+	}
+	plan := func(statement string, arguments ...any) PgPlan {
+		return PgSql(strings.ReplaceAll(statement, "@sessions", `"teslgotest"."sessions"`),
+			func() []any { return arguments })
+	}
+	WithDatabase(database, func() {
+		DbTruncate(database, table, "sessions")
+		revoked := "2026-01-01"
+		for _, row := range []struct {
+			id      string
+			revoked *string
+		}{{"live", nil}, {"gone", &revoked}} {
+			DbInsert(database, table, "Session",
+				session{ID: row.id, RevokedAt: MaybeOfPointer(row.revoked, func() string { return *row.revoked })},
+				func(a, b session) bool { return a.ID == b.ID },
+				`insert into "teslgotest"."sessions" ("id", "revoked_at") values ($1, $2)`,
+				func(s session) []any { return []any{s.ID, row.revoked} })
+		}
+		var none *string
+		live := DbSelect(database, table,
+			func(s session) bool { return !s.RevokedAt.IsSomething() }, nil, 0, -1,
+			plan(`select "id", "revoked_at" from @sessions where "revoked_at" is not distinct from $1`, none),
+			scan)
+		if len(live) != 1 || live[0].ID != "live" {
+			t.Fatalf("null-safe equality against Nothing matched %+v, want the unrevoked row", live)
+		}
+		notNone := DbSelect(database, table,
+			func(s session) bool { return s.RevokedAt.IsSomething() }, nil, 0, -1,
+			plan(`select "id", "revoked_at" from @sessions where "revoked_at" is distinct from $1`, none),
+			scan)
+		if len(notNone) != 1 || notNone[0].ID != "gone" {
+			t.Fatalf("null-safe inequality against Nothing matched %+v, want the revoked row", notNone)
+		}
+		// The plain operator is the bug: `= NULL` is never true.
+		plain := DbSelect(database, table,
+			func(s session) bool { return !s.RevokedAt.IsSomething() }, nil, 0, -1,
+			plan(`select "id", "revoked_at" from @sessions where "revoked_at" = $1`, none),
+			scan)
+		if len(plain) != 0 {
+			t.Fatalf("`= NULL` matched %+v; the test documents why the emitter avoids it", plain)
+		}
+	})
+}
+
+// A `secret` column's bound value reaches the server as plaintext (storage is the one
+// legitimate disclosure) while everything that renders the parameter sees the redaction
+// (whitebox campaign, 2026-09-02: the `--debug` SQL preview showed the plaintext).
+func TestBoundSecretParamStoresPlaintextAndRendersRedacted(t *testing.T) {
+	database := liveDatabase(t)
+	table := NewTable[dbBook]()
+	WithDatabase(database, func() {
+		DbTruncate(database, table, "books")
+		secret := MakeSecret("api-key-SECRET-999")
+		DbInsert(database, table, "Book", dbBook{ID: "k", Title: secret.Reveal(), Pages: FromInt64(1)},
+			bookConflicts,
+			`insert into "teslgotest"."books" ("id", "title", "pages") values ($1, $2, $3)`,
+			func(book dbBook) []any { return []any{book.ID, PgSecret(secret), PgInt(book.Pages)} })
+		stored := DbSelectOne(database, table, func(book dbBook) bool { return book.ID == "k" }, nil,
+			bookPlan(database, `select "id", "title", "pages" from @books where "id" = $1 limit 1`, "k"),
+			scanDbBook)
+		if !stored.IsSomething() || stored.SomethingValue.Title != "api-key-SECRET-999" {
+			t.Fatalf("the secret's plaintext must reach storage, got %+v", stored)
+		}
+	})
+	rendered := fmt.Sprintf("%v %s %d %+v %#v", PgSecret(MakeSecret("api-key-SECRET-999")),
+		PgSecret(MakeSecret("api-key-SECRET-999")), PgSecret(MakeSecret("api-key-SECRET-999")),
+		PgSecret(MakeSecret("api-key-SECRET-999")), PgSecret(MakeSecret("api-key-SECRET-999")))
+	if strings.Contains(rendered, "SECRET-999") {
+		t.Fatalf("a SecretParam rendered its plaintext: %s", rendered)
 	}
 }

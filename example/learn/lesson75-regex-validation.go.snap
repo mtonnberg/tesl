@@ -121,6 +121,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson75-regex-validation.tesl:193
 		raw := "bob@example.com"
@@ -132,12 +137,14 @@ func TestTesl0(teslT *testing.T) {
 			teslLeft1 := DeliverTo(good)
 //line lesson75-regex-validation.tesl:195
 			if teslLeft1 != "queued mail for bob@example.com" {
+//line lesson75-regex-validation.tesl:195
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft2 := EmailDomain(good)
 			teslRight2 := teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: "example.com"}
 //line lesson75-regex-validation.tesl:196
 			if teslLeft2.Tag != teslRight2.Tag || (teslLeft2.Tag == teslrt.MaybeSomething && (teslLeft2.SomethingValue != teslRight2.SomethingValue)) {
+//line lesson75-regex-validation.tesl:196
 				teslT.Fatal("Tesl expectation failed")
 			}
 			{
@@ -187,6 +194,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson75-regex-validation.tesl:210
 		raw := "hello-world-2"
@@ -198,6 +210,7 @@ func TestTesl1(teslT *testing.T) {
 			teslLeft3 := Permalink(good)
 //line lesson75-regex-validation.tesl:212
 			if teslLeft3 != "https://example.com/p/hello-world-2" {
+//line lesson75-regex-validation.tesl:212
 				teslT.Fatal("Tesl expectation failed")
 			}
 			{
@@ -247,24 +260,34 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 //line lesson75-regex-validation.tesl:225
 	if !(teslrt.RegexMatches("[0-9]+", "abc123")) {
+//line lesson75-regex-validation.tesl:225
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson75-regex-validation.tesl:226
 	if teslrt.RegexMatches("^[0-9]+$", "abc123") {
+//line lesson75-regex-validation.tesl:226
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson75-regex-validation.tesl:227
 	if !(teslrt.RegexMatches("^[0-9]+$", "123")) {
+//line lesson75-regex-validation.tesl:227
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson75-regex-validation.tesl:228
 	if !(hasThreeDigits("ab123")) {
+//line lesson75-regex-validation.tesl:228
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson75-regex-validation.tesl:229
 	if hasThreeDigits("ab12") {
+//line lesson75-regex-validation.tesl:229
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -276,45 +299,57 @@ func TestTesl3(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft4 := teslrt.RegexFind("[0-9]+", "a12b345")
 	teslRight4 := teslrt.Maybe[string]{Tag: teslrt.MaybeSomething, SomethingValue: "12"}
 //line lesson75-regex-validation.tesl:233
 	if teslLeft4.Tag != teslRight4.Tag || (teslLeft4.Tag == teslrt.MaybeSomething && (teslLeft4.SomethingValue != teslRight4.SomethingValue)) {
+//line lesson75-regex-validation.tesl:233
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft5 := teslrt.RegexFind("[0-9]+", "abc")
 	teslRight5 := teslrt.Maybe[string]{Tag: teslrt.MaybeNothing}
 //line lesson75-regex-validation.tesl:234
 	if teslLeft5.Tag != teslRight5.Tag || (teslLeft5.Tag == teslrt.MaybeSomething && (teslLeft5.SomethingValue != teslRight5.SomethingValue)) {
+//line lesson75-regex-validation.tesl:234
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft6 := ExtractTicketIds("see TESL-12 and TESL-345")
 	teslRight6 := []string{"TESL-12", "TESL-345"}
 //line lesson75-regex-validation.tesl:235
 	if !teslrt.ListEqualBy(teslLeft6, teslRight6, teslEqualString) {
+//line lesson75-regex-validation.tesl:235
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft7 := teslrt.ListLength(ExtractTicketIds("nothing here"))
 //line lesson75-regex-validation.tesl:236
 	if !teslrt.Equal(teslLeft7, teslrt.FromInt64(0)) {
+//line lesson75-regex-validation.tesl:236
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft8 := teslrt.RegexCaptures("^([a-z]+)-([0-9]+)$", "ab-12")
 	teslRight8 := teslrt.Maybe[[]string]{Tag: teslrt.MaybeSomething, SomethingValue: []string{"ab", "12"}}
 //line lesson75-regex-validation.tesl:237
 	if teslLeft8.Tag != teslRight8.Tag || (teslLeft8.Tag == teslrt.MaybeSomething && !teslrt.ListEqualBy(teslLeft8.SomethingValue, teslRight8.SomethingValue, teslEqualString)) {
+//line lesson75-regex-validation.tesl:237
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft9 := teslrt.RegexCaptures("^([a-z]+)-([0-9]+)$", "nope")
 	teslRight9 := teslrt.Maybe[[]string]{Tag: teslrt.MaybeNothing}
 //line lesson75-regex-validation.tesl:238
 	if teslLeft9.Tag != teslRight9.Tag || (teslLeft9.Tag == teslrt.MaybeSomething && !teslrt.ListEqualBy(teslLeft9.SomethingValue, teslRight9.SomethingValue, teslEqualString)) {
+//line lesson75-regex-validation.tesl:238
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft10 := teslrt.RegexCaptures("^[a-z]+$", "ab")
 	teslRight10 := teslrt.Maybe[[]string]{Tag: teslrt.MaybeSomething, SomethingValue: []string{}}
 //line lesson75-regex-validation.tesl:240
 	if teslLeft10.Tag != teslRight10.Tag || (teslLeft10.Tag == teslrt.MaybeSomething && !teslrt.ListEqualBy(teslLeft10.SomethingValue, teslRight10.SomethingValue, teslEqualString)) {
+//line lesson75-regex-validation.tesl:240
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -326,26 +361,35 @@ func TestTesl4(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft11 := RedactDigits("card 4111 1111")
 //line lesson75-regex-validation.tesl:244
 	if teslLeft11 != "card #### ####" {
+//line lesson75-regex-validation.tesl:244
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft12 := RedactDigits("no digits")
 //line lesson75-regex-validation.tesl:245
 	if teslLeft12 != "no digits" {
+//line lesson75-regex-validation.tesl:245
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft13 := SplitTags("a, b;c")
 	teslRight13 := []string{"a", "b", "c"}
 //line lesson75-regex-validation.tesl:246
 	if !teslrt.ListEqualBy(teslLeft13, teslRight13, teslEqualString) {
+//line lesson75-regex-validation.tesl:246
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft14 := SplitTags("single")
 	teslRight14 := []string{"single"}
 //line lesson75-regex-validation.tesl:247
 	if !teslrt.ListEqualBy(teslLeft14, teslRight14, teslEqualString) {
+//line lesson75-regex-validation.tesl:247
 		teslT.Fatal("Tesl expectation failed")
 	}
 }

@@ -1,6 +1,11 @@
 package teslrt
 
-import "crypto/subtle"
+import (
+	"crypto/subtle"
+	"database/sql/driver"
+	"fmt"
+	"io"
+)
 
 // SecretRedaction is the one string every sink substitutes for a secret's payload.
 //
@@ -23,11 +28,21 @@ func MakeSecret(plaintext string) SecretString {
 	return SecretString{plaintext: plaintext}
 }
 
-// String makes redaction the DEFAULT: fmt reaches for this method, so every accidental
-// print is safe without the call sites having to know they are handling a secret.
+// Format makes redaction the DEFAULT for EVERY verb. fmt consults `Stringer`/`GoStringer`
+// only for `%v %s %x %X %q` and `%#v`; any other verb — `%d`, `%b`, `%o`, a typo — fell back
+// to struct printing, which rendered the unexported field as `{%!d(string=<plaintext>)}`. A
+// `Formatter` is consulted first for every verb, so there is no verb left that discloses.
+// Flags and width are ignored on purpose: a padded or truncated redaction is still the same
+// fixed text, never a partial disclosure.
+func (secret SecretString) Format(state fmt.State, _ rune) {
+	_, _ = io.WriteString(state, SecretRedaction)
+}
+
+// String keeps the non-fmt callers (string builders, a `Stringer`-typed parameter) redacting
+// too; fmt itself goes through Format above.
 func (secret SecretString) String() string { return SecretRedaction }
 
-// GoString covers `%#v`, which would otherwise print the struct with its field.
+// GoString covers callers that ask for the Go-syntax form directly.
 func (secret SecretString) GoString() string { return SecretRedaction }
 
 // MarshalJSON keeps a secret out of an encoded payload the same way, rather than relying on
@@ -46,4 +61,30 @@ func (secret SecretString) Reveal() string { return secret.plaintext }
 // `constant-time-bytes=?/secret` has.
 func SecretEqual(left, right SecretString) bool {
 	return subtle.ConstantTimeCompare([]byte(left.plaintext), []byte(right.plaintext)) == 1
+}
+
+// SecretParam is how a `secret` column's value reaches a SQL statement. Storage is the one
+// place the plaintext legitimately travels, so the emitter used to bind `.Value.Reveal()` —
+// a bare string — and every path that RENDERS a bound parameter (the `--debug` SQL capture's
+// `Params` and `Preview`, a trap message quoting the arguments) saw the plaintext (whitebox
+// campaign, 2026-09-02). This type carries the secret to the driver through `driver.Valuer`,
+// which pgx honours when encoding, while every rendering path — fmt, Stringer, JSON — sees
+// the redaction, exactly as for SecretString.
+type SecretParam struct {
+	secret SecretString
+}
+
+// PgSecret is the binding the emitter writes for a `secret` column.
+func PgSecret(secret SecretString) SecretParam { return SecretParam{secret: secret} }
+
+// Value hands the plaintext to the database driver — the storage disclosure, and nothing else.
+func (param SecretParam) Value() (driver.Value, error) { return param.secret.Reveal(), nil }
+
+func (param SecretParam) Format(state fmt.State, _ rune) {
+	_, _ = io.WriteString(state, SecretRedaction)
+}
+func (param SecretParam) String() string   { return SecretRedaction }
+func (param SecretParam) GoString() string { return SecretRedaction }
+func (param SecretParam) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + SecretRedaction + `"`), nil
 }

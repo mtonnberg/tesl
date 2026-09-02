@@ -259,11 +259,15 @@ func (debugger *Debugger) Attach(listener DebugListener) func() {
 	return func() { debugger.Detach() }
 }
 
+// Detach ends the session: application goroutines resume, and the retained stop
+// frame (request-scoped locals) is dropped so a later client cannot read it.
 func (debugger *Debugger) Detach() {
 	debugger.mutex.Lock()
 	debugger.listener = nil
 	debugger.paused = false
 	debugger.pauseRequested = false
+	debugger.stepMode = DebugStepNone
+	debugger.lastFrame = DebugFrame{}
 	debugger.condition.Broadcast()
 	debugger.mutex.Unlock()
 }
@@ -367,7 +371,10 @@ func (debugger *Debugger) Checkpoint(frame DebugFrame) {
 	if debugger.PauseTimeout > 0 {
 		timer := time.AfterFunc(debugger.PauseTimeout, func() {
 			debugger.mutex.Lock()
-			debugger.paused = false
+			if debugger.paused {
+				debugger.paused = false
+				debugger.lastFrame = DebugFrame{}
+			}
 			debugger.mutex.Unlock()
 			debugger.condition.Broadcast()
 		})
@@ -425,10 +432,13 @@ func (debugger *Debugger) Pause() {
 	debugger.mutex.Unlock()
 }
 
+// Continue resumes every waiting checkpoint and forgets the stop frame: once the
+// program is running again its request state must not stay readable via snapshot.
 func (debugger *Debugger) Continue() {
 	debugger.mutex.Lock()
 	debugger.stepMode = DebugStepNone
 	debugger.paused = false
+	debugger.lastFrame = DebugFrame{}
 	debugger.condition.Broadcast()
 	debugger.mutex.Unlock()
 }

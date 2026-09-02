@@ -394,6 +394,11 @@ func TestTesl0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line memory-backend-regressions.tesl:132
 		_ = teslrt.TableInsert(PTable, "P", P{Id: "a", Qty: teslrt.FromInt64(3), Name: "cherry", At: teslrt.SecondsToPosix(teslrt.FromInt64(300)), Code: Code{Value: teslrt.FromInt64(7)}, Done: true}, func(teslRow, teslNew P) bool { return (teslRow.Id == teslNew.Id) })
@@ -407,12 +412,14 @@ func TestTesl0(teslT *testing.T) {
 				teslRight1 := []teslrt.Int{teslrt.FromInt64(1), teslrt.FromInt64(2), teslrt.FromInt64(3)}
 //line memory-backend-regressions.tesl:135
 				if !teslrt.ListEqualBy(teslLeft1, teslRight1, teslEqualTeslrtInt) {
+//line memory-backend-regressions.tesl:135
 					teslT.Fatal("Tesl expectation failed")
 				}
 				teslLeft2 := qtys(orderedDesc())
 				teslRight2 := []teslrt.Int{teslrt.FromInt64(3), teslrt.FromInt64(2), teslrt.FromInt64(1)}
 //line memory-backend-regressions.tesl:136
 				if !teslrt.ListEqualBy(teslLeft2, teslRight2, teslEqualTeslrtInt) {
+//line memory-backend-regressions.tesl:136
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -428,6 +435,11 @@ func TestTesl1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line memory-backend-regressions.tesl:145
 		_ = teslrt.TableInsert(PTable, "P", P{Id: "b", Qty: teslrt.FromInt64(1), Name: "apple", At: teslrt.SecondsToPosix(teslrt.FromInt64(100)), Code: Code{Value: teslrt.FromInt64(9)}, Done: false}, func(teslRow, teslNew P) bool { return (teslRow.Id == teslNew.Id) })
@@ -438,12 +450,14 @@ func TestTesl1(teslT *testing.T) {
 			teslRight3 := []string{"apple", "cherry"}
 //line memory-backend-regressions.tesl:147
 			if !teslrt.ListEqualBy(teslLeft3, teslRight3, teslEqualString) {
+//line memory-backend-regressions.tesl:147
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft4 := names(orderedByDoneDesc())
 			teslRight4 := []string{"cherry", "apple"}
 //line memory-backend-regressions.tesl:148
 			if !teslrt.ListEqualBy(teslLeft4, teslRight4, teslEqualString) {
+//line memory-backend-regressions.tesl:148
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -458,6 +472,11 @@ func TestTesl2(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line memory-backend-regressions.tesl:152
 		_ = teslrt.TableInsert(PTable, "P", P{Id: "a", Qty: teslrt.FromInt64(3), Name: "cherry", At: teslrt.SecondsToPosix(teslrt.FromInt64(300)), Code: Code{Value: teslrt.FromInt64(7)}, Done: true}, func(teslRow, teslNew P) bool { return (teslRow.Id == teslNew.Id) })
@@ -471,6 +490,7 @@ func TestTesl2(teslT *testing.T) {
 				teslRight5 := []string{"apple", "banana", "cherry"}
 //line memory-backend-regressions.tesl:155
 				if !teslrt.ListEqualBy(teslLeft5, teslRight5, teslEqualString) {
+//line memory-backend-regressions.tesl:155
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -486,6 +506,11 @@ func TestTesl3(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line memory-backend-regressions.tesl:164
 		_ = teslrt.TableInsert(LTable, "L", L{Id: "l1", Cat: "x", Price: teslrt.MoneyOf(teslrt.FromInt64(100), "USD", 2)}, func(teslRow, teslNew L) bool { return (teslRow.Id == teslNew.Id) })
@@ -498,11 +523,13 @@ func TestTesl3(teslT *testing.T) {
 				teslLeft6 := teslrt.MoneyMinorUnits(sumIn("x"))
 //line memory-backend-regressions.tesl:167
 				if !teslrt.Equal(teslLeft6, teslrt.FromInt64(350)) {
+//line memory-backend-regressions.tesl:167
 					teslT.Fatal("Tesl expectation failed")
 				}
 				teslLeft7 := teslrt.MoneyMinorUnits(sumIn("y"))
 //line memory-backend-regressions.tesl:168
 				if !teslrt.Equal(teslLeft7, teslrt.FromInt64(999)) {
+//line memory-backend-regressions.tesl:168
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -518,6 +545,11 @@ func TestTesl4(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line memory-backend-regressions.tesl:172
 		_ = teslrt.TableInsert(PTable, "P", P{Id: "a", Qty: teslrt.FromInt64(3), Name: "cherry", At: teslrt.SecondsToPosix(teslrt.FromInt64(300)), Code: Code{Value: teslrt.FromInt64(7)}, Done: true}, func(teslRow, teslNew P) bool { return (teslRow.Id == teslNew.Id) })
@@ -530,22 +562,26 @@ func TestTesl4(teslT *testing.T) {
 				teslLeft8 := teslrt.PosixToSeconds(newest())
 //line memory-backend-regressions.tesl:175
 				if !teslrt.Equal(teslLeft8, teslrt.FromInt64(300)) {
+//line memory-backend-regressions.tesl:175
 					teslT.Fatal("Tesl expectation failed")
 				}
 				teslLeft9 := teslrt.PosixToSeconds(oldest())
 //line memory-backend-regressions.tesl:176
 				if !teslrt.Equal(teslLeft9, teslrt.FromInt64(100)) {
+//line memory-backend-regressions.tesl:176
 					teslT.Fatal("Tesl expectation failed")
 				}
 				teslLeft10 := minCode()
 				teslRight10 := Code{Value: teslrt.FromInt64(3)}
 //line memory-backend-regressions.tesl:177
 				if !teslrt.Equal(teslLeft10.Value, teslRight10.Value) {
+//line memory-backend-regressions.tesl:177
 					teslT.Fatal("Tesl expectation failed")
 				}
 				teslLeft11 := maxQty()
 //line memory-backend-regressions.tesl:178
 				if !teslrt.Equal(teslLeft11, teslrt.FromInt64(3)) {
+//line memory-backend-regressions.tesl:178
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}
@@ -561,10 +597,16 @@ func TestTesl5(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft12 := maxOfEmpty()
 	teslRight12 := teslrt.Maybe[teslrt.Int]{Tag: teslrt.MaybeNothing}
 //line memory-backend-regressions.tesl:182
 	if teslLeft12.Tag != teslRight12.Tag || (teslLeft12.Tag == teslrt.MaybeSomething && !teslrt.Equal(teslLeft12.SomethingValue, teslRight12.SomethingValue)) {
+//line memory-backend-regressions.tesl:182
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -580,12 +622,18 @@ func TestTeslApi0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line memory-backend-regressions.tesl:242
 		r1 := teslrt.ApiRequest(RegServer, "POST", "/send", "{\"tag\":\"one\"}", nil, nil)
 		_ = r1
 //line memory-backend-regressions.tesl:243
 		if !(teslrt.StatusOk(r1.Status)) {
+//line memory-backend-regressions.tesl:243
 			teslT.Fatal("Tesl expectation failed")
 		}
 		{
@@ -594,6 +642,7 @@ func TestTeslApi0(teslT *testing.T) {
 			_ = r2
 //line memory-backend-regressions.tesl:245
 			if !(teslrt.StatusOk(r2.Status)) {
+//line memory-backend-regressions.tesl:245
 				teslT.Fatal("Tesl expectation failed")
 			}
 			{
@@ -602,11 +651,13 @@ func TestTeslApi0(teslT *testing.T) {
 				_ = r3
 //line memory-backend-regressions.tesl:247
 				if !(teslrt.StatusOk(r3.Status)) {
+//line memory-backend-regressions.tesl:247
 					teslT.Fatal("Tesl expectation failed")
 				}
 				teslLeft13 := teslrt.PendingJobCount(RegQueueQueue)
 //line memory-backend-regressions.tesl:249
 				if !teslrt.Equal(teslLeft13, teslrt.FromInt64(3)) {
+//line memory-backend-regressions.tesl:249
 					teslT.Fatal("Tesl expectation failed")
 				}
 				{
@@ -639,6 +690,7 @@ func TestTeslApi0(teslT *testing.T) {
 						teslLeft14 := jobA.Tag
 //line memory-backend-regressions.tesl:253
 						if teslLeft14 != "one" {
+//line memory-backend-regressions.tesl:253
 							teslT.Fatal("Tesl expectation failed")
 						}
 						{
@@ -671,6 +723,7 @@ func TestTeslApi0(teslT *testing.T) {
 								teslLeft15 := jobB.Tag
 //line memory-backend-regressions.tesl:257
 								if teslLeft15 != "two" {
+//line memory-backend-regressions.tesl:257
 									teslT.Fatal("Tesl expectation failed")
 								}
 								{
@@ -703,6 +756,7 @@ func TestTeslApi0(teslT *testing.T) {
 										teslLeft16 := jobC.Tag
 //line memory-backend-regressions.tesl:261
 										if teslLeft16 != "three" {
+//line memory-backend-regressions.tesl:261
 											teslT.Fatal("Tesl expectation failed")
 										}
 									}

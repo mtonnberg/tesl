@@ -285,6 +285,11 @@ func TestTesl0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line sql-clause-placement-tests.tesl:159
 		_ = seed()
@@ -292,12 +297,14 @@ func TestTesl0(teslT *testing.T) {
 		teslRight1 := []string{"alpha", "beta", "epsilon", "gamma"}
 //line sql-clause-placement-tests.tesl:160
 		if !teslrt.ListEqualBy(teslLeft1, teslRight1, teslEqualString) {
+//line sql-clause-placement-tests.tesl:160
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft2 := names(oneWhereOrderLimit("o1"))
 		teslRight2 := []string{"alpha", "beta"}
 //line sql-clause-placement-tests.tesl:161
 		if !teslrt.ListEqualBy(teslLeft2, teslRight2, teslEqualString) {
+//line sql-clause-placement-tests.tesl:161
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -311,6 +318,11 @@ func TestTesl1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line sql-clause-placement-tests.tesl:165
 		_ = seed()
@@ -318,12 +330,14 @@ func TestTesl1(teslT *testing.T) {
 		teslRight3 := []string{"alpha", "beta", "epsilon"}
 //line sql-clause-placement-tests.tesl:166
 		if !teslrt.ListEqualBy(teslLeft3, teslRight3, teslEqualString) {
+//line sql-clause-placement-tests.tesl:166
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft4 := names(andWhereLimitOffset("o1"))
 		teslRight4 := []string{"beta", "epsilon"}
 //line sql-clause-placement-tests.tesl:167
 		if !teslrt.ListEqualBy(teslLeft4, teslRight4, teslEqualString) {
+//line sql-clause-placement-tests.tesl:167
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -337,6 +351,11 @@ func TestTesl2(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line sql-clause-placement-tests.tesl:173
 		_ = seed()
@@ -344,18 +363,21 @@ func TestTesl2(teslT *testing.T) {
 		teslRight5 := []string{"alpha", "beta"}
 //line sql-clause-placement-tests.tesl:174
 		if !teslrt.ListEqualBy(teslLeft5, teslRight5, teslEqualString) {
+//line sql-clause-placement-tests.tesl:174
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft6 := names(andIlikeOrderLimit("o1", "%ETA%"))
 		teslRight6 := []string{"beta"}
 //line sql-clause-placement-tests.tesl:175
 		if !teslrt.ListEqualBy(teslLeft6, teslRight6, teslEqualString) {
+//line sql-clause-placement-tests.tesl:175
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft7 := names(andIlikeOrderLimit("o1", "%zzz%"))
 		teslRight7 := []string{}
 //line sql-clause-placement-tests.tesl:176
 		if !teslrt.ListEqualBy(teslLeft7, teslRight7, teslEqualString) {
+//line sql-clause-placement-tests.tesl:176
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -369,6 +391,11 @@ func TestTesl3(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line sql-clause-placement-tests.tesl:180
 		_ = seed()
@@ -376,12 +403,14 @@ func TestTesl3(teslT *testing.T) {
 		teslRight8 := []string{"alpha", "beta", "epsilon", "gamma"}
 //line sql-clause-placement-tests.tesl:181
 		if !teslrt.ListEqualBy(teslLeft8, teslRight8, teslEqualString) {
+//line sql-clause-placement-tests.tesl:181
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft9 := names(orWhereOrderMulti("o1"))
 		teslRight9 := []string{"alpha", "beta", "epsilon", "gamma"}
 //line sql-clause-placement-tests.tesl:182
 		if !teslrt.ListEqualBy(teslLeft9, teslRight9, teslEqualString) {
+//line sql-clause-placement-tests.tesl:182
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -395,6 +424,11 @@ func TestTesl4(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line sql-clause-placement-tests.tesl:187
 		_ = seed()
@@ -402,30 +436,35 @@ func TestTesl4(teslT *testing.T) {
 		teslRight10 := names(oneWhereOrderMulti("o1"))
 //line sql-clause-placement-tests.tesl:188
 		if !teslrt.ListEqualBy(teslLeft10, teslRight10, teslEqualString) {
+//line sql-clause-placement-tests.tesl:188
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft11 := names(andWhereOrder("o1"))
 		teslRight11 := names(andWhereOrderMulti("o1"))
 //line sql-clause-placement-tests.tesl:189
 		if !teslrt.ListEqualBy(teslLeft11, teslRight11, teslEqualString) {
+//line sql-clause-placement-tests.tesl:189
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft12 := names(andWhereLimitOffset("o1"))
 		teslRight12 := names(andWhereLimitOffsetMulti("o1"))
 //line sql-clause-placement-tests.tesl:190
 		if !teslrt.ListEqualBy(teslLeft12, teslRight12, teslEqualString) {
+//line sql-clause-placement-tests.tesl:190
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft13 := names(andIlikeOrderLimit("o1", "%a%"))
 		teslRight13 := names(andIlikeOrderLimitMulti("o1", "%a%"))
 //line sql-clause-placement-tests.tesl:191
 		if !teslrt.ListEqualBy(teslLeft13, teslRight13, teslEqualString) {
+//line sql-clause-placement-tests.tesl:191
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft14 := countInline("o1")
 		teslRight14 := countInlineMultiLine("o1")
 //line sql-clause-placement-tests.tesl:192
 		if !teslrt.Equal(teslLeft14, teslRight14) {
+//line sql-clause-placement-tests.tesl:192
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -439,17 +478,24 @@ func TestTesl5(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line sql-clause-placement-tests.tesl:196
 		_ = seed()
 		teslLeft15 := countInline("o1")
 //line sql-clause-placement-tests.tesl:197
 		if !teslrt.Equal(teslLeft15, teslrt.FromInt64(3)) {
+//line sql-clause-placement-tests.tesl:197
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft16 := countInlineMultiLine("o1")
 //line sql-clause-placement-tests.tesl:198
 		if !teslrt.Equal(teslLeft16, teslrt.FromInt64(3)) {
+//line sql-clause-placement-tests.tesl:198
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -463,17 +509,24 @@ func TestTesl6(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line sql-clause-placement-tests.tesl:202
 		_ = seed()
 		teslLeft17 := countRows("o1")
 //line sql-clause-placement-tests.tesl:203
 		if !teslrt.Equal(teslLeft17, teslrt.FromInt64(3)) {
+//line sql-clause-placement-tests.tesl:203
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft18 := maxQty("o1")
 //line sql-clause-placement-tests.tesl:204
 		if !teslrt.Equal(teslLeft18, teslrt.FromInt64(7)) {
+//line sql-clause-placement-tests.tesl:204
 			teslT.Fatal("Tesl expectation failed")
 		}
 //line sql-clause-placement-tests.tesl:205
@@ -486,6 +539,7 @@ func TestTesl6(teslT *testing.T) {
 				teslLeft19 := t.Name
 //line sql-clause-placement-tests.tesl:206
 				if teslLeft19 != "alpha" {
+//line sql-clause-placement-tests.tesl:206
 					teslT.Fatal("Tesl expectation failed")
 				}
 			case teslrt.MaybeNothing:
@@ -493,6 +547,7 @@ func TestTesl6(teslT *testing.T) {
 				teslRight20 := true
 //line sql-clause-placement-tests.tesl:207
 				if teslLeft20 != teslRight20 {
+//line sql-clause-placement-tests.tesl:207
 					teslT.Fatal("Tesl expectation failed")
 				}
 			default:
@@ -510,6 +565,11 @@ func TestTesl7(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line sql-clause-placement-tests.tesl:215
 		_ = seed()
@@ -534,6 +594,11 @@ func TestTesl8(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line sql-clause-placement-tests.tesl:222
 		_ = seed()
@@ -541,23 +606,27 @@ func TestTesl8(teslT *testing.T) {
 		teslRight21 := []string{"alpha", "beta", "epsilon", "gamma"}
 //line sql-clause-placement-tests.tesl:223
 		if !teslrt.ListEqualBy(teslLeft21, teslRight21, teslEqualString) {
+//line sql-clause-placement-tests.tesl:223
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft22 := names(aboveOneLine("o1", teslrt.FromInt64(5)))
 		teslRight22 := []string{"beta", "gamma"}
 //line sql-clause-placement-tests.tesl:224
 		if !teslrt.ListEqualBy(teslLeft22, teslRight22, teslEqualString) {
+//line sql-clause-placement-tests.tesl:224
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft23 := names(aboveOneLine("o1", teslrt.FromInt64(8)))
 		teslRight23 := []string{}
 //line sql-clause-placement-tests.tesl:225
 		if !teslrt.ListEqualBy(teslLeft23, teslRight23, teslEqualString) {
+//line sql-clause-placement-tests.tesl:225
 			teslT.Fatal("Tesl expectation failed")
 		}
 		teslLeft24 := teslrt.ListLength(aboveOneLine("o1", teslrt.FromInt64(3)))
 //line sql-clause-placement-tests.tesl:226
 		if !teslrt.Equal(teslLeft24, teslrt.FromInt64(3)) {
+//line sql-clause-placement-tests.tesl:226
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}

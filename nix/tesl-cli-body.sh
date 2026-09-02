@@ -1347,7 +1347,7 @@ case "$CMD" in
     STUFF_ROOT="$ROOT/.tesl-stuff"
     removed=0
     for path in "$BUILD_ROOT" "$ROOT/.tesl-stuff/go-build" \
-                "$ROOT/.tesl-stuff/debug.sock" "$ROOT/.tesl-stuff/debug.port" \
+                "$ROOT/.tesl-stuff/debug.sock" "$ROOT/.tesl-stuff/debug.port" "$ROOT/.tesl-stuff/debug.token" \
                 "$ROOT/.tesl-stuff"/tesl.* "$ROOT/.tesl-stuff"/go-emit-*; do
       [ -e "$path" ] || [ -L "$path" ] || continue
       rm -rf "$path"

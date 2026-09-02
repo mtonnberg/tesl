@@ -120,6 +120,11 @@ func TestTesl0(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson48-sql-inner-join.tesl:151
 		_ = teslrt.TableInsert(CustomerTable, "Customer", Customer{Id: "c1", Name: "Alice", Country: "SE"}, func(teslRow, teslNew Customer) bool { return (teslRow.Id == teslNew.Id) })
@@ -135,6 +140,7 @@ func TestTesl0(teslT *testing.T) {
 					_ = results
 //line lesson48-sql-inner-join.tesl:156
 					if teslrt.ListEqualBy(results, []Order{}, teslEqualOrder) {
+//line lesson48-sql-inner-join.tesl:156
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -151,6 +157,11 @@ func TestTesl1(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson48-sql-inner-join.tesl:160
 		_ = teslrt.TableInsert(CustomerTable, "Customer", Customer{Id: "c2", Name: "Bob", Country: "US"}, func(teslRow, teslNew Customer) bool { return (teslRow.Id == teslNew.Id) })
@@ -169,6 +180,7 @@ func TestTesl1(teslT *testing.T) {
 						_ = results
 //line lesson48-sql-inner-join.tesl:165
 						if teslrt.ListEqualBy(results, []Order{}, teslEqualOrder) {
+//line lesson48-sql-inner-join.tesl:165
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}
@@ -186,6 +198,11 @@ func TestTesl2(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson48-sql-inner-join.tesl:169
 		_ = teslrt.TableInsert(CustomerTable, "Customer", Customer{Id: "c4", Name: "Dave", Country: "DE"}, func(teslRow, teslNew Customer) bool { return (teslRow.Id == teslNew.Id) })
@@ -201,6 +218,7 @@ func TestTesl2(teslT *testing.T) {
 					_ = results
 //line lesson48-sql-inner-join.tesl:173
 					if teslrt.ListEqualBy(results, []Order{}, teslEqualOrder) {
+//line lesson48-sql-inner-join.tesl:173
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
@@ -217,6 +235,11 @@ func TestTesl3(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson48-sql-inner-join.tesl:177
 		_ = teslrt.TableInsert(CustomerTable, "Customer", Customer{Id: "c5", Name: "Eve", Country: "FR"}, func(teslRow, teslNew Customer) bool { return (teslRow.Id == teslNew.Id) })
@@ -235,6 +258,7 @@ func TestTesl3(teslT *testing.T) {
 						_ = items
 //line lesson48-sql-inner-join.tesl:183
 						if teslrt.ListEqualBy(items, []OrderItem{}, teslEqualOrderItem) {
+//line lesson48-sql-inner-join.tesl:183
 							teslT.Fatal("Tesl expectation failed")
 						}
 					}
@@ -252,6 +276,11 @@ func TestTesl4(teslT *testing.T) {
 		teslT.Skip("test kind filter")
 	}
 	teslResetTestState()
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson48-sql-inner-join.tesl:188
 		_ = teslrt.TableInsert(OrderTable, "Order", Order{Id: "orphan1", CustomerId: "missing-customer", Amount: teslrt.FromInt64(999), Status: "new"}, func(teslRow, teslNew Order) bool { return (teslRow.Id == teslNew.Id) })
@@ -262,6 +291,7 @@ func TestTesl4(teslT *testing.T) {
 			teslRight1 := []Order{}
 //line lesson48-sql-inner-join.tesl:190
 			if !teslrt.ListEqualBy(results, teslRight1, teslEqualOrder) {
+//line lesson48-sql-inner-join.tesl:190
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}

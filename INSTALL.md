@@ -106,7 +106,7 @@ tesl validate hello.tesl
 ```
 
 Run its `test` block to confirm the **full pipeline** end-to-end
-(parser → type-checker → proof-checker → emitter → Racket runtime):
+(parser → type-checker → proof-checker → Go emitter → `go test`):
 
 ```bash
 tesl test hello.tesl
@@ -135,7 +135,7 @@ nix profile install github:mtonnberg/tesl
 
 This installs both the `tesl` CLI and the `tesl-lsp` language server. The extension will find `tesl-lsp` automatically, even when VSCodium is launched from the desktop rather than a terminal.
 
-**Alternative — explicit path override:** if you need to point the extension at a specific LSP script, set `tesl.lspScript` in your VS Code settings to the absolute path of `tesl-lsp.rkt`.
+**Alternative — explicit path override:** if you need to point the extension at a specific LSP script, set `tesl.lspScript` in your VS Code settings to the absolute path of the `tesl-lsp` binary (built from `runtime/go/cmd/tesl-lsp`).
 
 ---
 

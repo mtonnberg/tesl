@@ -41,6 +41,16 @@ const (
 	// expensive, so an unbounded input is a denial-of-service amplifier. Same limit as the
 	// Racket runtime's.
 	maxPasswordBytes = 1024
+
+	// The CEILING on what a STORED hash may ask this process to spend. The PHC string's own
+	// parameters drive `verifyArgon2id`, and the hash column is data: a poisoned row saying
+	// `m=4194304` would make the next login attempt against it a 4 GiB allocation. The
+	// ceilings are far above anything this runtime mints (64 MiB, t=2, p=1) and above
+	// libsodium's SENSITIVE preset (1 GiB, t=4), so every legitimate hash parses; a row above
+	// them is treated exactly like a foreign encoding — does not verify, needs re-minting.
+	argonMaxMemoryKiB = 1024 * 1024 // 1 GiB
+	argonMaxTime      = 64
+	argonMaxThreads   = 16
 )
 
 // PasswordHash is opaque to Tesl: it holds the PHC string, and a program can store it, verify
@@ -132,7 +142,10 @@ func parseArgon2id(stored string) (argon2Params, bool) {
 			return argon2Params{}, false
 		}
 	}
-	if memory == 0 || time == 0 || threads == 0 || threads > 255 {
+	if memory == 0 || time == 0 || threads == 0 {
+		return argon2Params{}, false
+	}
+	if memory > argonMaxMemoryKiB || time > argonMaxTime || threads > argonMaxThreads {
 		return argon2Params{}, false
 	}
 	raw := base64.RawStdEncoding

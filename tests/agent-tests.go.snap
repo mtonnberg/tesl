@@ -48,6 +48,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line agent-tests.tesl:39
 		agent := teslrt.Agent{Provider: teslrt.MockProvider([]string{"hello from mock"}), SystemPrompt: "x", MaxTokens: teslrt.FromInt64(100), Tools: []teslrt.Tool{}}
@@ -58,6 +63,7 @@ func TestTesl0(teslT *testing.T) {
 			_ = reply
 //line agent-tests.tesl:41
 			if reply != "hello from mock" {
+//line agent-tests.tesl:41
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -71,9 +77,15 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft2 := AskMock("anything")
 //line agent-tests.tesl:45
 	if teslLeft2 != "hello from mock" {
+//line agent-tests.tesl:45
 		teslT.Fatal("Tesl expectation failed")
 	}
 }
@@ -85,6 +97,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line agent-tests.tesl:49
 		agent := teslrt.Agent{Provider: teslrt.MockProvider([]string{"first", "second"}), SystemPrompt: "x", MaxTokens: teslrt.FromInt64(50), Tools: []teslrt.Tool{}}
@@ -99,10 +116,12 @@ func TestTesl2(teslT *testing.T) {
 				_ = r2
 //line agent-tests.tesl:52
 				if r1 != "first" {
+//line agent-tests.tesl:52
 					teslT.Fatal("Tesl expectation failed")
 				}
 //line agent-tests.tesl:53
 				if r2 != "second" {
+//line agent-tests.tesl:53
 					teslT.Fatal("Tesl expectation failed")
 				}
 			}

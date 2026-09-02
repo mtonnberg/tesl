@@ -73,19 +73,27 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft1 := teslrt.MustCheck(CheckAge(teslrt.FromInt64(18)))
 //line lesson42-mutation-testing.tesl:98
 	if !teslrt.Equal(teslLeft1, teslrt.FromInt64(18)) {
+//line lesson42-mutation-testing.tesl:98
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft2 := teslrt.MustCheck(CheckAge(teslrt.FromInt64(65)))
 //line lesson42-mutation-testing.tesl:99
 	if !teslrt.Equal(teslLeft2, teslrt.FromInt64(65)) {
+//line lesson42-mutation-testing.tesl:99
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft3 := teslrt.MustCheck(CheckAge(teslrt.FromInt64(120)))
 //line lesson42-mutation-testing.tesl:100
 	if !teslrt.Equal(teslLeft3, teslrt.FromInt64(120)) {
+//line lesson42-mutation-testing.tesl:100
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson42-mutation-testing.tesl:101
@@ -105,19 +113,27 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft4 := teslrt.MustCheck(CheckScore(teslrt.FromInt64(0)))
 //line lesson42-mutation-testing.tesl:118
 	if !teslrt.Equal(teslLeft4, teslrt.FromInt64(0)) {
+//line lesson42-mutation-testing.tesl:118
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft5 := teslrt.MustCheck(CheckScore(teslrt.FromInt64(50)))
 //line lesson42-mutation-testing.tesl:119
 	if !teslrt.Equal(teslLeft5, teslrt.FromInt64(50)) {
+//line lesson42-mutation-testing.tesl:119
 		teslT.Fatal("Tesl expectation failed")
 	}
 	teslLeft6 := teslrt.MustCheck(CheckScore(teslrt.FromInt64(100)))
 //line lesson42-mutation-testing.tesl:120
 	if !teslrt.Equal(teslLeft6, teslrt.FromInt64(100)) {
+//line lesson42-mutation-testing.tesl:120
 		teslT.Fatal("Tesl expectation failed")
 	}
 	{
@@ -147,9 +163,15 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	teslLeft7 := teslrt.MustCheck(CheckDiscount(teslrt.FromInt64(42)))
 //line lesson42-mutation-testing.tesl:150
 	if !teslrt.Equal(teslLeft7, teslrt.FromInt64(42)) {
+//line lesson42-mutation-testing.tesl:150
 		teslT.Fatal("Tesl expectation failed")
 	}
 //line lesson42-mutation-testing.tesl:151

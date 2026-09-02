@@ -12,9 +12,19 @@ import (
 var (
 	ErrDivisionByZero = errors.New("teslrt.Int: division by zero")
 	ErrNegativePower  = errors.New("teslrt.Int: negative exponent")
+	ErrPowTooLarge    = errors.New("teslrt.Int: exponent is too large for Int.pow (the result would exceed 1048576 bits)")
 	ErrInvalidFloat   = errors.New("teslrt.Int: NaN and infinity are not integers")
 	ErrInvalidInt     = errors.New("teslrt.Int: invalid decimal integer")
 )
+
+// maxPowResultBits bounds the bit length of an Int.pow RESULT. It is a denial-of-service
+// bound, not a numeric limit: Int stays arbitrary-precision, and the checked int64 fast
+// path plus the math/big spill apply unchanged to every power below it. Without a bound
+// an exponent taken from a request (`Int.pow base n`) pins a core for minutes and
+// allocates gigabytes before the handler's recover ever runs — math/big exponentiation
+// is not interruptible. 1<<20 bits is a 128 KiB result, far past anything an integer
+// program computes on purpose, and still costs only milliseconds to produce.
+const maxPowResultBits = 1 << 20
 
 // Int is Tesl's arbitrary-precision integer. The zero value is zero.
 //
@@ -33,8 +43,22 @@ func FromInt64(value int64) Int {
 	return Int{small: value}
 }
 
+// maxDecimalDigits bounds the decimal text ANY Int is parsed from — a JSON literal, a path
+// capture, `String.toInt`. `big.Int.SetString` is quadratic in the digit count, so a
+// 900 000-digit path segment (well under the 1 MiB header limit) cost ~1.7 s of CPU before
+// the capture's own check ever ran. One bound at the one choke point, rather than per caller:
+// the first fix capped only the JSON path and the whitebox campaign walked in through the
+// other two. 4096 digits is ~13 600 bits, far beyond any value a program can mean.
+const maxDecimalDigits = 4096
+
+// ErrIntTooLong is the refusal for a decimal text over maxDecimalDigits.
+var ErrIntTooLong = errors.New("integer literal has more than 4096 digits")
+
 // ParseDecimal parses an optional sign followed by one or more decimal digits.
 func ParseDecimal(value string) (Int, error) {
+	if len(value) > maxDecimalDigits+1 {
+		return Int{}, ErrIntTooLong
+	}
 	if !validDecimal(value, true) {
 		return Int{}, ErrInvalidInt
 	}
@@ -230,11 +254,36 @@ func MustMod(dividend, divisor Int) Int {
 	return value
 }
 
+// Pow is base^exponent for a non-negative exponent. The result's size is bounded BEFORE
+// exponentiating (see maxPowResultBits): bits(base^n) <= bits(base)*n, so the bound is
+// decided from the operands alone in constant time, and an exponent that does not even
+// fit int64 is refused by the same rule without ever being converted.
 func Pow(base, exponent Int) (Int, error) {
 	if exponent.Sign() < 0 {
 		return Int{}, ErrNegativePower
 	}
-	return fromBig(new(big.Int).Exp(base.bigInt(), exponent.bigInt(), nil)), nil
+	// |base| <= 1 (0, 1, -1) is cheap for ANY exponent: the result is 0, 1 or -1, so it
+	// is decided here rather than measured against the bound.
+	baseBits := base.bigInt().BitLen()
+	if baseBits <= 1 {
+		switch {
+		case exponent.IsZero():
+			return FromInt64(1), nil
+		case base.IsZero():
+			return Int{}, nil
+		case base.Sign() > 0 || exponent.IsEven():
+			return FromInt64(1), nil
+		default:
+			return FromInt64(-1), nil
+		}
+	}
+	// |base| >= 2 from here, so baseBits >= 2 and any exponent beyond int64 is already
+	// past the bound. The division form avoids overflowing baseBits*power.
+	power, fits := exponent.Int64()
+	if !fits || power > int64(maxPowResultBits)/int64(baseBits) {
+		return Int{}, ErrPowTooLarge
+	}
+	return fromBig(new(big.Int).Exp(base.bigInt(), big.NewInt(power), nil)), nil
 }
 
 func GCD(left, right Int) Int {
@@ -384,7 +433,7 @@ func (n *Int) UnmarshalJSON(data []byte) error {
 }
 
 func validJSONInteger(value string) bool {
-	if !validDecimal(value, false) {
+	if len(value) > maxDecimalDigits+1 || !validDecimal(value, false) {
 		return false
 	}
 	start := 0
@@ -437,7 +486,8 @@ func IntToString(value Int) string {
 
 // MustPow raises rather than returning an error, matching Int.pow in tesl/int.rkt, which
 // rejects a negative exponent outright: there is no integer result, and Float.pow is the
-// function for a fractional one.
+// function for a fractional one. An exponent past maxPowResultBits traps the same way
+// (ErrPowTooLarge); inside a handler, callHandler turns the trap into a sanitized 500.
 func MustPow(base, exponent Int) Int {
 	result, err := Pow(base, exponent)
 	if err != nil {

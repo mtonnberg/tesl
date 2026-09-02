@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"sort"
@@ -73,10 +74,110 @@ var telemetry = struct {
 	tracesEnabled     bool
 	traceRatio        float64
 	metricsIntervalMs int
-	events            []TelemetryEvent
+	events            eventRing
 	series            map[string]*MetricSeries
-	exporterStop      chan struct{}
-}{service: "tesl", metricsEnabled: true, traceRatio: 1.0, series: map[string]*MetricSeries{}}
+	// instrumentSeries counts the distinct attribute sets each instrument (kind + name) has
+	// produced, which is what the cardinality cap is measured against.
+	instrumentSeries map[string]int
+	exporterStop     chan struct{}
+}{service: "tesl", metricsEnabled: true, traceRatio: 1.0,
+	series: map[string]*MetricSeries{}, instrumentSeries: map[string]int{}}
+
+// ── Bounds ────────────────────────────────────────────────────────────────────
+//
+// Both stores are fed by request-derived data — a label built from a user id, an event per
+// request — and both were unbounded. The spec's promises are the bounds implemented here:
+//
+//	maxMetricSeriesPerInstrument   "each instrument is capped at 2000 distinct attribute sets
+//	                               — overflow folds into a single {otel.metric.overflow=true}
+//	                               series", so a hostile label costs one extra series;
+//	maxTelemetryEvents             "events are buffered in a bounded queue (drop-oldest on
+//	                               overflow) flushed by a background timer"; exported events
+//	                               leave the buffer, and a drop is counted in the exporter's
+//	                               own `tesl.telemetry.dropped` counter.
+//
+// A sample that is NaN or ±Inf is refused at the record path and counted under the same
+// counter: encoding/json cannot represent it, and one such value used to make mustJSON answer
+// nil — blanking the ENTIRE metrics export for the rest of the process.
+const (
+	maxMetricSeriesPerInstrument = 2000
+	maxTelemetryEvents           = 10000
+	telemetryDroppedMetric       = "tesl.telemetry.dropped"
+)
+
+var metricOverflowAttributes = []Tuple2[string, string]{
+	{Tuple2First: "otel.metric.overflow", Tuple2Second: "true"},
+}
+
+// eventRing is the bounded event buffer: a fixed-capacity ring that drops the OLDEST event
+// when full. Every event carries a position in one monotonic sequence, so the exporter can
+// snapshot the buffer, post it, and then remove exactly what it posted — events that arrived
+// meanwhile keep their place, and an overflow that already discarded some of the snapshot
+// does not make the drain discard newer ones in their stead.
+type eventRing struct {
+	items    []TelemetryEvent
+	head     int   // index of the oldest item
+	count    int   // items held
+	firstSeq int64 // sequence number of the oldest item
+	dropped  int64 // events discarded because the ring was full
+}
+
+func (ring *eventRing) push(event TelemetryEvent) {
+	if ring.items == nil {
+		ring.items = make([]TelemetryEvent, maxTelemetryEvents)
+	}
+	if ring.count == len(ring.items) {
+		// Full: overwrite the oldest slot and advance past it.
+		ring.items[ring.head] = event
+		ring.head = (ring.head + 1) % len(ring.items)
+		ring.firstSeq++
+		ring.dropped++
+		return
+	}
+	ring.items[(ring.head+ring.count)%len(ring.items)] = event
+	ring.count++
+}
+
+// snapshot answers the events oldest-first and the sequence number just past the newest.
+func (ring *eventRing) snapshot() ([]TelemetryEvent, int64) {
+	out := make([]TelemetryEvent, 0, ring.count)
+	for index := 0; index < ring.count; index++ {
+		out = append(out, ring.items[(ring.head+index)%len(ring.items)])
+	}
+	return out, ring.firstSeq + int64(ring.count)
+}
+
+// dropBefore removes every event with a sequence number below `seq` — the ones a snapshot
+// taken at `seq` contained and the exporter has since delivered.
+func (ring *eventRing) dropBefore(seq int64) {
+	remove := seq - ring.firstSeq
+	if remove <= 0 {
+		return
+	}
+	if remove > int64(ring.count) {
+		remove = int64(ring.count)
+	}
+	for index := int64(0); index < remove; index++ {
+		ring.items[(ring.head+int(index))%len(ring.items)] = TelemetryEvent{}
+	}
+	ring.head = (ring.head + int(remove)) % len(ring.items)
+	ring.count -= int(remove)
+	ring.firstSeq += remove
+}
+
+func (ring *eventRing) reset() {
+	// The sequence moves past everything ever held, so a drain carrying a snapshot taken
+	// before the reset removes nothing recorded after it.
+	ring.firstSeq += int64(ring.count)
+	// Cleared in place rather than set to nil: `snapshot`/`dropBefore` index the backing
+	// array and the analyser cannot see that count==0 guards them; releasing the events is
+	// what matters, and the array is reused by the next `record`.
+	for index := range ring.items {
+		ring.items[index] = TelemetryEvent{}
+	}
+	ring.head, ring.count = 0, 0
+	ring.dropped = 0
+}
 
 func readCryptoRandom(value []byte) (int, error) {
 	return rand.Read(value)
@@ -102,8 +203,9 @@ func InitTelemetry(service, endpoint string, console, metrics, traces bool,
 	telemetry.tracesEnabled = traces
 	telemetry.metricsIntervalMs = metricsIntervalMs
 	telemetry.traceRatio = traceRatio
-	telemetry.events = nil
+	telemetry.events.reset()
 	telemetry.series = map[string]*MetricSeries{}
+	telemetry.instrumentSeries = map[string]int{}
 	if endpoint != "" && endpoint != "in-memory" {
 		telemetry.exporterStop = make(chan struct{})
 		go runTelemetryExporter(endpoint, metricsIntervalMs, telemetry.exporterStop)
@@ -125,7 +227,12 @@ func Telemetry(message string, attributes []Tuple2[string, string]) struct{} {
 		SpanID:      telemetryID(8),
 	}
 	telemetry.mutex.Lock()
-	telemetry.events = append(telemetry.events, event)
+	before := telemetry.events.dropped
+	telemetry.events.push(event)
+	if telemetry.events.dropped > before {
+		recordMetricLocked(telemetryDroppedMetric, MetricCounter, 1,
+			[]Tuple2[string, string]{{Tuple2First: "reason", Tuple2Second: "event-buffer-full"}})
+	}
 	console := telemetry.console
 	telemetry.mutex.Unlock()
 	if console {
@@ -171,8 +278,33 @@ func recordMetric(name string, kind MetricKind, value float64,
 	if !telemetry.metricsEnabled {
 		return
 	}
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		// Refused here rather than at export: a series that held one non-finite value could
+		// never be encoded again, and the export dropped every OTHER series with it.
+		recordMetricLocked(telemetryDroppedMetric, MetricCounter, 1,
+			[]Tuple2[string, string]{{Tuple2First: "reason", Tuple2Second: "non-finite-sample"}})
+		return
+	}
+	recordMetricLocked(name, kind, value, attributes)
+}
+
+// recordMetricLocked is the record path proper; the caller holds telemetry.mutex. A new
+// attribute set past the instrument's cap lands in the instrument's single overflow series
+// instead of a series of its own.
+func recordMetricLocked(name string, kind MetricKind, value float64,
+	attributes []Tuple2[string, string]) {
 	key := seriesKey(name, kind, attributes)
 	series, found := telemetry.series[key]
+	if !found {
+		instrument := fmt.Sprintf("%d\x00%s", kind, name)
+		if telemetry.instrumentSeries[instrument] >= maxMetricSeriesPerInstrument {
+			attributes = metricOverflowAttributes
+			key = seriesKey(name, kind, attributes)
+			series, found = telemetry.series[key]
+		} else {
+			telemetry.instrumentSeries[instrument]++
+		}
+	}
 	if !found {
 		series = &MetricSeries{Name: name, Kind: kind, Attributes: attributes,
 			Min: value, Max: value}
@@ -215,9 +347,16 @@ func Gauge(name string, value float64, attributes []Tuple2[string, string]) stru
 func TelemetryEvents() []TelemetryEvent {
 	telemetry.mutex.Lock()
 	defer telemetry.mutex.Unlock()
-	out := make([]TelemetryEvent, len(telemetry.events))
-	copy(out, telemetry.events)
-	return out
+	events, _ := telemetry.events.snapshot()
+	return events
+}
+
+// TelemetryDroppedEvents is how many events the bounded buffer discarded since the last
+// reset — the number the `tesl.telemetry.dropped` counter also carries.
+func TelemetryDroppedEvents() int64 {
+	telemetry.mutex.Lock()
+	defer telemetry.mutex.Unlock()
+	return telemetry.events.dropped
 }
 
 func telemetryTraceEnabled() bool {
@@ -252,8 +391,9 @@ func MetricSeriesSnapshot() []MetricSeries {
 func ResetTelemetry() {
 	telemetry.mutex.Lock()
 	defer telemetry.mutex.Unlock()
-	telemetry.events = nil
+	telemetry.events.reset()
 	telemetry.series = map[string]*MetricSeries{}
+	telemetry.instrumentSeries = map[string]int{}
 }
 
 // MillisOf narrows a Tesl `Int` interval to the plain int the recorder keeps. An interval outside
@@ -287,40 +427,60 @@ func runTelemetryExporter(endpoint string, intervalMs int, stop <-chan struct{})
 	for {
 		select {
 		case <-ticker.C:
-			exportTelemetry(endpoint)
+			func() {
+				defer func() {
+					if trap := recover(); trap != nil {
+						fmt.Fprintf(os.Stderr, "tesl: telemetry exporter recovered from a trap: %v\n", trap)
+					}
+				}()
+				exportTelemetry(endpoint)
+			}()
 		case <-stop:
 			return
 		}
 	}
 }
 
+// exportTelemetry posts one interval's snapshot. Metrics are CUMULATIVE and stay; events are
+// a QUEUE — the ones the collector accepted leave the buffer, so an event is exported once,
+// not on every later tick until the process ends (which is what an ever-growing slice did:
+// unbounded memory and O(n²) egress). A failed post keeps them for the next tick, bounded by
+// the ring.
 func exportTelemetry(endpoint string) {
-	metrics, traces := telemetryPayloads()
+	metrics, traces, exportedThrough := telemetryPayloads()
 	if len(metrics) > 0 {
 		postOTLP(endpointPath(endpoint, "/v1/metrics"), metrics)
 	}
-	if len(traces) > 0 {
-		postOTLP(endpointPath(endpoint, "/v1/traces"), traces)
+	if len(traces) > 0 && postOTLP(endpointPath(endpoint, "/v1/traces"), traces) {
+		telemetry.mutex.Lock()
+		telemetry.events.dropBefore(exportedThrough)
+		telemetry.mutex.Unlock()
 	}
 }
 
-func postOTLP(endpoint string, payload []byte) {
+// postOTLP answers whether the collector ACCEPTED the batch: a 2xx. Anything else — no
+// response, a 5xx, a 429 — is a failed delivery and the caller keeps what it tried to send.
+func postOTLP(endpoint string, payload []byte) bool {
 	request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
-		return
+		return false
 	}
 	request.Header.Set("Content-Type", "application/json")
 	response, err := otlpHTTPClient.Do(request)
-	if err == nil && response != nil {
-		_ = response.Body.Close()
+	if err != nil || response == nil {
+		return false
 	}
+	_ = response.Body.Close()
+	return response.StatusCode >= 200 && response.StatusCode < 300
 }
 
 func endpointPath(endpoint, suffix string) string {
 	return strings.TrimRight(endpoint, "/") + suffix
 }
 
-func telemetryPayloads() ([]byte, []byte) {
+// telemetryPayloads renders the metrics and traces batches, and answers the event sequence
+// the traces batch reaches — what exportTelemetry drains once that batch is delivered.
+func telemetryPayloads() (metrics, traces []byte, exportedThrough int64) {
 	telemetry.mutex.Lock()
 	service := telemetry.service
 	metricsEnabled := telemetry.metricsEnabled
@@ -329,16 +489,15 @@ func telemetryPayloads() ([]byte, []byte) {
 	for _, value := range telemetry.series {
 		series = append(series, *value)
 	}
-	events := append([]TelemetryEvent(nil), telemetry.events...)
+	events, exportedThrough := telemetry.events.snapshot()
 	telemetry.mutex.Unlock()
-	var metrics, traces []byte
 	if metricsEnabled && len(series) > 0 {
 		metrics = mustJSON(otlpMetrics(service, series))
 	}
 	if tracesEnabled && len(events) > 0 {
 		traces = mustJSON(otlpTraces(service, events))
 	}
-	return metrics, traces
+	return metrics, traces, exportedThrough
 }
 
 func resource(service string) map[string]any {

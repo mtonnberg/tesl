@@ -597,6 +597,50 @@ let pred_names_of_return_spec (spec : return_spec) : string list =
     )
   | _ -> []
 
+(* ── Proof applications WITH their arguments ──────────────────────────────────
+   A `via` boundary check (codec field, route capture, route auth) used to compare the
+   proof a check/auth function establishes to the proof the boundary declares by PREDICATE
+   NAME ONLY (`proof_predicates`).  So a check establishing `Role u "guest"` satisfied a
+   field declared `Role user "admin"`, the field then credited its DECLARED proof to the
+   value (proofs are erased at run time), and a request that only ever cleared the guest
+   check reached an admin-gated handler (whitebox campaign, 2026-09-02).
+
+   The comparison is now on the whole application.  The one argument that legitimately
+   differs is the SUBJECT — the check names its return binder, the boundary names its field
+   or binding — so that argument is canonicalised to `$subject` on both sides; every other
+   argument (a literal like `"admin"`, a second variable) must match exactly. *)
+type proof_app = string * string list
+
+let rec proof_apps_of ~(subject : string) (p : proof_expr) : proof_app list =
+  match p with
+  | PredApp { pred; args = []; _ } ->
+    (* The abbreviated spelling `::: Authenticated` (no argument) means "about the value
+       itself", so it compares equal to `Authenticated user` on the other side. *)
+    [(pred, ["$subject"])]
+  | PredApp { pred; args; _ } ->
+    [(pred, List.map (fun a -> if subject <> "" && a = subject then "$subject" else a) args)]
+  | PredAnd { left; right; _ } -> proof_apps_of ~subject left @ proof_apps_of ~subject right
+
+(** The proof applications a check/auth function's return spec establishes, with its
+    return binder canonicalised. *)
+let proof_apps_of_return_spec (spec : return_spec) : proof_app list =
+  match spec with
+  | RetAttached { binding = b; _ } | RetMaybeAttached { binding = b; _ } ->
+    (match b.proof_ann with Some p -> proof_apps_of ~subject:b.name p | None -> [])
+  | RetNamedPack { entity_proof; other_proof; _ } ->
+    (match entity_proof with Some p -> proof_apps_of ~subject:"" p | None -> [])
+    @ (match other_proof with Some p -> proof_apps_of ~subject:"" p | None -> [])
+  | _ -> []
+
+(** Renders `Pred <value> "admin"` for a diagnostic. *)
+let describe_proof_app ((pred, args) : proof_app) : string =
+  String.concat " " (pred :: List.map (fun a -> if a = "$subject" then "<value>" else a) args)
+
+(** The declared applications no via function establishes (exact match after subject
+    canonicalisation). *)
+let uncovered_proof_apps ~(declared : proof_app list) ~(covered : proof_app list) : proof_app list =
+  List.filter (fun app -> not (List.mem app covered)) declared
+
 (** Extract the element-level predicate names from a ForAll/MaybeForAll/SetForAll return spec. *)
 let forall_preds_of_return_spec (spec : return_spec) : string list =
   match spec with

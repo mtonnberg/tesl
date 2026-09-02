@@ -97,6 +97,11 @@ func TestTesl0(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson63-ai-structured-output.tesl:93
 		mock := teslrt.MockProvider([]string{"{\"level\":1,\"reason\":\"production outage\"}"})
@@ -108,11 +113,13 @@ func TestTesl0(teslT *testing.T) {
 			teslLeft1 := p.Level
 //line lesson63-ai-structured-output.tesl:95
 			if !teslrt.Equal(teslLeft1, teslrt.FromInt64(1)) {
+//line lesson63-ai-structured-output.tesl:95
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft2 := p.Reason
 //line lesson63-ai-structured-output.tesl:96
 			if teslLeft2 != "production outage" {
+//line lesson63-ai-structured-output.tesl:96
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -126,6 +133,11 @@ func TestTesl1(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson63-ai-structured-output.tesl:102
 		mock := teslrt.MockProvider([]string{"not json", "{\"level\":3,\"reason\":\"cosmetic typo\"}"})
@@ -137,11 +149,13 @@ func TestTesl1(teslT *testing.T) {
 			teslLeft3 := p.Level
 //line lesson63-ai-structured-output.tesl:104
 			if !teslrt.Equal(teslLeft3, teslrt.FromInt64(3)) {
+//line lesson63-ai-structured-output.tesl:104
 				teslT.Fatal("Tesl expectation failed")
 			}
 			teslLeft4 := p.Reason
 //line lesson63-ai-structured-output.tesl:105
 			if teslLeft4 != "cosmetic typo" {
+//line lesson63-ai-structured-output.tesl:105
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}
@@ -155,6 +169,11 @@ func TestTesl2(teslT *testing.T) {
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
 		teslT.Skip("test kind filter")
 	}
+	defer func() {
+		if teslTrap := recover(); teslTrap != nil {
+			teslT.Fatalf("Tesl test trapped: %v", teslTrap)
+		}
+	}()
 	{
 //line lesson63-ai-structured-output.tesl:111
 		alice := teslrt.MockProvider([]string{"Hello Alice!"})
@@ -174,11 +193,13 @@ func TestTesl2(teslT *testing.T) {
 					teslLeft5 := teslrt.ReplyText(replyA)
 //line lesson63-ai-structured-output.tesl:115
 					if teslLeft5 != "Hello Alice!" {
+//line lesson63-ai-structured-output.tesl:115
 						teslT.Fatal("Tesl expectation failed")
 					}
 					teslLeft6 := teslrt.ReplyText(replyB)
 //line lesson63-ai-structured-output.tesl:116
 					if teslLeft6 != "Hello Bob!" {
+//line lesson63-ai-structured-output.tesl:116
 						teslT.Fatal("Tesl expectation failed")
 					}
 				}
