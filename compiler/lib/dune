@@ -8,10 +8,10 @@
  ; fail-closed discipline the proof/validation passes depend on.
  (ocamlopt_flags (:standard -w -50 -warn-error +8))
  (ocamlc_flags (:standard -w -50 -warn-error +8))
-  (modules tz_zones currencies units_catalog stdlib_config_names formatter linter ast ast_visitor proof_kernel desugar checker compile diag_fix api_test_template emit_go emit_ts emit_elm error_codes float_fmt import_suggest ir lexer location mutate parser proof_checker proof_discharge sql_query token type_system regex_lint validation_common validation_structural validation_sql_codec validation_proof validation_names validation_capabilities validation_advanced validation embedded_docs embedded_go_runtime stdlib_docs stdlib_docs_entries index_lint)
+  (modules tz_zones currencies units_catalog stdlib_config_names formatter linter ast ast_visitor proof_kernel desugar checker compile diag_fix api_test_template emit_go emit_ts emit_elm error_codes float_fmt import_suggest ir lexer location mutate parser proof_checker proof_discharge sql_query token type_system regex_lint validation_common validation_structural validation_sql_codec validation_proof validation_names validation_capabilities validation_advanced validation embedded_docs stdlib_docs stdlib_docs_entries index_lint)
  ; unix: wall-clock timestamps for opt-in per-phase timing (TESL_PHASE_TIMING)
  ;       in compile.ml.  unix ships with the OCaml distribution.
- (libraries str unix))
+ (libraries str unix tesl_go_runtime))
 
 (ocamllex
  (modules lexer))
@@ -31,12 +31,7 @@
   (with-stdout-to %{target}
    (run %{exe:../gen/gen_docs.exe}))))
 
-; Keep generated Go projects standalone: runtime source is embedded in the
-; compiler, not read from TESL_REPO_ROOT at emission time.
-(rule
- (target embedded_go_runtime.ml)
- (mode promote)
-  (deps ../../runtime/go/teslrt/agent.go ../../runtime/go/teslrt/agent_endpoint.go ../../runtime/go/teslrt/agent_provider.go ../../runtime/go/teslrt/apitest.go ../../runtime/go/teslrt/apitest_json.go ../../runtime/go/teslrt/cache.go ../../runtime/go/teslrt/check.go ../../runtime/go/teslrt/control.go ../../runtime/go/teslrt/crypto.go ../../runtime/go/teslrt/debug.go ../../runtime/go/teslrt/debug_control.go ../../runtime/go/teslrt/debug_sql.go ../../runtime/go/teslrt/debug_state.go ../../runtime/go/teslrt/debug_value.go ../../runtime/go/teslrt/dict.go ../../runtime/go/teslrt/env.go ../../runtime/go/teslrt/either.go ../../runtime/go/teslrt/email.go ../../runtime/go/teslrt/float.go ../../runtime/go/teslrt/hostclass.go ../../runtime/go/teslrt/hostname.go ../../runtime/go/teslrt/httpclient.go ../../runtime/go/teslrt/httpstub.go ../../runtime/go/teslrt/int.go ../../runtime/go/teslrt/int32.go ../../runtime/go/teslrt/json.go ../../runtime/go/teslrt/jws.go ../../runtime/go/teslrt/jwt.go ../../runtime/go/teslrt/list.go ../../runtime/go/teslrt/loadtest.go ../../runtime/go/teslrt/maybe.go ../../runtime/go/teslrt/money.go ../../runtime/go/teslrt/currency_data.go ../../runtime/go/teslrt/database.go ../../runtime/go/teslrt/dbquery.go ../../runtime/go/teslrt/postgres.go ../../runtime/go/teslrt/units.go ../../runtime/go/teslrt/units_data.go ../../runtime/go/teslrt/password.go ../../runtime/go/teslrt/pgpubsub.go ../../runtime/go/teslrt/pgstores.go ../../runtime/go/teslrt/prop.go ../../runtime/go/teslrt/queue.go ../../runtime/go/teslrt/random.go ../../runtime/go/teslrt/regex.go ../../runtime/go/teslrt/request.go ../../runtime/go/teslrt/result.go ../../runtime/go/teslrt/secret.go ../../runtime/go/teslrt/serve.go ../../runtime/go/teslrt/server.go ../../runtime/go/teslrt/set.go ../../runtime/go/teslrt/sse.go ../../runtime/go/teslrt/sse_http.go ../../runtime/go/teslrt/sso.go ../../runtime/go/teslrt/sso_flow.go ../../runtime/go/teslrt/sso_route.go ../../runtime/go/teslrt/string.go ../../runtime/go/teslrt/table.go ../../runtime/go/teslrt/telemetry.go ../../runtime/go/teslrt/time.go ../../runtime/go/teslrt/timetrunc.go ../../runtime/go/teslrt/timezone.go ../../runtime/go/teslrt/tuple.go ../../runtime/go/teslrt/url.go ../../runtime/go/teslrt/workers.go)
- (action
-  (with-stdout-to %{target}
-   (run %{exe:../gen/gen_go_runtime.exe}))))
+; The embedded Go runtime lives in lib/go_runtime/ as a VIRTUAL library: the compiler
+; proper depends only on its interface, the CLI and the tests link the real snapshot
+; (default implementation), and the browser playground links the empty one — so the
+; 860 KB of Go source never reaches the js_of_ocaml bundle.  See lib/go_runtime/dune.

@@ -708,13 +708,13 @@ if ! command -v git >/dev/null 2>&1 || ! git -C "$SCRIPT_DIR" rev-parse --is-ins
 elif ! git -C "$SCRIPT_DIR" diff --quiet -- compiler/lib/embedded_docs.ml; then
     printf "  %s✗%s  embedded_docs.ml is stale vs manual/ + example/ — run 'dune build' (it promotes the snapshot) and commit compiler/lib/embedded_docs.ml\n" "$C_RED" "$C_RESET"
     phase_end FAIL
-elif ! git -C "$SCRIPT_DIR" diff --quiet -- compiler/lib/embedded_go_runtime.ml; then
+elif ! git -C "$SCRIPT_DIR" diff --quiet -- compiler/lib/go_runtime/embedded/embedded_go_runtime.ml; then
     # The SAME rule for the Go runtime the compiler bakes into every emitted module
-    # (compiler/lib/embedded_go_runtime.ml, promoted from runtime/go/teslrt).  Phase 2a
+    # (compiler/lib/go_runtime/embedded/embedded_go_runtime.ml, promoted from runtime/go/teslrt).  Phase 2a
     # tests the SOURCE tree; users receive the EMBEDDED copy — so a stale copy here is a
     # runtime fix that passed CI and did not ship.  test_embedded_go_runtime_seam.ml
     # compares the two byte for byte as well; this is the belt to its braces.
-    printf "  %s✗%s  embedded_go_runtime.ml is stale vs runtime/go/teslrt — run 'dune build' (it promotes the snapshot) and commit compiler/lib/embedded_go_runtime.ml\n" "$C_RED" "$C_RESET"
+    printf "  %s✗%s  embedded_go_runtime.ml is stale vs runtime/go/teslrt — run 'dune build' (it promotes the snapshot) and commit compiler/lib/go_runtime/embedded/embedded_go_runtime.ml\n" "$C_RED" "$C_RESET"
     phase_end FAIL
 else
     phase_end OK

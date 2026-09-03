@@ -1,0 +1,5 @@
+; The empty implementation, for executables that never emit a Go project (the browser
+; playground).  Selected by naming tesl_go_runtime_none in (libraries …).
+(library
+ (name tesl_go_runtime_none)
+ (implements tesl_go_runtime))

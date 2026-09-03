@@ -97,8 +97,11 @@ has a regression test.
   sealed `__Host-oauth` cookie still binds the flow to the browser).
 
 ### Process
-- CI fails when `compiler/lib/embedded_go_runtime.ml` is stale; a seam test compares the
+- CI fails when `compiler/lib/go_runtime/embedded/embedded_go_runtime.ml` is stale; a seam test compares the
   embedded runtime to `runtime/go/teslrt` byte for byte and checks every file is embedded.
+- The embedded Go runtime is a dune virtual library (`compiler/lib/go_runtime`): the CLI and
+  tests link the snapshot by default, the browser playground links the empty implementation.
+  #82 had pushed the playground bundle from 1.13 MB to 2.37 MB (its ceiling is 2 MB).
 - Test-drop ledger for the migration: `roadmap/completed/go_migration_test_drop_ledger.md`.
 - Outbound TLS verification tests restored (`httpclient_tls_test.go`).
 

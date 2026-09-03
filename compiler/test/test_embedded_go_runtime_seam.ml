@@ -72,7 +72,7 @@ let test_every_runtime_file_is_embedded () =
   if missing <> [] then
     failf "runtime/go/teslrt has files the compiler does not embed — add them to the list in \
            compiler/gen/gen_go_runtime.ml AND to the (deps …) of the embedded_go_runtime.ml \
-           rule in compiler/lib/dune: %s"
+           rule in compiler/lib/go_runtime/embedded/dune: %s"
       (String.concat ", " missing)
 
 let test_embedded_list_has_no_test_files () =

@@ -32,14 +32,15 @@ rolling deploy that ordering does not exist.
    per entity. Additive, loss-free changes are filled in by the compiler. Anything
    else is a typed hole (`todo "…"`) that is a compile error until a human replaces
    it. This is Lamdera's `Unimplemented` and Acadia's `.plan` file at once.
-3. **A row migration is an ordinary pure Tesl `check` function `check migrateUser(old:
-   V7.User) -> User`** — `ok` with the new row, or `fail` with a reason, the same shape
-   every boundary validator in Tesl already has, so the failure case is in the type
-   rather than hidden. Because `User` carries its field and record proofs, the
-   function cannot return a row that violates the new invariants without going
-   through another `check`. Neither
-   Lamdera nor Acadia can express a migration that is **invariant-correct per row**,
-   checked by the same kernel that guards the HTTP boundary.
+3. **A row migration is an ordinary Tesl function** `fn migrateNote(old:
+   NotesSchema.V7.Note) -> Migrated NotesSchema.V8.Note`, returning `Row` with the new
+   row or `Reject` with a reason, and the migration file is one folded record
+   (`Migration { from, to, same, entities }`) built from `Tesl.Migration` ADTs — no
+   keywords. Because the new row type carries its field proofs and a column fact can be
+   minted only by checks in its own schema module, the function cannot produce a row that
+   violates the new invariants without going through such a check. Neither Lamdera nor
+   Acadia can express a migration that is **invariant-correct per row**, checked by the
+   same kernel that guards the HTTP boundary.
 4. **The two-version rule is enforced at compile time, and everything else follows
    from it.** Every change is decomposed by the compiler into an **expand** step
    (compatible with V7 *and* V8 code) and a **contract** step (compatible with V8
@@ -344,9 +345,10 @@ constraints, `pg_stat_progress_*`) suffice.
 - **Identity across versions is declared, not assumed.** `NotesSchema.V8.NonNegative`
   and `NotesSchema.V9.NonNegative` are two nominal facts, as `V8.UserId` and
   `V9.UserId` are two newtypes; without more, every proof-carrying or newtype column
-  would need re-establishing in every migration and `unchanged` would be a lie for
-  proofs (maintainer, 2026-09-02). So the generator writes a **`same` block** into the
-  migration file listing every type, newtype, ADT, fact and codec whose canonical
+  would need re-establishing in every migration and `Unchanged` would be a lie for
+  proofs (maintainer, 2026-09-02). So the generator writes the **`same:` list** of the
+  migration record (`Same ShopSchema.V8.NonNegative ShopSchema.V9.NonNegative`, §4)
+  naming every type, newtype, ADT, fact and codec whose canonical
   **semantic closure** is identical in the two modules — for a fact, the transitive
   typed IR of every check that can mint it, the pure helpers they call, the codecs
   involved, the frozen stdlib functions reached and the primitive tags, not merely the
@@ -366,6 +368,24 @@ constraints, `pg_stat_progress_*`) suffice.
   to V8 is a compile error (MIG015) whose fix is the mechanical import bump the LSP
   offers. "Forgot to update an import" is therefore caught at the next compile, at the
   exact line, and cannot reach a build.
+- **Many files, one bump.** A large application imports the schema module from dozens
+  of files. A schema change then touches every one of them — and a **missed file cannot
+  compile**: MIG015 fires at the exact import line of every file still naming the old
+  version, and it is fix-all eligible, so one `source.fixAll` or `tesl --fix` rewrites
+  them all. The risk is zero by construction; what remains is diff churn. Two
+  mitigations, in order of preference: (1) import the schema module in few places by
+  design — the entity types flow through function signatures, so only the modules that
+  *name* `Note` in a signature or literal need the import, and in a well-factored program
+  that is a handful of files, not dozens; (2) if churn still bites, a one-line
+  **facade module** `schema/notes.tesl`: `module NotesSchema exposing [Note, …]
+  reexporting NotesSchema.V8`, so the application imports `NotesSchema` and only the
+  facade and the `database` line change per version. Tesl has no re-export today
+  (exports are explicit and local); adding one is a small, general feature and a
+  decision gate below. It keeps traceability at two greppable hops (facade → module)
+  rather than one, which is the honest cost. What is **not** on the table is an
+  implicit "import whatever version the database names": that would make the type's
+  origin invisible at the import site, which is the property the maintainer asked this
+  design to keep.
 - **Older versions are frozen by hash, at compile time.** When `tesl --migrate` writes
   `migrations/notes/V8.tesl` it records the hash of `NotesSchema.V7`'s elaborated
   catalog in that file's header. From then on any edit to `V7.tesl` is MIG013 at
@@ -391,7 +411,7 @@ constraints, `pg_stat_progress_*`) suffice.
   any V7 insert writes every column V7 declares; and `select e from E` decodes the whole
   row, so any V7 read reads every column. The two-version check therefore assumes
   "V7 code may read and write every column `NotesSchema.V7` declares" and needs nothing
-  else. (Precision — "V7 never inserted into `Session`" — could relax a `legacy`
+  else. (Precision — "V7 never inserted into `Session`" — could relax a `Legacy`
   requirement or a `ROLL-WINDOW RISK` label; it is a possible later refinement, not a
   soundness need.)
 - The `database` declaration has one **mandatory** field for this feature,
@@ -450,10 +470,10 @@ generation column** `_tesl_v smallint not null` that every entity table carries
 permanently (created with the table; added by `--schema adopt` on a pre-versioning
 database, metadata-only because it has a default). The value is the entity's
 **generation**, not the program's schema version: an entity's generation increments
-only when a migration gives that entity a row function (`migrate f`, `rename`), and
+only when a migration gives that entity a row function (`Migrate f`, `Rename`), and
 stays put through every version in which the entity is unchanged or changed only in
 ways a database default satisfies (a new `Maybe` column, a constant default, an
-index, a `legacy` dual write). The snapshot records, per entity, the generation each
+index, a `Legacy` dual write). The snapshot records, per entity, the generation each
 schema version corresponds to. Without this, a global version in the marker breaks
 the moment an entity sits out a release: `Session` rows at 7 stay at 7 through a V8
 that did not touch `Session`, and a V9 migration of `Session` that selects `= 8` misses
@@ -483,17 +503,17 @@ writer's meaning the current value carries.
 | new `Maybe T` column | `add column … null` | — | — | ONLINE |
 | new `T` column, constant default | `add column … not null default c` (metadata-only, PG 11+) | — | — | ONLINE |
 | new `T` column, computed from the row | `add column … null`; V8 writes it; invalidation trigger on the source columns | lazy read via row fn — **projection only in V8**; usable inside SQL from V9 (or now, if `Maybe`); backfill | at V9 boot, after V7 retired: final pass, `set not null` (`NOT VALID` + `validate`), drop trigger | ONLINE |
-| new field proof on existing column | — | V8 reads through `check`; V7 keeps writing unchecked values | `add check … not valid; validate` where expressible | ROLL-WINDOW RISK (prefer a validated new column + `rename`) |
-| `rename a -> b` | `add column b null`; **V8 writes both** `a` and `b`; invalidation trigger on `a` | lazy read: `_tesl_v` below the target generation → take `a`; backfill | `drop column a`; drop trigger | ONLINE |
-| type change / transform `a -> b with f` | as rename, V8 writes `b` and, if `writeBack g` given, `a`; trigger on `a` | lazy read via `f`; backfill | `drop column a`; drop trigger | ONLINE with `writeBack`; otherwise ROLL-WINDOW RISK |
-| column removed | V8 stops writing it, but V7 still **reads** it as non-null, so rows V8 inserts must carry a value: `legacy c` (constant → `set default c`, metadata-only) or `legacy with g` (V8 dual-writes `g(row)`); `drop not null` alone only when the V7 snapshot proves V7 never decodes the column | — | `drop column` | ONLINE with `legacy`; compile error without |
+| new field proof on existing column | — | V8 reads through `check`; V7 keeps writing unchecked values | `add check … not valid; validate` where expressible | ROLL-WINDOW RISK (prefer a validated new column + `Rename`) |
+| `Rename a b` | `add column b null`; **V8 writes both** `a` and `b`; invalidation trigger on `a` | lazy read: `_tesl_v` below the target generation → take `a`; backfill | `drop column a`; drop trigger | ONLINE |
+| type change / transform a new column with a row function | as rename, V8 writes `b` and, if `WriteBack g` given, `a`; trigger on `a` | lazy read via `f`; backfill | `drop column a`; drop trigger | ONLINE with `WriteBack`; otherwise ROLL-WINDOW RISK |
+| column removed | V8 stops writing it, but V7 still **reads** it as non-null, so rows V8 inserts must carry a value: `Legacy c v` (constant → `set default c`, metadata-only) or `LegacyWith f g` (V8 dual-writes `g(row)`); `drop not null` alone only when the V7 snapshot proves V7 never decodes the column | — | `drop column` | ONLINE with `Legacy`; compile error without |
 | entity removed | — (V7 still uses it) | — | `drop table` | ONLINE |
 | new plain index | `create index concurrently` (outside transaction, background) | ready before it exists; slower until then | — | ONLINE |
 | new unique index | `create unique index concurrently`; **readiness waits until it is `VALID`** (every new unique index; an `onConflict` on it is an additional hard dependency, not the criterion) | V7 may insert duplicates → build fails → drop `INVALID`, log keys, retry while V7 alive; once VALID, a V7 duplicate insert **fails** | — | ONLINE if V7 writes none of the indexed columns (index over new columns); otherwise ROLL-WINDOW RISK (§7) |
 | index removed | — | — | `drop index concurrently` | ONLINE |
 | `Maybe T` narrowed to `T` | as "computed column" into a new column | | drop old | ONLINE |
 | primary key change | — | — | — | OFFLINE |
-| `reset` | — | — | — | OFFLINE (explicit data loss) |
+| `Reset` | — | — | — | OFFLINE (explicit data loss) |
 
 **Writes from V7 instances during the window — the invalidation trigger.** (In every
 example below `User` is at generation **3** in V7 and **4** in V8; the numbers in
@@ -592,7 +612,7 @@ then every row must be recomputed once V7 is gone — a full-table rewrite).
 **The one case no trigger fixes** is a new proof on an *existing* column with no new
 column: V7 keeps writing unvalidated values for the roll window, and V8 reading them
 through `check` rejects them. The plan labels this `ROLL-WINDOW RISK`, steers to the
-new-column pattern (a validated copy, then `rename`), and contract's `VALIDATE
+new-column pattern (a validated copy, then `Rename`), and contract's `VALIDATE
 CONSTRAINT` fails loudly if bad rows remain, leaving the contract pending rather than
 silently applied.
 
@@ -607,10 +627,10 @@ need to speak the generation protocol itself), and the manual says so under
 `migrations#external-writers`. Read-only external access (reporting, BI on a replica)
 is fine and unaffected.
 
-**Why `writeBack` exists.** In a rename, V7 requires `a NOT NULL`; V8 inserts must
+**Why `WriteBack` exists.** In a rename, V7 requires `a NOT NULL`; V8 inserts must
 keep writing `a` or V7's decode of V8-inserted rows fails. The compiler derives that
-dual write (same value). In a transform `a -> b with f`, writing `a` needs the inverse.
-Either the migration supplies `writeBack g : fn (b) -> a` and the change is `ONLINE`,
+dual write (same value). In a transform a new column with a row function, writing `a` needs the inverse.
+Either the migration supplies `WriteBack a b g` with `g : To.E -> a`'s type and the change is `ONLINE`,
 or the plan labels it `ROLL-WINDOW RISK` (V7 instances may fail to decode rows V8
 created, for the minutes the roll lasts) and requires that label to be acknowledged.
 
@@ -621,7 +641,7 @@ are known. Expand DDL is accepted iff:
   accepts V7's writes (not dropped, not narrowed);
 - every column V7 code reads still exists and still has V7's type, **and every row
   V8 writes carries a non-null value for it** if V7 decodes it as non-null — by V8
-  still writing it, by a database default the plan set, or by a `legacy` dual write.
+  still writing it, by a database default the plan set, or by a `Legacy` dual write.
   V7 decodes every column it declares, because a `select` returns whole entity rows;
 - every column V8 code reads exists after expand, and every one it needs non-null is
   either written by V8, defaulted, or covered by a row function for the lazy path;
@@ -647,10 +667,10 @@ program, and computes per entity one of:
 |---|---|---|
 | **unchanged** | identical columns, indexes, proofs | `User unchanged` (required to be stated; a stale entry is an error, as in Acadia) |
 | **additive, loss-free** | new `Maybe` column; new index; constant-default column; proof removed | `User additive` — the compiler derives the adapter (`Nothing` / the constant), emits the expand DDL, bumps no generation; a new entity is `Tag new` |
-| **needs a value** | new non-`Maybe` computed column; new field proof; `Maybe T` narrowed; type change; newtype over an existing column; a removed column V7 still decodes (needs `legacy`); **a fact or type a column names changed** (its check body or declaration differs, so no `same` line) — re-validation of every row through the new check | `User migrate migrateUser` with a generated function whose body has one `todo` per problem |
+| **needs a value** | new non-`Maybe` computed column; new field proof; `Maybe T` narrowed; type change; newtype over an existing column; a removed column V7 still decodes (needs `Legacy`); **a fact or type a column names changed** (its check body or declaration differs, so no `same` line) — re-validation of every row through the new check | `User migrate migrateUser` with a generated function whose body has one `todo` per problem |
 | **lossy** | column removed; entity removed; ADT constructor removed on a JSONB column | listed with what will be dropped at V9 contract and how many queries/handlers touched it — never silent |
-| **ambiguous** | column removed and another of the same type added | proposed as `rename name -> fullName` in a comment; the hole asks |
-| **offline** | primary key change; `reset` | `OFFLINE` in the header; the file must contain `offline acknowledged "reason"` |
+| **ambiguous** | column removed and another of the same type added | proposed as `Rename name fullName` in a comment; the hole asks |
+| **offline** | primary key change; `Reset` | `OFFLINE` in the header; the entity's rule list must contain `Offline "reason"` |
 
 Classification uses the whole-program query set: a removed column that no query
 reads and no handler writes is still lossy for the data, but the plan says so
@@ -658,141 +678,227 @@ reads and no handler writes is still lossy for the data, but the plan says so
 reviewer needs. `Money`/`MoneyRate` fields, which expand to several derived columns,
 diff as one field.
 
-### 4. The migration file
+### 4. The migration file: one record, ordinary functions
+
+The migration file is a **folded record**, in the style Tesl already uses for
+`Database { … }` and `App { … }`, plus ordinary functions. There are no contextual
+keywords: every operation is a constructor of an ADT exported by a new stdlib module
+`Tesl.Migration`. (Maintainer, 2026-09-02: the earlier keyword form — `Migrate`,
+`Unchanged`, `Rename`, `Legacy`, `WriteBack`, `same`, `offline` — was a second little
+language; this is one record.)
 
 ```tesl
 # migrations/shop/v8.tesl — generated by `tesl --migrate`, edited by a person
 module ShopSchema.Migrate.V8 exposing [migration, migrateUser]
+
+import Tesl.Migration exposing [Migration, Entity(..), Rule(..), Migrated(..), Same(..)]
+import Tesl.Check exposing [Check.attempt, Attempt(..)]
+import Tesl.Maybe exposing [Maybe(..)]
 import ShopSchema.V7
 import ShopSchema.V8
 
-same { }
-
-migration ShopSchema.V7 -> ShopSchema.V8 {
-  User    migrate migrateUser              # gen n -> n+1
-          rename name -> fullName          # compiler-owned: fullName = old.name
-  Session unchanged
-  Legacy  drop                             # table dropped at V9 contract; V7 keeps using it
+migration = Migration {
+  from: ShopSchema.V7                       # module references (§1)
+  to:   ShopSchema.V8
+  same: []                                  # cross-version identities, generated (§1)
+  entities: {                               # a record whose fields are the entity names
+    User:    Migrate migrateUser [Rename name fullName]
+    Session: Unchanged
+    Legacy:  Drop                           # table dropped at V9 contract; V7 keeps using it
+  }
 }
 
-check migrateUser(old: ShopSchema.V7.User) -> ShopSchema.V8.User =
+fn migrateUser(old: ShopSchema.V7.User) -> Migrated ShopSchema.V8.User =
   let age = todo "V8 added `age: Int ::: NonNegative age`; ShopSchema.V7.User has id, email, name"
-  ok ShopSchema.V8.User { id: old.id, email: old.email, age: age }   # fullName injected by `rename`
+  Row (ShopSchema.V8.User { id: old.id, email: old.email, fullName: old.name, age: age })
 ```
 
-(`bio: Maybe String`, had V8 added one, would not appear here at all: a new `Maybe`
-column is `additive` and the compiler derives `Nothing`.)
+**`Tesl.Migration`** — the whole vocabulary, as types. Honesty about what these are:
+`Migration { … }` is a **compiler-known folded declaration**, in the same category as
+`Database { … }` and `App { … }` today (a `Database` already types `entities: [Note]`
+and `env "X"` contextually). It *looks like* ADT construction and its constructors are
+exported from a stdlib module so they are greppable and importable like everything
+else, but their arguments are typed **contextually by elaboration**, not by ordinary
+monomorphic constructor signatures — `Default rank 0` and `Default label "unknown"`
+could not both inhabit one ordinary `Rule`. The written signatures below use
+*metavariables* (`field`, `value`, `fn`, `rowFn`, `typeRef`); the elaboration rules that
+give them types follow the listing.
 
-- `migration`, `same`, `unchanged`, `additive`, `new`, `migrate`, `rename`, `drop`,
-  `reset`, `legacy`, `writeBack`, `offline` are contextual words in this one form, like
-  the SQL clause words; none becomes a global keyword.
-- **Every entity has exactly one entry, and the entries mean different things:**
-  - `unchanged` — columns, indexes and every type/fact the columns name are identical
-    (`same`). Nothing is emitted for it; writing it on an entity whose shape changed is
-    MIG002.
-  - `additive` — the only changes are ones with a **single derivable adapter**: a new
-    `Maybe` column (adapter `Nothing`), a new column with a constant default (the
-    constant), a new or removed index, a `legacy` dual write. The compiler derives the
-    adapter; no row function exists; the new decoder constructs `archivedAt = Nothing`
-    for an old row without any user code, and no generation bump happens. This is the
-    entry phase 1 lives on; the first drafts folded it into `unchanged` and thereby
-    contradicted the "unchanged means identical" rule.
-  - `migrate f` — a user-written row function; the entity's generation increments.
-  - `new` — the entity does not exist in the old module; its table is created at expand.
-  - `drop` / `reset` — as described elsewhere.
-- **`rename a -> b` is compiler-owned.** It *defines* `b = old.a`: the generated row
-  function does not initialise `b`, the record literal in a `migrate` function for
-  that entity **omits** `b` and the compiler injects the projection, and initialising
-  or transforming `b` in the row function is MIG017. This is what makes the SQL
-  rewrite `(b = $1 or (b is null and a = $1))`, the lazy decoder, the backfill and the
-  dual write agree: they all implement the one identity the declaration states. A
-  real transformation is `a -> b with f`, gets no identity rewrite, and is held to the
-  MIG008 rule.
-- `same { New.T = Old.T, … }` declares cross-version identity for types, newtypes,
-  ADTs, facts and codecs (§1); it is generated from canonical-hash equality and is
-  what lets `unchanged` and pass-through field initialisers (`wordCount: old.wordCount`)
-  type-check. An entity is `unchanged` only if its columns, indexes **and** every
-  type and fact its columns name are `same`; otherwise the generator writes `migrate`
-  with a re-validation skeleton. `new` is the entry for an entity that exists
-  in V8 and not in V7 (its table is created at expand; nothing to migrate).
-- Exactly one entry per entity in the **union** of V7 and V8. Missing entry, extra
-  entry, or `unchanged` on an entity whose shape changed: compile error (Acadia's
-  `D_TMissing`/`D_TExtra`/`D_TMismatch`).
-- `migrate f`: `f` is a **row function**, declared with the `check` keyword and typed
-  from the old module's entity to the new module's:
-  `check migrateNote(old: NotesSchema.V7.Note) -> NotesSchema.V8.Note`. This is a
-  stated **language change**, not an "ordinary" check: today a `check` must return a
-  proof-bearing subject (`-> n: Int ::: P n`); a row function returns a **record**
-  with no top-level `:::`, and the record's own field proofs are its evidence. It
-  fails exactly as checks do — `fail <status> "…"`, or a propagating inner `let x =
-  check f(y)` — and it is invoked exactly as checks are (`let note = check migrateNote
-  old` in a test). The runner intercepts a propagated failure, **ignores the HTTP
-  status** (an inner `checkWordCount` failing with 400 is not a client error here),
-  attaches the primary key, and stops the backfill or answers 500 on the lazy path
-  with the message in the log. No `Ok`/`Fail` ADT is involved anywhere; the earlier
-  drafts pattern-matched on check results, which Tesl does not have.
-  A row function may call checks, codecs and pure helpers of **either schema
-  module**, functions **declared in the migration file**, and the **standard
-  library** — never anything in the application proper. Nothing is duplicated:
-  `NotesSchema.V8.checkWordCount` is the same declaration the handlers import. It
-  **cannot** perform effects or queries (no `requires`), which keeps it re-runnable
-  and usable on the lazy read path inside a request. The partiality is
-  in the declaration — a reader sees `check`, not a `fn` with a hidden abort. Cross-entity lookups during migration are a later
-  extension (a read-only `V7` query capability); the row function stays pure in v1.
-- The compiler checks that `f` only *produces* columns that are new in V8. A row
-  function that would change the value of a column V7 still writes is rejected with
-  the explanation above (in-place rewrite breaks the two-version rule); the fix is a
-  new column plus `rename`/`drop`.
-- `todo "reason"` is a new builtin expression that unifies with any type and is
-  **always** a compile error carrying its message. It exists so the generator can
-  write a well-typed, self-documenting file that refuses to build. Not a flag, not a
-  warning.
-- `reset` is the only way to discard data without writing a function; it is
-  `OFFLINE` and a word a reviewer has to read in the plan header.
-- The migration file is part of the program: `tesl --check` and the LSP check it, and
-  `tesl test` can test its functions:
+```tesl
+type Entity
+  = Unchanged                       # identical columns, indexes, and `same` types/facts
+  | Additive (List Rule)            # only single-adapter changes; no row function; generation unchanged
+  | Derived  (List Rule)            # compiler-derived row migration (rules only — e.g. a pure Rename);
+                                    #   generation +1, no user function
+  | Migrate  rowFn (List Rule)      # user row function `fn (Old.E) -> Migrated New.E`; generation +1
+  | New                             # table created at expand
+  | Drop                            # table dropped at contract
+  | Reset                           # OFFLINE: discard every row
 
-  ```tesl
-  test "V8: legacy users get age 0 with a NonNegative proof" {
-    let old = ShopSchema.V7.User { id: "u1", email: "a@b.se", name: "A" }
-    let user = check migrateUser old            # a failing row function fails the test
-    expect user.age == 0
-    expect user.fullName == "A"                 # injected by `rename`
-  }
-  ```
+type Rule
+  = Rename    field field           # compiler-owned identity: new = old, everywhere
+  | Default   field value           # the constant a new non-Maybe column carries (also its SQL DEFAULT)
+  | Legacy    field value           # V7-decoded column V8 dropped: the value V8 rows carry for it
+  | LegacyWith field (fn)           # …computed from the new row (dual write)
+  | WriteBack field field (fn)      # WriteBack oldField newField g: for a column V8 computes into
+                                    #   `newField`, V8 also writes `g(new) : oldType` into the OLD
+                                    #   column so V7 readers stay whole. Both endpoints named, for
+                                    #   the same reason Rename names both: removed+added is ambiguous
+  | Offline   String                # `Reset` / primary-key change acknowledgement
 
-  The compiler also generates one **compatibility test module per migration**,
-  `NotesSchema.Migrate.V8Compat`, separate from the migration file because it must
-  import what the migration file may not: the application's `database`, both schema
-  modules, the migration module and the test-only `Schema` facilities. It exercises the
-  two-version rule on the Memory backend — insert with V7's write shape, read through
-  V8's path (and back, where `writeBack` exists). Its fixture rows are the one thing a
-  compiler cannot invent for arbitrary entities (proof-carrying fields, newtypes,
-  JSONB codecs, recursive ADTs): where every field type has a property generator
-  (`via`), the test is generated as a `property`; otherwise the harness is generated
-  with a `todo` for the representative old row, which is MIG003 like any other hole.
-  The insert of an old-shaped row is a generated, precisely typed helper per entity
-  (`insertOldNote : NotesSchema.V7.Note -> Unit`), not a polymorphic builtin — the
-  cross-version relationship comes from the migration's own metadata. In this module,
-  and only here, both schema modules' entities are legal SQL sources.
+type Migrated a = Row a | Reject String
+
+type Same = Same typeRef typeRef    # `Same ShopSchema.V8.NonNegative ShopSchema.V9.NonNegative`
+```
+
+**Elaboration rules** (the contextual typing that makes the record checkable; each
+violation is a MIG diagnostic in the table under "Diagnostics"):
+
+| position | type it must have | diagnostic |
+|---|---|---|
+| `from:` / `to:` | module references to `schema module`s, `to`'s version = `from`'s + 1 | MIG020 |
+| `entities:` | a record whose field set is exactly the union of the two modules' entity names | MIG002 |
+| `Migrate f rules` for entity `E` | `f : From.E -> Migrated To.E` — the specific pair, not a polymorphic shape | MIG021 |
+| `Rename a b` | `a` a column of `From.E` absent from `To.E`; `b` a column of `To.E` absent from `From.E`; same column type | MIG022 |
+| `Default b v` | `b` a new non-`Maybe` column of `To.E`; `v` a literal of `b`'s type | MIG022 |
+| `Legacy a v` / `LegacyWith a g` | `a` a column of `From.E` absent from `To.E`; `v : a`'s type / `g : To.E -> a`'s type | MIG022 |
+| `WriteBack a b g` | `a` old-only, `b` new-only, `g : To.E -> a`'s type | MIG022 |
+| duplicate or conflicting rules on one column (e.g. `Rename a b` and `Legacy a v`) | — | MIG023 |
+| `Same T U` | type references to same-kind declarations (fact/type/newtype/ADT/codec) in `From` and `To` | MIG024 |
+| `Additive rules` | every change to `E` has a single derivable adapter given the rules | MIG016 |
+
+What is genuinely new *syntax* is small and listed in §1: module references as record
+values, entity names as record fields, bare column identifiers as values inside a
+`Rule` (which `index [orgId]` and `onConflict [id]` already do inside an entity
+context), and type references as `Same` arguments. What is new *machinery* is the
+elaboration above — one contextual typing pass over a folded declaration, which the
+compiler already has for `Database` and `App`.
+
+**Row functions are ordinary `fn`s**, total by type: they return `Migrated New.E`,
+`Row` with the new row or `Reject` with a reason. No `check` declaration kind is
+extended, no proofless `ok` exists, and no HTTP status is written to be ignored. To
+use a `check` inside one — the way a proof-carrying column is filled — the function
+applies it **non-propagatingly** through `Check.attempt`, a small stdlib addition
+with a direct precedent in `List.allCheck`:
+
+```tesl
+fn migrateUser(old: ShopSchema.V7.User) -> Migrated ShopSchema.V8.User =
+  case Check.attempt ShopSchema.V8.checkNonNegative (defaultAgeFor old) of
+    Failed reason -> Reject "user {old.id}: {reason}"
+    Passed age    -> Row (ShopSchema.V8.User { id: old.id, email: old.email, fullName: old.name, age: age })
+```
+
+`Check.attempt` is a **compiler intrinsic**, not an ordinary library function — the
+same category as `List.allCheck` (`→ Maybe (List T ::: ForAll P)`), which already
+accepts a check as a first-class argument and intercepts its failure. Its typing rule:
+for a check `f : (x: A) -> x: A ::: P x`, `Check.attempt f a : Attempt (A ::: P a)`,
+where `type Attempt a = Passed a | Failed String`; `Passed` carries the proof-bearing
+subject exactly as `let a' = check f a` would have bound it, `Failed` carries the
+check's **message** with its HTTP status discarded — a migration is not an HTTP
+response, but the validator's reason is exactly what `--schema dry-run`, the backfill
+log and the lazy-path 500 should show, so it is not thrown away. Evaluation: call `f`;
+a `fail` inside it becomes `Failed reason` instead of propagating. The runner maps `Reject` to: stop the backfill with
+the primary key and reason; a 500 with the same reason in the log on the lazy path.
+Invocation in a test is a plain call: `case migrateUser old of Row u -> … | Reject r -> …`.
+
+**Rules the compiler enforces on a row function**, all syntactic, none semantic:
+
+- Exactly one entry per entity in the union of the two modules; `Unchanged` on an
+  entity whose shape changed, or `Additive` where a rule has no single adapter, is
+  MIG002/MIG016.
+- A **pass-through** column (present in both versions, no rule) must be initialised by
+  the exact projection `title: old.title`; any other expression is MIG018. The
+  compiler cannot prove `normalize old.title` equals `old.title`, so it does not try —
+  the identity is syntactic.
+- A **renamed** column must be initialised by the exact projection of its old name
+  (`fullName: old.name`); anything else is MIG017. The record literal stays complete —
+  no compiler-injected fields, no incomplete-literal exception — and the SQL rewrite,
+  lazy decoder, backfill and dual write all implement the one identity the `Rename`
+  rule declares. A real transformation is a new column plus a row function, and gets no
+  identity rewrite.
+- A **new** column is the only place an arbitrary expression is allowed, and it is
+  where the generator writes the `todo`.
+- The function may call functions of either schema module, functions declared in the
+  migration file, and the standard library (frozen with it, §11) — never the
+  application. Schema-module facts are **sealed** (§5), so "every check that can mint
+  this fact" is the finite set in the declaring module.
+- `todo "reason"` is a builtin expression that unifies with any type and is **always**
+  a compile error carrying its message, so the generator can write a well-typed file
+  that refuses to build.
+
+**Derived migrations.** `Derived [Rename authorId ownerId]` is a pure rename: it needs a
+generation bump and a backfill (the new column must be filled for old rows) but no user
+function, so `Migrate` would be wrong and `Additive` would be a lie. The compiler
+derives the row function from the rules. A migration whose every change is a `Rule`
+with a compiler-derivable adapter is `Derived`; the generator picks it.
+
+**`Additive [Default rank 0]`.** A new non-`Maybe` column needs a constant, and the
+entity declaration has no default annotation by design (a persistent default is a
+migration fact, not a shape fact); the `Default` rule supplies it, and it becomes both
+the adapter for old rows and the column's SQL `DEFAULT` so V7 inserts satisfy it. A
+new `Maybe` column needs no rule: `Nothing` is the only adapter.
+
+**Tests.** The migration file may contain ordinary `test` blocks over its own pure
+functions. The generated **compatibility test** lives in its own module (§4b).
+
+### 4b. The generated compatibility module
+
+`NotesSchema.Migrate.V8Compat` is generated, self-contained, and **frozen with the
+migration**: it imports the two schema modules, the migration module and a generated
+support module (`NotesSchema.Migrate.V8Support`, holding the precisely typed
+`insertOldNote : NotesSchema.V7.Note -> Unit` and friends) — and **nothing from the
+application**. Importing the application's `database` would (a) bind the test to the
+production backend (`with database X` means X's configured backend, §11.14) and (b)
+silently re-point a committed V8 test at whatever schema module the application names
+later. So the tests run as unnamed tests against the automatic in-memory store, which
+models `_tesl_v` and the lazy read path exactly as the PostgreSQL decoder does; both
+schema modules' entities are legal SQL sources there and only there.
+
+What is generated is **structural**: an old-shaped row is inserted at its generation,
+read back through the new decoder, found by a rewritten predicate, and — where
+`WriteBack` exists — read back through the old shape. What is **not** generated is a
+universal "every valid old row migrates successfully" property: a row function is
+allowed to `Reject` old rows the new invariant excludes, so such a property would fail
+legitimately. Fixture rows are a `todo` the developer fills (or a `property` with
+generators only when the row function is syntactically total: no `Reject` and no
+`Check.attempt` in its body).
+
+**Privilege boundary of the support module.** `insertOldNote : NotesSchema.V7.Note ->
+Unit` is not a harmless helper: it writes a row in a *historical* shape with a
+historical generation marker, bypassing the current entity's invariants, which is
+precisely what the whole protocol otherwise forbids. So it is a **compiler-generated,
+effectful, test-only** function: it requires the Memory store's `dbWrite` plus a new
+capability `schemaTest` that only a `…Compat` module is granted; the generated
+`…Support` module is marked test-only and importing it from any other module kind —
+the application, a migration file, another test — is MIG025; it does not exist in a
+production build at all. Store isolation between compatibility tests is the existing
+per-test reset of the Memory store that every emitted test function already gets. Whether *production* rows are accepted is the binary's
+`--schema dry-run`, not a unit test.
 
 ### 5. What proofs buy here
+
+**Sealed facts.** A fact declared in a schema module and named by an entity column is
+**sealed**: only `check` functions declared in that same schema module may mint it
+(`ok x ::: NonNegative x` anywhere else — an application `check`, `auth` or `establish`
+— is MIG019). Consumption is unrestricted. Without this, "every check that can mint
+the fact", which `same` hashes and from which a PostgreSQL `CHECK` may be derived, is
+not a finite set, and a stored invariant could be established by a validator the
+schema never saw. Facts not named by a column (`Authenticated`) are unaffected.
 
 `User` in V8 declares `age: Int ::: NonNegative age`. The generator cannot invent a
 `NonNegative` fact, so the hole is left. The developer writes:
 
 ```tesl
-check migrateUser(old: ShopSchema.V7.User) -> ShopSchema.V8.User =
-  let age = check ShopSchema.V8.checkNonNegative (defaultAgeFor old)   # propagates on failure
-  ok ShopSchema.V8.User { id: old.id, email: old.email, age: age }
+fn migrateUser(old: ShopSchema.V7.User) -> Migrated ShopSchema.V8.User =
+  case Check.attempt ShopSchema.V8.checkNonNegative (defaultAgeFor old) of
+    Failed reason -> Reject "user {old.id}: {reason}"
+    Passed age    -> Row (ShopSchema.V8.User { id: old.id, email: old.email, fullName: old.name, age: age })
 ```
 
-A propagating inner `check` (or an explicit `fail`) is the row function's one way out,
-and it is in its declaration kind. During backfill it stops the backfill and reports
-the primary key and message; on the lazy read path it is a 500 for that row with the
-same message in the log — the row is unreadable under the new invariant, which is the
-truth. The inner check's own status (`400`) is irrelevant here and the runner ignores
-it. The alternative — silently
+`Reject` is the row function's one way out, and it is in its return type. During
+backfill it stops the backfill and reports the primary key and reason; on the lazy read
+path it is a 500 for that row with the same reason in the log — the row is unreadable
+under the new invariant, which is the truth. The alternative — silently
 coercing — is unavailable by construction, because only `check` mints
 `NonNegative`. So the
 acceptance criterion for every migrated row is exactly the invariant the rest of the
@@ -882,7 +988,7 @@ describing each of them loosely enough to be wrong.
    fetched; a new column used in `where`, `order`, `groupBy`, a join or an aggregate is
    evaluated by PostgreSQL first, on `NULL` — **unless the column's window value is in
    the compiler's SQL-expressible subset**, which in v1 is exactly two forms, both
-   declared, never inferred: a `rename a -> b` (identity, `b` is `a`) and a constant
+   declared, never inferred: a `Rename a b` (identity, `b` is `a`) and a constant
    default. For those the emitter rewrites the window SQL per clause:
 
    | clause | rewrite (rename) | note |
@@ -893,7 +999,7 @@ describing each of them loosely enough to be wrong.
    | `innerJoin E on x.b Y.k` | `coalesce(x.b, x.a)` in the `ON` | |
    | `selectSum`/`Max`/`Min` over `b` | `coalesce(b, a)` | |
    | `unique index [b]`, `onConflict [b]` | **not rewritable** — a conflict target must be a real column | MIG008 stays; declare the unique index in the next version |
-   | constant default | the literal replaces `a` in every form above | |
+   | constant default (`Default c` on a new column) | the literal `c` stands in for the missing value: `coalesce(b, c)` | no old column exists; the rewrite is against the constant |
 
    Anything outside that table — a Go-computed column, an expression over several
    columns — is not SQL-expressible and is held to the rule that follows. The subset
@@ -1054,11 +1160,11 @@ any moment, and everything an instance does at boot is safe to lose a race on.
   old and the new columns; the decoder, when `_tesl_v` is below the entity's target
   generation, applies the row functions
   the row still owes, one version at a time (a `6` row goes through V7's function and
-  then V8's — both are in the binary, §6 invariant 2), to the row's stored view. Optional write-back (`migrate f writeBack onRead`) is off by
+  then V8's — both are in the binary, §6 invariant 2), to the row's stored view. Optional write-back on read (a `WriteBackOnRead` rule) is off by
   default: it turns reads into writes and doubles lock contention under load.
 - **Dual write.** Emitted inserts/updates write the V8 columns and every V7 column the
-  plan requires (`rename`: the same value; transform with `writeBack g`: `g`; removed
-  column with `legacy with g`: `g`).
+  plan requires (`Rename`: the same value; transform with `WriteBack g`: `g`; removed
+  column with `LegacyWith f g`: `g`).
 - **Backfill.** One instance holds the `backfill` lease; if it dies, another takes
   over, and two overlapping holders only duplicate work. Keyset pagination by primary
   key, batches of 1 000–5 000 rows, each batch its own transaction, `UPDATE … FROM
@@ -1068,10 +1174,10 @@ any moment, and everything an instance does at boot is safe to lose a race on.
   (sleep between batches, configurable), because a backfill that saturates the write
   path is an outage by another name. Rows a V7 update re-nulled through the trigger,
   or whose predicate failed, are picked up by the next pass. While V7 is admitted the
-  backfill can only ever be **provisional** ("no `_tesl_v < 8` rows at the last scan"
+  backfill can only ever be **provisional** ("no rows below the target generation at the last scan"
   — an observation `--schema status` shows, and nothing depends on). It becomes
   **final** only after V7 is retired (V9 boot, step 5), by an exhaustive keyset pass
-  over `_tesl_v < 8` that runs when no writer can re-mark anything; it terminates
+  over rows below the target generation (`_tesl_v < 4` in the running example) that runs when no writer can re-mark anything; it terminates
   because the marker, unlike a `NULL` test, does not depend on the migrated value,
   and it is normally tiny because the provisional passes did the work. Recorded per
   entity (`final_at`); V9's readiness and contract depend on it.
@@ -1271,7 +1377,7 @@ acknowledgements — is yours; what `--migrate` produces is exactly what a perso
 - the **diff and its classification** (`ONLINE` / `ROLL-WINDOW RISK` / `OFFLINE`,
   expand/window/contract per entity, the plan header) — derived from two schema
   modules plus the whole-program query set;
-- the **migration skeleton** with one entry per entity (most of them `unchanged`) and
+- the **migration skeleton** with one entry per entity (most of them `Unchanged`) and
   a typed `todo` per hole that lists the old row's fields and the new field's proof —
   Lamdera's `Unimplemented`, the part users value most;
 - the **frozen stdlib slice** the row functions reach (`V8.stdlib.tesl`) — a closure
@@ -1325,7 +1431,7 @@ tooling and a deployment tool most often end up doing each other's job:
 | offline apply, dry-run, adopt, retire, status, the optional single schema worker | the compiled binary, on demand via `--schema` |
 | rolling strategy, surge/unavailable counts, probe timings, scaling to zero, maintenance page | Helm / Kubernetes / whatever deploys it |
 | running `--schema apply-offline` at the right moment (a Job, a `pre-upgrade` hook) | Helm / the pipeline |
-| deciding that downtime is acceptable | the person writing `offline acknowledged "…"` |
+| deciding that downtime is acceptable | the person writing `Offline "…"` |
 
 Tesl never orchestrates a roll, never scales anything, never talks to a cluster API.
 It makes the binary correct under any roll order and tells the operator, in the boot
@@ -1479,20 +1585,33 @@ runtime for what is proven. Concretely:
   different admissions:
   - **write transactions** (`insert`, `update`, `upsert`, `delete` — a delete is a
     mutation): the two-statement fence of §6 invariant 1;
-  - **read transactions**: no advisory lock and no extra statement. The query itself
-    carries `(select tesl_admit(<program version>))` as an initplan — one primary-key
-    lookup on `tesl_schema`, comparing the **binary's schema version** with
-    `min_version`, evaluated once per statement, raising if the version is retired.
-    The argument is the program version, never an entity generation: generations are
-    the row dimension and do not move for an entity a release did not migrate, so they
-    cannot say whether *the binary* has been retired (the tenth review pass caught the
-    previous revision passing a generation here). It shares the statement's snapshot
-    with the data it guards, so a read that was admitted reads exactly the
-    pre-retirement state it was admitted for; no window, no lock-table traffic. The
-    emitted form must be one PostgreSQL cannot defer or eliminate — the acceptance
-    suite covers zero-row results, aggregates, `EXISTS`, prepared statements and
-    constant-folded predicates, not only row-returning selects. A read-heavy service
-    pays one index probe per query for "a retired binary cannot serve".
+  - **read transactions**: no advisory lock, and an **ordering** that makes admission
+    sound: the transaction runs its query (or queries) **first**, then `select
+    tesl_admit(<program version>)` — one primary-key lookup on `tesl_schema` comparing
+    the **binary's schema version** with `min_version`, raising if retired — then
+    `COMMIT`, all pipelined in one round trip, and the runtime hands rows to the
+    handler **only after the admission statement has returned**. Why this order and
+    not admit-then-query: under READ COMMITTED every statement has its own snapshot,
+    so an admission taken *before* the query proves nothing about the state the query
+    then reads — a retirement (and even a contract) could commit in between, since the
+    query holds no lock yet (the thirteenth review pass found exactly that in the
+    previous revision). Query-first closes it with two facts PostgreSQL guarantees: the
+    query's `ACCESS SHARE` lock on every table it touched is held until commit, so no
+    contract DDL can run between the query and the admission; and the admission
+    statement's snapshot is at least as new as the query's, so a retirement committed
+    before the query is seen and aborts the transaction, and a retirement committed
+    after the admission snapshot means the query read genuinely pre-retirement data.
+    Nothing is delivered from an aborted transaction. The argument is the program
+    version, never an entity generation: generations are the row dimension and do not
+    move for an entity a release did not migrate, so they cannot say whether *the
+    binary* has been retired. No lock-table traffic; a read-heavy service pays one
+    index probe per transaction for "a retired binary cannot serve". The acceptance
+    suite interposes a retirement between query and admission, and between admission
+    and commit, and asserts the transaction aborts in the first case and delivers
+    pre-retirement rows in the second; it also covers zero-row results, aggregates,
+    `EXISTS`, prepared and constant-folded statements, since the admission statement's
+    execution must not depend on the query's plan shape (an earlier target-list
+    initplan form could be skipped on a zero-row scan and was dropped).
   - **Idle zombies** that receive no request still exit: every instance re-reads
     `min_version` every 15 s and shuts down when retired. That poll is a liveness aid;
     the per-statement admission is the guard.
@@ -1523,8 +1642,8 @@ admission, one for migration/dual-write semantics — and until that separation 
 the design of the alternative, it is not a benchmark-equivalent candidate at all. That replaces the per-write-transaction
 advisory lock with a per-row trigger call, needs no client-side lock state for
 admission at all, and makes the request pool's pooler question disappear entirely;
-the DDL connection's fence would still be needed, and reads would keep the `tesl_admit`
-initplan (the trigger says nothing about reads). It has one gap the lock does not: a
+the DDL connection's fence would still be needed, and reads would keep the
+query-then-`tesl_admit` ordering (the trigger says nothing about reads). It has one gap the lock does not: a
 write whose snapshot predates retirement can still be in flight when the final pass
 runs and the trigger is dropped. The fix is a **barrier** before the final pass — a
 transaction that takes `LOCK TABLE … IN SHARE MODE` and commits immediately, which
@@ -1548,7 +1667,8 @@ schema/notes/v7.tesl                   schema module NotesSchema.V7             
 schema/notes/v8.tesl                   schema module NotesSchema.V8                                   ◆ versioned (current)
 schema/notes/v9.tesl                   schema module NotesSchema.V9  (later)                          ◆
 migrations/notes/v8.tesl               migration V7 -> V8: generated skeleton, edited by a person     ◆ generated + edited
-migrations/notes/v8-compat.tesl        generated two-version test module                              ◆ generated
+migrations/notes/v8-compat.tesl        generated two-version test module (imports no application code)  ◆ generated
+migrations/notes/v8-support.tesl       generated typed helpers for the compat module (insertOldNote…)   ◆ generated
 migrations/notes/v8.stdlib.tesl        frozen stdlib slice the migration closure reaches              ◆ generated (linked, never imported)
 ```
 
@@ -1559,8 +1679,8 @@ File names follow the existing PascalCase-to-kebab-case rule (§10.2). Only the
 `schema/…` modules are the source of truth for "what the data looks like"; the
 `migrations/…` files bridge two of them. `notes.tesl` is never migrated. Everything
 below is intended to be current Tesl except where a form is explicitly proposed by
-this document (`schema module`, module references in `Database`, the `migration` form,
-`check` returning a record, `todo`).
+this document (`schema module`, module references as record values, entity names as
+record fields, the `Tesl.Migration` and `Tesl.Check` stdlib modules, `todo`).
 
 ### The application (`notes.tesl`) at V7
 
@@ -1756,10 +1876,22 @@ entity Tag table "tags" primaryKey id {         # NEW entity
 
 ```tesl
 schema module NotesSchema.V9 exposing [Note, Session, Tag, ValidWordCount, checkWordCount, wordCountOf]
-# Identical to V8 except one line: the compiler derives the adapter (`Nothing`), no row
-# function exists, Note's generation stays 4. This is the phase-1 kind of change.
+# Identical to V8 except one line in Note: the compiler derives the adapter (`Nothing`),
+# no row function exists, Note's generation stays 4. This is the phase-1 kind of change.
 
-… (fact, check, helper, Session, Tag exactly as in V8) …
+import Tesl.Prelude exposing [Bool(..), Int, String]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Time exposing [PosixMillis]
+import Tesl.String exposing [String.split]
+import Tesl.List exposing [List.length, List.filter]
+
+fact ValidWordCount (n: Int)
+
+check checkWordCount(n: Int) -> n: Int ::: ValidWordCount n =
+  if n >= 0 then ok n ::: ValidWordCount n else fail 400 "negative word count"
+
+fn wordCountOf(text: String) -> Int =
+  List.length (List.filter (fn (w) -> w != "") (String.split " " text))
 
 entity Note table "notes" primaryKey id {
   id:         String
@@ -1767,9 +1899,22 @@ entity Note table "notes" primaryKey id {
   content:    String
   ownerId:    String
   wordCount:  Int ::: ValidWordCount wordCount
-  archivedAt: Maybe PosixMillis                 # NEW, nullable — `additive`
+  archivedAt: Maybe PosixMillis                 # NEW, nullable — `Additive`
   createdAt:  PosixMillis
   index [ownerId, createdAt]
+}
+
+entity Session table "sessions" primaryKey token {
+  token:     String
+  userId:    String
+  expiresAt: PosixMillis
+}
+
+entity Tag table "tags" primaryKey id {
+  id:     String
+  noteId: String
+  label:  String
+  index [noteId]
 }
 ```
 
@@ -1779,7 +1924,10 @@ entity Note table "notes" primaryKey id {
 ### What the application has to change, per migration
 
 **V7 → V8.** Ordinary compile-driven edits — every site is a type error until fixed,
-which is the "blast radius" promise the tour already makes.
+which is the "blast radius" promise the tour already makes. In a large application the
+import bump is many files but one action: each stale import is MIG015 (fix-all
+eligible), so nothing can be missed and one fix-all rewrites them all; a re-export
+facade (§1) would reduce it to one line.
 
 ```tesl
 # the ONE mechanical bump. Once the `database` line moves, any remaining
@@ -1792,7 +1940,7 @@ database NoteDatabase = Database {
   backend: …                                    # untouched
 }
 
-# listNotes: the renamed column. Allowed inside SQL in V8 because `rename` is in the
+# listNotes: the renamed column. Allowed inside SQL in V8 because `Rename` is in the
 # SQL-expressible subset — the emitter rewrites the predicate for the window.
 handler get listNotes(user: String ::: Authenticated user) -> List Note requires [dbRead] =
   select note from Note where note.ownerId == user order note.createdAt desc
@@ -1850,6 +1998,7 @@ migration NotesSchema.V7 -> NotesSchema.V8                       ONLINE
 froze  schema/notes/v7.tesl               (hash recorded in the migration header; edits are now MIG013)
 wrote  migrations/notes/v8.tesl            (2 todo — the program will not compile until resolved)
 wrote  migrations/notes/v8-compat.tesl
+wrote  migrations/notes/v8-support.tesl    (insertOldNote and friends, typed from the migration)
 wrote  migrations/notes/v8.stdlib.tesl     (frozen: String.split, List.length, List.filter — linked, not imported)
 ```
 
@@ -1860,109 +2009,117 @@ wrote  migrations/notes/v8.stdlib.tesl     (frozen: String.split, List.length, L
 # frozen: NotesSchema.V7 = sha256:9c1e…   NotesSchema.V8 = sha256:41ab…
 module NotesSchema.Migrate.V8 exposing [migration, migrateNote]
 
-import NotesSchema.V7                          # module imports; qualified names below (no alias feature)
+import Tesl.Migration exposing [Migration, Entity(..), Rule(..), Migrated(..), Same(..)]
+import Tesl.Check exposing [Check.attempt, Attempt(..)]
+import Tesl.Maybe exposing [Maybe(..)]
+import NotesSchema.V7                        # module imports; qualified names below
 import NotesSchema.V8
 
-same {                                         # nothing: V7 declares no fact or type that V8 also declares
-}
-
-migration NotesSchema.V7 -> NotesSchema.V8 {
-  Note    migrate migrateNote                  # gen 3 -> 4
-          rename authorId -> ownerId           # compiler-owned: ownerId = old.authorId everywhere
-          legacy legacyRank todo "V7 decodes legacyRank as Int NOT NULL; V8 rows need a value"
-  Session unchanged
-  Tag     new
-}
-
-check migrateNote(old: NotesSchema.V7.Note) -> NotesSchema.V8.Note =        # @tesl-gen a1f3 7c…
-  let wordCount = todo "V8 added `wordCount: Int ::: ValidWordCount wordCount`; NotesSchema.V7.Note has id, title, content, authorId, legacyRank, createdAt"
-  ok NotesSchema.V8.Note {
-    id: old.id,
-    title: old.title,
-    content: old.content,
-    # ownerId is NOT initialised here: `rename` owns it (MIG017 if you try)
-    wordCount: wordCount,
-    createdAt: old.createdAt
+migration = Migration {
+  from: NotesSchema.V7
+  to:   NotesSchema.V8
+  same: []                                   # V7 declares no fact or type that V8 also declares
+  entities: {
+    Note:    Migrate migrateNote [           # gen 3 -> 4
+               Rename authorId ownerId,      # compiler-owned identity
+               Legacy legacyRank (todo "V7 decodes legacyRank as Int NOT NULL; V8 rows need a value")
+             ]
+    Session: Unchanged
+    Tag:     New
   }
+}
+
+fn migrateNote(old: NotesSchema.V7.Note) -> Migrated NotesSchema.V8.Note =    # @tesl-gen a1f3 7c…
+  let wordCount = todo "V8 added `wordCount: Int ::: ValidWordCount wordCount`; NotesSchema.V7.Note has id, title, content, authorId, legacyRank, createdAt"
+  Row (NotesSchema.V8.Note {
+    id:        old.id,                       # pass-through: must stay the exact projection (MIG018)
+    title:     old.title,
+    content:   old.content,
+    ownerId:   old.authorId,                 # renamed: must stay this exact projection (MIG017)
+    wordCount: wordCount,                    # new: the only free expression
+    createdAt: old.createdAt
+  })
 ```
 
 The trailing `# @tesl-gen <id> <fingerprint>` marks generator-owned nodes; the moment
 the developer edits the body, its canonical AST no longer matches the fingerprint and
-the node becomes user-owned. `check … -> NotesSchema.V8.Note` (a record, no top-level
-`:::`) is the proposed row-function form; it fails like any check and is invoked like
-any check.
+the node becomes user-owned.
 
 ### The migration file as committed (after the developer resolved both holes)
 
 ```tesl
 module NotesSchema.Migrate.V8 exposing [migration, migrateNote]
 
+import Tesl.Migration exposing [Migration, Entity(..), Rule(..), Migrated(..), Same(..)]
+import Tesl.Check exposing [Check.attempt, Attempt(..)]
+import Tesl.Maybe exposing [Maybe(..)]
 import NotesSchema.V7
 import NotesSchema.V8
 
-same {
-}
-
-migration NotesSchema.V7 -> NotesSchema.V8 {
-  Note    migrate migrateNote
-          rename authorId -> ownerId
-          legacy legacyRank 0                  # constant → becomes the column DEFAULT at expand
-  Session unchanged
-  Tag     new
+migration = Migration {
+  from: NotesSchema.V7
+  to:   NotesSchema.V8
+  same: []
+  entities: {
+    Note:    Migrate migrateNote [Rename authorId ownerId, Legacy legacyRank 0]
+    Session: Unchanged
+    Tag:     New
+  }
 }
 
 # No helper copies here: NotesSchema.V8.checkWordCount and .wordCountOf ARE the
 # declarations the handlers use. Their stdlib calls are linked to the frozen slice at
-# the typed-IR level; nothing is imported from it.
-check migrateNote(old: NotesSchema.V7.Note) -> NotesSchema.V8.Note =
-  let words = check NotesSchema.V8.checkWordCount (NotesSchema.V8.wordCountOf old.content)
-  # a failing check propagates: the backfill stops with old.id and the message,
-  # the lazy read path answers 500 — the 400 inside checkWordCount is not a client error here
-  ok NotesSchema.V8.Note {
-    id: old.id,
-    title: old.title,
-    content: old.content,
-    wordCount: words,
-    createdAt: old.createdAt
-  }
+# the typed-IR level; nothing is imported from it. ValidWordCount is sealed: only
+# checks declared in NotesSchema.V8 can mint it.
+fn migrateNote(old: NotesSchema.V7.Note) -> Migrated NotesSchema.V8.Note =
+  case Check.attempt NotesSchema.V8.checkWordCount (NotesSchema.V8.wordCountOf old.content) of
+    Failed reason -> Reject "note {old.id}: {reason}"   # stops the backfill; 500 on the lazy path
+    Passed words  ->
+      Row (NotesSchema.V8.Note {
+        id:        old.id,
+        title:     old.title,
+        content:   old.content,
+        ownerId:   old.authorId,
+        wordCount: words,
+        createdAt: old.createdAt
+      })
 
 test "V8: word count is computed from content" {
   let old = NotesSchema.V7.Note { id: "n1", title: "t", content: "one two  three",
                                   authorId: "u1", legacyRank: 4, createdAt: 0 }
-  let note = check migrateNote old
-  expect note.wordCount == 3
-  expect note.ownerId == "u1"                  # injected by `rename`
+  case migrateNote old of
+    Row note -> expect note.wordCount == 3 && note.ownerId == "u1"
+    Reject _ -> expect False
 }
 ```
 
-### The generated compatibility test module (`migrations/notes/v8-compat.tesl`)
+### The generated compatibility module (`migrations/notes/v8-compat.tesl`)
 
-Separate from the migration file because it imports things the migration file may
-not: the application's database, both schema modules, the migration, and test-only
-`Schema` facilities. Every field of `NotesSchema.V7.Note` is `String`/`Int`/
-`PosixMillis`, so the generator could synthesise the fixture; it is written out here
-for legibility.
+Self-contained and frozen with the migration: it imports the two schema modules, the
+migration module and its generated support module — never the application or its
+`database`. It runs as unnamed tests against the automatic in-memory store, which
+models `_tesl_v` and the lazy read path.
 
 ```tesl
 module NotesSchema.Migrate.V8Compat exposing []
 
-import Notes exposing [NoteDatabase]
+import Tesl.Migration exposing [Migrated(..)]
+import Tesl.List exposing [List.length, List.head]
 import NotesSchema.V7
 import NotesSchema.V8 exposing [Note]
 import NotesSchema.Migrate.V8 exposing [migrateNote]
-import Tesl.Schema exposing [insertOldNote]          # generated, typed: NotesSchema.V7.Note -> Unit
-import Tesl.List exposing [List.length, List.head]
+import NotesSchema.Migrate.V8Support exposing [insertOldNote]   # generated: NotesSchema.V7.Note -> Unit,
+                                                                 # stores the row at generation 3
 
-# generated — the two-version rule, exercised on the Memory backend, which models
-# `_tesl_v` and the lazy read path exactly as the PostgreSQL decoder does
+# structural: a V7-shaped row is stored, found by the rewritten predicate, decoded
+# through the lazy path. The fixture is the developer's — a generator cannot know
+# which V7 rows the migration accepts, and migrateNote may legitimately Reject some.
 test "V8 compat: a V7-shaped Note is readable through V8" {
-  with database NoteDatabase {
-    insertOldNote (NotesSchema.V7.Note { id: "n2", title: "t", content: "a b",
-                                         authorId: "u2", legacyRank: 0, createdAt: 0 })
-    let notes = select note from Note where note.ownerId == "u2"   # the OR rewrite finds the V7 row
-    expect List.length notes == 1
-    expect (List.head notes).wordCount == 2                        # lazy path ran migrateNote
-  }
+  insertOldNote (NotesSchema.V7.Note { id: "n2", title: "t", content: "a b",
+                                       authorId: "u2", legacyRank: 0, createdAt: 0 })
+  let notes = select note from Note where note.ownerId == "u2"   # the OR rewrite finds the V7 row
+  expect List.length notes == 1
+  expect (List.head notes).wordCount == 2                        # lazy path ran migrateNote
 }
 ```
 
@@ -1971,35 +2128,40 @@ test "V8 compat: a V7-shaped Note is readable through V8" {
 ```tesl
 module NotesSchema.Migrate.V9 exposing [migration]
 
+import Tesl.Migration exposing [Migration, Entity(..), Rule(..), Same(..)]
 import NotesSchema.V8
 import NotesSchema.V9
 
-same {                                    # semantic closures identical: check body, helper, stdlib slice
-  NotesSchema.V9.ValidWordCount = NotesSchema.V8.ValidWordCount
-}
-
-migration NotesSchema.V8 -> NotesSchema.V9 {
-  Note    additive                        # +archivedAt: Maybe → adapter Nothing; gen stays 4
-  Session unchanged
-  Tag     unchanged
+migration = Migration {
+  from: NotesSchema.V8
+  to:   NotesSchema.V9
+  same: [ Same NotesSchema.V8.ValidWordCount NotesSchema.V9.ValidWordCount ]   # semantic closures identical
+  entities: {
+    Note:    Additive []                    # +archivedAt: Maybe → adapter Nothing; gen stays 4
+    Session: Unchanged
+    Tag:     Unchanged
+  }
 }
 ```
 
-Had V9 instead **tightened** the check — `checkWordCount` becoming `n > 0`, the fact
-renamed `PositiveWordCount` — the semantic closure differs, no `same` line is written,
-and `Note` cannot be `additive` or `unchanged` even though no column moved:
+(`v9-compat.tesl` is generated too: it stores a V8-shaped `Note` and reads it back with
+`archivedAt == Nothing`.) Had V9 instead **tightened** the check — `checkWordCount`
+becoming `n > 0`, the fact renamed `PositiveWordCount` — the semantic closure differs,
+no `Same` is written, and `Note` cannot be `Additive` or `Unchanged` (MIG016) even
+though no column moved:
 
 ```tesl
-migration NotesSchema.V8 -> NotesSchema.V9 {
-  Note    migrate revalidateNote          # gen 4 -> 5: the invariant changed, rows must prove it
-  …
-}
+  entities: {
+    Note:    Migrate revalidateNote []      # gen 4 -> 5: the invariant changed, rows must prove it
+    …
+  }
 
-check revalidateNote(old: NotesSchema.V8.Note) -> NotesSchema.V9.Note =
-  let words = check NotesSchema.V9.checkWordCount old.wordCount   # old proof is V8's fact; V9 wants its own
-  ok NotesSchema.V9.Note { id: old.id, title: old.title, content: old.content,
-                           ownerId: old.ownerId, wordCount: words, archivedAt: Nothing,
-                           createdAt: old.createdAt }
+fn revalidateNote(old: NotesSchema.V8.Note) -> Migrated NotesSchema.V9.Note =
+  case Check.attempt NotesSchema.V9.checkWordCount old.wordCount of   # old proof is V8's fact; V9 wants its own
+    Failed reason -> Reject "note {old.id}: {reason}"
+    Passed words  -> Row (NotesSchema.V9.Note { id: old.id, title: old.title, content: old.content,
+                                                  ownerId: old.ownerId, wordCount: words,
+                                                  archivedAt: Nothing, createdAt: old.createdAt })
 # --schema dry-run lists every zero-word note before the deploy.
 ```
 
@@ -2062,15 +2224,19 @@ background.
 ### What V8 request code runs during the window
 
 ```sql
--- listNotes: a READ. No fence lock; admission is an initplan on the PROGRAM VERSION (8),
--- never an entity generation. `where note.ownerId == user` is rewritten because ownerId
--- is a `rename` of authorId (identity, in the SQL-expressible subset):
-select (select notes_app.tesl_admit(8)),
-       n."_tesl_v", n."id", n."title", n."content", n."authorId", n."ownerId",
+-- listNotes: a READ. No fence lock. The query runs FIRST (its ACCESS SHARE lock is then
+-- held to commit, so no contract DDL can interpose), admission on the PROGRAM VERSION (8)
+-- runs AFTER it with a newer-or-equal snapshot, and the runtime releases rows to the
+-- handler only once the admission statement has returned. One pipelined round trip.
+-- `where note.ownerId == user` is rewritten because ownerId is a `Rename` of authorId:
+begin;
+select n."_tesl_v", n."id", n."title", n."content", n."authorId", n."ownerId",
        n."wordCount", n."createdAt"
   from notes_app.notes n
  where (n."ownerId" = $1 or (n."ownerId" is null and n."authorId" = $1))
  order by n."createdAt" desc;
+select notes_app.tesl_admit(8);          -- raises if min_version > 8 → transaction aborts, rows discarded
+commit;
 -- Go decoder: if _tesl_v < 4 → migrateNote(V7 view of the row) → Note; else decode directly.
 
 -- createNote: a WRITE. Two-statement fence, then the insert with the dual write and the stamp.
@@ -2150,7 +2316,7 @@ alter table notes_app.notes drop column "legacyRank";
 drop index concurrently if exists notes_app.notes_authorId_idx;                    -- DDL connection
 insert into notes_app.tesl_schema (version, step) values (8, 'contracted');
 
--- step 7: expand V8 -> V9 — the `additive` entry is one metadata-only statement
+-- step 7: expand V8 -> V9 — the `Additive` entry is one metadata-only statement
 alter table notes_app.notes add column if not exists "archivedAt" bigint;          -- Maybe → NULL
 insert into notes_app.tesl_schema (version, step, snapshot_hash, migration_hash) values (9, 'expanded', $1, $2);
 ```
@@ -2171,15 +2337,15 @@ the design in these places:
    check) to hand-written `schema module`s the program imports explicitly, with module
    references in `database` (`schema:`, mandatory `migrations:`), one declaration of
    each check shared through imports, and MIG015 for a stale import.
-1. **Additive changes needed their own entry.** `unchanged` meant "identical" and the
-   phase-1 changes are not identical; `additive` (derived adapter, no row function, no
+1. **Additive changes needed their own entry.** `Unchanged` meant "identical" and the
+   phase-1 changes are not identical; `Additive` (derived adapter, no row function, no
    generation bump) is now the entry phase 1 lives on.
 2. **Row functions needed a stated semantics**, not "an ordinary check": `check`
    returning a record with no top-level proof is a language change, invoked and
    failing like every other check, with the runner mapping any failure to backfill
    stop / lazy 500 regardless of the inner HTTP status. The earlier drafts
    pattern-matched on `Ok`/`Fail`, which Tesl does not have.
-3. **`rename` had to be compiler-owned.** A freely editable `ownerId: old.authorId`
+3. **`Rename` had to be compiler-owned.** A freely editable `ownerId: old.authorId`
    initialiser could silently diverge from the identity the SQL rewrite, lazy decoder,
    backfill and dual write all assume; the literal now omits the column and MIG017
    guards it.
@@ -2213,8 +2379,8 @@ the design in these places:
 
 ## The downtime path
 
-Two changes are `OFFLINE` in v1: changing an entity's primary key, and `reset`
-(discard every row and recreate). `reset` is offline by definition. A primary-key
+Two changes are `OFFLINE` in v1: changing an entity's primary key, and `Reset`
+(discard every row and recreate). `Reset` is offline by definition. A primary-key
 change is offline **by scope decision, not by necessity**: PostgreSQL can change a
 primary key without a full rebuild in many cases (new column, dual write, concurrent
 unique index, a brief constraint swap), but foreign keys, referenced data and the
@@ -2250,7 +2416,7 @@ error[MIG007]: migration V7 -> V8 changes the primary key of `User` (id: String 
     `tesl --migrate --suggest-online` writes this two-version plan for you.
 
   offline procedure (if downtime is acceptable):
-    1. add `offline acknowledged "<why downtime is acceptable here>"` to migrations/V8.tesl
+    1. add `Offline "<why downtime is acceptable here>"` to the entity's rule list in migrations/notes/v8.tesl
     2. scale the V7 deployment to zero (or put the ingress in maintenance mode)
     3. run the built binary once, where the database is reachable (a Job or Helm pre-upgrade hook):
              ./app --schema apply-offline --wait-for-drain
@@ -2304,7 +2470,7 @@ artefact and cannot be half-deployed. The plan header says which entity forced i
 the usual reaction — split the offline change into its own version, or take the
 online alternative — is obvious.
 
-**`reset`** is the same path with a simpler body: the table is truncated and recreated
+**`Reset`** is the same path with a simpler body: the table is truncated and recreated
 at V8. It is the right tool for pre-production data and for a table that is
 genuinely a cache; the acknowledgement string is the place to say which.
 
@@ -2333,21 +2499,29 @@ acknowledgement in source, never a quick fix).
 
 | Code | Reported by | Condition | Primary span | Related | Action class |
 |---|---|---|---|---|---|
-| MIG001 | compiler (`--check`, LSP) | the `database` names a schema module newer than the last migration's target and no migration file bridges them | the `database` declaration | the two schema modules | mechanical (not fix-all): run `tesl --migrate` (editor: *Generate migration*) |
-| MIG002 | compiler | migration entry missing / extra / `unchanged` on a changed entity | the `migration` block or the entry | old + new entity decls | mechanical **only** for a generator-owned, unedited entry (add/remove it); **decision** when the entry was hand-edited — never deleted automatically |
+| MIG001 | compiler (`--check`, LSP) | the `database` names a schema module newer than the last migration's `to:` and no migration file bridges them | the `database` declaration | the two schema modules | mechanical (not fix-all): run `tesl --migrate` (editor: *Generate migration*) |
+| MIG002 | compiler | migration entry missing / extra / `Unchanged` on a changed entity | the `migration` block or the entry | old + new entity decls | mechanical **only** for a generator-owned, unedited entry (add/remove it); **decision** when the entry was hand-edited — never deleted automatically |
 | MIG003 | compiler | unresolved `todo` | the `todo` | the new field/proof that caused it, the `V7.User` fields available | decision (see below) |
-| MIG004 | compiler / generator | ambiguous rename (removed + added same type) | the new field | the removed field | suggested: `rename a -> b`; alternative: separate add/drop |
-| MIG005 | compiler | removed field V7 still decodes, no `legacy` | the removed field in the snapshot | the V7 declaration (V7 decodes every column it declares) | decision: `legacy c` / `legacy with g` |
-| MIG006 | compiler | transform without `writeBack` | the `migrate` entry | the V7 declaration of `a` | decision: add `writeBack g` or acknowledge `ROLL-WINDOW RISK` |
-| MIG007 | compiler / generator | primary-key change / `reset` (OFFLINE) | the entity | the plan header | decision: `offline acknowledged "…"`; suggested: `--suggest-online` |
+| MIG004 | compiler / generator | ambiguous rename (removed + added same type) | the new field | the removed field | suggested: `Rename a b`; alternative: separate add/drop |
+| MIG005 | compiler | removed field V7 still decodes, no `Legacy` | the removed field in the snapshot | the V7 declaration (V7 decodes every column it declares) | decision: `Legacy c v` / `LegacyWith f g` |
+| MIG006 | compiler | a column V8 computes into a new column while V7 still decodes the old one, and no `WriteBack old new g` | the `Migrate` entry | the V7 declaration of the old column | decision: add `WriteBack old new g` or acknowledge `ROLL-WINDOW RISK` |
+| MIG007 | compiler / generator | primary-key change / `Reset` (OFFLINE) | the entity | the plan header | decision: `Offline "…"`; suggested: `--suggest-online` |
 | MIG008 | compiler | V8-introduced non-`Maybe` column whose row function is **not SQL-expressible** used inside SQL in V8 (renames and constant defaults are rewritten instead) | the query clause | the column decl | suggested: declare `Maybe`; or defer use to V9 |
-| MIG009 | compiler | row function writes an existing (V7-written) column | the field init in the row fn | the V7 declaration (any V7 insert writes it) | **suggested**: new column + `rename` *or* `drop` — creating the column skeleton is mechanical, choosing rename versus drop is semantic |
+| MIG009 | compiler | row function writes an existing (V7-written) column | the field init in the row fn | the V7 declaration (any V7 insert writes it) | **suggested**: new column + `Rename` *or* `Drop` — creating the column skeleton is mechanical, choosing rename versus drop is semantic |
 | MIG010 | compiler | row function reaches a live-program function | the call | the callee | mechanical: copy the closure into the migration file |
 | MIG011 | compiler | new unique index over V7-written columns | the `unique index` | the V7 declaration of the indexed columns | decision: acknowledge `ROLL-WINDOW RISK` |
 | MIG012 | compiler | required migration file (`V<n-1>`/`V<n>`) or its stdlib slice missing or pruned too early | the `database` decl | — | mechanical but **not fix-all eligible**: the message names the file to restore; the editor offers a command, never a silent VCS operation |
 | MIG013 | compiler (hash recorded in the next migration's header) **and** the boot gate (hash the database recorded) | a frozen schema module or migration file was edited after a later version was written | the edited declaration | the migration header that froze it | decision: revert the edit |
-| MIG016 | compiler / generator | a fact or type a column names changed between `Old` and `New` (no `same` line) and the entity is marked `unchanged` | the `unchanged` entry | the two declarations, the changed check body | decision: accept the generated `migrate` re-validation skeleton, or restore the declaration |
-| MIG017 | compiler | a row function initialises or transforms a column declared by `rename a -> b` | the field initialiser | the `rename` entry | mechanical: remove the initialiser (the compiler injects `old.a`); use `a -> b with f` for a real transform |
+| MIG016 | compiler / generator | a fact or type a column names changed between the two modules (no `Same` entry) and the entity is `Unchanged` or `Additive` | the entry | the two declarations, the changed check body | decision: accept the generated `Migrate` re-validation skeleton, or restore the declaration |
+| MIG018 | compiler | a pass-through column is not initialised by the exact projection `f: old.f` | the field initialiser | the two declarations of `f` | suggested: restore the projection; a real change is a new column |
+| MIG020 | compiler | `from:`/`to:` are not consecutive schema modules of the same family | the field | the two module headers | mechanical: fix the reference |
+| MIG021 | compiler | a `Migrate` row function's type is not `From.E -> Migrated To.E` for its entity | the function reference | the two entity declarations | suggested: fix the signature |
+| MIG022 | compiler | a rule names a column of the wrong version/side, or a value/function of the wrong type | the rule | the column declarations | suggested: fix the rule (the message states the expected type) |
+| MIG023 | compiler | two rules govern the same column | the second rule | the first | suggested: remove one |
+| MIG024 | compiler | `Same` pairs declarations of different kinds or from the wrong modules | the `Same` | the two declarations | mechanical: regenerate |
+| MIG025 | compiler | a non-compat module imports a generated `…Support` module (`insertOld<E>`) | the import | the support module header | none: these helpers exist only for compatibility tests |
+| MIG019 | compiler | a `check`/`auth`/`establish` outside the declaring schema module mints a sealed (column) fact | the `ok … ::: F` | the fact's declaration | suggested: move the check into the schema module, or consume an existing check |
+| MIG017 | compiler | a renamed column is not initialised by the exact projection of its old name (`b: old.a`) | the field initialiser | the `Rename` rule | **suggested**: restore the projection, or replace `Rename` with a new column + row function — removing a transform changes meaning, so never silent |
 | MIG015 | compiler | the program imports a type from a schema module other than the one its `database` names (stale import after a version bump) | the `import` line | the `database` declaration | mechanical, fix-all eligible: rewrite the import to the current module |
 | MIG014 | compiler (the runtime's primitive registry is known at compile time) | primitive tag referenced by an embedded migration not provided by this runtime | the migration file | the primitive | none: finalise and prune on the current runtime first |
 
@@ -2368,12 +2542,12 @@ skeleton* and *Open old / new declaration*. Independent holes report independent
 the record construction that contains three `todo`s produces three MIG003s and **no**
 cascading type error on the record itself.
 
-**Decisions are not quick fixes.** `ROLL-WINDOW RISK`, `drop`, `reset`, `legacy`,
-`offline acknowledged` are semantic choices about data; the editor may offer *Open
+**Decisions are not quick fixes.** `ROLL-WINDOW RISK`, `Drop`, `Reset`, `Legacy`,
+`Offline "…"` are semantic choices about data; the editor may offer *Open
 migration plan* or *Insert acknowledgement…* behind an explicit confirmation dialog,
 but none of them appears in `source.fixAll`, and "make this field `Maybe`" is a
 suggestion, never auto-applied. Mechanical actions — generate a skeleton, add an
-`unchanged` entry, copy a helper closure — are preferred quick fixes.
+`Unchanged` entry, copy a helper closure — are preferred quick fixes.
 
 ### LSP requirements
 
@@ -2388,8 +2562,8 @@ tooling needs four things it does not have:
    could leave partial changes, and `WorkspaceEdit` document versions would mean
    nothing. So the compiler gains `--migrate --manifest-json`: it takes the
    open-document overlays, performs **no writes**, and returns an edit manifest — the
-   files to create and the edits to apply (`migrations/V<n>.tesl`,
-   `migrations/notes/V<n>.tesl`, `V<n>.stdlib.tesl`), each with the
+   files to create and the edits to apply (`migrations/notes/v<n>.tesl`,
+   `v<n>-compat.tesl`, `v<n>-support.tesl`, `v<n>.stdlib.tesl`), each with the
    expected hash of the current on-disk/overlay content. The LSP presents the
    preview and applies the manifest **atomically as far as the protocols allow**,
    which needs saying precisely, because standard LSP does not by itself give
@@ -2444,7 +2618,7 @@ tooling needs four things it does not have:
    deleted or rewritten automatically, and if the new diff no longer wants it, it stays
    in the file with a MIG002 (decision class) pointing at the old and new declarations,
    and the editor offers a diff-based resolution. The same fingerprint is what lets
-   MIG002 tell a generator-owned entry from a hand-edited one reliably. Row functions, `legacy`/`writeBack`
+   MIG002 tell a generator-owned entry from a hand-edited one reliably. Row functions, `Legacy`/`WriteBack`
    clauses and acknowledgements are user-owned from the moment they are written.
 
 ### VSCodium extension
@@ -2523,7 +2697,7 @@ requirements summary):**
 
 | Concern | Mechanism now |
 |---|---|
-| admission | two dimensions, never mixed: **program version** for admission, **entity generation** for rows. `tesl_schema.min_version`; **writes and deletes**: `pg_advisory_xact_lock_shared(fence(v))`, then a separate `select min_version` (READ COMMITTED); **reads**: `(select tesl_admit(v))` initplan in the query itself, `v` = the binary's schema version, no lock (§13); server-side trigger fence for writes under evaluation, and only with a separate program-version GUC |
+| admission | two dimensions, never mixed: **program version** for admission, **entity generation** for rows. `tesl_schema.min_version`; **writes and deletes**: `pg_advisory_xact_lock_shared(fence(v))`, then a separate `select min_version` (READ COMMITTED); **reads**: query first, then `select tesl_admit(v)` in the same pipelined transaction, rows released only after it returns — the query's table lock and the later snapshot are the ordering guard, no advisory lock (§13); server-side trigger fence for writes under evaluation, and only with a separate program-version GUC |
 | retirement | one transaction: exclusive xact lock on the retiring version's fence, `min_version = v+1`; also waits for `pg_stat_progress_create_index` to be empty |
 | nontransactional DDL | dedicated DDL connection (`ddlConnection`, a **trusted** direct/session-mode DSN) holding a session-level shared fence, opened at boot step 9b; or a single `--schema worker`; version-suffixed object names |
 | "not yet migrated" | permanent per-row `_tesl_v smallint` holding the **entity generation** (increments only on row-function migrations, so unchanged entities never need touching); atomic per entity; only inserts, backfill, read-modify-write may stamp; trigger only lowers |
@@ -2537,8 +2711,10 @@ requirements summary):**
 | unique indexes | every new one gates readiness; over V7-written columns = `ROLL-WINDOW RISK` |
 | cross-version identity | generated `same { V9.T = V8.T }` block from equality of the **semantic closure** (checks, helpers, codecs, frozen stdlib, primitive tags), honoured inside the migration file only; a changed closure forces re-validation |
 | compatibility-check input | the frozen previous schema module only — complete-record inserts and whole-row selects make it a sound over-approximation of the previous program; no record of handler usage exists |
-| migration entries | `unchanged` (identical) / `additive` (derived adapter, phase 1) / `migrate f` (row function, generation bump) / `new` / `drop` / `reset`; `rename a -> b` compiler-owned (MIG017) |
-| row function | `check f(old: Old.E) -> New.E` — a stated language change (record result, no top-level proof); fails and is invoked like any check; runner maps failure to backfill stop / lazy 500 |
+| migration file | one folded record `Migration { from, to, same, entities: { E: Entity … } }` with the `Tesl.Migration` ADTs `Entity` (`Unchanged`/`Additive`/`Derived`/`Migrate`/`New`/`Drop`/`Reset`) and `Rule` (`Rename`/`Default`/`Legacy`/`LegacyWith`/`WriteBack`/`Offline`); no keywords |
+| row function | ordinary `fn (Old.E) -> Migrated New.E` (`Row`/`Reject`); checks applied via `Check.attempt` (Maybe-returning); pass-through and renamed columns must be exact projections (MIG018/MIG017); runner maps `Reject` to backfill stop / lazy 500 |
+| sealed facts | a column fact may be minted only by checks in its declaring schema module (MIG019), so `same` and derived `CHECK`s see every minter |
+| compatibility tests | generated `…V<n>Compat` + `…V<n>Support` modules, self-contained, Memory-backed as unnamed tests, importing no application code; structural only, fixtures are the developer's |
 | versioning unit | hand-written `schema module NotesSchema.V<n>` (entities, facts, checks, codecs, pure helpers; nothing else, compiler-enforced); imported explicitly by the program; `database { schema: NotesSchema.V<n>, migrations: NotesSchema.Migrate }` — module references, no strings; one version per database (MIG015) |
 | migration identity | frozen closure (migration file + both schema modules + stdlib slice) + primitive tags with retained implementations; hash of typed IR; older modules frozen at compile time by the hash in the next migration's header (MIG013) |
 
@@ -2608,7 +2784,7 @@ variant specified should a stronger level ever be offered. And "every V8 write s
 atomic per-entity statement, only inserts, backfill and read-modify-write updates may
 stamp it, the trigger only lowers it (`least(old, 7)`), V8 read-modify-writes identify
 themselves with a transaction-local `set_config`, and backfills chain strictly one
-version at a time (`= 7`, never `< 8`), which fixed the binary's contents at the two
+version at a time (`= g-1`, never `< g`), which fixed the binary's contents at the two
 most recent migrations and added a boot refusal when the prior migration is not
 final. The rest: retained primitive implementations behind version tags so a frozen
 migration can still execute after a runtime upgrade, with a build-time failure rather
@@ -2727,6 +2903,33 @@ does not need to: the **footprint artefact was removed**. The frozen module is a
 over-approximation because inserts are complete record literals and selects decode
 whole rows; the precision a footprint offered is noted as a possible later refinement.
 
+The maintainer then asked for **records and ordinary functions instead of keywords**,
+and a twelfth review pass landed at the same time; the two were folded together. The
+migration file is now one `Migration { … }` record with `Tesl.Migration` ADTs
+(`Entity`, `Rule`, `Migrated`, `Same`), row functions are plain `fn`s returning
+`Row`/`Reject` with checks applied through a Maybe-returning `Check.attempt` (no
+`check` extension, no proofless `ok`, no ignored HTTP status), pass-through and
+renamed columns are exact projections (no injected fields), pure renames and constant
+defaults have entries (`Derived`, `Additive [Default …]`), column facts are **sealed**
+to their schema module (MIG019), the compatibility module is self-contained and
+Memory-backed with typed generated helpers and no universal success property, the read
+admission is a separate pipelined statement rather than a target-list initplan, the
+manifest lists every generated file, the phase texts and MIG list match the final
+model, the `v9` schema block is complete, and the last `< 8` literals are gone.
+
+A **thirteenth pass** found two blockers in the new source design and four gaps. The
+`Migration` record's constructors were presented as ordinary ADTs but are typed
+contextually — `Migration { … }` is now stated as a compiler-known folded declaration
+like `Database`/`App`, with an elaboration table and MIG020–MIG024. The
+admit-then-query read order proved nothing under READ COMMITTED (separate snapshots,
+no lock yet held): reads now run **query first, then admission**, so the query's table
+lock and the later snapshot form the guard, with rows released only after admission
+returns. `WriteBack` names both endpoints; `Check.attempt` is a compiler intrinsic
+returning `Attempt` with the validator's reason; the support module has a privilege
+boundary (`schemaTest`, test-only, MIG025); `Derived`'s description, the phase-2 text
+and the acceptance criterion were aligned; and "Open questions: none" was replaced by
+the four items genuinely still open.
+
 The title was softened from "by construction" to "rolling deploys" in the same pass:
 the `ONLINE` class is zero-downtime under the stated protocol, and the two
 `ROLL-WINDOW RISK` cases and the `OFFLINE` class are named rather than claimed away.
@@ -2741,21 +2944,23 @@ the `ONLINE` class is zero-downtime under the stated protocol, and the two
    pre-check in `dry-run`. Every non-additive diff is a `todo`; `OFFLINE` changes get the
    MIG-series error with the procedure. **Tooling cut for phase 1:** MIG001, MIG002,
    the additive part of MIG004, MIG007 classification, MIG008, MIG011, MIG012, MIG013,
-   MIG014; the non-mutating manifest API, the versioned diagnostic protocol, the
+   MIG014, MIG015, MIG016 for `Additive`/`Unchanged`; the non-mutating manifest API, the versioned diagnostic protocol, the
    `tesl.generateMigration` command with preview and versioned apply, cross-file
    diagnostics, the unsaved-buffer policy. "Every non-additive diff is a `todo`" in
    phase 1 means the generator emits a rejected placeholder for it; the functional
    typed-hole workflow is phase 2. Fixes the stale tour/spec text. This alone
    closes the "column added, dies at request time" hole and restores plain-index
    creation — the most common production change, made zero-downtime.
-2. **Row functions and the online lifecycle.** `migrate f`, `rename`, `drop`,
-   `writeBack`, `legacy`, `todo`, `check`-shaped row functions, dual writes, lazy read, conditional batched backfill, the fence,
+2. **Row functions and the online lifecycle.** The `Migrate`/`Derived` entries and the
+   `Rename`/`Legacy`/`LegacyWith`/`WriteBack` rules, `todo`, ordinary `fn` row functions
+   returning `Migrated`, `Check.attempt`, dual writes, lazy read, conditional batched backfill, the fence,
    with leader election, retirement + contract at next boot behind the fence, `dry-run`,
-   generated compatibility tests, Memory-backend execution in `tesl test` — including
-   a generation marker and lazy read path in the Memory store and the test-only
-   `Schema.insertAsGeneration` so the compatibility test is a real two-version test —
-   snapshot types as frozen records in the checker. **Tooling for phase 2:** MIG003 (with the
-   hole contents), MIG005, MIG006, MIG009, MIG010, the row-function actions
+   the generated compatibility and support modules, Memory-backend execution in `tesl
+   test` — including a generation marker and lazy read path in the Memory store and the
+   generated typed `insertOld<Entity>` helpers so the compatibility test is a real
+   two-version test — `Check.attempt`, sealed facts (MIG019), and frozen schema modules
+   as frozen record types in the checker. **Tooling for phase 2:** MIG003 (with the
+   hole contents), MIG005, MIG006, MIG009, MIG010, MIG017, MIG018, MIG019, MIG021–MIG023, MIG025, the row-function actions
    (*Generate check skeleton*, copy-closure), the AST-aware refresh with ownership.
 3. **OFFLINE path and `reset`.** `--schema apply-offline --wait-for-drain`, shadow-table
    copy, the all-fences-exclusive check, `--migrate --suggest-online` for primary-key changes,
@@ -2820,6 +3025,11 @@ should not start until they are closed.
   ids; untouched generated nodes replaceable; edited nodes never auto-deleted; stale
   edited nodes stay with MIG002 and a diff resolution). Decide the provenance marker's
   concrete syntax.
+- **Module re-export for a schema facade.** Whether to add `module X exposing […]
+  reexporting Y` (or an equivalent) so that large applications can import an
+  unversioned `NotesSchema` facade and bump one line per schema change. General
+  language feature, small; the migration design works without it (MIG015 + fix-all),
+  so it is a convenience gate, not a blocker.
 - **Reserved names.** `_tesl_v`, `tesl_schema*`, `tesl_mig_v*` triggers/functions,
   `*_v<n>` index suffixes and the `tesl.writer.*` GUC prefix are reserved; a user
   entity field or table name that collides is a compile error. Decide the exact
@@ -2844,9 +3054,11 @@ should not start until they are closed.
 
 - Fence overhead on a write transaction: measured, and below an agreed budget (the
   proposal is ≤ 5% p99 latency at the reference load). Read admission: **no advisory
-  lock and no extra round trip** — the one initplan probe per query is measured against
-  its own budget (proposal ≤ 1% p99); "zero" is not a supportable claim and is not
-  made.
+  lock and no extra round trip** — the one admission statement per read transaction is
+  measured against its own budget (proposal ≤ 1% p99); "zero" is not a supportable
+  claim and is not made. Ordering tests: a retirement interposed between query and
+  admission aborts the transaction; between admission and commit, pre-retirement rows
+  are delivered; a contract DDL interposed anywhere blocks until commit.
 - Rolling deploy V7→V8 on a 10M-row table with continuous writes: no failed request
   attributable to the migration in the `ONLINE` class; a documented, bounded failure
   count in the `ROLL-WINDOW RISK` class.
@@ -2875,7 +3087,22 @@ should not start until they are closed.
 
 ## Open questions
 
-None remain that are specific to this item: everything unresolved is listed above as
-a decision gate with a leaning, and two items were moved out — typed holes (`todo`)
-anywhere in the language belong to their own compiler/LSP roadmap item, and whether
-row-level policies are mandatory belongs to the row-policy roadmap file.
+Four items are decided in direction but not yet specified to implementation depth,
+and are listed here rather than claimed closed:
+
+- **The exact elaboration rules of `Migration { … }`** — the table in §4 states what
+  each position must be; the formal typing judgments (how `entities:` derives its record
+  type from two modules, how `Migrate f` is checked against the specific pair) belong
+  in LANGUAGE-SPEC before implementation.
+- **The read-admission ordering proof** — the argument in §13 rests on `ACCESS SHARE`
+  being held to commit and on READ COMMITTED snapshot ordering; it must be written up
+  against the PostgreSQL manual's lock and snapshot rules and pinned by the interposed-
+  retirement tests before phase 1 ships reads.
+- **`Check.attempt`'s typing and evaluation** as a compiler intrinsic, and whether a
+  general `Attempt` result type belongs in `Tesl.Check` for handlers too.
+- **The `schemaTest` capability and test-only module kind** for the generated support
+  module: how a test build grants it and how the production build excludes the module.
+
+Two items were moved out — typed holes (`todo`) anywhere in the language belong to
+their own compiler/LSP roadmap item, and whether row-level policies are mandatory
+belongs to the row-policy roadmap file.
