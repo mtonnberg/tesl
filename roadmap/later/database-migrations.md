@@ -287,9 +287,10 @@ constraints, `pg_stat_progress_*`) suffice.
 - **The two-version rule is a compile-time check, not documentation.** A plan the
   compiler accepts is one where V7 and V8 can run against the same database at the
   same time. A plan that cannot satisfy that is labelled `OFFLINE` and must say so.
-- **A migration is a `check` function, checked by the proof kernel.** Not a script.
-  It is total over its declared result — the new row, or a typed rejection — and the
-  return type's proofs are the acceptance criterion for every migrated row.
+- **A migration is an ordinary function, checked by the proof kernel.** Not a script.
+  `fn (Old.E) -> Migrated New.E` is total over its declared result — the new row, or a
+  typed rejection — and the new row type's proofs are the acceptance criterion for
+  every migrated row.
 - **Fail closed, in the same direction as the rest of the language.** Unknown
   database state means the program does not start. A lossy diff without an explicit
   migration means the program does not compile.
@@ -740,6 +741,11 @@ type Rule
   | Default   field value           # the constant a new non-Maybe column carries (also its SQL DEFAULT)
   | Legacy    field value           # V7-decoded column V8 dropped: the value V8 rows carry for it
   | LegacyWith field (fn)           # …computed from the new row (dual write)
+  | Revalidate field (check)        # the column keeps its name and VALUE; only its proof (or the
+                                    #   check behind it) changed. The row function may initialise it
+                                    #   only from `Check.attempt <that check> old.field`; generation +1;
+                                    #   CHECK installed at contract; ROLL-WINDOW RISK (old writers
+                                    #   can still store values the new check rejects)
   | WriteBack field field (fn)      # WriteBack oldField newField g: for a column V8 computes into
                                     #   `newField`, V8 also writes `g(new) : oldType` into the OLD
                                     #   column so V7 readers stay whole. Both endpoints named, for
@@ -763,8 +769,9 @@ violation is a MIG diagnostic in the table under "Diagnostics"):
 | `Default b v` | `b` a new non-`Maybe` column of `To.E`; `v` a literal of `b`'s type | MIG022 |
 | `Legacy a v` / `LegacyWith a g` | `a` a column of `From.E` absent from `To.E`; `v : a`'s type / `g : To.E -> a`'s type | MIG022 |
 | `WriteBack a b g` | `a` old-only, `b` new-only, `g : To.E -> a`'s type | MIG022 |
+| `Revalidate f c` | `f` present in both versions with the same column type; `c` a check of `To`'s module minting the fact `To.E.f` names; the initialiser of `f` is a `Passed` binder of `Check.attempt c old.f` | MIG022 / MIG018 |
 | duplicate or conflicting rules on one column (e.g. `Rename a b` and `Legacy a v`) | — | MIG023 |
-| `Same T U` | type references to same-kind declarations (fact/type/newtype/ADT/codec) in `From` and `To` | MIG024 |
+| `Same T U` | type references to same-kind declarations in `From` and `To` **whose canonical semantic-closure hashes are equal** (declaration, minting checks, helpers, codecs, frozen stdlib, primitive tags); `Same` is verified, never an assertion — a hand-written `Same` over differing closures is MIG024, which names the first differing node | MIG024 |
 | `Additive rules` | every change to `E` has a single derivable adapter given the rules | MIG016 |
 
 What is genuinely new *syntax* is small and listed in §1: module references as record
@@ -797,7 +804,11 @@ subject exactly as `let a' = check f a` would have bound it, `Failed` carries th
 check's **message** with its HTTP status discarded — a migration is not an HTTP
 response, but the validator's reason is exactly what `--schema dry-run`, the backfill
 log and the lazy-path 500 should show, so it is not thrown away. Evaluation: call `f`;
-a `fail` inside it becomes `Failed reason` instead of propagating. The runner maps `Reject` to: stop the backfill with
+a `fail` inside it becomes `Failed reason` instead of propagating. In v1 it is
+restricted to **identity-preserving** checks (`(x: A) -> x: A ::: P x`); a
+transforming or parsing check (`String -> n: Int ::: P n`) is a compile error naming
+the restriction. Generalising to the check's output binder (`Attempt (y: B ::: P y)`,
+in Tesl's named nested-proof syntax) is the open item recorded below. The runner maps `Reject` to: stop the backfill with
 the primary key and reason; a 500 with the same reason in the log on the lazy path.
 Invocation in a test is a plain call: `case migrateUser old of Row u -> … | Reject r -> …`.
 
@@ -816,6 +827,23 @@ Invocation in a test is a plain call: `case migrateUser old of Row u -> … | Re
   lazy decoder, backfill and dual write all implement the one identity the `Rename`
   rule declares. A real transformation is a new column plus a row function, and gets no
   identity rewrite.
+- A **revalidated** column (rule `Revalidate f check`) is the one exception to the
+  pass-through rule, and a narrow one: its initialiser must be a variable bound by
+  `Passed` from `Check.attempt check old.f` — the same physical column, the same value,
+  a new proof. No shadow column exists; the trigger watches the column itself, so a V7
+  write lowers the marker and the row is re-validated; the column's `CHECK` is
+  installed `NOT VALID` and validated at contract; and the change is `ROLL-WINDOW
+  RISK`, because a V7 writer can store a value the new check rejects until it is
+  retired (§2 already labelled proof tightening so). This is how "the invariant
+  changed, no column moved" (MIG016) is *resolved*; the earlier example did it with a
+  bare initialiser, which MIG018 would have rejected.
+- A **same-named type change** (`Maybe T` → `T`, `Int` → `Int32`, a newtype introduced
+  over an existing column) has **no** in-place form in v1: it is a new column under a
+  new name plus a row function (and `WriteBack` if V7 still reads the old one), with
+  `Drop` of the old name at contract. A storage-name/shadow-column mechanism that would
+  let the Tesl name stay while the physical column changes was considered and deferred:
+  it adds a second naming layer to every emitter path for a case a rename handles.
+  MIG009 names the rule.
 - A **new** column is the only place an arbitrary expression is allowed, and it is
   where the generator writes the `todo`.
 - The function may call functions of either schema module, functions declared in the
@@ -854,9 +882,15 @@ later. So the tests run as unnamed tests against the automatic in-memory store, 
 models `_tesl_v` and the lazy read path exactly as the PostgreSQL decoder does; both
 schema modules' entities are legal SQL sources there and only there.
 
-What is generated is **structural**: an old-shaped row is inserted at its generation,
-read back through the new decoder, found by a rewritten predicate, and — where
-`WriteBack` exists — read back through the old shape. What is **not** generated is a
+What is generated is **structural**, in both directions the window needs: an
+old-shaped row is inserted at its generation, read back through the new decoder and
+found by a rewritten predicate (**old → new**); and a new-shaped row is inserted by the
+new code path and read back through the **old** decoder via a generated
+`readOld<Entity> : key -> Maybe Old.E` (**new → old**), which checks that `Rename`
+dual-wrote the old column, that `Legacy`/`LegacyWith` supplied every removed non-null
+column, and that `WriteBack` produced a decodable old value. The support module
+therefore holds both `insertOld<E>` and `readOld<E>`, under the same test-only
+privilege boundary. What is **not** generated is a
 universal "every valid old row migrates successfully" property: a row function is
 allowed to `Reject` old rows the new invariant excludes, so such a property would fail
 legitimately. Fixture rows are a `todo` the developer fills (or a `property` with
@@ -923,8 +957,9 @@ describing each of them loosely enough to be wrong.
    write — dropping its trigger, calling its backfill final, setting `NOT NULL`,
    dropping its columns, using a new column inside SQL — is sequenced **after**
    `min_version` passes 7, never after an observation that V7 seems absent.
-1. **Fence — transaction-scoped, two statements.** Every **write** transaction a
-   `V<n>` instance runs (reads use the lock-free admission of §13) begins with `select pg_advisory_xact_lock_shared(fence(schema, n))` and
+1. **Fence — transaction-scoped, two statements, on writes.** Every **write**
+   transaction a `V<n>` instance runs (reads use the lock-free, query-first admission
+   of §13; the DDL connection holds the session-level form of invariant 7) begins with `select pg_advisory_xact_lock_shared(fence(schema, n))` and
    **then, as a separate statement**, `select min_version from tesl_schema`; if
    `min_version > n` the transaction rolls back before any program statement runs, and
    the instance shuts down. Two statements, not one: under READ COMMITTED each
@@ -937,7 +972,8 @@ describing each of them loosely enough to be wrong.
    offered, the admission read must become `select min_version from tesl_schema for
    share` on the singleton row — under READ COMMITTED it re-evaluates to the updated
    row, under REPEATABLE READ/SERIALIZABLE it raises a serialization failure, both of
-   which are refusals — at the cost of row-lock (multixact) traffic on one hot tuple;
+   which are refusals — at the cost of row-lock (multixact) traffic on the one
+   `tesl_schema_state` tuple;
    that is the reason it is not the default. A single autocommit query is wrapped the
    same way; `pgx`'s pipeline mode sends `BEGIN`, both fence statements, the query and
    `COMMIT` in **one round trip**, so the cost is server-side lock-table work (tens of
@@ -993,13 +1029,21 @@ describing each of them loosely enough to be wrong.
 
    | clause | rewrite (rename) | note |
    |---|---|---|
-   | `where b <op> $1` | `(b <op> $1 or (b is null and a <op> $1))` | three-valued logic preserved: a row with both `NULL` is excluded either way; both indexes usable via BitmapOr |
-   | `isNull`/`isNotNull b` | `(b is null and a is null)` / `(b is not null or a is not null)` | |
-   | `order b`, `groupBy b`, `selectCountBy`/`selectSumBy` on `b` | `coalesce(b, a)` | an index on `b` alone does not serve the sort during the window; the plan header says so |
-   | `innerJoin E on x.b Y.k` | `coalesce(x.b, x.a)` in the `ON` | |
-   | `selectSum`/`Max`/`Min` over `b` | `coalesce(b, a)` | |
+   The window value of a renamed column is chosen by the **generation marker**, never
+   by `b IS NULL`: for a nullable (`Maybe`) column a physical `NULL` in `b` is
+   ambiguous — an unmigrated row, or a migrated row whose value is `Nothing` — and
+   `_tesl_v` already says which. Writing `w(b, a)` for
+   `case when _tesl_v < g then a else b end`:
+
+   | clause | rewrite (rename) | note |
+   |---|---|---|
+   | `where b <op> $1` | `((_tesl_v >= g and b <op> $1) or (_tesl_v < g and a <op> $1))` | three-valued logic preserved per branch; both indexes usable via BitmapOr with the marker as filter |
+   | `isNull`/`isNotNull b` | `w(b, a) is null` / `w(b, a) is not null` | on an old row with `a = Something x`, `b == Nothing` is **false**, as it must be |
+   | `order b`, `groupBy b`, `selectCountBy`/`selectSumBy` on `b` | `w(b, a)` | an index on `b` alone does not serve the sort during the window; the plan header says so |
+   | `innerJoin E on x.b Y.k` | `w(x.b, x.a)` in the `ON` | |
+   | `selectSum`/`Max`/`Min` over `b` | `w(b, a)` | |
    | `unique index [b]`, `onConflict [b]` | **not rewritable** — a conflict target must be a real column | MIG008 stays; declare the unique index in the next version |
-   | constant default (`Default c` on a new column) | the literal `c` stands in for the missing value: `coalesce(b, c)` | no old column exists; the rewrite is against the constant |
+   | constant default (`Default c` on a new column) | `case when _tesl_v < g then c else b end` | no old column exists; the rewrite is against the constant, again by marker, not by `NULL` |
 
    Anything outside that table — a Go-computed column, an expression over several
    columns — is not SQL-expressible and is held to the rule that follows. The subset
@@ -1078,20 +1122,33 @@ describing each of them loosely enough to be wrong.
    expanded`, `min_version = 6` or `7`.
 4. Verify the recorded V7 snapshot hash matches this binary's embedded copy of
    `schema/V7.tesl`. Mismatch: refuse (someone edited history).
-5. **Retire V6** if `min_version = 6`: in one transaction take
-   `pg_advisory_xact_lock(fence(schema, 6))` exclusively with `lock_timeout`; held by
-   any in-flight V6 transaction → a V8 is booting while
-   V6 still runs, which the two-version rule forbids: **refuse** to start, naming the
-   count from `pg_locks`. Acquired → `min_version = 7`, commit, release. From this
-   point no V6 connection can ever be admitted.
-6. **Finish V7's migration**, now that nothing can re-null its columns: hand the
-   backfill leader (below) the *final* pass for every entity V7 migrated; when an
-   entity's final pass finds no row with `_tesl_v < 7`, run its contract steps — `add
-   constraint … check (col is not null) not valid`, `validate constraint`, `set not
-   null` for each V7-introduced column, drop the V6→V7 invalidation trigger, `drop
-   column` for the V6 columns V7 stopped using — each in its own short transaction
-   with `lock_timeout`. Record `(7, 'contracted')` when every entity is done. Boot
-   does not wait for this.
+5. **Retire V6 — but only once every V6-shaped row has been carried forward.** In one
+   transaction take `pg_advisory_xact_lock(fence(schema, 6))` exclusively with
+   `lock_timeout`; held by any in-flight **fenced** V6 transaction (a write, or the DDL
+   connection — reads hold no fence) → a V8 is booting while V6 still runs, which the
+   two-version rule forbids: **refuse** to start, naming the count from `pg_locks`.
+   Acquired — so no V6 write can start or be in flight — run V7's **final pass** for
+   every entity V7 migrated *while holding the fence*: every row still below the
+   entity's V7 target generation goes through the frozen V7 row function (the pass
+   itself runs in batched transactions on other connections; the fence only has to
+   keep V6 writers out, and it does). If **every** row is accepted: `min_version = 7`,
+   commit, release — from this point no V6 connection can ever be admitted, and the
+   final pass is *final* because nothing that could have re-marked a row was admitted
+   while it ran. If **any** row is `Reject`ed: **roll the retirement back** — the fence
+   is released, V6 stays admitted, nothing has changed — record the rejected rows
+   (entity, primary key, reason) in `tesl_schema_quarantine`, and **refuse to start**
+   with that list. The fourteenth review pass found the previous order — retire first,
+   finish later — could strand the database: V7 kept writing until the moment of
+   retirement, a row written after the dry-run could be one the frozen function
+   rejects, and once V6 was retired nothing admitted could repair it. Validating
+   before advancing `min_version` keeps the old version available for exactly that
+   repair.
+6. **Contract V7**, now that V7's migration is final: for every entity, run the
+   contract steps — `add constraint … check (col is not null) not valid`, `validate
+   constraint`, `set not null` for each V7-introduced column, the `CHECK` of each
+   `Revalidate`d column, drop the V6→V7 invalidation trigger, `drop column` for the V6
+   columns V7 stopped using — each in its own short transaction with `lock_timeout`.
+   Record `(7, 'contracted')` when every entity is done. Boot does not wait for this.
 7. **Expand V7→V8**, if not yet expanded: each statement in its own short transaction
    with `SET lock_timeout = '2s'` and bounded retries with backoff, because a
    metadata-only `ALTER TABLE` still needs `ACCESS EXCLUSIVE` for a moment and must
@@ -1183,8 +1240,29 @@ any moment, and everything an instance does at boot is safe to lose a race on.
   entity (`final_at`); V9's readiness and contract depend on it.
 - Monitoring: `--schema status` and an OTel gauge (`tesl_schema_backfill_rows_remaining`).
 
-**At V9 boot:** steps 5–6 above retire V7 and finish V8's migration (final pass, `NOT
-NULL`, trigger and column drops). Rollback V8 → V7 is possible until that moment;
+**At V9 boot:** steps 5–6 above finish V8's migration (final pass under V7's
+exclusive fence), retire V7 only if every row was accepted, then contract (`NOT NULL`,
+trigger and column drops).
+
+**When a row is rejected at retirement.** The database is left exactly as it was: V8
+expanded, V7 admitted, rollback to V7 possible. `--schema status` and the refusing V9
+boot both print the quarantine (entity, key, reason — the reason is the validator's,
+via `Attempt`). Three repair paths, none of which edits the frozen migration:
+
+- fix or delete the rows through the still-admitted V7 or V8 application (the ordinary
+  case: a handful of rows written during the window that violate a new rule);
+- commit a **repair amendment**, `migrations/notes/v8-repair.tesl`, declaring
+  `repairNote : NotesSchema.V7.Note -> Migrated NotesSchema.V8.Note`, which the final
+  pass applies **only to rows the frozen function rejects**. Its hash is recorded as a
+  separate, append-only amendment row (`(8, 'repair', hash)`); V8's own hash is
+  untouched, so every binary still agrees on what V8 means, and the amendment is part
+  of the history from then on;
+- `--schema quarantine Note --delete <keys>`, for rows that should not exist, with the
+  same acknowledgement discipline as `Offline`.
+
+A row function that *can* reject — syntactically: `Reject` or `Check.attempt` in its
+body — is labelled **MAY BLOCK RETIREMENT** in the plan header next to its
+`ROLL-WINDOW RISK`, so the reviewer knows the retirement may need a hand. Rollback V8 → V7 is possible until that moment;
 rollback V9 → V8 for the whole life of V9, because V8 is retired only at V10's boot
 and a V8 binary that starts before then passes the admission check. An operator who
 wants the rollback window to V7 closed earlier — and V7's trigger gone earlier — runs
@@ -1276,7 +1354,7 @@ index build.
 | `tesl_schema` state vs binary `V<n>` | Behaviour |
 |---|---|
 | no `tesl_schema` and no user tables | fresh database: create the `tesl_schema*` tables, the lease rows and the `tesl_admit` function, then everything at `V<n>`, record it, start (`tesl run` on an empty dev/CI database still just works) |
-| no `tesl_schema`, user tables present | refuse: a pre-versioning database; print `--schema adopt`, which verifies the live columns against the snapshot and records the version |
+| no control schema, user tables present | refuse: a pre-versioning database; print `--schema adopt`, which — in **one transaction** — creates the control schema, verifies every live table's columns against the schema module (refusing on any mismatch or on a pre-existing `_tesl_v`/`tesl_*` name), adds `_tesl_v smallint not null default <g>` to every entity table (metadata-only, PostgreSQL 11+), where `g` is the entity's generation in the module lineage the repo holds (1 for an entity with no migration history), writes the `tesl_schema_entities` rows and records `V<n> expanded, contracted`. All or nothing: a failure on the fifth table leaves the first four untouched |
 | `min_version > n` | refuse: this version has been **retired** (a later version booted, or an operator ran `--schema retire`); redeploy the current version |
 | `V<n>` expanded, `min_version ≤ n` | start; retire `V<n-2>` and finish `V<n-1>`'s migration if not yet done (steps 5–6) |
 | `V<n-1>` expanded, `min_version ≤ n-1` | **expand `V<n>` automatically**, then start |
@@ -1586,11 +1664,26 @@ runtime for what is proven. Concretely:
   - **write transactions** (`insert`, `update`, `upsert`, `delete` — a delete is a
     mutation): the two-statement fence of §6 invariant 1;
   - **read transactions**: no advisory lock, and an **ordering** that makes admission
-    sound: the transaction runs its query (or queries) **first**, then `select
-    tesl_admit(<program version>)` — one primary-key lookup on `tesl_schema` comparing
-    the **binary's schema version** with `min_version`, raising if retired — then
-    `COMMIT`, all pipelined in one round trip, and the runtime hands rows to the
-    handler **only after the admission statement has returned**. Why this order and
+    sound: the query runs **first**, then `select tesl_admit(<program version>)` — one
+    primary-key lookup on `tesl_schema_state` comparing the **binary's schema
+    version** with `min_version`, raising if retired — then `COMMIT`; the runtime hands
+    rows to the handler **only after `COMMIT` has succeeded** (not merely after the
+    admission statement returns: a transaction can still fail at commit, and a future
+    streaming API must not observe rows the transaction later discards). Three shapes,
+    all statically known to the compiler:
+    - a **single read** outside any `transaction { }`: wrapped as `BEGIN`, query,
+      admit, `COMMIT`, pipelined, one round trip, rows released after commit;
+    - a **statically pipelineable batch** — several reads with no data dependency,
+      which the emitter can send in one pipeline: `BEGIN`, queries, one admit, `COMMIT`;
+    - a **data-dependent read-only `transaction { }`**, where query B is built from
+      A's rows: A's rows *must* reach the handler code before B exists, so admission
+      runs **after every read statement** (each one holds its tables' locks from then
+      on) and the handler's *response* is released only after `COMMIT`. A retirement
+      between A and B is caught by B's admission and aborts the whole transaction,
+      whose response is then never sent; the handler's non-database effects inside a
+      `transaction` are the language's existing concern, not this feature's.
+    - transactions containing **writes** take the write fence first and need no read
+      admission. Why this order and
     not admit-then-query: under READ COMMITTED every statement has its own snapshot,
     so an admission taken *before* the query proves nothing about the state the query
     then reads — a retirement (and even a contract) could commit in between, since the
@@ -2117,7 +2210,7 @@ import NotesSchema.Migrate.V8Support exposing [insertOldNote]   # generated: Not
 test "V8 compat: a V7-shaped Note is readable through V8" {
   insertOldNote (NotesSchema.V7.Note { id: "n2", title: "t", content: "a b",
                                        authorId: "u2", legacyRank: 0, createdAt: 0 })
-  let notes = select note from Note where note.ownerId == "u2"   # the OR rewrite finds the V7 row
+  let notes = select note from Note where note.ownerId == "u2"   # the marker-aware rewrite finds the V7 row
   expect List.length notes == 1
   expect (List.head notes).wordCount == 2                        # lazy path ran migrateNote
 }
@@ -2152,17 +2245,19 @@ though no column moved:
 
 ```tesl
   entities: {
-    Note:    Migrate revalidateNote []      # gen 4 -> 5: the invariant changed, rows must prove it
+    Note:    Migrate revalidateNote [Revalidate wordCount NotesSchema.V9.checkWordCount]   # gen 4 -> 5
     …
   }
 
 fn revalidateNote(old: NotesSchema.V8.Note) -> Migrated NotesSchema.V9.Note =
-  case Check.attempt NotesSchema.V9.checkWordCount old.wordCount of   # old proof is V8's fact; V9 wants its own
-    Failed reason -> Reject "note {old.id}: {reason}"
+  case Check.attempt NotesSchema.V9.checkWordCount old.wordCount of   # the ONLY legal initialiser for a
+    Failed reason -> Reject "note {old.id}: {reason}"                  # Revalidate'd column (MIG018 otherwise)
     Passed words  -> Row (NotesSchema.V9.Note { id: old.id, title: old.title, content: old.content,
                                                   ownerId: old.ownerId, wordCount: words,
                                                   archivedAt: Nothing, createdAt: old.createdAt })
-# --schema dry-run lists every zero-word note before the deploy.
+# Same physical column, same value, new proof; CHECK installed at contract; ROLL-WINDOW RISK
+# while V8 can still write zero-word notes. --schema dry-run lists every such note before the
+# deploy — and because this function can Reject, the plan header also says MAY BLOCK RETIREMENT.
 ```
 
 That is the case the design would otherwise have missed: a stored invariant that
@@ -2171,17 +2266,43 @@ silently stopped being true because its check changed.
 ### What the V8 binary does at boot (SQL it runs, in order)
 
 ```sql
+-- the control schema, created once at the first bootstrap (or by --schema adopt), never by a version:
+create table if not exists notes_app.tesl_schema_state (       -- ONE row: the database's admission state
+  id            smallint primary key check (id = 1),
+  min_version   int not null,                                  -- oldest admitted schema version
+  current       int not null);                                 -- highest expanded version
+create table if not exists notes_app.tesl_schema_versions (    -- append-only lifecycle rows
+  version int not null, step text not null,                    -- step ∈ expanded | contracted | repair
+  snapshot_hash text, migration_hash text, applied_at timestamptz not null default now(),
+  primary key (version, step));
+create table if not exists notes_app.tesl_schema_entities (    -- per-entity generation + backfill state
+  entity text primary key, generation smallint not null, target_generation smallint not null,
+  last_pk text, rows_done bigint not null default 0, final_at timestamptz);
+create table if not exists notes_app.tesl_schema_leases (name text primary key, holder text, expires_at timestamptz);
+create table if not exists notes_app.tesl_schema_index (name text primary key, state text not null, attempts int not null default 0, error text);
+create table if not exists notes_app.tesl_schema_quarantine (entity text, pk text, reason text, seen_at timestamptz, primary key (entity, pk));
+create or replace function notes_app.tesl_admit(v int) returns boolean language plpgsql stable as $$
+declare m int;
+begin
+  select min_version into m from notes_app.tesl_schema_state where id = 1;   -- the one lookup
+  if m > v then raise exception 'tesl: schema version % is retired (min_version %)', v, m; end if;
+  return true;
+end $$;
+insert into notes_app.tesl_schema_state (id, min_version, current) values (1, $v, $v) on conflict do nothing;
+
 -- step 1: boot lease (compare-and-swap; the row exists from the first bootstrap)
 update notes_app.tesl_schema_leases set holder = $1, expires_at = now() + interval '30 s'
   where name = 'boot' and (holder is null or expires_at < now());
 
 -- step 3: state
-select version, step, snapshot_hash, migration_hash, min_version from notes_app.tesl_schema …;
+select min_version, current from notes_app.tesl_schema_state where id = 1;
+select version, step, snapshot_hash, migration_hash from notes_app.tesl_schema_versions order by version, step;
 
--- step 5: retire V6 (only if min_version = 6)
+-- step 5: retire V6 (only if min_version = 6), validating first
 begin;
-select pg_advisory_xact_lock(hashtext('notes_app:fence:6'));   -- waits for in-flight V6 writers
-update notes_app.tesl_schema set min_version = 7 where min_version = 6;
+select pg_advisory_xact_lock(hashtext('notes_app:fence:6'));   -- waits for in-flight fenced V6 transactions
+-- V7's final pass runs here, in batches on other connections; any Reject → rollback + quarantine + refuse
+update notes_app.tesl_schema_state set min_version = 7 where id = 1 and min_version = 6;   -- compare-and-set
 commit;
 
 -- step 7: expand V7 -> V8, one short transaction per statement, lock_timeout = 2s
@@ -2204,12 +2325,13 @@ end $$ language plpgsql;
 create trigger tesl_mig_notes_g4 before update on notes_app.notes
   for each row execute function notes_app.tesl_mig_notes_g4();
 
-insert into notes_app.tesl_schema (version, step, snapshot_hash, migration_hash)
-  values (8, 'expanded', $1, $2);                    -- unique (version, step)
+insert into notes_app.tesl_schema_versions (version, step, snapshot_hash, migration_hash)
+  values (8, 'expanded', $1, $2);                    -- primary key (version, step): a second expander gets a duplicate
+update notes_app.tesl_schema_state set current = 8 where id = 1 and current = 7;
 
 -- step 9b: the dedicated DDL connection
 select pg_advisory_lock_shared(hashtext('notes_app:fence:8'));   -- session-level, lives with the connection
-select min_version from notes_app.tesl_schema;                    -- separate statement
+select min_version from notes_app.tesl_schema_state where id = 1;   -- separate statement
 
 -- step 10: index builds, from the DDL connection, one builder per index (lease)
 create index concurrently if not exists notes_ownerId_createdAt_idx_v8
@@ -2227,13 +2349,13 @@ background.
 -- listNotes: a READ. No fence lock. The query runs FIRST (its ACCESS SHARE lock is then
 -- held to commit, so no contract DDL can interpose), admission on the PROGRAM VERSION (8)
 -- runs AFTER it with a newer-or-equal snapshot, and the runtime releases rows to the
--- handler only once the admission statement has returned. One pipelined round trip.
+-- handler only once COMMIT has succeeded. One pipelined round trip.
 -- `where note.ownerId == user` is rewritten because ownerId is a `Rename` of authorId:
 begin;
 select n."_tesl_v", n."id", n."title", n."content", n."authorId", n."ownerId",
        n."wordCount", n."createdAt"
   from notes_app.notes n
- where (n."ownerId" = $1 or (n."ownerId" is null and n."authorId" = $1))
+ where ((n."_tesl_v" >= 4 and n."ownerId" = $1) or (n."_tesl_v" < 4 and n."authorId" = $1))
  order by n."createdAt" desc;
 select notes_app.tesl_admit(8);          -- raises if min_version > 8 → transaction aborts, rows discarded
 commit;
@@ -2242,7 +2364,7 @@ commit;
 -- createNote: a WRITE. Two-statement fence, then the insert with the dual write and the stamp.
 begin;
 select pg_advisory_xact_lock_shared(hashtext('notes_app:fence:8'));
-select min_version from notes_app.tesl_schema;                    -- must be <= 8
+select min_version from notes_app.tesl_schema_state where id = 1;   -- must be <= 8
 insert into notes_app.notes ("id","title","content","ownerId","authorId","wordCount",
                              "createdAt","legacyRank","_tesl_v")
   values ($1,$2,$3,$4,$4,$5,$6, default, 4);
@@ -2251,7 +2373,7 @@ commit;
 -- updateContent: touches a SOURCE column → read-modify-write, identified at compile time.
 begin;
 select pg_advisory_xact_lock_shared(hashtext('notes_app:fence:8'));
-select min_version from notes_app.tesl_schema;
+select min_version from notes_app.tesl_schema_state where id = 1;
 select set_config('tesl.writer.notes', '4', true);               -- "I materialise gen 4"
 select … from notes_app.notes where "id" = $1 for update;         -- read (lazy-migrate in Go if _tesl_v < 4)
 update notes_app.notes
@@ -2300,11 +2422,13 @@ V9's boot runs, in this order:
 
 ```sql
 -- step 5: retire V7
-begin;  select pg_advisory_xact_lock(hashtext('notes_app:fence:7'));
-        update notes_app.tesl_schema set min_version = 8 where min_version = 7;  commit;
+begin;  select pg_advisory_xact_lock(hashtext('notes_app:fence:7'));      -- no V7 write can now start
+        -- final pass for Note runs here, in batches on other connections: `where _tesl_v = 3` …
+        -- every remaining row through the frozen migrateNote; a Reject → ROLLBACK, quarantine, refuse
+        update notes_app.tesl_schema_state set min_version = 8 where id = 1 and min_version = 7;
+commit;
 
--- step 6: finish V8's migration of Note (background, per entity)
---   final pass: `where _tesl_v = 3` … finds nothing (or finishes the stragglers), then:
+-- step 6: contract V8's migration of Note (background, per entity), now that it is final:
 alter table notes_app.notes add constraint notes_wordcount_nn check ("wordCount" is not null) not valid;
 alter table notes_app.notes validate constraint notes_wordcount_nn;                 -- share lock only
 alter table notes_app.notes alter column "wordCount" set not null;                  -- cheap: constraint proves it
@@ -2314,11 +2438,12 @@ drop trigger tesl_mig_notes_g4 on notes_app.notes;  drop function notes_app.tesl
 alter table notes_app.notes drop column "authorId";
 alter table notes_app.notes drop column "legacyRank";
 drop index concurrently if exists notes_app.notes_authorId_idx;                    -- DDL connection
-insert into notes_app.tesl_schema (version, step) values (8, 'contracted');
+insert into notes_app.tesl_schema_versions (version, step) values (8, 'contracted');
 
 -- step 7: expand V8 -> V9 — the `Additive` entry is one metadata-only statement
 alter table notes_app.notes add column if not exists "archivedAt" bigint;          -- Maybe → NULL
-insert into notes_app.tesl_schema (version, step, snapshot_hash, migration_hash) values (9, 'expanded', $1, $2);
+insert into notes_app.tesl_schema_versions (version, step, snapshot_hash, migration_hash) values (9, 'expanded', $1, $2);
+update notes_app.tesl_schema_state set current = 9 where id = 1 and current = 8;
 ```
 
 V9's readiness waits for `Note`'s final pass because `longNotes` uses `wordCount`
@@ -2518,7 +2643,7 @@ acknowledgement in source, never a quick fix).
 | MIG021 | compiler | a `Migrate` row function's type is not `From.E -> Migrated To.E` for its entity | the function reference | the two entity declarations | suggested: fix the signature |
 | MIG022 | compiler | a rule names a column of the wrong version/side, or a value/function of the wrong type | the rule | the column declarations | suggested: fix the rule (the message states the expected type) |
 | MIG023 | compiler | two rules govern the same column | the second rule | the first | suggested: remove one |
-| MIG024 | compiler | `Same` pairs declarations of different kinds or from the wrong modules | the `Same` | the two declarations | mechanical: regenerate |
+| MIG024 | compiler | `Same` pairs declarations of different kinds, from the wrong modules, or whose semantic closures differ (the message names the first differing check/helper/codec) | the `Same` | the two declarations and the differing node | mechanical: regenerate (which removes the `Same` and forces MIG016's re-validation path) |
 | MIG025 | compiler | a non-compat module imports a generated `…Support` module (`insertOld<E>`) | the import | the support module header | none: these helpers exist only for compatibility tests |
 | MIG019 | compiler | a `check`/`auth`/`establish` outside the declaring schema module mints a sealed (column) fact | the `ok … ::: F` | the fact's declaration | suggested: move the check into the schema module, or consume an existing check |
 | MIG017 | compiler | a renamed column is not initialised by the exact projection of its old name (`b: old.a`) | the field initialiser | the `Rename` rule | **suggested**: restore the projection, or replace `Rename` with a new column + row function — removing a transform changes meaning, so never silent |
@@ -2698,7 +2823,8 @@ requirements summary):**
 | Concern | Mechanism now |
 |---|---|
 | admission | two dimensions, never mixed: **program version** for admission, **entity generation** for rows. `tesl_schema.min_version`; **writes and deletes**: `pg_advisory_xact_lock_shared(fence(v))`, then a separate `select min_version` (READ COMMITTED); **reads**: query first, then `select tesl_admit(v)` in the same pipelined transaction, rows released only after it returns — the query's table lock and the later snapshot are the ordering guard, no advisory lock (§13); server-side trigger fence for writes under evaluation, and only with a separate program-version GUC |
-| retirement | one transaction: exclusive xact lock on the retiring version's fence, `min_version = v+1`; also waits for `pg_stat_progress_create_index` to be empty |
+| retirement | one transaction: exclusive xact lock on the retiring version's fence, **then the next version's final pass with every remaining row accepted**, then compare-and-set `min_version = v+1`; a `Reject` rolls the retirement back, quarantines the row, and the booting instance refuses — repair via the still-admitted versions, a `v<n>-repair.tesl` amendment, or acknowledged deletion; also waits for `pg_stat_progress_create_index` to be empty |
+| control schema | `tesl_schema_state` (one row: `min_version`, `current`), `tesl_schema_versions` (append-only `(version, step)`), `tesl_schema_entities` (generation + backfill state), leases, index state, quarantine; `tesl_admit(v)` reads the one state row |
 | nontransactional DDL | dedicated DDL connection (`ddlConnection`, a **trusted** direct/session-mode DSN) holding a session-level shared fence, opened at boot step 9b; or a single `--schema worker`; version-suffixed object names |
 | "not yet migrated" | permanent per-row `_tesl_v smallint` holding the **entity generation** (increments only on row-function migrations, so unchanged entities never need touching); atomic per entity; only inserts, backfill, read-modify-write may stamp; trigger only lowers |
 | V7 writes during the window | invalidation trigger, `least(old, target-1)` unless `tesl.writer >= target`; lives until the version is retired |
@@ -2712,7 +2838,7 @@ requirements summary):**
 | cross-version identity | generated `same { V9.T = V8.T }` block from equality of the **semantic closure** (checks, helpers, codecs, frozen stdlib, primitive tags), honoured inside the migration file only; a changed closure forces re-validation |
 | compatibility-check input | the frozen previous schema module only — complete-record inserts and whole-row selects make it a sound over-approximation of the previous program; no record of handler usage exists |
 | migration file | one folded record `Migration { from, to, same, entities: { E: Entity … } }` with the `Tesl.Migration` ADTs `Entity` (`Unchanged`/`Additive`/`Derived`/`Migrate`/`New`/`Drop`/`Reset`) and `Rule` (`Rename`/`Default`/`Legacy`/`LegacyWith`/`WriteBack`/`Offline`); no keywords |
-| row function | ordinary `fn (Old.E) -> Migrated New.E` (`Row`/`Reject`); checks applied via `Check.attempt` (Maybe-returning); pass-through and renamed columns must be exact projections (MIG018/MIG017); runner maps `Reject` to backfill stop / lazy 500 |
+| row function | ordinary `fn (Old.E) -> Migrated New.E` (`Row`/`Reject`); checks applied via the `Check.attempt` intrinsic (`Attempt`-returning, carrying the validator's reason); `Revalidate` for a same-column proof change; pass-through and renamed columns must be exact projections (MIG018/MIG017); runner maps `Reject` to backfill stop / lazy 500 |
 | sealed facts | a column fact may be minted only by checks in its declaring schema module (MIG019), so `same` and derived `CHECK`s see every minter |
 | compatibility tests | generated `…V<n>Compat` + `…V<n>Support` modules, self-contained, Memory-backed as unnamed tests, importing no application code; structural only, fixtures are the developer's |
 | versioning unit | hand-written `schema module NotesSchema.V<n>` (entities, facts, checks, codecs, pure helpers; nothing else, compiler-enforced); imported explicitly by the program; `database { schema: NotesSchema.V<n>, migrations: NotesSchema.Migrate }` — module references, no strings; one version per database (MIG015) |
@@ -2907,7 +3033,7 @@ The maintainer then asked for **records and ordinary functions instead of keywor
 and a twelfth review pass landed at the same time; the two were folded together. The
 migration file is now one `Migration { … }` record with `Tesl.Migration` ADTs
 (`Entity`, `Rule`, `Migrated`, `Same`), row functions are plain `fn`s returning
-`Row`/`Reject` with checks applied through a Maybe-returning `Check.attempt` (no
+`Row`/`Reject` with checks applied through an `Attempt`-returning `Check.attempt` (no
 `check` extension, no proofless `ok`, no ignored HTTP status), pass-through and
 renamed columns are exact projections (no injected fields), pure renames and constant
 defaults have entries (`Derived`, `Additive [Default …]`), column facts are **sealed**
@@ -2930,6 +3056,27 @@ boundary (`schemaTest`, test-only, MIG025); `Derived`'s description, the phase-2
 and the acceptance criterion were aligned; and "Open questions: none" was replaced by
 the four items genuinely still open.
 
+A **fourteenth pass** found two blockers and eight gaps. A same-column proof change had
+no legal source form (the revalidation example violated the exact-projection rule) — a
+`Revalidate f check` rule now permits exactly one initialiser shape, with no shadow
+column, a generation bump, a contract-time `CHECK` and a `ROLL-WINDOW RISK` label, and
+same-named type changes are explicitly a new column + `Drop`. Retiring before
+finishing could strand rows a frozen function rejects — retirement now runs the final
+pass **under the exclusive fence first** and advances `min_version` only if every row
+is accepted, otherwise rolls back, quarantines, and refuses, with three repair paths
+(the admitted versions, an append-only `v<n>-repair.tesl` amendment, acknowledged
+deletion) and a `MAY BLOCK RETIREMENT` plan label for rejecting functions. Also: the
+control schema is now explicit DDL (`tesl_schema_state` singleton, append-only
+`tesl_schema_versions`, per-entity state, leases, index state, quarantine, `tesl_admit`);
+`--schema adopt` adds `_tesl_v` transactionally with lineage-derived generations;
+`Same` is verified by semantic-closure hash, never asserted; renamed-column rewrites
+select by generation marker, not by `NULL`, so nullable renames are correct; read
+admission is specified for single, batched and data-dependent transactions with rows
+released after `COMMIT`; `Check.attempt` is restricted to identity-preserving checks in
+v1; compatibility tests cover both directions via `readOld<E>`; and the stale
+`_tesl_v < 7`, "every transaction", "check function" and "Maybe-returning" phrases are
+gone.
+
 The title was softened from "by construction" to "rolling deploys" in the same pass:
 the `ONLINE` class is zero-downtime under the stated protocol, and the two
 `ROLL-WINDOW RISK` cases and the `OFFLINE` class are named rather than claimed away.
@@ -2944,7 +3091,7 @@ the `ONLINE` class is zero-downtime under the stated protocol, and the two
    pre-check in `dry-run`. Every non-additive diff is a `todo`; `OFFLINE` changes get the
    MIG-series error with the procedure. **Tooling cut for phase 1:** MIG001, MIG002,
    the additive part of MIG004, MIG007 classification, MIG008, MIG011, MIG012, MIG013,
-   MIG014, MIG015, MIG016 for `Additive`/`Unchanged`; the non-mutating manifest API, the versioned diagnostic protocol, the
+   MIG014, MIG015, MIG016 for `Additive`/`Unchanged`, MIG020, MIG024; the non-mutating manifest API, the versioned diagnostic protocol, the
    `tesl.generateMigration` command with preview and versioned apply, cross-file
    diagnostics, the unsaved-buffer policy. "Every non-additive diff is a `todo`" in
    phase 1 means the generator emits a rejected placeholder for it; the functional
@@ -3066,8 +3213,16 @@ should not start until they are closed.
   diff, `unchanged` entries and the plan header correct; every non-additive diff
   produces a placeholder entry the compiler rejects with a phase-1 diagnostic naming
   the change — the typed-hole *workflow* (MIG003 contents, skeleton actions) is phase 2.
-- (Phase 2) the generated compatibility test and the two-version Memory-backend test
-  pass for every row in the decomposition table.
+- (Phase 2) the generated compatibility tests, both directions (`insertOld`/`readOld`),
+  pass for every row in the decomposition table, including nullable-rename cases:
+  equality with `Nothing`, equality with `Something x`, `isNull`/`isNotNull`, grouping,
+  ordering, joins and aggregates on a renamed `Maybe` column.
+- (Phase 2) the deliberately failing production row: `--schema dry-run` passes; an old
+  binary then inserts a row the frozen row function rejects; the next version boots
+  and attempts retirement. Required outcome: retirement rolls back, the row appears in
+  `--schema status` with the validator's reason, the old version stays admitted, and
+  the system is repaired by one of the three documented paths without editing the
+  applied migration or running raw SQL — then retirement succeeds on the next boot.
 - Concurrent boot of ten instances against an empty database, a V7 database and a
   half-expanded database: exactly one expander, no duplicate state rows, nobody ready
   early.

@@ -99,6 +99,9 @@ has a regression test.
 ### Process
 - CI fails when `compiler/lib/go_runtime/embedded/embedded_go_runtime.ml` is stale; a seam test compares the
   embedded runtime to `runtime/go/teslrt` byte for byte and checks every file is embedded.
+- Fuzz gates run through `scripts/go-fuzz-target.sh`, which retries only the Go fuzz engine's
+  own `-fuzztime` deadline race ("context deadline exceeded" with no crasher written; twice
+  on the 4-core runner). A real finding still fails the first run.
 - The embedded Go runtime is a dune virtual library (`compiler/lib/go_runtime`): the CLI and
   tests link the snapshot by default, the browser playground links the empty implementation.
   #82 had pushed the playground bundle from 1.13 MB to 2.37 MB (its ceiling is 2 MB).

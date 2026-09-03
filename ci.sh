@@ -643,11 +643,15 @@ if [ "$go_gate_fail" -eq 0 ]; then
       fi
       go test -count=1 ./... &&
       go test -race -count=1 ./... &&
-      go test ./teslrt -run '^$' -fuzz '^FuzzIntDecimalAndJSONRoundTrip$' -fuzztime="${TESL_GO_FUZZTIME:-3s}" &&
-      go test ./teslrt -run '^$' -fuzz '^FuzzIntArithmeticAgainstBig$' -fuzztime="${TESL_GO_FUZZTIME:-3s}" &&
-      go test ./teslrt -run '^$' -fuzz '^FuzzIntJSONInput$' -fuzztime="${TESL_GO_FUZZTIME:-3s}" &&
-      go test ./internal/protocol -run '^$' -fuzz '^FuzzReaderAcceptsWriterFrames$' -fuzztime="${TESL_GO_FUZZTIME:-3s}" &&
-      go test ./internal/protocol -run '^$' -fuzz '^FuzzUTF16PositionsNeverPanic$' -fuzztime="${TESL_GO_FUZZTIME:-3s}" &&
+      # Fuzz targets go through scripts/go-fuzz-target.sh: it retries ONLY the Go fuzz
+      # engine's own -fuzztime deadline race ("context deadline exceeded", no crasher
+      # written); a real finding still fails on the first run.  TESL_GO_FUZZTIME sets
+      # the budget per target (default 3s).
+      bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./teslrt FuzzIntDecimalAndJSONRoundTrip &&
+      bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./teslrt FuzzIntArithmeticAgainstBig &&
+      bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./teslrt FuzzIntJSONInput &&
+      bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./internal/protocol FuzzReaderAcceptsWriterFrames &&
+      bash "$SCRIPT_DIR/scripts/go-fuzz-target.sh" ./internal/protocol FuzzUTF16PositionsNeverPanic &&
       go vet ./... &&
       CGO_ENABLED=0 go build ./... &&
       staticcheck ./... &&
