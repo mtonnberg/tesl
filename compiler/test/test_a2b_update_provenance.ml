@@ -93,8 +93,8 @@ let should_pass label src =
 (* Header: `dbRead`/`dbWrite` so the write's capability requirement is satisfied
    and only the FromDb-WHERE diagnostic can fire. *)
 let hdr name = Printf.sprintf {|module %s exposing []
-import Tesl.Prelude exposing [String, Bool(..)]
-import Tesl.DB exposing [dbRead, dbWrite, DeleteResult(..)]
+import Tesl.Prelude exposing [String, Bool(..), Int]
+import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Maybe exposing [Maybe(..)]
 entity Todo table "todos" primaryKey id {
   id: String
@@ -207,21 +207,21 @@ fn get(id: String, owner: String, flag: Bool) -> Todo ? FromDb (Id == id)
 
 (* deleteAndReturnResult wrong-column (single-line, WHERE fused into the spine) *)
 let neg_delete_wrong_col = hdr "DelWrongCol" ^ {|
-fn del(id: String, owner: String) -> DeleteResult ? FromDb (Id == id)
+fn del(id: String, owner: String) -> Int ? FromDb (Id == id)
   requires [dbRead, dbWrite] =
   deleteAndReturnResult t from Todo where t.ownerId == owner
 |}
 
 (* where-less deleteAndReturnResult *)
 let neg_delete_no_where = hdr "DelNoWhere" ^ {|
-fn del(id: String) -> DeleteResult ? FromDb (Id == id)
+fn del(id: String) -> Int ? FromDb (Id == id)
   requires [dbRead, dbWrite] =
   deleteAndReturnResult t from Todo
 |}
 
 (* `||` in a deleteAndReturnResult WHERE *)
 let neg_delete_or = hdr "DelOr" ^ {|
-fn del(id: String, owner: String) -> DeleteResult ? FromDb (Id == id)
+fn del(id: String, owner: String) -> Int ? FromDb (Id == id)
   requires [dbRead, dbWrite] =
   deleteAndReturnResult t from Todo where t.id == id || t.ownerId == owner
 |}
@@ -249,7 +249,7 @@ fn complete(id: String, n: String) -> Todo ? FromDb (Id == id)
 
 (* correct-column deleteAndReturnResult *)
 let pos_delete = hdr "PosDel" ^ {|
-fn del(id: String) -> DeleteResult ? FromDb (Id == id)
+fn del(id: String) -> Int ? FromDb (Id == id)
   requires [dbRead, dbWrite] =
   deleteAndReturnResult t from Todo where t.id == id
 |}

@@ -134,6 +134,9 @@
           meta.description = "Tesl Go LSP, DAP, headless debugger, and MCP tools";
         };
 
+        # DAST tools are part of the shipped workflow, not runtime downloads.
+        dastTools = [ pkgs.zap pkgs.nuclei ];
+
         # ── GNU userland pinned into the wrappers' PATH ────────────────────────
         # #46: on macOS the BSD variants of these tools are what a fresh
         # `nix profile install` finds on PATH, and the CLI expects GNU semantics.
@@ -161,6 +164,8 @@
           export TESL_DEBUG_ATTACH_BIN="${tesl-go-tools}/bin/tesl-debug-attach"
           export TESL_DEBUG_INSPECT_BIN="${tesl-go-tools}/bin/tesl-debug-inspect"
           export TESL_GO="${pkgs.go}/bin/go"
+          export TESL_ZAP="${pkgs.zap}/bin/zap"
+          export TESL_NUCLEI="${pkgs.nuclei}/bin/nuclei"
           export PATH="${gnuUserland}:$PATH"
         '';
 
@@ -181,6 +186,8 @@
            export TESL_DEBUG_ATTACH_BIN="''${TESL_DEBUG_ATTACH_BIN:-${tesl-go-tools}/bin/tesl-debug-attach}"
            export TESL_DEBUG_INSPECT_BIN="''${TESL_DEBUG_INSPECT_BIN:-${tesl-go-tools}/bin/tesl-debug-inspect}"
            export TESL_GO="''${TESL_GO:-${pkgs.go}/bin/go}"
+           export TESL_ZAP="''${TESL_ZAP:-${pkgs.zap}/bin/zap}"
+           export TESL_NUCLEI="''${TESL_NUCLEI:-${pkgs.nuclei}/bin/nuclei}"
            export PATH="${gnuUserland}:$PATH"
         '' + cliBody);
 
@@ -217,7 +224,7 @@
         # ── Combined default: CLI + LSP + MCP in one profile install ───────────
         tesl-full = pkgs.symlinkJoin {
           name = "tesl";
-          paths = [ tesl-go-cli tesl-compiler tesl-lsp tesl-mcp tesl-debug-tools ];
+          paths = [ tesl-go-cli tesl-compiler tesl-lsp tesl-mcp tesl-debug-tools ] ++ dastTools;
         };
 
       in {
@@ -266,7 +273,7 @@
             # Integration test mock servers
             mailhog   # SMTP mock for email integration tests (MailHog binary in PATH as MailHog)
             python3   # HTTP mock server for httpclient integration tests
-          ];
+          ] ++ dastTools;
 
           shellHook = ''
             # `${toString ./.}` is an immutable Nix-store source during `nix develop`,

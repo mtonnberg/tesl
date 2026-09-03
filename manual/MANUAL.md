@@ -25,6 +25,7 @@ Everything else in this manual is reference you reach *after* that:
 | Write idiomatic Tesl | `tesl help manual best-practices` | [best-practices.md](best-practices.md) |
 | Look up exact syntax | `tesl help manual language-spec` | [LANGUAGE-SPEC.md](../LANGUAGE-SPEC.md) |
 | Add third-party login (SSO) | `tesl help manual sso` | [sso.md](sso.md) |
+| Export OpenAPI and run DAST | `tesl help manual openapi-dast` | [openapi-dast.md](openapi-dast.md) |
 | Get unstuck | `tesl explain <CODE>`, then `tesl help manual faq` | [FAQ.md](FAQ.md) |
 | Drive Tesl from an AI coding agent | — | [AGENTS.md](../AGENTS.md) |
 
@@ -82,6 +83,7 @@ also accepts are shown in parentheses.
 | `faq` | — | Common questions and "why did I get this error?" |
 | `anchors` | — | The stable manual anchor/ID scheme (this is what error messages cite) |
 | `deploy` | — | Deploying a Tesl web API: `tesl build`, the Docker image, database flavours |
+| `openapi-dast` | — | Export a checked server as OpenAPI 3.1 and feed it to DAST tooling |
 | `tesl-manifest` | `manifest` | The `tesl.toml` project manifest schema (read by `tesl build` / `tesl db`) |
 | `dev` | — | Pointers into the contributor docs |
 
@@ -164,6 +166,8 @@ If you are writing tooling that deep-links into the manual, read that page first
 - **[FAQ](FAQ.md)** — troubleshooting and common questions
 - **[Deploying a Tesl web API](deploy.md)** — `tesl build`, the Docker image, and database flavours
   (also `tesl help manual deploy`)
+- **[OpenAPI and DAST](openapi-dast.md)** — generate a server-specific OpenAPI 3.1 artifact and
+  use it as input to a staging DAST scan (also `tesl help manual openapi-dast`)
 - **[`tesl.toml` project manifest](tesl-manifest.md)** — the manifest schema read by `tesl build` /
   `tesl db` and written by `tesl init` (also `tesl help manual tesl-manifest`)
 

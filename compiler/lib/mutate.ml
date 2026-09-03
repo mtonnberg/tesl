@@ -347,9 +347,12 @@ let rec expr_touches_infra ~pg e =
   | EFail { message; _ }           -> expr_touches_infra ~pg message
   | ETelemetry { fields; _ }       -> List.exists (fun (_, v) -> expr_touches_infra ~pg v) fields
   | EField { obj; _ }              -> expr_touches_infra ~pg obj
-  | EConstructor { args; _ }       -> List.exists (expr_touches_infra ~pg) args
-  | ELambda { body; _ }            -> expr_touches_infra ~pg body
-  | ELit _ | EVar _                -> false
+   | EConstructor { args; _ }       -> List.exists (expr_touches_infra ~pg) args
+   | ELambda { body; _ }            -> expr_touches_infra ~pg body
+   | ESqlQuery { query; _ }          ->
+     Ast_visitor.fold_sql_query
+       (fun found child -> found || expr_touches_infra ~pg child) false query
+   | ELit _ | EVar _                -> false
 
 (** [true] when a [test_stmt] (recursively) touches external infrastructure. *)
 let rec stmt_touches_infra ~pg = function

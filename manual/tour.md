@@ -105,6 +105,8 @@ surface. Today that mainly means:
 - `tesl generate ts file.tesl` for a TypeScript client that uses Zod
 - `tesl generate elm file.tesl` for an Elm client that preserves proof-carrying values with
   `mtonnberg/refinement-proofs`
+- `tesl generate-openapi file.tesl AppServer --output openapi.json` for an OpenAPI 3.1 document
+  that DAST tools can import
 
 The point is not just convenience. Tesl already knows the request and response shapes, the codecs
 that cross the HTTP boundary, which facts are simple enough to mirror on the client, and which facts
@@ -114,6 +116,12 @@ drifting into a hand-maintained second definition.
 Because the API layer, database JSONB layer, and generated clients all lean on the same declared
 codecs and type shapes, Tesl can reuse one wire-format story across the stack instead of maintaining
 separate ad hoc schemas for each consumer.
+
+The OpenAPI export is the interoperability path for security tooling rather than a second API
+definition. Generate it after `tesl --check`, select the exact `server` being deployed, and give
+the resulting file to a staging DAST scan. Proofs remain enforced by Tesl; OpenAPI carries them as
+descriptions and `x-tesl-proof` metadata so a scanner and a reviewer can see the declared intent.
+See [OpenAPI and DAST](openapi-dast.md).
 
 > Note: the generated TypeScript and Elm clients, along with the frontend-facing IR they depend on,
 > are still experimental in the current beta and may change aggressively — names and emitted helper
@@ -750,7 +758,23 @@ fn completeSignup(plan: String) -> String requires [] =
   "welcome"
 ```
 
-Traces need even less from you: an inbound `traceparent` header is picked up with no configuration,
+Telemetry setup belongs in the `App` record rather than startup plumbing:
+
+```tesl
+App {
+  database: MainDatabase
+  api: AppServer
+  port: 8080
+  telemetry: TelemetryConfig {
+    service: "orders"
+    endpoint: "in-memory"
+    console: True
+  }
+}
+```
+
+`initTelemetry` remains available for older programs, but new applications should use
+`TelemetryConfig`. Traces need even less from you: an inbound `traceparent` header is picked up with no configuration,
 so every log line is joinable to the caller's trace and every outbound call continues it. Add
 `traces True` (plus an optional `traceRatio`) to `initTelemetry` and you also get a per-request span
 tree — one span per SQL statement, outbound call, queue job, LLM call and agent tool — which is the

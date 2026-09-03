@@ -207,7 +207,8 @@ tesl_bsd() {
   local dir="$1"; shift
   ( cd "$dir" && PATH="$BSD_PATH" REAL_PATH="$REAL_PATH" \
       TESL_REPO_ROOT="$REPO_ROOT" TESL_OCAML_COMPILER="$MAIN_EXE" \
-      TESL_NO_DB_AUTOSTART=1 \
+      TESL_NO_DB_AUTOSTART=1 TESL_ZAP="${TESL_ZAP:-}" \
+      FAKE_PLAN="${FAKE_PLAN:-}" TEST_TOKEN="${TEST_TOKEN:-}" \
       bash "$BODY" "$@" 2>&1 )
 }
 
@@ -253,6 +254,24 @@ test "quad 3 == 12" {
 }
 EOF
 
+# Fake scanner for the DAST CLI contract. It records the generated automation
+# plan without making network requests or requiring ZAP in this portability test.
+FAKE_PLAN="$WORK/fake-zap-plan.yaml"
+cat > "$WORK/fake-zap" <<'EOF'
+#!/usr/bin/env bash
+plan=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -autorun) plan="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ -n "$plan" ] || exit 2
+cp "$plan" "$FAKE_PLAN"
+EOF
+chmod +x "$WORK/fake-zap"
+printf '%s\n' '{"openapi":"3.1.0"}' > "$WORK/openapi.json"
+
 # 1) Go emission (this is the exact path that died with `: No such file or directory`)
 out="$(tesl_bsd "$PROJ" emit go main.tesl)"; rc=$?
 if [ "$rc" -eq 0 ] && [ -f "$PROJ/.tesl-stuff/go-build/go.mod" ]; then
@@ -291,6 +310,28 @@ if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "ok"; then
   pass "bare 'tesl test' runs the entrypoint's Go test blocks"
 else
   fail "bare 'tesl test' failed (rc=$rc): $out"
+fi
+
+# 5) `tesl dast` emits a scanner plan without serializing auth secrets.
+out="$(TESL_ZAP="$WORK/fake-zap" FAKE_PLAN="$FAKE_PLAN" TEST_TOKEN='Bearer secret' \
+  tesl_bsd "$PROJ" dast http://localhost:8099 --spec "$WORK/openapi.json" \
+  --authorization-env TEST_TOKEN)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -f "$FAKE_PLAN" ] \
+   && grep -q 'type: openapi' "$FAKE_PLAN" \
+   && grep -q '\${TEST_TOKEN}' "$FAKE_PLAN" \
+   && ! grep -q 'Bearer secret' "$FAKE_PLAN"; then
+  pass "tesl dast builds a ZAP plan without leaking authorization secrets"
+else
+  fail "tesl dast plan generation failed or leaked a secret (rc=$rc): $out"
+fi
+
+# Active scans against remote targets require an explicit second opt-in.
+out="$(TESL_ZAP="$WORK/fake-zap" FAKE_PLAN="$FAKE_PLAN" \
+  tesl_bsd "$PROJ" dast https://staging.example.test --spec "$WORK/openapi.json" --active)"; rc=$?
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q "requires --allow-remote"; then
+  pass "tesl dast protects remote targets from accidental active scans"
+else
+  fail "tesl dast remote active-scan guard failed (rc=$rc): $out"
 fi
 
 # 5) `tesl build` with [deploy].target = "local" must NOT need Docker (#46.3)

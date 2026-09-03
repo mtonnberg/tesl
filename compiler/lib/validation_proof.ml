@@ -666,8 +666,11 @@ let rec check_expr_call_proofs
                     List.iter (function ILiteral _ -> () | IExpr e -> visit e) segments
                   | ELit _ | EVar _ | EStartWorkers _ -> ()
                  | ECacheGet _ | ECacheDelete _ | ECacheInvalidate _ -> ()
-                 | ECacheSet { value; _ } -> visit value
-                 | ESendEmail _ | EStartEmailWorker _ -> ()
+                  | ECacheSet { value; _ } -> visit value
+                  | ESendEmail _ | EStartEmailWorker _ -> ()
+                  | ESqlQuery { query; _ } ->
+                    Ast_visitor.fold_sql_query
+                      (fun () child -> visit child) () query
                in
                visit body;
                let non_call_errors =
@@ -755,8 +758,11 @@ let rec check_expr_call_proofs
             List.iter (function ILiteral _ -> () | IExpr e -> visit e) segments
           | ELit _ | EVar _ | EStartWorkers _ -> ()
           | ECacheGet _ | ECacheDelete _ | ECacheInvalidate _ -> ()
-          | ECacheSet { value; _ } -> visit value
-          | ESendEmail _ | EStartEmailWorker _ -> ()
+           | ECacheSet { value; _ } -> visit value
+           | ESendEmail _ | EStartEmailWorker _ -> ()
+           | ESqlQuery { query; _ } ->
+             Ast_visitor.fold_sql_query
+               (fun () child -> visit child) () query
         in
         visit body;
         let non_call_errors =
@@ -1820,9 +1826,11 @@ pass a `check` function or a `&&` combination of check functions"
        walk key; walk value; Option.iter walk ttl
      | ECacheDelete { key; _ } -> walk key
      | ECacheInvalidate { prefix; _ } -> walk prefix
-     | ESendEmail { to_; subject; body; _ } ->
-       walk to_; walk subject; walk body
-     | EStartEmailWorker _ -> ())
+      | ESendEmail { to_; subject; body; _ } ->
+        walk to_; walk subject; walk body
+      | EStartEmailWorker _ -> ()
+      | ESqlQuery { query; _ } ->
+        Ast_visitor.fold_sql_query (fun () child -> walk child) () query)
   in
   List.iter (function
     | DFunc fd -> walk fd.body
@@ -1836,8 +1844,9 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
   (* Detect if an expression is a SQL select (which carries FromDb proofs). *)
   let rec is_sql_select e =
     match e with
+    | ESqlQuery { query = QuerySelect _; _ } -> true
     | EApp { fn; _ } -> (match fn with
-      | EVar { name = ("select" | "selectOne" | "selectMany" | "selectCount" | "selectSum" | "selectMin" | "selectMax"); _ } -> true
+      | EVar { name = ("select" | "selectOne" | "selectMany" | "selectCount" | "selectSum" | "selectMin" | "selectMax" | "selectCountBy" | "selectSumBy"); _ } -> true
       | _ -> is_sql_select fn)
     | EBinop { left; right; _ } -> is_sql_select left || is_sql_select right
     | _ -> false
@@ -2330,7 +2339,7 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
        produced by filterCheck/allCheck/select, never on a record field.  Hence
        `w.items` at a `ForAll`-return position is always an unproven smuggle;
        reject it, mirroring the bare-var and list-literal cases above. *)
-    | EField { field; loc; _ } ->
+     | EField { field; loc; _ } ->
       (match expected with
        | Some wanted ->
          let required_preds = proof_predicates wanted in
@@ -2346,7 +2355,25 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
                 carries no per-element proof, so every element is unproven"
                field (String.concat ", " required_preds))
            :: !errors
-       | None -> ())
+        | None -> ())
+     | ESqlQuery { query = (QuerySelect _ as query); loc } ->
+       let required_preds = match expected with
+         | Some wanted -> proof_predicates wanted
+         | None -> []
+       in
+       let non_fromdb = List.filter (fun p -> p <> "FromDb") required_preds in
+       if non_fromdb <> [] then
+         errors := make_error loc
+           ~hint:(Printf.sprintf
+             "add `List.filterCheck <checkFn>` after the select to verify each element satisfies [%s]"
+             (String.concat ", " non_fromdb))
+           (Printf.sprintf
+             "SQL select only establishes `FromDb`; return type requires `ForAll [%s]` — add a `List.filterCheck` call"
+             (String.concat ", " required_preds))
+           :: !errors;
+       Ast_visitor.fold_sql_query (fun () child -> walk forall_env None child) () query
+     | ESqlQuery { query; _ } ->
+       Ast_visitor.fold_sql_query (fun () child -> walk forall_env None child) () query
     (* S9: enumerate the remaining variants explicitly (no `_`) so adding a new
        Ast.expr variant becomes a COMPILE error here rather than silently
        escaping this ForAll-consistency walk.  None of these are ForAll-producing
@@ -2359,7 +2386,7 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
     | ELit _ | EConstructor _ | EStartWorkers _ | EServe _
     | EBinop _ | EUnop _ | ERecord _ | ETelemetry _ | EOk _ | EEnqueue _
     | EPublish _ | ELambda _ | ECacheGet _ | ECacheSet _ | ECacheDelete _
-    | ECacheInvalidate _ | ESendEmail _ | EStartEmailWorker _ -> ()
+     | ECacheInvalidate _ | ESendEmail _ | EStartEmailWorker _ -> ()
   in
   (* A `ForAll (P1 && P2) xs` proof annotation is stored as
      `PredApp { pred="ForAll"; args=["(P1 && P2)"; "xs"] }` — the inner
@@ -2688,11 +2715,15 @@ let rec invalid_packed_value_computation funcs expr =
     || invalid_packed_value_computation funcs value
     || invalid_option ttl
   | ECacheInvalidate { prefix; _ } -> invalid_packed_value_computation funcs prefix
-  | ESendEmail { to_; subject; body; _ } ->
-    invalid_packed_value_computation funcs to_
-    || invalid_packed_value_computation funcs subject
-    || invalid_packed_value_computation funcs body
-  | ELit _ | EVar _ | EStartWorkers _ | EStartEmailWorker _ -> false
+   | ESendEmail { to_; subject; body; _ } ->
+     invalid_packed_value_computation funcs to_
+     || invalid_packed_value_computation funcs subject
+     || invalid_packed_value_computation funcs body
+   | ESqlQuery { query; _ } ->
+     Ast_visitor.fold_sql_query
+       (fun invalid child -> invalid || invalid_packed_value_computation funcs child)
+       false query
+   | ELit _ | EVar _ | EStartWorkers _ | EStartEmailWorker _ -> false
 
 let rec exact_exists_pack_shape funcs spec env expr =
   match expr with
@@ -3044,8 +3075,11 @@ let check_existential_proof_enforcement ?(extra_funcs = []) (decls : top_decl li
                          "existential pack body carries proof(s) `%s` but must carry the proof \
                           `%s` declared in the return spec"
                          (String.concat ", " carried) (pp_proof declared_proof)) ]
-                else if looks_proof_carrying funcs value then []
-                else
+                 else if looks_proof_carrying funcs value then []
+                 else if is_fromdb_family
+                         && return_value_flows_from_db_site
+                              ~shadowed:user_fn_names value then []
+                 else
                   [ make_error loc ~hint
                       (Printf.sprintf
                          "existential pack returns the raw local `%s`; the packed value must \
@@ -3553,6 +3587,9 @@ if every guard fails at runtime, the case has no match"
     recurse key @ recurse value @ (match ttl with Some e -> recurse e | None -> [])
   | ECacheDelete { key; _ } -> recurse key
   | ECacheInvalidate { prefix; _ } -> recurse prefix
-  | ESendEmail { to_; subject; body; _ } ->
-    recurse to_ @ recurse subject @ recurse body
-  | EStartEmailWorker _ -> []
+   | ESendEmail { to_; subject; body; _ } ->
+     recurse to_ @ recurse subject @ recurse body
+   | ESqlQuery { query; _ } ->
+     Ast_visitor.fold_sql_query
+       (fun errors child -> errors @ recurse child) [] query
+   | EStartEmailWorker _ -> []

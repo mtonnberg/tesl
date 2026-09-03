@@ -64,7 +64,7 @@ tie-breakers the spec appeals to.
 - Trusted proof introduction should happen at clear, auditable boundaries.
 - The language should be intentionally opinionated: one obvious style, enforced by a built-in linter/formatter.
 - Ordinary side effects should be capability-governed. Telemetry is the deliberate ambient exception.
-- Observability should follow OpenTelemetry semantic conventions (OpenTelemetry-shaped). A native OTLP exporter is implemented: when `initTelemetry` is given a real `endpoint` URL, telemetry is exported over OTLP/HTTP+JSON to `<endpoint>/v1/logs` (Logs signal, `dsl/otel.rkt`) and `<endpoint>/v1/metrics` (Metrics signal, `dsl/metrics.rkt`) and — with `traces True` — `<endpoint>/v1/traces` (Traces signal, `dsl/traces.rkt`); with no endpoint it emits structured JSON locally. W3C trace-context propagation is unconditional, so logs are joinable to a caller's trace even with span export off. The protobuf/gRPC transport is a non-goal, as is any user-facing span API.
+- Observability should follow OpenTelemetry semantic conventions (OpenTelemetry-shaped). Telemetry is configured declaratively through the `TelemetryConfig` field of `App`; the legacy `initTelemetry` startup form remains accepted for existing programs. With a real `endpoint` URL, telemetry is exported over OTLP/HTTP+JSON to `<endpoint>/v1/logs` (Logs signal, `dsl/otel.rkt`) and `<endpoint>/v1/metrics` (Metrics signal, `dsl/metrics.rkt`) and — with `traces True` — `<endpoint>/v1/traces` (Traces signal, `dsl/traces.rkt`); with no endpoint it emits structured JSON locally. W3C trace-context propagation is unconditional, so logs are joinable to a caller's trace even with span export off. The protobuf/gRPC transport is a non-goal, as is any user-facing span API.
 
 The language is in active development; breaking changes carry **no** backward-compatibility burden.
 We keep the language as tight and small as possible. Earlier architectural notes may use older
@@ -176,6 +176,29 @@ The intended model is:
 - Tesl telemetry is OpenTelemetry-shaped (follows OpenTelemetry semantic conventions); a native OTLP exporter is implemented (`dsl/otel.rkt`): with a configured `endpoint` it exports over OTLP/HTTP+JSON (Logs signal), and with no endpoint it emits structured JSON locally (see the Export paragraph below);
 - telemetry is ambient and does not require an explicit capability in ordinary code;
 - this exception exists because observability is considered part of the platform foundation rather than an arbitrary user-defined effect.
+
+**Declarative setup.** An application normally configures telemetry in its returned `App` record:
+
+```tesl
+import Tesl.Telemetry exposing [TelemetryConfig]
+
+main() -> App requires [appService] =
+  App {
+    database: MainDatabase
+    api: AppServer
+    port: 8080
+    telemetry: TelemetryConfig {
+      service: "orders"
+      endpoint: "in-memory"
+      console: True
+    }
+  }
+```
+
+`service`, `endpoint`, and `console` are required fields. `metrics` and `metricsInterval` are
+optional overrides. `endpoint "in-memory"` (or an empty endpoint) keeps export local. `initTelemetry`
+is a compatibility form for older programs; new code should use the record field so configuration
+is checked like the other `App` fields.
 
 **Export.** When `initTelemetry` is given a real `endpoint` URL, events are exported to it over OTLP/HTTP+JSON (Logs signal): each event becomes a log record (message → `body`, `timestampMs` → `timeUnixNano`, `service` → the `service.name` resource attribute, attributes → OTLP `KeyValue`s), POSTed in batches to `<endpoint>/v1/logs`. Export is opt-in purely by the presence of a configured endpoint — the outbound network egress is intentionally kept ambient (no `httpClient` capability), consistent with telemetry being platform infrastructure. Export is asynchronous and resilient: events are buffered in a bounded queue (drop-oldest on overflow) flushed by a background timer, and an unreachable/erroring collector degrades to a dropped batch — it never blocks or fails the request path. The sentinel `endpoint "in-memory"` (and the empty string) means "no remote export"; `console True` additionally prints events to the console for local dev. The protobuf/gRPC transport is a non-goal; the Traces signal is described below.
 
@@ -640,9 +663,11 @@ The current frontend gives special treatment to these module names:
 - `Tesl.Random` — randomness capability (`random`) and functions (`randomInt`). The `random` capability gates all non-deterministic operations. Import it alongside `Tesl.Id` when using `generatePrefixedId`, or standalone when calling `randomInt`.
 - `Tesl.Tuple` — tuple constructors and accessors (`Tuple2`, `Tuple3`, `Tuple2.first`, `Tuple2.second`, `Tuple3.first`, `Tuple3.second`, `Tuple3.third`).
 - `Tesl.Env` — environment variable access (`env`, `envInt`)
-- `Tesl.DB` — database capabilities (`dbRead`, `dbWrite`)
+- `Tesl.DB` — database capabilities (`dbRead`, `dbWrite`). A capability may be scoped to an entity,
+  for example `dbRead Order` or `dbWrite Order`; the bare forms remain migration wildcards.
 - `Tesl.Http` — HTTP request type (`HttpRequest`). Dot-access fields, each a `Dict String String`: `request.cookies`, `request.headers` (names lowercased), `request.queryParameters` (URL-query values are form-url-decoded; repeated keys are last-wins; keys are case-sensitive). Also `request.body` (a `String`, not a `Dict`): the raw request body exactly as it arrived, decoded as UTF-8. It exists for verifying an inbound signature — a MAC must be computed over the bytes that arrived, not over a re-encoded record — and it is not a way to skip a codec: a `String` still cannot become a record without one. Also `request.clientAddress` (a `String`, not a `Dict`): the trustworthy client IP — with no `trustedProxies` declaration (§23) it is the socket peer; with one it is the rightmost untrusted `X-Forwarded-For` hop, and a disagreeing chain is refused. An api-test supplies query parameters inline in the path, e.g. `get "/search?q=hello%20world"`. Also the **session cookie**: `Http.setSessionCookie`, `Http.clearSessionCookie`, `Http.sessionToken` and the `cookieCap` capability. See §21.8.
-- `Tesl.Telemetry` — telemetry sentinel bindings (`telemetry`, `initTelemetry`) and the ambient metric instruments (`counter`, `histogram`, `gauge`). See §5.2.
+- `Tesl.Telemetry` — `TelemetryConfig`, the legacy startup form `initTelemetry`, the ambient span/log
+  form `telemetry`, and the metric instruments (`counter`, `histogram`, `gauge`). See §5.2.
 - `Tesl.Queue` — queue capabilities (`queueRead`, `queueWrite`, `pubsub`), proof predicates (`FromQueue`, `FromDeadQueue`)
 - `Tesl.Crypto` — password storage, message authentication, digests and secrets (`PasswordHash`, `Signature`, `Secret`; facts `HashFor`, `PasswordVerified`, `Authentic`). Every primitive is libsodium. Reuses `random` for the two operations that draw randomness; introduces no capability of its own. See §21.7.
 - `Tesl.UUID` — UUID generation and validation: `UUID.v4`, `UUID.v7`, `UUID.validate`, `IsUuid` proof predicate, `uuidV4Codec`, `uuidV7Codec`. The `uuid` capability gates generation; `UUID.validate` requires no capability. See §21.1.
@@ -907,6 +932,12 @@ Files using `api-test` must import `Tesl.ApiTest`. The compiler emits a targeted
 Each `api-test` block runs with a fresh in-memory database by default. Optional `seed {}` setup runs before the HTTP boundary and uses the ordinary `insert` syntax, so entity field names and types are still compile-time checked.
 
 Request expressions return the compiler-known type `HttpResponse` with fields `status`, `body`, and `headers`. `body` is a `JsonValue`, and `Tesl.ApiTest` exposes helper functions such as `statusOk`, `jsonString`, `hasLength`, `fieldAt`, `subscribe`, `processNextJob`, and `processNextDeadJob` for asserting on raw JSON, SSE streams, and queue workers.
+
+Queue processing helpers return `JobResult a`. `JobOk job` carries the processed job payload and
+`JobFailed job message` carries that same payload plus a `String` failure message. Use
+`expectJobOk` and `expectJobFailed` when the test needs a typed success or failure assertion; the
+constructors are ordinary exhaustiveness-checked ADT cases with one type parameter, not a
+polymorphic error parameter.
 
 When `collect` uses `count` or `until`, a `timeout` clause is required. Queue helpers (`processNextJob`, `processNextDeadJob`, `drainQueue`, `pendingJobCount`) run workers synchronously during the test, making HTTP → queue → SSE flows deterministic.
 
@@ -1370,8 +1401,15 @@ build an agent.
 **Accepted design, Implemented.**
 
 ```text
-<capability-decl> ::= "capability" <identifier> [ "implies" <identifier> { "," <identifier> } ]
+<capability-decl> ::= "capability" <identifier> [ "implies" <capability> { "," <capability> } ]
+<capability>      ::= <identifier> [ <identifier> ]
 ```
+
+The optional second identifier scopes the built-in resource capability. For example,
+`dbRead Order` grants reads of `Order` but not `Customer`, while bare `dbRead` is a migration
+wildcard that covers every entity. The same form applies to `dbWrite`, `queueRead`, `queueWrite`,
+and `pubsub` channel names. Scoped requirements are checked through capability implication and
+must be covered by the same resource or by a deliberately broad bare grant.
 
 ### 11.4 Bindings and return specs
 **Accepted design, Implemented.**
@@ -2082,7 +2120,12 @@ is to give a parameter its own type so the pairing becomes checkable.
 <main-decl> ::= "main" "(" ")" "->" "App" "requires" "[" <capability-list> "]" "=" <body>
 ```
 
-The body is an ordinary function body that may run startup `let` bindings (telemetry init, port resolution, seeding) and must end by returning an `App { ... }` record. The `let` bindings are fully type-checked like any function body (unknown names, wrong-typed calls, and invalid `initTelemetry` keywords are compile errors); only the final `App { ... }` record is validated structurally, because its `database`/`api`/`queues`/`email`/`sseChannels` fields reference declarations by name rather than as values:
+The body is an ordinary function body that may run startup `let` bindings (port resolution and seeding)
+and must end by returning an `App { ... }` record. Telemetry normally belongs in the optional
+`telemetry` field; `initTelemetry` remains a checked compatibility form for older programs. The `let`
+bindings are fully type-checked like any function body (unknown names and wrong-typed calls are compile
+errors); only the final `App { ... }` record is validated structurally, because its
+`database`/`api`/`queues`/`email`/`sseChannels` fields reference declarations by name rather than as values:
 
 ```text
 <app-record> ::= "App" "{"
@@ -2094,7 +2137,18 @@ The body is an ordinary function body that may run startup `let` bindings (telem
                    [ "sseChannels" ":" "[" [ <identifier> { "," <identifier> } ] "]" ]
                    [ "static"      ":" <string> ]
                    [ "mountPath"   ":" <string> ]
+                   [ "telemetry"   ":" <telemetry-config> ]
                  "}"
+```
+
+```text
+<telemetry-config> ::= "TelemetryConfig" "{"
+                       "service"  ":" <string>
+                       "endpoint" ":" <string>
+                       "console"  ":" <bool>
+                       [ "metrics" ":" <bool> ]
+                       [ "metricsInterval" ":" <int> ]
+                     "}"
 ```
 
 ```tesl
@@ -2107,11 +2161,31 @@ main() -> App requires [appService, smtpSend] =
     queues: [EmailQueue]          # activates each queue's workers (normal + dead-letter)
     email: [AppEmail]             # activates each email block's delivery worker
     sseChannels: [UserEvents]     # activates each SSE channel's outbox delivery
+    telemetry: TelemetryConfig {
+      service: "orders"
+      endpoint: "in-memory"
+      console: True
+    }
     mountPath: "/api"             # every route answers under this prefix — see below
   }
 ```
 
 **Capabilities are granted at the App root**, derived from `main`'s `requires` list. There is no runtime cap-granting block; every capability referenced anywhere in the activated declarations flows from each declaration's own `requires`, and `main.requires` must cover them. A missing capability is a compile error.
+
+#### OpenAPI export
+
+The checked API surface can be exported for documentation and security tooling without changing
+the runtime surface:
+
+```text
+tesl generate-openapi <file> <Server> [--output <file>]
+```
+
+The command selects the API named by `<Server>` and emits an OpenAPI 3.1 JSON document. It includes
+typed captures, request and response schemas, session-cookie security, 401/404 responses, and proof
+annotations as both descriptions and `x-tesl-proof`. Proof annotations in OpenAPI are informational;
+Tesl's compiler and server remain authoritative. Generation is opt-in and file-based, so production
+servers do not gain a documentation route by default. See `manual/openapi-dast.md` for DAST usage.
 
 #### `mountPath` — serving the API under a path prefix
 
@@ -2773,6 +2847,14 @@ The current `.tesl` frontend includes a small SQL-like sublanguage:
 <comparison-op> ::= "==" | "!=" | "<=" | ">=" | "<" | ">"
 ```
 
+The parser produces a dedicated `ESqlQuery` AST node for each recognized select, insert, upsert,
+update, delete, or `deleteAndReturnResult` expression. SQL clause keywords and their source spans
+are consumed before the node is built, including multiline and parenthesized continuations. The
+checker, capability validator, index linter, and Go backend read the same `sql_query` payload; they
+do not independently reinterpret the application tree. A malformed SQL-shaped expression is left
+unrecognized and receives the normal fail-closed structural diagnostic rather than being emitted as
+an ordinary function call.
+
 **`innerJoin` — inner join by FK.** Returns only rows from the main entity for which a matching row exists in the joined entity. The two field refs after `on` are the main entity's FK field and the join entity's matching field (no `==` operator — `==` sits above function application in Tesl's grammar):
 
 ```tesl
@@ -2854,19 +2936,16 @@ upsert Session { userId: uid, token: tok, expiresAt: exp }
 
 The conflict columns must be **either the primary key or a declared `unique index`** (§11.8) on that entity, and this is a compile-time error otherwise. PostgreSQL can only infer a conflict target from a unique index on exactly those columns; without one it fails at runtime with *"there is no unique or exclusion constraint matching the ON CONFLICT specification"*. So the example above requires `unique index [userId]` on `Session` unless `userId` is its primary key.
 
-**`delete` and `deleteAndReturnResult`.**  `delete` removes matching rows and returns `Unit`.  `deleteAndReturnResult` removes matching rows and returns `DeleteResult`, which carries the count of deleted rows.  `DeleteResult` and the constructors `NoRowDeleted` / `RowsDeleted` must be imported from `Tesl.DB`:
+**`delete` and `deleteAndReturnResult`.**  `delete` removes matching rows and returns `Unit`.  `deleteAndReturnResult` removes matching rows and returns the non-negative `Int` count of deleted rows, including `0` when no rows match.  Both operations require `dbWrite` from `Tesl.DB`:
 
 ```tesl
-import Tesl.DB exposing [DeleteResult, NoRowDeleted, RowsDeleted]
+import Tesl.DB exposing [dbWrite]
 
 # Simple delete (returns Unit)
 delete u from User where u.id == userId
 
-# Delete with result inspection
+# Delete with count inspection
 let result = deleteAndReturnResult u from User where u.id == userId
-case result of
-  NoRowDeleted -> ...
-  RowsDeleted  -> ...
 ```
 
 ## 13. Static semantics

@@ -75,7 +75,7 @@ let check_module (m : module_form) : validation_error list =
   @ (TStructural @: check_workers_structure ~extra_funcs:imported_funcs decls)
   @ (TStructural @: check_cache_structure decls)
   @ (TStructural @: check_email_structure decls)
-  @ (TStructural @: check_typed_config_blocks decls)
+   @ (TStructural @: check_typed_config_blocks m)
   @ (TStructural @: check_app_wiring decls)
   @ (TDatabase @: check_database_entities m)
   @ (TTesting @: check_api_test_structure m)

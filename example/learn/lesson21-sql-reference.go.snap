@@ -178,9 +178,9 @@ func RemoveProduct(id string) struct{} {
 }
 
 //line lesson21-sql-reference.tesl:285
-func RemoveProductWithResult(id string) teslrt.DeleteResult {
+func RemoveProductWithResult(id string) teslrt.Int {
 //line lesson21-sql-reference.tesl:286
-	return teslrt.TableDeleteResult(ProductTable, func(p Product) bool {
+	return teslrt.TableDeleteCount(ProductTable, func(p Product) bool {
 		return (p.Id == id)
 	})
 }
@@ -855,7 +855,7 @@ func TestTesl6(teslT *testing.T) {
 }
 
 func TestTesl7(teslT *testing.T) {
-	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "removeProductWithResult returns NoRowDeleted when not found" && teslWanted != "TestTesl7" {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "removeProductWithResult returns zero when not found" && teslWanted != "TestTesl7" {
 		teslT.Skip("named test filter")
 	}
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
@@ -865,16 +865,15 @@ func TestTesl7(teslT *testing.T) {
 //line lesson21-sql-reference.tesl:627
 		result := RemoveProductWithResult("nonexistent-xyz")
 		_ = result
-		teslRight8 := teslrt.DeleteResult{Tag: teslrt.DeleteResultNoRowDeleted}
 //line lesson21-sql-reference.tesl:628
-		if result.Tag != teslRight8.Tag || (result.Tag == teslrt.DeleteResultRowsDeleted && !teslrt.Equal(result.RowsDeletedCount, teslRight8.RowsDeletedCount)) {
+		if !teslrt.Equal(result, teslrt.FromInt64(0)) {
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
 }
 
 func TestTesl8(teslT *testing.T) {
-	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "removeProductWithResult returns RowsDeleted when found" && teslWanted != "TestTesl8" {
+	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "removeProductWithResult returns count when found" && teslWanted != "TestTesl8" {
 		teslT.Skip("named test filter")
 	}
 	if teslKind := os.Getenv("TESL_TEST_KIND"); teslKind != "" && teslKind != "test" {
@@ -887,9 +886,8 @@ func TestTesl8(teslT *testing.T) {
 //line lesson21-sql-reference.tesl:633
 			result := RemoveProductWithResult("dr1")
 			_ = result
-			teslRight9 := teslrt.DeleteResult{Tag: teslrt.DeleteResultRowsDeleted, RowsDeletedCount: teslrt.FromInt64(1)}
 //line lesson21-sql-reference.tesl:634
-			if result.Tag != teslRight9.Tag || (result.Tag == teslrt.DeleteResultRowsDeleted && !teslrt.Equal(result.RowsDeletedCount, teslRight9.RowsDeletedCount)) {
+			if !teslrt.Equal(result, teslrt.FromInt64(1)) {
 				teslT.Fatal("Tesl expectation failed")
 			}
 		}

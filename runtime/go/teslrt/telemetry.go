@@ -20,7 +20,8 @@ import (
 // Ambient by design, and that is a language decision rather than an implementation shortcut: an
 // observability call that needed a capability would either be threaded through every signature
 // or be left out of the code that most needs it. So there is nothing to grant and nothing to
-// pass; what a program configures is the SINK, once, in `main`.
+// pass; what a program configures is the SINK, once, in the App `telemetry` field (or the legacy
+// `initTelemetry` form).
 //
 // Events and metrics accumulate in process, and with `console True` they are written to stderr.
 // A configured non-memory endpoint also receives standard-library-only OTLP/JSON batches from the
@@ -82,9 +83,10 @@ func readCryptoRandom(value []byte) (int, error) {
 	return rand.Read(value)
 }
 
-// InitTelemetry is `initTelemetry service … endpoint … console …`: it configures the sink, once,
-// from `main`. Calling it twice replaces the configuration and clears what was recorded, which
-// is what a fresh process would have.
+// InitTelemetry is the runtime contract for App's TelemetryConfig lowering. It configures the
+// sink once from the App `telemetry` field; the legacy `initTelemetry service … endpoint … console
+// …` form uses the same call. Calling it twice replaces the configuration and clears what was
+// recorded, which is what a fresh process would have.
 func InitTelemetry(service, endpoint string, console, metrics, traces bool,
 	metricsIntervalMs int, traceRatio float64) struct{} {
 	telemetry.mutex.Lock()

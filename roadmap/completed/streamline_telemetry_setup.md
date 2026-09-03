@@ -12,4 +12,5 @@ syntax to configure telemetry in the main function, all special syntax. However,
 
 - Make the telemetry follow the normal pattern and just be a Type "TelemetryConfig", that way the user can get help from the normal type system
 - The new TelemetryConfig is a part of the App type as a telemetry-field
+- The type should be well documented, have good autocomplete and require import
 - We can remove all the special handling of the initTelemetry, service, endpoint console etc keywords

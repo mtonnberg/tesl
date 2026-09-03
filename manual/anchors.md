@@ -113,6 +113,13 @@ them.
 |---|---|
 | `faq#is-there-runtime-overhead-for-proofs` | The proof cost model, in FAQ form |
 
+### `openapi-dast`
+
+| Anchor | Topic |
+|---|---|
+| `openapi-dast#generate-a-specification` | Generate a checked, server-specific OpenAPI 3.1 document |
+| `openapi-dast#use-it-in-dast` | Feed the artifact to a staging DAST scanner |
+
 ### `language-spec`
 
 The specification (`LANGUAGE-SPEC.md`) is addressed by **section number** (`§7.4`, `§14b.2`),

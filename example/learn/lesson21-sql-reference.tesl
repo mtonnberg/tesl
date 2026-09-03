@@ -47,7 +47,7 @@ module Lesson21SqlReference exposing [
 # updateAndReturnOne p in Entity where ... set p.f = v  -- UPDATE, returns updated entity
 # update p in Entity where ... set p.f = v      -- UPDATE rows, returns Unit
 # delete p from Entity where p.field == val     -- DELETE, returns Unit
-# deleteAndReturnResult p from Entity where ...  -- DELETE, returns DeleteResult
+# deleteAndReturnResult p from Entity where ...  -- DELETE, returns Int count
 # insertMany list in Entity                     -- INSERT many rows, returns Unit
 #
 # Comparison operators in WHERE:
@@ -110,7 +110,7 @@ import Tesl.Time exposing [
   EuropeStockholm,
   addMs,
 ]
-import Tesl.DB exposing [dbRead, dbWrite, DeleteResult(..)]
+import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Maybe exposing [Maybe(..)]
 
 # ─────────────────────────────────────────────
@@ -138,7 +138,7 @@ import Tesl.Maybe exposing [Maybe(..)]
 # "update" (without returning) returns Unit — use when you do not need the result.
 #
 # "delete" returns Unit — use deleteAndReturnResult when you need the row count.
-# "deleteAndReturnResult" returns DeleteResult: either NoRowDeleted or RowsDeleted n.
+# "deleteAndReturnResult" returns the non-negative Int count of deleted rows.
 #
 # "insertMany list in Entity" inserts all rows in the list, returns Unit.
 #
@@ -281,8 +281,8 @@ fn removeProduct(id: String) -> Unit requires [dbWrite] =
 # ─── 8b. DELETE with result — deleteAndReturnResult ──────────────────────────
 
 # "deleteAndReturnResult p from Entity where ..." deletes matching rows and
-# returns DeleteResult: NoRowDeleted if nothing matched, or RowsDeleted n.
-fn removeProductWithResult(id: String) -> DeleteResult requires [dbWrite] =
+# returns a non-negative Int count, including 0 when nothing matched.
+fn removeProductWithResult(id: String) -> Int requires [dbWrite] =
   deleteAndReturnResult p from Product where p.id == id
 
 # ─── 9. Comparison operators ─────────────────────────────────────────────────
@@ -623,15 +623,15 @@ test "removeProduct deletes a row and returns unit" requires [dbRead, dbWrite] {
   expect result == Nothing
 }
 
-test "removeProductWithResult returns NoRowDeleted when not found" requires [dbWrite] {
+test "removeProductWithResult returns zero when not found" requires [dbWrite] {
   let result = removeProductWithResult "nonexistent-xyz"
-  expect result == NoRowDeleted
+  expect result == 0
 }
 
-test "removeProductWithResult returns RowsDeleted when found" requires [dbRead, dbWrite] {
+test "removeProductWithResult returns count when found" requires [dbRead, dbWrite] {
   let _ = createProduct "dr1" "ToDelete" 5 "misc"
   let result = removeProductWithResult "dr1"
-  expect result == (RowsDeleted 1)
+  expect result == 1
 }
 
 test "batchCreate inserts all products" requires [dbRead, dbWrite] {

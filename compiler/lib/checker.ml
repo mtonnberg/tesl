@@ -649,7 +649,21 @@ let collect_type_defs ctx (decls : top_decl list) : ctx =
       ("tools", TApp (TCon "List", TCon "Tool"));
     ];
   } in
-  let ctx = { ctx with records = ("Agent", agent_record) :: ctx.records } in
+  (* `TelemetryConfig` is a typed configuration record consumed by the App pass.
+     Optional fields are accepted by the parser-independent App schema; the
+     required fields are registered here so imports expose a real record type. *)
+  let telemetry_config_record = {
+    rd_name = "TelemetryConfig";
+    rd_fields = [
+      ("service", TCon "String");
+      ("endpoint", TCon "String");
+      ("console", TCon "Bool");
+      ("metrics", TCon "Bool");
+      ("metricsInterval", TCon "Int");
+    ];
+  } in
+  let ctx = { ctx with records = ("TelemetryConfig", telemetry_config_record) ::
+                                  ("Agent", agent_record) :: ctx.records } in
   List.fold_left (fun ctx decl ->
     match decl with
     | DRecord r ->
@@ -1385,7 +1399,7 @@ let expr_loc (e : expr) =
   | EStartWorkers { loc; _ } | EWithDatabase { loc; _ } | EWithCapabilities { loc; _ }
   | EWithTransaction { loc; _ } | EServe { loc; _ } | EConstructor { loc; _ } | ELambda { loc; _ }
   | ECacheGet { loc; _ } | ECacheSet { loc; _ } | ECacheDelete { loc; _ } | ECacheInvalidate { loc; _ }
-  | ESendEmail { loc; _ } | EStartEmailWorker { loc; _ }
+  | ESendEmail { loc; _ } | EStartEmailWorker { loc; _ } | ESqlQuery { loc; _ }
   -> loc
 
 let rec flatten_app_expr acc = function
@@ -2300,7 +2314,7 @@ let rec classify_lowered_query ctx e =
     | EVar { name = "update"; _ } when args <> [] && (match List.hd args with EConstructor _ | EVar _ -> true | _ -> false) -> Some t_unit
     | EVar { name = "updateAndReturnOne"; _ } -> Some (fresh ())
     | EVar { name = "delete"; _ } when args <> [] && (match List.hd args with EConstructor _ | EVar _ -> true | _ -> false) -> Some t_unit
-    | EVar { name = "deleteAndReturnResult"; _ } -> Some t_delete_result
+     | EVar { name = "deleteAndReturnResult"; _ } -> Some t_int
     | EVar { name = "where"; _ } | EVar { name = "set"; _ } -> Some t_unit
     | _ ->
       (* Handle multi-line SQL: SQL modifier clauses (order, limit, etc.) merged as EApp
@@ -2574,6 +2588,125 @@ let rec infer_expr ctx (e : expr) : ty =
     | _ -> None
   in
   let inferred = match e with
+
+  | ESqlQuery { query; loc = _ } ->
+     (* SQL payloads are parser-owned now. Infer embedded values and validate the
+        structured metadata before deriving the operation result. *)
+     let field_type entity field =
+       match List.assoc_opt entity ctx.records with
+       | Some record ->
+         (match List.assoc_opt field record.rd_fields with
+          | Some ty -> ty
+          | None ->
+            add_error ctx (expr_loc e)
+              (Printf.sprintf "field `%s` does not exist on entity `%s`" field entity);
+            fresh ())
+       | None -> fresh ()
+     in
+     let rec infer_clause binder entity = function
+       | SqlPred { field; op; value } ->
+         let field_ty = field_type entity field in
+         let value_ty = infer_expr ctx value in
+         (match op, apply !(ctx.subst) field_ty with
+          | (BLt | BLe | BGt | BGe), TCon name
+            when name = "Money" || Units_catalog.is_money_rate_name name ->
+            add_error ctx (expr_loc value)
+              "money-rate or Money columns do not support ordered comparison in where clauses; materialize Money first"
+          | _ -> ());
+         unify_expected_at ctx (expr_loc value) value_ty
+           (mk_expectation ~origin:(expr_loc e)
+              ~role:(CallArgument (Some "where", 2))
+              ~reason:(Printf.sprintf "the where clause compares column `%s.%s` (declared `%s`)"
+                         binder field (pp_ty field_ty))
+              field_ty)
+       | SqlLike { field; pattern } | SqlILike { field; pattern } ->
+         let field_ty = field_type entity field in
+         let pattern_ty = infer_expr ctx pattern in
+         unify_at ctx (expr_loc pattern) pattern_ty t_string;
+         (match apply !(ctx.subst) field_ty with
+          | TCon _ -> ()
+          | _ -> add_error ctx (expr_loc pattern) "SQL like predicates require a String column")
+       | SqlOr clauses -> List.iter (infer_clause binder entity) clauses
+       | SqlIn { field; values } | SqlNotIn { field; values } ->
+         let field_ty = field_type entity field in
+         List.iter (fun value ->
+           let value_ty = infer_expr ctx value in
+           unify_at ctx (expr_loc value) value_ty field_ty) values
+       | SqlIsNull { field } | SqlIsNotNull { field } ->
+         let field_ty = field_type entity field in
+         (match apply !(ctx.subst) field_ty with
+          | TApp (TCon "Maybe", _) -> ()
+          | _ -> add_error ctx (expr_loc e)
+              (Printf.sprintf "SQL NULL predicate requires nullable field `%s`" field))
+     in
+     let infer_select (seed : sql_select_seed) dynamic =
+       List.iter (infer_clause seed.binder seed.entity) (seed.static_clauses @ dynamic);
+       (match seed.kind, seed.group_by with
+        | (SelectCountBy | SelectSumBy _), [] ->
+          add_error ctx (expr_loc e) "grouped aggregate requires exactly one `groupBy` clause"
+        | (SelectCountBy | SelectSumBy _), _ :: _ :: _ ->
+          add_error ctx (expr_loc e) "grouped aggregate supports exactly one `groupBy` clause"
+        | (SelectMany | SelectOne | SelectCount | SelectSum _ | SelectMax _ | SelectMin _), _ :: _ ->
+          let name = match seed.kind with
+            | SelectMany -> "select" | SelectOne -> "selectOne" | SelectCount -> "selectCount"
+            | SelectSum _ -> "selectSum" | SelectMax _ -> "selectMax" | SelectMin _ -> "selectMin"
+            | _ -> "select" in
+          add_error ctx (expr_loc e) (Printf.sprintf "`groupBy` is not supported on `%s`" name)
+        | _ -> ());
+       List.iter (function
+         | GField field -> ignore (field_type seed.entity field)
+         | GTimeTrunc (_, offset, field) ->
+           let field_ty = field_type seed.entity field in
+           (match apply !(ctx.subst) field_ty with
+            | TCon "PosixMillis" -> ()
+            | _ -> add_error ctx (expr_loc offset) "Time.trunc* requires a PosixMillis column");
+           let offset_ty = infer_expr ctx offset in
+           unify_at ctx (expr_loc offset) offset_ty (TCon "TimeZone"))
+         seed.group_by;
+       (match seed.kind with
+        | SelectCountBy | SelectSumBy _
+          when seed.order <> None || seed.limit <> None || seed.offset <> None ->
+          add_error ctx (expr_loc e)
+            (Printf.sprintf "`limit` is not supported on `%s`"
+               (match seed.kind with SelectCountBy -> "selectCountBy" | _ -> "selectSumBy"))
+        | _ -> ());
+       let group_key_type = function
+         | GField field -> field_type seed.entity field
+         | GTimeTrunc _ -> t_posix
+       in
+       match seed.kind with
+       | SelectMany -> t_list (TCon seed.entity)
+       | SelectOne -> t_maybe (TCon seed.entity)
+       | SelectCount -> t_int
+       | SelectSum field -> field_type seed.entity field
+       | SelectMax field | SelectMin field -> t_maybe (field_type seed.entity field)
+       | SelectCountBy ->
+         (match seed.group_by with key :: _ -> t_list (t_tuple2 (group_key_type key) t_int) | [] -> t_int)
+       | SelectSumBy field ->
+         (match seed.group_by with
+          | key :: _ -> t_list (t_tuple2 (group_key_type key) (field_type seed.entity field))
+          | [] -> t_list (t_tuple2 (fresh ()) (field_type seed.entity field)))
+     in
+     (match query with
+      | QuerySelect (seed, dynamic) -> infer_select seed dynamic
+      | QueryInsert insert ->
+        List.iter (fun (field, value) ->
+          let actual = infer_expr ctx value in
+          unify_at ctx (expr_loc value) actual (field_type insert.entity field)) insert.fields;
+        TCon insert.entity
+      | QueryInsertMany _ -> t_unit
+      | QueryUpsert upsert ->
+        List.iter (fun (field, value) ->
+          let actual = infer_expr ctx value in
+          unify_at ctx (expr_loc value) actual (field_type upsert.entity field)) upsert.fields;
+        t_unit
+      | QueryUpdate update ->
+        List.iter (infer_clause update.binder update.entity) update.clauses;
+        List.iter (fun (_, value) -> ignore (infer_expr ctx value)) update.updates;
+        if update.returning_one then TCon update.entity else t_unit
+      | QueryDelete (seed, dynamic) ->
+        List.iter (infer_clause seed.binder seed.entity) dynamic;
+        if seed.with_result then t_int else t_unit)
 
   | ELit { lit = LInterp segs; loc = _ } ->
     List.iter (function
@@ -3375,7 +3508,7 @@ let rec infer_expr ctx (e : expr) : ty =
      | EVar { name = "returning"; _ } ->
         fresh ()
      | EVar { name = "delete"; _ } -> t_unit
-     | EVar { name = "deleteAndReturnResult"; _ } -> t_delete_result
+      | EVar { name = "deleteAndReturnResult"; _ } -> t_int
      | EVar { name = "where"; _ }
      | EVar { name = "set"; _ }
      | EVar { name = "onConflict"; _ }
@@ -3528,13 +3661,10 @@ let rec infer_expr ctx (e : expr) : ty =
 
   | ECase { scrut; arms; loc } ->
     (* ── Exhaustiveness helper (defined inline to close over ctx/loc) ──────── *)
-    (* The stdlib ADTs' constructor sets come from ONE table,
-       `Validation_common.builtin_ctor_info`, which is also what the nested-pattern
-       exhaustiveness check reads.  They used to be two lists, and they disagreed: this one
-       knew `DeleteResult` and that one did not, so a `case` naming both of its constructors
-       passed the top-level check and was then reported non-exhaustive by the nested one —
-       a total match refused, with a catch-all `_` demanded in its place.  A constructor set
-       written twice is a constructor set that drifts, so it is written once.
+     (* The stdlib ADTs' constructor sets come from ONE table,
+        `Validation_common.builtin_ctor_info`, which is also what the nested-pattern
+        exhaustiveness check reads.  A constructor set written twice is a constructor set that
+        drifts, so it is written once.
        `Bool` stays here: its constructors are literals rather than rows in that table. *)
     let stdlib_ctors_for_type name =
       if name = "Bool" then Some ["True"; "False"]
@@ -4683,6 +4813,15 @@ let tuple_element_reason index expected_ty =
 
 let rec check_stmt ctx (e : expr) (expected : expectation) : unit =
   match e with
+  | ESqlQuery { query = QueryUpdate update; _ }
+    when update.returning_one && not update.returns_row ->
+    (* `update ... returning one` performs a row-returning write, but is commonly
+       used as a statement. Permit its result to be discarded while preserving
+       the entity result when the function explicitly returns it. *)
+    let actual_ty = infer_expr ctx e in
+    (match apply !(ctx.subst) (expected_ty_of expected) with
+     | TCon "Unit" -> ()
+     | _ -> unify_expected_at ctx (expr_loc e) actual_ty expected)
   | ELet {
       name = "_";
       declared_type = _;
@@ -6342,6 +6481,8 @@ let collect_bound_names (m : module_form) : (string, unit) Hashtbl.t =
     | ECacheDelete { key; _ } -> walk key
     | ECacheInvalidate { prefix; _ } -> walk prefix
     | ESendEmail { to_; subject; body; _ } -> walk to_; walk subject; walk body
+    | ESqlQuery { query; _ } ->
+      Ast_visitor.fold_sql_query (fun () child -> walk child) () query
     | ELit _ | EVar _ | EStartWorkers _ | EStartEmailWorker _ -> ()
   in
   List.iter (function

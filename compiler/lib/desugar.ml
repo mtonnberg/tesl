@@ -180,6 +180,8 @@ let render_config_value (e : expr) : string =
   | ELit { lit = LString s; _ } -> s
   | ELit { lit = LInt n; _ } -> string_of_int n
   | ELit { lit = LBool b; _ } -> if b then "true" else "false"
+  | EConstructor { name = "True"; _ } -> "true"
+  | EConstructor { name = "False"; _ } -> "false"
   | EApp { fn = EVar { name = "env"; _ }; arg = ELit { lit = LString v; _ }; _ } ->
     Printf.sprintf "env(%S)" v
   | EApp { fn = EApp { fn = EVar { name = "envInt"; _ };
@@ -252,6 +254,30 @@ let desugar_database_config (d : database_form) : database_form =
 let int_value = function ELit { lit = LInt n; _ } -> Some n | _ -> None
 let string_value = function ELit { lit = LString s; _ } -> Some s | _ -> None
 let bool_value = function ELit { lit = LBool b; _ } -> Some b | _ -> None
+
+(* App telemetry is declarative surface syntax, but the runtime already has a
+   single initialization call. Keep values as expressions so env-backed config
+   continues to resolve at startup in every backend. *)
+let telemetry_startup (fields : (string * expr) list) (loc : Location.loc) : expr option =
+  match List.assoc_opt "telemetry" fields with
+  | None -> None
+  | Some config ->
+    let config_fields = config_record_fields config in
+    let required name = List.assoc_opt name config_fields in
+    let settings =
+      [ "service", required "service";
+        "endpoint", required "endpoint";
+        "console", required "console" ]
+      @ (match required "metrics" with Some value -> [ "metrics", Some value ] | None -> [])
+      @ (match required "metricsInterval" with
+         | Some value -> [ "metricsInterval", Some value ] | None -> [])
+    in
+    let init = EVar { name = "initTelemetry"; loc } in
+    Some (List.fold_left (fun fn (name, value) ->
+      let keyword = EVar { name; loc } in
+      let with_keyword = EApp { fn; arg = keyword; loc } in
+      EApp { fn = with_keyword; arg = Option.value ~default:(ELit { lit = LString ""; loc }) value; loc }
+    ) init settings)
 
 (* App pass: a folded queue's `jobs: [Job J fn (Something dead)]` pairs each job
    type with its handler and an optional dead-letter handler. Returns
@@ -591,12 +617,16 @@ let lower_main_app (decls : top_decl list) (fd : func_decl) : func_decl =
     ) qs in
     let email_stmts = List.map (fun en -> EStartEmailWorker { email_name = en; loc }) es in
     let serve = EServe { server_name = api; port; capabilities = main_caps; static_dir; mount_path; loc } in
+    let telemetry_stmts = match telemetry_startup fields loc with
+      | Some startup -> [ startup ]
+      | None -> []
+    in
     let rec chain = function
       | [] -> serve
       | [ last ] -> last
       | s :: rest -> ELet { name = "_"; declared_type = None; declared_proof = None; value = s; body = chain rest; loc }
     in
-    chain (worker_stmts @ email_stmts @ [ serve ])
+    chain (telemetry_stmts @ worker_stmts @ email_stmts @ [ serve ])
   in
   (* Walk the let-chain of main's body to the trailing `App { … }` record. *)
   let rec find_app e = match e with

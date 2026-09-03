@@ -395,42 +395,6 @@ func TableTruncate[Row any](table *Table[Row]) {
 	table.rows = nil
 }
 
-// `deleteAndReturnResult` answers a `DeleteResult`, which is `NoRowDeleted` or `RowsDeleted n`.
-// It is a runtime-provided ADT for the reason `Maybe` is: it crosses module boundaries, so it
-// cannot be emitted once per module that mentions it.
-//
-// The distinction it draws is the one a plain count does not: deleting nothing is a different
-// OUTCOME from deleting rows, and a caller that has to act on "nothing matched" reads it as a
-// case rather than as a comparison with zero.
-type DeleteResultTag int
-
-const (
-	DeleteResultNoRowDeleted DeleteResultTag = iota
-	DeleteResultRowsDeleted
-)
-
-type DeleteResult struct {
-	Tag              DeleteResultTag
-	RowsDeletedCount Int
-}
-
-func NoRowDeleted() DeleteResult {
-	return DeleteResult{Tag: DeleteResultNoRowDeleted}
-}
-
-func RowsDeleted(count Int) DeleteResult {
-	return DeleteResult{Tag: DeleteResultRowsDeleted, RowsDeletedCount: count}
-}
-
-// TableDeleteResult is `deleteAndReturnResult` over the in-memory store.
-func TableDeleteResult[Row any](table *Table[Row], match func(Row) bool) DeleteResult {
-	removed := TableDeleteCount(table, match)
-	if Compare(removed, FromInt64(0)) == 0 {
-		return NoRowDeleted()
-	}
-	return RowsDeleted(removed)
-}
-
 // TableAny reports whether any row matches. It is what an `innerJoin` becomes on the in-memory
 // store: the clause filters the MAIN entity's rows to those with a counterpart, and the result
 // is still a list of that entity — so it is an existence test, not a product.

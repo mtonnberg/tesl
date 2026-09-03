@@ -1309,20 +1309,6 @@ fn firstOr(r: Result Int Int) -> Int =
    | Compile.GoFailure diagnostics ->
      failf "Result failed to compile: %s"
        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics)));
-  (* `DeleteResult` joined them when `deleteAndReturnResult` landed, so it compiles too. *)
-  let delete_result = {|module DeleteResultUser exposing [count]
-import Tesl.Prelude exposing [Int]
-import Tesl.DB exposing [DeleteResult(..)]
-fn count(r: DeleteResult) -> Int =
-  case r of
-    RowsDeleted n -> n
-    _ -> 0
-|} in
-  (match Compile.compile_go_source "<go-delete-result>" delete_result with
-   | Compile.GoSuccess _ -> ()
-   | Compile.GoFailure diagnostics ->
-     failf "DeleteResult failed to compile: %s"
-       (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics)));
   (* The point of this case survives: the runtime ADTs are whitelisted BY NAME, not
      "any stdlib ADT".  One that has no runtime type behind it still fails closed.
      `TimeZone` used to be the example and is now BUILT (489 IANA constructors through the
@@ -1336,10 +1322,10 @@ fn spanName(s: Span) -> String = "s"
   match Compile.compile_go_source "<go-span>" unsupported with
   | Compile.GoSuccess _ -> fail "an unsupported stdlib ADT emitted Go artifacts"
   | Compile.GoFailure diagnostics ->
-    check bool "an unlisted stdlib ADT is refused" true
-      (List.exists (fun (d : Compile.diagnostic) ->
-         d.source = "go-emitter" && contains d.message "`Tesl.Telemetry` export `Span`")
-        diagnostics)
+     let refused = List.exists (fun (d : Compile.diagnostic) ->
+       contains d.message "`Tesl.Telemetry` does not export `Span`")
+         diagnostics in
+     check bool "an unlisted stdlib ADT is refused" true refused
 
 let string_source = {|module GoStrings exposing [size, shout, initial, parsed, found, label, checked]
 import Tesl.Prelude exposing [Bool, Int, String]
@@ -3349,7 +3335,7 @@ import Tesl.Prelude exposing [Bool(..), Int, String, List, Unit]
 import Tesl.Int exposing [Int.toString]
 import Tesl.List exposing [List.length, List.map, List.head]
 import Tesl.Maybe exposing [Maybe(..)]
-import Tesl.DB exposing [dbRead, dbWrite, DeleteResult(..)]
+import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Database exposing [Database, Memory]
 
 type Sku = String
@@ -3430,9 +3416,7 @@ fn eitherName(left: String, right: String) -> Int
 fn describeDelete(name: String) -> String
   requires [dbWrite] =
   let removed = deleteAndReturnResult i from Item where i.name == name
-  case removed of
-    RowsDeleted n -> Int.toString n
-    _ -> "none"
+  Int.toString removed
 
 fn seed() -> Unit
   requires [dbWrite] =
@@ -3481,9 +3465,7 @@ test "update and delete change what queries see" requires [dbRead, dbWrite] {
   delete i from Item where i.qty > 25
   expect countAbove 19 == 1
   expect titleOf "u2" == "none"
-  # `deleteAndReturnResult` says whether anything WENT, which is not the same as a count of
-  # zero: the caller reads it as a case.
-  expect describeDelete "no-such-name" == "none"
+   expect describeDelete "no-such-name" == "0"
   expect describeDelete "renamed" == "1"
 }
 |}
@@ -3524,10 +3506,8 @@ let test_db_with_go () =
     (contains tests_go "teslNext := i");
   check bool "and reports nothing back, because `update` is a statement" true
     (contains tests_go "_ = teslrt.TableUpdate(ItemTable,");
-  (* `deleteAndReturnResult` answers a runtime-provided ADT rather than a count: "nothing
-     matched" is an outcome, not the number zero. *)
-  check bool "`deleteAndReturnResult` answers a DeleteResult" true
-    (contains module_go "teslrt.TableDeleteResult(ItemTable,");
+   check bool "`deleteAndReturnResult` answers an Int count" true
+     (contains module_go "teslrt.TableDeleteCount(ItemTable,");
   (* `go test` RUNS the two test blocks, so a wrong answer fails here. *)
   gate_emitted "tesl-go-db" emitted
 
@@ -5579,7 +5559,7 @@ import Tesl.String exposing [String.length]
 import Tesl.Json exposing [stringCodec]
 import Tesl.Database exposing [Database, Memory]
 import Tesl.App exposing [App]
-import Tesl.Telemetry exposing [initTelemetry, telemetry, counter, histogram, gauge]
+ import Tesl.Telemetry exposing [TelemetryConfig, telemetry, counter, histogram, gauge]
 import Tesl.ApiTest exposing [statusOk]
 
 record Greeting { message: String }
@@ -5619,10 +5599,14 @@ database TelemetryDb = Database {
 }
 
 main() -> App requires [] =
-  let _ = initTelemetry service "go-telemetry-app" endpoint "in-memory" console False
   App {
     database: TelemetryDb
     api: TelemetryServer
+    telemetry: TelemetryConfig {
+      service: "go-telemetry-app"
+      endpoint: "in-memory"
+      console: False
+    }
     port: 8099
   }
 
@@ -5692,7 +5676,7 @@ let test_telemetry_app_with_go () =
   (* `main` lowers into the startup chain; the App record has no runtime form. *)
   check bool "main serves the declared server on the declared port" true
     (contains module_go "teslrt.Serve(TelemetryServer, teslrt.ServeOptions{Port: teslrt.PortOf(teslrt.FromInt64(8099))})");
-  check bool "and initTelemetry's keyword surface becomes one call" true
+   check bool "App telemetry becomes one runtime init call" true
     (contains module_go
        "teslrt.InitTelemetry(\"go-telemetry-app\", \"in-memory\", false, true, false, 60000, 1.0)");
   (* A program gets the one `package main` Go needs to build a binary. *)

@@ -446,6 +446,23 @@ storeNewPassword user np (Crypto.hashPassword np)                 -- compiles
 storeNewPassword user np (Crypto.hashPassword body.oldPassword)   -- rejected
 ```
 
+### Scope capabilities to resources
+
+Database, queue, and pub/sub capabilities can name the resource they cover. Prefer the narrow form
+when a function should not gain access to unrelated data:
+
+```tesl
+fn listOrders(userId: String) -> List Order requires [dbRead Order] =
+  select order from Order where order.userId == userId
+
+capability orderService implies dbRead Order, dbWrite Order
+```
+
+`dbRead Customer` does not satisfy `dbRead Order`. A bare `dbRead` or `dbWrite` remains a deliberate
+migration wildcard covering every entity. The same rule applies to `queueRead QueueName`,
+`queueWrite QueueName`, and `pubsub ChannelName`. The compiler derives the resource set from the
+query or effect, including joined entities, and checks it through capability implications.
+
 ### A GET may not change state
 
 **❌ Don't:** put a write behind a `get` route.

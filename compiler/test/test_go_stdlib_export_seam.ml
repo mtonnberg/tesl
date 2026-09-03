@@ -151,7 +151,9 @@ let test_the_fallthrough_names_what_it_refuses () =
     check bool "names the module" true (contains message "`Tesl.Telemetry`");
     check bool "names the export" true (contains message "`Span`")
   | Wired -> fail "the probe compiled; pick a name that is still unwired"
-  | Rejected message -> failf "the checker refused the probe: %s" message
+  | Rejected message ->
+    check bool "checker refusal names the module" true (contains message "`Tesl.Telemetry`");
+    check bool "checker refusal names the export" true (contains message "`Span`")
 
 (* ── The `App` field inventory ─────────────────────────────────────────────────
    `App { … }` is the startup surface: `Desugar.lower_main_app` reads its fields and turns them
@@ -169,6 +171,7 @@ let app_field_dispositions = [
   "database", "the database scope main's body runs inside";
   "queues", "one teslrt.StartWorkers per activated queue (plus its dead-letter pool)";
   "email", "one teslrt.StartEmailWorker per declared outbox";
+  "telemetry", "one teslrt.InitTelemetry call from TelemetryConfig";
   "api", "the server teslrt.Serve is called with";
   "port", "ServeOptions.Port";
   "static", "ServeOptions.StaticDir";

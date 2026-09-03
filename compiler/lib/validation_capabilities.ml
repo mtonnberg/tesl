@@ -2,6 +2,15 @@ open Ast
 open Location
 open Validation_common
 
+(* Bare resource grants remain migration wildcards; scoped grants are least
+   privilege and only cover their named resource. *)
+let capability_covers grant needed =
+  grant = needed ||
+  (match String.split_on_char ' ' needed with
+   | [verb; _] when List.mem verb ["dbRead"; "dbWrite"; "queueRead"; "queueWrite"; "pubsub"] ->
+     grant = verb
+   | _ -> false)
+
 
 (* (Removed fn_bound_names: the function-wide bound-name set it produced was the
    root of the `requires []` capability-suppression hole — a binder in any
@@ -168,7 +177,7 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
     Hashtbl.fold (fun k () acc -> k :: acc) result []
   in
   let cap_covered declared needed =
-    List.mem needed (expand_declared declared)
+    List.exists (fun grant -> capability_covers grant needed) (expand_declared declared)
   in
   let errors = ref [] in
   List.iter (function
@@ -328,7 +337,7 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
   (match List.find_opt (function DFunc fd -> fd.kind = MainKind | _ -> false) decls with
    | Some (DFunc main_fd) ->
      let main_grant = expand_declared main_fd.capabilities in
-     let is_granted c = List.mem c main_grant in
+      let is_granted c = List.exists (fun grant -> capability_covers grant c) main_grant in
      let fn_info = List.filter_map (function
        | DFunc fd -> Some (fd.name, (fd.capabilities, fd.loc)) | _ -> None) decls in
      let servers = List.filter_map (function
@@ -437,7 +446,8 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
          List.iter (fun w -> match List.assoc_opt w fn_info with
            | Some (reqs, loc) ->
              let missing =
-               List.filter (fun c -> not (List.mem c qgrant)) (expand_declared reqs)
+                List.filter (fun c -> not (List.exists (fun grant -> capability_covers grant c) qgrant))
+                  (expand_declared reqs)
                |> List.sort_uniq String.compare in
              if missing <> [] then
                errors := make_error loc
@@ -467,7 +477,8 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
         worker thread's exception is invisible past its own top-level catch
         (issue #62). *)
      List.iter (fun qn -> match List.assoc_opt qn queue_caps with
-       | Some (caps, loc) when not (List.mem "queueRead" (expand_declared caps)) ->
+        | Some (caps, loc) when not (List.exists (fun grant -> capability_covers grant "queueRead")
+                                     (expand_declared caps)) ->
          errors := make_error loc
            ~hint:(Printf.sprintf
              "add a capability implying `queueRead` (e.g. one implying `queueWrite`, \
@@ -1021,12 +1032,31 @@ let check_pk_match (decls : top_decl list) : validation_error list =
              in
              close [] (result_uses fd.body)
            in
-           let should_credit = function
-             | None -> true                         (* result position → in the return path *)
-             | Some x -> List.mem x returned_vars
-           in
+            let should_credit = function
+              | None -> true                         (* result position → in the return path *)
+              | Some x -> List.mem x returned_vars
+            in
 
-           (* ── Returning-WRITE provenance (review §3.2 write variant) ────────
+            (* Recreate the comparison-shaped expressions expected by the
+               provenance unifier from canonical SQL clauses. *)
+            let rec canonical_clause_expr binder (clause : Sql_query.sql_clause) =
+              let loc = fd.loc in
+              match clause with
+              | SqlPred { field; op; value } ->
+                Some (EBinop { op;
+                  left = EField { obj = EVar { name = binder; loc }; field; loc };
+                  right = value; loc; op_loc = loc })
+              | SqlOr clauses ->
+                let exprs = List.filter_map (canonical_clause_expr binder) clauses in
+                (match exprs with
+                 | [] -> None
+                 | first :: rest ->
+                   Some (List.fold_left (fun left right ->
+                     EBinop { op = BOr; left; right; loc; op_loc = loc }) first rest))
+              | _ -> None
+            in
+
+            (* ── Returning-WRITE provenance (review §3.2 write variant) ────────
               A row-producing write — `update … where … set … returning one`,
               `updateAndReturnOne … where … set …`, or `deleteAndReturnResult …
               where …` — hands back a value carrying the declared FromDb.  Its
@@ -1245,8 +1275,8 @@ let check_pk_match (decls : top_decl list) : validation_error list =
                   end
                 | None ->
                   ignore (Ast_visitor.fold_children (fun () c -> check_expr c) () e))
-             | EBinop { op = BOr; loc; _ }
-               when should_credit binder
+              | EBinop { op = BOr; loc; _ }
+                when should_credit binder
                     && (let rec or_root = function
                        | EBinop { op = BOr; left; right; _ } ->
                          (match sql_root left with Some _ as r -> r
@@ -1260,8 +1290,8 @@ let check_pk_match (decls : top_decl list) : validation_error list =
                   select head seen, record the rejection, and do NOT descend into
                   the disjuncts (which would credit the single matching branch). *)
                select_head_seen := true;
-               if !disjunction_seen = None then
-                 disjunction_seen := Some (make_error loc
+                if !disjunction_seen = None then
+                  disjunction_seen := Some (make_error loc
                    ~hint:(Printf.sprintf "a WHERE with `||` broadens the result set; \
                            to establish `%s` every row must satisfy `%s == %s`, so \
                            remove the disjunction (or move it into a narrowing \
@@ -1269,9 +1299,42 @@ let check_pk_match (decls : top_decl list) : validation_error list =
                            spec_label expected_col expected_rhs expected_col expected_rhs)
                    (Printf.sprintf "WHERE clause uses `||` (disjunction); the declared \
                           FromDb provenance `%s == %s` in `%s` is not established for \
-                          every returned row (an `OR` broadens beyond the declared \
-                          subject)" expected_col expected_rhs spec_label))
-             | _ -> ignore (Ast_visitor.fold_children (fun () c -> check_expr c) () e)
+                           every returned row (an `OR` broadens beyond the declared \
+                           subject)" expected_col expected_rhs spec_label))
+              | ESqlQuery { query = QuerySelect (seed, dynamic); _ }
+                when should_credit binder ->
+                (* Parser-owned SQL queries no longer expose the old EApp/EBinop
+                   spine. Recreate only the small comparison shape needed by the
+                   provenance unifier; values remain the canonical clause payload. *)
+                select_head_seen := true;
+                let clauses = seed.static_clauses @ dynamic in
+               List.iter (function
+                   | SqlPred { field; op; value } when op = BEq ->
+                    let field_expr = EField {
+                      obj = EVar { name = seed.binder; loc = fd.loc };
+                      field; loc = fd.loc } in
+                    let comparison = EBinop {
+                      op; left = field_expr; right = value;
+                      loc = fd.loc; op_loc = fd.loc } in
+                    unify_where_select (Some seed.entity) seed.binder comparison
+                   | SqlOr _ when List.length clauses = 1 ->
+                    if !disjunction_seen = None then
+                      disjunction_seen := Some (make_error fd.loc
+                        ~hint:(Printf.sprintf "a WHERE with `||` broadens the result set; remove the disjunction")
+                        (Printf.sprintf "WHERE clause uses `||`; the declared FromDb provenance `%s == %s` in `%s` is not established for every returned row"
+                           expected_col expected_rhs spec_label))
+                   | _ -> ()) clauses
+              | ESqlQuery { query = QueryUpdate update; _ }
+                when should_credit binder && update.returning_one ->
+                write_head_seen := true;
+                unify_write_where (Some update.entity) update.binder
+                  (List.filter_map (canonical_clause_expr update.binder) update.clauses)
+              | ESqlQuery { query = QueryDelete (seed, clauses); _ }
+                when should_credit binder && seed.with_result ->
+                write_head_seen := true;
+                unify_write_where (Some seed.entity) seed.binder
+                  (List.filter_map (canonical_clause_expr seed.binder) clauses)
+              | _ -> ignore (Ast_visitor.fold_children (fun () c -> check_expr c) () e)
            in
            check_expr fd.body;
            check_writes fd.body;
@@ -1356,6 +1419,13 @@ let check_insert_pk_match (decls : top_decl list) : validation_error list =
      Only the PACKED body insert is validated — other inserts in the function body
      (e.g. for related entities) are allowed to use different id bindings. *)
   let check_packed_insert witness pk_var (e : expr) =
+    let e = match e with
+      | ESqlQuery { query = QueryInsert { fields; _ }; _ } ->
+        EApp { fn = EVar { name = "insert"; loc = Location.dummy_loc "" };
+               arg = ERecord { fields; type_hint = None; loc = Location.dummy_loc "" };
+               loc = Location.dummy_loc "" }
+      | _ -> e
+    in
     let (head, args) = collect_call_head_and_args [] e in
     match function_name_of_expr head with
     | Some "insert" ->
@@ -1492,6 +1562,13 @@ let check_nonexist_named_pack_insert (decls : top_decl list) : validation_error 
           | Some (col, rhs) ->
             let field = col_field col in
             List.iter (fun leaf ->
+              let leaf = match leaf with
+                | ESqlQuery { query = QueryInsert { fields; _ }; _ } ->
+                  EApp { fn = EVar { name = "insert"; loc = Location.dummy_loc "" };
+                         arg = ERecord { fields; type_hint = None; loc = Location.dummy_loc "" };
+                         loc = Location.dummy_loc "" }
+                | _ -> leaf
+              in
               let (head, args) = collect_call_head_and_args [] leaf in
               match function_name_of_expr head with
               | Some "insert" ->
@@ -1969,6 +2046,9 @@ check your fact declaration or the type of `%s`"
         walk_expr local_env to_; walk_expr local_env subject;
         walk_expr local_env body
       | EStartEmailWorker _ -> ()
+      | ESqlQuery { query; _ } ->
+        Ast_visitor.fold_sql_query
+          (fun () child -> walk_expr local_env child) () query
     in
     List.iter (function
       | DFunc fd ->
@@ -2086,4 +2166,3 @@ let check_type_arities (decls : top_decl list) : validation_error list =
     | DType (TypeNewtype { base_type; _ }) -> check_te base_type
     | _ -> []
   ) decls
-

@@ -12,6 +12,8 @@
 #   PATH                  must contain the Go toolchain for Go build/test flows
 # OPTIONAL (set by the installed preamble so assets resolve without a repo):
 #   TESL_TEMPLATES_DIR    store path holding templates/{minimal,api,docker}
+#   TESL_ZAP              path to the default ZAP DAST scanner
+#   TESL_NUCLEI            path to the complementary Nuclei scanner
 # DEV fallback:
 #   TESL_REPO_ROOT        repo checkout; templates + collections come from here.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -297,6 +299,218 @@ _tesl_default_entry() {
   [ "$root" = "$here" ] && path="$entry"
   echo "[tesl] no file given — using [project].entrypoint $path (from $root/tesl.toml)" >&2
   printf '%s\n' "$path"
+}
+
+# Quote a scalar for the small YAML plan passed to ZAP. Secrets never enter this
+# plan: authentication values are referenced by environment variable name.
+_tesl_yaml_quote() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/}"
+  value="${value//$'\r'/}"
+  printf '"%s"' "$value"
+}
+
+# Run ZAP's local Automation Framework against a checked Tesl OpenAPI export.
+# This deliberately does not start the application: callers choose the target
+# deployment explicitly, which keeps CI and local scans equally predictable.
+_tesl_dast() {
+  local file="" target="" server="" spec="" report_dir="" scanner="zap"
+  local active=0 allow_remote=0 auth_env="" work="" plan="" generated=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --server) server="${2:?tesl dast: --server requires a server name}"; shift 2 ;;
+      --target) target="${2:?tesl dast: --target requires a URL}"; shift 2 ;;
+      --spec) spec="${2:?tesl dast: --spec requires a file}"; shift 2 ;;
+      --report-dir) report_dir="${2:?tesl dast: --report-dir requires a directory}"; shift 2 ;;
+      --scanner) scanner="${2:?tesl dast: --scanner requires a scanner name}"; shift 2 ;;
+      --active) active=1; shift ;;
+      --allow-remote) allow_remote=1; shift ;;
+      --authorization-env) auth_env="${2:?tesl dast: --authorization-env requires an environment variable}"; shift 2 ;;
+      --help|-h)
+        cat <<'EOF'
+Usage: tesl dast <URL> [file.tesl] [options]
+       tesl dast <file.tesl> <server> --target <URL> [options]
+
+Options:
+  --server NAME             Select the Tesl server for OpenAPI generation
+  --target URL              Scan target (required unless given as first argument)
+  --spec FILE               Use an existing OpenAPI file instead of generating one
+  --report-dir DIR          Output directory (default: .tesl-stuff/dast)
+  --scanner zap              Scanner backend (default: zap)
+  --active                  Enable active checks (otherwise passive baseline only)
+  --allow-remote            Permit --active against a non-loopback target
+  --authorization-env NAME  Inject Authorization header from an environment variable
+EOF
+        return 0
+        ;;
+      http://*|https://*)
+        [ -z "$target" ] || { echo "tesl dast: multiple target URLs" >&2; return 2; }
+        target="$1"; shift ;;
+      *.tesl)
+        [ -z "$file" ] || { echo "tesl dast: multiple source files" >&2; return 2; }
+        file="$1"; shift ;;
+      *)
+        if [ -n "$file" ] && [ -z "$server" ]; then
+          server="$1"; shift
+        elif [ -z "$target" ] && [ -z "$file" ]; then
+          target="$1"; shift
+        else
+          echo "tesl dast: unexpected argument $1" >&2; return 2
+        fi
+        ;;
+    esac
+  done
+
+  [ -n "$target" ] || { echo "tesl dast: target URL is required" >&2; return 2; }
+  case "$target" in
+    http://*|https://*) ;;
+    *) echo "tesl dast: target must start with http:// or https://" >&2; return 2 ;;
+  esac
+  case "$scanner" in
+    zap) ;;
+    *) echo "tesl dast: unsupported scanner '$scanner' (supported: zap)" >&2; return 2 ;;
+  esac
+  if [ "$active" -eq 1 ] && [ "$allow_remote" -ne 1 ]; then
+    case "$target" in
+      http://localhost|http://localhost:*|https://localhost|https://localhost:*|\
+      http://127.0.0.1|http://127.0.0.1:*|https://127.0.0.1|https://127.0.0.1:*|\
+      http://\[::1\]|http://\[::1\]:*) ;;
+      *) echo "tesl dast: --active against a non-loopback target requires --allow-remote" >&2; return 2 ;;
+    esac
+  fi
+  if [ -n "$auth_env" ]; then
+    case "$auth_env" in
+      [A-Za-z_][A-Za-z0-9_]*) ;;
+      *) echo "tesl dast: invalid environment variable name '$auth_env'" >&2; return 2 ;;
+    esac
+    [ -n "${!auth_env:-}" ] || {
+      echo "tesl dast: authorization environment variable '$auth_env' is unset or empty" >&2
+      return 2
+    }
+  fi
+
+  if [ -z "$file" ] && [ -z "$spec" ]; then
+    file="$(_tesl_default_entry "tesl dast <URL> [file.tesl] [options]")" || return 1
+  fi
+  if [ -n "$file" ]; then
+    [ -f "$file" ] || { echo "tesl dast: source file not found: $file" >&2; return 2; }
+    file="$(_tesl_abspath "$file")" || { echo "tesl dast: cannot resolve source file: $file" >&2; return 2; }
+  fi
+  if [ -n "$spec" ]; then
+    [ -f "$spec" ] || { echo "tesl dast: OpenAPI file not found: $spec" >&2; return 2; }
+    spec="$(_tesl_abspath "$spec")" || { echo "tesl dast: cannot resolve OpenAPI file: $spec" >&2; return 2; }
+  fi
+
+  if [ -n "$file" ] && [ -z "$server" ]; then
+    local servers server_count
+    servers="$(awk '$1 == "server" { print $2 }' "$file" | sort -u)"
+    server_count="$(printf '%s\n' "$servers" | awk 'NF { n++ } END { print n + 0 }')"
+    if [ "$server_count" -ne 1 ]; then
+      echo "tesl dast: source must define exactly one server when --server is omitted" >&2
+      [ "$server_count" -gt 1 ] && echo "  servers: $(printf '%s' "$servers" | tr '\n' ' ')" >&2
+      echo "  use --server NAME to select one" >&2
+      return 2
+    fi
+    server="$servers"
+  fi
+
+  local root
+  if [ -n "$file" ]; then root="$(_tesl_project_root "$file")"; else root="$PWD"; fi
+  report_dir="${report_dir:-$root/.tesl-stuff/dast}"
+  mkdir -p "$report_dir" || { echo "tesl dast: cannot create report directory: $report_dir" >&2; return 1; }
+
+  work="$(_tesl_mktemp_dir)" || { echo "tesl dast: cannot create temporary workspace" >&2; return 1; }
+  cleanup() { trap - RETURN; rm -rf "$work"; }
+  trap cleanup RETURN
+  mkdir -p "$work/home"
+  if [ -z "$spec" ]; then
+    spec="$work/openapi.json"
+    generated=1
+    _tesl_require_compiler
+    "$TESL_OCAML_COMPILER" generate-openapi "$file" "$server" --output "$spec" || {
+      echo "tesl dast: OpenAPI generation failed" >&2
+      return 1
+    }
+  fi
+
+  local target_q include_q spec_q report_q auth_job active_job auth_ref zap_bin
+  target_q="$(_tesl_yaml_quote "$target")"
+  include_q="$(_tesl_yaml_quote "$target/.*")"
+  spec_q="$(_tesl_yaml_quote "$spec")"
+  report_q="$(_tesl_yaml_quote "$report_dir")"
+  auth_job=""
+  if [ -n "$auth_env" ]; then
+    auth_ref='${'"$auth_env"'}'
+    auth_job="  - type: replacer
+    parameters:
+      deleteAllRules: false
+    rules:
+      - description: Tesl Authorization header
+        matchType: req_header
+        matchString: Authorization
+        replacementString: \"$auth_ref\"
+"
+  fi
+  active_job=""
+  if [ "$active" -eq 1 ]; then
+    active_job="  - type: activeScan
+    parameters:
+      context: tesl
+      defaultStrength: Low
+      defaultThreshold: Medium
+      maxScanDurationInMins: 1
+      delayInMs: 100
+"
+  fi
+  plan="$work/plan.yaml"
+  cat > "$plan" <<EOF
+%YAML 1.2
+---
+env:
+  contexts:
+    - name: tesl
+      urls:
+        - $target_q
+      includePaths:
+        - $include_q
+jobs:
+$auth_job  - type: openapi
+    parameters:
+      apiFile: $spec_q
+      targetUrl: $target_q
+      context: tesl
+  - type: passiveScan-wait
+    parameters:
+      maxDuration: 1
+$active_job  - type: report
+    parameters:
+      template: traditional-json
+      reportDir: $report_q
+      reportFile: zap-report.json
+  - type: exitStatus
+    parameters:
+      errorLevel: High
+      warnLevel: Medium
+      errorExitValue: 1
+      warnExitValue: 1
+      okExitValue: 0
+EOF
+
+  zap_bin="${TESL_ZAP:-zap}"
+  if [ ! -x "$zap_bin" ]; then zap_bin="$(command -v "$zap_bin" 2>/dev/null || true)"; fi
+  [ -n "$zap_bin" ] && [ -x "$zap_bin" ] || {
+    echo "tesl dast: ZAP not found; install the Nix profile or set TESL_ZAP" >&2
+    return 1
+  }
+  echo "tesl dast: scanning $target (reports: $report_dir)"
+  if [ "$generated" -eq 1 ]; then echo "tesl dast: generated OpenAPI for $server"; fi
+  # ZAP expands ${ENV_NAME} inside the plan; the secret itself stays outside
+  # the generated specification and report files.
+  # Keep scanner state isolated. The Nix wrapper seeds a writable, versioned
+  # config under $HOME/.ZAP before ZAP opens the directory.
+  HOME="$work/home" "$zap_bin" -dir "$work/home/.ZAP" -silent -cmd -autorun "$plan"
 }
 
 # ── tesl.toml manifest reader (mirrors scripts/tesl-manifest.sh) ───────────
@@ -1015,7 +1229,7 @@ _tesl_build() {
 
 _tesl_build_go_container() {
   local entry="$1" name="$2" port="$3" dbmode="$4" variant="$5" tag="$6" no_docker="$7" requested_out="$8"
-  local ctx generated template go
+  local ctx generated template go revision created source
   if [ -n "$requested_out" ]; then
     ctx="$requested_out"
     mkdir -p "$ctx"
@@ -1047,7 +1261,24 @@ _tesl_build_go_container() {
     echo "tesl build --backend go: Docker template not found: $template" >&2
     return 1
   }
-  sed -e "s|__APP_NAME__|$name|g" -e "s|__PORT__|$port|g" "$template" > "$ctx/Dockerfile"
+  revision="unknown"
+  if command -v git >/dev/null 2>&1; then
+    revision="$(git -C "$(dirname "$ENTRY")" rev-parse HEAD 2>/dev/null || true)"
+  fi
+  [ -n "$revision" ] || revision="unknown"
+  created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  source="https://github.com/mtonnberg/tesl"
+  sed -e "s|__APP_NAME__|$name|g" \
+       -e "s|__PORT__|$port|g" \
+       -e "s|__REVISION__|$revision|g" \
+       -e "s|__CREATED__|$created|g" \
+       -e "s|__SOURCE__|$source|g" "$template" > "$ctx/Dockerfile"
+  cat > "$ctx/.dockerignore" <<'EOF'
+*
+!tesl-app
+!Dockerfile
+!.dockerignore
+EOF
   echo "tesl build: staged Go binary Docker context at $ctx (port=$port)"
   if [ "$no_docker" = "1" ]; then
     echo "tesl build: --no-docker set; build context ready at $ctx"
@@ -1136,6 +1367,10 @@ case "$CMD" in
     OUT_GO="$(_tesl_compile_go_file "$FILE" "$OUT_GO")" || exit 1
     echo "compiled Go module: $FILE → $OUT_GO"
     exit 0
+    ;;
+  dast)
+    _tesl_dast "$@"
+    exit $?
     ;;
   check)
     if [ $# -eq 0 ]; then
@@ -1234,6 +1469,11 @@ case "$CMD" in
     TEST_NAME=""
     TEST_KIND=""
     TEST_BACKEND="go"
+    TEST_WITH_DAST=0
+    TEST_DAST_TARGET=""
+    TEST_DAST_SERVER=""
+    TEST_DAST_ACTIVE=0
+    TEST_DAST_ALLOW_REMOTE=0
     while true; do
       case "${1:-}" in
         --backend)
@@ -1242,21 +1482,37 @@ case "$CMD" in
           ;;
         --test-name) TEST_NAME="${2:?--test-name requires a test name argument}"; shift 2 ;;
         --test-kind) TEST_KIND="${2:?--test-kind requires a kind argument}"; shift 2 ;;
+        --with-dast|--also-run-dast) TEST_WITH_DAST=1; shift ;;
+        --dast-target) TEST_DAST_TARGET="${2:?--dast-target requires a URL}"; shift 2 ;;
+        --dast-server) TEST_DAST_SERVER="${2:?--dast-server requires a server name}"; shift 2 ;;
+        --dast-active) TEST_DAST_ACTIVE=1; shift ;;
+        --dast-allow-remote) TEST_DAST_ALLOW_REMOTE=1; shift ;;
         *) break ;;
       esac
     done
     if [ $# -eq 0 ]; then
-       _TESL_ENTRY="$(_tesl_default_entry "tesl test [--test-name <name>] [--test-kind <kind>] [file.tesl ...]")" || exit 1
-      set -- "$_TESL_ENTRY"
-    fi
+       _TESL_ENTRY="$(_tesl_default_entry "tesl test [--test-name <name>] [--test-kind <kind>] [--with-dast --dast-target URL] [file.tesl ...]")" || exit 1
+       set -- "$_TESL_ENTRY"
+     fi
+     if [ "$TEST_WITH_DAST" -eq 1 ] && [ "$#" -ne 1 ]; then
+       echo "tesl test: --with-dast requires exactly one source file" >&2
+       exit 2
+     fi
     case "$TEST_BACKEND" in
       go)
         _tesl_require_compiler
         RET=0
-        for FILE in "$@"; do
-          _tesl_test_go_file "$FILE" "$TEST_NAME" "$TEST_KIND" || RET=$?
-        done
-        exit "$RET"
+         for FILE in "$@"; do
+           _tesl_test_go_file "$FILE" "$TEST_NAME" "$TEST_KIND" || RET=$?
+         done
+         if [ "$RET" -eq 0 ] && [ "$TEST_WITH_DAST" -eq 1 ]; then
+           DAST_ARGS=("$FILE" --target "$TEST_DAST_TARGET")
+           [ -n "$TEST_DAST_SERVER" ] && DAST_ARGS+=(--server "$TEST_DAST_SERVER")
+           [ "$TEST_DAST_ACTIVE" -eq 1 ] && DAST_ARGS+=(--active)
+           [ "$TEST_DAST_ALLOW_REMOTE" -eq 1 ] && DAST_ARGS+=(--allow-remote)
+           _tesl_dast "${DAST_ARGS[@]}" || RET=$?
+         fi
+         exit "$RET"
         ;;
     esac
     ;;
@@ -1404,11 +1660,14 @@ Usage:
   tesl fmt                 <file.tesl> [more.tesl ...]   Format in-place
   tesl fmt-check           <file.tesl> [more.tesl ...]   Check formatting without modifying
   tesl validate            [file.tesl ...]               Run check + lint + fmt-check
-  tesl run                 [--debug] [file.tesl] [args…]  Compile then execute
-                           (--debug: live checkpoints + attach endpoint under .tesl-stuff/)
-  tesl debug-attach        [--project DIR] [command…]     Attach to a `tesl run --debug` process
+   tesl run                 [--debug] [file.tesl] [args…]  Compile then execute
+                            (--debug: live checkpoints + attach endpoint under .tesl-stuff/)
+   tesl dast                 <URL> [file.tesl]             Run ZAP against the checked OpenAPI surface
+                            [--server NAME] [--active]     (active remote scans also require --allow-remote)
+   tesl debug-attach        [--project DIR] [command…]     Attach to a `tesl run --debug` process
                            (arm breakpoints, inspect, resume — see tesl debug-attach --help)
-    tesl test                [file.tesl ...]  Compile and run tests
+     tesl test                [file.tesl ...]  Compile and run tests
+                            [--with-dast --dast-target URL] optionally scan after tests pass
    tesl mutate              <file>  Run mutation testing
     tesl watch               [file.tesl] [args…]  Watch and restart on changes
 

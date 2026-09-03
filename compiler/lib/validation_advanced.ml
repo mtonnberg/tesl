@@ -316,6 +316,52 @@ let check_sql_where_clauses
   in
   let rec walk tenv binder_env bound_names e =
     match e with
+    | ESqlQuery { query; loc } ->
+       let rec check_clause binder_env binder clause =
+        match clause with
+        | SqlPred { field; op; value } ->
+          scan_predicate tenv binder_env bound_names
+            (EBinop { op; left = EField {
+               obj = EVar { name = binder; loc }; field; loc }; right = value;
+               loc; op_loc = loc })
+        | SqlIsNull { field } ->
+          scan_predicate tenv binder_env bound_names
+            (EApp { fn = EVar { name = "isNull"; loc };
+                    arg = EField { obj = EVar { name = binder; loc }; field; loc };
+                    loc })
+        | SqlIsNotNull { field } ->
+          scan_predicate tenv binder_env bound_names
+            (EApp { fn = EVar { name = "isNotNull"; loc };
+                    arg = EField { obj = EVar { name = binder; loc }; field; loc };
+                    loc })
+        | SqlOr clauses -> List.iter (check_clause binder_env binder) clauses
+        | SqlIn _ | SqlNotIn _ | SqlLike _ | SqlILike _ -> ()
+      in
+      (match query with
+       | QuerySelect (seed, dynamic) ->
+         let query_env = (seed.binder, seed.entity) :: binder_env in
+         List.iter (check_clause query_env seed.binder) seed.static_clauses;
+         List.iter (check_clause query_env seed.binder) dynamic;
+         List.iter (fun key -> match key with
+           | GField _ -> ()
+           | GTimeTrunc (_, offset, _) -> walk tenv query_env bound_names offset) seed.group_by;
+         List.iter (fun clause -> Ast_visitor.fold_sql_clause
+            (fun () value -> walk tenv query_env bound_names value) () clause)
+           (seed.static_clauses @ dynamic)
+       | QueryUpdate update ->
+         let query_env = (update.binder, update.entity) :: binder_env in
+         List.iter (check_clause query_env update.binder) update.clauses;
+         List.iter (fun (field, value) ->
+           check_set_field tenv query_env bound_names update.binder field value loc;
+           walk tenv query_env bound_names value) update.updates
+       | QueryDelete (seed, dynamic) ->
+         let query_env = (seed.binder, seed.entity) :: binder_env in
+         List.iter (check_clause query_env seed.binder) dynamic;
+         List.iter (fun clause -> Ast_visitor.fold_sql_clause
+           (fun () value -> walk tenv query_env bound_names value) () clause) dynamic
+       | QueryInsert insert -> List.iter (fun (_, value) -> walk tenv binder_env bound_names value) insert.fields
+       | QueryUpsert upsert -> List.iter (fun (_, value) -> walk tenv binder_env bound_names value) upsert.fields
+       | QueryInsertMany _ -> ())
     | EApp _ ->
       let flat =
         let rec go acc = function
@@ -1241,12 +1287,16 @@ let check_record_field_proof_construction
         Option.iter (walk_expr type_env subject_env proof_env) ttl
       | ECacheDelete { key; _ } -> walk_expr type_env subject_env proof_env key
       | ECacheInvalidate { prefix; _ } -> walk_expr type_env subject_env proof_env prefix
-      | ESendEmail { to_; subject; body; _ } ->
-        walk_expr type_env subject_env proof_env to_;
-        walk_expr type_env subject_env proof_env subject;
-        walk_expr type_env subject_env proof_env body
-      | EStartEmailWorker _ -> ()
-    in
+       | ESendEmail { to_; subject; body; _ } ->
+         walk_expr type_env subject_env proof_env to_;
+         walk_expr type_env subject_env proof_env subject;
+         walk_expr type_env subject_env proof_env body
+       | EStartEmailWorker _ -> ()
+       | ESqlQuery { query; _ } ->
+         Ast_visitor.fold_sql_query
+           (fun () child -> walk_expr type_env subject_env proof_env child)
+           () query
+     in
     List.iter (function
       | DFunc fd ->
         let type_env = List.map (fun (b : binding) -> (b.name, b.type_expr)) fd.params in
@@ -1901,4 +1951,3 @@ let check_file_module_name_match (m : module_form) : validation_error list =
               "module header `module %s` does not match file name `%s`; the compiler resolves imports by file name, so no other file can `import %s`"
               mname basename mname)
         ]
-

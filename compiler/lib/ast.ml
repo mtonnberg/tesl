@@ -86,6 +86,8 @@ type return_spec =
 
 (* ─── Expressions ────────────────────────────────────────────────────────── *)
 
+(* SQL payload records below intentionally share field labels. *)
+[@@@ocaml.warning "-30"]
 type lit =
   | LInt    of int
   | LBigInt of string                       (** canonical signed decimal for |value| outside native int; e.g. "9999999999999999999999" or "-4611686018427387905" *)
@@ -145,8 +147,11 @@ and expr =
   | EServe of { server_name : string; port : expr; capabilities : string list; static_dir : string option; mount_path : string option; loc : loc }
   | EConstructor of { name : string; args : expr list; loc : loc }
                (** Constructor applied to zero or more args *)
-  | ELambda of { params : binding list; body : expr; loc : loc }
-               (** Anonymous function: fn(x: T, y: T) -> body *)
+   | ELambda of { params : binding list; body : expr; loc : loc }
+                (** Anonymous function: fn(x: T, y: T) -> body *)
+   | ESqlQuery of { query : sql_query; loc : loc }
+                (** A parsed SQL operation. SQL payloads are mutually recursive
+                    with expressions because predicates and assignments contain them. *)
 and binop =
   | BAdd | BSub | BMul | BDiv | BMod
   | BConcat (* ++ — string concatenation *)
@@ -171,7 +176,89 @@ and pattern =
   | PCon       of { ctor : string; fields : (string * pattern) list; loc : loc }
                   (** Constructor field1 field2 — positional or labeled sub-patterns *)
   | PNullary   of { ctor : string; loc : loc }    (** Constructor with no fields *)
-  | PLit       of { value : lit; loc : loc }      (** string / int literal pattern *)
+   | PLit       of { value : lit; loc : loc }      (** string / int literal pattern *)
+
+(* ─── SQL query expressions ──────────────────────────────────────────────── *)
+
+and sql_clause =
+  | SqlPred of { field : string; op : binop; value : expr }
+  | SqlOr of sql_clause list
+  | SqlIsNull of { field : string }
+  | SqlIsNotNull of { field : string }
+  | SqlIn of { field : string; values : expr list }
+  | SqlNotIn of { field : string; values : expr list }
+  | SqlLike of { field : string; pattern : expr }
+  | SqlILike of { field : string; pattern : expr }
+
+and sql_join = {
+  join_entity : string;
+  main_field : string;
+  join_field : string;
+}
+
+and sql_select_kind =
+  | SelectMany
+  | SelectOne
+  | SelectCount
+  | SelectSum of string
+  | SelectMax of string
+  | SelectMin of string
+  | SelectCountBy
+  | SelectSumBy of string
+
+and sql_group_key =
+  | GField of string
+  | GTimeTrunc of string * expr * string
+
+and sql_select_seed = {
+  kind : sql_select_kind;
+  binder : string;
+  entity : string;
+  where_field : string option;
+  order : (string * string) option;
+  limit : int option;
+  offset : int option;
+  static_clauses : sql_clause list;
+  group_by : sql_group_key list;
+  joins : sql_join list;
+}
+
+and sql_insert = {
+  entity : string;
+  fields : (string * expr) list;
+}
+
+and sql_delete_seed = {
+  binder : string;
+  entity : string;
+  where_field : string option;
+  with_result : bool;
+}
+
+and sql_update = {
+  binder : string;
+  entity : string;
+  clauses : sql_clause list;
+  updates : (string * expr) list;
+  returning_one : bool;
+  returns_row : bool;
+}
+
+and sql_upsert = {
+  entity : string;
+  fields : (string * expr) list;
+  conflict : string list;
+  do_update : string list;
+}
+
+and sql_query =
+  | QuerySelect of sql_select_seed * sql_clause list
+  | QueryInsert of sql_insert
+  | QueryInsertMany of string * string
+  | QueryUpsert of sql_upsert
+  | QueryUpdate of sql_update
+  | QueryDelete of sql_delete_seed * sql_clause list
+[@@@ocaml.warning "+30"]
 
 (* ─── Top-level forms ────────────────────────────────────────────────────── *)
 

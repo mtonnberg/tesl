@@ -751,12 +751,19 @@ let rec definition_in_expr env locals line col (expr : Ast.expr) =
       find_named_loc env.ctor_defs name
     else
       find_map_list (definition_in_expr env locals line col) args
-  | Ast.ELambda { params; body; _ } ->
-    let result = find_map_list (definition_in_binding env line col) params in
-    (match result with
-     | Some _ as found -> found
-     | None ->
-       definition_in_expr env (extend_locals_with_params locals params) line col body)
+   | Ast.ELambda { params; body; _ } ->
+     let result = find_map_list (definition_in_binding env line col) params in
+     (match result with
+      | Some _ as found -> found
+      | None ->
+        definition_in_expr env (extend_locals_with_params locals params) line col body)
+   | Ast.ESqlQuery { query; _ } ->
+     Ast_visitor.fold_sql_query
+       (fun result child ->
+         match result with
+         | Some _ -> result
+         | None -> definition_in_expr env locals line col child)
+       None query
 
 let rec definition_in_test_stmts env locals line col (stmts : Ast.test_stmt list) =
   match stmts with
@@ -1238,11 +1245,18 @@ let rec resolve_symbol_in_expr env locals line col (expr : Ast.expr) =
     let ctor_loc = precise_name_loc loc name in
     if loc_contains_position ctor_loc line col then find_ctor_symbol env.ctor_defs name
     else find_map_list (resolve_symbol_in_expr env locals line col) args
-  | Ast.ELambda { params; body; _ } ->
-    let result = find_map_list (resolve_symbol_in_binding env line col) params in
-    (match result with
-     | Some _ as found -> found
-     | None -> resolve_symbol_in_expr env (extend_locals_with_params locals params) line col body)
+   | Ast.ELambda { params; body; _ } ->
+     let result = find_map_list (resolve_symbol_in_binding env line col) params in
+     (match result with
+      | Some _ as found -> found
+      | None -> resolve_symbol_in_expr env (extend_locals_with_params locals params) line col body)
+   | Ast.ESqlQuery { query; _ } ->
+     Ast_visitor.fold_sql_query
+       (fun result child ->
+         match result with
+         | Some _ -> result
+         | None -> resolve_symbol_in_expr env locals line col child)
+       None query
 
 let rec resolve_symbol_in_test_stmts env locals line col (stmts : Ast.test_stmt list) =
   match stmts with
@@ -1656,9 +1670,14 @@ let rec collect_occurrences_in_expr env locals target (expr : Ast.expr) =
     (match find_ctor_symbol env.ctor_defs name with
      | Some symbol when symbol_equal symbol target -> loc :: List.concat_map (collect_occurrences_in_expr env locals target) args
      | _ -> List.concat_map (collect_occurrences_in_expr env locals target) args)
-  | Ast.ELambda { params; body; _ } ->
-    List.concat_map (collect_occurrences_in_binding env target) params
-    @ collect_occurrences_in_expr env (extend_locals_with_params locals params) target body
+   | Ast.ELambda { params; body; _ } ->
+     List.concat_map (collect_occurrences_in_binding env target) params
+     @ collect_occurrences_in_expr env (extend_locals_with_params locals params) target body
+   | Ast.ESqlQuery { query; _ } ->
+     Ast_visitor.fold_sql_query
+       (fun acc child ->
+         acc @ collect_occurrences_in_expr env locals target child)
+       [] query
 
 let rec collect_occurrences_in_test_stmts env locals target (stmts : Ast.test_stmt list) =
   match stmts with
@@ -1942,7 +1961,7 @@ let top_decl_loc = Ast.top_decl_loc
 (* ── Config-block context (LSP hover + completion for config fields) ─────────
    Given a cursor position, return the most-specific typed configuration block
    enclosing it (Database / PostgresConfig / Queue / QueueRetryStrategy /
-   SseChannel / Cache / Email / SmtpConfig) together with each schema field and
+   SseChannel / Cache / Email / SmtpConfig / TelemetryConfig) together with each schema field and
    whether the user already wrote it.  Drives the editor's field completion +
    hover from {!Validation_structural.config_block_schema} so there is one
    source of truth. *)

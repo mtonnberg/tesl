@@ -54,7 +54,6 @@ import Tesl.Prelude exposing [Bool(..), Int, String, List, Unit]
 import Tesl.List exposing [List.foldl, List.append]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Time exposing [nowMillis, time, Time.secondsToPosix]
-import Tesl.DB exposing [DeleteResult]
 import KanelModels exposing [
   kanelDbRead,
   kanelDbWrite,
@@ -127,7 +126,7 @@ fn dbUpdateMemberRole(targetUserId: String, orgId: String, adminId: String ::: O
     set m.role = newRole
     returning one
 
-fn dbDeleteMembership(targetUserId: String, orgId: String, adminId: String ::: OrgAdmin adminId orgId) -> DeleteResult
+fn dbDeleteMembership(targetUserId: String, orgId: String, adminId: String ::: OrgAdmin adminId orgId) -> Int
   requires [kanelDbWrite] =
   deleteAndReturnResult m from OrgMembership where m.userId == targetUserId && m.orgId == orgId
 

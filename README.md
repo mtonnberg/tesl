@@ -72,6 +72,10 @@ auto-starts a project-local PostgreSQL and loads `.env`, so the API is live with
 Ship it as a Docker image with `tesl build`; database-backed apps use an
 external PostgreSQL service — see [`manual/deploy.md`](manual/deploy.md).
 
+Export a checked server for API clients or DAST scanners with
+`tesl generate-openapi app.tesl AppServer --output openapi.json` — see
+[`manual/openapi-dast.md`](manual/openapi-dast.md).
+
 **Caveat: Nix is required** Nix is the only supported install path today. If you do not
 have Nix and do not want it, this is where the trail ends for now — a standalone binary is on the
 roadmap, not done. See [`INSTALL.md`](INSTALL.md).

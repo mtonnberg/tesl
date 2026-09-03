@@ -1174,10 +1174,10 @@ let rec collect_start_email_workers (acc : string list) (e : Ast.expr) : string 
   | Ast.EWithTransaction { body; _ } -> collect_start_email_workers acc body
   | Ast.EServe _ | Ast.ETelemetry _ | Ast.EEnqueue _ | Ast.EPublish _
   | Ast.EStartWorkers _ | Ast.ESendEmail _ | Ast.ECacheGet _
-  | Ast.ECacheSet _ | Ast.ECacheDelete _ | Ast.ECacheInvalidate _
-  | Ast.ELambda _ | Ast.ERecord _ | Ast.EList _ | Ast.EOk _ | Ast.EFail _
-  | Ast.EConstructor _ | Ast.EField _ | Ast.EVar _ | Ast.ELit _
-  -> acc
+   | Ast.ECacheSet _ | Ast.ECacheDelete _ | Ast.ECacheInvalidate _
+   | Ast.ELambda _ | Ast.ERecord _ | Ast.EList _ | Ast.EOk _ | Ast.EFail _
+   | Ast.EConstructor _ | Ast.EField _ | Ast.EVar _ | Ast.ELit _ | Ast.ESqlQuery _
+   -> acc
 
 (** The names a module's own `main` activates under one `App` field.
 

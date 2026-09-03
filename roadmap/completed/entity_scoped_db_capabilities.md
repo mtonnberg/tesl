@@ -94,15 +94,14 @@ repeated form — once the verbosity has actually been felt, rather than before.
 - **Emission stays put.** Capabilities erase, so `emit_go` is unaffected and `emit_racket` can
   keep emitting the bare `dbRead` name — the check is static. Worth confirming rather than
   assuming.
+- We must handle joins etc in a good way
 
 ## Sequencing
 
 After the current Go-migration batch is committed. Every corpus file this touches is a file
-whose `.rkt` snapshot moves and whose Go emission needs re-verifying, and interleaving that with
+whose `go` snapshot moves and whose Go emission needs re-verifying, and interleaving that with
 a port in flight would make both harder to attribute.
 
 ## Related
 
 - `roadmap/next/delete_result_return_type.md` — the other stdlib-shape item found the same week.
-- The connection-points note in `roadmap/next/migrate_to_golang.md` records the behaviour this
-  item makes checkable.

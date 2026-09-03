@@ -325,15 +325,6 @@ type Side
   | Right
 |}
 
-let test_R65_SC04_local_constructor_conflicts_with_db_result_rejected () =
-  should_fail "constructor.*NoRowDeleted.*shadows\\|NoRowDeleted.*DB\\|shadows.*NoRowDeleted" {|
-module R65Sc04 exposing [MyDelete(..)]
-import Tesl.DB exposing [DeleteResult(..)]
-type MyDelete
-  = NoRowDeleted
-  | Deleted
-|}
-
 let test_R65_SC05_both_ok_and_err_conflict_detected_rejected () =
   (* When both Ok and Err are locally defined alongside import of Result(..) *)
   should_fail "constructor.*Ok.*shadows\\|constructor.*Err.*shadows\\|shadows.*Ok\\|shadows.*Err" {|
@@ -658,7 +649,6 @@ let () =
       test_case "R65_SC01 local Ok conflicts with Result(..) rejected" `Quick test_R65_SC01_local_ok_conflicts_with_imported_result_rejected;
       test_case "R65_SC02 local Err conflicts with Result(..) rejected" `Quick test_R65_SC02_local_err_conflicts_with_imported_result_rejected;
       test_case "R65_SC03 local Left/Right conflict with Either(..) rejected" `Quick test_R65_SC03_local_left_conflicts_with_imported_either_rejected;
-      test_case "R65_SC04 NoRowDeleted conflicts with DB(..) rejected" `Quick test_R65_SC04_local_constructor_conflicts_with_db_result_rejected;
       test_case "R65_SC05 both Ok and Err conflict detected" `Quick test_R65_SC05_both_ok_and_err_conflict_detected_rejected;
     ];
     "stdlib-ctor-accepted", [

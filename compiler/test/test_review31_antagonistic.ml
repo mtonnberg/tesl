@@ -11,7 +11,7 @@
       G35  ForAll on non-List/Set type now correctly rejected (was: silently accepted)
       G36  Handler with extra unused capability in requires produces no lint warning
       G37  upsert, delete, selectCount/Sum/Max/Min now documented in LANGUAGE-SPEC.md
-      G38  deleteAndReturnResult must import DeleteResult from Tesl.DB (not Tesl.Prelude)
+      G38  deleteAndReturnResult returns Int without a result ADT import
       G39  Proof arity mismatch at declaration now correctly rejected (was: silently accepted)
       G40  Nested transaction correctly gives P001 error
       G41  Non-exhaustive case expression is correctly detected
@@ -213,25 +213,20 @@ let test_g37_upsert_compiles () =
     "  upsert Product { id: id, name: name, price: price } onConflict [id] doUpdate [name, price]\n" in
   should_pass src
 
-(* ── G38: deleteAndReturnResult requires import from Tesl.DB ─────────────── *)
+(* ── G38: deleteAndReturnResult returns Int ──────────────────────────────── *)
 (*                                                                              *)
-(* `DeleteResult` and its constructors `NoRowDeleted`/`RowsDeleted` must be   *)
-(* imported from Tesl.DB, not Tesl.Prelude. This is not obvious from the      *)
-(* surface language — users expect common return types in the prelude.        *)
-let test_g38_delete_result_needs_db_import () =
+(* The count result needs only the database capability imports.               *)
+let test_g38_delete_result_returns_int () =
   let src =
     prelude ^
-    (* Wrong: DeleteResult is NOT in Tesl.Prelude *)
     "import Tesl.DB exposing [dbRead, dbWrite]\n" ^
     "entity Product table \"products\" primaryKey id {\n" ^
     "  id: String\n" ^
     "  name: String\n" ^
     "  price: Int\n" ^
     "}\n" ^
-    (* Forget to import DeleteResult *)
-    "fn removeProduct(id: String) -> Unit requires [dbWrite] =\n" ^
-    "  delete p from Product where p.id == id\n" in
-  (* Returning Unit from delete is fine — no DeleteResult needed *)
+    "fn removeProduct(id: String) -> Int requires [dbWrite] =\n" ^
+    "  deleteAndReturnResult p from Product where p.id == id\n" in
   should_pass src
 
 (* ── G39: Proof arity mismatch at declaration silently accepted ─────────── *)
@@ -447,7 +442,7 @@ let () =
     "G35", [ test_case "ForAll on non-List/Set type now rejected" `Quick test_g35_forall_on_non_list_silently_compiles ];
     "G36", [ test_case "handler with unused declared capability — no lint warning" `Quick test_g36_handler_unused_capability_no_warning ];
     "G37", [ test_case "upsert compiles correctly (now documented)" `Quick test_g37_upsert_compiles ];
-    "G38", [ test_case "delete returns Unit — no need to import DeleteResult" `Quick test_g38_delete_result_needs_db_import ];
+    "G38", [ test_case "deleteAndReturnResult returns Int" `Quick test_g38_delete_result_returns_int ];
     "G39", [ test_case "proof arity mismatch at declaration now rejected" `Quick test_g39_proof_arity_mismatch_at_declaration ];
     "G40", [ test_case "nested transaction correctly rejected (P001)" `Quick test_g40_nested_transaction_rejected ];
     "G41", [ test_case "non-exhaustive case expression correctly detected" `Quick test_g41_non_exhaustive_case_detected ];

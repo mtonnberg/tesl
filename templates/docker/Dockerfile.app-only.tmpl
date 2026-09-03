@@ -1,10 +1,15 @@
 # syntax=docker/dockerfile:1
-FROM debian:bookworm-slim
+# The Go build is performed outside this image. Distroless removes the shell,
+# package manager, and general-purpose userland from the production artifact.
+FROM gcr.io/distroless/static-debian12:nonroot
 LABEL org.opencontainers.image.title="__APP_NAME__" \
-      org.opencontainers.image.description="Tesl Go app (external PostgreSQL)"
+      org.opencontainers.image.description="Tesl Go app (external PostgreSQL)" \
+      org.opencontainers.image.revision="__REVISION__" \
+      org.opencontainers.image.created="__CREATED__" \
+      org.opencontainers.image.source="__SOURCE__"
 WORKDIR /opt/tesl/app
 COPY tesl-app /usr/local/bin/tesl-app
 ENV PORT=__PORT__
 EXPOSE __PORT__
-USER 65532:65532
+USER nonroot:nonroot
 ENTRYPOINT ["/usr/local/bin/tesl-app"]

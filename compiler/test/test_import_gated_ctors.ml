@@ -395,7 +395,7 @@ let t_exhaustiveness_covers_the_groups () =
      hand-written — but a gated ADT with no rows there is a `case` that is
      silently unchecked for exhaustiveness.  Known-and-recorded gaps are listed
      explicitly rather than skipped, so closing one is a visible edit. *)
-  let recorded_gaps = [ "DeleteResult"; "JobResult" ] in
+   let recorded_gaps = [] in
   let missing =
     List.concat_map (fun (_m, ty, ctors) ->
       if List.mem ty recorded_gaps then []

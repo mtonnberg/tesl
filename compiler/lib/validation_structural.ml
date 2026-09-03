@@ -2308,10 +2308,14 @@ let config_block_schema = function
   | "SseChannel" -> [ "database", VDatabaseRef, true; "payload", VTypeRef, true ]
   | "Cache" -> [ "database", VDatabaseRef, true; "valueType", VTypeRef, true;
                  "defaultTtl", VInt, false ]
+  | "TelemetryConfig" -> [ "service", VStr, true; "endpoint", VStr, true;
+                           "console", VBool, true; "metrics", VBool, false;
+                           "metricsInterval", VInt, false ]
   (* App-pass entry point: `main() -> App = App { … }`. *)
   | "App" -> [ "database", VDatabaseRef, true; "queues", VRefList, false;
                "email", VRefList, false; "sseChannels", VRefList, false;
                "api", VTypeRef, true; "port", VExpr, false;
+               "telemetry", VSub "TelemetryConfig", false;
                "static", VStr, false; "mountPath", VMountPath, false ]
   (* Agent { provider, systemPrompt, maxTokens, tools } is a typed-record constructor
      validated by the type checker (registered record fields), so it needs no
@@ -2326,6 +2330,18 @@ let config_block_schema = function
     an editor hint earns its keep. *)
 let config_field_doc (block : string) (field : string) : string =
   match block, field with
+  | "TelemetryConfig", "service" ->
+    "Service name attached to telemetry events and metrics."
+  | "TelemetryConfig", "endpoint" ->
+    "OTLP collector base URL; `\"in-memory\"` or an empty string keeps signals local."
+  | "TelemetryConfig", "console" ->
+    "Print telemetry events to stderr for local development."
+  | "TelemetryConfig", "metrics" ->
+    "Enable metrics recording and export. Defaults to enabled, like legacy `initTelemetry`."
+  | "TelemetryConfig", "metricsInterval" ->
+    "Metrics export interval in milliseconds. Defaults to 60000."
+  | "App", "telemetry" ->
+    "Optional startup telemetry configuration; use `TelemetryConfig { service, endpoint, console }`."
   | "App", "mountPath" ->
     "Serve every route the `api` block declares under this path prefix, e.g. \
      `\"/api\"` makes `get \"/widgets\"` answer at `/api/widgets`. Route strings \
@@ -2368,7 +2384,8 @@ let cfg_expr_loc (e : expr) : loc = match e with
   | ELit r -> r.loc | EVar r -> r.loc | EApp r -> r.loc | EConstructor r -> r.loc
   | ERecord r -> r.loc | EList r -> r.loc | EField r -> r.loc | _ -> dummy_loc ""
 
-let check_typed_config_blocks (decls : top_decl list) : validation_error list =
+let check_typed_config_blocks (m : module_form) : validation_error list =
+  let decls = m.decls in
   let names f = List.filter_map f decls in
   let dbs = names (function DDatabase d -> Some d.name | _ -> None) in
   let entities = names (function DEntity e -> Some e.name | _ -> None) in
@@ -2426,7 +2443,10 @@ let check_typed_config_blocks (decls : top_decl list) : validation_error list =
          else []
        | _ -> err (Printf.sprintf "field `%s` must be a String literal, e.g. \"/api\"" fname))
     | VBool ->
-      (match v with ELit { lit = LBool _; _ } -> [] | _ -> err (Printf.sprintf "field `%s` must be a Bool (true/false)" fname))
+      (match v with
+       | ELit { lit = LBool _; _ }
+       | EConstructor { name = "True" | "False"; _ } -> []
+       | _ -> err (Printf.sprintf "field `%s` must be a Bool (true/false)" fname))
     | VSub sub -> check_record (cfg_expr_loc v) sub (cfg_fields v)
     | VBackoff ->
       (match cfg_ctor v with
@@ -2563,7 +2583,23 @@ let check_typed_config_blocks (decls : top_decl list) : validation_error list =
       (match tail fd.body with
        | (ERecord { type_hint = Some "App"; _ }
          | EApp { fn = EConstructor { name = "App"; _ }; arg = ERecord _; _ }) as e ->
-         check_record fd.loc "App" (cfg_fields e)
+         let fields = cfg_fields e in
+         let telemetry_imported =
+           List.exists (fun (imp : import_decl) ->
+             imp.module_name = "Tesl.Telemetry" &&
+             match imp.names with
+             | ImportAll -> true
+             | ImportExposing names -> List.mem "TelemetryConfig" names
+           ) m.imports
+         in
+         let telemetry_import_error =
+           match List.assoc_opt "telemetry" fields with
+           | Some value when cfg_ctor value = Some "TelemetryConfig" && not telemetry_imported ->
+             [ make_error (cfg_expr_loc value)
+                 "`TelemetryConfig` requires `import Tesl.Telemetry exposing [TelemetryConfig]`" ]
+           | _ -> []
+         in
+         check_record fd.loc "App" fields @ telemetry_import_error
        | _ -> [])
     | DAgent r -> check_decl "Agent" r.loc r.config_expr
     | _ -> []
@@ -2635,4 +2671,3 @@ let check_app_wiring (decls : top_decl list) : validation_error list =
   decl_db_errs @ app_errs
 
 (* ── 2. SQL/record field name validation ─────────────────────────────────── *)
-

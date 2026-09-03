@@ -45,9 +45,11 @@ let ref_collect body =
     | EServe { port; _ } -> walk port
     | ELit { lit = LInterp segs; _ } ->
       List.iter (function IExpr e -> walk e | ILiteral _ -> ()) segs
-    | ELit _ | EVar _ | EStartWorkers _
-    | ECacheGet _ | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _
-    | ESendEmail _ | EStartEmailWorker _ -> ()
+     | ELit _ | EVar _ | EStartWorkers _
+     | ECacheGet _ | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _
+     | ESendEmail _ | EStartEmailWorker _ -> ()
+     | ESqlQuery { query; _ } ->
+       Ast_visitor.fold_sql_query (fun () child -> walk child) () query
   in
   walk body; List.rev !acc
 

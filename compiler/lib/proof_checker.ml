@@ -964,8 +964,8 @@ use the named constructor instead: `ok %s { ... } ::: ...`" b.name } :: !errors
       | ELit _ | EVar _ | EField _ | EApp _ | EBinop _ | EUnop _
       | ERecord _ | EList _ | EFail _ | ETelemetry _ | EEnqueue _
       | EPublish _ | EStartWorkers _ | ECacheGet _ | ECacheSet _
-      | ECacheDelete _ | ECacheInvalidate _ | ESendEmail _
-      | EStartEmailWorker _ | EServe _ | EConstructor _ | ELambda _
+       | ECacheDelete _ | ECacheInvalidate _ | ESendEmail _
+       | EStartEmailWorker _ | EServe _ | EConstructor _ | ELambda _ | ESqlQuery _
       -> ()
     in
     validate_ok_expr fd.body;
@@ -1522,8 +1522,11 @@ let check_module (m : module_form) : proof_error list =
       expr_contains_transaction body
     | ELambda { body; _ } -> expr_contains_transaction body
     | ECacheGet _ | ECacheDelete _ | ECacheInvalidate _ -> false
-    | ECacheSet { value; _ } -> expr_contains_transaction value
-    | ESendEmail _ | EStartEmailWorker _ -> false
+     | ECacheSet { value; _ } -> expr_contains_transaction value
+     | ESendEmail _ | EStartEmailWorker _ -> false
+     | ESqlQuery { query; _ } ->
+       Ast_visitor.fold_sql_query
+         (fun found child -> found || expr_contains_transaction child) false query
   in
   let rec expr_called_functions (e : expr) : string list =
     let dedup = List.sort_uniq String.compare in
@@ -1559,8 +1562,11 @@ let check_module (m : module_form) : proof_error list =
       | ELambda { body; _ } ->
       expr_called_functions body
     | ECacheGet _ | ECacheDelete _ | ECacheInvalidate _ -> []
-    | ECacheSet { value; _ } -> expr_called_functions value
-    | ESendEmail _ | EStartEmailWorker _ -> []
+     | ECacheSet { value; _ } -> expr_called_functions value
+     | ESendEmail _ | EStartEmailWorker _ -> []
+     | ESqlQuery { query; _ } ->
+       dedup (Ast_visitor.fold_sql_query
+         (fun acc child -> acc @ expr_called_functions child) [] query)
   in
   let rec close_transaction_functions txn_funcs =
     let grown =
@@ -1932,8 +1938,11 @@ supplies the wrong arguments (%s); the body must return the declared fact about 
         | EStartWorkers _ | EServe _ -> ()
         | ELambda { body; _ } -> check_nested_txn in_txn body
         | ECacheGet _ | ECacheDelete _ | ECacheInvalidate _ -> ()
-        | ECacheSet { value; _ } -> check_nested_txn in_txn value
-        | ESendEmail _ | EStartEmailWorker _ -> ()
+         | ECacheSet { value; _ } -> check_nested_txn in_txn value
+         | ESendEmail _ | EStartEmailWorker _ -> ()
+         | ESqlQuery { query; _ } ->
+           Ast_visitor.fold_sql_query
+             (fun () child -> check_nested_txn in_txn child) () query
       in
       check_nested_txn false fd.body;
 
