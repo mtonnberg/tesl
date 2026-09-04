@@ -213,13 +213,13 @@ func TestDynamicMetricNamesAreGloballyBounded(t *testing.T) {
 	_ = Counter("large.attribute", FromInt64(1), attributes("key", strings.Repeat("v", maxMetricAttributeBytes)))
 
 	series := MetricSeriesSnapshot()
-	if len(series) > maxMetricSeriesTotal+1 {
-		t.Fatalf("retained %d series, want at most %d", len(series), maxMetricSeriesTotal+1)
+	if len(series) > maxMetricSeriesTotal {
+		t.Fatalf("retained %d series, want at most %d", len(series), maxMetricSeriesTotal)
 	}
-	if len(telemetry.instrumentSeries) > maxMetricSeriesTotal+1 {
-		t.Fatalf("retained %d instruments, want at most %d", len(telemetry.instrumentSeries), maxMetricSeriesTotal+1)
+	if len(telemetry.instrumentSeries) > maxMetricSeriesTotal {
+		t.Fatalf("retained %d instruments, want at most %d", len(telemetry.instrumentSeries), maxMetricSeriesTotal)
 	}
-	if !hasSeries(metricOverflowName, "otel.metric.overflow", "true", int64(maxMetricSeriesTotal+2)) {
+	if !hasSeries(metricOverflowName, "otel.metric.overflow", "true", int64(maxMetricSeriesTotal+3)) {
 		t.Fatalf("missing bounded overflow series in %+v", series)
 	}
 }
