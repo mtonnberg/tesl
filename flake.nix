@@ -185,15 +185,12 @@
         '' + cliBody);
 
         # ── tesl-lsp wrapper ──────────────────────────────────────────────────
-         # Sets TESL_COMPILER for the Go LSP without needing TESL_REPO_ROOT. An
-         # inherited TESL_COMPILER wins: the editor
-        # extension points a repo checkout's LSP at that checkout's fresh
-        # compiler/_build binary, and clobbering it here is what silently pinned
-        # every diagnostic to the store compiler of whatever revision the user
-        # last ran `nix profile install` on — new checks looked simply absent.
+        # Always use the immutable packaged compiler. In particular, do not let
+        # a workspace-provided environment variable replace it with executable
+        # content controlled by that workspace.
         tesl-lsp = pkgs.writeShellScriptBin "tesl-lsp" (''
           export TESL_OCAML_COMPILER="${tesl-compiler}/bin/tesl-compiler"
-          export TESL_COMPILER="''${TESL_COMPILER:-$TESL_OCAML_COMPILER}"
+          export TESL_COMPILER="$TESL_OCAML_COMPILER"
           exec "${tesl-go-tools}/bin/tesl-lsp" "$@"
         '');
 

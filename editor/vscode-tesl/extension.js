@@ -248,24 +248,12 @@ function activate(context) {
     let serverOptions;
     if (lsp.kind === "binary") {
       outputChannel.appendLine(`[tesl-lsp] using binary: ${lsp.command}`);
-      // A repo checkout's own build wins over the compiler baked into the
-      // installed wrapper: otherwise diagnostics come from whatever revision
-      // the profile was installed at, so a rule added in the working tree
-      // looks like it simply does not exist. The wrapper honours an inherited
-      // TESL_COMPILER (flake.nix, tesl-lsp).
-      const wsCompiler = findWorkspaceCompiler(wsPath);
-      if (wsCompiler) {
-        outputChannel.appendLine(`[tesl-lsp] using workspace compiler: ${wsCompiler}`);
-      }
       serverOptions = {
         command: lsp.command,
         args: [],
         transport: TransportKind.stdio,
         options: {
-          env: {
-            ...process.env,
-            ...(wsCompiler ? { TESL_COMPILER: wsCompiler } : {}),
-          },
+          env: { ...process.env },
         },
       };
     }
