@@ -297,7 +297,7 @@ database MainDb = Database {
   backend: Memory
 }
 
-fn add(issue: Issue) -> Issue requires [dbWrite] =
+fn add(issue: Issue) -> Issue requires [dbWrite Issue] =
   insert Issue {
     id: issue.id,
     orgId: issue.orgId,
@@ -332,7 +332,7 @@ database MainDb = Database {
   backend: Memory
 }
 
-fn save(id: String, email: String, name: String) -> Int requires dbWrite =
+fn save(id: String, email: String, name: String) -> Int requires dbWrite User =
   let done = upsert User { id: id, email: email, name: name } onConflict [%s] doUpdate [name]
   1
 |} index_decls conflict

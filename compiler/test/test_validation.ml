@@ -685,7 +685,7 @@ let test_imported_capability_alias_covers_builtin_requirement () =
   let entry_path = Filename.concat temp_dir "main.tesl" in
   let caps_src = {|module Caps exposing [localRead]
 import Tesl.DB exposing [dbRead]
-capability localRead implies dbRead
+capability localRead implies dbRead Thing
 |} in
   let entry_src = {|module Main exposing []
 import Tesl.Prelude exposing [String]
@@ -855,7 +855,7 @@ import Tesl.DB exposing [dbRead, dbWrite]
 entity Thing table "things" primaryKey id {
   id: String
 }
-handler createThing(id: String) -> String requires [dbRead] =
+handler createThing(id: String) -> String requires [dbRead Thing] =
   insert Thing { id: id }
 |} "does not declare the required capabilities"
 
@@ -866,7 +866,7 @@ import Tesl.DB exposing [dbWrite]
 entity Thing table "things" primaryKey id {
   id: String
 }
-handler createThing(id: String) -> String requires [dbWrite] =
+handler createThing(id: String) -> String requires [dbWrite Thing] =
   insert Thing { id: id }
 |}
 
@@ -1012,7 +1012,7 @@ entity Thing table "things" primaryKey id {
   id: String
   parentId: String
 }
-fn relink(id: String, parentId: String) -> String requires [dbWrite] =
+fn relink(id: String, parentId: String) -> String requires [dbWrite Thing] =
   transaction {
     update t in Thing
       where t.id == id
@@ -1097,21 +1097,21 @@ entity Product table "products" primaryKey id {
   category: String
   price: Int
 }
-fn findCheapInCategory(cat: String, maxPrice: Int) -> List Product requires [dbRead] =
+fn findCheapInCategory(cat: String, maxPrice: Int) -> List Product requires [dbRead Product] =
   select p from Product where p.category == cat && p.price <= maxPrice
-fn findFeatured(cat1: String, cat2: String) -> List Product requires [dbRead] =
+fn findFeatured(cat1: String, cat2: String) -> List Product requires [dbRead Product] =
   select p from Product where p.category == cat1 || p.category == cat2
-fn removeProduct(id: String) -> Unit requires [dbWrite] =
+fn removeProduct(id: String) -> Unit requires [dbWrite Product] =
   delete p from Product where p.id == id
-fn expensiveProducts(minPrice: Int) -> List Product requires [dbRead] =
+fn expensiveProducts(minPrice: Int) -> List Product requires [dbRead Product] =
   select p from Product where p.price > minPrice
-fn discounted(maxPrice: Int) -> List Product requires [dbRead] =
+fn discounted(maxPrice: Int) -> List Product requires [dbRead Product] =
   select p from Product where p.price < maxPrice
-fn notInCategory(cat: String) -> List Product requires [dbRead] =
+fn notInCategory(cat: String) -> List Product requires [dbRead Product] =
   select p from Product where p.category != cat
-fn countInCategory(cat: String) -> Int requires [dbRead] =
+fn countInCategory(cat: String) -> Int requires [dbRead Product] =
   selectCount p from Product where p.category == cat
-fn sumInCategory(cat: String) -> Int requires [dbRead] =
+fn sumInCategory(cat: String) -> Int requires [dbRead Product] =
   selectSum p.price from Product where p.category == cat
 |}
 
@@ -1334,7 +1334,7 @@ entity Task table "tasks" primaryKey id {
   id: String
 }
 fn fetchTask(id: String) -> Task ? FromDb (Id == id)
-  requires [dbRead] =
+  requires [dbRead Task] =
   let existing = selectOne task from Task where task.id == id
   case existing of
     Nothing ->
@@ -1342,7 +1342,7 @@ fn fetchTask(id: String) -> Task ? FromDb (Id == id)
     Something task ->
       task
 
-test "named db key alias ok" requires [dbRead] {
+test "named db key alias ok" requires [dbRead Task] {
   let queryId = "task-1"
   let fetched: Task ::: FromDb (Id == queryId) fetched = fetchTask queryId
   expect fetched.id == "task-1"

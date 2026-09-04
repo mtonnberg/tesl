@@ -60,7 +60,7 @@ import Tesl.ApiTest exposing [
 # Declare a capability that implies httpClient.
 # Any handler with `requires [webClient]` can make outbound HTTP requests.
 # You can bundle it with other capabilities:
-#   capability microserviceCap implies httpClient, dbRead
+#   capability microserviceCap implies httpClient
 
 capability webClient implies httpClient
 

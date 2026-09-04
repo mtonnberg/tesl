@@ -15,7 +15,6 @@ import Tesl.Http exposing [HttpRequest, Http.sessionToken]
 import Tesl.Dict exposing [Dict.lookup, Dict.singleton]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.ApiTest exposing [statusOk, statusClientError]
-import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.JWT exposing [jwt, JWT.sign, JWT.verify]
 # The signing key is Tesl.Crypto's `Secret` — one key type for the whole language,
 # and the type `Env.requireSecret` returns.

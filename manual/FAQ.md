@@ -97,8 +97,8 @@ check passwordsMatch(password: String, confirm: String) -> unit ::: PasswordsMat
 
 Capabilities in Tesl represent **effects** or **permissions**. They make explicit what a function can do:
 
-- `dbRead` - Can read from the database
-- `dbWrite` - Can write to the database
+- `dbRead Entity` - Can read that database entity
+- `dbWrite Entity` - Can write and read that same database entity
 - `envRead` - Can read the environment
 - `queue` - Can enqueue background jobs
 - `time` - Can access the current time
@@ -108,11 +108,12 @@ Functions and handlers declare their capabilities in their signature:
 
 ```tesl
 handler get getTodo(id: String ::: ValidTodoId id) -> Todo ? FromDb (Id == id)
-  requires [dbRead] =
+  requires [dbRead Todo] =
   selectOne todo from Todo where todo.id == id
 ```
 
-This handler requires the `dbRead` capability to read from the database.
+This handler requires `dbRead Todo`. Database capabilities are always entity-scoped; bare
+`dbRead`/`dbWrite` grants are compile errors, though their `Tesl.DB` import names stay bare.
 
 ### Can I call C, Rust, or Python from Tesl? Is there an FFI?
 
@@ -150,7 +151,7 @@ check isValidEmail(email: String) -> email: String ::: ValidEmail email =
     fail 400 "Invalid email"
 
 handler post createUser(req: CreateUserRequest ::: ValidRequest req) -> User ? FromDb (Id == user.id)
-  requires [dbWrite] =
+  requires [dbWrite User] =
   # email is guaranteed to be valid here, no need to re-check
   insert User { email: req.email }
 ```
@@ -225,7 +226,7 @@ api TodoApi {
 }
 
 handler get getTodo(id: String ::: ValidTodoId id) -> Todo ? FromDb (Id == id)
-  requires [dbRead] =
+  requires [dbRead Todo] =
   let found = selectOne todo from Todo where todo.id == id
   case found of
     Nothing -> fail 404 "Todo not found"
@@ -289,7 +290,7 @@ codec NewTodo {
 }
 
 handler post createTodo(req: NewTodo ::: ValidNewTodo) -> Todo ? FromDb (Id == todo.id)
-  requires [dbWrite] =
+  requires [dbWrite Todo] =
   # req is already parsed and validated
   insert Todo req
 ```
@@ -300,7 +301,7 @@ In handlers, you can access query parameters through the request. For typed quer
 
 ```tesl
 handler get listTodos(page: Int ::: Positive page, limit: Int ::: Positive limit) -> Paginated Todo
-  requires [dbRead] =
+  requires [dbRead Todo] =
   let offset = (page - 1) * limit in
   let todos = select todo from Todo limit limit offset offset in
   ok { items: todos, page: page, limit: limit, total: countTodos() }
@@ -385,7 +386,7 @@ Use `transaction` to wrap multiple database operations:
 ```tesl
 handler post transferAmount(fromId: String, toId: String, amount: Int ::: Positive amount)
   -> TransferResult
-  requires [dbRead, dbWrite] =
+  requires [dbWrite Account] =
   transaction {
     update account in Account
       where account.id == fromId
@@ -431,7 +432,7 @@ Errors from `check` functions automatically become HTTP error responses. You can
 
 ```tesl
 handler get getTodo(id: String ::: ValidTodoId id) -> Todo ? FromDb (Id == id)
-  requires [dbRead] =
+  requires [dbRead Todo] =
   let found = selectOne todo from Todo where todo.id == id
   case found of
     Nothing -> fail 404 "Todo not found"

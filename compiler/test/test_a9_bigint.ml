@@ -192,7 +192,7 @@ database ItemDb = Database {
   })
 }
 
-fn getFn(itemId: String) -> Maybe Item requires [dbRead] =
+fn getFn(itemId: String) -> Maybe Item requires [dbRead Note] =
   selectOne i from Item where i.id == itemId
 |} huge in
   check_fail "not a valid port\\|port.*range\\|65535" src

@@ -382,7 +382,11 @@ let rec stmt_touches_infra ~pg = function
     capability list, not the expression tree, is what survives to mark the
     block as infrastructure-touching.  [time] and [env] are deterministic /
     local (no external service) and so are never infra. *)
-let capability_class = function
+let capability_class cap =
+  match Ast.resource_capability_parts cap with
+  | Some (("dbRead" | "dbWrite"), _) -> `Db
+  | Some (("queueRead" | "queueWrite" | "pubsub"), _) -> `ExternalService
+  | _ -> match cap with
   (* Database access.  A bare [raco test] only hangs on these when the database
      is Postgres-backed; an in-memory database runs fine, so DB capabilities are
      gated separately on whether the module declares a Postgres database. *)

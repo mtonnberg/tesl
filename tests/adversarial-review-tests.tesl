@@ -717,8 +717,8 @@ test "allPositiveCheck" {
 # TEST 18: CAPABILITY — declared correctly
 # ─────────────────────────────────────────────────────────────────────────────
 
-capability reviewRead implies dbRead
-capability reviewWrite implies dbWrite
+capability reviewRead
+capability reviewWrite
 capability reviewService implies reviewRead, reviewWrite
 
 fn readSomething() -> String

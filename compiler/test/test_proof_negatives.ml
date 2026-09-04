@@ -211,7 +211,7 @@ entity Product table "products" primaryKey id {
   id: String
   qty: Int
 }
-fn f(items: List Product) -> Unit requires [dbRead] =
+fn f(items: List Product) -> Unit requires [dbRead Note] =
   insertMany items in Product
 |}
 
@@ -502,7 +502,7 @@ let () =
     "capabilities", [
       test_case "CN01 capability use must be declared (leak)"     `Quick test_CN01_capability_leak;
       test_case "CN02 undeclared capability rejected"             `Quick test_CN02_undeclared_capability;
-      test_case "CN03 insertMany requires dbWrite (registry)"     `Quick test_CN03_insertMany_requires_dbWrite;
+      test_case "CN03 insertMany requires dbWrite Note (registry)"     `Quick test_CN03_insertMany_requires_dbWrite;
     ];
     "positive", [
       test_case "PC01 boundary check constructs proof"            `Quick test_PC01_check_constructs_proof;

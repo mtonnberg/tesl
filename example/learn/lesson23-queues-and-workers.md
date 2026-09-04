@@ -274,7 +274,7 @@ queue EmailQueue requires [smtpSend] = Queue {
 
 ```tesl
 handler registerUser(req: RegistrationRequest ::: ValidRequest req)
-  requires [dbWrite, queueWrite] =
+  requires [dbWrite User, queueWrite EmailQueue] =
   transaction {
     let userId = generateId "usr_"
     let user   = insert User {
@@ -345,22 +345,22 @@ main() -> App requires [appService, smtpSend] =
 
 The module `Tesl.Queue` provides three built-in capabilities:
 
-- `queueWrite` — required to call `enqueue`.
-- `queueRead` — required to inspect queue status (future: queue monitoring API).
-- `pubsub` — required to call `publish` and to hold open websocket subscriptions (see Lesson 24).
+- `queueWrite QueueName` — required to call `enqueue` for that queue.
+- `queueRead QueueName` — required to consume or inspect that queue.
+- `pubsub ChannelName` — required to publish on that channel (see Lesson 24).
 
-These are analogous to `dbRead` / `dbWrite` from `Tesl.DB`.
+These are analogous to `dbRead Entity` / `dbWrite Entity` from `Tesl.DB`.
 
 ### Implying queue capabilities from application capabilities
 
 Application capabilities imply queue capabilities with `implies`, exactly like database capabilities:
 
 ```tesl
-capability emailWrite implies queueWrite
-capability emailRead  implies queueRead
+capability emailWrite implies queueWrite EmailQueue
+capability emailRead  implies queueRead EmailQueue
 ```
 
-Any function with `requires [emailWrite]` automatically satisfies `queueWrite`. The `enqueue SendEmail` call in `registerUser` above works because `emailWrite` implies `queueWrite`.
+Any function with `requires [emailWrite]` automatically satisfies `queueWrite EmailQueue`. The `enqueue SendEmail` call in `registerUser` above works because `emailWrite` implies that scoped capability.
 
 This design lets you express application-level intent (`emailWrite` = "this code can send emails") while the language enforces the underlying infrastructure access (`queueWrite` = "this code can write to the job queue").
 

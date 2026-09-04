@@ -282,8 +282,8 @@ Four preloaded, all verified to produce the same diagnostics in the browser as
 3. **Type error with a fix** — a missing stdlib import. The diagnostic carries an
    `insert_line` edit titled *"Import String.length from Tesl.String"*; the
    **Apply** button applies it and re-checks.
-4. **Capability error** — `requires [dbRead]` on a function whose body writes.
-   `V001`: *"uses privileged operations and callees requiring `[dbWrite]` but
+4. **Capability error** — `requires [dbRead Note]` on a function whose body writes.
+   `V001`: *"uses privileged operations and callees requiring `[dbWrite Note]` but
    does not declare them"*.
 
 ### Sharing, and the optional position

@@ -88,47 +88,47 @@ fn qtys(ps: List P) -> List Int =
 fn names(ps: List P) -> List String =
   List.map (fn(p: P) -> p.name) ps
 
-fn orderedAsc() -> List P requires [dbRead] =
+fn orderedAsc() -> List P requires [dbRead P] =
   select p from P order p.qty asc
-fn orderedDesc() -> List P requires [dbRead] =
+fn orderedDesc() -> List P requires [dbRead P] =
   select p from P order p.qty desc
-fn orderedByName() -> List P requires [dbRead] =
+fn orderedByName() -> List P requires [dbRead P] =
   select p from P order p.name asc
-fn orderedByDone() -> List P requires [dbRead] =
+fn orderedByDone() -> List P requires [dbRead P] =
   select p from P order p.done asc
-fn orderedByDoneDesc() -> List P requires [dbRead] =
+fn orderedByDoneDesc() -> List P requires [dbRead P] =
   select p from P order p.done desc
 # selectMax/selectMin answer a Maybe: no matching row has no maximum.  These helpers
 # unwrap with a default so the assertions below still speak in plain values, and the
 # newtype-column regression (#2) is unchanged by that.
-fn newest() -> PosixMillis requires [dbRead] =
+fn newest() -> PosixMillis requires [dbRead P] =
   let latest = selectMax p.at from P
   case latest of
     Nothing -> Time.secondsToPosix 0
     Something at -> at
 
-fn oldest() -> PosixMillis requires [dbRead] =
+fn oldest() -> PosixMillis requires [dbRead P] =
   let earliest = selectMin p.at from P
   case earliest of
     Nothing -> Time.secondsToPosix 0
     Something at -> at
 
-fn maxQty() -> Int requires [dbRead] =
+fn maxQty() -> Int requires [dbRead P] =
   let biggest = selectMax p.qty from P
   case biggest of
     Nothing -> 0
     Something qty -> qty
 
-fn minCode() -> Code requires [dbRead] =
+fn minCode() -> Code requires [dbRead P] =
   let smallest = selectMin p.code from P
   case smallest of
     Nothing -> Code 0
     Something code -> code
 
 # The empty answer itself: an entity with no rows yields Nothing, not a zero.
-fn maxOfEmpty() -> Maybe Int requires [dbRead] =
+fn maxOfEmpty() -> Maybe Int requires [dbRead Empty] =
   selectMax e.qty from Empty
-test "order by asc/desc is applied on the Memory backend" requires [dbRead, dbWrite] {
+test "order by asc/desc is applied on the Memory backend" requires [dbRead P, dbWrite P] {
   let _ = insert P { id: "a", qty: 3, name: "cherry", at: Time.secondsToPosix 300, code: Code 7, done: True }
   let _ = insert P { id: "b", qty: 1, name: "apple", at: Time.secondsToPosix 100, code: Code 9, done: False }
   let _ = insert P { id: "c", qty: 2, name: "banana", at: Time.secondsToPosix 200, code: Code 3, done: True }
@@ -141,14 +141,14 @@ test "order by asc/desc is applied on the Memory backend" requires [dbRead, dbWr
 # checker accepts it and PostgreSQL orders booleans (false < true).  Two rows
 # only: Bool has two values, so a third row would make the tie order
 # hash-dependent under the stable sort.
-test "order by on a Bool column sorts false before true (PG parity)" requires [dbRead, dbWrite] {
+test "order by on a Bool column sorts false before true (PG parity)" requires [dbRead P, dbWrite P] {
   let _ = insert P { id: "b", qty: 1, name: "apple", at: Time.secondsToPosix 100, code: Code 9, done: False }
   let _ = insert P { id: "a", qty: 3, name: "cherry", at: Time.secondsToPosix 300, code: Code 7, done: True }
   expect names (orderedByDone ()) == ["apple", "cherry"]
   expect names (orderedByDoneDesc ()) == ["cherry", "apple"]
 }
 
-test "order by on a String column sorts lexicographically" requires [dbRead, dbWrite] {
+test "order by on a String column sorts lexicographically" requires [dbRead P, dbWrite P] {
   let _ = insert P { id: "a", qty: 3, name: "cherry", at: Time.secondsToPosix 300, code: Code 7, done: True }
   let _ = insert P { id: "b", qty: 1, name: "apple", at: Time.secondsToPosix 100, code: Code 9, done: False }
   let _ = insert P { id: "c", qty: 2, name: "banana", at: Time.secondsToPosix 200, code: Code 3, done: True }
@@ -158,9 +158,9 @@ test "order by on a String column sorts lexicographically" requires [dbRead, dbW
 # Regression 4: the checker now refines the where-lowered aggregate's result
 # by the queried FIELD's declared type, so `-> Money` is the accepted (and
 # only runtime-correct) annotation for a Money-column sum with a where-clause.
-fn sumIn(c: String) -> Money requires [dbRead] =
+fn sumIn(c: String) -> Money requires [dbRead L] =
   selectSum l.price from L where l.cat == c
-test "money sum with a where-clause" requires [dbRead, dbWrite] {
+test "money sum with a where-clause" requires [dbRead L, dbWrite L] {
   let _ = insert L { id: "l1", cat: "x", price: Money.usd 100 }
   let _ = insert L { id: "l2", cat: "x", price: Money.usd 250 }
   let _ = insert L { id: "l3", cat: "y", price: Money.usd 999 }
@@ -168,7 +168,7 @@ test "money sum with a where-clause" requires [dbRead, dbWrite] {
   expect Money.minorUnits (sumIn "y") == 999
 }
 
-test "selectMax/selectMin over newtype columns on the Memory backend" requires [dbRead, dbWrite] {
+test "selectMax/selectMin over newtype columns on the Memory backend" requires [dbRead P, dbWrite P] {
   let _ = insert P { id: "a", qty: 3, name: "cherry", at: Time.secondsToPosix 300, code: Code 7, done: True }
   let _ = insert P { id: "b", qty: 1, name: "apple", at: Time.secondsToPosix 100, code: Code 9, done: False }
   let _ = insert P { id: "c", qty: 2, name: "banana", at: Time.secondsToPosix 200, code: Code 3, done: True }
@@ -178,7 +178,7 @@ test "selectMax/selectMin over newtype columns on the Memory backend" requires [
   expect maxQty () == 3
 }
 
-test "selectMax over no matching row is Nothing" requires [dbRead] {
+test "selectMax over no matching row is Nothing" requires [dbRead Empty] {
   expect maxOfEmpty () == Nothing
 }
 

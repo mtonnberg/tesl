@@ -94,7 +94,7 @@ import Tesl.ApiTest exposing [statusOk, responseCookie]
 
 # The human half of this server (there is one: an extension host authenticates
 # both people and apps) needs the session trio. The machine half needs only
-# `dbRead` — verifying a bearer token is a lookup plus a constant-time compare,
+# `dbRead Installation` — verifying a bearer token is a lookup plus a constant-time compare,
 # no clock and no cookie.
 capability sessions implies jwt, time, cookieCap
 
@@ -206,7 +206,7 @@ fn tokenRevoked() -> String =
 # test and never shared.
 
 fn seedFixtures() -> Bool
-  requires [dbWrite] =
+  requires [dbWrite Installation, dbWrite Widget] =
   let installs = [
     Installation {
       id: "install-a",
@@ -280,7 +280,7 @@ fn callerOf(inst: Installation) -> Caller =
 # The store lookup, as a function, so a test can ask what the store holds without
 # reaching for the query grammar inside a test body.  Returns "" for no row.
 fn installationByStored(stored: String) -> String
-  requires [dbRead] =
+  requires [dbRead Installation] =
   case selectOne i from Installation where i.tokenFingerprint == stored of
     Nothing -> ""
     Something inst -> inst.id
@@ -293,7 +293,7 @@ fn installationByStored(stored: String) -> String
 # returned "not found" — a valid credential read as an invalid one, with no error
 # anywhere. Kept as a plain function so the regression is visible without HTTP.
 fn installationForVerifiedTag(claimedId: String, tag: String) -> String
-  requires [dbRead] =
+  requires [dbRead Installation] =
   let verifiedId = check Crypto.checkSignature (machineKey()) (Crypto.signatureFromHex tag) claimedId
   case selectOne i from Installation where i.id == verifiedId of
     Nothing -> "no-row"
@@ -302,7 +302,7 @@ fn installationForVerifiedTag(claimedId: String, tag: String) -> String
 # Revocation, as the operator would do it.  A function rather than an inline
 # statement so a test can revoke between two requests.
 fn revokeInstallation(installId: String) -> Bool
-  requires [dbWrite] =
+  requires [dbWrite Installation] =
   update i in Installation
     where i.id == installId
     set i.revoked = True
@@ -316,7 +316,7 @@ fn revokeInstallation(installId: String) -> Bool
 # caller (both 401, same body).
 
 auth machineAuth(request: HttpRequest) -> c: Caller ::: MachineCaller c
-  requires [dbRead] =
+  requires [dbRead Installation] =
   case bearerCredential request of
     Nothing -> fail 401 "no bearer credential"
     Something token ->
@@ -353,7 +353,7 @@ fn tokenTagPart(token: String) -> Maybe String =
     Nothing
 
 auth hmacMachineAuth(request: HttpRequest) -> c: Caller ::: MachineCaller c
-  requires [dbRead] =
+  requires [dbRead Installation] =
   case bearerCredential request of
     Nothing -> fail 401 "no bearer credential"
     Something token ->
@@ -510,7 +510,7 @@ codec HumanWho {
 # outside.
 
 fn listWidgetsCore(c: Caller ::: MayUse c ReadWidgets) -> WidgetList
-  requires [dbRead] =
+  requires [dbRead Widget] =
   # `order` so the assertion can be exact: row order out of a query is not a
   # guarantee, and an order-dependent test that passes today is a flake.
   let rows = select w from Widget
@@ -523,7 +523,7 @@ fn widgetName(w: Widget) -> String =
   w.name
 
 fn createWidgetCore(c: Caller ::: MayUse c WriteWidgets, id: String, name: String) -> Created
-  requires [dbWrite] =
+  requires [dbWrite Widget] =
   insert Widget { id: id, orgId: c.orgId, name: name }
   Created { id: id, orgId: c.orgId }
 
@@ -538,12 +538,12 @@ handler get hmacWhoami(c: Caller ::: MachineCaller c) -> HmacWho =
   HmacWho { install: c.install, orgId: c.orgId }
 
 handler get listWidgets(c: Caller ::: MachineCaller c) -> WidgetList
-  requires [dbRead] =
+  requires [dbRead Widget] =
   let reader = check mayReadWidgets c
   listWidgetsCore reader
 
 handler post createWidget(c: Caller ::: MachineCaller c, body: NewWidget) -> Created
-  requires [dbWrite] =
+  requires [dbWrite Widget] =
   let writer = check mayWriteWidgets c
   createWidgetCore writer body.id body.name
 
@@ -608,7 +608,7 @@ server MachineServer for MachineApi {
 # that trims, or that accepts a bare token with no scheme, widens the credential
 # space without any test going red. So the rule is pinned directly.
 
-test "the store keeps a digest, never the token" requires [dbRead, dbWrite] {
+test "the store keeps a digest, never the token" requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   let _ = seedFixtures()
   # The plaintext token is NOT a value in the store: looking a row up BY the
   # token (rather than by its digest) finds nothing. A database leak therefore
@@ -619,7 +619,7 @@ test "the store keeps a digest, never the token" requires [dbRead, dbWrite] {
   expect installationByStored (Crypto.fingerprint (tokenAlphaWrite())) == "install-a"
 }
 
-test "a check-bound value works as a SQL operand" requires [dbRead, dbWrite] {
+test "a check-bound value works as a SQL operand" requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   let _ = seedFixtures()
   case tokenTagPart (hmacTokenFor (machineKey()) "install-a") of
     Nothing -> expect False
@@ -668,7 +668,7 @@ test "the same id under two keys yields two different tags" {
 # FLAVOUR A — the happy path
 # ═══════════════════════════════════════════════════════════════════════════
 
-api-test "a valid machine token authenticates and names its own installation" for MachineServer requires [dbRead, dbWrite] {
+api-test "a valid machine token authenticates and names its own installation" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -679,7 +679,7 @@ api-test "a valid machine token authenticates and names its own installation" fo
   expect r.body.orgId == "org-alpha"
 }
 
-api-test "the Bearer scheme is matched case-insensitively" for MachineServer requires [dbRead, dbWrite] {
+api-test "the Bearer scheme is matched case-insensitively" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -694,7 +694,7 @@ api-test "the Bearer scheme is matched case-insensitively" for MachineServer req
   expect shouty.body.install == "install-a"
 }
 
-api-test "a second installation authenticates as ITSELF, not as the first" for MachineServer requires [dbRead, dbWrite] {
+api-test "a second installation authenticates as ITSELF, not as the first" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -715,7 +715,7 @@ api-test "a second installation authenticates as ITSELF, not as the first" for M
 # FLAVOUR A — every way a credential can be wrong
 # ═══════════════════════════════════════════════════════════════════════════
 
-api-test "no Authorization header is a 401" for MachineServer requires [dbRead, dbWrite] {
+api-test "no Authorization header is a 401" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -724,7 +724,7 @@ api-test "no Authorization header is a 401" for MachineServer requires [dbRead, 
   expect r.status == 401
 }
 
-api-test "an empty Authorization header is a 401" for MachineServer requires [dbRead, dbWrite] {
+api-test "an empty Authorization header is a 401" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -733,7 +733,7 @@ api-test "an empty Authorization header is a 401" for MachineServer requires [db
   expect r.status == 401
 }
 
-api-test "a bare token with no scheme is a 401" for MachineServer requires [dbRead, dbWrite] {
+api-test "a bare token with no scheme is a 401" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -744,7 +744,7 @@ api-test "a bare token with no scheme is a 401" for MachineServer requires [dbRe
   expect r.status == 401
 }
 
-api-test "another auth scheme carrying a valid token is a 401" for MachineServer requires [dbRead, dbWrite] {
+api-test "another auth scheme carrying a valid token is a 401" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -758,7 +758,7 @@ api-test "another auth scheme carrying a valid token is a 401" for MachineServer
   expect glued.status == 401
 }
 
-api-test "Bearer with an empty token is a 401" for MachineServer requires [dbRead, dbWrite] {
+api-test "Bearer with an empty token is a 401" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -769,7 +769,7 @@ api-test "Bearer with an empty token is a 401" for MachineServer requires [dbRea
   expect justScheme.status == 401
 }
 
-api-test "an unknown but well-formed token is a 401" for MachineServer requires [dbRead, dbWrite] {
+api-test "an unknown but well-formed token is a 401" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -778,7 +778,7 @@ api-test "an unknown but well-formed token is a 401" for MachineServer requires 
   expect r.status == 401
 }
 
-api-test "a token that differs in one character is a 401" for MachineServer requires [dbRead, dbWrite] {
+api-test "a token that differs in one character is a 401" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -789,7 +789,7 @@ api-test "a token that differs in one character is a 401" for MachineServer requ
   expect r.status == 401
 }
 
-api-test "a strict prefix of a valid token is a 401" for MachineServer requires [dbRead, dbWrite] {
+api-test "a strict prefix of a valid token is a 401" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -800,7 +800,7 @@ api-test "a strict prefix of a valid token is a 401" for MachineServer requires 
   expect oneChar.status == 401
 }
 
-api-test "a valid token with trailing junk is a 401" for MachineServer requires [dbRead, dbWrite] {
+api-test "a valid token with trailing junk is a 401" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -815,7 +815,7 @@ api-test "a valid token with trailing junk is a 401" for MachineServer requires 
   expect doubleSpace.status == 401
 }
 
-api-test "a revoked installation is refused even with the right token" for MachineServer requires [dbRead, dbWrite] {
+api-test "a revoked installation is refused even with the right token" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -827,7 +827,7 @@ api-test "a revoked installation is refused even with the right token" for Machi
   expect r.status == 401
 }
 
-api-test "revoking mid-flight takes effect on the next request" for MachineServer requires [dbRead, dbWrite] {
+api-test "revoking mid-flight takes effect on the next request" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -844,7 +844,7 @@ api-test "revoking mid-flight takes effect on the next request" for MachineServe
   expect after.status == 401
 }
 
-api-test "a refused credential leaves no trace on the next good request" for MachineServer requires [dbRead, dbWrite] {
+api-test "a refused credential leaves no trace on the next good request" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -860,7 +860,7 @@ api-test "a refused credential leaves no trace on the next good request" for Mac
 # Tenancy: the org comes off the witness
 # ═══════════════════════════════════════════════════════════════════════════
 
-api-test "each installation sees only its own org's rows" for MachineServer requires [dbRead, dbWrite] {
+api-test "each installation sees only its own org's rows" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -878,7 +878,7 @@ api-test "each installation sees only its own org's rows" for MachineServer requ
   expect beta.body.names == "beta-one"
 }
 
-api-test "a query parameter cannot re-point a machine caller at another org" for MachineServer requires [dbRead, dbWrite] {
+api-test "a query parameter cannot re-point a machine caller at another org" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -891,7 +891,7 @@ api-test "a query parameter cannot re-point a machine caller at another org" for
   expect r.body.count == "2"
 }
 
-api-test "a write lands in the caller's own org and is invisible to the other" for MachineServer requires [dbRead, dbWrite] {
+api-test "a write lands in the caller's own org and is invisible to the other" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -915,7 +915,7 @@ api-test "a write lands in the caller's own org and is invisible to the other" f
 # Scopes: the refusal is the scope, not the tenant
 # ═══════════════════════════════════════════════════════════════════════════
 
-api-test "a read-only installation may read" for MachineServer requires [dbRead, dbWrite] {
+api-test "a read-only installation may read" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -926,7 +926,7 @@ api-test "a read-only installation may read" for MachineServer requires [dbRead,
   expect r.body.count == "2"
 }
 
-api-test "a read-only installation is 403 on a write, not 401" for MachineServer requires [dbRead, dbWrite] {
+api-test "a read-only installation is 403 on a write, not 401" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -943,7 +943,7 @@ api-test "a read-only installation is 403 on a write, not 401" for MachineServer
   expect String.contains after.body.names "should-not-exist" == False
 }
 
-api-test "a read+write installation in the SAME org may write" for MachineServer requires [dbRead, dbWrite] {
+api-test "a read+write installation in the SAME org may write" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -955,7 +955,7 @@ api-test "a read+write installation in the SAME org may write" for MachineServer
   expect r.body.orgId == "org-alpha"
 }
 
-api-test "a revoked credential is refused before any scope is consulted" for MachineServer requires [dbRead, dbWrite] {
+api-test "a revoked credential is refused before any scope is consulted" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -970,7 +970,7 @@ api-test "a revoked credential is refused before any scope is consulted" for Mac
 # FLAVOUR B — the HMAC-bound token, and the subject-substitution attack
 # ═══════════════════════════════════════════════════════════════════════════
 
-api-test "an HMAC-bound token authenticates the id it was signed for" for MachineServer requires [dbRead, dbWrite] {
+api-test "an HMAC-bound token authenticates the id it was signed for" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -982,7 +982,7 @@ api-test "an HMAC-bound token authenticates the id it was signed for" for Machin
   expect r.body.orgId == "org-alpha"
 }
 
-api-test "an HMAC-bound token for the other installation authenticates as THAT one" for MachineServer requires [dbRead, dbWrite] {
+api-test "an HMAC-bound token for the other installation authenticates as THAT one" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -994,7 +994,7 @@ api-test "an HMAC-bound token for the other installation authenticates as THAT o
   expect r.body.orgId == "org-beta"
 }
 
-api-test "a tag minted for one installation cannot be presented with another id" for MachineServer requires [dbRead, dbWrite] {
+api-test "a tag minted for one installation cannot be presented with another id" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -1013,7 +1013,7 @@ api-test "a tag minted for one installation cannot be presented with another id"
       expect r.status == 401
 }
 
-api-test "a tag signed with another key is a 401" for MachineServer requires [dbRead, dbWrite] {
+api-test "a tag signed with another key is a 401" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -1023,7 +1023,7 @@ api-test "a tag signed with another key is a 401" for MachineServer requires [db
   expect r.status == 401
 }
 
-api-test "a tampered tag is a 401" for MachineServer requires [dbRead, dbWrite] {
+api-test "a tampered tag is a 401" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -1038,7 +1038,7 @@ api-test "a tampered tag is a 401" for MachineServer requires [dbRead, dbWrite] 
       expect r.status == 401
 }
 
-api-test "a non-hex tag is a 401, not a crash" for MachineServer requires [dbRead, dbWrite] {
+api-test "a non-hex tag is a 401, not a crash" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -1051,7 +1051,7 @@ api-test "a non-hex tag is a 401, not a crash" for MachineServer requires [dbRea
   expect empty.status == 401
 }
 
-api-test "a shapeless HMAC token is a 401" for MachineServer requires [dbRead, dbWrite] {
+api-test "a shapeless HMAC token is a 401" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -1064,7 +1064,7 @@ api-test "a shapeless HMAC token is a 401" for MachineServer requires [dbRead, d
   expect onlyDot.status == 401
 }
 
-api-test "a validly signed id for a nonexistent installation is a 401" for MachineServer requires [dbRead, dbWrite] {
+api-test "a validly signed id for a nonexistent installation is a 401" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -1076,7 +1076,7 @@ api-test "a validly signed id for a nonexistent installation is a 401" for Machi
   expect r.status == 401
 }
 
-api-test "a validly signed id for a REVOKED installation is a 401" for MachineServer requires [dbRead, dbWrite] {
+api-test "a validly signed id for a REVOKED installation is a 401" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -1086,7 +1086,7 @@ api-test "a validly signed id for a REVOKED installation is a 401" for MachineSe
   expect r.status == 401
 }
 
-api-test "the two flavours do not accept each other's tokens" for MachineServer requires [dbRead, dbWrite] {
+api-test "the two flavours do not accept each other's tokens" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -1103,7 +1103,7 @@ api-test "the two flavours do not accept each other's tokens" for MachineServer 
 # The credential kinds do not cross
 # ═══════════════════════════════════════════════════════════════════════════
 
-api-test "a human session does not authenticate a machine route" for MachineServer requires [dbRead, dbWrite, sessions] {
+api-test "a human session does not authenticate a machine route" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget, sessions] {
   seed {
     let _ = seedFixtures()
   }
@@ -1119,7 +1119,7 @@ api-test "a human session does not authenticate a machine route" for MachineServ
       expect r.status == 401
 }
 
-api-test "a machine token does not authenticate a session route" for MachineServer requires [dbRead, dbWrite, sessions] {
+api-test "a machine token does not authenticate a session route" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget, sessions] {
   seed {
     let _ = seedFixtures()
   }
@@ -1128,7 +1128,7 @@ api-test "a machine token does not authenticate a session route" for MachineServ
   expect r.status == 401
 }
 
-api-test "a valid session cookie cannot rescue a bad bearer token" for MachineServer requires [dbRead, dbWrite, sessions] {
+api-test "a valid session cookie cannot rescue a bad bearer token" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget, sessions] {
   seed {
     let _ = seedFixtures()
   }
@@ -1143,7 +1143,7 @@ api-test "a valid session cookie cannot rescue a bad bearer token" for MachineSe
       expect r.status == 401
 }
 
-api-test "a bogus cookie does not disturb a valid machine token" for MachineServer requires [dbRead, dbWrite, sessions] {
+api-test "a bogus cookie does not disturb a valid machine token" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget, sessions] {
   seed {
     let _ = seedFixtures()
   }
@@ -1153,7 +1153,7 @@ api-test "a bogus cookie does not disturb a valid machine token" for MachineServ
   expect r.body.install == "install-a"
 }
 
-api-test "a machine request mints no session cookie" for MachineServer requires [dbRead, dbWrite] {
+api-test "a machine request mints no session cookie" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget] {
   seed {
     let _ = seedFixtures()
   }
@@ -1174,7 +1174,7 @@ api-test "a machine request mints no session cookie" for MachineServer requires 
     Nothing -> expect True
 }
 
-api-test "the session half of the same server still works" for MachineServer requires [dbRead, dbWrite, sessions] {
+api-test "the session half of the same server still works" for MachineServer requires [dbRead Installation, dbRead Widget, dbWrite Installation, dbWrite Widget, sessions] {
   seed {
     let _ = seedFixtures()
   }

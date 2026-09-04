@@ -62,8 +62,8 @@ import Tesl.Agent exposing [
 # ══════════════════════════════════════════════════════════════════════════════
 
 capability convAi implies aiProvider
-capability convRead implies dbRead
-capability convWrite implies dbWrite
+capability convRead implies dbRead ConversationRecord, dbRead Order
+capability convWrite implies dbWrite ConversationRecord, dbWrite Order
 capability convPubSub implies pubsub
 capability httpAuth implies jwt
 capability convService implies convAi, convRead, convWrite, convPubSub, httpAuth

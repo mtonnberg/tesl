@@ -29,8 +29,8 @@ import Tesl.Database exposing [
   TcpConnection,
   SocketConnection,
 ]
-capability todoDbRead implies dbRead
-capability todoDbWrite implies dbWrite
+capability todoDbRead implies dbRead Todo
+capability todoDbWrite implies dbWrite Todo
 # `envRead` is part of the closure, not an extra the caller must remember: the
 # cookie-auth path reads the session signing key from the environment, so a
 # capability that grants "read the auth cookie" has to grant that too. Otherwise

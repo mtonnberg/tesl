@@ -452,15 +452,15 @@ let test_CP02_declared_capability_accepted () =
 module CP02 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbRead]
-fn query() -> Int requires [dbRead] = 42
+fn query() -> Int requires [dbRead Note] = 42
 |}
 
 let test_CP03_calling_fn_without_required_capability_rejected () =
-  should_fail "capability\\|requires.*dbWrite\\|missing.*capability" {|
+  should_fail "capability\\|requires.*dbWrite Note\\|missing.*capability" {|
 module CP03 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbWrite]
-fn write() -> Int requires [dbWrite] = 42
+fn write() -> Int requires [dbWrite Note] = 42
 fn noCapabilityFn() -> Int requires [] = write
 |}
 
@@ -469,8 +469,8 @@ let test_CP04_capability_implication_chain_accepted () =
 module CP04 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbRead, dbWrite]
-capability readCap implies dbRead
-capability writeCap implies dbWrite
+capability readCap implies dbRead Note
+capability writeCap implies dbWrite Note
 fn readsData() -> Int requires [readCap] = 1
 fn writesData() -> Int requires [writeCap] = 2
 |}

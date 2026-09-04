@@ -22,14 +22,14 @@ import Tesl.List exposing [List.length]
 entity OrgW table "orgw" primaryKey id { id: String name: String }
 entity ProjW table "projw" primaryKey id { id: String name: String }
 
-fn findOrg(pr: ProjW) -> Maybe OrgW requires [dbRead] =
+fn findOrg(pr: ProjW) -> Maybe OrgW requires [dbRead OrgW] =
   selectOne o from OrgW where o.name == pr.name
 
-fn countBoth(pr: ProjW) -> Int requires [dbRead] =
+fn countBoth(pr: ProjW) -> Int requires [dbRead OrgW] =
   let hits = select o from OrgW where o.id == pr.id && o.name == pr.name
   List.length hits
 
-test "shared-field read in where value operand does not trap (#27)" requires [dbRead, dbWrite] {
+test "shared-field read in where value operand does not trap (#27)" requires [dbRead OrgW, dbWrite OrgW] {
   let _ = insert OrgW { id: "o1", name: "acme" }
   let pr = ProjW { id: "p1", name: "acme" }
   expect (case findOrg pr of
@@ -37,13 +37,13 @@ test "shared-field read in where value operand does not trap (#27)" requires [db
     Nothing -> False)
 }
 
-test "compound where with two shared-field value operands (#27)" requires [dbRead, dbWrite] {
+test "compound where with two shared-field value operands (#27)" requires [dbRead OrgW, dbWrite OrgW] {
   let _ = insert OrgW { id: "same", name: "beta" }
   let pr = ProjW { id: "same", name: "beta" }
   expect countBoth pr == 1
 }
 
-test "no match returns Nothing without trapping (#27)" requires [dbRead, dbWrite] {
+test "no match returns Nothing without trapping (#27)" requires [dbRead OrgW, dbWrite OrgW] {
   let pr = ProjW { id: "px", name: "no-such-org" }
   expect (case findOrg pr of
     Something _ -> False

@@ -610,7 +610,7 @@ fn titleLength(title: String) -> Int =
     src: `module CapabilityMissing exposing [Note, NoteDb, addNote]
 
 import Tesl.Prelude exposing [String]
-import Tesl.DB exposing [dbRead]
+import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Database exposing [Database, Memory]
 
 entity Note table "notes" primaryKey id {
@@ -624,10 +624,10 @@ database NoteDb = Database {
   backend: Memory
 }
 
-# \`requires [dbRead]\` but the body writes. Capabilities are checked, not
+# \`requires [dbRead Note]\` but the body writes. Capabilities are checked, not
 # documented — and this is not something you can forget to test for.
 fn addNote(id: String, body: String) -> Note
-  requires [dbRead] =
+  requires [dbRead Note] =
   insert Note { id: id, body: body }
 `
   }

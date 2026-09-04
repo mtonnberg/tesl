@@ -67,7 +67,7 @@ handler createTodo(
   user:    User    ::: Authenticated user,   # from auth — already proven
   newTodo: NewTodo                            # codec ran isSafeTitle — already proven
 ) -> Todo
-  requires [dbWrite] =
+  requires [dbWrite Todo] =
   insert Todo {
     title:   newTodo.title,   # ValidTitle proof is already here — use it directly
     ownerId: user.id,

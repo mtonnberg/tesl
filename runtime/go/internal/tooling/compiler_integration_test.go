@@ -62,3 +62,31 @@ func TestBuiltCompilerJSONQuerySurface(t *testing.T) {
 		}
 	})
 }
+
+func TestBuiltCompilerAcceptsScopedDatabaseCapabilities(t *testing.T) {
+	_, testFile, _, _ := runtime.Caller(0)
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(testFile), "../../../.."))
+	compiler := filepath.Join(repoRoot, "compiler", "_build", "default", "bin", "main.exe")
+	if _, err := os.Stat(compiler); err != nil {
+		t.Skip("compiler build unavailable")
+	}
+	client := Client{Executable: compiler, Environment: withEnvironment(os.Environ(), "TESL_REPO_ROOT", repoRoot)}
+	source := "module ScopedProbe exposing [Note, listNotes]\n" +
+		"import Tesl.Prelude exposing [List, String]\n" +
+		"import Tesl.DB exposing [dbRead]\n" +
+		"entity Note table \"notes\" primaryKey id { id: String @db(text) }\n" +
+		"fn listNotes() -> List Note requires [dbRead Note] = select note from Note\n"
+	payload, result, err := client.QuerySourceJSON(context.Background(), "--check-json", "/workspace/scoped-probe.tesl", source)
+	if err != nil {
+		t.Fatalf("scoped capability diagnostic query failed: %v (exit=%d stderr=%s payload=%s)", err, result.ExitCode, result.Stderr, payload)
+	}
+	var envelope struct {
+		Diagnostics []json.RawMessage `json:"diagnostics"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Diagnostics) != 0 {
+		t.Fatalf("scoped capability produced editor diagnostics: %s", payload)
+	}
+}

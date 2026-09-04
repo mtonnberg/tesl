@@ -29,7 +29,7 @@ check checkOpen(todo: Todo) -> todo: Todo ::: IsOpen todo =
 
 handler listOpenTodos(user: User ::: Authenticated user)
   -> List Todo ? ForAll (FromDb (OwnerId == user.id) && IsOpen)
-  requires [dbRead] =
+  requires [dbRead Todo] =
   let mine = select todo from Todo where todo.ownerId == user.id
   List.filterCheck checkOpen mine   # proof grows: now includes IsOpen
 ```

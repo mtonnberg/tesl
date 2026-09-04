@@ -1122,6 +1122,18 @@ let check_capabilities ?(extra_caps = []) (decls : top_decl list) : proof_error 
   let errors = ref [] in
   let cap_map = build_cap_map decls @ extra_caps in
   let declared_caps = List.map fst cap_map in
+  let capability_is_declared cap =
+    List.mem cap declared_caps ||
+    match Ast.resource_capability_parts cap with
+    | Some (base, _) -> List.mem base declared_caps
+    | None -> false
+  in
+  let is_bare_db_cap = function "dbRead" | "dbWrite" -> true | _ -> false in
+  let report_bare_db ~what ~name ~loc cap =
+    errors := { loc; message = Printf.sprintf
+      "%s '%s' uses removed bare capability '%s'; database capabilities must name an entity, for example `%s Note`"
+      what name cap cap } :: !errors
+  in
 
   (* Shared rule for every non-DFunc decl kind that carries a `requires [...]`
      list: each listed name must be a declared/imported capability.  (Only a
@@ -1134,6 +1146,9 @@ let check_capabilities ?(extra_caps = []) (decls : top_decl list) : proof_error 
   (* For a stdlib-provided capability the fix is an exact import line, not a
      `capability` declaration — name it (roadmap: ambient_email_cap). *)
   let stdlib_cap_provider cap =
+    let cap = match Ast.resource_capability_parts cap with
+      | Some (base, _) -> base
+      | None -> cap in
     List.find_map (fun (module_name, caps) ->
       if List.mem_assoc cap caps then Some module_name else None
     ) stdlib_capabilities
@@ -1150,7 +1165,8 @@ let check_capabilities ?(extra_caps = []) (decls : top_decl list) : proof_error 
        both can import" in
   let check_requires ~what ~name ~loc caps =
     List.iter (fun cap ->
-      if not (List.mem cap declared_caps) then
+      if is_bare_db_cap cap then report_bare_db ~what ~name ~loc cap
+      else if not (capability_is_declared cap) then
         errors := { loc;
           message = Printf.sprintf
             "%s '%s' requires undeclared capability '%s'%s" what name cap
@@ -1164,7 +1180,9 @@ let check_capabilities ?(extra_caps = []) (decls : top_decl list) : proof_error 
     match decl with
     | DCapability c ->
       List.iter (fun implied ->
-        if not (List.mem implied declared_caps) then
+        if is_bare_db_cap implied then
+          report_bare_db ~what:"capability" ~name:c.name ~loc:c.loc implied
+        else if not (capability_is_declared implied) then
           errors := { loc = c.loc;
             message = Printf.sprintf
               "capability '%s' implies unknown capability '%s'" c.name implied
@@ -1176,7 +1194,9 @@ let check_capabilities ?(extra_caps = []) (decls : top_decl list) : proof_error 
          (`f: (A -> B requires c)` binds the row variable `c`). *)
       let bound_vars = Ast.func_bound_cap_vars fd in
       List.iter (fun cap ->
-        if not (List.mem cap declared_caps) && not (List.mem cap bound_vars) then
+        if is_bare_db_cap cap then
+          report_bare_db ~what:"function" ~name:fd.name ~loc:fd.loc cap
+        else if not (capability_is_declared cap) && not (List.mem cap bound_vars) then
           errors := { loc = fd.loc;
             message = Printf.sprintf
               "function '%s' requires undeclared capability '%s'%s" fd.name cap

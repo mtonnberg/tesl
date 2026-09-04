@@ -135,7 +135,7 @@
         };
 
         # DAST tools are part of the shipped workflow, not runtime downloads.
-        dastTools = [ pkgs.zap pkgs.nuclei ];
+        dastTools = [ pkgs.nuclei ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.zap ];
 
         # ── GNU userland pinned into the wrappers' PATH ────────────────────────
         # #46: on macOS the BSD variants of these tools are what a fresh

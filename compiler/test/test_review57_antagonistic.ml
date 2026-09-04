@@ -672,7 +672,7 @@ let r57_err02_wrong_capability_message () =
 import Tesl.Prelude exposing [String]
 import Tesl.DB exposing [dbRead]
 
-capability myDb implies dbRead
+capability myDb implies dbRead Note
 
 handler test() -> String requires [nonExistentCap] = "ok"
 |})

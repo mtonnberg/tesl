@@ -110,11 +110,11 @@ let proof_prelude =
 (* bare-`Int` return are pinned here.                                           *)
 let test_g31_selectmax_unknown_name () =
   let src = db_prelude ^
-    "fn maxPrice() -> Maybe Int requires [dbRead] =\n" ^
+    "fn maxPrice() -> Maybe Int requires [dbRead Product] =\n" ^
     "  selectMax p.price from Product\n" in
   should_pass src;
   let bare = db_prelude ^
-    "fn maxPrice() -> Int requires [dbRead] =\n" ^
+    "fn maxPrice() -> Int requires [dbRead Product] =\n" ^
     "  selectMax p.price from Product\n" in
   should_fail "cannot unify Maybe Int with Int" bare
 
@@ -128,7 +128,7 @@ let test_g31_selectmax_unknown_name () =
 let test_g32_selectsum_returns_int () =
   let src = db_prelude ^
     (* Return type annotation Int should match selectSum on Int field *)
-    "fn totalPrice() -> Int requires [dbRead] =\n" ^
+    "fn totalPrice() -> Int requires [dbRead Product] =\n" ^
     "  selectSum p.price from Product\n" in
   should_pass src
 
@@ -181,7 +181,7 @@ let test_g35_forall_on_non_list_silently_compiles () =
 
 (* ── G36: Handler with unused capability — no lint warning ──────────────── *)
 (*                                                                              *)
-(* A handler declaring `requires [dbRead, time]` but only using dbRead has    *)
+(* A handler declaring `requires [dbRead Product, time]` but only using dbRead Product has    *)
 (* no issue detected by the compiler. Unused declared capabilities represent  *)
 (* unnecessary privilege that should ideally be flagged by a lint rule.       *)
 (* The compiler silently accepts over-declared capabilities.                  *)
@@ -196,7 +196,7 @@ let test_g36_handler_unused_capability_no_warning () =
     "  price: Int\n" ^
     "}\n" ^
     (* Handler declares [dbRead, time] but only uses dbRead *)
-    "handler getProducts() -> List Product requires [dbRead, time] =\n" ^
+    "handler getProducts() -> List Product requires [dbRead Product, time] =\n" ^
     "  select p from Product\n" in
   should_pass src
 
@@ -209,7 +209,7 @@ let test_g36_handler_unused_capability_no_warning () =
 (* if/when documentation is added.                                            *)
 let test_g37_upsert_compiles () =
   let src = db_prelude ^
-    "fn upsertProduct(id: String, name: String, price: Int) -> Unit requires [dbWrite] =\n" ^
+    "fn upsertProduct(id: String, name: String, price: Int) -> Unit requires [dbWrite Product] =\n" ^
     "  upsert Product { id: id, name: name, price: price } onConflict [id] doUpdate [name, price]\n" in
   should_pass src
 
@@ -225,7 +225,7 @@ let test_g38_delete_result_returns_int () =
     "  name: String\n" ^
     "  price: Int\n" ^
     "}\n" ^
-    "fn removeProduct(id: String) -> Int requires [dbWrite] =\n" ^
+    "fn removeProduct(id: String) -> Int requires [dbWrite Product] =\n" ^
     "  deleteAndReturnResult p from Product where p.id == id\n" in
   should_pass src
 
@@ -254,7 +254,7 @@ let test_g39_proof_arity_mismatch_at_declaration () =
 (* rejected with P001 (transactional atomicity — LANGUAGE-SPEC §20.5).         *)
 let test_g40_nested_transaction_rejected () =
   let src = db_prelude ^
-    "fn nestedTx() -> Unit requires [dbWrite] =\n" ^
+    "fn nestedTx() -> Unit requires [dbWrite Product] =\n" ^
     "  transaction {\n" ^
     "    transaction {\n" ^
     "      insert Product { id: \"1\", name: \"a\", price: 10 }\n" ^
@@ -283,8 +283,8 @@ let test_g42_circular_capability_rejected () =
   let src =
     prelude ^
     "import Tesl.DB exposing [dbRead, dbWrite]\n" ^
-    "capability adminAccess implies dbRead, superAccess\n" ^
-    "capability superAccess implies adminAccess, dbWrite\n" in
+    "capability adminAccess implies dbRead Product, superAccess\n" ^
+    "capability superAccess implies adminAccess, dbWrite Product\n" in
   should_fail "cycle.*adminAccess\\|capability cycle\\|V001" src
 
 (* ── G43: Polymorphic identity function works at multiple call sites ──────── *)
@@ -372,7 +372,7 @@ let test_g47_let_shadowing_rejected () =
 (* type checker, and it can be used in string interpolation as an Int.        *)
 let test_g48_selectcount_returns_int () =
   let src = db_prelude ^
-    "fn countProducts() -> String requires [dbRead] =\n" ^
+    "fn countProducts() -> String requires [dbRead Product] =\n" ^
     "  let n = selectCount p from Product\n" ^
     "  \"Total: ${n}\"\n" in
   should_pass src

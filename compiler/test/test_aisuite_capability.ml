@@ -191,8 +191,8 @@ let insufficient_grants = [
      implied capability must NOT satisfy the requirement for aiProvider. *)
   { g_tag = "httpClient"; g_req = "httpClient"; g_pre = "import Tesl.HttpClient exposing [httpClient]" };
   (* custom capabilities whose implication closure never reaches aiProvider *)
-  { g_tag = "customLog";  g_req = "logCap";    g_pre = "import Tesl.DB exposing [dbRead]\ncapability logCap implies dbRead" };
-  { g_tag = "customDeep"; g_req = "deepCap";   g_pre = "import Tesl.DB exposing [dbWrite]\ncapability midCap implies dbWrite\ncapability deepCap implies midCap" };
+  { g_tag = "customLog";  g_req = "logCap";    g_pre = "import Tesl.DB exposing [dbRead]\ncapability logCap implies dbRead Note" };
+  { g_tag = "customDeep"; g_req = "deepCap";   g_pre = "import Tesl.DB exposing [dbWrite]\ncapability midCap implies dbWrite Note\ncapability deepCap implies midCap" };
   (* a custom cap that implies httpClient (the thing aiProvider implies) — still
      does NOT imply aiProvider, so must be rejected. *)
   { g_tag = "customHttp"; g_req = "netCap";    g_pre = "import Tesl.HttpClient exposing [httpClient]\ncapability netCap implies httpClient" };
@@ -208,7 +208,7 @@ let sufficient_grants = [
   { g_tag = "impliesTwoHop"; g_req = "top";
     g_pre = "capability mid implies aiProvider\ncapability svc implies mid\ncapability top implies svc" };
   { g_tag = "impliesAlongside"; g_req = "svc";
-    g_pre = "import Tesl.DB exposing [dbRead]\ncapability svc implies dbRead, aiProvider" };
+    g_pre = "import Tesl.DB exposing [dbRead]\ncapability svc implies dbRead Note, aiProvider" };
 ]
 
 (* ── Consumer kinds: fn / handler / worker — each with its own V001 wording. *)
@@ -374,9 +374,9 @@ codec EchoArgs {
 (* which tool fn carries dbWrite: the validator or the dispatcher *)
 let tool_cap_sites = [
   "dispatch",
-  "fn validateEcho(argsJson: String) -> EchoArgs = decodeAs \"EchoArgs\" argsJson\nfn dispatchEcho(args: EchoArgs) -> String requires [dbWrite] = args.text";
+  "fn validateEcho(argsJson: String) -> EchoArgs = decodeAs \"EchoArgs\" argsJson\nfn dispatchEcho(args: EchoArgs) -> String requires [dbWrite Note] = args.text";
   "validate",
-  "fn validateEcho(argsJson: String) -> EchoArgs requires [dbWrite] =\n  let _x = decodeAs \"EchoArgs\" argsJson\n  _x\nfn dispatchEcho(args: EchoArgs) -> String = args.text";
+  "fn validateEcho(argsJson: String) -> EchoArgs requires [dbWrite Note] =\n  let _x = decodeAs \"EchoArgs\" argsJson\n  _x\nfn dispatchEcho(args: EchoArgs) -> String = args.text";
 ]
 
 let tool_consumer_decl c_id req =
@@ -437,7 +437,7 @@ let tool_cap_pos =
       Printf.sprintf "P3 tool-%s-cap/%s grants aiProvider+dbWrite -> ok" site_tag c_id,
       (fun () ->
          should_pass
-           (build_tool_module ~mod_id ~c_id ~site_decls ~req:"aiProvider, dbWrite")))
+            (build_tool_module ~mod_id ~c_id ~site_decls ~req:"aiProvider, dbWrite Note")))
       ["fn"; "handler"; "worker"])
     tool_cap_sites
 
@@ -461,7 +461,7 @@ module AiCtrlF exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.DB exposing [dbRead]
 import Tesl.Agent exposing [aiProvider, Agent, mockProvider, ask]
-fn f(prompt: String) -> String requires [dbRead] =
+fn f(prompt: String) -> String requires [dbRead Note] =
   let agent = Agent { provider: mockProvider ["hi"], systemPrompt: "x", maxTokens: 100, tools: [] }
   ask agent prompt
 |}
@@ -473,7 +473,7 @@ module AiCtrlN exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.DB exposing [dbRead]
 import Tesl.Agent exposing [aiProvider, Agent, mockProvider, ask]
-capability logger implies dbRead
+capability logger implies dbRead Note
 handler h(prompt: String) -> String requires [logger] =
   let agent = Agent { provider: mockProvider ["hi"], systemPrompt: "x", maxTokens: 100, tools: [] }
   ask agent prompt

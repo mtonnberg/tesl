@@ -526,7 +526,7 @@ let pos_select_forall () =
     {|
 entity Note table "notes" primaryKey id { id: String authorId: String }
 fn listNotes(user: String) -> List Note ? ForAll (FromDb (AuthorId == user))
-  requires [dbRead] =
+  requires [dbRead Note] =
   select note from Note where note.authorId == user
 |})
 

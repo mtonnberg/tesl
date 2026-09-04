@@ -12,11 +12,23 @@ let null = Ir.json_null
 
 let rec schema_of_ir_type = function
   | Ir.IRString -> obj [field "type" (js "string")]
-  | Ir.IRInt | Ir.IRInt32 -> obj [field "type" (js "integer")]
-  | Ir.IRFloat | Ir.IRPosixMillis -> obj [field "type" (js "number")]
+  | Ir.IRInt -> obj [field "type" (js "integer")]
+  | Ir.IRInt32 -> obj [field "type" (js "integer"); field "minimum" "-2147483648";
+                       field "maximum" "2147483647"]
+  | Ir.IRFloat -> obj [field "type" (js "number")]
+  | Ir.IRPosixMillis -> obj [field "type" (js "integer")]
   | Ir.IRBool -> obj [field "type" (js "boolean")]
-  | Ir.IRMoney -> obj [field "type" (js "object")]
-  | Ir.IRMoneyRate -> obj [field "type" (js "object")]
+  | Ir.IRMoney -> obj [field "type" (js "object");
+      field "properties" (obj [field "minorUnits" (obj [field "type" (js "integer")]);
+                                field "currency" (obj [field "type" (js "string")])]);
+      field "required" (array [js "minorUnits"; js "currency"]);
+      field "additionalProperties" "false"]
+  | Ir.IRMoneyRate -> obj [field "type" (js "object");
+      field "properties" (obj [field "minorUnits" (obj [field "type" (js "integer")]);
+                                field "currency" (obj [field "type" (js "string")]);
+                                field "per" (obj [field "type" (js "string")])]);
+      field "required" (array [js "minorUnits"; js "currency"; js "per"]);
+      field "additionalProperties" "false"]
   | Ir.IRNamed name ->
     if List.mem name ["Unit"; "Json"; "Any"] then obj []
     else obj [field "$ref" (js ("#/components/schemas/" ^ name))]
@@ -25,11 +37,30 @@ let rec schema_of_ir_type = function
     obj [field "type" (js "array"); field "items" (schema_of_ir_type ty)]
   | Ir.IRMaybe ty ->
     obj [field "anyOf" (array [schema_of_ir_type ty; obj [field "type" (js "null")]])]
-  | Ir.IRDict (key, value) ->
-    let _ = key in
+  | Ir.IRDict (Ir.IRString, value) ->
     obj [field "type" (js "object"); field "additionalProperties" (schema_of_ir_type value)]
-  | Ir.IRResult (ok, error) | Ir.IREither (ok, error) ->
-    obj [field "oneOf" (array [schema_of_ir_type ok; schema_of_ir_type error])]
+  | Ir.IRDict (key, value) ->
+    schema_of_ir_type (Ir.IRList (Ir.IRTuple [key; value]))
+  | Ir.IRResult (ok, error) ->
+    obj [field "oneOf" (array [
+      obj [field "type" (js "object");
+           field "properties" (obj [field "tag" (obj [field "const" (js "Ok")]);
+                                     field "value" (schema_of_ir_type ok)]);
+           field "required" (array [js "tag"; js "value"]); field "additionalProperties" "false"];
+      obj [field "type" (js "object");
+           field "properties" (obj [field "tag" (obj [field "const" (js "Err")]);
+                                     field "error" (schema_of_ir_type error)]);
+           field "required" (array [js "tag"; js "error"]); field "additionalProperties" "false"]])]
+  | Ir.IREither (left, right) ->
+    obj [field "oneOf" (array [
+      obj [field "type" (js "object");
+           field "properties" (obj [field "tag" (obj [field "const" (js "Left")]);
+                                     field "value" (schema_of_ir_type left)]);
+           field "required" (array [js "tag"; js "value"]); field "additionalProperties" "false"];
+      obj [field "type" (js "object");
+           field "properties" (obj [field "tag" (obj [field "const" (js "Right")]);
+                                     field "value" (schema_of_ir_type right)]);
+           field "required" (array [js "tag"; js "value"]); field "additionalProperties" "false"]])]
   | Ir.IRTuple elems ->
     obj [field "type" (js "array"); field "prefixItems" (array (List.map schema_of_ir_type elems));
          field "minItems" (string_of_int (List.length elems));
@@ -151,7 +182,9 @@ let unique_type_decls (decls : top_decl list) : top_decl list =
   ) decls
 
 let rec response_schema (ep : Ir.ir_endpoint) =
-  match ep.ire_return with
+  match ep.ire_response_wire_type with
+  | Some name -> schema_of_ir_type (Ir.ir_type_of_type_expr (TName { name; loc = ep.ire_loc }))
+  | None -> match ep.ire_return with
   | IRRetPlain ty -> schema_of_ir_type ty
   | IRRetAttached binding -> schema_of_ir_type binding.irb_type
   | IRRetNamedPack { ty; _ } -> schema_of_ir_type ty
@@ -185,9 +218,12 @@ let operation_for_endpoint (ep : Ir.ir_endpoint) =
   let request_body = match ep.ire_body with
     | None -> []
     | Some body ->
-      [field "requestBody" (obj [field "required" "true";
-        field "content" (obj [field "application/json"
-          (obj [field "schema" (schema_of_ir_type body.irb_type)])])])]
+       let body_type = match ep.ire_body_wire_type with
+         | Some name -> Ir.ir_type_of_type_expr (TName { name; loc = ep.ire_loc })
+         | None -> body.irb_type in
+       [field "requestBody" (obj [field "required" "true";
+         field "content" (obj [field "application/json"
+          (obj [field "schema" (schema_of_ir_type body_type)])])])]
   in
   let responses = [
     field "200" (obj [field "description" (js "Successful response");
@@ -219,7 +255,10 @@ let emit (m : module_form) ~(server_name : string) =
   in
   let api = List.find_opt (function DApi a -> a.name = api_name | _ -> false) m.decls in
   let endpoints = match api with
-    | Some (DApi a) -> List.map Ir.ir_endpoint_of_api_endpoint a.endpoints
+    | Some (DApi a) ->
+      a.endpoints
+      |> List.filter (fun ep -> ep.method_ <> SSE)
+      |> List.map Ir.ir_endpoint_of_api_endpoint
     | _ -> invalid_arg (Printf.sprintf "server `%s` references unknown api `%s`" server_name api_name)
   in
   let paths = List.fold_left (fun acc (ep : Ir.ir_endpoint) ->

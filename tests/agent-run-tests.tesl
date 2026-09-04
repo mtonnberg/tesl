@@ -58,8 +58,8 @@ import Tesl.Agent exposing [
 #   - a `subscribe` SSE route streams those events; the api-test `collect`s them.
 # ────────────────────────────────────────────────────────────────────────────
 
-capability runRead implies dbRead
-capability runWrite implies dbWrite
+capability runRead implies dbRead RunLog
+capability runWrite implies dbWrite RunLog
 capability runPubSub implies pubsub
 capability runQueue implies queueWrite
 capability runWorker implies queueRead, runPubSub, aiProvider

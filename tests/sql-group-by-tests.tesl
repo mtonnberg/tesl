@@ -56,7 +56,7 @@ database GroupByTestDb = Database {
 
 # Instants (UTC): e1/e2 2026-03-01 (10:00, 23:30), e3 2026-03-02 01:00,
 # e4 2026-04-01 00:30, e5 another org on 2026-03-01.
-fn seed() -> Int requires [dbWrite] =
+fn seed() -> Int requires [dbWrite Entry] =
   insert Entry { id: "e1", orgId: "acme", minutes: 60, startedAt: Time.secondsToPosix 1772359200 }
   insert Entry { id: "e2", orgId: "acme", minutes: 30, startedAt: Time.secondsToPosix 1772407800 }
   insert Entry { id: "e3", orgId: "acme", minutes: 45, startedAt: Time.secondsToPosix 1772413200 }
@@ -65,18 +65,18 @@ fn seed() -> Int requires [dbWrite] =
   5
 
 fn minutesPerDay(orgId: String, tz: TimeZone) -> List (Tuple2 PosixMillis Int)
-  requires [dbRead] =
+  requires [dbRead Entry] =
   selectSumBy e.minutes from Entry
     where e.orgId == orgId
     groupBy (Time.truncDay tz e.startedAt)
 
 fn entriesPerMonth(orgId: String) -> List (Tuple2 PosixMillis Int)
-  requires [dbRead] =
+  requires [dbRead Entry] =
   selectCountBy e from Entry
     where e.orgId == orgId
     groupBy (Time.truncMonth Utc e.startedAt)
 
-fn perOrg() -> List (Tuple2 String Int) requires [dbRead] =
+fn perOrg() -> List (Tuple2 String Int) requires [dbRead Entry] =
   selectCountBy e from Entry
     groupBy e.orgId
 
@@ -153,7 +153,7 @@ test "leap day truncates to Feb 2020 / Jan 2020 / its own day" {
 
 # ── Grouped-aggregate queries (Memory backend) ───────────────────────────────
 
-test "selectSumBy day buckets: per-day sums, ordered, exact values" requires [dbRead, dbWrite] {
+test "selectSumBy day buckets: per-day sums, ordered, exact values" requires [dbRead Entry, dbWrite Entry] {
   let _ = seed()
   let days = minutesPerDay "acme" Utc
   expect (List.length days) == 3
@@ -162,7 +162,7 @@ test "selectSumBy day buckets: per-day sums, ordered, exact values" requires [db
   expect (firstValue days) == 90
 }
 
-test "selectCountBy month buckets: March has 3 acme entries, April 1" requires [dbRead, dbWrite] {
+test "selectCountBy month buckets: March has 3 acme entries, April 1" requires [dbRead Entry, dbWrite Entry] {
   let _ = seed()
   let months = entriesPerMonth "acme"
   expect (List.length months) == 2
@@ -170,7 +170,7 @@ test "selectCountBy month buckets: March has 3 acme entries, April 1" requires [
   expect (firstValue months) == 3
 }
 
-test "a zone offset moves a row across the day boundary" requires [dbRead, dbWrite] {
+test "a zone offset moves a row across the day boundary" requires [dbRead Entry, dbWrite Entry] {
   let _ = seed()
   # At UTC+2, e2 (23:30Z) rolls into local March 2 — joining e3's bucket:
   # buckets become Mar1(60), Mar2(30+45), Apr1(15).
@@ -179,7 +179,7 @@ test "a zone offset moves a row across the day boundary" requires [dbRead, dbWri
   expect (firstValue days) == 60
 }
 
-test "plain-column group key counts per org" requires [dbRead, dbWrite] {
+test "plain-column group key counts per org" requires [dbRead Entry, dbWrite Entry] {
   let _ = seed()
   let orgs = perOrg()
   expect (List.length orgs) == 2
@@ -188,7 +188,7 @@ test "plain-column group key counts per org" requires [dbRead, dbWrite] {
   expect (firstOrgValue orgs) == 4
 }
 
-test "a zone-keyed grouped query buckets by the zone's wall clock" requires [dbRead, dbWrite] {
+test "a zone-keyed grouped query buckets by the zone's wall clock" requires [dbRead Entry, dbWrite Entry] {
   let _ = seed()
   # In March, Stockholm is CET (+60): e2 (23:30Z) is already local March 2,
   # same as the fixed +60 result — but written with NO offset bookkeeping.

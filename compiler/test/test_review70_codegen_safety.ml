@@ -112,7 +112,7 @@ database AppDb = Database {
   })
 }
 entity Item table "items" primaryKey id { id: Int name: String }
-fn getItems() -> List Item requires [dbRead] =
+fn getItems() -> List Item requires [dbRead Item] =
   select i from Item
 |}
 
@@ -134,7 +134,7 @@ database AppDb = Database {
   })
 }
 entity Widget table "widgets" primaryKey id { id: Int label: String }
-fn findWidget(label: String) -> Maybe Widget requires [dbRead] =
+fn findWidget(label: String) -> Maybe Widget requires [dbRead Widget] =
   selectOne w from Widget where w.label == label
 |}
 
@@ -156,7 +156,7 @@ database AppDb = Database {
   })
 }
 entity Task table "tasks" primaryKey id { id: Int title: String }
-fn getTask(taskId: Int) -> Maybe Task requires [dbRead] =
+fn getTask(taskId: Int) -> Maybe Task requires [dbRead Task] =
   selectOne t from Task where t.id == taskId
 |}
 
@@ -177,7 +177,7 @@ database AppDb = Database {
   })
 }
 entity Record table "records" primaryKey id { id: Int value: String }
-fn updateRecord(recordId: Int, newValue: String) -> Unit requires [dbWrite] =
+fn updateRecord(recordId: Int, newValue: String) -> Unit requires [dbWrite Record] =
   update r in Record
     where r.id == recordId
     set r.value = newValue
@@ -210,7 +210,7 @@ database AppDb = Database {
   })
 }
 entity Post table "posts" primaryKey id { id: Int title: String score: Int }
-fn getTopPosts() -> List Post requires [dbRead] =
+fn getTopPosts() -> List Post requires [dbRead Post] =
   select p from Post
     order p.score desc
     limit 10

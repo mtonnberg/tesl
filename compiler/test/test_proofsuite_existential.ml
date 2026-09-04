@@ -351,7 +351,7 @@ fn gen() -> exists t: String => String ::: IsTok t requires [random] =
 let pos_insert_pack () =
   should_pass (todo_lib "PosH02" ^ {|
 fn create(t: String) -> exists todoId: String => Todo ? FromDb (Id == todoId)
-  requires [dbRead, dbWrite, random] =
+  requires [dbRead Todo, dbWrite Todo, random] =
   let todoId = generatePrefixedId "todo"
   exists todoId =>
     insert Todo { id: todoId, title: t }
@@ -408,7 +408,7 @@ let pos_select_existential () =
     {|
 entity Todo table "todos" primaryKey id { id: String title: String }
 fn fetchAuto(prefix: String) -> exists todoId: String => Todo ? FromDb (Id == todoId)
-  requires [dbRead, dbWrite, random] =
+  requires [dbRead Todo, dbWrite Todo, random] =
   let todoId = generatePrefixedId prefix
   insert Todo { id: todoId, title: "auto" }
   let r = selectOne t from Todo where t.id == todoId
@@ -423,7 +423,7 @@ fn fetchAuto(prefix: String) -> exists todoId: String => Todo ? FromDb (Id == to
 let pos_handler_existential () =
   should_pass (todo_lib "PosH06" ^ {|
 fn createTodo(title: String) -> exists todoId: String => Todo ? FromDb (Id == todoId)
-  requires [dbRead, dbWrite, random] =
+  requires [dbRead Todo, dbWrite Todo, random] =
   let todoId = generatePrefixedId "todo"
   exists todoId =>
     insert Todo { id: todoId, title: title }
@@ -535,7 +535,7 @@ let pos_structural_insert_existential () =
   should_pass (todo_lib "PosH12" ^ {|
 fn createReturning(title: String)
   -> exists tid: String => Todo ? FromDb (Id == tid)
-  requires [dbRead, dbWrite, random] =
+  requires [dbRead Todo, dbWrite Todo, random] =
   let tid = generatePrefixedId "t"
   exists tid =>
     insert Todo { id: tid, title: title }

@@ -50,7 +50,7 @@ Use `publish ChannelName(key) VariantConstructor { fields }` to send an event. U
 
 ```tesl
 handler updateProfile(userId: String ::: UserId userId, req: ProfileUpdateRequest)
-  requires [dbWrite, pubsub] =
+  requires [dbWrite User, pubsub UserEvents] =
   transaction {
     update User in MainDatabase where Id == userId set { bio: req.bio }
     publish UserEvents(userId) ProfileUpdated { bio: req.bio }

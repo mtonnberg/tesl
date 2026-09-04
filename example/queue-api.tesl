@@ -1,6 +1,5 @@
 module QueueApi exposing [EmailQueue]
 import Tesl.Prelude exposing [Bool(..), List, String, Fact]
-import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Queue exposing [
   deadJobs,
   requeue,
@@ -28,7 +27,7 @@ import Tesl.Database exposing [
 import Tesl.App exposing [App]
 
 capability emailWrite implies queueWrite
-capability appService implies dbRead, dbWrite, emailWrite, pubsub
+capability appService implies emailWrite, pubsub
 
 database MainDatabase = Database {
   schema: "app"

@@ -141,7 +141,7 @@ let test_g53_selectmax_now_in_type_checker () =
   (* The return type is `Maybe Int` since 2026-08-14: an aggregate over no matching row
      has no value of the column's type, so MAX/MIN are optional where SUM is not. *)
   let src = db_prelude ^
-    "fn maxPrice() -> Maybe Int requires [dbRead] =\n" ^
+    "fn maxPrice() -> Maybe Int requires [dbRead Product] =\n" ^
     "  selectMax p.price from Product\n" in
   should_pass src
 
@@ -180,7 +180,7 @@ let test_g55_selectsum_float_field_returns_float () =
     "  id: String\n" ^
     "  amount: Float\n" ^
     "}\n" ^
-    "fn totalSales() -> Float requires [dbRead] =\n" ^
+    "fn totalSales() -> Float requires [dbRead Sale] =\n" ^
     "  selectSum s.amount from Sale\n" in
   should_pass src_correct
 
@@ -464,7 +464,7 @@ let test_g74_bool_string_interpolation () =
 (* Something and Nothing cases in a case expression.                          *)
 let test_g75_selectone_returns_maybe () =
   let src = db_prelude ^
-    "fn findProduct(id: String) -> String requires [dbRead] =\n" ^
+    "fn findProduct(id: String) -> String requires [dbRead Product] =\n" ^
     "  let result = selectOne p from Product where p.id == id\n" ^
     "  case result of\n" ^
     "    Something p -> p.name\n" ^
@@ -478,7 +478,7 @@ let test_g75_selectone_returns_maybe () =
 (* or List Product).                                                           *)
 let test_g76_update_returning_one_type () =
   let src = db_prelude ^
-    "fn updateProductName(id: String, newName: String) -> Product requires [dbWrite] =\n" ^
+    "fn updateProductName(id: String, newName: String) -> Product requires [dbWrite Product] =\n" ^
     "  update p in Product\n" ^
     "    where p.id == id\n" ^
     "    set p.name = newName\n" ^
@@ -494,7 +494,7 @@ let test_g76_update_returning_one_type () =
 let test_g77_unused_capability_declaration_compiles () =
   let src = prelude ^
     "import Tesl.DB exposing [dbRead]\n" ^
-    "capability myRead implies dbRead\n" ^
+    "capability myRead implies dbRead Note\n" ^
     (* myRead is never referenced in any function requires *)
     "fn pureComputation(n: Int) -> Int = n + 1\n" in
   should_pass src

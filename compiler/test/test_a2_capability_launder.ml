@@ -5,7 +5,7 @@
     CheckKind/AuthKind/EstablishKind, so their bodies were NOT walked for
     privileged operations.  A read-only GET handler declaring only [dbRead]
     could route through a `check`/`auth`/`establish` whose body performed a
-    dbWrite (insert/delete/update) with NO covering `requires`; the effect then
+    dbWrite Note (insert/delete/update) with NO covering `requires`; the effect then
     laundered through to runtime, satisfied only by the ambient whole-app union.
 
     After the fix, [cap_check_kind_info] is an EXHAUSTIVE match: check/auth/
@@ -109,7 +109,7 @@ entity AuditLog table "audit_log" primaryKey id {
 
 (* ── check laundering ──────────────────────────────────────────────────────── *)
 
-(* A `check` body performs an insert (dbWrite) with NO `requires`.  Before the
+(* A `check` body performs an insert (dbWrite Note) with NO `requires`.  Before the
    fix this compiled clean (the ambient union satisfied the dbWrite at runtime);
    it must now be a STATIC compile error. *)
 let test_check_launders_dbwrite () =
@@ -129,7 +129,7 @@ check isPositive(taskId: Int) -> taskId: Int ::: Positive taskId =
     fail 400 "must be positive"
 |} audit_entity)
 
-(* Honest declaration: the same check DECLARING `requires [dbWrite]` compiles
+(* Honest declaration: the same check DECLARING `requires [dbWrite Note]` compiles
    clean.  Proves the fix does not over-reject a truthful check. *)
 let test_check_honest_dbwrite_positive () =
   should_pass
@@ -140,7 +140,7 @@ import Tesl.DB exposing [dbRead, dbWrite]
 %s
 fact Positive (taskId: Int)
 check isPositive(taskId: Int) -> taskId: Int ::: Positive taskId
-  requires [dbWrite] =
+  requires [dbWrite AuditLog] =
   let _ = insert AuditLog { id: "audit-1", msg: "checked" }
   if taskId > 0 then
     ok taskId ::: Positive taskId
@@ -164,7 +164,7 @@ check isPositive(taskId: Int) -> taskId: Int ::: Positive taskId =
 
 (* ── auth laundering ───────────────────────────────────────────────────────── *)
 
-(* An `auth` body that performs a selectOne (dbRead) but declares NO `requires`
+(* An `auth` body that performs a selectOne (dbRead Note) but declares NO `requires`
    is rejected for the auth kind specifically. *)
 let test_auth_launders_dbread () =
   should_fail
@@ -188,7 +188,7 @@ auth cookieAuth(request: HttpRequest) -> user: String ::: Authenticated user =
         Something _ -> ok userId ::: Authenticated user
 |} audit_entity)
 
-(* Honest auth: declares a capability that implies dbRead; compiles clean. *)
+(* Honest auth: declares a capability that implies dbRead Note; compiles clean. *)
 let test_auth_honest_dbread_positive () =
   should_pass
     (Printf.sprintf {|
@@ -198,7 +198,7 @@ import Tesl.Http exposing [HttpRequest]
 import Tesl.Dict exposing [Dict.lookup]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.DB exposing [dbRead]
-capability sessionRead implies dbRead
+capability sessionRead implies dbRead AuditLog
 %s
 fact Authenticated (user: String)
 auth cookieAuth(request: HttpRequest) -> user: String ::: Authenticated user
@@ -264,7 +264,7 @@ let () =
   run "A2-Capability-Launder" [
     "check", [
       test_case "check laundering dbWrite -> STATIC reject" `Quick test_check_launders_dbwrite;
-      test_case "check honest requires [dbWrite] -> accepted" `Quick test_check_honest_dbwrite_positive;
+      test_case "check honest requires [dbWrite Note] -> accepted" `Quick test_check_honest_dbwrite_positive;
       test_case "effect-free check -> accepted" `Quick test_check_effect_free_positive;
     ];
     "auth", [

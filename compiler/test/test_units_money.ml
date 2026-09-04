@@ -649,7 +649,7 @@ entity Row table "rows" primaryKey id {
   hourly: MoneyPerDuration
 }
 database Db = Database { entities: [Row], backend: Memory }
-fn cheap() -> List Row requires [dbRead] =
+fn cheap() -> List Row requires [dbRead Row] =
   select r from Row where r.hourly < MoneyRate.perHour (Money.sek 1000)
 |} "materialize Money first"
 
@@ -667,7 +667,7 @@ entity Run table "runs" primaryKey id {
   velocity: Speed
 }
 database Db = Database { entities: [Run], backend: Memory }
-fn fast() -> List Run requires [dbRead] =
+fn fast() -> List Run requires [dbRead Run] =
   select r from Run where r.velocity > Length.meters 1.0
 |} "the where clause compares column `r.velocity` (declared `Speed`)"
 
@@ -683,7 +683,7 @@ entity Run table "runs" primaryKey id {
   velocity: Speed
 }
 database Db = Database { entities: [Run], backend: Memory }
-fn exact() -> List Run requires [dbRead] =
+fn exact() -> List Run requires [dbRead Run] =
   select r from Run where r.velocity == 5.0
 |} "cannot unify Float with Speed"
 
@@ -871,12 +871,12 @@ entity Row table "rows" primaryKey id {
 }
 database SeedDatabase = Database { entities: [Row], backend: Memory }
 
-handler get listRows() -> List Row requires [dbRead] =
+handler get listRows() -> List Row requires [dbRead Row] =
   select r from Row
 api SeedApi { get "/rows" -> List Row }
 server SeedServer for SeedApi { listRows }
 
-api-test "seed with a rate" for SeedServer requires [dbRead, dbWrite] {
+api-test "seed with a rate" for SeedServer requires [dbRead Row, dbWrite Row] {
   seed {
     insert Row { id: "r1", hourly: MoneyRate.perHour (Money.sek 1) }
   }

@@ -30,7 +30,6 @@ import Tesl.Sso exposing [
 ]
 import Tesl.Env exposing [envRead, requireEnv, requireSecret]
 import Tesl.HttpClient exposing [httpClient]
-import Tesl.DB exposing [dbRead]
 import Tesl.Time exposing [time, PosixMillis]
 import Tesl.Crypto exposing [Secret]
 import Tesl.JWT exposing [jwt, JWT.verify]
@@ -97,9 +96,9 @@ fn linkUser(identity: SsoIdentity) -> String =
 # PART 3 — sessionRevoked: deny a renewal, fail-closed
 # ─────────────────────────────────────────────
 # Consulted ONLY when a session RENEWS, never on the stateless verify path. A
-# real app checks its own revocation store — hence `requires [dbRead]`, which
-# (like every capability here) must be granted by `main`.
-fn revoked(_subject: String, _issuedAt: PosixMillis) -> Bool requires [dbRead] =
+# A real app would query its own revocation entity and declare that entity's
+# scoped read capability. This lesson's callback is deliberately a pure stub.
+fn revoked(_subject: String, _issuedAt: PosixMillis) -> Bool =
   False
 
 # ─────────────────────────────────────────────
@@ -108,7 +107,7 @@ fn revoked(_subject: String, _issuedAt: PosixMillis) -> Bool requires [dbRead] =
 # There is nothing SSO-specific here: the callback minted an ordinary signed
 # session cookie, and this reads it exactly like lesson 76. The subject we get
 # back in `sub` is the very String `linkUser` returned; we wrap it into our own
-# `User` record. (A richer app would `dbRead` roles/email by this id here.)
+# `User` record. A richer app would query a scoped roles/email entity here.
 fn subjectOf(claims: Dict String String) -> String =
   case Dict.lookup "sub" claims of
     Nothing -> ""
@@ -160,11 +159,10 @@ database AppDb = Database {
 }
 
 # Every capability the wired functions need is declared HERE and nowhere else:
-# `sessions` (jwt+time+envRead) for the connection and the session auth, `dbRead`
-# for the revocation check, and `httpClient` for the runtime SSO flow's network
-# calls. If any were missing the compiler rejects the program rather than 500 at
-# runtime.
-main() -> App requires [sessions, dbRead, httpClient] =
+# `sessions` (jwt+time+envRead) for the connection and session auth, and
+# `httpClient` for the runtime SSO flow's network calls. If either were missing
+# the compiler rejects the program rather than 500 at runtime.
+main() -> App requires [sessions, httpClient] =
   App {
     database: AppDb
     api: AppServer

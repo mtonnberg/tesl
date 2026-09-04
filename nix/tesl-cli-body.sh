@@ -317,7 +317,7 @@ _tesl_yaml_quote() {
 # deployment explicitly, which keeps CI and local scans equally predictable.
 _tesl_dast() {
   local file="" target="" server="" spec="" report_dir="" scanner="zap"
-  local active=0 allow_remote=0 auth_env="" work="" plan="" generated=0
+  local active=0 allow_remote=0 auth_env="" cookie_env="" work="" plan="" generated=0 zap_port=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --server) server="${2:?tesl dast: --server requires a server name}"; shift 2 ;;
@@ -329,6 +329,7 @@ _tesl_dast() {
       --active) active=1; shift ;;
       --allow-remote) allow_remote=1; shift ;;
       --authorization-env) auth_env="${2:?tesl dast: --authorization-env requires an environment variable}"; shift 2 ;;
+      --cookie-env) cookie_env="${2:?tesl dast: --cookie-env requires an environment variable}"; shift 2 ;;
       --help|-h)
         cat <<'EOF'
 Usage: tesl dast <URL> [file.tesl] [options]
@@ -344,6 +345,7 @@ Options:
   --active                  Enable active checks (otherwise passive baseline only)
   --allow-remote            Permit --active against a non-loopback target
   --authorization-env NAME  Inject Authorization header from an environment variable
+  --cookie-env NAME         Inject Cookie header from an environment variable
 EOF
         return 0
         ;;
@@ -375,23 +377,44 @@ EOF
     *) echo "tesl dast: unsupported scanner '$scanner' (supported: zap)" >&2; return 2 ;;
   esac
   if [ "$active" -eq 1 ] && [ "$allow_remote" -ne 1 ]; then
-    case "$target" in
-      http://localhost|http://localhost:*|https://localhost|https://localhost:*|\
-      http://127.0.0.1|http://127.0.0.1:*|https://127.0.0.1|https://127.0.0.1:*|\
-      http://\[::1\]|http://\[::1\]:*) ;;
+    local authority host port_suffix
+    authority="${target#*://}"
+    authority="${authority%%[/?#]*}"
+    case "$authority" in
+      *'@'*) echo "tesl dast: target URL userinfo is not allowed" >&2; return 2 ;;
+    esac
+    case "$authority" in
+      \[*\]*)
+        host="${authority%%]*}]"
+        port_suffix="${authority#"$host"}"
+        ;;
+      *)
+        host="${authority%%:*}"
+        port_suffix="${authority#"$host"}"
+        ;;
+    esac
+    case "$port_suffix" in
+      ''|:[0-9]*) ;;
+      *) echo "tesl dast: invalid target URL authority" >&2; return 2 ;;
+    esac
+    case "$port_suffix" in *[!0-9:]*) echo "tesl dast: invalid target URL port" >&2; return 2 ;; esac
+    case "$host" in
+      localhost|127.0.0.1|'[::1]') ;;
       *) echo "tesl dast: --active against a non-loopback target requires --allow-remote" >&2; return 2 ;;
     esac
   fi
-  if [ -n "$auth_env" ]; then
-    case "$auth_env" in
-      [A-Za-z_][A-Za-z0-9_]*) ;;
-      *) echo "tesl dast: invalid environment variable name '$auth_env'" >&2; return 2 ;;
+  local secret_env
+  for secret_env in "$auth_env" "$cookie_env"; do
+    [ -z "$secret_env" ] && continue
+    case "$secret_env" in
+      [0-9]*|*[!A-Za-z0-9_]*|'')
+        echo "tesl dast: invalid environment variable name '$secret_env'" >&2; return 2 ;;
     esac
-    [ -n "${!auth_env:-}" ] || {
-      echo "tesl dast: authorization environment variable '$auth_env' is unset or empty" >&2
+    [ -n "${!secret_env:-}" ] || {
+      echo "tesl dast: authentication environment variable '$secret_env' is unset or empty" >&2
       return 2
     }
-  fi
+  done
 
   if [ -z "$file" ] && [ -z "$spec" ]; then
     file="$(_tesl_default_entry "tesl dast <URL> [file.tesl] [options]")" || return 1
@@ -426,6 +449,7 @@ EOF
     *) report_dir="$PWD/$report_dir" ;;
   esac
   mkdir -p "$report_dir" || { echo "tesl dast: cannot create report directory: $report_dir" >&2; return 1; }
+  chmod 700 "$report_dir" || { echo "tesl dast: cannot protect report directory: $report_dir" >&2; return 1; }
   report_dir="$(_tesl_abspath "$report_dir")" || {
     echo "tesl dast: cannot resolve report directory: $report_dir" >&2
     return 1
@@ -445,8 +469,8 @@ EOF
     }
   fi
 
-  local target_q include_q spec_q report_q auth_job active_job auth_ref zap_bin zap_port
-  zap_port="${TESL_ZAP_PORT:-8090}"
+  local target_q include_q spec_q report_q auth_job cookie_job active_job auth_ref zap_bin
+  zap_port="${zap_port:-${TESL_ZAP_PORT:-8090}}"
   target_q="$(_tesl_yaml_quote "$target")"
   include_q="$(_tesl_yaml_quote "$target/.*")"
   spec_q="$(_tesl_yaml_quote "$spec")"
@@ -461,6 +485,19 @@ EOF
       - description: Tesl Authorization header
         matchType: req_header
         matchString: Authorization
+        replacementString: \"$auth_ref\"
+"
+  fi
+  cookie_job=""
+  if [ -n "$cookie_env" ]; then
+    auth_ref='${'"$cookie_env"'}'
+    cookie_job="  - type: replacer
+    parameters:
+      deleteAllRules: false
+    rules:
+      - description: Tesl Cookie header
+        matchType: req_header
+        matchString: Cookie
         replacementString: \"$auth_ref\"
 "
   fi
@@ -487,7 +524,7 @@ env:
       includePaths:
         - $include_q
 jobs:
-$auth_job  - type: openapi
+$auth_job$cookie_job  - type: openapi
     parameters:
       apiFile: $spec_q
       targetUrl: $target_q
@@ -513,6 +550,7 @@ EOF
   case "$zap_port" in
     ''|*[!0-9]*|0) echo "tesl dast: ZAP port must be a positive number" >&2; return 2 ;;
   esac
+  [ "$zap_port" -le 65535 ] || { echo "tesl dast: ZAP port must be at most 65535" >&2; return 2; }
   # A local app commonly listens on 8090 (and the target may use any port), so do not
   # let ZAP fail before scanning merely because its default proxy port is occupied.
   while [ "$zap_port" -lt 65535 ] && (exec 3<>"/dev/tcp/127.0.0.1/$zap_port") 2>/dev/null; do

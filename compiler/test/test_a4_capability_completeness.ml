@@ -82,7 +82,7 @@ handler h(m: Maybe String) -> String requires [] =
       "no"
 |}
 
-(* dbRead select hidden in a guard, requires [] *)
+(* dbRead Note select hidden in a guard, requires [] *)
 let neg_select_guard = {|module SelGuard exposing []
 import Tesl.Prelude exposing [String, Bool(..)]
 import Tesl.Maybe exposing [Maybe(..)]

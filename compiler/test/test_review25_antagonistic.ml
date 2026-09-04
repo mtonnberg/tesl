@@ -429,7 +429,7 @@ fn pipeline(s: String) -> String =
 
 let test_capability_missing_from_requires () =
   (* A function calling an operation that needs dbWrite but only declaring
-     dbRead in requires must be rejected. *)
+     dbRead Note in requires must be rejected. *)
   let src = prelude ^
   "import Tesl.DB exposing [dbRead, dbWrite]\n" ^ {|
 entity Item table "items" primaryKey id {
@@ -438,7 +438,7 @@ entity Item table "items" primaryKey id {
 }
 
 fn badWrite() -> Int
-  requires [dbRead] =
+  requires [dbRead Note] =
   insert Item { id: "x", name: "y" }
   1
 |} in
@@ -790,7 +790,7 @@ let () = run "Review25-Antagonistic" [
       test_case "partial application of check fn compiles (G21)"         `Quick test_partial_application_of_check;
     ];
     "capabilities", [
-      test_case "missing dbWrite in requires caught (G17)"               `Quick test_capability_missing_from_requires;
+      test_case "missing dbWrite Note in requires caught (G17)"               `Quick test_capability_missing_from_requires;
       test_case "empty requires cannot call db (G18)"                    `Quick test_empty_requires_cannot_call_db;
       test_case "leaf capability with no implies compiles (G30)"         `Quick test_capability_empty_implies_ok;
     ];

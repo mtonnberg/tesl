@@ -54,37 +54,37 @@ fn names(ts: List Thing) -> List String =
 
 # ── The shapes under test, single-line ───────────────────────────────────────
 
-fn oneWhereOrder(org: String) -> List Thing requires [dbRead] =
+fn oneWhereOrder(org: String) -> List Thing requires [dbRead Thing] =
   select t from Thing where t.orgId == org order t.name asc
-fn oneWhereOrderLimit(org: String) -> List Thing requires [dbRead] =
+fn oneWhereOrderLimit(org: String) -> List Thing requires [dbRead Thing] =
   select t from Thing where t.orgId == org order t.name asc limit 2
-fn andWhereOrder(org: String) -> List Thing requires [dbRead] =
+fn andWhereOrder(org: String) -> List Thing requires [dbRead Thing] =
   select t from Thing where t.orgId == org && t.archived == False order t.name asc
 
-fn andWhereLimitOffset(org: String) -> List Thing requires [dbRead] =
+fn andWhereLimitOffset(org: String) -> List Thing requires [dbRead Thing] =
   select t from Thing where t.orgId == org && t.archived == False order t.name asc limit 2 offset 1
 
 # The exact shape from the issue: two comparisons and a functional predicate,
 # then order + limit — the variant that used to pass `check` and die on load.
-fn andIlikeOrderLimit(org: String, pat: String) -> List Thing requires [dbRead] =
+fn andIlikeOrderLimit(org: String, pat: String) -> List Thing requires [dbRead Thing] =
   select t from Thing where t.orgId == org && t.archived == False && ilike t.name pat order t.name asc limit 5
 
-fn orWhereOrder(org: String) -> List Thing requires [dbRead] =
+fn orWhereOrder(org: String) -> List Thing requires [dbRead Thing] =
   select t from Thing where t.orgId == org || t.archived == True order t.name asc
 
 # ── The same queries, multi-line (the documented workaround = the oracle) ────
 
-fn oneWhereOrderMulti(org: String) -> List Thing requires [dbRead] =
+fn oneWhereOrderMulti(org: String) -> List Thing requires [dbRead Thing] =
   select t from Thing
     where t.orgId == org
     order t.name asc
 
-fn andWhereOrderMulti(org: String) -> List Thing requires [dbRead] =
+fn andWhereOrderMulti(org: String) -> List Thing requires [dbRead Thing] =
   select t from Thing
     where t.orgId == org && t.archived == False
     order t.name asc
 
-fn andWhereLimitOffsetMulti(org: String) -> List Thing requires [dbRead] =
+fn andWhereLimitOffsetMulti(org: String) -> List Thing requires [dbRead Thing] =
   select t from Thing
     where t.orgId == org && t.archived == False
     order t.name asc
@@ -94,12 +94,12 @@ fn andWhereLimitOffsetMulti(org: String) -> List Thing requires [dbRead] =
 # A multi-line `||` predicate: found while gating #77's class.  The continuation
 # merge handled `&&` only, so `||` spliced the whole left comparison in as one
 # application argument and the query silently failed to lower.
-fn orWhereOrderMulti(org: String) -> List Thing requires [dbRead] =
+fn orWhereOrderMulti(org: String) -> List Thing requires [dbRead Thing] =
   select t from Thing
     where t.orgId == org || t.archived == True
     order t.name asc
 
-fn andIlikeOrderLimitMulti(org: String, pat: String) -> List Thing requires [dbRead] =
+fn andIlikeOrderLimitMulti(org: String, pat: String) -> List Thing requires [dbRead Thing] =
   select t from Thing
     where t.orgId == org && t.archived == False && ilike t.name pat
     order t.name asc
@@ -110,10 +110,10 @@ fn andIlikeOrderLimitMulti(org: String, pat: String) -> List Thing requires [dbR
 # mis-parse and the multi-line one used to fail with "expected ) but got
 # NEWLINE", so a query could not be passed straight to a function at all.
 
-fn countInline(org: String) -> Int requires [dbRead] =
+fn countInline(org: String) -> Int requires [dbRead Thing] =
   List.length (select t from Thing where t.orgId == org && t.archived == False order t.name asc limit 5)
 
-fn countInlineMultiLine(org: String) -> Int requires [dbRead] =
+fn countInlineMultiLine(org: String) -> Int requires [dbRead Thing] =
   List.length (select t from Thing
     where t.orgId == org && t.archived == False
     order t.name asc
@@ -121,15 +121,15 @@ fn countInlineMultiLine(org: String) -> Int requires [dbRead] =
 
 # ── Non-`select` query heads take the same spine ─────────────────────────────
 
-fn oneRow(org: String) -> Maybe Thing requires [dbRead] =
+fn oneRow(org: String) -> Maybe Thing requires [dbRead Thing] =
   selectOne t from Thing where t.orgId == org && t.archived == False order t.name asc
 
-fn countRows(org: String) -> Int requires [dbRead] =
+fn countRows(org: String) -> Int requires [dbRead Thing] =
   selectCount t from Thing where t.orgId == org && t.archived == False
 
 # selectMax answers a Maybe (no matching row has no maximum); the one-line spine this
 # test is about is unchanged by that.
-fn maxQty(org: String) -> Int requires [dbRead] =
+fn maxQty(org: String) -> Int requires [dbRead Thing] =
   let biggest = selectMax t.qty from Thing where t.orgId == org && t.archived == False
   case biggest of
     Nothing -> 0
@@ -138,15 +138,15 @@ fn maxQty(org: String) -> Int requires [dbRead] =
 # A dynamic threshold in the PREDICATE (values there may be any expression —
 # unlike `limit`/`offset`, which take an integer literal), so the property below
 # can vary the query without varying the spelling.
-fn aboveOneLine(org: String, k: Int) -> List Thing requires [dbRead] =
+fn aboveOneLine(org: String, k: Int) -> List Thing requires [dbRead Thing] =
   select t from Thing where t.orgId == org && t.qty >= k order t.name asc
 
-fn aboveMultiLine(org: String, k: Int) -> List Thing requires [dbRead] =
+fn aboveMultiLine(org: String, k: Int) -> List Thing requires [dbRead Thing] =
   select t from Thing
     where t.orgId == org && t.qty >= k
     order t.name asc
 
-fn seed() -> Thing requires [dbRead, dbWrite] =
+fn seed() -> Thing requires [dbRead Thing, dbWrite Thing] =
   let _ = insert Thing { id: "a", orgId: "o1", name: "alpha", qty: 3, archived: False }
   let _ = insert Thing { id: "b", orgId: "o1", name: "beta", qty: 7, archived: False }
   let _ = insert Thing { id: "c", orgId: "o1", name: "gamma", qty: 5, archived: True }
@@ -155,13 +155,13 @@ fn seed() -> Thing requires [dbRead, dbWrite] =
 
 # ── Tests ───────────────────────────────────────────────────────────────────
 
-test "#77: one-line where + order runs and orders" requires [dbRead, dbWrite] {
+test "#77: one-line where + order runs and orders" requires [dbRead Thing, dbWrite Thing] {
   let _ = seed ()
   expect names (oneWhereOrder "o1") == ["alpha", "beta", "epsilon", "gamma"]
   expect names (oneWhereOrderLimit "o1") == ["alpha", "beta"]
 }
 
-test "#77: one-line compound where + order/limit/offset runs" requires [dbRead, dbWrite] {
+test "#77: one-line compound where + order/limit/offset runs" requires [dbRead Thing, dbWrite Thing] {
   let _ = seed ()
   expect names (andWhereOrder "o1") == ["alpha", "beta", "epsilon"]
   expect names (andWhereLimitOffset "o1") == ["beta", "epsilon"]
@@ -169,21 +169,21 @@ test "#77: one-line compound where + order/limit/offset runs" requires [dbRead, 
 
 # The issue's own repro: compiled clean before the fix, then died at load with
 # "t: unbound identifier".  Running it at all is the assertion.
-test "#77: one-line where with && + ilike + order + limit runs" requires [dbRead, dbWrite] {
+test "#77: one-line where with && + ilike + order + limit runs" requires [dbRead Thing, dbWrite Thing] {
   let _ = seed ()
   expect names (andIlikeOrderLimit "o1" "%a%") == ["alpha", "beta"]
   expect names (andIlikeOrderLimit "o1" "%ETA%") == ["beta"]
   expect names (andIlikeOrderLimit "o1" "%zzz%") == []
 }
 
-test "#77: || where + order runs in both spellings" requires [dbRead, dbWrite] {
+test "#77: || where + order runs in both spellings" requires [dbRead Thing, dbWrite Thing] {
   let _ = seed ()
   expect names (orWhereOrder "o1") == ["alpha", "beta", "epsilon", "gamma"]
   expect names (orWhereOrderMulti "o1") == ["alpha", "beta", "epsilon", "gamma"]
 }
 
 # The property that matters: the spelling must not change the answer.
-test "#77: single-line and multi-line spellings agree" requires [dbRead, dbWrite] {
+test "#77: single-line and multi-line spellings agree" requires [dbRead Thing, dbWrite Thing] {
   let _ = seed ()
   expect names (oneWhereOrder "o1") == names (oneWhereOrderMulti "o1")
   expect names (andWhereOrder "o1") == names (andWhereOrderMulti "o1")
@@ -192,13 +192,13 @@ test "#77: single-line and multi-line spellings agree" requires [dbRead, dbWrite
   expect countInline "o1" == countInlineMultiLine "o1"
 }
 
-test "#77: a query in argument position, one line and many" requires [dbRead, dbWrite] {
+test "#77: a query in argument position, one line and many" requires [dbRead Thing, dbWrite Thing] {
   let _ = seed ()
   expect countInline "o1" == 3
   expect countInlineMultiLine "o1" == 3
 }
 
-test "#77: selectOne/selectCount/selectMax take the same one-line spine" requires [dbRead, dbWrite] {
+test "#77: selectOne/selectCount/selectMax take the same one-line spine" requires [dbRead Thing, dbWrite Thing] {
   let _ = seed ()
   expect countRows "o1" == 3
   expect maxQty "o1" == 7
@@ -211,14 +211,14 @@ test "#77: selectOne/selectCount/selectMax take the same one-line spine" require
 # one-line and multi-line spellings of the same query must return the same rows.
 # The rows are seeded first, so the property is not vacuously true on an empty
 # table (both sides would trivially return []).
-test "#77: property - spelling never changes the result" with 40 runs requires [dbRead, dbWrite] {
+test "#77: property - spelling never changes the result" with 40 runs requires [dbRead Thing, dbWrite Thing] {
   let _ = seed ()
   property "one-line == multi-line for any qty threshold" (k: Int where k > 0 && k < 12) {
     names (aboveOneLine "o1" k) == names (aboveMultiLine "o1" k)
   }
 }
 
-test "#77: a dynamic predicate value in a one-line query is read from scope" requires [dbRead, dbWrite] {
+test "#77: a dynamic predicate value in a one-line query is read from scope" requires [dbRead Thing, dbWrite Thing] {
   let _ = seed ()
   expect names (aboveOneLine "o1" 1) == ["alpha", "beta", "epsilon", "gamma"]
   expect names (aboveOneLine "o1" 5) == ["beta", "gamma"]

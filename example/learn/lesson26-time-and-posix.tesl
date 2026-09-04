@@ -84,8 +84,8 @@ import Tesl.Database exposing [
 import Tesl.Maybe exposing [Maybe(..)]
 
 # ─── Capabilities ─────────────────────────────────────────────────────────────
-capability timedRead implies dbRead
-capability timedWrite implies dbWrite, time, random
+capability timedRead implies dbRead Event
+capability timedWrite implies dbWrite Event, time, random
 capability timedService implies timedRead, timedWrite
 
 # ─── Entities using PosixMillis for timestamps ────────────────────────────────

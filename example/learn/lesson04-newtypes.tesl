@@ -129,7 +129,7 @@ test "makeProjectId round-trips" {
 #     publishedAt: PosixMillis    # BIGINT in DB — auto-mapped
 #   }
 #
-#   handler createPost(...) requires [dbWrite, time] =
+#   handler createPost(...) requires [dbWrite Post, time] =
 #     insert Post { id: newId, publishedAt: nowMillis }
 #
 # The general rule: any user-defined newtype wrapping a built-in type

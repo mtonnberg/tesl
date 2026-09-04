@@ -268,6 +268,7 @@ while [ "$#" -gt 0 ]; do
 done
 [ -n "$plan" ] || exit 2
 cp "$plan" "$FAKE_PLAN"
+exit "${FAKE_ZAP_EXIT:-0}"
 EOF
 chmod +x "$WORK/fake-zap"
 printf '%s\n' '{"openapi":"3.1.0"}' > "$WORK/openapi.json"
@@ -314,18 +315,50 @@ fi
 
 # 5) `tesl dast` emits a scanner plan without serializing auth secrets.
 out="$(TESL_ZAP="$WORK/fake-zap" FAKE_PLAN="$FAKE_PLAN" TEST_TOKEN='Bearer secret' \
+  TEST_COOKIE='__Host-session=secret-cookie' \
   tesl_bsd "$PROJ" dast http://localhost:8099 --spec "$WORK/openapi.json" \
-  --authorization-env TEST_TOKEN)"; rc=$?
+  --authorization-env TEST_TOKEN --cookie-env TEST_COOKIE)"; rc=$?
 if [ "$rc" -eq 0 ] && [ -f "$FAKE_PLAN" ] \
    && grep -q 'type: openapi' "$FAKE_PLAN" \
    && grep -q '\${TEST_TOKEN}' "$FAKE_PLAN" \
+   && grep -q '\${TEST_COOKIE}' "$FAKE_PLAN" \
    && ! grep -q 'Bearer secret' "$FAKE_PLAN" \
+   && ! grep -q 'secret-cookie' "$FAKE_PLAN" \
    && grep -q 'reportFile: zap-report.json' "$FAKE_PLAN" \
    && grep -q 'errorLevel: High' "$FAKE_PLAN" \
    && grep -q 'warnLevel: Medium' "$FAKE_PLAN"; then
   pass "tesl dast builds a ZAP plan without leaking authorization secrets"
 else
   fail "tesl dast plan generation failed or leaked a secret (rc=$rc): $out"
+fi
+
+# URL userinfo must not disguise a remote host as loopback.
+out="$(TESL_ZAP="$WORK/fake-zap" FAKE_PLAN="$FAKE_PLAN" \
+  tesl_bsd "$PROJ" dast 'http://localhost:8099@staging.example.test' \
+  --spec "$WORK/openapi.json" --active)"; rc=$?
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q "userinfo is not allowed"; then
+  pass "tesl dast rejects loopback-prefix URL userinfo bypasses"
+else
+  fail "tesl dast accepted a URL userinfo active-scan bypass (rc=$rc): $out"
+fi
+
+# Environment names are identifiers, not shell patterns or expansion syntax.
+out="$(TESL_ZAP="$WORK/fake-zap" FAKE_PLAN="$FAKE_PLAN" \
+  tesl_bsd "$PROJ" dast http://localhost:8099 --spec "$WORK/openapi.json" \
+  --authorization-env 'TOKEN-NAME')"; rc=$?
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q "invalid environment variable name"; then
+  pass "tesl dast rejects malformed authentication environment names"
+else
+  fail "tesl dast accepted a malformed environment name (rc=$rc): $out"
+fi
+
+# Scanner failure must remain the command's failure; CI gates depend on this.
+out="$(TESL_ZAP="$WORK/fake-zap" FAKE_PLAN="$FAKE_PLAN" FAKE_ZAP_EXIT=1 \
+  tesl_bsd "$PROJ" dast http://localhost:8099 --spec "$WORK/openapi.json")"; rc=$?
+if [ "$rc" -eq 1 ]; then
+  pass "tesl dast propagates scanner finding failures"
+else
+  fail "tesl dast swallowed scanner failure (rc=$rc): $out"
 fi
 
 # Active scans against remote targets require an explicit second opt-in.

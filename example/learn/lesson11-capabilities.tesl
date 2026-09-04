@@ -23,12 +23,11 @@ module Lesson11Capabilities exposing [
 #
 # Built-in capabilities from Tesl.Prelude:
 #   time     — access the current time (nowMillis)
-#   dbRead   — read from a database
-#   dbWrite  — write to a database
+#   dbRead Entity   — read one database entity
+#   dbWrite Entity  — write one database entity
 #   env      — read environment variables
 
 import Tesl.Prelude exposing [String]
-import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Time exposing [nowMillis, time, PosixMillis]
 import Tesl.Env exposing [env, envRead]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -37,8 +36,8 @@ import Tesl.Maybe exposing [Maybe(..)]
 # fileRead: permission to read external files or environment.
 capability fileRead # standalone capability, no implications
 
-# auditWrite: permission to write audit logs; implies dbWrite (DB access for logs).
-capability auditWrite implies dbWrite # auditWrite subsumes dbWrite
+# auditWrite: a domain permission to write audit logs.
+capability auditWrite
 
 # appCapability: a coarse-grained capability for the whole application.
 # Any function with appCapability satisfies both auditWrite and fileRead requirements.
@@ -55,9 +54,9 @@ fn readEnvVar(key: String) -> Maybe String requires [envRead] =
 fn getCurrentTime() -> PosixMillis requires [time] =
   nowMillis() # nowMillis returns current Unix time in milliseconds
 
-# This function declares [auditWrite, dbRead].
-# Since auditWrite implies dbWrite, it automatically has dbWrite access too.
-fn logMessage(message: String) -> String requires [auditWrite, dbRead] =
+# This pure teaching stub declares its domain permission. A persisted version
+# would also require `dbWrite AuditLog` at the actual insert site.
+fn logMessage(message: String) -> String requires [auditWrite] =
   "logged: ${message}" # in a real app, this would write to the DB
 
 # This function uses appCapability (implies auditWrite + fileRead) AND calls
@@ -83,15 +82,15 @@ fn readAndWrite(key: String) -> String requires [appCapability, envRead] =
 # requirements up the call stack, making effects visible at every level.
 #
 # "implies" lets you define capability hierarchies:
-#   - Fine-grained: dbRead, dbWrite, time, env (specific operations)
-#   - Coarse-grained: todoWebService implies dbRead, dbWrite, time (service bundle)
+#   - Fine-grained: dbRead Todo, dbWrite Todo, time, envRead
+#   - Coarse-grained: todoWebService implies dbRead Todo, dbWrite Todo, time
 # The coarse-grained capability satisfies all the fine-grained ones it implies.
 # This reduces annotation noise in real applications: declare todoWebService once
 # and everything in that service's scope has the needed permissions.
 #
 # The App root (`main() -> App requires [...]`) is where capabilities are
 # granted. The grant set is derived from main's own `requires` list — that
-# is the single place you say "I vouch that this application has [dbWrite]".
+# is the single place you say "I vouch that this application has [dbWrite Todo]".
 # Every declaration's effects flow up through `requires` to this root, and
 # the root must cover them all.
 
@@ -109,8 +108,8 @@ fn readAndWrite(key: String) -> String requires [appCapability, envRead] =
 # The compiler precomputes the transitive closure of the implies relation at compile time.
 #
 # The capability system does NOT prevent you from writing side-effectful code.
-# It makes side effects VISIBLE and AUDITABLE. If a handler has [dbWrite],
-# you know it can write to the database. If it only has [dbRead], you know it cannot.
+# It makes side effects VISIBLE and AUDITABLE. If a handler has [dbWrite Todo],
+# it can write Todo rows. With only [dbRead Todo], it cannot write them.
 #
 # Telemetry is the ONE deliberate exception: "telemetry ..." calls are always
 # allowed without a capability declaration. This is an intentional design choice —

@@ -2,13 +2,16 @@ open Ast
 open Location
 open Validation_common
 
-(* Bare resource grants remain migration wildcards; scoped grants are least
-   privilege and only cover their named resource. *)
+(* Queue/pubsub bare grants remain migration wildcards. Bare database grants are
+   rejected by the proof checker; database access is always entity-scoped. *)
 let capability_covers grant needed =
   grant = needed ||
-  (match String.split_on_char ' ' needed with
-   | [verb; _] when List.mem verb ["dbRead"; "dbWrite"; "queueRead"; "queueWrite"; "pubsub"] ->
-     grant = verb
+  (match Ast.resource_capability_parts grant, Ast.resource_capability_parts needed with
+   | _, Some (needed_verb, _)
+     when grant = needed_verb && List.mem needed_verb ["queueRead"; "queueWrite"; "pubsub"] -> true
+   | Some ("dbWrite", resource), Some ("dbRead", needed_resource)
+   | Some ("queueWrite", resource), Some ("queueRead", needed_resource) ->
+     resource = needed_resource
    | _ -> false)
 
 
@@ -102,10 +105,11 @@ let cap_check_kind_info (k : func_kind) : (string * (string -> string -> string)
    calling e.g. `ask` (aiProvider), `insert` (dbWrite), or `publish` (pubsub)
    beyond its `requires [...]` compiled clean and then trapped at RUNTIME with
    "Missing capabilities". This mirrors the fn/handler check onto test bodies. *)
-let collect_test_body_caps ~func_caps ?(server_tools_caps=[]) (stmts : test_stmt list) : string list =
+let collect_test_body_caps ~func_caps ?(server_tools_caps=[]) ?(queue_for_job=[])
+    (stmts : test_stmt list) : string list =
   let acc = ref [] in
   let add e bound =
-    acc := collect_needed_capabilities ~func_caps ~server_tools_caps ~bound e @ !acc in
+    acc := collect_needed_capabilities ~func_caps ~server_tools_caps ~queue_for_job ~bound e @ !acc in
   let rec pat_binders = function
     | PVar n when n <> "_" -> [n]
     | PCon { fields; _ } -> List.concat_map (fun (_, sub) -> pat_binders sub) fields
@@ -149,6 +153,10 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
      imported functions' declared `requires`, so a transitive call into an
      imported effecting function is enforced across the module boundary. *)
   let func_caps = build_func_capability_map decls @ imported_func_caps in
+  let queue_for_job =
+    List.concat_map (function
+      | DQueue q -> List.map (fun job -> (job, q.name)) (Desugar.queue_job_types q)
+      | _ -> []) decls in
   (* serverTools: server name → union of its bound handlers' declared caps, so a
      fn/test whose body exposes a server's endpoints to an agent must declare
      everything those handlers may do (V001 with the standard hint). *)
@@ -204,7 +212,7 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
              (* Seed [bound] with the function parameters (in scope for the whole
                 body); collect_needed_capabilities extends it lexically per inner
                 binder so a disjoint binder can no longer suppress a capability. *)
-             collect_needed_capabilities ~func_caps ~param_caps ~server_tools_caps
+              collect_needed_capabilities ~func_caps ~param_caps ~server_tools_caps ~queue_for_job
                ~bound:(List.map (fun (b : binding) -> b.name) fd.params) fd.body
              |> List.sort_uniq String.compare
          in
@@ -219,7 +227,7 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
     | DTest t ->
       (* Same capability enforcement as fns/handlers, extended to `test`/`api-test`
          etc. bodies (previously unchecked → runtime "Missing capabilities"). *)
-      let needed = collect_test_body_caps ~func_caps ~server_tools_caps t.stmts in
+      let needed = collect_test_body_caps ~func_caps ~server_tools_caps ~queue_for_job t.stmts in
       let declared = t.capabilities in
       let missing = List.filter (fun cap -> not (cap_covered declared cap)) needed in
       if missing <> [] then
@@ -255,7 +263,7 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
          (`asTool fn` and manual `tool … validate v dispatch d`). *)
       let field_caps_from_fields field fields =
         match List.assoc_opt field fields with
-        | Some tools_expr -> collect_needed_capabilities ~func_caps tools_expr
+        | Some tools_expr -> collect_needed_capabilities ~func_caps ~queue_for_job tools_expr
         | None -> []
       in
       let needed_tools_cap =
@@ -390,8 +398,33 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
           | Some e -> (match name_of e with Some n -> [n] | None -> [])
           | None -> [])
        | _ -> []) apps in
-     let api_servers = referenced "api" in
-     let app_queues = referenced "queues" in
+      let api_servers = referenced "api" in
+      let app_queues = referenced "queues" in
+      let app_databases = referenced "database" in
+      let database_entities =
+        List.filter_map (function
+          | DDatabase db ->
+            let db = Desugar.desugar_database_config db in
+            Some (db.name, db.entities)
+          | _ -> None) decls in
+      let connected_entities =
+        List.concat_map (fun db -> Option.value ~default:[] (List.assoc_opt db database_entities))
+          app_databases
+        |> List.sort_uniq String.compare in
+      if app_databases <> [] then
+        List.iter (fun cap ->
+          match Ast.resource_capability_parts cap with
+          | Some (("dbRead" | "dbWrite"), entity)
+            when not (List.mem entity connected_entities) ->
+            errors := make_error main_fd.loc
+              ~hint:(Printf.sprintf
+                "add entity `%s` to the database selected by `App.database`, or remove `%s` from main's grant"
+                entity cap)
+              (Printf.sprintf
+                "main grants `%s`, but entity `%s` is not in the database selected by `App.database`; queries would otherwise use the unconnected in-memory fallback"
+                cap entity)
+              :: !errors
+          | _ -> ()) main_grant;
      let handler_fns =
        List.concat_map (fun sn -> match List.assoc_opt sn servers with
          | Some hs -> hs | None -> []) api_servers |> List.sort_uniq String.compare in
@@ -477,18 +510,18 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
         worker thread's exception is invisible past its own top-level catch
         (issue #62). *)
      List.iter (fun qn -> match List.assoc_opt qn queue_caps with
-        | Some (caps, loc) when not (List.exists (fun grant -> capability_covers grant "queueRead")
-                                     (expand_declared caps)) ->
+         | Some (caps, loc) when not (List.exists (fun grant -> capability_covers grant ("queueRead " ^ qn))
+                                      (expand_declared caps)) ->
          errors := make_error loc
            ~hint:(Printf.sprintf
-             "add a capability implying `queueRead` (e.g. one implying `queueWrite`, \
-              which already implies `queueRead`) to queue `%s`'s `requires`"
-             qn)
+              "add `queueRead %s` or `queueWrite %s` (or a capability implying either) \
+               which already implies `queueRead`) to queue `%s`'s `requires`"
+              qn qn qn)
            (Printf.sprintf
-             "queue `%s` requires [%s], which does not grant `queueRead`; every worker \
+              "queue `%s` requires [%s], which does not grant `queueRead %s`; every worker \
               thread dequeues jobs under exactly this capability set, so without it every \
               enqueued job silently sits `pending` forever with no error"
-             qn (String.concat ", " caps))
+              qn (String.concat ", " caps) qn)
            :: !errors
        | _ -> ()) app_queues
    | _ -> ());
@@ -546,6 +579,10 @@ let get_forbidden_caps : string list =
 let check_get_routes_do_not_mutate ?(cap_map=[]) ?(imported_func_caps=[])
     (decls : top_decl list) : validation_error list =
   let func_caps = build_func_capability_map decls @ imported_func_caps in
+  let queue_for_job =
+    List.concat_map (function
+      | DQueue q -> List.map (fun job -> (job, q.name)) (Desugar.queue_job_types q)
+      | _ -> []) decls in
   let fn_map =
     List.filter_map (function
       | DFunc (fd : func_decl) -> Some (fd.name, fd) | _ -> None) decls in
@@ -576,9 +613,14 @@ let check_get_routes_do_not_mutate ?(cap_map=[]) ?(imported_func_caps=[])
   let reached_forbidden needed =
     let closure = expand needed in
     List.sort_uniq String.compare
-      (List.filter (fun forbidden ->
-         List.exists (fun granted -> capability_covers forbidden granted) closure)
-         get_forbidden_caps) in
+      (List.filter (fun reached ->
+         List.exists (fun forbidden ->
+           reached = forbidden ||
+           match Ast.resource_capability_parts reached with
+           | Some (verb, _) -> verb = forbidden
+           | None -> false)
+           get_forbidden_caps)
+         closure) in
   let report ~loc ~handler ~reached ~subject ~whence =
     errors := make_error ~code:"SEC005" loc
       ~hint:(Printf.sprintf
@@ -613,8 +655,8 @@ let check_get_routes_do_not_mutate ?(cap_map=[]) ?(imported_func_caps=[])
       when fd.kind = HandlerKind && List.mem GET fd.http_methods ->
       let param_caps = build_param_capability_map fd in
       let needed =
-        Validation_common.collect_needed_capabilities
-          ~func_caps ~param_caps
+         Validation_common.collect_needed_capabilities
+          ~func_caps ~param_caps ~queue_for_job
           ~bound:(List.map (fun (b : binding) -> b.name) fd.params) fd.body in
       let reached = reached_forbidden needed in
       if reached <> [] then begin

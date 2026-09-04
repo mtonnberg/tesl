@@ -22,6 +22,12 @@
  (modules test_roadmap_emitters)
  (libraries tesl_compiler_lib str))
 
+(test
+ (name test_entity_scoped_capabilities)
+ (modules test_entity_scoped_capabilities)
+ (libraries tesl_compiler_lib alcotest unix str)
+ (deps ../bin/main.exe))
+
 ; Pure-OCaml property test for the single float choke point (lib/float_fmt.ml):
 ; to_faithful_literal round-trips, identity_key is injective (S15).  No Racket /
 ; no alcotest, so it always builds and runs:

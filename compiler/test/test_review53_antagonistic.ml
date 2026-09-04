@@ -356,7 +356,7 @@ database ItemDb = Database {
   })
 }
 
-# fn with no requires — but uses selectOne which needs dbRead
+# fn with no requires — but uses selectOne which needs dbRead Note
 fn badFn(itemId: String) -> Maybe Item =
   selectOne i from Item where i.id == itemId
 |}
@@ -488,7 +488,7 @@ database NoteDb = Database {
 
 handler badHandler(noteId: String)
   -> Note
-  requires [dbWrite] =
+  requires [dbWrite Note] =
   transaction {
     transaction {
       insert Note { id: noteId, body: "hello" }
@@ -681,7 +681,7 @@ database WidgetDb = Database {
 
 fn goodReturn(wid: String)
   -> Widget ? FromDb (Id == wid)
-  requires [dbRead] =
+  requires [dbRead Widget] =
   let found = selectOne w from Widget where w.id == wid
   case found of
     Nothing -> fail 404 "not found"

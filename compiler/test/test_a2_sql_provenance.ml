@@ -88,27 +88,27 @@ let or_pat = "disjunction\\|`||`\\|OR.*broaden\\|broadens"
 
 let neg_or_admin = hdr "OrAdmin" ^ {|
 fn listMine(me: String, admin: String) -> List Todo ? ForAll (FromDb (OwnerId == me))
-  requires [dbRead] =
+  requires [dbRead Todo] =
   select t from Todo where t.ownerId == me || t.ownerId == admin
 |}
 
 let neg_or_status = hdr "OrStatus" ^ {|
 fn listMine(me: String) -> List Todo ? ForAll (FromDb (OwnerId == me))
-  requires [dbRead] =
+  requires [dbRead Todo] =
   select t from Todo where t.ownerId == me || t.status == "open"
 |}
 
 (* matching disjunct written SECOND *)
 let neg_or_second = hdr "OrSecond" ^ {|
 fn listMine(me: String, admin: String) -> List Todo ? ForAll (FromDb (OwnerId == me))
-  requires [dbRead] =
+  requires [dbRead Todo] =
   select t from Todo where t.ownerId == admin || t.ownerId == me
 |}
 
 (* single-row select with OR *)
 let neg_or_single = hdr "OrSingle" ^ {|
 fn getOne(id0: String, other: String) -> Todo ? FromDb (Id == id0)
-  requires [dbRead] =
+  requires [dbRead Todo] =
   let r = selectOne t from Todo where t.id == id0 || t.id == other
   case r of
     Nothing -> fail 404 "nf"
@@ -118,14 +118,14 @@ fn getOne(id0: String, other: String) -> Todo ? FromDb (Id == id0)
 (* ── re-review §3.1 narrowing OR positive (must compile) ───────────────────────────── *)
 let pos_narrowing_or = hdr "NarrowOr" ^ {|
 fn listMine(me: String) -> List Todo ? ForAll (FromDb (OwnerId == me))
-  requires [dbRead] =
+  requires [dbRead Todo] =
   select t from Todo where t.ownerId == me && (t.status == "open" || t.status == "done")
 |}
 
 (* ── re-review §3.2 sibling-mask (read) negatives ──────────────────────────────────── *)
 let neg_mask_unused = hdr "MaskUnused" ^ {|
 fn getThing(id0: String, other: String) -> Todo ? FromDb (Id == id0)
-  requires [dbRead] =
+  requires [dbRead Todo] =
   let good = selectOne t from Todo where t.id == id0
   let bad = selectOne t from Todo where t.ownerId == other
   case bad of
@@ -136,7 +136,7 @@ fn getThing(id0: String, other: String) -> Todo ? FromDb (Id == id0)
 (* the matching sibling appears FIRST but the returned value is from the wrong one *)
 let neg_mask_reorder = hdr "MaskReorder" ^ {|
 fn getThing(id0: String, other: String) -> Todo ? FromDb (Id == id0)
-  requires [dbRead] =
+  requires [dbRead Todo] =
   let matching = selectOne t from Todo where t.id == id0
   let wrong = selectOne t from Todo where t.status == other
   case wrong of
@@ -147,7 +147,7 @@ fn getThing(id0: String, other: String) -> Todo ? FromDb (Id == id0)
 (* ── positives (must compile) ────────────────────────────────────────────── *)
 let pos_single_select = hdr "SingleSel" ^ {|
 fn getThing(id0: String) -> Todo ? FromDb (Id == id0)
-  requires [dbRead] =
+  requires [dbRead Todo] =
   let r = selectOne t from Todo where t.id == id0
   case r of
     Nothing -> fail 404 "nf"
@@ -156,7 +156,7 @@ fn getThing(id0: String) -> Todo ? FromDb (Id == id0)
 
 let pos_list_forall = hdr "ListForAll" ^ {|
 fn listMine(me: String) -> List Todo ? ForAll (FromDb (OwnerId == me))
-  requires [dbRead] =
+  requires [dbRead Todo] =
   select t from Todo where t.ownerId == me
 |}
 
@@ -164,7 +164,7 @@ fn listMine(me: String) -> List Todo ? ForAll (FromDb (OwnerId == me))
    trigger a false rejection now that provenance is return-flow scoped *)
 let pos_helper_sibling = hdr "HelperSibling" ^ {|
 fn getThing(id0: String, other: String) -> Todo ? FromDb (Id == id0)
-  requires [dbRead] =
+  requires [dbRead Todo] =
   let other0 = selectOne t from Todo where t.ownerId == other
   let r = selectOne t from Todo where t.id == id0
   case r of

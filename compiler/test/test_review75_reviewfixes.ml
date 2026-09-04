@@ -196,8 +196,8 @@ module R75F1 exposing [createTodo]
 import Tesl.Prelude exposing [Bool(..), String]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Time exposing [nowMillis, PosixMillis, time]
-capability aDbRead implies dbRead
-capability aDbWrite implies dbWrite
+capability aDbRead implies dbRead Todo
+capability aDbWrite implies dbWrite Todo
 |} ^ fromdb_entity ^ {|
 handler createTodo(claimedId: String)
   -> Todo ? FromDb (Id == claimedId)
@@ -211,8 +211,8 @@ module R75F2 exposing [createTodo]
 import Tesl.Prelude exposing [Bool(..), String]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Time exposing [nowMillis, PosixMillis, time]
-capability aDbRead implies dbRead
-capability aDbWrite implies dbWrite
+capability aDbRead implies dbRead Todo
+capability aDbWrite implies dbWrite Todo
 |} ^ fromdb_entity ^ {|
 handler createTodo(victim: String)
   -> Todo ? FromDb (OwnerId == victim)
@@ -226,8 +226,8 @@ module R75F1ok exposing [createTodo]
 import Tesl.Prelude exposing [Bool(..), String]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Time exposing [nowMillis, PosixMillis, time]
-capability aDbRead implies dbRead
-capability aDbWrite implies dbWrite
+capability aDbRead implies dbRead Todo
+capability aDbWrite implies dbWrite Todo
 |} ^ fromdb_entity ^ {|
 handler createTodo(victim: String)
   -> Todo ? FromDb (OwnerId == victim)
@@ -243,7 +243,7 @@ import Tesl.DB exposing [dbRead, dbWrite]
 entity Msg table "msgs" primaryKey id { id: String }
 handler createMsg(seed: String)
   -> exists msgId: String => Msg ? FromDb (Id == msgId)
-  requires [dbRead, dbWrite] =
+  requires [dbRead Msg, dbWrite Msg] =
   exists msgId =>
     insert Msg { id: seed ++ "-suffix" }
 |}
@@ -308,7 +308,7 @@ database D = Database {
 api A {}
 server Srv for A {}
 
-main() -> App requires [dbRead, dbWrite, queueWrite] =
+main() -> App requires [queueWrite] =
   App { database: D api: Srv port: 8098 queues: [PingQueue] }
 |}
 
@@ -564,21 +564,21 @@ entity Widget table "widgets" primaryKey id {
 
 let test_R75_NT07SQL_insert_int_into_int32_rejected () =
   should_fail "unify Int with Int32\\|unify.*Int32" (sql_width_prelude ^ {|
-fn f(n: Int) -> String requires [dbWrite] =
+fn f(n: Int) -> String requires [dbWrite Widget] =
   insert Widget { id: "w", count: n, owner: UserId "u" }
   "ok"
 |})
 
 let test_R75_NT07SQL_insert_string_into_newtype_rejected () =
   should_fail "unify String with UserId\\|unify.*UserId" (sql_width_prelude ^ {|
-fn f(c: Int32, s: String) -> String requires [dbWrite] =
+fn f(c: Int32, s: String) -> String requires [dbWrite Widget] =
   insert Widget { id: "w", count: c, owner: s }
   "ok"
 |})
 
 let test_R75_NT07SQL_set_int_into_int32_rejected () =
   should_fail "SET clause: type mismatch\\|field type is `Int32`" (sql_width_prelude ^ {|
-fn f(n: Int) -> String requires [dbRead, dbWrite] =
+fn f(n: Int) -> String requires [dbRead Widget, dbWrite Widget] =
   update w in Widget
     where w.id == "x"
     set w.count = n
@@ -587,7 +587,7 @@ fn f(n: Int) -> String requires [dbRead, dbWrite] =
 
 let test_R75_NT07SQL_set_string_into_newtype_rejected () =
   should_fail "SET clause: type mismatch\\|field type is `UserId`" (sql_width_prelude ^ {|
-fn f(s: String) -> String requires [dbRead, dbWrite] =
+fn f(s: String) -> String requires [dbRead Widget, dbWrite Widget] =
   update w in Widget
     where w.id == "x"
     set w.owner = s
@@ -596,13 +596,13 @@ fn f(s: String) -> String requires [dbRead, dbWrite] =
 
 let test_R75_NT07SQL_where_string_into_newtype_rejected () =
   should_fail "WHERE clause: type mismatch\\|field type is `UserId`" (sql_width_prelude ^ {|
-fn f(s: String) -> List Widget requires [dbRead] =
+fn f(s: String) -> List Widget requires [dbRead Widget] =
   select w from Widget where w.owner == s
 |})
 
 let test_R75_NT07SQL_exact_types_accepted () =
   should_pass (sql_width_prelude ^ {|
-fn f(c: Int32, u: UserId) -> List Widget requires [dbRead, dbWrite] =
+fn f(c: Int32, u: UserId) -> List Widget requires [dbRead Widget, dbWrite Widget] =
   insert Widget { id: "w", count: c, owner: u }
   update w in Widget
     where w.id == "w"

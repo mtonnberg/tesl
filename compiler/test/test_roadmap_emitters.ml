@@ -6,6 +6,10 @@ let var name = EVar { name; loc }
 let app head args =
   List.fold_left (fun fn arg -> EApp { fn; arg; loc }) (var head) args
 
+let contains needle haystack =
+  try ignore (Str.search_forward (Str.regexp_string needle) haystack 0); true
+  with Not_found -> false
+
 let test_sql_dispatch () =
   match Sql_query.parse_query_node (app "select" [var "row"; var "from"; var "Todo"]) with
   | Some (Sql_query.QuerySelect (seed, [])) ->
@@ -39,7 +43,8 @@ let test_openapi_path () =
     exports = [];
     imports = [];
     decls = [
-      DApi { name = "TodoApi"; endpoints = [endpoint]; loc };
+      DApi { name = "TodoApi"; endpoints = [endpoint; { endpoint with
+        name = "todoEvents"; method_ = SSE; path = "/events" }]; loc };
       DServer {
         name = "TodoServer";
         api_name = "TodoApi";
@@ -65,8 +70,26 @@ let test_openapi_path () =
   let output = Emit_openapi.emit module_form ~server_name:"TodoServer" in
   assert (String.contains output '{');
   assert (String.length output > 0);
-  assert (try ignore (Str.search_forward (Str.regexp_string "\"/todos/{todoId}\"") output 0); true
-          with Not_found -> false)
+  assert (contains "\"/todos/{todoId}\"" output);
+  assert (contains "\"type\":\"string\"" output);
+  assert (not (contains "#/components/schemas/String" output));
+  (* SSE transport is runtime-owned and intentionally omitted from scanner input. *)
+  assert (not (contains "\"/events\"" output))
+
+let test_openapi_wire_schemas () =
+  let schema = Emit_openapi.schema_of_ir_type in
+  let int32 = schema Ir.IRInt32 in
+  assert (contains "\"minimum\":-2147483648" int32);
+  assert (contains "\"maximum\":2147483647" int32);
+  let dict = schema (Ir.IRDict (Ir.IRInt, Ir.IRString)) in
+  assert (contains "\"prefixItems\"" dict);
+  let result = schema (Ir.IRResult (Ir.IRString, Ir.IRInt)) in
+  assert (contains "\"const\":\"Ok\"" result);
+  assert (contains "\"const\":\"Err\"" result);
+  assert (contains "\"error\"" result);
+  let money = schema Ir.IRMoney in
+  assert (contains "\"minorUnits\"" money);
+  assert (contains "\"currency\"" money)
 
 let test_openapi_includes_imported_types () =
   let dir = Filename.temp_file "tesl-openapi-" "" in
@@ -96,4 +119,5 @@ let test_openapi_includes_imported_types () =
 let () =
   test_sql_dispatch ();
   test_openapi_path ();
+  test_openapi_wire_schemas ();
   test_openapi_includes_imported_types ()

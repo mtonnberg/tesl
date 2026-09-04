@@ -69,11 +69,11 @@ let t_read_statement_line_is_listed () =
   (* line 19 = the `let rows = select …` statement *)
   check_order ~line:19 ~query:"teslrt.TableSelect(" ~checkpoint_first:false
     (db_prelude ^ {|
-fn readOne() -> Int requires [dbRead] =
+fn readOne() -> Int requires [dbRead Row] =
   let rows = select r from Row where r.name == "ada"
   List.length rows
 
-fn writeOne() -> Int requires [dbWrite] =
+fn writeOne() -> Int requires [dbWrite Row] =
   1
 |})
 
@@ -82,10 +82,10 @@ let t_tail_read_is_listed () =
      no next line to step to. *)
   check_order ~line:19 ~query:"teslrt.TableSelect(" ~checkpoint_first:false
     (db_prelude ^ {|
-fn readOne() -> List Row requires [dbRead] =
+fn readOne() -> List Row requires [dbRead Row] =
   select r from Row where r.name == "ada"
 
-fn writeOne() -> Int requires [dbWrite] =
+fn writeOne() -> Int requires [dbWrite Row] =
   1
 |})
 
@@ -94,10 +94,10 @@ fn writeOne() -> Int requires [dbWrite] =
 let t_write_line_is_not_listed () =
   check_order ~line:22 ~query:"teslrt.TableInsert(" ~checkpoint_first:true
     (db_prelude ^ {|
-fn readOne() -> Int requires [dbRead] =
+fn readOne() -> Int requires [dbRead Row] =
   1
 
-fn writeOne() -> Int requires [dbWrite] =
+fn writeOne() -> Int requires [dbWrite Row] =
   let _ = insert Row { id: "r1", name: "ada" }
   1
 |})
@@ -108,10 +108,10 @@ let t_read_and_write_in_one_function_lists_only_the_read () =
      on a mutation must still stop before the world changes. *)
   let src =
     (db_prelude ^ {|
-fn readOne() -> Int requires [dbRead] =
+fn readOne() -> Int requires [dbRead Row] =
   1
 
-fn writeOne() -> Int requires [dbRead, dbWrite] =
+fn writeOne() -> Int requires [dbRead Row, dbWrite Row] =
   let _ = insert Row { id: "r1", name: "ada" }
   let rows = select r from Row
    List.length rows
@@ -148,11 +148,11 @@ fn f(n: Int) -> Int =
 let t_checkpoint_carries_the_binding_name () =
   let out =
     emit (db_prelude ^ {|
-fn readOne() -> Int requires [dbRead] =
+fn readOne() -> Int requires [dbRead Row] =
   let rows = select r from Row where r.name == "ada"
   List.length rows
 
-fn writeOne() -> Int requires [dbWrite] =
+fn writeOne() -> Int requires [dbWrite Row] =
   1
 |})
   in

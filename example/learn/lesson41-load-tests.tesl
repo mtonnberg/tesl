@@ -69,7 +69,7 @@ handler post greet(g: Greeting) -> Greeting =
   Greeting { name: g.name, message: "Hello, ${g.name}!" }
 
 handler get listBooks() -> List Book
-  requires [dbRead] =
+  requires [dbRead Book] =
   select b from Book
 
 api Lesson41Api {
@@ -112,7 +112,7 @@ load-test "greet throughput" for Lesson41Server
 load-test "list books with seeded data" for Lesson41Server
   rate 30rps
   duration 2s
-  requires [dbRead, dbWrite] {
+  requires [dbRead Book, dbWrite Book] {
   seed {
     insert Book { id: "book-1", title: "The Art of Tesl", pages: 320 }
     insert Book { id: "book-2", title: "Proofs in Practice", pages: 210 }

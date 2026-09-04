@@ -49,7 +49,8 @@ jq -e '
   ((.paths | has("/internal")) | not)
 ' "$spec" >/dev/null
 
-setsid tesl run "$app" >"$WORK/server.log" 2>&1 &
+setsid env TESL_REPO_ROOT="$REPO_ROOT" TESL_OCAML_COMPILER="$COMPILER" \
+  TESL_DEFAULT_BACKEND=go bash "$BODY" run "$app" >"$WORK/server.log" 2>&1 &
 RUN_PID=$!
 ready=0
 for _ in $(seq 1 60); do

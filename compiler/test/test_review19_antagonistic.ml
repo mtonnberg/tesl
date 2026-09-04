@@ -228,7 +228,7 @@ check checkOpen(t: Todo) -> t: Todo ::: IsOpen t =
     Done -> fail 422 "done"
 
 fn fakeForAll() -> List Todo ::: ForAll (IsOpen)
-  requires [dbRead] =
+  requires [dbRead Note] =
   select todo from Todo
 |} in
   should_fail "V001\\|SQL select\\|ForAll" src
@@ -371,7 +371,7 @@ import Tesl.Time exposing [PosixMillis]
 import Tesl.DB exposing [dbRead]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
 
-capability readOnly implies dbRead
+capability readOnly implies dbRead Note
 
 entity Note table "notes" primaryKey id {
   id: String

@@ -164,7 +164,7 @@ import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Maybe exposing [Maybe(..)]
 entity Todo table "todos" primaryKey id { id: String title: String ownerId: String }
 fn getTodo(todoId: String) -> Todo ? FromDb (Id == todoId)
-  requires [dbRead] =
+  requires [dbRead Todo] =
   let r = selectOne t from Todo where t.id == todoId
   case r of
     Nothing -> fail 404 "not found"
@@ -345,7 +345,7 @@ let np_wrong_key idx wrong_id =
   let test () =
     should_fail satisfy_re
       (named_pack_lib m ^ Printf.sprintf {|
-fn bad(todoId: String, %s: String) -> String requires [dbRead] =
+fn bad(todoId: String, %s: String) -> String requires [dbRead Todo] =
   let todo = getTodo todoId
   consume todo %s
 |} wrong_id wrong_id)
@@ -365,7 +365,7 @@ let np_wrong_entity idx =
   let test () =
     should_fail satisfy_re
       (named_pack_lib m ^ {|
-fn bad(todoId: String, raw: Todo) -> String requires [dbRead] =
+fn bad(todoId: String, raw: Todo) -> String requires [dbRead Todo] =
   let todo = getTodo todoId
   consume raw todoId
 |})
@@ -380,7 +380,7 @@ let np_swapped_keys idx =
   let test () =
     should_fail satisfy_re
       (named_pack_lib m ^ {|
-fn bad(id1: String, id2: String) -> String requires [dbRead] =
+fn bad(id1: String, id2: String) -> String requires [dbRead Todo] =
   let a = getTodo id1
   let b = getTodo id2
   consume a id2
@@ -394,7 +394,7 @@ let np_swapped_cases =
      ("NP-SWAP-02 consume B with A's key",
       fun () ->
         should_fail satisfy_re (named_pack_lib m ^ {|
-fn bad(id1: String, id2: String) -> String requires [dbRead] =
+fn bad(id1: String, id2: String) -> String requires [dbRead Todo] =
   let a = getTodo id1
   let b = getTodo id2
   consume b id1
@@ -412,7 +412,7 @@ import Tesl.Maybe exposing [Maybe(..)]
 entity Todo table "todos" primaryKey id { id: String title: String }
 fact Positive (t: Todo)
 fn bad(todoId: String) -> Todo ? Positive
-  requires [dbRead] =
+  requires [dbRead Todo] =
   let r = selectOne t from Todo where t.id == todoId
   case r of
     Nothing -> fail 404 "nf"
@@ -436,13 +436,13 @@ import Tesl.Maybe exposing [Maybe(..)]
 entity Todo table "todos" primaryKey id { id: String title: String ownerId: String }
 fact OwnedBy (u: String) (t: Todo)
 fn getTodo(todoId: String) -> Todo ? FromDb (Id == todoId)
-  requires [dbRead] =
+  requires [dbRead Todo] =
   let r = selectOne t from Todo where t.id == todoId
   case r of
     Nothing -> fail 404 "nf"
     Something t -> t
 fn needsOwned(u: String, t: Todo ::: OwnedBy u t) -> String = t.title
-fn bad(u: String, todoId: String) -> String requires [dbRead] =
+fn bad(u: String, todoId: String) -> String requires [dbRead Todo] =
   let todo = getTodo todoId
   needsOwned u todo
 |})
@@ -490,7 +490,7 @@ fn good(rawLo: Int, rawHi: Int, value: Int) -> Int =
    2-arg FromDb form with the matching key. *)
 let pos_named_pack_roundtrip () =
   should_pass (named_pack_lib "PosNp01" ^ {|
-fn flow(todoId: String) -> String requires [dbRead] =
+fn flow(todoId: String) -> String requires [dbRead Todo] =
   let todo = getTodo todoId
   consume todo todoId
 |})
@@ -499,7 +499,7 @@ fn flow(todoId: String) -> String requires [dbRead] =
    accepted at the consumer. *)
 let pos_named_pack_rename () =
   should_pass (named_pack_lib "PosNp02" ^ {|
-fn flow(todoId: String) -> String requires [dbRead] =
+fn flow(todoId: String) -> String requires [dbRead Todo] =
   let todo = getTodo todoId
   let alias = todo
   consume alias todoId
@@ -573,7 +573,7 @@ fn describe(lo: Int, hi: Int, raw: Int) -> String =
 (* Named-pack value consumed at two different sites with the same key. *)
 let pos_named_pack_consumed_twice () =
   should_pass (named_pack_lib "PosNp04" ^ {|
-fn flow(todoId: String) -> String requires [dbRead] =
+fn flow(todoId: String) -> String requires [dbRead Todo] =
   let todo = getTodo todoId
   let r1 = consume todo todoId
   let r2 = consume todo todoId
@@ -594,7 +594,7 @@ fn good(lo: Int, hi: Int, raw: Int) -> String =
    correctly with their own keys. *)
 let pos_named_pack_two_fetches () =
   should_pass (named_pack_lib "PosNp03" ^ {|
-fn flow(id1: String, id2: String) -> String requires [dbRead] =
+fn flow(id1: String, id2: String) -> String requires [dbRead Todo] =
   let a = getTodo id1
   let b = getTodo id2
   let ra = consume a id1

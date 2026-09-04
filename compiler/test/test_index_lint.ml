@@ -119,7 +119,7 @@ let expect_codes label src ~w092 ~w093 =
 
 let test_unindexed_filter () =
   let src = program {|
-fn byOrg(orgId: String) -> List Issue requires [dbRead] =
+fn byOrg(orgId: String) -> List Issue requires [dbRead Note] =
   select i from Issue where i.orgId == orgId
 |} in
   expect_codes "unindexed equality filter" src ~w092:1 ~w093:0;
@@ -133,7 +133,7 @@ let test_composite_suggestion_from_multiline_query () =
      produced TWO findings: one at 1:1 over the full column set, and a weaker
      one suggesting `index [orgId]` at the `where` line. *)
   let src = program {|
-fn recent(orgId: String) -> List Issue requires [dbRead] =
+fn recent(orgId: String) -> List Issue requires [dbRead Note] =
   select i from Issue
     where i.orgId == orgId
     order i.createdAt desc
@@ -150,13 +150,13 @@ let test_one_finding_per_missing_index () =
   (* Three call sites, one missing index.  Reported once — the actionable unit is
      the declaration, and three copies of it is how a lint gets ignored. *)
   let src = program {|
-fn a(orgId: String) -> List Issue requires [dbRead] =
+fn a(orgId: String) -> List Issue requires [dbRead Note] =
   select i from Issue where i.orgId == orgId
 
-fn b(orgId: String) -> List Issue requires [dbRead] =
+fn b(orgId: String) -> List Issue requires [dbRead Note] =
   select i from Issue where i.orgId == orgId
 
-fn c(orgId: String) -> List Issue requires [dbRead] =
+fn c(orgId: String) -> List Issue requires [dbRead Note] =
   select i from Issue where i.orgId == orgId
 |} in
   expect_codes "three queries, one missing index" src ~w092:1 ~w093:0;
@@ -167,12 +167,12 @@ fn c(orgId: String) -> List Issue requires [dbRead] =
 let test_delete_and_update_count () =
   expect_codes "a delete and an update on the same unindexed column"
     (program {|
-fn purge(slug: String) -> Unit requires [dbWrite] =
+fn purge(slug: String) -> Unit requires [dbWrite Note] =
   delete i from Issue where i.slug == slug
 |}) ~w092:1 ~w093:0;
   expect_codes "an update filtering on an unindexed column"
     (program {|
-fn rename(slug: String, t: String) -> Unit requires [dbRead, dbWrite] =
+fn rename(slug: String, t: String) -> Unit requires [dbRead Note, dbWrite Note] =
   update i in Issue
     where i.slug == slug
     set i.title = t
@@ -194,7 +194,7 @@ entity Owner table "owners" primaryKey id {
 }
 %s
 
-fn joined(orgId: String) -> List Issue requires [dbRead] =
+fn joined(orgId: String) -> List Issue requires [dbRead Note] =
   select i from Issue
     innerJoin Owner on i.orgId Owner.ownerId
     where i.orgId == orgId
@@ -219,7 +219,7 @@ entity Owner table "owners" primaryKey id {
 }
 %s
 
-fn joined(orgId: String) -> List Issue requires [dbRead] =
+fn joined(orgId: String) -> List Issue requires [dbRead Note] =
   select i from Issue
     innerJoin Owner on i.orgId Owner.ownerId
     where i.orgId == orgId
@@ -234,14 +234,14 @@ fn joined(orgId: String) -> List Issue requires [dbRead] =
 let test_primary_key_filter_silent () =
   expect_codes "filtering on the primary key"
     (program {|
-fn byId(id: String) -> List Issue requires [dbRead] =
+fn byId(id: String) -> List Issue requires [dbRead Note] =
   select i from Issue where i.id == id
 |}) ~w092:0 ~w093:0
 
 let test_declared_index_silences () =
   expect_codes "the declared index serves the query"
     (program ~entity_extra:"  index [orgId]" {|
-fn byOrg(orgId: String) -> List Issue requires [dbRead] =
+fn byOrg(orgId: String) -> List Issue requires [dbRead Note] =
   select i from Issue where i.orgId == orgId
 |}) ~w092:0 ~w093:0
 
@@ -251,14 +251,14 @@ let test_leading_column_prefix_serves () =
      would be a false positive. *)
   expect_codes "a composite index serves a filter on its leading column"
     (program ~entity_extra:"  index [orgId, createdAt]" {|
-fn byOrg(orgId: String) -> List Issue requires [dbRead] =
+fn byOrg(orgId: String) -> List Issue requires [dbRead Note] =
   select i from Issue where i.orgId == orgId
 |}) ~w092:0 ~w093:0
 
 let test_memory_backend_silent () =
   expect_codes "a Memory-backed database has nothing to index"
     (program ~db:(memory_db "Issue") {|
-fn byOrg(orgId: String) -> List Issue requires [dbRead] =
+fn byOrg(orgId: String) -> List Issue requires [dbRead Note] =
   select i from Issue where i.orgId == orgId
 |}) ~w092:0 ~w093:0
 
@@ -267,7 +267,7 @@ let test_no_database_silent () =
      there is nothing to say. *)
   expect_codes "an entity with no database declaration"
     (program ~db:"" {|
-fn byOrg(orgId: String) -> List Issue requires [dbRead] =
+fn byOrg(orgId: String) -> List Issue requires [dbRead Note] =
   select i from Issue where i.orgId == orgId
 |}) ~w092:0 ~w093:0
 
@@ -276,14 +276,14 @@ let test_ilike_silent () =
      would be bad advice. *)
   expect_codes "an ilike filter"
     (program {|
-fn search(q: String) -> List Issue requires [dbRead] =
+fn search(q: String) -> List Issue requires [dbRead Note] =
   select i from Issue where ilike i.title q
 |}) ~w092:0 ~w093:0
 
 let test_like_silent () =
   expect_codes "a like filter"
     (program {|
-fn search(q: String) -> List Issue requires [dbRead] =
+fn search(q: String) -> List Issue requires [dbRead Note] =
   select i from Issue where like i.title q
 |}) ~w092:0 ~w093:0
 
@@ -291,7 +291,7 @@ let test_test_block_query_silent () =
   (* A query in a `test` block is not a production access path. *)
   expect_codes "a query inside a test block"
     (program {|
-test "reads by slug" requires [dbRead, dbWrite] {
+test "reads by slug" requires [dbRead Note, dbWrite Note] {
   let _ = insert Issue { id: "i1", orgId: "o", slug: "s", title: "t", createdAt: 0 }
   let rows = select i from Issue where i.slug == "s"
   expect rows != []
@@ -301,7 +301,7 @@ test "reads by slug" requires [dbRead, dbWrite] {
 let test_unfiltered_query_silent () =
   expect_codes "a query with no where/order at all"
     (program {|
-fn all() -> List Issue requires [dbRead] =
+fn all() -> List Issue requires [dbRead Note] =
   select i from Issue
 |}) ~w092:0 ~w093:0
 
@@ -319,7 +319,7 @@ entity Issue table "issues" primaryKey id {
 }
 %s
 
-fn perDay(zone: TimeZone) -> List (Tuple2 PosixMillis Int) requires [dbRead] =
+fn perDay(zone: TimeZone) -> List (Tuple2 PosixMillis Int) requires [dbRead Note] =
   selectCountBy i from Issue groupBy (Time.truncDay zone i.createdAt)
 |} (postgres_db "Issue")) ~w092:0 ~w093:0
 
@@ -327,7 +327,7 @@ fn perDay(zone: TimeZone) -> List (Tuple2 PosixMillis Int) requires [dbRead] =
 
 let test_unused_index_reported () =
   let src = program ~entity_extra:"  index [orgId]\n  index [title]" {|
-fn byOrg(orgId: String) -> List Issue requires [dbRead] =
+fn byOrg(orgId: String) -> List Issue requires [dbRead Note] =
   select i from Issue where i.orgId == orgId
 |} in
   expect_codes "an index no query uses" src ~w092:0 ~w093:1;
@@ -340,7 +340,7 @@ let test_index_used_by_order_only () =
      ever ORDERED by is used, not dead. *)
   expect_codes "an index used only by an order clause"
     (program ~entity_extra:"  index [createdAt]" {|
-fn newest() -> List Issue requires [dbRead] =
+fn newest() -> List Issue requires [dbRead Note] =
   select i from Issue order i.createdAt desc limit 10
 |}) ~w092:0 ~w093:0
 
@@ -350,7 +350,7 @@ let test_unique_index_used_by_on_conflict () =
      dead would contradict the compiler. *)
   expect_codes "a unique index used only by an upsert conflict target"
     (program ~entity_extra:"  unique index [slug]" {|
-fn save(id: String, slug: String, title: String) -> Unit requires [dbWrite] =
+fn save(id: String, slug: String, title: String) -> Unit requires [dbWrite Note] =
   let done = upsert Issue { id: id, orgId: "o", slug: slug, title: title, createdAt: 0 }
     onConflict [slug] doUpdate [title]
   ok
@@ -366,7 +366,7 @@ let test_schema_only_module_silent () =
 let test_memory_backend_no_unused_report () =
   expect_codes "unused index on a Memory-backed entity"
     (program ~db:(memory_db "Issue") ~entity_extra:"  index [title]" {|
-fn byOrg(orgId: String) -> List Issue requires [dbRead] =
+fn byOrg(orgId: String) -> List Issue requires [dbRead Note] =
   select i from Issue where i.orgId == orgId
 |}) ~w092:0 ~w093:0
 
@@ -413,7 +413,7 @@ import Tesl.Prelude exposing [List, String]
 import Tesl.DB exposing [dbRead]
 import Db exposing [Issue]
 
-fn byOrg(orgId: String) -> List Issue requires [dbRead] =
+fn byOrg(orgId: String) -> List Issue requires [dbRead Note] =
   select i from Issue where i.orgId == orgId
 |}
 
@@ -489,7 +489,7 @@ entity Issue table "local_issues" primaryKey id {
 }
 %s
 
-fn byOrg(orgId: String) -> List Issue requires [dbRead] =
+fn byOrg(orgId: String) -> List Issue requires [dbRead Note] =
   select i from Issue where i.orgId == orgId
 |} (postgres_db "Issue") in
   let out = lint_in_project [ ("db.tesl", db_module ()); ("app.tesl", local_issue) ] "app.tesl" in

@@ -75,8 +75,8 @@ import Tesl.Maybe exposing [Maybe(..)]
 
 # ─── Capabilities ─────────────────────────────────────────────────────────────
 
-capability noteDbRead implies dbRead
-capability noteDbWrite implies dbWrite
+capability noteDbRead implies dbRead Note
+capability noteDbWrite implies dbWrite Note
 capability noteTime implies time
 capability noteReadCookie
 capability noteService implies noteDbRead, noteDbWrite, noteTime, noteReadCookie, random

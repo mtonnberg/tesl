@@ -137,7 +137,7 @@ let test_holeA_named_pack_column_mismatch () =
   should_fail "Id.*ownerId\\|ownerId.*Id\\|OwnerId.*Id\\|Id.*OwnerId\\|not established"
     (header "HoleA" ^ {|
 fn getTodo(todoId: String ::: TodoId todoId) -> Todo ? FromDb (Id == todoId)
-  requires [dbRead] =
+  requires [dbRead Todo] =
   let e = selectOne t from Todo where t.ownerId == todoId
   case e of
     Nothing -> fail 404 "x"
@@ -153,7 +153,7 @@ let test_holeB_forall_no_where () =
   should_fail "not established by any WHERE\\|does not constrain"
     (header "HoleB" ^ {|
 fn listAll(owner: String) -> List Todo ? ForAll (FromDb (OwnerId == owner))
-  requires [dbRead] =
+  requires [dbRead Todo] =
   select t from Todo
 |})
 
@@ -165,7 +165,7 @@ let test_holeC_forall_wrong_column () =
   should_fail "OwnerId\\|not established\\|does not constrain"
     (header "HoleC" ^ {|
 fn listByWrong(owner: String) -> List Todo ? ForAll (FromDb (OwnerId == owner))
-  requires [dbRead] =
+  requires [dbRead Todo] =
   select t from Todo where t.id == owner
 |})
 
@@ -179,7 +179,7 @@ let test_pos_field_access_rhs () =
   should_pass (header "PosFieldAccess" ^ {|
 fn listMine(requestUser: User ::: Authenticated requestUser)
   -> List Todo ? ForAll (FromDb (OwnerId == requestUser.id))
-  requires [dbRead] =
+  requires [dbRead Todo] =
   select t from Todo where t.ownerId == requestUser.id
 |})
 
@@ -191,7 +191,7 @@ let test_pos_insert_grant () =
      requirement which is scoped to select-derived grants. *)
   should_pass (header "PosInsert" ^ {|
 fn create(title: String) -> exists tid: String => Todo ? FromDb (Id == tid)
-  requires [dbWrite, random] =
+  requires [dbWrite Todo, random] =
   let tid = generatePrefixedId "todo"
   exists tid =>
     insert Todo { id: tid, ownerId: "me", title: title }
@@ -205,7 +205,7 @@ let test_pos_update_returning_grant () =
      does not fire. Must stay green. *)
   should_pass (header "PosUpdate" ^ {|
 fn rename(id: String, newTitle: String) -> Todo ? FromDb (Id == id)
-  requires [dbRead, dbWrite] =
+  requires [dbRead Todo, dbWrite Todo] =
   updateAndReturnOne t in Todo
     where t.id == id
     set t.title = newTitle
@@ -219,7 +219,7 @@ let test_pos_compound_where_pk_conjunct () =
      green (guards over-rejection when the pk is one conjunct among many). *)
   should_pass (header "PosCompound" ^ {|
 fn get2(id: String, owner: String) -> Todo ? FromDb (Id == id)
-  requires [dbRead] =
+  requires [dbRead Todo] =
   let e = selectOne t from Todo where t.id == id && t.ownerId == owner
   case e of
     Nothing -> fail 404 "x"
@@ -234,7 +234,7 @@ let test_pos_compound_where_pk_not_first () =
      must still find it (the entity binder is only on the first conjunct). *)
   should_pass (header "PosCompound2" ^ {|
 fn get3(id: String, owner: String) -> Todo ? FromDb (Id == id)
-  requires [dbRead] =
+  requires [dbRead Todo] =
   let e = selectOne t from Todo where t.ownerId == owner && t.id == id
   case e of
     Nothing -> fail 404 "x"

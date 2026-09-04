@@ -21,9 +21,9 @@ module Lesson20NamedDbResults exposing [
 # will be GDP-named by whatever `let` variable the caller binds it to."
 #
 #   fn fetchTask(id: String) -> Task ? FromDb (Id == id)
-#     requires [dbRead] = ...
+#     requires [dbRead Task] = ...
 #
-#   fn useTask(id: String) -> String requires [dbRead] =
+#   fn useTask(id: String) -> String requires [dbRead Task] =
 #     let task = fetchTask id   # task carries FromDb (Id == id) task
 #     task.title
 #
@@ -104,7 +104,7 @@ entity Task table "tasks" primaryKey id {
 # The "?" means: whatever variable the caller binds this to becomes the entity subject.
 # The proof carries both the key (id) and the entity identity.
 fn fetchTask(id: String) -> Task ? FromDb (Id == id)
-  requires [dbRead] =
+  requires [dbRead Task] =
   let r = selectOne t from Task where t.id == id
   case r of
     Nothing -> fail 404 "task not found"
@@ -112,7 +112,7 @@ fn fetchTask(id: String) -> Task ? FromDb (Id == id)
 
 # "insert" also returns a named-pack: the inserted row carries FromDb proof.
 fn seedAndFetch(id: String) -> Task ? FromDb (Id == id)
-  requires [dbRead, dbWrite] =
+  requires [dbRead Task, dbWrite Task] =
   insert Task { id: id, title: "task: ${id}", status: "open" }
   let r = selectOne t from Task where t.id == id
   case r of
@@ -135,12 +135,12 @@ fn processTask(t: Task ::: FromDb (Id == id) t, id: String) -> String =
 # The proof t carries is: FromDb (Id == id) t
 # Passing (t, id) to processTask satisfies both the entity and key requirements.
 fn fetchAndProcess(id: String) -> String
-  requires [dbRead] =
+  requires [dbRead Task] =
   let t = fetchTask id
   processTask t id
 
 fn seedAndProcess(id: String) -> String
-  requires [dbRead, dbWrite] =
+  requires [dbRead Task, dbWrite Task] =
   let t = seedAndFetch id
   processTask t id
 
@@ -151,7 +151,7 @@ fn seedAndProcess(id: String) -> String
 # The caller knows: "there exists some taskId such that the Task is in the DB
 # for that key" — but cannot directly use taskId in further proof reasoning.
 fn existentialFetch(prefix: String) -> exists taskId: String => Task ? FromDb (Id == taskId)
-  requires [dbRead, dbWrite] =
+  requires [dbRead Task, dbWrite Task] =
   let taskId = "${prefix}-auto"
   insert Task { id: taskId, title: "auto task", status: "new" }
   let r = selectOne t from Task where t.id == taskId
@@ -167,7 +167,7 @@ fn existentialFetch(prefix: String) -> exists taskId: String => Task ? FromDb (I
 # In production you would configure a real database; in tests, entities use an
 # in-memory store automatically when no database runtime is active.
 
-test "named db result preserves proof" requires [dbRead, dbWrite] {
+test "named db result preserves proof" requires [dbRead Task, dbWrite Task] {
   let t = seedAndFetch "test-1"
   # t:: Task::: FromDb (Id == "test-1") t
   # Both the key subject and entity subject are captured in the proof.
@@ -175,7 +175,7 @@ test "named db result preserves proof" requires [dbRead, dbWrite] {
   expect t.status == "open"
 }
 
-test "proof annotation verifies entity came from db" requires [dbRead, dbWrite] {
+test "proof annotation verifies entity came from db" requires [dbRead Task, dbWrite Task] {
   # let t: Task::: FromDb (Id == id) t = ... verifies at runtime that t
   # carries the FromDb proof with entity subject t.
   # The `id` symbol acts as a wildcard (matches any primary-key gensym).
@@ -184,7 +184,7 @@ test "proof annotation verifies entity came from db" requires [dbRead, dbWrite] 
   expect t.title == "task: test-proof"
 }
 
-test "processTask receives named entity" requires [dbRead, dbWrite] {
+test "processTask receives named entity" requires [dbRead Task, dbWrite Task] {
   # Proof threading requires a proper function body (define/pow context).
   # Use fetchAndProcess which internally chains fetchTask + processTask,
   # threading the same `id` binding so the FromDb proof aligns.
@@ -193,7 +193,7 @@ test "processTask receives named entity" requires [dbRead, dbWrite] {
   expect result == "task: test-2 status=open"
 }
 
-test "seedAndProcess chains fetch and process" requires [dbRead, dbWrite] {
+test "seedAndProcess chains fetch and process" requires [dbRead Task, dbWrite Task] {
   let result = seedAndProcess "test-3"
   expect result == "task: test-3 status=open"
 }

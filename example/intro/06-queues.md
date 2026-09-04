@@ -56,7 +56,7 @@ Workers are typed and capability-governed — exactly like handlers. The `FromQu
 ```tesl
 handler postComment(user: User ::: Authenticated user, body: CommentBody)
   -> Comment
-  requires [dbWrite, queueWrite] =
+  requires [dbWrite Comment, queueWrite NotificationQueue] =
   transaction {
     let c = insert Comment { content: body.content, authorId: user.id, ... }
     enqueue NotifyJob { userId: body.targetUserId, message: "New comment" }

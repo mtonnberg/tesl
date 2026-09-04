@@ -304,7 +304,7 @@ let scope_wrong_where idx ~scope ~where_var =
     should_fail scope_re
       (db_hdr m ^ Printf.sprintf {|
 fn dispatchList(%s: String, %s: String) -> List Note ? ForAll (FromDb (AuthorId == %s))
-  requires [dbRead] =
+  requires [dbRead Note] =
   select note from Note where note.authorId == %s
 |} scope where_var scope where_var)
   in
@@ -328,7 +328,7 @@ let scope_consume_wrong idx wrong =
 fn needsScoped(requestUser: String, xs: List Note ::: ForAll (FromDb (AuthorId == requestUser)) xs) -> Int =
   0
 fn dispatchList(requestUser: String, %s: String) -> Int
-  requires [dbRead] =
+  requires [dbRead Note] =
   let xs = select note from Note where note.authorId == %s
   needsScoped requestUser xs
 |} wrong wrong)
@@ -349,7 +349,7 @@ let scope_bare_consume idx =
 fn needsScoped%d(requestUser: String, xs: List Note ::: ForAll (FromDb (AuthorId == requestUser)) xs) -> Int =
   0
 fn dispatchList%d(requestUser: String) -> Int
-  requires [dbRead] =
+  requires [dbRead Note] =
   let xs = select note from Note
   needsScoped%d requestUser xs
 |} idx idx idx)
@@ -471,7 +471,7 @@ let pos_scope_ok idx scope =
     should_pass
       (db_hdr m ^ Printf.sprintf {|
 fn dispatchList(%s: String) -> List Note ? ForAll (FromDb (AuthorId == %s))
-  requires [dbRead] =
+  requires [dbRead Note] =
   select note from Note where note.authorId == %s
 |} scope scope scope)
   in

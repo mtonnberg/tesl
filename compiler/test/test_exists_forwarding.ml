@@ -145,7 +145,7 @@ database ProbeDatabase = Database {
 }
 
 fn core(name: String) -> exists id: String => Thing ? FromDb (Id == id)
-  requires [dbWrite, time, random] =
+  requires [dbWrite Thing, time, random] =
   let id = generatePrefixedId "thing"
   exists id =>
     insert Thing { id: id, name: name, createdAt: nowMillis() }
@@ -191,7 +191,7 @@ let test_forward_direct () =
   should_pass "direct forwarding (the issue's repro)"
     (db {|
 fn wrapper(name: String) -> exists id: String => Thing ? FromDb (Id == id)
-  requires [dbWrite, time, random] =
+  requires [dbWrite Thing, time, random] =
   core name
 |})
 
@@ -199,7 +199,7 @@ let test_forward_via_let () =
   should_pass "forwarding a let-bound package"
     (db {|
 fn wrapper(name: String) -> exists id: String => Thing ? FromDb (Id == id)
-  requires [dbWrite, time, random] =
+  requires [dbWrite Thing, time, random] =
   let packed = core name
   packed
 |})
@@ -208,7 +208,7 @@ let test_forward_via_let_bound_if () =
   should_pass "forwarding every branch through a let-bound package"
     (db {|
 fn wrapper(name: String, flag: Bool) -> exists id: String => Thing ? FromDb (Id == id)
-  requires [dbWrite, time, random] =
+  requires [dbWrite Thing, time, random] =
   let packed = if flag then
     core name
   else
@@ -220,7 +220,7 @@ let test_forward_via_let_bound_if_or_fail () =
   should_pass "forwarding through a let-bound branch that may fail"
     (db {|
 fn wrapper(name: String, flag: Bool) -> exists id: String => Thing ? FromDb (Id == id)
-  requires [dbWrite, time, random] =
+  requires [dbWrite Thing, time, random] =
   let packed = if flag then
     core name
   else
@@ -232,7 +232,7 @@ let test_forward_via_long_alias_chain () =
   should_pass "forwarding through more than eight aliases"
     (db {|
 fn wrapper(name: String) -> exists id: String => Thing ? FromDb (Id == id)
-  requires [dbWrite, time, random] =
+  requires [dbWrite Thing, time, random] =
   let a = core name
   let b = a
   let c = b
@@ -250,7 +250,7 @@ let test_forward_every_branch () =
   should_pass "every branch forwards"
     (db {|
 fn wrapper(name: String, flag: Bool) -> exists id: String => Thing ? FromDb (Id == id)
-  requires [dbWrite, time, random] =
+  requires [dbWrite Thing, time, random] =
   if flag then
     core name
   else
@@ -360,7 +360,7 @@ let test_reject_mixed_branches () =
     ~expect:"does not return the same `exists` type"
     (db {|
 fn wrapper(name: String, flag: Bool) -> exists id: String => Thing ? FromDb (Id == id)
-  requires [dbWrite, time, random] =
+  requires [dbWrite Thing, time, random] =
   if flag then
     core name
   else
@@ -399,7 +399,7 @@ let test_emit_forward_not_raw_valued () =
     emit_of "forwarded tail"
       (db {|
 fn wrapper(name: String) -> exists id: String => Thing ? FromDb (Id == id)
-  requires [dbWrite, time, random] =
+  requires [dbWrite Thing, time, random] =
   core name
 |})
   in
@@ -411,7 +411,7 @@ let test_emit_pack_in_branch_not_raw_valued () =
     emit_of "pack in an if branch"
       (db {|
 fn branchy(name: String, flag: Bool) -> exists id: String => Thing ? FromDb (Id == id)
-  requires [dbWrite, time, random] =
+  requires [dbWrite Thing, time, random] =
   let id = generatePrefixedId "thing"
   if flag then
     exists id =>

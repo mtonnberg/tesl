@@ -21,29 +21,29 @@ database TestDb = Database {
   backend: Memory
 }
 
-fn countEntries() -> Int requires [dbRead] =
+fn countEntries() -> Int requires [dbRead Ledger] =
   selectCount l from Ledger
 
-fn transferBoth() -> Int requires [dbWrite] =
+fn transferBoth() -> Int requires [dbWrite Ledger] =
   transaction {
     let _ = insert Ledger { id: "a", amount: 10 }
     let _ = insert Ledger { id: "b", amount: 20 }
     2
   }
 
-fn transferThenTrap() -> Int requires [dbWrite] =
+fn transferThenTrap() -> Int requires [dbWrite Ledger] =
   transaction {
     let _ = insert Ledger { id: "a", amount: 10 }
     let _ = insert Ledger { id: "a", amount: 99 }
     2
   }
 
-test "a committed transaction keeps every write" requires [dbRead, dbWrite] {
+test "a committed transaction keeps every write" requires [dbRead Ledger, dbWrite Ledger] {
   expect transferBoth () == 2
   expect countEntries () == 2
 }
 
-test "a trap inside the block rolls back the writes before it" requires [dbRead, dbWrite] {
+test "a trap inside the block rolls back the writes before it" requires [dbRead Ledger, dbWrite Ledger] {
   expectFail transferThenTrap ()
   expect countEntries () == 0
 }

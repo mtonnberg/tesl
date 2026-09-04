@@ -52,8 +52,8 @@ import Tesl.Time exposing [PosixMillis]
 
 # ── Capabilities ────────────────────────────────────────────────────────────
 
-capability kanelDbRead implies dbRead
-capability kanelDbWrite implies dbWrite
+capability kanelDbRead implies dbRead KanelUser, dbRead Org, dbRead OrgMembership, dbRead Project, dbRead ProjectMembership, dbRead Issue, dbRead IssueComment, dbRead TimeEntry, dbRead Invoice
+capability kanelDbWrite implies dbWrite KanelUser, dbWrite Org, dbWrite OrgMembership, dbWrite Project, dbWrite ProjectMembership, dbWrite Issue, dbWrite IssueComment, dbWrite TimeEntry, dbWrite Invoice
 capability kanelQueue implies queueWrite
 capability kanelPubSub implies pubsub
 

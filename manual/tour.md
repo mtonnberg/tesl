@@ -141,7 +141,7 @@ handler post createTodo(
 ) -> exists todoId: String => Todo ? FromDb (Id == todoId)
                               # `?` means the caller gets back a Todo that the compiler
                               # knows was just inserted — the `FromDb` proof comes for free
-  requires [dbRead, dbWrite, time, random] =
+  requires [dbWrite Todo, time, random] =
   let todoId = generatePrefixedId("todo")
   exists todoId =>
     insert Todo {
@@ -197,8 +197,8 @@ Every function lists what it touches. Think of it as dependency injection, but e
 compiler rather than at runtime.
 
 ```tesl
-capability todoRead  implies dbRead
-capability todoWrite implies dbWrite
+capability todoRead  implies dbRead Todo
+capability todoWrite implies dbWrite Todo
 capability todoService implies todoRead, todoWrite, time, random
 
 handler get listTodos(user: User ::: Authenticated user)
@@ -471,7 +471,7 @@ functions wrapped with `asTool`, which derives the JSON Schema from the paramete
 the model's tool-call arguments for you — no hand-written schema or validator.
 
 ```tesl
-fn lookupOrderStatus(orderId: String) -> String requires [dbRead] =
+fn lookupOrderStatus(orderId: String) -> String requires [dbRead Order] =
   case selectOne o from Order where o.id == orderId of
     Something o -> o.status
     Nothing -> "no such order"
@@ -602,7 +602,7 @@ auth, codecs, database effects, queues, and SSE without dropping to Go.
 import Tesl.ApiTest exposing [statusOk, subscribe, collect, processNextJob, expectJobOk, pendingJobCount]
 
 api-test "comment notification reaches the user stream" for AppServer
-  requires [dbRead, dbWrite, queueWrite, queueRead, pubsub] {
+  requires [dbRead Comment, dbWrite Comment, queueWrite NoticeQueue, queueRead NoticeQueue, pubsub UserNotices] {
   let stream = subscribe "/events/users/usr_1" cookie "session=usr_1"
   let resp = post "/comments" cookie "session=usr_2" body { "body": "Looks good" }
   expect statusOk resp.status
@@ -917,7 +917,7 @@ form a lattice (`capability chatService implies chatRead, chatWrite`), and the c
 every function only uses what it declared.
 
 This is conceptually close to **algebraic effects** (as in F# computation expressions or Scala's ZIO
-environment type `ZIO[R, E, A]`) but without the monadic ceremony. In Tesl, `requires [dbRead]` is a
+environment type `ZIO[R, E, A]`) but without the monadic ceremony. In Tesl, `requires [dbRead Order]` is a
 flat annotation, not a type parameter — easy to read, easy to grep, easy to reason about in a code
 review.
 

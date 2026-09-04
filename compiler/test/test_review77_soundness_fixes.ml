@@ -104,7 +104,7 @@ let r771_discarded_select_forge () =
   should_fail "77.1 discarded-select FromDb forge" "named pack claiming"
     (entity_hdr "R77a" ^ {|
 fn forge(id: String, attacker: String) -> Task ? FromDb (Id == id)
-  requires [dbRead] =
+  requires [dbRead Task] =
   let _r = selectOne t from Task where t.id == id
   Task { id: id, title: attacker, status: "pwned" }
 |})
@@ -113,7 +113,7 @@ let r771_write_discard_forge () =
   should_fail "77.1 discarded-write FromDb forge" "named pack claiming"
     (entity_hdr "R77b" ^ {|
 fn forge(id: String, attacker: String) -> Task ? FromDb (Id == id)
-  requires [dbWrite] =
+  requires [dbWrite Task] =
   let _r = update t in Task where t.id == id set t.title = attacker returning one
   Task { id: id, title: attacker, status: "pwned" }
 |})
@@ -121,7 +121,7 @@ fn forge(id: String, attacker: String) -> Task ? FromDb (Id == id)
 let r771_legit_select_return () =
   should_pass "77.1 legit select return"
     (entity_hdr "R77c" ^ {|
-fn fetch(id: String) -> Task ? FromDb (Id == id) requires [dbRead] =
+fn fetch(id: String) -> Task ? FromDb (Id == id) requires [dbRead Task] =
   let existing = selectOne t from Task where t.id == id
   case existing of
     Nothing -> fail 404 "not found"
@@ -132,7 +132,7 @@ let r771_legit_update_returning () =
   should_pass "77.1 legit update returning one"
     (entity_hdr "R77d" ^ {|
 fn setTitle(id: String, newTitle: String) -> Task ? FromDb (Id == id)
-  requires [dbRead, dbWrite] =
+  requires [dbRead Task, dbWrite Task] =
   updateAndReturnOne t in Task
     where t.id == id
     set t.title = newTitle
@@ -167,7 +167,7 @@ fn forge(rawId: String, rawName: String)
 let r772_legit_case_select () =
   should_pass "77.2 legit case-over-select existential"
     (exists_hdr "R77f" ^ {|
-fn fetch(id: String) -> exists w: String => Widget ? FromDb (Id == w) requires [dbRead] =
+fn fetch(id: String) -> exists w: String => Widget ? FromDb (Id == w) requires [dbRead Widget] =
   case selectOne x from Widget where x.id == id of
     Nothing -> fail 404 "no"
     Something wgt ->
@@ -180,7 +180,7 @@ fn fetch(id: String) -> exists w: String => Widget ? FromDb (Id == w) requires [
 let r772_return_binder_is_not_a_value () =
   should_fail "77.2 return-type witness binder as value" "unknown name: w"
     (exists_hdr "R77h" ^ {|
-fn fetch(id: String) -> exists w: String => Widget ? FromDb (Id == w) requires [dbRead] =
+fn fetch(id: String) -> exists w: String => Widget ? FromDb (Id == w) requires [dbRead Widget] =
   case selectOne x from Widget where x.id == id of
     Nothing -> fail 404 "no"
     Something wgt ->
@@ -194,7 +194,7 @@ let r772_witness_type_must_match () =
   should_fail "77.2 packed witness type mismatch" "cannot unify"
     (exists_hdr "R77i" ^ {|
 fn insertWidget(rawName: String) -> exists w: String => Widget ? FromDb (Id == w)
-  requires [dbRead, dbWrite] =
+  requires [dbRead Widget, dbWrite Widget] =
   let created = insert Widget { id: rawName, name: rawName }
   exists created =>
     created
@@ -206,7 +206,7 @@ let r772_legit_let_established () =
   should_pass "77.2 legit let-established existential"
     (exists_hdr "R77g" ^ {|
 fn insertWidget(rawName: String) -> exists w: String => Widget ? FromDb (Id == w)
-  requires [dbRead, dbWrite] =
+  requires [dbRead Widget, dbWrite Widget] =
   let created = insert Widget { id: rawName, name: rawName }
   exists rawName =>
     created

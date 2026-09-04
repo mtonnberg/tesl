@@ -120,18 +120,18 @@ entity Entry table "entries" primaryKey id {
 let test_valid_grouped_forms () =
   should_pass (fixture {|
 fn minutesPerDay(orgId: String, tz: TimeZone) -> List (Tuple2 PosixMillis Int)
-  requires [dbRead] =
+  requires [dbRead Entry] =
   selectSumBy e.minutes from Entry
     where e.orgId == orgId
     groupBy (Time.truncDay tz e.startedAt)
 
 fn perMonth() -> List (Tuple2 PosixMillis Int)
-  requires [dbRead] =
+  requires [dbRead Entry] =
   selectCountBy e from Entry
     groupBy (Time.truncMonth EuropeStockholm e.startedAt)
 
 fn perOrg() -> List (Tuple2 String Int)
-  requires [dbRead] =
+  requires [dbRead Entry] =
   selectCountBy e from Entry
     groupBy e.orgId
 |})
@@ -139,7 +139,7 @@ fn perOrg() -> List (Tuple2 String Int)
 let test_emitted_lowering () =
   let out = emit_output (fixture {|
 fn minutesPerDay(tz: TimeZone) -> List (Tuple2 PosixMillis Int)
-  requires [dbRead] =
+  requires [dbRead Entry] =
   selectSumBy e.minutes from Entry
     groupBy (Time.truncDay tz e.startedAt)
 |}) in
@@ -156,7 +156,7 @@ let test_wrong_key_type_is_type_error () =
   should_fail "cannot unify\\|type"
     (fixture {|
 fn bad() -> List (Tuple2 String Int)
-  requires [dbRead] =
+  requires [dbRead Entry] =
   selectCountBy e from Entry
     groupBy (Time.truncDay Utc e.startedAt)
 |})
@@ -167,7 +167,7 @@ let test_group_by_on_scalar_aggregate () =
   should_fail "`groupBy` is not supported on `selectSum`"
     (fixture {|
 fn bad(orgId: String) -> Int
-  requires [dbRead] =
+  requires [dbRead Entry] =
   selectSum e.minutes from Entry
     where e.orgId == orgId
     groupBy e.orgId
@@ -177,7 +177,7 @@ let test_group_by_on_plain_select () =
   should_fail "`groupBy` is not supported on `select`"
     (fixture {|
 fn bad() -> List Entry
-  requires [dbRead] =
+  requires [dbRead Entry] =
   select e from Entry
     groupBy e.orgId
 |})
@@ -186,7 +186,7 @@ let test_grouped_form_requires_group_by () =
   should_fail "requires exactly one `groupBy`"
     (fixture {|
 fn bad() -> List (Tuple2 String Int)
-  requires [dbRead] =
+  requires [dbRead Entry] =
   selectCountBy e from Entry
 |})
 
@@ -194,7 +194,7 @@ let test_unknown_key_field () =
   should_fail "does not exist on entity"
     (fixture {|
 fn bad() -> List (Tuple2 PosixMillis Int)
-  requires [dbRead] =
+  requires [dbRead Entry] =
   selectCountBy e from Entry
     groupBy (Time.truncDay Utc e.noSuchField)
 |})
@@ -203,7 +203,7 @@ let test_trunc_on_non_posix_column () =
   should_fail "requires a PosixMillis column"
     (fixture {|
 fn bad() -> List (Tuple2 PosixMillis Int)
-  requires [dbRead] =
+  requires [dbRead Entry] =
   selectCountBy e from Entry
     groupBy (Time.truncDay Utc e.orgId)
 |})
@@ -212,7 +212,7 @@ let test_limit_on_grouped_form () =
   should_fail "`limit` is not supported on `selectCountBy`"
     (fixture {|
 fn bad() -> List (Tuple2 String Int)
-  requires [dbRead] =
+  requires [dbRead Entry] =
   selectCountBy e from Entry
     groupBy e.orgId
     limit 5
@@ -223,7 +223,7 @@ let test_int_offset_rejected () =
   should_fail "cannot unify\\|TimeZone"
     (fixture {|
 fn bad() -> List (Tuple2 PosixMillis Int)
-  requires [dbRead] =
+  requires [dbRead Entry] =
   selectCountBy e from Entry
     groupBy (Time.truncDay 60 e.startedAt)
 |})
@@ -232,7 +232,7 @@ let test_zone_typo_rejected () =
   should_fail "unknown constructor"
     (fixture {|
 fn bad() -> List (Tuple2 PosixMillis Int)
-  requires [dbRead] =
+  requires [dbRead Entry] =
   selectCountBy e from Entry
     groupBy (Time.truncDay EuropeStokholm e.startedAt)
 |})
@@ -241,7 +241,7 @@ let test_arbitrary_key_expression_rejected () =
   should_fail "unsupported `groupBy` key expression\\|unknown name"
     (fixture {|
 fn bad() -> List (Tuple2 Int Int)
-  requires [dbRead] =
+  requires [dbRead Entry] =
   selectCountBy e from Entry
     groupBy (someFn e.startedAt)
 |})

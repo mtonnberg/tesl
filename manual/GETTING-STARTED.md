@@ -165,11 +165,12 @@ automatically, and a function that asks for one it was not given is a compile er
 
 ```tesl
 handler get getTodo(todoId: String) -> Maybe Todo
-  requires [dbRead] =
+  requires [dbRead Todo] =
   selectOne todo from Todo where todo.id == todoId
 ```
 
-Common ones: `dbRead`, `dbWrite`, `time`, `random`, `queue`, `pubsub`, `emailCap`. A handler can only
+Common ones: `dbRead Entity`, `dbWrite Entity`, `time`, `random`, `queueWrite Queue`, `pubsub Channel`,
+and `emailCap`. (`dbRead` and `dbWrite` stay bare only in the `Tesl.DB` import.) A handler can only
 do what its `requires` list allows, and the compiler checks the whole call graph.
 
 Both ideas, in full: [overview.md](overview.md) for the shape, [tour.md](tour.md) for every feature.

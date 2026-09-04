@@ -607,10 +607,15 @@ let rec collect_test_stmt_names acc (ts : Ast.test_stmt) =
   | TsExpr { e; _ } -> collect_expr_names acc e
 
 (** Collect all names used in a top-level declaration. *)
+let collect_capability_name acc cap =
+  match Ast.resource_capability_parts cap with
+  | Some (base, resource) -> resource :: base :: cap :: acc
+  | None -> cap :: acc
+
 let collect_decl_names acc (d : Ast.top_decl) =
   match d with
   | DFunc fd ->
-    let acc = List.fold_left (fun a c -> c :: a) acc fd.capabilities in
+    let acc = List.fold_left collect_capability_name acc fd.capabilities in
     let acc = List.fold_left collect_binding_names acc fd.params in
     let acc = collect_return_spec_names acc fd.return_spec in
     collect_expr_names acc fd.body
@@ -652,14 +657,14 @@ let collect_decl_names acc (d : Ast.top_decl) =
          ) a entries
        ) acc alts)
   | DTest tf ->
-    let acc = List.fold_left (fun a c -> c :: a) acc tf.capabilities in
+    let acc = List.fold_left collect_capability_name acc tf.capabilities in
     List.fold_left collect_test_stmt_names acc tf.stmts
   | DApiTest atf ->
-    let acc = List.fold_left (fun a c -> c :: a) acc atf.capabilities in
+    let acc = List.fold_left collect_capability_name acc atf.capabilities in
     let acc = List.fold_left (fun a e -> collect_expr_names a e) acc atf.seed_stmts in
     List.fold_left collect_test_stmt_names acc atf.stmts
   | DLoadTest ltf ->
-    let acc = List.fold_left (fun a c -> c :: a) acc ltf.capabilities in
+    let acc = List.fold_left collect_capability_name acc ltf.capabilities in
     let acc = List.fold_left (fun a e -> collect_expr_names a e) acc ltf.seed_stmts in
     List.fold_left collect_test_stmt_names acc ltf.request_stmts
   | DApi af ->
@@ -702,7 +707,7 @@ let collect_decl_names acc (d : Ast.top_decl) =
        references its capabilities and every name in the `Agent { … }` RHS (the
        provider constructor like `anthropic`/`requireEnv` and the `asTool`-wrapped
        tool fns). Descend so those imports aren't falsely flagged W050-unused. *)
-    let acc = List.fold_left (fun a c -> c :: a) acc af.capabilities in
+    let acc = List.fold_left collect_capability_name acc af.capabilities in
     (match af.config_expr with Some e -> collect_expr_names acc e | None -> acc)
   | DConst cf -> collect_expr_names acc cf.value
   | DQueue qf ->
@@ -710,7 +715,7 @@ let collect_decl_names acc (d : Ast.top_decl) =
        references its capabilities, the database, the job/worker names, and every
        name in the `Queue { … }` RHS (Queue/Job/QueueRetryStrategy/Exponential …).
        Descend so those imports aren't falsely flagged W050-unused. *)
-    let acc = List.fold_left (fun a c -> c :: a) acc qf.capabilities in
+    let acc = List.fold_left collect_capability_name acc qf.capabilities in
     let acc = qf.database :: List.fold_left (fun a j -> j :: a) acc qf.jobs in
     (match qf.config_expr with Some e -> collect_expr_names acc e | None -> acc)
   | DChannel chf ->
@@ -726,7 +731,7 @@ let collect_decl_names acc (d : Ast.top_decl) =
     let acc = wf.queue_name :: acc in
     List.fold_left (fun a (_, fn) -> fn :: a) acc wf.bindings
   | DCapability cf ->
-    List.fold_left (fun a c -> c :: a) acc cf.implies
+    List.fold_left collect_capability_name acc cf.implies
 
 (** Lint unused imports by parsing the source and checking name references. *)
 let lint_unused_imports filename (source : string) (out : lint_diag list ref) =

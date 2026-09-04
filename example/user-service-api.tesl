@@ -82,8 +82,8 @@ import Tesl.Email exposing [Email, SmtpConfig, emailCap, EmailBody(..)]
 # CAPABILITIES
 # ─────────────────────────────────────────────────────────────────────────────
 
-capability userDbRead implies dbRead
-capability userDbWrite implies dbWrite
+capability userDbRead implies dbRead User
+capability userDbWrite implies dbWrite User
 capability userTime implies time
 capability userRandom implies random
 

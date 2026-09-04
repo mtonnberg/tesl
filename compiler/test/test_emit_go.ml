@@ -3353,73 +3353,73 @@ database ProbeDb = Database {
 }
 
 fn titleOf(wanted: String) -> String
-  requires [dbRead] =
+  requires [dbRead Item] =
   let found = selectOne i from Item where i.id == wanted
   case found of
     Nothing -> "none"
     Something i -> i.name
 
 fn orderedNames() -> List String
-  requires [dbRead] =
+  requires [dbRead Item] =
   let rows = select i from Item order i.qty desc
   List.map (fn(i: Item) -> i.name) rows
 
 fn cheapestName() -> String
-  requires [dbRead] =
+  requires [dbRead Item] =
   let rows = select i from Item order i.qty asc limit 1
   case List.head rows of
     Nothing -> "none"
     Something i -> i.name
 
 fn countAbove(threshold: Int) -> Int
-  requires [dbRead] =
+  requires [dbRead Item] =
   selectCount i from Item where i.qty > threshold
 
 fn totalQty() -> Int
-  requires [dbRead] =
+  requires [dbRead Item] =
   selectSum i.qty from Item
 
 # selectMax/selectMin answer a Maybe: no matching row has no maximum.
 fn biggestQty() -> Int
-  requires [dbRead] =
+  requires [dbRead Item] =
   case selectMax i.qty from Item of
     Nothing -> 0
     Something qty -> qty
 
 fn smallestQty() -> Int
-  requires [dbRead] =
+  requires [dbRead Item] =
   case selectMin i.qty from Item of
     Nothing -> 0
     Something qty -> qty
 
 # The empty answer itself, over a predicate nothing matches.
 fn biggestQtyNamed(wanted: String) -> Maybe Int
-  requires [dbRead] =
+  requires [dbRead Item] =
   selectMax i.qty from Item where i.name == wanted
 
 fn namesLike(pattern: String) -> Int
-  requires [dbRead] =
+  requires [dbRead Item] =
   selectCount i from Item where like i.name pattern
 
 fn namesILike(pattern: String) -> Int
-  requires [dbRead] =
+  requires [dbRead Item] =
   selectCount i from Item where ilike i.name pattern
 
 fn bySku(raw: String) -> Int
-  requires [dbRead] =
+  requires [dbRead Item] =
   selectCount i from Item where i.sku == Sku raw
 
 fn eitherName(left: String, right: String) -> Int
-  requires [dbRead] =
+  requires [dbRead Item] =
   selectCount i from Item where i.name == left || i.name == right
 
 fn describeDelete(name: String) -> String
-  requires [dbWrite] =
+  requires [dbWrite Item] =
   let removed = deleteAndReturnResult i from Item where i.name == name
   Int.toString removed
 
 fn seed() -> Unit
-  requires [dbWrite] =
+  requires [dbWrite Item] =
   let _ = insert Item { id: "i1", sku: Sku "S-1", name: "alpha", qty: 7 }
   let rest = [
     Item { id: "i2", sku: Sku "S-2", name: "beta", qty: 3 },
@@ -3428,7 +3428,7 @@ fn seed() -> Unit
   let _ = insertMany rest in Item
   Unit
 
-test "queries read back what was written" requires [dbRead, dbWrite] {
+test "queries read back what was written" requires [dbRead Item, dbWrite Item] {
   let _ = seed ()
   expect titleOf "i1" == "alpha"
   expect titleOf "nope" == "none"
@@ -3450,7 +3450,7 @@ test "queries read back what was written" requires [dbRead, dbWrite] {
 
 # The Memory store is NOT reset between test blocks (it is one process-wide store on
 # both backends), so this test owns its own rows rather than re-seeding the first one's.
-test "update and delete change what queries see" requires [dbRead, dbWrite] {
+test "update and delete change what queries see" requires [dbRead Item, dbWrite Item] {
   let _ = insert Item { id: "u1", sku: Sku "S-U1", name: "delta", qty: 20 }
   let _ = insert Item { id: "u2", sku: Sku "S-U2", name: "epsilon", qty: 30 }
   Unit
@@ -3561,12 +3561,12 @@ database Shelf = Database {
 }
 
 fn shelve(id: String, title: String, pages: Int, status: BookStatus) -> Book
-  requires [dbWrite] =
+  requires [dbWrite Book] =
   insert Book { id: id, title: title, pages: pages, status: status }
 
 # An ADT column round-trips through the same wire shape a response body uses.
 fn statusOf(wanted: String) -> String
-  requires [dbRead] =
+  requires [dbRead Book] =
   case selectOne b from Book where b.id == wanted of
     Nothing -> "none"
     Something b ->
@@ -3575,16 +3575,16 @@ fn statusOf(wanted: String) -> String
         Published -> "published"
 
 fn titleOf(wanted: String) -> String
-  requires [dbRead] =
+  requires [dbRead Book] =
   case selectOne b from Book where b.id == wanted of
     Nothing -> "none"
     Something b -> b.title
 
 fn countBooks() -> Int
-  requires [dbRead] =
+  requires [dbRead Book] =
   selectCount b from Book
 
-test "a Postgres declaration leaves the store where it was" requires [dbRead, dbWrite] {
+test "a Postgres declaration leaves the store where it was" requires [dbRead Book, dbWrite Book] {
   let _ = shelve "b-1" "The Art of Tesl" 320 Published
   let _ = shelve "b-2" "Proofs in Practice" 210 Draft
   expect titleOf "b-1" == "The Art of Tesl"
@@ -3753,19 +3753,19 @@ database LiveDb = Database {
 }
 
 fn store(id: String, title: String, pages: Int, shelf: Shelf, retired: Bool, authorId: String) -> LiveBook
-  requires [dbWrite] =
+  requires [dbWrite Note] =
   insert LiveBook {
     id: id, title: title, pages: pages, shelf: shelf, binding: Paperback,
     retired: retired, authorId: authorId
   }
 
-fn storeBound(id: String, binding: Binding) -> LiveBook requires [dbWrite] =
+fn storeBound(id: String, binding: Binding) -> LiveBook requires [dbWrite Note] =
   insert LiveBook {
     id: id, title: "Bound", pages: 1, shelf: Fiction, binding: binding,
     retired: False, authorId: "a-1"
   }
 
-fn bindingOf(wanted: String) -> String requires [dbRead] =
+fn bindingOf(wanted: String) -> String requires [dbRead Note] =
   case selectOne b from LiveBook where b.id == wanted of
     Nothing -> "none"
     Something b ->
@@ -3775,7 +3775,7 @@ fn bindingOf(wanted: String) -> String requires [dbRead] =
         Special edition -> "special-" ++ edition
 
 fn storeAuthor(id: String, name: String) -> LiveAuthor
-  requires [dbWrite] =
+  requires [dbWrite Note] =
   insert LiveAuthor { id: id, name: name }
 
 # NO `innerJoin` here, deliberately.  Racket's Postgres join builder qualifies the ON columns
@@ -3788,37 +3788,37 @@ fn storeAuthor(id: String, name: String) -> LiveAuthor
 # example/learn/lesson48-sql-inner-join.tesl, whose database is Memory-backed.
 
 fn titleOf(wanted: String) -> String
-  requires [dbRead] =
+  requires [dbRead Note] =
   case selectOne b from LiveBook where b.id == wanted of
     Nothing -> "none"
     Something b -> b.title
 
 fn countBooks() -> Int
-  requires [dbRead] =
+  requires [dbRead Note] =
   selectCount b from LiveBook
 
 fn countRetired() -> Int
-  requires [dbRead] =
+  requires [dbRead Note] =
   selectCount b from LiveBook where b.retired == True
 
 fn totalPages() -> Int
-  requires [dbRead] =
+  requires [dbRead Note] =
   selectSum b.pages from LiveBook
 
 fn longest() -> Int
-  requires [dbRead] =
+  requires [dbRead Note] =
   case selectMax b.pages from LiveBook of
     Nothing -> 0
     Something pages -> pages
 
 fn titlesByPages() -> Int
-  requires [dbRead] =
+  requires [dbRead Note] =
   selectCount b from LiveBook where b.pages > 250
 
 # `upsert` on the SERVER is one statement — `insert … on conflict (id) do update set …` —
 # where the memory path finds, merges and stores. The two agree about the outcome, which is
 # what a test that runs on either store asserts.
-fn stash(id: String, title: String, pages: Int) -> Unit requires [dbWrite] =
+fn stash(id: String, title: String, pages: Int) -> Unit requires [dbWrite Note] =
   upsert LiveBook {
     id: id, title: title, pages: pages, shelf: Fiction, binding: Paperback,
     retired: False, authorId: "a-1"
@@ -3827,24 +3827,24 @@ fn stash(id: String, title: String, pages: Int) -> Unit requires [dbWrite] =
 # A grouped aggregate GROUPS on the server: `select "authorId", coalesce(sum("pages"), 0) …
 # group by 1 order by 1`, one row per bucket in ascending key order — the same order the
 # memory fold answers in.
-fn pagesByAuthor() -> List (Tuple2 String Int) requires [dbRead] =
+fn pagesByAuthor() -> List (Tuple2 String Int) requires [dbRead Note] =
   selectSumBy b.pages from LiveBook groupBy b.authorId
 
-fn booksByAuthor() -> List (Tuple2 String Int) requires [dbRead] =
+fn booksByAuthor() -> List (Tuple2 String Int) requires [dbRead Note] =
   selectCountBy b from LiveBook groupBy b.authorId
 
-fn authorsSeen() -> List String requires [dbRead] = List.map firstOfPair (pagesByAuthor ())
+fn authorsSeen() -> List String requires [dbRead Note] = List.map firstOfPair (pagesByAuthor ())
 
 fn firstOfPair(row: Tuple2 String Int) -> String = Tuple2.first row
 
-fn pagesSeen() -> List Int requires [dbRead] = List.map secondOfPair (pagesByAuthor ())
+fn pagesSeen() -> List Int requires [dbRead Note] = List.map secondOfPair (pagesByAuthor ())
 
 fn secondOfPair(row: Tuple2 String Int) -> Int = Tuple2.second row
 
-fn countsSeen() -> List Int requires [dbRead] = List.map secondOfPair (booksByAuthor ())
+fn countsSeen() -> List Int requires [dbRead Note] = List.map secondOfPair (booksByAuthor ())
 
 fn shelfOf(wanted: String) -> String
-  requires [dbRead] =
+  requires [dbRead Note] =
   case selectOne b from LiveBook where b.id == wanted of
     Nothing -> "none"
     Something b ->
@@ -3852,7 +3852,7 @@ fn shelfOf(wanted: String) -> String
         Fiction -> "fiction"
         Reference -> "reference"
 
-test "a round trip through the server answers what it stored" with database LiveDb requires [dbRead, dbWrite] {
+test "a round trip through the server answers what it stored" with database LiveDb requires [dbRead Note, dbWrite Note] {
   delete b from LiveBook
   delete a from LiveAuthor
   let _ = storeAuthor "a-1" "Ada"
@@ -3998,10 +3998,10 @@ database ColumnDb = Database {
 }
 
 fn store(id: String, priority: Priority, token: Token, assignee: Maybe String) -> Ticket
-  requires [dbWrite] =
+  requires [dbWrite Note] =
   insert Ticket { id: id, priority: priority, token: token, assignee: assignee }
 
-fn labelOf(wanted: String) -> String requires [dbRead] =
+fn labelOf(wanted: String) -> String requires [dbRead Note] =
   case selectOne t from Ticket where t.id == wanted of
     Nothing -> "none"
     Something t ->
@@ -4020,17 +4020,17 @@ fn labelOf(wanted: String) -> String requires [dbRead] =
 
 # A `secret` column: the column stores the newtype's BASE value, and what comes back is the
 # newtype again — so the only thing a caller can do with it is compare, which is the point.
-fn tokenMatches(wanted: String, guess: Token) -> Bool requires [dbRead] =
+fn tokenMatches(wanted: String, guess: Token) -> Bool requires [dbRead Note] =
   case selectOne t from Ticket where t.id == wanted of
     Nothing -> False
     Something t -> t.token == guess
 
 # `isNull` is the only way to ask a nullable column about its emptiness in a WHERE clause:
 # `t.assignee == Nothing` compares a column against a Tesl value, which the store cannot do.
-fn unnamed() -> Int requires [dbRead] =
+fn unnamed() -> Int requires [dbRead Note] =
   selectCount t from Ticket where isNull t.assignee
 
-test "a payload ADT, a secret and a nullable column all survive a round trip" with database ColumnDb requires [dbRead, dbWrite] {
+test "a payload ADT, a secret and a nullable column all survive a round trip" with database ColumnDb requires [dbRead Note, dbWrite Note] {
   # A live table outlives a test process, so the block starts by clearing what an earlier run
   # left — the per-test freshening both backends do covers memory stores only.
   delete t from Ticket
@@ -4550,15 +4550,15 @@ fn same(left: WideEvent, right: WideEvent) -> Bool =
 fn roundTrip(event: WideEvent) -> String =
   label event
 
-fn storeEvent(id: String, event: WideEvent) -> EventRow requires [dbWrite] =
+fn storeEvent(id: String, event: WideEvent) -> EventRow requires [dbWrite EventRow] =
   insert EventRow { id: id, event: event }
 
-fn labelOf(wanted: String) -> String requires [dbRead] =
+fn labelOf(wanted: String) -> String requires [dbRead EventRow] =
   case selectOne row from EventRow where row.id == wanted of
     Nothing -> "none"
     Something row -> label row.event
 
-test "a boxed ADT behaves exactly as a flat one does" requires [dbRead, dbWrite] {
+test "a boxed ADT behaves exactly as a flat one does" requires [dbRead EventRow, dbWrite EventRow] {
   let posted = Posted "m1" "u1" "ada" "hello" "general"
   let joined = Joined "u2" "grace"
   let failed = Failed "ada" "general" Nothing
@@ -4646,15 +4646,15 @@ database Team = Database {
   backend: Memory
 }
 
-fn add(id: String, email: String) -> Member requires [dbWrite] =
+fn add(id: String, email: String) -> Member requires [dbWrite Member] =
   insert Member { id: id, email: email, nickname: Nothing }
 
-fn rename(id: String, email: String) -> Unit requires [dbWrite] =
+fn rename(id: String, email: String) -> Unit requires [dbWrite Member] =
   update m in Member
     where m.id == id
     set m.email = email
 
-test "a unique index is enforced, and NULLs do not collide" requires [dbRead, dbWrite] {
+test "a unique index is enforced, and NULLs do not collide" requires [dbRead Member, dbWrite Member] {
   let _ = add "m1" "ada@example.com"
   let _ = add "m2" "grace@example.com"
   expectFail add "m3" "ada@example.com"
@@ -5497,7 +5497,7 @@ codec Count {
 }
 
 handler get listWidgets() -> Count
-  requires [dbRead] =
+  requires [dbRead Widget] =
   let rows = select w from Widget
   Count { widgets: List.length rows }
 
@@ -5510,7 +5510,7 @@ server SeedServer for SeedApi {
   listWidgets
 }
 
-api-test "a seeded block sees the rows it declared" for SeedServer requires [dbRead, dbWrite] {
+api-test "a seeded block sees the rows it declared" for SeedServer requires [dbRead Widget, dbWrite Widget] {
   seed {
     insert Widget { id: "w-1", label: "first" }
     insert Widget { id: "w-2", label: "second" }
@@ -5520,7 +5520,7 @@ api-test "a seeded block sees the rows it declared" for SeedServer requires [dbR
   expect counted.body.widgets == 2
 }
 
-api-test "and the next block does not inherit them" for SeedServer requires [dbRead, dbWrite] {
+api-test "and the next block does not inherit them" for SeedServer requires [dbRead Widget, dbWrite Widget] {
   let counted = get "/widgets"
   expect counted.body.widgets == 0
 }
@@ -8835,21 +8835,21 @@ database TxnDb = Database {
 }
 
 fn addEntry(id: String, account: String, amount: Int) -> Int
-  requires [dbRead, dbWrite] =
+  requires [dbRead Ledger, dbWrite Ledger] =
   transaction {
     insert Ledger { id: id, account: account, amount: amount }
     selectCount l from Ledger where l.account == account
   }
 
 fn totalFor(account: String) -> Int
-  requires [dbRead] =
+  requires [dbRead Ledger] =
   selectSum l.amount from Ledger where l.account == account
 
 fn entriesFor(account: String) -> Int
-  requires [dbRead] =
+  requires [dbRead Ledger] =
   selectCount l from Ledger where l.account == account
 
-test "a transaction groups its writes and answers its tail" requires [dbRead, dbWrite] {
+test "a transaction groups its writes and answers its tail" requires [dbRead Ledger, dbWrite Ledger] {
   expect addEntry "1" "ada" 100 == 1
   expect addEntry "2" "ada" 50 == 2
   expect addEntry "3" "grace" 10 == 1
@@ -8857,7 +8857,7 @@ test "a transaction groups its writes and answers its tail" requires [dbRead, db
   expect entriesFor "grace" == 1
 }
 
-test "each block starts from an empty table" requires [dbRead] {
+test "each block starts from an empty table" requires [dbRead Ledger] {
   expect entriesFor "ada" == 0
 }
 |}
@@ -11235,7 +11235,7 @@ database TicketDatabase = Database {
   backend: Memory
 }
 
-fn setOwner(ticketId: String, owner: String) -> String requires [dbWrite] =
+fn setOwner(ticketId: String, owner: String) -> String requires [dbWrite Note] =
   let _ = update t in Ticket where t.id == ticketId set t.ownerId = owner
   ticketId
 |} in
@@ -11747,16 +11747,16 @@ record ImageJob {
 }
 
 worker sendEmail(job: EmailJob ::: FromQueue (Id == jobId) job) -> Int
-  requires [dbWrite] =
+  requires [dbWrite Sent] =
   let _ = insert Sent { id: job.jobId, kind: "email" }
   1
 
 worker resizeImage(job: ImageJob ::: FromQueue (Id == jobId) job) -> Int
-  requires [dbWrite] =
+  requires [dbWrite Sent] =
   let _ = insert Sent { id: job.jobId, kind: "image" }
   job.width
 
-queue MultiJobQueue requires [queueRead, dbWrite] = Queue {
+queue MultiJobQueue requires [queueRead, dbWrite Sent] = Queue {
   database: MultiJobDb
   jobs: [
     Job EmailJob sendEmail Nothing,
@@ -11782,9 +11782,9 @@ fn seedBoth() -> Int requires [queueWrite] =
   let _ = queueImage "i1"
   2
 
-fn sentCount() -> Int requires [dbRead] = selectCount s from Sent
+fn sentCount() -> Int requires [dbRead Sent] = selectCount s from Sent
 
-test "both job types run through their own worker" requires [dbRead, dbWrite, queueRead, queueWrite] {
+test "both job types run through their own worker" requires [dbRead Sent, dbWrite Sent, queueRead, queueWrite] {
   let _ = seedBoth ()
   expect sentCount () == 0
 }
@@ -12259,66 +12259,66 @@ database GroupByDb = Database {
   backend: Memory
 }
 
-fn minutesPerDay(zone: TimeZone) -> List (Tuple2 PosixMillis Int) requires [dbRead] =
+fn minutesPerDay(zone: TimeZone) -> List (Tuple2 PosixMillis Int) requires [dbRead Entry] =
   selectSumBy e.minutes from Entry
     groupBy (Time.truncDay zone e.startedAt)
 
-fn entriesPerOrg() -> List (Tuple2 String Int) requires [dbRead] =
+fn entriesPerOrg() -> List (Tuple2 String Int) requires [dbRead Entry] =
   selectCountBy e from Entry
     groupBy e.orgId
 
-fn add(id: String, org: String, minutes: Int, seconds: Int) -> Entry requires [dbWrite] =
+fn add(id: String, org: String, minutes: Int, seconds: Int) -> Entry requires [dbWrite Entry] =
   insert Entry {
     id: id, orgId: org, minutes: minutes, startedAt: Time.secondsToPosix seconds
   }
 
 # 2026-03-01 10:00 and 23:30 UTC, then 2026-03-02 01:00 UTC.
-fn seed() -> Int requires [dbWrite] =
+fn seed() -> Int requires [dbWrite Entry] =
   let _ = add "e1" "acme" 60 1772359200
   let _ = add "e2" "acme" 30 1772407800
   let _ = add "e3" "acme" 15 1772413200
   let _ = add "e4" "other" 5 1772359200
   4
 
-fn touch(id: String, minutes: Int) -> Unit requires [dbWrite] =
+fn touch(id: String, minutes: Int) -> Unit requires [dbWrite Entry] =
   upsert Entry {
     id: id, orgId: "acme", minutes: minutes, startedAt: Time.secondsToPosix 0
   } onConflict [id] doUpdate [minutes]
 
-fn dayMinutes(zone: TimeZone) -> List Int requires [dbRead] =
+fn dayMinutes(zone: TimeZone) -> List Int requires [dbRead Entry] =
   List.map minutesOfRow (minutesPerDay zone)
 
 fn minutesOfRow(row: Tuple2 PosixMillis Int) -> Int = Tuple2.second row
 
-fn dayStarts(zone: TimeZone) -> List Int requires [dbRead] =
+fn dayStarts(zone: TimeZone) -> List Int requires [dbRead Entry] =
   List.map startOfRow (minutesPerDay zone)
 
 fn startOfRow(row: Tuple2 PosixMillis Int) -> Int =
   Time.posixToSeconds (Tuple2.first row)
 
-fn orgNames() -> List String requires [dbRead] = List.map nameOfRow (entriesPerOrg ())
+fn orgNames() -> List String requires [dbRead Entry] = List.map nameOfRow (entriesPerOrg ())
 
 fn nameOfRow(row: Tuple2 String Int) -> String = Tuple2.first row
 
-fn orgCounts() -> List Int requires [dbRead] = List.map countOfRow (entriesPerOrg ())
+fn orgCounts() -> List Int requires [dbRead Entry] = List.map countOfRow (entriesPerOrg ())
 
 fn countOfRow(row: Tuple2 String Int) -> Int = Tuple2.second row
 
-test "the day buckets are one row each, in ascending key order" requires [dbRead, dbWrite] {
+test "the day buckets are one row each, in ascending key order" requires [dbRead Entry, dbWrite Entry] {
   let _ = seed ()
   expect List.length (minutesPerDay Utc) == 2
   expect dayMinutes Utc == [95, 15]
   expect dayStarts Utc == [1772323200, 1772409600]
 }
 
-test "a plain column groups too" requires [dbRead, dbWrite] {
+test "a plain column groups too" requires [dbRead Entry, dbWrite Entry] {
   let _ = seed ()
   expect orgNames () == ["acme", "other"]
   expect orgCounts () == [3, 1]
 }
 
 # The row already there keeps its other columns; a row that is not there is inserted.
-test "upsert updates only the columns it names" requires [dbRead, dbWrite] {
+test "upsert updates only the columns it names" requires [dbRead Entry, dbWrite Entry] {
   let _ = seed ()
   let _ = touch "e1" 999
   expect orgNames () == ["acme", "other"]
@@ -12326,7 +12326,7 @@ test "upsert updates only the columns it names" requires [dbRead, dbWrite] {
   expect dayMinutes Utc == [1034, 15]
 }
 
-test "upsert inserts when nothing conflicts" requires [dbRead, dbWrite] {
+test "upsert inserts when nothing conflicts" requires [dbRead Entry, dbWrite Entry] {
   let _ = touch "fresh" 7
   expect orgNames () == ["acme"]
   expect orgCounts () == [1]

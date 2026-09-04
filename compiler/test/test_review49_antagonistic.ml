@@ -379,7 +379,7 @@ fn bad(s: String) -> Int =
    ═══════════════════════════════════════════════════════════════════════════ *)
 
 let r49_c01 () =
-  should_fail_src "capability\\|requires\\|missing\\|not.*declared\\|dbWrite" ({|module Test exposing []
+  should_fail_src "capability\\|requires\\|missing\\|not.*declared\\|dbWrite Note" ({|module Test exposing []
 import Tesl.Prelude exposing [Int, String, Unit]
 import Tesl.DB exposing [dbRead, dbWrite]
 
@@ -389,11 +389,11 @@ entity Item table "items" primaryKey id {
 }
 
 fn writeItem(id: String, name: String) -> Unit
-  requires [dbWrite] =
+  requires [dbWrite Note] =
   insert Item { id: id, name: name }
 
 fn caller() -> Unit
-  requires [dbRead] =
+  requires [dbRead Note] =
   writeItem "1" "test"
 |})
 

@@ -104,8 +104,8 @@ import Tesl.Database exposing [
 
 # ─── Capabilities ─────────────────────────────────────────────────────────────
 
-capability noteDbRead implies dbRead
-capability noteDbWrite implies dbWrite
+capability noteDbRead implies dbRead Note
+capability noteDbWrite implies dbWrite Note
 capability noteReadCookie
 capability noteService implies noteDbRead, noteDbWrite, noteReadCookie, random
 

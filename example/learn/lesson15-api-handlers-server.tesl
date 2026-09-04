@@ -19,7 +19,6 @@ module Lesson15ApiHandlersServer exposing [TaskServer]
 # These two are separate so you can swap implementations.
 
 import Tesl.Prelude exposing [Bool(..), Int, String]
-import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Http exposing [HttpRequest]
 import Tesl.Json exposing [stringCodec, intCodec, boolCodec]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -27,8 +26,8 @@ import Tesl.Dict exposing [Dict.lookup]
 
 # ─── Capabilities ─────────────────────────────────────────────────────────────
 
-capability taskDbRead implies dbRead # permission to read task data
-capability taskDbWrite implies dbWrite # permission to write task data
+capability taskRead # domain permission used by this in-memory teaching stub
+capability taskWrite # domain permission used by this in-memory teaching stub
 
 # ─── Data types ───────────────────────────────────────────────────────────────
 
@@ -103,7 +102,7 @@ capturer taskIdCapture: id: String using stringCodec
 # Parameters: authenticated user (proof required), request body.
 # Requires taskDbWrite capability (it would write to DB in a real app).
 handler post createTask(user: String ::: Authenticated user, body: NewTask) -> Task
-  requires [taskDbWrite] =
+  requires [taskWrite] =
   # user: authenticated, body: decoded from JSON (title and priority fields validated at boundary)
   Task { id: "task-1", title: body.title, priority: body.priority, done: False }
   # In a real app: insert into DB, generate real ID, return the persisted record.
@@ -111,7 +110,7 @@ handler post createTask(user: String ::: Authenticated user, body: NewTask) -> T
 # getTask: look up a task by ID.
 # Returns Maybe Task — Nothing if not found, Something task if found.
 handler get getTask(user: String ::: Authenticated user, id: String) -> Maybe Task
-  requires [taskDbRead] =
+  requires [taskRead] =
   # id: the parsed URL capture (plain String from taskIdCapture)
   Something (Task { id: id, title: "example task", priority: 3, done: False })
   # In a real app: query DB, return Nothing if not found.

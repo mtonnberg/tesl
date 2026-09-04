@@ -82,12 +82,12 @@ handler post createNote(body: NoteBody) -> NoteOut =
   NoteOut { stored: String.length body.title > 0 }
 
 handler post storeNote(body: NoteBody) -> NoteOut
-  requires [dbWrite] =
+  requires [dbWrite Note] =
   let _ = insert Note { id: body.id, title: body.title, pages: body.pages }
   NoteOut { stored: True }
 
 handler get countNotes() -> CountOut
-  requires [dbRead] =
+  requires [dbRead Note] =
   let rows = select n from Note
   CountOut { notes: 0 }
 
@@ -110,19 +110,19 @@ server BenchServer for BenchServerApi {
   countNotes
 }
 
-api-test "the decode path answers" for BenchServer requires [dbRead, dbWrite] {
+api-test "the decode path answers" for BenchServer requires [dbRead Note, dbWrite Note] {
   let created = post "/notes" body { "id": "n-1", "title": "first", "pages": 12 }
   expect statusOk created.status
   expect created.body.stored == True
 }
 
-api-test "the store path inserts" for BenchServer requires [dbRead, dbWrite] {
+api-test "the store path inserts" for BenchServer requires [dbRead Note, dbWrite Note] {
   let stored = post "/store" body { "id": "n-1", "title": "first", "pages": 12 }
   expect statusOk stored.status
   expect stored.body.stored == True
 }
 
-api-test "the read path answers" for BenchServer requires [dbRead, dbWrite] {
+api-test "the read path answers" for BenchServer requires [dbRead Note, dbWrite Note] {
   let counted = get "/count"
   expect statusOk counted.status
 }
@@ -130,7 +130,7 @@ api-test "the read path answers" for BenchServer requires [dbRead, dbWrite] {
 load-test "read path under load" for BenchServer
   rate 2000rps
   duration 5s
-  requires [dbRead, dbWrite] {
+  requires [dbRead Note, dbWrite Note] {
 
   get "/count"
 
@@ -140,7 +140,7 @@ load-test "read path under load" for BenchServer
 load-test "decode path under load" for BenchServer
   rate 2000rps
   duration 5s
-  requires [dbRead, dbWrite] {
+  requires [dbRead Note, dbWrite Note] {
 
   post "/notes" body { "id": "bench", "title": "a title of ordinary length", "pages": 240 }
 

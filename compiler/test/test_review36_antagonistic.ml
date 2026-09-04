@@ -363,8 +363,8 @@ let r36_24_capability_insufficiency () =
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbRead, dbWrite]
 
-capability readCap implies dbRead
-capability writeCap implies dbWrite
+capability readCap implies dbRead Note
+capability writeCap implies dbWrite Note
 
 fn doWrite() -> Int
   requires [writeCap] =

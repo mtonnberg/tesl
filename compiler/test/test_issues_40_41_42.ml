@@ -97,7 +97,7 @@ handler get rawBox() -> Int =
   let raw = Box { n: 3 }
   raw.n
 
-handler post seedRows() -> Int requires [dbRead, dbWrite] =
+handler post seedRows() -> Int requires [dbRead Thing, dbWrite Thing] =
   let rows = [Thing { id: "a" }]
   insertMany rows in Thing
   1

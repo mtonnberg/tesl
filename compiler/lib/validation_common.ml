@@ -1820,6 +1820,7 @@ let collect_needed_capabilities
     ?(param_caps : (string * string list) list = [])
     ?(bound : string list = [])
     ?(server_tools_caps : (string * string list) list = [])
+    ?(queue_for_job : (string * string) list = [])
     (e : expr)
     : string list =
   (* CAP-A1 fix: read/write classification comes from the single SQL registry
@@ -1986,7 +1987,9 @@ let collect_needed_capabilities
        children via the shared traversal. *)
     | EEnqueue { job_type; _ } | EPublish { channel_name = job_type; _ } ->
       let scoped = match e with
-        | EEnqueue _ -> ["queueWrite " ^ job_type]
+        | EEnqueue _ ->
+          let queue = Option.value ~default:job_type (List.assoc_opt job_type queue_for_job) in
+          ["queueWrite " ^ queue]
         | EPublish _ -> ["pubsub " ^ job_type]
         | _ -> []
       in
@@ -2095,7 +2098,11 @@ let rec load_imported_func_caps ?(visited : string list = []) (m : module_form)
                 (Ast.func_bound_cap_vars fd) in
             List.filter (fun c -> not (List.mem c bound)) caps
           in
-          let step verified =
+           let queue_for_job =
+             List.concat_map (function
+               | DQueue q -> List.map (fun job -> (job, q.name)) (Desugar.queue_job_types q)
+               | _ -> []) imported.decls in
+           let step verified =
             List.map (fun (name, cur) ->
               match List.assoc_opt name fd_by_name with
               | None -> (name, cur)
@@ -2103,7 +2110,7 @@ let rec load_imported_func_caps ?(visited : string list = []) (m : module_form)
                 let func_caps = verified @ imported_imports_caps in
                 let param_caps = build_param_capability_map fd in
                 let needed =
-                  collect_needed_capabilities ~func_caps ~param_caps
+                   collect_needed_capabilities ~func_caps ~param_caps ~queue_for_job
                     ~bound:(List.map (fun (b : binding) -> b.name) fd.params) fd.body in
                 (name, List.sort_uniq compare (cur @ strip_bound fd needed))
             ) verified

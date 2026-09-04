@@ -69,7 +69,7 @@ auth sessionOwner(request: HttpRequest) -> user: User ::: Authenticated user req
 The functions a `server` references run under the server's granted capabilities,
 so their `requires` must be covered by `main`'s grant — the compiler rejects the
 program otherwise rather than 500-ing at runtime. A connection reading env needs
-`envRead`; a `sessionRevoked` hook hitting the DB needs `dbRead`; and the SSO
+`envRead`; a `sessionRevoked` hook hitting an entity needs `dbRead Entity`; and the SSO
 flow's own network calls mean an `sso` server forces `main` to grant
 `httpClient`.
 

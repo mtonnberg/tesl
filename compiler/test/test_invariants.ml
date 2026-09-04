@@ -310,7 +310,7 @@ entity Todo table "todos" primaryKey id {
   title: String
 }
 fn getTodo(todoId: String ::: TodoId todoId) -> Todo ? FromDb (Id == todoId)
-  requires [dbRead] =
+  requires [dbRead Note] =
   let e = selectOne t from Todo where t.ownerId == todoId
   case e of
     Nothing -> fail 404 "x"

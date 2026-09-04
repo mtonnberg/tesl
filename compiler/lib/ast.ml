@@ -975,6 +975,19 @@ let builtin_capability_names : string list =
     "queueRead"; "queueWrite"; "pubsub"; "uuid"; "jwt";
     "httpClient"; "aiProvider"; "emailCap"; "cookieCap" ]
 
+let resource_capability_verbs : string list =
+  [ "dbRead"; "dbWrite"; "queueRead"; "queueWrite"; "pubsub" ]
+
+let resource_capability_parts (name : string) : (string * string) option =
+  match String.split_on_char ' ' name with
+  | [verb; resource]
+    when resource <> "" && List.mem verb resource_capability_verbs ->
+    Some (verb, resource)
+  | _ -> None
+
+let is_concrete_builtin_capability (name : string) : bool =
+  List.mem name builtin_capability_names || Option.is_some (resource_capability_parts name)
+
 let func_bound_cap_vars_of_params (params : binding list) : string list =
   let rec from_type acc (t : type_expr) =
     match t with
@@ -986,7 +999,7 @@ let func_bound_cap_vars_of_params (params : binding list) : string list =
   List.fold_left (fun acc (b : binding) -> from_type acc b.type_expr) [] params
   (* A concrete built-in capability is never a row variable, even when it is
      spelled as a parameter arrow's cap-row — otherwise it launders. *)
-  |> List.filter (fun n -> not (List.mem n builtin_capability_names))
+  |> List.filter (fun n -> not (is_concrete_builtin_capability n))
   |> List.sort_uniq String.compare
 
 let func_bound_cap_vars (fd : func_decl) : string list =

@@ -647,7 +647,7 @@ let r58_cp01_missing_capability_rejected () =
     base_header ^ {|
 import Tesl.DB exposing [dbRead]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
-capability myDbRead implies dbRead
+capability myDbRead implies dbRead Note
 
 entity Item table "items" primaryKey id {
   id: String

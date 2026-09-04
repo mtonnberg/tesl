@@ -328,7 +328,7 @@ entity Todo table "todos" primaryKey id {
 let r51_sq01_where_type_mismatch_fixed () =
   should_fail_src "SQL WHERE clause: type mismatch" (db_header ^ todo_entity ^ {|
 fn demo() -> Int
-  requires [dbRead] =
+  requires [dbRead Todo] =
   let x = select t from Todo where t.title == 5
   1
 |})
@@ -337,7 +337,7 @@ fn demo() -> Int
 let r51_sq02_where_unbound_var_fixed () =
   should_fail_src "SQL WHERE clause references unbound identifier" (db_header ^ todo_entity ^ {|
 fn demo() -> Int
-  requires [dbRead] =
+  requires [dbRead Todo] =
   let x = select t from Todo where t.title == nonExistentVar
   1
 |})
@@ -346,7 +346,7 @@ fn demo() -> Int
 let r51_sq03_isnull_on_nonnullable_fixed () =
   should_fail_src "isNull .* is always false" (db_header ^ todo_entity ^ {|
 fn demo() -> Int
-  requires [dbRead] =
+  requires [dbRead Todo] =
   let x = selectOne t from Todo where isNull t.title
   1
 |})
@@ -355,7 +355,7 @@ fn demo() -> Int
 let r51_sq04_unknown_field_rejected () =
   should_fail_src "unknown field" (db_header ^ todo_entity ^ {|
 fn demo() -> Int
-  requires [dbRead] =
+  requires [dbRead Todo] =
   let x = select t from Todo where t.bogus == "hi"
   1
 |})

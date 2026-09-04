@@ -663,8 +663,9 @@ The current frontend gives special treatment to these module names:
 - `Tesl.Random` — randomness capability (`random`) and functions (`randomInt`). The `random` capability gates all non-deterministic operations. Import it alongside `Tesl.Id` when using `generatePrefixedId`, or standalone when calling `randomInt`.
 - `Tesl.Tuple` — tuple constructors and accessors (`Tuple2`, `Tuple3`, `Tuple2.first`, `Tuple2.second`, `Tuple3.first`, `Tuple3.second`, `Tuple3.third`).
 - `Tesl.Env` — environment variable access (`env`, `envInt`)
-- `Tesl.DB` — database capabilities (`dbRead`, `dbWrite`). A capability may be scoped to an entity,
-  for example `dbRead Order` or `dbWrite Order`; the bare forms remain migration wildcards.
+- `Tesl.DB` — database capability constructors (`dbRead`, `dbWrite`). Imports keep those bare names,
+  for example `import Tesl.DB exposing [dbRead, dbWrite]`, but every grant, `requires` entry, and
+  `implies` target must apply one to an entity: `dbRead Order` or `dbWrite Order`.
 - `Tesl.Http` — HTTP request type (`HttpRequest`). Dot-access fields, each a `Dict String String`: `request.cookies`, `request.headers` (names lowercased), `request.queryParameters` (URL-query values are form-url-decoded; repeated keys are last-wins; keys are case-sensitive). Also `request.body` (a `String`, not a `Dict`): the raw request body exactly as it arrived, decoded as UTF-8. It exists for verifying an inbound signature — a MAC must be computed over the bytes that arrived, not over a re-encoded record — and it is not a way to skip a codec: a `String` still cannot become a record without one. Also `request.clientAddress` (a `String`, not a `Dict`): the trustworthy client IP — with no `trustedProxies` declaration (§23) it is the socket peer; with one it is the rightmost untrusted `X-Forwarded-For` hop, and a disagreeing chain is refused. An api-test supplies query parameters inline in the path, e.g. `get "/search?q=hello%20world"`. Also the **session cookie**: `Http.setSessionCookie`, `Http.clearSessionCookie`, `Http.sessionToken` and the `cookieCap` capability. See §21.8.
 - `Tesl.Telemetry` — `TelemetryConfig`, the legacy startup form `initTelemetry`, the ambient span/log
   form `telemetry`, and the metric instruments (`counter`, `histogram`, `gauge`). See §5.2.
@@ -718,7 +719,7 @@ entity Post table "posts" primaryKey id {
   publishedAt: PosixMillis    # BIGINT — no @db annotation needed
 }
 
-handler post createPost(...) requires [dbWrite, time] =
+handler post createPost(...) requires [dbWrite Post, time] =
   insert Post { id: newId, publishedAt: nowMillis() }
 ```
 
@@ -997,7 +998,7 @@ Assertions check histogram percentiles, error rate, and throughput after the run
 load-test "list books throughput" for BookServer
   rate 100rps
   duration 10s
-  requires [dbRead] {
+  requires [dbRead Book] {
   get "/books"
 
   assert p99 < 200ms
@@ -1090,8 +1091,8 @@ queue EmailQueue requires [emailWrite] = Queue {
   }
   numberOfWorkers: 4
 }
-capability emailWrite implies queueWrite
-capability emailRead  implies queueRead
+capability emailWrite implies queueWrite EmailQueue
+capability emailRead  implies queueRead EmailQueue
 ```
 
 Built-in `queueRead` and `queueWrite` capabilities come from `Tesl.Queue` (analogous to `dbRead`/`dbWrite` from `Tesl.DB`).
@@ -1224,7 +1225,7 @@ sees the failure and the loop continues, matching the containment `serverTools`
 endpoint tools have always had.
 
 ```tesl
-fn lookupOrderStatus(orderId: String) -> String requires [dbRead] =
+fn lookupOrderStatus(orderId: String) -> String requires [dbRead Order] =
   case selectOne o from Order where o.id == orderId of
     Something o -> o.status
     Nothing -> "no such order"
@@ -1407,11 +1408,16 @@ build an agent.
 <capability>      ::= <identifier> [ <identifier> ]
 ```
 
-The optional second identifier scopes the built-in resource capability. For example,
-`dbRead Order` grants reads of `Order` but not `Customer`, while bare `dbRead` is a migration
-wildcard that covers every entity. The same form applies to `dbWrite`, `queueRead`, `queueWrite`,
-and `pubsub` channel names. Scoped requirements are checked through capability implication and
-must be covered by the same resource or by a deliberately broad bare grant.
+The optional second identifier scopes a built-in resource capability. Database capabilities are
+always entity-scoped: `dbRead Order` grants reads of `Order` but not `Customer`, and a bare
+`dbRead` or `dbWrite` in any grant, `requires` list, or `implies` target is a compile error.
+`dbWrite Order` covers `dbRead Order` as well as writes to `Order`; it never covers either access
+to another entity. An imported constructor stays bare: `import Tesl.DB exposing [dbRead, dbWrite]`.
+
+Queue and pub/sub scoping is implemented separately. `queueRead Jobs`, `queueWrite Jobs`, and
+`pubsub UserEvents` constrain access to that queue or channel; `queueWrite Jobs` covers
+`queueRead Jobs`. Bare queue/pubsub grants currently remain migration wildcards. No DB wildcard
+is implied by that compatibility behavior.
 
 ### 11.4 Bindings and return specs
 **Accepted design, Implemented.**
@@ -1512,7 +1518,7 @@ Passing `raw` (without the proof) directly to `processInRange` is a compile-time
 
 <function-kind> ::= "check" | "establish" | "fn" | "auth" | "handler"
 <http-method>  ::= "get" | "post" | "put" | "delete" | "patch"
-<capability-list> ::= "[" [ <identifier> { "," <identifier> } ] "]"
+<capability-list> ::= "[" [ <capability> { "," <capability> } ] "]"
 ```
 
 The `<http-method>` prefix applies to **`handler` only**, where it is required, and states the HTTP
@@ -1600,7 +1606,7 @@ For returning proof-carrying values where the proof was produced inside the func
 ```tesl
 handler get getTodo(requestUser: User ::: Authenticated requestUser, todoId: String ::: TodoId todoId)
   -> Todo ? FromDb (Id == todoId)
-  requires [dbRead] =
+  requires [dbRead Todo] =
   ...
 
 # Compound entity proof: both Positive and Small get _entity appended
@@ -2177,6 +2183,11 @@ main() -> App requires [appService, smtpSend] =
 ```
 
 **Capabilities are granted at the App root**, derived from `main`'s `requires` list. There is no runtime cap-granting block; every capability referenced anywhere in the activated declarations flows from each declaration's own `requires`, and `main.requires` must cover them. A missing capability is a compile error.
+
+Every `dbRead Entity` or `dbWrite Entity` in `main`'s expanded grant must name an entity listed by
+the database selected in `App.database`. Otherwise compilation fails: the entity would not be
+connected to that App database. This check also applies to entity-scoped DB capabilities reached
+through `capability ... implies ...`.
 
 #### OpenAPI export
 
@@ -2861,7 +2872,7 @@ do not independently reinterpret the application tree. A malformed SQL-shaped ex
 unrecognized and receives the normal fail-closed structural diagnostic rather than being emitted as
 an ordinary function call.
 
-**`innerJoin` — inner join by FK.** Returns only rows from the main entity for which a matching row exists in the joined entity. The two field refs after `on` are the main entity's FK field and the join entity's matching field (no `==` operator — `==` sits above function application in Tesl's grammar):
+**`innerJoin` — inner join by FK.** Returns only rows from the main entity for which a matching row exists in the joined entity. The two field refs after `on` are the main entity's FK field and the join entity's matching field (no `==` operator — `==` sits above function application in Tesl's grammar). A query requires `dbRead` for every entity it touches: the examples below require both `dbRead User` and `dbRead Profile`, and multiple joins add one requirement per joined entity.
 
 ```tesl
 select u from User innerJoin Profile on u.profileId Profile.id
@@ -2871,7 +2882,7 @@ select u from User
   innerJoin Profile on u.profileId Profile.id
 ```
 
-**Aggregate queries.**  All aggregate forms require the `dbRead` capability. `selectCount` always returns `Int`. `selectSum` returns the same type as the target field (e.g. `Int` for an integer field, `Float` for a float field) — zero is its identity, so no matching row is `0`, not an absence. `selectMax` and `selectMin` return **`Maybe <field type>`**: over no matching row there is no value of the column's type to return, and inventing one (or handing back a SQL `NULL` typed as the column) would be unsound. Callers `case` on the result.
+**Aggregate queries.** All aggregate forms require `dbRead Entity` for their source entity. `selectCount` always returns `Int`. `selectSum` returns the same type as the target field (e.g. `Int` for an integer field, `Float` for a float field) — zero is its identity, so no matching row is `0`, not an absence. `selectMax` and `selectMin` return **`Maybe <field type>`**: over no matching row there is no value of the column's type to return, and inventing one (or handing back a SQL `NULL` typed as the column) would be unsound. Callers `case` on the result.
 
 **Grouped aggregates (GitHub #29).** `selectCountBy` / `selectSumBy` return **one row per
 group** as a `List (Tuple2 key aggregate)`, ordered by key ascending, and require exactly
@@ -2926,7 +2937,7 @@ let bottom = selectMin   u.score from User                          # Maybe Int
 `selectMax`/`selectMin` are optional, so a caller decides what "no rows" means:
 
 ```tesl
-fn highestScore() -> Int requires [dbRead] =
+fn highestScore() -> Int requires [dbRead User] =
   case selectMax u.score from User of
     Nothing -> 0
     Something score -> score
@@ -2942,7 +2953,7 @@ upsert Session { userId: uid, token: tok, expiresAt: exp }
 
 The conflict columns must be **either the primary key or a declared `unique index`** (§11.8) on that entity, and this is a compile-time error otherwise. PostgreSQL can only infer a conflict target from a unique index on exactly those columns; without one it fails at runtime with *"there is no unique or exclusion constraint matching the ON CONFLICT specification"*. So the example above requires `unique index [userId]` on `Session` unless `userId` is its primary key.
 
-**`delete` and `deleteAndReturnResult`.**  `delete` removes matching rows and returns `Unit`.  `deleteAndReturnResult` removes matching rows and returns the non-negative `Int` count of deleted rows, including `0` when no rows match.  Both operations require `dbWrite` from `Tesl.DB`:
+**`delete` and `deleteAndReturnResult`.** `delete` removes matching rows and returns `Unit`. `deleteAndReturnResult` removes matching rows and returns the non-negative `Int` count of deleted rows, including `0` when no rows match. Both operations require `dbWrite Entity`; the capability constructor is imported bare from `Tesl.DB`:
 
 ```tesl
 import Tesl.DB exposing [dbWrite]
@@ -3148,7 +3159,7 @@ The `(Id == sessionId)` sub-expression inside the proof fact is the structural b
 handler post createTodo(requestUser: User ::: Authenticated requestUser, newTodo: NewTodo)
   -> exists todoId: String =>
        ?Todo ::: FromDb (Id == todoId)
-  requires [dbRead, dbWrite, time] =
+  requires [dbWrite Todo, time] =
   let todoId = generateTodoId()
   exists todoId =>
     insert Todo { id: todoId, title: newTodo.title, ... }
@@ -3715,7 +3726,7 @@ A handler that reads or writes `UserProfileCache` must declare `cacheCap UserPro
 
 ```tesl
 handler get getProfile(id: String) -> UserProfile
-  requires [dbRead, cacheCap UserProfileCache] =
+  requires [dbRead UserProfile, cacheCap UserProfileCache] =
   ...
 ```
 
@@ -3744,7 +3755,7 @@ If a stored value cannot be deserialized (for example because the application wa
 ```tesl
 handler put updateProfile(userId: String, req: UpdateProfileRequest)
   -> UserProfile
-  requires [dbWrite, cacheCap UserProfileCache] =
+  requires [dbWrite User, cacheCap UserProfileCache] =
   transaction {
     let updated = update ... in User ...
     Cache.delete UserProfileCache ("profile_" ++ userId)
@@ -3768,7 +3779,7 @@ cache UserProfileCache = Cache {
 }
 
 handler get getUserProfile(id: String) -> UserProfile
-  requires [dbRead, cacheCap UserProfileCache] =
+  requires [dbRead UserProfile, cacheCap UserProfileCache] =
   let cached = Cache.get UserProfileCache ("profile_" ++ id)
   case cached of
     Something profile ->
@@ -3881,7 +3892,7 @@ After 5 failed attempts a row is marked `dead` and is no longer retried. Dead ro
 `Email.send` inside a `transaction` block is part of the same database transaction. If the transaction rolls back, the row is never inserted and the email is never sent. This prevents sending notifications for events that did not actually persist.
 
 ```tesl
-handler post registerUser(req: RegistrationRequest) -> User requires [dbWrite, emailCap] =
+handler post registerUser(req: RegistrationRequest) -> User requires [dbWrite User, emailCap] =
   transaction {
     let user = insert User { id: newId, email: req.email }
     Email.send AppEmail {

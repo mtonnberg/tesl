@@ -366,7 +366,7 @@ let test_h09_nested_transaction_rejected () =
     "    connection: TcpConnection { host: env \"H\"  port: envInt \"PORT\" 5432 }\n" ^
     "  })\n" ^
     "}\n" ^
-    "fn test() -> String requires [dbWrite] =\n" ^
+    "fn test() -> String requires [dbWrite Item] =\n" ^
     "  transaction {\n" ^
     "    transaction {\n" ^
     "      insert Item { id: \"1\", name: \"foo\" }\n" ^
@@ -647,11 +647,11 @@ let test_h23_select_without_capability_rejected () =
     "  let items = select item from Item\n" ^
     "  \"ok\"\n"
   in
-  should_fail "dbRead\\|capability\\|V001\\|requires.*dbRead" src
+  should_fail "dbRead Item\\|capability\\|V001\\|requires.*dbRead Item" src
 
 (* ── H24: `fn` with `select` and proper `dbRead` capability compiles ─────────── *)
 (*                                                                               *)
-(* A `fn` that declares `requires [dbRead]` and uses `select` must compile.   *)
+(* A `fn` that declares `requires [dbRead Item]` and uses `select` must compile.   *)
 let test_h24_select_with_capability_compiles () =
   let src = prelude ^
     "import Tesl.Env exposing [env, envInt]\n" ^
@@ -668,7 +668,7 @@ let test_h24_select_with_capability_compiles () =
     "    connection: TcpConnection { host: env \"H\"  port: envInt \"PORT\" 5432 }\n" ^
     "  })\n" ^
     "}\n" ^
-    "fn withCap() -> List Item requires [dbRead] =\n" ^
+    "fn withCap() -> List Item requires [dbRead Item] =\n" ^
     "  select item from Item\n"
   in
   should_pass src

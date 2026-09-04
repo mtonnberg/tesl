@@ -101,7 +101,7 @@ database Lesson74Database = Database {
   })
 }
 
-capability documentStore implies dbRead, dbWrite, time, random
+capability documentStore implies dbRead Document, dbWrite Document, time, random
 
 record NewDocument {
   name: String
@@ -182,7 +182,7 @@ record SummariseDocument {
 # receives an authenticated user. This is the whole "background workload"
 # feature — there is no subprocess, no binary in the image, and no new trust
 # boundary.
-fn storeSummary(docId: String, summary: String) -> Unit requires [dbWrite] =
+fn storeSummary(docId: String, summary: String) -> Unit requires [dbWrite Document] =
   update d in Document
     where d.id == docId
     set d.name = summary

@@ -432,7 +432,7 @@ establish makeValid(n: Int) -> Fact (Valid n) =
 
 let test_handler_with_requires_compiles () =
   let src = module_ ~exports:"getItems" ~extra:"import Tesl.DB exposing [dbRead]\n" {|
-capability myRead implies dbRead
+capability myRead implies dbRead Note
 handler getItems(user: String) -> List String
   requires [myRead] =
   []
@@ -451,14 +451,14 @@ fn identity(x: Int) -> Int =
 let test_cap_handler_db_read () =
   let src = module_ ~exports:"getItems" ~extra:"import Tesl.DB exposing [dbRead]\n" {|
 fn getItems() -> List String
-  requires [dbRead] =
+  requires [dbRead Todo] =
   []
 |} in
   check_contains "cap_db_read" src "getItems"
 
 let test_cap_implies () =
   let src = module_ ~exports:"readChat, chatRead" ~extra:"import Tesl.DB exposing [dbRead]\n" {|
-capability chatRead implies dbRead
+capability chatRead implies dbRead Note
 fn readChat() -> List String
   requires [chatRead] =
   []
@@ -467,7 +467,7 @@ fn readChat() -> List String
 
 let test_cap_implies_multiple () =
   let src = module_ ~exports:"doWork, svc" ~extra:"import Tesl.DB exposing [dbRead, dbWrite]\n" {|
-capability svc implies dbRead, dbWrite
+capability svc implies dbRead Note, dbWrite Note
 fn doWork() -> Int
   requires [svc] =
   42
@@ -476,7 +476,7 @@ fn doWork() -> Int
 
 let test_cap_transitive () =
   let src = module_ ~exports:"doWork, svc" ~extra:"import Tesl.DB exposing [dbRead]\n" {|
-capability chatRead implies dbRead
+capability chatRead implies dbRead Note
 capability svc implies chatRead
 fn doWork() -> Int
   requires [svc] =
@@ -511,7 +511,7 @@ entity Todo table "todos" primaryKey id {
   title: String
 }
 handler listMine(userId: String) -> List Todo ? ForAll (FromDb (OwnerId == userId))
-  requires [dbRead] =
+  requires [dbRead Todo] =
   select todo from Todo where todo.ownerId == userId
 |} in
   check_contains "forall_select" src "listMine"
@@ -529,7 +529,7 @@ check isActive(t: Todo) -> t: Todo ::: IsActive t =
   ok t ::: IsActive t
 
 handler listActive(userId: String) -> List Todo ? ForAll (FromDb (OwnerId == userId) && IsActive)
-  requires [dbRead] =
+  requires [dbRead Todo] =
   let all = select todo from Todo where todo.ownerId == userId
   List.filterCheck isActive all
 |} in
@@ -670,7 +670,7 @@ fn getLen(s: String) -> Int =
 let test_import_db_capability () =
   let src = module_ ~exports:"doRead" ~extra:"import Tesl.DB exposing [dbRead, dbWrite]\n" {|
 fn doRead() -> List String
-  requires [dbRead] =
+  requires [dbRead Task] =
   []
 |} in
   check_contains "import_db_cap" src "doRead"
@@ -1104,7 +1104,7 @@ check isValidTitle(title: String) -> title: String ::: ValidTitle title =
     fail 400 "bad title"
 
 handler get getTask(taskId: String) -> Task ? FromDb (Id == taskId)
-  requires [dbRead] =
+  requires [dbRead Task] =
   let existing = selectOne t from Task where t.id == taskId
   case existing of
     Nothing -> fail 404 "not found"

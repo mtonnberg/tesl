@@ -465,7 +465,7 @@ database D = Database {
 }
 
 fn f(a: String, b: String) -> List Item
-  requires [dbRead] =
+  requires [dbRead Item] =
   select item from Item where item.id == a || item.id == b
 |} in
   should_pass src
@@ -495,7 +495,7 @@ database D = Database {
 }
 
 fn f(id: String) -> Int
-  requires [dbWrite] =
+  requires [dbWrite Item] =
   delete t from Task where t.typoField == id
   0
 |} in
@@ -841,7 +841,7 @@ database D = Database {
 }
 
 fn f(id: String) -> String
-  requires [dbRead] =
+  requires [dbRead Item] =
   insert Item { id: id }
   id
 |} in
