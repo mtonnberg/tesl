@@ -204,6 +204,26 @@ func TestMetricCardinalityIsCappedWithAnOverflowSeries(t *testing.T) {
 	}
 }
 
+func TestDynamicMetricNamesAreGloballyBounded(t *testing.T) {
+	inMemoryTelemetry(t, false)
+	for i := 0; i < maxMetricSeriesTotal*2; i++ {
+		_ = Counter(fmt.Sprintf("request.metric.%d", i), FromInt64(1), attributes())
+	}
+	_ = Counter("x"+strings.Repeat("y", maxMetricNameBytes), FromInt64(1), attributes())
+	_ = Counter("large.attribute", FromInt64(1), attributes("key", strings.Repeat("v", maxMetricAttributeBytes)))
+
+	series := MetricSeriesSnapshot()
+	if len(series) > maxMetricSeriesTotal+1 {
+		t.Fatalf("retained %d series, want at most %d", len(series), maxMetricSeriesTotal+1)
+	}
+	if len(telemetry.instrumentSeries) > maxMetricSeriesTotal+1 {
+		t.Fatalf("retained %d instruments, want at most %d", len(telemetry.instrumentSeries), maxMetricSeriesTotal+1)
+	}
+	if !hasSeries(metricOverflowName, "otel.metric.overflow", "true", int64(maxMetricSeriesTotal+2)) {
+		t.Fatalf("missing bounded overflow series in %+v", series)
+	}
+}
+
 // Events are a bounded queue with drop-oldest overflow, and the drops are counted in the
 // exporter's own metric.
 func TestEventBufferDropsTheOldestAndCountsIt(t *testing.T) {
