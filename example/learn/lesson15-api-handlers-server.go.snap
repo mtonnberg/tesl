@@ -17,13 +17,13 @@ import (
 	"tesl.generated/teslmodlesson15apihandlersserver/internal/teslrt"
 )
 
-//line lesson15-api-handlers-server.tesl:36
+//line lesson15-api-handlers-server.tesl:35
 type NewTask struct {
 	Title    string
 	Priority teslrt.Int
 }
 
-//line lesson15-api-handlers-server.tesl:42
+//line lesson15-api-handlers-server.tesl:41
 type Task struct {
 	Id       string
 	Title    string
@@ -31,31 +31,31 @@ type Task struct {
 	Done     bool
 }
 
-//line lesson15-api-handlers-server.tesl:76
+//line lesson15-api-handlers-server.tesl:75
 func validatePriority(p teslrt.Int) teslrt.Check[teslrt.Int] {
-//line lesson15-api-handlers-server.tesl:77
+//line lesson15-api-handlers-server.tesl:76
 	if (teslrt.Compare(p, teslrt.FromInt64(1)) >= 0) && (teslrt.Compare(p, teslrt.FromInt64(5)) <= 0) {
-//line lesson15-api-handlers-server.tesl:78
+//line lesson15-api-handlers-server.tesl:77
 		return teslrt.Accept(p)
 	} else {
-//line lesson15-api-handlers-server.tesl:80
+//line lesson15-api-handlers-server.tesl:79
 		return teslrt.Reject[teslrt.Int](400, "priority must be 1-5")
 	}
 }
 
-//line lesson15-api-handlers-server.tesl:89
+//line lesson15-api-handlers-server.tesl:88
 func cookieAuth(request teslrt.HttpRequest) teslrt.Check[string] {
-//line lesson15-api-handlers-server.tesl:90
+//line lesson15-api-handlers-server.tesl:89
 	{
 		teslScrut1 := teslrt.DictLookup(request.Cookies, "user", teslKeyLessString)
 		switch teslScrut1.Tag {
 		case teslrt.MaybeNothing:
-//line lesson15-api-handlers-server.tesl:91
+//line lesson15-api-handlers-server.tesl:90
 			return teslrt.Reject[string](401, "not authenticated")
 		case teslrt.MaybeSomething:
 			userId := teslScrut1.SomethingValue
 			_ = userId
-//line lesson15-api-handlers-server.tesl:92
+//line lesson15-api-handlers-server.tesl:91
 			return teslrt.Accept(userId)
 		default:
 			panic("unreachable: checker guarantees case exhaustiveness")
@@ -63,15 +63,15 @@ func cookieAuth(request teslrt.HttpRequest) teslrt.Check[string] {
 	}
 }
 
-//line lesson15-api-handlers-server.tesl:105
+//line lesson15-api-handlers-server.tesl:104
 func createTask(user string, body NewTask) Task {
-//line lesson15-api-handlers-server.tesl:108
+//line lesson15-api-handlers-server.tesl:107
 	return Task{Id: "task-1", Title: body.Title, Priority: body.Priority, Done: false}
 }
 
-//line lesson15-api-handlers-server.tesl:113
+//line lesson15-api-handlers-server.tesl:112
 func getTask(user string, id string) teslrt.Maybe[Task] {
-//line lesson15-api-handlers-server.tesl:116
+//line lesson15-api-handlers-server.tesl:115
 	return teslrt.Maybe[Task]{Tag: teslrt.MaybeSomething, SomethingValue: Task{Id: id, Title: "example task", Priority: teslrt.FromInt64(3), Done: false}}
 }
 

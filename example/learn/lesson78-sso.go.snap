@@ -30,53 +30,53 @@ import (
 	"tesl.generated/teslmodlesson78sso/internal/teslrt"
 )
 
-//line lesson78-sso.tesl:52
+//line lesson78-sso.tesl:51
 type Profile struct {
 	UserId string
 }
 
-//line lesson78-sso.tesl:44
+//line lesson78-sso.tesl:43
 type User struct {
 	Id string
 }
 
-//line lesson78-sso.tesl:71
+//line lesson78-sso.tesl:70
 func sessionKey() teslrt.Secret {
-//line lesson78-sso.tesl:72
+//line lesson78-sso.tesl:71
 	return teslrt.RequireSecret("SESSION_KEY")
 }
 
-//line lesson78-sso.tesl:81
+//line lesson78-sso.tesl:80
 func githubConn() teslrt.SsoConnection {
-//line lesson78-sso.tesl:82
+//line lesson78-sso.tesl:81
 	return teslrt.SsoDefaults("GitHub", teslrt.RequireEnv("GH_CLIENT_ID"), teslrt.RequireSecret("GH_CLIENT_SECRET"))
 }
 
-//line lesson78-sso.tesl:93
+//line lesson78-sso.tesl:92
 func linkUser(identity teslrt.SsoIdentity) string {
-//line lesson78-sso.tesl:94
+//line lesson78-sso.tesl:93
 	return teslrt.SsoSubject(identity)
 }
 
-//line lesson78-sso.tesl:102
+//line lesson78-sso.tesl:101
 func revoked(_subject string, _issuedAt teslrt.PosixMillis) bool {
-//line lesson78-sso.tesl:103
+//line lesson78-sso.tesl:102
 	return false
 }
 
-//line lesson78-sso.tesl:112
+//line lesson78-sso.tesl:111
 func subjectOf(claims teslrt.Dict[string, string]) string {
-//line lesson78-sso.tesl:113
+//line lesson78-sso.tesl:112
 	{
 		teslScrut1 := teslrt.DictLookup(claims, "sub", teslKeyLessString)
 		switch teslScrut1.Tag {
 		case teslrt.MaybeNothing:
-//line lesson78-sso.tesl:114
+//line lesson78-sso.tesl:113
 			return ""
 		case teslrt.MaybeSomething:
 			subject := teslScrut1.SomethingValue
 			_ = subject
-//line lesson78-sso.tesl:115
+//line lesson78-sso.tesl:114
 			return subject
 		default:
 			panic("unreachable: checker guarantees case exhaustiveness")
@@ -84,20 +84,20 @@ func subjectOf(claims teslrt.Dict[string, string]) string {
 	}
 }
 
-//line lesson78-sso.tesl:117
+//line lesson78-sso.tesl:116
 func sessionOwner(request teslrt.HttpRequest) teslrt.Check[User] {
-//line lesson78-sso.tesl:119
+//line lesson78-sso.tesl:118
 	{
 		teslScrut1 := teslrt.SessionToken(request)
 		switch teslScrut1.Tag {
 		case teslrt.MaybeNothing:
-//line lesson78-sso.tesl:120
+//line lesson78-sso.tesl:119
 			return teslrt.Reject[User](401, "no session")
 		case teslrt.MaybeSomething:
 			token := teslScrut1.SomethingValue
 			_ = token
 			{
-//line lesson78-sso.tesl:122
+//line lesson78-sso.tesl:121
 				teslDelegated3 := teslrt.JwtVerify(token, sessionKey())
 				if !teslDelegated3.OK() {
 					return teslrt.Reject[User](teslDelegated3.Status(), teslDelegated3.Message())
@@ -105,10 +105,10 @@ func sessionOwner(request teslrt.HttpRequest) teslrt.Check[User] {
 				claims := teslrt.MustCheck(teslDelegated3)
 				_ = claims
 				{
-//line lesson78-sso.tesl:123
+//line lesson78-sso.tesl:122
 					subject := subjectOf(claims)
 					_ = subject
-//line lesson78-sso.tesl:124
+//line lesson78-sso.tesl:123
 					return teslrt.Accept(User{Id: subject})
 				}
 			}
@@ -118,15 +118,15 @@ func sessionOwner(request teslrt.HttpRequest) teslrt.Check[User] {
 	}
 }
 
-//line lesson78-sso.tesl:128
+//line lesson78-sso.tesl:127
 func me(user User) Profile {
-//line lesson78-sso.tesl:129
+//line lesson78-sso.tesl:128
 	return Profile{UserId: user.Id}
 }
 
-//line lesson78-sso.tesl:167
+//line lesson78-sso.tesl:165
 func Main() struct{} {
-//line lesson78-sso.tesl:167
+//line lesson78-sso.tesl:165
 	return teslrt.Serve(AppServer, teslrt.ServeOptions{Port: teslrt.PortOf(teslrt.FromInt64(8080)), ListenAddress: "127.0.0.1"})
 }
 

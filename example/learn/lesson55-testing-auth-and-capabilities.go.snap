@@ -17,61 +17,61 @@ import (
 	"tesl.generated/teslmodlesson55testingauthandcapabilities/internal/teslrt"
 )
 
-//line lesson55-testing-auth-and-capabilities.tesl:50
+//line lesson55-testing-auth-and-capabilities.tesl:49
 func keyFromRaw(raw string) teslrt.Secret {
-//line lesson55-testing-auth-and-capabilities.tesl:50
+//line lesson55-testing-auth-and-capabilities.tesl:49
 	return teslrt.Secret{Value: teslrt.MakeSecret(raw)}
 }
 
-//line lesson55-testing-auth-and-capabilities.tesl:52
+//line lesson55-testing-auth-and-capabilities.tesl:51
 func lessonSecret() teslrt.Secret {
-//line lesson55-testing-auth-and-capabilities.tesl:52
+//line lesson55-testing-auth-and-capabilities.tesl:51
 	return keyFromRaw("lesson55-signing-key-not-for-production")
 }
 
-//line lesson55-testing-auth-and-capabilities.tesl:55
+//line lesson55-testing-auth-and-capabilities.tesl:54
 func mintSession(user string) string {
-//line lesson55-testing-auth-and-capabilities.tesl:56
+//line lesson55-testing-auth-and-capabilities.tesl:55
 	return (teslrt.JwtSign(teslrt.DictSingleton("sub", user), lessonSecret())).Value
 }
 
-//line lesson55-testing-auth-and-capabilities.tesl:60
+//line lesson55-testing-auth-and-capabilities.tesl:59
 func forgedSession(user string) string {
-//line lesson55-testing-auth-and-capabilities.tesl:61
+//line lesson55-testing-auth-and-capabilities.tesl:60
 	return (teslrt.JwtSign(teslrt.DictSingleton("sub", user), keyFromRaw("an-attackers-own-key"))).Value
 }
 
-//line lesson55-testing-auth-and-capabilities.tesl:63
+//line lesson55-testing-auth-and-capabilities.tesl:62
 func sessionAuth(req teslrt.HttpRequest) teslrt.Check[string] {
-//line lesson55-testing-auth-and-capabilities.tesl:68
+//line lesson55-testing-auth-and-capabilities.tesl:67
 	{
 		teslScrut1 := teslrt.SessionToken(req)
 		switch teslScrut1.Tag {
 		case teslrt.MaybeNothing:
-//line lesson55-testing-auth-and-capabilities.tesl:69
+//line lesson55-testing-auth-and-capabilities.tesl:68
 			return teslrt.Reject[string](401, "not authenticated")
 		case teslrt.MaybeSomething:
 			token := teslScrut1.SomethingValue
 			_ = token
 			{
-//line lesson55-testing-auth-and-capabilities.tesl:75
+//line lesson55-testing-auth-and-capabilities.tesl:74
 				teslDelegated3 := teslrt.JwtVerify(token, lessonSecret())
 				if !teslDelegated3.OK() {
 					return teslrt.Reject[string](teslDelegated3.Status(), teslDelegated3.Message())
 				}
 				claims := teslrt.MustCheck(teslDelegated3)
 				_ = claims
-//line lesson55-testing-auth-and-capabilities.tesl:76
+//line lesson55-testing-auth-and-capabilities.tesl:75
 				{
 					teslScrut4 := teslrt.DictLookup(claims, "sub", teslKeyLessString)
 					switch teslScrut4.Tag {
 					case teslrt.MaybeNothing:
-//line lesson55-testing-auth-and-capabilities.tesl:77
+//line lesson55-testing-auth-and-capabilities.tesl:76
 						return teslrt.Reject[string](401, "not authenticated")
 					case teslrt.MaybeSomething:
 						subject := teslScrut4.SomethingValue
 						_ = subject
-//line lesson55-testing-auth-and-capabilities.tesl:78
+//line lesson55-testing-auth-and-capabilities.tesl:77
 						return teslrt.Accept(subject)
 					default:
 						panic("unreachable: checker guarantees case exhaustiveness")
@@ -84,15 +84,15 @@ func sessionAuth(req teslrt.HttpRequest) teslrt.Check[string] {
 	}
 }
 
-//line lesson55-testing-auth-and-capabilities.tesl:95
+//line lesson55-testing-auth-and-capabilities.tesl:94
 func health() string {
-//line lesson55-testing-auth-and-capabilities.tesl:95
+//line lesson55-testing-auth-and-capabilities.tesl:94
 	return "ok"
 }
 
-//line lesson55-testing-auth-and-capabilities.tesl:97
+//line lesson55-testing-auth-and-capabilities.tesl:96
 func profile(user string) string {
-//line lesson55-testing-auth-and-capabilities.tesl:98
+//line lesson55-testing-auth-and-capabilities.tesl:97
 	return ("profile of " + user)
 }
 
@@ -162,7 +162,7 @@ func TestMain(teslM *testing.M) {
 
 // api-test health endpoint is accessible without auth
 //
-//line lesson55-testing-auth-and-capabilities.tesl:116
+//line lesson55-testing-auth-and-capabilities.tesl:115
 func TestTeslApi0(teslT *testing.T) {
 	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "health endpoint is accessible without auth" && teslWanted != "TestTeslApi0" {
 		teslT.Skip("named test filter")
@@ -176,12 +176,12 @@ func TestTeslApi0(teslT *testing.T) {
 		}
 	}()
 	{
-//line lesson55-testing-auth-and-capabilities.tesl:117
+//line lesson55-testing-auth-and-capabilities.tesl:116
 		resp := teslrt.ApiRequest(AuthServer, "GET", "/health", "", nil, nil)
 		_ = resp
-//line lesson55-testing-auth-and-capabilities.tesl:118
+//line lesson55-testing-auth-and-capabilities.tesl:117
 		if !(teslrt.StatusOk(resp.Status)) {
-//line lesson55-testing-auth-and-capabilities.tesl:118
+//line lesson55-testing-auth-and-capabilities.tesl:117
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -189,7 +189,7 @@ func TestTeslApi0(teslT *testing.T) {
 
 // api-test profile endpoint returns 401 without cookie
 //
-//line lesson55-testing-auth-and-capabilities.tesl:122
+//line lesson55-testing-auth-and-capabilities.tesl:121
 func TestTeslApi1(teslT *testing.T) {
 	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "profile endpoint returns 401 without cookie" && teslWanted != "TestTeslApi1" {
 		teslT.Skip("named test filter")
@@ -203,12 +203,12 @@ func TestTeslApi1(teslT *testing.T) {
 		}
 	}()
 	{
-//line lesson55-testing-auth-and-capabilities.tesl:123
+//line lesson55-testing-auth-and-capabilities.tesl:122
 		resp := teslrt.ApiRequest(AuthServer, "GET", "/profile", "", nil, nil)
 		_ = resp
-//line lesson55-testing-auth-and-capabilities.tesl:124
+//line lesson55-testing-auth-and-capabilities.tesl:123
 		if !(teslrt.StatusClientError(resp.Status)) {
-//line lesson55-testing-auth-and-capabilities.tesl:124
+//line lesson55-testing-auth-and-capabilities.tesl:123
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -216,7 +216,7 @@ func TestTeslApi1(teslT *testing.T) {
 
 // api-test profile endpoint works with a signed session cookie
 //
-//line lesson55-testing-auth-and-capabilities.tesl:128
+//line lesson55-testing-auth-and-capabilities.tesl:127
 func TestTeslApi2(teslT *testing.T) {
 	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "profile endpoint works with a signed session cookie" && teslWanted != "TestTeslApi2" {
 		teslT.Skip("named test filter")
@@ -230,12 +230,12 @@ func TestTeslApi2(teslT *testing.T) {
 		}
 	}()
 	{
-//line lesson55-testing-auth-and-capabilities.tesl:129
+//line lesson55-testing-auth-and-capabilities.tesl:128
 		resp := teslrt.ApiRequest(AuthServer, "GET", "/profile", "", []string{"__Host-session=" + mintSession("alice")}, nil)
 		_ = resp
-//line lesson55-testing-auth-and-capabilities.tesl:130
+//line lesson55-testing-auth-and-capabilities.tesl:129
 		if !(teslrt.StatusOk(resp.Status)) {
-//line lesson55-testing-auth-and-capabilities.tesl:130
+//line lesson55-testing-auth-and-capabilities.tesl:129
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -243,7 +243,7 @@ func TestTeslApi2(teslT *testing.T) {
 
 // api-test profile endpoint rejects a made-up cookie value
 //
-//line lesson55-testing-auth-and-capabilities.tesl:136
+//line lesson55-testing-auth-and-capabilities.tesl:135
 func TestTeslApi3(teslT *testing.T) {
 	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "profile endpoint rejects a made-up cookie value" && teslWanted != "TestTeslApi3" {
 		teslT.Skip("named test filter")
@@ -257,12 +257,12 @@ func TestTeslApi3(teslT *testing.T) {
 		}
 	}()
 	{
-//line lesson55-testing-auth-and-capabilities.tesl:137
+//line lesson55-testing-auth-and-capabilities.tesl:136
 		resp := teslrt.ApiRequest(AuthServer, "GET", "/profile", "", []string{"__Host-session=" + "alice"}, nil)
 		_ = resp
-//line lesson55-testing-auth-and-capabilities.tesl:138
+//line lesson55-testing-auth-and-capabilities.tesl:137
 		if !(teslrt.StatusClientError(resp.Status)) {
-//line lesson55-testing-auth-and-capabilities.tesl:138
+//line lesson55-testing-auth-and-capabilities.tesl:137
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}
@@ -270,7 +270,7 @@ func TestTeslApi3(teslT *testing.T) {
 
 // api-test profile endpoint rejects a token signed with the wrong key
 //
-//line lesson55-testing-auth-and-capabilities.tesl:144
+//line lesson55-testing-auth-and-capabilities.tesl:143
 func TestTeslApi4(teslT *testing.T) {
 	if teslWanted := os.Getenv("TESL_TEST_NAME"); teslWanted != "" && teslWanted != "profile endpoint rejects a token signed with the wrong key" && teslWanted != "TestTeslApi4" {
 		teslT.Skip("named test filter")
@@ -284,12 +284,12 @@ func TestTeslApi4(teslT *testing.T) {
 		}
 	}()
 	{
-//line lesson55-testing-auth-and-capabilities.tesl:145
+//line lesson55-testing-auth-and-capabilities.tesl:144
 		resp := teslrt.ApiRequest(AuthServer, "GET", "/profile", "", []string{"__Host-session=" + forgedSession("alice")}, nil)
 		_ = resp
-//line lesson55-testing-auth-and-capabilities.tesl:146
+//line lesson55-testing-auth-and-capabilities.tesl:145
 		if !(teslrt.StatusClientError(resp.Status)) {
-//line lesson55-testing-auth-and-capabilities.tesl:146
+//line lesson55-testing-auth-and-capabilities.tesl:145
 			teslT.Fatal("Tesl expectation failed")
 		}
 	}

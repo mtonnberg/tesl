@@ -12,9 +12,10 @@ programs run as horizontally scaled fleets behind rolling deploys, so **at every
 instant the schema must be compatible with every code version currently serving**.
 
 This file is the **normative target design and delivery plan**, not a claim that the
-feature exists or is ready to implement. Items under "Decisions before phase 1" and
-"Open questions" are explicit gates; no phase may start while one of its gates is open.
-Its review history — sixteen passes, the mechanisms tried and withdrawn, and why — is in
+feature exists or is ready to implement. Items under "Decisions before their owning
+phase" and "Open questions" are explicit gates; no phase may start while one of its
+gates is open.
+Its review history — the review passes, mechanisms tried and withdrawn, and why — is in
 [`database-migrations-history.md`](database-migrations-history.md) and is not
 normative; where the two disagree, this file and its "Target mechanisms" table win.
 
@@ -56,7 +57,8 @@ rolling deploy that ordering does not exist.
 4. **Compatibility has two explicit modes.** A monotonic **additive epoch** may admit
    several versions because every old read and write remains valid. Before the first
    window-narrowing or transforming change, the epoch is closed and the strict
-   **two-version rule** applies. Every transforming change is decomposed by the compiler into an **expand** step
+   **two-version rule** applies. Every transforming change is decomposed by the
+   compiler into an **expand** step
    (compatible with V7 *and* V8 code) and a **contract** step (compatible with V8
    *and* V9 code). A change that cannot be decomposed is classified `OFFLINE` and
    must be acknowledged in the plan. Row functions never rewrite a column in place;
@@ -64,8 +66,9 @@ rolling deploy that ordering does not exist.
 5. **Expand runs when V8 arrives** — at boot of the first V8 instance in development,
    and from a dedicated **schema worker** (the same binary, `--schema worker`, with a
    DDL-owning role) in production, where request processes hold an entity-DML role
-   and no DDL authority. It is metadata-only DDL under a lease with `lock_timeout`
-   retries, and V7 instances tolerate it by construction, so no hand-run migration step
+   and no DDL authority. Metadata-only DDL runs under the session boot lock with
+   `lock_timeout` retries; leases schedule background jobs but guard no transition.
+   V7 instances tolerate expand by construction, so no hand-run migration step
    sits between build and deploy. This is the auto-migration the earlier draft wanted
    to remove, made safe by the rule and scoped by the privilege model (§11).
 6. **Backfill runs in the background from one V8 instance, in small batches, and
@@ -96,15 +99,16 @@ rolling deploy that ordering does not exist.
    Nothing depends on which backend session a statement lands on, so transaction-mode
    poolers are fine for the request pool (the schema worker's DDL connection is the
    one exception, §6 invariant 7). **When** retirement runs is a product setting:
-   the v1 default is an explicit `--schema contract` that the deployment pipeline runs
+   the target default is an explicit `--schema contract` that the deployment pipeline runs
    once the old fleet is drained (the fence still makes it safe against a straggling
    writer); `contract: WhenDrained` or `NextVersion` makes it automatic. Only
    after it are V7's trigger dropped, `NOT NULL` set, and V7's columns dropped. Rolling
-   back V8 → V7 is possible until retirement; V9 → V8 for the whole life of V9. The
+   back V8 → V7 and V9 → V8 remain possible only until the corresponding contract
+   retires the older binary; under `NextVersion`, that is normally the next boot. The
    heartbeat table is observability, never a guard.
 8. **The database records its state and its history** — one `tesl_schema_state`
    row for admission, append-only `tesl_schema_versions` rows for every expand,
-   contract and repair, per-entity generation state — and the compiled program embeds
+   retirement, contract and repair, per-entity generation state — and the compiled program embeds
    the version it was built against. The boot gate admits any distance **inside a
    monotonic additive epoch** (only epoch-preserving changes since the epoch began) and
    refuses a binary more than one version away once the epoch has been closed to the
@@ -171,9 +175,8 @@ every new construct, and says what was deliberately *not* added. Shown in the
 live-module decision: the generator copies the current module to `V<n>` *first*, then
 the developer edits `VCurrent`, so at V9 the repository holds `VCurrent`, `V8`, `V7`; the
 PR diff highlights only the change, and no import ever moves because they all name
-`VCurrent`. Recommended; since Tesl has no re-exports it is the only layout that bumps no
-application import. Under §1's hand-versioned layout only file names and import lines
-differ.)
+`VCurrent`. Since Tesl has no re-exports, this is the decided layout and the only one
+that bumps no application import.)
 
 **New constructs — five, no new keywords.**
 
@@ -280,7 +283,7 @@ V7's hash. *Then* the developer edits `v-current.tesl` (renames `authorId`, adds
 `migrations/notes/v8.tesl`:
 
 ```tesl
-module NotesSchema.Migrate.V8 exposing [migration, migrateNote]
+module NotesSchema.Migrate.V8 exposing [migration, migrateNote, oldNote]
 
 import Tesl.Migration exposing [Migration, Entity(..), Rule(..), Migrated(..)]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -302,10 +305,13 @@ migration = Migration {
 fn migrateNote(old: NotesSchema.V7.Note) -> Migrated NotesSchema.VCurrent.Note =
   let wordCount = todo "V8 added `wordCount: Int ::: ValidWordCount wordCount`; V7.Note has id, title, content, authorId, legacyRank, createdAt"
   Row (NotesSchema.VCurrent.Note { id: old.id, title: old.title, content: old.content,
-                          ownerId: old.authorId, wordCount: wordCount, createdAt: old.createdAt })
+                           ownerId: old.authorId, wordCount: wordCount, createdAt: old.createdAt })
+
+fn oldNote() -> NotesSchema.V7.Note =
+  todo "provide a representative V7 Note accepted by migrateNote"
 ```
 
-Two `todo`s; the program does not compile until they are gone. The developer replaces
+Three `todo`s; the program does not compile until they are gone. The developer replaces
 them — ordinary Tesl, nothing migration-specific in the bodies:
 
 ```tesl
@@ -322,7 +328,7 @@ fn oldNote() -> NotesSchema.V7.Note =
   NotesSchema.V7.Note { id: "n1", title: "t", content: "one two", authorId: "u1", legacyRank: 0, createdAt: 0 }
 
 test "V8: word count is computed from content" {
-  case migrateNote (oldNote ()) of
+  case migrateNote (oldNote()) of
     Row note -> expect note.wordCount == 2 && note.ownerId == "u1"
     Reject _ -> expect False
 }
@@ -339,9 +345,9 @@ handler post createNote(user: String ::: Authenticated user, body: NoteBody)
                 ownerId: user, wordCount: words, createdAt: nowMillis() }
 ```
 
-Deploy. Expand and backfill are automatic. Later, `tesl migrate contract V8` writes the
-reviewed list of what may go once V7 is gone, and `app --schema contract V8` executes it
-when `await contractable` says so:
+Before building, `tesl migrate contract V8` writes the reviewed list of what may go
+once V7 is gone. Deploy; expand and backfill are automatic. Later, `app --schema
+contract V8` executes the already-embedded authority when `await contractable` says so:
 
 ```tesl
 module NotesSchema.Migrate.V8Contract exposing [contract]
@@ -378,8 +384,8 @@ each is caught:
 - **The developer answered wrong** — refreshed V8 although V8 was already deployed
   somewhere. Compile time cannot see that; the **boot gate** does: the database recorded
   V8's `snapshot_hash` at expand, the rebuilt binary embeds a different one, refused as
-  edited history (§8). Exactly the backstop the hand-versioned layout has for an edited
-  `V8.tesl`, so the risk is the one the maintainer named: the same as today, no worse,
+  edited history (§8), exactly the backstop used for an edited frozen `V8.tesl`. The
+  risk is the one the maintainer named: the same as today, no worse,
   and never a corrupted table.
 - **The frozen copy is corrupt or hand-edited later.** Its hash is recorded in the
   migration that names it (`from: NotesSchema.V7`); any difference is MIG013 at compile
@@ -771,15 +777,14 @@ constraints, `pg_stat_progress_*`) suffice.
 
   For an additive change the committed footprint is therefore: the schema edit, a
   migration record of a few lines, and possibly nothing else (no row function reaches
-  the stdlib, so no slice). **Nor is there a contract step**: a version whose contract
+  the stdlib, so no slice). **Nor is there a contract artefact or contract DDL**: a version whose contract
   would list no physical operation and no generation change (only additive columns,
   indexes, new entities) needs no `v<n>-contract.tesl` at all. Its physical work is
   **finalised automatically** the moment expand completes — there is nothing to wait
-  for. Its *admission* is a different matter: the previous version stays admitted
-  (rollback possible) for the whole life of the current one, and is **retired only when
-  the next schema version needs the slot** — by the next version's own contract, under
-  the exclusive fence, as for any version. No timer closes a rollback window; no
-  exception to `contract: Explicit` exists; an empty `Contract { drops: [], tighten: [] }`
+  for. Its *admission* is a different matter: the previous version stays admitted until
+  the contract lifecycle operation closes its slot — explicitly by default, or
+  automatically under `WhenDrained`/`NextVersion` — under the exclusive fence. No timer
+  closes a rollback window under `Explicit`; an empty `Contract { drops: [], tighten: [] }`
   is never generated. `--prune` reports an additive revision as a candidate once every
   environment it is deployed to has moved two versions past it. The earlier text that listed the compatibility module as a
   committed file was wrong on its own terms: a deterministic artefact of frozen inputs
@@ -879,12 +884,12 @@ still **never rewrite an existing column in place**: an in-place rewrite changes
 meaning of a column V7 is still writing, and no marker on the row can say which
 writer's meaning the current value carries.
 
-| Change in V8 | Expand (at V8 boot) | During V8's life | Contract (at V9 boot) | Class |
+| Change in V8 | Expand (at V8 boot) | During V8's life | Contract (when `contract V8` runs; V9 boot only under `NextVersion`) | Class |
 |---|---|---|---|---|
 | new entity | `create table` | — | — | ONLINE |
 | new `Maybe T` column | `add column … null` | — | — | ONLINE |
 | new `T` column, constant default | `add column … not null default c` (metadata-only, PG 11+) | — | — | ONLINE |
-| new `T` column, computed from the row | `add column … null`; V8 writes it; invalidation trigger on the source columns | lazy read via row fn — **projection only in V8**; usable inside SQL from V9. `Maybe` does not help unless physical and logical window values are identical; backfill | at V9 boot: final pass under V7's exclusive retirement fence, atomic floor advance/finality, then `set not null` (`NOT VALID` + `validate`) and drop trigger | ONLINE |
+| new `T` column, computed from the row | `add column … null`; V8 writes it; invalidation trigger on the source columns | lazy read via row fn — **projection only in V8**; usable inside SQL from V9. `Maybe` does not help unless physical and logical window values are identical; backfill | when `contract V8` runs: final pass under V7's exclusive retirement fence, atomic floor advance/finality, then `set not null` (`NOT VALID` + `validate`) and drop trigger | ONLINE |
 | new field proof on existing column | — | V8 reads through `check`; V7 keeps writing unchecked values | `add check … not valid; validate` where expressible | ROLL-WINDOW RISK (prefer a validated new column + `Rename`) |
 | field proof **removed** from an existing column | keep any SQL-expressible `CHECK` while the predecessor is admitted | V7 still trusts the proof; a retained database constraint preserves it. A runtime-only proof has no such guard and V8 may write values V7 wrongly trusts | drop an expressible constraint only after retirement | ONLINE when an equivalent database constraint is retained through the window; otherwise ROLL-WINDOW RISK and **window-narrowing** (§3) |
 | `Rename a b` | `add column b null`; **V8 writes both** `a` and `b`; invalidation trigger on `a` | lazy read: `_tesl_v` below the target generation → take `a`; backfill | `drop column a`; drop trigger | ONLINE |
@@ -892,7 +897,7 @@ writer's meaning the current value carries.
 | column removed | V8 stops writing it, but V7 still **reads** it as non-null, so rows V8 inserts must carry a value: `Legacy c v` (constant → `set default c`, metadata-only) or `LegacyWith f g` (V8 dual-writes `g(row)`) | — | `drop column` | ONLINE with `Legacy`; compile error without. The schema-only compatibility model has no "V7 never decodes it" exception |
 | entity removed | — (V7 still uses it) | — | `drop table` | ONLINE |
 | new plain index | `create index concurrently` (outside transaction, background) | ready before it exists; slower until then | — | ONLINE |
-| new unique index | `create unique index concurrently`; **readiness waits until it is `VALID`** (every new unique index; an `onConflict` on it is an additional hard dependency, not the criterion) | behavioural enforcement may begin once PostgreSQL marks the index `indisready`, before `indisvalid`; failed remnants are dropped promptly. V7 may therefore see uniqueness failures from build start | — | ONLINE only if **every** indexed column is new in this version, nullable, default-free and not filled by a row function while older versions are admitted (so every old-version insert writes `NULL`, which `NULLS DISTINCT` never collides); otherwise ROLL-WINDOW RISK (§7) |
+| new unique index | `create unique index concurrently`; **readiness waits until it is `VALID`** whenever this version's type/tests promise uniqueness. A staged-promotion version instead uses its guard and cannot rely on the index | behavioural enforcement may begin once PostgreSQL marks the index `indisready`, before `indisvalid`; failed remnants are dropped promptly. V7 may therefore see uniqueness failures from build start | — | ONLINE only if **every** indexed column is new in this version, nullable, default-free and not filled by a row function while older versions are admitted (so every old-version insert writes `NULL`, which `NULLS DISTINCT` never collides); otherwise ROLL-WINDOW RISK (§7) |
 | index removed | — | — | `drop index concurrently` | ONLINE |
 | `Maybe T` narrowed to `T` | as "computed column" into a new column | | drop old | ONLINE |
 | primary key change | — | — | — | OFFLINE |
@@ -1154,8 +1159,7 @@ give them types follow the listing.
 
 ```tesl
 type Entity
-  = Unchanged                       # identical columns, indexes, and `same` types/facts
-  | Additive (List Rule)            # only single-adapter changes; no row function; generation unchanged
+  = Additive (List Rule)            # only single-adapter changes; no row function; generation unchanged
   | Derived  (List Rule)            # compiler-derived row migration (rules only — e.g. a pure Rename);
                                     #   generation +1, no user function
   | Migrate  rowFn (List Rule)      # user row function `fn (Old.E) -> Migrated New.E`; generation +1
@@ -1270,9 +1274,8 @@ migrateUser old of Row u -> … | Reject r -> …`.
 **Rules the compiler enforces on a row function**, all syntactic, none semantic:
 
 - One entry per **changed** entity; an entity absent from the record is verified
-  `Unchanged` by the compiler (writing `Unchanged` explicitly is allowed and means the
-  same). A changed entity with no entry, `Unchanged` on an entity whose shape changed,
-  or `Additive` where a rule has no single adapter, is MIG002/MIG016.
+  unchanged by the compiler. A changed entity with no entry, an extra entry for an
+  unchanged entity, or `Additive` where a rule has no single adapter, is MIG002/MIG016.
 - A **pass-through** column (present in both versions, no rule) must be initialised by
   the exact projection `title: old.title`; any other expression is MIG018. The
   compiler cannot prove `normalize old.title` equals `old.title`, so it does not try —
@@ -1354,7 +1357,7 @@ migrateUser old of Row u -> … | Reject r -> …`.
   application. It sees **one old row and nothing else**: no joins, no lookups in other
   entities. Cross-entity transformations — denormalising a value from a parent,
   deriving ownership through a foreign key, populating a field from a reference table
-  — are common and are **not expressible as a v1 row function**, deliberately: a lookup
+  — are common and are **not expressible through phase 4**, deliberately: a lookup
   makes the function's result depend on the state of another table at backfill time,
   which the two-version protocol cannot keep consistent under concurrent old writers.
   The supported routes, which the plan header names when it detects a hole that
@@ -1364,7 +1367,7 @@ migrateUser old of Row u -> … | Reject r -> …`.
   entity** populated by the application; (3) the **offline** path when the derivation
   must be atomic with the schema change. A restricted, read-only lookup context for
   row functions (a frozen view of specific other entities at their old generation) is
-  a later item, listed under non-goals for v1. Schema-module facts are **sealed** (§5), so "every check that can mint
+  a later item, listed under non-goals through phase 4. Schema-module facts are **sealed** (§5), so "every check that can mint
   this fact" is the finite set in the declaring module.
 - `todo "reason"` is a builtin expression that unifies with any type and is **always**
   a compile error carrying its message, so the generator can write a well-typed file
@@ -1488,20 +1491,20 @@ not implementation detail; the review of 2026-09-02 found the first draft
 describing each of them loosely enough to be wrong.
 
 0. **Admission is a stored state, `tesl_schema_state.min_version`**, the oldest version
-   allowed to hold a connection. It only ever increases, and only inside the
+   allowed to deliver reads or commit writes. It only ever increases, and only inside the
    *retire* transition below. Everything that must never happen while V7 could still
    write — dropping its trigger, calling its backfill final, setting `NOT NULL`,
    dropping its columns, using a new column inside SQL — is sequenced **after**
    `min_version` passes 7, never after an observation that V7 seems absent.
 1. **Fence — transaction-scoped, two statements, on writes, the second of which
    raises.** Every **write** transaction a `V<n>` instance runs (reads run the
-    lock-free, query-first admission of §13 on reads by default; the DDL
+   lock-free, query-first admission of §13 by default; the DDL
    connection holds the session-level form of invariant 7) begins with `select pg_advisory_xact_lock_shared(fence(schema,
    n))` and **then, as a separate statement**, `select tesl_admit(n)` — the same
    function reads use, which **raises** when `min_version > n`. It must raise, not
-   return a value: the whole transaction is pipelined (`BEGIN`, lock, admit, the
-   program's statements, `COMMIT`, one round trip), and PostgreSQL executes queued
-   statements in order regardless of what the client has seen — a returned
+   return a value: when a transaction is statically pipelineable, `BEGIN`, lock,
+   admit, program statements and `COMMIT` share one pipeline. PostgreSQL executes
+   queued statements in order regardless of what the client has seen — a returned
    `min_version` the client inspects later is no barrier at all, and the program's
    write would already have run (an earlier draft claimed "rolls back before any
    program statement runs" on exactly that basis; the eighteenth review pass caught
@@ -1526,9 +1529,9 @@ describing each of them loosely enough to be wrong.
    which are refusals — at the cost of row-lock (multixact) traffic on the one
    `tesl_schema_state` tuple;
    that is the reason it is not the default. A single autocommit query is wrapped the
-   same way; `pgx`'s pipeline mode sends `BEGIN`, both fence statements, the query and
-   `COMMIT` in **one round trip**, so the cost is server-side lock-table work (tens of
-   microseconds), not latency. That one-round-trip shape is also a **tested
+   same way. A data-dependent transaction cannot queue statements whose parameters do
+   not exist yet; it pays the initial fence/admit round trip before handler SQL. The
+   one-round-trip shape for static transactions is a **tested
    deployment condition**, not an assumption about every proxy: it requires the
    pooler to keep one backend from `BEGIN` through both fence statements, the
    program's statements and `COMMIT`, under the extended protocol with pipelining
@@ -1588,7 +1591,7 @@ describing each of them loosely enough to be wrong.
    and used inside SQL in the next.** A row function runs in Go after the rows are
    fetched; a new column used in `where`, `order`, `groupBy`, a join or an aggregate is
    evaluated by PostgreSQL first, on `NULL` — **unless the column's window value is in
-   the compiler's SQL-expressible subset**, which in v1 is exactly two forms, both
+   the compiler's initial SQL-expressible subset**, which in phase 3 is exactly two forms, both
    declared, never inferred: a `Rename a b` (identity, `b` is `a`) and a constant
    default. For those the emitter rewrites the window SQL per clause:
 
@@ -1624,10 +1627,11 @@ describing each of them loosely enough to be wrong.
    pass (V8 serves meanwhile; no deadlock, because V8 does not need the column in SQL).
    This is the same expand/contract rhythm as everything else: the *meaning* of the
    column contracts one version after its *storage* expands.
-4. **Readiness gates every new unique index**, not only the ones an `onConflict`
-   targets (§7): uniqueness is entity semantics the Memory backend already enforces,
-   and a V8 instance serving before the index is `VALID` could itself insert the
-   duplicate that fails the build.
+4. **Readiness gates every new unique index this version may rely on**, not only the
+   ones an `onConflict` targets (§7): uniqueness is entity semantics the Memory backend
+   already enforces. A staged-promotion version is the explicit exception: its type and
+   Memory backend expose no index yet, `onConflict` is rejected, and its per-key guard
+   covers writes until the following version gates on `VALID`.
 5. **Invalidation trigger** on every entity under migration for as long as V7 is
    admitted — until retirement, not until V7 looks absent (§2).
 6. **Safety never rests on a lease; one lock order everywhere.** The only locks that
@@ -1639,14 +1643,18 @@ describing each of them loosely enough to be wrong.
    renewed by heartbeat. Each takeover increments the monotonic **fencing token**;
    every transactional job batch verifies its token in the same transaction that
    commits progress/data, so a paused or reconnected former holder cannot commit after
-   takeover. Nontransactional index DDL cannot make that check atomic and instead stays
-   safe by version fencing, versioned names and catalog verification; a duplicate
-   `CREATE INDEX CONCURRENTLY` may fail harmlessly on the name. Leases coordinate work,
+   takeover. Nontransactional index DDL cannot make that check atomic, so each statement
+   also holds a session-level shared **DDL-job lock** and rechecks token/state after
+   acquiring it; contract takes the same job key exclusively, marks it terminal, then
+   drops the temporary object. The key is the one-argument advisory hash of
+   `(database_uuid, "tesl-ddl-job", stable job id)`, a lock space disjoint from the
+   two-int version fences; a hash collision only over-serialises jobs. Leases coordinate work,
    tokens fence stale transactional workers, and neither replaces the schema-version
    fences. Every command that
    takes more than one lock takes them in this order: (1) the boot lock (session-level
-   advisory, key `2147483647`), (2) fence keys in ascending version order, (3) job leases
-   (`backfill`, `index:<name>`). The boot lock is the one lease-shaped thing that *is* a
+   advisory, key `2147483647`), (2) fence keys in ascending version order, (3) job-lease
+   acquisition (`backfill`, `index:<name>`), (4) DDL-job keys in stable-id order.
+   The boot lock is the one lease-shaped thing that *is* a
    guard, which is why it is a lock and not a row. The
    offline path is the case that made this matter: the first draft had boot taking
    the boot lock and then fences, and offline taking every fence and then the boot
@@ -1678,9 +1686,11 @@ describing each of them loosely enough to be wrong.
    remain, because a requirement is still a requirement: the objects
    such DDL creates carry the creating version in their name (`users_email_idx_v8`),
    so a straggler can never satisfy or collide with a later version's declaration and
-   contract can drop `*_v<retired>` leftovers by name; and retirement additionally waits
-   until `pg_stat_progress_create_index` shows no build in the schema — server-side
-   truth about executing statements, which a paused client cannot fake.
+    contract can drop `*_v<retired>` leftovers by name; and retirement additionally waits
+    until `pg_stat_progress_create_index` shows no build in the schema — server-side
+    truth about executing statements, which a paused client cannot fake.
+   The per-job lock closes the distinct same-version race: after `contract V8` removes
+   V8's temporary marker index, no stale V8 job may recreate it while V8 remains admitted.
 
 **Modes, stated once so the steps below can name them.** *Default* (decided
 2026-09-03): expand and backfill automatic; contract (retirement inside it) only when
@@ -1775,8 +1785,8 @@ executor's expand to appear. One lifecycle, two topologies.
    executors waiting at step 1 now see `V8 expanded`, verify, and proceed.
 9. Open the pool. From here every transaction begins with the fence statement
    (invariant 1); the first one doubles as the admission check for this instance.
-9b. Open the **DDL connection** (invariant 7) unless this instance runs with a schema
-    worker elsewhere: on `ddlConnection`, `select pg_advisory_lock_shared(fence(schema,
+9b. Reuse that dedicated **DDL connection** (invariant 7), unless a separate schema
+    worker owns all jobs; after releasing the boot lock, run `select pg_advisory_lock_shared(fence(schema,
     8))` session-level, then — a separate statement — `select min_version from
     tesl_schema`; if not admitted, close and refuse. That exact backend session is kept
     for the instance's life; if it drops (failover, restart) every job on this
@@ -1824,7 +1834,7 @@ any moment, and everything an instance does at boot is safe to lose a race on.
   (inside `tesl_advance_floor`, which is the only writer of the floor) under the exclusive fence, so
   two retirers cannot both succeed; the trigger and marker rules are idempotent.
 - Two **different** versions booting together (a V8 roll interrupted by a V9 roll): the
-  lease serialises them in whichever order they arrive. V9 finds either a V7 or a V8
+  session boot lock serialises them in whichever order they arrive. V9 finds either a V7 or a V8
   expanded database; in the first case it waits for V8's expand, then refuses at step
   5 if any V7 transaction is still admitted and V8 rows are not final, otherwise
   proceeds. A V8 instance that boots *after* V9 expanded finds itself one version
@@ -1835,9 +1845,10 @@ any moment, and everything an instance does at boot is safe to lose a race on.
 
 - **Lazy read.** Emitted queries on an entity under migration select `_tesl_v`, the
   old and the new columns; the decoder, when `_tesl_v` is below the entity's target
-  generation, applies the row functions
-  the row still owes, one version at a time (a `6` row goes through V7's function and
-  then V8's — both are in the binary, §6 invariant 2), to the row's stored view. Optional write-back on read (a `WriteBackOnRead` rule) is off by
+  generation, applies the one serving-mode transition the row still owes. A row two
+  generations behind makes serving readiness fail (§8); multi-step chaining exists only
+  in catch-up, where a `6` row may pass through V7 and then V8 using embedded history.
+  Optional write-back on read (a `WriteBackOnRead` rule) is off by
   default: it turns reads into writes and doubles lock contention under load.
 - **Dual write.** Emitted inserts/updates write the V8 columns and every V7 column the
   plan requires (`Rename`: the same value; transform with `WriteBack g`: `g`; removed
@@ -1931,7 +1942,9 @@ any moment, and everything an instance does at boot is safe to lose a race on.
   a unit of *work*. Throttled
   **adaptively**, because a backfill that saturates the write path or a replica is an
   outage by another name: the leader measures, between batches, replication replay
-  lag (`pg_stat_replication`), WAL generation rate, lock waits and statement timeouts
+  lag (`pg_stat_replication`, available only through the installer-created narrow
+  monitoring function or an explicit `pg_monitor`/`pg_read_all_stats` grant), WAL
+  generation rate, lock waits and statement timeouts
   on its own batches, dead-tuple pressure on the table — all observable from the
   database by the executor itself — and, **only when configured**, the application's
   fleet-wide request p99 and error rate, read from a metrics provider the operator
@@ -1948,7 +1961,7 @@ any moment, and everything an instance does at boot is safe to lose a race on.
   or whose predicate failed, are picked up by the next pass. While V7 is admitted the
   backfill can only ever be **provisional** ("no rows below the target generation at the last scan"
   — an observation `--schema status` shows, and nothing depends on). It becomes
-  **final** under V7's exclusive retirement fence (V9 boot, step 5), by an exhaustive keyset pass
+  **final** under V7's exclusive retirement fence (when `contract V8` runs, step 5), by an exhaustive keyset pass
   over rows below the target generation (`_tesl_v < 4` in the running example) that runs when no writer can re-mark anything; it terminates
   because the marker, unlike a `NULL` test, does not depend on the migrated value,
   and it is normally tiny because the provisional passes did the work. Recorded per
@@ -1992,11 +2005,11 @@ itself cannot resume is named as such. Per job:
 |---|---|---|---|
 | **expand** (DDL, trigger, control rows) | nothing committed — each statement is its own transaction | the boot lock vanishes with the dead session; the next holder re-runs the same `IF NOT EXISTS` / catalog-checked statements (no-ops for what exists) and `tesl_record_expanded` (idempotent on equal hashes) | the session-level boot lock |
 | **initial install** on an empty database | same | same; `install_schema` verifies every existing table against the module before recording | same |
-| **backfill** (provisional) | at most **one uncommitted batch per shard** (`TESL_BACKFILL_BATCH` rows) | the `backfill:<entity>` lease expires (`TESL_LEASE_TTL_S`, default 30 s; renewed every 5 s by a live holder); the next executor reads every shard's `last_pk`/`state` from `tesl_schema_backfill_shards` and continues each shard from its cursor. **The marker makes even a lost cursor cheap**: eligible rows are exactly `_tesl_v = g-1`, served by the partial marker index, so a shard restarted from `lo_pk` re-reads only rows that were not yet migrated — a restart from the top costs a scan of the *remaining* rows, never a rewrite of finished ones. `--schema status` prints `resumed from shard cursors (k of n shards complete)` | the lease, plus the `xmin` predicate: an expired-but-alive holder and its successor can only duplicate a batch, never disagree |
+| **backfill** (provisional) | at most **one uncommitted batch per shard** (`TESL_BACKFILL_BATCH` rows) | the `backfill:<entity>` lease expires (`TESL_LEASE_TTL_S`, default 30 s; renewed every 5 s by a live holder); the next executor increments the token, reads every shard cursor and continues. **The marker makes even a lost cursor cheap**: eligible rows are exactly `_tesl_v = g-1`, so restart scans remaining rows, never rewrites finished ones. `--schema status` prints the resumed cursors | marker + bounded-age `xmin` + lease-token check in the committing transaction; stale and current holders may both execute a row function, but only the current token can commit |
 | **backfill by a newer binary** | nothing | a V9 executor embeds V8's migration (§6 invariant 2) and resumes V8's shard cursors exactly as a V8 executor would — a version roll *during* a long backfill is the normal case, not an exception | same |
-| **index build** (`CREATE INDEX CONCURRENTLY`) | **the whole build** — PostgreSQL has no resumable index build; an interrupted one is left `INVALID` | the next `index:<name>` lease holder confirms via `pg_stat_progress_create_index` that no build is running, drops the `INVALID` remnant, starts again. This is the one job that starts over, and on a 100 M-row table that is tens of minutes: hence the worker is a long-lived process with a generous `terminationGracePeriodSeconds` in `deploy-recipe`, and an operator pausing the backfill does not stop an index build | the lease; a second `CREATE` fails harmlessly on the name |
+| **index build** (`CREATE INDEX CONCURRENTLY`) | **the whole build** — PostgreSQL has no resumable index build; an interrupted one is left `INVALID` | the next `index:<name>` lease holder confirms via `pg_stat_progress_create_index` that no build is running, drops the `INVALID` remnant, starts again. This is the one job that starts over, and on a 100 M-row table that is tens of minutes: hence the worker is a long-lived process with a generous `terminationGracePeriodSeconds` in `deploy-recipe`, and an operator pausing the backfill does not stop an index build | lease token for ownership plus the shared session DDL-job lock; contract's exclusive form marks terminal before dropping, so stale same-version workers cannot resurrect it |
 | **final pass** (under the exclusive fence at contract) | the coordinator transaction — the fence and the floor advance; **not** the batches already committed on other connections | rerun `contract V<n>`: it retakes the fence and processes only rows still below the target generation, which the committed batches already removed from the set | the fence; the CAS in `tesl_advance_floor` |
-| **contract DDL** | the statement in flight | rerun `contract V<n>`: resumes statement by statement from the catalog (§13b) | `tesl_record_contracted`; the next version's expand waits for `contracted` |
+| **contract DDL** | the statement in flight | rerun `contract V<n>`: resumes statement by statement from the catalog (§13b) | `tesl_record_contracted`; any next expansion that could collide waits for `contracted` |
 | **queue restamp / repair passes** | one batch | own progress rows (`tesl_schema_queue_restamps`, the repair's quarantine keys); resume from the cursor | the fence |
 
 **How the successor knows it should resume rather than keep waiting.** (Maintainer's
@@ -2248,8 +2261,8 @@ fn repairNote(old: NotesSchema.V7.Note) -> Migrated NotesSchema.V8.Note = …
   the row, and by the application when it updates or deletes the row (the trigger
   lowers the marker, the pass re-reads it, and an accepted row deletes its quarantine
   entry). Rollback V8 → V7 is possible until that moment;
-rollback V9 → V8 for the whole life of V9, because V8 is retired only at V10's boot
-and a V8 binary that starts before then passes the admission check. An operator who
+rollback V9 → V8 is possible until `contract V9` retires V8; under `NextVersion` that
+normally occurs at V10 boot. A V8 binary that starts before then passes the admission check. An operator who
 wants the rollback window to V7 closed earlier — and V7's trigger gone earlier — runs
 `app --schema contract V8` on the worker as soon as the roll is done (or sets
 `contract: WhenDrained`); there is no separate retire command.
@@ -2291,13 +2304,14 @@ text identity (its formatting differs across majors) — **and** it is
 shape is dropped and rebuilt, and a differently shaped index of the same name is
 drift (above). §11.8's "same columns and uniqueness" is superseded.
 
-Partitioned Tesl-owned entities are refused in v1. PostgreSQL cannot run `CREATE INDEX
+Partitioned Tesl-owned entities are refused through phase 4. PostgreSQL cannot run `CREATE INDEX
 CONCURRENTLY` on a partitioned parent; correct support requires per-leaf concurrent
 builds, parent attachment, trigger propagation and recovery when partitions change.
 `--schema adopt` does not waive this protocol gap. `@external` may exclude such a table
 from migration ownership, but then Tesl makes no schema-evolution guarantee for it.
 
-**Every new unique index gates readiness; plain indexes do not.** A plain index is a
+**Every new unique index that the current program may rely on gates readiness; plain
+indexes and guarded staged promotions do not.** A plain index is a
 performance hint: a V8 instance is ready before it exists and merely runs slower until
 it does (the plan prints the estimate). A unique index is **entity semantics**: the
 Memory backend enforces it from the first test, so a V8 instance that served before
@@ -2309,7 +2323,10 @@ until the index exists. So every V8 instance polls `pg_index.indisvalid` for eac
 unique index and reports **not ready** until the build has finished. The rolling
 deploy simply takes as long as the build; V7 keeps serving the whole time. (The first
 revision gated only `onConflict` targets; the re-review is right that uniqueness
-matters whether or not a query names it.)
+matters whether or not a query names it.) The deliberate exception is promotion of a
+`staging unique index`: V9 is ready under its compiled per-key guard, cannot compile
+`onConflict` against that key, and starts the physical unique build only after V8 is
+retired; V10, the first version allowed to rely on the index, gates readiness on `VALID`.
 
 **Exactly one builder.** Every V8 instance passes the boot lock, so ownership of a
 build cannot come from reading a state table — two instances reading `pending` at
@@ -2318,7 +2335,10 @@ builder's lease expires, and the next instance's timer tick — after confirming
 `pg_stat_progress_create_index` that no build is still executing — drops the `INVALID`
 remnant and starts again. Ownership here is about not wasting work, not about safety:
 two builders racing is a harmless failure on the index name (§6 invariant 6).
-`tesl_schema_index` records what happened; it decides nothing.
+Before catalog verification or DDL, the holder acquires the job's shared session lock
+and rechecks both its lease token and non-terminal state; it holds that lock through the
+autocommit statement and final catalog verification. `tesl_schema_index` records what
+happened and lets contract mark the job terminal under the exclusive form of that lock.
 
 **A new unique index changes V7's behaviour, and the plan says so.** V7 was compiled
 under a schema that permitted duplicates. Once the concurrent build reaches
@@ -2390,7 +2410,7 @@ step:
 The guard is a per-key advisory lock plus one probe through the staging index per write
 of a staged key, in V9 only — the same primitive the fence uses, not the reservation subsystem the
 companion describes (that one is about *V8's* window, when the staging version itself
-must not create duplicates against V7; it remains withdrawn from v1). What staging buys,
+must not create duplicates against V7; it remains a dependent item after phase 4). What staging buys,
 stated precisely: the build never races an unguarded writer, so the livelock cannot
 occur; the cost is one extra release before the constraint can be relied on. A team
 that wants two releases instead has the **bounded maintenance step** — hold the
@@ -2399,7 +2419,7 @@ of minutes on a large table — chosen explicitly and never by default.
 
 A **runtime guard** for the window — a reservation table with a real unique index, kept
 in step by V8's writes so that even V8 cannot create duplicates while V7 is admitted —
-was designed and **withdrawn from v1** after review: an initially empty reservation table
+was designed and **deferred beyond phase 4** after review: an initially empty reservation table
 enforces nothing against pre-existing rows; a table trigger fires for V7's writes too,
 and a staging change bumps no generation, so nothing distinguishes the two writers;
 populating the table under concurrent V7 and V8 writes is a backfill with its own
@@ -2468,8 +2488,8 @@ index build.
 
 | `tesl_schema` state vs binary `V<n>` | Behaviour |
 |---|---|
-| no `tesl_schema` and no user tables | fresh database: create the `tesl_schema*` tables, the lease rows and the `tesl_admit` function, then everything at `V<n>`, record it, start (`tesl run` on an empty dev/CI database still just works) |
-| no control schema, user tables present | refuse: a pre-versioning database; print `--schema adopt`. Adoption creates an `adopting` control row under the boot lock, verifies every table, then adds `_tesl_v smallint not null default <g>` one table per short transaction and records per-table progress. This avoids accumulating `ACCESS EXCLUSIVE` locks across the whole schema. Boot remains unready until the final catalog recheck atomically records `V<n> expanded, contracted`; a crash resumes from progress, and a pre-existing `_tesl_v` is accepted only when the matching in-progress adoption row proves Tesl created it |
+| no `tesl_schema` and no user tables | fresh database: run the installer path, then create everything at `V<n>`, record it and start. In local dev/CI, `tesl run` may invoke that path with the configured setup-capable local role, so an empty database still just works; a production service credential lacking setup authority refuses and prints the one-time installer command |
+| no control schema, user tables present | refuse: a pre-versioning database; print `--schema adopt`. Under the installer identity's temporary `tesl_schema` membership, adoption creates an `adopting` control row, verifies every table and transfers each supported entity object to `tesl_schema` (or refuses with exact `ALTER … OWNER` instructions). In phase 1 it records the additive protocol without adding `_tesl_v`; when phase 3 enables online compatibility, the control-format upgrade adds `_tesl_v smallint not null default <g>` one table per short transaction and records per-table progress. This avoids accumulating `ACCESS EXCLUSIVE` locks across the schema. Boot remains unready until the final catalog/ownership recheck atomically records completion; a crash resumes, and a pre-existing `_tesl_v` is accepted only when matching progress proves Tesl created it |
 | `min_version > n` | refuse: this version has been **retired** (a contract of a later version ran); redeploy the current version |
 | binary embeds a `v<n>-contract.tesl`, `(n, 'contracted')` is absent, and `V<n-1>` is still admitted | start; the artefact authorises — execution is `app --schema contract V<n>` on the worker (`contract: Explicit`, default) or automatic under `WhenDrained` / `NextVersion`: final pass under `V<n-1>`'s exclusive fence, retire if every row is accepted, exactly the listed drops, record `(n, 'contracted', hash)` — or report the rejected rows and do nothing |
 | binary embeds no `V<n-1>` module/migration (cleanup after contract) and the database records `(n, 'contracted')` | start |
@@ -2483,7 +2503,7 @@ index build.
 | some entity still has rows **two generations** behind the generation `V<n-1>` gave it (the previous migration is not final) | refuse serving mode: although the binary embeds older history for catch-up, request serving may execute only the latest two transitions; let the running `V<n-1>` fleet finish (or run `--schema contract` there) first |
 | hash differs at the same version | refuse: an applied snapshot or migration's behaviour was edited (§11) |
 | `OFFLINE` plan pending | refuse with the exact `--schema apply-offline` command (see "The downtime path") |
-| a new unique index is not yet `VALID`, or a column this version uses inside SQL has no final backfill | start, but report **not ready** until it is (§6 step 11) |
+| a new unique index this version may rely on is not yet `VALID`, or a column this version uses inside SQL has no final backfill | start, but report **not ready** until it is (§6 step 11); a guarded staged-promotion version cannot rely on its index and is exempt |
 
 **The decision, as one algorithm** (the table above is its explanation; this is what
 the executor runs, and the re-review of 2026-09-04 asked for it because the table and
@@ -2511,8 +2531,8 @@ admit(v):
      if some entity two generations behind -> REFUSE "previous migration not final"
      else                                -> EXPAND v, then ADMIT
   if v > current + 1                     -> REFUSE "deploy in order" + offer catch-up
-  readiness: after ADMIT, not ready until every new unique index is VALID and every
-             column used inside SQL has a final backfill
+   readiness: after ADMIT, not ready until every unique index this version may rely on
+              is VALID and every column used inside SQL has a final backfill
 ```
 
 The Memory backend is always at `V<n>` (fresh per test). No environment variable
@@ -2594,11 +2614,14 @@ lifecycle above is shaped by that failure mode:
   everyone behind it. `VALIDATE CONSTRAINT` is different: it may scan for hours while
   holding `SHARE UPDATE EXCLUSIVE`; DML continues, but competing DDL and vacuum wait.
   Status, throttling and the operational budget must account for that duration.
-- **No long transactions on user tables.** Backfill batches commit independently;
+- **No long migration-owned maintenance transactions on user tables.** Backfill batches commit independently;
   `CREATE INDEX CONCURRENTLY` runs outside any transaction; `SET NOT NULL` at
   contract is preceded by `ADD CONSTRAINT … CHECK (col IS NOT NULL) NOT VALID` +
-  `VALIDATE CONSTRAINT` (`SHARE UPDATE EXCLUSIVE` — blocks other DDL and `VACUUM`,
-  never reads or writes), then the constraint is promoted.
+  `VALIDATE CONSTRAINT` (`SHARE UPDATE EXCLUSIVE` — scans existing rows but does not
+  block ordinary reads or writes; it blocks other DDL and `VACUUM`), then the constraint
+  is promoted. An acknowledged broad application `UPDATE` rewritten through RMW keeps
+  native statement atomicity with one cursor transaction and may therefore be long;
+  MIG031 and `dry-run` expose that separate application cost.
 - **Bloat is bounded.** `UPDATE`-based backfill creates one dead tuple per row; the
   batch pause lets autovacuum keep up, and the plan prints the expected cost honestly:
   every updated row is a **new heap tuple** (rows × average tuple width, not new-column
@@ -2622,9 +2645,10 @@ lifecycle above is shaped by that failure mode:
   setting executes it (command, when drained, or at V9's boot), so typically for part
   of V8's life. It is cheap enough that tying its lifetime to the state transition rather
   than to observed absence costs nothing worth having.
-- **The fence costs one extra statement per transaction, in the same round trip.**
-  `pgx` pipeline mode batches `BEGIN`, the fence statement, the program's statement(s)
-  and `COMMIT`; the server-side cost is a shared advisory lock in the lock table per
+- **The fence costs two server statements per write transaction.** Static transaction
+  shapes pipeline them with the program SQL; data-dependent bodies pay an initial
+  fence/admit round trip before later statements can be constructed. The server-side
+  cost includes a shared advisory lock in the lock table per
   transaction — tens of microseconds, and shared locks on one key do not *conflict*
   with each other. They do **contend**: PostgreSQL's fast-path locking, which keeps
   relation locks on hot tables out of the shared lock manager, does not cover advisory
@@ -2678,10 +2702,11 @@ tesl migrate contract  <entry> [--database D] V<n>                   # writes v<
 tesl migrate prune     <entry> [--database D]
 # `tesl migrate` is a subcommand family like `tesl doc`; verbs are mutually exclusive by construction.
 # `--database` selects the target when the workspace has several; otherwise the single target is inferred.
-    diff the previous schema module against the one the `database` names; write the
-    migration skeleton <Migrate>/V<n+1>.tesl (or refresh an unfinished one), its frozen
-    stdlib slice; print the plan header. If no newer
-    schema module exists yet, offer to copy V<n>.tesl to V<n+1>.tesl first. Idempotent.
+    if starting a revision, freeze the database's current `VCurrent` as V<n>; then diff
+    that frozen predecessor against the still-live `VCurrent`, write/refresh migration
+    skeleton <Migrate>/V<n+1>.tesl and its stdlib slice, and print the plan header.
+    When the following revision starts, freeze `VCurrent` as V<n+1> and mechanically
+    rewrite the completed migration's target references. Idempotent.
     The LSP quickfix on the "schema module changed, no migration" diagnostic calls
     exactly this.
 ```
@@ -2748,7 +2773,7 @@ the readiness ordering that keeps the current request pods serving throughout, a
 templates under `templates/`, in the style of the existing `templates/docker`. Tesl still orchestrates nothing; it hands
 the operator a correct starting point.
 
-**Why a command at all, if the schema module is copied by hand?** Because the copy is
+**Why a command at all, if freezing the schema module is mechanically simple?** Because the copy is
 the trivial part. Every hand-written thing — `V9.tesl`, the row functions, the
 acknowledgements — is yours; what `tesl migrate generate` produces is exactly what a person
 *cannot* write reliably, and the compiler needs all of it:
@@ -2768,9 +2793,9 @@ acknowledgements — is yours; what `tesl migrate generate` produces is exactly 
   the migration ships, preserving what you edited.
 
 A migration file could be written by hand and the compiler would still check it
-(MIG002 completeness, types, proofs); the stdlib slice and the hashes could not. So the command is the generator of the mechanical artefacts, and copying
-`V8.tesl` to `V9.tesl` when no newer module exists is a convenience it offers on the
-side, not its purpose. Everything else the earlier list had is either already covered or belongs
+(MIG002 completeness, types, proofs); the stdlib slice and the hashes could not. So the
+command owns freeze-first history and generates the mechanical artefacts; it never asks
+the developer to copy `V8.tesl` to `V9.tesl`. Everything else the earlier list had is either already covered or belongs
 somewhere else:
 
 - **`check`** is redundant: `tesl --check` already type-checks the whole program, and
@@ -2844,9 +2869,9 @@ migration V7 -> V8                                   ONLINE
   User      MIGRATE WITH migrateUser
             expand:   +fullName NULL, +bio NULL, +age NULL      (dual-write name→fullName)
             backfill: 3 columns, est. 2.4M rows
-            contract: -name, age SET NOT NULL, CHECK NonNegative   (at V9 boot)
+            contract: -name, age SET NOT NULL, CHECK NonNegative   (when `contract V8` runs)
   Session   unchanged
-  Legacy    DROP                                     (table dropped at V9 boot; 0 V8 readers)
+  Legacy    DROP                                     (table dropped when its contract runs; 0 old readers)
   indexes   +users_email_idx (unique, concurrently; gates readiness; 1 onConflict depends on it)
 ```
 
@@ -2945,11 +2970,11 @@ The protocol assumes **one logical primary** for writes. Under that assumption:
   use a proven bounded-lag protocol, because replicated `min_version` is stale by
   definition. Hot-standby query cancellation also needs explicit retry semantics.
   Until those gates exist, replica routing is unsupported rather than "replica-safe".
-- **Sharding / multi-primary**: out of scope for v1, and split in two. Multi-primary
+- **Sharding / multi-primary**: out of scope through phase 4, and split in two. Multi-primary
   (BDR-style) has no single lock manager for the fence to live in and is not planned.
   **Citus** is a different case: a coordinator in front of the shards *is* a single
   lock manager, and nothing in the protocol depends on single-node-only behaviour, so
-  there is a credible **future path** as a "Citus profile" on top of v1 rather than a
+  there is a credible **future path** as a "Citus profile" after phase 4 rather than a
   redesign (all of this from documentation as of the design date; verify before
   building):
   - unchanged: advisory fences and leases on the coordinator (a profile forbids
@@ -3084,7 +3109,7 @@ runtime for what is proven. Concretely:
   boot without a runtime verifier, and it is why the boot gate needs only a version
   comparison and a hash.
 
-**Alternative under evaluation — a server-side write fence with no lock at all.** If
+**Rejected alternative — a server-side write fence with no lock at all.** If
 *every* Tesl write statement carried a trusted **program-version** setting
 (`tesl.version = 8`, a pipelined `set_config` statement, no extra round trip), a
 permanent per-table trigger could reject any write whose program version is below
@@ -3101,13 +3126,11 @@ admission at all, and makes the request pool's pooler question disappear entirel
 the DDL connection's fence would still be needed, and reads would keep the
 query-then-`tesl_admit` ordering (the trigger says nothing about reads). It has one gap the lock does not: a
 write whose snapshot predates retirement can still be in flight when the final pass
-runs and the trigger is dropped. The fix is a **barrier** before the final pass — a
-transaction that takes `LOCK TABLE … IN SHARE MODE` and commits immediately, which
-waits for every in-flight writer and admits no new one (they are refused by admission
-once retirement is committed). Costs: a trigger on every write forever (tens of
-microseconds per row, comparable to the lock), and PL/pgSQL on the hot write path of
-every table. The choice is a phase-1 benchmark decision (see
-"Decisions before phase 1"); the rest of the protocol is unchanged either way.
+runs and the trigger is dropped. The proposed `LOCK TABLE … IN SHARE MODE` barrier does
+not repair the ordering: released before retirement, it admits a later old writer;
+held across batched final-pass updates, it conflicts with those updates; retirement
+before validation can strand a rejected row. Therefore this is not a correctness-valid
+benchmark candidate. The transaction-scoped advisory fence remains the decided design.
 
 **Transaction retry, as a general rule.** A PostgreSQL deadlock (`40P01`) or
 serialization failure (`40001`) — possible under any unique index, not only staged ones
@@ -3132,7 +3155,7 @@ capability. They are independent durable facts and must not be encoded as one en
 
 | axis | durable state | transition owner |
 |---|---|---|
-| version lifecycle | `expanded` → `contracting` → `contracted` | recorder functions; the next version waits for `contracted` |
+| version lifecycle | `expanded` → `contracting` → `contracted` | recorder functions; a next expansion waits when it would exceed the admitted window, reuse/remove compatibility objects, or race an in-progress contract |
 | admission | monotonic `min_version` plus append-only `retired` rows | `tesl_advance_floor` under predecessor fences |
 | compatibility plans | monotonic `compat_floor` | contract, before the first drop |
 | entity work | target generation, shard progress, provisional/final | backfill and final pass |
@@ -3144,15 +3167,16 @@ An additive epoch is `expand → expand → … → close-epoch`. A transforming
 `expand → provisional backfill → floor advance/finality → contract DDL → contracted`.
 An additive target has no contract artefact, but **slot retirement still records that
 target as `contracted`** with the retirement-plan hash after advancing `compat_floor`;
-otherwise the next-version gate has no durable terminal state.
+this gives later window-narrowing expansion a durable terminal state without forcing
+every intermediate additive expansion to contract.
 
 `contracting` can be observed for minutes or, after failure, indefinitely:
 `compat_floor` is set first, admitted binaries switch to settled plans, and listed drops
 and tightenings run as separate retryable transactions. A failure stops the command and
 `--schema status` reports `contracting: k of n statements remaining`. Rerunning
-`contract V<n>` resumes from the catalog. The `contracted` row is written last, and the
-next version cannot expand before it exists because stale physical objects may collide
-with the next plan.
+`contract V<n>` resumes from the catalog. The `contracted` row is written last. A next
+expansion that could collide with stale physical objects cannot proceed before it
+exists; additive epoch-preserving expansion need not manufacture an empty contract.
 
 Retirement is the only monotonic **admission** transition, not the only irreversible
 operation. Dropping columns/tables loses data; adding or validating unique, check and
@@ -3499,7 +3523,7 @@ main() -> App requires [dbRead, dbWrite, time, random, envRead] =
 
 **What `main` configures: nothing.** `main` is identical at V7, V8 and V9. The schema
 version is derived from the frozen snapshots adjacent to the `VCurrent` module; expand runs because the binary starts,
-retirement and contract run because the next binary starts, and every operator verb is
+retirement and contract run when the configured lifecycle (`Explicit` by default) triggers them, and every operator verb is
 a `--schema` flag on the same binary. Runtime knobs are environment variables in the
 existing style (`TESL_BACKFILL_BATCH` 2000, `TESL_BACKFILL_CONCURRENCY` 4, `TESL_BACKFILL_PAUSE_MS` 50, `TESL_LEASE_TTL_S` 30,
 `TESL_SCHEMA_LOCK_TIMEOUT_MS` 2000, `TESL_SCHEMA_POLL_S` 15). (The cookie auth is a
@@ -3509,7 +3533,7 @@ placeholder for the example, not a recommendation.)
 
 ```tesl
 module NotesSchema.V7 exposing [Note, Session]              # frozen snapshot; was NotesSchema.VCurrent while current
-# PROPOSED module kind: may contain entities, the types/facts/checks/codecs they need,
+# Schema-module content rule: may contain entities, the types/facts/checks/codecs they need,
 # and pure helpers — the compiler rejects handlers, effects, `database`, `main`,
 # `requires`, capabilities.
 
@@ -3538,12 +3562,13 @@ Per entity, `Note` is at **generation 3** (two earlier row-function migrations),
 `Session` at **generation 1** (never migrated). Every `notes` row has `_tesl_v = 3`,
 every `sessions` row `_tesl_v = 1`.
 
-### `schema/notes/v8.tesl` — copied from V7 and edited by hand
+### `schema/notes/v8.tesl` — frozen from edited `VCurrent` when V9 work begins
 
 ```tesl
 module NotesSchema.V8 exposing [Note, Session, Tag, ValidWordCount, tryWordCount, checkWordCount, wordCountOf]   # frozen
 
 import Tesl.Prelude exposing [Bool(..), Int, String]
+import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Time exposing [PosixMillis]
 import Tesl.String exposing [String.split]
 import Tesl.List exposing [List.length, List.filter]
@@ -3718,11 +3743,14 @@ handler get longNotes(user: String ::: Authenticated user) -> List Note requires
   select note from Note where note.ownerId == user && note.wordCount > 500
 ```
 
-### What `tesl migrate generate notes.tesl` prints and writes (V7 → V8)
+### The V7 → V8 output, shown after V9's freeze made V8 historical
+
+At initial V8 generation these target references name `VCurrent`; the next freeze
+mechanically rewrites them to byte-identical `NotesSchema.V8`, as specified above.
 
 ```
-migration NotesSchema.V7 -> NotesSchema.V8                       ONLINE
-  Note      gen 3 -> 4     MIGRATE WITH migrateNote   (2 holes)
+migration NotesSchema.V7 -> NotesSchema.V8                       ONLINE · MAY BLOCK RETIREMENT · MAY FAIL REQUESTS
+  Note      gen 3 -> 4     MIGRATE WITH migrateNote   (3 holes, including required representative fixture)
             expand:   +ownerId NULL, +wordCount NULL,
                       legacyRank SET DEFAULT ‹legacy›, _tesl_v SET DEFAULT 3,
                       trigger tesl_mig_notes_g4 (sources: content, authorId)
@@ -3732,7 +3760,7 @@ migration NotesSchema.V7 -> NotesSchema.V8                       ONLINE
                       application (handlers that update content: updateContent — sets wordCount: yes)
             backfill: est. 2.4M rows
             contract: -authorId, -legacyRank, wordCount SET NOT NULL, ownerId SET NOT NULL,
-                      CHECK ValidWordCount, -index notes_authorId_idx, -index notes_tesl_v_g4_idx, -trigger   (at V9 boot)
+                      CHECK ValidWordCount, -index notes_authorId_idx, -index notes_tesl_v_g4_idx, -trigger   (when `contract V8` runs)
   Session   gen 1         unchanged
   Tag       new           create table
   indexes   +notes_ownerId_createdAt_idx_v8 (plain, concurrently)
@@ -3740,7 +3768,7 @@ migration NotesSchema.V7 -> NotesSchema.V8                       ONLINE
             +notes_tesl_v_g4_idx (partial marker index on _tesl_v < 4, concurrently; dropped at contract)
 
 froze  schema/notes/v7.tesl               (hash recorded in the migration header; edits are now MIG013)
-wrote  migrations/notes/v8.tesl            (2 todo — the program will not compile until resolved)
+wrote  migrations/notes/v8.tesl            (3 todo — the program will not compile until resolved)
 built  .tesl-stuff/migrate/notes/v8-compat.tesl, v8-support.tesl   (deterministic; regenerated by every build, not committed)
 wrote  migrations/notes/v8.stdlib.tesl     (frozen: String.split, List.length, List.filter — linked, not imported)
 ```
@@ -3748,9 +3776,9 @@ wrote  migrations/notes/v8.stdlib.tesl     (frozen: String.split, List.length, L
 ### The migration file as generated (`migrations/notes/v8.tesl`)
 
 ```tesl
-# migration NotesSchema.V7 -> NotesSchema.V8  ONLINE   (header as above, kept in sync)
+# migration NotesSchema.V7 -> NotesSchema.V8  ONLINE · MAY BLOCK RETIREMENT · MAY FAIL REQUESTS
 # frozen: NotesSchema.V7 = sha256:9c1e…   NotesSchema.V8 = sha256:41ab…
-module NotesSchema.Migrate.V8 exposing [migration, migrateNote]
+module NotesSchema.Migrate.V8 exposing [migration, migrateNote, oldNoteFixture]
 
 import Tesl.Migration exposing [Migration, Entity(..), Rule(..), Migrated(..), Same(..)]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -3761,6 +3789,7 @@ migration = Migration {
   from: NotesSchema.V7
   to:   NotesSchema.V8
   same: []                                   # V7 declares no fact or type that V8 also declares
+  fixtures: [oldNoteFixture]
   entities: {                                # only what changed; Session is absent = verified Unchanged
     Note:    Migrate migrateNote [           # gen 3 -> 4
                Rename authorId ownerId,      # compiler-owned identity
@@ -3769,6 +3798,9 @@ migration = Migration {
     Tag:     New
   }
 }
+
+fn oldNoteFixture() -> NotesSchema.V7.Note =
+  todo "provide a representative V7 Note accepted by migrateNote"
 
 fn migrateNote(old: NotesSchema.V7.Note) -> Migrated NotesSchema.V8.Note =    # @tesl-gen a1f3 7c…
   let wordCount = todo "V8 added `wordCount: Int ::: ValidWordCount wordCount`; NotesSchema.V7.Note has id, title, content, authorId, legacyRank, createdAt"
@@ -3789,7 +3821,7 @@ the node becomes user-owned.
 ### The migration file as committed (after the developer resolved both holes)
 
 ```tesl
-module NotesSchema.Migrate.V8 exposing [migration, migrateNote]
+module NotesSchema.Migrate.V8 exposing [migration, migrateNote, oldNoteFixture]
 
 import Tesl.Migration exposing [Migration, Entity(..), Rule(..), Migrated(..), Same(..)]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -3800,11 +3832,16 @@ migration = Migration {
   from: NotesSchema.V7
   to:   NotesSchema.V8
   same: []
+  fixtures: [oldNoteFixture]
   entities: {
     Note:    Migrate migrateNote [Rename authorId ownerId, Legacy legacyRank 0]
     Tag:     New
   }
 }
+
+fn oldNoteFixture() -> NotesSchema.V7.Note =
+  NotesSchema.V7.Note { id: "n2", title: "t", content: "a b",
+                        authorId: "u2", legacyRank: 0, createdAt: 0 }
 
 # No helper copies here: NotesSchema.V8.tryWordCount and .wordCountOf ARE the
 # declarations the handlers use (through checkWordCount). Their stdlib calls are linked
@@ -3846,7 +3883,7 @@ import Tesl.Migration exposing [Migrated(..)]
 import Tesl.List exposing [List.length, List.head]
 import NotesSchema.V7
 import NotesSchema.V8 exposing [Note]
-import NotesSchema.Migrate.V8 exposing [migrateNote]
+import NotesSchema.Migrate.V8 exposing [migrateNote, oldNoteFixture]
 import NotesSchema.Migrate.V8Support exposing [insertOldNote]   # generated: NotesSchema.V7.Note -> Unit,
                                                                  # stores the row at generation 3
 
@@ -3854,8 +3891,7 @@ import NotesSchema.Migrate.V8Support exposing [insertOldNote]   # generated: Not
 # through the lazy path. The fixture is the developer's — a generator cannot know
 # which V7 rows the migration accepts, and migrateNote may legitimately Reject some.
 test "V8 compat: a V7-shaped Note is readable through V8" {
-  insertOldNote (NotesSchema.V7.Note { id: "n2", title: "t", content: "a b",
-                                       authorId: "u2", legacyRank: 0, createdAt: 0 })
+  insertOldNote (oldNoteFixture())
   let notes = select note from Note where note.ownerId == "u2"   # the marker-aware rewrite finds the V7 row
   expect List.length notes == 1
   expect (List.head notes).wordCount == 2                        # lazy path ran migrateNote
@@ -3931,19 +3967,23 @@ verbatim" acceptance line was not satisfiable and is replaced below.
 -- namespace with key2 = 0 (reserved: no version is 0), taken BEFORE the first CREATE. This is the ONE fixed-namespace
 -- lock: it only serialises bootstraps, so sharing it across schema families in one database is harmless. Every fence
 -- below uses the database's own :fence_ns instead.
--- This bootstrap runs under a short-lived installer identity. Before request/worker grants are applied, ownership of
--- the control schema, every tesl_schema_* table, and every transition function is transferred to tesl_control. Neither
--- long-lived login role is a member of tesl_control.
+-- This bootstrap runs under a short-lived installer identity with temporary tesl_control membership. Before
+-- request/worker grants are applied, ownership of the namespace, global fence registry, every tesl_schema_* table and
+-- every transition function is transferred to tesl_control; membership is then revoked. tesl_schema receives
+-- USAGE/CREATE on the namespace and owns each generated entity object, but no long-lived login is a tesl_control member.
 begin;
 select pg_advisory_xact_lock(32341, 0);
 create schema if not exists notes_app;            -- a genuinely empty database has no namespace yet (today's bootstrap
                                                   -- creates it too, postgres.go:228); the empty-database test must NOT
                                                   -- pre-create it in fixture setup
--- HARNESS STEP assert_schema_owner('notes_app'): pg_namespace.nspowner is the executor role (or a role it is a member
---   of); a namespace owned by someone else is drift, refused with the owner named
+-- HARNESS STEP assign_and_assert_namespace_owner: notes_app → tesl_control; grant tesl_schema USAGE, CREATE;
+--   a pre-existing namespace under any other owner is drift and is refused rather than adopted
 create table if not exists public.tesl_fence_namespaces (
   fence_ns int generated always as identity primary key check (fence_ns between 1 and 2147483646),
   database_uuid uuid not null unique);             -- database-wide allocation; random 31-bit truncation can collide
+-- HARNESS STEP assert_registry_owner_and_shape: the existing registry must have this exact catalog shape, be owned by
+-- tesl_control and grant no write privilege to PUBLIC or long-lived login roles; `IF NOT EXISTS` never adopts an
+-- attacker-created lookalike.
 create table if not exists notes_app.tesl_schema_meta (        -- the CONTROL SCHEMA's own version — see below
   id smallint primary key check (id = 1), format_version int not null,
   database_uuid uuid not null unique,      -- the ONE stable identity of this logical database: minted at bootstrap or
@@ -4005,13 +4045,14 @@ create table if not exists notes_app.tesl_schema_state (       -- ONE row: the d
   id            smallint primary key check (id = 1),
   min_version   int not null,                                  -- oldest admitted schema version
   current       int not null,                                  -- highest expanded version
+  installing_version int,                                      -- crash-stable target while current = 0
   compat_floor  int not null default 0);                       -- highest version whose predecessor's compatibility
                                                                -- objects are being/have been dropped: admitted
                                                                -- binaries at or below it run SETTLED plans for
                                                                -- that window; set BEFORE the first drop; monotonic
 create table if not exists notes_app.tesl_schema_versions (    -- append-only lifecycle rows
   version int not null,
-  step text not null check (step in ('expanded', 'retired', 'contracted', 'repair')),  -- the COMPLETE enum
+  step text not null check (step in ('expanded', 'retired', 'contracting', 'contracted', 'repair')),  -- COMPLETE enum
   seq smallint not null default 0,                             -- repair amendments are numbered
   snapshot_hash text,                                          -- the schema module's hash (expanded rows only)
   artefact_hash text not null,                                 -- expanded: migration hash; contracted: contract hash;
@@ -4072,6 +4113,24 @@ alter function notes_app.tesl_admit(int) owner to tesl_control;
 revoke execute on function notes_app.tesl_admit(int) from public;
 grant execute on function notes_app.tesl_admit(int) to tesl_app, tesl_schema;
 
+create or replace function notes_app.tesl_heartbeat(v int, proto int, seen_floor int) returns void
+language plpgsql security definer set search_path = pg_catalog, notes_app, pg_temp as $$
+declare instance_id text := current_setting('application_name', true);
+begin
+  perform notes_app.tesl_admit(v);
+  if instance_id is null or instance_id !~ '^tesl-(app|exec):' then
+    raise exception 'tesl: application_name must carry a registered tesl instance id'; end if;
+  insert into notes_app.tesl_schema_instances(instance, version, protocol_level, last_seen, compat_floor_seen)
+    values (instance_id, v, proto, clock_timestamp(), seen_floor)
+  on conflict (instance) do update
+    set version = excluded.version, protocol_level = excluded.protocol_level,
+        last_seen = excluded.last_seen,
+        compat_floor_seen = greatest(tesl_schema_instances.compat_floor_seen, excluded.compat_floor_seen);
+end $$;
+alter function notes_app.tesl_heartbeat(int, int, int) owner to tesl_control;
+revoke execute on function notes_app.tesl_heartbeat(int, int, int) from public;
+grant execute on function notes_app.tesl_heartbeat(int, int, int) to tesl_app, tesl_schema;
+
 -- The lifecycle is a state machine, and the database enforces its edges (re-review, 2026-09-04: a recorder that
 -- validated only 'expanded' would have accepted a 'contracted' without expansion, a repair gap, or a 'retired' written
 -- outside tesl_advance_floor). Design: one PRIVATE core that owns the insert — it never leaves the transaction aborted
@@ -4113,7 +4172,8 @@ begin
   end if;
   perform tesl_lifecycle_core__(v, 'expanded', 0, snap, art, proto, dom, who);
   update tesl_schema_state                                             -- row and singleton in ONE statement's transaction
-     set current = v, min_version = case when min_version = 0 then v else min_version end
+     set current = v, min_version = case when min_version = 0 then v else min_version end,
+         installing_version = null
    where id = 1 and current < v;                                       -- idempotent on a retry that already moved it
 end $$;
 alter function notes_app.tesl_record_expanded(int, text, text, int, text, text) owner to tesl_control;
@@ -4130,6 +4190,8 @@ begin
     raise exception 'tesl: V% cannot be contracted before V% is retired', v, v - 1; end if;
   if (select compat_floor from tesl_schema_state where id = 1) < v then
     raise exception 'tesl: compat_floor must reach V% before its contract is recorded', v; end if;
+  if not exists (select 1 from tesl_schema_versions where version = v and step = 'contracting') then
+    raise exception 'tesl: V% never began contracting', v; end if;
   perform tesl_lifecycle_core__(v, 'contracted', 0, null, art, proto, dom, who);
 end $$;
 alter function notes_app.tesl_record_contracted(int, text, int, text, text) owner to tesl_control;
@@ -4153,6 +4215,21 @@ grant execute on function notes_app.tesl_record_repair(int, int, text, int, text
 -- Every illegal edge is a negative acceptance test: contracted before expanded, contracted before the predecessor's
 -- retirement, contracted before compat_floor, a repair gap, a repair of an unexpanded version, expanded out of order,
 -- expanded after retired, and a direct call to the core or a direct INSERT as tesl_schema (privilege refusal).
+
+create or replace function notes_app.tesl_begin_contract(v int, art text, proto int, dom text, who text)
+returns void language plpgsql security definer set search_path = pg_catalog, notes_app, pg_temp as $$
+declare st notes_app.tesl_schema_state%rowtype;
+begin
+  select * into st from notes_app.tesl_schema_state where id = 1 for update;
+  if st.current < v or not exists (select 1 from notes_app.tesl_schema_versions where version = v and step = 'expanded') then
+    raise exception 'tesl: V% is not expanded', v; end if;
+  if st.min_version < v then raise exception 'tesl: predecessor of V% is still admitted', v; end if;
+  perform notes_app.tesl_lifecycle_core__(v, 'contracting', 0, null, art, proto, dom, who);
+  update notes_app.tesl_schema_state set compat_floor = greatest(compat_floor, v) where id = 1;
+end $$;
+alter function notes_app.tesl_begin_contract(int, text, int, text, text) owner to tesl_control;
+revoke execute on function notes_app.tesl_begin_contract(int, text, int, text, text) from public;
+grant execute on function notes_app.tesl_begin_contract(int, text, int, text, text) to tesl_schema;
 
 -- tesl_advance_floor is the ONLY writer of min_version (the `tesl_advance_floor` transition of the prose). Every
 -- caller — destructive contract, additive slot retirement, close-epoch, apply-offline, any future recovery — calls it;
@@ -4218,6 +4295,8 @@ end $$;
 alter function notes_app.tesl_advance_floor(int, int, text, int, text, text) owner to tesl_control;
 revoke execute on function notes_app.tesl_advance_floor(int, int, text, int, text, text) from public;
 grant execute on function notes_app.tesl_advance_floor(int, int, text, int, text, text) to tesl_schema;
+-- HARNESS STEP assign_and_assert_control_owners: public.tesl_fence_namespaces and every tesl_schema_* relation →
+--   tesl_control; exact existing ownership/ACLs are verified before any seed write
 -- bootstrap seed, still inside the transaction that took the bootstrap lock and created the tables above:
 with u as (
   select gen_random_uuid() as database_uuid
@@ -4229,7 +4308,7 @@ insert into notes_app.tesl_schema_meta (id, format_version, database_uuid, max_o
   select 1, :format_version, database_uuid, :protocol_level, :protocol_level, fence_ns, :fence_domain
     from allocated
   on conflict (id) do nothing;                    -- the UUID is minted by the database, never by a client
-insert into notes_app.tesl_schema_state (id, min_version, current, compat_floor) values (1, 0, 0, 0)
+insert into notes_app.tesl_schema_state (id, min_version, current, installing_version, compat_floor) values (1, 0, 0, null, 0)
   on conflict do nothing;                         -- current = 0: NOTHING is expanded yet. min_version = 0: NO floor yet —
                                                   -- `tesl_admit` passes every version until the initial expansion below
                                                   -- sets both to :v in one statement. Seeding min_version = :v (the first
@@ -4239,20 +4318,23 @@ commit;
 
 -- initial expansion (fresh database): the ONLY transition out of current = 0, run under the session-level boot LOCK by
 -- whichever version holds it (the seed is version-neutral, so the seeder and the expander may differ):
--- HARNESS STEP install_schema(:v): every `create table if not exists` / `create unique index if not exists` of the
---   application schema at V<v>, each its own short transaction, idempotent — a crash anywhere here is redone by the
---   next lock holder and creates nothing twice
-select notes_app.tesl_record_expanded(:v, :snapshot_hash, :migration_hash, :protocol_level, :fence_domain, :holder);
+-- HARNESS STEP choose_install_version(:v): while current = 0, atomically set installing_version only when NULL and
+--   return its value. Every successor finishes that embedded version before expanding toward its own; the target never
+--   changes merely because a newer executor took over after partial DDL.
+-- HARNESS STEP install_schema(:installing_version): as tesl_schema, every `create table if not exists` / `create unique index if not
+--   exists` of the application schema at V<installing_version>, each its own short transaction; verify every resulting entity object is
+--   owned by tesl_schema. A crash anywhere here is redone by the next lock holder and creates nothing twice
+select notes_app.tesl_record_expanded(:installing_version, :snapshot_hash, :migration_hash, :protocol_level, :fence_domain, :holder);
 --   one statement, one transaction: inserts the (v, 'expanded') row AND sets current = v AND min_version = v (from 0), so
 --   the lifecycle row and the singleton are never observed disagreeing. Recovery is total: crash before it → the catalog
 --   has tables, the state says nothing is expanded, the next holder redoes install_schema (no-op) and records; crash after
 --   it → done; a second recorder gets the idempotent path inside the function (equal hashes) or the immutable-history
 --   error (different hashes).
--- Two versions racing the first bootstrap: both seed identical state; the lease admits one to install_schema; the other
+-- Two versions racing the first bootstrap: both seed identical state; the boot lock admits one to choose/install; the other
 -- re-reads. If the loser is LOWER (a V8 lost to a V9): current = 9, min_version = 9 > 8 → it is refused with "database
 -- initialised at V9 with no V8 history; deploy V9" — a deploy-order message, because a database born at V9 never
 -- admitted V8 and has no V8 lifecycle row to roll back to. If the loser is HIGHER (a V9 lost to a V8): it finds the
--- ordinary `V<n-1> expanded, min_version = n-1` row and expands V9 after the lease. The end state therefore depends on
+-- ordinary `V<n-1> expanded, min_version = n-1` row and expands V9 after the boot lock. The end state therefore depends on
 -- who wins; the acceptance test asserts each outcome, not "the same state" (the earlier criterion claimed that).
 select database_uuid, format_version, fence_ns, fence_domain from notes_app.tesl_schema_meta where id = 1;   -- what everyone then uses;
                                                   -- :fence_ns below is this value, never a constant
@@ -4261,7 +4343,9 @@ select database_uuid, format_version, fence_ns, fence_domain from notes_app.tesl
 -- names the shape of the tesl_schema_* tables; the runtime carries hand-written, tested upgrade
 -- steps k → k+1 (`ALTER TABLE tesl_schema_versions ADD COLUMN seq …`, adding `_tesl_v` with the
 -- current generation default to every entity table when online compatibility is first enabled in
--- phase 3, …), each one transaction, run by the short-lived installer under the boot lock before anything else;
+-- phase 3, …), run by the short-lived installer under the boot lock before anything else. Each
+-- catalog substep is transactional; a multi-table upgrade commits resumable progress and advances
+-- format_version only after its final catalog recheck;
 -- a binary whose maximum format is below the database's refuses to start; `CREATE TABLE IF NOT
 -- EXISTS` creates, it never upgrades — the same problem this whole feature exists to solve, and
 -- the control schema is not exempt from it. A worker that sees an older supported format stays
@@ -4335,7 +4419,8 @@ alter table notes_app.notes alter column "_tesl_v"    set default 3;     -- V7 i
 create table if not exists notes_app.tags ("id" text primary key, "noteId" text not null,
   "label" text not null, "_tesl_v" smallint not null default 1);
 
-create or replace function notes_app.tesl_mig_notes_g4() returns trigger as $$
+create or replace function notes_app.tesl_mig_notes_g4() returns trigger
+set search_path = pg_catalog, notes_app, pg_temp as $$
 begin
   if coalesce(nullif(current_setting('tesl.writer.notes', true), '')::int, 0) < 4
      and (new."content"  is distinct from old."content"
@@ -4457,7 +4542,7 @@ database notes_app   min_version 7   V8 expanded   instances: 6×V8, 0×V7 (last
   Session  gen 1     unchanged
   Tag      gen 1     new
   indexes  notes_ownerId_createdAt_idx_v8 VALID   tags_noteId_idx_v8 VALID
-  pending at V9 boot: retire V7, final pass Note, contract (2 columns, 1 index, 1 trigger)
+  pending until `contract V8`: retire V7, final pass Note, contract (2 columns, 1 index, 1 trigger)
 ```
 
 ### V9: retire, finish V8, expand the additive column
@@ -4485,8 +4570,11 @@ select notes_app.tesl_advance_floor(7, 8, :retirement_plan_hash, :protocol_level
   -- (7, 'retired') row via the private lifecycle core — all or nothing, and never a raw `update … min_version`
 commit;
 
--- step 6a: announce the plan switch BEFORE any drop (V8 binaries are still admitted and dual-writing)
-update notes_app.tesl_schema_state set compat_floor = 8 where id = 1 and compat_floor < 8;
+-- step 6a: on the dedicated coordinator connection, take every listed temporary object's DDL-job key EXCLUSIVELY in
+-- stable-id order, mark each job terminal, and hold those session locks through the final drop/record below. This waits
+-- out an active autocommit build and prevents a stale V8 worker from recreating an object after contract removes it.
+-- Then announce the plan switch BEFORE any drop (V8 binaries are still admitted and dual-writing):
+select notes_app.tesl_begin_contract(8, :contract_hash, :protocol_level, :fence_domain, :holder);
 -- HARNESS STEP wait_plan_switch(8): until every row of tesl_schema_instances with version <= 8 reports
 -- compat_floor_seen >= 8, or 2 poll intervals (30 s) have passed — a grace, not a guard; the retry table is the guard
 
@@ -4510,6 +4598,7 @@ alter table notes_app.notes drop column if exists "legacyRank";
 drop index concurrently if exists notes_app.notes_authorId_idx;              -- DDL connection, outside a transaction
 drop index concurrently if exists notes_app.notes_tesl_v_g4_idx;             -- the partial marker index; every row is at gen 4
 select notes_app.tesl_record_contracted(8, :contract_hash, :protocol_level, :fence_domain, :holder);
+-- HARNESS STEP release_ddl_job_locks: release only after `contracted` is durable
 
 -- step 7: expand V8 -> V9 (a later boot; waits for the row above) — the `Additive` entry is one metadata-only statement
 alter table notes_app.notes add column if not exists "archivedAt" bigint;          -- Maybe → NULL
@@ -4532,13 +4621,13 @@ simply part of the rules above; the list of what changed and why is in
 
 ## The downtime path
 
-Two changes are `OFFLINE` in v1: changing an entity's primary key, and `Reset`
+Two changes are `OFFLINE` through phase 4: changing an entity's primary key, and `Reset`
 (discard every row and recreate). `Reset` is offline by definition. A primary-key
 change is offline **by scope decision, not by necessity**: PostgreSQL can change a
 primary key without a full rebuild in many cases (new column, dual write, concurrent
 unique index, a brief constraint swap), but foreign keys, referenced data and the
 `onConflict`/upsert sites that name the key make the general decomposition
-complicated, and v1 does not attempt it. The compiler error below says exactly that
+complicated, and phases 1–4 do not attempt it. The compiler error below says exactly that
 and offers the new-entity alternative, which *is* decomposable today. Both cases are
 rare, and the design has to make the path through them as clear as the online one,
 because a user who hits it has nowhere else to go.
@@ -4557,7 +4646,7 @@ error[MIG007]: migration V7 -> V8 changes the primary key of `User` (id: String 
   entity: `User` (table "users", 2.4M rows)
 
   Tesl does not decompose a primary-key change into online expand/contract steps
-  (v1 scope). Done in one step, a V7 instance (which still inserts with `id`) and a
+  (phase-4 scope). Done in one step, a V7 instance (which still inserts with `id`) and a
   V8 instance cannot run against the same table — the two-version rule
   (`tesl help manual migrations#online`) is not satisfied, so this plan is OFFLINE.
 
@@ -4576,9 +4665,9 @@ error[MIG007]: migration V7 -> V8 changes the primary key of `User` (id: String 
     2. scale the V7 deployment to zero (or put the ingress in maintenance mode)
     3. run the built binary once, where the database is reachable (a Job or Helm pre-upgrade hook):
              ./app --schema apply-offline --wait-for-drain
-             (waits until it holds every admitted version's fence key exclusively — i.e.
-              no admitted transaction is in flight; idle connections may remain and
-              their next transaction is refused — then applies V8 in one transaction;
+             (revokes effective CONNECT from request/worker login generations, terminates
+              and waits out their backends, then holds every admitted version's fence
+              key exclusively and applies V8 in one transaction;
               est. 4–12 min for 2.4M rows — see the binary's `--schema dry-run`)
     4. deploy V8; scale up
     V8 instances refuse to start until step 3 has completed, and V7 instances
@@ -4603,12 +4692,11 @@ will usually take it.
   every other path uses, so it is subject to the same protocol check: a database that
   ran a pre-fence binary must have completed the activation ceremony first, or the
   offline apply refuses, because a pre-fence zombie takes none of the keys it is
-  waiting for. An in-flight V7 transaction blocks it rather than slipping past it, and a
-  V7 transaction that starts afterwards is refused by its own fence statement. Holding every key proves
-  there is no admitted **transaction** in flight, not that no connection exists: idle
-  V7 connections may well remain open, and that is fine. Without `--wait-for-drain` it
-  fails fast and prints how many transactions hold which key; with it, it blocks until
-  they finish. The heartbeat table is what the progress message is built from, not
+   waiting for. The barrier revokes effective `CONNECT`, terminates every matching
+  request/worker backend and polls until none remain before taking the fences; no idle
+  old connection is intentionally left behind. Without `--wait-for-drain` it fails fast
+  and prints the remaining backends/transactions; with it, it waits through termination
+  and transaction drain. The heartbeat table is what the progress message is built from, not
   what authorises the operation. There is no `--force`, because a forced offline
   migration under a live V7 is exactly the corruption the whole design exists to
   prevent.
@@ -4666,8 +4754,8 @@ acknowledgement in source, never a quick fix).
 
 | Code | Reported by | Condition | Primary span | Related | Action class |
 |---|---|---|---|---|---|
-| MIG001 | compiler (`--check`, LSP) | the `database` names a schema module newer than the last migration's `to:` and no migration file bridges them | the `database` declaration | the two schema modules | mechanical (not fix-all): run `tesl migrate generate` (editor: *Tesl: Change Schema*) |
-| MIG002 | compiler | migration entry missing / extra / `Unchanged` on a changed entity | the `migration` block or the entry | old + new entity decls | mechanical **only** for a generator-owned, unedited entry (add/remove it); **decision** when the entry was hand-edited — never deleted automatically |
+| MIG001 | compiler (`--check`, LSP) | `VCurrent` differs from the last migration target without a refreshed current migration, or a new revision started without first freezing the prior `VCurrent` | the `database` declaration / live schema edit | the frozen predecessor and `VCurrent` | mechanical (not fix-all): run `tesl migrate generate` (editor: *Tesl: Change Schema*) |
+| MIG002 | compiler | migration entry missing, or an extra entry for an unchanged entity | the `migration` block or the entry | old + new entity decls | mechanical **only** for a generator-owned, unedited entry (add/remove it); **decision** when the entry was hand-edited — never deleted automatically |
 | MIG003 | compiler | unresolved `todo` | the `todo` | the new field/proof that caused it, the `V7.User` fields available | decision (see below) |
 | MIG004 | compiler / generator | ambiguous rename (removed + added same type) | the new field | the removed field | suggested: `Rename a b`; alternative: separate add/drop |
 | MIG005 | compiler | removed field V7 still decodes, no `Legacy` | the removed field in the snapshot | the V7 declaration (V7 decodes every column it declares) | decision: `Legacy c v` / `LegacyWith f g` |
@@ -4679,7 +4767,7 @@ acknowledgement in source, never a quick fix).
 | MIG011 | compiler | new unique index over V7-written columns | the `unique index` | the V7 declaration of the indexed columns | decision: acknowledge `ROLL-WINDOW RISK` |
 | MIG012 | compiler | a required migration, repair or contract file (`V<n-1>`/`V<n>` and their amendments) or a stdlib slice is missing — the previous version's files may be absent only when `prune` removed them with evidence (a contract executed, or an additive version two versions past, in every environment) | the `database` decl | — | mechanical but **not fix-all eligible**: the message names the file to restore; the editor offers a command, never a silent VCS operation |
 | MIG013 | compiler (hash recorded in the next migration's header) **and** the boot gate (hash the database recorded) | a frozen schema module or migration file was edited after a later version was written | the edited declaration | the migration header that froze it | decision: revert the edit |
-| MIG016 | compiler / generator | a fact or type a column names changed between the two modules (no `Same` entry) and the entity is `Unchanged` or `Additive` | the entry | the two declarations, the changed check body | decision: accept the generated `Migrate` re-validation skeleton, or restore the declaration |
+| MIG016 | compiler / generator | a fact or type a column names changed between the two modules (no `Same` entry) and the entity is absent from the record or marked `Additive` | the entry or migration block | the two declarations, the changed check body | decision: accept the generated `Migrate` re-validation skeleton, or restore the declaration |
 | MIG018 | compiler | a pass-through column is not initialised by the exact projection `f: old.f` | the field initialiser | the two declarations of `f` | suggested: restore the projection; a real change is a new column |
 | MIG020 | compiler | `from:`/`to:` are not consecutive schema modules of the same family | the field | the two module headers | mechanical: fix the reference |
 | MIG021 | compiler | a `Migrate` row function's type is not `From.E -> Migrated To.E` for its entity | the function reference | the two entity declarations | suggested: fix the signature |
@@ -4720,8 +4808,8 @@ cascading type error on the record itself.
 `Offline "…"` are semantic choices about data; the editor may offer *Open
 migration plan* or *Insert acknowledgement…* behind an explicit confirmation dialog,
 but none of them appears in `source.fixAll`, and "make this field `Maybe`" is a
-suggestion, never auto-applied. Mechanical actions — generate a skeleton, add an
-`Unchanged` entry, copy a helper closure — are preferred quick fixes.
+suggestion, never auto-applied. Mechanical actions — generate a skeleton, remove a
+generator-owned redundant entry, copy a helper closure — are preferred quick fixes.
 
 ### LSP requirements
 
@@ -4810,7 +4898,7 @@ syntax looks familiar while behaving unlike a normal value, which reads as arbit
 ### VSCodium extension
 
 `editor/vscode-tesl/package.json` contributes no migration command today. Add:
-*Tesl: Change Schema* — creates the next revision (or freezes the previous one), bumps `database` where the layout needs it, then
+*Tesl: Change Schema* — freezes the previous `VCurrent`, starts or refreshes the next revision without changing the database import, then
 generates/refreshes the migration (with progress and cancellation, a preview of the
 files to be created or changed, opening `migrations/V<n>.tesl` afterwards with the
 cursor on the first `todo`, and a diagnostics refresh); CodeLens on a `migration`
@@ -4904,10 +4992,10 @@ normative.
 | SQL use of a new column | compile error in the introducing version unless physical and logical window values are identical or a specified marker-aware rewrite applies; `Maybe` alone is insufficient. "Prepare the unlock" generates the next version; that version waits for the final pass |
 | unique indexes | every new one gates readiness; over columns any admitted version writes = `ROLL-WINDOW RISK` and window-narrowing. `staging unique index [cols]` builds a non-unique preparatory index and exposes no uniqueness in V<n>; promotion in V<n+1> retires the predecessor, uses a per-key promotion guard, then builds the unique index. The broader reservation guard during the staging version is deferred to `staged-uniqueness-guard.md`; duplicates already created are reported and block promotion |
 | nontransactional DDL | the worker's dedicated DDL connection holding a session-level shared fence (trusted direct DSN); version-suffixed object names; retirement waits out `pg_stat_progress_create_index` |
-| who does the work | `topology: Worker` (default; roles `tesl_app` / `tesl_schema`, `--schema grants`) or `Embedded` (one process, one role, same guards); lease fencing tokens prevent stale transactional job commits, while schema-version fences guard compatibility; lock order boot → fences ascending → job leases; the control schema has its own `format_version` and upgrade protocol |
+| who does the work | `topology: Worker` (default; separate `tesl_app` / `tesl_schema` logins) or `Embedded` (one process and one combined long-lived login); both retain the no-login `tesl_control` owner, and production setup/upgrades use a short-lived installer. Local dev/CI may run the same installer path through a setup-capable local role. Lease fencing tokens prevent stale transactional job commits, while schema-version fences guard compatibility; lock order boot → fences ascending → job leases; the control schema has its own `format_version` and upgrade protocol |
 | concurrent boots | the **session-level boot lock** on the DDL connection serialises expand (the lease row is observability); every step idempotent as defence in depth; waiting instances not ready |
 | queues, caches, outboxes | phase 2 adds `schema_version`, admitted-epoch claims, immutable job-shape checking, `claim_seq`, typed dead letters, closure-hashed cache keys and the runtime-table format protocol. Transforming payloads through `jobs:` / `IgnoreOld` are **not delivered by phase 4**; they remain the dependent `queue-payload-migrations.md` item |
-| topology (PostgreSQL) | one logical primary; HA failover survives every guard; async replicas give lagged retirement for reads; sharding a non-goal; built-ins only, on the PostgreSQL majors **supported upstream at release time** (14–18 today; the floor is 14 — `CREATE OR REPLACE TRIGGER` — and unsupported majors get no CI and no promise) |
+| topology (PostgreSQL) | one logical primary; HA failover survives every guard; read-replica routing is unsupported until schema-replay and primary-admission gates exist; sharding a non-goal; built-ins only, on the PostgreSQL majors **supported upstream at release time** (14–18 today; floor 14) |
 | commands | compiler: `tesl migrate generate|rebase|repair|contract|prune [--database D]`; binary: `app --schema <verb> [--database D]` with verbs `status`, `dry-run`, `contract V<n>`, `worker`, `grants`, `quarantine (list|export|delete)`, `backfill (pause|resume)`, `activate-protocol (plan|verify <nonce>)`, `close-epoch --through V<n>`, `index-wait`, `deploy-recipe`, `apply-offline`, `catch-up`, `await contractable`, `adopt`, `reidentify`; editor: *Tesl: Change Schema* over a non-mutating manifest with preview |
 
 ## Product layers, defaults, and what ships first
@@ -4919,7 +5007,7 @@ coordinator, a historical linker and a multi-file editor workflow — and phase 
 carrying most of the control plane to ship an additive column. The core that is
 Tesl-specific and worth building first is smaller: versioned schema modules, a
 compiler-generated diff and compatibility classification, typed row functions with
-proofs, a reviewable plan, and generated compatibility tests. Everything else is
+proofs, a reviewable plan, and generated compatibility tests. This overall core is
 layered on that, each layer useful without the next:
 
 | layer | what it is | ships in |
@@ -4928,7 +5016,7 @@ layered on that, each layer useful without the next:
 | 2. Typed transformation | `Migrate`/`Derived`, `Rename`/`Retype`/`Legacy`/`WriteBack`/`Revalidate`, row functions over `establish`, sealed facts, `Same`, frozen stdlib slices, `fixtures:`, `todo`, MIG003–MIG010, MIG017–MIG019, MIG021–MIG023, MIG025–MIG027, generated compatibility and support modules, `--schema dry-run` | phase 3 |
 | 3. Migration executor | the control schema, expand DDL with `lock_timeout`, `CREATE INDEX CONCURRENTLY` with single ownership, catalog verification, `--schema status`/`adopt`/`contract`, the schema worker and the privilege model, the OFFLINE path | phase 1 (additive, Embedded), phase 2 (worker, indexes, runtime tables), phase 4 (contract, offline) |
 | 4. Online compatibility | `_tesl_v` generations, invalidation triggers, dual writes, read-modify-write, marker-aware SQL rewrites, lazy reads, batched conditional backfill | phase 3 |
-| 5. Deployment coordination | **mechanism** — the write fence, read admission, protocol level, pooler compatibility suite — ships dormant in **phase 1** as the safety kernel; **use** — `min_version` retirement, `contract: WhenDrained | NextVersion`, the activation ceremony, prune — ships in phase 4 | phase 1 (kernel), phase 4 (retirement) |
+| 5. Deployment coordination | **mechanism** — write fence, read admission, protocol level, pooler suite — ships dormant in phase 1; **use** begins with slot retirement/epoch closure in phase 3, then destructive contract automation and prune in phase 4 | phase 1 (kernel), phases 3–4 (use) |
 
 **Defaults, decided as product choices rather than assumed.** One of them is about
 what phase 1 *is*. Two coherent strategies existed: (A) admission is a permanent
@@ -4937,7 +5025,8 @@ dormant only in that nothing is ever retired yet; (B) phase 1 is genuinely
 lightweight, and enabling coordination later requires the one-time activation ceremony
 for every database. **Strategy A is chosen** (2026-09-03): the kernel's cost is one
 shared advisory lock plus one raising statement per write transaction and one
-statement per read transaction, pipelined, measured in phase 1 against the reference
+statement per read transaction, pipelined for static shapes and paid as an initial
+round trip for data-dependent transactions, measured in phase 1 against the reference
 workload; the cost of B is a second protocol epoch that every database has to be
 walked through with a role-generation ceremony, forever. So layer 5's *mechanism* is
 phase 1 and only its *use* — retirement — is phase 3/4; the earlier claim that ordinary
@@ -5025,24 +5114,28 @@ happens without an explicit, reviewed step:
   services.** Request processes run as a role with entity DML and read-only control
   access; DDL, control-state transitions, backfill and index builds run in `--schema
   worker` under the DDL-owning role. `PostgresConfig { topology: Embedded }` lets a
-  one-process service with one credential expand at boot itself: every correctness
+  one-process service with one long-lived login credential expand at boot itself; the
+  no-login control owner and short-lived installer still exist: every correctness
   guard is unchanged, only the least-privilege isolation is given up, and the boot log
   says so in one line. A service with no Kubernetes and no long-running worker facility
   should not need one to add a column. Development is `Embedded` by default.
 
-**Privilege model.** Two PostgreSQL roles, created by the operator (the compiler emits
+**Privilege model.** Three persistent role classes plus one short-lived administrative
+identity, created by the operator (the compiler emits
 the grant script with `--schema grants`):
 
 | role | may | may not |
 |---|---|---|
 | `tesl_app` (request processes) | `SELECT/INSERT/UPDATE/DELETE` on entity tables; read-only control views; `EXECUTE` on `tesl_admit` and a narrow heartbeat function that derives `instance` from the connection's registered `application_name`; `set_config('tesl.writer.*')`; advisory locks | direct control-table DML, including `tesl_schema_instances`; DDL; boot lease; `min_version` |
-| `tesl_control` (NOLOGIN) | owns the control schema, control tables and hardened `SECURITY DEFINER` transition functions (`tesl_admit`, lifecycle recorders, `tesl_advance_floor`); no login role is a member, so nobody can `SET ROLE` to bypass the API | login, entity DML, application-schema DDL |
-| `tesl_schema` (worker) | everything `tesl_app` may, plus DDL on Tesl-owned entity objects, ownership of `tesl_mig_*` functions/triggers, narrow DML on progress/lease tables, and `EXECUTE` on validated lifecycle transitions; statistics access through a narrow monitoring function or explicit `pg_monitor` grant | direct lifecycle/floor writes; ownership or membership of `tesl_control`; role administration; terminating another login role |
-| short-lived installer/barrier identity | creates or upgrades control objects as owner `tesl_control`; for catch-up/offline, revokes and restores effective `CONNECT` ACLs and terminates request/worker login generations | long-running worker or request service |
+| `tesl_control` (NOLOGIN) | owns the global fence registry, application-schema namespace, control tables and hardened `SECURITY DEFINER` transition functions (`tesl_admit`, lifecycle recorders, `tesl_advance_floor`); no **long-lived** login role is a member, so a service cannot `SET ROLE` to bypass the API; exposed functions contain no entity-DDL path | login, entity DML through the exposed API |
+| `tesl_schema` (worker) | has `USAGE, CREATE` on the application schema and owns every Tesl-managed entity table (PostgreSQL has no separately grantable `ALTER TABLE` privilege); everything `tesl_app` may, plus entity DDL, ownership of `tesl_mig_*` functions/triggers, narrow DML on progress/lease tables, and `EXECUTE` on validated lifecycle transitions; statistics access through a narrow monitoring function or explicit `pg_monitor` grant | direct lifecycle/floor writes; ownership or steady-state membership of `tesl_control`; role administration; terminating another login role |
+| short-lived installer/barrier identity | receives operator-controlled, temporary membership in `tesl_control` while creating or upgrading control objects and temporary membership in `tesl_schema` while adopting, catching up or applying offline entity DDL/data changes; for catch-up/offline, also receives the database-level authority needed to revoke and restore effective `CONNECT` ACLs and terminate request/worker login generations; every temporary membership is revoked afterward | long-running worker or request service; retained membership in either owner role |
 
 Trigger functions are `SECURITY INVOKER` with a fixed `search_path`; control objects
-are owned by `tesl_control`, every new transition function revokes `PUBLIC` execution
-in its creation transaction, and `tesl_schema` receives only the grants listed above.
+are owned by `tesl_control`, entity objects by `tesl_schema`, every new transition
+function revokes `PUBLIC` execution in its creation transaction, and `tesl_schema`
+receives only the listed control-object grants. Installer membership is absent in steady
+state and its grant/revoke is part of the audited installation or control-upgrade step.
 The worker invokes `tesl_advance_floor`; it cannot update `min_version` directly.
 Catch-up/offline therefore use the short-lived barrier identity or external platform
 evidence, never ambient worker privilege. Where the worker role is absent from request pods by design,
@@ -5075,7 +5168,8 @@ independent exit gate; dependent roadmap items are not silently counted as deliv
    the diff and classification, the plan header, the sparse `Migration` record with
    `Additive`/`New`/`Drop`, the control schema and its format version, additive expand
    DDL with `lock_timeout`, catalog verification, **`topology: Embedded` only**
-   (development and small production), `app --schema status|adopt`, `tesl migrate
+   (development and small production), the no-login control owner plus one-time
+   installer path, `app --schema status|adopt`, `tesl migrate
    generate` with the non-mutating manifest, the versioned diagnostic protocol, the
    *Tesl: Change Schema* command with preview, dirty-buffer policy and cross-file
    diagnostics, the missing `tesl test` CLI route needed to run generated compatibility
@@ -5142,7 +5236,9 @@ independent exit gate; dependent roadmap items are not silently counted as deliv
    so no ceremony is needed for versions born in phase 1.
 2. **Production hardening.** `topology: Worker` with the two roles and `--schema
    grants|worker|deploy-recipe`, `CREATE INDEX CONCURRENTLY` with single-builder
-   ownership and the unique-index readiness gate, the session-fenced DDL connection,
+   ownership and the unique-index readiness gate, restricted here to plain indexes and
+   epoch-preserving unique indexes over newly added nullable/default-free columns;
+   window-narrowing unique-index execution waits for phase 3's epoch closure. Also the session-fenced DDL connection,
    runtime-owned tables under the format protocol, frozen and diffed job-type history in
    the schema module with `Same` plus MIG028, the `schema_version` claim predicate
    and typed dead letters on `tesl_jobs`/outboxes, `claim_seq` attempt tokens with lease
@@ -5154,7 +5250,8 @@ independent exit gate; dependent roadmap items are not silently counted as deliv
    `jobs:`, `IgnoreOld`, transforming job migrations — the dependent item.
 3. **Typed transformation and online compatibility.** `Migrate`/`Derived` and every
    `Rule` (`Rename`, `Retype` with `@column` and MIG027, `Legacy`, `WriteBack`,
-   `Revalidate`), `establish`-based row proofs, sealed facts, `Same`, frozen stdlib slices under the
+   `Revalidate`), `establish`-based row proofs, sealed facts, row-migration use of the
+   phase-1 `Same` closure, frozen stdlib slices under the
    execution ABI, `fixtures:`, `todo`, `_tesl_v` (added by adopt/expand as a format
    upgrade), invalidation triggers, dual writes, read-modify-write and partial-upsert
    rewriting, marker-aware SQL rewrites, lazy reads, batched conditional backfill, the
@@ -5226,15 +5323,13 @@ throwaway first protocol. Remaining reopened items below gate only their stated 
   `Embedded` is an explicit option.** Under `Worker`, `tesl_app` has no DDL authority
   and the worker is the only executor; the DDL connection's session affinity is the
   worker's single direct DSN, a trusted deployment requirement. Under `Embedded` one
-  process and one role do everything with every guard intact and reduced isolation,
-  stated in the boot log. Development is `Embedded`.
-- **Admission mechanism: transaction-scoped advisory fence (current) versus the
-  server-side write-fence trigger (§13 alternative).** The trigger is a candidate only
-  once it carries a separate trusted program-version GUC (`tesl.version`) checked
-  against `min_version` and the pre-final-pass barrier; with those in its design,
-  benchmark both on the write path at target throughput and pick the lower p99 cost —
-  the trigger wins on moving parts, the lock wins on keeping PL/pgSQL off every table.
-  Correctness first, then performance.
+  process and one long-lived login combine request and worker privileges with every
+  guard intact and reduced isolation, stated in the boot log; the no-login control
+  owner and short-lived installer remain separate. Development is `Embedded`.
+- **Admission mechanism — DECIDED (critical review, 2026-09-04): transaction-scoped
+  advisory fence.** The server-side trigger candidate cannot atomically order old-writer
+  exclusion, rejecting-row validation and retirement (§13). Benchmark the selected
+  fence against its phase-1 budgets; do not substitute the invalid trigger on speed.
 - **`_tesl_v` permanent versus per-migration marker.** Leaning permanent (two bytes a
   row; dropped columns leave `pg_attribute` tombstones against the 1600-column limit).
   Foundational: decide before any table is created with it.
@@ -5360,10 +5455,10 @@ throwaway first protocol. Remaining reopened items below gate only their stated 
   contract, then resuming to update a surviving source column. Every current Tesl
   database is pre-fence, so every operator pays a role-generation rotation, a DBA job and
   a redeploy with new credentials once, for that scenario. Fail-closed, consistent, and
-  disproportionate; the maintainer's call. If the phase-1 recommendation above is taken
-  (no fence until phase 3), the ceremony is needed by every database anyway and its cost
-  should be weighed against a **time-based** attestation (no pre-fence heartbeat for N
-  days, recorded as `evidence_kind = 'age'`), which this document currently rejects.
+  disproportionate but required for databases that predate phase 1. Databases created or
+  upgraded after phase 1 already run the permanent fence and need no later ceremony.
+  A **time-based** attestation (no pre-fence heartbeat for N days, recorded as
+  `evidence_kind = 'age'`) remains rejected because silence cannot fence a paused process.
 - **`where` over-approximation for Go-computed columns — decide before phase 3.** See
   §6 invariant 3's proposed row: it removes the otherwise-empty release for "filter on a
   new column" at the cost of fetching unmigrated rows, and is exact after the Go filter.
@@ -5409,7 +5504,7 @@ throwaway first protocol. Remaining reopened items below gate only their stated 
   identity column (`attidentity`), row-level-security policy, or partitioning, or a
   type/nullability/**collation** difference on a declared column is *behaviour-affecting* and the binary refuses to
   become ready with the object named. `--schema adopt` may accept supported drift but
-  refuses partitioned Tesl-owned entities in v1; `@external` excludes an object from
+  refuses partitioned Tesl-owned entities through phase 4; `@external` excludes an object from
   migration ownership and guarantees. Readiness compares a
   canonical fingerprint of the behaviour-affecting catalog built from **semantic
   catalog columns** (`pg_attribute` type/notnull/generated/`attcollation`/`attidentity`,
@@ -5455,8 +5550,12 @@ throwaway first protocol. Remaining reopened items below gate only their stated 
   heartbeat state only through the narrow function; `PUBLIC` cannot execute any
   transition, `tesl_schema` cannot directly insert lifecycle rows or update the floor,
   and a `pg_temp` shadow object cannot capture a `SECURITY DEFINER` lookup. The worker
-  performs entity DDL through its narrow grants; only the short-lived installer owns or
-  upgrades control objects.
+  performs entity DDL as owner of each entity object but cannot alter control objects;
+  only the short-lived installer owns or upgrades those through temporary
+  `tesl_control` membership.
+- (Phase 1) a pre-created `public.tesl_fence_namespaces` lookalike, wrong owner, changed
+  constraint or writable grant is refused; concurrent schema families receive distinct
+  `fence_ns` values and do not block each other's version keys.
 - (Phase 3) **crash-resumable backfill on a large table**: a 100 M-row fixture (nightly
   tier; 10 M in PR CI), the executor killed at every failpoint — mid-batch, after a
   batch commit, before and after the shard cursor write, during lease renewal, during
@@ -5570,19 +5669,18 @@ throwaway first protocol. Remaining reopened items below gate only their stated 
 - (Phase 4) crash after `ADD CONSTRAINT … NOT VALID` and before `VALIDATE`: the rerun
   skips the add, validates, and completes.
 - (Phase 1) concurrent **V8 and V9** first bootstrap of an empty database: exactly one
-  seeds; `current` and `min_version` are 0 until the initial `tesl_record_expanded(v,
-  'expanded')`, which sets both in one statement; if V8 installs first, V9 then expands
-  normally; if V9 installs first, V8 is refused with the deploy-order message — both
-  outcomes asserted, and both leave one `expanded` row and a consistent singleton.
+  target is persisted in `installing_version`; `current` and `min_version` are 0 until
+  that target's `tesl_record_expanded`, which sets both in one statement. If V8 wins,
+  V9 finishes/observes V8 then expands normally (two `expanded` rows); if V9 wins, V8 is
+  refused (one row). Both outcomes leave a consistent singleton and immutable history.
 - (Phase 1) crash after the bootstrap seed and before the initial expansion, at every
   failpoint of `install_schema`: the next lock holder completes it; the catalog, the
   lifecycle rows and the singleton agree afterwards; no table is created twice.
 - (Phase 1) a V8 executor **paused beyond the lease expiry** halfway through
   `install_schema` while a V9 executor arrives: V9 blocks on the session-level boot lock
   (it does not take over on the expired lease row), the V8 resumes and completes at V8,
-  V9 then expands V8 → V9; the same with V8's connection killed instead of paused: the lock
-  vanishes, V9 completes the install — at **V9's** shape, since `install_schema` verifies
-  every existing table against its own module before recording — and records V9.
+  V9 then expands V8 → V9; with V8's connection killed instead, the lock vanishes but
+  `installing_version` remains V8, so V9 completes and records V8 before expanding V9.
 - (Phase 1) a **genuinely empty database** — no `notes_app` namespace, fixture setup
   creates nothing — bootstraps to a ready V<n>; a namespace owned by another role is
   refused with the owner named.
@@ -5645,7 +5743,9 @@ throwaway first protocol. Remaining reopened items below gate only their stated 
   suite defines rather than assumes: PostgreSQL 16 on a stated instance size; direct
   connections and each supported pooler mode; a stated transaction rate with a stated
   concurrency; one read and one write per transaction and a 10-statement mixed
-  transaction; local and 1 ms network latency; one and ten tables under migration; hot
+  transaction; both static-pipeline and data-dependent write bodies (the latter includes
+  the initial fence/admit round trip); local and 1 ms network latency; one and ten tables
+  under migration; hot
   and cold cache; with and without a concurrent backfill and a concurrent index build;
   with a streaming replica; and the lock-manager saturation point for the shared fence
   key, found by ramping). `admission: Strict`
@@ -5680,7 +5780,8 @@ throwaway first protocol. Remaining reopened items below gate only their stated 
   does not compile, the Memory backend does not enforce uniqueness, and the entity type
   carries no promise; the non-unique preparatory index is built and the outstanding
   obligation/MIG030 cases are tracked. (Phase 4) V9's promotion does not start the build while V7 is admitted,
-  starts it once V7 is retired, and V9 is unready until the index is `VALID`; duplicates
+  starts it once V8 is retired, and V9 remains ready under its per-key guard while V10
+  is unready until the index is `VALID`; duplicates
   V8 created in the window make the build fail, the keys appear in `--schema status` with
   state `blocked_duplicates`, and the build succeeds once they are resolved; an
   abandoned stage is reported outstanding; a deleted `staging` line is a decision-class
