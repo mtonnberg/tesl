@@ -42,6 +42,16 @@ func TestSubjectKeyIsInjectiveAcrossIssuers(t *testing.T) {
 	}
 }
 
+func TestSsoSubjectReturnsIssuerScopedKey(t *testing.T) {
+	identity := SsoIdentity{
+		Key:     ssoSubjectKey("https://issuer.example", "42"),
+		Subject: "42",
+	}
+	if got := SsoSubject(identity); got != identity.Key {
+		t.Errorf("SsoSubject: got %q, want issuer-scoped key %q", got, identity.Key)
+	}
+}
+
 // "verified" is reachable ONLY with a positive signal AND an address: a provider that emits
 // no email_verified can never produce one.
 func TestEmailClaimNeedsAPositiveSignal(t *testing.T) {
