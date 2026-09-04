@@ -178,7 +178,7 @@ func (server *Server) handle(ctx context.Context, request protocol.Request, writ
 	case "textDocument/didSave":
 		return -1, server.didSave(ctx, request.Params, writer)
 	case "textDocument/didClose":
-		return -1, server.didClose(request.Params, writer)
+		return -1, server.didClose(ctx, request.Params, writer)
 	case "textDocument/hover":
 		if len(request.ID) == 0 {
 			return -1, nil
@@ -464,7 +464,20 @@ func (server *Server) didOpen(ctx context.Context, raw json.RawMessage, writer *
 	server.documents[params.TextDocument.URI] = document{
 		URI: params.TextDocument.URI, Path: path, Version: params.TextDocument.Version, Text: params.TextDocument.Text,
 	}
-	return server.publishDiagnostics(ctx, server.documents[params.TextDocument.URI], writer)
+	if err := server.publishDiagnostics(ctx, server.documents[params.TextDocument.URI], writer); err != nil {
+		return err
+	}
+	uris := make([]string, 0, len(server.documents)-1)
+	for uri := range server.documents {
+		if uri != params.TextDocument.URI {
+			uris = append(uris, uri)
+		}
+	}
+	sort.Strings(uris)
+	for _, uri := range uris {
+		server.scheduleDiagnostics(ctx, server.documents[uri], writer)
+	}
+	return nil
 }
 
 func (server *Server) didChange(ctx context.Context, raw json.RawMessage, writer *protocol.Writer) error {
@@ -524,24 +537,27 @@ func (server *Server) didChangeWatchedFiles(ctx context.Context, raw json.RawMes
 	return nil
 }
 
-func (server *Server) didClose(raw json.RawMessage, writer *protocol.Writer) error {
+func (server *Server) didClose(ctx context.Context, raw json.RawMessage, writer *protocol.Writer) error {
 	var params closeParams
 	if err := json.Unmarshal(raw, &params); err != nil || params.TextDocument.URI == "" {
 		return errors.New("textDocument/didClose: invalid params")
 	}
 	lock := server.diagnosticLock(params.TextDocument.URI)
 	lock.Lock()
-	defer func() {
-		server.diagnosticLocksMu.Lock()
-		if server.diagnosticLocks[params.TextDocument.URI] == lock {
-			delete(server.diagnosticLocks, params.TextDocument.URI)
-		}
-		server.diagnosticLocksMu.Unlock()
-		lock.Unlock()
-	}()
 	delete(server.documents, params.TextDocument.URI)
 	server.cancelDiagnostics(params.TextDocument.URI)
-	return server.publishDiagnosticGroups(params.TextDocument.URI, nil, writer)
+	err := server.publishDiagnosticGroups(params.TextDocument.URI, nil, writer)
+	server.diagnosticLocksMu.Lock()
+	if server.diagnosticLocks[params.TextDocument.URI] == lock {
+		delete(server.diagnosticLocks, params.TextDocument.URI)
+	}
+	server.diagnosticLocksMu.Unlock()
+	lock.Unlock()
+	if err != nil {
+		return err
+	}
+	server.scheduleAllDiagnostics(ctx, writer)
+	return nil
 }
 
 func (server *Server) scheduleDiagnostics(ctx context.Context, doc document, writer *protocol.Writer) {

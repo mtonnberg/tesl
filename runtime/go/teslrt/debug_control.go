@@ -32,6 +32,7 @@ const (
 	debugHandshakeTimeout = 5 * time.Second
 	debugWriteTimeout     = time.Second
 	debugMaxPendingTCP    = 16
+	debugMaxClients       = 16
 	debugMaxUnixPathBytes = 100
 )
 
@@ -106,6 +107,7 @@ type DebugControlServer struct {
 	handshakeTimeout time.Duration
 	writeTimeout     time.Duration
 	maxPendingTCP    int
+	maxClients       int
 	// files are the discovery files (port/token) this server wrote and removes on Close.
 	files []string
 }
@@ -329,6 +331,7 @@ func newDebugControlServer(debugger *Debugger, listener net.Listener, path, toke
 		handshakeTimeout: debugHandshakeTimeout,
 		writeTimeout:     debugWriteTimeout,
 		maxPendingTCP:    debugMaxPendingTCP,
+		maxClients:       debugMaxClients,
 	}
 	// The debugger is attached per authenticated client (see admit/release), not
 	// here: an endpoint with no client must behave exactly like a release build.
@@ -377,24 +380,28 @@ func (server *DebugControlServer) acceptLoop() {
 }
 
 // admit promotes a connection to an authenticated client. The first client
-// attaches the debugger; later ones share the session.
-func (server *DebugControlServer) admit(connection net.Conn) {
+// attaches the debugger; later ones share the session up to the hard client cap.
+func (server *DebugControlServer) admit(connection net.Conn) bool {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
 	delete(server.pending, connection)
 	select {
 	case <-server.done:
 		// A handshake racing Close must not re-attach the debugger to a dead endpoint.
-		return
+		return false
 	default:
 	}
 	if _, already := server.clients[connection]; already {
-		return
+		return true
+	}
+	if len(server.clients) >= server.maxClients {
+		return false
 	}
 	if len(server.clients) == 0 {
 		server.debugger.Attach(server.broadcast)
 	}
 	server.clients[connection] = struct{}{}
+	return true
 }
 
 // release forgets a connection. Only the LAST authenticated client leaving
@@ -460,7 +467,9 @@ func (server *DebugControlServer) handleConnection(connection net.Conn) {
 	// handshake carrying the token.
 	authenticated := server.token == ""
 	if authenticated {
-		server.admit(connection)
+		if !server.admit(connection) {
+			return
+		}
 	} else {
 		server.mutex.Lock()
 		handshakeTimeout := server.handshakeTimeout
@@ -487,7 +496,9 @@ func (server *DebugControlServer) handleConnection(connection net.Conn) {
 				return
 			}
 			authenticated = true
-			server.admit(connection)
+			if !server.admit(connection) {
+				return
+			}
 			if err := connection.SetReadDeadline(time.Time{}); err != nil {
 				return
 			}

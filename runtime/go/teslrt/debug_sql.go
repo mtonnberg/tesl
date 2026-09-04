@@ -26,6 +26,8 @@ func DebugPgSql(plan PgPlan) PgPlan {
 			return arguments
 		},
 	}
+	// Plan executors defer Capture before entering the driver. LoadAndDelete therefore
+	// consumes the mapping once on success or panic; a failed operation keeps row count zero.
 	wrapped.Capture = func(rowCount int) {
 		execution := debugExecutionID()
 		if captureID, present := captures.LoadAndDelete(execution); present {

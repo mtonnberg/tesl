@@ -1056,7 +1056,7 @@ func TestDidCloseCannotBeOvertakenByDiagnosticPublication(t *testing.T) {
 	}
 	closed := make(chan error, 1)
 	go func() {
-		closed <- server.didClose(json.RawMessage(`{"textDocument":{"uri":"file:///tmp/close-race.tesl"}}`), writer)
+		closed <- server.didClose(context.Background(), json.RawMessage(`{"textDocument":{"uri":"file:///tmp/close-race.tesl"}}`), writer)
 	}()
 	select {
 	case err := <-closed:
@@ -1146,6 +1146,67 @@ func TestBuiltCompilerUsesUnsavedDependencyOverlays(t *testing.T) {
 		if len(diagnostics) != 0 {
 			t.Fatalf("fixed unsaved dependency left importer diagnostics for %s: %#v", uri, diagnostics)
 		}
+	}
+}
+
+func TestBuiltCompilerOpenAndCloseDependencyRechecksImporter(t *testing.T) {
+	_, testFile, _, _ := runtime.Caller(0)
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(testFile), "../../../.."))
+	compilerPath := filepath.Join(repoRoot, "compiler", "_build", "default", "bin", "main.exe")
+	if _, err := os.Stat(compilerPath); err != nil {
+		t.Skip("compiler build unavailable")
+	}
+	project := t.TempDir()
+	mainPath := filepath.Join(project, "A.tesl")
+	dependencyPath := filepath.Join(project, "B.tesl")
+	mainSource := "module A exposing [use]\nimport Tesl.Prelude exposing [Int]\nimport B exposing [value]\nfn use() -> Int = value()\n"
+	diskDependency := "module B exposing [value]\nimport Tesl.Prelude exposing [String]\nfn value() -> String = \"bad\"\n"
+	openDependency := "module B exposing [value]\nimport Tesl.Prelude exposing [Int]\nfn value() -> Int = 1\n"
+	if err := os.WriteFile(mainPath, []byte(mainSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dependencyPath, []byte(diskDependency), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mainURI := protocol.PathToURI(mainPath)
+	dependencyURI := protocol.PathToURI(dependencyPath)
+	client := tooling.Client{Executable: compilerPath, Environment: append(os.Environ(), "TESL_REPO_ROOT="+repoRoot)}
+	server := NewServer(client)
+	var output bytes.Buffer
+	writer := protocol.NewWriter(&output)
+	ownedCount := func() int {
+		count := 0
+		for _, diagnostics := range server.diagnosticSets[mainURI] {
+			count += len(diagnostics)
+		}
+		return count
+	}
+
+	openMain := fmt.Sprintf(`{"textDocument":{"uri":%q,"version":1,"text":%q}}`, mainURI, mainSource)
+	if err := server.didOpen(context.Background(), json.RawMessage(openMain), writer); err != nil {
+		t.Fatal(err)
+	}
+	server.waitDiagnostics()
+	if count := ownedCount(); count == 0 {
+		t.Fatalf("disk dependency did not produce importer diagnostics: %#v", server.diagnosticSets[mainURI])
+	}
+
+	openDependencyParams := fmt.Sprintf(`{"textDocument":{"uri":%q,"version":1,"text":%q}}`, dependencyURI, openDependency)
+	if err := server.didOpen(context.Background(), json.RawMessage(openDependencyParams), writer); err != nil {
+		t.Fatal(err)
+	}
+	server.waitDiagnostics()
+	if count := ownedCount(); count != 0 {
+		t.Fatalf("opening fixed unsaved dependency left %d importer diagnostics: %#v", count, server.diagnosticSets[mainURI])
+	}
+
+	closeDependency := fmt.Sprintf(`{"textDocument":{"uri":%q}}`, dependencyURI)
+	if err := server.didClose(context.Background(), json.RawMessage(closeDependency), writer); err != nil {
+		t.Fatal(err)
+	}
+	server.waitDiagnostics()
+	if count := ownedCount(); count == 0 {
+		t.Fatalf("closing dependency did not restore importer diagnostics from disk: %#v", server.diagnosticSets[mainURI])
 	}
 }
 

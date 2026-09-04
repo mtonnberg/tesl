@@ -108,6 +108,23 @@ func heldFor(done <-chan struct{}, wait time.Duration) bool {
 	}
 }
 
+func waitForDebugClientCount(t *testing.T, server *DebugControlServer, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		server.mutex.Lock()
+		count := len(server.clients)
+		server.mutex.Unlock()
+		if count == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("authenticated clients = %d, want %d", count, want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestDebugControlTCPRefusesCommandsBeforeHandshake(t *testing.T) {
 	debugger := NewDebugger()
 	server, err := debugger.StartDebugControlTCP(0)
@@ -357,6 +374,68 @@ func TestDebugControlTCPBoundsSilentHandshakesAndPendingConnections(t *testing.T
 	} else if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
 		t.Fatalf("server did not enforce its handshake deadline: %v", err)
 	}
+}
+
+func TestDebugControlTCPBoundsAuthenticatedClients(t *testing.T) {
+	server, err := NewDebugger().StartDebugControlTCP(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = server.Close() }()
+	server.mutex.Lock()
+	server.maxClients = 2
+	server.mutex.Unlock()
+
+	first := dialControl(t, "tcp4", server.Endpoint())
+	first.mustSend(DebugControlRequest{ID: "1", Command: "handshake", Token: server.Token()})
+	second := dialControl(t, "tcp4", server.Endpoint())
+	second.mustSend(DebugControlRequest{ID: "1", Command: "handshake", Token: server.Token()})
+	waitForDebugClientCount(t, server, 2)
+
+	excess := dialControl(t, "tcp4", server.Endpoint())
+	if response, err := excess.send(DebugControlRequest{ID: "1", Command: "handshake", Token: server.Token()}); err == nil {
+		t.Fatalf("excess TCP client was accepted: %v", response)
+	}
+	waitForDebugClientCount(t, server, 2)
+
+	_ = first.conn.Close()
+	waitForDebugClientCount(t, server, 1)
+	replacement := dialControl(t, "tcp4", server.Endpoint())
+	replacement.mustSend(DebugControlRequest{ID: "1", Command: "handshake", Token: server.Token()})
+	waitForDebugClientCount(t, server, 2)
+}
+
+func TestDebugControlUnixBoundsAuthenticatedClients(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix control endpoint")
+	}
+	path := filepath.Join(t.TempDir(), "debug.sock")
+	server, err := NewDebugger().StartDebugControl(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = server.Close() }()
+	server.mutex.Lock()
+	server.maxClients = 2
+	server.mutex.Unlock()
+
+	first := dialControl(t, "unix", path)
+	first.mustSend(DebugControlRequest{ID: "1", Command: "ping"})
+	second := dialControl(t, "unix", path)
+	second.mustSend(DebugControlRequest{ID: "1", Command: "ping"})
+	waitForDebugClientCount(t, server, 2)
+
+	excess := dialControl(t, "unix", path)
+	if response, err := excess.send(DebugControlRequest{ID: "1", Command: "ping"}); err == nil {
+		t.Fatalf("excess Unix client was accepted: %v", response)
+	}
+	waitForDebugClientCount(t, server, 2)
+
+	_ = first.conn.Close()
+	waitForDebugClientCount(t, server, 1)
+	replacement := dialControl(t, "unix", path)
+	replacement.mustSend(DebugControlRequest{ID: "1", Command: "ping"})
+	waitForDebugClientCount(t, server, 2)
 }
 
 func TestDebugControlDetachesOnlyWhenLastClientLeaves(t *testing.T) {

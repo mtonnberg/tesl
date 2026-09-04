@@ -406,10 +406,12 @@ func PgQuery[Row any](db *PostgresDB, statement string, arguments []any,
 
 func PgQueryPlan[Row any](db *PostgresDB, plan PgPlan,
 	scan func(pgx.CollectableRow) (Row, error)) []Row {
-	rows := PgQuery(db, plan.SQL, plan.arguments(), scan)
+	rowCount := 0
 	if plan.Capture != nil {
-		plan.Capture(len(rows))
+		defer func() { plan.Capture(rowCount) }()
 	}
+	rows := PgQuery(db, plan.SQL, plan.arguments(), scan)
+	rowCount = len(rows)
 	return rows
 }
 
@@ -445,10 +447,12 @@ func PgExec(db *PostgresDB, statement string, arguments []any) int64 {
 }
 
 func PgExecPlan(db *PostgresDB, plan PgPlan) int64 {
-	rows := PgExec(db, plan.SQL, plan.arguments())
+	rowCount := 0
 	if plan.Capture != nil {
-		plan.Capture(int(rows))
+		defer func() { plan.Capture(rowCount) }()
 	}
+	rows := PgExec(db, plan.SQL, plan.arguments())
+	rowCount = int(rows)
 	return rows
 }
 
@@ -465,11 +469,13 @@ func PgCount(db *PostgresDB, statement string, arguments []any) Int {
 }
 
 func PgCountPlan(db *PostgresDB, plan PgPlan) Int {
-	count := PgCount(db, plan.SQL, plan.arguments())
+	rowCount := 0
 	if plan.Capture != nil {
-		if value, ok := count.Int64(); ok {
-			plan.Capture(int(value))
-		}
+		defer func() { plan.Capture(rowCount) }()
+	}
+	count := PgCount(db, plan.SQL, plan.arguments())
+	if value, ok := count.Int64(); ok {
+		rowCount = int(value)
 	}
 	return count
 }
@@ -489,10 +495,12 @@ func PgScalar[Value any](db *PostgresDB, statement string, arguments []any,
 
 func PgScalarPlan[Value any](db *PostgresDB, plan PgPlan,
 	scan func(pgx.Row) (Value, error)) Value {
-	value := PgScalar(db, plan.SQL, plan.arguments(), scan)
+	rowCount := 0
 	if plan.Capture != nil {
-		plan.Capture(1)
+		defer func() { plan.Capture(rowCount) }()
 	}
+	value := PgScalar(db, plan.SQL, plan.arguments(), scan)
+	rowCount = 1
 	return value
 }
 
@@ -534,10 +542,12 @@ func PgSumMoney(db *PostgresDB, statement string, arguments []any, entity, field
 }
 
 func PgSumMoneyPlan(db *PostgresDB, plan PgPlan, entity, field string) Money {
-	value := PgSumMoney(db, plan.SQL, plan.arguments(), entity, field)
+	rowCount := 0
 	if plan.Capture != nil {
-		plan.Capture(1)
+		defer func() { plan.Capture(rowCount) }()
 	}
+	value := PgSumMoney(db, plan.SQL, plan.arguments(), entity, field)
+	rowCount = 1
 	return value
 }
 

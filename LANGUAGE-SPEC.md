@@ -4782,7 +4782,9 @@ authenticated TCP form; inspector-launched targets instead use an isolated,
 owner-only short runtime directory. Loopback is shared by every local user, so
 a TCP client's first message must be a `handshake` carrying that per-launch
 token. Silent handshakes have a five-second deadline and at most 16 may be
-pending; excess or unauthenticated connections are closed.
+pending; excess or unauthenticated connections are closed. Both Unix and TCP
+endpoints also admit at most 16 authenticated clients at once; further
+connections are closed before joining the session.
 Debuggers then attach to the RUNNING process — the app keeps serving across
 attach/detach, several clients may share one session (the debugger detaches
 only when the last one leaves), and breakpoints can be re-armed without a
@@ -4797,12 +4799,15 @@ paused, and executions that later reach a boundary wait behind the stop, but an
 execution still blocked in external Go work may be running, so a timed-out
 snapshot is not a complete stop-the-world view. Stacks and SQL captures are
 keyed by execution, and a query completion consumes and updates only the capture
-identity created for that query. Arbitrary Go runtime goroutines and external
-systems are not suspended. A lifecycle scope blocked inside `Serve` is explicitly
+identity created for that query. A failed query or exec consumes that identity
+while unwinding too, so reusable plans retain no failed-operation mapping.
+Arbitrary Go runtime goroutines and external systems are not suspended. A
+lifecycle scope blocked inside `Serve` is explicitly
 quiescent: it is excluded from the finite stop participant set, but must wait
 behind the stop before returning to Tesl. Control writes are frame-atomic and
 bounded to one second per client; a client that stops reading is removed without
-delaying stopped-event delivery to other clients.
+delaying stopped-event delivery to other clients. The 16-client admission cap
+also bounds the per-client stopped-event delivery work.
 
 - **VSCode/VSCodium**: the `Attach to running app (tesl run --debug)` launch
   configuration (`request: "attach"`, `project: "${workspaceFolder}"`).
