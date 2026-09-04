@@ -378,6 +378,37 @@ fn wrapper(a: String, b: String)
   core b a
 |})
 
+let test_reject_parameter_name_inside_literal () =
+  (* A formal parameter whose spelling occurs in a string literal must not
+     retarget the carried proof when the package is forwarded. *)
+  should_fail "a proof literal is not a parameter reference"
+    ~expect:"does not return the same `exists` type"
+    (tok {|
+fn literalCore(user: String, role: String)
+  -> exists tok: String => tok: String ::: TaggedWith "user" tok
+  requires [idGen] =
+  let tok = generatePrefixedId "tok"
+  let validated = check checkTagged "user" tok
+  exists tok =>
+    validated
+
+fn wrapper(admin: String, role: String)
+  -> exists tok: String => tok: String ::: TaggedWith "admin" tok
+  requires [idGen] =
+  literalCore admin role
+|})
+
+let test_proof_argument_renaming_is_structural () =
+  let rename = Validation_proof.rename_in_proof_arg [("user", "admin")] in
+  check string "standalone reference" "admin" (rename "user");
+  check string "quoted literal" "\"user\"" (rename "\"user\"");
+  check string "escaped quoted literal" "\"say \\\"user\\\"\""
+    (rename "\"say \\\"user\\\"\"");
+  check string "parenthesized literal" "(Role == \"user\")"
+    (rename "(Role == \"user\")");
+  check string "dotted head only" "admin.user.name" (rename "user.user.name");
+  check string "spaced dotted member" "admin . user" (rename "user . user")
+
 let test_reject_unknown_callee () =
   should_fail "an unresolved callee is not a forwarding site"
     ~expect:"does not produce a top-level `exists` pack"
@@ -462,6 +493,10 @@ let () =
       test_case "fabricated record tail"      `Quick test_reject_fabricated_tail;
       test_case "one fabricated branch"       `Quick test_reject_mixed_branches;
       test_case "swapped proof subjects"      `Quick test_reject_swapped_subjects;
+      test_case "parameter spelling in literal" `Quick
+        test_reject_parameter_name_inside_literal;
+      test_case "structural proof argument renaming" `Quick
+        test_proof_argument_renaming_is_structural;
       test_case "unresolved tail"             `Quick test_reject_unknown_callee;
     ];
     "emit", [
