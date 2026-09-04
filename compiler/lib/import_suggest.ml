@@ -106,14 +106,24 @@ let skip_dir = function
   | d -> String.length d > 0 && d.[0] = '.'
 
 let max_scanned_files = 200
+let max_scanned_dirs = 200
+let max_scan_depth = 32
+
+let entry_kind path =
+  try Some (Unix.lstat path).st_kind with Unix.Unix_error _ -> None
 
 (** All `.tesl` files under [dir] except [self], nearest-first (the directory's
-    own files before subdirectories'), capped at {!max_scanned_files}. *)
+    own files before subdirectories').  Symlinks are never followed, so the scan
+    cannot escape the source tree or loop through directory aliases. *)
 let tesl_files_under (dir : string) ~(self : string) : string list =
-  let count = ref 0 in
-  let rec go dir acc =
-    if !count >= max_scanned_files then acc
+  let file_count = ref 0 in
+  let dir_count = ref 0 in
+  let rec go depth dir acc =
+    if !file_count >= max_scanned_files || !dir_count >= max_scanned_dirs
+       || depth > max_scan_depth
+    then acc
     else
+      let () = incr dir_count in
       match (try Some (Sys.readdir dir) with Sys_error _ -> None) with
       | None -> acc
       | Some entries ->
@@ -121,23 +131,23 @@ let tesl_files_under (dir : string) ~(self : string) : string list =
         let files, dirs =
           Array.to_list entries
           |> List.partition (fun e ->
-               not (try Sys.is_directory (Filename.concat dir e)
-                    with Sys_error _ -> true))
+               entry_kind (Filename.concat dir e) <> Some Unix.S_DIR)
         in
         let here =
           List.filter_map (fun e ->
             let path = Filename.concat dir e in
             if Filename.check_suffix e ".tesl" && path <> self
-               && !count < max_scanned_files
-            then (incr count; Some path)
+               && entry_kind path = Some Unix.S_REG
+               && !file_count < max_scanned_files
+            then (incr file_count; Some path)
             else None
           ) files
         in
         List.fold_left (fun acc d ->
-          if skip_dir d then acc else go (Filename.concat dir d) acc
+          if skip_dir d then acc else go (depth + 1) (Filename.concat dir d) acc
         ) (acc @ here) dirs
   in
-  go dir []
+  go 0 dir []
 
 (* One exposed name of a local module, as the folder-tree index carries it. *)
 type local_export = {
