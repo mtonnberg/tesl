@@ -3,6 +3,7 @@ package teslrt
 import (
 	"errors"
 	"net"
+	"sync"
 	"testing"
 	"time"
 )
@@ -285,6 +286,93 @@ func TestEmailWorkerIterationRecoversAnyTrap(t *testing.T) {
 		}
 	}()
 	runEmailWorkerIteration(&Outbox{settings: SmtpSettings{Host: "smtp.example"}, backend: &claimTrapBackend{}})
+}
+
+type leaseTimingOutboxBackend struct {
+	mutex     sync.Mutex
+	pending   []EmailMessage
+	claimed   int
+	claimTime map[uint64]time.Time
+}
+
+func (backend *leaseTimingOutboxBackend) active() bool                           { return true }
+func (backend *leaseTimingOutboxBackend) send(EmailMessage)                      {}
+func (backend *leaseTimingOutboxBackend) messages() []EmailMessage               { return []EmailMessage{} }
+func (backend *leaseTimingOutboxBackend) reset()                                 {}
+func (backend *leaseTimingOutboxBackend) prune(time.Duration)                    {}
+func (backend *leaseTimingOutboxBackend) recordOutcome(EmailMessage, error) bool { return true }
+
+func (backend *leaseTimingOutboxBackend) claimDue(limit int) []EmailMessage {
+	backend.mutex.Lock()
+	defer backend.mutex.Unlock()
+	if backend.claimed >= len(backend.pending) {
+		return []EmailMessage{}
+	}
+	take := min(limit, len(backend.pending)-backend.claimed)
+	claimed := append([]EmailMessage{}, backend.pending[backend.claimed:backend.claimed+take]...)
+	now := time.Now()
+	for _, message := range claimed {
+		backend.claimTime[message.id] = now
+	}
+	backend.claimed += take
+	return claimed
+}
+
+// The serial worker must not pre-claim mail that then waits behind an SMTP call. Hold the first
+// delivery beyond a short ownership window and prove the second row has not even been claimed;
+// once released, its own claim is fresh when delivery begins.
+func TestDurableEmailClaimsOnlyTheMessageBeingDelivered(t *testing.T) {
+	const ownershipWindow = 50 * time.Millisecond
+	backend := &leaseTimingOutboxBackend{
+		pending: []EmailMessage{
+			{id: 1, To: "first@example.com", claimToken: "first"},
+			{id: 2, To: "second@example.com", claimToken: "second"},
+		},
+		claimTime: map[uint64]time.Time{},
+	}
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	outbox := NewOutbox(testSettings("smtp.example.com", 25))
+	outbox.backend = backend
+	outbox.deliver = func(_ SmtpSettings, message EmailMessage) error {
+		if message.id == 1 {
+			close(firstStarted)
+			<-releaseFirst
+		}
+		return nil
+	}
+
+	finished := make(chan struct{})
+	go func() {
+		deliverPending(outbox)
+		close(finished)
+	}()
+	select {
+	case <-firstStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first message was not delivered")
+	}
+	time.Sleep(2 * ownershipWindow)
+	backend.mutex.Lock()
+	claimedWhileFirstBlocked := backend.claimed
+	backend.mutex.Unlock()
+	if claimedWhileFirstBlocked != 1 {
+		t.Fatalf("%d messages were claimed while only the first was being delivered", claimedWhileFirstBlocked)
+	}
+	releasedAt := time.Now()
+	close(releaseFirst)
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the durable delivery pass did not finish")
+	}
+	backend.mutex.Lock()
+	secondClaimedAt := backend.claimTime[2]
+	backend.mutex.Unlock()
+	if secondClaimedAt.Before(releasedAt) {
+		t.Fatalf("the second message was claimed at %v before the first delivery was released at %v",
+			secondClaimedAt, releasedAt)
+	}
 }
 
 // claimTrapBackend traps on the claim itself — the shape of a durable outbox whose database

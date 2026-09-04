@@ -33,6 +33,10 @@ type Compiler interface {
 	FormatSource(context.Context, string, string) ([]byte, tooling.Result, error)
 }
 
+type overlayCompiler interface {
+	QuerySourcesJSON(context.Context, string, string, []tooling.SourceOverlay, ...string) ([]byte, tooling.Result, error)
+}
+
 type document struct {
 	URI     string
 	Path    string
@@ -41,16 +45,21 @@ type document struct {
 }
 
 type Server struct {
-	compiler       Compiler
-	documents      map[string]document
-	semanticTokens map[string]semanticTokenState
-	nextTokenID    uint64
-	shutdown       bool
-	diagnosticMu   sync.Mutex
-	diagnosticRuns map[string]diagnosticRun
-	diagnosticWG   sync.WaitGroup
-	diagnosticSets map[string]map[string][]map[string]any
-	nextDiagnostic uint64
+	compiler          Compiler
+	documents         map[string]document
+	semanticTokens    map[string]semanticTokenState
+	nextTokenID       uint64
+	shutdown          bool
+	diagnosticMu      sync.Mutex
+	diagnosticRuns    map[string]diagnosticRun
+	diagnosticWG      sync.WaitGroup
+	diagnosticSets    map[string]map[string][]map[string]any
+	nextDiagnostic    uint64
+	diagnosticLocksMu sync.Mutex
+	diagnosticLocks   map[string]*sync.Mutex
+	// beforeDiagnosticPublish is used by race tests to pause between a query and
+	// its lifecycle check. Production servers leave it nil.
+	beforeDiagnosticPublish func()
 }
 
 type diagnosticRun struct {
@@ -62,7 +71,43 @@ func NewServer(compiler Compiler) *Server {
 	return &Server{
 		compiler: compiler, documents: make(map[string]document), semanticTokens: make(map[string]semanticTokenState),
 		diagnosticRuns: make(map[string]diagnosticRun), diagnosticSets: make(map[string]map[string][]map[string]any),
+		diagnosticLocks: make(map[string]*sync.Mutex),
 	}
+}
+
+func (server *Server) sourceOverlays() []tooling.SourceOverlay {
+	paths := make([]string, 0, len(server.documents))
+	byPath := make(map[string]string, len(server.documents))
+	for _, doc := range server.documents {
+		if strings.EqualFold(filepath.Ext(doc.Path), ".tesl") {
+			paths = append(paths, doc.Path)
+			byPath[doc.Path] = doc.Text
+		}
+	}
+	sort.Strings(paths)
+	overlays := make([]tooling.SourceOverlay, 0, len(paths))
+	for _, path := range paths {
+		overlays = append(overlays, tooling.SourceOverlay{Path: path, Source: byPath[path]})
+	}
+	return overlays
+}
+
+func (server *Server) querySourceJSON(ctx context.Context, flag string, doc document, overlays []tooling.SourceOverlay, position ...string) ([]byte, tooling.Result, error) {
+	if compiler, ok := server.compiler.(overlayCompiler); ok {
+		return compiler.QuerySourcesJSON(ctx, flag, doc.Path, overlays, position...)
+	}
+	return server.compiler.QuerySourceJSON(ctx, flag, doc.Path, doc.Text, position...)
+}
+
+func (server *Server) diagnosticLock(uri string) *sync.Mutex {
+	server.diagnosticLocksMu.Lock()
+	defer server.diagnosticLocksMu.Unlock()
+	lock := server.diagnosticLocks[uri]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		server.diagnosticLocks[uri] = lock
+	}
+	return lock
 }
 
 // Run serves one LSP session. It returns the process exit status required by
@@ -484,12 +529,24 @@ func (server *Server) didClose(raw json.RawMessage, writer *protocol.Writer) err
 	if err := json.Unmarshal(raw, &params); err != nil || params.TextDocument.URI == "" {
 		return errors.New("textDocument/didClose: invalid params")
 	}
+	lock := server.diagnosticLock(params.TextDocument.URI)
+	lock.Lock()
+	defer func() {
+		server.diagnosticLocksMu.Lock()
+		if server.diagnosticLocks[params.TextDocument.URI] == lock {
+			delete(server.diagnosticLocks, params.TextDocument.URI)
+		}
+		server.diagnosticLocksMu.Unlock()
+		lock.Unlock()
+	}()
 	delete(server.documents, params.TextDocument.URI)
 	server.cancelDiagnostics(params.TextDocument.URI)
 	return server.publishDiagnosticGroups(params.TextDocument.URI, nil, writer)
 }
 
 func (server *Server) scheduleDiagnostics(ctx context.Context, doc document, writer *protocol.Writer) {
+	lock := server.diagnosticLock(doc.URI)
+	lock.Lock()
 	server.diagnosticMu.Lock()
 	if previous, found := server.diagnosticRuns[doc.URI]; found {
 		previous.cancel()
@@ -500,9 +557,13 @@ func (server *Server) scheduleDiagnostics(ctx context.Context, doc document, wri
 	server.diagnosticRuns[doc.URI] = diagnosticRun{cancel: cancel, id: runID}
 	server.diagnosticWG.Add(1)
 	server.diagnosticMu.Unlock()
+	lock.Unlock()
+	overlays := server.sourceOverlays()
 	go func() {
 		defer server.diagnosticWG.Done()
-		groups, err := server.diagnosticsForDocument(queryContext, doc)
+		groups, err := server.diagnosticsForDocumentWithOverlays(queryContext, doc, overlays)
+		lock.Lock()
+		defer lock.Unlock()
 		server.diagnosticMu.Lock()
 		run, current := server.diagnosticRuns[doc.URI]
 		fresh := current && run.id == runID
@@ -510,7 +571,13 @@ func (server *Server) scheduleDiagnostics(ctx context.Context, doc document, wri
 			delete(server.diagnosticRuns, doc.URI)
 		}
 		server.diagnosticMu.Unlock()
-		if !fresh || errors.Is(queryContext.Err(), context.Canceled) {
+		if !fresh {
+			return
+		}
+		if server.beforeDiagnosticPublish != nil {
+			server.beforeDiagnosticPublish()
+		}
+		if errors.Is(queryContext.Err(), context.Canceled) {
 			return
 		}
 		if err != nil {
@@ -572,7 +639,7 @@ func (server *Server) queryDocumentPosition(ctx context.Context, doc document, p
 		return nil, err
 	}
 	byteColumn := offset - lineStart
-	payload, _, err := server.compiler.QuerySourceJSON(ctx, flag, doc.Path, doc.Text,
+	payload, _, err := server.querySourceJSON(ctx, flag, doc, server.sourceOverlays(),
 		strconv.Itoa(position.Line), strconv.Itoa(byteColumn))
 	return payload, err
 }
@@ -1234,7 +1301,7 @@ func (server *Server) writeInlayHints(ctx context.Context, id json.RawMessage, r
 	if !found || server.compiler == nil {
 		return server.writeResult(writer, id, []map[string]any{})
 	}
-	payload, _, err := server.compiler.QuerySourceJSON(ctx, "--local-bindings-json", doc.Path, doc.Text)
+	payload, _, err := server.querySourceJSON(ctx, "--local-bindings-json", doc, server.sourceOverlays())
 	if err != nil {
 		return server.writeResult(writer, id, []map[string]any{})
 	}
@@ -1368,7 +1435,7 @@ func (server *Server) semanticSnapshot(ctx context.Context, doc document) (seman
 	if server.compiler == nil {
 		return semanticSnapshot{}, errors.New("compiler client is not configured")
 	}
-	payload, _, err := server.compiler.QuerySourceJSON(ctx, "--semantic-json", doc.Path, doc.Text)
+	payload, _, err := server.querySourceJSON(ctx, "--semantic-json", doc, server.sourceOverlays())
 	if err != nil {
 		return semanticSnapshot{}, err
 	}
@@ -1692,7 +1759,7 @@ type sourcePosition struct {
 }
 
 func (server *Server) publishDiagnostics(ctx context.Context, doc document, writer *protocol.Writer) error {
-	groups, err := server.diagnosticsForDocument(ctx, doc)
+	groups, err := server.diagnosticsForDocumentWithOverlays(ctx, doc, server.sourceOverlays())
 	if err != nil {
 		return server.publishCompilerFailure(doc.URI, err, writer)
 	}
@@ -1700,10 +1767,14 @@ func (server *Server) publishDiagnostics(ctx context.Context, doc document, writ
 }
 
 func (server *Server) diagnosticsForDocument(ctx context.Context, doc document) (map[string][]map[string]any, error) {
+	return server.diagnosticsForDocumentWithOverlays(ctx, doc, server.sourceOverlays())
+}
+
+func (server *Server) diagnosticsForDocumentWithOverlays(ctx context.Context, doc document, overlays []tooling.SourceOverlay) (map[string][]map[string]any, error) {
 	if server.compiler == nil {
 		return nil, errors.New("compiler client is not configured")
 	}
-	payload, _, err := server.compiler.QuerySourceJSON(ctx, "--check-json", doc.Path, doc.Text)
+	payload, _, err := server.querySourceJSON(ctx, "--check-json", doc, overlays)
 	if err != nil {
 		return nil, err
 	}
@@ -1720,11 +1791,21 @@ func (server *Server) diagnosticsForDocument(ctx context.Context, doc document) 
 		source := doc.Text
 		if !samePath(diagnostic.File, doc.Path) {
 			uri = protocol.PathToURI(diagnostic.File)
-			contents, readErr := os.ReadFile(diagnostic.File) // #nosec G304 -- compiler returned a local source path.
-			if readErr != nil {
-				return nil, fmt.Errorf("read diagnostic source %s: %w", diagnostic.File, readErr)
+			var found bool
+			for _, overlay := range overlays {
+				if samePath(diagnostic.File, overlay.Path) {
+					source = overlay.Source
+					found = true
+					break
+				}
 			}
-			source = string(contents)
+			if !found {
+				contents, readErr := os.ReadFile(diagnostic.File) // #nosec G304 -- compiler returned a local source path.
+				if readErr != nil {
+					return nil, fmt.Errorf("read diagnostic source %s: %w", diagnostic.File, readErr)
+				}
+				source = string(contents)
+			}
 		}
 		index := protocol.NewLineIndex(source)
 		start, startErr := index.PositionFromLineColumn(diagnostic.Start.Line, diagnostic.Start.Col)

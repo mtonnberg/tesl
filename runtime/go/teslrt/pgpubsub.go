@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,14 +39,14 @@ import (
 // `pubsubBackend` interface. A channel of a Memory-backed database never touches this file.
 //
 // COMMIT-ORDERED DISPATCH. The row id is allocated by INSERT, not commit, so it is never used
-// as a lifetime delivery cursor. A sweep first assigns committed raw rows a dispatch_seq while
-// holding one transaction-scoped advisory lock for this outbox. Those assignment transactions
-// therefore commit in sequence order. A transaction that reserved a low row id and committed
-// late is assigned a later dispatch_seq and remains visible above every process's cursor.
+// as a lifetime delivery cursor. A publisher takes one transaction-scoped advisory lock before
+// drawing dispatch_seq and holds it through commit. Publishers therefore commit in sequence
+// order. The delivery loop reads only that order; NOTIFY is a doorbell, never a delivery path.
 //
-// STARTUP BASELINE. A process does not replay old SSE events. Preparation dispatches every row
-// visible at startup, then captures max(dispatch_seq). Rows that commit later are still raw and
-// receive a sequence above that baseline on a later sweep.
+// STARTUP BASELINE. A process does not replay old SSE events. PostgreSQL bootstrap upgrades all
+// visible rows from the former nullable-sequence format before a runtime captures max
+// (dispatch_seq). A legacy transaction that commits later remains NULL and the delivery loop
+// safely sequences it above the baseline under the same advisory lock.
 
 const (
 	pubsubNotifyChannel = "tesl_pubsub"
@@ -55,12 +56,9 @@ const (
 	queueNotifyChannel = "tesl_queue"
 	pubsubOutboxTable  = "tesl_pubsub_outbox"
 	pubsubDispatchSeq  = "tesl_pubsub_dispatch_seq"
-	// pubsubSweepBatch bounds one sweep query; a sweep that fills the batch runs again at once.
-	pubsubSweepBatch      = 500
-	pubsubSweepMaxBatches = 4
-	// pubsubSeenLimit bounds low-latency notification deduplication. Above it, rows wait for
-	// the durable sweep instead of consuming more process memory.
-	pubsubSeenLimit = pubsubSweepBatch * pubsubSweepMaxBatches
+	// pubsubSweepBatch bounds every dispatch and delivery query. A full batch yields and runs
+	// again immediately, so memory and query work are bounded without throttling catch-up.
+	pubsubSweepBatch = 500
 )
 
 // The intervals are variables so a test can shrink them; production never writes them.
@@ -79,7 +77,7 @@ var (
 )
 
 // pgPubsub is one process's pub/sub state for one `Database` declaration: the channels
-// declared on it, the LISTEN goroutine, and retained-row deduplication.
+// declared on it and its single ordered LISTEN/delivery goroutine.
 type pgPubsub struct {
 	database *Database
 
@@ -91,11 +89,11 @@ type pgPubsub struct {
 	queues map[string][]*Queue
 	// ready is set once the outbox table exists and the dispatch baseline is captured.
 	ready bool
-	// dispatchCursor is the highest commit-ordered dispatch sequence this process swept.
+	// dispatchCursor is the highest commit-ordered dispatch sequence this process delivered.
 	dispatchCursor int64
-	// seen contains up to pubsubSeenLimit notifications delivered before their row reached
-	// dispatchCursor. Once full, further notifications defer to the durable sweep.
-	seen map[int64]struct{}
+	// deliveryMutex keeps manual/test catch-up calls serialized with the listener. Production
+	// has only the listener path, but making the invariant local prevents future double delivery.
+	deliveryMutex sync.Mutex
 	// listener is the live LISTEN connection, or nil between connections.
 	listener *pgx.Conn
 
@@ -150,7 +148,6 @@ func pubsubFor(database *Database) *pgPubsub {
 		database: database,
 		channels: map[string][]*SseChannel{},
 		queues:   map[string][]*Queue{},
-		seen:     map[int64]struct{}{},
 		ctx:      ctx,
 		cancel:   cancel,
 		done:     make(chan struct{}),
@@ -168,8 +165,9 @@ func pubsubFor(database *Database) *pgPubsub {
 
 // ── The publish side ──────────────────────────────────────────────────────────
 
-// active answers whether the database is bound. It also PREPARES the outbox on the way, so
-// this process's first publish cannot be mistaken for a pre-existing baseline row.
+// active answers whether the database is bound. It also captures the baseline on the current
+// executor, so a first publish inside a pool-size-one transaction never asks the pool for a
+// second connection.
 func (runtime *pgPubsub) active() bool {
 	connection := runtime.database.bound()
 	if connection == nil {
@@ -181,10 +179,9 @@ func (runtime *pgPubsub) active() bool {
 	return true
 }
 
-// publish writes the row and queues the notification, both through the goroutine's executor
-// so that inside a `transaction { }` they belong to it: PostgreSQL delivers a NOTIFY only when
-// the transaction that issued it commits, and a rolled-back one leaves neither the row nor
-// the notification behind.
+// publish takes the outbox lock, allocates dispatch_seq, writes the row, and queues NOTIFY in
+// one transaction. If the caller already has a transaction, the lock remains held until that
+// transaction commits; otherwise this method opens the transaction itself.
 func (runtime *pgPubsub) publish(channel, key string, encoded string) {
 	connection := runtime.database.bound()
 	if connection == nil {
@@ -195,25 +192,61 @@ func (runtime *pgPubsub) publish(channel, key string, encoded string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 	defer cancel()
-	var id int64
-	err := connection.executor().QueryRow(ctx,
-		"insert into "+connection.QualifiedTable(pubsubOutboxTable)+
-			` ("channel", "key", "payload") values ($1, $2, $3::jsonb) returning "id"`,
-		channel, key, encoded).Scan(&id)
-	if err != nil {
-		panic(pgFailure("publish", err))
-	}
-	if _, err := connection.executor().Exec(ctx, "select pg_notify($1, $2)",
-		pubsubNotifyChannel, strconv.FormatInt(id, 10)); err != nil {
-		panic(pgFailure("publish", err))
+	if transaction := currentTransaction(); transaction != nil {
+		if _, err := writePubsub(ctx, transaction, connection, channel, key, encoded); err != nil {
+			panic(pgFailure("publish", err))
+		}
+	} else {
+		transaction, err := connection.pool.Begin(ctx)
+		if err != nil {
+			panic(pgFailure("publish: cannot begin", err))
+		}
+		committed := false
+		defer func() {
+			if !committed {
+				_ = transaction.Rollback(context.Background())
+			}
+		}()
+		if _, err := writePubsub(ctx, transaction, connection, channel, key, encoded); err != nil {
+			panic(pgFailure("publish", err))
+		}
+		if err := transaction.Commit(ctx); err != nil {
+			panic(pgFailure("publish: cannot commit", err))
+		}
+		committed = true
 	}
 	Counter("tesl.sse.pubsub.published", FromInt64(1), sseChannelAttribute(channel))
 }
 
-// prepare creates the outbox if it is absent and captures the dispatch baseline, once per
-// runtime. It runs on the POOL rather than the executor: a table created inside a caller's
-// transaction would vanish with a rollback, and the baseline is a fact about committed rows.
+func writePubsub(ctx context.Context, executor pgExecutor, connection *PostgresDB,
+	channel, key, encoded string) (int64, error) {
+	if _, err := executor.Exec(ctx,
+		`select pg_advisory_xact_lock(hashtextextended(current_database() || ':' || $1, 0))`,
+		connection.QualifiedTable(pubsubOutboxTable)); err != nil {
+		return 0, err
+	}
+	var id int64
+	err := executor.QueryRow(ctx, "insert into "+connection.QualifiedTable(pubsubOutboxTable)+
+		` ("channel", "key", "payload", "dispatch_seq", "dispatched_at") `+
+		`values ($1, $2, $3::jsonb, nextval($4::regclass), clock_timestamp()) returning "id"`,
+		channel, key, encoded, connection.QualifiedTable(pubsubDispatchSeq)).Scan(&id)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := executor.Exec(ctx, "select pg_notify($1, $2)",
+		pubsubNotifyChannel, strconv.FormatInt(id, 10)); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// prepare captures the committed dispatch baseline once per runtime. Bootstrap owns the DDL
+// and legacy normalization, so this read is safe through a caller's existing transaction.
 func (runtime *pgPubsub) prepare(connection *PostgresDB) error {
+	return runtime.prepareOn(connection, connection.executor())
+}
+
+func (runtime *pgPubsub) prepareOn(connection *PostgresDB, executor pgExecutor) error {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
 	if runtime.ready {
@@ -221,19 +254,7 @@ func (runtime *pgPubsub) prepare(connection *PostgresDB) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 	defer cancel()
-	if err := createPubsubOutbox(ctx, connection); err != nil {
-		return err
-	}
-	for {
-		dispatched, err := dispatchPubsubPending(ctx, connection.pool, connection)
-		if err != nil {
-			return err
-		}
-		if dispatched < pubsubSweepBatch {
-			break
-		}
-	}
-	if err := connection.pool.QueryRow(ctx, `select coalesce(max("dispatch_seq"), 0) from `+
+	if err := executor.QueryRow(ctx, `select coalesce(max("dispatch_seq"), 0) from `+
 		connection.QualifiedTable(pubsubOutboxTable)).Scan(&runtime.dispatchCursor); err != nil {
 		return err
 	}
@@ -283,6 +304,24 @@ func createPubsubOutbox(ctx context.Context, connection *PostgresDB) error {
 	return nil
 }
 
+// normalizeLegacyPubsubRows runs during PostgreSQL bootstrap, before the Database can be bound
+// and before a runtime captures its baseline. Each transaction has a fresh lease and handles a
+// bounded batch, avoiding the old single 10-second context across an arbitrarily large outbox.
+func normalizeLegacyPubsubRows(connection *PostgresDB) error {
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
+		dispatched, err := dispatchLegacyPubsubPending(ctx, connection.pool, connection)
+		cancel()
+		if err != nil {
+			return err
+		}
+		if dispatched < pubsubSweepBatch {
+			return nil
+		}
+		goruntime.Gosched()
+	}
+}
+
 // ── The delivery side ─────────────────────────────────────────────────────────
 
 // deliver hands one stored event to every local channel of that name. A payload that does
@@ -303,54 +342,18 @@ func (runtime *pgPubsub) deliver(channel, key string, encoded string) {
 	}
 }
 
-// markSeen records a notification-delivered id. False means either duplicate or full; in the
-// full case delivery is safely deferred to the durable sweep.
-func (runtime *pgPubsub) markSeen(id int64) bool {
-	runtime.mutex.Lock()
-	defer runtime.mutex.Unlock()
-	if _, already := runtime.seen[id]; already {
-		return false
-	}
-	if len(runtime.seen) >= pubsubSeenLimit {
-		return false
-	}
-	runtime.seen[id] = struct{}{}
-	return true
-}
-
-// takeSeen answers whether the notification path already delivered id and removes its
-// temporary entry. The dispatch cursor suppresses every later notification for the row.
-func (runtime *pgPubsub) takeSeen(id int64) bool {
-	runtime.mutex.Lock()
-	defer runtime.mutex.Unlock()
-	if _, seen := runtime.seen[id]; !seen {
-		return false
-	}
-	delete(runtime.seen, id)
-	return true
-}
-
 func (runtime *pgPubsub) cursor() int64 {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
 	return runtime.dispatchCursor
 }
 
-func (runtime *pgPubsub) swept(dispatchSequence int64) bool {
-	runtime.mutex.Lock()
-	defer runtime.mutex.Unlock()
-	return dispatchSequence <= runtime.dispatchCursor
-}
-
-// advance records a commit-ordered row and forgets its temporary notification dedup entry.
-// Once the cursor covers the row, a delayed notification is rejected by dispatch sequence.
-func (runtime *pgPubsub) advance(id, dispatchSequence int64) {
+func (runtime *pgPubsub) advance(dispatchSequence int64) {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
 	if dispatchSequence > runtime.dispatchCursor {
 		runtime.dispatchCursor = dispatchSequence
 	}
-	delete(runtime.seen, id)
 }
 
 // run is the listener goroutine: wait for the database to be bound, then hold a LISTEN
@@ -384,8 +387,8 @@ func (runtime *pgPubsub) run() {
 	}
 }
 
-// listenGuarded is one connection attempt — prepare, then listen — with any TRAP inside it
-// turned into the error the reconnect loop already handles. The listener goroutine is the
+// listenGuarded is one connection attempt with any TRAP inside it turned into the error the
+// reconnect loop already handles. The listener goroutine is the
 // process's only path from other instances' events to its subscribers; an unrecovered panic
 // in it (a decode that traps, a driver surprise) would end the whole process rather than
 // one connection.
@@ -395,9 +398,6 @@ func (runtime *pgPubsub) listenGuarded(connection *PostgresDB) (listened bool, e
 			listened, err = false, fmt.Errorf("listener trapped: %v", trap)
 		}
 	}()
-	if err := runtime.prepare(connection); err != nil {
-		return false, err
-	}
 	return runtime.listen(connection)
 }
 
@@ -437,6 +437,9 @@ func (runtime *pgPubsub) listen(connection *PostgresDB) (listened bool, err erro
 		runtime.listener = nil
 		runtime.mutex.Unlock()
 	}()
+	if err := runtime.prepareOn(connection, conn); err != nil {
+		return false, err
+	}
 	if _, err := conn.Exec(connectCtx, "listen "+quoteIdentifier(pubsubNotifyChannel)); err != nil {
 		return false, err
 	}
@@ -449,7 +452,7 @@ func (runtime *pgPubsub) listen(connection *PostgresDB) (listened bool, err erro
 
 	// Rows that committed before LISTEN was in place, and rows a previous connection's
 	// last moments missed.
-	if err := runtime.sweep(conn, connection); err != nil {
+	if err := runtime.drain(conn, connection); err != nil {
 		return true, err
 	}
 	nextSweep := time.Now().Add(pubsubSweepInterval)
@@ -460,22 +463,35 @@ func (runtime *pgPubsub) listen(connection *PostgresDB) (listened bool, err erro
 		cancelWait()
 		switch {
 		case err == nil:
+			now := time.Now()
 			if notification != nil && notification.Channel == queueNotifyChannel {
 				runtime.wakeQueues(notification.Payload)
-			} else if notification != nil {
-				if err := runtime.deliverNotified(conn, connection, notification.Payload); err != nil {
+			} else if notification != nil && notification.Channel == pubsubNotifyChannel {
+				// The payload is deliberately ignored. NOTIFY only wakes the same durable,
+				// ordered path used for reconnect and lost-notification recovery.
+				if err := runtime.drain(conn, connection); err != nil {
 					return true, err
 				}
+				nextSweep = now.Add(pubsubSweepInterval)
 			}
-			if time.Now().Before(nextSweep) {
-				continue
+			if !now.Before(nextSweep) {
+				if err := runtime.drain(conn, connection); err != nil {
+					return true, err
+				}
+				nextSweep = now.Add(pubsubSweepInterval)
 			}
-			fallthrough
+			if !now.Before(nextPrune) {
+				if err := runtime.prune(conn, connection); err != nil {
+					return true, err
+				}
+				nextPrune = now.Add(pubsubPruneInterval)
+			}
+			continue
 		case errors.Is(err, context.DeadlineExceeded) && runtime.ctx.Err() == nil:
 			// The wait ran out, which is the sweep's cue; the connection is intact — pgx
 			// resets the read deadline on the way out, and a deadline is not a fatal error
 			// to it.
-			if err := runtime.sweep(conn, connection); err != nil {
+			if err := runtime.drain(conn, connection); err != nil {
 				return true, err
 			}
 			nextSweep = time.Now().Add(pubsubSweepInterval)
@@ -491,49 +507,6 @@ func (runtime *pgPubsub) listen(connection *PostgresDB) (listened bool, err erro
 	}
 }
 
-// deliverNotified is the notification path: the payload is the row id, and the row is read
-// back and delivered unless the sweep got there first. The id is marked seen only once the
-// row is in hand — a fetch that fails takes the connection down, and the reconnect's sweep
-// must then still deliver the row.
-func (runtime *pgPubsub) deliverNotified(conn *pgx.Conn, connection *PostgresDB, payload string) error {
-	id, err := strconv.ParseInt(strings.TrimSpace(payload), 10, 64)
-	if err != nil {
-		// Not one of ours — something else on the cluster shares the channel name.
-		return nil
-	}
-	if runtime.isSeen(id) {
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(runtime.ctx, pgLeaseTimeout())
-	defer cancel()
-	var channel, key, encoded string
-	var dispatchSequence *int64
-	err = conn.QueryRow(ctx, `select "channel", "key", "payload"::text, "dispatch_seq" from `+
-		connection.QualifiedTable(pubsubOutboxTable)+` where "id" = $1`, id).
-		Scan(&channel, &key, &encoded, &dispatchSequence)
-	if errors.Is(err, pgx.ErrNoRows) {
-		// Pruned already, or a notification for a row this database never held.
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if dispatchSequence != nil && runtime.swept(*dispatchSequence) {
-		return nil
-	}
-	if runtime.markSeen(id) {
-		runtime.deliver(channel, key, encoded)
-	}
-	return nil
-}
-
-func (runtime *pgPubsub) isSeen(id int64) bool {
-	runtime.mutex.Lock()
-	defer runtime.mutex.Unlock()
-	_, seen := runtime.seen[id]
-	return seen
-}
-
 type pubsubRow struct {
 	id               int64
 	dispatchSequence int64
@@ -541,50 +514,70 @@ type pubsubRow struct {
 	encoded          string
 }
 
-// dispatchPubsubPending is one bounded dispatcher statement. The materialized lock CTE makes
-// every dispatcher wait for the previous assignment transaction to commit before drawing
-// sequence values. INSERT does not take this advisory lock and stays unblocked.
-func dispatchPubsubPending(ctx context.Context, executor pgExecutor, connection *PostgresDB) (int, error) {
+type pgTransactionStarter interface {
+	Begin(context.Context) (pgx.Tx, error)
+}
+
+// dispatchLegacyPubsubPending upgrades one bounded batch written by the former nullable-sequence
+// format. The explicit transaction makes the ordering proof the same as Publish: take the lock,
+// draw sequence values, and commit before another cooperating publisher can draw one.
+func dispatchLegacyPubsubPending(ctx context.Context, starter pgTransactionStarter,
+	connection *PostgresDB) (int, error) {
+	transaction, err := starter.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = transaction.Rollback(context.Background())
+		}
+	}()
+	if _, err := transaction.Exec(ctx,
+		`select pg_advisory_xact_lock(hashtextextended(current_database() || ':' || $1, 0))`,
+		connection.QualifiedTable(pubsubOutboxTable)); err != nil {
+		return 0, err
+	}
 	table := connection.QualifiedTable(pubsubOutboxTable)
-	statement := `with lock_acquired as materialized (` +
-		`select pg_advisory_xact_lock(hashtextextended(current_database() || ':' || $1, 0))), ` +
-		`pending as materialized (` +
-		`select "id" from ` + table + `, lock_acquired where "dispatch_seq" is null ` +
-		`order by "id" limit $2) ` +
+	statement := `with pending as materialized (` +
+		`select "id" from ` + table + ` where "dispatch_seq" is null order by "id" limit $1) ` +
 		`update ` + table + ` as outbox set ` +
-		`"dispatch_seq" = nextval($3::regclass), "dispatched_at" = clock_timestamp() ` +
+		`"dispatch_seq" = nextval($2::regclass), "dispatched_at" = clock_timestamp() ` +
 		`from pending where outbox."id" = pending."id" and outbox."dispatch_seq" is null`
-	tag, err := executor.Exec(ctx, statement, table, int32(pubsubSweepBatch),
+	tag, err := transaction.Exec(ctx, statement, int32(pubsubSweepBatch),
 		connection.QualifiedTable(pubsubDispatchSeq))
 	if err != nil {
 		return 0, err
 	}
+	if err := transaction.Commit(ctx); err != nil {
+		return 0, err
+	}
+	committed = true
 	return int(tag.RowsAffected()), nil
 }
 
-type pubsubSweepStats struct {
-	dispatchQueries int
-	fetchQueries    int
-	rowsRead        int
+type pubsubDrainStats struct {
+	iterations       int
+	legacyChecks     int
+	dispatchQueries  int
+	fetchQueries     int
+	legacyRows       int
+	rowsRead         int
+	maxLegacyBatch   int
+	maxDeliveryBatch int
 }
 
-// sweepWithStats performs bounded work: each stage issues at most
-// pubsubSweepMaxBatches queries and each query handles at most pubsubSweepBatch rows.
-func (runtime *pgPubsub) sweepWithStats(conn *pgx.Conn, connection *PostgresDB) (pubsubSweepStats, error) {
-	stats := pubsubSweepStats{}
-	for range pubsubSweepMaxBatches {
-		ctx, cancel := context.WithTimeout(runtime.ctx, pgLeaseTimeout())
-		dispatched, err := dispatchPubsubPending(ctx, conn, connection)
-		cancel()
-		stats.dispatchQueries++
-		if err != nil {
+// drainWithStats continuously catches up. Each iteration has bounded SQL and memory, and a full
+// iteration yields before continuing; there is no periodic per-sweep ceiling that can turn a
+// sustained but serviceable publish rate into permanent backlog.
+func (runtime *pgPubsub) drainWithStats(conn *pgx.Conn, connection *PostgresDB) (pubsubDrainStats, error) {
+	runtime.deliveryMutex.Lock()
+	defer runtime.deliveryMutex.Unlock()
+	stats := pubsubDrainStats{}
+	for {
+		if err := runtime.ctx.Err(); err != nil {
 			return stats, err
 		}
-		if dispatched < pubsubSweepBatch {
-			break
-		}
-	}
-	for range pubsubSweepMaxBatches {
 		ctx, cancel := context.WithTimeout(runtime.ctx, pgLeaseTimeout())
 		rows, err := conn.Query(ctx, `select "id", "channel", "key", "payload"::text, "dispatch_seq" from `+
 			connection.QualifiedTable(pubsubOutboxTable)+
@@ -605,22 +598,50 @@ func (runtime *pgPubsub) sweepWithStats(conn *pgx.Conn, connection *PostgresDB) 
 		if err != nil {
 			return stats, err
 		}
+		stats.iterations++
 		stats.rowsRead += len(batch)
+		if len(batch) > stats.maxDeliveryBatch {
+			stats.maxDeliveryBatch = len(batch)
+		}
 		for _, row := range batch {
-			if !runtime.takeSeen(row.id) {
-				runtime.deliver(row.channel, row.key, row.encoded)
-			}
-			runtime.advance(row.id, row.dispatchSequence)
+			runtime.deliver(row.channel, row.key, row.encoded)
+			runtime.advance(row.dispatchSequence)
 		}
-		if len(batch) < pubsubSweepBatch {
-			break
+		if len(batch) == pubsubSweepBatch {
+			goruntime.Gosched()
+			continue
 		}
+
+		ctx, cancel = context.WithTimeout(runtime.ctx, pgLeaseTimeout())
+		var legacyPending bool
+		err = conn.QueryRow(ctx, `select exists (select 1 from `+
+			connection.QualifiedTable(pubsubOutboxTable)+` where "dispatch_seq" is null)`).Scan(&legacyPending)
+		cancel()
+		stats.legacyChecks++
+		if err != nil {
+			return stats, err
+		}
+		if !legacyPending {
+			return stats, nil
+		}
+
+		ctx, cancel = context.WithTimeout(runtime.ctx, pgLeaseTimeout())
+		dispatched, err := dispatchLegacyPubsubPending(ctx, conn, connection)
+		cancel()
+		stats.dispatchQueries++
+		if err != nil {
+			return stats, err
+		}
+		stats.legacyRows += dispatched
+		if dispatched > stats.maxLegacyBatch {
+			stats.maxLegacyBatch = dispatched
+		}
+		goruntime.Gosched()
 	}
-	return stats, nil
 }
 
-func (runtime *pgPubsub) sweep(conn *pgx.Conn, connection *PostgresDB) error {
-	_, err := runtime.sweepWithStats(conn, connection)
+func (runtime *pgPubsub) drain(conn *pgx.Conn, connection *PostgresDB) error {
+	_, err := runtime.drainWithStats(conn, connection)
 	return err
 }
 

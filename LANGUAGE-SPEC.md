@@ -1078,7 +1078,7 @@ A `queue` is a **folded record** assigned with `=`. It pairs each job type with 
 
 A `queue` declaration creates a background job queue backed by the named `database`. Each `Job <JobType> <workerFn> (<dead-slot>)` entry folds a `record` type together with its normal worker function and an optional dead-letter worker (`(Something deadFn)` or `(Nothing)`).
 
-> **Durability (2026-09-02).** On a Postgres-backed database a `queue` is durable and shared: jobs are rows in `<schema>.tesl_jobs`, claimed with `FOR UPDATE SKIP LOCKED`, so any number of server instances work one queue; `enqueue` runs on the surrounding transaction; a failed job's `next_attempt_at` follows the declared `backoff`; a job whose instance died mid-run is reclaimed after the visibility timeout (`TESL_QUEUE_VISIBILITY_TIMEOUT_MS`, default 10 min). The same holds for the `email` outbox (`tesl_email_outbox`), the `cache` (`tesl_cache`, `UNLOGGED`) and SSE pub/sub (`tesl_pubsub_outbox` + `LISTEN`/`NOTIFY` fan-out to every instance). On a Memory-backed database all four stay in the process's memory: that is the development and test store. Workers are woken by `NOTIFY tesl_queue` from any instance over one shared LISTEN connection per process, with a 5 s fallback poll; the stale-claim sweep runs once a minute per process.
+> **Durability (2026-09-02).** On a Postgres-backed database a `queue` is durable and shared: jobs are rows in `<schema>.tesl_jobs`, claimed with `FOR UPDATE SKIP LOCKED`, so any number of server instances work one queue; `enqueue` runs on the surrounding transaction; a failed job's `next_attempt_at` follows the declared `backoff`; a job whose instance died mid-run is reclaimed after the visibility timeout (`TESL_QUEUE_VISIBILITY_TIMEOUT_MS`, default 10 min). A stale normal claim returns to `pending`; a stale dead-letter claim returns to `dead`. The same holds for the `email` outbox (`tesl_email_outbox`), the `cache` (`tesl_cache`, `UNLOGGED`) and SSE pub/sub (`tesl_pubsub_outbox` + `LISTEN`/`NOTIFY` fan-out to every instance). The serial email worker claims one message immediately before each SMTP delivery, so queued messages do not consume their claim window waiting behind earlier deliveries. On a Memory-backed database all four stay in the process's memory: that is the development and test store. Workers are woken by `NOTIFY tesl_queue` from any instance over one shared LISTEN connection per process, with a 5 s fallback poll; the stale-claim sweep runs once a minute per process.
 
 `retry` configures how failed worker jobs are retried. `maxAttempts: 1` (the default) means no retries. With `backoff: Exponential` and `initialDelay: N` the delay between retries doubles: N, 2N, 4N, … seconds. With `backoff: Fixed` the delay is always `initialDelay`.
 
@@ -1959,7 +1959,7 @@ In queries, `Maybe` fields require a `case` expression or the `isAssignedTo` / h
 
 > **Maybe columns compare as values (2026-09-02).** `p.field == x` and `p.field != x` on a `Maybe` column are emitted as `IS NOT DISTINCT FROM` / `IS DISTINCT FROM`, so `Nothing == Nothing` is true and `Nothing == Something v` is false on PostgreSQL exactly as on the Memory store. A query's row binder may not shadow a name already in scope (a parameter, a local or a function); the compiler refuses it, because the two backends would otherwise read the two names differently. Two module names that fold to one Go package name (`FooBar`, `Foobar`, `Foo_bar`) are refused for the same reason: one module's code would silently replace the other's.
 >
-> **Memory store limits.** `transaction { }` on the Memory store rolls back by restoring the touched tables to their state before the block, so a concurrent request's rows committed to the same table during the block are undone with it; and `selectOne` without `order` returns the first row in insertion order on Memory and in heap order on PostgreSQL. The Memory store is a development and test store; a served program with concurrent writers should be Postgres-backed.
+> **Memory store limits.** `transaction { }` on the Memory store rolls back by restoring touched tables to their state before the block. Outside table readers and writers wait until commit or rollback, while the transaction reads its own writes, so uncommitted and partially rolled-back rows are not observable from another request. Memory transactions are process-wide serialized rather than PostgreSQL's concurrent MVCC transactions. Also, `selectOne` without `order` returns the first row in insertion order on Memory and in heap order on PostgreSQL. The Memory store is a development and test store; a served program with concurrent access should be Postgres-backed.
 
 `Int` maps to `NUMERIC`, **not** `BIGINT`: `Int` is arbitrary-precision (unbounded), and `NUMERIC` stores any magnitude losslessly, so an `Int` of any size round-trips through the database with no truncation (NT-07). A newtype *over* `Int` maps to the same `NUMERIC` — a plain integer column is one consistent type regardless of whether it is a bare `Int` or a nominal newtype. `PosixMillis` is the one deliberate exception: it is a distinct 64-bit millis-timestamp type and maps to compact `BIGINT`. For a bounded integer column that must fit a JavaScript number (< 2^53) or a compact `int4`, use `Int32` (`INTEGER`); a linter warning steers wire/storage `Int` fields toward `Int32`. To store any of these under a different SQL type, use an explicit `@db(...)` annotation.
 
@@ -4788,14 +4788,21 @@ attach/detach, several clients may share one session (the debugger detaches
 only when the last one leaves), and breakpoints can be re-armed without a
 relaunch:
 
-Before a stopped event and snapshot are published, every active instrumented
-Tesl execution must rendezvous at its next function-entry/checkpoint boundary
-or exit. Stacks and SQL captures are keyed by execution, and a query completion
-can update only the capture identity created for that query. This is a
-cooperative stop-the-world guarantee for generated Tesl execution; arbitrary
-Go runtime goroutines and external systems are not suspended. A lifecycle scope
-blocked inside `Serve` is explicitly quiescent: it is excluded from the finite
-stop participant set, but must wait behind the stop before returning to Tesl.
+Before a stopped event and snapshot are published, active instrumented Tesl
+executions have one second from the triggering stop to rendezvous at their next
+function-entry/checkpoint boundary or exit. If that bound expires, publication
+continues with `rendezvous: "timed-out"` rather than hanging; `"complete"` means
+the finite participant set did rendezvous. The triggering execution remains
+paused, and executions that later reach a boundary wait behind the stop, but an
+execution still blocked in external Go work may be running, so a timed-out
+snapshot is not a complete stop-the-world view. Stacks and SQL captures are
+keyed by execution, and a query completion consumes and updates only the capture
+identity created for that query. Arbitrary Go runtime goroutines and external
+systems are not suspended. A lifecycle scope blocked inside `Serve` is explicitly
+quiescent: it is excluded from the finite stop participant set, but must wait
+behind the stop before returning to Tesl. Control writes are frame-atomic and
+bounded to one second per client; a client that stops reading is removed without
+delaying stopped-event delivery to other clients.
 
 - **VSCode/VSCodium**: the `Attach to running app (tesl run --debug)` launch
   configuration (`request: "attach"`, `project: "${workspaceFolder}"`).

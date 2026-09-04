@@ -52,8 +52,11 @@ func NewTable[Row any]() *Table[Row] {
 }
 
 // snapshot is what a read starts from: the published rows and the version they belong to. The
-// slice is safe to walk with no lock held because no writer mutates a published element.
+// Memory transaction gate prevents an outside reader from taking this snapshot while a
+// transaction has published uncommitted rows. The transaction owner skips the non-reentrant
+// gate and reads its own writes, as it does on PostgreSQL.
 func (table *Table[Row]) snapshot() ([]Row, uint64) {
+	defer releaseMemoryRead(acquireMemoryRead())
 	table.mutex.RLock()
 	defer table.mutex.RUnlock()
 	return table.rows, table.version
@@ -460,7 +463,6 @@ func TableDelete[Row any](table *Table[Row], match func(Row) bool) struct{} {
 }
 
 func TableDeleteCount[Row any](table *Table[Row], match func(Row) bool) Int {
-	defer releaseMemoryWrite(acquireMemoryWrite())
 	for range tableWriteRetries {
 		rows, version := table.snapshot()
 		// The predicate runs on the snapshot with no lock held: it may query this table.
@@ -484,6 +486,7 @@ func TableDeleteCount[Row any](table *Table[Row], match func(Row) bool) Int {
 // computed `next` from — and reports whether it did. A false answer means another writer
 // published in between and the caller recomputes.
 func (table *Table[Row]) publishIfUnchanged(version uint64, next []Row) bool {
+	defer releaseMemoryWrite(acquireMemoryWrite())
 	table.mutex.Lock()
 	defer table.mutex.Unlock()
 	if table.version != version {
@@ -507,6 +510,7 @@ type rowReplacement[Row any] struct {
 // they are on the server.
 func (table *Table[Row]) replaceIfUnchanged(version uint64, replacements []rowReplacement[Row],
 	unique []UniqueIndex[Row]) bool {
+	defer releaseMemoryWrite(acquireMemoryWrite())
 	table.mutex.Lock()
 	defer table.mutex.Unlock()
 	if table.version != version {
@@ -525,7 +529,6 @@ func (table *Table[Row]) replaceIfUnchanged(version uint64, replacements []rowRe
 // plain `update` is a statement, so nothing is reported back.
 func TableUpdate[Row any](table *Table[Row], match func(Row) bool, apply func(Row) Row,
 	unique ...UniqueIndex[Row]) struct{} {
-	defer releaseMemoryWrite(acquireMemoryWrite())
 	for range tableWriteRetries {
 		rows, version := table.snapshot()
 		// `match` and `apply` run on the snapshot with no lock held: a `set` value may query
@@ -569,7 +572,6 @@ const updateReturnOneAmbiguous = "updateAndReturnOne: the predicate matched more
 // now refuse the ambiguous predicate before changing anything.
 func TableUpdateReturnOne[Row any](table *Table[Row], match func(Row) bool, apply func(Row) Row,
 	unique ...UniqueIndex[Row]) Row {
-	defer releaseMemoryWrite(acquireMemoryWrite())
 	for range tableWriteRetries {
 		rows, version := table.snapshot()
 		matched := -1
@@ -726,12 +728,11 @@ func Discard[A any](A) struct{} { return struct{}{} }
 // anything, and the record is a slice header — the rows are immutable once published, so no
 // copy is taken on the way in.
 //
-// Transactions take the Memory write gate exclusively through commit or rollback. Ordinary
-// writes take it shared, preserving their existing concurrency with each other but making them
-// wait outside a transaction instead of letting rollback erase them. Reads remain lock-free at
-// this level and can observe a transaction's published rows, as before. The gate is always taken
-// before a table mutex; transaction-owned writes skip reacquiring it, so predicates may query
-// tables without creating an inverted lock order.
+// Transactions take the Memory gate exclusively through commit or rollback. Ordinary reads and
+// writes take it shared, preserving their concurrency with each other but making them wait
+// outside a transaction. The owner skips reacquiring the non-reentrant gate, so it can read its
+// own writes and predicates may query tables without deadlocking. The gate is always taken before
+// a table mutex.
 //
 // Nesting is refused exactly as the Postgres path refuses it, so a program cannot pass its tests
 // with a shape that traps in production. The open transaction is keyed by goroutine, like the
@@ -758,11 +759,11 @@ func recordForRollback[Row any](transaction *memoryTransaction, table *Table[Row
 
 var openMemoryTransactions sync.Map // goroutine id -> *memoryTransaction
 
-// Transactions exclude every other Memory writer for their full duration. Non-transactional
-// writers use the shared side so they remain concurrent except when a transaction is active.
+// Transactions exclude every other Memory table operation for their full duration. Ordinary
+// readers and writers use the shared side so they remain concurrent except during a transaction.
 var memoryTransactionGate sync.RWMutex
 
-// memoryTransactionsOpen lets a write skip the goroutine-id lookup entirely — the common case
+// memoryTransactionsOpen lets an operation skip the goroutine-id lookup entirely — the common case
 // of a program with no transaction open anywhere.
 var memoryTransactionsOpen atomic.Int64
 
@@ -777,6 +778,20 @@ func acquireMemoryWrite() bool {
 }
 
 func releaseMemoryWrite(acquired bool) {
+	if acquired {
+		memoryTransactionGate.RUnlock()
+	}
+}
+
+func acquireMemoryRead() bool {
+	if memoryTransactionsOpen.Load() > 0 && currentMemoryTransaction() != nil {
+		return false
+	}
+	memoryTransactionGate.RLock()
+	return true
+}
+
+func releaseMemoryRead(acquired bool) {
 	if acquired {
 		memoryTransactionGate.RUnlock()
 	}

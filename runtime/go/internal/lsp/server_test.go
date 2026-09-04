@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -1013,6 +1014,138 @@ func TestServerInvalidCompilerSchemaPublishesFailure(t *testing.T) {
 	}
 	if !bytes.Contains(message, []byte(`"code":"TESL-COMPILER"`)) || !bytes.Contains(message, []byte(`missing required field`)) {
 		t.Fatalf("compiler schema failure = %s", message)
+	}
+}
+
+func TestServerMalformedNestedFixPublishesCompilerFailure(t *testing.T) {
+	payload := []byte(`{"version":1,"diagnostics":[{"file":"/tmp/demo.tesl","start":{"line":0,"col":0},"end":{"line":0,"col":1},"severity":"error","code":"E1","message":"bad","fix":{"kind":"multi","title":"Fix all","edits":[{"kind":"replace_line","line":0}]},"source":"parser"}]}`)
+	server := NewServer(&fakeCompiler{payload: payload})
+	doc := document{URI: "file:///tmp/demo.tesl", Path: "/tmp/demo.tesl", Text: "x"}
+	var output bytes.Buffer
+	if err := server.publishDiagnostics(context.Background(), doc, protocol.NewWriter(&output)); err != nil {
+		t.Fatal(err)
+	}
+	message, err := protocol.NewReader(&output).Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(message, []byte(`"code":"TESL-COMPILER"`)) || bytes.Contains(message, []byte(`"data"`)) {
+		t.Fatalf("malformed fix publication = %s", message)
+	}
+}
+
+func TestDidCloseCannotBeOvertakenByDiagnosticPublication(t *testing.T) {
+	uri := "file:///tmp/close-race.tesl"
+	payload := []byte(`{"version":1,"diagnostics":[{"file":"/tmp/close-race.tesl","start":{"line":0,"col":0},"end":{"line":0,"col":1},"severity":"error","code":"E1","message":"bad","fix":null,"source":"parser"}]}`)
+	server := NewServer(&fakeCompiler{payload: payload})
+	doc := document{URI: uri, Path: "/tmp/close-race.tesl", Version: 1, Text: "x"}
+	server.documents[uri] = doc
+	ready := make(chan struct{})
+	release := make(chan struct{})
+	server.beforeDiagnosticPublish = func() {
+		close(ready)
+		<-release
+	}
+	var output bytes.Buffer
+	writer := protocol.NewWriter(&output)
+	server.scheduleDiagnostics(context.Background(), doc, writer)
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("diagnostic worker did not reach publication boundary")
+	}
+	closed := make(chan error, 1)
+	go func() {
+		closed <- server.didClose(json.RawMessage(`{"textDocument":{"uri":"file:///tmp/close-race.tesl"}}`), writer)
+	}()
+	select {
+	case err := <-closed:
+		t.Fatalf("didClose bypassed in-flight publication lock: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+	server.waitDiagnostics()
+
+	reader := protocol.NewReader(&output)
+	counts := make([]int, 0, 2)
+	for {
+		message, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		var notification protocol.Request
+		if err := json.Unmarshal(message, &notification); err != nil {
+			t.Fatal(err)
+		}
+		var params struct {
+			Diagnostics []json.RawMessage `json:"diagnostics"`
+		}
+		if err := json.Unmarshal(notification.Params, &params); err != nil {
+			t.Fatal(err)
+		}
+		counts = append(counts, len(params.Diagnostics))
+	}
+	if got := fmt.Sprint(counts); got != "[1 0]" {
+		t.Fatalf("diagnostic publication counts = %s, want [1 0]", got)
+	}
+}
+
+func TestBuiltCompilerUsesUnsavedDependencyOverlays(t *testing.T) {
+	_, testFile, _, _ := runtime.Caller(0)
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(testFile), "../../../.."))
+	compilerPath := filepath.Join(repoRoot, "compiler", "_build", "default", "bin", "main.exe")
+	if _, err := os.Stat(compilerPath); err != nil {
+		t.Skip("compiler build unavailable")
+	}
+	project := t.TempDir()
+	mainPath := filepath.Join(project, "A.tesl")
+	dependencyPath := filepath.Join(project, "B.tesl")
+	mainSource := "module A exposing [use]\nimport Tesl.Prelude exposing [Int]\nimport B exposing [value]\nfn use() -> Int = value()\n"
+	validDependency := "module B exposing [value]\nimport Tesl.Prelude exposing [Int]\nfn value() -> Int = 1\n"
+	brokenDependency := "module B exposing [value]\nimport Tesl.Prelude exposing [String]\nfn value() -> String = \"bad\"\n"
+	if err := os.WriteFile(mainPath, []byte(mainSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dependencyPath, []byte(validDependency), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mainURI := protocol.PathToURI(mainPath)
+	dependencyURI := protocol.PathToURI(dependencyPath)
+	client := tooling.Client{Executable: compilerPath, Environment: append(os.Environ(), "TESL_REPO_ROOT="+repoRoot)}
+	server := NewServer(client)
+	server.documents[mainURI] = document{URI: mainURI, Path: mainPath, Version: 1, Text: mainSource}
+	server.documents[dependencyURI] = document{URI: dependencyURI, Path: dependencyPath, Version: 1, Text: validDependency}
+	var output bytes.Buffer
+	writer := protocol.NewWriter(&output)
+
+	breakChange := fmt.Sprintf(`{"textDocument":{"uri":%q,"version":2},"contentChanges":[{"text":%q}]}`, dependencyURI, brokenDependency)
+	if err := server.didChange(context.Background(), json.RawMessage(breakChange), writer); err != nil {
+		t.Fatal(err)
+	}
+	server.waitDiagnostics()
+	brokenCount := 0
+	for _, diagnostics := range server.diagnosticSets[mainURI] {
+		brokenCount += len(diagnostics)
+	}
+	if brokenCount == 0 {
+		t.Fatalf("unsaved dependency break did not update importer diagnostics: %#v", server.diagnosticSets[mainURI])
+	}
+
+	fixChange := fmt.Sprintf(`{"textDocument":{"uri":%q,"version":3},"contentChanges":[{"text":%q}]}`, dependencyURI, validDependency)
+	if err := server.didChange(context.Background(), json.RawMessage(fixChange), writer); err != nil {
+		t.Fatal(err)
+	}
+	server.waitDiagnostics()
+	for uri, diagnostics := range server.diagnosticSets[mainURI] {
+		if len(diagnostics) != 0 {
+			t.Fatalf("fixed unsaved dependency left importer diagnostics for %s: %#v", uri, diagnostics)
+		}
 	}
 }
 

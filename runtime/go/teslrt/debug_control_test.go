@@ -69,9 +69,16 @@ func TestDebugControlHandshakeAndContinue(t *testing.T) {
 	if stopped.Event != "stopped" {
 		t.Fatalf("event = %#v", stopped)
 	}
+	if stopped.Rendezvous != DebugRendezvousComplete {
+		t.Fatalf("rendezvous = %q, want complete", stopped.Rendezvous)
+	}
 	response = send(DebugControlRequest{ID: "3", Command: "snapshot"})
 	if response["error"] != nil {
 		t.Fatalf("snapshot response = %#v", response)
+	}
+	result, _ := response["result"].(map[string]any)
+	if result["rendezvous"] != DebugRendezvousComplete {
+		t.Fatalf("snapshot rendezvous = %#v", result)
 	}
 	send(DebugControlRequest{ID: "4", Command: "step-in"})
 	nextDone := make(chan struct{})

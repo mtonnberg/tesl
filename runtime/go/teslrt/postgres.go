@@ -253,10 +253,10 @@ func postgresDSN(config PostgresConfig) string {
 	return strings.Join(settings, " ")
 }
 
-// bootstrap creates the schema and any missing table. `if not exists` throughout: a second
-// process starting at the same time must not fail, and an EXISTING table is left exactly as it
-// is — this is not a migration tool, and silently altering a live table would be worse than
-// refusing to.
+// bootstrap creates the schema, declared tables, and the runtime-owned pub/sub outbox before
+// the Database can be bound. `if not exists` throughout: a second process starting at the same
+// time must not fail. Application tables are never altered; the outbox's idempotent ALTERs are
+// runtime metadata rather than application migration machinery.
 func (db *PostgresDB) bootstrap(ctx context.Context, tables []PostgresTable) {
 	db.bootstrapMutex.Lock()
 	defer db.bootstrapMutex.Unlock()
@@ -295,6 +295,12 @@ func (db *PostgresDB) bootstrap(ctx context.Context, tables []PostgresTable) {
 				panic("database: cannot create unique index " + index.Name + ": " + err.Error())
 			}
 		}
+	}
+	if err := createPubsubOutbox(ctx, db); err != nil {
+		panic("database: cannot create the pub/sub outbox: " + err.Error())
+	}
+	if err := normalizeLegacyPubsubRows(db); err != nil {
+		panic("database: cannot upgrade the pub/sub outbox: " + err.Error())
 	}
 }
 

@@ -47,12 +47,17 @@ L1,L2,L3             comma-separated bare lines      e.g. 10,22,40
 
 Optional `mode` is `"program"` (default) or `"test"` (run inside the file's
 `test` blocks). It compiles the file with debug instrumentation, runs to the
-first breakpoint that fires, waits for every active instrumented Tesl execution
-to rendezvous at its next debug boundary, and returns one execution-isolated
-stack and SQL capture in
+first breakpoint that fires, gives active instrumented Tesl executions one
+second to rendezvous at their next debug boundary, and returns one
+execution-isolated stack and SQL capture in
 `{stopped, source, locals, domain, sql, breakpoint}`.
 The long-lived `main` scope blocked in the HTTP server is quiescent: it does not
 delay a handler breakpoint and cannot resume through an established stop.
+If another execution remains blocked outside a debug boundary, the stop is
+published after that bound and is partial: the triggering execution and later
+boundary arrivals are paused, but the blocked execution may still be running.
+The raw control-channel event/snapshot identifies this as
+`rendezvous: "timed-out"` (`"complete"` otherwise).
 `timeout_ms` defaults to 30000; the MCP subprocess deadline adds a small startup
 and shutdown margin to that requested debugger timeout.
 

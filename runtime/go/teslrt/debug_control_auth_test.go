@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -202,6 +203,104 @@ func TestDebugControlSessionSurvivesUnauthenticatedChurn(t *testing.T) {
 	}
 	operator.mustSend(DebugControlRequest{ID: "3", Command: "continue"})
 	<-done
+}
+
+func TestDebugControlNonReadingClientCannotBlockStoppedEvent(t *testing.T) {
+	debugger := NewDebugger()
+	server, err := debugger.StartDebugControlTCP(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = server.Close() }()
+	server.mutex.Lock()
+	server.writeTimeout = 750 * time.Millisecond
+	server.mutex.Unlock()
+
+	nonReader := dialControl(t, "tcp4", server.Endpoint())
+	nonReader.mustSend(DebugControlRequest{ID: "1", Command: "handshake", Token: server.Token()})
+	server.mutex.Lock()
+	var blockedConnection net.Conn
+	var blockedWriter *sync.Mutex
+	for connection := range server.clients {
+		blockedConnection = connection
+		blockedWriter = server.writers[connection]
+	}
+	server.mutex.Unlock()
+	if blockedConnection == nil || blockedWriter == nil {
+		t.Fatal("authenticated connection has no writer")
+	}
+	if tcp, ok := blockedConnection.(*net.TCPConn); !ok {
+		t.Fatalf("server connection = %T, want TCP", blockedConnection)
+	} else if err := tcp.SetWriteBuffer(1024); err != nil {
+		t.Fatal(err)
+	}
+	if tcp, ok := nonReader.conn.(*net.TCPConn); !ok {
+		t.Fatalf("client connection = %T, want TCP", nonReader.conn)
+	} else if err := tcp.SetReadBuffer(1024); err != nil {
+		t.Fatal(err)
+	}
+
+	operator := dialControl(t, "tcp4", server.Endpoint())
+	operator.mustSend(DebugControlRequest{ID: "1", Command: "handshake", Token: server.Token()})
+	operator.mustSend(DebugControlRequest{ID: "2", Command: "set-breakpoints", Breakpoints: []DebugBreakpointSpec{{ID: "bp", File: "main.tesl", Line: 7}}})
+
+	requestSent := make(chan error, 1)
+	go func() {
+		requestSent <- json.NewEncoder(nonReader.conn).Encode(DebugControlRequest{ID: strings.Repeat("x", 256<<10), Command: "ping"})
+	}()
+	if err := <-requestSent; err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for blockedWriter.TryLock() {
+		blockedWriter.Unlock()
+		if time.Now().After(deadline) {
+			t.Fatal("non-reading client's server write did not block")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	done := secretCheckpoint(debugger, loginFrame)
+	eventRead := make(chan map[string]any, 1)
+	eventErr := make(chan error, 1)
+	go func() {
+		event, err := operator.readLine()
+		if err != nil {
+			eventErr <- err
+			return
+		}
+		eventRead <- event
+	}()
+	select {
+	case event := <-eventRead:
+		if event["event"] != "stopped" {
+			t.Fatalf("stopped event = %v", event)
+		}
+	case err := <-eventErr:
+		t.Fatal(err)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("non-reading client blocked stopped event delivery")
+	}
+	operator.mustSend(DebugControlRequest{ID: "3", Command: "continue"})
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("continue did not release checkpoint")
+	}
+
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		server.mutex.Lock()
+		_, retained := server.clients[blockedConnection]
+		server.mutex.Unlock()
+		if !retained {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed-out client was not removed")
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 func TestDebugControlTCPBoundsSilentHandshakesAndPendingConnections(t *testing.T) {

@@ -999,6 +999,77 @@ func TestMemoryTransactionBlocksConcurrentWriterUntilAfterRollback(t *testing.T)
 	}
 }
 
+// An outside Memory reader waits for commit instead of observing the row after it is published
+// but before the transaction commits. The owner still reads its own write without deadlocking.
+func TestMemoryTransactionBlocksConcurrentReaderUntilAfterCommit(t *testing.T) {
+	table := NewTable[row]()
+	TableInsert(table, "Row", row{ID: "before"}, sameID)
+	readerStarted := make(chan struct{})
+	readerResult := make(chan int, 1)
+	WithTransaction(func() {
+		TableInsert(table, "Row", row{ID: "inside"}, sameID)
+		if count := TableCount(table, every); !Equal(count, FromInt64(2)) {
+			t.Fatalf("transaction owner counted %s rows, want its two visible rows", count.String())
+		}
+		go func() {
+			close(readerStarted)
+			readerResult <- len(TableSelect(table, every))
+		}()
+		<-readerStarted
+		select {
+		case count := <-readerResult:
+			t.Fatalf("outside reader observed %d rows before commit", count)
+		case <-time.After(100 * time.Millisecond):
+		}
+	})
+	select {
+	case count := <-readerResult:
+		if count != 2 {
+			t.Fatalf("outside reader observed %d rows after commit, want 2", count)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("outside reader did not resume after commit")
+	}
+}
+
+// The same gate remains held through rollback, including restoration, so an outside reader sees
+// the pre-transaction state rather than dirty data or an intermediate restore.
+func TestMemoryTransactionBlocksConcurrentReaderUntilAfterRollback(t *testing.T) {
+	table := NewTable[row]()
+	TableInsert(table, "Row", row{ID: "before"}, sameID)
+	readerStarted := make(chan struct{})
+	readerResult := make(chan []row, 1)
+	recovered := func() (recovered any) {
+		defer func() { recovered = recover() }()
+		WithTransaction(func() {
+			TableInsert(table, "Row", row{ID: "inside"}, sameID)
+			go func() {
+				close(readerStarted)
+				readerResult <- TableSelect(table, every)
+			}()
+			<-readerStarted
+			select {
+			case rows := <-readerResult:
+				t.Fatalf("outside reader observed rows before rollback: %+v", rows)
+			case <-time.After(100 * time.Millisecond):
+			}
+			panic("rollback")
+		})
+		return nil
+	}()
+	if recovered != "rollback" {
+		t.Fatalf("transaction answered %v, expected rollback trap", recovered)
+	}
+	select {
+	case rows := <-readerResult:
+		if len(rows) != 1 || rows[0].ID != "before" {
+			t.Fatalf("outside reader after rollback observed %+v", rows)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("outside reader did not resume after rollback")
+	}
+}
+
 // ── Pool lease ───────────────────────────────────────────────────────────────
 
 // The documented lease: a request that cannot get a connection within

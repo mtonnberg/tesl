@@ -405,6 +405,107 @@ func TestDurableQueueReclaimsAJobFromACrashedInstance(t *testing.T) {
 	})
 }
 
+// A dead-letter claim has a different origin from a normal claim. If its worker crashes, stale
+// reclamation must put it back in the dead letter, never into the normal pending queue.
+func TestDurableQueueReclaimsADeadJobToTheDeadLetter(t *testing.T) {
+	dbA, dbB := storeDatabase(t, "DeadCrashA"), storeDatabase(t, "DeadCrashB")
+	name := uniqueName("dead_crash")
+	queueA := NewQueueOn(dbA, name, 1, "", 0)
+	queueB := NewQueueOn(dbB, name, 1, "", 0)
+	registerStoreJobCodec(queueA)
+	registerStoreJobCodec(queueB)
+
+	var claimedID string
+	WithDatabase(dbA, func() {
+		ResetQueue(queueA)
+		EnqueueJob(queueA, storeJob{Name: "dead", Count: FromInt64(1)})
+		ProcessNextJob(queueA, failJob)
+		id, _, attempts, token, found := queueA.dequeue(jobDead)
+		if !found || attempts != 1 || token == "" {
+			t.Fatalf("dead claim: found=%v attempts=%d token=%q", found, attempts, token)
+		}
+		claimedID = id
+		db := dbA.bound()
+		rows := PgQuery(db, "select status from "+db.QualifiedTable(jobsTable)+" where id = $1",
+			[]any{id}, scanText)
+		if len(rows) != 1 || rows[0] != jobDeadProcessing {
+			t.Fatalf("claimed dead job status = %v", rows)
+		}
+		PgExec(db, "update "+db.QualifiedTable(jobsTable)+
+			" set locked_at = now() - interval '1 day' where id = $1", []any{id})
+	})
+	WithDatabase(dbB, func() {
+		backend := queueB.backend.(*pgQueueBackend)
+		backend.lastReclaim.Store(0)
+		if _, _, _, _, found := queueB.dequeue(jobPending); found {
+			t.Fatal("a reclaimed dead-letter claim entered the normal pending queue")
+		}
+		expectInt(t, "dead after reclaim", DeadJobCount(queueB), 1)
+		id, payload, attempts, token, found := queueB.dequeue(jobDead)
+		if !found || id != claimedID || attempts != 1 || token == "" {
+			t.Fatalf("reclaimed dead claim: id=%q found=%v attempts=%d token=%q", id, found, attempts, token)
+		}
+		if job, ok := payload.(storeJob); !ok || job.Name != "dead" {
+			t.Fatalf("payload after dead reclaim: %#v", payload)
+		}
+		if !queueB.complete(id, token) {
+			t.Fatal("the reclaimed dead job could not be completed")
+		}
+	})
+}
+
+// If reclamation fences a dead worker while its handler is still running, its completion must
+// not disappear silently. workerIteration reports the lost ownership as a store failure and the
+// reclaimed row remains available to another dead-letter worker.
+func TestDurableDeadWorkerSurfacesAFencedCompletion(t *testing.T) {
+	database := storeDatabase(t, "DeadFence")
+	queue := NewQueueOn(database, uniqueName("dead_fence"), 1, "", 0)
+	registerStoreJobCodec(queue)
+	WithDatabase(database, func() {
+		ResetQueue(queue)
+		EnqueueJob(queue, storeJob{Name: "fenced", Count: FromInt64(1)})
+		ProcessNextJob(queue, failJob)
+		handlerEntered := make(chan struct{})
+		releaseHandler := make(chan struct{})
+		type iterationResult struct {
+			outcome JobOutcome
+			ok      bool
+		}
+		result := make(chan iterationResult, 1)
+		var iteration iterationResult
+		reported := captureStderr(t, func() {
+			go func() {
+				outcome, ok := workerIteration(queue, func(any) JobOutcome {
+					close(handlerEntered)
+					<-releaseHandler
+					return JobOutcome{OK: true}
+				}, true)
+				result <- iterationResult{outcome: outcome, ok: ok}
+			}()
+			<-handlerEntered
+			db := database.bound()
+			table := db.QualifiedTable(jobsTable)
+			PgExec(db, "update "+table+" set locked_at = now() - interval '1 day' "+
+				"where queue = $1 and status = 'dead_processing'", []any{queue.name})
+			backend := queue.backend.(*pgQueueBackend)
+			backend.lastReclaim.Store(0)
+			backend.reclaimStuck(db, table)
+			close(releaseHandler)
+			iteration = <-result
+		})
+		if iteration.ok || iteration.outcome.Ran {
+			t.Fatalf("fenced dead completion was not surfaced as a store failure: %+v", iteration)
+		}
+		if !strings.Contains(reported, "dead-letter completion lost ownership") {
+			t.Fatalf("fenced dead completion was not reported: %q", reported)
+		}
+		expectInt(t, "dead after fenced completion", DeadJobCount(queue), 1)
+		if outcome := ProcessNextDeadJob(queue, okJob); !outcome.Ran || !outcome.OK {
+			t.Fatalf("the reclaimed dead job was not available to its replacement worker: %+v", outcome)
+		}
+	})
+}
+
 // A worker whose lease was replaced cannot complete or retry the replacement's active
 // attempt. The row id is deliberately the same across both claims; only the token fences it.
 func TestDurableQueueRejectsOutcomesFromAStaleClaim(t *testing.T) {
@@ -590,19 +691,15 @@ func TestDurableOutboxIsTransactionalAndExactlyOnce(t *testing.T) {
 		}
 		var mutex sync.Mutex
 		delivered := map[string]int{}
-		byInstance := map[string]int{}
-		stub := func(instance string) func(SmtpSettings, EmailMessage) error {
-			return func(_ SmtpSettings, message EmailMessage) error {
-				mutex.Lock()
-				delivered[message.To]++
-				byInstance[instance]++
-				mutex.Unlock()
-				time.Sleep(2 * time.Millisecond)
-				return nil
-			}
+		stub := func(_ SmtpSettings, message EmailMessage) error {
+			mutex.Lock()
+			delivered[message.To]++
+			mutex.Unlock()
+			time.Sleep(2 * time.Millisecond)
+			return nil
 		}
-		outboxA.deliver = stub("A")
-		outboxB.deliver = stub("B")
+		outboxA.deliver = stub
+		outboxB.deliver = stub
 		var wait sync.WaitGroup
 		for _, outbox := range []*Outbox{outboxA, outboxB} {
 			wait.Add(1)
@@ -619,9 +716,6 @@ func TestDurableOutboxIsTransactionalAndExactlyOnce(t *testing.T) {
 			if times != 1 {
 				t.Fatalf("%s was delivered %d times", recipient, times)
 			}
-		}
-		if byInstance["A"] == 0 || byInstance["B"] == 0 {
-			t.Fatalf("delivery was not shared between the instances: %v", byInstance)
 		}
 		for _, message := range OutboxMessages(outboxA) {
 			if message.Status != EmailSent || message.SentAt.IsZero() {

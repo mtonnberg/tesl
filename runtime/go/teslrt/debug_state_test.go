@@ -2,6 +2,7 @@ package teslrt
 
 import (
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -50,6 +51,10 @@ func TestDebugPgSqlCapturesParameterizedPlan(t *testing.T) {
 	plan.Capture(3)
 	if state := DebugRuntimeStateSnapshot(); state.SQL == nil || state.SQL.RowCount != 3 {
 		t.Fatalf("SQL row count = %#v", state.SQL)
+	}
+	plan.Capture(9)
+	if state := DebugRuntimeStateSnapshot(); state.SQL == nil || state.SQL.RowCount != 3 {
+		t.Fatalf("completed plan retained its capture mapping: %#v", state.SQL)
 	}
 	ClearDebugSQLCapture()
 }
@@ -142,4 +147,46 @@ func TestDebugPgSqlCompletionCannotMutateAnotherExecutionCapture(t *testing.T) {
 		t.Fatal("concurrent SQL capture test timed out")
 	}
 	<-firstDone
+}
+
+func TestDebugPgSqlReusablePlanConsumesConcurrentCaptureMappings(t *testing.T) {
+	const executions = 16
+	plan := DebugPgSql(PgSql("select reusable", nil))
+	ready := make(chan struct{}, executions)
+	capture := make(chan struct{})
+	results := make(chan int, executions)
+	var wait sync.WaitGroup
+	for rowCount := 1; rowCount <= executions; rowCount++ {
+		wait.Add(1)
+		go func(rowCount int) {
+			defer wait.Done()
+			plan.arguments()
+			ready <- struct{}{}
+			<-capture
+			plan.Capture(rowCount)
+			plan.Capture(-1)
+			state := DebugRuntimeStateSnapshot()
+			if state.SQL == nil {
+				results <- 0
+			} else {
+				results <- state.SQL.RowCount
+			}
+			ClearDebugSQLCapture()
+		}(rowCount)
+	}
+	for range executions {
+		<-ready
+	}
+	close(capture)
+	wait.Wait()
+	close(results)
+	seen := make(map[int]bool, executions)
+	for rowCount := range results {
+		seen[rowCount] = true
+	}
+	for rowCount := 1; rowCount <= executions; rowCount++ {
+		if !seen[rowCount] {
+			t.Fatalf("concurrent reusable plan lost row count %d; results = %#v", rowCount, seen)
+		}
+	}
 }

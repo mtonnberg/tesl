@@ -176,6 +176,11 @@ func exitCode(err error) int {
 
 const compilerProtocolVersion = 1
 
+const (
+	maxDiagnosticFixDepth = 16
+	maxDiagnosticFixEdits = 256
+)
+
 // ValidateCompilerJSON checks the required version-1 fields consumed by editor
 // tooling. Unknown flags are left alone so QueryJSON remains usable for future
 // compiler commands, while every currently consumed schema fails closed.
@@ -324,8 +329,9 @@ func validateAgentDiagnostic(value map[string]any, name string) error {
 		return err
 	}
 	if fix, present := value["fix"]; present && fix != nil {
-		if _, ok := fix.(map[string]any); !ok {
-			return fmt.Errorf("%s field \"fix\" must be an object", name)
+		count := 0
+		if err := validateDiagnosticFix(fix, name+".fix", true, 0, &count); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -502,10 +508,115 @@ func validateDiagnostic(value map[string]any, index int) error {
 	if end[0] < start[0] || end[0] == start[0] && end[1] < start[1] {
 		return fmt.Errorf("%s has an inverted range", name)
 	}
-	if _, ok := value["fix"]; !ok {
+	fix, ok := value["fix"]
+	if !ok {
 		return fmt.Errorf("%s is missing required field \"fix\"", name)
 	}
+	if fix != nil {
+		count := 0
+		if err := validateDiagnosticFix(fix, name+".fix", true, 0, &count); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func validateDiagnosticFix(raw any, name string, topLevel bool, depth int, count *int) error {
+	if depth > maxDiagnosticFixDepth {
+		return fmt.Errorf("%s exceeds maximum nesting depth", name)
+	}
+	*count = *count + 1
+	if *count > maxDiagnosticFixEdits {
+		return fmt.Errorf("%s exceeds maximum edit count", name)
+	}
+	fix, err := valueObject(raw, name)
+	if err != nil {
+		return err
+	}
+	if topLevel {
+		if _, err := requiredNonEmptyString(fix, "title"); err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+	}
+	kind, err := requiredString(fix, "kind")
+	if err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	requirePosition := func(field string) (int, error) {
+		position, err := requiredInt(fix, field)
+		if err != nil || position < 0 {
+			return 0, fmt.Errorf("%s field %q must be a non-negative integer", name, field)
+		}
+		return position, nil
+	}
+	requireText := func(field string) error {
+		if _, err := requiredString(fix, field); err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+		return nil
+	}
+	switch kind {
+	case "replace_line":
+		if _, err := requirePosition("line"); err != nil {
+			return err
+		}
+		return requireText("replacement")
+	case "insert_line":
+		if _, err := requirePosition("line"); err != nil {
+			return err
+		}
+		return requireText("text")
+	case "replace_span":
+		start, err := requirePosition("start_line")
+		if err != nil {
+			return err
+		}
+		end, err := requirePosition("end_line")
+		if err != nil {
+			return err
+		}
+		if end < start {
+			return fmt.Errorf("%s has an inverted line range", name)
+		}
+		return requireText("replacement")
+	case "replace_range":
+		startLine, err := requirePosition("start_line")
+		if err != nil {
+			return err
+		}
+		startCol, err := requirePosition("start_col")
+		if err != nil {
+			return err
+		}
+		endLine, err := requirePosition("end_line")
+		if err != nil {
+			return err
+		}
+		endCol, err := requirePosition("end_col")
+		if err != nil {
+			return err
+		}
+		if endLine < startLine || endLine == startLine && endCol < startCol {
+			return fmt.Errorf("%s has an inverted range", name)
+		}
+		return requireText("replacement")
+	case "multi":
+		edits, err := requiredArray(fix, "edits")
+		if err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+		if len(edits) == 0 {
+			return fmt.Errorf("%s field \"edits\" must not be empty", name)
+		}
+		for index, edit := range edits {
+			if err := validateDiagnosticFix(edit, fmt.Sprintf("%s.edits[%d]", name, index), false, depth+1, count); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("%s has unsupported kind %q", name, kind)
+	}
 }
 
 func validateTypedLocation(value map[string]any, name string, requireFile bool, fields ...string) error {

@@ -2,7 +2,10 @@ package tooling
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -116,6 +119,76 @@ func TestClientFormatsTemporarySourceAndSetsLogicalPath(t *testing.T) {
 	}
 }
 
+func TestClientQueriesBoundedOverlayProjectAndMapsPaths(t *testing.T) {
+	project := t.TempDir()
+	entry := filepath.Join(project, "A.tesl")
+	dependency := filepath.Join(project, "B.tesl")
+	for path, contents := range map[string]string{
+		filepath.Join(project, "tesl.toml"): "[project]\nname = \"overlay-test\"\n",
+		entry:                               "disk entry",
+		dependency:                          "disk dependency",
+	} {
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	marker := filepath.Join(t.TempDir(), "shadow-path")
+	script := filepath.Join(t.TempDir(), "compiler-helper.sh")
+	program := `#!/bin/sh
+test -z "$TESL_LOGICAL_PATH" || exit 3
+shadow=$(dirname "$2")
+printf '%s' "$shadow" > "$OVERLAY_MARKER"
+test "$(cat "$shadow/B.tesl")" = "unsaved dependency" || exit 4
+printf '{"version":1,"diagnostics":[{"file":"%s","start":{"line":0,"col":0},"end":{"line":0,"col":1},"severity":"error","code":"E1","message":"bad","fix":null,"source":"type"}]}' "$shadow/B.tesl"
+`
+	if err := os.WriteFile(script, []byte(program), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	client := Client{
+		Executable:  script,
+		Environment: append(os.Environ(), "TESL_LOGICAL_PATH=stale", "OVERLAY_MARKER="+marker),
+	}
+	payload, _, err := client.QuerySourcesJSON(context.Background(), "--check-json", entry, []SourceOverlay{
+		{Path: entry, Source: "open entry"},
+		{Path: dependency, Source: "unsaved dependency"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(payload), dependency) || strings.Contains(string(payload), "tesl-overlay-") {
+		t.Fatalf("mapped payload = %s", payload)
+	}
+	shadowBytes, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(string(shadowBytes)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("shadow directory was not cleaned up: %q, err=%v", shadowBytes, err)
+	}
+}
+
+func TestClientRejectsOverlayBounds(t *testing.T) {
+	entry := filepath.Join(t.TempDir(), "A.tesl")
+	tooMany := make([]SourceOverlay, DefaultMaxOverlayDocuments+1)
+	for index := range tooMany {
+		tooMany[index] = SourceOverlay{Path: filepath.Join(filepath.Dir(entry), fmt.Sprintf("%d.tesl", index))}
+	}
+	client := Client{Executable: "unused"}
+	if _, _, err := client.QuerySourcesJSON(context.Background(), "--check-json", entry, tooMany); err == nil {
+		t.Fatal("QuerySourcesJSON accepted too many overlays")
+	}
+	if _, _, err := client.QuerySourcesJSON(context.Background(), "--check-json", entry, []SourceOverlay{{
+		Path: entry, Source: strings.Repeat("x", DefaultMaxOverlayBytes+1),
+	}}); err == nil {
+		t.Fatal("QuerySourcesJSON accepted an oversized overlay")
+	}
+	if _, _, err := client.QuerySourcesJSON(context.Background(), "--check-json", strings.Repeat("x", DefaultMaxOverlayPathBytes+1), []SourceOverlay{{
+		Path: entry,
+	}}); err == nil {
+		t.Fatal("QuerySourcesJSON accepted an oversized path")
+	}
+}
+
 func TestValidateCompilerJSONRejectsMissingAndMalformedRequiredFields(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -135,6 +208,11 @@ func TestValidateCompilerJSONRejectsMissingAndMalformedRequiredFields(t *testing
 		{"semantic variant", "--semantic-json", `{"version":1,"records":[],"adts":[{"name":"Choice","variants":[{"constructor":3}]}],"functions":[],"local_bindings":[]}`},
 		{"semantic function location", "--semantic-json", `{"version":1,"records":[],"adts":[],"functions":[{"name":"f","kind":"fn","loc":{"file":"a.tesl","start_line":0,"start_col":0,"end_line":0}}],"local_bindings":[]}`},
 		{"semantic binding name", "--semantic-json", `{"version":1,"records":[],"adts":[],"functions":[],"local_bindings":[{"name":"","loc":null}]}`},
+		{"unknown diagnostic fix", "--check-json", `{"version":1,"diagnostics":[{"file":"/tmp/a.tesl","start":{"line":0,"col":0},"end":{"line":0,"col":1},"severity":"error","code":"E1","message":"bad","fix":{"kind":"erase","title":"Erase"},"source":"parser"}]}`},
+		{"missing diagnostic replacement", "--check-json", `{"version":1,"diagnostics":[{"file":"/tmp/a.tesl","start":{"line":0,"col":0},"end":{"line":0,"col":1},"severity":"error","code":"E1","message":"bad","fix":{"kind":"replace_line","line":0,"title":"Replace"},"source":"parser"}]}`},
+		{"inverted diagnostic fix range", "--check-json", `{"version":1,"diagnostics":[{"file":"/tmp/a.tesl","start":{"line":0,"col":0},"end":{"line":0,"col":1},"severity":"error","code":"E1","message":"bad","fix":{"kind":"replace_range","start_line":1,"start_col":0,"end_line":0,"end_col":0,"replacement":"","title":"Replace"},"source":"parser"}]}`},
+		{"malformed nested diagnostic fix", "--check-json", `{"version":1,"diagnostics":[{"file":"/tmp/a.tesl","start":{"line":0,"col":0},"end":{"line":0,"col":1},"severity":"error","code":"E1","message":"bad","fix":{"kind":"multi","title":"Fix all","edits":[{"kind":"insert_line","line":0}]},"source":"parser"}]}`},
+		{"empty multi diagnostic fix", "--check-json", `{"version":1,"diagnostics":[{"file":"/tmp/a.tesl","start":{"line":0,"col":0},"end":{"line":0,"col":1},"severity":"error","code":"E1","message":"bad","fix":{"kind":"multi","title":"Fix all","edits":[]},"source":"parser"}]}`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -146,7 +224,7 @@ func TestValidateCompilerJSONRejectsMissingAndMalformedRequiredFields(t *testing
 }
 
 func TestValidateCompilerJSONAcceptsNestedAgentAndSemanticMembers(t *testing.T) {
-	agent := `{"version":1,"file":"a.tesl","content_hash":"h","ok":false,"summary":"bad","diagnostics":[{"code":"E1","severity":"error","message":"bad","line":0,"col":0,"end_line":0,"end_col":1,"fix":{"kind":"replace_line"}}],"symbols":[{"name":"f","kind":"fn","signature":"Int"}],"proof_obligations":[{"code":"P1","message":"prove","line":0,"col":0}]}`
+	agent := `{"version":1,"file":"a.tesl","content_hash":"h","ok":false,"summary":"bad","diagnostics":[{"code":"E1","severity":"error","message":"bad","line":0,"col":0,"end_line":0,"end_col":1,"fix":{"kind":"replace_line","line":0,"replacement":"fixed","title":"Replace line"}}],"symbols":[{"name":"f","kind":"fn","signature":"Int"}],"proof_obligations":[{"code":"P1","message":"prove","line":0,"col":0}]}`
 	if err := ValidateCompilerJSON("--agent-context-json", []byte(agent)); err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +235,7 @@ func TestValidateCompilerJSONAcceptsNestedAgentAndSemanticMembers(t *testing.T) 
 }
 
 func TestValidateCompilerJSONAcceptsValidDiagnosticEnvelope(t *testing.T) {
-	payload := `{"version":1,"diagnostics":[{"file":"/tmp/a.tesl","start":{"line":0,"col":0},"end":{"line":0,"col":1},"severity":"error","code":"E1","message":"bad","fix":null,"source":"parser"}]}`
+	payload := `{"version":1,"diagnostics":[{"file":"/tmp/a.tesl","start":{"line":0,"col":0},"end":{"line":0,"col":1},"severity":"error","code":"E1","message":"bad","fix":{"kind":"multi","title":"Apply fixes","edits":[{"kind":"insert_line","line":0,"text":"import B"},{"kind":"replace_range","start_line":1,"start_col":0,"end_line":1,"end_col":3,"replacement":"new"}]},"source":"parser"}]}`
 	if err := ValidateCompilerJSON("--check-json", []byte(payload)); err != nil {
 		t.Fatal(err)
 	}

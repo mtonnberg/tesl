@@ -95,6 +95,18 @@ func TestMCPCompilerToolRejectsMalformedAgentContextMember(t *testing.T) {
 	}
 }
 
+func TestMCPCompilerToolRejectsMalformedNestedDiagnosticFix(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "compiler-helper.sh")
+	payload := `{"version":1,"diagnostics":[{"file":"fixture.tesl","start":{"line":0,"col":0},"end":{"line":0,"col":1},"severity":"error","code":"E1","message":"bad","fix":{"kind":"multi","title":"Fix all","edits":[{"kind":"replace_line","line":0}]},"source":"parser"}]}`
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s' '"+payload+"'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	server := &server{compiler: tooling.Client{Executable: script}}
+	if _, err := server.callTool(context.Background(), "tesl.check", map[string]any{"file": "fixture.tesl"}); err == nil || !strings.Contains(err.Error(), "replacement") {
+		t.Fatalf("malformed diagnostic fix error = %v", err)
+	}
+}
+
 func TestMCPCompilerToolsDispatchWithRequiredArguments(t *testing.T) {
 	directory := t.TempDir()
 	script := filepath.Join(directory, "compiler-helper.sh")

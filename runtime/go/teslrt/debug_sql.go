@@ -28,8 +28,10 @@ func DebugPgSql(plan PgPlan) PgPlan {
 	}
 	wrapped.Capture = func(rowCount int) {
 		execution := debugExecutionID()
-		if captureID, present := captures.Load(execution); present {
-			updateDebugSQLCapture(execution, captureID.(uint64), rowCount)
+		if captureID, present := captures.LoadAndDelete(execution); present {
+			if id, valid := captureID.(uint64); valid {
+				updateDebugSQLCapture(execution, id, rowCount)
+			}
 		}
 	}
 	// The explaining probe rides along unchanged: it runs only on an empty result and is not

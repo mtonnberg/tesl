@@ -167,7 +167,7 @@ func scanText(row pgx.CollectableRow) (string, error) {
 //
 // tesl_jobs holds every queue of the database, told apart by `queue`. A row is one job:
 //
-//	status          pending | processing | dead
+//	status          pending | processing | dead | dead_processing
 //	attempts        failed attempts so far
 //	next_attempt_at when a pending (or dead) row may be claimed; the backoff lands here
 //	seq             the claim order — a bigserial, so a retried job keeps its place in line
@@ -179,8 +179,8 @@ func scanText(row pgx.CollectableRow) (string, error) {
 // 1) returning …` — so two workers on two instances cannot take the same row: the second
 // skips the row the first has locked and takes the next. Before each claim, jobs an instance
 // took and never finished (it crashed, or lost the network) are RECLAIMED: a `processing` row
-// whose `locked_at` is older than the visibility timeout goes back to `pending` with its
-// attempts intact, so a crash is a retry rather than a loss.
+// whose `locked_at` is older than the visibility timeout goes back to `pending`, while a
+// `dead_processing` row goes back to `dead`. Attempts stay intact in both cases.
 
 // jobsTable is the table name; the schema is the database's.
 const jobsTable = "tesl_jobs"
@@ -391,8 +391,9 @@ func (backend *pgQueueBackend) reclaimStuck(db *PostgresDB, table string) {
 	if now-last < queueReclaimInterval.Nanoseconds() || !backend.lastReclaim.CompareAndSwap(last, now) {
 		return
 	}
-	PgExec(db, "update "+table+" set status = 'pending', locked_at = null, locked_by = null, claim_token = null "+
-		"where queue = $1 and status = 'processing' "+
+	PgExec(db, "update "+table+" set status = case when status = 'dead_processing' then 'dead' else 'pending' end, "+
+		"locked_at = null, locked_by = null, claim_token = null "+
+		"where queue = $1 and status in ('processing', 'dead_processing') "+
 		"and locked_at < now() - ($2::bigint * interval '1 millisecond')",
 		[]any{backend.name, queueVisibilityTimeout().Milliseconds()})
 }
@@ -405,17 +406,19 @@ func (backend *pgQueueBackend) reclaimStuck(db *PostgresDB, table string) {
 // The claim then moves on to the next row instead of answering "nothing to do".
 func (backend *pgQueueBackend) dequeue(status string) (string, any, int, string, bool) {
 	db, table := backend.table()
-	if status == jobPending {
-		backend.reclaimStuck(db, table)
+	backend.reclaimStuck(db, table)
+	processingStatus := jobProcessing
+	if status == jobDead {
+		processingStatus = jobDeadProcessing
 	}
 	for {
 		claimToken := UUIDv7()
-		rows := PgQuery(db, "update "+table+" set status = 'processing', locked_at = now(), locked_by = $3, "+
-			"claim_token = $4 "+
+		rows := PgQuery(db, "update "+table+" set status = $3, locked_at = now(), locked_by = $4, "+
+			"claim_token = $5 "+
 			"where id = (select id from "+table+" where queue = $1 and status = $2 "+
 			"and next_attempt_at <= now() order by seq for update skip locked limit 1) "+
 			"returning id, job_type, payload::text, attempts, claim_token",
-			[]any{backend.name, status, instanceID(), claimToken}, scanClaimedJob)
+			[]any{backend.name, status, processingStatus, instanceID(), claimToken}, scanClaimedJob)
 		if len(rows) == 0 {
 			return "", nil, 0, "", false
 		}
@@ -424,8 +427,8 @@ func (backend *pgQueueBackend) dequeue(status string) (string, any, int, string,
 		if err != nil {
 			changed := PgExec(db, "update "+table+" set status = 'dead', next_attempt_at = 'infinity', "+
 				"locked_at = null, locked_by = null, claim_token = null "+
-				"where id = $1 and status = 'processing' and claim_token = $2",
-				[]any{claimed.id, claimed.claimToken})
+				"where id = $1 and status = $3 and claim_token = $2",
+				[]any{claimed.id, claimed.claimToken, processingStatus})
 			if changed == 1 {
 				fmt.Fprintf(os.Stderr, "tesl: queue %s: job %s (job_type %s) cannot be decoded and was "+
 					"quarantined in the dead letter: %v\n", backend.name, claimed.id, claimed.jobType, err)
@@ -440,7 +443,8 @@ func (backend *pgQueueBackend) complete(id, claimToken string) bool {
 	db, table := backend.table()
 	// Zero rows means this attempt's lease was replaced; its result is discarded.
 	return PgExec(db, "delete from "+table+
-		" where id = $1 and status = 'processing' and claim_token = $2", []any{id, claimToken}) == 1
+		" where id = $1 and status in ('processing', 'dead_processing') and claim_token = $2",
+		[]any{id, claimToken}) == 1
 }
 
 // retryDelaySeconds is the wait before attempt number `attempts`+1, given `attempts` failures:
@@ -508,7 +512,7 @@ func (backend *pgQueueBackend) deadJobs(queue *Queue) []DeadJob {
 }
 
 // requeue puts a dead job back in line with a fresh attempt count. Only a row that IS dead
-// moves — one a dead-letter worker has claimed is `processing` and answers false, as the
+// moves — one a dead-letter worker has claimed is `dead_processing` and answers false, as the
 // in-memory store does for the same case.
 func (backend *pgQueueBackend) requeue(id string) bool {
 	db, table := backend.table()

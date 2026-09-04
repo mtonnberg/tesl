@@ -97,11 +97,12 @@ Version 1 supports a minimal edit-oriented shape. Example:
 {
   "kind": "replace_line",
   "line": 12,
-  "replacement": "  title: String"
+  "replacement": "  title: String",
+  "title": "Replace line"
 }
 ```
 
-Three kinds exist (all line numbers 0-based):
+Five kinds exist (all line and column numbers are 0-based):
 
 - `replace_line` — `{ "kind": "replace_line", "line": int, "replacement": string }`:
   replace one whole line.
@@ -110,11 +111,18 @@ Three kinds exist (all line numbers 0-based):
 - `replace_span` — `{ "kind": "replace_span", "start_line": int, "end_line": int, "replacement": string }`:
   replace the inclusive line range; an empty `replacement` deletes the lines
   (E1: prune or remove an unused import). `replacement` may contain newlines.
+- `replace_range` — `{ "kind": "replace_range", "start_line": int, "start_col": int, "end_line": int, "end_col": int, "replacement": string }`:
+  replace the ordered source range.
+- `multi` — `{ "kind": "multi", "edits": [fix, ...] }`: apply one or more
+  recursively validated edits as one action.
 
 Rules:
 
-- unknown `fix.kind` values must be ignored by the editor
-- diagnostics remain valid even when the editor ignores the fix payload
+- the top-level fix has a non-empty `title`; nested `multi` edits do not
+- all required positions are non-negative and ranges are ordered
+- replacement and insertion fields are strings; empty replacement strings are valid
+- unknown or malformed fix kinds make the compiler response malformed, rather than producing an empty or partial edit
+- consumers bound recursive depth and total nested edit count
 - fix payloads should describe edits, not compiler-internal semantic actions
 
 ## Current compiler sources
@@ -157,6 +165,17 @@ Until a project import index exists, text changes, saves, and watched-file
 notifications conservatively recheck every open document. This ensures an
 importer's owned dependency groups are replaced or cleared after an imported
 file changes instead of leaving stale diagnostics behind.
+
+Source queries use a bounded, per-query shadow project rooted at the nearest
+`tesl.toml` (or the entry file's directory when no manifest exists). Disk `.tesl`
+files and manifests form the baseline and open buffers under that root replace them, so unsaved
+imports participate in diagnostics and semantic queries without changing disk.
+The implementation currently permits at most 256 open overlays, 4096 disk project
+files, 16384 traversed directories, 4096-byte relative paths, 64 MiB of staged
+source, and the compiler client's existing 8 MiB default output cap. Build, VCS, and
+dependency-cache directories are skipped. Open files outside the entry project
+are ignored, compiler paths are mapped back to real workspace paths, and every
+temporary shadow tree is removed after its query.
 
 ## Compatibility rules
 

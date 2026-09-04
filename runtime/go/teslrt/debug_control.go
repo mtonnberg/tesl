@@ -30,6 +30,7 @@ const (
 	DebugTokenEnv         = "TESL_DEBUG_TOKEN" // #nosec G101 -- the NAME of the variable, not a credential.
 	debugTokenBytes       = 32
 	debugHandshakeTimeout = 5 * time.Second
+	debugWriteTimeout     = time.Second
 	debugMaxPendingTCP    = 16
 	debugMaxUnixPathBytes = 100
 )
@@ -63,9 +64,10 @@ type DebugControlError struct {
 }
 
 type DebugStoppedEvent struct {
-	Event string       `json:"event"`
-	Frame DebugFrame   `json:"frame"`
-	Stack []DebugFrame `json:"stack,omitempty"`
+	Event      string       `json:"event"`
+	Frame      DebugFrame   `json:"frame"`
+	Stack      []DebugFrame `json:"stack,omitempty"`
+	Rendezvous string       `json:"rendezvous,omitempty"`
 }
 
 type DebugHandshake struct {
@@ -95,13 +97,14 @@ type DebugControlServer struct {
 	// a handshake yet (TCP only); they receive nothing and are closed with the server.
 	clients        map[net.Conn]struct{}
 	pending        map[net.Conn]struct{}
+	writers        map[net.Conn]*sync.Mutex
 	configured     chan struct{}
 	configuredOnce sync.Once
-	write          sync.Mutex
 	// token is the hex credential a TCP client must present in its first message.
 	// Empty on Unix endpoints, where filesystem permissions are the credential.
 	token            string
 	handshakeTimeout time.Duration
+	writeTimeout     time.Duration
 	maxPendingTCP    int
 	// files are the discovery files (port/token) this server wrote and removes on Close.
 	files []string
@@ -320,9 +323,11 @@ func newDebugControlServer(debugger *Debugger, listener net.Listener, path, toke
 		closed:           make(chan struct{}),
 		clients:          make(map[net.Conn]struct{}),
 		pending:          make(map[net.Conn]struct{}),
+		writers:          make(map[net.Conn]*sync.Mutex),
 		configured:       make(chan struct{}),
 		token:            token,
 		handshakeTimeout: debugHandshakeTimeout,
+		writeTimeout:     debugWriteTimeout,
 		maxPendingTCP:    debugMaxPendingTCP,
 	}
 	// The debugger is attached per authenticated client (see admit/release), not
@@ -365,6 +370,7 @@ func (server *DebugControlServer) acceptLoop() {
 			continue
 		}
 		server.pending[connection] = struct{}{}
+		server.writers[connection] = &sync.Mutex{}
 		server.mutex.Unlock()
 		go server.handleConnection(connection)
 	}
@@ -399,6 +405,7 @@ func (server *DebugControlServer) release(connection net.Conn) {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
 	delete(server.pending, connection)
+	delete(server.writers, connection)
 	if _, authenticated := server.clients[connection]; !authenticated {
 		return
 	}
@@ -415,10 +422,28 @@ func (server *DebugControlServer) authenticates(request DebugControlRequest) boo
 	return subtle.ConstantTimeCompare([]byte(request.Token), []byte(server.token)) == 1
 }
 
-func (server *DebugControlServer) reply(encoder *json.Encoder, response DebugControlResponse) error {
-	server.write.Lock()
-	defer server.write.Unlock()
-	return encoder.Encode(response)
+func (server *DebugControlServer) writeTo(connection net.Conn, write func() error) error {
+	server.mutex.Lock()
+	writer := server.writers[connection]
+	timeout := server.writeTimeout
+	server.mutex.Unlock()
+	if writer == nil {
+		return net.ErrClosed
+	}
+	writer.Lock()
+	defer writer.Unlock()
+	if err := connection.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+		return err
+	}
+	err := write()
+	if clearErr := connection.SetWriteDeadline(time.Time{}); err == nil {
+		err = clearErr
+	}
+	return err
+}
+
+func (server *DebugControlServer) reply(connection net.Conn, encoder *json.Encoder, response DebugControlResponse) error {
+	return server.writeTo(connection, func() error { return encoder.Encode(response) })
 }
 
 func (server *DebugControlServer) handleConnection(connection net.Conn) {
@@ -456,7 +481,7 @@ func (server *DebugControlServer) handleConnection(connection net.Conn) {
 			if decodeErr != nil || !server.authenticates(request) {
 				// Closed at once: no session, no events, and nothing learned beyond
 				// "a credential is required". The compare is constant-time.
-				_ = server.reply(encoder, DebugControlResponse{ID: request.ID, Error: &DebugControlError{
+				_ = server.reply(connection, encoder, DebugControlResponse{ID: request.ID, Error: &DebugControlError{
 					Code: "unauthorized", Message: "first message must be a handshake carrying the endpoint token",
 				}})
 				return
@@ -468,13 +493,13 @@ func (server *DebugControlServer) handleConnection(connection net.Conn) {
 			}
 		}
 		if decodeErr != nil || request.Command == "" {
-			_ = server.reply(encoder, DebugControlResponse{ID: request.ID, Error: &DebugControlError{
+			_ = server.reply(connection, encoder, DebugControlResponse{ID: request.ID, Error: &DebugControlError{
 				Code: "invalid-request", Message: "invalid control request",
 			}})
 			continue
 		}
 		response, closeConnection := server.handleRequest(request)
-		if err := server.reply(encoder, response); err != nil || closeConnection {
+		if err := server.reply(connection, encoder, response); err != nil || closeConnection {
 			return
 		}
 	}
@@ -750,7 +775,7 @@ func compareConditionNumbers(left, right int64, operator string) bool {
 }
 
 func (server *DebugControlServer) broadcast(event DebugEvent) {
-	message, err := json.Marshal(DebugStoppedEvent{Event: event.Kind, Frame: event.Frame, Stack: event.Stack})
+	message, err := json.Marshal(DebugStoppedEvent{Event: event.Kind, Frame: event.Frame, Stack: event.Stack, Rendezvous: event.Rendezvous})
 	if err != nil {
 		return
 	}
@@ -761,10 +786,27 @@ func (server *DebugControlServer) broadcast(event DebugEvent) {
 		clients = append(clients, client)
 	}
 	server.mutex.Unlock()
-	server.write.Lock()
-	defer server.write.Unlock()
 	for _, client := range clients {
-		_, _ = client.Write(message)
+		go func() {
+			remaining := message
+			err := server.writeTo(client, func() error {
+				for len(remaining) > 0 {
+					written, writeErr := client.Write(remaining)
+					if writeErr != nil {
+						return writeErr
+					}
+					if written == 0 {
+						return errors.New("debug control: zero-byte write")
+					}
+					remaining = remaining[written:]
+				}
+				return nil
+			})
+			if err != nil {
+				server.release(client)
+				_ = client.Close()
+			}
+		}()
 	}
 }
 
@@ -788,6 +830,7 @@ func (server *DebugControlServer) Close() error {
 	}
 	server.clients = make(map[net.Conn]struct{})
 	server.pending = make(map[net.Conn]struct{})
+	server.writers = make(map[net.Conn]*sync.Mutex)
 	files := server.files
 	server.files = nil
 	server.mutex.Unlock()

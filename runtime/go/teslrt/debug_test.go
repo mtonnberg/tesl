@@ -318,6 +318,9 @@ func TestDebuggerStopBarrierAndStacksAreExecutionIsolated(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("stop was not published after every active execution reached a boundary")
 	}
+	if event.Rendezvous != DebugRendezvousComplete {
+		t.Fatalf("rendezvous = %q, want complete", event.Rendezvous)
+	}
 	if len(event.Stack) != 1 || event.Stack[0].ID != "request" {
 		t.Fatalf("stopped request stack contains another execution: %#v", event.Stack)
 	}
@@ -341,6 +344,72 @@ func TestDebuggerStopBarrierAndStacksAreExecutionIsolated(t *testing.T) {
 	<-requestDone
 	if progress.Load() != 2 {
 		t.Fatalf("worker did not resume after Continue: %d", progress.Load())
+	}
+}
+
+func TestDebuggerPublishesPartialStopWhenExecutionCannotRendezvous(t *testing.T) {
+	debugger := NewDebugger()
+	debugger.rendezvousTimeout = 60 * time.Millisecond
+	stopped := make(chan DebugEvent, 1)
+	debugger.Attach(func(event DebugEvent) { stopped <- event })
+	debugger.SetBreakpoints([]DebugBreakpoint{{File: "request.tesl", Line: 10}})
+
+	blocked := make(chan struct{})
+	blockedReady := make(chan struct{})
+	blockedAtBoundary := make(chan struct{})
+	blockedDone := make(chan struct{})
+	go func() {
+		scope := debugger.Enter(DebugFrame{ID: "blocked", Function: "blocked"})
+		defer scope.Leave()
+		close(blockedReady)
+		<-blocked
+		close(blockedAtBoundary)
+		debugger.Checkpoint(DebugFrame{ID: "blocked", Location: SourceLocation{File: "blocked.tesl", Line: 20}})
+		close(blockedDone)
+	}()
+	<-blockedReady
+
+	triggerDone := make(chan struct{})
+	go func() {
+		debugger.Checkpoint(DebugFrame{ID: "request", Location: SourceLocation{File: "request.tesl", Line: 10}})
+		close(triggerDone)
+	}()
+	var event DebugEvent
+	select {
+	case event = <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("blocked external work prevented stop publication")
+	}
+	if event.Rendezvous != DebugRendezvousTimedOut {
+		t.Fatalf("rendezvous = %q, want timed-out", event.Rendezvous)
+	}
+	snapshot := debugger.SnapshotState()
+	if !snapshot.Paused || snapshot.Rendezvous != DebugRendezvousTimedOut {
+		t.Fatalf("partial snapshot = %#v", snapshot)
+	}
+	select {
+	case <-triggerDone:
+		t.Fatal("partial stop did not hold the triggering execution")
+	default:
+	}
+
+	close(blocked)
+	<-blockedAtBoundary
+	select {
+	case <-blockedDone:
+		t.Fatal("late rendezvous passed the partial stop before Continue")
+	case <-time.After(50 * time.Millisecond):
+	}
+	debugger.Continue()
+	select {
+	case <-blockedDone:
+	case <-time.After(time.Second):
+		t.Fatal("Continue did not release the late rendezvous")
+	}
+	select {
+	case <-triggerDone:
+	case <-time.After(time.Second):
+		t.Fatal("Continue did not release the triggering execution")
 	}
 }
 

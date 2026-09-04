@@ -139,8 +139,9 @@ func (outbox *Outbox) durable() outboxBackend {
 	return nil
 }
 
-// emailClaimBatch is how many due messages one durable delivery pass claims at a time.
-const emailClaimBatch = 50
+// emailClaimBatch is one because the worker delivers serially: a row is claimed immediately
+// before its SMTP call, never left waiting behind other deliveries while its lease ages.
+const emailClaimBatch = 1
 
 // emailMaxAttempts and the backoff below are tesl/email.rkt's, so a message that fails on one
 // backend is retried on the same schedule by the other.
@@ -335,10 +336,9 @@ func deliverPending(outbox *Outbox) {
 
 // deliverClaimed is deliverPending against the durable outbox: only messages this process
 // has CLAIMED are delivered, so several instances polling one table never send the same mail
-// twice, and each outcome is written back to the row rather than to a slice. Batches are
-// claimed until one comes back short, which bounds a pass to the backlog that was due when
-// it started — a claimed message is invisible to the next claim, and a failed one is pushed
-// past `now()`, so the loop cannot revisit a message within one pass.
+// twice, and each outcome is written back to the row rather than to a slice. The serial worker
+// claims one message immediately before delivery, so no later message spends another message's
+// SMTP timeout consuming its ownership window.
 func deliverClaimed(outbox *Outbox, backend outboxBackend) {
 	outbox.mutex.Lock()
 	settings := outbox.settings

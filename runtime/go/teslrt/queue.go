@@ -81,7 +81,7 @@ func (queue *Queue) durable() queueBackend {
 type queuedJob struct {
 	id       string
 	payload  any
-	status   string // "pending" | "processing" | "dead"
+	status   string // "pending" | "processing" | "dead" | "dead_processing"
 	attempts int
 	seq      int64
 }
@@ -91,6 +91,8 @@ const (
 	jobPending    = "pending"
 	jobProcessing = "processing"
 	jobDead       = "dead"
+	// A distinct in-flight state preserves which queue a stale claim must return to.
+	jobDeadProcessing = "dead_processing"
 )
 
 // maxPendingJobs bounds one Memory queue's pending backlog.
@@ -244,6 +246,9 @@ func (queue *Queue) dequeue(status string) (string, any, int, string, bool) {
 		queue.pending--
 	}
 	job.status = jobProcessing
+	if status == jobDead {
+		job.status = jobDeadProcessing
+	}
 	return job.id, job.payload, job.attempts, "", true
 }
 
@@ -338,15 +343,18 @@ func ProcessNextJob(queue *Queue, handler func(any) JobOutcome) JobOutcome {
 }
 
 // ProcessNextDeadJob is the dead-letter counterpart: it claims a job that exhausted its
-// attempts and hands it to the dead-letter worker. A dead job is REMOVED whatever the
-// outcome — there is no second dead letter to fall into.
+// attempts and hands it to the dead-letter worker. A dead job is REMOVED whatever the handler
+// outcome — there is no second dead letter to fall into. A fenced completion is a store failure,
+// not a handler outcome, and is surfaced so the replacement claim is not mistaken for removal.
 func ProcessNextDeadJob(queue *Queue, handler func(any) JobOutcome) JobOutcome {
 	id, payload, _, claimToken, found := queue.dequeue(jobDead)
 	if !found {
 		return JobOutcome{}
 	}
 	outcome := runJob(handler, payload)
-	queue.complete(id, claimToken)
+	if !queue.complete(id, claimToken) {
+		panic("queue " + queue.name + ": dead-letter completion lost ownership of job " + id)
+	}
 	outcome.Ran = true
 	return outcome
 }

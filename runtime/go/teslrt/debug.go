@@ -182,16 +182,18 @@ type DebugFrame struct {
 }
 
 type DebugEvent struct {
-	Kind  string       `json:"kind"`
-	Frame DebugFrame   `json:"frame"`
-	Stack []DebugFrame `json:"stack,omitempty"`
+	Kind       string       `json:"kind"`
+	Frame      DebugFrame   `json:"frame"`
+	Stack      []DebugFrame `json:"stack,omitempty"`
+	Rendezvous string       `json:"rendezvous,omitempty"`
 }
 
 type DebugSnapshot struct {
-	Paused  bool              `json:"paused"`
-	Frame   DebugFrame        `json:"frame"`
-	Stack   []DebugFrame      `json:"stack"`
-	Runtime DebugRuntimeState `json:"runtime"`
+	Paused     bool              `json:"paused"`
+	Frame      DebugFrame        `json:"frame"`
+	Stack      []DebugFrame      `json:"stack"`
+	Runtime    DebugRuntimeState `json:"runtime"`
+	Rendezvous string            `json:"rendezvous,omitempty"`
 }
 
 type DebugListener func(DebugEvent)
@@ -203,6 +205,10 @@ const (
 	DebugStepIn   DebugStepMode = "in"
 	DebugStepOver DebugStepMode = "over"
 	DebugStepOut  DebugStepMode = "out"
+
+	DebugRendezvousComplete = "complete"
+	DebugRendezvousTimedOut = "timed-out"
+	debugRendezvousTimeout  = time.Second
 )
 
 type DebugBreakpoint struct {
@@ -236,16 +242,17 @@ type Debugger struct {
 	// under them would corrupt their mental model of "paused". The attach/DAP
 	// servers set this from TESL_DEBUG_PAUSE_TIMEOUT_MS so a client that dies
 	// mid-stop (SIGKILL, laptop sleep) cannot wedge a long-running service.
-	PauseTimeout time.Duration
-	lastFrame    DebugFrame
-	lastSnapshot DebugSnapshot
-	stepMode     DebugStepMode
-	stepOrigin   DebugFrame
-	stoppedExec  uint64
-	stacks       map[uint64][]DebugFrame
-	quiescent    map[uint64]int
-	participants map[uint64]struct{}
-	parked       map[uint64]struct{}
+	PauseTimeout      time.Duration
+	lastFrame         DebugFrame
+	lastSnapshot      DebugSnapshot
+	stepMode          DebugStepMode
+	stepOrigin        DebugFrame
+	stoppedExec       uint64
+	stacks            map[uint64][]DebugFrame
+	quiescent         map[uint64]int
+	participants      map[uint64]struct{}
+	parked            map[uint64]struct{}
+	rendezvousTimeout time.Duration
 }
 
 type DebugScope struct {
@@ -263,11 +270,12 @@ type DebugQuiescentScope struct {
 
 func NewDebugger() *Debugger {
 	debugger := &Debugger{
-		breakpoints:  make(map[string]*DebugBreakpoint),
-		stacks:       make(map[uint64][]DebugFrame),
-		quiescent:    make(map[uint64]int),
-		participants: make(map[uint64]struct{}),
-		parked:       make(map[uint64]struct{}),
+		breakpoints:       make(map[string]*DebugBreakpoint),
+		stacks:            make(map[uint64][]DebugFrame),
+		quiescent:         make(map[uint64]int),
+		participants:      make(map[uint64]struct{}),
+		parked:            make(map[uint64]struct{}),
+		rendezvousTimeout: debugRendezvousTimeout,
 	}
 	debugger.condition = sync.NewCond(&debugger.mutex)
 	return debugger
@@ -506,9 +514,17 @@ func (debugger *Debugger) Checkpoint(frame DebugFrame) {
 	}
 	debugger.participants[execution] = struct{}{}
 	debugger.parked[execution] = struct{}{}
-	for !debugger.barrierComplete() && debugger.listener != nil {
+	rendezvousTimedOut := false
+	rendezvousTimer := time.AfterFunc(debugger.rendezvousTimeout, func() {
+		debugger.mutex.Lock()
+		rendezvousTimedOut = true
+		debugger.condition.Broadcast()
+		debugger.mutex.Unlock()
+	})
+	for !debugger.barrierComplete() && debugger.listener != nil && !rendezvousTimedOut {
 		debugger.condition.Wait()
 	}
+	rendezvousTimer.Stop()
 	listener = debugger.listener
 	if listener == nil || !debugger.stopping {
 		debugger.stopping = false
@@ -523,7 +539,11 @@ func (debugger *Debugger) Checkpoint(frame DebugFrame) {
 	debugger.stoppedExec = execution
 	debugger.lastFrame = frame
 	stack = append([]DebugFrame(nil), debugger.stacks[execution]...)
-	debugger.lastSnapshot = DebugSnapshot{Paused: true, Frame: frame, Stack: stack}
+	rendezvous := DebugRendezvousComplete
+	if !debugger.barrierComplete() {
+		rendezvous = DebugRendezvousTimedOut
+	}
+	debugger.lastSnapshot = DebugSnapshot{Paused: true, Frame: frame, Stack: stack, Rendezvous: rendezvous}
 	debugger.mutex.Unlock()
 	runtimeState := debugRuntimeStateSnapshotForExecution(execution)
 	debugger.mutex.Lock()
@@ -536,7 +556,7 @@ func (debugger *Debugger) Checkpoint(frame DebugFrame) {
 	if !publish || listener == nil {
 		return
 	}
-	listener(DebugEvent{Kind: "stopped", Frame: frame, Stack: stack})
+	listener(DebugEvent{Kind: "stopped", Frame: frame, Stack: stack, Rendezvous: rendezvous})
 	debugger.mutex.Lock()
 	// The auto-resume guard: one timer per stop. It re-checks under the mutex
 	// (a human Continue may have won the race) and broadcasts so every waiting
