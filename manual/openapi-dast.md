@@ -65,6 +65,12 @@ TESL_AUTH_HEADER='Bearer ...' tesl dast https://staging.example.com app.tesl \
   --server AppServer --authorization-env TESL_AUTH_HEADER
 ```
 
+The repository includes a disposable CI smoke fixture that demonstrates the complete boundary:
+`bash tests/dast-openapi-smoke.sh` compiles `example/learn/lesson81-openapi-dast.tesl`, checks that
+the selected `PublicServer` spec excludes its sibling `InternalServer`, exercises authenticated and
+unauthenticated operations, and imports the spec into an active ZAP scan. The fixture uses a temporary
+port and report directory and does not touch a deployed service.
+
 `tesl` installed from the Nix flake includes OWASP ZAP and Nuclei. Nuclei is available for
 separate scanner workflows through the same Nix environment; `tesl dast` currently uses ZAP
 as its supported first-party backend.

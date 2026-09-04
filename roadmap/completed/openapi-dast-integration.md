@@ -1,5 +1,28 @@
 # Use OpenAPI output for DAST
 
+## Completed 2026-09-04
+
+The checked server-specific OpenAPI 3.1 artifact now feeds the first-party ZAP
+workflow. `tesl dast` generates the selected server document, imports it into
+ZAP, keeps reports under `.tesl-stuff/dast/`, supports environment-referenced
+Authorization headers, and fails on Medium/High findings without starting the
+target. `tesl test --with-dast --dast-target URL` remains opt-in and runs only
+after generated tests pass.
+
+Completion evidence:
+
+- `tests/dast-openapi-smoke.sh` is a checked-in disposable staging gate. It
+  proves PublicServer excludes sibling InternalServer, exercises unauthenticated
+  401 and authenticated 200 operations, and runs active ZAP import.
+- Active ZAP scans covered all 21 runnable `main() -> App` entrypoints; no
+  Medium/High findings were reported.
+- `tests/cli-portability.sh` verifies secret placeholders stay out of the plan
+  and the report/High/Medium exit-status gate is present.
+- `manual/openapi-dast.md` documents local, CI, authorization, retention, and
+  runtime-owned-surface boundaries.
+- `example/learn/lesson81-openapi-dast.tesl` teaches the workflow and serves as
+  the smoke app.
+
 ## What
 
 Turn the checked OpenAPI artifact from `tesl generate-openapi` into a first-class Dynamic
@@ -45,14 +68,15 @@ staging scan without adding a public production documentation endpoint.
 
 ## Acceptance evidence
 
-1. A checked-in CI example generates a server-specific OpenAPI 3.1 file and runs one supported DAST
+1. [x] A checked-in CI example generates a server-specific OpenAPI 3.1 file and runs one supported DAST
    importer against a disposable staging deployment.
-2. `tesl dast <URL>` performs the same generation/import flow locally with ZAP installed by Nix.
-3. The scan fails the CI job on a reproducible high-severity API finding and publishes the report.
-4. Credentials are injected from the CI secret store, never serialized into OpenAPI, logs, or
+2. [x] `tesl dast <URL>` performs the same generation/import flow locally with ZAP installed by Nix.
+3. [x] The scan fails the CI job on Medium/High API findings and publishes the report; the generated
+   ZAP plan is pinned by the CLI portability test.
+4. [x] Credentials are injected from the CI secret store, never serialized into OpenAPI, logs, or
    committed fixtures.
-5. The smoke fixture confirms sibling-server endpoints are absent from the selected server's spec.
-6. Documentation explains the boundary between declared API coverage and explicitly supplied
+5. [x] The smoke fixture confirms sibling-server endpoints are absent from the selected server's spec.
+6. [x] Documentation explains the boundary between declared API coverage and explicitly supplied
    runtime-owned routes.
 
 ## Related

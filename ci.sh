@@ -43,6 +43,7 @@
 #   10a. Clean install        nix-built #tesl-go-cli wrapper: init/emit/build
 #                             under env -i (tests/go-clean-install.sh)
 #   11. Boot smoke            Go App activation via `tesl run`
+#   11a. OpenAPI DAST smoke   disposable staging app + server-scoped ZAP import
 #   12. Playground parity     scripts/playground-parity.sh — the browser build's
 #                             teslCheck vs `tesl --check-json` over 30 lessons
 #                             (SKIPs when js_of_ocaml or node is unavailable)
@@ -117,7 +118,7 @@ phase_started_at=$SECONDS
 
 # ── Phase registry / progress bar ────────────────────────────────────────────
 # We know the phase count up front so each phase can print "[N/T] <name>".
-TOTAL_PHASES=21
+TOTAL_PHASES=22
 PHASE_NUM=0
 # Parallel arrays: name / status (OK|FAIL|SKIP) / elapsed seconds.
 PHASE_NAMES=()
@@ -1261,6 +1262,31 @@ else
         phase_end FAIL
     fi
     rm -rf "$boot_root" "$boot_out"
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  OpenAPI DAST smoke (disposable staging app + server-scoped ZAP import)
+# ══════════════════════════════════════════════════════════════════════════════
+# This checked-in acceptance fixture starts a temporary Go app, proves the
+# selected server's spec excludes its sibling server, exercises both sides of
+# the auth boundary, and imports that spec into ZAP. The app and report are
+# disposable; `tesl dast` itself never starts the target.
+phase_begin "OpenAPI DAST smoke (server scope + auth boundary)"
+_dast_smoke_rc=0
+_dast_smoke_zap="${TESL_ZAP:-$(command -v zap 2>/dev/null || true)}"
+if ! command -v go >/dev/null 2>&1; then
+    printf "  %s⚠%s  go not on PATH — skipping OpenAPI DAST smoke\n" "$C_YELLOW" "$C_RESET"
+    phase_end SKIP
+elif [ ! -x "$_main_exe" ]; then
+    printf "  %s⚠%s  compiler binary missing — skipping OpenAPI DAST smoke\n" "$C_YELLOW" "$C_RESET"
+    phase_end SKIP
+elif [ -z "$_dast_smoke_zap" ]; then
+    printf "  %s⚠%s  ZAP not on PATH — skipping OpenAPI DAST smoke\n" "$C_YELLOW" "$C_RESET"
+    phase_end SKIP
+else
+    TESL_REPO_ROOT="$SCRIPT_DIR" TESL_OCAML_COMPILER="$_main_exe" \
+        TESL_ZAP="$_dast_smoke_zap" bash "$SCRIPT_DIR/tests/dast-openapi-smoke.sh" || _dast_smoke_rc=$?
+    if [ "$_dast_smoke_rc" -eq 0 ]; then phase_end OK; else phase_end FAIL; fi
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════

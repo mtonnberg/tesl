@@ -319,7 +319,10 @@ out="$(TESL_ZAP="$WORK/fake-zap" FAKE_PLAN="$FAKE_PLAN" TEST_TOKEN='Bearer secre
 if [ "$rc" -eq 0 ] && [ -f "$FAKE_PLAN" ] \
    && grep -q 'type: openapi' "$FAKE_PLAN" \
    && grep -q '\${TEST_TOKEN}' "$FAKE_PLAN" \
-   && ! grep -q 'Bearer secret' "$FAKE_PLAN"; then
+   && ! grep -q 'Bearer secret' "$FAKE_PLAN" \
+   && grep -q 'reportFile: zap-report.json' "$FAKE_PLAN" \
+   && grep -q 'errorLevel: High' "$FAKE_PLAN" \
+   && grep -q 'warnLevel: Medium' "$FAKE_PLAN"; then
   pass "tesl dast builds a ZAP plan without leaking authorization secrets"
 else
   fail "tesl dast plan generation failed or leaked a secret (rc=$rc): $out"

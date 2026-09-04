@@ -13,7 +13,7 @@ Go snapshot and test blocks in the gate. Read one with:
 tesl help manual <lesson-name>      # e.g. tesl help manual lesson05-intro-to-proofs
 ```
 
-There are **82** lessons. That number is generated; it cannot drift.
+There are **83** lessons. That number is generated; it cannot drift.
 
 ## In a hurry? Start with these
 
@@ -126,6 +126,7 @@ exactly what you are missing.
 | 650 | [`lesson42-mutation-testing`](../example/learn/lesson42-mutation-testing.tesl) | Ask whether your tests would catch a plausible logic error injected into a check or auth | [`lesson14-test-blocks`](../example/learn/lesson14-test-blocks.tesl) — Write tests inside the language with test blocks, including randomized property runs<br>[`lesson06-proof-check-proof-auth`](../example/learn/lesson06-proof-check-proof-auth.tesl) — The three proof-producing function kinds: check validates at runtime, establish asserts a trust boundary, auth proves identity |
 | 660 | [`lesson41-load-tests`](../example/learn/lesson41-load-tests.tesl) | Assert on latency percentiles, throughput and error rates with a load-test block | [`lesson32-api-tests`](../example/learn/lesson32-api-tests.tesl) — Test a whole HTTP endpoint from Tesl: seeded state, request bodies and JSON response assertions |
 | 820 | [`lesson80-testing-sso`](../example/learn/lesson80-testing-sso.tesl) | Test an SSO-protected route without a live IdP, and drive a full login through api-test with stubHttp | [`lesson78-sso`](../example/learn/lesson78-sso.tesl) — Add third-party login in one server clause — the OAuth2/OIDC dance, PKCE, state and the session cookie are all the runtime's job; you map the identity and gate a route on it<br>[`lesson32-api-tests`](../example/learn/lesson32-api-tests.tesl) — Test a whole HTTP endpoint from Tesl: seeded state, request bodies and JSON response assertions |
+| 830 | [`lesson81-openapi-dast`](../example/learn/lesson81-openapi-dast.tesl) | Export one server's checked OpenAPI surface and run it against a disposable staging target with ZAP | [`lesson15-api-handlers-server`](../example/learn/lesson15-api-handlers-server.tesl) — Build a real HTTP endpoint from records, a check and auth at the boundary, handlers, an api type and a server<br>[`lesson32-api-tests`](../example/learn/lesson32-api-tests.tesl) — Test a whole HTTP endpoint from Tesl: seeded state, request bodies and JSON response assertions |
 
 ### Standard library
 
