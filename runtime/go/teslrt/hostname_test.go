@@ -110,6 +110,22 @@ func TestLoopbackInEverySpelling(t *testing.T) {
 	}
 }
 
+func TestForbiddenHostRefusesSpecialUseAddresses(t *testing.T) {
+	for _, host := range []string{
+		"192.0.2.1", "198.18.0.1", "198.51.100.1", "203.0.113.1",
+		"[100::1]", "[2001:db8::1]",
+	} {
+		if !NetIsForbiddenHost(host) {
+			t.Errorf("NetIsForbiddenHost(%q) = false for a special-use address", host)
+		}
+	}
+	for _, host := range []string{"8.8.8.8", "[2606:4700:4700::1111]"} {
+		if NetIsForbiddenHost(host) {
+			t.Errorf("NetIsForbiddenHost(%q) = true for a public address", host)
+		}
+	}
+}
+
 // Where BOTH parsers accept a literal, they must mean the same address — including the IPv6
 // spellings where a hand-rolled parser is most likely to drift (`::`, embedded IPv4, leading
 // zeros, upper case).

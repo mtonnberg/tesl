@@ -322,6 +322,10 @@ func ipv4OctetsClass(octets [4]int) addressClass {
 		return classCGNAT
 	case first >= 224:
 		return classMulticast
+	case (first == 192 && second == 0 && (octets[2] == 0 || octets[2] == 2)) ||
+		(first == 198 && (second == 18 || second == 19 || (second == 51 && octets[2] == 100))) ||
+		(first == 203 && second == 0 && octets[2] == 113):
+		return classReserved
 	default:
 		return classPublic
 	}
@@ -355,6 +359,10 @@ func ipv6GroupsClass(groups [8]int) addressClass {
 		return classPrivate
 	case first&0xff00 == 0xff00:
 		return classMulticast
+	case first == 0x0100 && groups[1] == 0 && groups[2] == 0 && groups[3] == 0:
+		return classReserved // 100::/64 discard-only
+	case first == 0x2001 && groups[1] == 0x0db8:
+		return classReserved // 2001:db8::/32 documentation
 	default:
 		return classPublic
 	}

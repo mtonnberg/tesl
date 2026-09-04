@@ -25,6 +25,8 @@ func TestIPForbiddenReasonNamesTheRange(t *testing.T) {
 		{"100.64.0.1", "CGNAT 100.64.0.0/10"},
 		{"224.0.0.1", "multicast/reserved >= 224.0.0.0"},
 		{"ff02::1", "IPv6 multicast ff00::/8"},
+		{"100::1", "discard-only 100::/64"},
+		{"2001:db8::1", "documentation 2001:db8::/32"},
 		// 172.15 and 172.32 are OUTSIDE the /12, and a classifier that tested only the first
 		// octet would refuse them.
 		{"172.15.0.1", ""},
@@ -33,6 +35,14 @@ func TestIPForbiddenReasonNamesTheRange(t *testing.T) {
 	for _, testCase := range cases {
 		if got := IPForbiddenReason(testCase.address); got != testCase.reason {
 			t.Fatalf("IPForbiddenReason(%q) = %q, want %q", testCase.address, got, testCase.reason)
+		}
+	}
+}
+
+func TestIPForbiddenReasonRefusesIPv6SpecialUseBlocksAtEgress(t *testing.T) {
+	for _, address := range []string{"100::1", "2001:db8::1"} {
+		if got := SsrfEgressRefusal(address); got == "" {
+			t.Errorf("SsrfEgressRefusal(%q) allowed a special-use address", address)
 		}
 	}
 }
