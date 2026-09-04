@@ -188,6 +188,10 @@ func ipv6Class(full net.IP) addressClass {
 		return classPrivate // fc00::/7 unique-local
 	case group0&0xff00 == 0xff00:
 		return classMulticast // ff00::/8
+	case prefixIs(full, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00):
+		return classReserved // 100::/64 discard-only (RFC 6666)
+	case prefixIs(full, 0x20, 0x01, 0x0d, 0xb8):
+		return classReserved // 2001:db8::/32 documentation (RFC 3849)
 	default:
 		return classPublic
 	}
@@ -230,8 +234,17 @@ func IPForbiddenReason(address string) string {
 		}
 		return "IPv6 multicast ff00::/8"
 	case classReserved:
-		if label := reservedIPv4Label(v4); label != "" {
-			return label
+		if isIPv4 {
+			if label := reservedIPv4Label(v4); label != "" {
+				return label
+			}
+		} else {
+			switch {
+			case prefixIs(net.ParseIP(address).To16(), 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00):
+				return "discard-only 100::/64"
+			case prefixIs(net.ParseIP(address).To16(), 0x20, 0x01, 0x0d, 0xb8):
+				return "documentation 2001:db8::/32"
+			}
 		}
 		return "unrecognized address form (fail-closed)"
 	case classInvalid:
