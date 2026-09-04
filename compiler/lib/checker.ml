@@ -6385,6 +6385,7 @@ let tesl_module_predicate_exports : (string * string list) list = [
   ("Tesl.Int32",   ["IsNonNegative"; "IsNonZero"]);
   ("Tesl.Float",   ["FloatNonZero"; "FloatNonNegative"]);
   ("Tesl.Dict",    ["HasKey"]);
+  ("Tesl.Money",   ["SameCurrency"; "NonNegativeMoney"; "RateFor"]);
 ]
 
 (** Collect the set of stdlib predicate names that are EXPLICITLY available:
@@ -6919,18 +6920,24 @@ let check_fact_name_distinctness (m : module_form) : type_error list =
       | _ -> acc
     ) owners []
   in
-  (* A local `fact` colliding with an EXPLICITLY-imported stdlib predicate (stdlib
-     preds have no user-module owner, so they don't enter [owners]). *)
+  (* A user-module `fact` colliding with an EXPLICITLY-imported stdlib predicate
+     (stdlib preds have no user-module owner, so they don't enter [owners]).
+     Check every reachable owner rather than only local declarations: otherwise
+     an imported check can carry its owner's same-spelled proof into this module. *)
   let imported_stdlib_preds = collect_explicitly_imported_stdlib_predicates m in
   let stdlib_errors =
-    List.filter_map (fun (name, loc) ->
-      if List.mem name imported_stdlib_preds then
+    List.filter_map (fun name ->
+      match Hashtbl.find_opt owners name with
+      | Some user_owners ->
+        let loc = try Hashtbl.find import_loc_of name
+          with Not_found -> Location.dummy_loc m.source_file in
         Some { loc; message = Printf.sprintf
-          "fact `%s` shadows the imported stdlib proof predicate `%s`; a proof \
-           predicate has a single owning module. Drop the local `fact %s` and use \
-           the imported one, or rename this fact." name name name; fix = None }
-      else None
-    ) local_facts
+          "proof predicate `%s` is owned by both imported stdlib module and user \
+           module(s) %s; a proof predicate has a single owning module. Rename the \
+           user-module fact, or do not import it into this scope."
+          name (String.concat ", " (List.sort compare user_owners)); fix = None }
+      | None -> None
+    ) imported_stdlib_preds
   in
   ambiguity_errors @ stdlib_errors
 
