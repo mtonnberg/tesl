@@ -3753,19 +3753,19 @@ database LiveDb = Database {
 }
 
 fn store(id: String, title: String, pages: Int, shelf: Shelf, retired: Bool, authorId: String) -> LiveBook
-  requires [dbWrite Note] =
+  requires [dbWrite LiveBook] =
   insert LiveBook {
     id: id, title: title, pages: pages, shelf: shelf, binding: Paperback,
     retired: retired, authorId: authorId
   }
 
-fn storeBound(id: String, binding: Binding) -> LiveBook requires [dbWrite Note] =
+fn storeBound(id: String, binding: Binding) -> LiveBook requires [dbWrite LiveBook] =
   insert LiveBook {
     id: id, title: "Bound", pages: 1, shelf: Fiction, binding: binding,
     retired: False, authorId: "a-1"
   }
 
-fn bindingOf(wanted: String) -> String requires [dbRead Note] =
+fn bindingOf(wanted: String) -> String requires [dbRead LiveBook] =
   case selectOne b from LiveBook where b.id == wanted of
     Nothing -> "none"
     Something b ->
@@ -3775,7 +3775,7 @@ fn bindingOf(wanted: String) -> String requires [dbRead Note] =
         Special edition -> "special-" ++ edition
 
 fn storeAuthor(id: String, name: String) -> LiveAuthor
-  requires [dbWrite Note] =
+  requires [dbWrite LiveAuthor] =
   insert LiveAuthor { id: id, name: name }
 
 # NO `innerJoin` here, deliberately.  Racket's Postgres join builder qualifies the ON columns
@@ -3788,37 +3788,37 @@ fn storeAuthor(id: String, name: String) -> LiveAuthor
 # example/learn/lesson48-sql-inner-join.tesl, whose database is Memory-backed.
 
 fn titleOf(wanted: String) -> String
-  requires [dbRead Note] =
+  requires [dbRead LiveBook] =
   case selectOne b from LiveBook where b.id == wanted of
     Nothing -> "none"
     Something b -> b.title
 
 fn countBooks() -> Int
-  requires [dbRead Note] =
+  requires [dbRead LiveBook] =
   selectCount b from LiveBook
 
 fn countRetired() -> Int
-  requires [dbRead Note] =
+  requires [dbRead LiveBook] =
   selectCount b from LiveBook where b.retired == True
 
 fn totalPages() -> Int
-  requires [dbRead Note] =
+  requires [dbRead LiveBook] =
   selectSum b.pages from LiveBook
 
 fn longest() -> Int
-  requires [dbRead Note] =
+  requires [dbRead LiveBook] =
   case selectMax b.pages from LiveBook of
     Nothing -> 0
     Something pages -> pages
 
 fn titlesByPages() -> Int
-  requires [dbRead Note] =
+  requires [dbRead LiveBook] =
   selectCount b from LiveBook where b.pages > 250
 
 # `upsert` on the SERVER is one statement — `insert … on conflict (id) do update set …` —
 # where the memory path finds, merges and stores. The two agree about the outcome, which is
 # what a test that runs on either store asserts.
-fn stash(id: String, title: String, pages: Int) -> Unit requires [dbWrite Note] =
+fn stash(id: String, title: String, pages: Int) -> Unit requires [dbWrite LiveBook] =
   upsert LiveBook {
     id: id, title: title, pages: pages, shelf: Fiction, binding: Paperback,
     retired: False, authorId: "a-1"
@@ -3827,24 +3827,24 @@ fn stash(id: String, title: String, pages: Int) -> Unit requires [dbWrite Note] 
 # A grouped aggregate GROUPS on the server: `select "authorId", coalesce(sum("pages"), 0) …
 # group by 1 order by 1`, one row per bucket in ascending key order — the same order the
 # memory fold answers in.
-fn pagesByAuthor() -> List (Tuple2 String Int) requires [dbRead Note] =
+fn pagesByAuthor() -> List (Tuple2 String Int) requires [dbRead LiveBook] =
   selectSumBy b.pages from LiveBook groupBy b.authorId
 
-fn booksByAuthor() -> List (Tuple2 String Int) requires [dbRead Note] =
+fn booksByAuthor() -> List (Tuple2 String Int) requires [dbRead LiveBook] =
   selectCountBy b from LiveBook groupBy b.authorId
 
-fn authorsSeen() -> List String requires [dbRead Note] = List.map firstOfPair (pagesByAuthor ())
+fn authorsSeen() -> List String requires [dbRead LiveBook] = List.map firstOfPair (pagesByAuthor ())
 
 fn firstOfPair(row: Tuple2 String Int) -> String = Tuple2.first row
 
-fn pagesSeen() -> List Int requires [dbRead Note] = List.map secondOfPair (pagesByAuthor ())
+fn pagesSeen() -> List Int requires [dbRead LiveBook] = List.map secondOfPair (pagesByAuthor ())
 
 fn secondOfPair(row: Tuple2 String Int) -> Int = Tuple2.second row
 
-fn countsSeen() -> List Int requires [dbRead Note] = List.map secondOfPair (booksByAuthor ())
+fn countsSeen() -> List Int requires [dbRead LiveBook] = List.map secondOfPair (booksByAuthor ())
 
 fn shelfOf(wanted: String) -> String
-  requires [dbRead Note] =
+  requires [dbRead LiveBook] =
   case selectOne b from LiveBook where b.id == wanted of
     Nothing -> "none"
     Something b ->
@@ -3852,7 +3852,7 @@ fn shelfOf(wanted: String) -> String
         Fiction -> "fiction"
         Reference -> "reference"
 
-test "a round trip through the server answers what it stored" with database LiveDb requires [dbRead Note, dbWrite Note] {
+test "a round trip through the server answers what it stored" with database LiveDb requires [dbRead LiveBook, dbWrite LiveBook, dbWrite LiveAuthor] {
   delete b from LiveBook
   delete a from LiveAuthor
   let _ = storeAuthor "a-1" "Ada"
@@ -3998,10 +3998,10 @@ database ColumnDb = Database {
 }
 
 fn store(id: String, priority: Priority, token: Token, assignee: Maybe String) -> Ticket
-  requires [dbWrite Note] =
+  requires [dbWrite Ticket] =
   insert Ticket { id: id, priority: priority, token: token, assignee: assignee }
 
-fn labelOf(wanted: String) -> String requires [dbRead Note] =
+fn labelOf(wanted: String) -> String requires [dbRead Ticket] =
   case selectOne t from Ticket where t.id == wanted of
     Nothing -> "none"
     Something t ->
@@ -4020,17 +4020,17 @@ fn labelOf(wanted: String) -> String requires [dbRead Note] =
 
 # A `secret` column: the column stores the newtype's BASE value, and what comes back is the
 # newtype again — so the only thing a caller can do with it is compare, which is the point.
-fn tokenMatches(wanted: String, guess: Token) -> Bool requires [dbRead Note] =
+fn tokenMatches(wanted: String, guess: Token) -> Bool requires [dbRead Ticket] =
   case selectOne t from Ticket where t.id == wanted of
     Nothing -> False
     Something t -> t.token == guess
 
 # `isNull` is the only way to ask a nullable column about its emptiness in a WHERE clause:
 # `t.assignee == Nothing` compares a column against a Tesl value, which the store cannot do.
-fn unnamed() -> Int requires [dbRead Note] =
+fn unnamed() -> Int requires [dbRead Ticket] =
   selectCount t from Ticket where isNull t.assignee
 
-test "a payload ADT, a secret and a nullable column all survive a round trip" with database ColumnDb requires [dbRead Note, dbWrite Note] {
+test "a payload ADT, a secret and a nullable column all survive a round trip" with database ColumnDb requires [dbRead Ticket, dbWrite Ticket] {
   # A live table outlives a test process, so the block starts by clearing what an earlier run
   # left — the per-test freshening both backends do covers memory stores only.
   delete t from Ticket
@@ -12743,9 +12743,8 @@ fn twice(n: Int) -> Int = n * 2
         (List.exists (fun (a : Emit_go.artifact) -> a.path = path) artifacts))
       [ "internal/teslrt/url.go"; "internal/teslrt/hostname.go" ]
 
-let () =
-  run "emit_go" [
-    "emission", [
+let emission_tests =
+    [
       test_case "artifact layout and helpers" `Quick test_artifact_layout;
       test_case "App module does not shadow Tesl.App" `Quick test_app_module_does_not_shadow_tesl_app;
       test_case "debug emission has versioned checkpoint" `Quick test_debug_emission_has_versioned_checkpoint;
@@ -12931,5 +12930,29 @@ let () =
       test_case "partial record literal fails before emission" `Quick test_missing_record_field_never_reaches_emitter;
       test_case "Go corpus compiles to Go" `Slow test_go_corpus_with_go;
       test_case "fresh module passes Go gates" `Slow test_generated_module_with_go;
-    ];
-  ]
+    ]
+
+let () =
+  let shard_count, shard_index =
+    match Sys.getenv_opt "TESL_TEST_SHARD_COUNT", Sys.getenv_opt "TESL_TEST_SHARD_INDEX" with
+    | None, None -> 1, 0
+    | Some count, Some index ->
+      (match int_of_string_opt count, int_of_string_opt index with
+       | Some count, Some index when count > 0 && index >= 0 && index < count ->
+         count, index
+       | _ -> failwith "invalid TESL_TEST_SHARD_COUNT/TESL_TEST_SHARD_INDEX")
+    | _ -> failwith "TESL_TEST_SHARD_COUNT and TESL_TEST_SHARD_INDEX must be set together"
+  in
+  let selected =
+    emission_tests
+    |> List.mapi (fun index test -> index, test)
+    |> List.filter_map (fun (index, test) ->
+         if index mod shard_count = shard_index then Some test else None)
+  in
+  let suite_name, group_name =
+    if shard_count = 1 then "emit_go", "emission"
+    else
+      Printf.sprintf "emit_go-shard-%02d" shard_index,
+      Printf.sprintf "emission-shard-%02d" shard_index
+  in
+  run suite_name [group_name, selected]

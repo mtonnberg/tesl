@@ -48,6 +48,7 @@ pkgs.mkShell {
   buildInputs = with pkgs; [
     curl
     jq
+    nodejs
     postgresql
     go
     staticcheck

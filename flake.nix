@@ -253,6 +253,7 @@
             tesl-go-tools
             curl
             jq
+            nodejs
             postgresql
             go
             staticcheck
