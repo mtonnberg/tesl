@@ -649,6 +649,9 @@ let regex_functions : (string * int) list =
 
 let is_regex_function (name : string) : bool = List.mem_assoc name regex_functions
 
+let regex_function_arity (name : string) : int =
+  if name = "Regex.replace" then 3 else 2
+
 (** The runtime (emitted Racket) names of the same functions, for the emitter's
     fail-closed backstop. *)
 let is_regex_runtime_name (racket_name : string) : bool =
@@ -725,9 +728,46 @@ let check_call (acc : (Location.loc * string * string) list ref) (e : expr) : un
      | _ -> ())
   | _ -> ()
 
+(** Regex operations are application-site-sensitive: allowing one to escape as
+    an ordinary function value would let an indirect caller supply a dynamic
+    pattern and bypass every check above.  Record only heads of saturated direct
+    calls; every other reference is rejected by [module_diagnostics]. *)
+let allowed_direct_reference (e : expr) : Location.loc option =
+  match e with
+  | EApp _ ->
+    let head, args = flatten_app [] e in
+    (match call_head_name head with
+     | Some name
+       when is_regex_function name && List.length args = regex_function_arity name ->
+       Some (Parser.expr_loc head)
+     | _ -> None)
+  | _ -> None
+
 let module_diagnostics (m : module_form) : (Location.loc * string * string) list =
   let acc = ref [] in
-  let visit_expr e = Ast_visitor.iter (check_call acc) e in
+  let visit_expr e =
+    let allowed = ref [] in
+    Ast_visitor.iter
+      (fun node ->
+        Option.iter (fun loc -> allowed := loc :: !allowed)
+          (allowed_direct_reference node))
+      e;
+    Ast_visitor.iter
+      (fun node ->
+        check_call acc node;
+        match call_head_name node with
+        | Some name
+          when is_regex_function name
+               && not (List.exists (( = ) (Parser.expr_loc node)) !allowed) ->
+          acc :=
+            ( Parser.expr_loc node,
+              "VREGEX002",
+              not_a_literal_message name
+              ^ " Regex functions cannot be stored, passed, or returned as values." )
+            :: !acc
+        | _ -> ())
+      e
+  in
   let rec visit_test_stmt = function
     | TsLetProof { value; _ } -> visit_expr value
     | TsLet { value; _ } -> visit_expr value
