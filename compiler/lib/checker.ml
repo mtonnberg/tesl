@@ -6385,17 +6385,22 @@ let tesl_module_predicate_exports : (string * string list) list = [
   ("Tesl.Int32",   ["IsNonNegative"; "IsNonZero"]);
   ("Tesl.Float",   ["FloatNonZero"; "FloatNonNegative"]);
   ("Tesl.Dict",    ["HasKey"]);
+  ("Tesl.CivilTime",
+   ["IsDayOfMonth"; "IsMonthNumber"; "IsDayOfYear"; "IsWeekNumber";
+    "IsWeekdayNumber"; "IsMonthLength"; "DayOfMonth"; "SameCalendar"]);
 ]
 
 (** Collect the set of stdlib predicate names that are EXPLICITLY available:
     only those that appear in an `import Tesl.X exposing [...]` list. *)
 let collect_explicitly_imported_stdlib_predicates (m : module_form) : string list =
-  let all_stdlib_preds = List.concat_map snd tesl_module_predicate_exports in
   List.concat_map (fun (imp : import_decl) ->
     match imp.names with
     | ImportAll -> []  (* ImportAll does NOT grant stdlib predicates *)
     | ImportExposing names ->
-      List.filter (fun name -> List.mem name all_stdlib_preds) names
+      let module_preds =
+        Option.value ~default:[]
+          (List.assoc_opt imp.module_name tesl_module_predicate_exports) in
+      List.filter (fun name -> List.mem name module_preds) names
   ) m.imports
 
 (** Collect all proof predicate names (uppercase) referenced in proof annotations
@@ -6919,9 +6924,42 @@ let check_fact_name_distinctness (m : module_form) : type_error list =
       | _ -> acc
     ) owners []
   in
-  (* A local `fact` colliding with an EXPLICITLY-imported stdlib predicate (stdlib
-     preds have no user-module owner, so they don't enter [owners]). *)
-  let imported_stdlib_preds = collect_explicitly_imported_stdlib_predicates m in
+  (* A stdlib function can carry a predicate in its signature even when that
+     predicate was not explicitly exposed.  Such hidden obligations must reserve
+     their owning predicate too: otherwise a local fact with the same bare name
+     can forge the proof expected by the imported function. *)
+  let rec proof_names acc = function
+    | PredApp { pred; _ } -> pred :: acc
+    | PredAnd { left; right; _ } -> proof_names (proof_names acc left) right
+  in
+  let proof_opt acc = function None -> acc | Some p -> proof_names acc p in
+  let rec return_proofs acc = function
+    | RetPlain _ -> acc
+    | RetAttached { binding; _ } ->
+      proof_opt acc binding.proof_ann
+    | RetMaybeAttached { binding; _ } ->
+      proof_opt acc binding.proof_ann
+    | RetNamedPack { entity_proof; other_proof; _ } ->
+      proof_opt (proof_opt acc entity_proof) other_proof
+    | RetForAll { proof; _ } | RetMaybeForAll { proof; _ }
+    | RetSetForAll { proof; _ } | RetMaybeSetForAll { proof; _ }
+    | RetForAllDictValues { proof; _ } | RetForAllDictKeys { proof; _ } ->
+      proof_names acc proof
+    | RetExists { binding; body; _ } ->
+      return_proofs (proof_opt acc binding.proof_ann) body
+  in
+  let all_stdlib_preds = List.concat_map snd tesl_module_predicate_exports in
+  let signature_stdlib_preds =
+    Validation_common.load_imported_func_info m
+    |> List.concat_map (fun (_, (fi : Validation_common.func_info)) ->
+         let from_params = List.fold_left (fun acc (b : binding) ->
+           proof_opt acc b.proof_ann) [] fi.fi_params in
+         return_proofs from_params fi.fi_return)
+    |> List.filter (fun name -> List.mem name all_stdlib_preds)
+  in
+  (* Stdlib predicates have no user-module owner, so they do not enter [owners]. *)
+  let imported_stdlib_preds =
+    collect_explicitly_imported_stdlib_predicates m @ signature_stdlib_preds in
   let stdlib_errors =
     List.filter_map (fun (name, loc) ->
       if List.mem name imported_stdlib_preds then
