@@ -130,10 +130,11 @@ let section_files =
   [ "getting-started", "GETTING-STARTED.md";
     "overview",        "overview.md";
     "examples",        "examples.md";
-    "best-practices",  "best-practices.md";
-    "faq",             "FAQ.md";
-    "anchors",         "anchors.md";
-    (* language-spec lives at repo root, not in manual/, so we don't slug-check it here *)
+     "best-practices",  "best-practices.md";
+     "faq",             "FAQ.md";
+     "anchors",         "anchors.md";
+     "openapi-dast",    "openapi-dast.md";
+     (* language-spec lives at repo root, not in manual/, so we don't slug-check it here *)
   ]
 
 let file_of_section s = List.assoc s section_files

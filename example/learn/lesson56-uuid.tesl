@@ -60,7 +60,7 @@ module Lesson56Uuid exposing [
 # capability's implies list:
 #
 #   import Tesl.UUID exposing [uuid, UUID.v7]
-#   capability myService implies dbWrite, uuid
+#   capability myService implies dbWrite User, uuid
 #
 #   handler createUser(body: CreateUserRequest)
 #     -> String

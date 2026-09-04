@@ -146,15 +146,6 @@ func (target *ProcessTarget) LaunchBackend(data json.RawMessage) (DebugBackend, 
 	if !filepath.IsAbs(arguments.Program) && filepath.Dir(arguments.Program) != "." {
 		arguments.Program = filepath.Join(cwd, arguments.Program)
 	}
-	// Inspector-launched Tesl files need an isolated endpoint. Reusing the
-	// project-wide debug.sock lets a stale or concurrent target detach the next
-	// target before its snapshot, which surfaces as "endpoint closed". Explicit
-	// sockets/ports remain untouched for attach workflows.
-	if strings.EqualFold(filepath.Ext(arguments.Program), ".tesl") &&
-		arguments.DebugSocket == "" && arguments.DebugAddress == "" && arguments.DebugPort == 0 {
-		arguments.DebugSocket = filepath.Join(cwd, ".tesl-stuff",
-			fmt.Sprintf("debug-%d-%d.sock", os.Getpid(), time.Now().UnixNano()))
-	}
 	program, programArgs, cleanup, err := target.prepareProgram(arguments, cwd)
 	if err != nil {
 		return nil, err
@@ -173,6 +164,11 @@ func (target *ProcessTarget) LaunchBackend(data json.RawMessage) (DebugBackend, 
 	if err != nil {
 		cleanup()
 		return nil, err
+	}
+	programCleanup := cleanup
+	cleanup = func() {
+		endpoint.cleanup()
+		programCleanup()
 	}
 	for name, value := range endpoint.environment {
 		environment = setEnvironment(environment, name, value)
@@ -445,6 +441,7 @@ type launchEndpointSpec struct {
 	address     string
 	token       string
 	environment map[string]string
+	cleanup     func()
 }
 
 // launchEndpoint chooses the child's control endpoint. For TCP launches the
@@ -475,11 +472,20 @@ func launchEndpoint(arguments processLaunchArguments, cwd string) (launchEndpoin
 		if strings.EqualFold(filepath.Ext(arguments.Program), ".tesl") {
 			environment["TESL_DEBUG_WAIT"] = "1"
 		}
-		return launchEndpointSpec{address: address, token: token, environment: environment}, nil
+		return launchEndpointSpec{address: address, token: token, environment: environment, cleanup: func() {}}, nil
 	}
 	socket := arguments.DebugSocket
+	cleanup := func() {}
 	if socket == "" {
-		socket = filepath.Join(cwd, ".tesl-stuff", "debug.sock")
+		// Unix sockaddr paths are short (typically 104-108 bytes). Keep launch
+		// endpoints in a private, owner-only runtime directory rather than under a
+		// potentially deep workspace or TMPDIR.
+		directory, err := shortDebugDirectory()
+		if err != nil {
+			return launchEndpointSpec{}, err
+		}
+		cleanup = func() { _ = os.RemoveAll(directory) }
+		socket = filepath.Join(directory, "control.sock")
 	}
 	environment := map[string]string{
 		"TESL_DEBUG": "1", "TESL_DEBUG_ROOT": cwd, "TESL_DEBUG_SOCKET": socket,
@@ -487,7 +493,28 @@ func launchEndpoint(arguments processLaunchArguments, cwd string) (launchEndpoin
 	if strings.EqualFold(filepath.Ext(arguments.Program), ".tesl") {
 		environment["TESL_DEBUG_WAIT"] = "1"
 	}
-	return launchEndpointSpec{socket: socket, environment: environment}, nil
+	return launchEndpointSpec{socket: socket, environment: environment, cleanup: cleanup}, nil
+}
+
+func shortDebugDirectory() (string, error) {
+	bases := []string{os.TempDir()}
+	if filepath.Clean(os.TempDir()) != filepath.Clean("/tmp") {
+		bases = append(bases, "/tmp")
+	}
+	var lastErr error
+	for _, base := range bases {
+		directory, err := os.MkdirTemp(base, "tesl-debug-")
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if len([]byte(filepath.Join(directory, "control.sock"))) <= 100 {
+			return directory, nil
+		}
+		_ = os.RemoveAll(directory)
+		lastErr = errors.New("runtime directory exceeds the Unix socket path limit")
+	}
+	return "", fmt.Errorf("create private debug endpoint directory: %w", lastErr)
 }
 
 func splitAddress(address string) (string, int, error) {

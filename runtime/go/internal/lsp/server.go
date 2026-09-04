@@ -20,8 +20,6 @@ import (
 	"tesl.dev/runtime/go/internal/tooling"
 )
 
-const compilerProtocolVersion = 1
-
 const (
 	parseError     = -32700
 	invalidRequest = -32600
@@ -35,6 +33,10 @@ type Compiler interface {
 	FormatSource(context.Context, string, string) ([]byte, tooling.Result, error)
 }
 
+type overlayCompiler interface {
+	QuerySourcesJSON(context.Context, string, string, []tooling.SourceOverlay, ...string) ([]byte, tooling.Result, error)
+}
+
 type document struct {
 	URI     string
 	Path    string
@@ -43,23 +45,69 @@ type document struct {
 }
 
 type Server struct {
-	compiler       Compiler
-	documents      map[string]document
-	semanticTokens map[string]semanticTokenState
-	nextTokenID    uint64
-	shutdown       bool
-	diagnosticMu   sync.Mutex
-	diagnosticRuns map[string]diagnosticRun
-	diagnosticWG   sync.WaitGroup
+	compiler          Compiler
+	documents         map[string]document
+	semanticTokens    map[string]semanticTokenState
+	nextTokenID       uint64
+	shutdown          bool
+	diagnosticMu      sync.Mutex
+	diagnosticRuns    map[string]diagnosticRun
+	diagnosticWG      sync.WaitGroup
+	diagnosticSets    map[string]map[string][]map[string]any
+	nextDiagnostic    uint64
+	diagnosticLocksMu sync.Mutex
+	diagnosticLocks   map[string]*sync.Mutex
+	// beforeDiagnosticPublish is used by race tests to pause between a query and
+	// its lifecycle check. Production servers leave it nil.
+	beforeDiagnosticPublish func()
 }
 
 type diagnosticRun struct {
-	cancel  context.CancelFunc
-	version int
+	cancel context.CancelFunc
+	id     uint64
 }
 
 func NewServer(compiler Compiler) *Server {
-	return &Server{compiler: compiler, documents: make(map[string]document), semanticTokens: make(map[string]semanticTokenState), diagnosticRuns: make(map[string]diagnosticRun)}
+	return &Server{
+		compiler: compiler, documents: make(map[string]document), semanticTokens: make(map[string]semanticTokenState),
+		diagnosticRuns: make(map[string]diagnosticRun), diagnosticSets: make(map[string]map[string][]map[string]any),
+		diagnosticLocks: make(map[string]*sync.Mutex),
+	}
+}
+
+func (server *Server) sourceOverlays() []tooling.SourceOverlay {
+	paths := make([]string, 0, len(server.documents))
+	byPath := make(map[string]string, len(server.documents))
+	for _, doc := range server.documents {
+		if strings.EqualFold(filepath.Ext(doc.Path), ".tesl") {
+			paths = append(paths, doc.Path)
+			byPath[doc.Path] = doc.Text
+		}
+	}
+	sort.Strings(paths)
+	overlays := make([]tooling.SourceOverlay, 0, len(paths))
+	for _, path := range paths {
+		overlays = append(overlays, tooling.SourceOverlay{Path: path, Source: byPath[path]})
+	}
+	return overlays
+}
+
+func (server *Server) querySourceJSON(ctx context.Context, flag string, doc document, overlays []tooling.SourceOverlay, position ...string) ([]byte, tooling.Result, error) {
+	if compiler, ok := server.compiler.(overlayCompiler); ok {
+		return compiler.QuerySourcesJSON(ctx, flag, doc.Path, overlays, position...)
+	}
+	return server.compiler.QuerySourceJSON(ctx, flag, doc.Path, doc.Text, position...)
+}
+
+func (server *Server) diagnosticLock(uri string) *sync.Mutex {
+	server.diagnosticLocksMu.Lock()
+	defer server.diagnosticLocksMu.Unlock()
+	lock := server.diagnosticLocks[uri]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		server.diagnosticLocks[uri] = lock
+	}
+	return lock
 }
 
 // Run serves one LSP session. It returns the process exit status required by
@@ -76,10 +124,9 @@ func (server *Server) Run(ctx context.Context, input io.Reader, output io.Writer
 			if writeErr := server.writeError(writer, nil, parseError, err.Error()); writeErr != nil {
 				return 1
 			}
-			if errors.Is(err, io.ErrUnexpectedEOF) {
-				return 1
-			}
-			continue
+			// A framing error can leave an unread body in the stream. Continuing
+			// could interpret body bytes as a new header, so terminate safely.
+			return 1
 		}
 		request, err := protocol.DecodeRequest(message)
 		if err != nil {
@@ -131,7 +178,7 @@ func (server *Server) handle(ctx context.Context, request protocol.Request, writ
 	case "textDocument/didSave":
 		return -1, server.didSave(ctx, request.Params, writer)
 	case "textDocument/didClose":
-		return -1, server.didClose(request.Params, writer)
+		return -1, server.didClose(ctx, request.Params, writer)
 	case "textDocument/hover":
 		if len(request.ID) == 0 {
 			return -1, nil
@@ -207,11 +254,6 @@ func (server *Server) handle(ctx context.Context, request protocol.Request, writ
 			return -1, nil
 		}
 		return -1, server.writeFormatting(ctx, request.ID, request.Params, writer)
-	case "textDocument/rangeFormatting", "textDocument/onTypeFormatting":
-		if len(request.ID) == 0 {
-			return -1, nil
-		}
-		return -1, server.writeFormatting(ctx, request.ID, request.Params, writer)
 	case "textDocument/documentHighlight":
 		if len(request.ID) == 0 {
 			return -1, nil
@@ -227,11 +269,6 @@ func (server *Server) handle(ctx context.Context, request protocol.Request, writ
 			return -1, nil
 		}
 		return -1, server.writeInlayHints(ctx, request.ID, request.Params, writer)
-	case "inlayHint/resolve":
-		if len(request.ID) == 0 {
-			return -1, nil
-		}
-		return -1, server.writeResult(writer, request.ID, json.RawMessage(request.Params))
 	case "textDocument/foldingRange":
 		if len(request.ID) == 0 {
 			return -1, nil
@@ -260,12 +297,7 @@ func (server *Server) handle(ctx context.Context, request protocol.Request, writ
 	case "workspace/didChangeConfiguration":
 		return -1, nil
 	case "workspace/didChangeWatchedFiles":
-		return -1, nil
-	case "workspace/executeCommand":
-		if len(request.ID) == 0 {
-			return -1, nil
-		}
-		return -1, server.writeResult(writer, request.ID, nil)
+		return -1, server.didChangeWatchedFiles(ctx, request.Params, writer)
 	default:
 		if len(request.ID) == 0 {
 			return -1, nil
@@ -289,28 +321,33 @@ func initializeResult() map[string]any {
 				"change":    2,
 				"save":      map[string]any{"includeText": true},
 			},
-			"hoverProvider":                    true,
-			"definitionProvider":               true,
-			"referencesProvider":               true,
-			"renameProvider":                   map[string]any{"prepareProvider": true},
-			"documentFormattingProvider":       true,
-			"documentRangeFormattingProvider":  true,
-			"documentOnTypeFormattingProvider": map[string]any{"firstTriggerCharacter": "\n"},
-			"completionProvider":               map[string]any{"resolveProvider": true, "triggerCharacters": []string{"."}},
-			"signatureHelpProvider":            map[string]any{"triggerCharacters": []string{"(", ","}},
-			"codeActionProvider":               map[string]any{"codeActionKinds": []string{"quickfix", "source.fixAll", "source.organizeImports"}},
-			"executeCommandProvider":           map[string]any{"commands": []string{"tesl.applyFix"}},
-			"documentSymbolProvider":           true,
-			"foldingRangeProvider":             true,
-			"documentHighlightProvider":        true,
-			"selectionRangeProvider":           true,
-			"inlayHintProvider":                true,
+			"hoverProvider":              true,
+			"definitionProvider":         true,
+			"declarationProvider":        true,
+			"typeDefinitionProvider":     true,
+			"referencesProvider":         true,
+			"renameProvider":             map[string]any{"prepareProvider": true},
+			"documentFormattingProvider": true,
+			"completionProvider":         map[string]any{"resolveProvider": true, "triggerCharacters": []string{"."}},
+			"signatureHelpProvider":      map[string]any{"triggerCharacters": []string{"(", ","}},
+			"codeActionProvider":         map[string]any{"codeActionKinds": []string{"quickfix"}},
+			"documentLinkProvider":       map[string]any{"resolveProvider": false},
+			"linkedEditingRangeProvider": true,
+			"diagnosticProvider": map[string]any{
+				"identifier": "tesl", "interFileDependencies": true, "workspaceDiagnostics": false,
+			},
+			"documentSymbolProvider":    true,
+			"foldingRangeProvider":      true,
+			"documentHighlightProvider": true,
+			"selectionRangeProvider":    true,
+			"inlayHintProvider":         true,
 			"semanticTokensProvider": map[string]any{
 				"legend": map[string]any{
 					"tokenTypes":     []string{"function", "type", "enum", "enumMember", "property", "variable"},
 					"tokenModifiers": []string{"declaration"},
 				},
-				"full": true,
+				"full":  map[string]any{"delta": true},
+				"range": true,
 			},
 		},
 		"serverInfo": map[string]string{
@@ -360,7 +397,7 @@ func (server *Server) didSave(ctx context.Context, raw json.RawMessage, writer *
 		doc.Text = *params.Text
 		server.documents[doc.URI] = doc
 	}
-	server.scheduleDiagnostics(ctx, doc, writer)
+	server.scheduleAllDiagnostics(ctx, writer)
 	return nil
 }
 
@@ -427,7 +464,20 @@ func (server *Server) didOpen(ctx context.Context, raw json.RawMessage, writer *
 	server.documents[params.TextDocument.URI] = document{
 		URI: params.TextDocument.URI, Path: path, Version: params.TextDocument.Version, Text: params.TextDocument.Text,
 	}
-	return server.publishDiagnostics(ctx, server.documents[params.TextDocument.URI], writer)
+	if err := server.publishDiagnostics(ctx, server.documents[params.TextDocument.URI], writer); err != nil {
+		return err
+	}
+	uris := make([]string, 0, len(server.documents)-1)
+	for uri := range server.documents {
+		if uri != params.TextDocument.URI {
+			uris = append(uris, uri)
+		}
+	}
+	sort.Strings(uris)
+	for _, uri := range uris {
+		server.scheduleDiagnostics(ctx, server.documents[uri], writer)
+	}
+	return nil
 }
 
 func (server *Server) didChange(ctx context.Context, raw json.RawMessage, writer *protocol.Writer) error {
@@ -462,48 +512,107 @@ func (server *Server) didChange(ctx context.Context, raw json.RawMessage, writer
 	}
 	doc.Text = text
 	server.documents[doc.URI] = doc
-	server.scheduleDiagnostics(ctx, doc, writer)
+	server.scheduleAllDiagnostics(ctx, writer)
 	return nil
 }
 
-func (server *Server) didClose(raw json.RawMessage, writer *protocol.Writer) error {
+type watchedFileParams struct {
+	Changes []struct {
+		URI  string `json:"uri"`
+		Type int    `json:"type"`
+	} `json:"changes"`
+}
+
+func (server *Server) didChangeWatchedFiles(ctx context.Context, raw json.RawMessage, writer *protocol.Writer) error {
+	var params watchedFileParams
+	if err := json.Unmarshal(raw, &params); err != nil || len(params.Changes) == 0 {
+		return errors.New("workspace/didChangeWatchedFiles: invalid params")
+	}
+	for _, change := range params.Changes {
+		if change.URI == "" || change.Type < 1 || change.Type > 3 {
+			return errors.New("workspace/didChangeWatchedFiles: invalid params")
+		}
+	}
+	server.scheduleAllDiagnostics(ctx, writer)
+	return nil
+}
+
+func (server *Server) didClose(ctx context.Context, raw json.RawMessage, writer *protocol.Writer) error {
 	var params closeParams
 	if err := json.Unmarshal(raw, &params); err != nil || params.TextDocument.URI == "" {
 		return errors.New("textDocument/didClose: invalid params")
 	}
+	lock := server.diagnosticLock(params.TextDocument.URI)
+	lock.Lock()
 	delete(server.documents, params.TextDocument.URI)
 	server.cancelDiagnostics(params.TextDocument.URI)
-	return server.publishEmptyDiagnostics(params.TextDocument.URI, writer)
+	err := server.publishDiagnosticGroups(params.TextDocument.URI, nil, writer)
+	server.diagnosticLocksMu.Lock()
+	if server.diagnosticLocks[params.TextDocument.URI] == lock {
+		delete(server.diagnosticLocks, params.TextDocument.URI)
+	}
+	server.diagnosticLocksMu.Unlock()
+	lock.Unlock()
+	if err != nil {
+		return err
+	}
+	server.scheduleAllDiagnostics(ctx, writer)
+	return nil
 }
 
 func (server *Server) scheduleDiagnostics(ctx context.Context, doc document, writer *protocol.Writer) {
+	lock := server.diagnosticLock(doc.URI)
+	lock.Lock()
 	server.diagnosticMu.Lock()
 	if previous, found := server.diagnosticRuns[doc.URI]; found {
 		previous.cancel()
 	}
 	queryContext, cancel := context.WithCancel(ctx)
-	server.diagnosticRuns[doc.URI] = diagnosticRun{cancel: cancel, version: doc.Version}
+	server.nextDiagnostic++
+	runID := server.nextDiagnostic
+	server.diagnosticRuns[doc.URI] = diagnosticRun{cancel: cancel, id: runID}
 	server.diagnosticWG.Add(1)
 	server.diagnosticMu.Unlock()
+	lock.Unlock()
+	overlays := server.sourceOverlays()
 	go func() {
 		defer server.diagnosticWG.Done()
-		diagnostics, err := server.diagnosticsForDocument(queryContext, doc)
+		groups, err := server.diagnosticsForDocumentWithOverlays(queryContext, doc, overlays)
+		lock.Lock()
+		defer lock.Unlock()
 		server.diagnosticMu.Lock()
 		run, current := server.diagnosticRuns[doc.URI]
-		fresh := current && run.version == doc.Version
+		fresh := current && run.id == runID
 		if fresh {
 			delete(server.diagnosticRuns, doc.URI)
 		}
 		server.diagnosticMu.Unlock()
-		if !fresh || errors.Is(queryContext.Err(), context.Canceled) {
+		if !fresh {
+			return
+		}
+		if server.beforeDiagnosticPublish != nil {
+			server.beforeDiagnosticPublish()
+		}
+		if errors.Is(queryContext.Err(), context.Canceled) {
 			return
 		}
 		if err != nil {
 			_ = server.publishCompilerFailure(doc.URI, err, writer)
 			return
 		}
-		_ = server.publish(doc.URI, diagnostics, writer)
+		_ = server.publishDiagnosticGroups(doc.URI, groups, writer)
 	}()
+}
+
+func (server *Server) scheduleAllDiagnostics(ctx context.Context, writer *protocol.Writer) {
+	uris := make([]string, 0, len(server.documents))
+	for uri := range server.documents {
+		uris = append(uris, uri)
+	}
+	sort.Strings(uris)
+	for _, uri := range uris {
+		server.scheduleDiagnostics(ctx, server.documents[uri], writer)
+	}
 }
 
 func (server *Server) cancelDiagnostics(uri string) {
@@ -546,7 +655,7 @@ func (server *Server) queryDocumentPosition(ctx context.Context, doc document, p
 		return nil, err
 	}
 	byteColumn := offset - lineStart
-	payload, _, err := server.compiler.QuerySourceJSON(ctx, flag, doc.Path, doc.Text,
+	payload, _, err := server.querySourceJSON(ctx, flag, doc, server.sourceOverlays(),
 		strconv.Itoa(position.Line), strconv.Itoa(byteColumn))
 	return payload, err
 }
@@ -564,7 +673,7 @@ func (server *Server) writeHover(ctx context.Context, id json.RawMessage, raw js
 		return server.writeError(writer, id, internalError, err.Error())
 	}
 	var response typeAtResponse
-	if err := decodeVersioned(payload, &response); err != nil {
+	if err := decodeVersioned("--type-at-json", payload, &response); err != nil {
 		return server.writeError(writer, id, internalError, err.Error())
 	}
 	if response.TypeAt == nil {
@@ -573,7 +682,7 @@ func (server *Server) writeHover(ctx context.Context, id json.RawMessage, raw js
 			return server.writeResult(writer, id, nil)
 		}
 		var field fieldAtResponse
-		if err := decodeVersioned(fieldPayload, &field); err != nil || field.FieldAt == nil {
+		if err := decodeVersioned("--field-at-json", fieldPayload, &field); err != nil || field.FieldAt == nil {
 			return server.writeResult(writer, id, nil)
 		}
 		return server.writeResult(writer, id, map[string]any{
@@ -619,7 +728,7 @@ func (server *Server) writeDefinition(ctx context.Context, id json.RawMessage, r
 		return server.writeError(writer, id, internalError, err.Error())
 	}
 	var response definitionResponse
-	if err := decodeVersioned(payload, &response); err != nil {
+	if err := decodeVersioned("--definition-json", payload, &response); err != nil {
 		return server.writeError(writer, id, internalError, err.Error())
 	}
 	if response.Definition == nil {
@@ -652,7 +761,7 @@ func (server *Server) writeCompletion(ctx context.Context, id json.RawMessage, r
 		return server.writeError(writer, id, internalError, err.Error())
 	}
 	var response completionResponse
-	if err := decodeVersioned(payload, &response); err != nil {
+	if err := decodeVersioned("--completions-json", payload, &response); err != nil {
 		return server.writeError(writer, id, internalError, err.Error())
 	}
 	items := make([]map[string]any, 0, len(response.Completions))
@@ -689,7 +798,7 @@ func (server *Server) writeCompletionDocumentation(ctx context.Context, id json.
 			Doc  string `json:"doc"`
 		} `json:"entries"`
 	}
-	if err := json.Unmarshal(payload, &docs); err != nil {
+	if err := decodeVersioned("--doc-json", payload, &docs); err != nil {
 		return server.writeResult(writer, id, item)
 	}
 	for _, entry := range docs.Entries {
@@ -719,7 +828,7 @@ func (server *Server) writeSignatureHelp(ctx context.Context, id json.RawMessage
 		return server.writeError(writer, id, internalError, err.Error())
 	}
 	var response signatureHelpResponse
-	if err := decodeVersioned(payload, &response); err != nil {
+	if err := decodeVersioned("--signature-help-json", payload, &response); err != nil {
 		return server.writeError(writer, id, internalError, err.Error())
 	}
 	if response.Signature == nil {
@@ -756,7 +865,7 @@ func (server *Server) writeTypeDefinition(ctx context.Context, id json.RawMessag
 		return server.writeError(writer, id, internalError, err.Error())
 	}
 	var response typeDefinitionResponse
-	if err := decodeVersioned(payload, &response); err != nil {
+	if err := decodeVersioned("--type-definition-json", payload, &response); err != nil {
 		return server.writeError(writer, id, internalError, err.Error())
 	}
 	if response.TypeDefinition == nil {
@@ -776,7 +885,7 @@ func (server *Server) writeReferences(ctx context.Context, id json.RawMessage, r
 		return server.writeError(writer, id, internalError, err.Error())
 	}
 	var response referencesResponse
-	if err := decodeVersioned(payload, &response); err != nil {
+	if err := decodeVersioned("--occurrences-json", payload, &response); err != nil {
 		return server.writeError(writer, id, internalError, err.Error())
 	}
 	locations := make([]map[string]any, 0, len(response.Occurrences))
@@ -792,7 +901,7 @@ func (server *Server) writePrepareRename(ctx context.Context, id json.RawMessage
 		return server.writeResult(writer, id, nil)
 	}
 	var response referencesResponse
-	if err := decodeVersioned(payload, &response); err != nil {
+	if err := decodeVersioned("--occurrences-json", payload, &response); err != nil {
 		return server.writeResult(writer, id, nil)
 	}
 	var params positionParams
@@ -819,7 +928,7 @@ func (server *Server) writeRename(ctx context.Context, id json.RawMessage, raw j
 		return server.writeResult(writer, id, nil)
 	}
 	var response referencesResponse
-	if err := decodeVersioned(payload, &response); err != nil || len(response.Occurrences) == 0 {
+	if err := decodeVersioned("--occurrences-json", payload, &response); err != nil || len(response.Occurrences) == 0 {
 		return server.writeResult(writer, id, nil)
 	}
 	edits := make([]map[string]any, 0, len(response.Occurrences))
@@ -1119,7 +1228,7 @@ func (server *Server) writeDocumentHighlight(ctx context.Context, id json.RawMes
 		return server.writeResult(writer, id, []map[string]any{})
 	}
 	var response referencesResponse
-	if err := decodeVersioned(payload, &response); err != nil {
+	if err := decodeVersioned("--occurrences-json", payload, &response); err != nil {
 		return server.writeResult(writer, id, []map[string]any{})
 	}
 	highlights := make([]map[string]any, 0, len(response.Occurrences))
@@ -1161,7 +1270,7 @@ func (server *Server) writeSelectionRanges(ctx context.Context, id json.RawMessa
 			continue
 		}
 		var response selectionResponse
-		if err := decodeVersioned(payload, &response); err != nil || len(response.Ranges) == 0 {
+		if err := decodeVersioned("--selection-range-json", payload, &response); err != nil || len(response.Ranges) == 0 {
 			result = append(result, selectionFallback(position))
 			continue
 		}
@@ -1208,12 +1317,12 @@ func (server *Server) writeInlayHints(ctx context.Context, id json.RawMessage, r
 	if !found || server.compiler == nil {
 		return server.writeResult(writer, id, []map[string]any{})
 	}
-	payload, _, err := server.compiler.QuerySourceJSON(ctx, "--local-bindings-json", doc.Path, doc.Text)
+	payload, _, err := server.querySourceJSON(ctx, "--local-bindings-json", doc, server.sourceOverlays())
 	if err != nil {
 		return server.writeResult(writer, id, []map[string]any{})
 	}
 	var response localBindingsResponse
-	if err := decodeVersioned(payload, &response); err != nil {
+	if err := decodeVersioned("--local-bindings-json", payload, &response); err != nil {
 		return server.writeResult(writer, id, []map[string]any{})
 	}
 	index := protocol.NewLineIndex(doc.Text)
@@ -1342,12 +1451,12 @@ func (server *Server) semanticSnapshot(ctx context.Context, doc document) (seman
 	if server.compiler == nil {
 		return semanticSnapshot{}, errors.New("compiler client is not configured")
 	}
-	payload, _, err := server.compiler.QuerySourceJSON(ctx, "--semantic-json", doc.Path, doc.Text)
+	payload, _, err := server.querySourceJSON(ctx, "--semantic-json", doc, server.sourceOverlays())
 	if err != nil {
 		return semanticSnapshot{}, err
 	}
 	var snapshot semanticSnapshot
-	if err := decodeVersioned(payload, &snapshot); err != nil {
+	if err := decodeVersioned("--semantic-json", payload, &snapshot); err != nil {
 		return semanticSnapshot{}, err
 	}
 	return snapshot, nil
@@ -1608,15 +1717,9 @@ func compilerLocationToLSPForDocument(doc document, location compilerLocation) m
 	return result
 }
 
-func decodeVersioned(payload []byte, destination any) error {
-	var envelope struct {
-		Version int `json:"version"`
-	}
-	if err := json.Unmarshal(payload, &envelope); err != nil {
-		return fmt.Errorf("invalid compiler JSON: %w", err)
-	}
-	if envelope.Version != compilerProtocolVersion {
-		return fmt.Errorf("unsupported compiler protocol version %d", envelope.Version)
+func decodeVersioned(flag string, payload []byte, destination any) error {
+	if err := tooling.ValidateCompilerJSON(flag, payload); err != nil {
+		return err
 	}
 	if err := json.Unmarshal(payload, destination); err != nil {
 		return fmt.Errorf("invalid compiler JSON: %w", err)
@@ -1672,34 +1775,55 @@ type sourcePosition struct {
 }
 
 func (server *Server) publishDiagnostics(ctx context.Context, doc document, writer *protocol.Writer) error {
-	diagnostics, err := server.diagnosticsForDocument(ctx, doc)
+	groups, err := server.diagnosticsForDocumentWithOverlays(ctx, doc, server.sourceOverlays())
 	if err != nil {
 		return server.publishCompilerFailure(doc.URI, err, writer)
 	}
-	return server.publish(doc.URI, diagnostics, writer)
+	return server.publishDiagnosticGroups(doc.URI, groups, writer)
 }
 
-func (server *Server) diagnosticsForDocument(ctx context.Context, doc document) ([]map[string]any, error) {
+func (server *Server) diagnosticsForDocument(ctx context.Context, doc document) (map[string][]map[string]any, error) {
+	return server.diagnosticsForDocumentWithOverlays(ctx, doc, server.sourceOverlays())
+}
+
+func (server *Server) diagnosticsForDocumentWithOverlays(ctx context.Context, doc document, overlays []tooling.SourceOverlay) (map[string][]map[string]any, error) {
 	if server.compiler == nil {
 		return nil, errors.New("compiler client is not configured")
 	}
-	payload, _, err := server.compiler.QuerySourceJSON(ctx, "--check-json", doc.Path, doc.Text)
+	payload, _, err := server.querySourceJSON(ctx, "--check-json", doc, overlays)
 	if err != nil {
+		return nil, err
+	}
+	if err := tooling.ValidateCompilerJSON("--check-json", payload); err != nil {
 		return nil, err
 	}
 	var response compilerResponse
 	if err := json.Unmarshal(payload, &response); err != nil {
 		return nil, fmt.Errorf("invalid compiler JSON: %w", err)
 	}
-	if response.Version != compilerProtocolVersion {
-		return nil, fmt.Errorf("unsupported compiler protocol version %d", response.Version)
-	}
-	index := protocol.NewLineIndex(doc.Text)
-	diagnostics := make([]map[string]any, 0, len(response.Diagnostics))
+	groups := map[string][]map[string]any{doc.URI: {}}
 	for _, diagnostic := range response.Diagnostics {
-		if diagnostic.File != "" && !samePath(diagnostic.File, doc.Path) {
-			continue
+		uri := doc.URI
+		source := doc.Text
+		if !samePath(diagnostic.File, doc.Path) {
+			uri = protocol.PathToURI(diagnostic.File)
+			var found bool
+			for _, overlay := range overlays {
+				if samePath(diagnostic.File, overlay.Path) {
+					source = overlay.Source
+					found = true
+					break
+				}
+			}
+			if !found {
+				contents, readErr := os.ReadFile(diagnostic.File) // #nosec G304 -- compiler returned a local source path.
+				if readErr != nil {
+					return nil, fmt.Errorf("read diagnostic source %s: %w", diagnostic.File, readErr)
+				}
+				source = string(contents)
+			}
 		}
+		index := protocol.NewLineIndex(source)
 		start, startErr := index.PositionFromLineColumn(diagnostic.Start.Line, diagnostic.Start.Col)
 		end, endErr := index.PositionFromLineColumn(diagnostic.End.Line, diagnostic.End.Col)
 		if startErr != nil || endErr != nil {
@@ -1718,9 +1842,9 @@ func (server *Server) diagnosticsForDocument(ctx context.Context, doc document) 
 		if len(diagnostic.Fix) > 0 && string(diagnostic.Fix) != "null" {
 			entry["data"] = map[string]json.RawMessage{"fix": diagnostic.Fix}
 		}
-		diagnostics = append(diagnostics, entry)
+		groups[uri] = append(groups[uri], entry)
 	}
-	return diagnostics, nil
+	return groups, nil
 }
 
 type pullDiagnosticParams struct {
@@ -1739,18 +1863,25 @@ func (server *Server) writePullDiagnostics(ctx context.Context, id json.RawMessa
 	if !found {
 		return server.writeResult(writer, id, map[string]any{"kind": "full", "resultId": contentResultID(""), "items": []map[string]any{}})
 	}
-	resultID := contentResultID(doc.Text)
+	groups, err := server.diagnosticsForDocument(ctx, doc)
+	if err != nil {
+		groups = map[string][]map[string]any{doc.URI: {compilerFailureDiagnostic(err)}}
+	}
+	resultID := diagnosticResultID(doc.Text, groups)
 	if params.PreviousResultID != "" && params.PreviousResultID == resultID {
 		return server.writeResult(writer, id, map[string]any{"kind": "unchanged", "resultId": resultID})
 	}
-	diagnostics, err := server.diagnosticsForDocument(ctx, doc)
-	if err != nil {
-		diagnostics = []map[string]any{{
-			"range":    map[string]protocol.Position{"start": {Line: 0, Character: 0}, "end": {Line: 0, Character: 0}},
-			"severity": 2, "code": "TESL-COMPILER", "message": err.Error(), "source": "tesl-lsp-go",
-		}}
+	related := make(map[string]any)
+	for uri, diagnostics := range groups {
+		if uri != doc.URI {
+			related[uri] = map[string]any{"kind": "full", "items": diagnostics}
+		}
 	}
-	return server.writeResult(writer, id, map[string]any{"kind": "full", "resultId": resultID, "items": diagnostics})
+	result := map[string]any{"kind": "full", "resultId": resultID, "items": groups[doc.URI]}
+	if len(related) > 0 {
+		result["relatedDocuments"] = related
+	}
+	return server.writeResult(writer, id, result)
 }
 
 func contentResultID(text string) string {
@@ -1758,8 +1889,17 @@ func contentResultID(text string) string {
 	return fmt.Sprintf("%x", digest[:])
 }
 
+func diagnosticResultID(text string, groups map[string][]map[string]any) string {
+	encoded, _ := json.Marshal(groups)
+	return contentResultID(text + "\x00" + string(encoded))
+}
+
 func (server *Server) publishCompilerFailure(uri string, err error, writer *protocol.Writer) error {
-	diagnostic := map[string]any{
+	return server.publishDiagnosticGroups(uri, map[string][]map[string]any{uri: {compilerFailureDiagnostic(err)}}, writer)
+}
+
+func compilerFailureDiagnostic(err error) map[string]any {
+	return map[string]any{
 		"range": map[string]protocol.Position{
 			"start": {Line: 0, Character: 0},
 			"end":   {Line: 0, Character: 0},
@@ -1769,11 +1909,50 @@ func (server *Server) publishCompilerFailure(uri string, err error, writer *prot
 		"message":  err.Error(),
 		"source":   "tesl-lsp-go",
 	}
-	return server.publish(uri, []map[string]any{diagnostic}, writer)
 }
 
-func (server *Server) publishEmptyDiagnostics(uri string, writer *protocol.Writer) error {
-	return server.publish(uri, []map[string]any{}, writer)
+func (server *Server) publishDiagnosticGroups(entryURI string, groups map[string][]map[string]any, writer *protocol.Writer) error {
+	server.diagnosticMu.Lock()
+	affected := make(map[string]struct{})
+	for uri := range server.diagnosticSets[entryURI] {
+		affected[uri] = struct{}{}
+	}
+	if groups == nil {
+		delete(server.diagnosticSets, entryURI)
+	} else {
+		server.diagnosticSets[entryURI] = groups
+		for uri := range groups {
+			affected[uri] = struct{}{}
+		}
+	}
+	aggregated := make(map[string][]map[string]any, len(affected))
+	for uri := range affected {
+		seen := make(map[string]struct{})
+		for _, entryGroups := range server.diagnosticSets {
+			for _, diagnostic := range entryGroups[uri] {
+				encoded, _ := json.Marshal(diagnostic)
+				key := string(encoded)
+				if _, duplicate := seen[key]; duplicate {
+					continue
+				}
+				seen[key] = struct{}{}
+				aggregated[uri] = append(aggregated[uri], diagnostic)
+			}
+		}
+	}
+	server.diagnosticMu.Unlock()
+
+	uris := make([]string, 0, len(affected))
+	for uri := range affected {
+		uris = append(uris, uri)
+	}
+	sort.Strings(uris)
+	for _, uri := range uris {
+		if err := server.publish(uri, aggregated[uri], writer); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (server *Server) publish(uri string, diagnostics []map[string]any, writer *protocol.Writer) error {

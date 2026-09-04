@@ -128,6 +128,14 @@ let registry : entry list = [
        `if cond then a else b`) carry a structured machine-applicable fix, \
        surfaced in editors as a quickfix.";
     manual = Some "language-spec" };
+  { code = "E003"; category = Syntax;
+    title = "source complexity budget exceeded";
+    explanation =
+      "A module contains an expression deeper or larger than the compiler's \
+       bounded semantic-analysis budget (512 nesting levels or 100,000 expression \
+       nodes). Split deeply nested expressions into named functions or smaller \
+       declarations so checking remains predictable.";
+    manual = Some "language-spec" };
 
   (* ── Type checker ─────────────────────────────────────────────────────── *)
   { code = "T001"; category = Type;
@@ -429,6 +437,13 @@ let registry : entry list = [
        is the migration the field exists to remove. Matched by path SEGMENT, so \
        `mountPath: \"/api\"` does not fire on a route beginning `/apiary`.";
     manual = Some "language-spec" };
+  { code = "W097"; category = Lint;
+    title = "unused type parameter";
+    explanation = "An algebraic data type declares a type parameter that no \
+       constructor field uses. The parameter is therefore phantom: different \
+       applications suggest a distinction that represented values do not carry. \
+       Remove the parameter or use it in a constructor field.";
+    manual = Some "language-spec" };
 
   (* ── Linter: security (SEC0xx) ─────────────────────────────────────────────
      Their own category, deliberately, so `tesl help codes` groups them apart
@@ -526,6 +541,17 @@ let registry : entry list = [
        Move the mutation to a POST/PUT/PATCH/DELETE endpoint, or take the \
        write out of the GET handler. If you need a read-audit trail, record it \
        through telemetry, or accept the write on a POST.";
+     manual = Some "best-practices#security" };
+
+  { code = "SEC006"; category = Security;
+    title = "insecure server Content-Security-Policy";
+    explanation =
+      "A `contentSecurityPolicy` server clause is missing a required isolation \
+       directive or admits a wildcard, inline/eval execution, or unrestricted \
+       data/blob/http(s) source. The runtime-served HTML must use an explicit \
+       baseline so a browser cannot load or execute arbitrary content. Add \
+       `default-src`, `base-uri`, `object-src`, `frame-ancestors`, `form-action`, \
+       `script-src`, and `style-src`, and use explicit trusted sources only.";
     manual = Some "best-practices#security" };
 ]
 

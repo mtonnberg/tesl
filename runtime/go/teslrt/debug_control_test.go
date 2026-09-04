@@ -69,9 +69,16 @@ func TestDebugControlHandshakeAndContinue(t *testing.T) {
 	if stopped.Event != "stopped" {
 		t.Fatalf("event = %#v", stopped)
 	}
+	if stopped.Rendezvous != DebugRendezvousComplete {
+		t.Fatalf("rendezvous = %q, want complete", stopped.Rendezvous)
+	}
 	response = send(DebugControlRequest{ID: "3", Command: "snapshot"})
 	if response["error"] != nil {
 		t.Fatalf("snapshot response = %#v", response)
+	}
+	result, _ := response["result"].(map[string]any)
+	if result["rendezvous"] != DebugRendezvousComplete {
+		t.Fatalf("snapshot rendezvous = %#v", result)
 	}
 	send(DebugControlRequest{ID: "4", Command: "step-in"})
 	nextDone := make(chan struct{})
@@ -234,6 +241,41 @@ func TestDebugControlEnvironmentDiscovery(t *testing.T) {
 	defer func() { _ = server.Close() }()
 	if _, err := os.Stat(filepath.Join(root, ".tesl-stuff", "debug.sock")); err != nil {
 		t.Fatalf("discovered socket: %v", err)
+	}
+}
+
+func TestDebugControlEnvironmentFallsBackToAuthenticatedTCPForLongSocketPath(t *testing.T) {
+	root := t.TempDir()
+	for len([]byte(filepath.Join(root, ".tesl-stuff", "debug.sock"))) <= debugMaxUnixPathBytes {
+		root = filepath.Join(root, "workspace-segment")
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TESL_DEBUG", "1")
+	t.Setenv("TESL_DEBUG_SOCKET", "")
+	t.Setenv("TESL_DEBUG_PORT", "")
+	t.Setenv("TESL_DEBUG_ROOT", root)
+	server, err := StartDebugControlFromEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server == nil {
+		t.Fatal("enabled long-path debug environment returned no server")
+	}
+	if server.Port() == 0 || server.Token() == "" {
+		t.Fatalf("long path endpoint = %s token=%q", server.Endpoint(), server.Token())
+	}
+	if _, err := os.Stat(filepath.Join(root, ".tesl-stuff", "debug.sock")); !os.IsNotExist(err) {
+		t.Fatalf("unsafe long Unix socket was created: %v", err)
+	}
+	for _, name := range []string{DebugPortFile, DebugTokenFile} {
+		if _, err := os.Stat(filepath.Join(root, ".tesl-stuff", name)); err != nil {
+			t.Fatalf("missing %s: %v", name, err)
+		}
+	}
+	if err := server.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

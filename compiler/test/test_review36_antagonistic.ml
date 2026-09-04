@@ -215,7 +215,7 @@ establish provePositive(n: Int) -> Fact (IsPositive n) =
 
 let r36_11_integer_overflow () =
   (* A9/HM-1: Int is arbitrary-precision; a huge literal compiles (carried as
-     an LBigInt canonical string into the Racket bignum), no longer rejected. *)
+     an LBigInt canonical string into direct Go output), no longer rejected. *)
   should_pass {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
@@ -363,8 +363,8 @@ let r36_24_capability_insufficiency () =
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbRead, dbWrite]
 
-capability readCap implies dbRead
-capability writeCap implies dbWrite
+capability readCap implies dbRead Note
+capability writeCap implies dbWrite Note
 
 fn doWrite() -> Int
   requires [writeCap] =

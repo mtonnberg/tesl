@@ -86,11 +86,11 @@ database Db = Database {
   })
 }
 
-fn liveSessions(uid: String, none: Maybe String) -> List Session requires [dbRead] =
+fn liveSessions(uid: String, none: Maybe String) -> List Session requires [dbRead Session] =
   select s from Session
     where s.userId == uid && s.revokedAt == none
 
-fn revokedSessions(none: Maybe String) -> List Session requires [dbRead] =
+fn revokedSessions(none: Maybe String) -> List Session requires [dbRead Session] =
   select s from Session
     where s.revokedAt != none
 |}
@@ -115,7 +115,7 @@ entity Row table "rows" primaryKey id {
   small: Int
 }
 
-fn same(r: Row) -> List Row requires [dbRead] =
+fn same(r: Row) -> List Row requires [dbRead Row] =
   select %s from Row
     where %s.n == r.small
 |} binder binder
@@ -159,7 +159,7 @@ database Db = Database {
   })
 }
 
-fn store(id: String, key: ApiKey) -> Credential requires [dbWrite] =
+fn store(id: String, key: ApiKey) -> Credential requires [dbWrite Credential] =
   insert Credential { id: id, key: key }
 |}
 

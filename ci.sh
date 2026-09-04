@@ -43,6 +43,7 @@
 #   10a. Clean install        nix-built #tesl-go-cli wrapper: init/emit/build
 #                             under env -i (tests/go-clean-install.sh)
 #   11. Boot smoke            Go App activation via `tesl run`
+#   11a. OpenAPI DAST smoke   disposable staging app + server-scoped ZAP import
 #   12. Playground parity     scripts/playground-parity.sh — the browser build's
 #                             teslCheck vs `tesl --check-json` over 30 lessons
 #                             (SKIPs when js_of_ocaml or node is unavailable)
@@ -62,7 +63,7 @@
 #     ./ci.sh
 #
 # Env knobs (all preserved from the originals):
-#   TESL_CI_JOBS               parallel worker count for fmt/validate (default: nproc)
+#   TESL_CI_JOBS               parallel worker count for tests/fmt/validate (default: nproc)
 #   TESL_MUTATION_TIMEOUT      cap on the full --mutate run (default 120s)
 #   TESL_TEST_USE_TEMP_PG      use a temp PostgreSQL data root (default: CI)
 #   TESL_POSTGRES_HOST/PORT/USER  reuse an external PostgreSQL cluster
@@ -94,14 +95,15 @@ export TESL_OCAML_COMPILER="$COMPILER_DIR/_build/default/bin/main.exe"
 # fast budget-bounded mode the developer dune-test loop uses.  Overridable.
 export TESL_S7_EXHAUSTIVE="${TESL_S7_EXHAUSTIVE:-1}"
 
-# ── Parallel worker pool size (fmt/validate) ─────────────────────────────────
-# The per-file `tesl fmt` and `tesl validate` loops are embarrassingly parallel.
-# TESL_CI_JOBS overrides the worker count (default: one per core). 1 = serial.
+# ── Parallel worker pool size ────────────────────────────────────────────────
+# Dune tests and the per-file fmt/validate loops use this bounded worker count.
+# TESL_CI_JOBS overrides the default of one worker per core. 1 = serial.
 TESL_CI_JOBS="${TESL_CI_JOBS:-$(nproc 2>/dev/null || echo 1)}"
 case "$TESL_CI_JOBS" in
     ''|*[!0-9]*) TESL_CI_JOBS=1 ;;
 esac
 [ "$TESL_CI_JOBS" -lt 1 ] && TESL_CI_JOBS=1
+export TESL_CI_JOBS
 
 # ── Colour / TTY handling ────────────────────────────────────────────────────
 # Only emit ANSI colour when stdout is an interactive terminal and colour is not
@@ -117,7 +119,7 @@ phase_started_at=$SECONDS
 
 # ── Phase registry / progress bar ────────────────────────────────────────────
 # We know the phase count up front so each phase can print "[N/T] <name>".
-TOTAL_PHASES=21
+TOTAL_PHASES=22
 PHASE_NUM=0
 # Parallel arrays: name / status (OK|FAIL|SKIP) / elapsed seconds.
 PHASE_NAMES=()
@@ -583,10 +585,12 @@ if ! command -v dune >/dev/null 2>&1; then
     printf "  %s⚠%s  dune not found — skipping dune test\n" "$C_YELLOW" "$C_RESET"
     phase_end SKIP
 else
-    # -j1 avoids the known parallel-httpclient flake; unset the compiler overrides
-    # so dune uses its own freshly-built binary rather than a stale one.
+    # The old -j1 workaround covered test_httpclient_integration, which no longer
+    # exists. Dune sandboxes independent test executables, so use the shared
+    # bounded worker count. Unset compiler overrides so dune uses its own
+    # freshly-built binary rather than a stale one.
     _test_log=$(mktemp "${TMPDIR:-/tmp}/tesl-dune-test.XXXXXX")
-    if ( cd "$COMPILER_DIR" && unset TESL_OCAML_COMPILER TESL_BIN && dune test -j1 ) 2>&1 | tee "$_test_log"; then
+    if ( cd "$COMPILER_DIR" && unset TESL_OCAML_COMPILER TESL_BIN && dune test -j "$TESL_CI_JOBS" ) 2>&1 | tee "$_test_log"; then
         phase_end OK
     else
         mapfile -t _fail_ids < <(grep -aoE "\[FAIL\][^│]*" "$_test_log" | _normalize_fail_id | sort -u)
@@ -1261,6 +1265,31 @@ else
         phase_end FAIL
     fi
     rm -rf "$boot_root" "$boot_out"
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  OpenAPI DAST smoke (disposable staging app + server-scoped ZAP import)
+# ══════════════════════════════════════════════════════════════════════════════
+# This checked-in acceptance fixture starts a temporary Go app, proves the
+# selected server's spec excludes its sibling server, exercises both sides of
+# the auth boundary, and imports that spec into ZAP. The app and report are
+# disposable; `tesl dast` itself never starts the target.
+phase_begin "OpenAPI DAST smoke (server scope + auth boundary)"
+_dast_smoke_rc=0
+_dast_smoke_zap="${TESL_ZAP:-$(command -v zap 2>/dev/null || true)}"
+if ! command -v go >/dev/null 2>&1; then
+    printf "  %s⚠%s  go not on PATH — skipping OpenAPI DAST smoke\n" "$C_YELLOW" "$C_RESET"
+    phase_end SKIP
+elif [ ! -x "$_main_exe" ]; then
+    printf "  %s⚠%s  compiler binary missing — skipping OpenAPI DAST smoke\n" "$C_YELLOW" "$C_RESET"
+    phase_end SKIP
+elif [ -z "$_dast_smoke_zap" ]; then
+    printf "  %s⚠%s  ZAP not on PATH — skipping OpenAPI DAST smoke\n" "$C_YELLOW" "$C_RESET"
+    phase_end SKIP
+else
+    TESL_REPO_ROOT="$SCRIPT_DIR" TESL_OCAML_COMPILER="$_main_exe" \
+        TESL_ZAP="$_dast_smoke_zap" bash "$SCRIPT_DIR/tests/dast-openapi-smoke.sh" || _dast_smoke_rc=$?
+    if [ "$_dast_smoke_rc" -eq 0 ]; then phase_end OK; else phase_end FAIL; fi
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════

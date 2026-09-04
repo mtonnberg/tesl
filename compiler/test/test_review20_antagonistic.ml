@@ -223,7 +223,7 @@ fn classify(mx: Maybe Int) -> String =
 (* ── 1.3 A9/HM-1: Int is arbitrary-precision — a huge literal compiles ────── *)
 (* Formerly these asserted a clean range error (exit 1). Under A9/HM-1 the 63-bit
    range check is dropped: the huge magnitude flows through as an LBigInt canonical
-   string into the Racket bignum, so it compiles (exit 0, no error diagnostic). *)
+   string into direct Go output, so it compiles (exit 0, no error diagnostic). *)
 
 let test_overflow_exit_code_is_one () =
   let src = prelude ^ "fn bigNum() -> Int = 9999999999999999999999\n" in

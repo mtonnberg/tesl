@@ -10,7 +10,7 @@
 
 The Go LSP is available as `tesl-lsp` or with `nix develop --command go run ./runtime/go/cmd/tesl-lsp`; set `TESL_COMPILER` when the compiler executable is not on `PATH`. It supports initialize/shutdown/exit, full-document open/change/close, pushed diagnostics, hover, definition/declaration, type-definition, completion and resolve, signature help, references, prepare-rename, rename, quick-fix code actions, document links, linked editing, full-document formatting, document highlights, selection ranges, inlay hints, folding ranges, document symbols, and semantic tokens with full, range, and delta responses. The compiler/editor boundary is documented in `editor/protocol.md`.
 
-To iterate on the grammar, edit `vscode-tesl/syntaxes/tesl.tmLanguage.json` and reload the VSCodium window. To build the extension from source: `cd vscode-tesl && npm install && vsce package --allow-missing-repository`, then `codium --install-extension vscode-tesl-*.vsix`.
+To iterate on the grammar, edit `vscode-tesl/syntaxes/tesl.tmLanguage.json` and reload the VSCodium window. The repository Nix shell provides Node, npm, and npx. To build the extension from source, enter the repository root and run `nix develop`, then `cd editor/vscode-tesl && npm ci && npm run package`. Install the result with `codium --install-extension vscode-tesl-*.vsix`.
 
 ## Architecture
 

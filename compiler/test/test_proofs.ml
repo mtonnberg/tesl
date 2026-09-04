@@ -183,14 +183,14 @@ let test_builtin_caps_ok () =
 import Tesl.Prelude exposing [Int]
 import Tesl.DB   exposing [dbRead, dbWrite]
 import Tesl.Time exposing [time]
-fn f(x: Int) -> Int requires [dbRead, dbWrite, time] = x
+fn f(x: Int) -> Int requires [dbRead Note, dbWrite Note, time] = x
 |}
 
 let test_declared_cap_ok () =
   assert_no_proof_errors {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbRead]
-capability myRead implies dbRead
+capability myRead implies dbRead Note
 fn f(x: Int) -> Int requires [myRead] = x
 |}
 
@@ -209,7 +209,7 @@ let test_cap_chain_ok () =
   (* Transitive capability implications are valid *)
   assert_no_proof_errors {|module Foo exposing []
 import Tesl.DB exposing [dbRead]
-capability level2 implies dbRead
+capability level2 implies dbRead Note
 capability level1 implies level2
 fn f() -> Int requires [level1] = 0
 |}
@@ -218,7 +218,7 @@ let test_handler_requires_caps () =
   assert_no_proof_errors {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.DB exposing [dbRead]
-capability appRead implies dbRead
+capability appRead implies dbRead Note
 handler myHandler(x: String) -> String
   requires [appRead] =
   x
@@ -340,8 +340,8 @@ record SafeNote {
 let test_complex_capability_hierarchy () =
   assert_no_proof_errors {|module Foo exposing []
 import Tesl.DB exposing [dbRead, dbWrite]
-capability readAll implies dbRead
-capability writeAll implies dbWrite
+capability readAll implies dbRead Note
+capability writeAll implies dbWrite Note
 capability fullAccess implies readAll, writeAll
 handler myOp() -> Int requires [fullAccess] = 0
 |}

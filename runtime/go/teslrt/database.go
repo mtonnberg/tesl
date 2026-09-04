@@ -43,6 +43,46 @@ type Database struct {
 // where two databases are in scope.
 var boundDatabase atomic.Pointer[Database]
 
+var databaseBindings = struct {
+	mutex sync.Mutex
+	cond  *sync.Cond
+	owner uint64
+	depth int
+}{}
+
+func init() {
+	databaseBindings.cond = sync.NewCond(&databaseBindings.mutex)
+}
+
+// acquireDatabaseBinding serializes process-wide bindings while allowing the same goroutine
+// to nest them. The API has no context or handle to carry a binding explicitly, so overlap
+// cannot be made request-local without changing generated programs; serialization makes the
+// existing process-global contract deterministic instead of letting scopes unbind each other.
+func acquireDatabaseBinding() {
+	owner := goroutineID()
+	databaseBindings.mutex.Lock()
+	for databaseBindings.owner != 0 && databaseBindings.owner != owner {
+		databaseBindings.cond.Wait()
+	}
+	databaseBindings.owner = owner
+	databaseBindings.depth++
+	databaseBindings.mutex.Unlock()
+}
+
+func releaseDatabaseBinding() {
+	owner := goroutineID()
+	databaseBindings.mutex.Lock()
+	defer databaseBindings.mutex.Unlock()
+	if databaseBindings.owner != owner || databaseBindings.depth == 0 {
+		panic("database: binding released by a goroutine that does not own it")
+	}
+	databaseBindings.depth--
+	if databaseBindings.depth == 0 {
+		databaseBindings.owner = 0
+		databaseBindings.cond.Broadcast()
+	}
+}
+
 // NewDatabase, PostgresTableOf and PostgresColumnOf are what a `database` declaration emits.
 // They are constructors rather than struct literals because gofmt ALIGNS the values in a
 // multi-line composite literal and breaks the alignment run at a nested multi-line value — a
@@ -83,6 +123,7 @@ func PostgresColumnOf(name, columnType string, primaryKey, nullable bool) Postgr
 // the block does not reach the server either way, because the binding is what routes it.
 func WithDatabase(database *Database, body func()) {
 	connection := OpenPostgres(database.Config, database.Tables)
+	acquireDatabaseBinding()
 	database.mutex.Lock()
 	previous := database.open
 	database.open = connection
@@ -93,6 +134,7 @@ func WithDatabase(database *Database, body func()) {
 		database.mutex.Lock()
 		database.open = previous
 		database.mutex.Unlock()
+		releaseDatabaseBinding()
 	}()
 	body()
 }

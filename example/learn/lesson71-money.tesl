@@ -120,7 +120,7 @@ database Shop = Database {
 # `selectSum` over a Money column returns Money — and only sums a SINGLE
 # currency: mixed currencies (or an empty row set, whose zero has no currency)
 # raise instead of adding öre to yen.
-fn totalRevenue() -> Money requires [dbRead] =
+fn totalRevenue() -> Money requires [dbRead OrderLine] =
   selectSum l.price from OrderLine
 
 # ─── Tests ───────────────────────────────────────────────────────────────────────
@@ -161,7 +161,7 @@ test "convertChecked is total behind a RateFor proof" {
   expect Money.minorUnits (convertChecked rate (Money.usd 1000)) == 916
 }
 
-test "a Money column round-trips and selectSum sums one currency" requires [dbRead, dbWrite] {
+test "a Money column round-trips and selectSum sums one currency" requires [dbRead OrderLine, dbWrite OrderLine] {
   let _ = insert OrderLine { id: "l1", price: Money.usd 1050, quantity: 1 }
   let _ = insert OrderLine { id: "l2", price: Money.usd 500, quantity: 2 }
   expect Money.display (totalRevenue()) == "$15.50"
@@ -199,7 +199,7 @@ database Agency = Database {
   backend: Memory
 }
 
-test "a stored hourly rate round-trips and bills" requires [dbRead, dbWrite] {
+test "a stored hourly rate round-trips and bills" requires [dbRead Consultant, dbWrite Consultant] {
   let _ = insert Consultant { id: "c1", hourly: MoneyRate.perHour (Money.sek 95000) }
   let found = selectOne c from Consultant where c.id == "c1"
   expect (case found of

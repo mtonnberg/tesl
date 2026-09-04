@@ -98,12 +98,6 @@ let should_pass src =
     let code, out = run_compiler ["--check"; path] in
     if code <> 0 then failf "expected compilation success, got:\n%s" out)
 
-let[@warning "-32"] known_gap ~what src =
-  with_temp_file src (fun path ->
-    let code, _ = run_compiler ["--check"; path] in
-    if code <> 0 then
-      failf "KNOWN GAP CLOSED — `%s` is now rejected; promote to should_fail." what)
-
 (* ── Shared TESL fragments ───────────────────────────────────────────────── *)
 
 let hdr modname = Printf.sprintf
@@ -264,12 +258,9 @@ let raw_extra_cases =
     raw_with_validated_local 2 ~packed:"raw";
     raw_with_validated_local 3 ~packed:"s"; ]
 
-(* GAP-PACKLOCAL — CLOSED.
-   The "not demonstrably attached" check was widened: it now flags a raw
-   LET-BOUND local with no proof (the result of a non-proof-producing call), not
-   only a literal function parameter.  Packing such a local where the return spec
-   declares a non-trivial proof is correctly rejected. *)
-let pack_local_gap () =
+(* A raw let-bound local, like a raw parameter, cannot satisfy the proof on an
+   existential package. *)
+let pack_raw_local_rejected () =
   (* Review 2.1: message widened to the shared raw_re family
      ("must carry the proof" / "does not…satisfy"). *)
   should_fail raw_re
@@ -281,8 +272,8 @@ fn bad() -> exists t: String => String ::: IsTok t
     x
 |})
 
-let pack_local_gap_cases =
-  [ ("RAW-GAP-01 pack raw let-bound local (KNOWN GAP)", pack_local_gap) ]
+let pack_local_cases =
+  [ ("RAW-13 pack raw let-bound local", pack_raw_local_rejected) ]
 
 (* ══════════════════════════════════════════════════════════════════════════
    CONS — feeding an existential result to a proof-requiring consumer.
@@ -351,7 +342,7 @@ fn gen() -> exists t: String => String ::: IsTok t requires [random] =
 let pos_insert_pack () =
   should_pass (todo_lib "PosH02" ^ {|
 fn create(t: String) -> exists todoId: String => Todo ? FromDb (Id == todoId)
-  requires [dbRead, dbWrite, random] =
+  requires [dbRead Todo, dbWrite Todo, random] =
   let todoId = generatePrefixedId "todo"
   exists todoId =>
     insert Todo { id: todoId, title: t }
@@ -408,7 +399,7 @@ let pos_select_existential () =
     {|
 entity Todo table "todos" primaryKey id { id: String title: String }
 fn fetchAuto(prefix: String) -> exists todoId: String => Todo ? FromDb (Id == todoId)
-  requires [dbRead, dbWrite, random] =
+  requires [dbRead Todo, dbWrite Todo, random] =
   let todoId = generatePrefixedId prefix
   insert Todo { id: todoId, title: "auto" }
   let r = selectOne t from Todo where t.id == todoId
@@ -423,7 +414,7 @@ fn fetchAuto(prefix: String) -> exists todoId: String => Todo ? FromDb (Id == to
 let pos_handler_existential () =
   should_pass (todo_lib "PosH06" ^ {|
 fn createTodo(title: String) -> exists todoId: String => Todo ? FromDb (Id == todoId)
-  requires [dbRead, dbWrite, random] =
+  requires [dbRead Todo, dbWrite Todo, random] =
   let todoId = generatePrefixedId "todo"
   exists todoId =>
     insert Todo { id: todoId, title: title }
@@ -535,7 +526,7 @@ let pos_structural_insert_existential () =
   should_pass (todo_lib "PosH12" ^ {|
 fn createReturning(title: String)
   -> exists tid: String => Todo ? FromDb (Id == tid)
-  requires [dbRead, dbWrite, random] =
+  requires [dbRead Todo, dbWrite Todo, random] =
   let tid = generatePrefixedId "t"
   exists tid =>
     insert Todo { id: tid, title: title }
@@ -548,7 +539,7 @@ let to_cases lst = List.map (fun (name, fn) -> test_case name `Quick fn) lst
 let () =
   run "ProofSuite-H" [
     "NOEX-no-exists-body", to_cases noex_cases;
-    "RAW-unattached-pack", to_cases (raw_cases @ raw_extra_cases @ pack_local_gap_cases);
+    "RAW-unattached-pack", to_cases (raw_cases @ raw_extra_cases @ pack_local_cases);
     "CONS-existential-to-consumer", to_cases (cons_cases @ cons_extra_cases);
     "POS-companions", [
       test_case "POS check-validated pack" `Quick pos_check_pack;

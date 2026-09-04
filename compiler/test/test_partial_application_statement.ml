@@ -146,7 +146,7 @@ fn tailPos(a: String) -> String =
 let test_effect_statements_still_accepted () =
   should_pass "queries and inserts as statements"
     {|
-fn seed() -> Int requires [dbRead, dbWrite] =
+fn seed() -> Int requires [dbRead Row, dbWrite Row] =
   let _ = insert Row { id: "a", qty: 1 }
   let _ = insert Row { id: "b", qty: 2 }
   let rows = select r from Row

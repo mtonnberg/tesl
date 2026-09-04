@@ -10,16 +10,27 @@
  (libraries tesl_compiler_lib))
 
 ; Pure-OCaml property test for the shared AST-traversal framework
-; (lib/ast_visitor.ml).  No Racket / no alcotest, so it always builds and runs:
+; (lib/ast_visitor.ml). No alcotest, so it always builds and runs:
 ;   dune exec test/test_ast_visitor.exe
 (test
  (name test_ast_visitor)
  (modules test_ast_visitor)
  (libraries tesl_compiler_lib))
 
+(test
+ (name test_roadmap_emitters)
+ (modules test_roadmap_emitters)
+ (libraries tesl_compiler_lib str))
+
+(test
+ (name test_entity_scoped_capabilities)
+ (modules test_entity_scoped_capabilities)
+ (libraries tesl_compiler_lib alcotest unix str)
+ (deps ../bin/main.exe))
+
 ; Pure-OCaml property test for the single float choke point (lib/float_fmt.ml):
-; to_faithful_literal round-trips, identity_key is injective (S15).  No Racket /
-; no alcotest, so it always builds and runs:
+; to_faithful_literal round-trips, identity_key is injective (S15). No alcotest,
+; so it always builds and runs:
 ;   dune exec test/test_float_fmt.exe
 (test
  (name test_float_fmt)
@@ -28,8 +39,7 @@
 
 ; Pure-OCaml conformance test for the single SQL op registry
 ; (lib/validation_common.ml): effect classification matches the naming oracle,
-; name predicates agree, name-sets partition (S3b down-payment).  No Racket / no
-; alcotest:
+; name predicates agree, name-sets partition (S3b down-payment). No alcotest:
 ;   dune exec test/test_sql_registry.exe
 (test
  (name test_sql_registry)
@@ -41,7 +51,7 @@
 ; round-trips, decode-tag/schema match an independent oracle, and the checker
 ; whitelist / decode-tag emitter / JSON-schema emitter all derive from the ONE
 ; registry (tri-site coverage) so adding a primitive can't leave a site behind.
-; No Racket / no alcotest:
+; No alcotest:
 ;   dune exec test/test_agent_prim_registry.exe
 (test
  (name test_agent_prim_registry)
@@ -60,7 +70,7 @@
 ; A2-3 conformance: the single-source effect->capability registry
 ; (Type_system.stdlib_capabilities) that var_caps derives from. An independent
 ; oracle pins every capability-bearing stdlib name, guards the UUID drift-fix,
-; and asserts pure PosixMillis ops carry no capability. No Racket / no alcotest:
+; and asserts pure PosixMillis ops carry no capability. No alcotest:
 ;   dune exec test/test_capability_registry.exe
 (test
  (name test_capability_registry)
@@ -70,7 +80,7 @@
 ; B2 conformance: the trusted proof-introducing kinds live in ONE predicate
 ; (Ast.is_proof_introducing_kind); this pins it against an independent oracle
 ; over every func_kind constructor so the trusted set cannot silently drift.
-; No Racket / no alcotest:
+; No alcotest:
 ;   dune exec test/test_proof_kind_registry.exe
 (test
  (name test_proof_kind_registry)
@@ -82,7 +92,7 @@
 ; preserved, every variant carried through), and for the lowered families
 ; (enqueue/workers/serve/cache/email/telemetry) a table HIT reproduces the
 ; historical bytes while a table MISS lowers to the registry-lookup form.
-; No Racket / no alcotest:
+; No alcotest:
 ;   dune exec test/test_desugar.exe
 (test
  (name test_desugar)
@@ -91,7 +101,7 @@
 
 ; Differential check that the {!Mutate} walks (now on {!Ast_visitor}) produce
 ; byte-identical site indices / replacements vs a reference of the original
-; hand-rolled walk, over the real lesson corpus.  Pure OCaml; no Racket.  A
+; hand-rolled walk, over the real lesson corpus. Pure OCaml. A
 ; Uses Compile.default_root_path, so it is stable under the runtest sandbox:
 ;   dune exec test/test_mutate_differential.exe
 (test
@@ -100,7 +110,7 @@
  (libraries tesl_compiler_lib))
 
 ; Pure-OCaml unit test for the mutation-testing classification logic.
-; No alcotest / no Racket, so it builds and runs in every gate:
+; No alcotest, so it builds and runs in every gate:
 ;   dune exec test/test_mutate_classify.exe
 (test
  (name test_mutate_classify)
@@ -129,8 +139,7 @@
 ; resolves to a real spec heading (hard gate), AND each invariant is bound to a
 ; real red→green exercise — a tiny antagonistic program compiled via main.exe
 ; that MUST be rejected with the invariant-specific diagnostic (a missing/failing
-; exercise is a HARD failure; un-exercisable invariants are explicit KnownGaps
-; reconciled against an expected set). Pure OCaml (str + unix); shells out to
+; exercise is a HARD failure). Pure OCaml (str + unix); shells out to
 ; ../bin/main.exe:
 ;   dune exec test/test_invariants.exe
 (tests
@@ -158,12 +167,14 @@
 
 ; First Go-backend vertical slice: pure emission assertions always run. When Go
 ; is on PATH (mandatory in the project dev shell/CI), it also compiles, tests,
-; vets, and race-tests a freshly emitted module.
+; vets, and race-tests a freshly emitted module. This is the dominant serial
+; suite, so its cases run in isolated process shards bounded by TESL_CI_JOBS.
 (test
  (name test_emit_go)
  (modules test_emit_go)
  (libraries tesl_compiler_lib alcotest unix)
- (deps ../bin/main.exe))
+ (deps ../bin/main.exe run_emit_go_shards.sh)
+ (action (run bash %{dep:run_emit_go_shards.sh} %{test})))
 
 (test
  (name test_mutation_go)
@@ -178,14 +189,8 @@
  (modules test_stdlib_runtime_binding)
  (libraries tesl_compiler_lib alcotest str unix))
 
-; Stdlib constructor field-LABEL seam test (GitHub #69's drift class closer):
-; Emit_racket.stdlib_ctor_fields tells pattern_to_racket which hash key each
-; POSITIONAL sub-pattern binds, and a missing row silently lowers
-; `case t of Tuple3 a b c` to (hash-ref … 'a) — green through the whole gate,
-; dead at runtime.  This pins the table against the RUNTIME in both directions
-; (rows match real ordered labels; no field-carrying ctor lacks a row), with the
-; labels recovered by applying each constructor to sentinels.  Self-skips loudly
-; without racket:
+; Go ADT constructor seam: the shared checker registry keeps built-in constructor
+; names unique and their field shapes valid for direct Go emission:
 ;   dune exec test/test_stdlib_ctor_labels.exe
 (tests
  (names test_stdlib_ctor_labels)
@@ -226,7 +231,7 @@
  (libraries tesl_compiler_lib alcotest unix))
 
 ; `inList`/`notInList` need a list literal (review 2026-09-02, H1): a non-literal member list
-; used to compile to a CONSTANT predicate on both backends.  Pins the checker rule and the
+; used to compile to a CONSTANT predicate. Pins the checker rule and the
 ; fail-closed Sql_query parser.
 ;   dune exec test/test_sql_list_membership.exe
 (tests

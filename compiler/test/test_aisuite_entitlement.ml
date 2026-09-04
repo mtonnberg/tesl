@@ -116,13 +116,6 @@ let should_pass src =
     let code, out = run_compiler ["--check"; path] in
     if code <> 0 then failf "expected compilation success, got:\n%s" out)
 
-let[@warning "-32"] known_gap ~what src =
-  with_temp_file src (fun path ->
-    let code, _ = run_compiler ["--check"; path] in
-    if code <> 0 then
-      failf "KNOWN GAP CLOSED — `%s` is now statically rejected; \
-             promote this case from known_gap to should_fail." what)
-
 (* ── Shared TESL fragments ───────────────────────────────────────────────── *)
 
 (* Header for the agentic ownership tools.  Imports the agent surface so the
@@ -304,7 +297,7 @@ let scope_wrong_where idx ~scope ~where_var =
     should_fail scope_re
       (db_hdr m ^ Printf.sprintf {|
 fn dispatchList(%s: String, %s: String) -> List Note ? ForAll (FromDb (AuthorId == %s))
-  requires [dbRead] =
+  requires [dbRead Note] =
   select note from Note where note.authorId == %s
 |} scope where_var scope where_var)
   in
@@ -328,7 +321,7 @@ let scope_consume_wrong idx wrong =
 fn needsScoped(requestUser: String, xs: List Note ::: ForAll (FromDb (AuthorId == requestUser)) xs) -> Int =
   0
 fn dispatchList(requestUser: String, %s: String) -> Int
-  requires [dbRead] =
+  requires [dbRead Note] =
   let xs = select note from Note where note.authorId == %s
   needsScoped requestUser xs
 |} wrong wrong)
@@ -349,7 +342,7 @@ let scope_bare_consume idx =
 fn needsScoped%d(requestUser: String, xs: List Note ::: ForAll (FromDb (AuthorId == requestUser)) xs) -> Int =
   0
 fn dispatchList%d(requestUser: String) -> Int
-  requires [dbRead] =
+  requires [dbRead Note] =
   let xs = select note from Note
   needsScoped%d requestUser xs
 |} idx idx idx)
@@ -471,7 +464,7 @@ let pos_scope_ok idx scope =
     should_pass
       (db_hdr m ^ Printf.sprintf {|
 fn dispatchList(%s: String) -> List Note ? ForAll (FromDb (AuthorId == %s))
-  requires [dbRead] =
+  requires [dbRead Note] =
   select note from Note where note.authorId == %s
 |} scope scope scope)
   in

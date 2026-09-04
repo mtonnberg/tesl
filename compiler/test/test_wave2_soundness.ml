@@ -163,7 +163,7 @@ let test_c_real_selectone () =
   should_pass
     (task_hdr ^ {|
 fn getT(id: String) -> t: Task ::: FromDb (Id == id) t
-  requires [dbRead] =
+  requires [dbRead Task] =
   let r = selectOne t from Task where t.id == id
   case r of
     Nothing -> fail 404 "nf"
@@ -174,7 +174,7 @@ let test_c_named_pack () =
   should_pass
     (task_hdr ^ {|
 fn fetchT(id: String) -> Task ? FromDb (Id == id)
-  requires [dbRead] =
+  requires [dbRead Task] =
   let r = selectOne t from Task where t.id == id
   case r of
     Nothing -> fail 404 "nf"
@@ -216,7 +216,7 @@ let test_d_fromqueue_with_db_still_rejected () =
   should_fail forge_pat
     (task_hdr ^ {|
 fn forgeQ(id: String) -> t: Task ::: FromQueue t
-  requires [dbRead] =
+  requires [dbRead Task] =
   let r = selectOne t from Task where t.id == id
   case r of
     Nothing -> fail 404 "nf"
@@ -236,7 +236,7 @@ fn del() -> String requires [] =
 let test_e_delete_with_cap_accepted () =
   should_pass
     (task_hdr ^ {|
-fn del() -> String requires [dbWrite] =
+fn del() -> String requires [dbWrite Task] =
   delete o from Task where o.id == "x"
   "ok"
 |})
@@ -251,7 +251,7 @@ fn rd(id: String) -> Maybe Task requires [] =
 let test_e_select_with_cap_accepted () =
   should_pass
     (task_hdr ^ {|
-fn rd(id: String) -> Maybe Task requires [dbRead] =
+fn rd(id: String) -> Maybe Task requires [dbRead Task] =
   selectOne t from Task where t.id == id
 |})
 
@@ -259,7 +259,7 @@ fn rd(id: String) -> Maybe Task requires [dbRead] =
 let test_e_delete_only_read_cap_rejected () =
   should_fail "dbWrite\\|privileged operations\\|does not declare"
     (task_hdr ^ {|
-fn del() -> String requires [dbRead] =
+fn del() -> String requires [dbRead Task] =
   delete o from Task where o.id == "x"
   "ok"
 |})
@@ -690,10 +690,10 @@ let () =
     ];
     "E-capability-laundering", [
       test_case "delete requires [] rejected" `Quick test_e_delete_no_cap_rejected;
-      test_case "delete requires [dbWrite] accepted" `Quick test_e_delete_with_cap_accepted;
+      test_case "delete requires [dbWrite Task] accepted" `Quick test_e_delete_with_cap_accepted;
       test_case "selectOne requires [] rejected" `Quick test_e_select_no_cap_rejected;
-      test_case "selectOne requires [dbRead] accepted" `Quick test_e_select_with_cap_accepted;
-      test_case "delete requires [dbRead] (read-only) rejected" `Quick test_e_delete_only_read_cap_rejected;
+      test_case "selectOne requires [dbRead Task] accepted" `Quick test_e_select_with_cap_accepted;
+      test_case "delete requires [dbRead Task] (read-only) rejected" `Quick test_e_delete_only_read_cap_rejected;
     ];
     "F-decidable-comparison", [
       test_case "== Int accepted" `Quick test_f_eq_int;

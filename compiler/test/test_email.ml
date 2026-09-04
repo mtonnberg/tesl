@@ -483,7 +483,7 @@ let test_cap_email_missing_in_caller () =
 (** 4.9 Email send with wrong capability name errors *)
 let test_cap_wrong_capability () =
   let src = module_ ~extra:(with_db email_block)
-    "fn f(addr: String) -> Unit requires [dbRead] =\n\
+    "fn f(addr: String) -> Unit requires [dbRead Note] =\n\
      Email.send AppEmail { to: addr subject: \"Hi\" body: TextBody \"Hi\" }\n" in
   check_err_contains "cap_wrong_cap" src "email"
 

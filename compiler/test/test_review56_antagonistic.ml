@@ -348,7 +348,7 @@ let r56_fp04_fn_fromdb_return_allowed () =
 import Tesl.DB exposing [dbRead]
 entity Item table "items" primaryKey id { id: String }
 fn getItem(i: String) -> item: Item ::: FromDb (Id == i) item
-  requires [dbRead] =
+  requires [dbRead Item] =
   let existing = selectOne item from Item where item.id == i
   case existing of
     Nothing -> fail 404 "not found"
@@ -529,7 +529,7 @@ import Tesl.DB exposing [dbRead]
 entity Item table "items" primaryKey id { id: String }
 
 fn getItem(i: String) -> item: Item ::: FromDb (Id == i) item
-  requires [dbRead] =
+  requires [dbRead Item] =
   let existing = selectOne item from Item where item.id == i
   case existing of
     Nothing -> fail 404 "not found"
@@ -545,7 +545,7 @@ import Tesl.DB exposing [dbRead]
 entity Product table "products" primaryKey id { id: String }
 
 fn getProduct(i: String) -> item: Product ::: FromDb (Id == i) item
-  requires [dbRead] =
+  requires [dbRead Product] =
   let existing = selectOne item from Product where item.id == i
   case existing of
     Nothing -> fail 404 "not found"

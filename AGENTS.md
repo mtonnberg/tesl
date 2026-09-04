@@ -85,8 +85,16 @@ Use these for a *specific* question — never dump a whole module into context.
 
 ## Runtime inspection — debug like a human (headless)
 
-`tesl debug-inspect` runs a program to a breakpoint **you set** (with stop-the-world
-active so nothing races) and dumps the paused runtime state as one JSON object.
+`tesl debug-inspect` runs a program to a breakpoint **you set**. A stop gives
+active instrumented Tesl executions one second to rendezvous at their next debug
+boundary; the stopped stack and SQL capture belong only to the triggering
+execution. Runtime lifecycle scopes blocked in `Serve` are quiescent rather than
+participants; they cannot delay a handler stop and cannot resume through one.
+If an execution remains blocked outside a debug boundary, publication proceeds
+with a partial stop; the triggering execution and later boundary arrivals still
+wait for continue. Raw control-channel stopped events and snapshots report
+`rendezvous: "complete"` or `rendezvous: "timed-out"`. It then dumps the paused
+runtime state as one JSON object.
 
 ```
 tesl debug-inspect <file.tesl> --break-at SPEC [--break-at SPEC ...] \

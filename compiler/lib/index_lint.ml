@@ -157,6 +157,28 @@ let select_usages (seed : Sql_query.sql_select_seed)
 
 let usages_of_expr (e : expr) : usage list =
   let loc = Parser.expr_loc e in
+  let usages_of_query (query : Sql_query.query_node) : usage list =
+    match query with
+    | Sql_query.QuerySelect (seed, dyn) -> select_usages seed dyn loc
+    | Sql_query.QueryDelete (seed, dyn) ->
+      [ { u_entity = seed.entity; u_binder = seed.binder;
+          u_fields = dedup ((match seed.where_field with Some f -> [ f ] | None -> [])
+                            @ List.concat_map clause_fields dyn);
+          u_loc = loc; u_demands_index = true } ]
+    | Sql_query.QueryUpdate update ->
+      [ { u_entity = update.entity; u_binder = update.binder;
+          u_fields = dedup (List.concat_map clause_fields update.clauses);
+          u_loc = loc; u_demands_index = true } ]
+    | Sql_query.QueryUpsert upsert when upsert.conflict <> [] ->
+      [ { u_entity = upsert.entity; u_binder = "#upsert";
+          u_fields = dedup upsert.conflict;
+          u_loc = loc; u_demands_index = false } ]
+    | Sql_query.QueryInsert _ | Sql_query.QueryInsertMany _
+    | Sql_query.QueryUpsert _ -> []
+  in
+  match e with
+  | ESqlQuery { query; _ } -> usages_of_query query
+  | _ ->
   let selects =
     match Sql_query.extract_select_query e with
     | Some (seed, dyn) -> select_usages seed dyn loc

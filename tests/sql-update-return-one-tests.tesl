@@ -24,20 +24,20 @@ database TestDb = Database {
   backend: Memory
 }
 
-fn renameProduct(id: String, name: String) -> Product requires [dbWrite] =
+fn renameProduct(id: String, name: String) -> Product requires [dbWrite Product] =
   updateAndReturnOne p in Product
     where p.id == id
     set p.name = name
 
-fn repriceAll(price: Int, next: Int) -> Product requires [dbWrite] =
+fn repriceAll(price: Int, next: Int) -> Product requires [dbWrite Product] =
   updateAndReturnOne p in Product
     where p.price == price
     set p.price = next
 
-fn findProduct(id: String) -> Maybe Product requires [dbRead] =
+fn findProduct(id: String) -> Maybe Product requires [dbRead Product] =
   selectOne p from Product where p.id == id
 
-test "updateAndReturnOne on a unique predicate updates that row" requires [dbRead, dbWrite] {
+test "updateAndReturnOne on a unique predicate updates that row" requires [dbRead Product, dbWrite Product] {
   let _ = insert Product { id: "a", name: "alpha", price: 10 }
   let _ = insert Product { id: "b", name: "beta", price: 10 }
   let renamed = renameProduct "a" "alpha II"
@@ -47,7 +47,7 @@ test "updateAndReturnOne on a unique predicate updates that row" requires [dbRea
     Nothing -> False)
 }
 
-test "updateAndReturnOne on a predicate matching two rows traps and changes nothing" requires [dbRead, dbWrite] {
+test "updateAndReturnOne on a predicate matching two rows traps and changes nothing" requires [dbRead Product, dbWrite Product] {
   let _ = insert Product { id: "a", name: "alpha", price: 10 }
   let _ = insert Product { id: "b", name: "beta", price: 10 }
   expectFail repriceAll 10 99
@@ -59,6 +59,6 @@ test "updateAndReturnOne on a predicate matching two rows traps and changes noth
     Nothing -> False)
 }
 
-test "updateAndReturnOne on no matching row traps" requires [dbRead, dbWrite] {
+test "updateAndReturnOne on no matching row traps" requires [dbRead Product, dbWrite Product] {
   expectFail renameProduct "missing" "x"
 }

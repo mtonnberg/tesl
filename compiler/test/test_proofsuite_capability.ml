@@ -10,9 +10,8 @@
     from code).
 
     Hardening: [should_fail] additionally fails if the compiler output contains
-    any runtime-leak marker (`raise-user-error`, `check-fail`, a Racket
-    backtrace).  Rejection of these programs must be STATIC — they must never
-    reach the emitted Racket where a runtime guard would catch them.
+    any historical runtime-leak marker (`raise-user-error`, `check-fail`, a
+    retired Racket backtrace). Rejection of these programs must be STATIC.
 
     Modeled on test_library_negative.ml / test_review20_antagonistic.ml.
 
@@ -82,8 +81,8 @@ let with_temp_file content f =
     ~finally:(fun () -> (try Sys.remove path with _ -> ()); (try Unix.rmdir dir with _ -> ()))
     (fun () -> f path)
 
-(* Runtime-leak markers: presence means the program reached emitted Racket and
-   relied on a dynamic guard, i.e. the static checker FAILED to reject it. *)
+(* Historical runtime-leak markers: presence means static rejection regressed
+   to the retired backend's dynamic-guard behavior. *)
 let leak_markers = [
   "raise-user-error"; "check-fail"; "context...:"; "context ...:";
   ".rkt:"; "racket/"; "/collects/"; "errortrace"; "uncaught exception";
@@ -143,30 +142,30 @@ type db_op = {
 }
 
 let db_ops = [
-  { op_tag = "select";    op_cap = "dbRead";
+  { op_tag = "select";    op_cap = "dbRead Note";
     op_ret = "List Note";
     op_body = "select note from Note where note.id == id" };
-  { op_tag = "selectCount"; op_cap = "dbRead";
+  { op_tag = "selectCount"; op_cap = "dbRead Note";
     op_ret = "Int";
     op_body = "selectCount note from Note where note.id == id" };
   (* `Maybe Int`, not `Int`: an aggregate over no matching row has no maximum. *)
-  { op_tag = "selectMax"; op_cap = "dbRead";
+  { op_tag = "selectMax"; op_cap = "dbRead Note";
     op_ret = "Maybe Int";
     op_body = "selectMax note.n from Note where note.id == id" };
-  { op_tag = "selectSum"; op_cap = "dbRead";
+  { op_tag = "selectSum"; op_cap = "dbRead Note";
     op_ret = "Int";
     op_body = "selectSum note.n from Note where note.id == id" };
-  { op_tag = "insert";    op_cap = "dbWrite";
+  { op_tag = "insert";    op_cap = "dbWrite Note";
     op_ret = "Note";
     op_body = "insert Note { id: id, authorId: id, n: 0 }" };
-  { op_tag = "update";    op_cap = "dbWrite";
+  { op_tag = "update";    op_cap = "dbWrite Note";
     op_ret = "Unit";
     (* Multi-line: a SINGLE-LINE update has never had a lowering (codegen rejects
        it), and since that became a CHECK error rather than an emit-time one
        (#77) this sweep has to spell the form that actually compiles.  Indented to
        sit under the one-space body indentation the templates splice it into. *)
     op_body = "update note in Note\n    where note.id == id\n    set note.authorId = id\n    returning one" };
-  { op_tag = "delete";    op_cap = "dbWrite";
+  { op_tag = "delete";    op_cap = "dbWrite Note";
     op_ret = "Unit";
     op_body = "delete note from Note where note.id == id" };
 ]
@@ -294,8 +293,8 @@ handler h() -> %s requires [%s] =
 
 let cap_callee_lattice = {|
 import Tesl.DB exposing [dbRead, dbWrite]
-capability todoRead implies dbRead
-capability todoWrite implies dbWrite
+capability todoRead implies dbRead Note
+capability todoWrite implies dbWrite Note
 |}
 
 let test_L2_fn_calls_dbWrite_callee_with_only_dbRead () =
@@ -304,8 +303,8 @@ let test_L2_fn_calls_dbWrite_callee_with_only_dbRead () =
 module CapL2A exposing []
 import Tesl.Prelude exposing [Int]
 %s
-fn writer(n: Int) -> Int requires [dbWrite] = n
-fn reader(n: Int) -> Int requires [dbRead] =
+fn writer(n: Int) -> Int requires [dbWrite Note] = n
+fn reader(n: Int) -> Int requires [dbRead Note] =
   writer n
 |} cap_callee_lattice)
 
@@ -326,7 +325,7 @@ let test_L2_fn_calls_callee_declaring_nothing () =
 module CapL2C exposing []
 import Tesl.Prelude exposing [Int]
 %s
-fn writer(n: Int) -> Int requires [dbWrite] = n
+fn writer(n: Int) -> Int requires [dbWrite Note] = n
 fn reader(n: Int) -> Int requires [] =
   writer n
 |} cap_callee_lattice)
@@ -337,7 +336,7 @@ let test_L2_handler_calls_callee_without_cap () =
 module CapL2D exposing []
 import Tesl.Prelude exposing [Int]
 %s
-fn writer(n: Int) -> Int requires [dbWrite] = n
+fn writer(n: Int) -> Int requires [dbWrite Note] = n
 handler h(n: Int) -> Int requires [] =
   writer n
 |} cap_callee_lattice)
@@ -349,13 +348,13 @@ let test_L2_callee_chain_positive () =
 module CapL2E exposing []
 import Tesl.Prelude exposing [Int]
 %s
-fn mutate(n: Int) -> Int requires [dbWrite] = n
+fn mutate(n: Int) -> Int requires [dbWrite Note] = n
 fn reader(n: Int) -> Int requires [todoWrite] =
   mutate n
 |} cap_callee_lattice)
 
 (* Capability-via-callee swept across caller-kinds {fn, handler, worker} ×
-   declared-cap {none, only-the-wrong-one}.  The callee requires dbWrite. *)
+   declared-cap {none, only-the-wrong-one}.  The callee requires dbWrite Note. *)
 type cap_caller = {
   cc_id    : string;
   cc_pat   : string;
@@ -391,7 +390,7 @@ let cap_via_callee_matrix =
 module CapL2M%s%s exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbRead, dbWrite]
-fn writer(n: Int) -> Int requires [dbWrite] = n
+fn writer(n: Int) -> Int requires [dbWrite Note] = n
 %s
 %s
 |} (String.capitalize_ascii cc.cc_id) (String.capitalize_ascii cap_tag)
@@ -453,7 +452,7 @@ import Tesl.DB exposing [dbRead]
 capability a implies b
 capability b implies c
 capability c implies b
-capability e implies dbRead
+capability e implies dbRead Note
 fn f(n: Int) -> Int requires [a] = n
 |}
 
@@ -464,7 +463,7 @@ let test_L3_diamond_no_cycle_positive () =
 module CapDiamond exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbRead]
-capability d implies dbRead
+capability d implies dbRead Note
 capability b implies d
 capability c implies d
 capability a implies b, c
@@ -477,7 +476,7 @@ let test_L3_long_chain_no_cycle_positive () =
 module CapChain exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbRead]
-capability e implies dbRead
+capability e implies dbRead Note
 capability d implies e
 capability c implies d
 capability b implies c
@@ -622,7 +621,7 @@ handler h() -> PosixMillis requires [time] =
 let worker_db_lattice = {|
 import Tesl.DB exposing [dbRead, dbWrite]
 record JobRec { n: Int }
-fn writer(n: Int) -> Int requires [dbWrite] = n
+fn writer(n: Int) -> Int requires [dbWrite Note] = n
 |}
 
 let test_L8_worker_callee_undeclared () =
@@ -642,7 +641,7 @@ let test_L8_worker_callee_declared_positive () =
 module CapWkrP exposing []
 import Tesl.Prelude exposing [Int]
 %s
-worker doJob(j: JobRec) requires [dbWrite] =
+worker doJob(j: JobRec) requires [dbWrite Note] =
   let _x = writer j.n
   j
 |} worker_db_lattice)
@@ -655,7 +654,7 @@ let test_L9_transitive_service_cap_positive () =
 module CapSvc exposing []
 import Tesl.Prelude exposing [List, String]
 import Tesl.DB exposing [dbRead, dbWrite]
-capability svc implies dbRead, dbWrite
+capability svc implies dbRead Note, dbWrite Note
 entity Note table "notes" primaryKey id {
   id: String @db(text)
 }
@@ -670,9 +669,9 @@ let test_L9_deep_transitive_positive () =
 module CapDeep exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbWrite]
-capability mid implies dbWrite
+capability mid implies dbWrite Note
 capability svc implies mid
-fn writer(n: Int) -> Int requires [dbWrite] = n
+fn writer(n: Int) -> Int requires [dbWrite Note] = n
 fn caller(n: Int) -> Int requires [svc] =
   writer n
 |}
@@ -699,7 +698,7 @@ import Tesl.DB exposing [dbRead, dbWrite]
 entity Note table "notes" primaryKey id {
   id: String @db(text)
 }
-handler rw(id: String) -> Note requires [dbRead] =
+handler rw(id: String) -> Note requires [dbRead Note] =
   insert Note { id: id }
 |}
 
@@ -712,9 +711,9 @@ import Tesl.DB exposing [dbRead, dbWrite]
 entity Note table "notes" primaryKey id {
   id: String @db(text)
 }
-handler getN(id: String) -> List Note requires [dbRead] =
+handler getN(id: String) -> List Note requires [dbRead Note] =
   select note from Note where note.id == id
-handler ins(id: String) -> Note requires [dbWrite] =
+handler ins(id: String) -> Note requires [dbWrite Note] =
   insert Note { id: id }
 |}
 

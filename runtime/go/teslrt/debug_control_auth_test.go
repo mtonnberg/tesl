@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -104,6 +105,23 @@ func heldFor(done <-chan struct{}, wait time.Duration) bool {
 		return false
 	case <-time.After(wait):
 		return true
+	}
+}
+
+func waitForDebugClientCount(t *testing.T, server *DebugControlServer, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		server.mutex.Lock()
+		count := len(server.clients)
+		server.mutex.Unlock()
+		if count == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("authenticated clients = %d, want %d", count, want)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -202,6 +220,222 @@ func TestDebugControlSessionSurvivesUnauthenticatedChurn(t *testing.T) {
 	}
 	operator.mustSend(DebugControlRequest{ID: "3", Command: "continue"})
 	<-done
+}
+
+func TestDebugControlNonReadingClientCannotBlockStoppedEvent(t *testing.T) {
+	debugger := NewDebugger()
+	server, err := debugger.StartDebugControlTCP(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = server.Close() }()
+	server.mutex.Lock()
+	server.writeTimeout = 750 * time.Millisecond
+	server.mutex.Unlock()
+
+	nonReader := dialControl(t, "tcp4", server.Endpoint())
+	nonReader.mustSend(DebugControlRequest{ID: "1", Command: "handshake", Token: server.Token()})
+	server.mutex.Lock()
+	var blockedConnection net.Conn
+	var blockedWriter *sync.Mutex
+	for connection := range server.clients {
+		blockedConnection = connection
+		blockedWriter = server.writers[connection]
+	}
+	server.mutex.Unlock()
+	if blockedConnection == nil || blockedWriter == nil {
+		t.Fatal("authenticated connection has no writer")
+	}
+	if tcp, ok := blockedConnection.(*net.TCPConn); !ok {
+		t.Fatalf("server connection = %T, want TCP", blockedConnection)
+	} else if err := tcp.SetWriteBuffer(1024); err != nil {
+		t.Fatal(err)
+	}
+	if tcp, ok := nonReader.conn.(*net.TCPConn); !ok {
+		t.Fatalf("client connection = %T, want TCP", nonReader.conn)
+	} else if err := tcp.SetReadBuffer(1024); err != nil {
+		t.Fatal(err)
+	}
+
+	operator := dialControl(t, "tcp4", server.Endpoint())
+	operator.mustSend(DebugControlRequest{ID: "1", Command: "handshake", Token: server.Token()})
+	operator.mustSend(DebugControlRequest{ID: "2", Command: "set-breakpoints", Breakpoints: []DebugBreakpointSpec{{ID: "bp", File: "main.tesl", Line: 7}}})
+
+	requestSent := make(chan error, 1)
+	go func() {
+		requestSent <- json.NewEncoder(nonReader.conn).Encode(DebugControlRequest{ID: strings.Repeat("x", 256<<10), Command: "ping"})
+	}()
+	if err := <-requestSent; err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for blockedWriter.TryLock() {
+		blockedWriter.Unlock()
+		if time.Now().After(deadline) {
+			t.Fatal("non-reading client's server write did not block")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	done := secretCheckpoint(debugger, loginFrame)
+	eventRead := make(chan map[string]any, 1)
+	eventErr := make(chan error, 1)
+	go func() {
+		event, err := operator.readLine()
+		if err != nil {
+			eventErr <- err
+			return
+		}
+		eventRead <- event
+	}()
+	select {
+	case event := <-eventRead:
+		if event["event"] != "stopped" {
+			t.Fatalf("stopped event = %v", event)
+		}
+	case err := <-eventErr:
+		t.Fatal(err)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("non-reading client blocked stopped event delivery")
+	}
+	operator.mustSend(DebugControlRequest{ID: "3", Command: "continue"})
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("continue did not release checkpoint")
+	}
+
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		server.mutex.Lock()
+		_, retained := server.clients[blockedConnection]
+		server.mutex.Unlock()
+		if !retained {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed-out client was not removed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestDebugControlTCPBoundsSilentHandshakesAndPendingConnections(t *testing.T) {
+	server, err := NewDebugger().StartDebugControlTCP(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = server.Close() }()
+	server.mutex.Lock()
+	server.handshakeTimeout = 80 * time.Millisecond
+	server.maxPendingTCP = 2
+	server.mutex.Unlock()
+
+	first, err := net.Dial("tcp4", server.Endpoint())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = first.Close() }()
+	second, err := net.Dial("tcp4", server.Endpoint())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = second.Close() }()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		server.mutex.Lock()
+		pending := len(server.pending)
+		server.mutex.Unlock()
+		if pending == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pending handshakes = %d, want 2", pending)
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	overflow, err := net.Dial("tcp4", server.Endpoint())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = overflow.Close() }()
+	_ = overflow.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := overflow.Read(make([]byte, 1)); err == nil {
+		t.Fatal("connection above pending handshake cap remained open")
+	} else if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+		t.Fatalf("connection above pending handshake cap was not closed: %v", err)
+	}
+
+	_ = first.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := first.Read(make([]byte, 1)); err == nil {
+		t.Fatal("silent unauthenticated connection survived handshake deadline")
+	} else if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+		t.Fatalf("server did not enforce its handshake deadline: %v", err)
+	}
+}
+
+func TestDebugControlTCPBoundsAuthenticatedClients(t *testing.T) {
+	server, err := NewDebugger().StartDebugControlTCP(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = server.Close() }()
+	server.mutex.Lock()
+	server.maxClients = 2
+	server.mutex.Unlock()
+
+	first := dialControl(t, "tcp4", server.Endpoint())
+	first.mustSend(DebugControlRequest{ID: "1", Command: "handshake", Token: server.Token()})
+	second := dialControl(t, "tcp4", server.Endpoint())
+	second.mustSend(DebugControlRequest{ID: "1", Command: "handshake", Token: server.Token()})
+	waitForDebugClientCount(t, server, 2)
+
+	excess := dialControl(t, "tcp4", server.Endpoint())
+	if response, err := excess.send(DebugControlRequest{ID: "1", Command: "handshake", Token: server.Token()}); err == nil {
+		t.Fatalf("excess TCP client was accepted: %v", response)
+	}
+	waitForDebugClientCount(t, server, 2)
+
+	_ = first.conn.Close()
+	waitForDebugClientCount(t, server, 1)
+	replacement := dialControl(t, "tcp4", server.Endpoint())
+	replacement.mustSend(DebugControlRequest{ID: "1", Command: "handshake", Token: server.Token()})
+	waitForDebugClientCount(t, server, 2)
+}
+
+func TestDebugControlUnixBoundsAuthenticatedClients(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix control endpoint")
+	}
+	path := filepath.Join(t.TempDir(), "debug.sock")
+	server, err := NewDebugger().StartDebugControl(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = server.Close() }()
+	server.mutex.Lock()
+	server.maxClients = 2
+	server.mutex.Unlock()
+
+	first := dialControl(t, "unix", path)
+	first.mustSend(DebugControlRequest{ID: "1", Command: "ping"})
+	second := dialControl(t, "unix", path)
+	second.mustSend(DebugControlRequest{ID: "1", Command: "ping"})
+	waitForDebugClientCount(t, server, 2)
+
+	excess := dialControl(t, "unix", path)
+	if response, err := excess.send(DebugControlRequest{ID: "1", Command: "ping"}); err == nil {
+		t.Fatalf("excess Unix client was accepted: %v", response)
+	}
+	waitForDebugClientCount(t, server, 2)
+
+	_ = first.conn.Close()
+	waitForDebugClientCount(t, server, 1)
+	replacement := dialControl(t, "unix", path)
+	replacement.mustSend(DebugControlRequest{ID: "1", Command: "ping"})
+	waitForDebugClientCount(t, server, 2)
 }
 
 func TestDebugControlDetachesOnlyWhenLastClientLeaves(t *testing.T) {

@@ -251,21 +251,20 @@ func TestTableExtreme(t *testing.T) {
 	}
 }
 
-// `deleteAndReturnResult` draws the distinction a count does not: deleting nothing is a
-// different OUTCOME from deleting rows, and the caller reads it as a case.
-func TestTableDeleteResult(t *testing.T) {
+// `deleteAndReturnResult` returns the number of rows removed, including zero.
+func TestTableDeleteCount(t *testing.T) {
 	table := NewTable[string]()
 	never := func(string, string) bool { return false }
 	TableInsert(table, "Note", "a", never)
 	TableInsert(table, "Note", "b", never)
 
-	missed := TableDeleteResult(table, func(row string) bool { return row == "zz" })
-	if missed.Tag != DeleteResultNoRowDeleted {
-		t.Fatalf("a delete that matched nothing answered %+v", missed)
+	missed := TableDeleteCount(table, func(row string) bool { return row == "zz" })
+	if !Equal(missed, FromInt64(0)) {
+		t.Fatalf("a delete that matched nothing answered %s", missed.String())
 	}
-	removed := TableDeleteResult(table, func(row string) bool { return row == "a" })
-	if removed.Tag != DeleteResultRowsDeleted || !Equal(removed.RowsDeletedCount, FromInt64(1)) {
-		t.Fatalf("a delete that removed one row answered %+v", removed)
+	removed := TableDeleteCount(table, func(row string) bool { return row == "a" })
+	if !Equal(removed, FromInt64(1)) {
+		t.Fatalf("a delete that removed one row answered %s", removed.String())
 	}
 	if got := TableCount(table, func(string) bool { return true }); !Equal(got, FromInt64(1)) {
 		t.Fatalf("%s rows remain", got.String())

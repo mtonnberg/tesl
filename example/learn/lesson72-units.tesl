@@ -361,7 +361,7 @@ database Fleet = Database {
   backend: Memory
 }
 
-test "a Speed column stores canonical m/s and reads back typed" requires [dbRead, dbWrite] {
+test "a Speed column stores canonical m/s and reads back typed" requires [dbRead Vehicle, dbWrite Vehicle] {
   let _ = insert Vehicle { id: "v1", topSpeed: Speed.kilometersPerHour 110.0 }
   let found = selectOne v from Vehicle where v.id == "v1"
   expect (case found of

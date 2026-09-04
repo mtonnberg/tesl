@@ -7,7 +7,7 @@ We have first class support for ai chat + tool use. The chat can also be picked 
     - An ai sales rep in a crm software etc
     - a product manager
     - a legal expert
-    - an openclaw agent perhaps. 
+    - an openclaw agent perhaps.
 
 ## Goal
 
@@ -15,4 +15,4 @@ We have first class support for ai chat + tool use. The chat can also be picked 
 
 ## Notes
 
-- We do not neccessarily need to implement/host/manage the agents ourselves via Tesl but it should be a breeze to hook it up if you are developing an app with Tesl. 
+- We do not necessarily need to implement/host/manage the agents ourselves via Tesl but it should be a breeze to hook it up if you are developing an app with Tesl. 

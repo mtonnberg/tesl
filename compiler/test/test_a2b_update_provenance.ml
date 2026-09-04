@@ -93,8 +93,8 @@ let should_pass label src =
 (* Header: `dbRead`/`dbWrite` so the write's capability requirement is satisfied
    and only the FromDb-WHERE diagnostic can fire. *)
 let hdr name = Printf.sprintf {|module %s exposing []
-import Tesl.Prelude exposing [String, Bool(..)]
-import Tesl.DB exposing [dbRead, dbWrite, DeleteResult(..)]
+import Tesl.Prelude exposing [String, Bool(..), Int]
+import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Maybe exposing [Maybe(..)]
 entity Todo table "todos" primaryKey id {
   id: String
@@ -114,7 +114,7 @@ let or_pat = "disjunction\\|`||`\\|broaden"
 (* wrong-column `update … returning one` — the shipped completeTodo BOLA-write *)
 let neg_update_wrong_col = hdr "UpdWrongCol" ^ {|
 fn complete(id: String, owner: String) -> Todo ? FromDb (Id == id)
-  requires [dbRead, dbWrite] =
+  requires [dbRead Todo, dbWrite Todo] =
   update t in Todo
     where t.ownerId == owner
     set t.status = "done"
@@ -124,7 +124,7 @@ fn complete(id: String, owner: String) -> Todo ? FromDb (Id == id)
 (* wrong-column updateAndReturnOne *)
 let neg_uaro_wrong_col = hdr "UaroWrongCol" ^ {|
 fn complete(id: String, owner: String) -> Todo ? FromDb (Id == id)
-  requires [dbRead, dbWrite] =
+  requires [dbRead Todo, dbWrite Todo] =
   updateAndReturnOne t in Todo
     where t.ownerId == owner
     set t.status = "done"
@@ -133,7 +133,7 @@ fn complete(id: String, owner: String) -> Todo ? FromDb (Id == id)
 (* where-LESS `update … returning one` *)
 let neg_update_no_where = hdr "UpdNoWhere" ^ {|
 fn complete(id: String) -> Todo ? FromDb (Id == id)
-  requires [dbRead, dbWrite] =
+  requires [dbRead Todo, dbWrite Todo] =
   update t in Todo
     set t.status = "done"
     returning one
@@ -142,7 +142,7 @@ fn complete(id: String) -> Todo ? FromDb (Id == id)
 (* where-LESS updateAndReturnOne *)
 let neg_uaro_no_where = hdr "UaroNoWhere" ^ {|
 fn complete(id: String) -> Todo ? FromDb (Id == id)
-  requires [dbRead, dbWrite] =
+  requires [dbRead Todo, dbWrite Todo] =
   updateAndReturnOne t in Todo
     set t.status = "done"
 |}
@@ -150,7 +150,7 @@ fn complete(id: String) -> Todo ? FromDb (Id == id)
 (* `||` in a returning-update WHERE — a disjunction broadens the rows written *)
 let neg_update_or = hdr "UpdOr" ^ {|
 fn complete(id: String, other: String) -> Todo ? FromDb (Id == id)
-  requires [dbRead, dbWrite] =
+  requires [dbRead Todo, dbWrite Todo] =
   update t in Todo
     where t.id == id || t.id == other
     set t.status = "done"
@@ -160,7 +160,7 @@ fn complete(id: String, other: String) -> Todo ? FromDb (Id == id)
 (* `||` in an updateAndReturnOne WHERE *)
 let neg_uaro_or = hdr "UaroOr" ^ {|
 fn complete(id: String, other: String) -> Todo ? FromDb (Id == id)
-  requires [dbRead, dbWrite] =
+  requires [dbRead Todo, dbWrite Todo] =
   updateAndReturnOne t in Todo
     where t.id == id || t.ownerId == other
     set t.status = "done"
@@ -169,7 +169,7 @@ fn complete(id: String, other: String) -> Todo ? FromDb (Id == id)
 (* right column, WRONG subject variable *)
 let neg_update_wrong_subj = hdr "UpdWrongSubj" ^ {|
 fn complete(id: String, other: String) -> Todo ? FromDb (Id == id)
-  requires [dbRead, dbWrite] =
+  requires [dbRead Todo, dbWrite Todo] =
   updateAndReturnOne t in Todo
     where t.id == other
     set t.status = "done"
@@ -179,7 +179,7 @@ fn complete(id: String, other: String) -> Todo ? FromDb (Id == id)
    column — the matching guard must NOT launder the returned write. *)
 let neg_guard_masks_update = hdr "GuardMask" ^ {|
 fn complete(id: String, owner: String) -> Todo ? FromDb (Id == id)
-  requires [dbRead, dbWrite] =
+  requires [dbRead Todo, dbWrite Todo] =
   let guard = selectOne t from Todo where t.id == id
   case guard of
     Nothing -> fail 404 "nf"
@@ -193,7 +193,7 @@ fn complete(id: String, owner: String) -> Todo ? FromDb (Id == id)
    WRITE.  The write must be rejected independently of the select's match. *)
 let neg_mixed_path = hdr "MixedPath" ^ {|
 fn get(id: String, owner: String, flag: Bool) -> Todo ? FromDb (Id == id)
-  requires [dbRead, dbWrite] =
+  requires [dbRead Todo, dbWrite Todo] =
   if flag then
     let r = selectOne t from Todo where t.id == id
     case r of
@@ -207,22 +207,22 @@ fn get(id: String, owner: String, flag: Bool) -> Todo ? FromDb (Id == id)
 
 (* deleteAndReturnResult wrong-column (single-line, WHERE fused into the spine) *)
 let neg_delete_wrong_col = hdr "DelWrongCol" ^ {|
-fn del(id: String, owner: String) -> DeleteResult ? FromDb (Id == id)
-  requires [dbRead, dbWrite] =
+fn del(id: String, owner: String) -> Int ? FromDb (Id == id)
+  requires [dbRead Todo, dbWrite Todo] =
   deleteAndReturnResult t from Todo where t.ownerId == owner
 |}
 
 (* where-less deleteAndReturnResult *)
 let neg_delete_no_where = hdr "DelNoWhere" ^ {|
-fn del(id: String) -> DeleteResult ? FromDb (Id == id)
-  requires [dbRead, dbWrite] =
+fn del(id: String) -> Int ? FromDb (Id == id)
+  requires [dbRead Todo, dbWrite Todo] =
   deleteAndReturnResult t from Todo
 |}
 
 (* `||` in a deleteAndReturnResult WHERE *)
 let neg_delete_or = hdr "DelOr" ^ {|
-fn del(id: String, owner: String) -> DeleteResult ? FromDb (Id == id)
-  requires [dbRead, dbWrite] =
+fn del(id: String, owner: String) -> Int ? FromDb (Id == id)
+  requires [dbRead Todo, dbWrite Todo] =
   deleteAndReturnResult t from Todo where t.id == id || t.ownerId == owner
 |}
 
@@ -231,7 +231,7 @@ fn del(id: String, owner: String) -> DeleteResult ? FromDb (Id == id)
 (* correct-column `update … returning one` (the shipped completeTodo shape) *)
 let pos_update = hdr "PosUpd" ^ {|
 fn complete(id: String) -> Todo ? FromDb (Id == id)
-  requires [dbRead, dbWrite] =
+  requires [dbRead Todo, dbWrite Todo] =
   update t in Todo
     where t.id == id
     set t.status = "done"
@@ -241,7 +241,7 @@ fn complete(id: String) -> Todo ? FromDb (Id == id)
 (* correct-column updateAndReturnOne *)
 let pos_uaro = hdr "PosUaro" ^ {|
 fn complete(id: String, n: String) -> Todo ? FromDb (Id == id)
-  requires [dbRead, dbWrite] =
+  requires [dbRead Todo, dbWrite Todo] =
   updateAndReturnOne t in Todo
     where t.id == id
     set t.status = n
@@ -249,15 +249,15 @@ fn complete(id: String, n: String) -> Todo ? FromDb (Id == id)
 
 (* correct-column deleteAndReturnResult *)
 let pos_delete = hdr "PosDel" ^ {|
-fn del(id: String) -> DeleteResult ? FromDb (Id == id)
-  requires [dbRead, dbWrite] =
+fn del(id: String) -> Int ? FromDb (Id == id)
+  requires [dbRead Todo, dbWrite Todo] =
   deleteAndReturnResult t from Todo where t.id == id
 |}
 
 (* compound WHERE, pk conjunct present but NOT first — must still find it *)
 let pos_compound = hdr "PosCompound" ^ {|
 fn complete(id: String, owner: String) -> Todo ? FromDb (Id == id)
-  requires [dbRead, dbWrite] =
+  requires [dbRead Todo, dbWrite Todo] =
   updateAndReturnOne t in Todo
     where t.ownerId == owner && t.id == id
     set t.status = "done"
@@ -266,7 +266,7 @@ fn complete(id: String, owner: String) -> Todo ? FromDb (Id == id)
 (* a select-derived FromDb still verifies (no regression from the write walk) *)
 let pos_select = hdr "PosSelect" ^ {|
 fn get(id: String) -> Todo ? FromDb (Id == id)
-  requires [dbRead] =
+  requires [dbRead Todo] =
   let r = selectOne t from Todo where t.id == id
   case r of
     Nothing -> fail 404 "nf"
@@ -277,7 +277,7 @@ fn get(id: String) -> Todo ? FromDb (Id == id)
    (the correct write is the one that flows to the result). *)
 let pos_dead_sibling = hdr "PosDeadSibling" ^ {|
 fn complete(id: String, owner: String) -> Todo ? FromDb (Id == id)
-  requires [dbRead, dbWrite] =
+  requires [dbRead Todo, dbWrite Todo] =
   let _ = updateAndReturnOne t in Todo
     where t.ownerId == owner
     set t.status = "x"

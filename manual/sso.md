@@ -69,7 +69,7 @@ auth sessionOwner(request: HttpRequest) -> user: User ::: Authenticated user req
 The functions a `server` references run under the server's granted capabilities,
 so their `requires` must be covered by `main`'s grant — the compiler rejects the
 program otherwise rather than 500-ing at runtime. A connection reading env needs
-`envRead`; a `sessionRevoked` hook hitting the DB needs `dbRead`; and the SSO
+`envRead`; a `sessionRevoked` hook hitting an entity needs `dbRead Entity`; and the SSO
 flow's own network calls mean an `sso` server forces `main` to grant
 `httpClient`.
 
@@ -100,12 +100,11 @@ flow's own network calls mean an `sso` server forces `main` to grant
   must name that origin (a Host-header attack otherwise mints links/cookies for
   another origin); this ONE path is exempt so a host-blind load-balancer probe
   still succeeds.
-- `contentSecurityPolicy "default-src 'self'; frame-ancestors 'none'"` — the
-  server default CSP for HTML responses (the SPA fallback + static HTML). Typed
-  in the program (a reviewer sees it), takes precedence over the `TESL_CSP` env,
-  and a handler that sets its own `Content-Security-Policy` header still wins per
-  response — that is the per-route form (e.g. an extension bundle route framable
-  by its host).
+- `contentSecurityPolicy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'"` — the
+  server default CSP for HTML responses (the SPA fallback + static HTML). The
+  compiler requires the isolation baseline and rejects wildcard, inline/eval,
+  and unrestricted data/blob/http(s) sources. The `TESL_CSP` environment
+  fallback is checked at runtime and fails closed to the same baseline.
 - `loginMethods [Sso] | [Sso, Password via <fn>] | [Sso, Machine]` — the **checked** promise that
   no code path mints a session cookie except the SSO callback.
 
@@ -141,7 +140,10 @@ convention:
   the client address an app records (audit, abuse detection) is trustworthy.
 - `publicOrigin` + `Host` validation (with one `healthProbePath` exempt) refuse a
   request whose `Host` does not name the app's origin, closing the Host-header
-  class of attack.
+  class of attack. It also supplies the exact external scheme, host and port for
+  CSRF Origin checks when TLS terminates at the proxy. Tesl never trusts
+  `Forwarded` or `X-Forwarded-Proto` for this; configure `publicOrigin` for that
+  topology.
 
 ### Trusting a header for identity
 

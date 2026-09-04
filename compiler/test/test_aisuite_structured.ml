@@ -22,8 +22,8 @@
                 `case` — exhaustiveness rejects it before any case body runs.
       S-CAP   — `askFor` / a fn transitively calling an AI verb, in a fn/test that
                 does NOT grant `aiProvider` — capability gating rejects it.
-      S-GAP   — KNOWN STATIC GAPS in `decodeAs` literal-type-name resolution
-                (pinned `should_pass`; see notes).
+      S-DECODE — invalid `decodeAs` literal type names or missing codecs are
+                 rejected statically.
       S-POS   — positive controls (a proper codec + decoder + downstream
                 consumption) must compile.
 
@@ -583,27 +583,16 @@ let s_cap_matrix () =
   ) cap_cases
 
 (* ════════════════════════════════════════════════════════════════════════
-   S-GAP — KNOWN STATIC GAPS in `decodeAs` literal-type-name resolution.
+   S-DECODE - invalid `decodeAs` literal type names.
 
-   The `decodeAs` builtin is typed `String -> String -> _a` (type_system.ml:539)
-   — fully polymorphic in its result.  The literal type-name STRING argument is
-   NOT statically reconciled with:
-     (1) the existence of a type/codec of that name, nor
-     (2) the inferred result type.
-   So `decodeAs "Nonexistent" j`, `decodeAs "WeatherArgs" j` returned where a
-   `Summary` is expected, and `decodeAs "T" j` where `T` has NO codec at all,
-   ALL COMPILE today.  An attacker who controls the type-name string (or a typo)
-   can summon a decode the codec registry never validated.  These SHOULD be
-   rejected (a `decodeAs "T"` should require: T exists, T has a fromJson codec,
-   and T unifies with the result type).  CLOSED by A8 (type-directed decoders):
-   the check-path now reconciles the literal type-name against the resolved
-   result type (name match + fromJson-codec existence), so these are `should_fail`.
+   The checker reconciles the literal type name with the resolved result type
+   and requires a fromJson codec. These cases pin each invalid form.
    ════════════════════════════════════════════════════════════════════════ *)
 
-let s_gap_nonexistent_type () =
-  should_fail ~label:"S-GAP decodeAs nonexistent type (now CLOSED by A8)"
+let s_decode_nonexistent_type () =
+  should_fail ~label:"S-DECODE decodeAs nonexistent type"
     "must match the target type" {|
-module SGapNonexistent exposing []
+module SDecodeNonexistent exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [stringCodec, intCodec]
 import Tesl.Agent exposing [decodeAs]
@@ -620,10 +609,10 @@ codec Summary {
 fn decodeSummary(j: String) -> Summary = decodeAs "Nonexistent" j
 |}
 
-let s_gap_type_name_mismatch () =
-  should_fail ~label:"S-GAP decodeAs name != result type (now CLOSED by A8)"
+let s_decode_type_name_mismatch () =
+  should_fail ~label:"S-DECODE decodeAs name != result type"
     "must match the target type" {|
-module SGapMismatch exposing []
+module SDecodeMismatch exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [stringCodec, intCodec]
 import Tesl.Agent exposing [decodeAs]
@@ -645,10 +634,10 @@ codec WeatherArgs {
 fn decodeSummary(j: String) -> Summary = decodeAs "WeatherArgs" j
 |}
 
-let s_gap_no_codec_target () =
-  should_fail ~label:"S-GAP decodeAs target has NO codec (now CLOSED by A8)"
+let s_decode_no_codec_target () =
+  should_fail ~label:"S-DECODE decodeAs target has NO codec"
     "has no .*codec" {|
-module SGapNoCodec exposing []
+module SDecodeNoCodec exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Agent exposing [decodeAs]
 record Summary { title: String, score: Int }
@@ -786,10 +775,10 @@ let () =
     "S-FLOW unvalidated decoded value → proof param", s_flow_matrix ();
     "S-ADT decoded ADT exhaustiveness", s_adt_matrix ();
     "S-CAP aiProvider capability gating (verbs × sites)", s_cap_matrix ();
-    "S-GAP decodeAs type-name resolution (KNOWN GAPS, pinned)", [
-      test_case "decodeAs to nonexistent type name (KNOWN GAP)" `Quick s_gap_nonexistent_type;
-      test_case "decodeAs name != result type (KNOWN GAP)" `Quick s_gap_type_name_mismatch;
-      test_case "decodeAs target has no codec (KNOWN GAP)" `Quick s_gap_no_codec_target;
+    "S-DECODE invalid decodeAs type-name resolution", [
+      test_case "decodeAs to nonexistent type name" `Quick s_decode_nonexistent_type;
+      test_case "decodeAs name != result type" `Quick s_decode_type_name_mismatch;
+      test_case "decodeAs target has no codec" `Quick s_decode_no_codec_target;
     ];
     "S-POS positive controls", [
       test_case "proper codec + decoder compiles" `Quick pos_decoder_full;

@@ -15,8 +15,9 @@
       tesl --completions-json <file> <line> <col> emit completions at cursor as JSON
       tesl --fmt <file>          format source file in place
       tesl --fmt-check <file>    check formatting without modifying
-      tesl --lint <file> ...     run the opinionated linter
-      tesl --ir <file>           emit API IR JSON
+       tesl --lint <file> ...     run the opinionated linter
+       tesl --ir <file>           emit API IR JSON
+       tesl generate-openapi <file> <Server> [--output <file>]  emit OpenAPI 3.1
       tesl --deps <file>         list all transitively imported local .tesl files
       tesl --semantic-json <file>  emit full module semantic snapshot as JSON
        tesl --mutate [--backend go] <file> [test-file ...]  run Go mutation testing
@@ -46,6 +47,7 @@ let usage = {|Usage:
   tesl --lint <file> [...]     run the opinionated linter
   tesl --debug <file>          compile with step-debugger instrumentation (thsl-src wrappers)
   tesl --ir <file>             emit API IR JSON
+  tesl generate-openapi <file> <Server> [--output <file>]  emit OpenAPI 3.1
   tesl --deps <file>           list all transitively imported local .tesl files (one per line)
   tesl --semantic-json <file>  emit full module semantic snapshot as JSON (IR-1 foundation)
   tesl agent-context <file>    emit a compact AI-agent snapshot (diagnostics+symbols+obligations) as JSON
@@ -265,8 +267,9 @@ let section_to_embedded_key name =
   | "intro"                                -> "example/intro/README.md"
   (* D12/D13: the guided feature tour + the rehomed user-facing deploy/manifest docs. *)
   | "tour"                                 -> "manual/tour.md"
-  | "deploy"                               -> "manual/deploy.md"
-  | "tesl-manifest" | "manifest"           -> "manual/tesl-manifest.md"
+   | "deploy"                               -> "manual/deploy.md"
+   | "openapi-dast"                         -> "manual/openapi-dast.md"
+   | "tesl-manifest" | "manifest"           -> "manual/tesl-manifest.md"
   | other ->
     let ex = remove_example_prefix other in
     (* allow `dev/<file>` and `dev-docs/<file>` to reach a specific dev doc *)
@@ -318,8 +321,9 @@ let get_manual_content section =
     | "faq" -> Filename.concat !manual_dir "FAQ.md"
     | "intro" -> Filename.concat !root_path "example/intro/README.md"
     | "tour" -> Filename.concat !manual_dir "tour.md"
-    | "deploy" -> Filename.concat !manual_dir "deploy.md"
-    | "tesl-manifest" | "manifest" -> Filename.concat !manual_dir "tesl-manifest.md"
+     | "deploy" -> Filename.concat !manual_dir "deploy.md"
+     | "openapi-dast" -> Filename.concat !manual_dir "openapi-dast.md"
+     | "tesl-manifest" | "manifest" -> Filename.concat !manual_dir "tesl-manifest.md"
     | _ ->
       let try_path path = if Sys.file_exists path then Some path else None in
       let try_paths paths =
@@ -403,6 +407,7 @@ let get_full_manual () =
     Filename.concat !manual_dir "overview.md",        "manual/overview.md";
     Filename.concat !manual_dir "examples.md",        "manual/examples.md";
     Filename.concat !manual_dir "best-practices.md",  "manual/best-practices.md";
+    Filename.concat !manual_dir "openapi-dast.md",     "manual/openapi-dast.md";
     Filename.concat !manual_dir "FAQ.md",             "manual/FAQ.md";
     Filename.concat !manual_dir "LANGUAGE-SPEC.md",   "LANGUAGE-SPEC.md";
     Filename.concat !manual_dir "INSTALL.md",         "INSTALL.md";
@@ -1118,12 +1123,11 @@ let () =
        (* Include linter findings so agent-context reports the SAME diagnostic
           set as --check-json (review 2026-07 TOOL-AGENTCTX). *)
        let lint_diags = Linter.lint_file ~logical_path:lpath filename in
-       let json = Compile.agent_context_source ~extra_diags:lint_diags lpath source in
-       print_string json;
+       let result =
+         Compile.agent_context_result_source ~extra_diags:lint_diags lpath source in
+       print_string result.json;
        print_newline ();
-       let diags = Compile.check_source lpath source in
-       let has_error = List.exists (fun (d : Compile.diagnostic) -> d.severity = "error") diags in
-       exit (if has_error then 1 else 0)
+       exit (if result.ok then 0 else 1)
      with Sys_error msg ->
        Printf.eprintf "error: %s\n" msg; exit 1)
 
@@ -1298,7 +1302,7 @@ let () =
        (* B1 / review §8.2: the API IR feeds downstream client generators, so
           it is gated behind the FULL whole-program checker exactly like
           --generate-ts/--generate-elm — a program that fails `--check` must
-          not still yield a plausible machine-consumed IR artifact. *)
+           not still yield a plausible machine-consumed IR artifact. *)
         require_checked filename;
        let source = In_channel.with_open_text filename In_channel.input_all in
        match Parser.parse_module filename source with
@@ -1310,10 +1314,40 @@ let () =
          Printf.eprintf "%s:%d:%d: error: %s\n"
            e.loc.file (e.loc.start.line + 1) (e.loc.start.col + 1) e.msg;
          exit 1
-     with Sys_error msg ->
-       Printf.eprintf "error: %s\n" msg; exit 1)
+      with Sys_error msg ->
+        Printf.eprintf "error: %s\n" msg; exit 1)
 
-  | ("--generate-ts" :: filename :: rest) ->
+   | ("generate-openapi" :: filename :: server_name :: rest) ->
+     let out_file = match rest with
+       | ["--output"; f] | ["--out"; f] -> Some f
+       | [] -> None
+       | _ ->
+         Printf.eprintf "usage: tesl generate-openapi <file> <Server> [--output <file>]\n";
+         exit 2
+     in
+     (try
+        require_checked filename;
+        let source = In_channel.with_open_text filename In_channel.input_all in
+        match Parser.parse_module filename source with
+        | Ok m ->
+          let output = Emit_openapi.emit m ~server_name in
+          (match out_file with
+           | None -> print_endline output
+           | Some f ->
+             let oc = Out_channel.open_text f in
+             Out_channel.output_string oc output;
+             Out_channel.output_char oc '\n';
+             Out_channel.close oc);
+          exit 0
+        | Err e ->
+          Printf.eprintf "%s:%d:%d: error: %s\n"
+            e.loc.file (e.loc.start.line + 1) (e.loc.start.col + 1) e.msg;
+          exit 1
+      with
+      | Sys_error msg -> Printf.eprintf "error: %s\n" msg; exit 1
+      | Invalid_argument msg -> Printf.eprintf "error: %s\n" msg; exit 1)
+
+   | ("--generate-ts" :: filename :: rest) ->
     let out_file = match rest with ["--out"; f] -> Some f | _ -> None in
     (try
        (* B1 / review §8.2: gate the client generator behind the FULL checker

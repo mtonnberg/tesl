@@ -48,7 +48,7 @@ let assert_clean src =
 let app_preamble = {|module Foo exposing [greet]
 
 import Tesl.Prelude exposing [Bool(..), Int, String, Unit, List]
-import Tesl.Telemetry exposing [initTelemetry]
+import Tesl.Telemetry exposing [initTelemetry, TelemetryConfig]
 import Tesl.Database exposing [Database, DatabaseBackend, Memory]
 import Tesl.App exposing [App]
 
@@ -71,6 +71,18 @@ server Srv for A {
 let app_tail = {|  App {
     database: D
     api: Srv
+    port: 8097
+  }
+|}
+
+let telemetry_app_tail = {|  App {
+    database: D
+    api: Srv
+    telemetry: TelemetryConfig {
+      service: "foo"
+      endpoint: "in-memory"
+      console: False
+    }
     port: 8097
   }
 |}
@@ -125,6 +137,31 @@ let t_sound_main_accepted () =
   let msg = greet "pro"
 |}
      ^ app_tail)
+
+let t_app_telemetry_config_accepted () =
+  assert_clean
+    (app_preamble
+     ^ {|main() -> App requires [] =
+|}
+     ^ telemetry_app_tail)
+
+let t_app_telemetry_config_bad_metrics () =
+  assert_error
+    (app_preamble
+     ^ {|main() -> App requires [] =
+  App {
+    database: D
+    api: Srv
+    telemetry: TelemetryConfig {
+      service: "foo"
+      endpoint: "in-memory"
+      console: False
+      metrics: "yes"
+    }
+    port: 8097
+  }
+|})
+    "field `metrics` must be a Bool"
 
 (* Later lets must see earlier bindings (env threading through the chain). *)
 let t_let_chain_threading () =
@@ -319,9 +356,12 @@ let () =
           Alcotest.test_case "keyword-named binding as initTelemetry value" `Quick
             t_keyword_shadow_value_rejected;
         ] );
-      ( "sound variants stay accepted",
-        [ Alcotest.test_case "canonical main" `Quick t_sound_main_accepted;
-          Alcotest.test_case "let-chain env threading" `Quick t_let_chain_threading;
+       ( "sound variants stay accepted",
+         [ Alcotest.test_case "canonical main" `Quick t_sound_main_accepted;
+           Alcotest.test_case "App TelemetryConfig" `Quick t_app_telemetry_config_accepted;
+           Alcotest.test_case "App TelemetryConfig bad metrics" `Quick
+             t_app_telemetry_config_bad_metrics;
+           Alcotest.test_case "let-chain env threading" `Quick t_let_chain_threading;
           Alcotest.test_case "let-chain threading catches bad type" `Quick
             t_let_chain_threading_bad_type;
           Alcotest.test_case "call expression as initTelemetry keyword value" `Quick

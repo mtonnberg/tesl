@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	goruntime "runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -180,16 +182,18 @@ type DebugFrame struct {
 }
 
 type DebugEvent struct {
-	Kind  string       `json:"kind"`
-	Frame DebugFrame   `json:"frame"`
-	Stack []DebugFrame `json:"stack,omitempty"`
+	Kind       string       `json:"kind"`
+	Frame      DebugFrame   `json:"frame"`
+	Stack      []DebugFrame `json:"stack,omitempty"`
+	Rendezvous string       `json:"rendezvous,omitempty"`
 }
 
 type DebugSnapshot struct {
-	Paused  bool              `json:"paused"`
-	Frame   DebugFrame        `json:"frame"`
-	Stack   []DebugFrame      `json:"stack"`
-	Runtime DebugRuntimeState `json:"runtime"`
+	Paused     bool              `json:"paused"`
+	Frame      DebugFrame        `json:"frame"`
+	Stack      []DebugFrame      `json:"stack"`
+	Runtime    DebugRuntimeState `json:"runtime"`
+	Rendezvous string            `json:"rendezvous,omitempty"`
 }
 
 type DebugListener func(DebugEvent)
@@ -201,6 +205,10 @@ const (
 	DebugStepIn   DebugStepMode = "in"
 	DebugStepOver DebugStepMode = "over"
 	DebugStepOut  DebugStepMode = "out"
+
+	DebugRendezvousComplete = "complete"
+	DebugRendezvousTimedOut = "timed-out"
+	debugRendezvousTimeout  = time.Second
 )
 
 type DebugBreakpoint struct {
@@ -226,6 +234,7 @@ type Debugger struct {
 	listener       DebugListener
 	breakpoints    map[string]*DebugBreakpoint
 	paused         bool
+	stopping       bool
 	pauseRequested bool
 	// PauseTimeout bounds how long ONE stop may hold application goroutines
 	// before the debugger auto-resumes. Zero (the default) waits forever —
@@ -233,23 +242,83 @@ type Debugger struct {
 	// under them would corrupt their mental model of "paused". The attach/DAP
 	// servers set this from TESL_DEBUG_PAUSE_TIMEOUT_MS so a client that dies
 	// mid-stop (SIGKILL, laptop sleep) cannot wedge a long-running service.
-	PauseTimeout time.Duration
-	lastFrame    DebugFrame
-	stepMode     DebugStepMode
-	stepOrigin   DebugFrame
-	stack        []DebugFrame
+	PauseTimeout      time.Duration
+	lastFrame         DebugFrame
+	lastSnapshot      DebugSnapshot
+	stepMode          DebugStepMode
+	stepOrigin        DebugFrame
+	stoppedExec       uint64
+	stacks            map[uint64][]DebugFrame
+	quiescent         map[uint64]int
+	participants      map[uint64]struct{}
+	parked            map[uint64]struct{}
+	rendezvousTimeout time.Duration
 }
 
 type DebugScope struct {
-	debugger *Debugger
-	frameID  string
-	once     sync.Once
+	debugger  *Debugger
+	frameID   string
+	execution uint64
+	once      sync.Once
+}
+
+type DebugQuiescentScope struct {
+	debugger  *Debugger
+	execution uint64
+	once      sync.Once
 }
 
 func NewDebugger() *Debugger {
-	debugger := &Debugger{breakpoints: make(map[string]*DebugBreakpoint)}
+	debugger := &Debugger{
+		breakpoints:       make(map[string]*DebugBreakpoint),
+		stacks:            make(map[uint64][]DebugFrame),
+		quiescent:         make(map[uint64]int),
+		participants:      make(map[uint64]struct{}),
+		parked:            make(map[uint64]struct{}),
+		rendezvousTimeout: debugRendezvousTimeout,
+	}
 	debugger.condition = sync.NewCond(&debugger.mutex)
 	return debugger
+}
+
+func init() {
+	debugLifecycleQuiesce = func() func() {
+		quiescent := DebugQuiesce()
+		return quiescent.Resume
+	}
+}
+
+// Quiesce marks the current execution as blocked in runtime lifecycle work.
+// Its stack remains available, but it cannot hold a cooperative stop open.
+// Resume waits behind an established or collecting stop before returning to
+// instrumented Tesl code.
+func (debugger *Debugger) Quiesce() *DebugQuiescentScope {
+	execution := debugExecutionID()
+	debugger.mutex.Lock()
+	debugger.quiescent[execution]++
+	if debugger.stopping {
+		delete(debugger.participants, execution)
+		delete(debugger.parked, execution)
+		debugger.condition.Broadcast()
+	}
+	debugger.mutex.Unlock()
+	return &DebugQuiescentScope{debugger: debugger, execution: execution}
+}
+
+func (scope *DebugQuiescentScope) Resume() {
+	if scope == nil {
+		return
+	}
+	scope.once.Do(func() {
+		scope.debugger.mutex.Lock()
+		if count := scope.debugger.quiescent[scope.execution]; count <= 1 {
+			delete(scope.debugger.quiescent, scope.execution)
+			scope.debugger.waitAtBarrier(scope.execution)
+		} else {
+			scope.debugger.quiescent[scope.execution] = count - 1
+		}
+		scope.debugger.mutex.Unlock()
+	})
 }
 
 func (debugger *Debugger) Attach(listener DebugListener) func() {
@@ -265,19 +334,27 @@ func (debugger *Debugger) Detach() {
 	debugger.mutex.Lock()
 	debugger.listener = nil
 	debugger.paused = false
+	debugger.stopping = false
 	debugger.pauseRequested = false
 	debugger.stepMode = DebugStepNone
 	debugger.lastFrame = DebugFrame{}
+	debugger.lastSnapshot = DebugSnapshot{}
+	debugger.stoppedExec = 0
+	clear(debugger.participants)
+	clear(debugger.parked)
 	debugger.condition.Broadcast()
 	debugger.mutex.Unlock()
 }
 
 func (debugger *Debugger) Enter(frame DebugFrame) *DebugScope {
+	execution := debugExecutionID()
 	debugger.mutex.Lock()
-	frame.Depth = len(debugger.stack)
-	debugger.stack = append(debugger.stack, frame)
+	debugger.waitAtBarrier(execution)
+	stack := debugger.stacks[execution]
+	frame.Depth = len(stack)
+	debugger.stacks[execution] = append(stack, frame)
 	debugger.mutex.Unlock()
-	return &DebugScope{debugger: debugger, frameID: frame.ID}
+	return &DebugScope{debugger: debugger, frameID: frame.ID, execution: execution}
 }
 
 func (scope *DebugScope) Leave() {
@@ -286,24 +363,86 @@ func (scope *DebugScope) Leave() {
 	}
 	scope.once.Do(func() {
 		scope.debugger.mutex.Lock()
-		for index := len(scope.debugger.stack) - 1; index >= 0; index-- {
-			if scope.debugger.stack[index].ID == scope.frameID {
-				scope.debugger.stack = append(scope.debugger.stack[:index], scope.debugger.stack[index+1:]...)
+		stack := scope.debugger.stacks[scope.execution]
+		executionEnded := false
+		for index := len(stack) - 1; index >= 0; index-- {
+			if stack[index].ID == scope.frameID {
+				stack = append(stack[:index], stack[index+1:]...)
 				break
 			}
 		}
+		if len(stack) == 0 {
+			executionEnded = true
+			delete(scope.debugger.stacks, scope.execution)
+			delete(scope.debugger.quiescent, scope.execution)
+			if scope.debugger.stopping {
+				delete(scope.debugger.participants, scope.execution)
+				delete(scope.debugger.parked, scope.execution)
+				scope.debugger.condition.Broadcast()
+			}
+		} else {
+			scope.debugger.stacks[scope.execution] = stack
+		}
 		scope.debugger.mutex.Unlock()
+		if executionEnded {
+			clearDebugSQLCaptureForExecution(scope.execution)
+		}
 	})
 }
 
-func (debugger *Debugger) updateStackFrame(frame DebugFrame) {
-	for index := len(debugger.stack) - 1; index >= 0; index-- {
-		if debugger.stack[index].ID == frame.ID {
-			frame.Depth = index
-			debugger.stack[index] = frame
+func (debugger *Debugger) updateStackFrame(execution uint64, frame DebugFrame) {
+	stack, present := debugger.stacks[execution]
+	if !present || len(stack) == 0 {
+		return
+	}
+	for index := len(stack); index > 0; index-- {
+		frameIndex := index - 1
+		if stack[frameIndex].ID == frame.ID {
+			frame.Depth = frameIndex
+			stack[frameIndex] = frame
+			debugger.stacks[execution] = stack
 			return
 		}
 	}
+}
+
+// debugExecutionID supplies execution-local storage for debug builds without
+// changing the generated checkpoint ABI. Go exposes no goroutine-local API; the
+// runtime stack header is therefore read only while debugging is active.
+func debugExecutionID() uint64 {
+	var buffer [64]byte
+	count := goruntime.Stack(buffer[:], false)
+	fields := strings.Fields(string(buffer[:count]))
+	if len(fields) < 2 {
+		return 0
+	}
+	id, _ := strconv.ParseUint(fields[1], 10, 64)
+	return id
+}
+
+// waitAtBarrier parks an execution at an instrumentation boundary. Callers hold
+// debugger.mutex. Executions already active when a stop begins acknowledge the
+// rendezvous; executions starting later wait without extending that finite set.
+func (debugger *Debugger) waitAtBarrier(execution uint64) bool {
+	waited := false
+	for debugger.stopping || debugger.paused {
+		waited = true
+		if _, participates := debugger.participants[execution]; participates {
+			debugger.parked[execution] = struct{}{}
+			debugger.condition.Broadcast()
+		}
+		debugger.condition.Wait()
+	}
+	return waited
+}
+
+func (debugger *Debugger) barrierComplete() bool {
+	for execution := range debugger.participants {
+		if _, parked := debugger.parked[execution]; !parked {
+			return false
+		}
+	}
+	return true
 }
 
 func (debugger *Debugger) breakpointHit(frame DebugFrame) bool {
@@ -340,6 +479,7 @@ func (debugger *Debugger) Checkpoint(frame DebugFrame) {
 		return
 	}
 	debugger.mutex.Unlock()
+	execution := debugExecutionID()
 	for index := range frame.Locals {
 		if frame.Locals[index].Accessor != nil {
 			frame.Locals[index].Value = safeDebugValue(frame.Locals[index].Accessor)
@@ -347,10 +487,15 @@ func (debugger *Debugger) Checkpoint(frame DebugFrame) {
 		}
 	}
 	debugger.mutex.Lock()
+	if debugger.waitAtBarrier(execution) {
+		debugger.mutex.Unlock()
+		return
+	}
 	listener = debugger.listener
-	if len(debugger.stack) > 0 {
-		frame.Depth = len(debugger.stack) - 1
-		debugger.updateStackFrame(frame)
+	stack := debugger.stacks[execution]
+	if len(stack) > 0 {
+		frame.Depth = len(stack) - 1
+		debugger.updateStackFrame(execution, frame)
 	}
 	stepHit := debugger.stepMode != DebugStepNone && debugger.stepMatches(frame)
 	if listener == nil || (!debugger.pauseRequested && !stepHit && !debugger.breakpointHit(frame)) {
@@ -359,11 +504,59 @@ func (debugger *Debugger) Checkpoint(frame DebugFrame) {
 	}
 	debugger.pauseRequested = false
 	debugger.stepMode = DebugStepNone
+	debugger.stopping = true
+	clear(debugger.participants)
+	clear(debugger.parked)
+	for active := range debugger.stacks {
+		if debugger.quiescent[active] == 0 {
+			debugger.participants[active] = struct{}{}
+		}
+	}
+	debugger.participants[execution] = struct{}{}
+	debugger.parked[execution] = struct{}{}
+	rendezvousTimedOut := false
+	rendezvousTimer := time.AfterFunc(debugger.rendezvousTimeout, func() {
+		debugger.mutex.Lock()
+		rendezvousTimedOut = true
+		debugger.condition.Broadcast()
+		debugger.mutex.Unlock()
+	})
+	for !debugger.barrierComplete() && debugger.listener != nil && !rendezvousTimedOut {
+		debugger.condition.Wait()
+	}
+	rendezvousTimer.Stop()
+	listener = debugger.listener
+	if listener == nil || !debugger.stopping {
+		debugger.stopping = false
+		clear(debugger.participants)
+		clear(debugger.parked)
+		debugger.condition.Broadcast()
+		debugger.mutex.Unlock()
+		return
+	}
+	debugger.stopping = false
 	debugger.paused = true
+	debugger.stoppedExec = execution
 	debugger.lastFrame = frame
-	stack := append([]DebugFrame(nil), debugger.stack...)
+	stack = append([]DebugFrame(nil), debugger.stacks[execution]...)
+	rendezvous := DebugRendezvousComplete
+	if !debugger.barrierComplete() {
+		rendezvous = DebugRendezvousTimedOut
+	}
+	debugger.lastSnapshot = DebugSnapshot{Paused: true, Frame: frame, Stack: stack, Rendezvous: rendezvous}
 	debugger.mutex.Unlock()
-	listener(DebugEvent{Kind: "stopped", Frame: frame, Stack: stack})
+	runtimeState := debugRuntimeStateSnapshotForExecution(execution)
+	debugger.mutex.Lock()
+	if debugger.paused && debugger.stoppedExec == execution {
+		debugger.lastSnapshot.Runtime = runtimeState
+	}
+	publish := debugger.paused && debugger.stoppedExec == execution
+	listener = debugger.listener
+	debugger.mutex.Unlock()
+	if !publish || listener == nil {
+		return
+	}
+	listener(DebugEvent{Kind: "stopped", Frame: frame, Stack: stack, Rendezvous: rendezvous})
 	debugger.mutex.Lock()
 	// The auto-resume guard: one timer per stop. It re-checks under the mutex
 	// (a human Continue may have won the race) and broadcasts so every waiting
@@ -374,9 +567,13 @@ func (debugger *Debugger) Checkpoint(frame DebugFrame) {
 			if debugger.paused {
 				debugger.paused = false
 				debugger.lastFrame = DebugFrame{}
+				debugger.lastSnapshot = DebugSnapshot{}
+				debugger.stoppedExec = 0
+				clear(debugger.participants)
+				clear(debugger.parked)
+				debugger.condition.Broadcast()
 			}
 			debugger.mutex.Unlock()
-			debugger.condition.Broadcast()
 		})
 		defer timer.Stop()
 	}
@@ -438,7 +635,12 @@ func (debugger *Debugger) Continue() {
 	debugger.mutex.Lock()
 	debugger.stepMode = DebugStepNone
 	debugger.paused = false
+	debugger.stopping = false
 	debugger.lastFrame = DebugFrame{}
+	debugger.lastSnapshot = DebugSnapshot{}
+	debugger.stoppedExec = 0
+	clear(debugger.participants)
+	clear(debugger.parked)
 	debugger.condition.Broadcast()
 	debugger.mutex.Unlock()
 }
@@ -455,6 +657,11 @@ func (debugger *Debugger) Step(mode DebugStepMode) bool {
 	debugger.stepMode = mode
 	debugger.stepOrigin = debugger.lastFrame
 	debugger.paused = false
+	debugger.lastFrame = DebugFrame{}
+	debugger.lastSnapshot = DebugSnapshot{}
+	debugger.stoppedExec = 0
+	clear(debugger.participants)
+	clear(debugger.parked)
 	debugger.condition.Broadcast()
 	return true
 }
@@ -468,18 +675,21 @@ func (debugger *Debugger) Snapshot() (DebugFrame, bool) {
 func (debugger *Debugger) StackSnapshot() []DebugFrame {
 	debugger.mutex.Lock()
 	defer debugger.mutex.Unlock()
-	return append([]DebugFrame(nil), debugger.stack...)
+	if debugger.paused {
+		return append([]DebugFrame(nil), debugger.lastSnapshot.Stack...)
+	}
+	return append([]DebugFrame(nil), debugger.stacks[debugExecutionID()]...)
 }
 
 func (debugger *Debugger) SnapshotState() DebugSnapshot {
 	debugger.mutex.Lock()
 	defer debugger.mutex.Unlock()
-	return DebugSnapshot{
-		Paused:  debugger.paused,
-		Frame:   debugger.lastFrame,
-		Stack:   append([]DebugFrame(nil), debugger.stack...),
-		Runtime: DebugRuntimeStateSnapshot(),
+	if !debugger.paused {
+		return DebugSnapshot{}
 	}
+	snapshot := debugger.lastSnapshot
+	snapshot.Stack = append([]DebugFrame(nil), snapshot.Stack...)
+	return snapshot
 }
 
 var DefaultDebugger = NewDebugger()
@@ -487,3 +697,5 @@ var DefaultDebugger = NewDebugger()
 func Checkpoint(frame DebugFrame) { DefaultDebugger.Checkpoint(frame) }
 
 func DebugEnter(frame DebugFrame) *DebugScope { return DefaultDebugger.Enter(frame) }
+
+func DebugQuiesce() *DebugQuiescentScope { return DefaultDebugger.Quiesce() }

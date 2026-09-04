@@ -36,7 +36,7 @@ validation. That proof is carried in the type signature wherever the value trave
 ```tesl
 # The proof flows automatically through function calls, visible in the signature
 handler post createTodo(title: String ::: ValidTitle title) -> Todo ? FromDb (Id == todo.id)
-  requires [dbWrite, time] =
+  requires [dbWrite Todo, time] =
   # title is guaranteed valid here — nothing to re-check
   insert Todo { id: generateId(), title: title, completed: false, createdAt: nowMillis() }
 ```
@@ -46,7 +46,7 @@ handler post createTodo(title: String ::: ValidTitle title) -> Todo ? FromDb (Id
 ```tesl
 # This won't compile: title has no proof
 handler post createTodoBad(title: String) -> Todo ? FromDb (Id == todo.id)
-  requires [dbWrite, time] =
+  requires [dbWrite Todo, time] =
   # ❌ ERROR: cannot find proof for ValidTitle title
   insert Todo { id: generateId(), title: title, completed: false, createdAt: nowMillis() }
 ```
@@ -97,7 +97,7 @@ entity User table "users" primaryKey id {
 }
 
 handler post createUser(email: String ::: ValidEmail email) -> User ? FromDb (Id == user.id)
-  requires [dbWrite, time] =
+  requires [dbWrite User, time] =
   # email is guaranteed to be valid here
   # the proof ValidEmail email is automatically available
   insert User { id: generateId(), email: email, createdAt: nowMillis() }

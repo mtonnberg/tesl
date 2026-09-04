@@ -102,12 +102,6 @@ let should_pass src =
     let code, out = run_compiler ["--check"; path] in
     if code <> 0 then failf "expected compilation success, got:\n%s" out)
 
-let[@warning "-32"] known_gap ~what src =
-  with_temp_file src (fun path ->
-    let code, _ = run_compiler ["--check"; path] in
-    if code <> 0 then
-      failf "KNOWN GAP CLOSED — `%s` is now rejected; promote to should_fail." what)
-
 (* ── Shared TESL fragments ───────────────────────────────────────────────── *)
 
 let list_hdr modname = Printf.sprintf
@@ -270,14 +264,9 @@ fn bad(xs: List Int) -> List Int ? ForAll (%s) requires [] =
   in
   (Printf.sprintf "MISS-%02d promise (%s) run %s" idx promised run, test)
 
-(* GAP-ALLCHECK-RET — CLOSED.
-   `List.filterCheck` verifies the return-spec conjunction against the check's
-   produced predicates (MISS-01/02 above, correctly rejected).  `List.allCheck`
-   now does too: an allCheck return type `Maybe (... ::: ForAll (IsPos && IsSmall))`
-   backed only by `checkPos` (which establishes `IsPos`) is rejected for the
-   missing `IsSmall` conjunct.  (Downstream *consumption* of an over-claimed list
-   is also rejected — see MISS-04.) *)
-let miss_allcheck_gap () =
+(* List.allCheck return claims are checked against the predicates its check
+   argument produces, including every conjunct. *)
+let miss_allcheck_return_conjunct () =
   should_fail miss_re
     (list_hdr "Miss03" ^ int_checks ^ {|
 fn bad(xs: List Int) -> Maybe (xs: List Int ::: ForAll (IsPos && IsSmall) xs) requires [] =
@@ -302,7 +291,7 @@ let miss_cases =
     miss_conjunct 2 ~promised:"IsPos && IsSmall" ~run:"checkSmall";
     miss_conjunct 4 ~promised:"IsSmall && IsPos" ~run:"checkPos";
     miss_conjunct 5 ~promised:"IsSmall && IsPos" ~run:"checkSmall";
-    ("MISS-03 allCheck return over-claim (KNOWN GAP)", miss_allcheck_gap);
+    ("MISS-03 allCheck return over-claim", miss_allcheck_return_conjunct);
     ("MISS-04 allCheck over-claim rejected at consumer", miss_allcheck_consume); ]
 
 (* ══════════════════════════════════════════════════════════════════════════
@@ -526,7 +515,7 @@ let pos_select_forall () =
     {|
 entity Note table "notes" primaryKey id { id: String authorId: String }
 fn listNotes(user: String) -> List Note ? ForAll (FromDb (AuthorId == user))
-  requires [dbRead] =
+  requires [dbRead Note] =
   select note from Note where note.authorId == user
 |})
 

@@ -15,11 +15,8 @@
           via `main.exe --check`, and assert (a) a NON-ZERO exit and (b) an
           invariant-specific diagnostic. If the guard is renamed/deleted/weakened
           the program stops being rejected (exit 0 or the diagnostic disappears)
-          and THIS TEST FAILS. Where no surface program can express a violation
-          (the guarantee holds by ABSENCE of syntax, or is an architectural
-          property), the row is an explicit `KnownGap` with a one-line reason,
-          and the KnownGap set is asserted to be EXACTLY the expected set — so a
-          new gap, or a guard silently downgraded to a gap, breaks the build.
+          and THIS TEST FAILS. Every registered invariant has such an exercise;
+          prose-only or tautological coverage does not count.
 
     This replaces the previous cosmetic credit (a `test_hint` substring counted
     as "TESTED" if it appeared ANYWHERE in the test corpus — including in a
@@ -36,10 +33,8 @@
 *)
 
 (* ── Coverage kind ──────────────────────────────────────────────────────────
-   A §7 invariant is covered EITHER by a real red→green [Exercise] (a program
-   that violates it + the invariant-specific rejection the compiler must emit),
-   OR — only when no surface program can express the violation — by a
-   [KnownGap reason]. There is no third, cosmetic option. *)
+   Every §7 invariant is covered by a real red→green [Exercise]: a program that
+   violates it plus the invariant-specific rejection the compiler must emit. *)
 
 type coverage =
   | Exercise of { program : string; expect : string }
@@ -47,13 +42,6 @@ type coverage =
        `--check`. [expect]: a case-insensitive regexp that MUST match the
        compiler's stderr/stdout — the invariant-specific diagnostic (the
        semantic object). *)
-  | KnownGap of string [@warning "-37"]
-    (* No enforceable surface exercise; [string] is the one-line reason. The
-       constructor is intentionally retained even when the gap set is EMPTY
-       (all invariants exercised today): it is the sanctioned home for a future
-       genuinely un-exercisable invariant, reconciled against
-       [expected_known_gaps]. Warning 37 (unused-constructor) is silenced so an
-       empty-gap tree still builds. *)
 
 type row = { section : string; title : string; coverage : coverage }
 
@@ -310,7 +298,7 @@ entity Todo table "todos" primaryKey id {
   title: String
 }
 fn getTodo(todoId: String ::: TodoId todoId) -> Todo ? FromDb (Id == todoId)
-  requires [dbRead] =
+  requires [dbRead Note] =
   let e = selectOne t from Todo where t.ownerId == todoId
   case e of
     Nothing -> fail 404 "x"
@@ -318,14 +306,6 @@ fn getTodo(todoId: String ::: TodoId todoId) -> Todo ? FromDb (Id == todoId)
 |};
       expect = "not established by this WHERE\\|does not constrain\\|OwnerId.*Id\\|Id.*OwnerId" } };
 ]
-
-(* ── The EXPECTED KnownGap set (C14) ─────────────────────────────────────────
-   Currently EMPTY: every §7 invariant has a real red→green exercise. If a guard
-   is ever legitimately un-exercisable it must be moved to `KnownGap` in the
-   registry AND its section added here (with the reason living on the row). Any
-   drift between the actual gaps and this set is a HARD failure — so a guard
-   quietly downgraded to a gap, or a stale expected-gap, breaks the build. *)
-let expected_known_gaps : string list = []
 
 (* ── Locate the repo root (has LANGUAGE-SPEC.md + compiler/test/) ──────────── *)
 let is_repo_root d =
@@ -503,16 +483,13 @@ let () =
     registry;
 
   (* Part (2): semantic-object coverage — a real red→green exercise per
-     invariant (HARD). KnownGaps are reconciled against [expected_known_gaps]. *)
+     invariant (HARD). *)
   Printf.printf "\n";
   let failures = ref [] in
-  let exercised = ref 0 and gaps = ref [] in
+  let exercised = ref 0 in
   List.iter
     (fun r ->
        match r.coverage with
-       | KnownGap reason ->
-         gaps := r.section :: !gaps;
-         Printf.printf "invariant %s: KNOWN-GAP (%s)\n" r.section reason
        | Exercise { program; expect } ->
          (match run_exercise ~section:r.section ~program ~expect with
           | Ok () ->
@@ -525,30 +502,9 @@ let () =
     registry;
 
   let n = List.length registry in
-  Printf.printf "\n%d/%d invariants exercised (red→green); %d known-gap(s)\n"
-    !exercised n (List.length !gaps);
+  Printf.printf "\n%d/%d invariants exercised (red→green)\n" !exercised n;
 
-  (* Part (3): KnownGap-set reconciliation (HARD) — the actual gap set must be
-     EXACTLY [expected_known_gaps]. A new gap, or a stale expectation, fails. *)
-  let sort = List.sort_uniq compare in
-  let actual_gaps = sort !gaps and expected_gaps = sort expected_known_gaps in
-  let unexpected = List.filter (fun s -> not (List.mem s expected_gaps)) actual_gaps in
-  let missing    = List.filter (fun s -> not (List.mem s actual_gaps)) expected_gaps in
-  if unexpected <> [] then
-    failures := ("known-gap",
-      Printf.sprintf
-        "UNEXPECTED KnownGap(s) %s — an invariant lost its real exercise. \
-         Restore the guard/exercise, or (if genuinely un-exercisable) add the \
-         section to expected_known_gaps with a reason."
-        (String.concat ", " unexpected)) :: !failures;
-  if missing <> [] then
-    failures := ("known-gap",
-      Printf.sprintf
-        "STALE expected_known_gaps %s — no longer a gap (now exercised). \
-         Remove it from expected_known_gaps."
-        (String.concat ", " missing)) :: !failures;
-
-  (* Part (4): PASS/FAIL + exit code from BOTH the anti-drift gate AND coverage. *)
+  (* Part (3): PASS/FAIL + exit code from BOTH the anti-drift gate AND coverage. *)
   Printf.printf "\n";
   let ok = unresolved = [] && !failures = [] in
   if unresolved <> [] then begin
@@ -564,7 +520,7 @@ let () =
   end;
   if ok then begin
     Printf.printf
-      "PASS (all %d §7 headings resolve; all %d exercised; known-gaps = expected)\n"
+      "PASS (all %d §7 headings resolve; all %d exercised)\n"
       n !exercised;
     exit 0
   end else

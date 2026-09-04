@@ -127,7 +127,7 @@ let e22_fromdb_record_forgery () =
       import Tesl.DB exposing [dbRead, dbWrite]\n" ^ {|
 entity Note table "notes" primaryKey id { id: String body: String }
 fn forge(fakeId: String) -> exists noteId: String => Note ? FromDb (Id == noteId)
-  requires [dbRead, dbWrite] =
+  requires [dbRead Note, dbWrite Note] =
   exists fakeId =>
     Note { id: fakeId, body: "leaked-without-db" }
 |})

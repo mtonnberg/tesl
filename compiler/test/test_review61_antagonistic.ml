@@ -164,16 +164,16 @@ fn test(x: Int) -> Int =
 
 let test_R61_CP01_3level_cap_chain_now_works () =
   (* FIXED (BUG-02): cap_covered now uses full recursive transitive closure.
-     level1 → level2 → level3 → dbRead: handler requires [level1] now correctly
-     passes because level1 transitively implies dbRead through 3 levels. *)
+     level1 → level2 → level3 → dbRead Note: handler requires [level1] now correctly
+     passes because level1 transitively implies dbRead Note through 3 levels. *)
   should_pass {|
 module R61Cp01 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbRead]
 capability level1 implies level2
 capability level2 implies level3
-capability level3 implies dbRead
-fn readSomething(x: Int) -> Int requires [dbRead] = x
+capability level3 implies dbRead Note
+fn readSomething(x: Int) -> Int requires [dbRead Note] = x
 handler testHandler(req: Int) -> Int requires [level1] =
   readSomething req
 |}
@@ -184,8 +184,8 @@ let test_R61_CP02_2level_cap_chain_works () =
 module R61Cp02 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbRead]
-capability level1 implies dbRead
-fn readSomething(x: Int) -> Int requires [dbRead] = x
+capability level1 implies dbRead Note
+fn readSomething(x: Int) -> Int requires [dbRead Note] = x
 handler testHandler(req: Int) -> Int requires [level1] =
   readSomething req
 |}
@@ -200,8 +200,8 @@ import Tesl.DB exposing [dbRead]
 capability level1 implies level2
 capability level2 implies level3
 capability level3 implies level4
-capability level4 implies dbRead
-fn readSomething(x: Int) -> Int requires [dbRead] = x
+capability level4 implies dbRead Note
+fn readSomething(x: Int) -> Int requires [dbRead Note] = x
 handler testHandler(req: Int) -> Int requires [level1] =
   readSomething req
 |}
@@ -821,8 +821,8 @@ import Tesl.DB exposing [dbRead]
 capability appService implies businessLogic
 capability businessLogic implies dataAccess
 capability dataAccess implies cacheLayer
-capability cacheLayer implies dbRead
-fn readData(x: Int) -> Int requires [dbRead] = x
+capability cacheLayer implies dbRead Note
+fn readData(x: Int) -> Int requires [dbRead Note] = x
 handler serve(req: Int) -> Int requires [appService] =
   readData req
 |}
@@ -835,10 +835,10 @@ module R61Cp05 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbRead, dbWrite]
 capability fullAccess implies readAccess, writeAccess
-capability readAccess implies dbRead
-capability writeAccess implies dbWrite
-fn readData(x: Int) -> Int requires [dbRead] = x
-fn writeData(x: Int) -> Int requires [dbWrite] = x
+capability readAccess implies dbRead Note
+capability writeAccess implies dbWrite Note
+fn readData(x: Int) -> Int requires [dbRead Note] = x
+fn writeData(x: Int) -> Int requires [dbWrite Note] = x
 handler serve(req: Int) -> Int requires [fullAccess] =
   let r = readData req
   writeData r
@@ -861,7 +861,7 @@ let test_R61_CP07_fn_missing_cap_still_caught () =
 module R61Cp07 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbRead]
-fn readData(x: Int) -> Int requires [dbRead] = x
+fn readData(x: Int) -> Int requires [dbRead Note] = x
 fn callsRead(y: Int) -> Int =
   readData y
 |}

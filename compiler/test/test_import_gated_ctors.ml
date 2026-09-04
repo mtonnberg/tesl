@@ -2,7 +2,7 @@
     (roadmap/completed/import_gated_stdlib_constructors.md, found while landing #78).
 
     Before this, a stdlib ADT constructor resolved in a module that never
-    imported its module, `tesl check` said nothing, and the emitted Racket could
+    imported its module, `tesl check` said nothing, and the retired Racket output could
     not load:
 
       case Monday of Monday -> True; _ -> False     # no import Tesl.CivilTime
@@ -395,7 +395,7 @@ let t_exhaustiveness_covers_the_groups () =
      hand-written — but a gated ADT with no rows there is a `case` that is
      silently unchecked for exhaustiveness.  Known-and-recorded gaps are listed
      explicitly rather than skipped, so closing one is a visible edit. *)
-  let recorded_gaps = [ "DeleteResult"; "JobResult" ] in
+   let recorded_gaps = [] in
   let missing =
     List.concat_map (fun (_m, ty, ctors) ->
       if List.mem ty recorded_gaps then []

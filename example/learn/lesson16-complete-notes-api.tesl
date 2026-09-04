@@ -17,7 +17,6 @@ module Lesson16CompleteNotesApi exposing [NotesServer]
 # Key pattern: proof-annotated records + codecs for HTTP validation.
 
 import Tesl.Prelude exposing [String]
-import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Http exposing [HttpRequest]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Dict exposing [Dict.lookup]
@@ -27,8 +26,8 @@ import Tesl.Json exposing [stringCodec, posixMillisCodec]
 
 # ─── Capabilities ─────────────────────────────────────────────────────────────
 
-capability noteDbRead implies dbRead # read notes from storage
-capability noteDbWrite implies dbWrite # write notes to storage
+capability noteRead # domain permission used by this in-memory teaching stub
+capability noteWrite # domain permission used by this in-memory teaching stub
 capability noteAuth # read auth cookies
 
 # ─── Newtypes ─────────────────────────────────────────────────────────────────
@@ -125,7 +124,7 @@ capturer noteIdCapture: noteId: String using stringCodec
 #               → NewNote decoder runs checkSafeTitle and checkSafeContent
 #               → handler receives user (Authenticated) + body (validated NewNote)
 handler post createNote(user: String ::: Authenticated user, body: NewNote) -> Note
-  requires [noteDbWrite, time] =
+  requires [noteWrite, time] =
   # Inside here: user is authenticated, body.title has SafeTitle, body.content has SafeContent.
   # All proven before we even start executing.
   let noteId = NoteId "note-1" # in real app: generate unique ID
@@ -133,7 +132,7 @@ handler post createNote(user: String ::: Authenticated user, body: NewNote) -> N
 
 # getNote: authenticated user + note ID → returns Maybe Note.
 handler get getNote(user: String ::: Authenticated user, noteId: String) -> Maybe Note
-  requires [noteDbRead] =
+  requires [noteRead] =
   # noteId is the parsed URL capture, plain String (no extra establish from capture here).
   # user is authenticated.
   Something (Note { id: NoteId "note-1", title: "example note", content: "hello world", authorId: user, createdAt: Time.secondsToPosix 0 })

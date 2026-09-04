@@ -3,7 +3,7 @@
     Go has no dynamic type registry. Concrete boundary types become Go types, so
     known mismatches are rejected by Tesl's type checker and unknown/unsupported
     concrete types are refused before artifacts escape. Records, ADTs, newtypes,
-    Unit, runtime-provided DeleteResult, and type variables must still compile to
+    Unit and type variables must still compile to
     typed Go and execute successfully. This suite proves both halves: compiler
     rejection for bad boundaries and a real generated-Go test for valid ones. *)
 
@@ -117,10 +117,9 @@ let should_fail_go_emit needle src =
       failf "expected Go emitter rejection containing %S, got: %s" needle
         (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
 
-let runtime_proof = {|module DesignS13Go exposing [Widget, Color, Score, firstOr, countDeleted]
+let runtime_proof = {|module DesignS13Go exposing [Widget, Color, Score, firstOr]
 import Tesl.Prelude exposing [Int, String, Unit]
 import Tesl.Maybe exposing [Maybe(..)]
-import Tesl.DB exposing [DeleteResult(..)]
 
 record Widget { id: Int name: String }
 type Color =
@@ -133,11 +132,6 @@ fn firstOr(value: Maybe a, dflt: a) -> a =
   case value of
     Something found -> found
     Nothing -> dflt
-
-fn countDeleted(result: DeleteResult) -> Int =
-  case result of
-    RowsDeleted count -> count
-    NoRowDeleted -> 0
 
 fn colorCode(color: Color) -> Int =
   case color of
@@ -154,15 +148,11 @@ test "typed Go boundaries" {
   let color = colorCode (firstOr (Something Green) Red)
   let number = firstOr (Something 7) 0
   let score = scoreValue (Score 7)
-  let rows = countDeleted (RowsDeleted 3)
-  let none = countDeleted NoRowDeleted
   let _unit = unitValue()
   expect id == 1
   expect color == 2
   expect number == 7
   expect score == 7
-  expect rows == 3
-  expect none == 0
 }
 |}
 
@@ -184,7 +174,7 @@ let test_S13_fail_closed_runtime_proof () =
 let test_S13_go_types_are_concrete () =
   should_emit_go
     [ "type Widget struct"; "type ColorTag int"; "type Score struct";
-      "teslrt.DeleteResult"; "func FirstOr[A any]" ]
+      "func FirstOr[A any]" ]
     runtime_proof
 
 let test_S13_known_mismatches_rejected () =
@@ -276,7 +266,7 @@ let () =
       test_case "concrete builtin return still compiles" `Quick test_S13_concrete_return_still_compiles;
     ];
     "fail_closed", [
-      test_case "generated Go accepts typed record/ADT/newtype/Unit/DeleteResult/type-var"
+      test_case "generated Go accepts typed record/ADT/newtype/Unit/type-var"
         `Quick test_S13_fail_closed_runtime_proof;
       test_case "generated Go keeps concrete and generic boundary types" `Quick test_S13_go_types_are_concrete;
       test_case "known record/ADT/newtype mismatches are rejected" `Quick test_S13_known_mismatches_rejected;

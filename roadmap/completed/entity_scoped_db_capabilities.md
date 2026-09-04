@@ -1,5 +1,9 @@
 # Scope the database capabilities to entities
 
+**Status: completed.** Bare DB grants are compile errors. Imports remain bare; every grant,
+`requires`, and `implies` use is entity-scoped. Same-entity writes cover reads, SQL joins require
+every touched entity, and `main` may grant only entities in its selected `App.database`.
+
 ## What
 
 Make `dbRead` / `dbWrite` carry the entities they cover, in the two-word form the language
@@ -14,13 +18,12 @@ main() -> App requires [readMyDb, envRead] = …
 ```
 
 Every function that queries states the entities it touches; the requirement propagates to
-`main`, whose own `requires` states the grant. A requirement nothing granted is a compile
+`main`, whose own `requires` states the grant. A requirement not granted is a compile
 error at the call edge that needs it, exactly as an ungranted capability is today.
 
-**Extend the same treatment to queues and SSE.** `queueRead`/`queueWrite` and `pubsub` are
-all-or-nothing in the same way — any code holding `pubsub` may publish to any channel — so they
-want `queueWrite <Queue>` and `pubsub <Channel>`. Caches already work this way (`cacheCap
-<Name>`); the inconsistency is that one resource got it and three did not.
+Queue and SSE scopes also shipped as `queueRead <Queue>`, `queueWrite <Queue>`, and
+`pubsub <Channel>`. `queueWrite <Queue>` covers `queueRead` for that queue. Unlike DB capabilities,
+their bare forms currently remain migration wildcards. Caches use `cacheCap <Name>`.
 
 ## Why
 
@@ -88,21 +91,18 @@ repeated form — once the verbosity has actually been felt, rather than before.
   is written, rather than derived from `App { database: D }`. Deriving it would leave the App
   type and every `main` untouched, but it would make this one capability's grant work
   differently from all the others, and the asymmetry is not worth the saved lines.
-- **A bare `dbRead` must still mean something.** Either it keeps meaning "every entity" (and
-  the check only bites where someone opted in) or it becomes an error. The second is the honest
-  one and is what makes the 280 sites mandatory rather than optional.
+- **Resolved:** bare `dbRead` and `dbWrite` grants are errors. This makes entity scope mandatory.
 - **Emission stays put.** Capabilities erase, so `emit_go` is unaffected and `emit_racket` can
   keep emitting the bare `dbRead` name — the check is static. Worth confirming rather than
   assuming.
+- **Resolved:** joins require `dbRead` for the main entity and every joined entity.
 
 ## Sequencing
 
 After the current Go-migration batch is committed. Every corpus file this touches is a file
-whose `.rkt` snapshot moves and whose Go emission needs re-verifying, and interleaving that with
+whose `go` snapshot moves and whose Go emission needs re-verifying, and interleaving that with
 a port in flight would make both harder to attribute.
 
 ## Related
 
 - `roadmap/next/delete_result_return_type.md` — the other stdlib-shape item found the same week.
-- The connection-points note in `roadmap/next/migrate_to_golang.md` records the behaviour this
-  item makes checkable.

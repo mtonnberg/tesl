@@ -3,16 +3,16 @@
     Out-of-native-range integer literals are no longer a compile-time range error.
     The lexer emits a [BIGINT] token carrying the canonical (leading-zero-stripped)
     decimal magnitude; the parser folds unary minus into a signed [LBigInt] string;
-    the checker types it as [Int]; the emitter writes the exact digit string into
-    the Racket bignum.  This suite pins:
+    the checker types it as [Int]; the direct Go emitter writes the exact digit
+    string into the generated source. This suite pins:
 
       - a huge positive literal in a function body compiles and round-trips verbatim
-        into the emitted Racket (no wrap / no truncation);
+        into emitted Go (no wrap / no truncation);
       - a huge literal under unary minus compiles and emits `-<digits>`;
       - the former out-of-range boundary 2^62 (= 4611686018427387904) now compiles
         (both the bare positive and the -2^62 form);
       - leading-zero canonicalization: `000…N` and `N` emit the SAME digit string
-        (no leading zeros leak into Racket), so their content identity collapses;
+        (no leading zeros leak into Go), so their content identity collapses;
       - a huge literal can serve as a proof subject / argument (multi-param fact),
         satisfying a proof exactly like an in-range Int literal;
       - GUARD (soundness): arbitrary precision does NOT make a huge literal a valid
@@ -21,7 +21,7 @@
         the config layer.
 
     Emission / canonicalization assertions run in-process (parse + emit) so they
-    read the exact Racket text; the behavioural pass/reject assertions drive the
+    read the exact Go text; the behavioural pass/reject assertions drive the
     real `--check` pipeline (which runs full validation, incl. VPort). *)
 
 open Alcotest
@@ -113,13 +113,13 @@ let test_huge_body_compiles () =
 let test_huge_body_roundtrips () =
   let racket = emit_ok (prelude ^ Printf.sprintf "fn big() -> Int = %s\n" huge)
                  "huge_body_roundtrip" in
-  assert_contains ~name:"emitted Racket carries the exact digit string" racket huge
+  assert_contains ~name:"emitted Go carries the exact digit string" racket huge
 
 let test_huge_under_unary_minus () =
   let src = prelude ^ Printf.sprintf "fn negBig() -> Int = -%s\n" huge in
   check_pass src;
   let racket = emit_ok src "huge_negated" in
-  assert_contains ~name:"emitted Racket carries -<digits>" racket ("-" ^ huge)
+  assert_contains ~name:"emitted Go carries -<digits>" racket ("-" ^ huge)
 
 let test_former_boundary_2pow62_compiles () =
   (* 2^62 = 4611686018427387904 was formerly the out-of-range boundary. *)
@@ -137,8 +137,8 @@ let test_leading_zero_canonicalization () =
   (* both emit the same canonical (zero-stripped) digit string, twice *)
   check int "both fns emit the canonical bare form (2 occurrences)" 2
     (count_substring racket bare);
-  (* no leading-zero form leaks into the Racket output *)
-  assert_not_contains ~name:"no leading-zero literal leaks into Racket" racket ("0" ^ bare)
+  (* no leading-zero form leaks into the Go output *)
+  assert_not_contains ~name:"no leading-zero literal leaks into Go" racket ("0" ^ bare)
 
 (* ── Cross-seam: a huge literal as a proof subject / argument ──────────────── *)
 (* HasMin lo n holds when n >= lo. `atLeast` establishes it for a value known to
@@ -192,7 +192,7 @@ database ItemDb = Database {
   })
 }
 
-fn getFn(itemId: String) -> Maybe Item requires [dbRead] =
+fn getFn(itemId: String) -> Maybe Item requires [dbRead Note] =
   selectOne i from Item where i.id == itemId
 |} huge in
   check_fail "not a valid port\\|port.*range\\|65535" src
@@ -214,7 +214,7 @@ let () =
   run "test_a9_bigint" [
     "arbitrary-precision-Int", [
       test_case "huge literal in body compiles"            `Quick test_huge_body_compiles;
-      test_case "huge literal round-trips verbatim to Racket" `Quick test_huge_body_roundtrips;
+      test_case "huge literal round-trips verbatim to Go" `Quick test_huge_body_roundtrips;
       test_case "huge literal under unary minus"           `Quick test_huge_under_unary_minus;
       test_case "former 2^62 boundary now compiles (+/-)"  `Quick test_former_boundary_2pow62_compiles;
       test_case "leading-zero canonicalization"            `Quick test_leading_zero_canonicalization;

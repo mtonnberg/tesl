@@ -192,7 +192,7 @@ Gate: names/schemas/JSON remain compatible and live compiler/debug calls pass.
 
 ### Phase 6 closure log
 
-- 2026-08-20: Go `tesl-mcp` exposes the compiler query surface and debugger tools over bounded MCP stdio framing; unit, framing, race, vet, and real compiler agent-context smoke checks pass. Differential tool/error and live attach parity remain open.
+- 2026-08-20: Go `tesl-mcp` exposes the compiler query surface and debugger tools over bounded newline-delimited MCP stdio, separate from LSP/DAP `Content-Length` framing; unit, framing, race, vet, and real compiler agent-context smoke checks pass. Differential tool/error and live attach parity remain open.
 - 2026-08-20: MCP now keeps capability discovery alive when the compiler is absent, supports `shutdown`, validates source-query positions, returns contained `tools/call` errors, and has real-stdio matrix coverage for all compiler tools plus debug-attach argument forwarding.
 - 2026-08-20: MCP phase closure adds a real built-compiler/headless-debugger stdio test, Racket-versus-Go catalog/schema and `agent_context` differential coverage, and a CLI smoke that arms Go `debug-attach` through MCP against a running Go server and verifies the stopped event.
 - 2026-08-20: The MCP differential found and fixed a Racket compatibility defect: `tesl.proof_obligations` now returns the documented sliced array, matching Go rather than wrapping it in an agent-context object.

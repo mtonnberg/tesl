@@ -1,3 +1,7 @@
+(** Direct Go emission tests. References below to Racket describe the historical
+    compatibility baseline from the retired backend; this suite builds and runs
+    only the OCaml frontend's direct Go output. *)
+
 open Alcotest
 
 let source = {|module GoSmoke exposing [add, choose, nestedChoice, boundary, withUnused, map, teslMap, describe, describeComputed, Positive, checkPositive, checkPositiveNested, alwaysReject, rejectEither, requirePositive, doublePositive]
@@ -925,7 +929,7 @@ let run_generated_module_analyzers root =
 (* This case used to assert the emitter REFUSED a program containing an uncalled private
    function, on the grounds that an unused unexported Go function is a lint finding and a
    finding on emitted code is an emitter bug.  The conclusion was wrong: an unused private
-   declaration is legal Tesl and the Racket backend emits it, so refusing made a legal
+   declaration is legal Tesl and the retired Racket backend emitted it, so refusing made a legal
    program un-emittable — lesson35 declares `prependInt` to illustrate it and could not be
    compiled at all.  The function is emitted and referenced once at package level, which
    satisfies the linter without dropping code the author wrote.  The centralized generated
@@ -1030,9 +1034,9 @@ test "recursion" {
 }
 |}
 
-(* Racket has TCO and Go does not, and a Go stack overflow is FATAL (unrecoverable
+(* The retired Racket backend had TCO and Go does not, and a Go stack overflow is FATAL (unrecoverable
    by `recover`), so a self tail call must become a loop rather than a stack frame —
-   otherwise a program that merely runs on Racket kills the Go process. *)
+   otherwise a program that ran under the historical backend kills the Go process. *)
 let test_recursion_with_go () =
   let emitted = match Compile.compile_go_source "<go-recursion>" recursion_source with
     | Compile.GoSuccess artifacts -> artifacts
@@ -1309,20 +1313,6 @@ fn firstOr(r: Result Int Int) -> Int =
    | Compile.GoFailure diagnostics ->
      failf "Result failed to compile: %s"
        (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics)));
-  (* `DeleteResult` joined them when `deleteAndReturnResult` landed, so it compiles too. *)
-  let delete_result = {|module DeleteResultUser exposing [count]
-import Tesl.Prelude exposing [Int]
-import Tesl.DB exposing [DeleteResult(..)]
-fn count(r: DeleteResult) -> Int =
-  case r of
-    RowsDeleted n -> n
-    _ -> 0
-|} in
-  (match Compile.compile_go_source "<go-delete-result>" delete_result with
-   | Compile.GoSuccess _ -> ()
-   | Compile.GoFailure diagnostics ->
-     failf "DeleteResult failed to compile: %s"
-       (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics)));
   (* The point of this case survives: the runtime ADTs are whitelisted BY NAME, not
      "any stdlib ADT".  One that has no runtime type behind it still fails closed.
      `TimeZone` used to be the example and is now BUILT (489 IANA constructors through the
@@ -1336,10 +1326,10 @@ fn spanName(s: Span) -> String = "s"
   match Compile.compile_go_source "<go-span>" unsupported with
   | Compile.GoSuccess _ -> fail "an unsupported stdlib ADT emitted Go artifacts"
   | Compile.GoFailure diagnostics ->
-    check bool "an unlisted stdlib ADT is refused" true
-      (List.exists (fun (d : Compile.diagnostic) ->
-         d.source = "go-emitter" && contains d.message "`Tesl.Telemetry` export `Span`")
-        diagnostics)
+     let refused = List.exists (fun (d : Compile.diagnostic) ->
+       contains d.message "`Tesl.Telemetry` does not export `Span`")
+         diagnostics in
+     check bool "an unlisted stdlib ADT is refused" true refused
 
 let string_source = {|module GoStrings exposing [size, shout, initial, parsed, found, label, checked]
 import Tesl.Prelude exposing [Bool, Int, String]
@@ -1433,9 +1423,11 @@ fn tidy(s: String) -> String = String.trimLeft s
   match Compile.compile_go_source "<go-string-trimleft>" unsupported with
   | Compile.GoSuccess _ -> fail "an unsupported Tesl.String export emitted Go artifacts"
   | Compile.GoFailure diagnostics ->
-    check bool "an unimplemented leaf of a supported module fails closed" true
+    check bool "an unimplemented leaf is rejected before emission" true
       (List.exists (fun (d : Compile.diagnostic) ->
-         d.source = "go-emitter" && contains d.message "`String.trimLeft`") diagnostics)
+         d.source <> "go-emitter"
+         && contains d.message "the Go backend does not implement `String.trimLeft` from `Tesl.String`")
+        diagnostics)
 
 let list_source = {|module GoLists exposing [size, empty, firstOr, rest, joined, parts, top, dedup, ordered, hasTwo, both, prefix]
 import Tesl.Prelude exposing [Bool, Int, List, String]
@@ -1548,12 +1540,13 @@ let test_unsupported_list_exports_fail_closed () =
     | Compile.GoFailure diagnostics ->
       check bool label true
         (List.exists (fun (d : Compile.diagnostic) ->
-           d.source = "go-emitter" && contains d.message needle) diagnostics)
+           contains d.message needle) diagnostics)
   in
   (* `map`/`filter`/`foldl`/`foldr`/`any`/`all` are loops now, so this moved to the next
      unimplemented higher-order leaf: an unimplemented leaf of a SUPPORTED module must
      still fail closed rather than emit something plausible. *)
-  expect_go_error "unimplemented higher-order leaf" "`List.partition`" {|module ListPartition exposing [split]
+  expect_go_error "unimplemented higher-order leaf"
+    "the Go backend does not implement `List.partition` from `Tesl.List`" {|module ListPartition exposing [split]
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.partition]
 fn split(xs: List Int) -> List (List Int) = List.partition (fn(x: Int) -> x > 10) xs
@@ -1677,7 +1670,7 @@ let test_higher_order_lists_with_go () =
    fail closed here for want of a calling convention. Both emit now: a lambda becomes a Go
    func literal and a partial application the runtime combinator that closes over what was
    given. What they do is tested where the feature lives ("function values and lambdas",
-   with its Racket oracle), so this file no longer states the refusal. *)
+   with its historical Racket oracle), so this file no longer states the refusal. *)
 
 let check_list_source = {|module GoCheckLists exposing [Small, checkSmall, checkBelow, kept, keptBelow, allKept, sizeOfKept]
 import Tesl.Prelude exposing [Int, List]
@@ -2531,7 +2524,7 @@ let test_higher_order_leaves_with_go () =
 (* `List.filterMap` over a `Maybe Bool`.  Racket's implementation fed the payload to
    `filter-map`, so `Something False` was silently DROPPED — `filterMap toFlag [0, 1, 2]`
    returned one element where all three mapped to Something.  Fixed in tesl/list.rkt; this
-   runs on both backends, so it pins the agreement rather than just the Go side. *)
+   ran under the retired backend too, so it pins the compatibility contract. *)
 let filter_map_bool_source = {|module GoFilterMapBool exposing [flags, evens, toFlag, keepEven]
 import Tesl.Prelude exposing [Bool(..), Int, List]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -2705,7 +2698,7 @@ let test_int_leaves_with_go () =
         (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
   in
   let module_go = artifact "internal/teslmodgointleaves/module.go" emitted in
-  check bool "clamp keeps Racket's argument order" true
+  check bool "clamp keeps the established argument order" true
     (contains module_go "teslrt.Clamp(n, teslrt.FromInt64(0), teslrt.FromInt64(10))");
   check bool "pow raises on a negative exponent rather than returning an error" true
     (contains module_go "teslrt.MustPow(");
@@ -3191,7 +3184,7 @@ server HelloServer for HelloApi {
 |}
 
 (* Tesl `api-test` blocks driving the emitted server IN PROCESS — no socket, so they are
-   ordinary `go test` cases.  Racket dispatches the same way, so both backends exercise the
+   ordinary `go test` cases. The retired Racket backend dispatched the same way, so these exercise the
    same layer.  The statements are the same `test_stmt` forms an ordinary `test` block
    uses, so only the request verbs needed emitting. *)
 let go_api_test_source = {|module GoApiTest exposing [Greeting, hello]
@@ -3349,7 +3342,7 @@ import Tesl.Prelude exposing [Bool(..), Int, String, List, Unit]
 import Tesl.Int exposing [Int.toString]
 import Tesl.List exposing [List.length, List.map, List.head]
 import Tesl.Maybe exposing [Maybe(..)]
-import Tesl.DB exposing [dbRead, dbWrite, DeleteResult(..)]
+import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Database exposing [Database, Memory]
 
 type Sku = String
@@ -3367,75 +3360,73 @@ database ProbeDb = Database {
 }
 
 fn titleOf(wanted: String) -> String
-  requires [dbRead] =
+  requires [dbRead Item] =
   let found = selectOne i from Item where i.id == wanted
   case found of
     Nothing -> "none"
     Something i -> i.name
 
 fn orderedNames() -> List String
-  requires [dbRead] =
+  requires [dbRead Item] =
   let rows = select i from Item order i.qty desc
   List.map (fn(i: Item) -> i.name) rows
 
 fn cheapestName() -> String
-  requires [dbRead] =
+  requires [dbRead Item] =
   let rows = select i from Item order i.qty asc limit 1
   case List.head rows of
     Nothing -> "none"
     Something i -> i.name
 
 fn countAbove(threshold: Int) -> Int
-  requires [dbRead] =
+  requires [dbRead Item] =
   selectCount i from Item where i.qty > threshold
 
 fn totalQty() -> Int
-  requires [dbRead] =
+  requires [dbRead Item] =
   selectSum i.qty from Item
 
 # selectMax/selectMin answer a Maybe: no matching row has no maximum.
 fn biggestQty() -> Int
-  requires [dbRead] =
+  requires [dbRead Item] =
   case selectMax i.qty from Item of
     Nothing -> 0
     Something qty -> qty
 
 fn smallestQty() -> Int
-  requires [dbRead] =
+  requires [dbRead Item] =
   case selectMin i.qty from Item of
     Nothing -> 0
     Something qty -> qty
 
 # The empty answer itself, over a predicate nothing matches.
 fn biggestQtyNamed(wanted: String) -> Maybe Int
-  requires [dbRead] =
+  requires [dbRead Item] =
   selectMax i.qty from Item where i.name == wanted
 
 fn namesLike(pattern: String) -> Int
-  requires [dbRead] =
+  requires [dbRead Item] =
   selectCount i from Item where like i.name pattern
 
 fn namesILike(pattern: String) -> Int
-  requires [dbRead] =
+  requires [dbRead Item] =
   selectCount i from Item where ilike i.name pattern
 
 fn bySku(raw: String) -> Int
-  requires [dbRead] =
+  requires [dbRead Item] =
   selectCount i from Item where i.sku == Sku raw
 
 fn eitherName(left: String, right: String) -> Int
-  requires [dbRead] =
+  requires [dbRead Item] =
   selectCount i from Item where i.name == left || i.name == right
 
 fn describeDelete(name: String) -> String
-  requires [dbWrite] =
+  requires [dbWrite Item] =
   let removed = deleteAndReturnResult i from Item where i.name == name
-  case removed of
-    RowsDeleted n -> Int.toString n
-    _ -> "none"
+  Int.toString removed
 
 fn seed() -> Unit
-  requires [dbWrite] =
+  requires [dbWrite Item] =
   let _ = insert Item { id: "i1", sku: Sku "S-1", name: "alpha", qty: 7 }
   let rest = [
     Item { id: "i2", sku: Sku "S-2", name: "beta", qty: 3 },
@@ -3444,7 +3435,7 @@ fn seed() -> Unit
   let _ = insertMany rest in Item
   Unit
 
-test "queries read back what was written" requires [dbRead, dbWrite] {
+test "queries read back what was written" requires [dbRead Item, dbWrite Item] {
   let _ = seed ()
   expect titleOf "i1" == "alpha"
   expect titleOf "nope" == "none"
@@ -3465,8 +3456,8 @@ test "queries read back what was written" requires [dbRead, dbWrite] {
 }
 
 # The Memory store is NOT reset between test blocks (it is one process-wide store on
-# both backends), so this test owns its own rows rather than re-seeding the first one's.
-test "update and delete change what queries see" requires [dbRead, dbWrite] {
+# the historical and Go paths), so this test owns its own rows rather than re-seeding the first one's.
+test "update and delete change what queries see" requires [dbRead Item, dbWrite Item] {
   let _ = insert Item { id: "u1", sku: Sku "S-U1", name: "delta", qty: 20 }
   let _ = insert Item { id: "u2", sku: Sku "S-U2", name: "epsilon", qty: 30 }
   Unit
@@ -3481,9 +3472,7 @@ test "update and delete change what queries see" requires [dbRead, dbWrite] {
   delete i from Item where i.qty > 25
   expect countAbove 19 == 1
   expect titleOf "u2" == "none"
-  # `deleteAndReturnResult` says whether anything WENT, which is not the same as a count of
-  # zero: the caller reads it as a case.
-  expect describeDelete "no-such-name" == "none"
+   expect describeDelete "no-such-name" == "0"
   expect describeDelete "renamed" == "1"
 }
 |}
@@ -3524,10 +3513,8 @@ let test_db_with_go () =
     (contains tests_go "teslNext := i");
   check bool "and reports nothing back, because `update` is a statement" true
     (contains tests_go "_ = teslrt.TableUpdate(ItemTable,");
-  (* `deleteAndReturnResult` answers a runtime-provided ADT rather than a count: "nothing
-     matched" is an outcome, not the number zero. *)
-  check bool "`deleteAndReturnResult` answers a DeleteResult" true
-    (contains module_go "teslrt.TableDeleteResult(ItemTable,");
+   check bool "`deleteAndReturnResult` answers an Int count" true
+     (contains module_go "teslrt.TableDeleteCount(ItemTable,");
   (* `go test` RUNS the two test blocks, so a wrong answer fails here. *)
   gate_emitted "tesl-go-db" emitted
 
@@ -3581,12 +3568,12 @@ database Shelf = Database {
 }
 
 fn shelve(id: String, title: String, pages: Int, status: BookStatus) -> Book
-  requires [dbWrite] =
+  requires [dbWrite Book] =
   insert Book { id: id, title: title, pages: pages, status: status }
 
 # An ADT column round-trips through the same wire shape a response body uses.
 fn statusOf(wanted: String) -> String
-  requires [dbRead] =
+  requires [dbRead Book] =
   case selectOne b from Book where b.id == wanted of
     Nothing -> "none"
     Something b ->
@@ -3595,16 +3582,16 @@ fn statusOf(wanted: String) -> String
         Published -> "published"
 
 fn titleOf(wanted: String) -> String
-  requires [dbRead] =
+  requires [dbRead Book] =
   case selectOne b from Book where b.id == wanted of
     Nothing -> "none"
     Something b -> b.title
 
 fn countBooks() -> Int
-  requires [dbRead] =
+  requires [dbRead Book] =
   selectCount b from Book
 
-test "a Postgres declaration leaves the store where it was" requires [dbRead, dbWrite] {
+test "a Postgres declaration leaves the store where it was" requires [dbRead Book, dbWrite Book] {
   let _ = shelve "b-1" "The Art of Tesl" 320 Published
   let _ = shelve "b-2" "Proofs in Practice" 210 Draft
   expect titleOf "b-1" == "The Art of Tesl"
@@ -3712,7 +3699,7 @@ let test_postgres_pool_size_lowering () =
    `test "…" with database D` is the header that BINDS D for the block, so the block's queries
    reach the server rather than the in-memory table.  The configuration reads the same
    environment ci.sh sets for the Racket Postgres tests, which is what lets ONE cluster serve
-   both backends and the oracle compare them on the same rows.  With no cluster configured the
+   the Go path and historical oracle and compare them on the same rows. With no cluster configured the
    case skips: a developer without a server still gets everything above. *)
 let postgres_live_source = {|module GoPostgresLive exposing [titleOf, countBooks]
 
@@ -3737,7 +3724,7 @@ type Shelf
   | Reference
 
 # A variant that CARRIES a payload. The column is JSONB holding `{"tag": …, "fields": {…}}`,
-# which is the shape both backends write, so a row written by either is readable by both.
+# which is the historical wire shape retained by Go, so old rows remain readable.
 type Binding
   = Paperback
   | Hardcover pressing: Int
@@ -3773,19 +3760,19 @@ database LiveDb = Database {
 }
 
 fn store(id: String, title: String, pages: Int, shelf: Shelf, retired: Bool, authorId: String) -> LiveBook
-  requires [dbWrite] =
+  requires [dbWrite LiveBook] =
   insert LiveBook {
     id: id, title: title, pages: pages, shelf: shelf, binding: Paperback,
     retired: retired, authorId: authorId
   }
 
-fn storeBound(id: String, binding: Binding) -> LiveBook requires [dbWrite] =
+fn storeBound(id: String, binding: Binding) -> LiveBook requires [dbWrite LiveBook] =
   insert LiveBook {
     id: id, title: "Bound", pages: 1, shelf: Fiction, binding: binding,
     retired: False, authorId: "a-1"
   }
 
-fn bindingOf(wanted: String) -> String requires [dbRead] =
+fn bindingOf(wanted: String) -> String requires [dbRead LiveBook] =
   case selectOne b from LiveBook where b.id == wanted of
     Nothing -> "none"
     Something b ->
@@ -3795,7 +3782,7 @@ fn bindingOf(wanted: String) -> String requires [dbRead] =
         Special edition -> "special-" ++ edition
 
 fn storeAuthor(id: String, name: String) -> LiveAuthor
-  requires [dbWrite] =
+  requires [dbWrite LiveAuthor] =
   insert LiveAuthor { id: id, name: name }
 
 # NO `innerJoin` here, deliberately.  Racket's Postgres join builder qualifies the ON columns
@@ -3804,41 +3791,41 @@ fn storeAuthor(id: String, name: String) -> LiveAuthor
 # `LiveBook`/`live_books` included (finding 13 in the roadmap).  The Go form is an
 # `exists (…)` subquery and does run: it is exercised against the cluster by
 # `TestBoundInnerJoinExists` in runtime/go/teslrt/database_test.go, where there is no Racket
-# counterpart to disagree with, and its BEHAVIOUR is compared on both backends by
+# counterpart to disagree with, and its BEHAVIOUR was compared against the retired backend by
 # example/learn/lesson48-sql-inner-join.tesl, whose database is Memory-backed.
 
 fn titleOf(wanted: String) -> String
-  requires [dbRead] =
+  requires [dbRead LiveBook] =
   case selectOne b from LiveBook where b.id == wanted of
     Nothing -> "none"
     Something b -> b.title
 
 fn countBooks() -> Int
-  requires [dbRead] =
+  requires [dbRead LiveBook] =
   selectCount b from LiveBook
 
 fn countRetired() -> Int
-  requires [dbRead] =
+  requires [dbRead LiveBook] =
   selectCount b from LiveBook where b.retired == True
 
 fn totalPages() -> Int
-  requires [dbRead] =
+  requires [dbRead LiveBook] =
   selectSum b.pages from LiveBook
 
 fn longest() -> Int
-  requires [dbRead] =
+  requires [dbRead LiveBook] =
   case selectMax b.pages from LiveBook of
     Nothing -> 0
     Something pages -> pages
 
 fn titlesByPages() -> Int
-  requires [dbRead] =
+  requires [dbRead LiveBook] =
   selectCount b from LiveBook where b.pages > 250
 
 # `upsert` on the SERVER is one statement — `insert … on conflict (id) do update set …` —
 # where the memory path finds, merges and stores. The two agree about the outcome, which is
 # what a test that runs on either store asserts.
-fn stash(id: String, title: String, pages: Int) -> Unit requires [dbWrite] =
+fn stash(id: String, title: String, pages: Int) -> Unit requires [dbWrite LiveBook] =
   upsert LiveBook {
     id: id, title: title, pages: pages, shelf: Fiction, binding: Paperback,
     retired: False, authorId: "a-1"
@@ -3847,24 +3834,24 @@ fn stash(id: String, title: String, pages: Int) -> Unit requires [dbWrite] =
 # A grouped aggregate GROUPS on the server: `select "authorId", coalesce(sum("pages"), 0) …
 # group by 1 order by 1`, one row per bucket in ascending key order — the same order the
 # memory fold answers in.
-fn pagesByAuthor() -> List (Tuple2 String Int) requires [dbRead] =
+fn pagesByAuthor() -> List (Tuple2 String Int) requires [dbRead LiveBook] =
   selectSumBy b.pages from LiveBook groupBy b.authorId
 
-fn booksByAuthor() -> List (Tuple2 String Int) requires [dbRead] =
+fn booksByAuthor() -> List (Tuple2 String Int) requires [dbRead LiveBook] =
   selectCountBy b from LiveBook groupBy b.authorId
 
-fn authorsSeen() -> List String requires [dbRead] = List.map firstOfPair (pagesByAuthor ())
+fn authorsSeen() -> List String requires [dbRead LiveBook] = List.map firstOfPair (pagesByAuthor ())
 
 fn firstOfPair(row: Tuple2 String Int) -> String = Tuple2.first row
 
-fn pagesSeen() -> List Int requires [dbRead] = List.map secondOfPair (pagesByAuthor ())
+fn pagesSeen() -> List Int requires [dbRead LiveBook] = List.map secondOfPair (pagesByAuthor ())
 
 fn secondOfPair(row: Tuple2 String Int) -> Int = Tuple2.second row
 
-fn countsSeen() -> List Int requires [dbRead] = List.map secondOfPair (booksByAuthor ())
+fn countsSeen() -> List Int requires [dbRead LiveBook] = List.map secondOfPair (booksByAuthor ())
 
 fn shelfOf(wanted: String) -> String
-  requires [dbRead] =
+  requires [dbRead LiveBook] =
   case selectOne b from LiveBook where b.id == wanted of
     Nothing -> "none"
     Something b ->
@@ -3872,7 +3859,7 @@ fn shelfOf(wanted: String) -> String
         Fiction -> "fiction"
         Reference -> "reference"
 
-test "a round trip through the server answers what it stored" with database LiveDb requires [dbRead, dbWrite] {
+test "a round trip through the server answers what it stored" with database LiveDb requires [dbRead LiveBook, dbWrite LiveBook, dbWrite LiveAuthor] {
   delete b from LiveBook
   delete a from LiveAuthor
   let _ = storeAuthor "a-1" "Ada"
@@ -4018,10 +4005,10 @@ database ColumnDb = Database {
 }
 
 fn store(id: String, priority: Priority, token: Token, assignee: Maybe String) -> Ticket
-  requires [dbWrite] =
+  requires [dbWrite Ticket] =
   insert Ticket { id: id, priority: priority, token: token, assignee: assignee }
 
-fn labelOf(wanted: String) -> String requires [dbRead] =
+fn labelOf(wanted: String) -> String requires [dbRead Ticket] =
   case selectOne t from Ticket where t.id == wanted of
     Nothing -> "none"
     Something t ->
@@ -4040,19 +4027,19 @@ fn labelOf(wanted: String) -> String requires [dbRead] =
 
 # A `secret` column: the column stores the newtype's BASE value, and what comes back is the
 # newtype again — so the only thing a caller can do with it is compare, which is the point.
-fn tokenMatches(wanted: String, guess: Token) -> Bool requires [dbRead] =
+fn tokenMatches(wanted: String, guess: Token) -> Bool requires [dbRead Ticket] =
   case selectOne t from Ticket where t.id == wanted of
     Nothing -> False
     Something t -> t.token == guess
 
 # `isNull` is the only way to ask a nullable column about its emptiness in a WHERE clause:
 # `t.assignee == Nothing` compares a column against a Tesl value, which the store cannot do.
-fn unnamed() -> Int requires [dbRead] =
+fn unnamed() -> Int requires [dbRead Ticket] =
   selectCount t from Ticket where isNull t.assignee
 
-test "a payload ADT, a secret and a nullable column all survive a round trip" with database ColumnDb requires [dbRead, dbWrite] {
+test "a payload ADT, a secret and a nullable column all survive a round trip" with database ColumnDb requires [dbRead Ticket, dbWrite Ticket] {
   # A live table outlives a test process, so the block starts by clearing what an earlier run
-  # left — the per-test freshening both backends do covers memory stores only.
+  # left — per-test freshening covers memory stores only.
   delete t from Ticket
   let _ = store "t-1" Low (Token "k-1") (Something "ada")
   let _ = store "t-2" (Numbered 3) (Token "k-2") Nothing
@@ -4102,7 +4089,7 @@ let test_pg_columns_with_go () =
     gate_emitted ~env "tesl-go-pg-columns" emitted
 
 (* ─── The `server` clause surface ─────────────────────────────────────────────
-   `Ast.server_form` carries 16 fields and `emit_racket.ml` honours all of them.  This backend
+   `Ast.server_form` carries 16 fields, and the direct Go emitter must account for all of them. It
    read TEN.  The six it ignored were not refused — they were DROPPED, which is the one failure
    mode this migration exists to prevent:
 
@@ -4173,7 +4160,7 @@ server ClauseServer for ClauseApi {
   sessionRevoked revoked
   listenAddress Loopback
   healthProbePath "/healthz"
-  contentSecurityPolicy "default-src 'self'"
+  contentSecurityPolicy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'"
   trustedProxies ["10.0.0.1"]
 }
 
@@ -4209,7 +4196,7 @@ let test_server_clauses_with_go () =
         "teslrt.SetPreviousSessionKey(teslrt.SecretPointer(teslrt.RequireSecret(\"GOCLAUSES_PREVIOUS_KEY\")))";
       "sessionRevoked", "teslrt.SetSessionRevokedHook(func(teslSubject string, teslIssuedAt int64) bool {";
       "healthProbePath", "teslrt.SetHealthProbePath(\"/healthz\")";
-       "contentSecurityPolicy", "teslrt.SetContentSecurityPolicy(\"default-src 'self'\")";
+       "contentSecurityPolicy", "teslrt.SetContentSecurityPolicy(\"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'\")";
        "trustedProxies", "[]string{\"10.0.0.1\"}" ];
   (* The hook is handed `iat` in SECONDS and the clause's fn takes a `PosixMillis`, so the
      adapter has to convert — a hook given milliseconds compares against the wrong epoch and
@@ -4363,7 +4350,7 @@ let test_list_unique_with_go () =
    "the body is JSON" is true there by construction and no api-test on that backend can reach the
    content-type check.  `teslrt.ApiRequest` builds a real `*http.Request` and calls the server, so
    here the check is on the path an api-test walks — which is why the assertion below is possible
-   at all.  Over real HTTP both backends answer 415; only the test surfaces differ. *)
+   at all. The historical server and direct Go server answer 415 over real HTTP; only the test surfaces differ. *)
 let json_payload_source = {|module GoJsonPayload exposing [echo]
 
 import Tesl.Prelude exposing [Int, String]
@@ -4570,15 +4557,15 @@ fn same(left: WideEvent, right: WideEvent) -> Bool =
 fn roundTrip(event: WideEvent) -> String =
   label event
 
-fn storeEvent(id: String, event: WideEvent) -> EventRow requires [dbWrite] =
+fn storeEvent(id: String, event: WideEvent) -> EventRow requires [dbWrite EventRow] =
   insert EventRow { id: id, event: event }
 
-fn labelOf(wanted: String) -> String requires [dbRead] =
+fn labelOf(wanted: String) -> String requires [dbRead EventRow] =
   case selectOne row from EventRow where row.id == wanted of
     Nothing -> "none"
     Something row -> label row.event
 
-test "a boxed ADT behaves exactly as a flat one does" requires [dbRead, dbWrite] {
+test "a boxed ADT behaves exactly as a flat one does" requires [dbRead EventRow, dbWrite EventRow] {
   let posted = Posted "m1" "u1" "ada" "hello" "general"
   let joined = Joined "u2" "grace"
   let failed = Failed "ada" "general" Nothing
@@ -4666,15 +4653,15 @@ database Team = Database {
   backend: Memory
 }
 
-fn add(id: String, email: String) -> Member requires [dbWrite] =
+fn add(id: String, email: String) -> Member requires [dbWrite Member] =
   insert Member { id: id, email: email, nickname: Nothing }
 
-fn rename(id: String, email: String) -> Unit requires [dbWrite] =
+fn rename(id: String, email: String) -> Unit requires [dbWrite Member] =
   update m in Member
     where m.id == id
     set m.email = email
 
-test "a unique index is enforced, and NULLs do not collide" requires [dbRead, dbWrite] {
+test "a unique index is enforced, and NULLs do not collide" requires [dbRead Member, dbWrite Member] {
   let _ = add "m1" "ada@example.com"
   let _ = add "m2" "grace@example.com"
   expectFail add "m3" "ada@example.com"
@@ -5307,7 +5294,7 @@ let test_queue_with_go () =
   let tests_go = artifact "internal/teslmodgoqueue/module_test.go" emitted in
   check bool "an api-test drives the queue's own worker" true
     (contains tests_go "teslrt.ProcessNextJob(SendQueueQueue, func(teslPayload any) teslrt.JobOutcome {");
-  check bool "and an empty queue traps with the Racket hint" true
+  check bool "and an empty queue traps with the established hint" true
     (contains tests_go "panic(teslrt.EmptyQueue(\"SendQueue\", \"processNextJob\"))");
   check bool "a JSON body template becomes constant JSON" true
     (contains tests_go "teslrt.ApiRequest(QueueServer, \"POST\", \"/send\", \"{\\\"tag\\\":\\\"one\\\"}\", nil, nil)");
@@ -5517,7 +5504,7 @@ codec Count {
 }
 
 handler get listWidgets() -> Count
-  requires [dbRead] =
+  requires [dbRead Widget] =
   let rows = select w from Widget
   Count { widgets: List.length rows }
 
@@ -5530,7 +5517,7 @@ server SeedServer for SeedApi {
   listWidgets
 }
 
-api-test "a seeded block sees the rows it declared" for SeedServer requires [dbRead, dbWrite] {
+api-test "a seeded block sees the rows it declared" for SeedServer requires [dbRead Widget, dbWrite Widget] {
   seed {
     insert Widget { id: "w-1", label: "first" }
     insert Widget { id: "w-2", label: "second" }
@@ -5540,7 +5527,7 @@ api-test "a seeded block sees the rows it declared" for SeedServer requires [dbR
   expect counted.body.widgets == 2
 }
 
-api-test "and the next block does not inherit them" for SeedServer requires [dbRead, dbWrite] {
+api-test "and the next block does not inherit them" for SeedServer requires [dbRead Widget, dbWrite Widget] {
   let counted = get "/widgets"
   expect counted.body.widgets == 0
 }
@@ -5579,7 +5566,7 @@ import Tesl.String exposing [String.length]
 import Tesl.Json exposing [stringCodec]
 import Tesl.Database exposing [Database, Memory]
 import Tesl.App exposing [App]
-import Tesl.Telemetry exposing [initTelemetry, telemetry, counter, histogram, gauge]
+ import Tesl.Telemetry exposing [TelemetryConfig, telemetry, counter, histogram, gauge]
 import Tesl.ApiTest exposing [statusOk]
 
 record Greeting { message: String }
@@ -5619,10 +5606,14 @@ database TelemetryDb = Database {
 }
 
 main() -> App requires [] =
-  let _ = initTelemetry service "go-telemetry-app" endpoint "in-memory" console False
   App {
     database: TelemetryDb
     api: TelemetryServer
+    telemetry: TelemetryConfig {
+      service: "go-telemetry-app"
+      endpoint: "in-memory"
+      console: False
+    }
     port: 8099
   }
 
@@ -5692,7 +5683,7 @@ let test_telemetry_app_with_go () =
   (* `main` lowers into the startup chain; the App record has no runtime form. *)
   check bool "main serves the declared server on the declared port" true
     (contains module_go "teslrt.Serve(TelemetryServer, teslrt.ServeOptions{Port: teslrt.PortOf(teslrt.FromInt64(8099))})");
-  check bool "and initTelemetry's keyword surface becomes one call" true
+   check bool "App telemetry becomes one runtime init call" true
     (contains module_go
        "teslrt.InitTelemetry(\"go-telemetry-app\", \"in-memory\", false, true, false, 60000, 1.0)");
   (* A program gets the one `package main` Go needs to build a binary. *)
@@ -5856,7 +5847,7 @@ let test_newtype_case_with_go () =
    options anywhere. The signature is `Tesl.Crypto`'s HMAC-SHA256 over `header.payload`, so a
    token minted by either backend verifies on the other — the runtime suite pins that against an
    actual Racket-minted token, and this case pins the SURFACE: what the emitter writes, and that
-   the whole round trip behaves the same on both backends. *)
+   the whole round trip preserves the historical compatibility behavior. *)
 let jwt_source = {|module GoJwt exposing [issue, subjectOf, renewFor, LoginOut, SessionApi, SessionServer]
 
 import Tesl.Prelude exposing [Bool, String]
@@ -7727,7 +7718,7 @@ record Right {
 fn valueOf(l: Left) -> Int = l.value
 |};
   (* A record INVARIANT used to fail closed here.  It ERASES: LANGUAGE-SPEC calls the
-     record-level `::: P` a zero-cost annotation, and the Racket emitter reads it only for
+     record-level `::: P` a zero-cost annotation; the retired Racket emitter read it only for
      property-test generators, never for a check at construction — so this is now a positive
      assertion, like the proof-carrying FIELD below. *)
   (match Compile.compile_go_source "<invariant-record>" {|module InvariantRecord exposing [Span, width]
@@ -8089,7 +8080,7 @@ fn splitSides(values: List (Either String Int)) -> Int =
   let parts = Either.partition values
   List.length (Tuple2.first parts) + List.length (Tuple2.second parts)
 
-test "the container leaves answer what Racket answers" {
+test "the container leaves preserve established behavior" {
   expect countBig [1, 20, 30] == 2
   expect tally [2, 3, 4] == 24
   expect tally [] == 1
@@ -8104,7 +8095,7 @@ test "the container leaves answer what Racket answers" {
   expect Int.lcm 0 6 == 0
 }
 
-test "the Either combinators answer what Racket answers" {
+test "the Either combinators preserve established behavior" {
   expect Either.isLeft (parse (0 - 1)) == True
   expect Either.isRight (parse 5) == True
   expect Either.withDefault 0 (parse 5) == 5
@@ -8322,7 +8313,7 @@ let test_nested_patterns_with_go () =
 
 (* `Tesl.UUID`: two generators gated by the `uuid` capability, and a validate that is a
    CHECK.  The v7 layout was already in the runtime (a queue job id is one, and it has to
-   sort the same on both backends); v4 and the validator join it.  Also pinned here: a
+   preserve the historical sort order); v4 and the validator join it. Also pinned here: a
    check's VALUE used where its base type is expected (`fn validated(s) -> String =
    UUID.validate s`), which traps on rejection — the same verdict `expectFail` sees on
    Racket. *)
@@ -8345,7 +8336,7 @@ fn validated(s: String) -> String =
 fn versionDigit(s: String) -> String =
   String.slice s 14 15
 
-test "a minted UUID has the shape both backends agree on" requires [uuid] {
+test "a minted UUID has the canonical compatibility shape" requires [uuid] {
   let v4 = mintV4()
   let v7 = mintV7()
   expect String.length v4 == 36
@@ -8823,7 +8814,7 @@ let test_sse_with_go () =
     (contains tests_go "teslrt.SubscribeStream(MainServer, \"/runs/stream\", nil)");
   check bool "collect waits for the count it was given" true
     (contains tests_go "teslrt.CollectCount(");
-  (* A SUBSCRIPTION is per-block state on both backends — Racket's api-test cleanups
+  (* A SUBSCRIPTION is per-block state, preserving the retired Racket api-test cleanup
      unregister the listener when the block ends — so the emitted block closes its stream. *)
   check bool "a block closes the stream it opened" true
     (contains tests_go "defer teslrt.UnsubscribeStream(stream)");
@@ -8851,21 +8842,21 @@ database TxnDb = Database {
 }
 
 fn addEntry(id: String, account: String, amount: Int) -> Int
-  requires [dbRead, dbWrite] =
+  requires [dbRead Ledger, dbWrite Ledger] =
   transaction {
     insert Ledger { id: id, account: account, amount: amount }
     selectCount l from Ledger where l.account == account
   }
 
 fn totalFor(account: String) -> Int
-  requires [dbRead] =
+  requires [dbRead Ledger] =
   selectSum l.amount from Ledger where l.account == account
 
 fn entriesFor(account: String) -> Int
-  requires [dbRead] =
+  requires [dbRead Ledger] =
   selectCount l from Ledger where l.account == account
 
-test "a transaction groups its writes and answers its tail" requires [dbRead, dbWrite] {
+test "a transaction groups its writes and answers its tail" requires [dbRead Ledger, dbWrite Ledger] {
   expect addEntry "1" "ada" 100 == 1
   expect addEntry "2" "ada" 50 == 2
   expect addEntry "3" "grace" 10 == 1
@@ -8873,7 +8864,7 @@ test "a transaction groups its writes and answers its tail" requires [dbRead, db
   expect entriesFor "grace" == 1
 }
 
-test "each block starts from an empty table" requires [dbRead] {
+test "each block starts from an empty table" requires [dbRead Ledger] {
   expect entriesFor "ada" == 0
 }
 |}
@@ -9041,7 +9032,7 @@ let test_email_with_go () =
   check bool "an HTML body carries only the HTML" true
     (contains module_go "teslrt.EmailBody{Tag: teslrt.EmailBodyHTML, HTML: html}");
   (* Per-test isolation: one block's outbox must not be another's, the same rule tables,
-     queues and caches follow — on both backends (see the cache case). *)
+     queues and caches follow too (see the cache case). *)
   let tests_go = artifact "internal/teslmodgoemail/module_test.go" emitted in
   check bool "each test block starts from an empty outbox" true
     (contains tests_go "teslrt.ResetOutbox(AppMailOutbox)");
@@ -10007,7 +9998,7 @@ test "a let-bound combined check propagates each conjunct's rejection" {
   expectFail check bothProofs tooBig
 }
 
-# The transcendentals. Only inputs where both backends are exact are asserted:
+# The transcendentals. Only inputs where Go matches the historical baseline exactly are asserted:
 # sin/cos/tan/exp diverge from Racket by up to an ulp elsewhere, which is recorded
 # rather than pinned.
 test "the transcendentals answer their exact values" {
@@ -10175,7 +10166,7 @@ test "a local function value reaches a higher-order leaf" {
 }
 
 # Partial application is CURRIED: `blend 1` is a function of `b` answering a
-# function of `c`, applied one argument at a time on both backends.
+# function of `c`, applied one argument at a time in Go and the historical baseline.
 test "one and two of three arguments supplied" {
   let withA = blend 1
   let thenB = withA 2
@@ -11010,13 +11001,11 @@ let test_proof_shapes_with_go () =
       ())
   end
 
-(* A proof operation that could only fail on RACKET stays refused, and the rule is precise
-   rather than a blanket one: its runtime raises when a value carries more than one proof,
-   which the emitter can see — a `check` applied to a value that is itself a check's result
-   ACCUMULATES.  A proof operation on a singly-checked value raises nowhere, so an
-   `expectFail` over that function is expecting one of its CHECKS to reject, which happens
-   here too. *)
-let test_racket_only_proof_failures_fail_closed () =
+(* Proof erasure cannot preserve a failure that depends on accumulating multiple proof
+   witnesses. The Go emitter therefore refuses that shape precisely rather than banning
+   every proof operation: a singly-checked value remains valid because `expectFail` observes
+   the check's ordinary runtime rejection. *)
+let test_proof_erasure_limits_fail_closed () =
   let header = {|module GoProofLimit exposing []
 import Tesl.Prelude exposing [Int, Bool(..), Fact, forgetFact, detachFact, attachFact]
 
@@ -11036,8 +11025,8 @@ check checkSmall(n: Int ::: PosLimit n) -> n: Int ::: SmallLimit n =
     fail 400 "too large"
 
 |} in
-  (* ACCUMULATED: the second check runs on the first one's result, so `detachFact` on it is
-     the shape whose failure exists only on Racket. *)
+  (* ACCUMULATED: the second check runs on the first one's result, so `detachFact` would
+     depend on evidence that the Go representation erases. *)
   let accumulated = {|fn twoProofs(raw: Int) -> Int =
   let a = check checkPos raw
   let b = check checkSmall a
@@ -11074,7 +11063,13 @@ test "emitted" {
   | Compile.GoFailure diagnostics ->
     failf "a singly-checked detach was refused: %s"
       (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
-  | Compile.GoSuccess _ -> check bool "a singly-checked detach emits" true true
+  | Compile.GoSuccess emitted ->
+    let module_go = artifact "internal/teslmodgoprooflimit/module.go" emitted in
+    let tests_go = artifact "internal/teslmodgoprooflimit/module_test.go" emitted in
+    check bool "singly-checked detach emits the function" true
+      (contains module_go "func oneProof(raw teslrt.Int) teslrt.Int");
+    check bool "singly-checked detach emits its rejection test" true
+      (contains tests_go "oneProof(bad)")
 
 (* ── A conjunction whose conjuncts capture, and the cookie record form ───────
    `checkAtLeast 0 && checkAtMost 100` is two checks the PROGRAM has partially applied, and
@@ -11251,7 +11246,7 @@ database TicketDatabase = Database {
   backend: Memory
 }
 
-fn setOwner(ticketId: String, owner: String) -> String requires [dbWrite] =
+fn setOwner(ticketId: String, owner: String) -> String requires [dbWrite Note] =
   let _ = update t in Ticket where t.id == ticketId set t.ownerId = owner
   ticketId
 |} in
@@ -11267,7 +11262,7 @@ fn setOwner(ticketId: String, owner: String) -> String requires [dbWrite] =
    A field annotated `Int ::: IsPositive n` cannot be drawn from the whole Int range: the
    property would be handed a value its own annotation says is impossible.  The three
    predicates Racket has proof-aware draws for get the same three here, over the same
-   ranges, so a property searches the same space on both backends; any other predicate falls
+   ranges, so a property searches the historical compatibility range; any other predicate falls
    back to the plain draw and the proof is NOT fabricated — what makes it true is the
    checker, not the generator.
 
@@ -11763,16 +11758,16 @@ record ImageJob {
 }
 
 worker sendEmail(job: EmailJob ::: FromQueue (Id == jobId) job) -> Int
-  requires [dbWrite] =
+  requires [dbWrite Sent] =
   let _ = insert Sent { id: job.jobId, kind: "email" }
   1
 
 worker resizeImage(job: ImageJob ::: FromQueue (Id == jobId) job) -> Int
-  requires [dbWrite] =
+  requires [dbWrite Sent] =
   let _ = insert Sent { id: job.jobId, kind: "image" }
   job.width
 
-queue MultiJobQueue requires [queueRead, dbWrite] = Queue {
+queue MultiJobQueue requires [queueRead, dbWrite Sent] = Queue {
   database: MultiJobDb
   jobs: [
     Job EmailJob sendEmail Nothing,
@@ -11798,9 +11793,9 @@ fn seedBoth() -> Int requires [queueWrite] =
   let _ = queueImage "i1"
   2
 
-fn sentCount() -> Int requires [dbRead] = selectCount s from Sent
+fn sentCount() -> Int requires [dbRead Sent] = selectCount s from Sent
 
-test "both job types run through their own worker" requires [dbRead, dbWrite, queueRead, queueWrite] {
+test "both job types run through their own worker" requires [dbRead Sent, dbWrite Sent, queueRead, queueWrite] {
   let _ = seedBoth ()
   expect sentCount () == 0
 }
@@ -12275,66 +12270,66 @@ database GroupByDb = Database {
   backend: Memory
 }
 
-fn minutesPerDay(zone: TimeZone) -> List (Tuple2 PosixMillis Int) requires [dbRead] =
+fn minutesPerDay(zone: TimeZone) -> List (Tuple2 PosixMillis Int) requires [dbRead Entry] =
   selectSumBy e.minutes from Entry
     groupBy (Time.truncDay zone e.startedAt)
 
-fn entriesPerOrg() -> List (Tuple2 String Int) requires [dbRead] =
+fn entriesPerOrg() -> List (Tuple2 String Int) requires [dbRead Entry] =
   selectCountBy e from Entry
     groupBy e.orgId
 
-fn add(id: String, org: String, minutes: Int, seconds: Int) -> Entry requires [dbWrite] =
+fn add(id: String, org: String, minutes: Int, seconds: Int) -> Entry requires [dbWrite Entry] =
   insert Entry {
     id: id, orgId: org, minutes: minutes, startedAt: Time.secondsToPosix seconds
   }
 
 # 2026-03-01 10:00 and 23:30 UTC, then 2026-03-02 01:00 UTC.
-fn seed() -> Int requires [dbWrite] =
+fn seed() -> Int requires [dbWrite Entry] =
   let _ = add "e1" "acme" 60 1772359200
   let _ = add "e2" "acme" 30 1772407800
   let _ = add "e3" "acme" 15 1772413200
   let _ = add "e4" "other" 5 1772359200
   4
 
-fn touch(id: String, minutes: Int) -> Unit requires [dbWrite] =
+fn touch(id: String, minutes: Int) -> Unit requires [dbWrite Entry] =
   upsert Entry {
     id: id, orgId: "acme", minutes: minutes, startedAt: Time.secondsToPosix 0
   } onConflict [id] doUpdate [minutes]
 
-fn dayMinutes(zone: TimeZone) -> List Int requires [dbRead] =
+fn dayMinutes(zone: TimeZone) -> List Int requires [dbRead Entry] =
   List.map minutesOfRow (minutesPerDay zone)
 
 fn minutesOfRow(row: Tuple2 PosixMillis Int) -> Int = Tuple2.second row
 
-fn dayStarts(zone: TimeZone) -> List Int requires [dbRead] =
+fn dayStarts(zone: TimeZone) -> List Int requires [dbRead Entry] =
   List.map startOfRow (minutesPerDay zone)
 
 fn startOfRow(row: Tuple2 PosixMillis Int) -> Int =
   Time.posixToSeconds (Tuple2.first row)
 
-fn orgNames() -> List String requires [dbRead] = List.map nameOfRow (entriesPerOrg ())
+fn orgNames() -> List String requires [dbRead Entry] = List.map nameOfRow (entriesPerOrg ())
 
 fn nameOfRow(row: Tuple2 String Int) -> String = Tuple2.first row
 
-fn orgCounts() -> List Int requires [dbRead] = List.map countOfRow (entriesPerOrg ())
+fn orgCounts() -> List Int requires [dbRead Entry] = List.map countOfRow (entriesPerOrg ())
 
 fn countOfRow(row: Tuple2 String Int) -> Int = Tuple2.second row
 
-test "the day buckets are one row each, in ascending key order" requires [dbRead, dbWrite] {
+test "the day buckets are one row each, in ascending key order" requires [dbRead Entry, dbWrite Entry] {
   let _ = seed ()
   expect List.length (minutesPerDay Utc) == 2
   expect dayMinutes Utc == [95, 15]
   expect dayStarts Utc == [1772323200, 1772409600]
 }
 
-test "a plain column groups too" requires [dbRead, dbWrite] {
+test "a plain column groups too" requires [dbRead Entry, dbWrite Entry] {
   let _ = seed ()
   expect orgNames () == ["acme", "other"]
   expect orgCounts () == [3, 1]
 }
 
 # The row already there keeps its other columns; a row that is not there is inserted.
-test "upsert updates only the columns it names" requires [dbRead, dbWrite] {
+test "upsert updates only the columns it names" requires [dbRead Entry, dbWrite Entry] {
   let _ = seed ()
   let _ = touch "e1" 999
   expect orgNames () == ["acme", "other"]
@@ -12342,7 +12337,7 @@ test "upsert updates only the columns it names" requires [dbRead, dbWrite] {
   expect dayMinutes Utc == [1034, 15]
 }
 
-test "upsert inserts when nothing conflicts" requires [dbRead, dbWrite] {
+test "upsert inserts when nothing conflicts" requires [dbRead Entry, dbWrite Entry] {
   let _ = touch "fresh" 7
   expect orgNames () == ["acme"]
   expect orgCounts () == [1]
@@ -12759,9 +12754,8 @@ fn twice(n: Int) -> Int = n * 2
         (List.exists (fun (a : Emit_go.artifact) -> a.path = path) artifacts))
       [ "internal/teslrt/url.go"; "internal/teslrt/hostname.go" ]
 
-let () =
-  run "emit_go" [
-    "emission", [
+let emission_tests =
+    [
       test_case "artifact layout and helpers" `Quick test_artifact_layout;
       test_case "App module does not shadow Tesl.App" `Quick test_app_module_does_not_shadow_tesl_app;
       test_case "debug emission has versioned checkpoint" `Quick test_debug_emission_has_versioned_checkpoint;
@@ -12826,7 +12820,7 @@ let () =
       test_case "doctest kind filter" `Quick test_go_doctest_kind_filter;
       test_case "debug main starts control server" `Quick test_debug_main_starts_control_server;
       test_case "`case` over a scalar" `Slow test_scalar_case_with_go;
-      test_case "`case` over a newtype scrutinee (Go-only; Racket raises)" `Slow
+      test_case "`case` over a newtype scrutinee" `Slow
         test_newtype_case_with_go;
       test_case "Tesl.JWT and the session cookie" `Slow test_jwt_with_go;
       test_case "Tesl.Crypto: MACs, digests, tokens" `Slow test_crypto_with_go;
@@ -12918,8 +12912,8 @@ let () =
       test_case "a column-type mismatch fails closed" `Quick
         test_column_type_mismatch_fails_closed;
       test_case "proof shapes at the edges of erasure" `Slow test_proof_shapes_with_go;
-      test_case "Racket-only proof failures fail closed" `Quick
-        test_racket_only_proof_failures_fail_closed;
+      test_case "proof-erasure limits fail closed" `Quick
+        test_proof_erasure_limits_fail_closed;
       test_case "the request boundary: captures, list bodies, chained checks" `Slow
         test_boundary_with_go;
       test_case "a newtype over a newtype, and unobservable containers" `Slow
@@ -12947,5 +12941,29 @@ let () =
       test_case "partial record literal fails before emission" `Quick test_missing_record_field_never_reaches_emitter;
       test_case "Go corpus compiles to Go" `Slow test_go_corpus_with_go;
       test_case "fresh module passes Go gates" `Slow test_generated_module_with_go;
-    ];
-  ]
+    ]
+
+let () =
+  let shard_count, shard_index =
+    match Sys.getenv_opt "TESL_TEST_SHARD_COUNT", Sys.getenv_opt "TESL_TEST_SHARD_INDEX" with
+    | None, None -> 1, 0
+    | Some count, Some index ->
+      (match int_of_string_opt count, int_of_string_opt index with
+       | Some count, Some index when count > 0 && index >= 0 && index < count ->
+         count, index
+       | _ -> failwith "invalid TESL_TEST_SHARD_COUNT/TESL_TEST_SHARD_INDEX")
+    | _ -> failwith "TESL_TEST_SHARD_COUNT and TESL_TEST_SHARD_INDEX must be set together"
+  in
+  let selected =
+    emission_tests
+    |> List.mapi (fun index test -> index, test)
+    |> List.filter_map (fun (index, test) ->
+         if index mod shard_count = shard_index then Some test else None)
+  in
+  let suite_name, group_name =
+    if shard_count = 1 then "emit_go", "emission"
+    else
+      Printf.sprintf "emit_go-shard-%02d" shard_index,
+      Printf.sprintf "emission-shard-%02d" shard_index
+  in
+  run suite_name [group_name, selected]

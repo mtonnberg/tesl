@@ -352,9 +352,9 @@ let r55_hh01_handler_calls_handler_rejected () =
 import Tesl.Http exposing [HttpRequest]
 import Tesl.DB exposing [dbRead]
 
-handler innerH(req: HttpRequest, n: Int) -> Int requires [dbRead] = n
+handler innerH(req: HttpRequest, n: Int) -> Int requires [dbRead Note] = n
 
-handler outerH(req: HttpRequest, n: Int) -> Int requires [dbRead] =
+handler outerH(req: HttpRequest, n: Int) -> Int requires [dbRead Note] =
   innerH req n
 |})
 
@@ -366,7 +366,7 @@ import Tesl.DB exposing [dbRead]
 
 fn helperFn(n: Int) -> Int = n + 1
 
-handler myH(req: HttpRequest, n: Int) -> Int requires [dbRead] =
+handler myH(req: HttpRequest, n: Int) -> Int requires [dbRead Note] =
   helperFn n
 |})
 

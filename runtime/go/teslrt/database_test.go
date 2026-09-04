@@ -245,6 +245,92 @@ func TestTransactionOnAnUnboundDatabaseIsTheBody(t *testing.T) {
 	}
 }
 
+// WithDatabase has a process-wide API, so overlapping scopes are serialized. The second
+// scope cannot clear the first one's binding, and begins only after the first restored it.
+func TestOverlappingWithDatabaseScopesAreSerialized(t *testing.T) {
+	firstDatabase := liveDatabase(t)
+	secondDatabase := liveDatabase(t)
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondAttempted := make(chan struct{})
+	secondEntered := make(chan struct{})
+	done := make(chan struct{}, 2)
+
+	go func() {
+		WithDatabase(firstDatabase, func() {
+			close(firstEntered)
+			<-releaseFirst
+			if firstDatabase.bound() == nil || boundDatabase.Load() != firstDatabase {
+				t.Error("the first scope lost its binding while the second waited")
+			}
+		})
+		done <- struct{}{}
+	}()
+	<-firstEntered
+	go func() {
+		close(secondAttempted)
+		WithDatabase(secondDatabase, func() {
+			if secondDatabase.bound() == nil || boundDatabase.Load() != secondDatabase {
+				t.Error("the second scope was not bound when it entered")
+			}
+			close(secondEntered)
+		})
+		done <- struct{}{}
+	}()
+	<-secondAttempted
+	select {
+	case <-secondEntered:
+		t.Fatal("overlapping WithDatabase scopes ran concurrently")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseFirst)
+	select {
+	case <-secondEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the second WithDatabase scope did not enter after the first exited")
+	}
+	<-done
+	<-done
+	if firstDatabase.bound() != nil || secondDatabase.bound() != nil || boundDatabase.Load() != nil {
+		t.Fatal("a serialized scope left a stale binding")
+	}
+}
+
+func TestDatabaseBindingSerializerIsRaceSafeAndReentrant(t *testing.T) {
+	acquireDatabaseBinding()
+	acquireDatabaseBinding()
+	secondEntered := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		acquireDatabaseBinding()
+		close(secondEntered)
+		releaseDatabaseBinding()
+		close(done)
+	}()
+	enteredWhileNested := false
+	select {
+	case <-secondEntered:
+		enteredWhileNested = true
+	case <-time.After(25 * time.Millisecond):
+	}
+	releaseDatabaseBinding()
+	enteredBeforeOutermostRelease := false
+	select {
+	case <-secondEntered:
+		enteredBeforeOutermostRelease = true
+	case <-time.After(25 * time.Millisecond):
+	}
+	releaseDatabaseBinding()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("waiting binding did not enter after release")
+	}
+	if enteredWhileNested || enteredBeforeOutermostRelease {
+		t.Fatal("another goroutine entered before the outermost binding was released")
+	}
+}
+
 // A panic through a transaction rolls it back: a check failure halfway through must leave
 // nothing behind, which is the only reason the block exists.
 func TestTransactionRollsBackOnPanic(t *testing.T) {
@@ -864,36 +950,123 @@ func TestMemoryTransactionRefusesNesting(t *testing.T) {
 	}
 }
 
-// A goroutine started inside the body does not join the transaction — the Postgres rule — so
-// its writes survive the rollback, and the rollback restores a fresh slice rather than
-// reusing storage a concurrent reader may still be walking (proved under -race).
-func TestMemoryTransactionIsPerGoroutine(t *testing.T) {
+// A goroutine started inside the body does not join the transaction — the Postgres rule — but
+// its Memory write waits for rollback to finish. It then commits against the restored rows, so
+// rollback cannot erase a concurrent request's completed write.
+func TestMemoryTransactionBlocksConcurrentWriterUntilAfterRollback(t *testing.T) {
 	table := NewTable[row]()
-	func() {
-		defer func() { _ = recover() }()
+	TableInsert(table, "Row", row{ID: "before"}, sameID)
+	writerStarted := make(chan struct{})
+	writerEnteredTable := make(chan struct{})
+	writerCommitted := make(chan struct{})
+	var enteredOnce sync.Once
+	recovered := func() (recovered any) {
+		defer func() { recovered = recover() }()
 		WithTransaction(func() {
 			TableInsert(table, "Row", row{ID: "inside"}, sameID)
-			var wait sync.WaitGroup
-			wait.Add(1)
 			go func() {
-				defer wait.Done()
-				TableInsert(table, "Row", row{ID: "outside"}, sameID)
-				_ = TableSelect(table, every)
+				close(writerStarted)
+				TableInsert(table, "Row", row{ID: "outside"}, func(row, row) bool {
+					enteredOnce.Do(func() { close(writerEnteredTable) })
+					return false
+				})
+				close(writerCommitted)
 			}()
-			wait.Wait()
+			<-writerStarted
+			select {
+			case <-writerEnteredTable:
+				t.Error("the concurrent writer entered the table operation before rollback")
+			case <-time.After(100 * time.Millisecond):
+			}
 			panic("trap")
 		})
+		return nil
 	}()
+	if recovered != "trap" {
+		t.Fatalf("transaction answered %v, expected its trap", recovered)
+	}
+	select {
+	case <-writerCommitted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the concurrent writer did not commit after rollback released it")
+	}
 	rows := TableSelect(table, every)
-	// "outside" was written by a goroutine that was not in the transaction, to a table the
-	// transaction had ALREADY recorded — so the restore undoes it too. That is the documented
-	// non-isolation of the Memory store (rollback is per-trap atomicity, not isolation), pinned
-	// here so a change to it is a deliberate one.
-	if len(rows) != 0 {
+	if len(rows) != 2 || rows[0].ID != "before" || rows[1].ID != "outside" {
 		t.Fatalf("after rollback: %+v", rows)
 	}
 	if memoryTransactionsOpen.Load() != 0 {
 		t.Fatal("a Memory transaction is still registered")
+	}
+}
+
+// An outside Memory reader waits for commit instead of observing the row after it is published
+// but before the transaction commits. The owner still reads its own write without deadlocking.
+func TestMemoryTransactionBlocksConcurrentReaderUntilAfterCommit(t *testing.T) {
+	table := NewTable[row]()
+	TableInsert(table, "Row", row{ID: "before"}, sameID)
+	readerStarted := make(chan struct{})
+	readerResult := make(chan int, 1)
+	WithTransaction(func() {
+		TableInsert(table, "Row", row{ID: "inside"}, sameID)
+		if count := TableCount(table, every); !Equal(count, FromInt64(2)) {
+			t.Fatalf("transaction owner counted %s rows, want its two visible rows", count.String())
+		}
+		go func() {
+			close(readerStarted)
+			readerResult <- len(TableSelect(table, every))
+		}()
+		<-readerStarted
+		select {
+		case count := <-readerResult:
+			t.Fatalf("outside reader observed %d rows before commit", count)
+		case <-time.After(100 * time.Millisecond):
+		}
+	})
+	select {
+	case count := <-readerResult:
+		if count != 2 {
+			t.Fatalf("outside reader observed %d rows after commit, want 2", count)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("outside reader did not resume after commit")
+	}
+}
+
+// The same gate remains held through rollback, including restoration, so an outside reader sees
+// the pre-transaction state rather than dirty data or an intermediate restore.
+func TestMemoryTransactionBlocksConcurrentReaderUntilAfterRollback(t *testing.T) {
+	table := NewTable[row]()
+	TableInsert(table, "Row", row{ID: "before"}, sameID)
+	readerStarted := make(chan struct{})
+	readerResult := make(chan []row, 1)
+	recovered := func() (recovered any) {
+		defer func() { recovered = recover() }()
+		WithTransaction(func() {
+			TableInsert(table, "Row", row{ID: "inside"}, sameID)
+			go func() {
+				close(readerStarted)
+				readerResult <- TableSelect(table, every)
+			}()
+			<-readerStarted
+			select {
+			case rows := <-readerResult:
+				t.Fatalf("outside reader observed rows before rollback: %+v", rows)
+			case <-time.After(100 * time.Millisecond):
+			}
+			panic("rollback")
+		})
+		return nil
+	}()
+	if recovered != "rollback" {
+		t.Fatalf("transaction answered %v, expected rollback trap", recovered)
+	}
+	select {
+	case rows := <-readerResult:
+		if len(rows) != 1 || rows[0].ID != "before" {
+			t.Fatalf("outside reader after rollback observed %+v", rows)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("outside reader did not resume after rollback")
 	}
 }
 

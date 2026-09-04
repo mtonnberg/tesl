@@ -61,9 +61,9 @@ type queueBackend interface {
 	// active reports whether the store's database is bound right now.
 	active() bool
 	enqueue(payload any) string
-	dequeue(status string) (id string, payload any, attempts int, found bool)
-	complete(id string)
-	fail(id string, attempts int)
+	dequeue(status string) (id string, payload any, attempts int, claimToken string, found bool)
+	complete(id, claimToken string) bool
+	fail(id string, attempts int, claimToken string) bool
 	count(status string) int
 	deadJobs(queue *Queue) []DeadJob
 	requeue(id string) bool
@@ -81,7 +81,7 @@ func (queue *Queue) durable() queueBackend {
 type queuedJob struct {
 	id       string
 	payload  any
-	status   string // "pending" | "processing" | "dead"
+	status   string // "pending" | "processing" | "dead" | "dead_processing"
 	attempts int
 	seq      int64
 }
@@ -91,6 +91,8 @@ const (
 	jobPending    = "pending"
 	jobProcessing = "processing"
 	jobDead       = "dead"
+	// A distinct in-flight state preserves which queue a stale claim must return to.
+	jobDeadProcessing = "dead_processing"
 )
 
 // maxPendingJobs bounds one Memory queue's pending backlog.
@@ -226,7 +228,7 @@ func (queue *Queue) countWithStatus(status string) int {
 // the job itself, not an id to re-read from the map: a second lookup would be a map read
 // whose success only the surrounding lock explains, which is exactly what nilaway (in the
 // emitted-code gate) refuses to take on trust.
-func (queue *Queue) dequeue(status string) (string, any, int, bool) {
+func (queue *Queue) dequeue(status string) (string, any, int, string, bool) {
 	if backend := queue.durable(); backend != nil {
 		return backend.dequeue(status)
 	}
@@ -238,13 +240,16 @@ func (queue *Queue) dequeue(status string) (string, any, int, bool) {
 	}
 	job, found := index.pop(queue.jobs, status)
 	if !found {
-		return "", nil, 0, false
+		return "", nil, 0, "", false
 	}
 	if status == jobPending {
 		queue.pending--
 	}
 	job.status = jobProcessing
-	return job.id, job.payload, job.attempts, true
+	if status == jobDead {
+		job.status = jobDeadProcessing
+	}
+	return job.id, job.payload, job.attempts, "", true
 }
 
 // DeadJob is one entry in a queue's dead letter. It is OPAQUE to Tesl — `deadJobs` is typed
@@ -316,7 +321,7 @@ type JobOutcome struct {
 // would be a slow test rather than a truthful one. The durable store applies it as the row's
 // `next_attempt_at` (pgstores.go), which the claim respects.
 func ProcessNextJob(queue *Queue, handler func(any) JobOutcome) JobOutcome {
-	id, payload, attempts, found := queue.dequeue(jobPending)
+	id, payload, attempts, claimToken, found := queue.dequeue(jobPending)
 	if !found {
 		return JobOutcome{}
 	}
@@ -325,26 +330,31 @@ func ProcessNextJob(queue *Queue, handler func(any) JobOutcome) JobOutcome {
 	Histogram("tesl.queue.job.duration", time.Since(started).Seconds(),
 		[]Tuple2[string, string]{{Tuple2First: "tesl.queue", Tuple2Second: queue.name}})
 	if outcome.OK {
-		queueMetric("tesl.queue.completed", queue.name, 1)
-		queue.complete(id)
+		if queue.complete(id, claimToken) {
+			queueMetric("tesl.queue.completed", queue.name, 1)
+		}
 	} else {
-		queueMetric("tesl.queue.failed", queue.name, 1)
-		queue.fail(id, attempts)
+		if queue.fail(id, attempts, claimToken) {
+			queueMetric("tesl.queue.failed", queue.name, 1)
+		}
 	}
 	outcome.Ran = true
 	return outcome
 }
 
 // ProcessNextDeadJob is the dead-letter counterpart: it claims a job that exhausted its
-// attempts and hands it to the dead-letter worker. A dead job is REMOVED whatever the
-// outcome — there is no second dead letter to fall into.
+// attempts and hands it to the dead-letter worker. A dead job is REMOVED whatever the handler
+// outcome — there is no second dead letter to fall into. A fenced completion is a store failure,
+// not a handler outcome, and is surfaced so the replacement claim is not mistaken for removal.
 func ProcessNextDeadJob(queue *Queue, handler func(any) JobOutcome) JobOutcome {
-	id, payload, _, found := queue.dequeue(jobDead)
+	id, payload, _, claimToken, found := queue.dequeue(jobDead)
 	if !found {
 		return JobOutcome{}
 	}
 	outcome := runJob(handler, payload)
-	queue.complete(id)
+	if !queue.complete(id, claimToken) {
+		panic("queue " + queue.name + ": dead-letter completion lost ownership of job " + id)
+	}
 	outcome.Ran = true
 	return outcome
 }
@@ -373,26 +383,28 @@ func runJob(handler func(any) JobOutcome, payload any) (outcome JobOutcome) {
 	return handler(payload)
 }
 
-func (queue *Queue) complete(id string) {
+func (queue *Queue) complete(id, claimToken string) bool {
 	if backend := queue.durable(); backend != nil {
-		backend.complete(id)
-		return
+		return backend.complete(id, claimToken)
 	}
 	queue.mutex.Lock()
 	defer queue.mutex.Unlock()
+	if _, found := queue.jobs[id]; !found {
+		return false
+	}
 	delete(queue.jobs, id)
+	return true
 }
 
-func (queue *Queue) fail(id string, attempts int) {
+func (queue *Queue) fail(id string, attempts int, claimToken string) bool {
 	if backend := queue.durable(); backend != nil {
-		backend.fail(id, attempts)
-		return
+		return backend.fail(id, attempts, claimToken)
 	}
 	queue.mutex.Lock()
 	defer queue.mutex.Unlock()
 	job, found := queue.jobs[id]
 	if !found {
-		return
+		return false
 	}
 	job.attempts = attempts + 1
 	if job.attempts >= queue.maxAttempts {
@@ -405,6 +417,7 @@ func (queue *Queue) fail(id string, attempts int) {
 		queue.pendingHeap.push(job)
 		queue.pending++
 	}
+	return true
 }
 
 // JobResult is what an api-test's `processNextJob` answers: the job that ran, and — when

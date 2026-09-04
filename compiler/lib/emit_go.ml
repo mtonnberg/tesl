@@ -482,19 +482,49 @@ let line_directive loc =
   let line = max 1 (loc.Location.start.line + 1) in
   Printf.sprintf "//line %s:%d\n" (directive_file loc.Location.file) line
 
+let runtime_currency_type loc =
+  TRecord {
+    rec_tesl_name = "Currency";
+    rec_owner = "";
+    rec_go_name = "teslrt.Currency";
+    rec_fields = ["code", TString; "minorDigits", TInt];
+    rec_proof_fields = false;
+    rec_loc = loc;
+  }
+
+let runtime_money_type loc =
+  TRecord {
+    rec_tesl_name = "Money";
+    rec_owner = "";
+    rec_go_name = "teslrt.Money";
+    rec_fields = ["minorUnits", TInt; "currency", runtime_currency_type loc];
+    rec_proof_fields = false;
+    rec_loc = loc;
+  }
+
+let runtime_posix_type loc =
+  TNewtype {
+    tesl_name = "PosixMillis";
+    owner = "";
+    go_name = "teslrt.PosixMillis";
+    base = TInt;
+    secret = false;
+    loc;
+  }
+
 let primitive_type_of_type_expr = function
   | TName { name = "Int"; _ } -> TInt
   | TName { name = "Float"; _ } -> TFloat
   | TName { name = "String"; _ } -> TString
   | TName { name = "Bool"; _ } -> TBool
   | TName { name = "Unit"; _ } -> TUnit
+  | TName { name = "Money"; loc } -> runtime_money_type loc
+  | TName { name = "PosixMillis"; loc } -> runtime_posix_type loc
   | TName { name; loc } ->
     unsupported loc "Go backend newtype base `%s` is not a direct scalar type" name
-  (* Each of these says what it refuses IN THIS POSITION, and none says "yet": a newtype is a
-     nominal wrapper over ONE scalar carrier, so there is nothing to add later that would make
-     a function, a tuple or a type variable into one.  The old wording named the shape instead
-     of the position — "does not support function values yet" pointed at a feature that IS
-     supported and promised work that will never happen. *)
+  (* Money and PosixMillis are the two built-in nominal carriers above. Each arm below says
+     what it refuses IN THIS POSITION, and none says "yet": a function, tuple, or type variable
+     cannot provide a concrete carrier for a local newtype. *)
   | TVar { name; loc } -> unsupported loc
     "Go backend newtype base `%s` is a type variable: a newtype wraps one scalar carrier, so \
      there is nothing for it to stand for" name
@@ -2160,10 +2190,8 @@ let record_info_of_signature signatures name =
   | _ -> None
 
 (* ─── SQL ──────────────────────────────────────────────────────────────────────
-   A query is ordinary application syntax in the surface tree, so its structure is
-   recovered by {!Sql_query} — the same module the Legacy backend and the checker use.
-   Nothing about the shape of a query is re-derived here; this only decides which Go
-   the recovered structure renders to. *)
+   The parser owns query recognition. This backend only converts the canonical
+   AST payload to its rendering form. *)
 type sql_form =
   | SqlSelect of Sql_query.sql_select_seed * Sql_query.sql_clause list
   | SqlInsert of Sql_query.sql_insert
@@ -2172,35 +2200,15 @@ type sql_form =
   | SqlUpdate of Sql_query.sql_update
   | SqlDelete of Sql_query.sql_delete_seed * Sql_query.sql_clause list
 
-(* The three surface shapes a query arrives in: a plain application, an application
-   wrapped in the comparison that a `where` predicate parses as, and — for the
-   multi-line forms — an underscore-`let` chain.  Tried in the same order as the Legacy
-   backend's guards, so the two agree on what a given tree means. *)
+(* Convert the one canonical query node into the backend's rendering form. *)
 let recognise_sql expr =
-  let first_of options = List.fold_left (fun found next ->
-    match found with Some _ -> found | None -> next ()) None options in
   match expr with
-  | EApp _ | EBinop _ ->
-    first_of [
-      (fun () -> Option.map (fun (seed, clauses) -> SqlSelect (seed, clauses))
-        (Sql_query.extract_select_query expr));
-      (fun () -> Option.map (fun insert -> SqlInsert insert)
-        (Sql_query.parse_insert_expr expr));
-      (fun () -> Option.map (fun (list_var, entity) -> SqlInsertMany (list_var, entity))
-        (Sql_query.parse_insert_many_expr expr));
-      (fun () -> Option.map (fun upsert -> SqlUpsert upsert)
-        (Sql_query.parse_upsert_expr expr));
-      (fun () -> Option.map (fun (seed, clauses) -> SqlDelete (seed, clauses))
-        (Sql_query.extract_delete_query expr));
-    ]
-  | ELet _ ->
-    first_of [
-      (fun () -> Option.map (fun update -> SqlUpdate update) (Sql_query.extract_update expr));
-      (fun () -> Option.map (fun (seed, clauses) -> SqlDelete (seed, clauses))
-        (Sql_query.extract_delete expr));
-      (fun () -> Option.map (fun (seed, clauses) -> SqlSelect (seed, clauses))
-        (Sql_query.extract_multiline_select_query expr));
-    ]
+  | ESqlQuery { query = QuerySelect (seed, clauses); _ } -> Some (SqlSelect (seed, clauses))
+  | ESqlQuery { query = QueryInsert insert; _ } -> Some (SqlInsert insert)
+  | ESqlQuery { query = QueryInsertMany (list_var, entity); _ } -> Some (SqlInsertMany (list_var, entity))
+  | ESqlQuery { query = QueryUpsert upsert; _ } -> Some (SqlUpsert upsert)
+  | ESqlQuery { query = QueryUpdate update; _ } -> Some (SqlUpdate update)
+  | ESqlQuery { query = QueryDelete (seed, clauses); _ } -> Some (SqlDelete (seed, clauses))
   | _ -> None
 
 let sql_form_is_read = function
@@ -2900,21 +2908,12 @@ let type_of_sql_form signatures loc form =
      the only reading both backends agree on is that it answers nothing. *)
   | SqlUpsert upsert -> ignore (entity_of_query loc upsert.entity); TUnit
   | SqlUpdate update ->
-    if update.returning_one then TRecord (entity_of_query loc update.entity).ent_row
+     if update.returning_one then TRecord (entity_of_query loc update.entity).ent_row
     else TUnit
-  | SqlDelete (seed, _) ->
-    ignore (entity_of_query loc seed.entity);
-    if not seed.with_result then TUnit
-    else
-      (* `DeleteResult` is runtime-provided and registered by the import that names it, so a
-         module that deletes with a result and does not import it is refused HERE rather than
-         emitting a reference to a type it never brought in. *)
-      (match Option.bind !current_types
-               (fun types -> Hashtbl.find_opt types.adts "DeleteResult") with
-       | Some info -> TAdt (info, [])
-       | None -> unsupported loc
-         "Go backend `deleteAndReturnResult` answers a `DeleteResult`; import \
-          `Tesl.DB exposing [DeleteResult(..)]`")
+   | SqlDelete (seed, _) ->
+     ignore (entity_of_query loc seed.entity);
+     if not seed.with_result then TUnit
+     else TInt
 
 (* A stand-in for the ADT info a scalar `case` does not have.  The scalar path never reads it;
    it exists so the two paths can share one `let` binding rather than duplicating every arm
@@ -3127,7 +3126,7 @@ let rec type_of_expr signatures env expr =
       | None -> assert false
     in
     type_of_variant_application signatures env loc info variant args
-  | EConstructor { name; args; loc } ->
+   | EConstructor { name; args; loc } ->
     (match Hashtbl.find_opt signatures name with
      | Some { params = [base]; result = (TNewtype _ as result); _ } ->
        (match args with
@@ -3154,9 +3153,14 @@ let rec type_of_expr signatures env expr =
      | _ -> unsupported loc
        "Go backend: unknown constructor `%s` — no ADT variant, record or stdlib constructor of \
         that name is in scope, and a stdlib constructor needs its module imported" name)
-  (* A query's type comes from its ENTITY and its form, not from a signature: `select`
-     and friends are surface syntax rather than functions. *)
-  | (EApp _ | EBinop _ | ELet _) as sql when recognise_sql sql <> None ->
+   (* A query's type comes from its ENTITY and its form, not from a signature: `select`
+      and friends are surface syntax rather than functions. *)
+   | ESqlQuery _ as sql ->
+     let loc = Checker.expr_loc sql in
+     (match recognise_sql sql with
+      | Some form -> type_of_sql_form signatures loc form
+      | None -> assert false)
+   | (EApp _ | EBinop _ | ELet _) as sql when recognise_sql sql <> None ->
     let loc = Checker.expr_loc sql in
     (match recognise_sql sql with
      | Some form -> type_of_sql_form signatures loc form
@@ -5313,7 +5317,7 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
       | _ -> type_of_expr signatures env expr
     in
     emit_variant_literal ~indent signatures env result variant args
-  | EConstructor { name; args; loc } ->
+   | EConstructor { name; args; loc } ->
     (match Hashtbl.find_opt signatures name with
      | Some { params = [_]; result = (TNewtype _ as result); _ } ->
        ignore (type_of_expr signatures env expr);
@@ -5338,7 +5342,11 @@ let rec emit_expr ?expected ?(indent="") signatures env expr =
      (* A proof term erases: `ValidPort port` is the zero-size proof value. *)
      | Some { params = []; result = TUnit; go_name = "struct{}{}"; _ } -> "struct{}{}"
      | _ -> unsupported loc "Go backend cannot emit constructor `%s`" name)
-  | (EApp _ | EBinop _ | ELet _) as sql when recognise_sql sql <> None ->
+   | ESqlQuery _ as sql ->
+     (match recognise_sql sql with
+      | Some form -> emit_sql_form ~indent signatures env (Checker.expr_loc sql) form
+      | None -> assert false)
+   | (EApp _ | EBinop _ | ELet _) as sql when recognise_sql sql <> None ->
     (match recognise_sql sql with
      | Some form -> emit_sql_form ~indent signatures env (Checker.expr_loc sql) form
      | None -> assert false)
@@ -9377,10 +9385,8 @@ and emit_sql_form ?(indent="") signatures env loc form =
     let info = entity_of_query loc seed.entity in
     sql_check_where_field loc seed.where_field clauses;
     let predicate = emit_sql_predicate ~indent signatures env loc info seed.binder clauses in
-    (* `delete` is a statement; `deleteAndReturnResult` answers whether anything WENT, which is
-       a different outcome from a count of zero and is read as a `case` rather than compared. *)
-    let memory = if seed.with_result then "TableDeleteResult" else "TableDelete" in
-    let server = if seed.with_result then "DbDeleteResult" else "DbDelete" in
+     let memory = if seed.with_result then "TableDeleteCount" else "TableDelete" in
+     let server = if seed.with_result then "DbDeleteCount" else "DbDelete" in
     (match info.ent_database with
      | None -> Printf.sprintf "teslrt.%s(%s, %s)" memory (sql_table_ref info) predicate
      | Some database ->
@@ -9839,7 +9845,7 @@ let emit_tail ?self ?(debug=false) ?(debug_package="") ?(debug_function="")
        the clause keywords for values and try to call a function named `update`.
        Recognised FIRST, which is what a test-block statement already does; the two positions
        must read the same tree the same way. *)
-    | (ELet _ | EApp _ | EBinop _) when recognise_sql expr <> None ->
+     | (ESqlQuery _ | ELet _ | EApp _ | EBinop _) when recognise_sql expr <> None ->
       ignore (type_of_arg signatures env expected expr);
       Buffer.add_string buffer (line_directive (Checker.expr_loc expr));
       if expr_is_sql_read expr && debug then begin
@@ -10329,10 +10335,14 @@ let codec_alt_name type_name index =
 let newtype_base_codec name =
   match Option.bind !current_types (fun types -> Hashtbl.find_opt types.newtypes name) with
   | Some info ->
-    (match info.base with
+    let rec classify = function
      | TString -> Some `String | TInt -> Some `Int
      | TBool -> Some `Bool | TFloat -> Some `Float
-     | _ -> None)
+     | base when is_money base -> Some `Money
+     | TNewtype nested -> classify nested.base
+     | _ -> None
+    in
+    classify info.base
   | None -> None
 
 let primitive_codec = function
@@ -10344,6 +10354,7 @@ let primitive_codec = function
      agent-boundary enrichment (`{epochMillis, iso}`) is a different surface, and an HTTP body
      carries the bare number on both backends (`tesl-encode-prim-posix-millis`). *)
   | "posixMillisCodec" -> Some `PosixMillis
+  | "moneyCodec" -> Some `Money
   | _ -> None
 
 (* What a field's `with_codec` means: a primitive codec, or a newtype standing for its base. *)
@@ -10373,6 +10384,13 @@ let aligned_map_entries indent entries =
     Printf.sprintf "%s%s%s %s," indent key
       (String.make (max 0 (width - String.length key)) ' ') value) entries)
 
+let rec json_dict_key_encoder ty operand =
+  match ty with
+  | TString -> operand
+  | TNewtype { secret = false; base; _ } ->
+    json_dict_key_encoder base (operand ^ ".Value")
+  | _ -> invalid_arg "Go JSON encoding requires a Dict with String keys"
+
 let rec value_encoder ty =
   let encoded_field operand field_ty =
     Printf.sprintf "%s(%s)" (value_encoder field_ty) operand in
@@ -10394,6 +10412,10 @@ let rec value_encoder ty =
     remember_helper ~prefix:"teslEncode"
       ~signature:(Printf.sprintf "(teslValue %s) any" (go_type ty))
       ~body:(encoded_field "teslValue.Value" info.base)
+  | TRecord _ when is_money ty ->
+    remember_helper ~prefix:"teslEncode"
+      ~signature:"(teslValue teslrt.Money) any"
+      ~body:"map[string]any{\"minorUnits\": teslValue.MinorUnits, \"currency\": teslValue.Currency.Code}"
   | TRecord info when List.mem info.rec_tesl_name !current_codec_types
                       || codec_owner info.rec_tesl_name <> None ->
     codec_encode_ref info.rec_tesl_name
@@ -10433,7 +10455,19 @@ let rec value_encoder ty =
       ~body:(Printf.sprintf
         "func() any {\n\t\tteslOut := make([]any, len(teslValue))\n\t\tfor teslAt, teslItem := range teslValue {\n\t\t\tteslOut[teslAt] = %s(teslItem)\n\t\t}\n\t\treturn teslOut\n\t}()"
         (value_encoder element))
-  | TDict _ | TSet _ | TParam _ | TFunc _ | TJson | TStream | TCheck _ | TFailure
+  | TSet element ->
+    remember_helper ~prefix:"teslEncode"
+      ~signature:(Printf.sprintf "(teslValue %s) any" (go_type ty))
+      ~body:(Printf.sprintf
+        "func() any {\n\t\tteslOut := make([]any, len(teslValue.Elements))\n\t\tfor teslAt, teslItem := range teslValue.Elements {\n\t\t\tteslOut[teslAt] = %s(teslItem)\n\t\t}\n\t\treturn teslOut\n\t}()"
+        (value_encoder element))
+  | TDict (key, value) ->
+    remember_helper ~prefix:"teslEncode"
+      ~signature:(Printf.sprintf "(teslValue %s) any" (go_type ty))
+      ~body:(Printf.sprintf
+        "func() any {\n\t\tteslOut := make(map[string]any, len(teslValue.Entries))\n\t\tfor _, teslEntry := range teslValue.Entries {\n\t\t\tteslOut[%s] = %s(teslEntry.Value)\n\t\t}\n\t\treturn teslOut\n\t}()"
+        (json_dict_key_encoder key "teslEntry.Key") (value_encoder value))
+  | TParam _ | TFunc _ | TJson | TStream | TCheck _ | TFailure
   | TAnon ->
     invalid_arg "Go response encoding for this type is rejected before emission"
 
@@ -10491,6 +10525,20 @@ let rec json_value_decoder ~package ~loc ~what ty =
     Printf.sprintf
       "func(teslRaw any) ([]%s, error) {\n\t\treturn teslrt.DecodeListValue(teslRaw, %s)\n\t}"
       (go_type element) (json_value_decoder ~package ~loc ~what element)
+  | TSet element ->
+    Printf.sprintf
+      "func(teslRaw any) (%s, error) {\n\t\tteslItems, teslErr := teslrt.DecodeListValue(teslRaw, %s)\n\t\tif teslErr != nil {\n\t\t\treturn %s{}, teslErr\n\t\t}\n\t\treturn teslrt.SetFromList(teslItems, %s), nil\n\t}"
+      (go_type ty) (json_value_decoder ~package ~loc ~what element) (go_type ty)
+      (element_less_func element)
+  | TDict (key, value) ->
+    Printf.sprintf
+      "func(teslRaw any) (%s, error) {\n\t\tteslFields, teslOK := teslRaw.(map[string]any)\n\t\tif !teslOK {\n\t\t\treturn %s{}, errors.New(\"expected JSON object for Dict\")\n\t\t}\n\t\tteslPairs := make([]teslrt.Tuple2[%s, %s], 0, len(teslFields))\n\t\tfor teslRawKey, teslRawValue := range teslFields {\n\t\t\tteslKey, teslKeyErr := %s(teslRawKey)\n\t\t\tif teslKeyErr != nil {\n\t\t\t\treturn %s{}, teslKeyErr\n\t\t\t}\n\t\t\tteslValue, teslValueErr := %s(teslRawValue)\n\t\t\tif teslValueErr != nil {\n\t\t\t\treturn %s{}, teslValueErr\n\t\t\t}\n\t\t\tteslPairs = append(teslPairs, teslrt.Tuple2[%s, %s]{Tuple2First: teslKey, Tuple2Second: teslValue})\n\t\t}\n\t\treturn teslrt.DictFromList(teslPairs, %s), nil\n\t}"
+      (go_type ty) (go_type ty) (go_type key) (go_type value)
+      (json_value_decoder ~package ~loc ~what key) (go_type ty)
+      (json_value_decoder ~package ~loc ~what value) (go_type ty)
+      (go_type key) (go_type value) (element_less_func key)
+  | TRecord _ when is_money ty ->
+    "func(teslRaw any) (teslrt.Money, error) {\n\t\tteslMinorUnits, teslUnitsErr := teslrt.DecodeIntField(teslRaw, \"minorUnits\")\n\t\tif teslUnitsErr != nil {\n\t\t\treturn teslrt.Money{}, teslUnitsErr\n\t\t}\n\t\tteslCode, teslCodeErr := teslrt.DecodeStringField(teslRaw, \"currency\")\n\t\tif teslCodeErr != nil {\n\t\t\treturn teslrt.Money{}, teslCodeErr\n\t\t}\n\t\tteslCurrency, teslKnown := teslrt.CurrencyFromCode(teslCode).Value()\n\t\tif !teslKnown {\n\t\t\treturn teslrt.Money{}, errors.New(\"unknown ISO 4217 currency code for Money: \" + teslCode)\n\t\t}\n\t\treturn teslrt.MoneyFromMinorUnits(teslCurrency, teslMinorUnits), nil\n\t}"
   | TRecord nested when nested.rec_owner = package
                         || List.mem nested.rec_tesl_name !current_codec_types
                         || codec_owner nested.rec_tesl_name <> None ->
@@ -10983,7 +11031,11 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
               | _ -> rendered
             in
             (entry.json_key, match field_codec_kind entry.codec with
+              | Some `Money -> Printf.sprintf "%s(%s)"
+                  (value_encoder (field_type entry.field_name)) value
               | Some _ -> unwrapped (field_type entry.field_name) value
+              | None when List.mem entry.codec ["listCodec"; "setCodec"; "dictCodec"] ->
+                Printf.sprintf "%s(%s)" (value_encoder (field_type entry.field_name)) value
               | None -> Printf.sprintf "%s(%s)" (codec_encode_ref entry.codec) value))
             entries));
        Buffer.add_string body "\n\t}\n}\n");
@@ -11020,6 +11072,16 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
              let suffix = go_ident ~exported:true field_name in
              let binder = "teslField" ^ suffix in
              (match field_codec_kind field_codec with
+              | Some `Money ->
+                Printf.bprintf body
+                  "\tteslRaw%s, teslErr%s := teslrt.JSONFieldValue(teslJSON, %s)\n\tif teslErr%s != nil {\n\t\treturn teslrt.RejectShape[%s](teslErr%s.Error())\n\t}\n\t%s, teslDecodeErr%s := %s(teslRaw%s)\n\tif teslDecodeErr%s != nil {\n\t\treturn teslrt.RejectShape[%s](teslDecodeErr%s.Error())\n\t}\n"
+                  suffix suffix (go_quote json_key) suffix go_type_name suffix
+                  binder suffix
+                  (json_value_decoder ~package ~loc:codec.loc
+                     ~what:(Printf.sprintf "%s.%s" type_name field_name)
+                     (let rec base = function TNewtype info -> base info.base | ty -> ty in
+                      base (field_type field_name)))
+                  suffix suffix go_type_name suffix
               | Some kind ->
                 let decoder = match kind with
                   | `String -> "DecodeStringField" | `Int -> "DecodeIntField"
@@ -11033,6 +11095,7 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
                      `innerJoin` against a real server.  The divergence is measured, not
                      inherited. *)
                   | `PosixMillis -> "DecodeIntField"
+                  | `Money -> assert false
                 in
                 Printf.bprintf body
                   "\t%s, teslErr%s := teslrt.%s(teslJSON, %s)\n\tif teslErr%s != nil {\n\t\treturn teslrt.RejectShape[%s](teslErr%s.Error())\n\t}\n"
@@ -11104,11 +11167,17 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
             more than a String — and echo it into a client-facing 400.  `via` therefore runs on
             the raw value above, and only a successful check's value is wrapped. *)
          let wrapped field binder =
-           match field_type field with
-           | TNewtype info when info.secret ->
-             Printf.sprintf "%s{Value: teslrt.MakeSecret(%s)}" (go_type (TNewtype info)) binder
-           | TNewtype info -> Printf.sprintf "%s{Value: %s}" (go_type (TNewtype info)) binder
-           | _ -> binder
+           let rec wrap ty rendered =
+             match ty with
+             | TNewtype info when info.secret ->
+               Printf.sprintf "%s{Value: teslrt.MakeSecret(%s)}"
+                 (go_type (TNewtype info)) rendered
+             | TNewtype info ->
+               Printf.sprintf "%s{Value: %s}"
+                 (go_type (TNewtype info)) (wrap info.base rendered)
+             | _ -> rendered
+          in
+           wrap (field_type field) binder
          in
          Printf.bprintf body "\tteslDecoded := %s{" go_type_name;
          Buffer.add_string body
@@ -12769,7 +12838,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | "posixMillisCodec" -> ()
           (* A CONTAINER codec names the shape; the field's declared type says how to read each
              element, which is what the decoder walks. *)
-          | "listCodec" -> ()
+          | "listCodec" | "setCodec" | "dictCodec" | "moneyCodec" -> ()
           | other -> unsupported import.loc
             "Go backend does not emit the `Tesl.Json` export `%s`: the module is wired, that \
              export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
@@ -12876,13 +12945,12 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | other -> unsupported import.loc
             "Go backend does not emit the `Tesl.App` export `%s`: the module is wired, that \
              export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
-      (* `Tesl.Telemetry`: the ambient signals.  Nothing is gated — an observability call that
-         needed a capability would be threaded through every signature or left out of the code
-         that most needs it — so what is left is one runtime call per signal. *)
-      | "Tesl.Telemetry" ->
-        List.iter (fun name ->
-          match name with
-          | "initTelemetry" | "telemetry" | "counter" | "histogram" | "gauge" -> ()
+       (* `Tesl.Telemetry`: the ambient signals. `TelemetryConfig` is consumed by the App lowering
+          and has no runtime binding; legacy `initTelemetry` remains an emitted runtime call. *)
+       | "Tesl.Telemetry" ->
+         List.iter (fun name ->
+           match name with
+           | "TelemetryConfig" | "initTelemetry" | "telemetry" | "counter" | "histogram" | "gauge" -> ()
           | other -> unsupported import.loc
             "Go backend does not emit the `Tesl.Telemetry` export `%s`: the module is wired, that \
              export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
@@ -12916,10 +12984,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
         List.iter (fun name ->
           match name with
           | "dbRead" | "dbWrite" -> ()
-          (* `DeleteResult` is runtime-provided, like `Maybe`: it crosses module boundaries, so
-             it cannot be emitted once per module that names it.  Registered below. *)
-          | "DeleteResult" | "DeleteResult(..)" | "NoRowDeleted" | "RowsDeleted" -> ()
-          | other -> unsupported import.loc
+           | other -> unsupported import.loc
             "Go backend does not emit the `Tesl.DB` export `%s`: the module is wired, that \
              export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed
       (* `Tesl.Database` names the DECLARATION form (`= Database { entities: … backend:
@@ -14387,30 +14452,6 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
             { var_ctor = "JobFailed"; var_tag = "teslrt.JobResultFailed";
               var_fields = ["job", TParam "Payload"; "error", TString];
               var_go_fields = ["job", "FailedJob"; "error", "FailedError"]; var_loc = loc };
-          ];
-          adt_loc = loc;
-          adt_builtin = true;
-        }
-      end) m.imports;
-    (* `DeleteResult` is what `deleteAndReturnResult` answers: `NoRowDeleted` or
-       `RowsDeleted n`.  Runtime-provided for the reason `Maybe` is, and registered on the
-       import that names it rather than unconditionally, so a module that never deletes with a
-       result carries no reference to it. *)
-    List.iter (fun (import : import_decl) ->
-      if import.module_name = "Tesl.DB" then begin
-        let loc = import.loc in
-        Hashtbl.replace types.adts "DeleteResult" {
-          adt_tesl_name = "DeleteResult";
-          adt_owner = "";
-          adt_go_name = "teslrt.DeleteResult";
-          adt_tag_type = "teslrt.DeleteResultTag";
-          adt_params = [];
-          adt_variants = [
-            { var_ctor = "NoRowDeleted"; var_tag = "teslrt.DeleteResultNoRowDeleted";
-              var_fields = []; var_go_fields = []; var_loc = loc };
-            { var_ctor = "RowsDeleted"; var_tag = "teslrt.DeleteResultRowsDeleted";
-              var_fields = ["count", TInt];
-              var_go_fields = ["count", "RowsDeletedCount"]; var_loc = loc };
           ];
           adt_loc = loc;
           adt_builtin = true;

@@ -26,6 +26,49 @@ let valid_public_origin (s : string) : bool =
       loopback && host_rest_ok rest
     end else false
 
+(* The HTML served by the runtime needs an explicit CSP baseline.  This is a
+   deliberately small parser: it does not try to implement the whole CSP
+   grammar, but rejects the source expressions that make the policy unsafe and
+   requires the directives that make the browser enforce the intended floor. *)
+let insecure_content_security_policy (policy : string) : string option =
+  let required = ["default-src"; "base-uri"; "object-src"; "frame-ancestors";
+                  "form-action"; "script-src"; "style-src"] in
+  let seen = Hashtbl.create 8 in
+  let forbidden = ["*"; "'unsafe-inline'"; "'unsafe-eval'"; "data:"; "blob:"; "http:"; "https:"] in
+  let words segment =
+    Str.split (Str.regexp "[ \t\r\n]+") (String.trim segment)
+    |> List.filter (fun word -> word <> "")
+  in
+  let bad = ref None in
+  List.iter (fun segment ->
+    match words segment with
+    | [] -> ()
+    | name :: sources ->
+      let name = String.lowercase_ascii name in
+      Hashtbl.replace seen name ();
+      if List.exists (fun source -> List.mem (String.lowercase_ascii source) forbidden) sources
+      then bad := Some "contains a wildcard, inline/eval execution, or unrestricted data/blob/http(s) source"
+  ) (String.split_on_char ';' policy);
+  match !bad with
+  | Some reason -> Some reason
+  | None ->
+    (match List.find_opt (fun name -> not (Hashtbl.mem seen name)) required with
+     | Some name -> Some (Printf.sprintf "is missing required directive `%s`" name)
+     | None -> None)
+
+let check_content_security_policy (decls : top_decl list) : validation_error list =
+  List.filter_map (function
+    | DServer server ->
+      (match server.content_security_policy with
+       | Some policy ->
+         (match insecure_content_security_policy policy with
+          | None -> None
+          | Some reason -> Some (make_error ~code:"SEC006" server.loc
+              (Printf.sprintf "server '%s' has an insecure contentSecurityPolicy: %s" server.name reason)))
+       | None -> None)
+    | _ -> None
+  ) decls
+
 (* build_field_proof_map now lives in Validation_common (shared via module_facts). *)
 
 let rec carried_proofs_of_expr
@@ -912,8 +955,34 @@ let check_upsert_conflict_target ?facts ?(extra_funcs=[]) (decls : top_decl list
   | [] -> []
   | _ ->
     let errors = ref [] in
+    let check_target loc entity_name conflict =
+      match entity_name with
+      | None -> ()
+      | Some en ->
+        (match List.find_opt (fun (e : entity_form) -> e.name = en) entities with
+         | None -> ()   (* unknown entity — reported by the entity/name passes *)
+         | Some ent ->
+           let is_pk = (conflict = [ ent.primary_key ]) in
+           let matches_unique =
+             List.exists (fun (ix : entity_index) ->
+                 ix.ix_unique && ix.ix_fields = conflict) ent.indexes
+           in
+           if conflict <> [] && not is_pk && not matches_unique then
+             errors := make_error loc
+               ~hint:(Printf.sprintf
+                 "add `unique index [%s]` to entity `%s`, or conflict on the primary key `%s`"
+                 (String.concat ", " conflict) en ent.primary_key)
+               (Printf.sprintf
+                 "`upsert %s … onConflict [%s]` needs a unique index on (%s): PostgreSQL cannot infer a conflict target without one and fails at runtime"
+                 en (String.concat ", " conflict) (String.concat ", " conflict))
+               :: !errors)
+    in
     let check_expr (e : expr) =
       Ast_visitor.iter (fun node ->
+          match node with
+          | ESqlQuery { query = QueryUpsert q; loc } ->
+            check_target loc (Some q.entity) q.conflict
+          | _ ->
           match collect_call_head_and_args [] node with
           (* The full spine, exactly as the emitter matches it.  A looser prefix
              match would also fire on every partial application inside the same
@@ -932,29 +1001,7 @@ let check_upsert_conflict_target ?facts ?(extra_funcs=[]) (decls : top_decl list
                   | EField { field; _ } -> Some field
                   | _ -> None) elems
             in
-            (match entity_name with
-             | None -> ()
-             | Some en ->
-               (match List.find_opt (fun (e : entity_form) -> e.name = en) entities with
-                | None -> ()   (* unknown entity — reported by the entity/name passes *)
-                | Some ent ->
-                  let is_pk = (conflict = [ ent.primary_key ]) in
-                  let matches_unique =
-                    List.exists (fun (ix : entity_index) ->
-                        ix.ix_unique && ix.ix_fields = conflict) ent.indexes
-                  in
-                  if conflict <> [] && not is_pk && not matches_unique then
-                    errors := make_error loc
-                      ~hint:(Printf.sprintf
-                        "add `unique index [%s]` to entity `%s`, or conflict on the \
-                         primary key `%s`"
-                        (String.concat ", " conflict) en ent.primary_key)
-                      (Printf.sprintf
-                        "`upsert %s … onConflict [%s]` needs a unique index on \
-                         (%s): PostgreSQL cannot infer a conflict target without \
-                         one and fails at runtime"
-                        en (String.concat ", " conflict) (String.concat ", " conflict))
-                      :: !errors))
+             check_target loc entity_name conflict
           | _ -> ()) e
     in
     List.iter (function
@@ -2316,10 +2363,14 @@ let config_block_schema = function
   | "SseChannel" -> [ "database", VDatabaseRef, true; "payload", VTypeRef, true ]
   | "Cache" -> [ "database", VDatabaseRef, true; "valueType", VTypeRef, true;
                  "defaultTtl", VInt, false ]
+  | "TelemetryConfig" -> [ "service", VStr, true; "endpoint", VStr, true;
+                           "console", VBool, true; "metrics", VBool, false;
+                           "metricsInterval", VInt, false ]
   (* App-pass entry point: `main() -> App = App { … }`. *)
   | "App" -> [ "database", VDatabaseRef, true; "queues", VRefList, false;
                "email", VRefList, false; "sseChannels", VRefList, false;
                "api", VTypeRef, true; "port", VExpr, false;
+               "telemetry", VSub "TelemetryConfig", false;
                "static", VStr, false; "mountPath", VMountPath, false ]
   (* Agent { provider, systemPrompt, maxTokens, tools } is a typed-record constructor
      validated by the type checker (registered record fields), so it needs no
@@ -2334,6 +2385,18 @@ let config_block_schema = function
     an editor hint earns its keep. *)
 let config_field_doc (block : string) (field : string) : string =
   match block, field with
+  | "TelemetryConfig", "service" ->
+    "Service name attached to telemetry events and metrics."
+  | "TelemetryConfig", "endpoint" ->
+    "OTLP collector base URL; `\"in-memory\"` or an empty string keeps signals local."
+  | "TelemetryConfig", "console" ->
+    "Print telemetry events to stderr for local development."
+  | "TelemetryConfig", "metrics" ->
+    "Enable metrics recording and export. Defaults to enabled, like legacy `initTelemetry`."
+  | "TelemetryConfig", "metricsInterval" ->
+    "Metrics export interval in milliseconds. Defaults to 60000."
+  | "App", "telemetry" ->
+    "Optional startup telemetry configuration; use `TelemetryConfig { service, endpoint, console }`."
   | "App", "mountPath" ->
     "Serve every route the `api` block declares under this path prefix, e.g. \
      `\"/api\"` makes `get \"/widgets\"` answer at `/api/widgets`. Route strings \
@@ -2376,7 +2439,8 @@ let cfg_expr_loc (e : expr) : loc = match e with
   | ELit r -> r.loc | EVar r -> r.loc | EApp r -> r.loc | EConstructor r -> r.loc
   | ERecord r -> r.loc | EList r -> r.loc | EField r -> r.loc | _ -> dummy_loc ""
 
-let check_typed_config_blocks (decls : top_decl list) : validation_error list =
+let check_typed_config_blocks (m : module_form) : validation_error list =
+  let decls = m.decls in
   let names f = List.filter_map f decls in
   let dbs = names (function DDatabase d -> Some d.name | _ -> None) in
   let entities = names (function DEntity e -> Some e.name | _ -> None) in
@@ -2434,7 +2498,10 @@ let check_typed_config_blocks (decls : top_decl list) : validation_error list =
          else []
        | _ -> err (Printf.sprintf "field `%s` must be a String literal, e.g. \"/api\"" fname))
     | VBool ->
-      (match v with ELit { lit = LBool _; _ } -> [] | _ -> err (Printf.sprintf "field `%s` must be a Bool (true/false)" fname))
+      (match v with
+       | ELit { lit = LBool _; _ }
+       | EConstructor { name = "True" | "False"; _ } -> []
+       | _ -> err (Printf.sprintf "field `%s` must be a Bool (true/false)" fname))
     | VSub sub -> check_record (cfg_expr_loc v) sub (cfg_fields v)
     | VBackoff ->
       (match cfg_ctor v with
@@ -2571,7 +2638,23 @@ let check_typed_config_blocks (decls : top_decl list) : validation_error list =
       (match tail fd.body with
        | (ERecord { type_hint = Some "App"; _ }
          | EApp { fn = EConstructor { name = "App"; _ }; arg = ERecord _; _ }) as e ->
-         check_record fd.loc "App" (cfg_fields e)
+         let fields = cfg_fields e in
+         let telemetry_imported =
+           List.exists (fun (imp : import_decl) ->
+             imp.module_name = "Tesl.Telemetry" &&
+             match imp.names with
+             | ImportAll -> true
+             | ImportExposing names -> List.mem "TelemetryConfig" names
+           ) m.imports
+         in
+         let telemetry_import_error =
+           match List.assoc_opt "telemetry" fields with
+           | Some value when cfg_ctor value = Some "TelemetryConfig" && not telemetry_imported ->
+             [ make_error (cfg_expr_loc value)
+                 "`TelemetryConfig` requires `import Tesl.Telemetry exposing [TelemetryConfig]`" ]
+           | _ -> []
+         in
+         check_record fd.loc "App" fields @ telemetry_import_error
        | _ -> [])
     | DAgent r -> check_decl "Agent" r.loc r.config_expr
     | _ -> []
@@ -2643,4 +2726,3 @@ let check_app_wiring (decls : top_decl list) : validation_error list =
   decl_db_errs @ app_errs
 
 (* ── 2. SQL/record field name validation ─────────────────────────────────── *)
-

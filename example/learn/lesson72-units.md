@@ -77,7 +77,7 @@ entity Vehicle table "vehicles" primaryKey id {
   topSpeed: Speed          # a plain Real column holding canonical m/s
 }
 
-handler addVehicle(...) requires [dbWrite] =
+handler addVehicle(...) requires [dbWrite Vehicle] =
   insert Vehicle { id: newId, topSpeed: Speed.kilometersPerHour 110.0 }
 
 # reading back: exit through the accessor of your choice

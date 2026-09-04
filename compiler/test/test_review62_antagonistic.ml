@@ -516,8 +516,8 @@ capability level1 implies level2
 capability level2 implies level3
 capability level3 implies level4
 capability level4 implies level5
-capability level5 implies dbRead
-fn readData(x: Int) -> Int requires [dbRead] = x
+capability level5 implies dbRead Note
+fn readData(x: Int) -> Int requires [dbRead Note] = x
 handler h(x: Int) -> Int requires [level1] = readData x
 |}
 

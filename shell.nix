@@ -48,6 +48,7 @@ pkgs.mkShell {
   buildInputs = with pkgs; [
     curl
     jq
+    nodejs
     postgresql
     go
     staticcheck
@@ -74,6 +75,8 @@ pkgs.mkShell {
     # Integration test mock servers
     mailhog   # SMTP mock for email integration tests (MailHog binary in PATH as MailHog)
     python3   # HTTP mock server for httpclient integration tests
+    zap       # default Tesl DAST scanner
+    nuclei    # complementary template-based scanner
   ];
 
   shellHook = ''

@@ -9,7 +9,7 @@ Every function in Tesl declares what it touches. Think of it as dependency injec
 ```tesl
 handler createTodo(user: User ::: Authenticated user, newTodo: NewTodo)
   -> Todo
-  requires [dbRead, dbWrite, time, random] =
+  requires [dbRead Todo, dbWrite Todo, time, random] =
   ...
 ```
 
@@ -22,25 +22,25 @@ The `requires [...]` list is the function's capability contract. If you call any
 Real APIs bundle fine-grained capabilities into service-level ones:
 
 ```tesl
-capability todoRead    implies dbRead
-capability todoWrite   implies dbWrite
+capability todoRead    implies dbRead Todo
+capability todoWrite   implies dbWrite Todo
 capability todoService implies todoRead, todoWrite, time, random
 ```
 
-A function with `[todoService]` automatically satisfies `[dbRead]`, `[dbWrite]`, `[time]`, and `[random]`. Declare the bundle once, use it everywhere.
+A function with `[todoService]` automatically satisfies `[dbRead Todo]`, `[dbWrite Todo]`, `[time]`, and `[random]`. Declare the bundle once, use it everywhere.
 
 ---
 
 ## The compiler checks every call
 
-Add a database write to a `dbRead`-only function:
+Add a database write to a `dbRead Todo`-only function:
 
 ```
 $ tesl check api.tesl
-api.tesl:55: missing capability: dbWrite
-  `updateStatus` calls `update` which requires [dbWrite]
-  but `updateStatus` only declares [dbRead]
-  hint: add dbWrite to the requires list
+api.tesl:55: missing capability: dbWrite Todo
+  `updateStatus` calls `update` which requires [dbWrite Todo]
+  but `updateStatus` only declares [dbRead Todo]
+  hint: add dbWrite Todo to the requires list
 ```
 
 No surprises in production. The mistake is caught at build time.
@@ -71,7 +71,7 @@ This is unlike dependency injection frameworks or ZIO environments: there is no 
 
 ```tesl
 handler listTodos(user: User ::: Authenticated user) -> List Todo
-  requires [dbRead] =
+  requires [dbRead Todo] =
   telemetry "todos.list" { user.id = user.id }  # no capability needed
   select todo from Todo where todo.ownerId == user.id
 ```

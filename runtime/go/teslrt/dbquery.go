@@ -236,19 +236,14 @@ func DbTruncate[Row any](database *Database, table *Table[Row], tableName string
 	TableTruncate(table)
 }
 
-// DbDeleteResult is `deleteAndReturnResult`. On the server the count comes back from the
-// statement's own tag rather than from a second query, so the rows are walked once on either
-// path.
-func DbDeleteResult[Row any](database *Database, table *Table[Row], match func(Row) bool,
-	plan PgPlan) DeleteResult {
+// DbDeleteCount is `deleteAndReturnResult`. On the server the count comes back from the
+// statement's own tag, so the rows are counted once on either path.
+func DbDeleteCount[Row any](database *Database, table *Table[Row], match func(Row) bool,
+	plan PgPlan) Int {
 	if connection := database.bound(); connection != nil {
-		removed := PgExecPlan(connection, plan)
-		if removed == 0 {
-			return NoRowDeleted()
-		}
-		return RowsDeleted(FromInt64(removed))
+		return FromInt64(PgExecPlan(connection, plan))
 	}
-	return TableDeleteResult(table, match)
+	return TableDeleteCount(table, match)
 }
 
 // DbUpsert is `upsert … onConflict [c] doUpdate [u]`. On a Postgres-backed database the SERVER

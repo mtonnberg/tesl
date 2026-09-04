@@ -531,8 +531,8 @@ let test_R64_CC03_linear_capability_chain_accepted () =
 module R64Cc03 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbRead, dbWrite]
-capability readOnly implies dbRead
-capability readWrite implies dbWrite
+capability readOnly implies dbRead Note
+capability readWrite implies dbWrite Note
 capability fullAccess implies readOnly, readWrite
 handler h(x: Int) -> Int requires [fullAccess] = x
 |}

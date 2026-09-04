@@ -87,7 +87,7 @@ let test_p0_1_fromdb_with_select_accepted () =
   should_pass
     (entity_task ^
      "fn getItem(id: String) -> t: Task ::: FromDb (Id == id) t\n\
-      \  requires [dbRead] =\n\
+       \  requires [dbRead Task] =\n\
       \  let r = selectOne t from Task where t.id == id\n\
       \  case r of\n\
       \    Nothing -> fail 404 \"task not found\"\n\
@@ -98,7 +98,7 @@ let test_p0_1_fromdb_named_pack_accepted () =
   should_pass
     (entity_task ^
      "fn fetchTask(id: String) -> Task ? FromDb (Id == id)\n\
-      \  requires [dbRead] =\n\
+       \  requires [dbRead Task] =\n\
       \  let r = selectOne t from Task where t.id == id\n\
       \  case r of\n\
       \    Nothing -> fail 404 \"task not found\"\n\
@@ -115,7 +115,7 @@ let entity_order =
    \  status: String\n\
    }\n"
 
-(* `requires []` but performs a real `delete` (dbWrite); `delete` is bound as a
+(* `requires []` but performs a real `delete` (dbWrite Note); `delete` is bound as a
    case-arm var in a disjoint scope to suppress the capability function-wide. *)
 let test_p0_2_cap_suppression_rejected () =
   should_fail "dbWrite\\|does not declare\\|privileged operations"
@@ -128,7 +128,7 @@ let test_p0_2_cap_suppression_rejected () =
       \    Nothing -> \"none\"\n\
       \    Something delete -> \"got\"\n")
 
-(* Same real delete, correctly declaring requires [dbWrite]: legit. *)
+(* Same real delete, correctly declaring requires [dbWrite Note]: legit. *)
 let test_p0_2_cap_declared_accepted () =
   should_pass
     "module T exposing []\n\
@@ -139,7 +139,7 @@ let test_p0_2_cap_declared_accepted () =
      \  status: String\n\
      }\n\
      fn evictLegit() -> String\n\
-     \  requires [dbWrite] =\n\
+     \  requires [dbWrite Order] =\n\
      \  delete o from Order\n\
      \    where o.status == \"expired\"\n\
      \  \"ok\"\n"
@@ -270,8 +270,8 @@ let () =
       test_case "? FromDb named-pack with select accepted" `Quick test_p0_1_fromdb_named_pack_accepted;
     ];
     "capability-suppression", [
-      test_case "requires [] doing real dbWrite rejected" `Quick test_p0_2_cap_suppression_rejected;
-      test_case "real dbWrite with requires [dbWrite] accepted" `Quick test_p0_2_cap_declared_accepted;
+      test_case "requires [] doing real dbWrite Note rejected" `Quick test_p0_2_cap_suppression_rejected;
+      test_case "real dbWrite Note with requires [dbWrite Note] accepted" `Quick test_p0_2_cap_declared_accepted;
       test_case "legit param shadow of builtin accepted" `Quick test_p0_2_param_shadow_still_accepted;
     ];
     "auth-escalation", [

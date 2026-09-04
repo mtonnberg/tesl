@@ -34,8 +34,8 @@ import Tesl.App exposing [App]
 
 # Capabilities are explicit permissions. `appWebService` bundles everything the
 # server needs; a handler can only do what its declared capabilities allow.
-capability appDbRead implies dbRead
-capability appDbWrite implies dbWrite
+capability appDbRead implies dbRead Todo
+capability appDbWrite implies dbWrite Todo
 capability appReadCookie implies jwt
 capability appWebService implies appDbRead, appDbWrite, appReadCookie, time, random
 

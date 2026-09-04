@@ -78,12 +78,12 @@ entity Post table "posts" primaryKey id {
 
 let test_literal_list_compiles () =
   should_pass (fixture {|
-fn visible() -> Int requires [dbRead] =
+fn visible() -> Int requires [dbRead Post] =
   let rows = select p from Post
     where notInList p.author ["mallory"]
   List.length rows
 
-fn staff() -> Int requires [dbRead] =
+fn staff() -> Int requires [dbRead Post] =
   let rows = select p from Post
     where inList p.author ["alice", "bob"]
   List.length rows
@@ -94,7 +94,7 @@ fn staff() -> Int requires [dbRead] =
 let test_variable_operand_refused () =
   should_fail "`notInList` needs a list literal.*variable"
     (fixture {|
-fn visible(blocked: List String) -> Int requires [dbRead] =
+fn visible(blocked: List String) -> Int requires [dbRead Post] =
   let rows = select p from Post
     where notInList p.author blocked
   List.length rows
@@ -103,7 +103,7 @@ fn visible(blocked: List String) -> Int requires [dbRead] =
 let test_in_list_variable_operand_refused () =
   should_fail "`inList` needs a list literal.*variable"
     (fixture {|
-fn staff(allowed: List String) -> Int requires [dbRead] =
+fn staff(allowed: List String) -> Int requires [dbRead Post] =
   let rows = select p from Post
     where inList p.author allowed
   List.length rows
@@ -112,7 +112,7 @@ fn staff(allowed: List String) -> Int requires [dbRead] =
 let test_let_bound_operand_refused () =
   should_fail "`notInList` needs a list literal"
     (fixture {|
-fn visible() -> Int requires [dbRead] =
+fn visible() -> Int requires [dbRead Post] =
   let blocked = ["mallory"]
   let rows = select p from Post
     where notInList p.author blocked
@@ -124,7 +124,7 @@ let test_call_operand_refused () =
     (fixture {|
 fn allowed() -> List String = ["alice"]
 
-fn staff() -> Int requires [dbRead] =
+fn staff() -> Int requires [dbRead Post] =
   let rows = select p from Post
     where inList p.author (allowed ())
   List.length rows
@@ -135,7 +135,7 @@ fn staff() -> Int requires [dbRead] =
 let test_hint_names_the_constant () =
   should_fail "would have compiled to a constant `where true` and returned every row"
     (fixture {|
-fn visible(blocked: List String) -> Int requires [dbRead] =
+fn visible(blocked: List String) -> Int requires [dbRead Post] =
   let rows = select p from Post
     where notInList p.author blocked
   List.length rows

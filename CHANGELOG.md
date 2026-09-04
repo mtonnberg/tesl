@@ -6,6 +6,12 @@ Findings and evidence: `language-review.md`, `language-review-executive.md`. Eve
 has a regression test.
 
 ### Breaking / behaviour changes a program can observe
+- **Bare `dbRead` / `dbWrite` grants are removed.** Imports remain
+  `import Tesl.DB exposing [dbRead, dbWrite]`, but every `requires`, `main` grant, and
+  `capability ... implies ...` use must name an entity (`dbRead Order`, `dbWrite Order`).
+  `dbWrite Order` covers `dbRead Order`, never another entity. SQL joins require read access to
+  every touched entity, and every scoped DB capability granted by `main` must name an entity in
+  the database selected by `App.database`; violations are compile errors.
 - **`inList` / `notInList` require a list literal.** A variable, `let` or call as the member
   list is now a compile error (V001, operand named). It used to compile to a constant
   `where false` / `where true` — an exclusion filter returned every row.

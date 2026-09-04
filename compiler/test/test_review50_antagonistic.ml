@@ -707,14 +707,14 @@ database TestDB = Database {
 }
 
 fn doInner(uid: String, n: String) -> Int
-  requires [dbWrite] =
+  requires [dbWrite Note] =
   transaction {
     let _ = insert User { id: uid, name: n }
     1
   }
 
 fn doOuter(uid: String, n: String) -> Int
-  requires [dbWrite] =
+  requires [dbWrite Note] =
   transaction {
     let _ = insert User { id: uid, name: n }
     doInner uid n
@@ -744,7 +744,7 @@ database TestDB = Database {
   })
 }
 
-fn doNested(uid: String, n: String) -> Int requires [dbWrite] =
+fn doNested(uid: String, n: String) -> Int requires [dbWrite Note] =
   transaction {
     transaction {
       let _ = insert User { id: uid, name: n }
@@ -756,13 +756,13 @@ fn doNested(uid: String, n: String) -> Int requires [dbWrite] =
 (* R50_E03 — Calling a function that requires a capability without declaring
    it transitively is rejected. *)
 let r50_e03_transitive_capability_required () =
-  should_fail_src "requires\\|cap\\|dbWrite" ({|module Test exposing []
+  should_fail_src "requires\\|cap\\|dbWrite Note" ({|module Test exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbRead, dbWrite]
 
-fn writer() -> Int requires [dbWrite] = 1
+fn writer() -> Int requires [dbWrite Note] = 1
 
-fn reader() -> Int requires [dbRead] =
+fn reader() -> Int requires [dbRead Note] =
   writer()
 |})
 

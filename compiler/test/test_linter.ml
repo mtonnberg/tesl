@@ -1,7 +1,7 @@
 (** Linter rule tests (WS5 — linting improvements).
 
     These exercise {!Linter.lint_file} directly on temp files. The linter is
-    pure static OCaml analysis — no Racket backend: is involved — so these tests
+    pure static OCaml analysis with no emission step, so these tests
     run entirely in-process via the library.
 
     Coverage:
@@ -298,6 +298,46 @@ fn hollow(a: Int ::: ValidScore a, b: Int ::: ValidScore a) -> String =
   if not (str_contains d.message "b") then
     Alcotest.fail ("W061 should name the discarded parameter `b`, got: " ^ d.message)
 
+let test_w097_unused_adt_type_parameter_fires () =
+  let diags = lint_src {|module Phantom exposing [Tree]
+import Tesl.Prelude exposing [Int]
+type Tree a
+  = Leaf
+  | Node value: Int
+|} in
+  let d = find diags "W097" in
+  if not (str_contains d.message "`a`") || not (str_contains d.message "`Tree`") then
+    Alcotest.fail ("W097 should name the unused parameter and ADT, got: " ^ d.message)
+
+let test_w097_used_adt_type_parameter_is_quiet () =
+  let diags = lint_src {|module Used exposing [Box]
+type Box a
+  = Box value: a
+|} in
+  assert_absent diags "W097"
+
+let test_w097_underscore_parameter_is_intentional () =
+  let diags = lint_src {|module Intentional exposing [Token]
+type Token _phantom
+  = Token
+|} in
+  assert_absent diags "W097"
+
+let test_logical_path_is_reported_for_temp_buffer () =
+  let path = Filename.temp_file "tesl_linter_buffer" ".tesl" in
+  let logical_path = "/workspace/src/Main.tesl" in
+  Fun.protect
+    ~finally:(fun () -> if Sys.file_exists path then Sys.remove path)
+    (fun () ->
+      let oc = open_out_bin path in
+      output_string oc
+        "module Main exposing [value]\nimport Tesl.Prelude exposing [Int]   \nfn value() -> Int = 1\n";
+      close_out oc;
+      let diags = Linter.lint_file ~logical_path path in
+      assert_has diags "W010";
+      List.iter (fun (d : Compile.diagnostic) ->
+        Alcotest.(check string) "diagnostic logical path" logical_path d.file) diags)
+
 let () =
   Alcotest.run "Linter" [
     "W050-config-usage-credited", [
@@ -335,6 +375,18 @@ let () =
         test_w064_keep_proof_half_no_warning;
       Alcotest.test_case "bound check quiet" `Quick
         test_w064_bound_check_no_warning;
+    ];
+    "W097-unused-type-parameter", [
+      Alcotest.test_case "unused ADT parameter fires" `Quick
+        test_w097_unused_adt_type_parameter_fires;
+      Alcotest.test_case "used ADT parameter is quiet" `Quick
+        test_w097_used_adt_type_parameter_is_quiet;
+      Alcotest.test_case "underscore parameter is intentional" `Quick
+        test_w097_underscore_parameter_is_intentional;
+    ];
+    "logical-path", [
+      Alcotest.test_case "temp-buffer diagnostics use logical path" `Quick
+        test_logical_path_is_reported_for_temp_buffer;
     ];
     "proof-idioms-quiet", [
       Alcotest.test_case "detach/forget/attach roundtrip quiet" `Quick

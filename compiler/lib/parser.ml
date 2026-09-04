@@ -263,11 +263,12 @@ let parse_parenthesized_list parse_item s =
    declaration keyword — `cacheCap` is an ordinary identifier here. *)
 let parse_cap_name s =
   match peek s with
-  | IDENT "cacheCap" ->
+  | IDENT ("cacheCap" | "dbRead" | "dbWrite" | "queueRead" | "queueWrite" | "pubsub") ->
+    let prefix = match peek s with IDENT n -> n | _ -> "" in
     advance s;
     (match peek s with
-     | UIDENT cache_name -> advance s; return ("cacheCap " ^ cache_name)
-     | _ -> return "cacheCap")
+     | UIDENT resource -> advance s; return (prefix ^ " " ^ resource)
+     | _ -> return prefix)
   | IDENT n -> advance s; return n
   | EMAIL -> advance s; return "email"
   | t -> err s (Printf.sprintf "expected capability name, got %s" (tok_to_string t))
@@ -1356,6 +1357,7 @@ and parse_case s =
      `parse_pipe_right` (pipelines are unambiguously unrelated to `case`
      heads) to avoid surprising captures of trailing `|>`. *)
   let* scrut = parse_logic s in
+  let scrut = wrap_sql_expr scrut in
   let* _ = expect s OF in
   skip_newlines s;
   (* Arms must follow — either indented or at same level in braces *)
@@ -1772,9 +1774,11 @@ and parse_let s =
   in
   let* _ = expect s EQ in
   let* value = parse_expr s in
+  let value = wrap_sql_expr value in
   (* Users must write TypeName { field: val } explicitly — no auto-promotion from let annotation *)
   skip_newlines s;
   let* body = parse_expr s in
+  let body = wrap_sql_expr body in
   let loc = span loc0 (current_loc s) in
   match !proof_binding with
   | Some (first_pos, pname) ->
@@ -2430,9 +2434,9 @@ and parse_atom s =
          this: any other parenthesized expression keeps the strict layout. *)
       let* e =
         if is_select_expr e then begin
-          let e = consume_sql_modifiers e s in
-          skip_layout s;
-          return e
+           let e = consume_sql_modifiers e s in
+           skip_layout s;
+           return (wrap_sql_expr e)
         end else return e
       in
       let* _ = expect s RPAREN in
@@ -2501,11 +2505,11 @@ and parse_record_literal s =
       | IDENT _
       (* Allow keyword tokens as record field names (e.g. email, smtp, and the
          config-block field keywords schema/database/backend/api). *)
-      | EMAIL | SMTP | SCHEMA | DATABASE | BACKEND | API ->
+      | EMAIL | SMTP | SCHEMA | DATABASE | BACKEND | API | TELEMETRY ->
         let fname = match peek s with
           | IDENT n -> n | EMAIL -> "email" | SMTP -> "smtp"
           | SCHEMA -> "schema" | DATABASE -> "database" | BACKEND -> "backend"
-          | API -> "api"
+          | API -> "api" | TELEMETRY -> "telemetry"
           | _ -> "_"
         in
         advance s;
@@ -2637,7 +2641,7 @@ and expr_loc = function
   | EOk e -> e.loc | EFail e -> e.loc | ETelemetry e -> e.loc
   | EEnqueue e -> e.loc | EPublish e -> e.loc | EStartWorkers e -> e.loc
   | EWithDatabase e -> e.loc | EWithCapabilities e -> e.loc | EWithTransaction e -> e.loc | EServe e -> e.loc
-  | EConstructor e -> e.loc | ELambda e -> e.loc
+  | EConstructor e -> e.loc | ELambda e -> e.loc | ESqlQuery e -> e.loc
   | ECacheGet e -> e.loc | ECacheSet e -> e.loc | ECacheDelete e -> e.loc | ECacheInvalidate e -> e.loc
   | ESendEmail e -> e.loc | EStartEmailWorker e -> e.loc
 
@@ -2812,6 +2816,17 @@ and consume_sql_modifiers select_e s =
     | _ -> select_e
   end
 
+(* Query recognition happens only after all same-query modifier continuations
+   have been consumed. This keeps the parser node stable for both one-line and
+   layout-sensitive spellings. *)
+and wrap_sql_expr e =
+  match e with
+  | ESqlQuery _ -> e
+  | _ ->
+    (match Sql_query.parse_query_node e with
+     | Some query -> ESqlQuery { query; loc = expr_loc e }
+     | None -> e)
+
 and parse_stmt_seq s =
   skip_newlines s;
   match peek s with
@@ -2863,7 +2878,7 @@ and parse_stmt_seq s =
     in
     continue_stmt_seq s e
   | _ ->
-    let* e = parse_expr s in
+     let* e = parse_expr s in
     let* e =
       (* Preserve SQL-style assignment tails when a field/value pair appears as a standalone statement. *)
       if peek s = EQ then begin
@@ -2878,7 +2893,8 @@ and parse_stmt_seq s =
     in
     skip_newlines s;
     (* Merge any SQL modifier continuations on subsequent lines into the select expression *)
-    let e = consume_sql_modifiers e s in
+     let e = consume_sql_modifiers e s in
+     let e = wrap_sql_expr e in
     skip_newlines s;
     (match peek s with
      | DEDENT | EOF | RBRACE -> return e
@@ -2888,12 +2904,12 @@ and parse_stmt_seq s =
        let* body = parse_stmt_seq s in
        skip_newlines s;
        if peek s = DEDENT then advance s;
-       let continued = ELet { name = "_"; declared_type = None; declared_proof = None; value = e; body; loc } in
-       continue_stmt_seq s continued
+        let continued = wrap_sql_expr (ELet { name = "_"; declared_type = None; declared_proof = None; value = e; body; loc }) in
+        continue_stmt_seq s continued
      | _ ->
        let loc = expr_loc e in
        let* body = parse_stmt_seq s in
-       return (ELet { name = "_"; declared_type = None; declared_proof = None; value = e; body; loc }))
+        return (wrap_sql_expr (ELet { name = "_"; declared_type = None; declared_proof = None; value = e; body; loc })))
 
 and parse_let_in_seq s =
   (* Parse let x = v, then parse the rest of the sequence as the body *)
@@ -2996,7 +3012,8 @@ and parse_let_in_seq s =
   let _ = declared_type in
   (* Allow SQL modifier continuations (where/set/order/limit/…) on subsequent indented
      lines when the let-bound value is a SQL query or update expression. *)
-  let value = consume_sql_modifiers value s in
+   let value = consume_sql_modifiers value s in
+   let value = wrap_sql_expr value in
   skip_newlines s;
   let loc = span loc0 (current_loc s) in
   (* The body is the rest of the sequence — if empty (DEDENT/EOF), the body is a
@@ -3023,8 +3040,8 @@ and parse_let_in_seq s =
       return body
     | _ -> parse_stmt_seq s
   in
-  match !proof_binding with
-  | Some (first_pos, pname) ->
+   let result = match !proof_binding with
+   | Some (first_pos, pname) ->
     let arity = !proof_arity in
     let idx_for pos = if arity <= 1 then None else Some (pos, arity) in
     let body_with_extras = List.fold_right (fun (pos, extra_name) acc_body ->
@@ -3032,18 +3049,20 @@ and parse_let_in_seq s =
                   proof_index = idx_for pos;
                   value = value; body = acc_body; loc }
     ) !extra_proof_binders body in
-    return (ELetProof { value_name = binding_name; proof_name = pname;
-                         proof_index = idx_for first_pos;
-                         value; body = body_with_extras; loc })
-  | None ->
-    return (ELet {
-      name = binding_name;
-      declared_type;
-      declared_proof;
-      value;
-      body;
-      loc;
-    })
+     ELetProof { value_name = binding_name; proof_name = pname;
+                 proof_index = idx_for first_pos;
+                 value; body = body_with_extras; loc }
+   | None ->
+      ELet {
+       name = binding_name;
+       declared_type;
+       declared_proof;
+       value;
+       body;
+       loc;
+      }
+   in
+   return (wrap_sql_expr result)
 
 (** Parse the function/handler body.
     Three cases:
@@ -3082,7 +3101,7 @@ let parse_func_body s =
     let* first = parse_expr s in
     skip_newlines s;
     (* Merge SQL modifier continuations (order, limit, etc.) from subsequent lines *)
-    let first = consume_sql_modifiers first s in
+    let first = wrap_sql_expr (consume_sql_modifiers first s) in
     skip_newlines s;
     match peek s with
     | DEDENT | EOF -> return first
@@ -4765,14 +4784,20 @@ let rec parse_test_stmt_block_or_inline s =
     parse_test_stmt_items s
 
 and parse_test_expr_with_indented_args s =
-  with_test_multiline_request_continuations s parse_expr
+  with_test_multiline_request_continuations s (fun s ->
+    match parse_expr s with
+    | Ok e -> return (wrap_sql_expr e)
+    | Err e -> Err e)
 
 and parse_test_expect_left s =
   (* Use parse_additive so that `expect a ++ b == c` and `expect x + y == z`
      work without parentheses around the left operand.  parse_comparison is
      deliberately excluded here: the expect statement owns the comparison
      operator (`==` / `!=` / `<` etc.) at the statement level. *)
-  with_test_multiline_request_continuations s parse_additive
+  with_test_multiline_request_continuations s (fun s ->
+    match parse_additive s with
+    | Ok e -> return (wrap_sql_expr e)
+    | Err e -> Err e)
 
 and parse_test_stmt_items s =
   let loc0 = current_loc s in
@@ -5055,22 +5080,27 @@ and parse_test_stmt_items s =
     let saved = s.allow_test_multiline_request_continuations in
     s.allow_test_multiline_request_continuations <- false;
     let result =
-      match parse_expr s with
-      | Ok e ->
-        skip_newlines s;
-        (match peek s with
-         | INDENT ->
+       match parse_expr s with
+       | Ok e ->
+         skip_newlines s;
+         (match peek s with
+          | INDENT ->
            advance s;
            (match parse_stmt_seq s with
             | Ok body ->
               skip_newlines s;
               if peek s = DEDENT then advance s;
-              let combined = ELet { name = "_"; declared_type = None;
-                                    declared_proof = None; value = e; body;
-                                    loc = expr_loc e } in
+               let combined = ELet { name = "_"; declared_type = None;
+                                     declared_proof = None; value = e; body;
+                                     loc = expr_loc e } in
+               let combined = wrap_sql_expr combined in
               return [TsExpr { e = combined; loc = expr_loc combined }]
-            | Err _ -> return [TsExpr { e; loc = expr_loc e }])
-         | _ -> return [TsExpr { e; loc = expr_loc e }])
+             | Err _ ->
+               let e = wrap_sql_expr e in
+               return [TsExpr { e; loc = expr_loc e }])
+          | _ ->
+            let e = wrap_sql_expr e in
+            return [TsExpr { e; loc = expr_loc e }])
       | Err _ -> return []
     in
     s.allow_test_multiline_request_continuations <- saved;

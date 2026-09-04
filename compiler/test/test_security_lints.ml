@@ -353,7 +353,7 @@ record Doc {
   id: String
 }
 
-handler get act() -> String requires [dbWrite] =
+handler get act() -> String requires [dbWrite Note] =
   let saved = insert Doc { id: "x" }
   "ok"
 
@@ -370,7 +370,7 @@ database ProbeDb = Database {
   backend: Memory
 }
 
-main() -> App requires [dbWrite] =
+main() -> App requires [dbWrite Note] =
   App {
     database: ProbeDb
     api: ActServer

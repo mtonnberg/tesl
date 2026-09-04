@@ -19,6 +19,11 @@ main() -> App requires [emailCap] =
   App {
     database: Store
     email: [AppMail]
+    telemetry: TelemetryConfig {
+      service: "email-startup"
+      endpoint: "in-memory"
+      console: False
+    }
     api: AppServer
     port: 8080
   }
@@ -30,14 +35,19 @@ main() -> App requires [emailCap] =
     | Some (DFunc fd) -> fd
     | _ -> failwith "startup fixture has no main" in
   let lowered = Desugar.lower_main_app parsed.decls main in
+  let rec app_head = function
+    | EApp { fn; _ } -> app_head fn
+    | EVar { name; _ } -> Some name
+    | _ -> None in
   let rec startup_order = function
     | EWithCapabilities { body; _ } | EWithDatabase { body; _ } -> startup_order body
     | ELet { value; body; _ } -> startup_order value @ startup_order body
     | EStartEmailWorker { email_name; _ } -> ["email:" ^ email_name]
+    | EApp _ as e when app_head e = Some "initTelemetry" -> ["telemetry"]
     | EServe { server_name; _ } -> ["serve:" ^ server_name]
     | _ -> [] in
   match startup_order lowered.body with
-  | ["email:AppMail"; "serve:AppServer"] -> ()
+  | ["telemetry"; "email:AppMail"; "serve:AppServer"] -> ()
   | order -> failwith ("wrong App startup order: " ^ String.concat ", " order)
 
 let () =

@@ -60,7 +60,7 @@ handler post echo(req: EchoRequest) -> EchoRequest =
   req
 
 handler get getSeededNote() -> Note
-  requires [dbRead] =
+  requires [dbRead Note] =
   let found = selectOne n from Note where n.id == "note-1"
   case found of
     Nothing ->
@@ -89,7 +89,7 @@ api-test "raw JSON body and dynamic response fields" for Lesson32Server {
   expect isNull echoResp.body.missing
 }
 
-api-test "seed prepares fresh in-memory state" for Lesson32Server requires [dbRead, dbWrite] {
+api-test "seed prepares fresh in-memory state" for Lesson32Server requires [dbRead Note, dbWrite Note] {
   seed {
     insert Note { id: "note-1", title: "Seeded from setup" }
   }
@@ -99,7 +99,7 @@ api-test "seed prepares fresh in-memory state" for Lesson32Server requires [dbRe
   expect seeded.body.title == "Seeded from setup"
 }
 
-api-test "state is isolated between blocks" for Lesson32Server requires [dbRead] {
+api-test "state is isolated between blocks" for Lesson32Server requires [dbRead Note] {
   let seeded = get "/seeded-note"
   expect seeded.status == 404
 }

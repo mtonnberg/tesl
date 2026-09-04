@@ -1,0 +1,118 @@
+module Lesson81OpenapiDast exposing [PublicServer, InternalServer]
+
+# lesson: track=testing order=830 needs=lesson15-api-handlers-server,lesson32-api-tests
+# summary: Export one server's checked OpenAPI surface and run it against a disposable staging target with ZAP
+# ─────────────────────────────────────────────────────────────────────────────
+# Lesson 81 — OpenAPI and DAST
+#
+# A Tesl module can declare more than one server. Each server is an allowlist:
+# it names exactly one API and exactly the handlers that implement it. The
+# OpenAPI emitter follows that same boundary. Select PublicServer and the
+# resulting document contains /public and /private, but never /internal from
+# its sibling InternalServer.
+#
+# Generate the selected document:
+#
+#   tesl generate-openapi example/learn/lesson81-openapi-dast.tesl PublicServer \
+#     --output .tesl-stuff/dast/public.json
+#
+# Run the checked document against an already-running disposable target:
+#
+#   tesl dast http://127.0.0.1:8080 example/learn/lesson81-openapi-dast.tesl \
+#     --server PublicServer --active
+#
+# `tesl dast` imports the generated OpenAPI 3.1 file into ZAP. It never starts
+# the target. Passive scanning is the default; active scanning requires the
+# explicit `--active` flag and a second opt-in for non-loopback targets.
+#
+# Authentication values stay outside the specification. Supply a test-only
+# Authorization header through the environment:
+#
+#   TESL_DAST_AUTH='Bearer dast-lesson' tesl dast ... \
+#     --authorization-env TESL_DAST_AUTH
+#
+# The compiler owns route and response shape guarantees. The scanner adds
+# runtime coverage: the public route should be reachable, the private route
+# should reject a missing header and accept the test credential, and a server
+# selection must not leak its sibling's routes.
+
+import Tesl.Prelude exposing [String]
+import Tesl.Dict exposing [Dict, Dict.lookup, Dict.singleton]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.ApiTest exposing [statusOk, statusClientError]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.App exposing [App]
+
+fact Authenticated (user: String)
+
+# This deliberately tiny checker makes the scanner's auth setup observable.
+# A production app would verify a signed token or opaque credential here.
+check checkApiKey(raw: String) -> raw: String ::: Authenticated raw =
+  if raw == "Bearer dast-lesson" then
+    ok raw ::: Authenticated raw
+  else
+    fail 401 "invalid test credential"
+
+auth apiKeyAuth(request: HttpRequest) -> user: String ::: Authenticated user =
+  case Dict.lookup "authorization" request.headers of
+    Nothing -> fail 401 "missing Authorization header"
+    Something raw -> check checkApiKey raw
+
+handler get publicEndpoint() -> String =
+  "public"
+
+handler get privateEndpoint(user: String ::: Authenticated user) -> String =
+  "private for ${user}"
+
+handler get internalEndpoint() -> String =
+  "internal"
+
+api PublicApi {
+  get "/public" -> String
+  get "/private"
+    auth user: String ::: Authenticated user via apiKeyAuth
+    -> String
+}
+
+api InternalApi {
+  get "/internal" -> String
+}
+
+server PublicServer for PublicApi {
+  publicEndpoint
+  privateEndpoint
+}
+
+server InternalServer for InternalApi {
+  internalEndpoint
+}
+
+database Lesson81Database = Database {
+  entities: []
+  backend: Memory
+}
+
+main() -> App =
+  App {
+    database: Lesson81Database
+    api: PublicServer
+    port: 8080
+  }
+
+api-test "the unauthenticated public operation succeeds" for PublicServer {
+  let response = get "/public"
+  expect statusOk response.status
+  expect response.body == "public"
+}
+
+api-test "the protected operation rejects a missing credential" for PublicServer {
+  let response = get "/private"
+  expect statusClientError response.status
+}
+
+api-test "the protected operation accepts the test credential" for PublicServer {
+  let response = get "/private" headers (Dict.singleton "authorization" "Bearer dast-lesson")
+  expect statusOk response.status
+  expect response.body == "private for Bearer dast-lesson"
+}

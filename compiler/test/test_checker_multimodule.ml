@@ -117,7 +117,7 @@ database D = Database {
   backend: Memory
 }
 
-fn sumIn(c: String) -> %s requires [dbRead] =
+fn sumIn(c: String) -> %s requires [dbRead L] =
   selectSum l.price from L where l.cat == c
 |} ret
 
@@ -155,7 +155,7 @@ import Tesl.Tuple exposing [Tuple2]
 import Tesl.DB exposing [dbRead]
 import Lib exposing [Item, Store]
 
-fn countsPerCategory() -> List (Tuple2 String Int) requires [dbRead] =
+fn countsPerCategory() -> List (Tuple2 String Int) requires [dbRead Item] =
   selectCountBy i from Item groupBy i.category
 |}
 

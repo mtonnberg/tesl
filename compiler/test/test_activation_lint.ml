@@ -71,7 +71,7 @@ import Tesl.SSE exposing [SseChannel]
 import Tesl.Database exposing [Database, Memory]
 import Tesl.App exposing [App]
 
-capability appService implies dbRead, dbWrite, queueWrite, pubsub
+capability appService implies dbRead Note, dbWrite Note, queueWrite, pubsub
 
 database MainDb = Database {
   schema: "app"
@@ -175,7 +175,7 @@ let test_no_main_is_silent () =
 let test_test_module_is_silent () =
   expect "a module whose queue is exercised only by a test block"
     (prelude ^ {|
-test "enqueues a job" requires [dbRead, dbWrite] {
+test "enqueues a job" requires [dbRead Note, dbWrite Note] {
   expect 1 == 1
 }
 |}) ~w094:0

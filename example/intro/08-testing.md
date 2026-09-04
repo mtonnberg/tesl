@@ -8,7 +8,7 @@ Tesl has two testing primitives: `api-test` blocks that exercise the full HTTP b
 
 ```tesl
 api-test "creates a todo and returns it" for TodoServer
-  requires [dbRead, dbWrite, time, random] {
+  requires [dbRead Todo, dbWrite Todo, time, random] {
 
   let resp = post "/todos"
     cookie "user=mikael"
@@ -28,7 +28,7 @@ api-test "creates a todo and returns it" for TodoServer
 
 ```tesl
 api-test "cannot access another user's todo" for TodoServer
-  requires [dbRead, dbWrite] {
+  requires [dbRead Todo, dbWrite Todo] {
 
   seed {
     insert Todo { id: "todo-1", title: "Anna's note", ownerId: "anna",

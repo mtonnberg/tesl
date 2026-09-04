@@ -48,9 +48,14 @@ type debugProviderEntry struct {
 var debugState = struct {
 	sync.RWMutex
 	providers []debugProviderEntry
-	sql       *DebugSQLCapture
+	sql       map[uint64]debugSQLCaptureEntry
 	nextID    uint64
-}{}
+}{sql: make(map[uint64]debugSQLCaptureEntry)}
+
+type debugSQLCaptureEntry struct {
+	id      uint64
+	capture *DebugSQLCapture
+}
 
 func RegisterDebugDomainProvider(provider DebugDomainProvider) func() {
 	debugState.Lock()
@@ -71,19 +76,24 @@ func RegisterDebugDomainProvider(provider DebugDomainProvider) func() {
 }
 
 func SetDebugSQLCapture(capture *DebugSQLCapture) {
-	debugState.Lock()
-	debugState.sql = cloneDebugSQL(capture)
-	debugState.Unlock()
+	setDebugSQLCapture(debugExecutionID(), capture)
 }
 
 func ClearDebugSQLCapture() {
-	SetDebugSQLCapture(nil)
+	clearDebugSQLCaptureForExecution(debugExecutionID())
 }
 
 func DebugRuntimeStateSnapshot() DebugRuntimeState {
+	return debugRuntimeStateSnapshotForExecution(debugExecutionID())
+}
+
+// debugRuntimeStateSnapshotForExecution returns SQL state owned by one Tesl
+// execution. Domain providers are process-wide and are sampled only after the
+// debugger's cooperative execution barrier has completed.
+func debugRuntimeStateSnapshotForExecution(execution uint64) DebugRuntimeState {
 	debugState.RLock()
 	providers := append([]debugProviderEntry(nil), debugState.providers...)
-	sql := cloneDebugSQL(debugState.sql)
+	sql := cloneDebugSQL(debugState.sql[execution].capture)
 	debugState.RUnlock()
 	state := DebugRuntimeState{SQL: sql}
 	for _, provider := range providers {
@@ -92,6 +102,35 @@ func DebugRuntimeStateSnapshot() DebugRuntimeState {
 		}
 	}
 	return state
+}
+
+func setDebugSQLCapture(execution uint64, capture *DebugSQLCapture) uint64 {
+	debugState.Lock()
+	defer debugState.Unlock()
+	if capture == nil {
+		delete(debugState.sql, execution)
+		return 0
+	}
+	debugState.nextID++
+	id := debugState.nextID
+	debugState.sql[execution] = debugSQLCaptureEntry{id: id, capture: cloneDebugSQL(capture)}
+	return id
+}
+
+func clearDebugSQLCaptureForExecution(execution uint64) {
+	debugState.Lock()
+	delete(debugState.sql, execution)
+	debugState.Unlock()
+}
+
+func updateDebugSQLCapture(execution, id uint64, rowCount int) {
+	debugState.Lock()
+	entry, present := debugState.sql[execution]
+	if present && entry.id == id {
+		entry.capture.RowCount = rowCount
+		debugState.sql[execution] = entry
+	}
+	debugState.Unlock()
 }
 
 func mergeDebugDomainState(left, right DebugDomainState) DebugDomainState {

@@ -55,50 +55,50 @@ import (
 	"tesl.generated/teslmodqueueapi/internal/teslrt"
 )
 
-//line queue-api.tesl:47
+//line queue-api.tesl:46
 type SendEmail struct {
 	To      string
 	Subject string
 	Body    string
 }
 
-//line queue-api.tesl:53
+//line queue-api.tesl:52
 var EmailQueueQueue = teslrt.NewQueueOn(MainDatabaseDatabase, "EmailQueue", 3, "exponential", 60)
 
-//line queue-api.tesl:33
+//line queue-api.tesl:32
 var MainDatabaseDatabase = teslrt.NewDatabase(
 	"MainDatabase",
 	teslrt.PostgresConfig{DBName: "app_db", User: "app", Password: "", Host: "localhost", Port: 5432, Schema: "app"},
 	[]teslrt.PostgresTable{},
 )
 
-//line queue-api.tesl:63
+//line queue-api.tesl:62
 func sendEmailWorker(job SendEmail) SendEmail {
-//line queue-api.tesl:65
+//line queue-api.tesl:64
 	return job
 }
 
-//line queue-api.tesl:69
+//line queue-api.tesl:68
 func listDeadEmails(q *teslrt.Queue) []teslrt.DeadJob {
-//line queue-api.tesl:71
+//line queue-api.tesl:70
 	return teslrt.DeadJobs(q)
 }
 
-//line queue-api.tesl:76
+//line queue-api.tesl:75
 func replayEmail(job teslrt.DeadJob) bool {
-//line queue-api.tesl:78
+//line queue-api.tesl:77
 	return teslrt.Requeue(job)
 }
 
-//line queue-api.tesl:80
+//line queue-api.tesl:79
 func appRoot() string {
-//line queue-api.tesl:82
+//line queue-api.tesl:81
 	return "ok"
 }
 
-//line queue-api.tesl:92
+//line queue-api.tesl:91
 func Main() struct{} {
-//line queue-api.tesl:92
+//line queue-api.tesl:91
 	return func() struct{} {
 		var teslBound struct{}
 		teslrt.WithDatabase(MainDatabaseDatabase, func() {

@@ -14,11 +14,11 @@ import Tesl.List exposing [List.length]
 
 entity Ev table "ev_range" primaryKey id { id: String at: PosixMillis }
 
-fn inWindow(lo: PosixMillis, hi: PosixMillis) -> Int requires [dbRead] =
+fn inWindow(lo: PosixMillis, hi: PosixMillis) -> Int requires [dbRead Ev] =
   let hits = select e from Ev where e.at >= lo && e.at <= hi
   List.length hits
 
-test "PosixMillis range in select-where works (was a runtime trap, #28)" requires [dbRead, dbWrite, time] {
+test "PosixMillis range in select-where works (was a runtime trap, #28)" requires [dbRead Ev, dbWrite Ev, time] {
   let now = nowMillis()
   let _ = insert Ev { id: "a", at: now }
   let lo = subtractMs now 1000
@@ -26,7 +26,7 @@ test "PosixMillis range in select-where works (was a runtime trap, #28)" require
   expect inWindow lo hi == 1
 }
 
-test "PosixMillis range excludes out-of-window rows (#28)" requires [dbRead, dbWrite, time] {
+test "PosixMillis range excludes out-of-window rows (#28)" requires [dbRead Ev, dbWrite Ev, time] {
   let now = nowMillis()
   let _ = insert Ev { id: "b", at: now }
   let lo = addMs now 5000

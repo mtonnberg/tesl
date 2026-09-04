@@ -87,6 +87,20 @@ Container Registry lives at
 [`templates/docker/github-deploy.yml.example`](../templates/docker/github-deploy.yml.example).
 Copy it to your project's `.github/workflows/deploy.yml` and set `APP_NAME`.
 
+## Generate OpenAPI for security scanning
+
+Before deploying to staging, generate a checked specification for the server being deployed:
+
+```bash
+tesl --check app.tesl
+tesl generate-openapi app.tesl AppServer --output .tesl-stuff/build/openapi.json
+```
+
+Give that file to the DAST tool's OpenAPI import. The artifact contains the server's declared
+routes, typed captures, request/response schemas, cookie authentication, and proof metadata.
+It is a file-based input; the application does not need to expose a public documentation route.
+See [OpenAPI and DAST](openapi-dast.md) for the CI workflow and credential-safety guidance.
+
 ## How it works (and what is intentionally not here)
 
 - `tesl build --container` compiles a Linux Go binary, stages a runtime-only

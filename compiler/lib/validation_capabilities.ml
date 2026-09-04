@@ -2,6 +2,18 @@ open Ast
 open Location
 open Validation_common
 
+(* Queue/pubsub bare grants remain migration wildcards. Bare database grants are
+   rejected by the proof checker; database access is always entity-scoped. *)
+let capability_covers grant needed =
+  grant = needed ||
+  (match Ast.resource_capability_parts grant, Ast.resource_capability_parts needed with
+   | _, Some (needed_verb, _)
+     when grant = needed_verb && List.mem needed_verb ["queueRead"; "queueWrite"; "pubsub"] -> true
+   | Some ("dbWrite", resource), Some ("dbRead", needed_resource)
+   | Some ("queueWrite", resource), Some ("queueRead", needed_resource) ->
+     resource = needed_resource
+   | _ -> false)
+
 
 (* (Removed fn_bound_names: the function-wide bound-name set it produced was the
    root of the `requires []` capability-suppression hole — a binder in any
@@ -93,10 +105,11 @@ let cap_check_kind_info (k : func_kind) : (string * (string -> string -> string)
    calling e.g. `ask` (aiProvider), `insert` (dbWrite), or `publish` (pubsub)
    beyond its `requires [...]` compiled clean and then trapped at RUNTIME with
    "Missing capabilities". This mirrors the fn/handler check onto test bodies. *)
-let collect_test_body_caps ~func_caps ?(server_tools_caps=[]) (stmts : test_stmt list) : string list =
+let collect_test_body_caps ~func_caps ?(server_tools_caps=[]) ?(queue_for_job=[])
+    (stmts : test_stmt list) : string list =
   let acc = ref [] in
   let add e bound =
-    acc := collect_needed_capabilities ~func_caps ~server_tools_caps ~bound e @ !acc in
+    acc := collect_needed_capabilities ~func_caps ~server_tools_caps ~queue_for_job ~bound e @ !acc in
   let rec pat_binders = function
     | PVar n when n <> "_" -> [n]
     | PCon { fields; _ } -> List.concat_map (fun (_, sub) -> pat_binders sub) fields
@@ -140,6 +153,10 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
      imported functions' declared `requires`, so a transitive call into an
      imported effecting function is enforced across the module boundary. *)
   let func_caps = build_func_capability_map decls @ imported_func_caps in
+  let queue_for_job =
+    List.concat_map (function
+      | DQueue q -> List.map (fun job -> (job, q.name)) (Desugar.queue_job_types q)
+      | _ -> []) decls in
   (* serverTools: server name → union of its bound handlers' declared caps, so a
      fn/test whose body exposes a server's endpoints to an agent must declare
      everything those handlers may do (V001 with the standard hint). *)
@@ -168,7 +185,7 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
     Hashtbl.fold (fun k () acc -> k :: acc) result []
   in
   let cap_covered declared needed =
-    List.mem needed (expand_declared declared)
+    List.exists (fun grant -> capability_covers grant needed) (expand_declared declared)
   in
   let errors = ref [] in
   List.iter (function
@@ -195,7 +212,7 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
              (* Seed [bound] with the function parameters (in scope for the whole
                 body); collect_needed_capabilities extends it lexically per inner
                 binder so a disjoint binder can no longer suppress a capability. *)
-             collect_needed_capabilities ~func_caps ~param_caps ~server_tools_caps
+              collect_needed_capabilities ~func_caps ~param_caps ~server_tools_caps ~queue_for_job
                ~bound:(List.map (fun (b : binding) -> b.name) fd.params) fd.body
              |> List.sort_uniq String.compare
          in
@@ -210,7 +227,7 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
     | DTest t ->
       (* Same capability enforcement as fns/handlers, extended to `test`/`api-test`
          etc. bodies (previously unchecked → runtime "Missing capabilities"). *)
-      let needed = collect_test_body_caps ~func_caps ~server_tools_caps t.stmts in
+      let needed = collect_test_body_caps ~func_caps ~server_tools_caps ~queue_for_job t.stmts in
       let declared = t.capabilities in
       let missing = List.filter (fun cap -> not (cap_covered declared cap)) needed in
       if missing <> [] then
@@ -246,7 +263,7 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
          (`asTool fn` and manual `tool … validate v dispatch d`). *)
       let field_caps_from_fields field fields =
         match List.assoc_opt field fields with
-        | Some tools_expr -> collect_needed_capabilities ~func_caps tools_expr
+        | Some tools_expr -> collect_needed_capabilities ~func_caps ~queue_for_job tools_expr
         | None -> []
       in
       let needed_tools_cap =
@@ -328,7 +345,7 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
   (match List.find_opt (function DFunc fd -> fd.kind = MainKind | _ -> false) decls with
    | Some (DFunc main_fd) ->
      let main_grant = expand_declared main_fd.capabilities in
-     let is_granted c = List.mem c main_grant in
+      let is_granted c = List.exists (fun grant -> capability_covers grant c) main_grant in
      let fn_info = List.filter_map (function
        | DFunc fd -> Some (fd.name, (fd.capabilities, fd.loc)) | _ -> None) decls in
      let servers = List.filter_map (function
@@ -381,8 +398,33 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
           | Some e -> (match name_of e with Some n -> [n] | None -> [])
           | None -> [])
        | _ -> []) apps in
-     let api_servers = referenced "api" in
-     let app_queues = referenced "queues" in
+      let api_servers = referenced "api" in
+      let app_queues = referenced "queues" in
+      let app_databases = referenced "database" in
+      let database_entities =
+        List.filter_map (function
+          | DDatabase db ->
+            let db = Desugar.desugar_database_config db in
+            Some (db.name, db.entities)
+          | _ -> None) decls in
+      let connected_entities =
+        List.concat_map (fun db -> Option.value ~default:[] (List.assoc_opt db database_entities))
+          app_databases
+        |> List.sort_uniq String.compare in
+      if app_databases <> [] then
+        List.iter (fun cap ->
+          match Ast.resource_capability_parts cap with
+          | Some (("dbRead" | "dbWrite"), entity)
+            when not (List.mem entity connected_entities) ->
+            errors := make_error main_fd.loc
+              ~hint:(Printf.sprintf
+                "add entity `%s` to the database selected by `App.database`, or remove `%s` from main's grant"
+                entity cap)
+              (Printf.sprintf
+                "main grants `%s`, but entity `%s` is not in the database selected by `App.database`; queries would otherwise use the unconnected in-memory fallback"
+                cap entity)
+              :: !errors
+          | _ -> ()) main_grant;
      let handler_fns =
        List.concat_map (fun sn -> match List.assoc_opt sn servers with
          | Some hs -> hs | None -> []) api_servers |> List.sort_uniq String.compare in
@@ -437,7 +479,8 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
          List.iter (fun w -> match List.assoc_opt w fn_info with
            | Some (reqs, loc) ->
              let missing =
-               List.filter (fun c -> not (List.mem c qgrant)) (expand_declared reqs)
+                List.filter (fun c -> not (List.exists (fun grant -> capability_covers grant c) qgrant))
+                  (expand_declared reqs)
                |> List.sort_uniq String.compare in
              if missing <> [] then
                errors := make_error loc
@@ -467,17 +510,18 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
         worker thread's exception is invisible past its own top-level catch
         (issue #62). *)
      List.iter (fun qn -> match List.assoc_opt qn queue_caps with
-       | Some (caps, loc) when not (List.mem "queueRead" (expand_declared caps)) ->
+         | Some (caps, loc) when not (List.exists (fun grant -> capability_covers grant ("queueRead " ^ qn))
+                                      (expand_declared caps)) ->
          errors := make_error loc
            ~hint:(Printf.sprintf
-             "add a capability implying `queueRead` (e.g. one implying `queueWrite`, \
-              which already implies `queueRead`) to queue `%s`'s `requires`"
-             qn)
+              "add `queueRead %s` or `queueWrite %s` (or a capability implying either) \
+               which already implies `queueRead`) to queue `%s`'s `requires`"
+              qn qn qn)
            (Printf.sprintf
-             "queue `%s` requires [%s], which does not grant `queueRead`; every worker \
+              "queue `%s` requires [%s], which does not grant `queueRead %s`; every worker \
               thread dequeues jobs under exactly this capability set, so without it every \
               enqueued job silently sits `pending` forever with no error"
-             qn (String.concat ", " caps))
+              qn (String.concat ", " caps) qn)
            :: !errors
        | _ -> ()) app_queues
    | _ -> ());
@@ -535,6 +579,10 @@ let get_forbidden_caps : string list =
 let check_get_routes_do_not_mutate ?(cap_map=[]) ?(imported_func_caps=[])
     (decls : top_decl list) : validation_error list =
   let func_caps = build_func_capability_map decls @ imported_func_caps in
+  let queue_for_job =
+    List.concat_map (function
+      | DQueue q -> List.map (fun job -> (job, q.name)) (Desugar.queue_job_types q)
+      | _ -> []) decls in
   let fn_map =
     List.filter_map (function
       | DFunc (fd : func_decl) -> Some (fd.name, fd) | _ -> None) decls in
@@ -565,7 +613,14 @@ let check_get_routes_do_not_mutate ?(cap_map=[]) ?(imported_func_caps=[])
   let reached_forbidden needed =
     let closure = expand needed in
     List.sort_uniq String.compare
-      (List.filter (fun c -> List.mem c closure) get_forbidden_caps) in
+      (List.filter (fun reached ->
+         List.exists (fun forbidden ->
+           reached = forbidden ||
+           match Ast.resource_capability_parts reached with
+           | Some (verb, _) -> verb = forbidden
+           | None -> false)
+           get_forbidden_caps)
+         closure) in
   let report ~loc ~handler ~reached ~subject ~whence =
     errors := make_error ~code:"SEC005" loc
       ~hint:(Printf.sprintf
@@ -600,8 +655,8 @@ let check_get_routes_do_not_mutate ?(cap_map=[]) ?(imported_func_caps=[])
       when fd.kind = HandlerKind && List.mem GET fd.http_methods ->
       let param_caps = build_param_capability_map fd in
       let needed =
-        Validation_common.collect_needed_capabilities
-          ~func_caps ~param_caps
+         Validation_common.collect_needed_capabilities
+          ~func_caps ~param_caps ~queue_for_job
           ~bound:(List.map (fun (b : binding) -> b.name) fd.params) fd.body in
       let reached = reached_forbidden needed in
       if reached <> [] then begin
@@ -1021,12 +1076,31 @@ let check_pk_match (decls : top_decl list) : validation_error list =
              in
              close [] (result_uses fd.body)
            in
-           let should_credit = function
-             | None -> true                         (* result position → in the return path *)
-             | Some x -> List.mem x returned_vars
-           in
+            let should_credit = function
+              | None -> true                         (* result position → in the return path *)
+              | Some x -> List.mem x returned_vars
+            in
 
-           (* ── Returning-WRITE provenance (review §3.2 write variant) ────────
+            (* Recreate the comparison-shaped expressions expected by the
+               provenance unifier from canonical SQL clauses. *)
+            let rec canonical_clause_expr binder (clause : Sql_query.sql_clause) =
+              let loc = fd.loc in
+              match clause with
+              | SqlPred { field; op; value } ->
+                Some (EBinop { op;
+                  left = EField { obj = EVar { name = binder; loc }; field; loc };
+                  right = value; loc; op_loc = loc })
+              | SqlOr clauses ->
+                let exprs = List.filter_map (canonical_clause_expr binder) clauses in
+                (match exprs with
+                 | [] -> None
+                 | first :: rest ->
+                   Some (List.fold_left (fun left right ->
+                     EBinop { op = BOr; left; right; loc; op_loc = loc }) first rest))
+              | _ -> None
+            in
+
+            (* ── Returning-WRITE provenance (review §3.2 write variant) ────────
               A row-producing write — `update … where … set … returning one`,
               `updateAndReturnOne … where … set …`, or `deleteAndReturnResult …
               where …` — hands back a value carrying the declared FromDb.  Its
@@ -1245,8 +1319,8 @@ let check_pk_match (decls : top_decl list) : validation_error list =
                   end
                 | None ->
                   ignore (Ast_visitor.fold_children (fun () c -> check_expr c) () e))
-             | EBinop { op = BOr; loc; _ }
-               when should_credit binder
+              | EBinop { op = BOr; loc; _ }
+                when should_credit binder
                     && (let rec or_root = function
                        | EBinop { op = BOr; left; right; _ } ->
                          (match sql_root left with Some _ as r -> r
@@ -1260,8 +1334,8 @@ let check_pk_match (decls : top_decl list) : validation_error list =
                   select head seen, record the rejection, and do NOT descend into
                   the disjuncts (which would credit the single matching branch). *)
                select_head_seen := true;
-               if !disjunction_seen = None then
-                 disjunction_seen := Some (make_error loc
+                if !disjunction_seen = None then
+                  disjunction_seen := Some (make_error loc
                    ~hint:(Printf.sprintf "a WHERE with `||` broadens the result set; \
                            to establish `%s` every row must satisfy `%s == %s`, so \
                            remove the disjunction (or move it into a narrowing \
@@ -1269,9 +1343,42 @@ let check_pk_match (decls : top_decl list) : validation_error list =
                            spec_label expected_col expected_rhs expected_col expected_rhs)
                    (Printf.sprintf "WHERE clause uses `||` (disjunction); the declared \
                           FromDb provenance `%s == %s` in `%s` is not established for \
-                          every returned row (an `OR` broadens beyond the declared \
-                          subject)" expected_col expected_rhs spec_label))
-             | _ -> ignore (Ast_visitor.fold_children (fun () c -> check_expr c) () e)
+                           every returned row (an `OR` broadens beyond the declared \
+                           subject)" expected_col expected_rhs spec_label))
+              | ESqlQuery { query = QuerySelect (seed, dynamic); _ }
+                when should_credit binder ->
+                (* Parser-owned SQL queries no longer expose the old EApp/EBinop
+                   spine. Recreate only the small comparison shape needed by the
+                   provenance unifier; values remain the canonical clause payload. *)
+                select_head_seen := true;
+                let clauses = seed.static_clauses @ dynamic in
+               List.iter (function
+                   | SqlPred { field; op; value } when op = BEq ->
+                    let field_expr = EField {
+                      obj = EVar { name = seed.binder; loc = fd.loc };
+                      field; loc = fd.loc } in
+                    let comparison = EBinop {
+                      op; left = field_expr; right = value;
+                      loc = fd.loc; op_loc = fd.loc } in
+                    unify_where_select (Some seed.entity) seed.binder comparison
+                   | SqlOr _ when List.length clauses = 1 ->
+                    if !disjunction_seen = None then
+                      disjunction_seen := Some (make_error fd.loc
+                        ~hint:(Printf.sprintf "a WHERE with `||` broadens the result set; remove the disjunction")
+                        (Printf.sprintf "WHERE clause uses `||`; the declared FromDb provenance `%s == %s` in `%s` is not established for every returned row"
+                           expected_col expected_rhs spec_label))
+                   | _ -> ()) clauses
+              | ESqlQuery { query = QueryUpdate update; _ }
+                when should_credit binder && update.returning_one ->
+                write_head_seen := true;
+                unify_write_where (Some update.entity) update.binder
+                  (List.filter_map (canonical_clause_expr update.binder) update.clauses)
+              | ESqlQuery { query = QueryDelete (seed, clauses); _ }
+                when should_credit binder && seed.with_result ->
+                write_head_seen := true;
+                unify_write_where (Some seed.entity) seed.binder
+                  (List.filter_map (canonical_clause_expr seed.binder) clauses)
+              | _ -> ignore (Ast_visitor.fold_children (fun () c -> check_expr c) () e)
            in
            check_expr fd.body;
            check_writes fd.body;
@@ -1356,6 +1463,13 @@ let check_insert_pk_match (decls : top_decl list) : validation_error list =
      Only the PACKED body insert is validated — other inserts in the function body
      (e.g. for related entities) are allowed to use different id bindings. *)
   let check_packed_insert witness pk_var (e : expr) =
+    let e = match e with
+      | ESqlQuery { query = QueryInsert { fields; _ }; _ } ->
+        EApp { fn = EVar { name = "insert"; loc = Location.dummy_loc "" };
+               arg = ERecord { fields; type_hint = None; loc = Location.dummy_loc "" };
+               loc = Location.dummy_loc "" }
+      | _ -> e
+    in
     let (head, args) = collect_call_head_and_args [] e in
     match function_name_of_expr head with
     | Some "insert" ->
@@ -1492,6 +1606,13 @@ let check_nonexist_named_pack_insert (decls : top_decl list) : validation_error 
           | Some (col, rhs) ->
             let field = col_field col in
             List.iter (fun leaf ->
+              let leaf = match leaf with
+                | ESqlQuery { query = QueryInsert { fields; _ }; _ } ->
+                  EApp { fn = EVar { name = "insert"; loc = Location.dummy_loc "" };
+                         arg = ERecord { fields; type_hint = None; loc = Location.dummy_loc "" };
+                         loc = Location.dummy_loc "" }
+                | _ -> leaf
+              in
               let (head, args) = collect_call_head_and_args [] leaf in
               match function_name_of_expr head with
               | Some "insert" ->
@@ -1969,6 +2090,9 @@ check your fact declaration or the type of `%s`"
         walk_expr local_env to_; walk_expr local_env subject;
         walk_expr local_env body
       | EStartEmailWorker _ -> ()
+      | ESqlQuery { query; _ } ->
+        Ast_visitor.fold_sql_query
+          (fun () child -> walk_expr local_env child) () query
     in
     List.iter (function
       | DFunc fd ->
@@ -2086,4 +2210,3 @@ let check_type_arities (decls : top_decl list) : validation_error list =
     | DType (TypeNewtype { base_type; _ }) -> check_te base_type
     | _ -> []
   ) decls
-

@@ -34,6 +34,54 @@ type Reader struct {
 	maxHeader  int
 }
 
+// LineReader decodes MCP stdio messages. MCP 2024-11-05 uses one compact JSON
+// message per line, unlike the Content-Length framing used by LSP and DAP.
+type LineReader struct {
+	reader     *bufio.Reader
+	maxMessage int
+}
+
+func NewLineReader(reader io.Reader) *LineReader {
+	return &LineReader{reader: bufio.NewReader(reader), maxMessage: DefaultMaxMessageBytes}
+}
+
+func (reader *LineReader) SetMaxMessageBytes(maxMessageBytes int) error {
+	if maxMessageBytes <= 0 {
+		return errors.New("protocol: max message size must be positive")
+	}
+	reader.maxMessage = maxMessageBytes
+	return nil
+}
+
+func (reader *LineReader) Read() ([]byte, error) {
+	var message []byte
+	for {
+		part, err := reader.reader.ReadSlice('\n')
+		message = append(message, part...)
+		if len(message) > reader.maxMessage+2 {
+			return nil, ErrMessageTooLarge
+		}
+		if err == nil {
+			message = bytes.TrimSuffix(message, []byte{'\n'})
+			message = bytes.TrimSuffix(message, []byte{'\r'})
+			if len(message) > reader.maxMessage {
+				return nil, ErrMessageTooLarge
+			}
+			return message, nil
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		if errors.Is(err, io.EOF) {
+			if len(message) == 0 {
+				return nil, io.EOF
+			}
+			return nil, io.ErrUnexpectedEOF
+		}
+		return nil, err
+	}
+}
+
 func NewReader(reader io.Reader) *Reader {
 	return &Reader{
 		reader:     bufio.NewReader(reader),
@@ -136,6 +184,46 @@ type Writer struct {
 	writer     io.Writer
 	maxMessage int
 	mutex      sync.Mutex
+}
+
+// LineWriter encodes MCP stdio messages as compact JSON followed by a newline.
+type LineWriter struct {
+	writer     io.Writer
+	maxMessage int
+	mutex      sync.Mutex
+}
+
+func NewLineWriter(writer io.Writer) *LineWriter {
+	return &LineWriter{writer: writer, maxMessage: DefaultMaxMessageBytes}
+}
+
+func (writer *LineWriter) SetMaxMessageBytes(maxMessageBytes int) error {
+	if maxMessageBytes <= 0 {
+		return errors.New("protocol: max message size must be positive")
+	}
+	writer.maxMessage = maxMessageBytes
+	return nil
+}
+
+func (writer *LineWriter) Write(message []byte) error {
+	if len(message) > writer.maxMessage {
+		return ErrMessageTooLarge
+	}
+	if bytes.IndexByte(message, '\n') >= 0 || bytes.IndexByte(message, '\r') >= 0 {
+		return errors.New("protocol: MCP message contains a newline")
+	}
+	frame := append(append(make([]byte, 0, len(message)+1), message...), '\n')
+	writer.mutex.Lock()
+	defer writer.mutex.Unlock()
+	return writeAll(writer.writer, frame)
+}
+
+func (writer *LineWriter) WriteJSON(value any) error {
+	message, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("protocol: encode JSON: %w", err)
+	}
+	return writer.Write(message)
 }
 
 func NewWriter(writer io.Writer) *Writer {

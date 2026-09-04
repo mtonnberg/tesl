@@ -35,7 +35,7 @@ auth cookieAuth(request: HttpRequest) -> user: User ::: Authenticated user
 ```tesl
 handler listMyTodos(user: User ::: Authenticated user)  # requires the stamp
   -> List Todo
-  requires [dbRead] =
+  requires [dbRead Todo] =
   select todo from Todo where todo.ownerId == user.id
 ```
 

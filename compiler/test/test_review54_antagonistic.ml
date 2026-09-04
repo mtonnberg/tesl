@@ -90,17 +90,6 @@ let should_fail_src pattern src =
     try ignore (Str.search_forward re out 0)
     with Not_found -> failf "expected failure matching %S, got:\n%s" pattern out)
 
-(* Mark a test as documenting a known-open bug where the compiler currently passes
-   what it should reject. Passes silently while bug is open. Fails loud when fixed. *)
-let known_bug_passes_should_fail _pattern src =
-  with_temp_file "tesl-r54" ".tesl" src (fun path ->
-    let code, out = run_compiler ["--check"; path] in
-    if code <> 0 then
-      failf "KNOWN-OPEN BUG FIXED: compiler now rejects this (correct).\n\
-             Promote to should_fail_src with the new diagnostic.\n%s" out
-    (* else: still passes -- known bug still open, test passes silently *))
-[@@warning "-32"]
-
 let base_header = {|module Test exposing []
 import Tesl.Prelude exposing [Int, String, Bool(..), List, Fact, forgetFact, attachFact, detachFact, introAnd, andLeft, andRight]
 import Tesl.Maybe exposing [Maybe(..)]

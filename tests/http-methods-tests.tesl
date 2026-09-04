@@ -54,18 +54,18 @@ codec WidgetBody {
 # ── Handlers — one per verb, each stamping the verb that wrote the row ───────
 
 handler post createWidget(body: WidgetBody) -> String
-  requires [dbRead, dbWrite] =
+  requires [dbRead Widget, dbWrite Widget] =
   insert Widget { id: "w-new", label: body.label, tag: "post" }
   "created"
 
 handler get readWidget(widgetId: String) -> String
-  requires [dbRead] =
+  requires [dbRead Widget] =
   case selectOne w from Widget where w.id == widgetId of
     Nothing -> fail 404 "no such widget"
     Something w -> w.label ++ "/" ++ w.tag
 
 handler put replaceWidget(widgetId: String, body: WidgetBody) -> String
-  requires [dbRead, dbWrite] =
+  requires [dbRead Widget, dbWrite Widget] =
   update w in Widget
     where w.id == widgetId
     set w.label = body.label
@@ -75,7 +75,7 @@ handler put replaceWidget(widgetId: String, body: WidgetBody) -> String
   "replaced"
 
 handler patch amendWidget(widgetId: String, body: WidgetBody) -> String
-  requires [dbRead, dbWrite] =
+  requires [dbRead Widget, dbWrite Widget] =
   update w in Widget
     where w.id == widgetId
     set w.label = body.label
@@ -85,7 +85,7 @@ handler patch amendWidget(widgetId: String, body: WidgetBody) -> String
   "amended"
 
 handler delete removeWidget(widgetId: String) -> String
-  requires [dbRead, dbWrite] =
+  requires [dbRead Widget, dbWrite Widget] =
   delete w from Widget where w.id == widgetId
   "removed"
 
@@ -124,7 +124,7 @@ server WidgetServer for WidgetApi {
 
 # ── One verb at a time ──────────────────────────────────────────────────────
 
-api-test "POST reaches its handler and carries the body" for WidgetServer requires [dbRead, dbWrite] {
+api-test "POST reaches its handler and carries the body" for WidgetServer requires [dbRead Widget, dbWrite Widget] {
   let created = post "/widgets" body { "label": "first" }
   expect statusOk created.status
   expect created.body == "created"
@@ -133,12 +133,12 @@ api-test "POST reaches its handler and carries the body" for WidgetServer requir
   expect read.body == "first/post"
 }
 
-api-test "GET on a missing row is a client error, not a crash" for WidgetServer requires [dbRead, dbWrite] {
+api-test "GET on a missing row is a client error, not a crash" for WidgetServer requires [dbRead Widget, dbWrite Widget] {
   let resp = get "/widgets/never-created"
   expect statusClientError resp.status
 }
 
-api-test "PUT is routed, carries its body, and stamps its own verb" for WidgetServer requires [dbRead, dbWrite] {
+api-test "PUT is routed, carries its body, and stamps its own verb" for WidgetServer requires [dbRead Widget, dbWrite Widget] {
   seed {
     insert Widget { id: "w-put", label: "before", tag: "seed" }
   }
@@ -149,7 +149,7 @@ api-test "PUT is routed, carries its body, and stamps its own verb" for WidgetSe
   expect read.body == "after-put/put"
 }
 
-api-test "PATCH is routed to its own handler, not to PUT's" for WidgetServer requires [dbRead, dbWrite] {
+api-test "PATCH is routed to its own handler, not to PUT's" for WidgetServer requires [dbRead Widget, dbWrite Widget] {
   seed {
     insert Widget { id: "w-patch", label: "before", tag: "seed" }
   }
@@ -160,7 +160,7 @@ api-test "PATCH is routed to its own handler, not to PUT's" for WidgetServer req
   expect read.body == "after-patch/patch"
 }
 
-api-test "DELETE is routed and the row is really gone afterwards" for WidgetServer requires [dbRead, dbWrite] {
+api-test "DELETE is routed and the row is really gone afterwards" for WidgetServer requires [dbRead Widget, dbWrite Widget] {
   seed {
     insert Widget { id: "w-del", label: "doomed", tag: "seed" }
   }
@@ -178,7 +178,7 @@ api-test "DELETE is routed and the row is really gone afterwards" for WidgetServ
 # and read the tag back each time: a router that ignored the method (or paired
 # handlers to endpoints by name instead of position) would leave the wrong tag.
 
-api-test "PUT then PATCH on one path land in different handlers" for WidgetServer requires [dbRead, dbWrite] {
+api-test "PUT then PATCH on one path land in different handlers" for WidgetServer requires [dbRead Widget, dbWrite Widget] {
   seed {
     insert Widget { id: "w-seq", label: "v0", tag: "seed" }
   }
@@ -198,12 +198,12 @@ api-test "PUT then PATCH on one path land in different handlers" for WidgetServe
 # directions must be rejected rather than falling through to the handler that
 # happens to share the other half of the key.
 
-api-test "DELETE on a path that declares only POST is refused" for WidgetServer requires [dbRead, dbWrite] {
+api-test "DELETE on a path that declares only POST is refused" for WidgetServer requires [dbRead Widget, dbWrite Widget] {
   let resp = delete "/widgets"
   expect statusClientError resp.status
 }
 
-api-test "POST on a path that declares no POST is refused" for WidgetServer requires [dbRead, dbWrite] {
+api-test "POST on a path that declares no POST is refused" for WidgetServer requires [dbRead Widget, dbWrite Widget] {
   seed {
     insert Widget { id: "w-nopost", label: "untouched", tag: "seed" }
   }

@@ -347,9 +347,12 @@ let rec expr_touches_infra ~pg e =
   | EFail { message; _ }           -> expr_touches_infra ~pg message
   | ETelemetry { fields; _ }       -> List.exists (fun (_, v) -> expr_touches_infra ~pg v) fields
   | EField { obj; _ }              -> expr_touches_infra ~pg obj
-  | EConstructor { args; _ }       -> List.exists (expr_touches_infra ~pg) args
-  | ELambda { body; _ }            -> expr_touches_infra ~pg body
-  | ELit _ | EVar _                -> false
+   | EConstructor { args; _ }       -> List.exists (expr_touches_infra ~pg) args
+   | ELambda { body; _ }            -> expr_touches_infra ~pg body
+   | ESqlQuery { query; _ }          ->
+     Ast_visitor.fold_sql_query
+       (fun found child -> found || expr_touches_infra ~pg child) false query
+   | ELit _ | EVar _                -> false
 
 (** [true] when a [test_stmt] (recursively) touches external infrastructure. *)
 let rec stmt_touches_infra ~pg = function
@@ -379,7 +382,11 @@ let rec stmt_touches_infra ~pg = function
     capability list, not the expression tree, is what survives to mark the
     block as infrastructure-touching.  [time] and [env] are deterministic /
     local (no external service) and so are never infra. *)
-let capability_class = function
+let capability_class cap =
+  match Ast.resource_capability_parts cap with
+  | Some (("dbRead" | "dbWrite"), _) -> `Db
+  | Some (("queueRead" | "queueWrite" | "pubsub"), _) -> `ExternalService
+  | _ -> match cap with
   (* Database access.  A bare [raco test] only hangs on these when the database
      is Postgres-backed; an in-memory database runs fine, so DB capabilities are
      gated separately on whether the module declares a Postgres database. *)

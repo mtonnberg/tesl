@@ -304,13 +304,14 @@ func TestServerScopesAndVariablesAreStopScoped(t *testing.T) {
 	outputReader, outputWriter := io.Pipe()
 	server := NewServer(strings.NewReader(""), outputWriter, debugger)
 	defer server.Close()
-	debugger.Enter(teslrt.DebugFrame{
-		ID: "frame", Function: "work",
-		Location: teslrt.SourceLocation{File: "main.tesl", Line: 12},
-	})
 	debugger.Pause()
 	done := make(chan struct{})
 	go func() {
+		scope := debugger.Enter(teslrt.DebugFrame{
+			ID: "frame", Function: "work",
+			Location: teslrt.SourceLocation{File: "main.tesl", Line: 12},
+		})
+		defer scope.Leave()
 		debugger.Checkpoint(teslrt.DebugFrame{
 			ID: "frame", Function: "work",
 			Location: teslrt.SourceLocation{File: "main.tesl", Line: 12},

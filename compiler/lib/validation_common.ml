@@ -273,6 +273,7 @@ let body_has_db_site ?(shadowed : string list = []) (e : expr) : bool =
   in
   let rec go (bound : string list) (e : expr) : bool =
     match e with
+    | ESqlQuery _ -> true
     | EVar { name; _ } -> is_sql_builtin name && not (List.mem name bound)
     | ELet { name; value; body; _ } -> go bound value || go (name :: bound) body
     | ELetProof { value_name; proof_name; value; body; _ } ->
@@ -328,6 +329,7 @@ let return_value_flows_from_db_site ?(shadowed : string list = []) (e : expr) : 
      DB-sourced, so a select buried in a record field does not launder. *)
   let is_db_leaf (e : expr) : bool =
     match e with
+    | ESqlQuery _ -> true
     | ERecord _ | EConstructor _ | ELit _ | ELambda _ | EVar _ -> false
     | _ ->
       (match spine_head e with
@@ -872,17 +874,16 @@ let builtin_ctor_info : ctor_info = [
   ("TextBody", ([mk_name_type "String"], mk_name_type "EmailBody"));
   ("HtmlBody", ([mk_name_type "String"], mk_name_type "EmailBody"));
   ("RichBody", ([mk_name_type "String"; mk_name_type "String"], mk_name_type "EmailBody"));
-  (* HostClass (Tesl.Net, GitHub #68) — nine nullary variants.  These rows are
+   (* JobResult (Tesl.ApiTest) — one payload parameter; failures carry String. *)
+   ("JobOk", ([mk_var_type "a"],
+               mk_app_type (mk_name_type "JobResult") (mk_var_type "a")));
+   ("JobFailed", ([mk_var_type "a"; mk_name_type "String"],
+                   mk_app_type (mk_name_type "JobResult") (mk_var_type "a")));
+   (* HostClass (Tesl.Net, GitHub #68) — nine nullary variants.  These rows are
      what make `case Net.classifyHost h of …` exhaustiveness-checked, and that
      is the entire argument for classifying into an ADT instead of shipping
      nine `Net.isX` predicates: a forgotten range has to be a compile error,
-     because the bug the issue reports IS a forgotten spelling.
-
-     `DeleteResult` was the same gap and is fixed below.  `JobResult` still has
-     no rows: `tesl/api-test.rkt` declares it `(define-adt (JobResult job error)
-     [JobOk job] [JobFailed job error])` — TWO type parameters — while the rest
-     of the compiler carries only its constructor NAMES and no signatures, so a
-     row here would be an arity guess rather than a fact. *)
+     because the bug the issue reports IS a forgotten spelling. *)
   ("Loopback",    ([], mk_name_type "HostClass"));
   ("PrivateIp",   ([], mk_name_type "HostClass"));
   ("LinkLocal",   ([], mk_name_type "HostClass"));
@@ -898,14 +899,6 @@ let builtin_ctor_info : ctor_info = [
      exhaustiveness-checked, and without a variant list here a TOTAL case is
      flagged non-exhaustive instead — the same false positive the EmailBody and
      HostClass rows above exist to remove. *)
-  (* DeleteResult (Tesl.DB) — what `deleteAndReturnResult` answers.  Without these rows a
-     `case` naming BOTH constructors was reported non-exhaustive and a catch-all `_` was
-     required, which is the opposite of what an exhaustiveness check is for: the total match
-     was refused and the ignorable one accepted.  NOTE the payload is an unconstrained `Int`,
-     so `RowsDeleted 0` is inhabited and means what `NoRowDeleted` means — see the roadmap on
-     whether this type should be a count with a proof instead. *)
-  ("NoRowDeleted", ([], mk_name_type "DeleteResult"));
-  ("RowsDeleted",  ([mk_name_type "Int"], mk_name_type "DeleteResult"));
   ("January",   ([], mk_name_type "Month"));
   ("February",  ([], mk_name_type "Month"));
   ("March",     ([], mk_name_type "Month"));
@@ -943,7 +936,7 @@ let build_ctor_info (decls : top_decl list) : ctor_info =
      own `type Weekday = Mon | … | Sun` was told its exhaustive case was "missing
      constructor(s) [Monday, …, Sunday]" — the constructors of Tesl.CivilTime's
      ADT, in a module that never imported it.  The hazard was latent for every
-     stdlib ADT name (`HostClass`, `EmailBody`, `DeleteResult`); common calendar
+      stdlib ADT name (`HostClass`, `EmailBody`); common calendar
      words are just the first ones a user was likely to pick.
 
      This does NOT permit shadowing, which Tesl bans outright.  The two cases are
@@ -1827,6 +1820,7 @@ let collect_needed_capabilities
     ?(param_caps : (string * string list) list = [])
     ?(bound : string list = [])
     ?(server_tools_caps : (string * string list) list = [])
+    ?(queue_for_job : (string * string) list = [])
     (e : expr)
     : string list =
   (* CAP-A1 fix: read/write classification comes from the single SQL registry
@@ -1857,8 +1851,7 @@ let collect_needed_capabilities
        NO capability — checked after param_caps/func_caps so function-typed params
        and user functions keep their own rows. *)
     else if List.mem name bound then []
-    else if is_sql_read_builtin name then ["dbRead"]
-    else if is_sql_write_builtin name then ["dbWrite"]
+    else if is_sql_read_builtin name || is_sql_write_builtin name then []
     (* A2-3: every other effect→capability decision is DERIVED from the single
        source of truth in type_system (queue/time/random/env/jwt/httpClient/uuid/
        aiProvider). SQL stays structural above because a user fn may legitimately
@@ -1884,7 +1877,42 @@ let collect_needed_capabilities
      real effect.  Threading [bound] lexically makes the capability checker agree
      with the typechecker's own scoping (checker.ml routes a name to the SQL/
      builtin path only when it is NOT locally bound). *)
-  let rec go (bound : string list) (acc : string list) (e : expr) : string list =
+    (* Query recognition is centralized in the SQL query node. Scoped
+       requirements use its entity set; legacy bare grants remain wildcards. *)
+    let sql_scoped_caps bound e =
+     let read (seed : Sql_query.sql_select_seed) =
+       ("dbRead " ^ seed.entity) ::
+       List.map (fun (j : Sql_query.sql_join) -> "dbRead " ^ j.join_entity) seed.joins
+     in
+       let query_node = match e with
+         | ESqlQuery { query; _ } -> Some query
+         | _ -> Sql_query.parse_query_node e
+       in
+       match query_node with
+      | Some (Sql_query.QuerySelect (seed, _)) -> read seed
+      | Some (Sql_query.QueryInsert q) -> ["dbWrite " ^ q.entity]
+      | Some (Sql_query.QueryInsertMany (_, entity)) -> ["dbWrite " ^ entity]
+      | Some (Sql_query.QueryUpsert q) -> ["dbWrite " ^ q.entity]
+      | Some (Sql_query.QueryUpdate q) -> ["dbWrite " ^ q.entity]
+      | Some (Sql_query.QueryDelete (q, _)) -> ["dbWrite " ^ q.entity]
+      | None ->
+        (* Preserve fail-closed diagnostics for malformed SQL.  The structural
+           validator will report the bad shape, but capability analysis must
+           still charge the operation instead of making the malformed form look
+           harmless. *)
+         (match Sql_query.flatten_app_expr [] e with
+          | (EVar { name; _ }, _)
+            when is_sql_read_builtin name
+              && not (List.mem name bound || List.mem_assoc name func_caps
+                      || List.mem_assoc name param_caps) -> ["dbRead"]
+          | (EVar { name; _ }, _)
+            when is_sql_write_builtin name
+              && not (List.mem name bound || List.mem_assoc name func_caps
+                      || List.mem_assoc name param_caps) -> ["dbWrite"]
+          | _ -> [])
+    in
+    let rec go (bound : string list) (acc : string list) (e : expr) : string list =
+     let acc = sql_scoped_caps bound e @ acc in
     match e with
     | EVar { name; _ } -> var_caps bound name @ acc
     (* A qualified call `M.f` parses as an EField on the module-name constructor/var.
@@ -1957,7 +1985,16 @@ let collect_needed_capabilities
       go bound acc user_arg
     (* Effect forms: prepend the fixed data-table token, then descend into
        children via the shared traversal. *)
-    | EEnqueue _ | EPublish _ | ETelemetry _ | ESendEmail _ ->
+    | EEnqueue { job_type; _ } | EPublish { channel_name = job_type; _ } ->
+      let scoped = match e with
+        | EEnqueue _ ->
+          let queue = Option.value ~default:job_type (List.assoc_opt job_type queue_for_job) in
+          ["queueWrite " ^ queue]
+        | EPublish _ -> ["pubsub " ^ job_type]
+        | _ -> []
+      in
+      Ast_visitor.fold_children_env go bound (scoped @ acc) e
+    | ETelemetry _ | ESendEmail _ ->
       let key = match e with
         | EEnqueue _ -> "EEnqueue" | EPublish _ -> "EPublish"
         | ETelemetry _ -> "ETelemetry" | _ -> "ESendEmail" in
@@ -2061,7 +2098,11 @@ let rec load_imported_func_caps ?(visited : string list = []) (m : module_form)
                 (Ast.func_bound_cap_vars fd) in
             List.filter (fun c -> not (List.mem c bound)) caps
           in
-          let step verified =
+           let queue_for_job =
+             List.concat_map (function
+               | DQueue q -> List.map (fun job -> (job, q.name)) (Desugar.queue_job_types q)
+               | _ -> []) imported.decls in
+           let step verified =
             List.map (fun (name, cur) ->
               match List.assoc_opt name fd_by_name with
               | None -> (name, cur)
@@ -2069,7 +2110,7 @@ let rec load_imported_func_caps ?(visited : string list = []) (m : module_form)
                 let func_caps = verified @ imported_imports_caps in
                 let param_caps = build_param_capability_map fd in
                 let needed =
-                  collect_needed_capabilities ~func_caps ~param_caps
+                   collect_needed_capabilities ~func_caps ~param_caps ~queue_for_job
                     ~bound:(List.map (fun (b : binding) -> b.name) fd.params) fd.body in
                 (name, List.sort_uniq compare (cur @ strip_bound fd needed))
             ) verified
@@ -2510,8 +2551,35 @@ let rec infer_expr_type
                (fun (b : binding) acc ->
                   TFun { dom = b.type_expr; cod = acc; caps = []; loc = gen_loc })
                params cod)
-     | None -> None)
-  | EBinop { op; _ } ->
+      | None -> None)
+   | ESqlQuery { query; _ } ->
+     let field_type entity field =
+       match List.assoc_opt entity fields_by_type with
+       | Some fields ->
+         Option.map (fun (f : field_def) -> f.type_expr)
+           (List.find_opt (fun (f : field_def) -> f.name = field) fields)
+       | None -> None
+     in
+     let query_field_type entity field =
+       Option.value (field_type entity field) ~default:(mk_var_type "a")
+     in
+     (match query with
+      | QuerySelect ({ kind; entity; _ }, _) ->
+        (match kind with
+         | SelectMany -> Some (mk_app_type (mk_name_type "List") (mk_name_type entity))
+         | SelectOne -> Some (mk_app_type (mk_name_type "Maybe") (mk_name_type entity))
+         | SelectCount | SelectCountBy -> Some (mk_name_type "Int")
+         | SelectSum field -> Some (query_field_type entity field)
+         | SelectMax field | SelectMin field ->
+           Some (mk_app_type (mk_name_type "Maybe") (query_field_type entity field))
+         | SelectSumBy field ->
+           Some (mk_app_type (mk_name_type "List")
+                   (TTuple { elems = [mk_var_type "a"; query_field_type entity field]; loc = gen_loc })))
+      | QueryInsert _ | QueryInsertMany _ | QueryUpsert _ | QueryUpdate _ ->
+        Some (mk_name_type "Unit")
+      | QueryDelete (seed, _) ->
+        Some (if seed.with_result then mk_name_type "Int" else mk_name_type "Unit"))
+   | EBinop { op; _ } ->
     (match op with
      | BAnd | BOr | BEq | BNeq | BLt | BLe | BGt | BGe -> Some (mk_name_type "Bool")
      | BConcat -> Some (mk_name_type "String")

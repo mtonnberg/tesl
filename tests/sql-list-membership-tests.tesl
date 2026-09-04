@@ -24,24 +24,24 @@ database TestDb = Database {
   backend: Memory
 }
 
-fn visiblePosts() -> Int requires [dbRead] =
+fn visiblePosts() -> Int requires [dbRead Post] =
   let rows = select p from Post
     where notInList p.author ["mallory", "trudy"]
   List.length rows
 
-fn staffPosts() -> Int requires [dbRead] =
+fn staffPosts() -> Int requires [dbRead Post] =
   let rows = select p from Post
     where inList p.author ["alice", "bob"]
   List.length rows
 
-test "notInList with a literal list excludes exactly those authors" requires [dbRead, dbWrite] {
+test "notInList with a literal list excludes exactly those authors" requires [dbRead Post, dbWrite Post] {
   let _ = insert Post { id: "1", author: "alice" }
   let _ = insert Post { id: "2", author: "mallory" }
   let _ = insert Post { id: "3", author: "trudy" }
   expect visiblePosts () == 1
 }
 
-test "inList with a literal list keeps exactly those authors" requires [dbRead, dbWrite] {
+test "inList with a literal list keeps exactly those authors" requires [dbRead Post, dbWrite Post] {
   let _ = insert Post { id: "1", author: "alice" }
   let _ = insert Post { id: "2", author: "mallory" }
   let _ = insert Post { id: "3", author: "bob" }

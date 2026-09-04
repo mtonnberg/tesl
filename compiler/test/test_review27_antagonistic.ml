@@ -478,7 +478,7 @@ fn testHof(n: Int) -> Int =
 (* ── F22: Large integer literal compiles (A9/HM-1: Int is arbitrary-precision) ──
    Formerly Int literals above the fixnum limit were rejected. Under A9/HM-1 the
    range check is dropped: the huge magnitude is carried as an LBigInt canonical
-   string into the Racket bignum — never silently wrapped or truncated.          *)
+   string into direct Go output — never silently wrapped or truncated.           *)
 
 let test_large_integer_literal_rejected () =
   let src = prelude ^ {|

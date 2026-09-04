@@ -407,7 +407,7 @@ database TestDB = Database {
   backend: Memory
 }
 
-fn findMatched(minVal: Int) -> List A requires [dbRead] =
+fn findMatched(minVal: Int) -> List A requires [dbRead A, dbRead B] =
   select a from A
   innerJoin B on a.bId B.id
   where a.val > minVal
@@ -429,7 +429,7 @@ database IJWhereDB = Database {
   backend: Memory
 }
 
-fn query(userId: String) -> List Post requires [dbRead] =
+fn query(userId: String) -> List Post requires [dbRead Post, dbRead User] =
   select p from Post
   innerJoin User on p.userId User.id
   where p.userId == userId
@@ -451,7 +451,7 @@ database IJOrderDB = Database {
   backend: Memory
 }
 
-fn topPosts(n: Int) -> List Article requires [dbRead] =
+fn topPosts(n: Int) -> List Article requires [dbRead Article, dbRead Author] =
   select a from Article
   innerJoin Author on a.authorId Author.id
   order a.score desc
@@ -474,7 +474,7 @@ database IJRuntimeDB = Database {
   backend: Memory
 }
 
-fn doQuery() -> List Widget requires [dbRead] =
+fn doQuery() -> List Widget requires [dbRead Widget, dbRead Thing] =
   select w from Widget
   innerJoin Thing on w.thingId Thing.id
 |} in
@@ -496,7 +496,7 @@ database MultiJoinDB = Database {
   backend: Memory
 }
 
-fn query() -> List Order requires [dbRead] =
+fn query() -> List Order requires [dbRead Order, dbRead Customer, dbRead Product] =
   select o from Order
   innerJoin Customer on o.customerId Customer.id
   innerJoin Product on o.productId Product.id

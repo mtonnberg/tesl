@@ -337,7 +337,7 @@ handler post echo(req: EchoRequest) -> EchoRequest =
   req
 
 handler get getSeededNote() -> Note
-  requires [dbRead] =
+  requires [dbRead Note] =
   let found = selectOne n from Note where n.id == "note-1"
   case found of
     Nothing ->
@@ -358,7 +358,7 @@ server Server for Api {
   getSeededNote
 }
 
-api-test "seed prepares fresh in-memory state" for Server requires [dbRead, dbWrite] {
+api-test "seed prepares fresh in-memory state" for Server requires [dbRead Note, dbWrite Note] {
   seed {
     insert Note { id: "note-1", title: "Seeded from setup" }
   }
@@ -556,7 +556,7 @@ database MainDatabase = Database {
 }
 
 handler get listBooks() -> List Book
-  requires [dbRead] =
+  requires [dbRead Book] =
   select b from Book
 
 api Api {
@@ -572,7 +572,7 @@ load-test "list books with seeded data" for Server
   rate 3rps
   duration 1s
   baseline "base"
-  requires [dbRead, dbWrite] {
+  requires [dbRead Book, dbWrite Book] {
   seed {
     insert Book { id: "book-1", title: "The Art of Tesl", pages: 320 }
     insert Book { id: "book-2", title: "Proofs in Practice", pages: 210 }

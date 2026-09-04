@@ -309,7 +309,7 @@ let test_R59_CP01_missing_capability_from_callee () =
 module R59Cp01 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbRead]
-fn readOp(n: Int) -> Int requires [dbRead] = n
+fn readOp(n: Int) -> Int requires [dbRead Note] = n
 fn noCapFn(n: Int) -> Int =
   readOp n
 |}

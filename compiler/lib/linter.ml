@@ -34,6 +34,7 @@
       W094  queue/sseChannel declared but never activated in main's App
       W095  two api endpoints share one handler signature (positional-bind ambiguity)
       W096  route string already carries the App's mountPath prefix (applied twice)
+      W097  unused ADT type parameter
 *)
 
 (* A lint diagnostic uses the same type as Compile.diagnostic so it can
@@ -607,10 +608,15 @@ let rec collect_test_stmt_names acc (ts : Ast.test_stmt) =
   | TsExpr { e; _ } -> collect_expr_names acc e
 
 (** Collect all names used in a top-level declaration. *)
+let collect_capability_name acc cap =
+  match Ast.resource_capability_parts cap with
+  | Some (base, resource) -> resource :: base :: cap :: acc
+  | None -> cap :: acc
+
 let collect_decl_names acc (d : Ast.top_decl) =
   match d with
   | DFunc fd ->
-    let acc = List.fold_left (fun a c -> c :: a) acc fd.capabilities in
+    let acc = List.fold_left collect_capability_name acc fd.capabilities in
     let acc = List.fold_left collect_binding_names acc fd.params in
     let acc = collect_return_spec_names acc fd.return_spec in
     collect_expr_names acc fd.body
@@ -652,14 +658,14 @@ let collect_decl_names acc (d : Ast.top_decl) =
          ) a entries
        ) acc alts)
   | DTest tf ->
-    let acc = List.fold_left (fun a c -> c :: a) acc tf.capabilities in
+    let acc = List.fold_left collect_capability_name acc tf.capabilities in
     List.fold_left collect_test_stmt_names acc tf.stmts
   | DApiTest atf ->
-    let acc = List.fold_left (fun a c -> c :: a) acc atf.capabilities in
+    let acc = List.fold_left collect_capability_name acc atf.capabilities in
     let acc = List.fold_left (fun a e -> collect_expr_names a e) acc atf.seed_stmts in
     List.fold_left collect_test_stmt_names acc atf.stmts
   | DLoadTest ltf ->
-    let acc = List.fold_left (fun a c -> c :: a) acc ltf.capabilities in
+    let acc = List.fold_left collect_capability_name acc ltf.capabilities in
     let acc = List.fold_left (fun a e -> collect_expr_names a e) acc ltf.seed_stmts in
     List.fold_left collect_test_stmt_names acc ltf.request_stmts
   | DApi af ->
@@ -702,7 +708,7 @@ let collect_decl_names acc (d : Ast.top_decl) =
        references its capabilities and every name in the `Agent { … }` RHS (the
        provider constructor like `anthropic`/`requireEnv` and the `asTool`-wrapped
        tool fns). Descend so those imports aren't falsely flagged W050-unused. *)
-    let acc = List.fold_left (fun a c -> c :: a) acc af.capabilities in
+    let acc = List.fold_left collect_capability_name acc af.capabilities in
     (match af.config_expr with Some e -> collect_expr_names acc e | None -> acc)
   | DConst cf -> collect_expr_names acc cf.value
   | DQueue qf ->
@@ -710,7 +716,7 @@ let collect_decl_names acc (d : Ast.top_decl) =
        references its capabilities, the database, the job/worker names, and every
        name in the `Queue { … }` RHS (Queue/Job/QueueRetryStrategy/Exponential …).
        Descend so those imports aren't falsely flagged W050-unused. *)
-    let acc = List.fold_left (fun a c -> c :: a) acc qf.capabilities in
+    let acc = List.fold_left collect_capability_name acc qf.capabilities in
     let acc = qf.database :: List.fold_left (fun a j -> j :: a) acc qf.jobs in
     (match qf.config_expr with Some e -> collect_expr_names acc e | None -> acc)
   | DChannel chf ->
@@ -726,7 +732,7 @@ let collect_decl_names acc (d : Ast.top_decl) =
     let acc = wf.queue_name :: acc in
     List.fold_left (fun a (_, fn) -> fn :: a) acc wf.bindings
   | DCapability cf ->
-    List.fold_left (fun a c -> c :: a) acc cf.implies
+    List.fold_left collect_capability_name acc cf.implies
 
 (** Lint unused imports by parsing the source and checking name references. *)
 let lint_unused_imports filename (source : string) (out : lint_diag list ref) =
@@ -1174,10 +1180,10 @@ let rec collect_start_email_workers (acc : string list) (e : Ast.expr) : string 
   | Ast.EWithTransaction { body; _ } -> collect_start_email_workers acc body
   | Ast.EServe _ | Ast.ETelemetry _ | Ast.EEnqueue _ | Ast.EPublish _
   | Ast.EStartWorkers _ | Ast.ESendEmail _ | Ast.ECacheGet _
-  | Ast.ECacheSet _ | Ast.ECacheDelete _ | Ast.ECacheInvalidate _
-  | Ast.ELambda _ | Ast.ERecord _ | Ast.EList _ | Ast.EOk _ | Ast.EFail _
-  | Ast.EConstructor _ | Ast.EField _ | Ast.EVar _ | Ast.ELit _
-  -> acc
+   | Ast.ECacheSet _ | Ast.ECacheDelete _ | Ast.ECacheInvalidate _
+   | Ast.ELambda _ | Ast.ERecord _ | Ast.EList _ | Ast.EOk _ | Ast.EFail _
+   | Ast.EConstructor _ | Ast.EField _ | Ast.EVar _ | Ast.ELit _ | Ast.ESqlQuery _
+   -> acc
 
 (** The names a module's own `main` activates under one `App` field.
 
@@ -1913,6 +1919,37 @@ let lint_security filename (source : string) (out : lint_diag list ref) =
     sec003_hardcoded_secret filename m out;
     sec004_timing_unsafe_mac filename m out
 
+(** W097: a declared ADT parameter must affect at least one constructor field.
+    Otherwise distinct applications such as [Tree Int] and [Tree String] imply
+    a distinction the representation never carries. *)
+let lint_unused_type_parameters filename (source : string) (out : lint_diag list ref) =
+  let rec vars acc = function
+    | Ast.TVar { name; _ } -> name :: acc
+    | Ast.TName _ -> acc
+    | Ast.TApp { head; arg; _ } -> vars (vars acc head) arg
+    | Ast.TFun { dom; cod; _ } -> vars (vars acc dom) cod
+    | Ast.TTuple { elems; _ } -> List.fold_left vars acc elems
+  in
+  match Parser.parse_module filename source with
+  | Err _ -> ()
+  | Ok m ->
+    List.iter (function
+      | Ast.DType (Ast.TypeAdt { name; params; variants; loc }) ->
+        let used =
+          List.fold_left (fun acc (variant : Ast.adt_variant) ->
+            List.fold_left (fun acc (field : Ast.field_def) ->
+              vars acc field.type_expr) acc variant.fields) [] variants in
+        List.iter (fun param ->
+          if not (List.mem param used)
+             && not (String.length param > 0 && param.[0] = '_') then
+            out := { file = filename; line = loc.start.line; col = loc.start.col;
+                     severity = "warning"; code = "W097";
+                     message = Printf.sprintf
+                       "unused type parameter `%s` on `%s`: no constructor field carries it"
+                       param name;
+                     fix = None } :: !out) params
+      | _ -> ()) m.decls
+
 (* ── Public API ──────────────────────────────────────────────────────────── *)
 
 (** Run all lint checks and return diagnostics as [Compile.diagnostic] values
@@ -1942,23 +1979,24 @@ let lint_file ?logical_path (filename : string) : Compile.diagnostic list =
      runs once an earlier pass raises on a lexer-fatal buffer — which for a
      SECURITY finding is the wrong failure mode.  Running first with a private
      guard means neither direction can suppress the other. *)
-  (try lint_security filename src out with Failure _ -> ());
+  (try lint_security parse_path src out with Failure _ -> ());
   (try
-    lint_file_structure    filename lines out;
-    lint_whitespace        filename lines out;
-    lint_naming            filename lines out;
-    lint_deprecated_syntax filename lines out;
-    lint_adt_footgun             filename lines out;
-    lint_lambda_in_arg_position  filename lines out;
-    lint_unused_imports          filename src out;
-    lint_unused_locals_and_dead_code filename src out;
-    lint_missing_email_worker    filename src out;
-    lint_unactivated_runtime_decls filename src out;
-    lint_ambiguous_handler_signatures filename src out;
-    lint_mount_path_double_prefix    filename src out;
-    lint_unexported_signature_names filename src out;
-    lint_int_at_wire                filename src out;
-    lint_database_indexes           filename parse_path src out
+    lint_file_structure    parse_path lines out;
+    lint_whitespace        parse_path lines out;
+    lint_naming            parse_path lines out;
+    lint_deprecated_syntax parse_path lines out;
+    lint_adt_footgun             parse_path lines out;
+    lint_lambda_in_arg_position  parse_path lines out;
+    lint_unused_imports          parse_path src out;
+    lint_unused_locals_and_dead_code parse_path src out;
+    lint_unused_type_parameters  parse_path src out;
+    lint_missing_email_worker    parse_path src out;
+    lint_unactivated_runtime_decls parse_path src out;
+    lint_ambiguous_handler_signatures parse_path src out;
+    lint_mount_path_double_prefix    parse_path src out;
+    lint_unexported_signature_names parse_path src out;
+    lint_int_at_wire                parse_path src out;
+    lint_database_indexes           parse_path parse_path src out
    with Failure _ -> ());
   (* Sort by line then col *)
   let sorted = List.sort (fun a b ->

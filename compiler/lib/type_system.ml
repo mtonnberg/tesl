@@ -60,7 +60,6 @@ let t_iso_week   = TCon "IsoWeek"
 let t_month      = TCon "Month"
 let t_weekday    = TCon "Weekday"
 let t_fact    = TCon "Fact"
-let t_delete_result = TCon "DeleteResult"
 let t_jwt_token  = TCon "JwtToken"
 (* Tesl.Http's request.  Opaque: it has no record type, and field reads on it go
    through the checker's [opaque_special_field_types] escape hatch, so this alias
@@ -442,10 +441,6 @@ let stdlib_env : (string * scheme) list = [
   "Ok",  { vars = _r2_ab; mono = t_fun [_a] (t_result _a _b) };
   "Err", { vars = _r2_ab; mono = t_fun [_b] (t_result _a _b) };
 
-  (* ── DeleteResult ─────────────────────────────────────────────────────── *)
-  "NoRowDeleted", { vars = []; mono = t_delete_result };
-  "RowsDeleted", { vars = []; mono = t_fun [t_int] t_delete_result };
-
   (* ── List ────────────────────────────────────────────────────────────── *)
   (* TYPE SOURCE OF TRUTH: the 26 PURE, PROOF-FREE List combinators below were
      LIFTED — their type signatures now live in `tesl/list.tesl` and are loaded
@@ -534,7 +529,7 @@ let stdlib_env : (string * scheme) list = [
   "Url.userInfo",      mono (t_fun [t_url] (t_maybe t_string));
   "Url.toString",      mono (t_fun [t_url] t_string);
 
-  (* HostClass constructors — nullary, like NoRowDeleted. *)
+   (* HostClass constructors — nullary. *)
   "Loopback",    mono t_host_class;
   "PrivateIp",   mono t_host_class;
   "LinkLocal",   mono t_host_class;
@@ -1398,6 +1393,37 @@ let env_extend name sch (env : (string * scheme) list) =
   (name, sch) :: env
 
 (* ── Stdlib module export registry ───────────────────────────────────────── *)
+(** Stdlib exports that are part of the language surface but cannot currently
+    be lowered by the sole shipped backend.  The checker consumes this table so
+    an explicit import fails before code generation; the Go seam test consumes
+    the same table to ensure every backend refusal has a frontend guard. *)
+let go_backend_unavailable_exports : (string * string list) list = [
+  "Tesl.Dict", ["Dict.map"; "Dict.mapWithKey"; "Dict.filter"; "Dict.filterWithKey";
+                "Dict.foldl"; "Dict.foldr"; "Dict.insertWith"; "Dict.unionWith";
+                "Dict.update"; "Dict.difference"; "Dict.intersection"];
+  "Tesl.Set", ["Set.map"; "Set.filter"; "Set.foldl"; "Set.all"; "Set.any"; "Set.partition"];
+  "Tesl.List", ["List.zipWith"; "List.unzip"; "List.partition"; "List.groupBy";
+                "List.findIndex"; "List.dedupe"; "List.intersperse"; "List.intercalate";
+                "List.nth"];
+  "Tesl.ListPrim", ["ListPrim.head"; "ListPrim.tail"; "ListPrim.append"];
+  "Tesl.Int", ["Int.toFloat"; "Int.fromFloat"; "Int.digits"; "Int.isZero";
+               "Int.isPositive"; "Int.isNegative"];
+  "Tesl.String", ["String.toFloat"; "String.fromFloat"; "String.words"; "String.lines";
+                  "String.trimLeft"; "String.trimRight"];
+  "Tesl.Json", ["int32Codec"];
+  "Tesl.UUID", ["uuidV4Codec"; "uuidV7Codec"];
+  "Tesl.Email", ["Email.send"; "startEmailWorker"];
+  "Tesl.Cache", ["cache"];
+  "Tesl.ApiTest", ["SseStream"];
+  "Tesl.Net", ["Loopback"; "PrivateIp"; "LinkLocal"; "Cgnat"; "Multicast";
+               "Unspecified"; "PublicIp"; "DomainName"; "InvalidHost"];
+]
+
+let go_backend_export_available module_name export =
+  match List.assoc_opt module_name go_backend_unavailable_exports with
+  | Some unavailable -> not (List.mem export unavailable)
+  | None -> true
+
 (** Authoritative export lists for every Tesl.* stdlib module.
     Used to validate `import Tesl.X exposing [name]` at compile time —
     the compiler rejects any name that is not listed here. *)
@@ -1426,7 +1452,7 @@ let tesl_module_exports : (string * string list) list = [
   ( "Tesl.Result",
     [ "Result"; "Ok"; "Err" ] );
   ( "Tesl.DB",
-    [ "dbRead"; "dbWrite"; "DeleteResult"; "NoRowDeleted"; "RowsDeleted" ] );
+    [ "dbRead"; "dbWrite" ] );
   ( "Tesl.EitherPrim",
     [ "Either"; "Left"; "Right" ] );
   ( "Tesl.Either",
@@ -1681,8 +1707,10 @@ let tesl_module_exports : (string * string list) list = [
       "askReply"; "askWith"; "replyText"; "replyTokens"; "replyToolCalls";
       "decodeAs"; "askFor";
       "Conversation"; "Conversation?"; "ConversationTurn"; "ConversationTurn?";
-      "newConversation"; "conversationFrom"; "converse"; "converseStreaming"; "turnReply";
-      "turnConversation"; "conversationJson"; "conversationLength"; "agentRun" ] );
+       "newConversation"; "conversationFrom"; "converse"; "converseStreaming"; "turnReply";
+       "turnConversation"; "conversationJson"; "conversationLength"; "agentRun" ] );
+   ( "Tesl.Telemetry",
+     [ "TelemetryConfig"; "initTelemetry"; "telemetry"; "counter"; "histogram"; "gauge" ] );
   (* Tesl.Http gained a real export list when the session cookie landed
      (2026-07-30).  Before that it was one of the loosely-validated internal
      modules below, which meant its names were also invisible to the stdlib
@@ -1718,7 +1746,7 @@ let tesl_module_export_set (module_name : string) : string list option =
     and then died at `raco expand` with "unbound identifier".
 
     NO stdlib module's surface is exempt, deliberately.  Several stdlib
-    constructors (`Nothing`/`Something`, `Ok`/`Err`, `NoRowDeleted`, the `String`
+     constructors (`Nothing`/`Something`, `Ok`/`Err`, the `String`
     type-name symbol) HAPPEN to be bound without an import, because the
     always-emitted dsl/runtime + Prelude + dsl/sql requires provide them — so
     corpus modules got away with using them while importing nothing.  That
@@ -1860,7 +1888,6 @@ let stdlib_adt_ctor_groups : (string * string * string list) list = [
      take their leaves from Tesl.EitherPrim): both modules export the ctors, and
      tesl/either.tesl itself imports only the PRIM one. *)
   "Tesl.EitherPrim", "Either",       [ "Left"; "Right" ];
-  "Tesl.DB",         "DeleteResult", [ "NoRowDeleted"; "RowsDeleted" ];
   "Tesl.ApiTest",    "JobResult",    [ "JobOk"; "JobFailed" ];
   "Tesl.Email",      "EmailBody",    [ "TextBody"; "HtmlBody"; "RichBody" ];
   "Tesl.Net",        "HostClass",

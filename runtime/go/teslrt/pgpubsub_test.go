@@ -3,11 +3,14 @@ package teslrt
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // The cross-instance path is under test here, so every live test stands up TWO `Database`
@@ -206,6 +209,216 @@ func TestPubsubSweepDeliversARowWhoseNotificationWasLost(t *testing.T) {
 	})
 }
 
+// A publisher holds the dispatch lock until commit. A concurrent publisher cannot allocate a
+// later sequence and commit first, so another instance observes the transactions in lock/commit
+// order rather than allocation-id or notification order.
+func TestPubsubCrossInstanceDeliveryFollowsSerializedCommitOrder(t *testing.T) {
+	shrinkPubsubIntervals(t)
+	instanceA := pubsubDatabase(t, "InstanceA")
+	instanceB := pubsubDatabase(t, "InstanceB")
+	channelA := NewSseChannelOn(instanceA, "Ordered")
+	channelB := NewSseChannelOn(instanceB, "Ordered")
+	WithDatabase(instanceA, func() {
+		WithDatabase(instanceB, func() {
+			listener := channelB.register("all")
+			defer channelB.unregister("all", listener)
+			awaitListener(t, instanceA)
+			awaitListener(t, instanceB)
+			db := instanceA.bound()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			first, err := db.pool.Begin(ctx)
+			if err != nil {
+				t.Fatalf("begin first publisher: %v", err)
+			}
+			defer func() { _ = first.Rollback(context.Background()) }()
+			if _, err := writePubsub(ctx, first, db, channelA.name, "all", `{"order":"first"}`); err != nil {
+				t.Fatalf("write first publisher: %v", err)
+			}
+
+			secondDone := make(chan error, 1)
+			go func() {
+				second, beginErr := db.pool.Begin(ctx)
+				if beginErr != nil {
+					secondDone <- beginErr
+					return
+				}
+				defer func() { _ = second.Rollback(context.Background()) }()
+				if _, writeErr := writePubsub(ctx, second, db, channelA.name, "all", `{"order":"second"}`); writeErr != nil {
+					secondDone <- writeErr
+					return
+				}
+				secondDone <- second.Commit(ctx)
+			}()
+			select {
+			case err := <-secondDone:
+				t.Fatalf("second publisher passed the first transaction's lock: %v", err)
+			case <-time.After(100 * time.Millisecond):
+			}
+			if err := first.Commit(ctx); err != nil {
+				t.Fatalf("commit first publisher: %v", err)
+			}
+			if err := <-secondDone; err != nil {
+				t.Fatalf("second publisher: %v", err)
+			}
+
+			for index, want := range []string{`{"order":"first"}`, `{"order":"second"}`} {
+				if got := EncodeJSONValue(expectEvent(t, listener, 5*time.Second)); got != want {
+					t.Fatalf("event %d was %s, want %s", index+1, got, want)
+				}
+			}
+			expectNoEvent(t, listener, 600*time.Millisecond)
+		})
+	})
+}
+
+// Retained history does not become periodic work. A backlog larger than the former four-batch
+// ceiling drains in one call, while each iteration reads and upgrades at most one bounded batch.
+func TestPubsubSustainedBacklogConvergesWithBoundedIterations(t *testing.T) {
+	database := storeDatabase(t, "SweepScale")
+	WithDatabase(database, func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		runtime := &pgPubsub{
+			database: database,
+			channels: map[string][]*SseChannel{},
+			queues:   map[string][]*Queue{},
+			ctx:      ctx,
+		}
+		db := database.bound()
+		if err := runtime.prepare(db); err != nil {
+			t.Fatalf("prepare: %v", err)
+		}
+		conn, err := pgx.ConnectConfig(ctx, db.pool.Config().ConnConfig.Copy())
+		if err != nil {
+			t.Fatalf("connect sweep session: %v", err)
+		}
+		defer func() { _ = conn.Close(context.Background()) }()
+		table := db.QualifiedTable(pubsubOutboxTable)
+		channelName := uniqueName("sweep_scale")
+		const retained = 10 * pubsubSweepBatch
+		transaction, err := db.pool.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin fixture: %v", err)
+		}
+		if _, err := transaction.Exec(ctx,
+			`select pg_advisory_xact_lock(hashtextextended(current_database() || ':' || $1, 0))`, table); err != nil {
+			t.Fatalf("lock fixture: %v", err)
+		}
+		if _, err := transaction.Exec(ctx, `insert into `+table+
+			` ("channel", "key", "payload", "dispatch_seq", "dispatched_at") `+
+			`select $1, 'all', '{"scale":true}'::jsonb, nextval($2::regclass), clock_timestamp() `+
+			`from generate_series(1, $3)`, channelName, db.QualifiedTable(pubsubDispatchSeq), int32(retained)); err != nil {
+			t.Fatalf("insert fixture: %v", err)
+		}
+		if err := transaction.Commit(ctx); err != nil {
+			t.Fatalf("commit fixture: %v", err)
+		}
+		const legacyRetained = 2*pubsubSweepBatch + 1
+		PgExec(db, `insert into `+table+` ("channel", "key", "payload") `+
+			`select $1, 'all', '{"scale":"legacy"}'::jsonb from generate_series(1, $2)`,
+			[]any{channelName, int32(legacyRetained)})
+
+		stats, err := runtime.drainWithStats(conn, db)
+		if err != nil {
+			t.Fatalf("catch-up drain: %v", err)
+		}
+		if stats.rowsRead != retained+legacyRetained || stats.legacyRows != legacyRetained || stats.iterations <= 4 {
+			t.Fatalf("backlog did not drain continuously: %+v", stats)
+		}
+		if stats.maxLegacyBatch > pubsubSweepBatch || stats.maxDeliveryBatch > pubsubSweepBatch ||
+			stats.dispatchQueries != 3 || stats.legacyChecks != stats.dispatchQueries+1 ||
+			stats.fetchQueries != stats.iterations {
+			t.Fatalf("an iteration exceeded its query or memory bound: %+v", stats)
+		}
+		ahead, _ := PgCount(db, `select count(*) from `+table+
+			` where "channel" = $1 and "dispatch_seq" > $2`,
+			[]any{channelName, runtime.cursor()}).Int64()
+		if ahead != 0 {
+			t.Fatalf("drain left %d rows ahead of its cursor", ahead)
+		}
+
+		quiet, err := runtime.drainWithStats(conn, db)
+		if err != nil {
+			t.Fatalf("quiet drain: %v", err)
+		}
+		if quiet.dispatchQueries != 0 || quiet.legacyChecks != 1 || quiet.fetchQueries != 1 || quiet.rowsRead != 0 {
+			t.Fatalf("quiet drain over %d retained rows did %+v work", retained, quiet)
+		}
+
+		oneTransaction, err := db.pool.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin one-row fixture: %v", err)
+		}
+		if _, err := writePubsub(ctx, oneTransaction, db, channelName, "all", `{"scale":"new"}`); err != nil {
+			t.Fatalf("write one-row fixture: %v", err)
+		}
+		if err := oneTransaction.Commit(ctx); err != nil {
+			t.Fatalf("commit one-row fixture: %v", err)
+		}
+		one, err := runtime.drainWithStats(conn, db)
+		if err != nil {
+			t.Fatalf("one-row drain: %v", err)
+		}
+		if one.dispatchQueries != 0 || one.legacyChecks != 1 || one.fetchQueries != 1 || one.rowsRead != 1 {
+			t.Fatalf("one new row over %d retained rows did %+v work", retained, one)
+		}
+		kept, _ := PgCount(db, `select count(*) from `+table+` where "channel" = $1`,
+			[]any{channelName}).Int64()
+		if kept != retained+legacyRetained+1 {
+			t.Fatalf("scaling fixture retained %d rows, want %d", kept, retained+legacyRetained+1)
+		}
+		PgExec(db, `delete from `+table+` where "channel" = $1`, []any{channelName})
+	})
+}
+
+func TestPubsubPreparationUpgradesTheRuntimeOutboxIdempotently(t *testing.T) {
+	config := liveCluster(t)
+	config.Schema = uniqueName("pubsub_upgrade")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	legacy, err := pgx.Connect(ctx, postgresDSN(config))
+	if err != nil {
+		t.Fatalf("connect legacy fixture: %v", err)
+	}
+	defer func() { _ = legacy.Close(context.Background()) }()
+	if _, err := legacy.Exec(ctx, `create schema `+quoteIdentifier(config.Schema)); err != nil {
+		t.Fatalf("create legacy schema: %v", err)
+	}
+	table := quoteIdentifier(config.Schema) + "." + quoteIdentifier(pubsubOutboxTable)
+	if _, err := legacy.Exec(ctx, `create table `+table+` (`+
+		`"id" bigserial primary key, "channel" text not null, "key" text not null, `+
+		`"payload" jsonb not null, "created_at" timestamptz not null default now())`); err != nil {
+		t.Fatalf("create legacy outbox: %v", err)
+	}
+	if _, err := legacy.Exec(ctx, `insert into `+table+
+		` ("channel", "key", "payload") values ('Old', 'all', '{}'::jsonb)`); err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+	db := OpenPostgres(config, nil)
+	_ = OpenPostgres(config, nil)
+	runtimeCtx, runtimeCancel := context.WithCancel(context.Background())
+	defer runtimeCancel()
+	runtime := &pgPubsub{
+		database: &Database{Name: "Upgrade", Config: config},
+		channels: map[string][]*SseChannel{},
+		queues:   map[string][]*Queue{},
+		ctx:      runtimeCtx,
+	}
+	if err := runtime.prepare(db); err != nil {
+		t.Fatalf("first prepare: %v", err)
+	}
+	if err := runtime.prepare(db); err != nil {
+		t.Fatalf("second prepare: %v", err)
+	}
+	ready, _ := PgCount(db, `select count(*) from `+table+
+		` where "dispatch_seq" is not null and "dispatched_at" is not null`, nil).Int64()
+	if ready != 1 || runtime.cursor() == 0 {
+		t.Fatalf("upgraded outbox: ready=%d cursor=%d", ready, runtime.cursor())
+	}
+}
+
 // (d) The LISTEN connection dies. The instance reconnects, and an event published while it
 // was down is delivered by the reconnect's catch-up sweep; one published afterwards arrives
 // through the new connection.
@@ -323,7 +536,80 @@ func TestPubsubChannelOnAnUnboundDatabaseDeliversLocally(t *testing.T) {
 	}
 	// The listener goroutine is idle, polling for a binding that never comes; it must not
 	// have touched anything.
-	if runtime := pubsubRuntimeOf(t, database); runtime.ListenerPID() != 0 || runtime.cursor() != 0 {
+	if runtime := pubsubRuntimeOf(t, database); runtime.ListenerPID() != 0 {
 		t.Fatal("an unbound database started a listener")
 	}
+}
+
+// A timer can expire while a publishing transaction holds the dispatch lock and its NOTIFY is
+// waiting for commit. Both wakeups must feed one cursor rather than independently delivering.
+func TestPubsubNotificationAndPeriodicDrainDoNotDoubleDeliver(t *testing.T) {
+	shrinkPubsubIntervals(t)
+	previous := pubsubSweepInterval
+	pubsubSweepInterval = 5 * time.Millisecond
+	t.Cleanup(func() { pubsubSweepInterval = previous })
+	instance := pubsubDatabase(t, "Instance")
+	channel := NewSseChannelOn(instance, "Race")
+	WithDatabase(instance, func() {
+		listener := channel.register("all")
+		defer channel.unregister("all", listener)
+		awaitListener(t, instance)
+		const published = 48
+		WithTransaction(func() {
+			for number := range published {
+				Publish(channel, "all", eventPayload("n", fmt.Sprintf("%02d", number)))
+			}
+			// Let periodic recovery run before the commit's NOTIFY wakes the same path.
+			time.Sleep(2 * pubsubSweepInterval)
+		})
+		for number := range published {
+			want := fmt.Sprintf(`{"n":"%02d"}`, number)
+			if got := EncodeJSONValue(expectEvent(t, listener, 5*time.Second)); got != want {
+				t.Fatalf("event %d was %s, want %s", number+1, got, want)
+			}
+		}
+		expectNoEvent(t, listener, 100*time.Millisecond)
+	})
+}
+
+// The runtime starts unprepared and the caller already owns the pool's sole connection. Baseline
+// capture and publishing must stay on that transaction rather than lazily leasing another one.
+func TestPubsubFirstTransactionalPublishUsesPoolSizeOne(t *testing.T) {
+	config := liveCluster(t)
+	config.Schema = uniqueName("pubsub_pool_one")
+	config.PoolSize = 1
+	database := &Database{Name: "PoolOne", Config: config}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runtime := &pgPubsub{
+		database: database,
+		channels: map[string][]*SseChannel{},
+		queues:   map[string][]*Queue{},
+		ctx:      ctx,
+	}
+	channel := NewSseChannel("FirstPublish")
+	channel.backend = runtime
+	runtime.channels[channel.name] = []*SseChannel{channel}
+	listener := channel.register("all")
+	defer channel.unregister("all", listener)
+
+	WithDatabase(database, func() {
+		if runtime.ready {
+			t.Fatal("fixture runtime was prepared before its first transactional publish")
+		}
+		WithTransaction(func() {
+			Publish(channel, "all", eventPayload("pool", "one"))
+		})
+		conn, err := pgx.ConnectConfig(ctx, database.bound().pool.Config().ConnConfig.Copy())
+		if err != nil {
+			t.Fatalf("connect delivery session: %v", err)
+		}
+		defer func() { _ = conn.Close(context.Background()) }()
+		if err := runtime.drain(conn, database.bound()); err != nil {
+			t.Fatalf("drain: %v", err)
+		}
+		if got := EncodeJSONValue(expectEvent(t, listener, time.Second)); got != `{"pool":"one"}` {
+			t.Fatalf("first transactional publish delivered %s", got)
+		}
+	})
 }

@@ -14,7 +14,10 @@
 
 open Ast
 
-type sql_clause =
+(* SQL payloads live in [Ast] so the parser can produce a real SQL expression
+   node without an Ast/Sql_query module cycle. These aliases preserve the
+   public type names used by existing consumers. *)
+type sql_clause = Ast.sql_clause =
   | SqlPred of { field : string; op : binop; value : expr }
   | SqlOr of sql_clause list
   | SqlIsNull of { field : string }
@@ -23,31 +26,24 @@ type sql_clause =
   | SqlNotIn of { field : string; values : expr list }
   | SqlLike of { field : string; pattern : expr }
   | SqlILike of { field : string; pattern : expr }
-
-type sql_join = {
+type sql_join = Ast.sql_join = {
   join_entity : string;
   main_field : string;
   join_field : string;
 }
-
-type sql_select_kind =
+type sql_select_kind = Ast.sql_select_kind =
   | SelectMany
   | SelectOne
   | SelectCount
   | SelectSum of string
   | SelectMax of string
   | SelectMin of string
-  | SelectCountBy                (* grouped: List (Tuple2 K Int), GitHub #29 *)
-  | SelectSumBy of string        (* grouped: List (Tuple2 K V) over the field *)
-
-(* A `groupBy` bucket key (GitHub #29).  Fail-closed structural surface: a bare
-   binder field, or one of the five Time.trunc* calendar buckets applied to a
-   PosixMillis field (unit, offset-minutes expression, field). *)
-type sql_group_key =
+  | SelectCountBy
+  | SelectSumBy of string
+type sql_group_key = Ast.sql_group_key =
   | GField of string
   | GTimeTrunc of string * expr * string
-
-type sql_select_seed = {
+type sql_select_seed = Ast.sql_select_seed = {
   kind : sql_select_kind;
   binder : string;
   entity : string;
@@ -69,31 +65,29 @@ let trunc_unit_of_name = function
   | "truncYear" -> Some "year"
   | _ -> None
 
-type sql_insert = {
+type sql_insert = Ast.sql_insert = {
   entity : string;
   fields : (string * expr) list;
 }
-
-type sql_delete_seed = {
+type sql_delete_seed = Ast.sql_delete_seed = {
   binder : string;
   entity : string;
   where_field : string option;
   with_result : bool;
 }
-
-type sql_update = {
+type sql_update = Ast.sql_update = {
   binder : string;
   entity : string;
   clauses : sql_clause list;
   updates : (string * expr) list;
   returning_one : bool;
+  returns_row : bool;
 }
-
-type sql_upsert = {
-  entity   : string;
-  fields   : (string * expr) list;
-  conflict : string list;    (* onConflict [f1, f2] *)
-  do_update: string list;    (* doUpdate [f1, f2] *)
+type sql_upsert = Ast.sql_upsert = {
+  entity : string;
+  fields : (string * expr) list;
+  conflict : string list;
+  do_update : string list;
 }
 
 let rec flatten_app_expr acc = function
@@ -271,6 +265,9 @@ let parse_insert_expr e =
   | _ -> None
 
 let parse_upsert_expr e =
+  match e with
+  | ESqlQuery { query = QueryUpsert q; _ } -> Some q
+  | _ ->
   (* upsert Entity { field: val, ... }
        onConflict [f1, f2]
        doUpdate   [f1, f2]
@@ -326,7 +323,7 @@ let parse_update_start e =
     (match entity_name_of_expr entity_expr with
      | Some entity ->
        let returning_one = String.equal kw "updateAndReturnOne" in
-       Some (binder, entity, returning_one)
+        Some (binder, entity, returning_one, String.equal kw "updateAndReturnOne")
      | None -> None)
   | _ -> None
 
@@ -458,6 +455,9 @@ let rec collect_sql_continuation_atoms acc = function
   | other -> (acc, other)
 
 let extract_select_query e =
+  match e with
+  | ESqlQuery { query = QuerySelect (seed, clauses); _ } -> Some (seed, clauses)
+  | _ ->
   let rec find_seed = function
     | EBinop { left; right; _ } ->
       (match find_seed left with
@@ -573,14 +573,14 @@ let extract_update e =
   | first :: rest ->
     (match parse_update_start first with
      | None -> None
-     | Some (binder, entity, initial_returning_one) ->
-       let rec loop clauses updates returning_one = function
-         | [] when updates <> [] -> Some { binder; entity; clauses; updates; returning_one }
+      | Some (binder, entity, initial_returning_one, returns_row) ->
+        let rec loop clauses updates returning_one = function
+          | [] when updates <> [] -> Some { binder; entity; clauses; updates; returning_one; returns_row }
          | [] -> None
          | expr :: tl ->
            (match parse_returning_one expr with
             | Some flag ->
-              if tl = [] && updates <> [] then Some { binder; entity; clauses; updates; returning_one = flag }
+               if tl = [] && updates <> [] then Some { binder; entity; clauses; updates; returning_one = flag; returns_row }
               else None
             | None ->
               match parse_update_set binder expr with
@@ -614,4 +614,38 @@ let extract_delete e =
        in
        loop [] rest
      | _ -> None)
-  | _ -> None
+   | _ -> None
+
+(* Compatibility name for the canonical AST query payload. *)
+type query_node = Ast.sql_query =
+  | QuerySelect of sql_select_seed * sql_clause list
+  | QueryInsert of sql_insert
+  | QueryInsertMany of string * string
+  | QueryUpsert of sql_upsert
+  | QueryUpdate of sql_update
+  | QueryDelete of sql_delete_seed * sql_clause list
+
+let parse_query_node expr =
+  match expr with
+  | ESqlQuery { query; _ } -> Some query
+  | _ ->
+    let first_of options =
+      List.fold_left (fun found next ->
+        match found with Some _ -> found | None -> next ()) None options
+    in
+    match expr with
+    | EApp _ | EBinop _ ->
+      first_of [
+        (fun () -> Option.map (fun (seed, clauses) -> QuerySelect (seed, clauses)) (extract_select_query expr));
+        (fun () -> Option.map (fun q -> QueryInsert q) (parse_insert_expr expr));
+        (fun () -> Option.map (fun (list_var, entity) -> QueryInsertMany (list_var, entity)) (parse_insert_many_expr expr));
+        (fun () -> Option.map (fun q -> QueryUpsert q) (parse_upsert_expr expr));
+        (fun () -> Option.map (fun (seed, clauses) -> QueryDelete (seed, clauses)) (extract_delete_query expr));
+      ]
+    | ELet _ ->
+      first_of [
+        (fun () -> Option.map (fun q -> QueryUpdate q) (extract_update expr));
+        (fun () -> Option.map (fun (seed, clauses) -> QueryDelete (seed, clauses)) (extract_delete expr));
+        (fun () -> Option.map (fun (seed, clauses) -> QuerySelect (seed, clauses)) (extract_multiline_select_query expr));
+      ]
+    | _ -> None

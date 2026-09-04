@@ -4,6 +4,21 @@
 open Parser
 open Ast
 
+let lexer_failure_prefix = "lexer failure: "
+
+(** Total parser boundary for compiler APIs.  The lexer reports malformed bytes
+    and unterminated literals with [Failure]; convert those into the parser's
+    normal error channel so every JSON query can still emit its documented
+    envelope. *)
+let parse_module filename source =
+  try Parser.parse_module filename source with
+  | Failure message ->
+    Parser.Err {
+      msg = lexer_failure_prefix ^ message;
+      loc = Location.dummy_loc filename;
+      fix = None;
+    }
+
 (** JSON-safe string encoder.
     OCaml's [%S] format uses OCaml escape syntax (\NNN for non-ASCII bytes),
     which is NOT valid JSON.  This function produces a properly quoted JSON
@@ -113,9 +128,17 @@ let diag_of_parse_error (e : parse_error) : diagnostic = {
      from the retired "missing #lang" lint) so `tesl help E002` explains it. *)
   code       = (if String.length e.msg >= 12 && String.sub e.msg 0 12 = "`#lang tesl`"
                 then "E002" else "E000");
-  message    = e.msg;
+  message    =
+    (if String.length e.msg >= String.length lexer_failure_prefix
+        && String.sub e.msg 0 (String.length lexer_failure_prefix) = lexer_failure_prefix
+     then String.sub e.msg (String.length lexer_failure_prefix)
+            (String.length e.msg - String.length lexer_failure_prefix)
+     else e.msg);
   fix        = e.fix;
-  source     = "parser";
+  source     =
+    (if String.length e.msg >= String.length lexer_failure_prefix
+        && String.sub e.msg 0 (String.length lexer_failure_prefix) = lexer_failure_prefix
+     then "lexer" else "parser");
   manual     = None;
 }
 
@@ -336,6 +359,62 @@ let field_at_to_json = function
 
 let field_at_response_to_json result =
   Printf.sprintf {|{"version":1,"field_at":%s}|} (field_at_to_json result)
+
+(* Bound work before recursive semantic passes. The walk itself is iterative,
+   so detecting an excessive tree cannot overflow the OCaml stack. *)
+let max_expression_depth = 512
+let max_expression_nodes = 100_000
+
+let module_expression_roots (m : Ast.module_form) : Ast.expr list =
+  let test_roots stmts = List.concat_map Ast.test_stmt_exprs stmts in
+  List.concat_map (function
+    | Ast.DFunc fd -> [fd.body]
+    | Ast.DConst c -> [c.value]
+    | Ast.DTest t -> test_roots t.stmts
+    | Ast.DApiTest t -> t.seed_stmts @ test_roots t.stmts
+    | Ast.DLoadTest t -> t.seed_stmts @ test_roots t.request_stmts
+    | Ast.DDatabase d -> Option.to_list d.config_expr
+    | Ast.DQueue q -> Option.to_list q.config_expr
+    | Ast.DChannel c -> Option.to_list c.config_expr
+    | Ast.DCache c -> Option.to_list c.config_expr
+    | Ast.DEmail e -> Option.to_list e.config_expr
+    | Ast.DAgent a -> Option.to_list a.config_expr
+    | Ast.DType _ | Ast.DRecord _ | Ast.DEntity _ | Ast.DFact _ | Ast.DCodec _
+    | Ast.DCapability _ | Ast.DWorkers _ | Ast.DCapture _ | Ast.DApi _
+    | Ast.DServer _ -> []) m.decls
+
+let module_complexity_diagnostics (m : Ast.module_form) : diagnostic list =
+  let stack = Stack.create () in
+  List.iter (fun root -> Stack.push (root, 1) stack) (module_expression_roots m);
+  let nodes = ref 0 in
+  let exceeded = ref None in
+  while !exceeded = None && not (Stack.is_empty stack) do
+    let expr, depth = Stack.pop stack in
+    incr nodes;
+    if depth > max_expression_depth then
+      exceeded := Some (`Depth depth, Checker.expr_loc expr)
+    else if !nodes > max_expression_nodes then
+      exceeded := Some (`Nodes !nodes, Checker.expr_loc expr)
+    else
+      ignore (Ast_visitor.fold_children
+        (fun () child -> Stack.push (child, depth + 1) stack) () expr)
+  done;
+  match !exceeded with
+  | None -> []
+  | Some (reason, loc) ->
+    let detail = match reason with
+      | `Depth depth -> Printf.sprintf "expression nesting is %d levels (limit %d)"
+                          depth max_expression_depth
+      | `Nodes _ -> Printf.sprintf "module contains more than %d expression nodes"
+                      max_expression_nodes in
+    [{ file = loc.Location.file;
+       start_line = loc.Location.start.line; start_col = loc.Location.start.col;
+       end_line = loc.Location.stop.line; end_col = loc.Location.stop.col;
+       severity = "error"; code = "E003";
+       message = Printf.sprintf
+         "source complexity budget exceeded: %s; split the expression into named functions or smaller declarations"
+         detail;
+       fix = None; source = "parser"; manual = None }]
 
 type named_loc = {
   bound_name : string;
@@ -751,12 +830,19 @@ let rec definition_in_expr env locals line col (expr : Ast.expr) =
       find_named_loc env.ctor_defs name
     else
       find_map_list (definition_in_expr env locals line col) args
-  | Ast.ELambda { params; body; _ } ->
-    let result = find_map_list (definition_in_binding env line col) params in
-    (match result with
-     | Some _ as found -> found
-     | None ->
-       definition_in_expr env (extend_locals_with_params locals params) line col body)
+   | Ast.ELambda { params; body; _ } ->
+     let result = find_map_list (definition_in_binding env line col) params in
+     (match result with
+      | Some _ as found -> found
+      | None ->
+        definition_in_expr env (extend_locals_with_params locals params) line col body)
+   | Ast.ESqlQuery { query; _ } ->
+     Ast_visitor.fold_sql_query
+       (fun result child ->
+         match result with
+         | Some _ -> result
+         | None -> definition_in_expr env locals line col child)
+       None query
 
 let rec definition_in_test_stmts env locals line col (stmts : Ast.test_stmt list) =
   match stmts with
@@ -992,6 +1078,7 @@ let definition_source filename source line col =
   match parse_module filename source with
   | Err _ -> None
   | Ok m ->
+    if module_complexity_diagnostics m <> [] then None else
     let env = collect_definition_env m in
     find_map_list (definition_in_top_decl env line col) m.decls
     |> Option.map location_to_definition
@@ -1238,11 +1325,18 @@ let rec resolve_symbol_in_expr env locals line col (expr : Ast.expr) =
     let ctor_loc = precise_name_loc loc name in
     if loc_contains_position ctor_loc line col then find_ctor_symbol env.ctor_defs name
     else find_map_list (resolve_symbol_in_expr env locals line col) args
-  | Ast.ELambda { params; body; _ } ->
-    let result = find_map_list (resolve_symbol_in_binding env line col) params in
-    (match result with
-     | Some _ as found -> found
-     | None -> resolve_symbol_in_expr env (extend_locals_with_params locals params) line col body)
+   | Ast.ELambda { params; body; _ } ->
+     let result = find_map_list (resolve_symbol_in_binding env line col) params in
+     (match result with
+      | Some _ as found -> found
+      | None -> resolve_symbol_in_expr env (extend_locals_with_params locals params) line col body)
+   | Ast.ESqlQuery { query; _ } ->
+     Ast_visitor.fold_sql_query
+       (fun result child ->
+         match result with
+         | Some _ -> result
+         | None -> resolve_symbol_in_expr env locals line col child)
+       None query
 
 let rec resolve_symbol_in_test_stmts env locals line col (stmts : Ast.test_stmt list) =
   match stmts with
@@ -1656,9 +1750,14 @@ let rec collect_occurrences_in_expr env locals target (expr : Ast.expr) =
     (match find_ctor_symbol env.ctor_defs name with
      | Some symbol when symbol_equal symbol target -> loc :: List.concat_map (collect_occurrences_in_expr env locals target) args
      | _ -> List.concat_map (collect_occurrences_in_expr env locals target) args)
-  | Ast.ELambda { params; body; _ } ->
-    List.concat_map (collect_occurrences_in_binding env target) params
-    @ collect_occurrences_in_expr env (extend_locals_with_params locals params) target body
+   | Ast.ELambda { params; body; _ } ->
+     List.concat_map (collect_occurrences_in_binding env target) params
+     @ collect_occurrences_in_expr env (extend_locals_with_params locals params) target body
+   | Ast.ESqlQuery { query; _ } ->
+     Ast_visitor.fold_sql_query
+       (fun acc child ->
+         acc @ collect_occurrences_in_expr env locals target child)
+       [] query
 
 let rec collect_occurrences_in_test_stmts env locals target (stmts : Ast.test_stmt list) =
   match stmts with
@@ -1854,6 +1953,7 @@ let occurrences_source filename source line col =
   match parse_module filename source with
   | Err _ -> []
   | Ok m ->
+    if module_complexity_diagnostics m <> [] then [] else
     let env = collect_definition_env m in
     match find_map_list (resolve_symbol_in_top_decl env line col) m.decls with
     | None -> []
@@ -1886,16 +1986,31 @@ let type_at_of_checker (info : Checker.expr_type_info) : type_at_result = {
 }
 
 let type_at_source filename source line col =
+  set_query_source_lines source;
   match parse_module filename source with
   | Err _ -> None
   | Ok m ->
-    let expr_types, _ = Checker.check_module_with_expr_types m in
-    List.fold_left (fun best info ->
-      if loc_contains_position info.Checker.loc line col && better_expr_type best info
-      then Some info
-      else best
-    ) None expr_types
-    |> Option.map type_at_of_checker
+    if module_complexity_diagnostics m <> [] then None
+    else
+      let bindings, expr_types, _, _, _, _, _ =
+        Checker.check_module_with_metadata m in
+      let expression =
+        List.fold_left (fun best info ->
+          if loc_contains_position info.Checker.loc line col && better_expr_type best info
+          then Some info
+          else best
+        ) None expr_types
+      in
+      match expression with
+      | Some info -> Some (type_at_of_checker info)
+      | None ->
+        List.find_map (fun (binding : Checker.local_binding_info) ->
+          let loc = precise_name_loc binding.loc binding.name in
+          if loc_contains_position loc line col then
+            Some { file = loc.file; line = loc.start.line; col = loc.start.col;
+                   end_line = loc.stop.line; end_col = loc.stop.col;
+                   ty = binding.display_ty }
+          else None) bindings
 
 let type_at_file filename line col =
   let source = In_channel.with_open_text filename In_channel.input_all in
@@ -1922,6 +2037,8 @@ let field_at_source filename source line col =
   match parse_module filename source with
   | Err _ -> None
   | Ok m ->
+    if module_complexity_diagnostics m <> [] then None
+    else
     let field_accesses, _ = Checker.check_module_with_field_accesses m in
     List.fold_left (fun best (fa : Checker.field_access_info) ->
       if loc_contains_position fa.Checker.fa_loc line col && better_field_access best fa
@@ -1942,7 +2059,7 @@ let top_decl_loc = Ast.top_decl_loc
 (* ── Config-block context (LSP hover + completion for config fields) ─────────
    Given a cursor position, return the most-specific typed configuration block
    enclosing it (Database / PostgresConfig / Queue / QueueRetryStrategy /
-   SseChannel / Cache / Email / SmtpConfig) together with each schema field and
+   SseChannel / Cache / Email / SmtpConfig / TelemetryConfig) together with each schema field and
    whether the user already wrote it.  Drives the editor's field completion +
    hover from {!Validation_structural.config_block_schema} so there is one
    source of truth. *)
@@ -2018,6 +2135,7 @@ let config_context_source filename source line col : config_context option =
   match parse_module filename source with
   | Err _ -> None
   | Ok m ->
+    if module_complexity_diagnostics m <> [] then None else
     let under_cursor d =
       config_decl_expr d <> None
       && loc_contains_position (top_decl_loc d) line col
@@ -2213,6 +2331,7 @@ let signature_help_source filename source line col : signature_info option =
   match parse_module filename source with
   | Err _ -> None
   | Ok m ->
+    if module_complexity_diagnostics m <> [] then None else
     let funcs = func_decls_by_name m in
     (* best = innermost (smallest span) matching call site *)
     let best : (string * Ast.expr list * Location.loc) option ref = ref None in
@@ -2294,6 +2413,7 @@ let selection_range_source filename source line col : selection_range list =
   match parse_module filename source with
   | Err _ -> []
   | Ok m ->
+    if module_complexity_diagnostics m <> [] then [] else
     (* Gather every AST node loc that contains the cursor: every expression
        span (via the recursive expr walk), every top-level declaration span,
        and the enclosing module span itself. *)
@@ -2352,6 +2472,7 @@ let type_definition_source filename source line col : definition_location option
   match parse_module filename source with
   | Err _ -> None
   | Ok m ->
+    if module_complexity_diagnostics m <> [] then None else
     let type_env = collect_definition_env m in
     (* 1. Try expression types from the checker: the type of the expr under the
           cursor, mapped to its declaring record/adt/newtype/entity. *)
@@ -2765,11 +2886,14 @@ let type_diags_of source (m : Ast.module_form) : diagnostic list =
     passes, same order, diagnostics anchored at the DEP's own file via its
     parse locations. *)
 let module_local_diags source (m : Ast.module_form) : diagnostic list =
-  legacy_bool_diagnostics m.source_file source m
-  @ regex_literal_diagnostics m
-  @ type_diags_of source m
-  @ List.map diag_of_proof_error (Proof_checker.check_module m)
-  @ List.map diag_of_validation_error (Validation.check_module m)
+  match module_complexity_diagnostics m with
+  | _ :: _ as diagnostics -> diagnostics
+  | [] ->
+    legacy_bool_diagnostics m.source_file source m
+    @ regex_literal_diagnostics m
+    @ type_diags_of source m
+    @ List.map diag_of_proof_error (Proof_checker.check_module m)
+    @ List.map diag_of_validation_error (Validation.check_module m)
 
 (* ── Cross-module structural validation (2026-07-08 multi-module audit) ─────
    `--check <entrypoint>` historically validated the entrypoint plus module
@@ -3118,8 +3242,9 @@ let cross_module_diags ?(skip_dep_body : string -> bool = fun _ -> false)
     (canonical path predicate) suppresses the dep-body re-check for modules
     that are themselves being checked in the same CLI invocation. *)
 let check_module ?skip_dep_body source (m : Ast.module_form) : diagnostic list =
-  module_local_diags source m
-  @ cross_module_diags ?skip_dep_body m
+  match module_local_diags source m with
+  | ({ code = "E003"; _ } :: _) as diagnostics -> diagnostics
+  | diagnostics -> diagnostics @ cross_module_diags ?skip_dep_body m
 
 let default_root_path () =
   match Sys.getenv_opt "TESL_REPO_ROOT" with
@@ -3467,12 +3592,35 @@ let go_project_diag file message = {
   manual = None;
 }
 
+(* Keep Go's unsupported-export boundary observable even when the frontend also
+   rejects an import name.  The checker remains authoritative for --check; Go
+   callers additionally get the backend diagnostic that explains why emission
+   cannot proceed. *)
+let go_import_boundary_diags (filename : string) (m : Ast.module_form) =
+  let strip_ctor_suffix name =
+    let n = String.length name in
+    if n > 4 && String.sub name (n - 4) 4 = "(..)" then
+      String.sub name 0 (n - 4)
+    else name
+  in
+  List.concat_map (fun (imp : Ast.import_decl) ->
+    match imp.names, Type_system.tesl_module_export_set imp.module_name with
+    | ImportExposing names, Some exports ->
+      List.filter_map (fun raw_name ->
+        let name = strip_ctor_suffix raw_name in
+        if List.mem name exports then None
+        else Some (go_project_diag filename
+          (Printf.sprintf
+             "Go backend does not emit the `%s` export `%s`: module `%s` does not export `%s`"
+             imp.module_name name imp.module_name name))) names
+    | _ -> []) m.imports
+
 let compile_go_source ?(debug=false) ?(path="") filename source =
   match parse_module filename source with
   | Err error -> GoFailure [diag_of_parse_error error]
   | Ok m ->
     let diags = check_module source m in
-    if diags <> [] then GoFailure diags
+    if diags <> [] then GoFailure (diags @ go_import_boundary_diags filename m)
     else
       (match local_dependency_modules path m with
        | GoDepsError message -> GoFailure [go_project_diag filename message]
@@ -3531,8 +3679,10 @@ let local_bindings_source filename source =
   match parse_module filename source with
   | Err _ -> []
   | Ok m ->
-    let bindings, _ = Checker.check_module_with_local_bindings m in
-    List.map local_binding_of_checker bindings
+    if module_complexity_diagnostics m <> [] then []
+    else
+      let bindings, _ = Checker.check_module_with_local_bindings m in
+      List.map local_binding_of_checker bindings
 
 type completion_item = {
   ci_label  : string;
@@ -3554,6 +3704,7 @@ let completions_source filename source line col =
   match parse_module filename source with
   | Err _ -> []
   | Ok m ->
+    if module_complexity_diagnostics m <> [] then [] else
     let src_lines = Array.of_list (String.split_on_char '\n' source) in
     let char_at l c =
       if l >= 0 && l < Array.length src_lines then
@@ -3920,16 +4071,31 @@ let semantic_json_of_module (m : Ast.module_form) : string =
 
 let semantic_json_source filename source =
   match parse_module filename source with
-  | Ok m  -> Some (semantic_json_of_module m)
+  | Ok m when module_complexity_diagnostics m = [] -> Some (semantic_json_of_module m)
+  | Ok m ->
+    Some (json_obj [
+      "version", "1"; "file", json_str filename;
+      "module_name", json_str m.module_name;
+      "content_hash", json_str (Digest.to_hex (Digest.string source));
+      "records", "[]"; "adts", "[]"; "functions", "[]";
+      "local_bindings", "[]"; "expr_types", "[]";
+    ])
   | Err _ ->
     (* Resilient path (editor/LSP): the buffer has a syntax error, but the
        parser's top-level recovery can still salvage the declarations that did
        parse.  Emit a best-effort snapshot of those rather than [None], so
        completion/hover/documentSymbol degrade gracefully mid-edit.  The full
        checker may itself raise on a partial module, so guard it. *)
-    (match Parser.parse_module_recover filename source with
-     | None -> None
-     | Some m -> (try Some (semantic_json_of_module m) with _ -> None))
+    (match (try Parser.parse_module_recover filename source with Failure _ -> None) with
+     | Some m -> (try Some (semantic_json_of_module m) with _ -> None)
+     | None ->
+       Some (json_obj [
+         "version", "1"; "file", json_str filename;
+         "module_name", json_str "";
+         "content_hash", json_str (Digest.to_hex (Digest.string source));
+         "records", "[]"; "adts", "[]"; "functions", "[]";
+         "local_bindings", "[]"; "expr_types", "[]";
+       ]))
 
 let semantic_json_file filename =
   let source = In_channel.with_open_text filename In_channel.input_all in
@@ -3998,9 +4164,9 @@ let cap_list cap xs =
 
 (* Compact diagnostic record for the agent snapshot: the stable code, severity,
    message, 0-based span, and a machine-applicable fix when one is available.
-   Distinct from [diag_to_json] (which also carries file/source) — this trims
-   redundant fields the agent already knows (the file) to save tokens. *)
-let agent_diag_json (d : diagnostic) : string =
+   Distinct from [diag_to_json] (which also carries source): this omits the
+   redundant requested-file path but retains a path for imported diagnostics. *)
+let agent_diag_json ~requested_file (d : diagnostic) : string =
   let base = [
     "code",       json_str d.code;
     "severity",   json_str d.severity;
@@ -4010,8 +4176,10 @@ let agent_diag_json (d : diagnostic) : string =
     "end_line",   string_of_int d.end_line;
     "end_col",    string_of_int d.end_col;
   ] in
+  let with_file =
+    if d.file = requested_file then base else base @ ["file", json_str d.file] in
   let with_fix = match d.fix with
-    | None -> base
+    | None -> with_file
     | Some _ ->
       (* ~code is REQUIRED here.  Without it [fix_to_json] falls back to
          [Diag_fix.content_title], which describes the EDIT ("Replace with
@@ -4021,18 +4189,18 @@ let agent_diag_json (d : diagnostic) : string =
          quick-fix an AI agent saw had generic wording while the same fix shown
          to the LSP had the real title.  For a language positioned around its
          agent surface, that is the wrong half to degrade. *)
-      base @ ["fix", fix_to_json ~code:d.code d.fix]
+      with_file @ ["fix", fix_to_json ~code:d.code d.fix]
   in
   json_obj with_fix
 
 (* One outstanding proof obligation: location, message, and stable code. *)
-let agent_obligation_json (d : diagnostic) : string =
-  json_obj [
+let agent_obligation_json ~requested_file (d : diagnostic) : string =
+  json_obj ([
     "line",    string_of_int d.start_line;
     "col",     string_of_int d.start_col;
     "message", json_str d.message;
     "code",    json_str d.code;
-  ]
+  ] @ if d.file = requested_file then [] else ["file", json_str d.file])
 
 (* Top-level symbol: name, kind, and signature/type ONLY — never a body. *)
 let agent_symbol_json ~name ~kind ~signature : string =
@@ -4121,9 +4289,9 @@ let agent_context_to_json
     "content_hash", json_str content_hash;
     "ok",           if ok then "true" else "false";
     "summary",      json_str summary;
-    "diagnostics",  json_arr (List.map agent_diag_json diags_capped);
+    "diagnostics",  json_arr (List.map (agent_diag_json ~requested_file:file) diags_capped);
     "symbols",      json_arr symbols_capped;
-    "proof_obligations", json_arr (List.map agent_obligation_json oblig_capped);
+    "proof_obligations", json_arr (List.map (agent_obligation_json ~requested_file:file) oblig_capped);
   ] in
   json_obj (if omitted_pairs = [] then base else base @ ["omitted", json_obj omitted_pairs])
 
@@ -4137,18 +4305,32 @@ let agent_context_to_json
    because it only ran [check_source] (the checker emits none), so its "N
    warnings" count was effectively always 0.  Folding [extra_diags] in makes it
    report the same diagnostic set as --check-json. *)
-let agent_context_source ?(extra_diags = []) filename source : string =
+type agent_context_result = {
+  json : string;
+  ok : bool;
+  diagnostics : diagnostic list;
+}
+
+let agent_context_result_source ?(extra_diags = []) filename source : agent_context_result =
   let content_hash = Digest.to_hex (Digest.string source) in
-  let diagnostics = check_source filename source @ extra_diags in
-  let symbols =
+  let checked, symbols =
     match parse_module filename source with
-    | Ok m -> agent_symbols_of_module m
-    | Err _ ->
-      (match Parser.parse_module_recover filename source with
-       | Some m -> (try agent_symbols_of_module m with _ -> [])
-       | None -> [])
+    | Ok m -> check_module source m, agent_symbols_of_module m
+    | Err error ->
+      let diagnostics = [diag_of_parse_error error] in
+      let symbols =
+        match (try Parser.parse_module_recover filename source with Failure _ -> None) with
+        | Some m -> (try agent_symbols_of_module m with _ -> [])
+        | None -> [] in
+      diagnostics, symbols
   in
-  agent_context_to_json ~file:filename ~content_hash ~diagnostics ~symbols
+  let diagnostics = checked @ extra_diags in
+  let ok = not (List.exists (fun d -> d.severity = "error") diagnostics) in
+  { json = agent_context_to_json ~file:filename ~content_hash ~diagnostics ~symbols;
+    ok; diagnostics }
+
+let agent_context_source ?(extra_diags = []) filename source : string =
+  (agent_context_result_source ~extra_diags filename source).json
 
 let agent_context_file filename : string =
   let source = In_channel.with_open_text filename In_channel.input_all in

@@ -149,10 +149,10 @@ main() -> App requires [%s] =
     module_name
     (if writes then "import Tesl.DB exposing [dbWrite]" else "")
     method_kw
-    (if writes then "dbWrite" else "")
+    (if writes then "dbWrite Doc" else "")
     (if writes then "  let saved = insert Doc { id: \"x\" }\n  \"ok\"" else "  \"ok\"")
     method_kw
-    (if writes then "dbWrite" else "")
+    (if writes then "dbWrite Doc" else "")
 
 (* ── dbWrite: the canonical case, plus the POST control ───────────────────── *)
 
@@ -181,7 +181,7 @@ record Doc {
   id: String
 }
 
-handler get act() -> List Doc requires [dbRead] =
+handler get act() -> List Doc requires [dbRead Doc] =
   select d from Doc
 
 api ActApi {
@@ -197,7 +197,7 @@ database ProbeDb = Database {
   backend: Memory
 }
 
-main() -> App requires [dbRead] =
+main() -> App requires [dbRead Doc] =
   App {
     database: ProbeDb
     api: ActServer
@@ -270,14 +270,14 @@ let test_post_email_accepted () =
 (* The closure is what matters, not the spelling: `capability audit implies
    dbWrite` in a GET handler must fire exactly as a bare `dbWrite` does. *)
 let test_get_implied_write_rejected () =
-  expect_sec005 ~who:"GET+implies dbWrite" ~mentions:[ "dbWrite" ]
+  expect_sec005 ~who:"GET+implies dbWrite Doc" ~mentions:[ "dbWrite Doc" ]
     {|module Sec005Implies exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.DB exposing [dbWrite]
 import Tesl.Database exposing [Database, Memory]
 import Tesl.App exposing [App]
 
-capability audit implies dbWrite
+capability audit implies dbWrite Doc
 
 record Doc {
   id: String
@@ -335,7 +335,7 @@ record Doc {
 handler get readOnly() -> String requires [] =
   "ok"
 
-handler post mutate() -> String requires [dbWrite] =
+handler post mutate() -> String requires [dbWrite Doc] =
   let saved = insert Doc { id: "x" }
   "ok"
 
@@ -354,7 +354,7 @@ database ProbeDb = Database {
   backend: Memory
 }
 
-main() -> App requires [dbWrite] =
+main() -> App requires [dbWrite Doc] =
   App {
     database: ProbeDb
     api: ActServer
@@ -382,7 +382,7 @@ record Doc {
 handler post readOnly() -> String requires [] =
   "ok"
 
-handler get mutate() -> String requires [dbWrite] =
+handler get mutate() -> String requires [dbWrite Doc] =
   let saved = insert Doc { id: "x" }
   "ok"
 
@@ -401,7 +401,7 @@ database ProbeDb = Database {
   backend: Memory
 }
 
-main() -> App requires [dbWrite] =
+main() -> App requires [dbWrite Doc] =
   App {
     database: ProbeDb
     api: ActServer
@@ -429,7 +429,7 @@ record Doc {
 handler post readOnly() -> String requires [] =
   "ok"
 
-handler get mutate() -> String requires [dbWrite] =
+handler get mutate() -> String requires [dbWrite Doc] =
   let saved = insert Doc { id: "x" }
   "ok"
 
@@ -450,7 +450,7 @@ database ProbeDb = Database {
   backend: Memory
 }
 
-main() -> App requires [dbWrite, pubsub] =
+main() -> App requires [dbWrite Doc, pubsub] =
   App {
     database: ProbeDb
     api: ActServer
@@ -472,11 +472,11 @@ record Doc {
   id: String
 }
 
-fn doWrite() -> String requires [dbWrite] =
+fn doWrite() -> String requires [dbWrite Doc] =
   let saved = insert Doc { id: "x" }
   "ok"
 
-handler get act() -> String requires [dbWrite] =
+handler get act() -> String requires [dbWrite Doc] =
   doWrite()
 
 api ActApi {
@@ -492,7 +492,7 @@ database ProbeDb = Database {
   backend: Memory
 }
 
-main() -> App requires [dbWrite] =
+main() -> App requires [dbWrite Doc] =
   App {
     database: ProbeDb
     api: ActServer
@@ -516,7 +516,7 @@ record Doc {
   id: String
 }
 
-handler get libMutate() -> String requires [dbWrite] =
+handler get libMutate() -> String requires [dbWrite Doc] =
   let saved = insert Doc { id: "x" }
   "ok"
 |}
@@ -546,7 +546,7 @@ database ProbeDb = Database {
   backend: Memory
 }
 
-main() -> App requires [dbWrite] =
+main() -> App requires [dbWrite Doc] =
   App {
     database: ProbeDb
     api: ActServer
@@ -649,7 +649,7 @@ database ProbeDb = Database {
   backend: Memory
 }
 
-handler %s leaky() -> String requires [dbWrite] =
+handler %s leaky() -> String requires [dbWrite Doc] =
   let saved = insert Doc { id: "x" }
   "ok"
 |} method_kw
@@ -683,7 +683,7 @@ database ProbeDb = Database {
   backend: Memory
 }
 
-handler get leaky() -> String requires [dbWrite] =
+handler get leaky() -> String requires [dbWrite Doc] =
   let saved = insert Doc { id: "x" }
   "ok"
 

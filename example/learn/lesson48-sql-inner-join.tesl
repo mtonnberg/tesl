@@ -113,7 +113,7 @@ database JoinDatabase = Database {
 # 1. Simple innerJoin: find orders that have a matching customer.
 #    Returns List Order — only orders with an existing customer are included.
 fn findOrderWithCustomer(customerId: String) -> List Order
-  requires [dbRead] =
+  requires [dbRead Order, dbRead Customer] =
   select o from Order
   innerJoin Customer on o.customerId Customer.id
   where o.customerId == customerId
@@ -121,7 +121,7 @@ fn findOrderWithCustomer(customerId: String) -> List Order
 # 2. innerJoin combined with an additional where condition.
 #    Returns orders for customers in a given country.
 fn findOrdersByCustomerCountry(country: String) -> List Order
-  requires [dbRead] =
+  requires [dbRead Order, dbRead Customer] =
   select o from Order
   innerJoin Customer on o.customerId Customer.id
   where o.status == "shipped"
@@ -129,7 +129,7 @@ fn findOrdersByCustomerCountry(country: String) -> List Order
 # 3. innerJoin with order and limit.
 #    Returns the N cheapest orders that have an existing customer.
 fn cheapOrdersByCountry(n: Int) -> List Order
-  requires [dbRead] =
+  requires [dbRead Order, dbRead Customer] =
   select o from Order
   innerJoin Customer on o.customerId Customer.id
   order o.amount asc
@@ -138,7 +138,7 @@ fn cheapOrdersByCountry(n: Int) -> List Order
 # 4. Multiple innerJoins on the same select.
 #    Returns order items only for orders that have both a valid order and customer.
 fn findOrderItemsByOrderId(orderId: String) -> List OrderItem
-  requires [dbRead] =
+  requires [dbRead OrderItem, dbRead Order] =
   select i from OrderItem
   innerJoin Order on i.orderId Order.id
   where i.orderId == orderId
@@ -147,7 +147,7 @@ fn findOrderItemsByOrderId(orderId: String) -> List OrderItem
 # TESTS
 # ─────────────────────────────────────────────
 
-test "innerJoin filters out orders with no matching customer" requires [dbRead, dbWrite] {
+test "innerJoin filters out orders with no matching customer" requires [dbRead Order, dbRead Customer, dbWrite Order, dbWrite Customer] {
   let _ = insert Customer { id: "c1", name: "Alice", country: "SE" }
   let _ = insert Order { id: "o1", customerId: "c1", amount: 50, status: "new" }
   # o2 has no matching customer — innerJoin excludes it
@@ -156,7 +156,7 @@ test "innerJoin filters out orders with no matching customer" requires [dbRead, 
   expect results != []
 }
 
-test "innerJoin returns only orders for the given customer" requires [dbRead, dbWrite] {
+test "innerJoin returns only orders for the given customer" requires [dbRead Order, dbRead Customer, dbWrite Order, dbWrite Customer] {
   let _ = insert Customer { id: "c2", name: "Bob", country: "US" }
   let _ = insert Customer { id: "c3", name: "Carol", country: "UK" }
   let _ = insert Order { id: "o3", customerId: "c2", amount: 200, status: "shipped" }
@@ -165,7 +165,7 @@ test "innerJoin returns only orders for the given customer" requires [dbRead, db
   expect results != []
 }
 
-test "cheapOrdersByCountry returns results when orders with customers exist" requires [dbRead, dbWrite] {
+test "cheapOrdersByCountry returns results when orders with customers exist" requires [dbRead Order, dbRead Customer, dbWrite Order, dbWrite Customer] {
   let _ = insert Customer { id: "c4", name: "Dave", country: "DE" }
   let _ = insert Order { id: "o5", customerId: "c4", amount: 10, status: "new" }
   let _ = insert Order { id: "o6", customerId: "c4", amount: 20, status: "new" }
@@ -173,7 +173,7 @@ test "cheapOrdersByCountry returns results when orders with customers exist" req
   expect results != []
 }
 
-test "findOrderItemsByOrderId uses innerJoin to filter items" requires [dbRead, dbWrite] {
+test "findOrderItemsByOrderId uses innerJoin to filter items" requires [dbRead OrderItem, dbRead Order, dbWrite Customer, dbWrite Order, dbWrite OrderItem] {
   let _ = insert Customer { id: "c5", name: "Eve", country: "FR" }
   let _ = insert Order { id: "o7", customerId: "c5", amount: 75, status: "processing" }
   let _ = insert OrderItem { id: "i1", orderId: "o7", productName: "Widget", quantity: 3 }
@@ -183,7 +183,7 @@ test "findOrderItemsByOrderId uses innerJoin to filter items" requires [dbRead, 
   expect items != []
 }
 
-test "innerJoin with no matching customer returns empty list" requires [dbRead, dbWrite] {
+test "innerJoin with no matching customer returns empty list" requires [dbRead Order, dbRead Customer, dbWrite Order] {
   # Insert an order with no corresponding customer
   let _ = insert Order { id: "orphan1", customerId: "missing-customer", amount: 999, status: "new" }
   let results = findOrderWithCustomer "missing-customer"

@@ -167,7 +167,7 @@ fact Authenticated (u: String)
 
 (* SEED A — FromDb provenance produced by a real select; capability declared. *)
 let seed_a = task_hdr ^ {|
-fn getT(id: String) -> t: Task ::: FromDb (Id == id) t requires [dbRead] =
+fn getT(id: String) -> t: Task ::: FromDb (Id == id) t requires [dbRead Task] =
   let r = selectOne t from Task where t.id == id
   case r of
     Nothing -> fail 404 "nf"
@@ -176,7 +176,7 @@ fn getT(id: String) -> t: Task ::: FromDb (Id == id) t requires [dbRead] =
 
 (* SEED B — a real DB write with the correct capability declared. *)
 let seed_b = task_hdr ^ {|
-fn del() -> String requires [dbWrite] =
+fn del() -> String requires [dbWrite Task] =
   delete o from Task where o.id == "x"
   "ok"
 |}
@@ -198,7 +198,7 @@ fn ident(t: Task) -> Task = t
 
 (* SEED F — a real DB read returning a list. *)
 let seed_f = task_hdr ^ {|
-fn allT() -> List Task requires [dbRead] =
+fn allT() -> List Task requires [dbRead Task] =
   select t from Task
 |}
 
@@ -213,7 +213,7 @@ check checkPos(n: Int) -> n: Int ::: IsPositive n =
 
 (* SEED H — a genuine `auth` boundary reading the DB, capability declared. *)
 let seed_h = auth_hdr ^ {|
-auth tokenAuth(tok: String) -> user: String ::: Authenticated user requires [dbRead] =
+auth tokenAuth(tok: String) -> user: String ::: Authenticated user requires [dbRead Account] =
   let r = selectOne a from Account where a.token == tok
   case r of
     Nothing -> fail 401 "bad token"

@@ -88,22 +88,6 @@ let should_pass src =
     let code, out = run_compiler ["--check"; path] in
     if code <> 0 then failf "expected clean compile, got exit %d:\n%s" code out)
 
-(* Helper that pins a source the checker currently ACCEPTS but which SHOULD be
-   rejected statically (it forges or mis-produces a proof).  It asserts the
-   current (accepting) behavior so that if the checker is later fixed to reject
-   this, the assertion flips and tells us to promote it to a real negative.
-   [what] is a human description of what SHOULD be rejected.
-   (All produce-suite gaps are now closed → flipped to should_fail; kept here,
-   warning-suppressed, for re-pinning if a future regression reopens one.) *)
-let[@warning "-32"] known_gap ~what src =
-  ignore what;
-  with_temp_file src (fun path ->
-    let code, _ = run_compiler ["--check"; path] in
-    (* Currently compiles clean (exit 0). When the gap is closed this becomes
-       non-zero and the test fails, prompting promotion to should_fail. *)
-    if code <> 0 then
-      failf "KNOWN-GAP CLOSED: %s is now rejected — promote this case to should_fail" what)
-
 (* Shared module header. NOTE: `Maybe` lives in `Tesl.Maybe`, NOT `Tesl.Prelude`. *)
 let prelude name =
   Printf.sprintf
@@ -605,22 +589,8 @@ let produce_param_cases () =
           ^ p.decl ^ "\n"
           ^ body
         in
-        (* CLOSED (was a KNOWN GAP): `establish` whose declared return spec is a
-           literal-param / multi-arg fact (Clamped) now validates the body's fact
-           constructor — a wrong constructor / wrong literal args is rejected
-           ("must return the declared fact constructor"), matching the 1-arg/2-arg
-           establish facts and the analogous `check` path. *)
-        let is_clamped =
-          try ignore (Str.search_forward (Str.regexp_string "Clamp") p.pid 0); true
-          with Not_found -> false
-        in
-        let was_establish_gap =
-          kind = "establish" && is_clamped
-          && (match mistake with `WrongSubject | `WrongPredicate -> true | `MissingStamp -> false)
-        in
         let label =
-          Printf.sprintf "A-PAR %s%s/%s/%s"
-            (if was_establish_gap then "GAP-CLOSED " else "")
+          Printf.sprintf "A-PAR %s/%s/%s"
             kind
             (match mistake with `WrongSubject -> "wrong-subject" | `WrongPredicate -> "wrong-predicate" | `MissingStamp -> "missing-stamp")
             p.pid

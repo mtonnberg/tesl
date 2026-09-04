@@ -6,6 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -69,6 +74,53 @@ func (compiler *cancellableCompiler) FormatSource(context.Context, string, strin
 	return []byte("formatted"), tooling.Result{}, nil
 }
 
+type dependencyCompiler struct {
+	mutex          sync.Mutex
+	dependencyPath string
+	mainPath       string
+	broken         bool
+	queries        map[string]int
+}
+
+func (compiler *dependencyCompiler) QuerySourceJSON(_ context.Context, flag, path, _ string, _ ...string) ([]byte, tooling.Result, error) {
+	compiler.mutex.Lock()
+	compiler.queries[path]++
+	broken := compiler.broken
+	compiler.mutex.Unlock()
+	if flag == "--check-json" && path == compiler.mainPath && broken {
+		payload, err := json.Marshal(map[string]any{
+			"version": 1,
+			"diagnostics": []map[string]any{{
+				"file": compiler.dependencyPath, "start": map[string]int{"line": 0, "col": 0},
+				"end": map[string]int{"line": 0, "col": 1}, "severity": "error", "code": "T001",
+				"message": "dependency failed", "source": "type-checker", "fix": nil,
+			}},
+		})
+		return payload, tooling.Result{}, err
+	}
+	return []byte(`{"version":1,"diagnostics":[]}`), tooling.Result{}, nil
+}
+
+func (compiler *dependencyCompiler) QueryJSON(context.Context, ...string) (json.RawMessage, tooling.Result, error) {
+	return []byte(`{"version":1,"entries":[]}`), tooling.Result{}, nil
+}
+
+func (compiler *dependencyCompiler) FormatSource(context.Context, string, string) ([]byte, tooling.Result, error) {
+	return nil, tooling.Result{}, nil
+}
+
+func (compiler *dependencyCompiler) setBroken(broken bool) {
+	compiler.mutex.Lock()
+	compiler.broken = broken
+	compiler.mutex.Unlock()
+}
+
+func (compiler *dependencyCompiler) queryCount(path string) int {
+	compiler.mutex.Lock()
+	defer compiler.mutex.Unlock()
+	return compiler.queries[path]
+}
+
 func TestServerInitializesPublishesDiagnosticsAndShutsDown(t *testing.T) {
 	compiler := &fakeCompiler{payload: []byte(`{"version":1,"diagnostics":[{"file":"/tmp/demo.tesl","start":{"line":0,"col":1},"end":{"line":0,"col":5},"severity":"warning","code":"W001","message":"careful","source":"lint","fix":null}]}`)}
 	input := frames(t,
@@ -125,7 +177,7 @@ func TestServerAnswersHoverDefinitionAndCompletion(t *testing.T) {
 	compiler := &fakeCompiler{
 		payload: []byte(`{"version":1,"diagnostics":[]}`),
 		responses: map[string][]byte{
-			"--type-at-json":     []byte(`{"version":1,"type_at":{"type":"Int"}}`),
+			"--type-at-json":     []byte(`{"version":1,"type_at":{"file":"/tmp/demo.tesl","line":0,"col":0,"end_line":0,"end_col":1,"type":"Int"}}`),
 			"--definition-json":  []byte(`{"version":1,"definition":{"file":"/tmp/demo.tesl","line":0,"col":0,"end_line":0,"end_col":1}}`),
 			"--completions-json": []byte(`{"version":1,"completions":[{"label":"double","detail":"Int -> Int","kind":"function"}]}`),
 		},
@@ -374,6 +426,17 @@ func TestServerAnswersFoldingSymbolsAndSemanticTokens(t *testing.T) {
 	}
 }
 
+func TestServerRejectsMalformedNestedSemanticMember(t *testing.T) {
+	compiler := &fakeCompiler{responses: map[string][]byte{
+		"--semantic-json": []byte(`{"version":1,"records":[],"adts":[],"functions":[{"name":"broken"}],"local_bindings":[]}`),
+	}}
+	server := NewServer(compiler)
+	_, err := server.semanticSnapshot(context.Background(), document{Path: "/tmp/demo.tesl", Text: "fn broken() = 1"})
+	if err == nil || !strings.Contains(err.Error(), "kind") {
+		t.Fatalf("malformed semantic member error = %v", err)
+	}
+}
+
 func TestServerPreparesAndAppliesRenameAndDeclaration(t *testing.T) {
 	compiler := &fakeCompiler{
 		payload: []byte(`{"version":1,"diagnostics":[]}`),
@@ -528,7 +591,7 @@ func TestServerReturnsCodeActionsAndResolvesCompletionItems(t *testing.T) {
 func TestServerHoverFallsBackToRecordFieldQuery(t *testing.T) {
 	compiler := &fakeCompiler{responses: map[string][]byte{
 		"--type-at-json":  []byte(`{"version":1,"type_at":null}`),
-		"--field-at-json": []byte(`{"version":1,"field_at":{"field":"x","field_type":"Int"}}`),
+		"--field-at-json": []byte(`{"version":1,"field_at":{"file":"/tmp/demo.tesl","line":0,"col":5,"end_line":0,"end_col":7,"field":"x","record_type":"Point","field_type":"Int"}}`),
 	}}
 	server := NewServer(compiler)
 	server.documents["file:///tmp/demo.tesl"] = document{
@@ -626,8 +689,13 @@ func TestServerReturnsDocumentLinksAndLinkedEditingRanges(t *testing.T) {
 }
 
 func TestServerPullDiagnosticsReturnsUnchangedReport(t *testing.T) {
-	compiler := &fakeCompiler{payload: []byte(`{"version":1,"diagnostics":[{"file":"/tmp/demo.tesl","start":{"line":0,"col":0},"end":{"line":0,"col":1},"severity":"warning","code":"W1","message":"warn","source":"lint"}]}`)}
-	previous := contentResultID("x")
+	compiler := &fakeCompiler{payload: []byte(`{"version":1,"diagnostics":[{"file":"/tmp/demo.tesl","start":{"line":0,"col":0},"end":{"line":0,"col":1},"severity":"warning","code":"W1","message":"warn","source":"lint","fix":null}]}`)}
+	previous := diagnosticResultID("x", map[string][]map[string]any{
+		"file:///tmp/demo.tesl": {{
+			"range":    map[string]protocol.Position{"start": {Line: 0, Character: 0}, "end": {Line: 0, Character: 1}},
+			"severity": 2, "code": "W1", "message": "warn", "source": "lint",
+		}},
+	})
 	input := frames(t,
 		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didOpen", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl","version":1,"text":"x"}}`)},
 		protocol.Request{JSONRPC: "2.0", ID: json.RawMessage(`2`), Method: "textDocument/diagnostic", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl"}}`)},
@@ -677,7 +745,7 @@ func TestServerPullDiagnosticsReturnsUnchangedReport(t *testing.T) {
 }
 
 func TestServerRejectsStaleChangesAndUsesUTF16Ranges(t *testing.T) {
-	compiler := &fakeCompiler{payload: []byte(`{"version":1,"diagnostics":[{"file":"/tmp/demo.tesl","start":{"line":0,"col":4},"end":{"line":0,"col":8},"severity":"error","code":"T001","message":"bad","source":"type-checker"}]}`)}
+	compiler := &fakeCompiler{payload: []byte(`{"version":1,"diagnostics":[{"file":"/tmp/demo.tesl","start":{"line":0,"col":4},"end":{"line":0,"col":8},"severity":"error","code":"T001","message":"bad","source":"type-checker","fix":null}]}`)}
 	input := frames(t,
 		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didOpen", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl","version":2,"text":"😀 = 1"}}`)},
 		protocol.Request{JSONRPC: "2.0", Method: "textDocument/didChange", Params: json.RawMessage(`{"textDocument":{"uri":"file:///tmp/demo.tesl","version":1},"contentChanges":[{"text":"stale"}]}`)},
@@ -758,6 +826,436 @@ func TestServerAppliesUTF16RangedAndMultipleChanges(t *testing.T) {
 	server.waitDiagnostics()
 	if got := server.documents["file:///tmp/demo.tesl"].Text; got != "aXc\nDEF" {
 		t.Fatalf("document text = %q", got)
+	}
+}
+
+func TestServerPublishesDependencyDiagnosticsAtActualURI(t *testing.T) {
+	directory := t.TempDir()
+	mainPath := filepath.Join(directory, "main.tesl")
+	dependencyPath := filepath.Join(directory, "lib.tesl")
+	if err := os.WriteFile(dependencyPath, []byte("😀bad\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mainURI := protocol.PathToURI(mainPath)
+	dependencyURI := protocol.PathToURI(dependencyPath)
+	payload, err := json.Marshal(map[string]any{
+		"version": 1,
+		"diagnostics": []map[string]any{{
+			"file": dependencyPath, "start": map[string]int{"line": 0, "col": 4},
+			"end": map[string]int{"line": 0, "col": 7}, "severity": "error", "code": "T001",
+			"message": "dependency failed", "source": "type-checker", "fix": nil,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(&fakeCompiler{payload: payload})
+	server.documents[mainURI] = document{URI: mainURI, Path: mainPath, Version: 1, Text: "module Main\n"}
+	var output bytes.Buffer
+	if err := server.publishDiagnostics(context.Background(), server.documents[mainURI], protocol.NewWriter(&output)); err != nil {
+		t.Fatal(err)
+	}
+	reader := protocol.NewReader(&output)
+	publications := make(map[string][]struct {
+		Code  string         `json:"code"`
+		Range protocol.Range `json:"range"`
+	})
+	for {
+		message, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		var notification protocol.Request
+		if err := json.Unmarshal(message, &notification); err != nil {
+			t.Fatal(err)
+		}
+		var params struct {
+			URI         string `json:"uri"`
+			Diagnostics []struct {
+				Code  string         `json:"code"`
+				Range protocol.Range `json:"range"`
+			} `json:"diagnostics"`
+		}
+		if err := json.Unmarshal(notification.Params, &params); err != nil {
+			t.Fatal(err)
+		}
+		publications[params.URI] = params.Diagnostics
+	}
+	if diagnostics, ok := publications[mainURI]; !ok || len(diagnostics) != 0 {
+		t.Fatalf("entry diagnostics = %#v, published=%#v", diagnostics, publications)
+	}
+	dependency := publications[dependencyURI]
+	if len(dependency) != 1 || dependency[0].Code != "T001" || dependency[0].Range.Start.Character != 2 {
+		t.Fatalf("dependency diagnostics = %#v", dependency)
+	}
+}
+
+func TestDependencyDiagnosticPublicationAggregatesEntryOwnership(t *testing.T) {
+	server := NewServer(&fakeCompiler{})
+	dependencyURI := "file:///tmp/lib.tesl"
+	diagnostic := map[string]any{"code": "T001", "message": "bad dependency"}
+	groups := map[string][]map[string]any{dependencyURI: {diagnostic}}
+	var output bytes.Buffer
+	writer := protocol.NewWriter(&output)
+	if err := server.publishDiagnosticGroups("file:///tmp/main-a.tesl", groups, writer); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.publishDiagnosticGroups("file:///tmp/main-b.tesl", groups, writer); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.publishDiagnosticGroups("file:///tmp/main-a.tesl", nil, writer); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.publishDiagnosticGroups("file:///tmp/main-b.tesl", nil, writer); err != nil {
+		t.Fatal(err)
+	}
+	reader := protocol.NewReader(&output)
+	counts := make([]int, 0, 4)
+	for {
+		message, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		var notification protocol.Request
+		if err := json.Unmarshal(message, &notification); err != nil {
+			t.Fatal(err)
+		}
+		var params struct {
+			URI         string            `json:"uri"`
+			Diagnostics []json.RawMessage `json:"diagnostics"`
+		}
+		if err := json.Unmarshal(notification.Params, &params); err != nil {
+			t.Fatal(err)
+		}
+		if params.URI != dependencyURI {
+			t.Fatalf("publication URI = %q", params.URI)
+		}
+		counts = append(counts, len(params.Diagnostics))
+	}
+	if got, want := fmt.Sprint(counts), "[1 1 1 0]"; got != want {
+		t.Fatalf("diagnostic ownership counts = %s, want %s", got, want)
+	}
+}
+
+func TestDependencyChangesRecheckImportersAndClearStaleOwnedGroups(t *testing.T) {
+	directory := t.TempDir()
+	mainPath := filepath.Join(directory, "main.tesl")
+	dependencyPath := filepath.Join(directory, "lib.tesl")
+	if err := os.WriteFile(dependencyPath, []byte("lib\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mainURI := protocol.PathToURI(mainPath)
+	dependencyURI := protocol.PathToURI(dependencyPath)
+	compiler := &dependencyCompiler{
+		dependencyPath: dependencyPath, mainPath: mainPath, queries: make(map[string]int),
+	}
+	server := NewServer(compiler)
+	server.documents[mainURI] = document{URI: mainURI, Path: mainPath, Version: 1, Text: "module Main\n"}
+	server.documents[dependencyURI] = document{URI: dependencyURI, Path: dependencyPath, Version: 1, Text: "lib\n"}
+	var output bytes.Buffer
+	writer := protocol.NewWriter(&output)
+
+	compiler.setBroken(true)
+	change := fmt.Sprintf(`{"textDocument":{"uri":%q,"version":2},"contentChanges":[{"text":"broken"}]}`, dependencyURI)
+	if err := server.didChange(context.Background(), json.RawMessage(change), writer); err != nil {
+		t.Fatal(err)
+	}
+	server.waitDiagnostics()
+	if got := len(server.diagnosticSets[mainURI][dependencyURI]); got != 1 {
+		t.Fatalf("importer dependency diagnostics after break = %d", got)
+	}
+	if compiler.queryCount(mainPath) != 1 || compiler.queryCount(dependencyPath) != 1 {
+		t.Fatalf("didChange query counts: main=%d dependency=%d", compiler.queryCount(mainPath), compiler.queryCount(dependencyPath))
+	}
+
+	compiler.setBroken(false)
+	save := fmt.Sprintf(`{"textDocument":{"uri":%q},"text":"fixed"}`, dependencyURI)
+	if err := server.didSave(context.Background(), json.RawMessage(save), writer); err != nil {
+		t.Fatal(err)
+	}
+	server.waitDiagnostics()
+	if _, stale := server.diagnosticSets[mainURI][dependencyURI]; stale {
+		t.Fatalf("fixed dependency left stale importer-owned group: %#v", server.diagnosticSets[mainURI])
+	}
+	if compiler.queryCount(mainPath) != 2 || compiler.queryCount(dependencyPath) != 2 {
+		t.Fatalf("didSave query counts: main=%d dependency=%d", compiler.queryCount(mainPath), compiler.queryCount(dependencyPath))
+	}
+
+	compiler.setBroken(true)
+	watched := fmt.Sprintf(`{"changes":[{"uri":%q,"type":2}]}`, dependencyURI)
+	if err := server.didChangeWatchedFiles(context.Background(), json.RawMessage(watched), writer); err != nil {
+		t.Fatal(err)
+	}
+	server.waitDiagnostics()
+	if got := len(server.diagnosticSets[mainURI][dependencyURI]); got != 1 {
+		t.Fatalf("importer dependency diagnostics after watched change = %d", got)
+	}
+	if compiler.queryCount(mainPath) != 3 || compiler.queryCount(dependencyPath) != 3 {
+		t.Fatalf("watched-file query counts: main=%d dependency=%d", compiler.queryCount(mainPath), compiler.queryCount(dependencyPath))
+	}
+}
+
+func TestServerInvalidCompilerSchemaPublishesFailure(t *testing.T) {
+	server := NewServer(&fakeCompiler{payload: []byte(`{"version":1}`)})
+	doc := document{URI: "file:///tmp/demo.tesl", Path: "/tmp/demo.tesl", Text: "x"}
+	var output bytes.Buffer
+	if err := server.publishDiagnostics(context.Background(), doc, protocol.NewWriter(&output)); err != nil {
+		t.Fatal(err)
+	}
+	message, err := protocol.NewReader(&output).Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(message, []byte(`"code":"TESL-COMPILER"`)) || !bytes.Contains(message, []byte(`missing required field`)) {
+		t.Fatalf("compiler schema failure = %s", message)
+	}
+}
+
+func TestServerMalformedNestedFixPublishesCompilerFailure(t *testing.T) {
+	payload := []byte(`{"version":1,"diagnostics":[{"file":"/tmp/demo.tesl","start":{"line":0,"col":0},"end":{"line":0,"col":1},"severity":"error","code":"E1","message":"bad","fix":{"kind":"multi","title":"Fix all","edits":[{"kind":"replace_line","line":0}]},"source":"parser"}]}`)
+	server := NewServer(&fakeCompiler{payload: payload})
+	doc := document{URI: "file:///tmp/demo.tesl", Path: "/tmp/demo.tesl", Text: "x"}
+	var output bytes.Buffer
+	if err := server.publishDiagnostics(context.Background(), doc, protocol.NewWriter(&output)); err != nil {
+		t.Fatal(err)
+	}
+	message, err := protocol.NewReader(&output).Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(message, []byte(`"code":"TESL-COMPILER"`)) || bytes.Contains(message, []byte(`"data"`)) {
+		t.Fatalf("malformed fix publication = %s", message)
+	}
+}
+
+func TestDidCloseCannotBeOvertakenByDiagnosticPublication(t *testing.T) {
+	uri := "file:///tmp/close-race.tesl"
+	payload := []byte(`{"version":1,"diagnostics":[{"file":"/tmp/close-race.tesl","start":{"line":0,"col":0},"end":{"line":0,"col":1},"severity":"error","code":"E1","message":"bad","fix":null,"source":"parser"}]}`)
+	server := NewServer(&fakeCompiler{payload: payload})
+	doc := document{URI: uri, Path: "/tmp/close-race.tesl", Version: 1, Text: "x"}
+	server.documents[uri] = doc
+	ready := make(chan struct{})
+	release := make(chan struct{})
+	server.beforeDiagnosticPublish = func() {
+		close(ready)
+		<-release
+	}
+	var output bytes.Buffer
+	writer := protocol.NewWriter(&output)
+	server.scheduleDiagnostics(context.Background(), doc, writer)
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("diagnostic worker did not reach publication boundary")
+	}
+	closed := make(chan error, 1)
+	go func() {
+		closed <- server.didClose(context.Background(), json.RawMessage(`{"textDocument":{"uri":"file:///tmp/close-race.tesl"}}`), writer)
+	}()
+	select {
+	case err := <-closed:
+		t.Fatalf("didClose bypassed in-flight publication lock: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+	server.waitDiagnostics()
+
+	reader := protocol.NewReader(&output)
+	counts := make([]int, 0, 2)
+	for {
+		message, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		var notification protocol.Request
+		if err := json.Unmarshal(message, &notification); err != nil {
+			t.Fatal(err)
+		}
+		var params struct {
+			Diagnostics []json.RawMessage `json:"diagnostics"`
+		}
+		if err := json.Unmarshal(notification.Params, &params); err != nil {
+			t.Fatal(err)
+		}
+		counts = append(counts, len(params.Diagnostics))
+	}
+	if got := fmt.Sprint(counts); got != "[1 0]" {
+		t.Fatalf("diagnostic publication counts = %s, want [1 0]", got)
+	}
+}
+
+func TestBuiltCompilerUsesUnsavedDependencyOverlays(t *testing.T) {
+	_, testFile, _, _ := runtime.Caller(0)
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(testFile), "../../../.."))
+	compilerPath := filepath.Join(repoRoot, "compiler", "_build", "default", "bin", "main.exe")
+	if _, err := os.Stat(compilerPath); err != nil {
+		t.Skip("compiler build unavailable")
+	}
+	project := t.TempDir()
+	mainPath := filepath.Join(project, "A.tesl")
+	dependencyPath := filepath.Join(project, "B.tesl")
+	mainSource := "module A exposing [use]\nimport Tesl.Prelude exposing [Int]\nimport B exposing [value]\nfn use() -> Int = value()\n"
+	validDependency := "module B exposing [value]\nimport Tesl.Prelude exposing [Int]\nfn value() -> Int = 1\n"
+	brokenDependency := "module B exposing [value]\nimport Tesl.Prelude exposing [String]\nfn value() -> String = \"bad\"\n"
+	if err := os.WriteFile(mainPath, []byte(mainSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dependencyPath, []byte(validDependency), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mainURI := protocol.PathToURI(mainPath)
+	dependencyURI := protocol.PathToURI(dependencyPath)
+	client := tooling.Client{Executable: compilerPath, Environment: append(os.Environ(), "TESL_REPO_ROOT="+repoRoot)}
+	server := NewServer(client)
+	server.documents[mainURI] = document{URI: mainURI, Path: mainPath, Version: 1, Text: mainSource}
+	server.documents[dependencyURI] = document{URI: dependencyURI, Path: dependencyPath, Version: 1, Text: validDependency}
+	var output bytes.Buffer
+	writer := protocol.NewWriter(&output)
+
+	breakChange := fmt.Sprintf(`{"textDocument":{"uri":%q,"version":2},"contentChanges":[{"text":%q}]}`, dependencyURI, brokenDependency)
+	if err := server.didChange(context.Background(), json.RawMessage(breakChange), writer); err != nil {
+		t.Fatal(err)
+	}
+	server.waitDiagnostics()
+	brokenCount := 0
+	for _, diagnostics := range server.diagnosticSets[mainURI] {
+		brokenCount += len(diagnostics)
+	}
+	if brokenCount == 0 {
+		t.Fatalf("unsaved dependency break did not update importer diagnostics: %#v", server.diagnosticSets[mainURI])
+	}
+
+	fixChange := fmt.Sprintf(`{"textDocument":{"uri":%q,"version":3},"contentChanges":[{"text":%q}]}`, dependencyURI, validDependency)
+	if err := server.didChange(context.Background(), json.RawMessage(fixChange), writer); err != nil {
+		t.Fatal(err)
+	}
+	server.waitDiagnostics()
+	for uri, diagnostics := range server.diagnosticSets[mainURI] {
+		if len(diagnostics) != 0 {
+			t.Fatalf("fixed unsaved dependency left importer diagnostics for %s: %#v", uri, diagnostics)
+		}
+	}
+}
+
+func TestBuiltCompilerOpenAndCloseDependencyRechecksImporter(t *testing.T) {
+	_, testFile, _, _ := runtime.Caller(0)
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(testFile), "../../../.."))
+	compilerPath := filepath.Join(repoRoot, "compiler", "_build", "default", "bin", "main.exe")
+	if _, err := os.Stat(compilerPath); err != nil {
+		t.Skip("compiler build unavailable")
+	}
+	project := t.TempDir()
+	mainPath := filepath.Join(project, "A.tesl")
+	dependencyPath := filepath.Join(project, "B.tesl")
+	mainSource := "module A exposing [use]\nimport Tesl.Prelude exposing [Int]\nimport B exposing [value]\nfn use() -> Int = value()\n"
+	diskDependency := "module B exposing [value]\nimport Tesl.Prelude exposing [String]\nfn value() -> String = \"bad\"\n"
+	openDependency := "module B exposing [value]\nimport Tesl.Prelude exposing [Int]\nfn value() -> Int = 1\n"
+	if err := os.WriteFile(mainPath, []byte(mainSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dependencyPath, []byte(diskDependency), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mainURI := protocol.PathToURI(mainPath)
+	dependencyURI := protocol.PathToURI(dependencyPath)
+	client := tooling.Client{Executable: compilerPath, Environment: append(os.Environ(), "TESL_REPO_ROOT="+repoRoot)}
+	server := NewServer(client)
+	var output bytes.Buffer
+	writer := protocol.NewWriter(&output)
+	ownedCount := func() int {
+		count := 0
+		for _, diagnostics := range server.diagnosticSets[mainURI] {
+			count += len(diagnostics)
+		}
+		return count
+	}
+
+	openMain := fmt.Sprintf(`{"textDocument":{"uri":%q,"version":1,"text":%q}}`, mainURI, mainSource)
+	if err := server.didOpen(context.Background(), json.RawMessage(openMain), writer); err != nil {
+		t.Fatal(err)
+	}
+	server.waitDiagnostics()
+	if count := ownedCount(); count == 0 {
+		t.Fatalf("disk dependency did not produce importer diagnostics: %#v", server.diagnosticSets[mainURI])
+	}
+
+	openDependencyParams := fmt.Sprintf(`{"textDocument":{"uri":%q,"version":1,"text":%q}}`, dependencyURI, openDependency)
+	if err := server.didOpen(context.Background(), json.RawMessage(openDependencyParams), writer); err != nil {
+		t.Fatal(err)
+	}
+	server.waitDiagnostics()
+	if count := ownedCount(); count != 0 {
+		t.Fatalf("opening fixed unsaved dependency left %d importer diagnostics: %#v", count, server.diagnosticSets[mainURI])
+	}
+
+	closeDependency := fmt.Sprintf(`{"textDocument":{"uri":%q}}`, dependencyURI)
+	if err := server.didClose(context.Background(), json.RawMessage(closeDependency), writer); err != nil {
+		t.Fatal(err)
+	}
+	server.waitDiagnostics()
+	if count := ownedCount(); count == 0 {
+		t.Fatalf("closing dependency did not restore importer diagnostics from disk: %#v", server.diagnosticSets[mainURI])
+	}
+}
+
+func TestInitializeCapabilitiesMatchImplementedLSP317Handlers(t *testing.T) {
+	result := initializeResult()
+	capabilities := result["capabilities"].(map[string]any)
+	for _, name := range []string{
+		"declarationProvider", "typeDefinitionProvider", "documentLinkProvider",
+		"linkedEditingRangeProvider", "diagnosticProvider",
+	} {
+		if capabilities[name] == nil {
+			t.Fatalf("missing capability %s", name)
+		}
+	}
+	documentLinks, ok := capabilities["documentLinkProvider"].(map[string]any)
+	if !ok || documentLinks["resolveProvider"] != false {
+		t.Fatalf("document link capability = %#v", capabilities["documentLinkProvider"])
+	}
+	for _, name := range []string{"documentRangeFormattingProvider", "documentOnTypeFormattingProvider", "executeCommandProvider"} {
+		if _, advertised := capabilities[name]; advertised {
+			t.Fatalf("unsupported capability %s is advertised", name)
+		}
+	}
+	codeActions := capabilities["codeActionProvider"].(map[string]any)["codeActionKinds"].([]string)
+	if len(codeActions) != 1 || codeActions[0] != "quickfix" {
+		t.Fatalf("code action kinds = %#v", codeActions)
+	}
+	semantic := capabilities["semanticTokensProvider"].(map[string]any)
+	full, ok := semantic["full"].(map[string]any)
+	if !ok || full["delta"] != true || semantic["range"] != true {
+		t.Fatalf("semantic token capability = %#v", semantic)
+	}
+	if capabilities["inlayHintProvider"] != true {
+		t.Fatalf("inlay hint capability = %#v", capabilities["inlayHintProvider"])
+	}
+}
+
+func TestServerTerminatesAfterMalformedFrameWithUnreadBody(t *testing.T) {
+	input := strings.NewReader("Content-Length: nope\r\n\r\n{}Content-Length: 2\r\n\r\n{}")
+	var output bytes.Buffer
+	if status := NewServer(&fakeCompiler{}).Run(context.Background(), input, &output); status != 1 {
+		t.Fatalf("Run() status = %d, want 1", status)
+	}
+	reader := protocol.NewReader(&output)
+	if _, err := reader.Read(); err != nil {
+		t.Fatalf("missing framing error response: %v", err)
+	}
+	if _, err := reader.Read(); err != io.EOF {
+		t.Fatalf("server continued after malformed framing: %v", err)
 	}
 }
 

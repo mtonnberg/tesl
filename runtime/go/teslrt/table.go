@@ -52,8 +52,11 @@ func NewTable[Row any]() *Table[Row] {
 }
 
 // snapshot is what a read starts from: the published rows and the version they belong to. The
-// slice is safe to walk with no lock held because no writer mutates a published element.
+// Memory transaction gate prevents an outside reader from taking this snapshot while a
+// transaction has published uncommitted rows. The transaction owner skips the non-reentrant
+// gate and reads its own writes, as it does on PostgreSQL.
 func (table *Table[Row]) snapshot() ([]Row, uint64) {
+	defer releaseMemoryRead(acquireMemoryRead())
 	table.mutex.RLock()
 	defer table.mutex.RUnlock()
 	return table.rows, table.version
@@ -105,6 +108,7 @@ func tableWriteContended(operation string) string {
 // two rows with one key would answer `selectOne` differently on the two backends.
 func TableInsert[Row any](table *Table[Row], entity string, row Row, conflicts func(Row, Row) bool,
 	unique ...UniqueIndex[Row]) Row {
+	defer releaseMemoryWrite(acquireMemoryWrite())
 	table.mutex.Lock()
 	defer table.mutex.Unlock()
 	checkUniqueIn(table.rows, entity, row, unique, -1)
@@ -171,6 +175,7 @@ func checkUniqueIn[Row any](rows []Row, entity string, row Row, indexes []Unique
 // insert-many! is a loop over insert-one!.
 func TableInsertMany[Row any](table *Table[Row], entity string, rows []Row,
 	conflicts func(Row, Row) bool, unique ...UniqueIndex[Row]) struct{} {
+	defer releaseMemoryWrite(acquireMemoryWrite())
 	table.mutex.Lock()
 	defer table.mutex.Unlock()
 	for _, row := range rows {
@@ -481,6 +486,7 @@ func TableDeleteCount[Row any](table *Table[Row], match func(Row) bool) Int {
 // computed `next` from — and reports whether it did. A false answer means another writer
 // published in between and the caller recomputes.
 func (table *Table[Row]) publishIfUnchanged(version uint64, next []Row) bool {
+	defer releaseMemoryWrite(acquireMemoryWrite())
 	table.mutex.Lock()
 	defer table.mutex.Unlock()
 	if table.version != version {
@@ -504,6 +510,7 @@ type rowReplacement[Row any] struct {
 // they are on the server.
 func (table *Table[Row]) replaceIfUnchanged(version uint64, replacements []rowReplacement[Row],
 	unique []UniqueIndex[Row]) bool {
+	defer releaseMemoryWrite(acquireMemoryWrite())
 	table.mutex.Lock()
 	defer table.mutex.Unlock()
 	if table.version != version {
@@ -591,45 +598,10 @@ func TableUpdateReturnOne[Row any](table *Table[Row], match func(Row) bool, appl
 
 // TableTruncate empties the table, for a test that wants a fresh store.
 func TableTruncate[Row any](table *Table[Row]) {
+	defer releaseMemoryWrite(acquireMemoryWrite())
 	table.mutex.Lock()
 	defer table.mutex.Unlock()
 	table.publishLocked(nil)
-}
-
-// `deleteAndReturnResult` answers a `DeleteResult`, which is `NoRowDeleted` or `RowsDeleted n`.
-// It is a runtime-provided ADT for the reason `Maybe` is: it crosses module boundaries, so it
-// cannot be emitted once per module that mentions it.
-//
-// The distinction it draws is the one a plain count does not: deleting nothing is a different
-// OUTCOME from deleting rows, and a caller that has to act on "nothing matched" reads it as a
-// case rather than as a comparison with zero.
-type DeleteResultTag int
-
-const (
-	DeleteResultNoRowDeleted DeleteResultTag = iota
-	DeleteResultRowsDeleted
-)
-
-type DeleteResult struct {
-	Tag              DeleteResultTag
-	RowsDeletedCount Int
-}
-
-func NoRowDeleted() DeleteResult {
-	return DeleteResult{Tag: DeleteResultNoRowDeleted}
-}
-
-func RowsDeleted(count Int) DeleteResult {
-	return DeleteResult{Tag: DeleteResultRowsDeleted, RowsDeletedCount: count}
-}
-
-// TableDeleteResult is `deleteAndReturnResult` over the in-memory store.
-func TableDeleteResult[Row any](table *Table[Row], match func(Row) bool) DeleteResult {
-	removed := TableDeleteCount(table, match)
-	if Compare(removed, FromInt64(0)) == 0 {
-		return NoRowDeleted()
-	}
-	return RowsDeleted(removed)
 }
 
 // TableAny reports whether any row matches. It is what an `innerJoin` becomes on the in-memory
@@ -716,6 +688,7 @@ func TableUpsert[Row any](
 	conflicts func(Row, Row) bool,
 	unique ...UniqueIndex[Row],
 ) Row {
+	defer releaseMemoryWrite(acquireMemoryWrite())
 	// `matches` and `merge` are the emitter's field comparisons over two rows already in
 	// hand, not Tesl expressions, so they carry no query and may run under the lock.
 	table.mutex.Lock()
@@ -755,13 +728,11 @@ func Discard[A any](A) struct{} { return struct{}{} }
 // anything, and the record is a slice header — the rows are immutable once published, so no
 // copy is taken on the way in.
 //
-// WHAT THIS IS NOT. It is atomicity with respect to a trap in ONE goroutine, not isolation:
-// another goroutine (a concurrent request against a Memory-backed server) sees the body's
-// writes as they happen, and a write IT makes to a touched table between the body's first write
-// and the rollback is undone with the body's. That is acceptable for what the Memory store is —
-// the single-process dev and test store — and is the reason a Postgres-backed program's tests
-// exercising isolation must run `with database`. Memory rollback is likewise single-process:
-// nothing outside this process observes or participates in it.
+// Transactions take the Memory gate exclusively through commit or rollback. Ordinary reads and
+// writes take it shared, preserving their concurrency with each other but making them wait
+// outside a transaction. The owner skips reacquiring the non-reentrant gate, so it can read its
+// own writes and predicates may query tables without deadlocking. The gate is always taken before
+// a table mutex.
 //
 // Nesting is refused exactly as the Postgres path refuses it, so a program cannot pass its tests
 // with a shape that traps in production. The open transaction is keyed by goroutine, like the
@@ -788,9 +759,43 @@ func recordForRollback[Row any](transaction *memoryTransaction, table *Table[Row
 
 var openMemoryTransactions sync.Map // goroutine id -> *memoryTransaction
 
-// memoryTransactionsOpen lets a write skip the goroutine-id lookup entirely — the common case
+// Transactions exclude every other Memory table operation for their full duration. Ordinary
+// readers and writers use the shared side so they remain concurrent except during a transaction.
+var memoryTransactionGate sync.RWMutex
+
+// memoryTransactionsOpen lets an operation skip the goroutine-id lookup entirely — the common case
 // of a program with no transaction open anywhere.
 var memoryTransactionsOpen atomic.Int64
+
+// acquireMemoryWrite enters the shared side for an ordinary write. A transaction's own writes
+// already hold the exclusive side and must not try to take this non-reentrant lock again.
+func acquireMemoryWrite() bool {
+	if memoryTransactionsOpen.Load() > 0 && currentMemoryTransaction() != nil {
+		return false
+	}
+	memoryTransactionGate.RLock()
+	return true
+}
+
+func releaseMemoryWrite(acquired bool) {
+	if acquired {
+		memoryTransactionGate.RUnlock()
+	}
+}
+
+func acquireMemoryRead() bool {
+	if memoryTransactionsOpen.Load() > 0 && currentMemoryTransaction() != nil {
+		return false
+	}
+	memoryTransactionGate.RLock()
+	return true
+}
+
+func releaseMemoryRead(acquired bool) {
+	if acquired {
+		memoryTransactionGate.RUnlock()
+	}
+}
 
 func currentMemoryTransaction() *memoryTransaction {
 	if found, open := openMemoryTransactions.Load(goroutineID()); open {
@@ -809,21 +814,22 @@ func WithMemoryTransaction(body func()) {
 	if _, nested := openMemoryTransactions.Load(key); nested {
 		panic("transaction: a transaction is already open on the Memory store")
 	}
+	memoryTransactionGate.Lock()
 	transaction := &memoryTransaction{recorded: map[any]struct{}{}}
 	openMemoryTransactions.Store(key, transaction)
 	memoryTransactionsOpen.Add(1)
 	committed := false
 	defer func() {
+		if !committed {
+			// Most recent first, so a table written several times ends at its FIRST recorded
+			// state — though `record` keeps only that one, the order also costs nothing.
+			for index := len(transaction.restores) - 1; index >= 0; index-- {
+				transaction.restores[index]()
+			}
+		}
 		openMemoryTransactions.Delete(key)
 		memoryTransactionsOpen.Add(-1)
-		if committed {
-			return
-		}
-		// Most recent first, so a table written several times ends at its FIRST recorded
-		// state — though `record` keeps only that one, the order also costs nothing.
-		for index := len(transaction.restores) - 1; index >= 0; index-- {
-			transaction.restores[index]()
-		}
+		memoryTransactionGate.Unlock()
 	}()
 	body()
 	committed = true

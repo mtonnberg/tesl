@@ -14,32 +14,32 @@ package teslmodlesson11capabilities
 
 import "tesl.generated/teslmodlesson11capabilities/internal/teslrt"
 
-//line lesson11-capabilities.tesl:51
+//line lesson11-capabilities.tesl:50
 func ReadEnvVar(key string) teslrt.Maybe[string] {
-//line lesson11-capabilities.tesl:52
+//line lesson11-capabilities.tesl:51
 	return teslrt.EnvMaybe(key)
 }
 
-//line lesson11-capabilities.tesl:55
+//line lesson11-capabilities.tesl:54
 func GetCurrentTime() teslrt.PosixMillis {
-//line lesson11-capabilities.tesl:56
+//line lesson11-capabilities.tesl:55
 	return teslrt.NowMillis()
 }
 
-//line lesson11-capabilities.tesl:60
+//line lesson11-capabilities.tesl:59
 func LogMessage(message string) string {
-//line lesson11-capabilities.tesl:61
+//line lesson11-capabilities.tesl:60
 	return ("logged: " + message)
 }
 
-//line lesson11-capabilities.tesl:66
+//line lesson11-capabilities.tesl:65
 func ReadAndWrite(key string) string {
 	{
-//line lesson11-capabilities.tesl:67
+//line lesson11-capabilities.tesl:66
 		value := ReadEnvVar(key)
 		_ = value
 		{
-//line lesson11-capabilities.tesl:68
+//line lesson11-capabilities.tesl:67
 			valueStr := (func() string {
 				{
 					teslScrut4 := value
@@ -56,7 +56,7 @@ func ReadAndWrite(key string) string {
 				}
 			}())
 			_ = valueStr
-//line lesson11-capabilities.tesl:71
+//line lesson11-capabilities.tesl:70
 			return ("read key: " + key + ", value: " + valueStr)
 		}
 	}

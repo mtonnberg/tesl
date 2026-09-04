@@ -11,7 +11,7 @@
       G35  ForAll on non-List/Set type now correctly rejected (was: silently accepted)
       G36  Handler with extra unused capability in requires produces no lint warning
       G37  upsert, delete, selectCount/Sum/Max/Min now documented in LANGUAGE-SPEC.md
-      G38  deleteAndReturnResult must import DeleteResult from Tesl.DB (not Tesl.Prelude)
+      G38  deleteAndReturnResult returns Int without a result ADT import
       G39  Proof arity mismatch at declaration now correctly rejected (was: silently accepted)
       G40  Nested transaction correctly gives P001 error
       G41  Non-exhaustive case expression is correctly detected
@@ -110,11 +110,11 @@ let proof_prelude =
 (* bare-`Int` return are pinned here.                                           *)
 let test_g31_selectmax_unknown_name () =
   let src = db_prelude ^
-    "fn maxPrice() -> Maybe Int requires [dbRead] =\n" ^
+    "fn maxPrice() -> Maybe Int requires [dbRead Product] =\n" ^
     "  selectMax p.price from Product\n" in
   should_pass src;
   let bare = db_prelude ^
-    "fn maxPrice() -> Int requires [dbRead] =\n" ^
+    "fn maxPrice() -> Int requires [dbRead Product] =\n" ^
     "  selectMax p.price from Product\n" in
   should_fail "cannot unify Maybe Int with Int" bare
 
@@ -128,7 +128,7 @@ let test_g31_selectmax_unknown_name () =
 let test_g32_selectsum_returns_int () =
   let src = db_prelude ^
     (* Return type annotation Int should match selectSum on Int field *)
-    "fn totalPrice() -> Int requires [dbRead] =\n" ^
+    "fn totalPrice() -> Int requires [dbRead Product] =\n" ^
     "  selectSum p.price from Product\n" in
   should_pass src
 
@@ -181,7 +181,7 @@ let test_g35_forall_on_non_list_silently_compiles () =
 
 (* ── G36: Handler with unused capability — no lint warning ──────────────── *)
 (*                                                                              *)
-(* A handler declaring `requires [dbRead, time]` but only using dbRead has    *)
+(* A handler declaring `requires [dbRead Product, time]` but only using dbRead Product has    *)
 (* no issue detected by the compiler. Unused declared capabilities represent  *)
 (* unnecessary privilege that should ideally be flagged by a lint rule.       *)
 (* The compiler silently accepts over-declared capabilities.                  *)
@@ -196,7 +196,7 @@ let test_g36_handler_unused_capability_no_warning () =
     "  price: Int\n" ^
     "}\n" ^
     (* Handler declares [dbRead, time] but only uses dbRead *)
-    "handler getProducts() -> List Product requires [dbRead, time] =\n" ^
+    "handler getProducts() -> List Product requires [dbRead Product, time] =\n" ^
     "  select p from Product\n" in
   should_pass src
 
@@ -209,29 +209,24 @@ let test_g36_handler_unused_capability_no_warning () =
 (* if/when documentation is added.                                            *)
 let test_g37_upsert_compiles () =
   let src = db_prelude ^
-    "fn upsertProduct(id: String, name: String, price: Int) -> Unit requires [dbWrite] =\n" ^
+    "fn upsertProduct(id: String, name: String, price: Int) -> Unit requires [dbWrite Product] =\n" ^
     "  upsert Product { id: id, name: name, price: price } onConflict [id] doUpdate [name, price]\n" in
   should_pass src
 
-(* ── G38: deleteAndReturnResult requires import from Tesl.DB ─────────────── *)
+(* ── G38: deleteAndReturnResult returns Int ──────────────────────────────── *)
 (*                                                                              *)
-(* `DeleteResult` and its constructors `NoRowDeleted`/`RowsDeleted` must be   *)
-(* imported from Tesl.DB, not Tesl.Prelude. This is not obvious from the      *)
-(* surface language — users expect common return types in the prelude.        *)
-let test_g38_delete_result_needs_db_import () =
+(* The count result needs only the database capability imports.               *)
+let test_g38_delete_result_returns_int () =
   let src =
     prelude ^
-    (* Wrong: DeleteResult is NOT in Tesl.Prelude *)
     "import Tesl.DB exposing [dbRead, dbWrite]\n" ^
     "entity Product table \"products\" primaryKey id {\n" ^
     "  id: String\n" ^
     "  name: String\n" ^
     "  price: Int\n" ^
     "}\n" ^
-    (* Forget to import DeleteResult *)
-    "fn removeProduct(id: String) -> Unit requires [dbWrite] =\n" ^
-    "  delete p from Product where p.id == id\n" in
-  (* Returning Unit from delete is fine — no DeleteResult needed *)
+    "fn removeProduct(id: String) -> Int requires [dbWrite Product] =\n" ^
+    "  deleteAndReturnResult p from Product where p.id == id\n" in
   should_pass src
 
 (* ── G39: Proof arity mismatch at declaration silently accepted ─────────── *)
@@ -259,7 +254,7 @@ let test_g39_proof_arity_mismatch_at_declaration () =
 (* rejected with P001 (transactional atomicity — LANGUAGE-SPEC §20.5).         *)
 let test_g40_nested_transaction_rejected () =
   let src = db_prelude ^
-    "fn nestedTx() -> Unit requires [dbWrite] =\n" ^
+    "fn nestedTx() -> Unit requires [dbWrite Product] =\n" ^
     "  transaction {\n" ^
     "    transaction {\n" ^
     "      insert Product { id: \"1\", name: \"a\", price: 10 }\n" ^
@@ -288,8 +283,8 @@ let test_g42_circular_capability_rejected () =
   let src =
     prelude ^
     "import Tesl.DB exposing [dbRead, dbWrite]\n" ^
-    "capability adminAccess implies dbRead, superAccess\n" ^
-    "capability superAccess implies adminAccess, dbWrite\n" in
+    "capability adminAccess implies dbRead Product, superAccess\n" ^
+    "capability superAccess implies adminAccess, dbWrite Product\n" in
   should_fail "cycle.*adminAccess\\|capability cycle\\|V001" src
 
 (* ── G43: Polymorphic identity function works at multiple call sites ──────── *)
@@ -377,7 +372,7 @@ let test_g47_let_shadowing_rejected () =
 (* type checker, and it can be used in string interpolation as an Int.        *)
 let test_g48_selectcount_returns_int () =
   let src = db_prelude ^
-    "fn countProducts() -> String requires [dbRead] =\n" ^
+    "fn countProducts() -> String requires [dbRead Product] =\n" ^
     "  let n = selectCount p from Product\n" ^
     "  \"Total: ${n}\"\n" in
   should_pass src
@@ -447,7 +442,7 @@ let () =
     "G35", [ test_case "ForAll on non-List/Set type now rejected" `Quick test_g35_forall_on_non_list_silently_compiles ];
     "G36", [ test_case "handler with unused declared capability — no lint warning" `Quick test_g36_handler_unused_capability_no_warning ];
     "G37", [ test_case "upsert compiles correctly (now documented)" `Quick test_g37_upsert_compiles ];
-    "G38", [ test_case "delete returns Unit — no need to import DeleteResult" `Quick test_g38_delete_result_needs_db_import ];
+    "G38", [ test_case "deleteAndReturnResult returns Int" `Quick test_g38_delete_result_returns_int ];
     "G39", [ test_case "proof arity mismatch at declaration now rejected" `Quick test_g39_proof_arity_mismatch_at_declaration ];
     "G40", [ test_case "nested transaction correctly rejected (P001)" `Quick test_g40_nested_transaction_rejected ];
     "G41", [ test_case "non-exhaustive case expression correctly detected" `Quick test_g41_non_exhaustive_case_detected ];

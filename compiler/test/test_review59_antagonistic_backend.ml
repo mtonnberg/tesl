@@ -132,7 +132,7 @@ let test_R59B_FA01_forall_where_different_binding () =
   should_fail "WHERE clause uses.*but return spec declares" (base_header ^ {|
 handler badHandler(roomId: String ::: ValidRoomId roomId)
   -> List Message ? ForAll (FromDb (RoomId == roomId))
-  requires [dbRead] =
+  requires [dbRead Message] =
   let sneaky = "sneaky2"
   select m from Message where m.roomId == sneaky
 |})
@@ -142,7 +142,7 @@ let test_R59B_FA02_forall_where_literal () =
   should_fail "WHERE condition does not match.*use parameter.*not a literal" (base_header ^ {|
 handler badHandler(roomId: String ::: ValidRoomId roomId)
   -> List Message ? ForAll (FromDb (RoomId == roomId))
-  requires [dbRead] =
+  requires [dbRead Message] =
   select m from Message where m.roomId == "sneaky"
 |})
 
@@ -152,7 +152,7 @@ let test_R59B_FA03_forall_where_different_param () =
 handler badHandler(roomId: String ::: ValidRoomId roomId,
                    sneakyRoomId: String ::: ValidRoomId sneakyRoomId)
   -> List Message ? ForAll (FromDb (RoomId == roomId))
-  requires [dbRead] =
+  requires [dbRead Message] =
   select m from Message where m.roomId == sneakyRoomId
 |})
 
@@ -161,7 +161,7 @@ let test_R59B_FA04_forall_where_correct_compiles () =
   should_pass (base_header ^ {|
 handler goodHandler(roomId: String ::: ValidRoomId roomId)
   -> List Message ? ForAll (FromDb (RoomId == roomId))
-  requires [dbRead] =
+  requires [dbRead Message] =
   select m from Message where m.roomId == roomId
 |})
 
@@ -177,7 +177,7 @@ let test_R59B_EX01_insert_id_literal () =
   should_fail "insert uses a literal for.*id.*witness" (base_exists ^ {|
 handler badPost(roomId: String ::: ValidRoomId roomId)
   -> exists msgId: String => Message ? FromDb (Id == msgId)
-  requires [dbWrite, random] =
+  requires [dbWrite Message, random] =
   let msgId = generatePrefixedId "msg"
   exists msgId =>
     insert Message { id: "sneaky", roomId: roomId }
@@ -188,7 +188,7 @@ let test_R59B_EX02_insert_id_different_binding () =
   should_fail "insert uses.*id.*but return spec declares.*do not match" (base_exists ^ {|
 handler badPost(roomId: String ::: ValidRoomId roomId)
   -> exists msgId: String => Message ? FromDb (Id == msgId)
-  requires [dbWrite, random] =
+  requires [dbWrite Message, random] =
   let msgId = generatePrefixedId "msg"
   let sneaky = generatePrefixedId "msg"
   exists msgId =>
@@ -201,7 +201,7 @@ let test_R59B_EX03_insert_id_different_param () =
 handler badPost(roomId: String ::: ValidRoomId roomId,
                 sneaky: String ::: ValidRoomId sneaky)
   -> exists msgId: String => Message ? FromDb (Id == msgId)
-  requires [dbWrite, random] =
+  requires [dbWrite Message, random] =
   let msgId = generatePrefixedId "msg"
   exists msgId =>
     insert Message { id: sneaky, roomId: roomId }
@@ -212,7 +212,7 @@ let test_R59B_EX04_insert_correct_compiles () =
   should_pass (base_exists ^ {|
 handler goodPost(roomId: String ::: ValidRoomId roomId)
   -> exists msgId: String => Message ? FromDb (Id == msgId)
-  requires [dbWrite, random] =
+  requires [dbWrite Message, random] =
   let msgId = generatePrefixedId "msg"
   exists msgId =>
     insert Message { id: msgId, roomId: roomId }

@@ -100,12 +100,6 @@ let should_pass src =
     let code, out = run_compiler ["--check"; path] in
     if code <> 0 then failf "expected compilation success, got:\n%s" out)
 
-let[@warning "-32"] known_gap ~what src =
-  with_temp_file src (fun path ->
-    let code, _ = run_compiler ["--check"; path] in
-    if code <> 0 then
-      failf "KNOWN GAP CLOSED — `%s` is now rejected; promote to should_fail." what)
-
 (* ── Shared TESL fragments ───────────────────────────────────────────────── *)
 
 let hdr modname = Printf.sprintf
@@ -282,18 +276,9 @@ let _ = nop_case  (* keep helper available; explicit cases used above *)
    PROJ — conjunction decomposition projection mistakes.
    ══════════════════════════════════════════════════════════════════════════ *)
 
-(* GAP-CONJPROJ — KNOWN STATIC-CHECKER GAP.
-   After `let (bare ::: pPos && pSmall) = both` (a SINGLE value carrying a
-   conjunction), reattaching the WRONG projected half to a consumer
-   (`needsPositive (bare ::: pSmall)`) is accepted today.  Because both
-   projected proofs share `bare`'s subject, the checker cannot tell `pPos` from
-   `pSmall` at reattach time, so the wrong-conjunct reattachment slips through.
-   This is the DECOMPOSITION-BINDING variant of conjunction projection (distinct
-   from NEG-ATTACK's GAP-ANDPROJ andLeft/andRight helper no-op).  CLOSED: the
-   projection is now subject-precise, so reattaching the wrong projected half is
-   rejected ("does not statically satisfy").
-   (The cross-VALUE swap — different subjects — was already rejected; see PROJ-03/04.) *)
-let proj_wrong_half_gap idx ~wrong_proof ~consumer =
+(* Conjunction decomposition records each projected predicate, so reattaching
+   the wrong projected half is rejected even when both proofs share a subject. *)
+let proj_wrong_half idx ~wrong_proof ~consumer =
   let m = Printf.sprintf "Proj%02d" idx in
   let test () =
     should_fail satisfy_re
@@ -304,11 +289,11 @@ fn bad(raw: Int) -> String =
   %s (bare ::: %s)
 |} consumer wrong_proof)
   in
-  (Printf.sprintf "PROJ-%02d reattach %s at %s (KNOWN GAP)" idx wrong_proof consumer, test)
+  (Printf.sprintf "PROJ-%02d reject %s at %s" idx wrong_proof consumer, test)
 
 (* Three-way conjunction projection: decompose P && Q && R, reattach a wrong
    leaf at each consumer.  Same GAP-CONJPROJ root cause. *)
-let proj_three_way_gap idx ~wrong_proof ~consumer =
+let proj_three_way_wrong_half idx ~wrong_proof ~consumer =
   let m = Printf.sprintf "Proj3%02d" idx in
   let test () =
     should_fail satisfy_re
@@ -343,17 +328,17 @@ fn bad(raw: Int) -> String =
   %s (bare ::: %s)
 |} consumer wrong_proof)
   in
-  (Printf.sprintf "PROJ3-%02d reattach %s at %s (KNOWN GAP)" idx wrong_proof consumer, test)
+  (Printf.sprintf "PROJ3-%02d reject %s at %s" idx wrong_proof consumer, test)
 
 let proj_cases =
-  [ proj_wrong_half_gap 1 ~wrong_proof:"pSmall" ~consumer:"needsPositive";
-    proj_wrong_half_gap 2 ~wrong_proof:"pPos" ~consumer:"needsSmall";
-    proj_three_way_gap 1 ~wrong_proof:"pb" ~consumer:"needsA";
-    proj_three_way_gap 2 ~wrong_proof:"pc" ~consumer:"needsA";
-    proj_three_way_gap 3 ~wrong_proof:"pa" ~consumer:"needsB";
-    proj_three_way_gap 4 ~wrong_proof:"pc" ~consumer:"needsB";
-    proj_three_way_gap 5 ~wrong_proof:"pa" ~consumer:"needsC";
-    proj_three_way_gap 6 ~wrong_proof:"pb" ~consumer:"needsC"; ]
+  [ proj_wrong_half 1 ~wrong_proof:"pSmall" ~consumer:"needsPositive";
+    proj_wrong_half 2 ~wrong_proof:"pPos" ~consumer:"needsSmall";
+    proj_three_way_wrong_half 1 ~wrong_proof:"pb" ~consumer:"needsA";
+    proj_three_way_wrong_half 2 ~wrong_proof:"pc" ~consumer:"needsA";
+    proj_three_way_wrong_half 3 ~wrong_proof:"pa" ~consumer:"needsB";
+    proj_three_way_wrong_half 4 ~wrong_proof:"pc" ~consumer:"needsB";
+    proj_three_way_wrong_half 5 ~wrong_proof:"pa" ~consumer:"needsC";
+    proj_three_way_wrong_half 6 ~wrong_proof:"pb" ~consumer:"needsC"; ]
 
 (* The exact lesson38-documented bug: decompose two SEPARATE proven values,
    re-combine, then reattach the cross-proof (tagProof) where ValidScore is
@@ -559,18 +544,15 @@ let self_cases =
     ("SELF-02 self-ref Fact (string) via detachFact", self_via_detach_str); ]
   @ self_named_cases
 
-(* GAP-SELFPARAM — CLOSED.
-   The self-referential check fired on `let`-bound `Fact (P binding)` (SELF-01/02
-   above) but not on a function *parameter* annotated `p: Fact (P p)`.  The
-   parameter form is now also rejected (P001, same root cause). *)
-let self_param_gap () =
+(* Function parameters reject the same self-referential Fact shape as lets. *)
+let self_param_rejected () =
   should_fail self_re
     (hdr "SelfGap01" ^ checks ^ {|
 fn bad(p: Fact (ValidScore p)) -> String = "x"
 |})
 
-let self_gap_cases =
-  [ ("SELF-GAP-01 self-ref Fact on parameter (KNOWN GAP)", self_param_gap) ]
+let self_param_cases =
+  [ ("SELF-07 self-ref Fact on parameter", self_param_rejected) ]
 
 (* ══════════════════════════════════════════════════════════════════════════
    POS — positive companions (MUST compile).
@@ -712,7 +694,7 @@ let () =
     "NOP-no-attached-proof", to_cases (nop_cases @ nop_constructed_cases);
     "PROJ-conjunction-projection", to_cases (proj_cases @ proj_extra_cases);
     "FORG-forget-then-use", to_cases (forg_cases @ forg_extra_cases @ forg_extra2_cases);
-    "SELF-self-referential-fact", to_cases (self_cases @ self_gap_cases);
+    "SELF-self-referential-fact", to_cases (self_cases @ self_param_cases);
     "POS-companions", [
       test_case "POS decompose then reattach same subject" `Quick pos_decompose_reattach;
       test_case "POS forget then re-validate" `Quick pos_forget_revalidate;

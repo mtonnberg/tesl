@@ -64,7 +64,7 @@ tie-breakers the spec appeals to.
 - Trusted proof introduction should happen at clear, auditable boundaries.
 - The language should be intentionally opinionated: one obvious style, enforced by a built-in linter/formatter.
 - Ordinary side effects should be capability-governed. Telemetry is the deliberate ambient exception.
-- Observability should follow OpenTelemetry semantic conventions (OpenTelemetry-shaped). A native OTLP exporter is implemented: when `initTelemetry` is given a real `endpoint` URL, telemetry is exported over OTLP/HTTP+JSON to `<endpoint>/v1/logs` (Logs signal, `dsl/otel.rkt`) and `<endpoint>/v1/metrics` (Metrics signal, `dsl/metrics.rkt`) and — with `traces True` — `<endpoint>/v1/traces` (Traces signal, `dsl/traces.rkt`); with no endpoint it emits structured JSON locally. W3C trace-context propagation is unconditional, so logs are joinable to a caller's trace even with span export off. The protobuf/gRPC transport is a non-goal, as is any user-facing span API.
+- Observability should follow OpenTelemetry semantic conventions (OpenTelemetry-shaped). Telemetry is configured declaratively through the `TelemetryConfig` field of `App`; the legacy `initTelemetry` startup form remains accepted for existing programs. With a real `endpoint` URL, telemetry is exported over OTLP/HTTP+JSON to `<endpoint>/v1/logs` (Logs signal, `dsl/otel.rkt`) and `<endpoint>/v1/metrics` (Metrics signal, `dsl/metrics.rkt`) and — with `traces True` — `<endpoint>/v1/traces` (Traces signal, `dsl/traces.rkt`); with no endpoint it emits structured JSON locally. W3C trace-context propagation is unconditional, so logs are joinable to a caller's trace even with span export off. The protobuf/gRPC transport is a non-goal, as is any user-facing span API.
 
 The language is in active development; breaking changes carry **no** backward-compatibility burden.
 We keep the language as tight and small as possible. Earlier architectural notes may use older
@@ -128,29 +128,36 @@ Tesl currently has three relevant layers.
 ### 4.1 Surface `.tesl` layer
 This is the intended authoring surface. Users write modules, imports, records, entities, functions, captures, APIs, servers, and `main` blocks here.
 
-### 4.2 Elaborated Racket DSL layer
-The `.tesl` compiler lowers surface forms into Racket DSL forms such as `define/pow`, `define-checker`, `define-auther`, `define-handler`, `define-trusted`, `define-record`, `define-entity`, `define-api`, and `define-server`.
+### 4.2 OCaml frontend and Go emission layer
 
-### 4.3 Runtime evidence layer (erased by default; retained under `--debug`)
+The OCaml compiler parses the surface language, resolves the module graph, performs structural type checking and proof/capability validation, and emits a Go module. Each Tesl module becomes a Go package under the generated module; a module containing `main` also gets `cmd/app/main.go`, and Tesl test forms become Go `_test.go` functions.
 
-Proof-relevant information *can* be carried at runtime through evidence-bearing values:
+Emission is directly from the checked Tesl module representation. The generated project includes `go.mod`, generated application packages, and the runtime sources required by the program. Optional external Go dependencies are version-pinned in the generated module.
 
-- named values (`named-value` struct: name, raw value, fact list, bindings);
-- successful check results (`check-ok`);
-- detached proofs (`detached-proof`);
-- existential packages.
+**Historical architecture:** Tesl formerly lowered surface forms to a Racket macro DSL with forms such as `define/pow`, `define-checker`, `define-auther`, and `define-handler`. That Racket emitter/runtime architecture has been retired; references to those forms describe historical behavior, not the current compilation path.
 
-**This layer is erased.** For standard `check`/`fn`/`handler` paths the param-binding machinery (struct wrapping, `validate-runtime-argument`, the proof-environment `parameterize`) is dropped during macro expansion, so a build allocates nothing for proof tracking. Proof verification is a purely compile-time guarantee; there is no runtime proof-checking layer behind it to toggle back on.
+### 4.3 Go runtime and erased evidence layer
 
-**Retained pieces ("(almost)"):** free-floating proofs (`detached-proof`, via `detachFact`/`attachFact`) and cross-boundary proof transport keep their carriers; a proof-annotated parameter keeps one allocation so decomposition still works; `establish`/trusted facts, existential packages, newtype nominal wrappers, and `FromDb` proofs retain their representation.
+The compiler vendors the required embedded `teslrt` Go sources into `internal/teslrt/` in the generated module. Runtime files for features such as HTTP, PostgreSQL, debugging, agents, regexes, and time zones are selected only when the generated program needs them. The checked-in runtime source and the compiler's embedded snapshot are kept in sync by compiler tests and CI.
 
-**Erased under `--debug` too.** For a sound checker the runtime structs are redundant — a binding's proof is compile-time information. So `--debug` also erases; the debugger shows the raw runtime value and overlays proof/type from compile-time type info, and breakpoints (`thsl-src!` checkpoints, emitted separately by the OCaml emitter) are unaffected. There is no toggle that restores a runtime evidence layer — proof verification lives entirely in the compiler.
+Proofs, facts, existential witnesses, and capability declarations are compile-time information and have no evidence-bearing runtime representation in generated Go:
+
+- proof attachment, detachment, decomposition, and `Fact` values erase;
+- proof-annotated values, fields, collection elements, and function returns use their ordinary Go value representation;
+- existential quantifiers erase to the representation of their body value;
+- `requires [...]` declarations leave no runtime capability row or grant check.
+
+A `check` or `auth` still returns `teslrt.Check[T]` because success/failure and its status/message are observable runtime control flow. That value does not contain a proof identity. Nominal newtypes and ordinary ADTs/records retain representations because they are value types, not proof evidence.
+
+**Erased under `--debug` too.** Debug builds add source checkpoints, metadata, and the required debug runtime files, but they do not restore proof objects. The debugger displays runtime values alongside compiler-provided source/type information; proof verification remains entirely in the frontend.
 
 ### 4.4 Public interface
 
-The only level that should be seen as "front facing" is the tesl-files. What is possible to do in the racket-files with manual changes is not interesting - if the language can prove its stated guarantees if a api web developer only works with the tesl files that is good enough. The compile layer should catch all errors except inherent runtime problems, such as database not available etc and they should only exist at the bounderies.
+The `.tesl` files are the only supported authoring interface. Generated Go is deliberately readable and can be inspected or processed with ordinary Go tooling, but manually changing it is outside the language guarantee and those changes are overwritten by the next emission.
 
-Replacing the Racket substrate with a Rust/Zig (or other) layer is an **aspiration, not a current property**. There is no lowering-IR or backend seam today: `emit_racket.ml` writes Racket forms directly, and the emitters re-derive lowering from the surface AST rather than from a shared normalized IR. (`ir.ml` is a parse-driven JSON tooling export, not a codegen/lowering stage — see `dev-docs/11-frontend-ir.md`.) A runtime swap would therefore require rewriting the emitter and reimplementing the runtime with exact behavior parity, including its trusted semantics. The enabling roadmap item lives in `roadmap/discarded/swappable-runtime-backend.md`.
+The OCaml frontend and Go emitter are the compile-time authority for syntax, types, proofs, capabilities, and backend-supported forms. The generated `teslrt` code owns runtime boundary behavior such as request decoding, check rejection, database access, and response encoding. Inherent environmental failures, such as an unavailable database, remain runtime failures at those boundaries.
+
+Go is the sole current execution backend. The retired Racket files and DSL forms are relevant only to explicitly historical comparisons; they are not an alternate public interface or a runtime fallback.
 
 ## 5. Effect model and operational stance
 This section is normative for the public language design.
@@ -176,6 +183,29 @@ The intended model is:
 - Tesl telemetry is OpenTelemetry-shaped (follows OpenTelemetry semantic conventions); a native OTLP exporter is implemented (`dsl/otel.rkt`): with a configured `endpoint` it exports over OTLP/HTTP+JSON (Logs signal), and with no endpoint it emits structured JSON locally (see the Export paragraph below);
 - telemetry is ambient and does not require an explicit capability in ordinary code;
 - this exception exists because observability is considered part of the platform foundation rather than an arbitrary user-defined effect.
+
+**Declarative setup.** An application normally configures telemetry in its returned `App` record:
+
+```tesl
+import Tesl.Telemetry exposing [TelemetryConfig]
+
+main() -> App requires [appService] =
+  App {
+    database: MainDatabase
+    api: AppServer
+    port: 8080
+    telemetry: TelemetryConfig {
+      service: "orders"
+      endpoint: "in-memory"
+      console: True
+    }
+  }
+```
+
+`service`, `endpoint`, and `console` are required fields. `metrics` and `metricsInterval` are
+optional overrides. `endpoint "in-memory"` (or an empty endpoint) keeps export local. `initTelemetry`
+is a compatibility form for older programs; new code should use the record field so configuration
+is checked like the other `App` fields.
 
 **Export.** When `initTelemetry` is given a real `endpoint` URL, events are exported to it over OTLP/HTTP+JSON (Logs signal): each event becomes a log record (message → `body`, `timestampMs` → `timeUnixNano`, `service` → the `service.name` resource attribute, attributes → OTLP `KeyValue`s), POSTed in batches to `<endpoint>/v1/logs`. Export is opt-in purely by the presence of a configured endpoint — the outbound network egress is intentionally kept ambient (no `httpClient` capability), consistent with telemetry being platform infrastructure. Export is asynchronous and resilient: events are buffered in a bounded queue (drop-oldest on overflow) flushed by a background timer, and an unreachable/erroring collector degrades to a dropped batch — it never blocks or fails the request path. The sentinel `endpoint "in-memory"` (and the empty string) means "no remote export"; `console True` additionally prints events to the console for local dev. The protobuf/gRPC transport is a non-goal; the Traces signal is described below.
 
@@ -640,9 +670,12 @@ The current frontend gives special treatment to these module names:
 - `Tesl.Random` — randomness capability (`random`) and functions (`randomInt`). The `random` capability gates all non-deterministic operations. Import it alongside `Tesl.Id` when using `generatePrefixedId`, or standalone when calling `randomInt`.
 - `Tesl.Tuple` — tuple constructors and accessors (`Tuple2`, `Tuple3`, `Tuple2.first`, `Tuple2.second`, `Tuple3.first`, `Tuple3.second`, `Tuple3.third`).
 - `Tesl.Env` — environment variable access (`env`, `envInt`)
-- `Tesl.DB` — database capabilities (`dbRead`, `dbWrite`)
+- `Tesl.DB` — database capability constructors (`dbRead`, `dbWrite`). Imports keep those bare names,
+  for example `import Tesl.DB exposing [dbRead, dbWrite]`, but every grant, `requires` entry, and
+  `implies` target must apply one to an entity: `dbRead Order` or `dbWrite Order`.
 - `Tesl.Http` — HTTP request type (`HttpRequest`). Dot-access fields, each a `Dict String String`: `request.cookies`, `request.headers` (names lowercased), `request.queryParameters` (URL-query values are form-url-decoded; repeated keys are last-wins; keys are case-sensitive). Also `request.body` (a `String`, not a `Dict`): the raw request body exactly as it arrived, decoded as UTF-8. It exists for verifying an inbound signature — a MAC must be computed over the bytes that arrived, not over a re-encoded record — and it is not a way to skip a codec: a `String` still cannot become a record without one. Also `request.clientAddress` (a `String`, not a `Dict`): the trustworthy client IP — with no `trustedProxies` declaration (§23) it is the socket peer; with one it is the rightmost untrusted `X-Forwarded-For` hop, and a disagreeing chain is refused. An api-test supplies query parameters inline in the path, e.g. `get "/search?q=hello%20world"`. Also the **session cookie**: `Http.setSessionCookie`, `Http.clearSessionCookie`, `Http.sessionToken` and the `cookieCap` capability. See §21.8.
-- `Tesl.Telemetry` — telemetry sentinel bindings (`telemetry`, `initTelemetry`) and the ambient metric instruments (`counter`, `histogram`, `gauge`). See §5.2.
+- `Tesl.Telemetry` — `TelemetryConfig`, the legacy startup form `initTelemetry`, the ambient span/log
+  form `telemetry`, and the metric instruments (`counter`, `histogram`, `gauge`). See §5.2.
 - `Tesl.Queue` — queue capabilities (`queueRead`, `queueWrite`, `pubsub`), proof predicates (`FromQueue`, `FromDeadQueue`)
 - `Tesl.Crypto` — password storage, message authentication, digests and secrets (`PasswordHash`, `Signature`, `Secret`; facts `HashFor`, `PasswordVerified`, `Authentic`). Every primitive is libsodium. Reuses `random` for the two operations that draw randomness; introduces no capability of its own. See §21.7.
 - `Tesl.UUID` — UUID generation and validation: `UUID.v4`, `UUID.v7`, `UUID.validate`, `IsUuid` proof predicate, `uuidV4Codec`, `uuidV7Codec`. The `uuid` capability gates generation; `UUID.validate` requires no capability. See §21.1.
@@ -693,7 +726,7 @@ entity Post table "posts" primaryKey id {
   publishedAt: PosixMillis    # BIGINT — no @db annotation needed
 }
 
-handler post createPost(...) requires [dbWrite, time] =
+handler post createPost(...) requires [dbWrite Post, time] =
   insert Post { id: newId, publishedAt: nowMillis() }
 ```
 
@@ -908,6 +941,12 @@ Each `api-test` block runs with a fresh in-memory database by default. Optional 
 
 Request expressions return the compiler-known type `HttpResponse` with fields `status`, `body`, and `headers`. `body` is a `JsonValue`, and `Tesl.ApiTest` exposes helper functions such as `statusOk`, `jsonString`, `hasLength`, `fieldAt`, `subscribe`, `processNextJob`, and `processNextDeadJob` for asserting on raw JSON, SSE streams, and queue workers.
 
+Queue processing helpers return `JobResult a`. `JobOk job` carries the processed job payload and
+`JobFailed job message` carries that same payload plus a `String` failure message. Use
+`expectJobOk` and `expectJobFailed` when the test needs a typed success or failure assertion; the
+constructors are ordinary exhaustiveness-checked ADT cases with one type parameter, not a
+polymorphic error parameter.
+
 When `collect` uses `count` or `until`, a `timeout` clause is required. Queue helpers (`processNextJob`, `processNextDeadJob`, `drainQueue`, `pendingJobCount`) run workers synchronously during the test, making HTTP → queue → SSE flows deterministic.
 
 #### Stubbing outbound HTTP
@@ -966,7 +1005,7 @@ Assertions check histogram percentiles, error rate, and throughput after the run
 load-test "list books throughput" for BookServer
   rate 100rps
   duration 10s
-  requires [dbRead] {
+  requires [dbRead Book] {
   get "/books"
 
   assert p99 < 200ms
@@ -1039,7 +1078,7 @@ A `queue` is a **folded record** assigned with `=`. It pairs each job type with 
 
 A `queue` declaration creates a background job queue backed by the named `database`. Each `Job <JobType> <workerFn> (<dead-slot>)` entry folds a `record` type together with its normal worker function and an optional dead-letter worker (`(Something deadFn)` or `(Nothing)`).
 
-> **Durability (2026-09-02).** On a Postgres-backed database a `queue` is durable and shared: jobs are rows in `<schema>.tesl_jobs`, claimed with `FOR UPDATE SKIP LOCKED`, so any number of server instances work one queue; `enqueue` runs on the surrounding transaction; a failed job's `next_attempt_at` follows the declared `backoff`; a job whose instance died mid-run is reclaimed after the visibility timeout (`TESL_QUEUE_VISIBILITY_TIMEOUT_MS`, default 10 min). The same holds for the `email` outbox (`tesl_email_outbox`), the `cache` (`tesl_cache`, `UNLOGGED`) and SSE pub/sub (`tesl_pubsub_outbox` + `LISTEN`/`NOTIFY` fan-out to every instance). On a Memory-backed database all four stay in the process's memory: that is the development and test store. Workers are woken by `NOTIFY tesl_queue` from any instance over one shared LISTEN connection per process, with a 5 s fallback poll; the stale-claim sweep runs once a minute per process.
+> **Durability (2026-09-02).** On a Postgres-backed database a `queue` is durable and shared: jobs are rows in `<schema>.tesl_jobs`, claimed with `FOR UPDATE SKIP LOCKED`, so any number of server instances work one queue; `enqueue` runs on the surrounding transaction; a failed job's `next_attempt_at` follows the declared `backoff`; a job whose instance died mid-run is reclaimed after the visibility timeout (`TESL_QUEUE_VISIBILITY_TIMEOUT_MS`, default 10 min). A stale normal claim returns to `pending`; a stale dead-letter claim returns to `dead`. The same holds for the `email` outbox (`tesl_email_outbox`), the `cache` (`tesl_cache`, `UNLOGGED`) and SSE pub/sub (`tesl_pubsub_outbox` + `LISTEN`/`NOTIFY` fan-out to every instance). The serial email worker claims one message immediately before each SMTP delivery, so queued messages do not consume their claim window waiting behind earlier deliveries. On a Memory-backed database all four stay in the process's memory: that is the development and test store. Workers are woken by `NOTIFY tesl_queue` from any instance over one shared LISTEN connection per process, with a 5 s fallback poll; the stale-claim sweep runs once a minute per process.
 
 `retry` configures how failed worker jobs are retried. `maxAttempts: 1` (the default) means no retries. With `backoff: Exponential` and `initialDelay: N` the delay between retries doubles: N, 2N, 4N, … seconds. With `backoff: Fixed` the delay is always `initialDelay`.
 
@@ -1059,8 +1098,8 @@ queue EmailQueue requires [emailWrite] = Queue {
   }
   numberOfWorkers: 4
 }
-capability emailWrite implies queueWrite
-capability emailRead  implies queueRead
+capability emailWrite implies queueWrite EmailQueue
+capability emailRead  implies queueRead EmailQueue
 ```
 
 Built-in `queueRead` and `queueWrite` capabilities come from `Tesl.Queue` (analogous to `dbRead`/`dbWrite` from `Tesl.DB`).
@@ -1193,7 +1232,7 @@ sees the failure and the loop continues, matching the containment `serverTools`
 endpoint tools have always had.
 
 ```tesl
-fn lookupOrderStatus(orderId: String) -> String requires [dbRead] =
+fn lookupOrderStatus(orderId: String) -> String requires [dbRead Order] =
   case selectOne o from Order where o.id == orderId of
     Something o -> o.status
     Nothing -> "no such order"
@@ -1372,8 +1411,20 @@ build an agent.
 **Accepted design, Implemented.**
 
 ```text
-<capability-decl> ::= "capability" <identifier> [ "implies" <identifier> { "," <identifier> } ]
+<capability-decl> ::= "capability" <identifier> [ "implies" <capability> { "," <capability> } ]
+<capability>      ::= <identifier> [ <identifier> ]
 ```
+
+The optional second identifier scopes a built-in resource capability. Database capabilities are
+always entity-scoped: `dbRead Order` grants reads of `Order` but not `Customer`, and a bare
+`dbRead` or `dbWrite` in any grant, `requires` list, or `implies` target is a compile error.
+`dbWrite Order` covers `dbRead Order` as well as writes to `Order`; it never covers either access
+to another entity. An imported constructor stays bare: `import Tesl.DB exposing [dbRead, dbWrite]`.
+
+Queue and pub/sub scoping is implemented separately. `queueRead Jobs`, `queueWrite Jobs`, and
+`pubsub UserEvents` constrain access to that queue or channel; `queueWrite Jobs` covers
+`queueRead Jobs`. Bare queue/pubsub grants currently remain migration wildcards. No DB wildcard
+is implied by that compatibility behavior.
 
 ### 11.4 Bindings and return specs
 **Accepted design, Implemented.**
@@ -1474,7 +1525,7 @@ Passing `raw` (without the proof) directly to `processInRange` is a compile-time
 
 <function-kind> ::= "check" | "establish" | "fn" | "auth" | "handler"
 <http-method>  ::= "get" | "post" | "put" | "delete" | "patch"
-<capability-list> ::= "[" [ <identifier> { "," <identifier> } ] "]"
+<capability-list> ::= "[" [ <capability> { "," <capability> } ] "]"
 ```
 
 The `<http-method>` prefix applies to **`handler` only**, where it is required, and states the HTTP
@@ -1562,7 +1613,7 @@ For returning proof-carrying values where the proof was produced inside the func
 ```tesl
 handler get getTodo(requestUser: User ::: Authenticated requestUser, todoId: String ::: TodoId todoId)
   -> Todo ? FromDb (Id == todoId)
-  requires [dbRead] =
+  requires [dbRead Todo] =
   ...
 
 # Compound entity proof: both Positive and Small get _entity appended
@@ -1908,7 +1959,7 @@ In queries, `Maybe` fields require a `case` expression or the `isAssignedTo` / h
 
 > **Maybe columns compare as values (2026-09-02).** `p.field == x` and `p.field != x` on a `Maybe` column are emitted as `IS NOT DISTINCT FROM` / `IS DISTINCT FROM`, so `Nothing == Nothing` is true and `Nothing == Something v` is false on PostgreSQL exactly as on the Memory store. A query's row binder may not shadow a name already in scope (a parameter, a local or a function); the compiler refuses it, because the two backends would otherwise read the two names differently. Two module names that fold to one Go package name (`FooBar`, `Foobar`, `Foo_bar`) are refused for the same reason: one module's code would silently replace the other's.
 >
-> **Memory store limits.** `transaction { }` on the Memory store rolls back by restoring the touched tables to their state before the block, so a concurrent request's rows committed to the same table during the block are undone with it; and `selectOne` without `order` returns the first row in insertion order on Memory and in heap order on PostgreSQL. The Memory store is a development and test store; a served program with concurrent writers should be Postgres-backed.
+> **Memory store limits.** `transaction { }` on the Memory store rolls back by restoring touched tables to their state before the block. Outside table readers and writers wait until commit or rollback, while the transaction reads its own writes, so uncommitted and partially rolled-back rows are not observable from another request. Memory transactions are process-wide serialized rather than PostgreSQL's concurrent MVCC transactions. Also, `selectOne` without `order` returns the first row in insertion order on Memory and in heap order on PostgreSQL. The Memory store is a development and test store; a served program with concurrent access should be Postgres-backed.
 
 `Int` maps to `NUMERIC`, **not** `BIGINT`: `Int` is arbitrary-precision (unbounded), and `NUMERIC` stores any magnitude losslessly, so an `Int` of any size round-trips through the database with no truncation (NT-07). A newtype *over* `Int` maps to the same `NUMERIC` — a plain integer column is one consistent type regardless of whether it is a bare `Int` or a nominal newtype. `PosixMillis` is the one deliberate exception: it is a distinct 64-bit millis-timestamp type and maps to compact `BIGINT`. For a bounded integer column that must fit a JavaScript number (< 2^53) or a compact `int4`, use `Int32` (`INTEGER`); a linter warning steers wire/storage `Int` fields toward `Int32`. To store any of these under a different SQL type, use an explicit `@db(...)` annotation.
 
@@ -2088,7 +2139,12 @@ is to give a parameter its own type so the pairing becomes checkable.
 <main-decl> ::= "main" "(" ")" "->" "App" "requires" "[" <capability-list> "]" "=" <body>
 ```
 
-The body is an ordinary function body that may run startup `let` bindings (telemetry init, port resolution, seeding) and must end by returning an `App { ... }` record. The `let` bindings are fully type-checked like any function body (unknown names, wrong-typed calls, and invalid `initTelemetry` keywords are compile errors); only the final `App { ... }` record is validated structurally, because its `database`/`api`/`queues`/`email`/`sseChannels` fields reference declarations by name rather than as values:
+The body is an ordinary function body that may run startup `let` bindings (port resolution and seeding)
+and must end by returning an `App { ... }` record. Telemetry normally belongs in the optional
+`telemetry` field; `initTelemetry` remains a checked compatibility form for older programs. The `let`
+bindings are fully type-checked like any function body (unknown names and wrong-typed calls are compile
+errors); only the final `App { ... }` record is validated structurally, because its
+`database`/`api`/`queues`/`email`/`sseChannels` fields reference declarations by name rather than as values:
 
 ```text
 <app-record> ::= "App" "{"
@@ -2100,7 +2156,18 @@ The body is an ordinary function body that may run startup `let` bindings (telem
                    [ "sseChannels" ":" "[" [ <identifier> { "," <identifier> } ] "]" ]
                    [ "static"      ":" <string> ]
                    [ "mountPath"   ":" <string> ]
+                   [ "telemetry"   ":" <telemetry-config> ]
                  "}"
+```
+
+```text
+<telemetry-config> ::= "TelemetryConfig" "{"
+                       "service"  ":" <string>
+                       "endpoint" ":" <string>
+                       "console"  ":" <bool>
+                       [ "metrics" ":" <bool> ]
+                       [ "metricsInterval" ":" <int> ]
+                     "}"
 ```
 
 ```tesl
@@ -2113,11 +2180,36 @@ main() -> App requires [appService, smtpSend] =
     queues: [EmailQueue]          # activates each queue's workers (normal + dead-letter)
     email: [AppEmail]             # activates each email block's delivery worker
     sseChannels: [UserEvents]     # activates each SSE channel's outbox delivery
+    telemetry: TelemetryConfig {
+      service: "orders"
+      endpoint: "in-memory"
+      console: True
+    }
     mountPath: "/api"             # every route answers under this prefix — see below
   }
 ```
 
 **Capabilities are granted at the App root**, derived from `main`'s `requires` list. There is no runtime cap-granting block; every capability referenced anywhere in the activated declarations flows from each declaration's own `requires`, and `main.requires` must cover them. A missing capability is a compile error.
+
+Every `dbRead Entity` or `dbWrite Entity` in `main`'s expanded grant must name an entity listed by
+the database selected in `App.database`. Otherwise compilation fails: the entity would not be
+connected to that App database. This check also applies to entity-scoped DB capabilities reached
+through `capability ... implies ...`.
+
+#### OpenAPI export
+
+The checked API surface can be exported for documentation and security tooling without changing
+the runtime surface:
+
+```text
+tesl generate-openapi <file> <Server> [--output <file>]
+```
+
+The command selects the API named by `<Server>` and emits an OpenAPI 3.1 JSON document. It includes
+typed captures, request and response schemas, session-cookie security, 401/404 responses, and proof
+annotations as both descriptions and `x-tesl-proof`. Proof annotations in OpenAPI are informational;
+Tesl's compiler and server remain authoritative. Generation is opt-in and file-based, so production
+servers do not gain a documentation route by default. See `manual/openapi-dast.md` for DAST usage.
 
 #### `mountPath` — serving the API under a path prefix
 
@@ -2779,7 +2871,15 @@ The current `.tesl` frontend includes a small SQL-like sublanguage:
 <comparison-op> ::= "==" | "!=" | "<=" | ">=" | "<" | ">"
 ```
 
-**`innerJoin` — inner join by FK.** Returns only rows from the main entity for which a matching row exists in the joined entity. The two field refs after `on` are the main entity's FK field and the join entity's matching field (no `==` operator — `==` sits above function application in Tesl's grammar):
+The parser produces a dedicated `ESqlQuery` AST node for each recognized select, insert, upsert,
+update, delete, or `deleteAndReturnResult` expression. SQL clause keywords and their source spans
+are consumed before the node is built, including multiline and parenthesized continuations. The
+checker, capability validator, index linter, and Go backend read the same `sql_query` payload; they
+do not independently reinterpret the application tree. A malformed SQL-shaped expression is left
+unrecognized and receives the normal fail-closed structural diagnostic rather than being emitted as
+an ordinary function call.
+
+**`innerJoin` — inner join by FK.** Returns only rows from the main entity for which a matching row exists in the joined entity. The two field refs after `on` are the main entity's FK field and the join entity's matching field (no `==` operator — `==` sits above function application in Tesl's grammar). A query requires `dbRead` for every entity it touches: the examples below require both `dbRead User` and `dbRead Profile`, and multiple joins add one requirement per joined entity.
 
 ```tesl
 select u from User innerJoin Profile on u.profileId Profile.id
@@ -2789,7 +2889,7 @@ select u from User
   innerJoin Profile on u.profileId Profile.id
 ```
 
-**Aggregate queries.**  All aggregate forms require the `dbRead` capability. `selectCount` always returns `Int`. `selectSum` returns the same type as the target field (e.g. `Int` for an integer field, `Float` for a float field) — zero is its identity, so no matching row is `0`, not an absence. `selectMax` and `selectMin` return **`Maybe <field type>`**: over no matching row there is no value of the column's type to return, and inventing one (or handing back a SQL `NULL` typed as the column) would be unsound. Callers `case` on the result.
+**Aggregate queries.** All aggregate forms require `dbRead Entity` for their source entity. `selectCount` always returns `Int`. `selectSum` returns the same type as the target field (e.g. `Int` for an integer field, `Float` for a float field) — zero is its identity, so no matching row is `0`, not an absence. `selectMax` and `selectMin` return **`Maybe <field type>`**: over no matching row there is no value of the column's type to return, and inventing one (or handing back a SQL `NULL` typed as the column) would be unsound. Callers `case` on the result.
 
 **Grouped aggregates (GitHub #29).** `selectCountBy` / `selectSumBy` return **one row per
 group** as a `List (Tuple2 key aggregate)`, ordered by key ascending, and require exactly
@@ -2844,7 +2944,7 @@ let bottom = selectMin   u.score from User                          # Maybe Int
 `selectMax`/`selectMin` are optional, so a caller decides what "no rows" means:
 
 ```tesl
-fn highestScore() -> Int requires [dbRead] =
+fn highestScore() -> Int requires [dbRead User] =
   case selectMax u.score from User of
     Nothing -> 0
     Something score -> score
@@ -2860,19 +2960,16 @@ upsert Session { userId: uid, token: tok, expiresAt: exp }
 
 The conflict columns must be **either the primary key or a declared `unique index`** (§11.8) on that entity, and this is a compile-time error otherwise. PostgreSQL can only infer a conflict target from a unique index on exactly those columns; without one it fails at runtime with *"there is no unique or exclusion constraint matching the ON CONFLICT specification"*. So the example above requires `unique index [userId]` on `Session` unless `userId` is its primary key.
 
-**`delete` and `deleteAndReturnResult`.**  `delete` removes matching rows and returns `Unit`.  `deleteAndReturnResult` removes matching rows and returns `DeleteResult`, which carries the count of deleted rows.  `DeleteResult` and the constructors `NoRowDeleted` / `RowsDeleted` must be imported from `Tesl.DB`:
+**`delete` and `deleteAndReturnResult`.** `delete` removes matching rows and returns `Unit`. `deleteAndReturnResult` removes matching rows and returns the non-negative `Int` count of deleted rows, including `0` when no rows match. Both operations require `dbWrite Entity`; the capability constructor is imported bare from `Tesl.DB`:
 
 ```tesl
-import Tesl.DB exposing [DeleteResult, NoRowDeleted, RowsDeleted]
+import Tesl.DB exposing [dbWrite]
 
 # Simple delete (returns Unit)
 delete u from User where u.id == userId
 
-# Delete with result inspection
+# Delete with count inspection
 let result = deleteAndReturnResult u from User where u.id == userId
-case result of
-  NoRowDeleted -> ...
-  RowsDeleted  -> ...
 ```
 
 ## 13. Static semantics
@@ -3069,7 +3166,7 @@ The `(Id == sessionId)` sub-expression inside the proof fact is the structural b
 handler post createTodo(requestUser: User ::: Authenticated requestUser, newTodo: NewTodo)
   -> exists todoId: String =>
        ?Todo ::: FromDb (Id == todoId)
-  requires [dbRead, dbWrite, time] =
+  requires [dbWrite Todo, time] =
   let todoId = generateTodoId()
   exists todoId =>
     insert Todo { id: todoId, title: newTodo.title, ... }
@@ -3636,7 +3733,7 @@ A handler that reads or writes `UserProfileCache` must declare `cacheCap UserPro
 
 ```tesl
 handler get getProfile(id: String) -> UserProfile
-  requires [dbRead, cacheCap UserProfileCache] =
+  requires [dbRead UserProfile, cacheCap UserProfileCache] =
   ...
 ```
 
@@ -3665,7 +3762,7 @@ If a stored value cannot be deserialized (for example because the application wa
 ```tesl
 handler put updateProfile(userId: String, req: UpdateProfileRequest)
   -> UserProfile
-  requires [dbWrite, cacheCap UserProfileCache] =
+  requires [dbWrite User, cacheCap UserProfileCache] =
   transaction {
     let updated = update ... in User ...
     Cache.delete UserProfileCache ("profile_" ++ userId)
@@ -3689,7 +3786,7 @@ cache UserProfileCache = Cache {
 }
 
 handler get getUserProfile(id: String) -> UserProfile
-  requires [dbRead, cacheCap UserProfileCache] =
+  requires [dbRead UserProfile, cacheCap UserProfileCache] =
   let cached = Cache.get UserProfileCache ("profile_" ++ id)
   case cached of
     Something profile ->
@@ -3802,7 +3899,7 @@ After 5 failed attempts a row is marked `dead` and is no longer retried. Dead ro
 `Email.send` inside a `transaction` block is part of the same database transaction. If the transaction rolls back, the row is never inserted and the email is never sent. This prevents sending notifications for events that did not actually persist.
 
 ```tesl
-handler post registerUser(req: RegistrationRequest) -> User requires [dbWrite, emailCap] =
+handler post registerUser(req: RegistrationRequest) -> User requires [dbWrite User, emailCap] =
   transaction {
     let user = insert User { id: newId, email: req.email }
     Email.send AppEmail {
@@ -4679,13 +4776,38 @@ The `editor/vscode-tesl` extension contributes a `debuggers` entry in `package.j
 `tesl run --debug <file.tesl>` starts the app with live checkpoints (the same
 emitted code — the `thsl-src!` gate is read at Racket expansion time) and a
 loopback-only control channel under `<project>/.tesl-stuff/` (`debug.sock`, or
-`debug.port` plus an owner-only `debug.token` for the TCP fallback — loopback is
-shared by every local user, so a TCP client's first message must be a
-`handshake` carrying that per-launch token or the connection is closed).
+`debug.port` plus an owner-only `debug.token` for the TCP fallback). When a
+project path cannot fit in a Unix socket address, the runtime selects the
+authenticated TCP form; inspector-launched targets instead use an isolated,
+owner-only short runtime directory. Loopback is shared by every local user, so
+a TCP client's first message must be a `handshake` carrying that per-launch
+token. Silent handshakes have a five-second deadline and at most 16 may be
+pending; excess or unauthenticated connections are closed. Both Unix and TCP
+endpoints also admit at most 16 authenticated clients at once; further
+connections are closed before joining the session.
 Debuggers then attach to the RUNNING process — the app keeps serving across
 attach/detach, several clients may share one session (the debugger detaches
 only when the last one leaves), and breakpoints can be re-armed without a
 relaunch:
+
+Before a stopped event and snapshot are published, active instrumented Tesl
+executions have one second from the triggering stop to rendezvous at their next
+function-entry/checkpoint boundary or exit. If that bound expires, publication
+continues with `rendezvous: "timed-out"` rather than hanging; `"complete"` means
+the finite participant set did rendezvous. The triggering execution remains
+paused, and executions that later reach a boundary wait behind the stop, but an
+execution still blocked in external Go work may be running, so a timed-out
+snapshot is not a complete stop-the-world view. Stacks and SQL captures are
+keyed by execution, and a query completion consumes and updates only the capture
+identity created for that query. A failed query or exec consumes that identity
+while unwinding too, so reusable plans retain no failed-operation mapping.
+Arbitrary Go runtime goroutines and external systems are not suspended. A
+lifecycle scope blocked inside `Serve` is explicitly
+quiescent: it is excluded from the finite stop participant set, but must wait
+behind the stop before returning to Tesl. Control writes are frame-atomic and
+bounded to one second per client; a client that stops reading is removed without
+delaying stopped-event delivery to other clients. The 16-client admission cap
+also bounds the per-client stopped-event delivery work.
 
 - **VSCode/VSCodium**: the `Attach to running app (tesl run --debug)` launch
   configuration (`request: "attach"`, `project: "${workspaceFolder}"`).

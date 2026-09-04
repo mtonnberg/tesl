@@ -437,7 +437,7 @@ database Db = Database {
   })
 }
 entity Task table "tasks" primaryKey id { id: Int priority: Int done: Bool }
-fn highPriorityPending(minPriority: Int) -> List Task requires [dbRead] =
+fn highPriorityPending(minPriority: Int) -> List Task requires [dbRead Task] =
   select t from Task
     where t.priority >= minPriority && t.done == False
 |}
@@ -459,7 +459,7 @@ database Db = Database {
   })
 }
 entity Post table "posts" primaryKey id { id: Int score: Int title: String }
-fn topPosts() -> List Post requires [dbRead] =
+fn topPosts() -> List Post requires [dbRead Post] =
   select p from Post
     order p.score desc
     limit 10
@@ -482,7 +482,7 @@ database Db = Database {
   })
 }
 entity Item table "items" primaryKey id { id: Int name: String }
-fn bad() -> List Item requires [dbRead] =
+fn bad() -> List Item requires [dbRead Item] =
   select i from Item where i.ghostField == 42
 |}
 

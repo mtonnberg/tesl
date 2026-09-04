@@ -84,8 +84,8 @@ import Tesl.Agent exposing [
 # ══════════════════════════════════════════════════════════════════════════════
 
 capability reportAi implies aiProvider
-capability reportRead implies dbRead
-capability reportWrite implies dbWrite
+capability reportRead implies dbRead ConversationRecord
+capability reportWrite implies dbWrite ConversationRecord
 capability reportPubSub implies pubsub
 capability reportEnqueue implies queueWrite
 # The HTTP turn: builds the agent (whose tool enqueues), loads/saves the

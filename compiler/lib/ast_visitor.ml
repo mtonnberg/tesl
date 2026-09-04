@@ -92,7 +92,60 @@ let map_interp_segment (f : expr -> expr) (seg : interp_segment) : interp_segmen
 let fold_interp_segment (f : 'a -> expr -> 'a) (acc : 'a) (seg : interp_segment) : 'a =
   match seg with
   | ILiteral _ -> acc
-  | IExpr e -> f acc e
+   | IExpr e -> f acc e
+
+let rec map_sql_clause f = function
+  | SqlPred { field; op; value } -> SqlPred { field; op; value = f value }
+  | SqlOr clauses -> SqlOr (List.map (map_sql_clause f) clauses)
+  | SqlIsNull _ as clause -> clause
+  | SqlIsNotNull _ as clause -> clause
+  | SqlIn { field; values } -> SqlIn { field; values = List.map f values }
+  | SqlNotIn { field; values } -> SqlNotIn { field; values = List.map f values }
+  | SqlLike { field; pattern } -> SqlLike { field; pattern = f pattern }
+  | SqlILike { field; pattern } -> SqlILike { field; pattern = f pattern }
+
+let map_sql_group_key f = function
+  | GField _ as key -> key
+  | GTimeTrunc (unit, offset, field) -> GTimeTrunc (unit, f offset, field)
+
+let map_sql_query f = function
+  | QuerySelect (seed, dynamic) ->
+    QuerySelect ({ seed with
+      static_clauses = List.map (map_sql_clause f) seed.static_clauses;
+      group_by = List.map (map_sql_group_key f) seed.group_by },
+      List.map (map_sql_clause f) dynamic)
+  | QueryInsert insert -> QueryInsert { insert with fields = List.map (fun (name, e) -> name, f e) insert.fields }
+  | QueryInsertMany _ as query -> query
+  | QueryUpsert upsert -> QueryUpsert { upsert with fields = List.map (fun (name, e) -> name, f e) upsert.fields }
+  | QueryUpdate update -> QueryUpdate { update with
+      clauses = List.map (map_sql_clause f) update.clauses;
+      updates = List.map (fun (name, e) -> name, f e) update.updates }
+  | QueryDelete (seed, dynamic) ->
+    QueryDelete (seed, List.map (map_sql_clause f) dynamic)
+
+let rec fold_sql_clause f acc = function
+  | SqlPred { value; _ } -> f acc value
+  | SqlOr clauses -> List.fold_left (fold_sql_clause f) acc clauses
+  | SqlIsNull _ | SqlIsNotNull _ -> acc
+  | SqlIn { values; _ } | SqlNotIn { values; _ } -> List.fold_left f acc values
+  | SqlLike { pattern; _ } | SqlILike { pattern; _ } -> f acc pattern
+
+let fold_sql_group_key f acc = function
+  | GField _ -> acc
+  | GTimeTrunc (_, offset, _) -> f acc offset
+
+let fold_sql_query f acc = function
+  | QuerySelect (seed, dynamic) ->
+    let acc = List.fold_left (fold_sql_clause f) acc seed.static_clauses in
+    let acc = List.fold_left (fold_sql_group_key f) acc seed.group_by in
+    List.fold_left (fold_sql_clause f) acc dynamic
+  | QueryInsert insert -> List.fold_left (fun acc (_, e) -> f acc e) acc insert.fields
+  | QueryInsertMany _ -> acc
+  | QueryUpsert upsert -> List.fold_left (fun acc (_, e) -> f acc e) acc upsert.fields
+  | QueryUpdate update ->
+    let acc = List.fold_left (fold_sql_clause f) acc update.clauses in
+    List.fold_left (fun acc (_, e) -> f acc e) acc update.updates
+  | QueryDelete (_, dynamic) -> List.fold_left (fold_sql_clause f) acc dynamic
 
 (* ── map_children ───────────────────────────────────────────────────────────
    Apply [f] to each IMMEDIATE child expr and rebuild, preserving every [loc].
@@ -203,6 +256,8 @@ let map_children (f : expr -> expr) (e : expr) : expr =
   | ELambda { params; body; loc } ->
     let body' = f body in
     ELambda { params; body = body'; loc }
+  | ESqlQuery { query; loc } ->
+    ESqlQuery { query = map_sql_query f query; loc }
 
 (* ── fold_children ──────────────────────────────────────────────────────────
    Thread [acc] left-to-right through each immediate child expr.  Defined in the
@@ -249,6 +304,7 @@ let fold_children (f : 'a -> expr -> 'a) (acc : 'a) (e : expr) : 'a =
   | EServe { port; _ } -> f acc port
   | EConstructor { args; _ } -> List.fold_left f acc args
   | ELambda { body; _ } -> f acc body
+  | ESqlQuery { query; _ } -> fold_sql_query f acc query
 
 (* ── fold_children_env ───────────────────────────────────────────────────────
    Like [fold_children], but ALSO threads an explicit read-only [env] DOWN to

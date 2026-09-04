@@ -17,18 +17,18 @@ import (
 	"tesl.generated/teslmodlesson16completenotesapi/internal/teslrt"
 )
 
-//line lesson16-complete-notes-api.tesl:38
+//line lesson16-complete-notes-api.tesl:37
 type NoteId struct {
 	Value string
 }
 
-//line lesson16-complete-notes-api.tesl:64
+//line lesson16-complete-notes-api.tesl:63
 type NewNote struct {
 	Title   string
 	Content string
 }
 
-//line lesson16-complete-notes-api.tesl:80
+//line lesson16-complete-notes-api.tesl:79
 type Note struct {
 	Id        NoteId
 	Title     string
@@ -37,48 +37,48 @@ type Note struct {
 	CreatedAt teslrt.PosixMillis
 }
 
-//line lesson16-complete-notes-api.tesl:45
+//line lesson16-complete-notes-api.tesl:44
 func checkSafeContent(s string) teslrt.Check[string] {
-//line lesson16-complete-notes-api.tesl:46
+//line lesson16-complete-notes-api.tesl:45
 	if (teslrt.Compare(teslrt.StringLength(s), teslrt.FromInt64(1)) >= 0) && (teslrt.Compare(teslrt.StringLength(s), teslrt.FromInt64(2000)) <= 0) {
-//line lesson16-complete-notes-api.tesl:47
+//line lesson16-complete-notes-api.tesl:46
 		return teslrt.Accept(s)
 	} else {
-//line lesson16-complete-notes-api.tesl:49
+//line lesson16-complete-notes-api.tesl:48
 		return teslrt.Reject[string](400, "note content must be 1-2000 characters")
 	}
 }
 
-//line lesson16-complete-notes-api.tesl:54
+//line lesson16-complete-notes-api.tesl:53
 func checkSafeTitle(s string) teslrt.Check[string] {
-//line lesson16-complete-notes-api.tesl:55
+//line lesson16-complete-notes-api.tesl:54
 	if (teslrt.Compare(teslrt.StringLength(s), teslrt.FromInt64(1)) >= 0) && (teslrt.Compare(teslrt.StringLength(s), teslrt.FromInt64(200)) <= 0) {
-//line lesson16-complete-notes-api.tesl:56
+//line lesson16-complete-notes-api.tesl:55
 		return teslrt.Accept(s)
 	} else {
-//line lesson16-complete-notes-api.tesl:58
+//line lesson16-complete-notes-api.tesl:57
 		return teslrt.Reject[string](400, "title must be 1-200 characters")
 	}
 }
 
-//line lesson16-complete-notes-api.tesl:105
+//line lesson16-complete-notes-api.tesl:104
 func userAuth(request teslrt.HttpRequest) teslrt.Check[string] {
-//line lesson16-complete-notes-api.tesl:107
+//line lesson16-complete-notes-api.tesl:106
 	{
 		teslScrut1 := teslrt.DictLookup(request.Cookies, "user", teslKeyLessString)
 		switch teslScrut1.Tag {
 		case teslrt.MaybeNothing:
-//line lesson16-complete-notes-api.tesl:108
+//line lesson16-complete-notes-api.tesl:107
 			return teslrt.Reject[string](401, "authentication required")
 		case teslrt.MaybeSomething:
 			userId := teslScrut1.SomethingValue
 			_ = userId
-//line lesson16-complete-notes-api.tesl:110
+//line lesson16-complete-notes-api.tesl:109
 			if teslrt.Compare(teslrt.StringLength(userId), teslrt.FromInt64(0)) > 0 {
-//line lesson16-complete-notes-api.tesl:111
+//line lesson16-complete-notes-api.tesl:110
 				return teslrt.Accept(userId)
 			} else {
-//line lesson16-complete-notes-api.tesl:113
+//line lesson16-complete-notes-api.tesl:112
 				return teslrt.Reject[string](401, "invalid user session")
 			}
 		default:
@@ -87,20 +87,20 @@ func userAuth(request teslrt.HttpRequest) teslrt.Check[string] {
 	}
 }
 
-//line lesson16-complete-notes-api.tesl:127
+//line lesson16-complete-notes-api.tesl:126
 func createNote(user string, body NewNote) Note {
 	{
-//line lesson16-complete-notes-api.tesl:131
+//line lesson16-complete-notes-api.tesl:130
 		noteId := NoteId{Value: "note-1"}
 		_ = noteId
-//line lesson16-complete-notes-api.tesl:132
+//line lesson16-complete-notes-api.tesl:131
 		return Note{Id: noteId, Title: body.Title, Content: body.Content, AuthorId: user, CreatedAt: teslrt.NowMillis()}
 	}
 }
 
-//line lesson16-complete-notes-api.tesl:135
+//line lesson16-complete-notes-api.tesl:134
 func getNote(user string, noteId string) teslrt.Maybe[Note] {
-//line lesson16-complete-notes-api.tesl:139
+//line lesson16-complete-notes-api.tesl:138
 	return teslrt.Maybe[Note]{Tag: teslrt.MaybeSomething, SomethingValue: Note{Id: NoteId{Value: "note-1"}, Title: "example note", Content: "hello world", AuthorId: user, CreatedAt: teslrt.SecondsToPosix(teslrt.FromInt64(0))}}
 }
 

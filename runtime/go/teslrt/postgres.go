@@ -91,11 +91,18 @@ type PostgresIndex struct {
 
 // PostgresDB is a live pool plus the schema every statement is qualified with.
 type PostgresDB struct {
-	pool   *pgxpool.Pool
-	schema string
+	pool           *pgxpool.Pool
+	schema         string
+	bootstrapMutex sync.Mutex
 }
 
-var postgresConnectOnce sync.Map // schema+dsn -> *PostgresDB
+type postgresInitialization struct {
+	done    chan struct{}
+	db      *PostgresDB
+	failure any
+}
+
+var postgresConnectOnce sync.Map // schema+dsn -> *postgresInitialization
 
 // OpenPostgres connects, creates the schema and the declared tables if they are absent, and
 // answers a pool. It is idempotent per configuration: a program with several databases on one
@@ -108,27 +115,54 @@ func OpenPostgres(config PostgresConfig, tables []PostgresTable) *PostgresDB {
 	dsn := postgresDSN(config)
 	poolConfig := postgresPoolConfig(config, dsn)
 	key := fmt.Sprintf("%s\x00%s\x00%d", config.Schema, dsn, poolConfig.MaxConns)
-	if existing, found := postgresConnectOnce.Load(key); found {
-		if db, ok := existing.(*PostgresDB); ok {
-			// A process can declare several databases with the same connection
-			// configuration but different tables. Reusing the pool is correct, but
-			// the first declaration must not prevent later tables from bootstrapping.
-			ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
-			db.bootstrap(ctx, tables)
-			cancel()
-			return db
-		}
+	created := &postgresInitialization{done: make(chan struct{})}
+	actual, loaded := postgresConnectOnce.LoadOrStore(key, created)
+	initialization, ok := actual.(*postgresInitialization)
+	if !ok {
+		panic("database: connection registry holds an unexpected value")
 	}
+	if !loaded {
+		initializePostgres(key, initialization, poolConfig, config.Schema, tables)
+	} else {
+		<-initialization.done
+	}
+	if initialization.failure != nil {
+		panic(initialization.failure)
+	}
+	if initialization.db == nil {
+		panic("database: PostgreSQL initialization completed without a pool")
+	}
+	if loaded {
+		ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
+		initialization.db.bootstrap(ctx, tables)
+		cancel()
+	}
+	return initialization.db
+}
+
+func initializePostgres(key string, initialization *postgresInitialization,
+	poolConfig *pgxpool.Config, schema string, tables []PostgresTable) {
+	defer close(initialization.done)
+	var pool *pgxpool.Pool
+	defer func() {
+		if failure := recover(); failure != nil {
+			if pool != nil {
+				pool.Close()
+			}
+			initialization.failure = failure
+			postgresConnectOnce.CompareAndDelete(key, initialization)
+		}
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 	defer cancel()
-	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	var err error
+	pool, err = pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		panic("database: cannot connect to PostgreSQL: " + err.Error())
 	}
-	db := &PostgresDB{pool: pool, schema: config.Schema}
+	db := &PostgresDB{pool: pool, schema: schema}
 	db.bootstrap(ctx, tables)
-	postgresConnectOnce.Store(key, db)
-	return db
+	initialization.db = db
 }
 
 const defaultPostgresPoolSize = 10
@@ -219,11 +253,13 @@ func postgresDSN(config PostgresConfig) string {
 	return strings.Join(settings, " ")
 }
 
-// bootstrap creates the schema and any missing table. `if not exists` throughout: a second
-// process starting at the same time must not fail, and an EXISTING table is left exactly as it
-// is — this is not a migration tool, and silently altering a live table would be worse than
-// refusing to.
+// bootstrap creates the schema, declared tables, and the runtime-owned pub/sub outbox before
+// the Database can be bound. `if not exists` throughout: a second process starting at the same
+// time must not fail. Application tables are never altered; the outbox's idempotent ALTERs are
+// runtime metadata rather than application migration machinery.
 func (db *PostgresDB) bootstrap(ctx context.Context, tables []PostgresTable) {
+	db.bootstrapMutex.Lock()
+	defer db.bootstrapMutex.Unlock()
 	if db.schema != "" {
 		if _, err := db.pool.Exec(ctx,
 			"create schema if not exists "+quoteIdentifier(db.schema)); err != nil {
@@ -259,6 +295,12 @@ func (db *PostgresDB) bootstrap(ctx context.Context, tables []PostgresTable) {
 				panic("database: cannot create unique index " + index.Name + ": " + err.Error())
 			}
 		}
+	}
+	if err := createPubsubOutbox(ctx, db); err != nil {
+		panic("database: cannot create the pub/sub outbox: " + err.Error())
+	}
+	if err := normalizeLegacyPubsubRows(db); err != nil {
+		panic("database: cannot upgrade the pub/sub outbox: " + err.Error())
 	}
 }
 
@@ -364,10 +406,12 @@ func PgQuery[Row any](db *PostgresDB, statement string, arguments []any,
 
 func PgQueryPlan[Row any](db *PostgresDB, plan PgPlan,
 	scan func(pgx.CollectableRow) (Row, error)) []Row {
-	rows := PgQuery(db, plan.SQL, plan.arguments(), scan)
+	rowCount := 0
 	if plan.Capture != nil {
-		plan.Capture(len(rows))
+		defer func() { plan.Capture(rowCount) }()
 	}
+	rows := PgQuery(db, plan.SQL, plan.arguments(), scan)
+	rowCount = len(rows)
 	return rows
 }
 
@@ -403,10 +447,12 @@ func PgExec(db *PostgresDB, statement string, arguments []any) int64 {
 }
 
 func PgExecPlan(db *PostgresDB, plan PgPlan) int64 {
-	rows := PgExec(db, plan.SQL, plan.arguments())
+	rowCount := 0
 	if plan.Capture != nil {
-		plan.Capture(int(rows))
+		defer func() { plan.Capture(rowCount) }()
 	}
+	rows := PgExec(db, plan.SQL, plan.arguments())
+	rowCount = int(rows)
 	return rows
 }
 
@@ -423,11 +469,13 @@ func PgCount(db *PostgresDB, statement string, arguments []any) Int {
 }
 
 func PgCountPlan(db *PostgresDB, plan PgPlan) Int {
-	count := PgCount(db, plan.SQL, plan.arguments())
+	rowCount := 0
 	if plan.Capture != nil {
-		if value, ok := count.Int64(); ok {
-			plan.Capture(int(value))
-		}
+		defer func() { plan.Capture(rowCount) }()
+	}
+	count := PgCount(db, plan.SQL, plan.arguments())
+	if value, ok := count.Int64(); ok {
+		rowCount = int(value)
 	}
 	return count
 }
@@ -447,10 +495,12 @@ func PgScalar[Value any](db *PostgresDB, statement string, arguments []any,
 
 func PgScalarPlan[Value any](db *PostgresDB, plan PgPlan,
 	scan func(pgx.Row) (Value, error)) Value {
-	value := PgScalar(db, plan.SQL, plan.arguments(), scan)
+	rowCount := 0
 	if plan.Capture != nil {
-		plan.Capture(1)
+		defer func() { plan.Capture(rowCount) }()
 	}
+	value := PgScalar(db, plan.SQL, plan.arguments(), scan)
+	rowCount = 1
 	return value
 }
 
@@ -492,10 +542,12 @@ func PgSumMoney(db *PostgresDB, statement string, arguments []any, entity, field
 }
 
 func PgSumMoneyPlan(db *PostgresDB, plan PgPlan, entity, field string) Money {
-	value := PgSumMoney(db, plan.SQL, plan.arguments(), entity, field)
+	rowCount := 0
 	if plan.Capture != nil {
-		plan.Capture(1)
+		defer func() { plan.Capture(rowCount) }()
 	}
+	value := PgSumMoney(db, plan.SQL, plan.arguments(), entity, field)
+	rowCount = 1
 	return value
 }
 

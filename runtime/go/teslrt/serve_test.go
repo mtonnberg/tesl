@@ -1,6 +1,7 @@
 package teslrt
 
 import (
+	"crypto/tls"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -182,12 +183,13 @@ func TestSecurityHeaderFloorOnJSON(t *testing.T) {
 
 func TestSecurityHeaderFloorOnHTML(t *testing.T) {
 	t.Cleanup(func() { SetContentSecurityPolicy("") })
+	t.Setenv("TESL_CSP", "")
 	recorder := httptest.NewRecorder()
 	writer := &hardenedWriter{ResponseWriter: recorder}
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 	writer.WriteHeader(200)
 
-	if got := recorder.Header().Get("Content-Security-Policy"); got != "frame-ancestors 'none'" {
+	if got := recorder.Header().Get("Content-Security-Policy"); got != defaultContentSecurityPolicy {
 		t.Errorf("default CSP = %q", got)
 	}
 	// `no-store` is the JSON API's rule; a static asset stays cacheable, as on Racket.
@@ -200,13 +202,15 @@ func TestSecurityHeaderFloorOnHTML(t *testing.T) {
 // chose its own policy means it.
 func TestContentSecurityPolicyPrecedence(t *testing.T) {
 	t.Cleanup(func() { SetContentSecurityPolicy("") })
-	SetContentSecurityPolicy("default-src 'self'")
+	t.Setenv("TESL_CSP", "")
+	policy := "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'"
+	SetContentSecurityPolicy(policy)
 
 	recorder := httptest.NewRecorder()
 	writer := &hardenedWriter{ResponseWriter: recorder}
 	writer.Header().Set("Content-Type", "text/html")
 	writer.WriteHeader(200)
-	if got := recorder.Header().Get("Content-Security-Policy"); got != "default-src 'self'" {
+	if got := recorder.Header().Get("Content-Security-Policy"); got != policy {
 		t.Errorf("clause CSP = %q", got)
 	}
 
@@ -217,6 +221,26 @@ func TestContentSecurityPolicyPrecedence(t *testing.T) {
 	chosen.WriteHeader(200)
 	if got := producer.Header().Get("Content-Security-Policy"); got != "frame-ancestors https://example.test" {
 		t.Errorf("a producer-set CSP was overridden: %q", got)
+	}
+}
+
+func TestContentSecurityPolicyFailsClosed(t *testing.T) {
+	t.Cleanup(func() { SetContentSecurityPolicy("") })
+	t.Setenv("TESL_CSP", "")
+	for _, policy := range []string{
+		"default-src *; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'",
+		"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline'; style-src 'self'",
+		"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; script-src 'self'; style-src 'self'",
+	} {
+		SetContentSecurityPolicy(policy)
+		if got := htmlContentSecurityPolicy(); got != defaultContentSecurityPolicy {
+			t.Errorf("unsafe/incomplete CSP %q was accepted as %q", policy, got)
+		}
+	}
+	SetContentSecurityPolicy("")
+	t.Setenv("TESL_CSP", "default-src *; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'")
+	if got := htmlContentSecurityPolicy(); got != defaultContentSecurityPolicy {
+		t.Errorf("unsafe TESL_CSP was accepted as %q", got)
 	}
 }
 
@@ -439,8 +463,7 @@ func TestHandlerWithMountedMissAnswersJSON404(t *testing.T) {
 	}
 }
 
-// The CSRF guard without Fetch Metadata (review M6): the initiator the request names — Origin,
-// else Referer — is compared against the configured public origin's host.
+// The CSRF guard compares the full initiator origin, including scheme and effective port.
 func TestCrossSiteRefusalFallsBackToOriginAndReferer(t *testing.T) {
 	t.Cleanup(func() { SetPublicOriginValue("") })
 	SetPublicOriginValue("https://app.example.test")
@@ -467,20 +490,63 @@ func TestCrossSiteRefusalFallsBackToOriginAndReferer(t *testing.T) {
 	refuses("Referer from another site", map[string]string{"Referer": "https://evil.example/form"})
 	refuses("opaque Origin", map[string]string{"Origin": "null"})
 	refuses("explicit cross-site", map[string]string{"Sec-Fetch-Site": "cross-site", "Origin": "https://app.example.test"})
+	refuses("same-site sibling Origin", map[string]string{"Sec-Fetch-Site": "same-site", "Origin": "https://evil.example.test"})
+	refuses("same-site without Origin", map[string]string{"Sec-Fetch-Site": "same-site"})
+	refuses("unknown Fetch Metadata", map[string]string{"Sec-Fetch-Site": "future-value", "Origin": "https://app.example.test"})
+	refuses("same host over HTTP", map[string]string{"Origin": "http://app.example.test"})
+	refuses("same host on another port", map[string]string{"Origin": "https://app.example.test:8443"})
 	passes("same-host Origin", map[string]string{"Origin": "https://app.example.test"})
-	passes("same-host Origin on another port", map[string]string{"Origin": "https://app.example.test:8443"})
 	passes("same-host Referer", map[string]string{"Referer": "https://app.example.test/page"})
+	passes("exact same-site Origin", map[string]string{"Sec-Fetch-Site": "same-site", "Origin": "https://app.example.test"})
 	// Origin wins over Referer when both are present.
 	passes("Origin over a stale Referer", map[string]string{"Origin": "https://app.example.test", "Referer": "https://evil.example/"})
-	// A browser that sent Fetch Metadata has vouched for the request; the fallback is not consulted.
+	// A contradictory Origin is still refused even when Fetch Metadata says same-origin.
+	refuses("same-origin with contradictory Origin", map[string]string{"Sec-Fetch-Site": "same-origin", "Origin": "https://evil.example.test"})
 	passes("same-origin per the browser", map[string]string{"Sec-Fetch-Site": "same-origin"})
 	// Neither header: curl and service clients look like this, and refusing them protects nothing.
 	passes("no initiator headers", map[string]string{})
 
-	// With NO public origin configured the initiator is ignored: the only other reference would be
-	// the request's own Host, which nothing validates without a public origin, so the comparison
-	// would be between two values the same client chose.
+	// With no configured origin, compare against the target request's origin.
 	SetPublicOriginValue("")
-	passes("Origin ignored without a public origin", map[string]string{"Origin": "https://evil.example"})
+	refuses("foreign Origin without a public origin", map[string]string{"Origin": "https://evil.example"})
+	passes("target Origin without a public origin", map[string]string{"Origin": "https://app.example.test"})
 	refuses("explicit cross-site still refused without a public origin", map[string]string{"Sec-Fetch-Site": "cross-site"})
+}
+
+func TestExactOriginBehindTLSProxyRequiresConfiguredPublicOrigin(t *testing.T) {
+	t.Cleanup(func() { SetPublicOriginValue("") })
+	request := func(origin string, directTLS bool) *http.Request {
+		// Production net/http requests carry a relative URL. A TLS-terminating
+		// proxy also leaves TLS nil on the app-side connection.
+		result := httptest.NewRequest(http.MethodPost, "/hello", nil)
+		result.Host = "app.example.test"
+		result.Header.Set("Origin", origin)
+		result.Header.Set("Sec-Fetch-Site", "same-site")
+		result.Header.Set("X-Forwarded-Proto", "https")
+		if directTLS {
+			result.TLS = &tls.ConnectionState{}
+		}
+		return result
+	}
+	status := func(request *http.Request) int {
+		recorder := httptest.NewRecorder()
+		testServer().ServeHTTP(recorder, request)
+		return recorder.Code
+	}
+
+	SetPublicOriginValue("https://app.example.test")
+	if got := status(request("https://app.example.test", false)); got != http.StatusOK {
+		t.Fatalf("configured TLS-terminating proxy request = %d, want 200", got)
+	}
+	if got := status(request("https://evil.example.test", false)); got != http.StatusForbidden {
+		t.Fatalf("same-site sibling through proxy = %d, want 403", got)
+	}
+
+	SetPublicOriginValue("")
+	if got := status(request("https://app.example.test", false)); got != http.StatusForbidden {
+		t.Fatalf("unconfigured forwarded scheme request = %d, want 403", got)
+	}
+	if got := status(request("https://app.example.test", true)); got != http.StatusOK {
+		t.Fatalf("direct TLS request = %d, want 200", got)
+	}
 }

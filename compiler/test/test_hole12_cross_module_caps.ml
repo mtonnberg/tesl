@@ -6,7 +6,7 @@
     Before the fix, [load_imported_func_caps] propagated only the imported
     function's DECLARED capability row; an importer that only compiled itself saw
     the honest-looking `requires []` and could call the effecting function from a
-    `requires []` (or `[dbRead]`) context, performing an undeclared effect the
+    `requires []` (or `[dbRead Note]`) context, performing an undeclared effect the
     whole-app capability union never governs.  After the fix, the loader computes
     each imported function's ACTUAL body capabilities ([collect_needed_capabilities],
     now colocated in validation_common) — to a fixpoint over the imported module's

@@ -78,7 +78,7 @@ Every `select` and `insert` automatically attaches a proof that the data came fr
 
 ```tesl
 handler getTodo(todoId: String ::: TodoId todoId) -> Todo ? FromDb (Id == todoId)
-  requires [dbRead] =
+  requires [dbRead Todo] =
   let found = selectOne todo from Todo where todo.id == todoId
   case found of
     Nothing    -> fail 404 "not found"

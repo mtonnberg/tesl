@@ -143,7 +143,7 @@ server TestServer2 for TestApi2 {
 (* ── P2: Large integer literals compile (A9/HM-1: Int is arbitrary-precision) ── *)
 (* Formerly these asserted a compile-time range error. Under A9/HM-1 the 63-bit
    fixnum range check is gone: a huge magnitude is carried through as an LBigInt
-   canonical string into the Racket bignum. These now must compile (and, of course,
+   canonical string into direct Go output. These now must compile (and, of course,
    still must not crash). *)
 
 let test_no_crash_on_large_literal () =
@@ -228,7 +228,7 @@ check checkOpen(t: Todo) -> t: Todo ::: IsOpen t =
     Done -> fail 422 "done"
 
 fn fakeForAll() -> List Todo ::: ForAll (IsOpen)
-  requires [dbRead] =
+  requires [dbRead Note] =
   select todo from Todo
 |} in
   should_fail "V001\\|SQL select\\|ForAll" src
@@ -371,7 +371,7 @@ import Tesl.Time exposing [PosixMillis]
 import Tesl.DB exposing [dbRead]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
 
-capability readOnly implies dbRead
+capability readOnly implies dbRead Note
 
 entity Note table "notes" primaryKey id {
   id: String

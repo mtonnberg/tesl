@@ -298,21 +298,21 @@ let sql_schema =
 let test_sql1_valid_join_accepted () =
   should_pass
     (sql_schema ^
-     "fn q() -> List Order requires [dbRead] =\n\
+     "fn q() -> List Order requires [dbRead Customer, dbRead Order] =\n\
       \  select o from Order\n\
       \  innerJoin Customer on o.customerId Customer.id\n")
 
 let test_sql1_wrong_join_field_rejected () =
   should_fail "unknown field `idd`\\|unknown field"
     (sql_schema ^
-     "fn q() -> List Order requires [dbRead] =\n\
+     "fn q() -> List Order requires [dbRead Customer, dbRead Order] =\n\
       \  select o from Order\n\
       \  innerJoin Customer on o.customerId Customer.idd\n")
 
 let test_sql1_wrong_join_entity_rejected () =
   should_fail "unknown entity `Custmer`\\|unknown entity"
     (sql_schema ^
-     "fn q() -> List Order requires [dbRead] =\n\
+     "fn q() -> List Order requires [dbRead Customer, dbRead Order] =\n\
       \  select o from Order\n\
       \  innerJoin Custmer on o.customerId Custmer.id\n")
 

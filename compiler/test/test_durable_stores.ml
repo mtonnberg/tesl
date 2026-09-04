@@ -70,10 +70,10 @@ database Db = Database {
   backend: %s
 }
 
-worker buildReport(job: ReportJob ::: FromQueue (Id == jobId) job) requires [dbRead] =
+worker buildReport(job: ReportJob ::: FromQueue (Id == jobId) job) requires [dbRead Note] =
   job
 
-queue ReportQueue requires [dbRead] = Queue {
+queue ReportQueue requires [dbRead Note] = Queue {
   database: Db
   jobs: [Job ReportJob buildReport Nothing]
   retry: QueueRetryStrategy {

@@ -47,7 +47,7 @@ module Lesson21SqlReference exposing [
 # updateAndReturnOne p in Entity where ... set p.f = v  -- UPDATE, returns updated entity
 # update p in Entity where ... set p.f = v      -- UPDATE rows, returns Unit
 # delete p from Entity where p.field == val     -- DELETE, returns Unit
-# deleteAndReturnResult p from Entity where ...  -- DELETE, returns DeleteResult
+# deleteAndReturnResult p from Entity where ...  -- DELETE, returns Int count
 # insertMany list in Entity                     -- INSERT many rows, returns Unit
 #
 # Comparison operators in WHERE:
@@ -110,7 +110,7 @@ import Tesl.Time exposing [
   EuropeStockholm,
   addMs,
 ]
-import Tesl.DB exposing [dbRead, dbWrite, DeleteResult(..)]
+import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Maybe exposing [Maybe(..)]
 
 # ─────────────────────────────────────────────
@@ -138,7 +138,7 @@ import Tesl.Maybe exposing [Maybe(..)]
 # "update" (without returning) returns Unit — use when you do not need the result.
 #
 # "delete" returns Unit — use deleteAndReturnResult when you need the row count.
-# "deleteAndReturnResult" returns DeleteResult: either NoRowDeleted or RowsDeleted n.
+# "deleteAndReturnResult" returns the non-negative Int count of deleted rows.
 #
 # "insertMany list in Entity" inserts all rows in the list, returns Unit.
 #
@@ -210,7 +210,7 @@ entity Category table "categories" primaryKey id {
 # "selectOne" queries for exactly one row. Returns Nothing if no row matches.
 # The "?" named-pack operator gives the caller's let-binding name to the entity.
 fn findById(id: String) -> Product ? FromDb (Id == id)
-  requires [dbRead] =
+  requires [dbRead Product] =
   let result = selectOne p from Product where p.id == id
   case result of
     Nothing -> fail 404 "not found"
@@ -219,27 +219,27 @@ fn findById(id: String) -> Product ? FromDb (Id == id)
 # ─── 2. select many with WHERE ───────────────────────────────────────────────
 
 # "select" returns all matching rows as a List. Never fails, may be empty.
-fn findByCategory(cat: String) -> List Product requires [dbRead] =
+fn findByCategory(cat: String) -> List Product requires [dbRead Product] =
   select p from Product where p.category == cat
 
 # ─── 3. Compound AND WHERE ───────────────────────────────────────────────────
 
 # "&&" in WHERE compiles to two separate WHERE predicates (both must hold).
 # Both p.category == cat AND p.price <= maxAllowedPrice must be True.
-fn findCheapInCategory(cat: String, maxAllowedPrice: Int) -> List Product requires [dbRead] =
+fn findCheapInCategory(cat: String, maxAllowedPrice: Int) -> List Product requires [dbRead Product] =
   select p from Product where p.category == cat && (p.price <= maxAllowedPrice || p.price > 10)
 
 # ─── 4. Compound OR WHERE ────────────────────────────────────────────────────
 
 # "||" in WHERE compiles to an OR predicate (either condition may hold).
-fn findFeatured(cat1: String, cat2: String) -> List Product requires [dbRead] =
+fn findFeatured(cat1: String, cat2: String) -> List Product requires [dbRead Product] =
   select p from Product where p.category == cat1 || p.category == cat2
 
 # ─── 5. ORDER BY and LIMIT ───────────────────────────────────────────────────
 
 # "order p.field asc/desc" adds an ORDER BY clause.
 # "limit N" limits the result to N rows.
-fn cheapestProducts(n: Int) -> List Product requires [dbRead] =
+fn cheapestProducts(n: Int) -> List Product requires [dbRead Product] =
   select p from Product order p.price asc limit 5
 
 # ─── 6. INSERT — returns named entity ────────────────────────────────────────
@@ -248,7 +248,7 @@ fn cheapestProducts(n: Int) -> List Product requires [dbRead] =
 # The "?" named-pack operator applies: the caller names the returned entity.
 # The returned entity carries: FromDb (Id == id) entitySubject.
 fn createProduct(id: String, name: String, price: Int, category: String) -> Product ? FromDb (Id == id)
-  requires [dbWrite] =
+  requires [dbWrite Product] =
   insert Product { id: id, name: name, price: price, category: category, inStock: True }
 
 # ─── 7a. UPDATE with return — updateAndReturnOne ─────────────────────────────
@@ -256,7 +256,7 @@ fn createProduct(id: String, name: String, price: Int, category: String) -> Prod
 # "updateAndReturnOne p in Entity where ... set p.field = val" updates matching
 # rows and returns the updated entity. Requires exactly one match.
 fn setPrice(id: String, newPrice: Int) -> Product ? FromDb (Id == id)
-  requires [dbRead, dbWrite] =
+  requires [dbRead Product, dbWrite Product] =
   updateAndReturnOne p in Product
     where p.id == id
     set p.price = newPrice
@@ -267,7 +267,7 @@ fn setPrice(id: String, newPrice: Int) -> Product ? FromDb (Id == id)
 # "update p in Entity ... set p.field = val" updates matching rows, returns Unit.
 # Use this when you do not need the updated entity back.
 fn updatePriceSilently(id: String, newPrice: Int) -> Unit
-  requires [dbRead, dbWrite] =
+  requires [dbRead Product, dbWrite Product] =
   update p in Product
     where p.id == id
     set p.price = newPrice
@@ -275,27 +275,27 @@ fn updatePriceSilently(id: String, newPrice: Int) -> Unit
 # ─── 8a. DELETE — returns Unit ───────────────────────────────────────────────
 
 # "delete p from Entity where ..." deletes all matching rows and returns Unit.
-fn removeProduct(id: String) -> Unit requires [dbWrite] =
+fn removeProduct(id: String) -> Unit requires [dbWrite Product] =
   delete p from Product where p.id == id
 
 # ─── 8b. DELETE with result — deleteAndReturnResult ──────────────────────────
 
 # "deleteAndReturnResult p from Entity where ..." deletes matching rows and
-# returns DeleteResult: NoRowDeleted if nothing matched, or RowsDeleted n.
-fn removeProductWithResult(id: String) -> DeleteResult requires [dbWrite] =
+# returns a non-negative Int count, including 0 when nothing matched.
+fn removeProductWithResult(id: String) -> Int requires [dbWrite Product] =
   deleteAndReturnResult p from Product where p.id == id
 
 # ─── 9. Comparison operators ─────────────────────────────────────────────────
 
 # All standard comparison operators work in WHERE clauses.
 # "==" and "!=" for equality, ">", ">=", "<", "<=" for ordering.
-fn expensiveProducts(minAllowedPrice: Int) -> List Product requires [dbRead] =
+fn expensiveProducts(minAllowedPrice: Int) -> List Product requires [dbRead Product] =
   select p from Product where p.price > minAllowedPrice
 
-fn discounted(maxAllowedPrice: Int) -> List Product requires [dbRead] =
+fn discounted(maxAllowedPrice: Int) -> List Product requires [dbRead Product] =
   select p from Product where p.price < maxAllowedPrice
 
-fn notInCategory(cat: String) -> List Product requires [dbRead] =
+fn notInCategory(cat: String) -> List Product requires [dbRead Product] =
   select p from Product where p.category != cat
 
 # ─── 10. Existential return from INSERT ──────────────────────────────────────
@@ -304,7 +304,7 @@ fn notInCategory(cat: String) -> List Product requires [dbRead] =
 # direct access to pid. This is the right pattern when the caller does not need
 # to use the ID in further proof reasoning.
 fn createWithWitness(name: String, price: Int) -> exists pid: String => Product ? FromDb (Id == pid)
-  requires [dbWrite] =
+  requires [dbWrite Product] =
   let pid = "${name}-${price}"
   exists pid =>
     insert Product { id: pid, name: name, price: price, category: "default", inStock: True }
@@ -314,7 +314,7 @@ fn createWithWitness(name: String, price: Int) -> exists pid: String => Product 
 # "insertMany list in Entity" inserts every element of list into the entity table.
 # The list elements must be plain records (not yet from the database).
 # Returns Unit. Use when you need to seed data or process a batch.
-fn batchCreate(products: List Product) -> Unit requires [dbWrite] =
+fn batchCreate(products: List Product) -> Unit requires [dbWrite Product] =
   insertMany products in Product
 
 # ─── 12. Range queries ───────────────────────────────────────────────────────
@@ -322,11 +322,11 @@ fn batchCreate(products: List Product) -> Unit requires [dbWrite] =
 # Use && to combine two comparison predicates for a range.
 # This is just the regular AND operator applied to two comparisons.
 # Can be written all on one line or split across lines for readability.
-fn findInPriceRange(minP: Int, maxP: Int) -> List Product requires [dbRead] =
+fn findInPriceRange(minP: Int, maxP: Int) -> List Product requires [dbRead Product] =
   select p from Product where p.price >= minP && p.price <= maxP
 
 # Multi-line version with order (where and order on separate lines):
-fn findInPriceRangeOrdered(minP: Int, maxP: Int) -> List Product requires [dbRead] =
+fn findInPriceRangeOrdered(minP: Int, maxP: Int) -> List Product requires [dbRead Product] =
   select p from Product
   where p.price >= minP && p.price <= maxP
   order p.price asc
@@ -342,12 +342,12 @@ fn findInPriceRangeOrdered(minP: Int, maxP: Int) -> List Product requires [dbRea
 # PostgreSQL can only infer a conflict target from a unique index on exactly
 # those columns, and the compiler rejects the mismatch rather than letting it
 # fail at runtime. Here [id] is the primary key.
-fn upsertProduct(id: String, name: String, price: Int) -> Unit requires [dbWrite] =
+fn upsertProduct(id: String, name: String, price: Int) -> Unit requires [dbWrite Product] =
   upsert Product { id: id, name: name, price: price, category: "general", inStock: True } onConflict [id] doUpdate [name, price]
 
 # Conflicting on a NON-primary-key column works because Product declares
 # "unique index [name]" above. Without that line this would not compile.
-fn upsertProductByName(id: String, name: String, price: Int) -> Unit requires [dbWrite] =
+fn upsertProductByName(id: String, name: String, price: Int) -> Unit requires [dbWrite Product] =
   upsert Product { id: id, name: name, price: price, category: "general", inStock: True } onConflict [name] doUpdate [price]
 
 # ─── 14. LIKE / ILIKE — pattern matching ─────────────────────────────────────
@@ -359,11 +359,11 @@ fn upsertProductByName(id: String, name: String, price: Int) -> Unit requires [d
 #   "%widget%"  → contains widget anywhere
 #   "Wid_et"   → matches exactly 6 chars with Wid at start and et at end
 
-fn searchByName(prefix: String) -> List Product requires [dbRead] =
+fn searchByName(prefix: String) -> List Product requires [dbRead Product] =
   select p from Product
   where like p.name prefix
 
-fn searchByNameInsensitive(prefix: String) -> List Product requires [dbRead] =
+fn searchByNameInsensitive(prefix: String) -> List Product requires [dbRead Product] =
   select p from Product
   where ilike p.name prefix
 
@@ -375,32 +375,32 @@ fn searchByNameInsensitive(prefix: String) -> List Product requires [dbRead] =
 # "selectMin p.field from Entity" returns the minimum value of a numeric field.
 # All four support the where modifier (order/limit make no sense on one scalar).
 
-fn countProducts() -> Int requires [dbRead] =
+fn countProducts() -> Int requires [dbRead Product] =
   selectCount p from Product
 
-fn sumPrices() -> Int requires [dbRead] =
+fn sumPrices() -> Int requires [dbRead Product] =
   selectSum p.price from Product
 
 # selectMax/selectMin return `Maybe <field type>`: over no matching row there is no
 # maximum, and inventing one (0, or a SQL NULL typed as the column) would be a lie the
 # caller cannot see. selectSum needs no Maybe — zero IS the sum of no rows.
-fn maxPrice() -> Maybe Int requires [dbRead] =
+fn maxPrice() -> Maybe Int requires [dbRead Product] =
   selectMax p.price from Product
 
-fn minPrice() -> Maybe Int requires [dbRead] =
+fn minPrice() -> Maybe Int requires [dbRead Product] =
   selectMin p.price from Product
 
-fn maxPriceInCategory(cat: String) -> Maybe Int requires [dbRead] =
+fn maxPriceInCategory(cat: String) -> Maybe Int requires [dbRead Product] =
   selectMax p.price from Product
   where p.category == cat
 
-fn minPriceInCategory(cat: String) -> Maybe Int requires [dbRead] =
+fn minPriceInCategory(cat: String) -> Maybe Int requires [dbRead Product] =
   selectMin p.price from Product
   where p.category == cat
 
 # The caller decides what "no rows" means — here, a catalogue with no products has a
 # highest price of 0.
-fn maxPriceOrZero() -> Int requires [dbRead] =
+fn maxPriceOrZero() -> Int requires [dbRead Product] =
   case maxPrice () of
     Nothing -> 0
     Something price -> price
@@ -415,11 +415,11 @@ fn maxPriceOrZero() -> Int requires [dbRead] =
 # `groupBy` on the SCALAR forms (selectCount/selectSum/selectMax/selectMin) or
 # on plain select is a COMPILE error — the per-group breakdown would be lost.
 
-fn countPerCategory() -> List (Tuple2 String Int) requires [dbRead] =
+fn countPerCategory() -> List (Tuple2 String Int) requires [dbRead Product] =
   selectCountBy p from Product
     groupBy p.category
 
-fn stockValuePerCategory() -> List (Tuple2 String Int) requires [dbRead] =
+fn stockValuePerCategory() -> List (Tuple2 String Int) requires [dbRead Product] =
   selectSumBy p.price from Product
     groupBy p.category
 
@@ -453,14 +453,14 @@ entity TimeEntry table "time_entries" primaryKey id {
 # One (dayStart, minutesSum) row per local day, ordered by day: exactly what a
 # chart wants, computed by PostgreSQL GROUP BY (only the buckets cross the wire).
 fn minutesPerDay(orgId: String, zone: TimeZone) -> List (Tuple2 PosixMillis Int)
-  requires [dbRead] =
+  requires [dbRead TimeEntry] =
   selectSumBy e.minutes from TimeEntry
     where e.orgId == orgId
     groupBy (Time.truncDay zone e.startedAt)
 
 # Entries per calendar month (a count series works the same way).
 fn entriesPerMonth(orgId: String, zone: TimeZone) -> List (Tuple2 PosixMillis Int)
-  requires [dbRead] =
+  requires [dbRead TimeEntry] =
   selectCountBy e from TimeEntry
     where e.orgId == orgId
     groupBy (Time.truncMonth zone e.startedAt)
@@ -470,7 +470,7 @@ fn entriesPerMonth(orgId: String, zone: TimeZone) -> List (Tuple2 PosixMillis In
 # same trunc functions, then use a plain range where. The bounds are constants,
 # so an index on startedAt keeps driving the scan.
 fn entriesOnDay(orgId: String, zone: TimeZone, anyInstantThatDay: PosixMillis) -> List TimeEntry
-  requires [dbRead] =
+  requires [dbRead TimeEntry] =
   let dayStart = Time.truncDay zone anyInstantThatDay
   let dayEnd = addMs dayStart 86400000
   select e from TimeEntry
@@ -478,17 +478,17 @@ fn entriesOnDay(orgId: String, zone: TimeZone, anyInstantThatDay: PosixMillis) -
 
 # "minutes this ISO week" — same shape, week boundary.
 fn minutesThisWeek(orgId: String, zone: TimeZone, now: PosixMillis) -> Int
-  requires [dbRead] =
+  requires [dbRead TimeEntry] =
   let weekStart = Time.truncWeek zone now
   selectSum e.minutes from TimeEntry
     where e.orgId == orgId && e.startedAt >= weekStart
 
-fn countByCategory(cat: String) -> Int requires [dbRead] =
+fn countByCategory(cat: String) -> Int requires [dbRead Product] =
   selectCount p from Product
   where p.category == cat
 
 # Complex example: count in-stock items per category for cheap products
-fn findInStockCheap(maxAllowedPrice: Int) -> List Product requires [dbRead] =
+fn findInStockCheap(maxAllowedPrice: Int) -> List Product requires [dbRead Product] =
   select p from Product
   where p.inStock == True && p.price <= maxAllowedPrice
   order p.price asc
@@ -500,7 +500,7 @@ fn findInStockCheap(maxAllowedPrice: Int) -> List Product requires [dbRead] =
 # List Product — innerJoin acts as a filter, not a projection.
 #
 # See lesson48-sql-inner-join.tesl for a full dedicated introduction.
-fn findProductsWithCategory(minAllowedPrice: Int) -> List Product requires [dbRead] =
+fn findProductsWithCategory(minAllowedPrice: Int) -> List Product requires [dbRead Product, dbRead Category] =
   select p from Product
   innerJoin Category on p.category Category.id
   where p.price >= minAllowedPrice
@@ -531,7 +531,7 @@ fn createProductWithCategory(
     catId: String,
     catLabel: String)
   -> Product
-  requires [dbRead, dbWrite] =
+  requires [dbRead Product, dbRead Category, dbWrite Product, dbWrite Category] =
   transaction {
     let _ = insert Category { id: catId, label: catLabel, active: True }
     insert Product { id: id, name: name, price: price, category: catId, inStock: True }
@@ -539,7 +539,7 @@ fn createProductWithCategory(
 
 # Transfer stock: mark one product out-of-stock and another in-stock atomically.
 # Both updates must succeed — either both happen or neither.
-fn swapStock(outId: String, inId: String) -> Unit requires [dbWrite] =
+fn swapStock(outId: String, inId: String) -> Unit requires [dbWrite Product] =
   transaction {
     let _ = update p in Product
       where p.id == outId
@@ -569,7 +569,7 @@ fn swapStock(outId: String, inId: String) -> Unit requires [dbWrite] =
 
 # ─── Test block ───────────────────────────────────────────────────────────────
 
-test "findById returns named entity" requires [dbRead, dbWrite] {
+test "findById returns named entity" requires [dbRead Product, dbWrite Product] {
   let _ = createProduct "p1" "Widget" 10 "tools"
   let p = findById "p1"
   expect p.name == "Widget"
@@ -577,7 +577,7 @@ test "findById returns named entity" requires [dbRead, dbWrite] {
   expect p.category == "tools"
 }
 
-test "findByCategory returns matching rows" requires [dbRead, dbWrite] {
+test "findByCategory returns matching rows" requires [dbRead Product, dbWrite Product] {
   let _ = createProduct "c1" "Hammer" 15 "tools"
   let _ = createProduct "c2" "Nail" 2 "tools"
   let _ = createProduct "c3" "Book" 20 "media"
@@ -585,7 +585,7 @@ test "findByCategory returns matching rows" requires [dbRead, dbWrite] {
   expect results != []
 }
 
-test "findCheapInCategory applies AND condition" requires [dbRead, dbWrite] {
+test "findCheapInCategory applies AND condition" requires [dbRead Product, dbWrite Product] {
   let _ = createProduct "a1" "Cheap Tool" 5 "tools"
   let _ = createProduct "a2" "Expensive Tool" 50 "tools"
   let cheap = findCheapInCategory "tools" 10
@@ -594,7 +594,7 @@ test "findCheapInCategory applies AND condition" requires [dbRead, dbWrite] {
   expect expensive != []
 }
 
-test "findFeatured applies OR condition" requires [dbRead, dbWrite] {
+test "findFeatured applies OR condition" requires [dbRead Product, dbWrite Product] {
   let _ = createProduct "f1" "Alpha" 10 "alpha"
   let _ = createProduct "f2" "Beta" 10 "beta"
   let _ = createProduct "f3" "Gamma" 10 "gamma"
@@ -602,51 +602,51 @@ test "findFeatured applies OR condition" requires [dbRead, dbWrite] {
   expect results != []
 }
 
-test "setPrice updates the entity and returns it" requires [dbRead, dbWrite] {
+test "setPrice updates the entity and returns it" requires [dbRead Product, dbWrite Product] {
   let _ = createProduct "u1" "Updatable" 100 "misc"
   let updated = setPrice "u1" 200
   expect updated.price == 200
   expect updated.category == "recently-updated"
 }
 
-test "updatePriceSilently returns unit" requires [dbRead, dbWrite] {
+test "updatePriceSilently returns unit" requires [dbRead Product, dbWrite Product] {
   let _ = createProduct "us1" "Silent" 50 "misc"
   let _ = updatePriceSilently "us1" 75
   let found = findById "us1"
   expect found.price == 75
 }
 
-test "removeProduct deletes a row and returns unit" requires [dbRead, dbWrite] {
+test "removeProduct deletes a row and returns unit" requires [dbRead Product, dbWrite Product] {
   let _ = createProduct "d1" "Deletable" 5 "misc"
   let _ = removeProduct "d1"
   let result = selectOne p from Product where p.id == "d1"
   expect result == Nothing
 }
 
-test "removeProductWithResult returns NoRowDeleted when not found" requires [dbWrite] {
+test "removeProductWithResult returns zero when not found" requires [dbWrite Product] {
   let result = removeProductWithResult "nonexistent-xyz"
-  expect result == NoRowDeleted
+  expect result == 0
 }
 
-test "removeProductWithResult returns RowsDeleted when found" requires [dbRead, dbWrite] {
+test "removeProductWithResult returns count when found" requires [dbRead Product, dbWrite Product] {
   let _ = createProduct "dr1" "ToDelete" 5 "misc"
   let result = removeProductWithResult "dr1"
-  expect result == (RowsDeleted 1)
+  expect result == 1
 }
 
-test "batchCreate inserts all products" requires [dbRead, dbWrite] {
+test "batchCreate inserts all products" requires [dbRead Product, dbWrite Product] {
   let _ = batchCreate [Product { id: "b1", name: "Batch1", price: 10, category: "batch", inStock: True }, Product { id: "b2", name: "Batch2", price: 20, category: "batch", inStock: True }]
   let results = findByCategory "batch"
   expect results != []
 }
 
-test "expensiveProducts filters by price" requires [dbRead, dbWrite] {
+test "expensiveProducts filters by price" requires [dbRead Product, dbWrite Product] {
   let _ = createProduct "e1" "Pricey" 999 "luxury"
   let results = expensiveProducts 500
   expect results != []
 }
 
-test "findInPriceRange returns only rows in range" requires [dbRead, dbWrite] {
+test "findInPriceRange returns only rows in range" requires [dbRead Product, dbWrite Product] {
   let _ = createProduct "br1" "Cheap" 5 "misc"
   let _ = createProduct "br2" "Mid" 25 "misc"
   let _ = createProduct "br3" "Expensive" 100 "misc"
@@ -654,7 +654,7 @@ test "findInPriceRange returns only rows in range" requires [dbRead, dbWrite] {
   expect results != []
 }
 
-test "findInPriceRangeOrdered returns ordered results" requires [dbRead, dbWrite] {
+test "findInPriceRangeOrdered returns ordered results" requires [dbRead Product, dbWrite Product] {
   let _ = createProduct "bro1" "Budget" 15 "misc"
   let _ = createProduct "bro2" "Premium" 45 "misc"
   let _ = createProduct "bro3" "TooExpensive" 200 "misc"
@@ -662,14 +662,14 @@ test "findInPriceRangeOrdered returns ordered results" requires [dbRead, dbWrite
   expect results != []
 }
 
-test "upsertProduct inserts when row does not exist" requires [dbRead, dbWrite] {
+test "upsertProduct inserts when row does not exist" requires [dbRead Product, dbWrite Product] {
   let _ = upsertProduct "up1" "NewProduct" 42
   let found = findById "up1"
   expect found.name == "NewProduct"
   expect found.price == 42
 }
 
-test "upsertProduct updates when row already exists" requires [dbRead, dbWrite] {
+test "upsertProduct updates when row already exists" requires [dbRead Product, dbWrite Product] {
   let _ = upsertProduct "up2" "Original" 10
   let _ = upsertProduct "up2" "Updated" 99
   let found = findById "up2"
@@ -677,7 +677,7 @@ test "upsertProduct updates when row already exists" requires [dbRead, dbWrite] 
   expect found.price == 99
 }
 
-test "upsertProductByName conflicts on the unique index, not the primary key" requires [dbRead, dbWrite] {
+test "upsertProductByName conflicts on the unique index, not the primary key" requires [dbRead Product, dbWrite Product] {
   let _ = upsertProductByName "un1" "UniqueName" 10
   # A DIFFERENT id but the same name: the unique index on [name] is the conflict
   # target, so this updates the existing row instead of inserting a second one.
@@ -688,41 +688,41 @@ test "upsertProductByName conflicts on the unique index, not the primary key" re
   expect byOther == []
 }
 
-test "searchByName with like pattern matches prefix" requires [dbRead, dbWrite] {
+test "searchByName with like pattern matches prefix" requires [dbRead Product, dbWrite Product] {
   let _ = createProduct "lk1" "Widget Pro" 50 "tools"
   let _ = createProduct "lk2" "Gadget" 30 "tools"
   let results = searchByName "Widget%"
   expect results != []
 }
 
-test "searchByNameInsensitive with ilike is case-insensitive" requires [dbRead, dbWrite] {
+test "searchByNameInsensitive with ilike is case-insensitive" requires [dbRead Product, dbWrite Product] {
   let _ = createProduct "ilk1" "WidgetX" 50 "tools"
   let results = searchByNameInsensitive "widget%"
   expect results != []
 }
 
-test "countProducts returns total count" requires [dbRead, dbWrite] {
+test "countProducts returns total count" requires [dbRead Product, dbWrite Product] {
   let _ = createProduct "cnt1" "CountMe1" 10 "count-test"
   let _ = createProduct "cnt2" "CountMe2" 20 "count-test"
   let n = countProducts ()
   expect n > 0
 }
 
-test "sumPrices returns non-negative sum" requires [dbRead, dbWrite] {
+test "sumPrices returns non-negative sum" requires [dbRead Product, dbWrite Product] {
   let _ = createProduct "sum1" "SumMe1" 10 "sum-test"
   let _ = createProduct "sum2" "SumMe2" 20 "sum-test"
   let total = sumPrices ()
   expect total > 0
 }
 
-test "findInStockCheap filters on multiple conditions" requires [dbRead, dbWrite] {
+test "findInStockCheap filters on multiple conditions" requires [dbRead Product, dbWrite Product] {
   let _ = createProduct "is1" "Cheap In Stock" 5 "misc"
   let _ = createProduct "is2" "Expensive In Stock" 500 "misc"
   let results = findInStockCheap 50
   expect results != []
 }
 
-test "findProductsWithCategory uses innerJoin to filter" requires [dbRead, dbWrite] {
+test "findProductsWithCategory uses innerJoin to filter" requires [dbRead Product, dbRead Category, dbWrite Product, dbWrite Category] {
   let _ = insert Category { id: "tools", label: "Tools", active: True }
   # A distinct name from the "Hammer" inserted above: this file has no
   # `database` declaration, so every test shares one in-memory store, and
@@ -735,7 +735,7 @@ test "findProductsWithCategory uses innerJoin to filter" requires [dbRead, dbWri
   expect results != []
 }
 
-test "createProductWithCategory inserts both atomically" requires [dbRead, dbWrite] {
+test "createProductWithCategory inserts both atomically" requires [dbRead Product, dbRead Category, dbWrite Product, dbWrite Category] {
   let p = createProductWithCategory "txp1" "Transactional Widget" 30 "tx-cat" "TX Category"
   expect p.name == "Transactional Widget"
   expect p.price == 30
@@ -744,7 +744,7 @@ test "createProductWithCategory inserts both atomically" requires [dbRead, dbWri
   expect cats != []
 }
 
-test "swapStock updates two rows atomically" requires [dbRead, dbWrite] {
+test "swapStock updates two rows atomically" requires [dbRead Product, dbWrite Product] {
   let _ = createProduct "swap1" "SwapOut" 10 "misc"
   let _ = createProduct "swap2" "SwapIn" 20 "misc"
   # Initially both are inStock: True (createProduct sets inStock True)
@@ -759,13 +759,13 @@ test "swapStock updates two rows atomically" requires [dbRead, dbWrite] {
 # ─── Time / timezone query tests ──────────────────────────────────────────────
 
 # UTC instants: te1/te2 on 2026-03-01 (10:00Z, 23:30Z), te3 on 2026-03-02 01:00Z.
-fn seedTimeEntries() -> Int requires [dbWrite] =
+fn seedTimeEntries() -> Int requires [dbWrite TimeEntry] =
   insert TimeEntry { id: "te1", orgId: "acme", minutes: 60, startedAt: Time.secondsToPosix 1772359200 }
   insert TimeEntry { id: "te2", orgId: "acme", minutes: 30, startedAt: Time.secondsToPosix 1772407800 }
   insert TimeEntry { id: "te3", orgId: "acme", minutes: 45, startedAt: Time.secondsToPosix 1772413200 }
   3
 
-test "per-day series: UTC buckets differ from Stockholm buckets" requires [dbRead, dbWrite] {
+test "per-day series: UTC buckets differ from Stockholm buckets" requires [dbRead TimeEntry, dbWrite TimeEntry] {
   let _ = seedTimeEntries()
   # At UTC, te2 (23:30Z) is still March 1 — two buckets: Mar1(90), Mar2(45).
   let utcDays = minutesPerDay "acme" Utc
@@ -776,7 +776,7 @@ test "per-day series: UTC buckets differ from Stockholm buckets" requires [dbRea
   expect (List.length sthlmDays) == 2
 }
 
-test "filter pattern: all rows for one Stockholm day" requires [dbRead, dbWrite] {
+test "filter pattern: all rows for one Stockholm day" requires [dbRead TimeEntry, dbWrite TimeEntry] {
   insert TimeEntry { id: "te4", orgId: "acme2", minutes: 10, startedAt: Time.secondsToPosix 1772359200 }
   insert TimeEntry { id: "te5", orgId: "acme2", minutes: 20, startedAt: Time.secondsToPosix 1772407800 }
   # te5 (23:30Z) belongs to local March 2 in Stockholm, so "March 1" finds only te4.

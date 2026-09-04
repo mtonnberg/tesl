@@ -326,14 +326,14 @@ entity Todo table "todos" primaryKey id {
 
 let test_capability () =
   let src = {|module Foo exposing []
-capability taskDbRead implies dbRead
+capability taskDbRead implies dbRead Note
 |} in
   assert_ok src (fun m ->
     match first_decl m with
     | DCapability c ->
       Alcotest.(check string) "name" "taskDbRead" c.name;
       Alcotest.(check int) "one implication" 1 (List.length c.implies);
-      Alcotest.(check string) "implies dbRead" "dbRead" (List.hd c.implies)
+      Alcotest.(check string) "implies dbRead Note" "dbRead Note" (List.hd c.implies)
     | _ -> Alcotest.fail "expected DCapability"
   )
 

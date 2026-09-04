@@ -1,9 +1,46 @@
 package teslrt
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
+
+type debugFailingTransaction struct {
+	pgx.Tx
+	queryError  error
+	execError   error
+	execTag     pgconn.CommandTag
+	execStarted chan<- struct{}
+	execRelease <-chan struct{}
+}
+
+func (transaction *debugFailingTransaction) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	return nil, transaction.queryError
+}
+
+func (transaction *debugFailingTransaction) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	if transaction.execStarted != nil {
+		transaction.execStarted <- struct{}{}
+	}
+	if transaction.execRelease != nil {
+		<-transaction.execRelease
+	}
+	return transaction.execTag, transaction.execError
+}
+
+func recoverDebugSQLFailure(run func()) (failure any) {
+	defer func() { failure = recover() }()
+	run()
+	return nil
+}
 
 func TestDebugRuntimeStateProviderAndSQLCapture(t *testing.T) {
 	remove := RegisterDebugDomainProvider(func() DebugDomainState {
@@ -49,6 +86,10 @@ func TestDebugPgSqlCapturesParameterizedPlan(t *testing.T) {
 	plan.Capture(3)
 	if state := DebugRuntimeStateSnapshot(); state.SQL == nil || state.SQL.RowCount != 3 {
 		t.Fatalf("SQL row count = %#v", state.SQL)
+	}
+	plan.Capture(9)
+	if state := DebugRuntimeStateSnapshot(); state.SQL == nil || state.SQL.RowCount != 3 {
+		t.Fatalf("completed plan retained its capture mapping: %#v", state.SQL)
 	}
 	ClearDebugSQLCapture()
 }
@@ -98,4 +139,129 @@ func TestDebugPgSqlRedactsSecretParameters(t *testing.T) {
 		t.Fatalf("secret parameter display = %q, want the redaction", state.SQL.Params[1].Display)
 	}
 	ClearDebugSQLCapture()
+}
+
+func TestDebugPgSqlCompletionCannotMutateAnotherExecutionCapture(t *testing.T) {
+	firstReady := make(chan struct{})
+	secondReady := make(chan struct{})
+	firstCaptured := make(chan struct{})
+	firstDone := make(chan struct{})
+	secondResult := make(chan DebugRuntimeState, 1)
+
+	go func() {
+		defer close(firstDone)
+		plan := DebugPgSql(PgSql("select first", nil))
+		plan.arguments()
+		close(firstReady)
+		<-secondReady
+		plan.Capture(11)
+		close(firstCaptured)
+	}()
+	<-firstReady
+	go func() {
+		plan := DebugPgSql(PgSql("select second", nil))
+		plan.arguments()
+		close(secondReady)
+		<-firstCaptured
+		state := DebugRuntimeStateSnapshot()
+		plan.Capture(22)
+		updated := DebugRuntimeStateSnapshot()
+		if updated.SQL == nil || updated.SQL.RowCount != 22 {
+			secondResult <- DebugRuntimeState{}
+			return
+		}
+		secondResult <- state
+	}()
+
+	select {
+	case state := <-secondResult:
+		if state.SQL == nil || state.SQL.SQL != "select second" || state.SQL.RowCount != 0 {
+			t.Fatalf("first query completion changed second execution capture: %#v", state.SQL)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("concurrent SQL capture test timed out")
+	}
+	<-firstDone
+}
+
+func TestDebugPgSqlFailedQueryConsumesCaptureMapping(t *testing.T) {
+	ClearDebugSQLCapture()
+	defer ClearDebugSQLCapture()
+	key := goroutineID()
+	openTransactions.Store(key, &debugFailingTransaction{queryError: errors.New("query failed")})
+	defer openTransactions.Delete(key)
+	plan := DebugPgSql(PgSql("select failed", nil))
+	failure := recoverDebugSQLFailure(func() {
+		PgQueryPlan(&PostgresDB{}, plan, func(pgx.CollectableRow) (struct{}, error) { return struct{}{}, nil })
+	})
+	if failure == nil || !strings.Contains(fmt.Sprint(failure), "query failed") {
+		t.Fatalf("query failure = %v", failure)
+	}
+	plan.Capture(99)
+	if state := DebugRuntimeStateSnapshot(); state.SQL == nil || state.SQL.RowCount != 0 {
+		t.Fatalf("failed query retained its capture mapping: %#v", state.SQL)
+	}
+}
+
+func TestDebugPgSqlFailedExecConsumesCaptureMapping(t *testing.T) {
+	ClearDebugSQLCapture()
+	defer ClearDebugSQLCapture()
+	key := goroutineID()
+	openTransactions.Store(key, &debugFailingTransaction{execError: errors.New("exec failed")})
+	defer openTransactions.Delete(key)
+	plan := DebugPgSql(PgSql("update failed", nil))
+	failure := recoverDebugSQLFailure(func() { PgExecPlan(&PostgresDB{}, plan) })
+	if failure == nil || !strings.Contains(fmt.Sprint(failure), "exec failed") {
+		t.Fatalf("exec failure = %v", failure)
+	}
+	plan.Capture(99)
+	if state := DebugRuntimeStateSnapshot(); state.SQL == nil || state.SQL.RowCount != 0 {
+		t.Fatalf("failed exec retained its capture mapping: %#v", state.SQL)
+	}
+}
+
+func TestDebugPgSqlReusablePlanConsumesConcurrentCaptureMappings(t *testing.T) {
+	const executions = 16
+	plan := DebugPgSql(PgSql("select reusable", nil))
+	ready := make(chan struct{}, executions)
+	execute := make(chan struct{})
+	results := make(chan int, executions)
+	var wait sync.WaitGroup
+	for rowCount := 1; rowCount <= executions; rowCount++ {
+		wait.Add(1)
+		go func(rowCount int) {
+			defer wait.Done()
+			key := goroutineID()
+			openTransactions.Store(key, &debugFailingTransaction{
+				execTag:     pgconn.NewCommandTag(fmt.Sprintf("UPDATE %d", rowCount)),
+				execStarted: ready,
+				execRelease: execute,
+			})
+			defer openTransactions.Delete(key)
+			PgExecPlan(&PostgresDB{}, plan)
+			plan.Capture(-1)
+			state := DebugRuntimeStateSnapshot()
+			if state.SQL == nil {
+				results <- 0
+			} else {
+				results <- state.SQL.RowCount
+			}
+			ClearDebugSQLCapture()
+		}(rowCount)
+	}
+	for range executions {
+		<-ready
+	}
+	close(execute)
+	wait.Wait()
+	close(results)
+	seen := make(map[int]bool, executions)
+	for rowCount := range results {
+		seen[rowCount] = true
+	}
+	for rowCount := 1; rowCount <= executions; rowCount++ {
+		if !seen[rowCount] {
+			t.Fatalf("concurrent reusable plan lost row count %d; results = %#v", rowCount, seen)
+		}
+	}
 }

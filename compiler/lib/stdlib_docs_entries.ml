@@ -372,14 +372,9 @@ let int32 : entry list = [
     ~doc:"Integer remainder; the divisor needs an IsNonZero proof (from Int32.nonZero).";
 ]
 
-(* ── Tesl.DB (DeleteResult; dbRead/dbWrite are generated capability rows) ──── *)
+(* ── Tesl.DB (dbRead/dbWrite are generated capability rows) ──────────────── *)
 
 let db : entry list = [
-  e "DeleteResult" ~m:"Tesl.DB"
-    ~kind:(KType "type DeleteResult = NoRowDeleted | RowsDeleted Int")
-    ~doc:"Result of `deleteAndReturnResult` — whether (and how many) rows were deleted.";
-  v "NoRowDeleted" ~m:"Tesl.DB" ~doc:"DeleteResult constructor: no rows matched the delete.";
-  f "RowsDeleted" [ "count" ] ~m:"Tesl.DB" ~doc:"DeleteResult constructor: count rows were deleted.";
 ]
 
 (* ── Tesl.EitherPrim / Tesl.Either ─────────────────────────────────────────── *)
@@ -849,7 +844,7 @@ let api_test : entry list = [
   e "SseStream" ~m:"Tesl.ApiTest" ~kind:(KType "type SseStream   # an open SSE subscription handle (from subscribe)")
     ~doc:"A live server-sent-events subscription inside an api-test; read with collect.";
   e "JobResult" ~m:"Tesl.ApiTest"
-    ~kind:(KType "type JobResult a e = JobOk a | JobFailed a e")
+    ~kind:(KType "type JobResult a = JobOk a | JobFailed a String")
     ~doc:"Result of processNextJob / processNextDeadJob — the worker's job on success, job plus error on failure."
     ~aliases:[ "JobOk"; "JobFailed" ];
   v "statusOk" ~m:"Tesl.ApiTest" ~doc:"Status matcher for api-test expectations — `expect statusOk resp.status` passes on any 2xx.";
@@ -885,8 +880,8 @@ let api_test : entry list = [
   f "processNextDeadJob" [ "queue" ] ~m:"Tesl.ApiTest" ~doc:"Runs one dead-letter job through its dead-worker inside the test; returns a JobResult.";
   f "drainQueue" [ "queue" ] ~m:"Tesl.ApiTest" ~doc:"Runs pending jobs until the queue is empty (safety-limited).";
   f "pendingJobCount" [ "queue" ] ~m:"Tesl.ApiTest" ~doc:"Number of jobs currently waiting on the queue.";
-  e "expectJobOk" ~m:"Tesl.ApiTest" ~kind:(KSyntax "fn expectJobOk(result: JobResult a e) -> a") ~doc:"Asserts the job succeeded and returns the processed job.";
-  e "expectJobFailed" ~m:"Tesl.ApiTest" ~kind:(KSyntax "fn expectJobFailed(result: JobResult a e) -> e") ~doc:"Asserts the job failed and returns the worker's error.";
+  e "expectJobOk" ~m:"Tesl.ApiTest" ~kind:(KSyntax "fn expectJobOk(result: JobResult a) -> a") ~doc:"Asserts the job succeeded and returns the processed job.";
+  e "expectJobFailed" ~m:"Tesl.ApiTest" ~kind:(KSyntax "fn expectJobFailed(result: JobResult a) -> String") ~doc:"Asserts the job failed and returns the worker's error.";
   f "stubHttp" [ "method"; "url"; "status"; "body" ] ~m:"Tesl.ApiTest"
     ~doc:"Answers a matching outbound HttpClient call from the test instead of the network (\"*\" = any method/url, trailing * = url prefix).";
   f "stubHttpFailure" [ "method"; "url"; "message" ] ~m:"Tesl.ApiTest"
@@ -1097,9 +1092,15 @@ let queue : entry list = [
 (* ── Tesl.Telemetry ────────────────────────────────────────────────────────── *)
 
 let telemetry : entry list = [
+  e "TelemetryConfig" ~m:"Tesl.Telemetry"
+    ~kind:(KType "TelemetryConfig { service: String, endpoint: String, console: Bool, metrics: Bool?, metricsInterval: Int? }")
+    ~doc:"Application telemetry configuration. Put `TelemetryConfig { service, endpoint, console }` in the `telemetry` field of the App record; `metrics` and `metricsInterval` are optional. The record is consumed at startup and has no runtime value.";
+  e "Span" ~m:"Tesl.Telemetry"
+    ~kind:(KType "Span")
+    ~doc:"Opaque span handle returned by telemetry integrations.";
   e "initTelemetry" ~m:"Tesl.Telemetry"
     ~kind:(KSyntax "initTelemetry service \"my-service\" endpoint \"http://collector:4318\" console True : Unit")
-    ~doc:"Configures the OpenTelemetry exporter (keyword-value form lowered by the compiler); call once at startup.";
+    ~doc:"Legacy startup form for configuring OpenTelemetry. Prefer `TelemetryConfig` in the App record.";
   f "telemetry" [ "name" ] ~m:"Tesl.Telemetry"
     ~doc:"Emits a span; the special form `telemetry \"span.name\" { key = value }` attaches the fields as span attributes.";
   f "counter" [ "name"; "delta"; "attrs" ] ~m:"Tesl.Telemetry"
@@ -1155,4 +1156,4 @@ let entries : entry list =
   @ int32 @ db @ either @ string_ @ regex @ url @ net @ list_ @ list_prim @ int_ @ float_
   @ dict @ set_ @ tuple @ money @ random_uuid_id_env @ json_codecs
   @ api_test @ jwt @ crypto @ cache @ database @ http @ http_client @ agent @ queue
-  @ telemetry @ sso
+   @ telemetry @ sso

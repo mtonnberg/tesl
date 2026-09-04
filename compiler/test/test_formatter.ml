@@ -69,7 +69,7 @@ let corpus = [
   "worker sendEmailWorker(job: SendEmail ::: FromQueue (Id == jobId) job)\n  requires [queueRead] =\n  job\n";
 
   "multiline_handler",
-  "endpoint GET \"/users/:id\" -> User\n  requires [dbRead] =\n  dbRead id\n";
+  "endpoint GET \"/users/:id\" -> User\n  requires [dbRead Note] =\n  dbRead Note id\n";
 
   "comment_normalize",
   "#a comment\nfn f(x: Int) -> Int = x\n";

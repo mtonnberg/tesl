@@ -48,7 +48,7 @@ The compiler tracks the proof (`:::` annotation) and ensures the value remains v
 ```tesl
 handler get getTodo(requestUser: User ::: Authenticated requestUser, todoId: String ::: ValidTodoId todoId)
   -> Todo ? FromDb (Id == todoId)
-  requires [dbRead] =
+  requires [dbRead Todo] =
   # Auth is visible in the signature: requestUser carries the Authenticated proof
 ```
 
@@ -221,7 +221,7 @@ them and the compiler forces all trust through them.
 **✅ Do:** Attach proofs at the validation boundary:
 ```tesl
 handler post createTodo(req: NewTodo ::: ValidNewTodo) -> Todo ? FromDb (Id == todo.id)
-  requires [dbWrite] =
+  requires [dbWrite Todo] =
   # req carries the ValidNewTodo proof automatically
   insert Todo req
 ```
@@ -242,7 +242,7 @@ fn processTodo(todo: Todo ::: TodoExists todo.id) -> Result =
 **✅ Do:** Use forall proofs for collections:
 ```tesl
 handler get getAllTodos() -> List Todo ? ForAll (FromDb (Id == todo.id))
-  requires [dbRead] =
+  requires [dbRead Todo] =
   select todo from Todo
 ```
 
@@ -446,12 +446,33 @@ storeNewPassword user np (Crypto.hashPassword np)                 -- compiles
 storeNewPassword user np (Crypto.hashPassword body.oldPassword)   -- rejected
 ```
 
+### Scope capabilities to resources
+
+Database capabilities must name the entity they cover:
+
+```tesl
+fn listOrders(userId: String) -> List Order requires [dbRead Order] =
+  select order from Order where order.userId == userId
+
+capability orderService implies dbRead Order, dbWrite Order
+```
+
+`dbRead Customer` does not satisfy `dbRead Order`. `dbWrite Order` covers both reads and writes of
+`Order`, but no access to `Customer`. Bare `dbRead` and `dbWrite` grants are compile errors; only
+their imports stay bare. The compiler derives requirements from each query, including every entity
+touched by a join, and checks them through capability implications. Every DB entity granted by
+`main` must also belong to the database selected by `App.database`.
+
+Queue and pub/sub resource scopes are also implemented: `queueRead QueueName`,
+`queueWrite QueueName`, and `pubsub ChannelName`. `queueWrite QueueName` covers reads from that same
+queue, never another queue. Bare queue/pubsub grants currently remain migration wildcards.
+
 ### A GET may not change state
 
 **❌ Don't:** put a write behind a `get` route.
 
 ```tesl
-handler get recordView(id: String) -> String requires [dbWrite] =
+handler get recordView(id: String) -> String requires [dbWrite View] =
   let _ = insert View { docId: id }
   "ok"
 
@@ -484,8 +505,8 @@ a build failure:
   way.
 
 The rule keys on what the handler's body *actually does* (transitively, through the calls it makes),
-not on what it declares — so a handler holding a coarse capability that `implies dbWrite` while only
-selecting rows stays clean. Reads are fine: `dbRead` and `queueRead` in a GET are the common case.
+not on what it declares — so a handler holding a capability that `implies dbWrite View` while only
+selecting rows stays clean. Reads are fine: `dbRead Entity` and `queueRead Queue` in a GET are the common case.
 Telemetry is ambient and out of scope, and so is `cacheCap` — it has no read/write split, and
 filling a cache during a GET is response caching, the benign case.
 
@@ -622,7 +643,7 @@ let user = selectOne user from User where user.email == email
 ```tesl
 handler post transferAmount(fromId: String, toId: String, amount: Int ::: Positive amount)
   -> TransferResult
-  requires [dbRead, dbWrite] =
+  requires [dbWrite Account] =
   transaction {
     let fromBalance = selectOne account from Account where account.id == fromId
     let toBalance = selectOne account from Account where account.id == toId
@@ -984,7 +1005,7 @@ model (a fixed arrival `rate`) and reuses the same request syntax as `api-test`.
 load-test "list todos throughput" for TodoServer
   rate 100rps
   duration 10s
-  requires [dbRead] {
+  requires [dbRead Todo] {
   get "/todos"
 
   assert p99 < 200ms
@@ -1206,7 +1227,7 @@ Create helper functions to build test data:
 ```tesl
 # In a test helper module
 fn createTestUser(?email: String, ?name: String) -> User ::: FromDb (Id == user.id)
-  requires [dbWrite, time] =
+  requires [dbWrite User, time] =
   let user = {
     id: generatePrefixedId("test-user"),
     email: email | default "test@example.com",
@@ -1216,7 +1237,7 @@ fn createTestUser(?email: String, ?name: String) -> User ::: FromDb (Id == user.
   insert User user
 
 fn createTestTodo(?title: String, ?userId: String) -> Todo ::: FromDb (Id == todo.id)
-  requires [dbWrite, time] =
+  requires [dbWrite Todo, dbWrite User, time] =
   let todo = {
     id: generatePrefixedId("test-todo"),
     title: title | default "Test todo",
