@@ -1192,6 +1192,32 @@ let test_agent_context_errors_sort_first () =
   if not (sorted ranked) then
     Alcotest.fail "agent-context diagnostics must be ranked errors-first"
 
+let test_agent_context_imported_diagnostic_file_identity () =
+  let dir = Filename.temp_dir "tesl-agent-context-import" "" in
+  let main_path = Filename.concat dir "Main.tesl" in
+  let dep_path = Filename.concat dir "Dep.tesl" in
+  Fun.protect
+    ~finally:(fun () ->
+      if Sys.file_exists main_path then Sys.remove main_path;
+      if Sys.file_exists dep_path then Sys.remove dep_path;
+      if Sys.file_exists dir then Unix.rmdir dir)
+    (fun () ->
+      write_text_file dep_path {|module Dep exposing [broken]
+import Tesl.Prelude exposing [Int, String]
+fn broken() -> String = 1
+|};
+      write_text_file main_path {|module Main exposing [run]
+import Tesl.Prelude exposing [String]
+import Dep exposing [broken]
+fn run() -> String = broken()
+|};
+      let json = Compile.agent_context_file main_path in
+      assert_contains ~name:"requested module file" json
+        (Printf.sprintf {|"file":"%s"|} main_path);
+      assert_contains ~name:"imported diagnostic file" json
+        (Printf.sprintf {|"file":"%s"|} dep_path);
+      assert_contains ~name:"imported type error" json {|"code":"T001"|})
+
 (* Item 14 (review 2026-07-09): --ir feeds downstream client generators, so it
    is gated behind the full whole-program checker like --generate-ts/-elm — a
    module that fails --check must not yield a plausible IR artifact.
@@ -1310,5 +1336,6 @@ let () =
       Alcotest.test_case "agent-context hash matches semantic-json" `Quick test_agent_context_hash_matches_semantic;
       Alcotest.test_case "agent-context diagnostics carry codes + obligations" `Quick test_agent_context_codes_and_obligations;
       Alcotest.test_case "agent-context errors sort first" `Quick test_agent_context_errors_sort_first;
+      Alcotest.test_case "agent-context imported diagnostic file identity" `Quick test_agent_context_imported_diagnostic_file_identity;
     ];
   ]

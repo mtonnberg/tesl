@@ -159,11 +159,10 @@ if command -v curl >/dev/null 2>&1; then
     exit 1
   }
   mcp_payload='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"tesl.debug_attach","arguments":{"action":"once","project":"'"$TMP/live-project"'","break_at":["lesson17-telemetry.tesl:72"],"timeout_ms":10000}}}'
-  mcp_length=$(printf '%s' "$mcp_payload" | wc -c | tr -d ' ')
   (
     {
-      printf 'Content-Length: %s\r\n\r\n' "$mcp_length"
-      printf '%s' "$mcp_payload"
+      # MCP stdio is one compact JSON-RPC message per line, not LSP framing.
+      printf '%s\n' "$mcp_payload"
     } | TESL_DEBUG_ATTACH="$attach_bin" TESL_COMPILER="$COMPILER" \
       TESL_REPO_ROOT="$REPO_ROOT" "$mcp_bin"
   ) >"$TMP/mcp-live.out" 2>&1 &
@@ -180,7 +179,7 @@ if command -v curl >/dev/null 2>&1; then
     exit 1
   }
   mcp_pid=""
-  grep -q 'stopped' "$TMP/mcp-live.out" || {
+  grep -q '\\"stopped\\":true' "$TMP/mcp-live.out" || {
     cat "$TMP/mcp-live.out" >&2
     echo "go-cli-smoke: MCP attach response contained no stopped event" >&2
     exit 1

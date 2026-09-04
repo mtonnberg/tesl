@@ -1,9 +1,9 @@
 (** A7 — single-source stdlib import scope.
 
     Closes the "typechecks-but-unbound-at-runtime" CLASS: a stdlib name that sits
-    in {!Type_system.stdlib_env} and would emit a `(require tesl/X.rkt)` when its
-    module is imported, but was ABSENT from the checker's hand-maintained scope
-    tables, passed `--check` yet was `unbound identifier` at runtime.
+    in {!Type_system.stdlib_env} but was ABSENT from the checker's hand-maintained
+    scope tables passed `--check` without importing its owning module, leaving
+    code generation without a valid imported binding.
 
     After A7:
       - ONE authoritative registry {!Type_system.stdlib_home_module} drives the
@@ -29,9 +29,7 @@
                    always-available, a constructor, a compile-time-lowered form,
                    or has a home-module entry — so a future name cannot silently
                    re-open the hole;
-      (emit-cover) every home module resolves to a Racket file path in the
-                   emitter's module_path_table — the require path and the scope
-                   decision cannot drift (belt-and-suspenders for the derivation). *)
+      (module-cover) every home module is a known compiler-owned module. *)
 
 open Alcotest
 
@@ -248,9 +246,8 @@ let is_constructor name =
   String.length name > 0 && name.[0] >= 'A' && name.[0] <= 'Z'
 
 (* Compile-time-lowered Agent provider/tool forms: they lower via the `__tart_`
-   desugar path (emit_racket) and have no plain runtime require, so they are
-   intentionally OUT of the home-module registry (demanding an import for them
-   would contradict the emitter). *)
+   desugar path before direct Go emission and have no ordinary imported binding,
+   so they are intentionally OUT of the home-module registry. *)
 let compile_time_lowered = [ "anthropic"; "openai"; "mistral"; "local"; "asTool" ]
 
 (* No intentionally-ungated stdlib names remain.  The only former entry — the

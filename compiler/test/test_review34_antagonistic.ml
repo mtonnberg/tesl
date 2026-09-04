@@ -1,37 +1,7 @@
 (** Antagonistic regression tests for Critical Review 34.
 
-    Each test probes a specific correctness gap, ergonomic limitation, or
-    soundness boundary identified during Review 34.
-
-    Findings covered:
-      H01  Lambda emission always uses #:returns Unit — emitter bug for Bool lambdas
-      H02  `fn` with proof return type compiles but proof body is not verified
-      H03  `establish` with Maybe (Fact ...) + `n ::: _proof` now works (FIXED)
-      H04  Unused ADT type parameter compiles without lint warning (phantom param)
-      H05  `establish` can manufacture a proof for any value with no runtime check
-      H06  ADT value in string interpolation gives clear error (not silent type corruption)
-      H07  Circular module-level binding compiles without error (infinite loop risk)
-      H08  Dict.filter reference .rkt is now out of sync — emitter adds Dict.filter
-      H09  Multi-line `type X = A | B` inline gives lint error, not silent misparse
-      H10  `establish` inside `fn` body produces un-usable proof (known limitation)
-      H11  Newtype vs base-type unification: List UserId must NOT match List String
-      H12  Integer modulo with IsNonZero proof requirement is enforced
-      H13  Negative integer literal is valid (-2^62 boundary)
-      H14  Zero-arg lambda `fn() -> 42` compiles and emits correctly
-      H15  Lambda with multiple params `fn(x: Int, y: Int) -> x + y` compiles
-      H16  `fn` calling a `check` function inherits the proof on the return value
-      H17  Record field with proof annotation: reading the field does not carry proof
-      H18  Pattern matching on parameterized ADT with phantom param compiles
-      H19  Mutual recursion across two `fn` declarations compiles correctly
-      H20  Nested `transaction` is rejected at compile time
-      H21  `case` expression with string literal patterns requires catch-all
-      H22  `select` in a `fn` body with proper capability compiles
-      H23  Proof forgery via raw `:::` in `handler` body is rejected
-      H24  `fn` returning a value with proof annotation silently drops proof in emitter
-      H25  `List.filter` with a named Bool-returning fn compiles without type errors
-      H26  `Dict.filter` predicate is value-only (not key+value) — type matches
-      H27  `establish` with conditional proof (if-then-else branch) works
-*)
+    The historical finding IDs are retained, while each assertion describes the
+    current OCaml frontend and Go emitter behavior. *)
 
 open Alcotest
 
@@ -51,10 +21,6 @@ let tesl =
 let check_subcmd =
   if Filename.basename tesl = "main.exe" then "--check" else "check"
 
-let emit_subcmd =
-  (* default mode = emit Racket *)
-  ""
-
 let compile_string ?(mode = check_subcmd) src =
   let tmp = Filename.temp_file "tesl-r34-test" ".tesl" in
   let oc = open_out tmp in
@@ -69,8 +35,6 @@ let compile_string ?(mode = check_subcmd) src =
   let _ = Unix.close_process_in ic in
   (try Sys.remove tmp with _ -> ());
   out
-
-let emit_string src = compile_string ~mode:emit_subcmd src
 
 let has_error out =
   let re = Str.regexp "error\\[" in
@@ -92,32 +56,20 @@ let should_fail pattern src =
     Printf.eprintf "Expected pattern '%s' in:\n%s\n" pattern out;
   check bool (Printf.sprintf "should fail: %s" pattern) true found
 
-let lint_string src =
-  let _src = src in ""
+let go_module_source src =
+  match Compile.compile_go_source "<test>" src with
+  | Compile.GoFailure ds ->
+    failwith (String.concat "\n" (List.map (fun (d : Compile.diagnostic) -> d.message) ds))
+  | Compile.GoSuccess artifacts ->
+    (match List.find_opt
+             (fun (a : Emit_go.artifact) -> Filename.basename a.path = "module.go")
+             artifacts with
+     | Some artifact -> artifact.contents
+     | None -> failwith "Go emission did not produce module.go")
 
-let should_emit pattern src =
-  let out = emit_string src in
-  let found =
-    let re = Str.regexp_case_fold pattern in
-    try ignore (Str.search_forward re out 0); true with Not_found -> false
-  in
-  if not found then
-    Printf.eprintf "Expected pattern '%s' in emitted output:\n%s\n" pattern out;
-  check bool (Printf.sprintf "emitter should contain: %s" pattern) true found
-
-let should_not_emit pattern src =
-  let out = emit_string src in
-  let found =
-    let re = Str.regexp_case_fold pattern in
-    try ignore (Str.search_forward re out 0); true with Not_found -> false
-  in
-  if found then
-    Printf.eprintf "Unexpected pattern '%s' in emitted output:\n%s\n" pattern out;
-  check bool (Printf.sprintf "emitter should NOT contain: %s" pattern) false found
-
-let _lint_string = lint_string
-let _should_emit = should_emit
-let _should_not_emit = should_not_emit
+let contains pattern text =
+  try ignore (Str.search_forward (Str.regexp pattern) text 0); true
+  with Not_found -> false
 
 let prelude =
   {|module Test exposing []
@@ -125,61 +77,23 @@ import Tesl.Prelude exposing [Bool(..), Int, String, Unit, List, Fact]
 import Tesl.Maybe exposing [Maybe(..)]
 |}
 
-(* ── H01: Lambda #:returns — FIXED ─────────────────────────────────────────── *)
-(*                                                                               *)
-(* Previously the emitter hardcoded the wrong result type for lambdas. The fix  *)
-(* uses the type checker's inferred body type when emitting Go function values. *)
-(* This test uses the library API directly (not the CLI) to avoid binary path   *)
-(* resolution issues in `dune runtest`.                                         *)
-let test_h01_lambda_returns_unit_in_emitter () =
+(* H01: the Go emitter preserves the inferred lambda result type. *)
+let test_h01_lambda_emits_bool_result () =
   let src = prelude ^
-    "import Tesl.List exposing [List.filter]\n" ^
-    "fn test(xs: List Int) -> List Int =\n" ^
-    "  List.filter (fn(x: Int) -> x > 0) xs\n"
+    "fn apply(pred: Int -> Bool, n: Int) -> Bool = pred n\n" ^
+    "fn test(n: Int) -> Bool = apply (fn(x: Int) -> x > 0) n\n"
   in
-  let out = match Parser.parse_module "<test>" src with
-     | Ok _m ->
-       (match Compile.compile_go_source "<test>" src with
-        | Compile.GoSuccess artifacts ->
-          String.concat "\n" (List.map (fun (a : Emit_go.artifact) -> a.contents) artifacts)
-        | Compile.GoFailure ds ->
-          failwith (String.concat "\n" (List.map (fun (d : Compile.diagnostic) -> d.message) ds)))
-    | Err e -> failwith e.msg
-  in
-   (* The Go emitter should preserve the lambda's function result type. *)
-   let has_bool_return =
-     let re = Str.regexp "func" in
-    try ignore (Str.search_forward re out 0); true with Not_found -> false
-  in
-   check bool "lambda emits a Go function" true has_bool_return;
-   (* Must not contain the old backend-only lambda marker. *)
-  let has_unit_lambda =
-     let re = Str.regexp "tesl-lambda" in
-    try ignore (Str.search_forward re out 0); true with Not_found -> false
-  in
-   check bool "lambda does NOT emit the old marker" false has_unit_lambda
+  let out = go_module_source src in
+  check bool "lambda emits a Bool-returning Go function" true
+    (contains "func(x teslrt[.]Int) bool {" out)
 
-(* ── H02: `fn` with proof return type — body not verified ─────────────────── *)
-(*                                                                               *)
-(* `fn f(s: String) -> String ::: IsAdmin s = s` compiles without error even   *)
-(* though the body `s` carries no proof. The compiler should either:           *)
-(* (a) reject proof annotations in fn return specs, or                          *)
-(* (b) verify the body actually carries the declared proof.                    *)
-(* Currently neither happens — the declaration silently succeeds.              *)
-let test_h02_fn_proof_return_body_not_verified () =
+(* H02: ordinary functions cannot claim a proof their return value lacks. *)
+let test_h02_fn_proof_return_body_is_verified () =
   let src = prelude ^
     "fact IsAdmin (u: String)\n" ^
     "fn getAdmin(u: String) -> String ::: IsAdmin u = u\n"
   in
-  (* Currently this COMPILES even though body `u` doesn't carry IsAdmin proof.
-     The proof annotation on the return is effectively silently ignored/dropped
-     by the checker. This is a soundness gap. *)
-  let out = compile_string src in
-  (* We document that it currently passes — ideally it should produce at least a
-     lint warning that fn bodies cannot introduce new proofs *)
-  if not (has_error out) then
-    Printf.eprintf "H02 CONFIRMED GAP: fn with proof return type compiles without body verification\n";
-  check bool "H02 passes (gap documented)" false false (* always passes — records the gap *)
+  should_fail "cannot declare a proof return type\\|cannot introduce new proofs" src
 
 (* ── H03: `establish` + Maybe(Fact) proof injection via `n ::: _proof` ────── *)
 (*                                                                               *)
@@ -221,13 +135,8 @@ let test_h03b_bare_n_without_proof_still_rejected () =
   in
   should_fail "does not statically satisfy.*IsPositive\\|IsPositive.*not satisfied" src
 
-(* ── H04: Unused ADT type parameter — no lint warning ─────────────────────── *)
-(*                                                                               *)
-(* `type Tree a = Leaf | Node left:(Tree Int) value:Int right:(Tree Int)`       *)
-(* declares a type parameter `a` but never uses it. Lesson 37 has this exact   *)
-(* pattern. The compiler silently accepts it, creating a phantom type parameter *)
-(* that confuses users and makes `Tree Int` and `Tree String` the same type.   *)
-let test_h04_unused_type_param_compiles_silently () =
+(* ── H04: Unused ADT type parameter is linted ─────────────────────────────── *)
+let test_h04_unused_type_param_is_linted () =
   let src = prelude ^
     "type Tree a\n" ^
     "  = Leaf\n" ^
@@ -237,25 +146,10 @@ let test_h04_unused_type_param_compiles_silently () =
     "    Leaf -> 0\n" ^
     "    Node _ _ _ -> 1\n"
   in
-  (* This currently COMPILES without warning even though `a` is never used.
-     A lint warning W0xx should be emitted for unused type parameters. *)
-  let out = compile_string src in
-  if not (has_error out) then
-    Printf.eprintf "H04 CONFIRMED GAP: unused type param `a` accepted without warning\n";
-  (* Verify the phantom param allows bogus type application without error *)
-  let src2 = prelude ^
-    "type Tree a\n" ^
-    "  = Leaf\n" ^
-    "  | Node left: (Tree Int) value: Int right: (Tree Int)\n" ^
-    "fn wtf(t: Tree String) -> Int =\n" ^  (* Tree String with Int internals *)
-    "  case t of\n" ^
-    "    Leaf -> 0\n" ^
-    "    Node _ _ _ -> 1\n"
-  in
-  let out2 = compile_string src2 in
-  if not (has_error out2) then
-    Printf.eprintf "H04 EXTRA: Tree String with Int internals also accepted (phantom param)\n";
-  check bool "H04 passes (gap documented)" false false
+  let out = compile_string ~mode:"--lint" src in
+  let re = Str.regexp "warning\\[W097\\]" in
+  let warned = try ignore (Str.search_forward re out 0); true with Not_found -> false in
+  if not warned then failf "expected W097 for unused ADT type parameter, got:\n%s" out
 
 (* ── H05: `establish` manufactures any proof — trusted boundary caveat ─────── *)
 (*                                                                               *)
@@ -318,33 +212,19 @@ let test_h07_single_line_adt_needs_separate_lines () =
   (* Parser rejects inline multi-constructor ADT with a clear error *)
   should_fail "ADT variants must be on separate lines\\|error\\[E000\\]\\|separate.*lines\\|inline.*ADT" src
 
-(* ── H08: `fn` can declare proof return spec — emitter silently drops proof ── *)
-(*                                                                               *)
-(* When `fn f -> T ::: Proof` is emitted, the Racket output uses `#:returns T` *)
-(* (not `#:returns (T ::: Proof)`). The proof annotation is silently dropped   *)
-(* by the emitter. This means the declared proof return type of a `fn` has no  *)
-(* runtime enforcement, creating a potential gap between declared type and      *)
-(* emitted behavior.                                                            *)
-let test_h08_fn_proof_return_dropped_in_emitter () =
+(* H08: a discharged function return proof erases from generated Go. *)
+let test_h08_fn_proof_return_erases_after_validation () =
   let src = prelude ^
     "fact IsNonEmpty (s: String)\n" ^
-    "fn trimmed(s: String) -> String ::: IsNonEmpty s = s\n"
+    "fn trimmed(s: String ::: IsNonEmpty s) -> result: String ::: IsNonEmpty result =\n" ^
+    "  let result = s\n" ^
+    "  result\n"
   in
-  let out = emit_string src in
-  (* The emitter should emit #:returns String, not #:returns (String ::: IsNonEmpty) *)
-  let has_error_out = has_error out in
-  if not has_error_out then begin
-    (* Verify proof annotation does NOT appear in Racket output as a runtime check *)
-    let has_proof_in_returns =
-      let re = Str.regexp "returns.*IsNonEmpty\\|IsNonEmpty.*returns" in
-      try ignore (Str.search_forward re out 0); true with Not_found -> false
-    in
-    if has_proof_in_returns then
-      Printf.eprintf "H08: Proof annotation appears in emitter output (unexpected)\n"
-    else
-      Printf.eprintf "H08 CONFIRMED: fn proof return annotation is dropped in emitter\n"
-  end;
-  check bool "H08 passes (gap documented)" false false
+  let out = go_module_source src in
+  check bool "proof-passing fn emits an ordinary Go signature" true
+    (contains "func trimmed(s string) string" out);
+  check bool "proof predicate is erased from generated module" false
+    (contains "IsNonEmpty" out)
 
 (* ── H09: Nested `transaction` is a compile error ─────────────────────── *)
 (*                                                                               *)
@@ -437,19 +317,14 @@ let test_h13_list_filter_named_fn () =
   in
   should_pass src
 
-(* ── H14: `Dict.filter` predicate is value-only (not key+value) ─────────────── *)
-(*                                                                               *)
-(* The type of `Dict.filter` is `(v -> Bool) -> Dict k v -> Dict k v`.         *)
-(* The predicate receives only the VALUE, not the key. Using a two-param        *)
-(* predicate is a type error.                                                   *)
-let test_h14_dict_filter_value_only_predicate () =
+(* ── H14: `Dict.filter` is unavailable on the sole backend ────────────────── *)
+let test_h14_dict_filter_rejected_before_emission () =
   let src = prelude ^
     "import Tesl.Dict exposing [Dict(..), Dict.filter, Dict.empty]\n" ^
     "fn test(d: Dict String Int) -> Dict String Int =\n" ^
     "  Dict.filter (fn(v: Int) -> v > 0) d\n"
   in
-  (* Value-only predicate should compile *)
-  should_pass src
+  should_fail "Go backend does not implement.*Dict.filter" src
 
 let test_h14b_dict_filter_two_param_predicate_rejected () =
   let src = prelude ^
@@ -462,8 +337,8 @@ let test_h14b_dict_filter_two_param_predicate_rejected () =
 
 (* ── H15: Mutual recursion across two `fn` declarations ─────────────────────── *)
 (*                                                                               *)
-(* Two mutually recursive functions (isEven/isOdd) must both compile and emit  *)
-(* correct Racket (using letrec or equivalent forward references).             *)
+(* Two mutually recursive functions (isEven/isOdd) must both compile for direct *)
+(* Go emission, where package-level declarations permit forward references.     *)
 let test_h15_mutual_recursion_compiles () =
   let src = prelude ^
     "fn isEven(n: Int) -> Bool =\n" ^
@@ -530,28 +405,15 @@ let test_h18_newtype_list_does_not_unify_with_base () =
   (* List UserId should NOT unify with List String *)
   should_fail "cannot unify.*UserId.*String\\|UserId.*String.*mismatch\\|type mismatch\\|T001" src
 
-(* ── H19: `case` with integer literal patterns missing catch-all — compile-time gap ── *)
-(*                                                                                        *)
-(* CONFIRMED BUG: Integer domain `case` without a catch-all silently compiles.           *)
-(* The compiler checks ADT exhaustiveness (rejects missing constructors) but does NOT    *)
-(* check literal-pattern exhaustiveness. `case n of 1 -> "a" | 2 -> "b"` compiles       *)
-(* without error — at runtime, n=3 will crash or return an uninitialized value.          *)
-(* ADT exhaustiveness IS enforced (test H19b confirms this), proving the gap is         *)
-(* specific to literal patterns.                                                         *)
-let test_h19_integer_literal_case_missing_catchall_compiles_silently () =
+(* H19: literal cases are infinite-domain matches and require a catch-all. *)
+let test_h19_integer_literal_case_missing_catchall_rejected () =
   let src = prelude ^
     "fn describe(n: Int) -> String =\n" ^
     "  case n of\n" ^
     "    1 -> \"one\"\n" ^
     "    2 -> \"two\"\n"
-    (* missing catch-all *)
   in
-  (* BUG: This SHOULD fail with non-exhaustive error but currently COMPILES silently *)
-  let out = compile_string src in
-  let err = has_error out in
-  if not err then
-    Printf.eprintf "H19 CONFIRMED BUG: integer literal case without catch-all compiles silently\n";
-  check bool "H19 documents bug (integer literal no catch-all should error)" false false
+  should_fail "non-exhaustive case.*literal patterns.*catch-all" src
 
 let test_h19b_adt_non_exhaustive_case_is_rejected () =
   let src =
@@ -709,16 +571,16 @@ let test_h27_forward_reference_compiles () =
 
 let () =
   run "Review34" [
-    "H01", [ test_case "lambda emits correct #:returns type (FIXED)"
-               `Quick test_h01_lambda_returns_unit_in_emitter ];
-    "H02", [ test_case "fn with proof return annotation compiles without body verification (gap)"
-               `Quick test_h02_fn_proof_return_body_not_verified ];
+    "H01", [ test_case "lambda emits a Bool-returning Go function"
+               `Quick test_h01_lambda_emits_bool_result ];
+    "H02", [ test_case "fn proof return body is verified"
+               `Quick test_h02_fn_proof_return_body_is_verified ];
     "H03", [ test_case "establish Maybe(Fact) + n:::_proof now compiles (FIXED)"
                `Quick test_h03_establish_maybe_fact_proof_injected;
              test_case "bare n without proof still rejected"
                `Quick test_h03b_bare_n_without_proof_still_rejected ];
-    "H04", [ test_case "unused ADT type parameter compiles silently (gap)"
-               `Quick test_h04_unused_type_param_compiles_silently ];
+    "H04", [ test_case "unused ADT type parameter emits W097"
+               `Quick test_h04_unused_type_param_is_linted ];
     "H05", [ test_case "establish trusted boundary: compiles by design"
                `Quick test_h05_establish_trusted_boundary_compiles ];
     "H05b", [ test_case "establish proof does not auto-attach to calling context"
@@ -727,8 +589,8 @@ let () =
                `Quick test_h06_adt_string_interpolation_rejected ];
     "H07", [ test_case "inline single-line ADT definition is rejected"
                `Quick test_h07_single_line_adt_needs_separate_lines ];
-    "H08", [ test_case "fn proof return type is dropped by emitter (gap)"
-               `Quick test_h08_fn_proof_return_dropped_in_emitter ];
+    "H08", [ test_case "validated fn proof return erases from Go"
+               `Quick test_h08_fn_proof_return_erases_after_validation ];
     "H09", [ test_case "nested `transaction` is rejected at compile time"
                `Quick test_h09_nested_transaction_rejected ];
     "H10", [ test_case "zero-arg lambda fn() -> 42 compiles"
@@ -739,8 +601,8 @@ let () =
                `Quick test_h12_lambda_with_proof_param_threads_proof ];
     "H13", [ test_case "List.filter with named Bool-returning fn compiles"
                `Quick test_h13_list_filter_named_fn ];
-    "H14", [ test_case "Dict.filter with value-only predicate compiles"
-               `Quick test_h14_dict_filter_value_only_predicate ];
+    "H14", [ test_case "Dict.filter is rejected before backend emission"
+               `Quick test_h14_dict_filter_rejected_before_emission ];
     "H14b", [ test_case "Dict.filter with two-param predicate is a type error"
                 `Quick test_h14b_dict_filter_two_param_predicate_rejected ];
     "H15", [ test_case "mutual recursion across two fn declarations compiles"
@@ -751,8 +613,8 @@ let () =
                `Quick test_h17_raw_proof_in_fn_body_rejected ];
     "H18", [ test_case "List UserId does NOT unify with List String (newtype safety)"
                `Quick test_h18_newtype_list_does_not_unify_with_base ];
-    "H19", [ test_case "integer literal case missing catch-all compiles silently (BUG documented)"
-               `Quick test_h19_integer_literal_case_missing_catchall_compiles_silently ];
+    "H19", [ test_case "integer literal case missing catch-all is rejected"
+               `Quick test_h19_integer_literal_case_missing_catchall_rejected ];
     "H19b", [ test_case "ADT non-exhaustive case IS correctly rejected"
                 `Quick test_h19b_adt_non_exhaustive_case_is_rejected ];
     "H20", [ test_case "integer literal case with catch-all compiles"

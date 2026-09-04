@@ -11,16 +11,12 @@
     also asserts the derived name-sets and the name predicates all AGREE with
     `sql_op_effect`, and that names round-trip through `sql_op_of_name`.
 
-    S3b-b DONE: the emitter's free-variable SQL-keyword guard
-    (emit_racket.ml, the `EVar` fallback) is now DERIVED from this registry — it
-    calls [is_sql_builtin] directly instead of a hand-maintained literal that had
-    drifted to 7 of 14 ops — so check (3) below (is_sql_builtin over all_sql_ops)
-    IS the emit-guard coverage assertion; there is no longer a separate emitter
-    list to drift.  NOTE (remaining, tracked as S3b in roadmap/later): the harder
-    cross-seam half — binding this to the Racket guard set (`sql.rkt` per-builtin
-    `require-capabilities!`) — is not yet asserted here.
+    S3b-b DONE: the frontend's SQL-name guards are DERIVED from this registry —
+    they call [is_sql_builtin] directly instead of a hand-maintained literal that
+    had drifted to 7 of 14 ops. Check (3) below therefore covers every frontend
+    consumer; there is no separate emitter list to drift.
 
-    Pure OCaml, no alcotest / no Racket, so it runs in every gate:
+    Pure OCaml, no alcotest, so it runs in every gate:
       dune exec test/test_sql_registry.exe *)
 
 open Validation_common

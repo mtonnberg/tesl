@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,10 +10,32 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"tesl.dev/runtime/go/internal/protocol"
 	"tesl.dev/runtime/go/internal/tooling"
 )
+
+const compilerHelperScript = `#!/bin/sh
+case "$1" in
+  --agent-context-json)
+    printf '%s' '{"version":1,"file":"fixture.tesl","content_hash":"abc","ok":true,"summary":"clean","diagnostics":[],"symbols":[],"proof_obligations":[]}' ;;
+  --check-json)
+    printf '%s' '{"version":1,"diagnostics":[]}' ;;
+  --type-at-json)
+    printf '%s' '{"version":1,"type_at":null}' ;;
+  --signature-help-json)
+    printf '%s' '{"version":1,"signature":null}' ;;
+  --completions-json)
+    printf '%s' '{"version":1,"completions":[]}' ;;
+  --definition-json)
+    printf '%s' '{"version":1,"definition":null}' ;;
+  --occurrences-json)
+    printf '%s' '{"version":1,"occurrences":[]}' ;;
+  *)
+    printf '%s' '{"version":1}' ;;
+esac
+`
 
 func TestMCPStdioHelper(t *testing.T) {
 	if os.Getenv("TESL_MCP_STDIO_HELPER") != "1" {
@@ -47,7 +70,7 @@ func TestMCPInitializeAndToolCatalog(t *testing.T) {
 func TestMCPCompilerToolWrapsCompactJSON(t *testing.T) {
 	directory := t.TempDir()
 	script := filepath.Join(directory, "compiler-helper.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s' '{\"version\":1,\"ok\":true,\"diagnostics\":[],\"symbols\":[],\"proof_obligations\":[]}'\n"), 0o700); err != nil {
+	if err := os.WriteFile(script, []byte(compilerHelperScript), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	server := &server{compiler: tooling.Client{Executable: script}}
@@ -60,10 +83,22 @@ func TestMCPCompilerToolWrapsCompactJSON(t *testing.T) {
 	}
 }
 
+func TestMCPCompilerToolRejectsMalformedAgentContextMember(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "compiler-helper.sh")
+	payload := `{"version":1,"file":"fixture.tesl","content_hash":"abc","ok":true,"summary":"clean","diagnostics":[],"symbols":[{"name":"broken","kind":"fn"}],"proof_obligations":[]}`
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s' '"+payload+"'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	server := &server{compiler: tooling.Client{Executable: script}}
+	if _, err := server.callTool(context.Background(), "tesl.agent_context", map[string]any{"file": "fixture.tesl"}); err == nil || !strings.Contains(err.Error(), "signature") {
+		t.Fatalf("malformed agent-context member error = %v", err)
+	}
+}
+
 func TestMCPCompilerToolsDispatchWithRequiredArguments(t *testing.T) {
 	directory := t.TempDir()
 	script := filepath.Join(directory, "compiler-helper.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s' '{} '\n"), 0o700); err != nil {
+	if err := os.WriteFile(script, []byte(compilerHelperScript), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	server := &server{compiler: tooling.Client{Executable: script}}
@@ -102,6 +137,13 @@ func TestMCPDebugInspectUsesGoLauncher(t *testing.T) {
 	if !strings.Contains(string(value), `"stopped":true`) {
 		t.Fatalf("debug inspect = %s", value)
 	}
+	timeout, err := debugTimeout(map[string]any{"timeout_ms": float64(5000)})
+	if err != nil || timeout != 5*time.Second {
+		t.Fatalf("debug timeout = %s, %v", timeout, err)
+	}
+	if args := strings.Join(debugInspectArgs(nil, timeout), " "); !strings.Contains(args, "--timeout-ms 5000") {
+		t.Fatalf("debug inspect args = %s", args)
+	}
 }
 
 func TestMCPDebugAttachForwardsSessionArguments(t *testing.T) {
@@ -139,6 +181,52 @@ func TestMCPDebugAttachForwardsSessionArguments(t *testing.T) {
 	}
 }
 
+func TestMCPDebugAttachDefaultsAndProjectDiscovery(t *testing.T) {
+	project := t.TempDir()
+	nested := filepath.Join(project, "src", "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "tesl.toml"), []byte("[project]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := nearestProject(nested)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != project {
+		t.Fatalf("nearestProject() = %q, want %q", got, project)
+	}
+	if timeout := debugAttachProcessTimeout(30 * time.Second); timeout != 30*time.Second+debugProcessMargin {
+		t.Fatalf("debug process timeout = %s", timeout)
+	}
+	if _, err := (&server{}).debugAttach(context.Background(), map[string]any{"project": project}); err == nil || !strings.Contains(err.Error(), "requires at least one break_at") {
+		t.Fatalf("default action error = %v", err)
+	}
+}
+
+func TestMCPDebugAttachSchemaRequiresBreakpointsForDefaultOnce(t *testing.T) {
+	var schema map[string]any
+	for _, tool := range toolDefinitions() {
+		if tool["name"] == "tesl.debug_attach" {
+			schema, _ = tool["inputSchema"].(map[string]any)
+			break
+		}
+	}
+	if schema == nil || schema["allOf"] == nil {
+		t.Fatalf("debug_attach schema does not constrain default once action: %#v", schema)
+	}
+	properties, _ := schema["properties"].(map[string]any)
+	action, _ := properties["action"].(map[string]any)
+	if action["default"] != "once" {
+		t.Fatalf("action default = %#v", action["default"])
+	}
+	timeout, _ := properties["timeout_ms"].(map[string]any)
+	if timeout["default"] != 30000 {
+		t.Fatalf("timeout default = %#v", timeout["default"])
+	}
+}
+
 func TestMCPUnknownMethodIsProtocolError(t *testing.T) {
 	if _, err := (&server{}).handle(context.Background(), "unknown/method", nil); err == nil || !strings.Contains(err.Error(), "unknown method") {
 		t.Fatalf("unknown method error = %v", err)
@@ -170,10 +258,10 @@ func TestMCPShutdownAndSourceQueryValidation(t *testing.T) {
 	}
 }
 
-func TestMCPStdioProtocol(t *testing.T) {
+func TestMCPStdioRawConformance(t *testing.T) {
 	directory := t.TempDir()
 	script := filepath.Join(directory, "compiler-helper.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s' '{\"version\":1,\"ok\":true,\"diagnostics\":[],\"symbols\":[],\"proof_obligations\":[]}'\n"), 0o700); err != nil {
+	if err := os.WriteFile(script, []byte(compilerHelperScript), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if len(os.Args) == 0 {
@@ -195,30 +283,81 @@ func TestMCPStdioProtocol(t *testing.T) {
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
-	writer := protocol.NewWriter(input)
-	if err := writer.WriteJSON(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize"}); err != nil {
+	// This probe deliberately does not use the production protocol package: raw
+	// MCP 2024-11-05 clients write and read one JSON object per line.
+	if _, err := input.Write([]byte("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}\n")); err != nil {
 		t.Fatal(err)
 	}
-	if err := writer.WriteJSON(map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/list"}); err != nil {
+	if _, err := input.Write([]byte("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n")); err != nil {
 		t.Fatal(err)
 	}
 	if err := input.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reader := protocol.NewReader(output)
-	first, err := reader.Read()
-	if err != nil {
-		t.Fatal(err)
+	scanner := bufio.NewScanner(output)
+	if !scanner.Scan() {
+		t.Fatalf("missing initialize response: %v", scanner.Err())
 	}
-	second, err := reader.Read()
-	if err != nil {
-		t.Fatal(err)
+	first := scanner.Text()
+	if !scanner.Scan() {
+		t.Fatalf("missing tools/list response: %v", scanner.Err())
 	}
-	if !strings.Contains(string(first), `"protocolVersion":"2024-11-05"`) {
+	second := scanner.Text()
+	if strings.HasPrefix(first, "Content-Length:") || !strings.Contains(first, `"protocolVersion":"2024-11-05"`) {
 		t.Fatalf("initialize response = %s", first)
 	}
-	if !strings.Contains(string(second), `"tesl.agent_context"`) {
+	if !strings.Contains(second, `"tesl.agent_context"`) {
 		t.Fatalf("tools/list response missing agent context: %s", second)
+	}
+	if err := command.Wait(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMCPStdioTerminatesOnTruncatedLine(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "compiler-helper.sh")
+	if err := os.WriteFile(script, []byte(compilerHelperScript), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if len(os.Args) == 0 {
+		t.Fatal("test executable path unavailable")
+		return
+	}
+	command := exec.Command(os.Args[0], "-test.run=TestMCPStdioHelper")
+	command.Env = append(os.Environ(), "TESL_MCP_STDIO_HELPER=1", "TESL_COMPILER="+script)
+	input, err := command.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+	if input == nil {
+		t.Fatal("MCP helper stdin pipe is nil")
+		return
+	}
+	output, err := command.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := input.Write([]byte(`{"jsonrpc":"2.0","id":1,"method":"initialize"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := input.Close(); err != nil {
+		t.Fatal(err)
+	}
+	scanner := bufio.NewScanner(output)
+	if !scanner.Scan() || !strings.Contains(scanner.Text(), `"code":-32700`) {
+		t.Fatalf("truncated-line response = %q, error = %v", scanner.Text(), scanner.Err())
+	}
+	for scanner.Scan() {
+		if strings.HasPrefix(scanner.Text(), "{") {
+			t.Fatalf("server continued after truncated line: %s", scanner.Text())
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
 	}
 	if err := command.Wait(); err != nil {
 		t.Fatal(err)
@@ -228,7 +367,7 @@ func TestMCPStdioProtocol(t *testing.T) {
 func TestMCPStdioCompilerToolMatrix(t *testing.T) {
 	directory := t.TempDir()
 	script := filepath.Join(directory, "compiler-helper.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s' '{\"version\":1,\"ok\":true,\"diagnostics\":[],\"symbols\":[],\"proof_obligations\":[]}'\n"), 0o700); err != nil {
+	if err := os.WriteFile(script, []byte(compilerHelperScript), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if len(os.Args) == 0 {
@@ -250,8 +389,8 @@ func TestMCPStdioCompilerToolMatrix(t *testing.T) {
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
-	writer := protocol.NewWriter(input)
-	reader := protocol.NewReader(output)
+	writer := protocol.NewLineWriter(input)
+	reader := protocol.NewLineReader(output)
 	requests := []map[string]any{
 		{"jsonrpc": "2.0", "id": 1, "method": "initialize"},
 		{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": map[string]any{"name": "tesl.agent_context", "arguments": map[string]any{"file": "fixture.tesl"}}},
@@ -331,8 +470,8 @@ func TestMCPStdioRealCompilerAndHeadlessDebugger(t *testing.T) {
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
-	writer := protocol.NewWriter(input)
-	reader := protocol.NewReader(output)
+	writer := protocol.NewLineWriter(input)
+	reader := protocol.NewLineReader(output)
 	request := func(id int, method string, params map[string]any) map[string]any {
 		t.Helper()
 		if err := writer.WriteJSON(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params}); err != nil {
@@ -560,6 +699,12 @@ func compareToolCatalog(t *testing.T, goCatalog, racketResponse map[string]any) 
 		racketTool, ok := racketByName[name]
 		if !ok {
 			return fmt.Errorf("Racket catalog missing %s", name)
+		}
+		// The Go debugger schemas carry timeout/default constraints that the
+		// legacy Racket compatibility server does not model. Compiler-query tool
+		// shapes remain a useful differential oracle; debugger schemas do not.
+		if name == "tesl.debug_inspect" || name == "tesl.debug_attach" {
+			continue
 		}
 		goShape, err := schemaShape(goTool)
 		if err != nil {

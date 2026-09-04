@@ -1393,6 +1393,37 @@ let env_extend name sch (env : (string * scheme) list) =
   (name, sch) :: env
 
 (* ── Stdlib module export registry ───────────────────────────────────────── *)
+(** Stdlib exports that are part of the language surface but cannot currently
+    be lowered by the sole shipped backend.  The checker consumes this table so
+    an explicit import fails before code generation; the Go seam test consumes
+    the same table to ensure every backend refusal has a frontend guard. *)
+let go_backend_unavailable_exports : (string * string list) list = [
+  "Tesl.Dict", ["Dict.map"; "Dict.mapWithKey"; "Dict.filter"; "Dict.filterWithKey";
+                "Dict.foldl"; "Dict.foldr"; "Dict.insertWith"; "Dict.unionWith";
+                "Dict.update"; "Dict.difference"; "Dict.intersection"];
+  "Tesl.Set", ["Set.map"; "Set.filter"; "Set.foldl"; "Set.all"; "Set.any"; "Set.partition"];
+  "Tesl.List", ["List.zipWith"; "List.unzip"; "List.partition"; "List.groupBy";
+                "List.findIndex"; "List.dedupe"; "List.intersperse"; "List.intercalate";
+                "List.nth"];
+  "Tesl.ListPrim", ["ListPrim.head"; "ListPrim.tail"; "ListPrim.append"];
+  "Tesl.Int", ["Int.toFloat"; "Int.fromFloat"; "Int.digits"; "Int.isZero";
+               "Int.isPositive"; "Int.isNegative"];
+  "Tesl.String", ["String.toFloat"; "String.fromFloat"; "String.words"; "String.lines";
+                  "String.trimLeft"; "String.trimRight"];
+  "Tesl.Json", ["int32Codec"];
+  "Tesl.UUID", ["uuidV4Codec"; "uuidV7Codec"];
+  "Tesl.Email", ["Email.send"; "startEmailWorker"];
+  "Tesl.Cache", ["cache"];
+  "Tesl.ApiTest", ["SseStream"];
+  "Tesl.Net", ["Loopback"; "PrivateIp"; "LinkLocal"; "Cgnat"; "Multicast";
+               "Unspecified"; "PublicIp"; "DomainName"; "InvalidHost"];
+]
+
+let go_backend_export_available module_name export =
+  match List.assoc_opt module_name go_backend_unavailable_exports with
+  | Some unavailable -> not (List.mem export unavailable)
+  | None -> true
+
 (** Authoritative export lists for every Tesl.* stdlib module.
     Used to validate `import Tesl.X exposing [name]` at compile time —
     the compiler rejects any name that is not listed here. *)

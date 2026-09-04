@@ -101,17 +101,6 @@ let should_pass src =
     let code, out = run_compiler ["--check"; path] in
     if code <> 0 then failf "expected compilation success, got:\n%s" out)
 
-(* A [known_gap] is a program that SHOULD be statically rejected but compiles
-   today.  We assert it still COMPILES so the suite stays green; if a future
-   static-checker fix starts rejecting it, this flips loudly (the assertion
-   fails) and the case should be promoted to [should_fail]. *)
-let[@warning "-32"] known_gap ~what src =
-  with_temp_file src (fun path ->
-    let code, _ = run_compiler ["--check"; path] in
-    if code <> 0 then
-      failf "KNOWN GAP CLOSED — `%s` is now statically rejected; \
-             promote this case from known_gap to should_fail." what)
-
 (* ── Shared TESL fragments ───────────────────────────────────────────────── *)
 
 let hdr modname =
@@ -450,16 +439,6 @@ fn bad(u: String, todoId: String) -> String requires [dbRead Todo] =
   (Printf.sprintf "NP-BIND-%02d FromDb value at OwnedBy site" idx, test)
 
 let np_binder_cases = [ np_binder_differs 1 ]
-
-(* ══════════════════════════════════════════════════════════════════════════
-   GAP — pin a known static-checker gap (self-referential param annotation
-   compiles today; the `let`-binding form below is the rejected variant).
-   ══════════════════════════════════════════════════════════════════════════ *)
-
-(* Cross-parameter proof on a param that names a parameter which does not exist
-   in scope is rejected — but a literal in the proof template position is a
-   known-gap candidate. We pin the trackable-subject expectation as a positive
-   instead; see POS-* below. (No false gaps asserted here.) *)
 
 (* ══════════════════════════════════════════════════════════════════════════
    POS — positive companions (MUST compile)

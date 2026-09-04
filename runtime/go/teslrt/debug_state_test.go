@@ -3,6 +3,7 @@ package teslrt
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDebugRuntimeStateProviderAndSQLCapture(t *testing.T) {
@@ -98,4 +99,47 @@ func TestDebugPgSqlRedactsSecretParameters(t *testing.T) {
 		t.Fatalf("secret parameter display = %q, want the redaction", state.SQL.Params[1].Display)
 	}
 	ClearDebugSQLCapture()
+}
+
+func TestDebugPgSqlCompletionCannotMutateAnotherExecutionCapture(t *testing.T) {
+	firstReady := make(chan struct{})
+	secondReady := make(chan struct{})
+	firstCaptured := make(chan struct{})
+	firstDone := make(chan struct{})
+	secondResult := make(chan DebugRuntimeState, 1)
+
+	go func() {
+		defer close(firstDone)
+		plan := DebugPgSql(PgSql("select first", nil))
+		plan.arguments()
+		close(firstReady)
+		<-secondReady
+		plan.Capture(11)
+		close(firstCaptured)
+	}()
+	<-firstReady
+	go func() {
+		plan := DebugPgSql(PgSql("select second", nil))
+		plan.arguments()
+		close(secondReady)
+		<-firstCaptured
+		state := DebugRuntimeStateSnapshot()
+		plan.Capture(22)
+		updated := DebugRuntimeStateSnapshot()
+		if updated.SQL == nil || updated.SQL.RowCount != 22 {
+			secondResult <- DebugRuntimeState{}
+			return
+		}
+		secondResult <- state
+	}()
+
+	select {
+	case state := <-secondResult:
+		if state.SQL == nil || state.SQL.SQL != "select second" || state.SQL.RowCount != 0 {
+			t.Fatalf("first query completion changed second execution capture: %#v", state.SQL)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("concurrent SQL capture test timed out")
+	}
+	<-firstDone
 }

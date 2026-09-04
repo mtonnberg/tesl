@@ -496,7 +496,7 @@ fn area(s: Shape) -> Int =
 
 let r49_a06 () =
   (* A9/HM-1: Int is arbitrary-precision — a huge literal compiles (carried as an
-     LBigInt canonical string into the Racket bignum), no longer rejected. *)
+     LBigInt canonical string into direct Go output), no longer rejected. *)
   should_pass_src (base_header ^ {|
 fn bad() -> Int = 9999999999999999999999
 |})

@@ -67,12 +67,13 @@ type EmailMessage struct {
 	// window, never a slice index: a prune or a reset that runs while a message is on the
 	// wire rebuilds the slice, and an index taken before that points at a different message
 	// (or past the end) afterwards. Assigned by the outbox; zero means "not yet".
-	id       uint64
-	To       string
-	Subject  string
-	Body     EmailBody
-	Status   EmailStatus
-	Attempts int
+	id         uint64
+	claimToken string
+	To         string
+	Subject    string
+	Body       EmailBody
+	Status     EmailStatus
+	Attempts   int
 	// NextAttemptAt is when the worker may try again; zero means "now".
 	NextAttemptAt time.Time
 	SentAt        time.Time
@@ -120,7 +121,7 @@ type outboxBackend interface {
 	claimDue(limit int) []EmailMessage
 	// recordOutcome marks a claimed message sent, or counts a failed attempt with backoff
 	// and, at emailMaxAttempts, dead.
-	recordOutcome(message EmailMessage, err error)
+	recordOutcome(message EmailMessage, err error) bool
 	messages() []EmailMessage
 	reset()
 	prune(keep time.Duration)
@@ -353,9 +354,13 @@ func deliverClaimed(outbox *Outbox, backend outboxBackend) {
 	for {
 		claimed := backend.claimDue(emailClaimBatch)
 		for _, message := range claimed {
+			// Durable backends carry their lease identity on the message so recordOutcome
+			// can fence this exact attempt. Keep the carrier observable in memory-only
+			// emitted runtimes too, where the PostgreSQL implementation is omitted.
+			_ = message.claimToken
 			err := deliverOne(deliver, settings, message)
-			backend.recordOutcome(message, err)
-			if err != nil {
+			applied := backend.recordOutcome(message, err)
+			if applied && err != nil {
 				fmt.Fprintf(os.Stderr, "tesl: email delivery to %s failed (attempt %d): %v\n",
 					message.To, message.Attempts+1, err)
 			}

@@ -9,12 +9,12 @@ import (
 // the hourly pruner fires.
 type trappingOutboxBackend struct{ pruned int }
 
-func (b *trappingOutboxBackend) active() bool                      { return true }
-func (b *trappingOutboxBackend) send(EmailMessage)                 {}
-func (b *trappingOutboxBackend) claimDue(int) []EmailMessage       { return nil }
-func (b *trappingOutboxBackend) recordOutcome(EmailMessage, error) {}
-func (b *trappingOutboxBackend) messages() []EmailMessage          { return []EmailMessage{} }
-func (b *trappingOutboxBackend) reset()                            {}
+func (b *trappingOutboxBackend) active() bool                           { return true }
+func (b *trappingOutboxBackend) send(EmailMessage)                      {}
+func (b *trappingOutboxBackend) claimDue(int) []EmailMessage            { return nil }
+func (b *trappingOutboxBackend) recordOutcome(EmailMessage, error) bool { return true }
+func (b *trappingOutboxBackend) messages() []EmailMessage               { return []EmailMessage{} }
+func (b *trappingOutboxBackend) reset()                                 {}
 func (b *trappingOutboxBackend) prune(time.Duration) {
 	b.pruned++
 	panic(RequestRejection{Status: 503, Message: "database busy, try again"})

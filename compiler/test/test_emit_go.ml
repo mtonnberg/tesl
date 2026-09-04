@@ -1,3 +1,7 @@
+(** Direct Go emission tests. References below to Racket describe the historical
+    compatibility baseline from the retired backend; this suite builds and runs
+    only the OCaml frontend's direct Go output. *)
+
 open Alcotest
 
 let source = {|module GoSmoke exposing [add, choose, nestedChoice, boundary, withUnused, map, teslMap, describe, describeComputed, Positive, checkPositive, checkPositiveNested, alwaysReject, rejectEither, requirePositive, doublePositive]
@@ -925,7 +929,7 @@ let run_generated_module_analyzers root =
 (* This case used to assert the emitter REFUSED a program containing an uncalled private
    function, on the grounds that an unused unexported Go function is a lint finding and a
    finding on emitted code is an emitter bug.  The conclusion was wrong: an unused private
-   declaration is legal Tesl and the Racket backend emits it, so refusing made a legal
+   declaration is legal Tesl and the retired Racket backend emitted it, so refusing made a legal
    program un-emittable — lesson35 declares `prependInt` to illustrate it and could not be
    compiled at all.  The function is emitted and referenced once at package level, which
    satisfies the linter without dropping code the author wrote.  The centralized generated
@@ -1030,9 +1034,9 @@ test "recursion" {
 }
 |}
 
-(* Racket has TCO and Go does not, and a Go stack overflow is FATAL (unrecoverable
+(* The retired Racket backend had TCO and Go does not, and a Go stack overflow is FATAL (unrecoverable
    by `recover`), so a self tail call must become a loop rather than a stack frame —
-   otherwise a program that merely runs on Racket kills the Go process. *)
+   otherwise a program that ran under the historical backend kills the Go process. *)
 let test_recursion_with_go () =
   let emitted = match Compile.compile_go_source "<go-recursion>" recursion_source with
     | Compile.GoSuccess artifacts -> artifacts
@@ -1419,9 +1423,11 @@ fn tidy(s: String) -> String = String.trimLeft s
   match Compile.compile_go_source "<go-string-trimleft>" unsupported with
   | Compile.GoSuccess _ -> fail "an unsupported Tesl.String export emitted Go artifacts"
   | Compile.GoFailure diagnostics ->
-    check bool "an unimplemented leaf of a supported module fails closed" true
+    check bool "an unimplemented leaf is rejected before emission" true
       (List.exists (fun (d : Compile.diagnostic) ->
-         d.source = "go-emitter" && contains d.message "`String.trimLeft`") diagnostics)
+         d.source <> "go-emitter"
+         && contains d.message "the Go backend does not implement `String.trimLeft` from `Tesl.String`")
+        diagnostics)
 
 let list_source = {|module GoLists exposing [size, empty, firstOr, rest, joined, parts, top, dedup, ordered, hasTwo, both, prefix]
 import Tesl.Prelude exposing [Bool, Int, List, String]
@@ -1534,12 +1540,13 @@ let test_unsupported_list_exports_fail_closed () =
     | Compile.GoFailure diagnostics ->
       check bool label true
         (List.exists (fun (d : Compile.diagnostic) ->
-           d.source = "go-emitter" && contains d.message needle) diagnostics)
+           contains d.message needle) diagnostics)
   in
   (* `map`/`filter`/`foldl`/`foldr`/`any`/`all` are loops now, so this moved to the next
      unimplemented higher-order leaf: an unimplemented leaf of a SUPPORTED module must
      still fail closed rather than emit something plausible. *)
-  expect_go_error "unimplemented higher-order leaf" "`List.partition`" {|module ListPartition exposing [split]
+  expect_go_error "unimplemented higher-order leaf"
+    "the Go backend does not implement `List.partition` from `Tesl.List`" {|module ListPartition exposing [split]
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.partition]
 fn split(xs: List Int) -> List (List Int) = List.partition (fn(x: Int) -> x > 10) xs
@@ -1663,7 +1670,7 @@ let test_higher_order_lists_with_go () =
    fail closed here for want of a calling convention. Both emit now: a lambda becomes a Go
    func literal and a partial application the runtime combinator that closes over what was
    given. What they do is tested where the feature lives ("function values and lambdas",
-   with its Racket oracle), so this file no longer states the refusal. *)
+   with its historical Racket oracle), so this file no longer states the refusal. *)
 
 let check_list_source = {|module GoCheckLists exposing [Small, checkSmall, checkBelow, kept, keptBelow, allKept, sizeOfKept]
 import Tesl.Prelude exposing [Int, List]
@@ -2517,7 +2524,7 @@ let test_higher_order_leaves_with_go () =
 (* `List.filterMap` over a `Maybe Bool`.  Racket's implementation fed the payload to
    `filter-map`, so `Something False` was silently DROPPED — `filterMap toFlag [0, 1, 2]`
    returned one element where all three mapped to Something.  Fixed in tesl/list.rkt; this
-   runs on both backends, so it pins the agreement rather than just the Go side. *)
+   ran under the retired backend too, so it pins the compatibility contract. *)
 let filter_map_bool_source = {|module GoFilterMapBool exposing [flags, evens, toFlag, keepEven]
 import Tesl.Prelude exposing [Bool(..), Int, List]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -2691,7 +2698,7 @@ let test_int_leaves_with_go () =
         (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
   in
   let module_go = artifact "internal/teslmodgointleaves/module.go" emitted in
-  check bool "clamp keeps Racket's argument order" true
+  check bool "clamp keeps the established argument order" true
     (contains module_go "teslrt.Clamp(n, teslrt.FromInt64(0), teslrt.FromInt64(10))");
   check bool "pow raises on a negative exponent rather than returning an error" true
     (contains module_go "teslrt.MustPow(");
@@ -3177,7 +3184,7 @@ server HelloServer for HelloApi {
 |}
 
 (* Tesl `api-test` blocks driving the emitted server IN PROCESS — no socket, so they are
-   ordinary `go test` cases.  Racket dispatches the same way, so both backends exercise the
+   ordinary `go test` cases. The retired Racket backend dispatched the same way, so these exercise the
    same layer.  The statements are the same `test_stmt` forms an ordinary `test` block
    uses, so only the request verbs needed emitting. *)
 let go_api_test_source = {|module GoApiTest exposing [Greeting, hello]
@@ -3449,7 +3456,7 @@ test "queries read back what was written" requires [dbRead Item, dbWrite Item] {
 }
 
 # The Memory store is NOT reset between test blocks (it is one process-wide store on
-# both backends), so this test owns its own rows rather than re-seeding the first one's.
+# the historical and Go paths), so this test owns its own rows rather than re-seeding the first one's.
 test "update and delete change what queries see" requires [dbRead Item, dbWrite Item] {
   let _ = insert Item { id: "u1", sku: Sku "S-U1", name: "delta", qty: 20 }
   let _ = insert Item { id: "u2", sku: Sku "S-U2", name: "epsilon", qty: 30 }
@@ -3692,7 +3699,7 @@ let test_postgres_pool_size_lowering () =
    `test "…" with database D` is the header that BINDS D for the block, so the block's queries
    reach the server rather than the in-memory table.  The configuration reads the same
    environment ci.sh sets for the Racket Postgres tests, which is what lets ONE cluster serve
-   both backends and the oracle compare them on the same rows.  With no cluster configured the
+   the Go path and historical oracle and compare them on the same rows. With no cluster configured the
    case skips: a developer without a server still gets everything above. *)
 let postgres_live_source = {|module GoPostgresLive exposing [titleOf, countBooks]
 
@@ -3717,7 +3724,7 @@ type Shelf
   | Reference
 
 # A variant that CARRIES a payload. The column is JSONB holding `{"tag": …, "fields": {…}}`,
-# which is the shape both backends write, so a row written by either is readable by both.
+# which is the historical wire shape retained by Go, so old rows remain readable.
 type Binding
   = Paperback
   | Hardcover pressing: Int
@@ -3784,7 +3791,7 @@ fn storeAuthor(id: String, name: String) -> LiveAuthor
 # `LiveBook`/`live_books` included (finding 13 in the roadmap).  The Go form is an
 # `exists (…)` subquery and does run: it is exercised against the cluster by
 # `TestBoundInnerJoinExists` in runtime/go/teslrt/database_test.go, where there is no Racket
-# counterpart to disagree with, and its BEHAVIOUR is compared on both backends by
+# counterpart to disagree with, and its BEHAVIOUR was compared against the retired backend by
 # example/learn/lesson48-sql-inner-join.tesl, whose database is Memory-backed.
 
 fn titleOf(wanted: String) -> String
@@ -4032,7 +4039,7 @@ fn unnamed() -> Int requires [dbRead Ticket] =
 
 test "a payload ADT, a secret and a nullable column all survive a round trip" with database ColumnDb requires [dbRead Ticket, dbWrite Ticket] {
   # A live table outlives a test process, so the block starts by clearing what an earlier run
-  # left — the per-test freshening both backends do covers memory stores only.
+  # left — per-test freshening covers memory stores only.
   delete t from Ticket
   let _ = store "t-1" Low (Token "k-1") (Something "ada")
   let _ = store "t-2" (Numbered 3) (Token "k-2") Nothing
@@ -4082,7 +4089,7 @@ let test_pg_columns_with_go () =
     gate_emitted ~env "tesl-go-pg-columns" emitted
 
 (* ─── The `server` clause surface ─────────────────────────────────────────────
-   `Ast.server_form` carries 16 fields and `emit_racket.ml` honours all of them.  This backend
+   `Ast.server_form` carries 16 fields, and the direct Go emitter must account for all of them. It
    read TEN.  The six it ignored were not refused — they were DROPPED, which is the one failure
    mode this migration exists to prevent:
 
@@ -4343,7 +4350,7 @@ let test_list_unique_with_go () =
    "the body is JSON" is true there by construction and no api-test on that backend can reach the
    content-type check.  `teslrt.ApiRequest` builds a real `*http.Request` and calls the server, so
    here the check is on the path an api-test walks — which is why the assertion below is possible
-   at all.  Over real HTTP both backends answer 415; only the test surfaces differ. *)
+   at all. The historical server and direct Go server answer 415 over real HTTP; only the test surfaces differ. *)
 let json_payload_source = {|module GoJsonPayload exposing [echo]
 
 import Tesl.Prelude exposing [Int, String]
@@ -5287,7 +5294,7 @@ let test_queue_with_go () =
   let tests_go = artifact "internal/teslmodgoqueue/module_test.go" emitted in
   check bool "an api-test drives the queue's own worker" true
     (contains tests_go "teslrt.ProcessNextJob(SendQueueQueue, func(teslPayload any) teslrt.JobOutcome {");
-  check bool "and an empty queue traps with the Racket hint" true
+  check bool "and an empty queue traps with the established hint" true
     (contains tests_go "panic(teslrt.EmptyQueue(\"SendQueue\", \"processNextJob\"))");
   check bool "a JSON body template becomes constant JSON" true
     (contains tests_go "teslrt.ApiRequest(QueueServer, \"POST\", \"/send\", \"{\\\"tag\\\":\\\"one\\\"}\", nil, nil)");
@@ -5840,7 +5847,7 @@ let test_newtype_case_with_go () =
    options anywhere. The signature is `Tesl.Crypto`'s HMAC-SHA256 over `header.payload`, so a
    token minted by either backend verifies on the other — the runtime suite pins that against an
    actual Racket-minted token, and this case pins the SURFACE: what the emitter writes, and that
-   the whole round trip behaves the same on both backends. *)
+   the whole round trip preserves the historical compatibility behavior. *)
 let jwt_source = {|module GoJwt exposing [issue, subjectOf, renewFor, LoginOut, SessionApi, SessionServer]
 
 import Tesl.Prelude exposing [Bool, String]
@@ -7711,7 +7718,7 @@ record Right {
 fn valueOf(l: Left) -> Int = l.value
 |};
   (* A record INVARIANT used to fail closed here.  It ERASES: LANGUAGE-SPEC calls the
-     record-level `::: P` a zero-cost annotation, and the Racket emitter reads it only for
+     record-level `::: P` a zero-cost annotation; the retired Racket emitter read it only for
      property-test generators, never for a check at construction — so this is now a positive
      assertion, like the proof-carrying FIELD below. *)
   (match Compile.compile_go_source "<invariant-record>" {|module InvariantRecord exposing [Span, width]
@@ -8073,7 +8080,7 @@ fn splitSides(values: List (Either String Int)) -> Int =
   let parts = Either.partition values
   List.length (Tuple2.first parts) + List.length (Tuple2.second parts)
 
-test "the container leaves answer what Racket answers" {
+test "the container leaves preserve established behavior" {
   expect countBig [1, 20, 30] == 2
   expect tally [2, 3, 4] == 24
   expect tally [] == 1
@@ -8088,7 +8095,7 @@ test "the container leaves answer what Racket answers" {
   expect Int.lcm 0 6 == 0
 }
 
-test "the Either combinators answer what Racket answers" {
+test "the Either combinators preserve established behavior" {
   expect Either.isLeft (parse (0 - 1)) == True
   expect Either.isRight (parse 5) == True
   expect Either.withDefault 0 (parse 5) == 5
@@ -8306,7 +8313,7 @@ let test_nested_patterns_with_go () =
 
 (* `Tesl.UUID`: two generators gated by the `uuid` capability, and a validate that is a
    CHECK.  The v7 layout was already in the runtime (a queue job id is one, and it has to
-   sort the same on both backends); v4 and the validator join it.  Also pinned here: a
+   preserve the historical sort order); v4 and the validator join it. Also pinned here: a
    check's VALUE used where its base type is expected (`fn validated(s) -> String =
    UUID.validate s`), which traps on rejection — the same verdict `expectFail` sees on
    Racket. *)
@@ -8329,7 +8336,7 @@ fn validated(s: String) -> String =
 fn versionDigit(s: String) -> String =
   String.slice s 14 15
 
-test "a minted UUID has the shape both backends agree on" requires [uuid] {
+test "a minted UUID has the canonical compatibility shape" requires [uuid] {
   let v4 = mintV4()
   let v7 = mintV7()
   expect String.length v4 == 36
@@ -8807,7 +8814,7 @@ let test_sse_with_go () =
     (contains tests_go "teslrt.SubscribeStream(MainServer, \"/runs/stream\", nil)");
   check bool "collect waits for the count it was given" true
     (contains tests_go "teslrt.CollectCount(");
-  (* A SUBSCRIPTION is per-block state on both backends — Racket's api-test cleanups
+  (* A SUBSCRIPTION is per-block state, preserving the retired Racket api-test cleanup
      unregister the listener when the block ends — so the emitted block closes its stream. *)
   check bool "a block closes the stream it opened" true
     (contains tests_go "defer teslrt.UnsubscribeStream(stream)");
@@ -9025,7 +9032,7 @@ let test_email_with_go () =
   check bool "an HTML body carries only the HTML" true
     (contains module_go "teslrt.EmailBody{Tag: teslrt.EmailBodyHTML, HTML: html}");
   (* Per-test isolation: one block's outbox must not be another's, the same rule tables,
-     queues and caches follow — on both backends (see the cache case). *)
+     queues and caches follow too (see the cache case). *)
   let tests_go = artifact "internal/teslmodgoemail/module_test.go" emitted in
   check bool "each test block starts from an empty outbox" true
     (contains tests_go "teslrt.ResetOutbox(AppMailOutbox)");
@@ -9991,7 +9998,7 @@ test "a let-bound combined check propagates each conjunct's rejection" {
   expectFail check bothProofs tooBig
 }
 
-# The transcendentals. Only inputs where both backends are exact are asserted:
+# The transcendentals. Only inputs where Go matches the historical baseline exactly are asserted:
 # sin/cos/tan/exp diverge from Racket by up to an ulp elsewhere, which is recorded
 # rather than pinned.
 test "the transcendentals answer their exact values" {
@@ -10159,7 +10166,7 @@ test "a local function value reaches a higher-order leaf" {
 }
 
 # Partial application is CURRIED: `blend 1` is a function of `b` answering a
-# function of `c`, applied one argument at a time on both backends.
+# function of `c`, applied one argument at a time in Go and the historical baseline.
 test "one and two of three arguments supplied" {
   let withA = blend 1
   let thenB = withA 2
@@ -10994,13 +11001,11 @@ let test_proof_shapes_with_go () =
       ())
   end
 
-(* A proof operation that could only fail on RACKET stays refused, and the rule is precise
-   rather than a blanket one: its runtime raises when a value carries more than one proof,
-   which the emitter can see — a `check` applied to a value that is itself a check's result
-   ACCUMULATES.  A proof operation on a singly-checked value raises nowhere, so an
-   `expectFail` over that function is expecting one of its CHECKS to reject, which happens
-   here too. *)
-let test_racket_only_proof_failures_fail_closed () =
+(* Proof erasure cannot preserve a failure that depends on accumulating multiple proof
+   witnesses. The Go emitter therefore refuses that shape precisely rather than banning
+   every proof operation: a singly-checked value remains valid because `expectFail` observes
+   the check's ordinary runtime rejection. *)
+let test_proof_erasure_limits_fail_closed () =
   let header = {|module GoProofLimit exposing []
 import Tesl.Prelude exposing [Int, Bool(..), Fact, forgetFact, detachFact, attachFact]
 
@@ -11020,8 +11025,8 @@ check checkSmall(n: Int ::: PosLimit n) -> n: Int ::: SmallLimit n =
     fail 400 "too large"
 
 |} in
-  (* ACCUMULATED: the second check runs on the first one's result, so `detachFact` on it is
-     the shape whose failure exists only on Racket. *)
+  (* ACCUMULATED: the second check runs on the first one's result, so `detachFact` would
+     depend on evidence that the Go representation erases. *)
   let accumulated = {|fn twoProofs(raw: Int) -> Int =
   let a = check checkPos raw
   let b = check checkSmall a
@@ -11058,7 +11063,13 @@ test "emitted" {
   | Compile.GoFailure diagnostics ->
     failf "a singly-checked detach was refused: %s"
       (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics))
-  | Compile.GoSuccess _ -> check bool "a singly-checked detach emits" true true
+  | Compile.GoSuccess emitted ->
+    let module_go = artifact "internal/teslmodgoprooflimit/module.go" emitted in
+    let tests_go = artifact "internal/teslmodgoprooflimit/module_test.go" emitted in
+    check bool "singly-checked detach emits the function" true
+      (contains module_go "func oneProof(raw teslrt.Int) teslrt.Int");
+    check bool "singly-checked detach emits its rejection test" true
+      (contains tests_go "oneProof(bad)")
 
 (* ── A conjunction whose conjuncts capture, and the cookie record form ───────
    `checkAtLeast 0 && checkAtMost 100` is two checks the PROGRAM has partially applied, and
@@ -11251,7 +11262,7 @@ fn setOwner(ticketId: String, owner: String) -> String requires [dbWrite Note] =
    A field annotated `Int ::: IsPositive n` cannot be drawn from the whole Int range: the
    property would be handed a value its own annotation says is impossible.  The three
    predicates Racket has proof-aware draws for get the same three here, over the same
-   ranges, so a property searches the same space on both backends; any other predicate falls
+   ranges, so a property searches the historical compatibility range; any other predicate falls
    back to the plain draw and the proof is NOT fabricated — what makes it true is the
    checker, not the generator.
 
@@ -12809,7 +12820,7 @@ let emission_tests =
       test_case "doctest kind filter" `Quick test_go_doctest_kind_filter;
       test_case "debug main starts control server" `Quick test_debug_main_starts_control_server;
       test_case "`case` over a scalar" `Slow test_scalar_case_with_go;
-      test_case "`case` over a newtype scrutinee (Go-only; Racket raises)" `Slow
+      test_case "`case` over a newtype scrutinee" `Slow
         test_newtype_case_with_go;
       test_case "Tesl.JWT and the session cookie" `Slow test_jwt_with_go;
       test_case "Tesl.Crypto: MACs, digests, tokens" `Slow test_crypto_with_go;
@@ -12901,8 +12912,8 @@ let emission_tests =
       test_case "a column-type mismatch fails closed" `Quick
         test_column_type_mismatch_fails_closed;
       test_case "proof shapes at the edges of erasure" `Slow test_proof_shapes_with_go;
-      test_case "Racket-only proof failures fail closed" `Quick
-        test_racket_only_proof_failures_fail_closed;
+      test_case "proof-erasure limits fail closed" `Quick
+        test_proof_erasure_limits_fail_closed;
       test_case "the request boundary: captures, list bodies, chained checks" `Slow
         test_boundary_with_go;
       test_case "a newtype over a newtype, and unobservable containers" `Slow

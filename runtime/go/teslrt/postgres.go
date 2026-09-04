@@ -91,11 +91,18 @@ type PostgresIndex struct {
 
 // PostgresDB is a live pool plus the schema every statement is qualified with.
 type PostgresDB struct {
-	pool   *pgxpool.Pool
-	schema string
+	pool           *pgxpool.Pool
+	schema         string
+	bootstrapMutex sync.Mutex
 }
 
-var postgresConnectOnce sync.Map // schema+dsn -> *PostgresDB
+type postgresInitialization struct {
+	done    chan struct{}
+	db      *PostgresDB
+	failure any
+}
+
+var postgresConnectOnce sync.Map // schema+dsn -> *postgresInitialization
 
 // OpenPostgres connects, creates the schema and the declared tables if they are absent, and
 // answers a pool. It is idempotent per configuration: a program with several databases on one
@@ -108,27 +115,54 @@ func OpenPostgres(config PostgresConfig, tables []PostgresTable) *PostgresDB {
 	dsn := postgresDSN(config)
 	poolConfig := postgresPoolConfig(config, dsn)
 	key := fmt.Sprintf("%s\x00%s\x00%d", config.Schema, dsn, poolConfig.MaxConns)
-	if existing, found := postgresConnectOnce.Load(key); found {
-		if db, ok := existing.(*PostgresDB); ok {
-			// A process can declare several databases with the same connection
-			// configuration but different tables. Reusing the pool is correct, but
-			// the first declaration must not prevent later tables from bootstrapping.
-			ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
-			db.bootstrap(ctx, tables)
-			cancel()
-			return db
-		}
+	created := &postgresInitialization{done: make(chan struct{})}
+	actual, loaded := postgresConnectOnce.LoadOrStore(key, created)
+	initialization, ok := actual.(*postgresInitialization)
+	if !ok {
+		panic("database: connection registry holds an unexpected value")
 	}
+	if !loaded {
+		initializePostgres(key, initialization, poolConfig, config.Schema, tables)
+	} else {
+		<-initialization.done
+	}
+	if initialization.failure != nil {
+		panic(initialization.failure)
+	}
+	if initialization.db == nil {
+		panic("database: PostgreSQL initialization completed without a pool")
+	}
+	if loaded {
+		ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
+		initialization.db.bootstrap(ctx, tables)
+		cancel()
+	}
+	return initialization.db
+}
+
+func initializePostgres(key string, initialization *postgresInitialization,
+	poolConfig *pgxpool.Config, schema string, tables []PostgresTable) {
+	defer close(initialization.done)
+	var pool *pgxpool.Pool
+	defer func() {
+		if failure := recover(); failure != nil {
+			if pool != nil {
+				pool.Close()
+			}
+			initialization.failure = failure
+			postgresConnectOnce.CompareAndDelete(key, initialization)
+		}
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), pgLeaseTimeout())
 	defer cancel()
-	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	var err error
+	pool, err = pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		panic("database: cannot connect to PostgreSQL: " + err.Error())
 	}
-	db := &PostgresDB{pool: pool, schema: config.Schema}
+	db := &PostgresDB{pool: pool, schema: schema}
 	db.bootstrap(ctx, tables)
-	postgresConnectOnce.Store(key, db)
-	return db
+	initialization.db = db
 }
 
 const defaultPostgresPoolSize = 10
@@ -224,6 +258,8 @@ func postgresDSN(config PostgresConfig) string {
 // is — this is not a migration tool, and silently altering a live table would be worse than
 // refusing to.
 func (db *PostgresDB) bootstrap(ctx context.Context, tables []PostgresTable) {
+	db.bootstrapMutex.Lock()
+	defer db.bootstrapMutex.Unlock()
 	if db.schema != "" {
 		if _, err := db.pool.Exec(ctx,
 			"create schema if not exists "+quoteIdentifier(db.schema)); err != nil {

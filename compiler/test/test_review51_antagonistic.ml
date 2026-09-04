@@ -610,19 +610,23 @@ check demo(n: Int) -> n: Int ::: IsPositive n =
   ok n ::: IsPositive n
 |}
 
-(* R51_F08 — still open. `--type-at-json` returns null. *)
-let r51_f08_type_at_json_returns_null_bug () =
+(* R51_F08 — FIXED. `--type-at-json` returns an inferred type on a binding
+   declaration, not only on value-use expressions. *)
+let r51_f08_type_at_json_returns_type_fixed () =
   with_temp_file "tesl-r51" ".tesl" (base_header ^ {|
-fn demo(n: Int) -> Int = n + 1
+fn demo() -> Int =
+  let answer = 41
+  answer + 1
 |}) (fun path ->
-    let _, out = run_compiler ["--type-at-json"; path; "5"; "16"] in
-    let re = Str.regexp_string "\"type_at\":null" in
-    let returns_null =
-      try ignore (Str.search_forward re out 0); true
-      with Not_found -> false
-    in
-    if not returns_null then
-      failwith "--type-at-json is now returning a non-null payload — turn this into a FIXED test.")
+    let _, out = run_compiler ["--type-at-json"; path; "5"; "7"] in
+    let null_re = Str.regexp_string "\"type_at\":null" in
+    (try
+       ignore (Str.search_forward null_re out 0);
+       failf "--type-at-json unexpectedly returned null:\n%s" out
+     with Not_found -> ());
+    let type_re = Str.regexp_string "\"type\":\"Int\"" in
+    try ignore (Str.search_forward type_re out 0)
+    with Not_found -> failf "--type-at-json did not report Int:\n%s" out)
 
 (* ═══════════════════════════════════════════════════════════════════════════
    R51_N — NEW adversarial tests (added after the fix round)
@@ -867,7 +871,7 @@ let () =
       test_case "R51_F06 linter catches unused param (FIXED)"                  `Quick r51_f06_linter_catches_unused_param_fixed;
       test_case "R51_F06b underscore-prefix param not flagged"                 `Quick r51_f06b_underscore_prefix_param_not_flagged;
       test_case "R51_F07 linter catches dead after fail (FIXED)"               `Quick r51_f07_linter_catches_dead_after_fail_fixed;
-      test_case "R51_F08 --type-at-json returns null (BUG — still open)"       `Quick r51_f08_type_at_json_returns_null_bug;
+      test_case "R51_F08 --type-at-json returns inferred type (FIXED)"         `Quick r51_f08_type_at_json_returns_type_fixed;
     ];
     "new-adversarial", [
       test_case "R51_N01 chained let aliases still rejected"                   `Quick r51_n01_chained_let_aliases_rejected;

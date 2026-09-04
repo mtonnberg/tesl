@@ -1,13 +1,13 @@
-(** Codegen safety and arithmetic transparency tests — Review 70.
+(** Frontend safety and arithmetic transparency tests — Review 70.
 
     Two concerns addressed here:
 
-    A. CODEGEN SAFETY (Item 8.2): The 11 crash points in emit_racket.ml
-       (assert false / failwith) were replaced with meaningful error messages.
-       These tests ensure:
+    A. FRONTEND SAFETY (Item 8.2): A historical review found 11 crash points in
+       the retired Racket emitter. The active OCaml frontend now rejects those
+       unsupported shapes before direct Go emission. These tests ensure:
        - SQL constructs (select, insert, upsert, insert-many, delete) still
          compile correctly after the refactor (regression guard)
-       - Non-SQL function calls still emit correctly
+       - Non-SQL function calls still check correctly
        - Proof annotation handling in validation.ml is safe when proof_ann = None
 
     B. ARITHMETIC TRANSPARENCY (Item 8.4): Proof-carrying values should be
@@ -23,7 +23,7 @@
        - Division correctly requires IsNonZero proof (safety, not a bug)
 
     Test groups:
-      SQL  — SQL codegen regression (guards the assert-false refactor)
+      SQL  — SQL frontend regression (guards the former crash-point class)
       ARITH — Arithmetic transparency on proof-carrying values
       SAFE  — Division/modulo safety checks work correctly *)
 
@@ -92,8 +92,8 @@ let should_fail pat src =
     try ignore (Str.search_forward re out 0)
     with Not_found -> failf "expected failure matching %S, got:\n%s" pat out)
 
-(* ── SQL — SQL codegen regression tests ─────────────────────────────────── *)
-(* These guard the assert-false refactor: SQL constructs must still compile  *)
+(* ── SQL — SQL frontend regression tests ───────────────────────────────── *)
+(* These guard the former crash-point class: SQL constructs must still check. *)
 
 let test_SQL01_database_select_compiles () =
   should_pass {|
@@ -218,7 +218,7 @@ fn getTopPosts() -> List Post requires [dbRead Post] =
 
 (* ── ARITH — Arithmetic transparency on proof-carrying values ─────────────── *)
 (* Prove that the user never needs to write *x in Tesl source code.            *)
-(* The compiler generates *x internally in the Racket output.                  *)
+(* Direct Go emission uses the underlying numeric value without source syntax. *)
 
 let test_ARITH01_basic_multiplication_on_proof_param () =
   should_pass {|
@@ -443,8 +443,8 @@ fn badDiv(a: Int, b: Int) -> Int = Int.divide a b
 (* ── Test runner ─────────────────────────────────────────────────────────── *)
 
 let () =
-  run "Review70-Codegen-Safety" [
-    "sql-codegen-regression", [
+  run "Review70-Frontend-Safety" [
+    "sql-frontend-regression", [
       test_case "SQL01 select compiles" `Quick test_SQL01_database_select_compiles;
       test_case "SQL02 insert compiles" `Quick test_SQL02_database_insert_compiles;
       test_case "SQL03 select with where compiles" `Quick test_SQL03_database_select_with_where_compiles;

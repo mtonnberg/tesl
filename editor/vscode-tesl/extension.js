@@ -234,6 +234,14 @@ function findTeslCli() {
 function activate(context) {
   const wsPath = (vscode.workspace.workspaceFolders || [])[0]?.uri?.fsPath ?? "";
 
+  function requireTrustedWorkspace() {
+    if (vscode.workspace.isTrusted) return true;
+    vscode.window.showWarningMessage(
+      "Tesl: trust this workspace before running or debugging workspace code."
+    );
+    return false;
+  }
+
   // ── LSP ──────────────────────────────────────────────────────────────────────
   const lsp = resolveLsp(context.extensionPath);
 
@@ -253,7 +261,7 @@ function activate(context) {
       // the profile was installed at, so a rule added in the working tree
       // looks like it simply does not exist. The wrapper honours an inherited
       // TESL_COMPILER (flake.nix, tesl-lsp).
-      const wsCompiler = findWorkspaceCompiler(wsPath);
+      const wsCompiler = vscode.workspace.isTrusted ? findWorkspaceCompiler(wsPath) : null;
       if (wsCompiler) {
         outputChannel.appendLine(`[tesl-lsp] using workspace compiler: ${wsCompiler}`);
       }
@@ -342,7 +350,7 @@ function activate(context) {
   // ── CodeLens: per-test run/debug + per-doctest run + run-all-in-file ───────────
   const lensProvider = {
     provideCodeLenses(document) {
-      if (!document.fileName.endsWith(".tesl")) return [];
+      if (!vscode.workspace.isTrusted || !document.fileName.endsWith(".tesl")) return [];
       const file = document.uri.fsPath;
       const { tests, apiTests, loadTests, doctests, hasAny } = discoverTests(document.getText());
       const lenses = [];
@@ -472,30 +480,59 @@ function activate(context) {
     }
     return { command: findTeslWrapper(), prefixArgs: [] };
   }
-  function teslShellEnvPrefix() {
-    if (process.platform === "win32") return "";
-    const temp = stableTempDir();
-    return `TMPDIR="${temp}" GOTMPDIR="${temp}" TMP="${temp}" TEMP="${temp}" `;
-  }
-  function createTeslTerminal(file, name) {
-    const shellPath = process.platform === "win32" ? "bash" : "/bin/bash";
-    return vscode.window.createTerminal({
+  function runProcessInTerminal(file, name, command, args, onEnd) {
+    const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(file));
+    const execution = new vscode.ProcessExecution(command, args, teslProcessOptions(file));
+    const task = new vscode.Task(
+      { type: "tesl" },
+      folder || vscode.TaskScope.Workspace,
       name,
-      shellPath,
-      shellArgs: ["--noprofile", "--norc", "-i"],
-      ...teslProcessOptions(file),
+      "Tesl",
+      execution,
+      []
+    );
+    task.presentationOptions = {
+      reveal: vscode.TaskRevealKind.Always,
+      focus: false,
+      panel: vscode.TaskPanelKind.New,
+      echo: true,
+      showReuseMessage: false,
+    };
+
+    let ended = false;
+    let endSubscription = null;
+    const finish = () => {
+      if (ended) return;
+      ended = true;
+      if (endSubscription) endSubscription.dispose();
+      if (onEnd) onEnd();
+    };
+    if (onEnd) {
+      endSubscription = vscode.tasks.onDidEndTask((event) => {
+        if (event.execution.task !== task) return;
+        finish();
+      });
+    }
+    return vscode.tasks.executeTask(task).catch((error) => {
+      finish();
+      throw error;
     });
   }
-  function runNamedTestInTerminal(file, testName, terminalName, kind) {
+  function runTeslInTerminal(file, name, args, onEnd) {
     const launcher = teslLauncher(file);
-    const terminal = createTeslTerminal(file, terminalName || `Tesl: ${testName}`);
-    terminal.show(true);
-    const bin = launcher.prefixArgs.length > 0
-      ? `"${launcher.command}" ${launcher.prefixArgs.map((a) => `"${a}"`).join(" ")}`
-      : `"${launcher.command}"`;
-    const kindArg = kind ? ` --test-kind ${kind}` : "";
-    terminal.sendText(`${teslShellEnvPrefix()}${bin} test --test-name "${testName}"${kindArg} "${file}"`);
-    return terminal;
+    return runProcessInTerminal(
+      file,
+      name,
+      launcher.command,
+      [...launcher.prefixArgs, ...args],
+      onEnd
+    );
+  }
+  function runNamedTestInTerminal(file, testName, terminalName, kind) {
+    const args = ["test", "--test-name", testName];
+    if (kind) args.push("--test-kind", kind);
+    args.push(file);
+    return runTeslInTerminal(file, terminalName || `Tesl: ${testName}`, args);
   }
 
   // Set once Test Explorer is initialized. CodeLens runs then share Test Results.
@@ -505,17 +542,19 @@ function activate(context) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand("tesl.runSingleTest", async (file, testName, kind) => {
+      if (!requireTrustedWorkspace()) return;
       if (runSingleTestInExplorer) {
         await runSingleTestInExplorer(file, testName, kind);
         return;
       }
-      runNamedTestInTerminal(file, testName, undefined, kind);
+      await runNamedTestInTerminal(file, testName, undefined, kind);
     })
   );
 
   // "Debug test" — compile only the named test, then start a debug session.
   context.subscriptions.push(
     vscode.commands.registerCommand("tesl.debugSingleTest", (file, testName, kind) => {
+      if (!requireTrustedWorkspace()) return;
       const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(file));
       vscode.debug.startDebugging(folder, {
         type: "tesl", request: "launch",
@@ -539,6 +578,7 @@ function activate(context) {
   // "Debug Tesl Tests" — launches the debugger in test mode for the current file.
   context.subscriptions.push(
     vscode.commands.registerCommand("tesl.debugTests", async (uri) => {
+      if (!requireTrustedWorkspace()) return;
       const file = teslFileFrom(uri);
       if (!file) { vscode.window.showErrorMessage("No Tesl file selected."); return; }
       if (debugFileInExplorer) {
@@ -556,6 +596,7 @@ function activate(context) {
   // "Debug Tesl Program" — launches the debugger in program (main) mode.
   context.subscriptions.push(
     vscode.commands.registerCommand("tesl.debugProgram", (uri) => {
+      if (!requireTrustedWorkspace()) return;
       const file = teslFileFrom(uri);
       if (!file) { vscode.window.showErrorMessage("No Tesl file selected."); return; }
       const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(file));
@@ -569,19 +610,14 @@ function activate(context) {
   // "Run Tesl Tests in Terminal" — runs tesl test without the debugger.
   context.subscriptions.push(
     vscode.commands.registerCommand("tesl.runTests", async (uri) => {
+      if (!requireTrustedWorkspace()) return;
       const file = teslFileFrom(uri);
       if (!file) { vscode.window.showErrorMessage("No Tesl file selected."); return; }
       if (runFileInExplorer) {
         await runFileInExplorer(file);
         return;
       }
-      const terminal = createTeslTerminal(file, "Tesl Tests");
-      terminal.show(true);
-      const launcher = teslLauncher(file);
-      const bin = launcher.prefixArgs.length > 0
-        ? `"${launcher.command}" ${launcher.prefixArgs.map((a) => `"${a}"`).join(" ")}`
-        : `"${launcher.command}"`;
-      terminal.sendText(`${teslShellEnvPrefix()}${bin} test "${file}"`);
+      await runTeslInTerminal(file, "Tesl Tests", ["test", file]);
     })
   );
 
@@ -594,6 +630,7 @@ function activate(context) {
   // it prints PASS. This does NOT depend on the LSP.
   context.subscriptions.push(
     vscode.commands.registerCommand("tesl.runFunctionWithInput", async (uri) => {
+      if (!requireTrustedWorkspace()) return;
       const editor = vscode.window.activeTextEditor;
       const file = (uri && uri.fsPath) || (editor && editor.document.fileName);
       if (!file || !file.endsWith(".tesl")) {
@@ -644,16 +681,19 @@ function activate(context) {
         const block = `\n\ntest "${testName.replace(/"/g, '\\"')}" {\n  expect (${expr}) == (${exp})\n}\n`;
         fs.writeFileSync(driver, src + block, "utf8");
       } catch (e) {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
         vscode.window.showErrorMessage(`Run Function: could not prepare driver: ${e}`);
         return;
       }
 
-       const terminal = createTeslTerminal(file, `Tesl: ${expr}`);
-      terminal.show(true);
       // Compile only the synthetic test with the Go backend, then remove the temp dir.
-       terminal.sendText(
-         `${teslShellEnvPrefix()}"${tesl}" test --backend go --test-name "${testName}" "${driver}"; rm -rf "${tmpDir}"`
-       );
+      await runProcessInTerminal(
+        file,
+        `Tesl: ${expr}`,
+        tesl,
+        ["test", "--backend", "go", "--test-name", testName, driver],
+        () => fs.rmSync(tmpDir, { recursive: true, force: true })
+      );
     })
   );
 
@@ -863,6 +903,7 @@ function activate(context) {
     const runHandler = async (request, token) => {
       const run = ctrl.createTestRun(request);
       try {
+        if (!requireTrustedWorkspace()) return;
         const byFile = new Map(); // file -> [{ item, tgt }]
         for (const item of collectLeaves(request)) {
           const tgt = targetOf(item);
@@ -1008,6 +1049,7 @@ function activate(context) {
     ctrl.createRunProfile("Debug", vscode.TestRunProfileKind.Debug, async (request, token) => {
       const run = ctrl.createTestRun(request);
       try {
+        if (!requireTrustedWorkspace()) return;
         // A file-level debug request should be one DAP session for the file. The
         // leaf loop below is for individually selected tests only; launching one
         // session per child without waiting makes VS Code reject the later starts.
@@ -1071,6 +1113,7 @@ function activate(context) {
   context.subscriptions.push(
     vscode.debug.registerDebugAdapterDescriptorFactory("tesl", {
       createDebugAdapterDescriptor(session) {
+        if (!requireTrustedWorkspace()) return null;
         const sessionRoot = session.workspaceFolder?.uri?.fsPath || wsPath;
         const program = session.configuration.program;
         const projectRoot = resolveTeslRoot(sessionRoot, program);
@@ -1114,6 +1157,7 @@ function activate(context) {
       // stage — a value like "${workspaceFolder}/backend" is still the raw
       // unsubstituted string and any path check on it is meaningless.
       resolveDebugConfiguration(folder, config) {
+        if (!requireTrustedWorkspace()) return undefined;
         if (config.request === "launch" && typeof config.program === "string" &&
             config.program.toLowerCase().endsWith(".tesl") && !config.cwd && folder) {
           config.cwd = folder.uri.fsPath;
@@ -1130,6 +1174,7 @@ function activate(context) {
       // so fail fast with an actionable message when no endpoint exists,
       // instead of letting the adapter session start and instantly terminate.
       resolveDebugConfigurationWithSubstitutedVariables(folder, config) {
+        if (!requireTrustedWorkspace()) return undefined;
         if (config.request === "attach" && !config.socket && !config.port && !config.program && config.project) {
           const stuff = path.join(config.project, ".tesl-stuff");
           const hasEndpoint =
@@ -1150,25 +1195,25 @@ function activate(context) {
   // Palette command: start the current file under `tesl run --debug` in a
   // terminal — the counterpart of the attach config above.
   context.subscriptions.push(
-    vscode.commands.registerCommand("tesl.runDebugMode", () => {
+    vscode.commands.registerCommand("tesl.runDebugMode", async () => {
+       if (!requireTrustedWorkspace()) return;
        const editor = vscode.window.activeTextEditor;
        if (!editor || !editor.document.fileName.endsWith(".tesl")) {
          vscode.window.showErrorMessage("Tesl: open a .tesl file first.");
          return;
        }
-       const term = createTeslTerminal(editor.document.fileName, "tesl run --debug");
-       term.show();
-       const launcher = teslLauncher(editor.document.fileName);
-       const bin = launcher.prefixArgs.length > 0
-         ? `"${launcher.command}" ${launcher.prefixArgs.map((a) => `"${a}"`).join(" ")}`
-         : `"${launcher.command}"`;
-       term.sendText(`${teslShellEnvPrefix()}${bin} run --debug ${JSON.stringify(editor.document.fileName)}`);
+       await runTeslInTerminal(
+         editor.document.fileName,
+         "tesl run --debug",
+         ["run", "--debug", editor.document.fileName]
+       );
      })
    );
 
   // Palette command: attach to the running app of the current workspace.
   context.subscriptions.push(
     vscode.commands.registerCommand("tesl.attachRunning", () => {
+      if (!requireTrustedWorkspace()) return;
       const folder = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0];
       vscode.debug.startDebugging(folder, {
         type: "tesl",

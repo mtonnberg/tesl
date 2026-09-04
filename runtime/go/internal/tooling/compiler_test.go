@@ -33,6 +33,17 @@ func TestClientRunsJSONQueryAndPreservesStderr(t *testing.T) {
 	}
 }
 
+func TestClientRejectsInvalidKnownCompilerSchema(t *testing.T) {
+	script := t.TempDir() + "/invalid-compiler.sh"
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s' '{\"version\":1}'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := (Client{Executable: script}).QueryJSON(context.Background(), "--check-json", "fixture.tesl")
+	if err == nil || !strings.Contains(err.Error(), "missing required field") {
+		t.Fatalf("QueryJSON() error = %v", err)
+	}
+}
+
 func TestClientAcceptsValidJSONFromDiagnosticExit(t *testing.T) {
 	if os.Getenv("TESL_COMPILER_HELPER") == "diagnostics" {
 		_, _ = os.Stdout.WriteString(`{"version":1,"diagnostics":[{"severity":"error"}]}`)
@@ -102,5 +113,58 @@ func TestClientFormatsTemporarySourceAndSetsLogicalPath(t *testing.T) {
 	}
 	if string(formatted) != "formatted" || result.ExitCode != 0 {
 		t.Fatalf("formatted=%q exit=%d", formatted, result.ExitCode)
+	}
+}
+
+func TestValidateCompilerJSONRejectsMissingAndMalformedRequiredFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		flag    string
+		payload string
+	}{
+		{"missing diagnostics", "--check-json", `{"version":1}`},
+		{"missing diagnostic fields", "--check-json", `{"version":1,"diagnostics":[{}]}`},
+		{"invalid severity", "--check-json", `{"version":1,"diagnostics":[{"file":"/tmp/a.tesl","start":{"line":0,"col":0},"end":{"line":0,"col":1},"severity":"fatal","code":"E1","message":"bad","fix":null,"source":"parser"}]}`},
+		{"missing nullable result", "--definition-json", `{"version":1}`},
+		{"null array", "--completions-json", `{"version":1,"completions":null}`},
+		{"incomplete location", "--type-at-json", `{"version":1,"type_at":{"type":"Int"}}`},
+		{"agent diagnostic member", "--agent-context-json", `{"version":1,"file":"a.tesl","content_hash":"h","ok":false,"summary":"bad","diagnostics":[{"severity":"error","message":"bad","line":0,"col":0,"end_line":0,"end_col":1}],"symbols":[],"proof_obligations":[]}`},
+		{"agent symbol member", "--agent-context-json", `{"version":1,"file":"a.tesl","content_hash":"h","ok":true,"summary":"ok","diagnostics":[],"symbols":[{"name":"f","kind":"fn"}],"proof_obligations":[]}`},
+		{"agent obligation member", "--agent-context-json", `{"version":1,"file":"a.tesl","content_hash":"h","ok":false,"summary":"bad","diagnostics":[],"symbols":[],"proof_obligations":[{"code":"P1","message":"prove","line":0}]}`},
+		{"semantic record field", "--semantic-json", `{"version":1,"records":[{"name":"R","fields":[{}]}],"adts":[],"functions":[],"local_bindings":[]}`},
+		{"semantic variant", "--semantic-json", `{"version":1,"records":[],"adts":[{"name":"Choice","variants":[{"constructor":3}]}],"functions":[],"local_bindings":[]}`},
+		{"semantic function location", "--semantic-json", `{"version":1,"records":[],"adts":[],"functions":[{"name":"f","kind":"fn","loc":{"file":"a.tesl","start_line":0,"start_col":0,"end_line":0}}],"local_bindings":[]}`},
+		{"semantic binding name", "--semantic-json", `{"version":1,"records":[],"adts":[],"functions":[],"local_bindings":[{"name":"","loc":null}]}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := ValidateCompilerJSON(test.flag, []byte(test.payload)); err == nil {
+				t.Fatalf("ValidateCompilerJSON(%s) accepted %s", test.flag, test.payload)
+			}
+		})
+	}
+}
+
+func TestValidateCompilerJSONAcceptsNestedAgentAndSemanticMembers(t *testing.T) {
+	agent := `{"version":1,"file":"a.tesl","content_hash":"h","ok":false,"summary":"bad","diagnostics":[{"code":"E1","severity":"error","message":"bad","line":0,"col":0,"end_line":0,"end_col":1,"fix":{"kind":"replace_line"}}],"symbols":[{"name":"f","kind":"fn","signature":"Int"}],"proof_obligations":[{"code":"P1","message":"prove","line":0,"col":0}]}`
+	if err := ValidateCompilerJSON("--agent-context-json", []byte(agent)); err != nil {
+		t.Fatal(err)
+	}
+	semantic := `{"version":1,"records":[{"name":"R","fields":[{"name":"value"}]}],"adts":[{"name":"Choice","variants":[{"constructor":"Yes"}]}],"functions":[{"name":"f","kind":"fn","loc":{"file":"a.tesl","start_line":0,"start_col":0,"end_line":0,"end_col":1}}],"local_bindings":[{"name":"x","loc":null}]}`
+	if err := ValidateCompilerJSON("--semantic-json", []byte(semantic)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateCompilerJSONAcceptsValidDiagnosticEnvelope(t *testing.T) {
+	payload := `{"version":1,"diagnostics":[{"file":"/tmp/a.tesl","start":{"line":0,"col":0},"end":{"line":0,"col":1},"severity":"error","code":"E1","message":"bad","fix":null,"source":"parser"}]}`
+	if err := ValidateCompilerJSON("--check-json", []byte(payload)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateCompilerJSONLeavesUnknownCommandSchemasAlone(t *testing.T) {
+	if err := ValidateCompilerJSON("debug-inspect", []byte(`{"version":2,"stopped":false}`)); err != nil {
+		t.Fatal(err)
 	}
 }

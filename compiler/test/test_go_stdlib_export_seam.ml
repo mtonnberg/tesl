@@ -11,16 +11,10 @@
     stdlib feature is refused at the user's compile time with no signal at ours. The
     fallthrough would quietly eat every future addition.
 
-    This closes that direction. Every (module, export) pair in the checker's own allowlist is
-    compiled through the Go emitter, and the answer is compared against {!expected_unsupported}
-    below. Both directions fail:
-
-      - a pair that is REFUSED but not listed → a new export was swallowed; wire it, or add it
-        here with a reason;
-      - a pair that is LISTED but now compiles → the list has rotted; delete the row.
-
-    So the fallthroughs stay as the fail-closed arm they are, and the list of what they
-    actually catch is a fact this suite keeps true rather than a comment that drifts.
+    This closes that direction. Every export in {!Type_system.tesl_module_exports} is
+    compiled through the Go pipeline. Exports in
+    {!Type_system.go_backend_unavailable_exports} must be rejected by the checker; every
+    emitter fallthrough is therefore an unclassified backend gap and fails this suite.
 
     The probe is an IMPORT: the export match runs at the import, so importing one name is
     enough to reach it. Some wired leaves answer a `Maybe`/`Result` or take a `TimeZone`, and
@@ -73,75 +67,41 @@ let probe module_name export =
     then Refused message
     else Rejected message
 
-(* Every (module, export) the Go emitter refuses TODAY, with the reason it is not wired.
-   Adding a row is a decision to leave a stdlib name unavailable on this backend; removing one
-   is what wiring it looks like from here. *)
-let expected_unsupported = [
-  (* The higher-order Dict/Set/List leaves: each takes a CALLBACK, and the emitter inlines a
-     callback rather than passing a Go func value, so each needs its own emission rather than
-     a table row. *)
-  "Tesl.Dict", ["Dict.map"; "Dict.mapWithKey"; "Dict.filter"; "Dict.filterWithKey";
-                "Dict.foldl"; "Dict.foldr"; "Dict.insertWith"; "Dict.unionWith";
-                "Dict.update"; "Dict.difference"; "Dict.intersection"];
-  "Tesl.Set", ["Set.map"; "Set.filter"; "Set.foldl"; "Set.all"; "Set.any"; "Set.partition"];
-  "Tesl.List", ["List.zipWith"; "List.unzip"; "List.partition"; "List.groupBy";
-                "List.findIndex"; "List.dedupe"; "List.intersperse"; "List.intercalate";
-                "List.nth"];
-  (* `Tesl.ListPrim` is the lifted list module's own primitive layer: a program imports
-     `Tesl.List`, and the prim names exist for that module's implementation. *)
-  "Tesl.ListPrim", ["ListPrim.head"; "ListPrim.tail"; "ListPrim.append"];
-  (* Float↔Int↔String conversions and the digit/sign predicates. *)
-  "Tesl.Int", ["Int.toFloat"; "Int.fromFloat"; "Int.digits"; "Int.isZero"; "Int.isPositive";
-               "Int.isNegative"];
-  "Tesl.String", ["String.toFloat"; "String.fromFloat"; "String.words"; "String.lines";
-                  "String.trimLeft"; "String.trimRight"];
-  (* The codecs for types whose wire shape is not a scalar. *)
-  "Tesl.Json", ["dictCodec"; "setCodec"; "moneyCodec"; "int32Codec"];
-  "Tesl.UUID", ["uuidV4Codec"; "uuidV7Codec"];
-  (* Outbound email: the runtime has an outbox for tests, not a sender. *)
-  "Tesl.Email", ["Email.send"; "startEmailWorker"];
-  (* A `cache` DECLARATION is wired; the capability name itself is not a value here. *)
-  "Tesl.Cache", ["cache"];
-  (* The api-test SSE handle. *)
-  "Tesl.ApiTest", ["SseStream"];
-  (* `HostClass`'s constructors are reachable through `HostClass(..)`, which is how the
-     surface writes them; a BARE constructor import is not wired. *)
-  "Tesl.Net", ["Loopback"; "PrivateIp"; "LinkLocal"; "Cgnat"; "Multicast"; "Unspecified";
-               "PublicIp"; "DomainName"; "InvalidHost"];
-]
+(* The compiler's single source of truth for intentionally unavailable Go exports. *)
+let unavailable_exports = Type_system.go_backend_unavailable_exports
 
 let listed module_name export =
-  match List.assoc_opt module_name expected_unsupported with
+  match List.assoc_opt module_name unavailable_exports with
   | Some names -> List.mem export names
   | None -> false
 
 let test_no_export_is_swallowed () =
-  let swallowed = ref [] and rotted = ref [] in
+  let swallowed = ref [] and unguarded = ref [] in
   List.iter (fun (module_name, exports) ->
     List.iter (fun export ->
       if probeable export then
         match probe module_name export with
         | Wired ->
           if listed module_name export then
-            rotted := Printf.sprintf "%s %s" module_name export :: !rotted
+            unguarded := Printf.sprintf "%s %s" module_name export :: !unguarded
         | Refused _ ->
-          if not (listed module_name export) then
-            swallowed := Printf.sprintf "%s %s" module_name export :: !swallowed
+          swallowed := Printf.sprintf "%s %s" module_name export :: !swallowed
         (* A probe the CHECKER refuses says nothing about the Go emitter: the name needs a
            companion this probe does not know, or a capability an import cannot grant. *)
-        | Rejected _ -> ())
+         | Rejected _ ->
+           if not (listed module_name export) then ())
       exports)
     Type_system.tesl_module_exports;
   if !swallowed <> [] then
     failf
-      "these stdlib exports reach the Go emitter's fallthrough and are NOT in \
-       expected_unsupported — wire them, or add them there with a reason:\n  %s"
+      "these stdlib exports reach the Go emitter's fallthrough without a checker guard; \
+       wire them, or add them to go_backend_unavailable_exports:\n  %s"
       (String.concat "\n  " (List.sort compare !swallowed));
-  if !rotted <> [] then
+  if !unguarded <> [] then
     failf
-      "these stdlib exports are listed in expected_unsupported but now COMPILE — delete \
-       those rows:\n  %s"
-      (String.concat "\n  " (List.sort compare !rotted))
+      "these unavailable stdlib exports reached code generation instead of being rejected \
+       by the checker:\n  %s"
+      (String.concat "\n  " (List.sort compare !unguarded))
 
 (* The fallthrough's own wording, pinned: it must name the MODULE and the EXPORT, so the
    reader knows which table to add a row to. *)
@@ -155,12 +115,35 @@ let test_the_fallthrough_names_what_it_refuses () =
     check bool "checker refusal names the module" true (contains message "`Tesl.Telemetry`");
     check bool "checker refusal names the export" true (contains message "`Span`")
 
+let test_unavailable_export_is_rejected_by_checker () =
+  match probe "Tesl.List" "List.nth" with
+  | Rejected message ->
+    check bool "names backend" true (contains message "Go backend");
+    check bool "names module" true (contains message "`Tesl.List`");
+    check bool "names export" true (contains message "`List.nth`")
+  | Refused message ->
+    failf "unavailable export reached the emitter instead of the checker: %s" message
+  | Wired -> fail "unavailable export unexpectedly compiled"
+
+let test_import_all_rejects_unavailable_use () =
+  let source = {|module GoImportAllProbe exposing [dedupe]
+import Tesl.Prelude exposing [Int, List]
+import Tesl.List
+fn dedupe(xs: List Int) -> List Int = List.dedupe xs
+|} in
+  match Compile.compile_go_source "<go-import-all-probe>" source with
+  | Compile.GoSuccess _ -> fail "qualified unavailable export unexpectedly compiled"
+  | Compile.GoFailure diagnostics ->
+    let message = String.concat "; "
+      (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics) in
+    check bool "names backend" true (contains message "Go backend");
+    check bool "names unavailable use" true (contains message "`List.dedupe`")
+
 (* ── The `App` field inventory ─────────────────────────────────────────────────
    `App { … }` is the startup surface: `Desugar.lower_main_app` reads its fields and turns them
    into the imperative chain (start workers, start email workers, serve).  It reads them BY NAME
    out of an assoc list, so a field added to the App schema that nothing reads is silently
-   dropped — the same class as the six `server` clauses this backend was ignoring, and it would
-   hit both backends rather than one.
+   dropped — the same class as the six `server` clauses the direct Go path once ignored.
 
    `Ast.server_form` and `Ast.EServe` are OCaml records, so their seams are compile-time ones
    (`emit_go.ml` rebuilds each record from its own fields).  The App schema is DATA — a row in
@@ -176,10 +159,9 @@ let app_field_dispositions = [
   "port", "ServeOptions.Port";
   "static", "ServeOptions.StaticDir";
   "mountPath", "ServeOptions.MountPath";
-  (* INERT on BOTH backends: an `sseChannel` declaration registers its own channel, and
-     listing it in App starts nothing — `emit_racket.ml` reads this field no more than
-     `emit_go.ml` does.  Listed so the field is accounted for rather than forgotten. *)
-  "sseChannels", "inert: the channel declaration is what registers it, on both backends";
+  (* INERT: an `sseChannel` declaration registers its own channel, and listing it in App
+     starts nothing. Listed so the field is accounted for rather than forgotten. *)
+  "sseChannels", "inert: the channel declaration is what registers it";
 ]
 
 let test_app_fields_are_accounted_for () =
@@ -207,6 +189,10 @@ let () =
       test_case "no stdlib export is swallowed silently" `Slow test_no_export_is_swallowed;
       test_case "the refusal names the module and the export" `Quick
         test_the_fallthrough_names_what_it_refuses;
+      test_case "unavailable export is rejected by checker" `Quick
+        test_unavailable_export_is_rejected_by_checker;
+      test_case "import-all unavailable use is rejected by checker" `Quick
+        test_import_all_rejects_unavailable_use;
     ];
     "startup-surface", [
       test_case "every App field is accounted for" `Quick test_app_fields_are_accounted_for;

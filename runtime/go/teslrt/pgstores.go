@@ -122,7 +122,7 @@ func pgDuplicateObject(err error) bool {
 		return false
 	}
 	switch pgErr.Code {
-	case "42P07", "42710", "42P06", "23505":
+	case "42P07", "42710", "42701", "42P06", "23505":
 		return true
 	}
 	return false
@@ -172,6 +172,7 @@ func scanText(row pgx.CollectableRow) (string, error) {
 //	next_attempt_at when a pending (or dead) row may be claimed; the backoff lands here
 //	seq             the claim order — a bigserial, so a retried job keeps its place in line
 //	locked_at/by    who is processing it and since when; what the reclaim reads
+//	claim_token     identity of the current processing attempt; every outcome is fenced by it
 //	job_type        which codec decodes `payload`
 //
 // CLAIM is a single statement — `update … where id = (select … for update skip locked limit
@@ -197,7 +198,9 @@ func jobsTableDDL(qualified string) []string {
 			"seq bigserial, " +
 			"locked_at timestamptz, " +
 			"locked_by text, " +
+			"claim_token text, " +
 			"created_at timestamptz not null default now())",
+		"alter table " + qualified + " add column if not exists claim_token text",
 		"create index if not exists " + quoteIdentifier(jobsTable+"_claim_idx") +
 			" on " + qualified + " (queue, status, next_attempt_at, seq)",
 	}
@@ -357,16 +360,17 @@ func (backend *pgQueueBackend) enqueue(payload any) string {
 
 // claimedJob is one row as the claim returns it.
 type claimedJob struct {
-	id       string
-	jobType  string
-	payload  string
-	attempts int
+	id         string
+	jobType    string
+	payload    string
+	attempts   int
+	claimToken string
 }
 
 func scanClaimedJob(row pgx.CollectableRow) (claimedJob, error) {
 	job := claimedJob{}
 	var attempts int32
-	if err := row.Scan(&job.id, &job.jobType, &job.payload, &attempts); err != nil {
+	if err := row.Scan(&job.id, &job.jobType, &job.payload, &attempts, &job.claimToken); err != nil {
 		return job, err
 	}
 	job.attempts = int(attempts)
@@ -387,7 +391,7 @@ func (backend *pgQueueBackend) reclaimStuck(db *PostgresDB, table string) {
 	if now-last < queueReclaimInterval.Nanoseconds() || !backend.lastReclaim.CompareAndSwap(last, now) {
 		return
 	}
-	PgExec(db, "update "+table+" set status = 'pending', locked_at = null, locked_by = null "+
+	PgExec(db, "update "+table+" set status = 'pending', locked_at = null, locked_by = null, claim_token = null "+
 		"where queue = $1 and status = 'processing' "+
 		"and locked_at < now() - ($2::bigint * interval '1 millisecond')",
 		[]any{backend.name, queueVisibilityTimeout().Milliseconds()})
@@ -399,36 +403,44 @@ func (backend *pgQueueBackend) reclaimStuck(db *PostgresDB, table string) {
 // retried: it goes to the dead letter with a `next_attempt_at` of infinity, so it is counted
 // and listed there but never claimed again by either worker, and one line on stderr says so.
 // The claim then moves on to the next row instead of answering "nothing to do".
-func (backend *pgQueueBackend) dequeue(status string) (string, any, int, bool) {
+func (backend *pgQueueBackend) dequeue(status string) (string, any, int, string, bool) {
 	db, table := backend.table()
 	if status == jobPending {
 		backend.reclaimStuck(db, table)
 	}
 	for {
-		rows := PgQuery(db, "update "+table+" set status = 'processing', locked_at = now(), locked_by = $3 "+
+		claimToken := UUIDv7()
+		rows := PgQuery(db, "update "+table+" set status = 'processing', locked_at = now(), locked_by = $3, "+
+			"claim_token = $4 "+
 			"where id = (select id from "+table+" where queue = $1 and status = $2 "+
 			"and next_attempt_at <= now() order by seq for update skip locked limit 1) "+
-			"returning id, job_type, payload::text, attempts",
-			[]any{backend.name, status, instanceID()}, scanClaimedJob)
+			"returning id, job_type, payload::text, attempts, claim_token",
+			[]any{backend.name, status, instanceID(), claimToken}, scanClaimedJob)
 		if len(rows) == 0 {
-			return "", nil, 0, false
+			return "", nil, 0, "", false
 		}
 		claimed := rows[0]
 		payload, err := backend.decodePayload(claimed.jobType, claimed.payload)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "tesl: queue %s: job %s (job_type %s) cannot be decoded and was "+
-				"quarantined in the dead letter: %v\n", backend.name, claimed.id, claimed.jobType, err)
-			PgExec(db, "update "+table+" set status = 'dead', next_attempt_at = 'infinity', "+
-				"locked_at = null, locked_by = null where id = $1", []any{claimed.id})
+			changed := PgExec(db, "update "+table+" set status = 'dead', next_attempt_at = 'infinity', "+
+				"locked_at = null, locked_by = null, claim_token = null "+
+				"where id = $1 and status = 'processing' and claim_token = $2",
+				[]any{claimed.id, claimed.claimToken})
+			if changed == 1 {
+				fmt.Fprintf(os.Stderr, "tesl: queue %s: job %s (job_type %s) cannot be decoded and was "+
+					"quarantined in the dead letter: %v\n", backend.name, claimed.id, claimed.jobType, err)
+			}
 			continue
 		}
-		return claimed.id, payload, claimed.attempts, true
+		return claimed.id, payload, claimed.attempts, claimed.claimToken, true
 	}
 }
 
-func (backend *pgQueueBackend) complete(id string) {
+func (backend *pgQueueBackend) complete(id, claimToken string) bool {
 	db, table := backend.table()
-	PgExec(db, "delete from "+table+" where id = $1", []any{id})
+	// Zero rows means this attempt's lease was replaced; its result is discarded.
+	return PgExec(db, "delete from "+table+
+		" where id = $1 and status = 'processing' and claim_token = $2", []any{id, claimToken}) == 1
 }
 
 // retryDelaySeconds is the wait before attempt number `attempts`+1, given `attempts` failures:
@@ -457,7 +469,7 @@ func (backend *pgQueueBackend) retryDelaySeconds(attempts int) int64 {
 
 // fail records a failed attempt: back to `pending` after the backoff, or `dead` at
 // maxAttempts — claimable at once by the dead-letter worker.
-func (backend *pgQueueBackend) fail(id string, attempts int) {
+func (backend *pgQueueBackend) fail(id string, attempts int, claimToken string) bool {
 	db, table := backend.table()
 	next := attempts + 1
 	status := jobPending
@@ -466,10 +478,12 @@ func (backend *pgQueueBackend) fail(id string, attempts int) {
 		status = jobDead
 		delay = 0
 	}
-	PgExec(db, "update "+table+" set status = $2, attempts = $3, "+
+	changed := PgExec(db, "update "+table+" set status = $2, attempts = $3, "+
 		"next_attempt_at = now() + ($4::bigint * interval '1 second'), "+
-		"locked_at = null, locked_by = null where id = $1",
-		[]any{id, status, int32(min(next, 1<<30)), delay}) // #nosec G115 -- clamped above
+		"locked_at = null, locked_by = null, claim_token = null "+
+		"where id = $1 and status = 'processing' and claim_token = $5",
+		[]any{id, status, int32(min(next, 1<<30)), delay, claimToken}) // #nosec G115 -- clamped above
+	return changed == 1
 }
 
 func (backend *pgQueueBackend) count(status string) int {
@@ -499,7 +513,7 @@ func (backend *pgQueueBackend) deadJobs(queue *Queue) []DeadJob {
 func (backend *pgQueueBackend) requeue(id string) bool {
 	db, table := backend.table()
 	changed := PgExec(db, "update "+table+" set status = 'pending', attempts = 0, "+
-		"next_attempt_at = now(), locked_at = null, locked_by = null "+
+		"next_attempt_at = now(), locked_at = null, locked_by = null, claim_token = null "+
 		"where id = $1 and status = 'dead'", []any{id})
 	return changed == 1
 }
@@ -531,8 +545,10 @@ func outboxTableDDL(qualified string) []string {
 			"attempts int, " +
 			"next_attempt_at timestamptz, " +
 			"locked_at timestamptz, " +
+			"claim_token text, " +
 			"created_at timestamptz default now(), " +
 			"sent_at timestamptz)",
+		"alter table " + qualified + " add column if not exists claim_token text",
 		"create index if not exists " + quoteIdentifier(outboxTable+"_due_idx") +
 			" on " + qualified + " (status, next_attempt_at, id)",
 	}
@@ -612,24 +628,25 @@ func (backend *pgOutboxBackend) send(message EmailMessage) {
 }
 
 const outboxColumns = "id, recipient, subject, body_kind, body_text, body_html, status, attempts, " +
-	"next_attempt_at, sent_at"
+	"next_attempt_at, sent_at, claim_token"
 
 func scanOutboxRow(row pgx.CollectableRow) (EmailMessage, error) {
 	message := EmailMessage{}
 	var (
-		id        int64
-		recipient *string
-		subject   *string
-		kind      *string
-		text      *string
-		html      *string
-		status    *string
-		attempts  *int32
-		next      *time.Time
-		sent      *time.Time
+		id         int64
+		recipient  *string
+		subject    *string
+		kind       *string
+		text       *string
+		html       *string
+		status     *string
+		attempts   *int32
+		next       *time.Time
+		sent       *time.Time
+		claimToken *string
 	)
 	if err := row.Scan(&id, &recipient, &subject, &kind, &text, &html, &status, &attempts,
-		&next, &sent); err != nil {
+		&next, &sent, &claimToken); err != nil {
 		return message, err
 	}
 	if id < 0 {
@@ -659,6 +676,9 @@ func scanOutboxRow(row pgx.CollectableRow) (EmailMessage, error) {
 	if sent != nil {
 		message.SentAt = *sent
 	}
+	if claimToken != nil {
+		message.claimToken = *claimToken
+	}
 	return message, nil
 }
 
@@ -667,34 +687,38 @@ func scanOutboxRow(row pgx.CollectableRow) (EmailMessage, error) {
 // `skip locked` covers the instant between two claims running at once.
 func (backend *pgOutboxBackend) claimDue(limit int) []EmailMessage {
 	db, table := backend.table()
-	return PgQuery(db, "update "+table+" set locked_at = now() where id in ("+
+	claimToken := UUIDv7()
+	return PgQuery(db, "update "+table+" set locked_at = now(), claim_token = $3 where id in ("+
 		"select id from "+table+" where status = 'pending' and next_attempt_at <= now() "+
 		"and (locked_at is null or locked_at < now() - ($2::bigint * interval '1 millisecond')) "+
 		"order by id for update skip locked limit $1) returning "+outboxColumns,
-		[]any{int32(min(max(limit, 1), 1<<30)), emailClaimWindow.Milliseconds()}, // #nosec G115 -- clamped
+		[]any{int32(min(max(limit, 1), 1<<30)), emailClaimWindow.Milliseconds(), claimToken}, // #nosec G115 -- clamped
 		scanOutboxRow)
 }
 
-func (backend *pgOutboxBackend) recordOutcome(message EmailMessage, err error) {
+func (backend *pgOutboxBackend) recordOutcome(message EmailMessage, err error) bool {
 	db, table := backend.table()
 	if message.id > uint64(1<<62) {
 		panic("email: outbox row id out of range")
 	}
 	id := int64(message.id) // #nosec G115 -- range checked above
+	// Zero rows in any branch means the lease was replaced; the stale SMTP result is discarded.
 	if err == nil {
-		PgExec(db, "update "+table+" set status = 'sent', sent_at = now(), locked_at = null where id = $1",
-			[]any{id})
-		return
+		return PgExec(db, "update "+table+" set status = 'sent', sent_at = now(), locked_at = null, "+
+			"claim_token = null where id = $1 and status = 'pending' and claim_token = $2",
+			[]any{id, message.claimToken}) == 1
 	}
 	attempts := message.Attempts + 1
 	if attempts >= emailMaxAttempts {
-		PgExec(db, "update "+table+" set status = 'dead', attempts = $2, locked_at = null where id = $1",
-			[]any{id, int32(min(attempts, 1<<30))}) // #nosec G115 -- clamped
-		return
+		return PgExec(db, "update "+table+" set status = 'dead', attempts = $2, locked_at = null, "+
+			"claim_token = null where id = $1 and status = 'pending' and claim_token = $3",
+			[]any{id, int32(min(attempts, 1<<30)), message.claimToken}) == 1 // #nosec G115 -- clamped
 	}
-	PgExec(db, "update "+table+" set attempts = $2, "+
-		"next_attempt_at = now() + ($3::bigint * interval '1 millisecond'), locked_at = null where id = $1",
-		[]any{id, int32(min(attempts, 1<<30)), emailRetryDelay(attempts).Milliseconds()}) // #nosec G115 -- clamped
+	return PgExec(db, "update "+table+" set attempts = $2, "+
+		"next_attempt_at = now() + ($3::bigint * interval '1 millisecond'), locked_at = null, "+
+		"claim_token = null where id = $1 and status = 'pending' and claim_token = $4",
+		[]any{id, int32(min(attempts, 1<<30)), emailRetryDelay(attempts).Milliseconds(),
+			message.claimToken}) == 1 // #nosec G115 -- clamped
 }
 
 func (backend *pgOutboxBackend) messages() []EmailMessage {

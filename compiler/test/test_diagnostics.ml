@@ -117,6 +117,19 @@ let run_type_at_json path line col =
   in
   (exit_code, stdout)
 
+let run_cli args =
+  let binary = compiler_binary () in
+  let argv = Array.of_list (binary :: args) in
+  let ic = Unix.open_process_args_in binary argv in
+  let stdout = In_channel.input_all ic in
+  let exit_code =
+    match Unix.close_process_in ic with
+    | Unix.WEXITED code -> code
+    | Unix.WSIGNALED signal -> Alcotest.failf "compiler terminated by signal %d" signal
+    | Unix.WSTOPPED signal -> Alcotest.failf "compiler stopped by signal %d" signal
+  in
+  (exit_code, stdout)
+
 let parser_error_src = {|module Main exposing [value]
 value: Int
 value = 1
@@ -397,6 +410,60 @@ let test_cli_check_json_codec_unknown_type_contract () =
     assert_contains ~name:"codec unknown type file" stdout path;
     assert_contains ~name:"codec unknown type message" stdout "codec 'Missing' refers to unknown type 'Missing'")
 
+let test_cli_json_queries_total_on_lexer_failure () =
+  with_temp_file "tesl-json-lexer-failure-" "module Main exposing []\n\000" (fun path ->
+    let position_commands = [
+      "--type-at-json"; "--field-at-json"; "--signature-help-json";
+      "--completions-json"; "--definition-json"; "--type-definition-json";
+      "--occurrences-json"; "--selection-range-json"; "--config-context-json";
+    ] in
+    let commands =
+      [ ["--check-json"; path]; ["--local-bindings-json"; path];
+        ["--semantic-json"; path]; ["agent-context"; path];
+        ["--agent-context-json"; path] ]
+      @ List.map (fun command -> [command; path; "0"; "0"]) position_commands in
+    List.iter (fun args ->
+      let _, stdout = run_cli args in
+      let command = List.hd args in
+      assert_contains ~name:(command ^ " versioned envelope") stdout "\"version\":1";
+      if String.length stdout = 0 || stdout.[0] <> '{' then
+        Alcotest.failf "%s did not return a JSON object: %S" command stdout) commands)
+
+let test_agent_context_exit_matches_json_result () =
+  with_temp_file "tesl-agent-context-ok-" valid_src (fun path ->
+    let exit_code, stdout = run_cli ["agent-context"; path] in
+    Alcotest.(check int) "successful exit" 0 exit_code;
+    assert_contains ~name:"successful JSON result" stdout "\"ok\":true");
+  with_temp_file "tesl-agent-context-warning-" lint_warning_src (fun path ->
+    let exit_code, stdout = run_cli ["agent-context"; path] in
+    Alcotest.(check int) "warning-only exit" 0 exit_code;
+    assert_contains ~name:"warning-only JSON result" stdout "\"ok\":true";
+    assert_contains ~name:"warning diagnostic" stdout "\"code\":\"W010\"");
+  let lint_error_src =
+    "module Main exposing [value]\nimport Tesl.Prelude exposing [Int]\nfn value() -> Int =\n\t1\n" in
+  with_temp_file "tesl-agent-context-lint-error-" lint_error_src (fun path ->
+    let exit_code, stdout = run_cli ["agent-context"; path] in
+    Alcotest.(check int) "lint-error exit" 1 exit_code;
+    assert_contains ~name:"lint-error JSON result" stdout "\"ok\":false";
+    assert_contains ~name:"lint error diagnostic" stdout "\"code\":\"E010\"");
+  with_temp_file "tesl-agent-context-error-" type_error_src (fun path ->
+    let exit_code, stdout = run_cli ["agent-context"; path] in
+    Alcotest.(check int) "error exit" 1 exit_code;
+    assert_contains ~name:"error JSON result" stdout "\"ok\":false";
+    assert_contains ~name:"error diagnostics" stdout "\"code\":\"T001\"")
+
+let test_expression_complexity_budget () =
+  let source nesting =
+    "module Main exposing [value]\nimport Tesl.Prelude exposing [Bool(..)]\nfn value() -> Bool = "
+    ^ String.concat "" (List.init nesting (fun _ -> "not ")) ^ "true\n" in
+  let within_budget = check_source "complexity-ok.tesl" (source 511) in
+  if List.exists (fun (d : diagnostic) -> d.code = "E003") within_budget then
+    Alcotest.fail "an expression exactly at the depth budget was rejected";
+  let diags = check_source "complexity.tesl" (source 513) in
+  match List.find_opt (fun (d : diagnostic) -> d.code = "E003") diags with
+  | None -> Alcotest.fail "expected E003 for an expression nested beyond the semantic budget"
+  | Some d -> assert_contains ~name:"complexity guidance" d.message "split the expression"
+
 let test_cli_local_bindings_json_contract () =
   with_temp_file "tesl-local-bindings-ok-" local_bindings_src (fun path ->
     let exit_code, stdout = run_local_bindings_json path in
@@ -556,6 +623,13 @@ let test_cli_type_at_json_local_contract () =
     assert_contains ~name:"local type_at line" stdout "\"line\":4";
     assert_contains ~name:"local type_at type" stdout "\"type\":\"Int\"")
 
+let test_cli_type_at_json_binding_declaration_contract () =
+  with_temp_file "tesl-type-at-binding-declaration-" local_definition_src (fun path ->
+    let exit_code, stdout = run_type_at_json path 3 7 in
+    Alcotest.(check int) "exit code" 0 exit_code;
+    assert_contains ~name:"binding declaration type_at line" stdout "\"line\":3";
+    assert_contains ~name:"binding declaration inferred type" stdout "\"type\":\"Int\"")
+
 let test_cli_type_at_json_parser_contract () =
   with_temp_file "tesl-type-at-parser-" parser_error_src (fun path ->
     let exit_code, stdout = run_type_at_json path 2 0 in
@@ -654,6 +728,9 @@ let () =
       Alcotest.test_case "cli check-json parser failure" `Quick test_cli_check_json_parser_contract;
       Alcotest.test_case "cli check-json includes lint warning" `Quick test_cli_check_json_includes_lint_warning;
       Alcotest.test_case "cli check-json codec unknown type" `Quick test_cli_check_json_codec_unknown_type_contract;
+      Alcotest.test_case "all JSON queries survive lexer failure" `Quick test_cli_json_queries_total_on_lexer_failure;
+      Alcotest.test_case "agent-context exit matches JSON" `Quick test_agent_context_exit_matches_json_result;
+      Alcotest.test_case "expression complexity budget" `Quick test_expression_complexity_budget;
       Alcotest.test_case "cli local-bindings success" `Quick test_cli_local_bindings_json_contract;
       Alcotest.test_case "cli local-bindings refined case" `Quick test_cli_local_bindings_json_refined_case_contract;
       Alcotest.test_case "cli local-bindings guarded case" `Quick test_cli_local_bindings_json_guarded_case_contract;
@@ -671,6 +748,7 @@ let () =
       Alcotest.test_case "cli occurrences parser failure" `Quick test_cli_occurrences_json_parser_contract;
       Alcotest.test_case "cli type_at top-level" `Quick test_cli_type_at_json_top_level_contract;
       Alcotest.test_case "cli type_at local" `Quick test_cli_type_at_json_local_contract;
+      Alcotest.test_case "cli type_at binding declaration" `Quick test_cli_type_at_json_binding_declaration_contract;
       Alcotest.test_case "cli type_at parser failure" `Quick test_cli_type_at_json_parser_contract;
       Alcotest.test_case "cli field_at hit" `Quick test_cli_field_at_json_contract;
       Alcotest.test_case "cli field_at miss" `Quick test_cli_field_at_json_null_contract;

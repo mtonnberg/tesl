@@ -2,8 +2,8 @@
     swallowed the clauses that follow it.
 
     Tesl's SQL surface is not keyword-parsed: `select t from T where … order …`
-    reaches the compiler as an ordinary application spine, which codegen
-    (emit_racket's extractors) reinterprets structurally.  Application binds
+    reaches the compiler as an ordinary application spine, which the shared
+    {!Sql_query} frontend reinterprets structurally before Go emission. Application binds
     tighter than every binary operator, so the moment the predicate contained an
     operator the spine SPLIT and the trailing clause keywords were swallowed by
     the last operand's own application chain:
@@ -33,7 +33,7 @@
        produce the SAME lowering — asserted through codegen's own extractor, so
        the test cannot pass on a tree that merely looks plausible.
     2. THE CLASS.  A query shape codegen has no lowering for is a CHECK error,
-       not a clean check followed by unloadable Racket.  That is the general
+       not a clean check followed by invalid generated code. That is the general
        protection: #77 was one shape, and the fall-through was the bug.
     3. The diagnostic names the actual cause (a non-literal `limit`, a
        single-line `update`, `insertMany` on a list literal) rather than only

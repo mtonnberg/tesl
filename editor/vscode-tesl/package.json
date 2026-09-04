@@ -9,6 +9,16 @@
   "extensionKind": [
     "workspace"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Language features remain available, but running tests, programs, and debuggers requires Workspace Trust.",
+      "restrictedConfigurations": [
+        "tesl.lspBinary",
+        "tesl.dapBinary"
+      ]
+    }
+  },
   "license": "BSD-3-Clause",
   "repository": {
     "type": "git",
@@ -225,81 +235,89 @@
       {
         "command": "tesl.runDebugMode",
         "title": "Run current file in debug mode (tesl run --debug)",
-        "category": "Tesl"
+        "category": "Tesl",
+        "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "tesl.attachRunning",
         "title": "Attach to running app",
-        "category": "Tesl"
+        "category": "Tesl",
+        "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "tesl.debugTests",
         "title": "Debug Tesl Tests",
-        "category": "Tesl"
+        "category": "Tesl",
+        "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "tesl.debugProgram",
         "title": "Debug Tesl Program",
-        "category": "Tesl"
+        "category": "Tesl",
+        "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "tesl.runTests",
         "title": "Run Tesl Tests in Terminal",
-        "category": "Tesl"
+        "category": "Tesl",
+        "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "tesl.runSingleTest",
         "title": "Run This Test",
-        "category": "Tesl"
+        "category": "Tesl",
+        "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "tesl.debugSingleTest",
         "title": "Debug This Test",
-        "category": "Tesl"
+        "category": "Tesl",
+        "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "tesl.runFunctionWithInput",
         "title": "Run Function with Input...",
-        "category": "Tesl"
+        "category": "Tesl",
+        "enablement": "isWorkspaceTrusted"
       }
     ],
     "menus": {
       "editor/context": [
         {
           "command": "tesl.debugTests",
-          "when": "resourceExtname == .tesl",
+          "when": "resourceExtname == .tesl && isWorkspaceTrusted",
           "group": "tesl@1"
         },
         {
           "command": "tesl.debugProgram",
-          "when": "resourceExtname == .tesl",
+          "when": "resourceExtname == .tesl && isWorkspaceTrusted",
           "group": "tesl@2"
         },
         {
           "command": "tesl.runTests",
-          "when": "resourceExtname == .tesl",
+          "when": "resourceExtname == .tesl && isWorkspaceTrusted",
           "group": "tesl@3"
         },
         {
           "command": "tesl.runFunctionWithInput",
-          "when": "resourceExtname == .tesl",
+          "when": "resourceExtname == .tesl && isWorkspaceTrusted",
           "group": "tesl@4"
         }
       ],
       "explorer/context": [
         {
           "command": "tesl.debugTests",
-          "when": "resourceExtname == .tesl",
+          "when": "resourceExtname == .tesl && isWorkspaceTrusted",
           "group": "tesl@1"
         },
         {
           "command": "tesl.debugProgram",
-          "when": "resourceExtname == .tesl",
+          "when": "resourceExtname == .tesl && isWorkspaceTrusted",
           "group": "tesl@2"
         },
         {
           "command": "tesl.runTests",
-          "when": "resourceExtname == .tesl",
+          "when": "resourceExtname == .tesl && isWorkspaceTrusted",
           "group": "tesl@3"
         }
       ]

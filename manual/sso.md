@@ -140,7 +140,10 @@ convention:
   the client address an app records (audit, abuse detection) is trustworthy.
 - `publicOrigin` + `Host` validation (with one `healthProbePath` exempt) refuse a
   request whose `Host` does not name the app's origin, closing the Host-header
-  class of attack.
+  class of attack. It also supplies the exact external scheme, host and port for
+  CSRF Origin checks when TLS terminates at the proxy. Tesl never trusts
+  `Forwarded` or `X-Forwarded-Proto` for this; configure `publicOrigin` for that
+  topology.
 
 ### Trusting a header for identity
 

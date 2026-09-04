@@ -2,7 +2,7 @@
     (roadmap/completed/import_gated_stdlib_constructors.md, found while landing #78).
 
     Before this, a stdlib ADT constructor resolved in a module that never
-    imported its module, `tesl check` said nothing, and the emitted Racket could
+    imported its module, `tesl check` said nothing, and the retired Racket output could
     not load:
 
       case Monday of Monday -> True; _ -> False     # no import Tesl.CivilTime

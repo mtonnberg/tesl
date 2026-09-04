@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -359,6 +360,77 @@ func TestOpenPostgresIsIdempotent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	first.bootstrap(ctx, tables)
+}
+
+// The first open of one configuration is a single flight: every concurrent caller gets the
+// same pool and table bootstrap is serialized behind it.
+func TestOpenPostgresConcurrentInitializationUsesOnePool(t *testing.T) {
+	config := liveCluster(t)
+	config.Schema = uniqueName("open_once")
+	tables := []PostgresTable{{Name: "items", Columns: []PostgresColumn{
+		{Name: "id", Type: "text", PrimaryKey: true},
+	}}}
+	const callers = 32
+	start := make(chan struct{})
+	results := make(chan *PostgresDB, callers)
+	failures := make(chan any, callers)
+	var wait sync.WaitGroup
+	wait.Add(callers)
+	for range callers {
+		go func() {
+			defer wait.Done()
+			defer func() {
+				if failure := recover(); failure != nil {
+					failures <- failure
+				}
+			}()
+			<-start
+			results <- OpenPostgres(config, tables)
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(results)
+	close(failures)
+	for failure := range failures {
+		t.Errorf("concurrent initialization trapped: %v", failure)
+	}
+	var first *PostgresDB
+	for db := range results {
+		if first == nil {
+			first = db
+		} else if db != first {
+			t.Fatal("one configuration produced more than one pool")
+		}
+	}
+	if first == nil {
+		t.Fatal("no concurrent caller returned a pool")
+	}
+	if got := PgCount(first, "select count(*) from "+first.QualifiedTable("items"), nil); !Equal(got, FromInt64(0)) {
+		t.Fatalf("bootstrapped table count = %s", got.String())
+	}
+}
+
+// A bootstrap failure is not cached. The candidate pool is closed by initialization and a
+// later valid open of the same configuration can create a fresh pool.
+func TestOpenPostgresFailureCanBeRetried(t *testing.T) {
+	config := liveCluster(t)
+	config.Schema = uniqueName("open_retry")
+	invalid := []PostgresTable{{Name: "broken", Columns: []PostgresColumn{
+		{Name: "id", Type: "tesl_type_that_does_not_exist", PrimaryKey: true},
+	}}}
+	recovered := func() (failure any) {
+		defer func() { failure = recover() }()
+		OpenPostgres(config, invalid)
+		return nil
+	}()
+	if recovered == nil {
+		t.Fatal("invalid bootstrap unexpectedly succeeded")
+	}
+	db := OpenPostgres(config, nil)
+	if got := PgCount(db, "select 1", nil); !Equal(got, FromInt64(1)) {
+		t.Fatalf("retry pool answered %s", got.String())
+	}
 }
 
 // The live half of the NULL rule: a nullable NUMERIC column read through the plain-`Int`

@@ -376,15 +376,8 @@ let test_g68b_let_bound_check_call_without_keyword_rejected () =
     "  needsPositive checked\n" in
   should_fail "check.*keyword\\|let.*check\\|V001" src
 
-(* ── G69: handler calling another handler silently compiles (gap) ─────────── *)
-(*                                                                              *)
-(* `handler` functions are HTTP-boundary functions. Calling one handler from  *)
-(* another is semantically wrong — HTTP handlers should only be called by the  *)
-(* routing layer, not from application code. However, the compiler currently  *)
-(* ACCEPTS this without any error or warning. This test documents the gap:    *)
-(* it PASSES (compiles) but the DESIRED behavior would be a compile error.   *)
-(* A lint rule or validation check should be added to flag inter-handler calls. *)
-let test_g69_handler_calling_handler_accepted_gap () =
+(* G69: handlers are HTTP boundaries and cannot call other handlers. *)
+let test_g69_handler_calling_handler_rejected () =
   let src = prelude ^
     "handler firstHandler(x: Int) -> Int =\n" ^
     "  x + 1\n" ^
@@ -645,7 +638,7 @@ let () =
     "G67", [ test_case "record literal with unknown field gives clear error" `Quick test_g67_record_unknown_field_error ];
     "G68", [ test_case "inline check call rejected — must use check keyword" `Quick test_g68_inline_check_call_rejected;
              test_case "let-bound check call without keyword rejected" `Quick test_g68b_let_bound_check_call_without_keyword_rejected ];
-    "G69", [ test_case "handler calling another handler is now rejected" `Quick test_g69_handler_calling_handler_accepted_gap ];
+    "G69", [ test_case "handler calling another handler is rejected" `Quick test_g69_handler_calling_handler_rejected ];
     "G70", [ test_case "type alias to unknown type gives clear error" `Quick test_g70_type_alias_unknown_base_type ];
     "G71", [ test_case "integer literal > 2^62 rejected at compile time" `Quick test_g71_integer_overflow_compile_error ];
     "G72", [ test_case "polymorphic fn used at two different return-type positions" `Quick test_g72_polymorphic_two_return_sites ];

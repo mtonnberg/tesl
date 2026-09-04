@@ -215,7 +215,7 @@ establish provePositive(n: Int) -> Fact (IsPositive n) =
 
 let r36_11_integer_overflow () =
   (* A9/HM-1: Int is arbitrary-precision; a huge literal compiles (carried as
-     an LBigInt canonical string into the Racket bignum), no longer rejected. *)
+     an LBigInt canonical string into direct Go output), no longer rejected. *)
   should_pass {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 

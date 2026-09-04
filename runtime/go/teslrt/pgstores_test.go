@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // The durable stores against the live cluster (skipped without one, like every other live
@@ -371,7 +374,7 @@ func TestDurableQueueReclaimsAJobFromACrashedInstance(t *testing.T) {
 		ResetQueue(queueA)
 		EnqueueJob(queueA, storeJob{Name: "fragile", Count: FromInt64(1)})
 		ProcessNextJob(queueA, failJob) // attempts = 1
-		id, _, attempts, found := queueA.dequeue(jobPending)
+		id, _, attempts, _, found := queueA.dequeue(jobPending)
 		if !found || attempts != 1 {
 			t.Fatalf("A's claim: found=%v attempts=%d", found, attempts)
 		}
@@ -379,12 +382,12 @@ func TestDurableQueueReclaimsAJobFromACrashedInstance(t *testing.T) {
 		// …and instance A dies here, never completing or failing the job.
 	})
 	WithDatabase(dbB, func() {
-		if _, _, _, found := queueB.dequeue(jobPending); found {
+		if _, _, _, _, found := queueB.dequeue(jobPending); found {
 			t.Fatal("B claimed a job A is still processing within the visibility window")
 		}
 		queueVisibilityTimeout = func() time.Duration { return 100 * time.Millisecond }
 		time.Sleep(250 * time.Millisecond)
-		id, payload, attempts, found := queueB.dequeue(jobPending)
+		id, payload, attempts, claimToken, found := queueB.dequeue(jobPending)
 		if !found {
 			t.Fatal("B did not reclaim the abandoned job")
 		}
@@ -397,8 +400,54 @@ func TestDurableQueueReclaimsAJobFromACrashedInstance(t *testing.T) {
 		if job, ok := payload.(storeJob); !ok || job.Name != "fragile" {
 			t.Fatalf("payload after reclaim: %#v", payload)
 		}
-		queueB.complete(id)
+		queueB.complete(id, claimToken)
 		expectInt(t, "pending after completion", PendingJobCount(queueB), 0)
+	})
+}
+
+// A worker whose lease was replaced cannot complete or retry the replacement's active
+// attempt. The row id is deliberately the same across both claims; only the token fences it.
+func TestDurableQueueRejectsOutcomesFromAStaleClaim(t *testing.T) {
+	database := storeDatabase(t, "QueueFence")
+	queue := NewQueueOn(database, uniqueName("queue_fence"), 3, "", 0)
+	registerStoreJobCodec(queue)
+	WithDatabase(database, func() {
+		ResetQueue(queue)
+		EnqueueJob(queue, storeJob{Name: "leased", Count: FromInt64(1)})
+		id, _, attempts, oldToken, found := queue.dequeue(jobPending)
+		if !found || oldToken == "" {
+			t.Fatalf("first claim: found=%v token=%q", found, oldToken)
+		}
+
+		db := database.bound()
+		table := db.QualifiedTable(jobsTable)
+		PgExec(db, "update "+table+" set locked_at = now() - interval '1 day' where id = $1", []any{id})
+		backend := queue.backend.(*pgQueueBackend)
+		backend.lastReclaim.Store(0)
+		backend.reclaimStuck(db, table)
+		againID, _, againAttempts, newToken, found := queue.dequeue(jobPending)
+		if !found || againID != id || newToken == "" || newToken == oldToken {
+			t.Fatalf("replacement claim: id=%q token=%q, old id=%q token=%q", againID, newToken, id, oldToken)
+		}
+		if queue.complete(id, oldToken) {
+			t.Fatal("stale completion deleted the replacement claim")
+		}
+		if queue.fail(id, attempts, oldToken) {
+			t.Fatal("stale failure changed the replacement claim")
+		}
+		rows := PgQuery(db, "select status, claim_token, attempts from "+table+" where id = $1",
+			[]any{id}, func(row pgx.CollectableRow) ([3]string, error) {
+				var status, token string
+				var attempts int32
+				err := row.Scan(&status, &token, &attempts)
+				return [3]string{status, token, strconv.Itoa(int(attempts))}, err
+			})
+		if len(rows) != 1 || rows[0] != [3]string{jobProcessing, newToken, strconv.Itoa(againAttempts)} {
+			t.Fatalf("replacement changed by stale outcomes: %+v", rows)
+		}
+		if !queue.complete(id, newToken) {
+			t.Fatal("the current claim could not complete its job")
+		}
 	})
 }
 
@@ -659,6 +708,45 @@ func TestDurableOutboxClaimIsExclusive(t *testing.T) {
 			t.Fatalf("an abandoned claim was not released: %+v", third)
 		}
 		ResetOutbox(outbox)
+	})
+}
+
+// SMTP may finish after the claim window and after another worker has reclaimed the row. Its
+// old result must not mark sent, increment attempts, or clear the replacement's lock.
+func TestDurableOutboxRejectsOutcomesFromAStaleClaim(t *testing.T) {
+	database := storeDatabase(t, "EmailFence")
+	outbox := NewOutboxOn(database, testSettings("smtp.example.com", 25))
+	WithDatabase(database, func() {
+		ResetOutbox(outbox)
+		SendEmail(outbox, "fenced@example.com", "Fence", TextBody("body"))
+		backend := outbox.backend.(*pgOutboxBackend)
+		first := backend.claimDue(1)
+		if len(first) != 1 || first[0].claimToken == "" {
+			t.Fatalf("first claim: %+v", first)
+		}
+		db := database.bound()
+		table := db.QualifiedTable(outboxTable)
+		PgExec(db, "update "+table+" set locked_at = now() - interval '11 minutes' where id = $1",
+			[]any{int64(first[0].id)})
+		second := backend.claimDue(1)
+		if len(second) != 1 || second[0].id != first[0].id || second[0].claimToken == "" ||
+			second[0].claimToken == first[0].claimToken {
+			t.Fatalf("replacement claim: old=%+v new=%+v", first, second)
+		}
+		if backend.recordOutcome(first[0], nil) {
+			t.Fatal("stale success marked the replacement sent")
+		}
+		if backend.recordOutcome(first[0], errors.New("stale failure")) {
+			t.Fatal("stale failure changed the replacement")
+		}
+		current := OutboxMessages(outbox)
+		if len(current) != 1 || current[0].Status != EmailPending || current[0].Attempts != 0 ||
+			current[0].claimToken != second[0].claimToken {
+			t.Fatalf("replacement changed by stale outcomes: %+v", current)
+		}
+		if !backend.recordOutcome(second[0], nil) {
+			t.Fatal("the current claim could not record its outcome")
+		}
 	})
 }
 

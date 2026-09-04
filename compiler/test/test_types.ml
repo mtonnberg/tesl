@@ -133,7 +133,7 @@ let test_compose () =
 let test_unify_same () =
   reset ();
   let s = unify empty_subst t_int t_int in
-  Alcotest.(check bool) "same types unify" true (s = empty_subst || true)
+  Alcotest.(check int) "same concrete types add no bindings" 0 (List.length s)
 
 let test_unify_var_to_con () =
   reset ();

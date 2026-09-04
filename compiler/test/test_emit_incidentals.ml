@@ -471,10 +471,7 @@ api-test "raw JSON body round-trips" for EchoServer {
     | _ -> assert false)
 
 (* GitHub #60 (second bug): `with_codec dictCodec`/`listCodec`/`setCodec`
-   must recursively decode by the field's declared key/value types. The Go
-   backend does not expose these codecs yet, so this keeps whole-program check
-   coverage and pins that explicit emitter gap rather than silently dropping
-   the source case. *)
+   recursively decodes by the field's declared key/value types. *)
 let dict_list_set_codec_decode_recurses () =
   let src = {|module Main exposing []
 import Tesl.Prelude exposing [String, List]
@@ -488,7 +485,11 @@ record PayloadBody {
   uniqueTags: Set String
 }
 codec PayloadBody {
-  toJson_forbidden
+  toJson {
+    payload -> "payload" with_codec dictCodec
+    tags -> "tags" with_codec listCodec
+    uniqueTags -> "uniqueTags" with_codec setCodec
+  }
   fromJson [
     {
       payload <- "payload" with_codec dictCodec
@@ -501,13 +502,21 @@ codec PayloadBody {
   with_files [ ("main.tesl", src) ] (function
     | [main_p] ->
        check_ok "dictCodec/listCodec/setCodec decode" main_p;
-       (match Compile.compile_go_file main_p with
-        | Compile.GoSuccess _ -> failf "container codecs unexpectedly became Go-emittable without a behavior assertion"
-        | Compile.GoFailure diagnostics ->
-          let messages = String.concat "\n"
-              (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics) in
-          assert_contains ~what:"documented Go container-codec gap"
-            "does not emit the `Tesl.Json` export `dictCodec`" messages)
+       let artifacts = go_artifacts "dictCodec/listCodec/setCodec decode" main_p in
+       let emitted = artifacts
+         |> List.map (fun (a : Emit_go.artifact) -> a.contents)
+         |> String.concat "\n" in
+       assert_contains ~what:"dict values recursively decode"
+         "teslrt.DictFromList" emitted;
+       assert_contains ~what:"set elements recursively decode"
+         "teslrt.SetFromList" emitted;
+       assert_contains ~what:"container String values are checked"
+         "teslrt.DecodeStringValue" emitted;
+       assert_contains ~what:"dict values recursively encode"
+         "len(teslValue.Entries)" emitted;
+       assert_contains ~what:"set elements recursively encode"
+         "len(teslValue.Elements)" emitted;
+       run_go_tests "dictCodec/listCodec/setCodec decode" artifacts
     | _ -> assert false)
 
 (* Item 10 (review 2026-07-09): the name-level endpoint rejection missed
@@ -1162,12 +1171,9 @@ let qualified_partial_application_eta_expands () =
             "cannot resolve function `PartialLib.addN`" out)
      | _ -> assert false)
 
-(* ITEM 12 (Money/PosixMillis newtype field decode): moneyCodec was missing
-   from base_of_prim_codec (a Money-newtype field stayed unwrapped after
-   decode), and the `with_codec <Newtype>` arm had no decoder for Money /
-   PosixMillis bases, so it applied the constructor to the RAW jsexpr.
-   PosixMillis is itself a runtime newtype, so its decode additionally wraps
-   the BASE constructor. *)
+(* ITEM 12 (Money/PosixMillis newtype field decode): primitive codecs decode
+   the base wire value, then the record constructor wraps every declared
+   newtype layer exactly once. Money keeps its {minorUnits, currency} wire shape. *)
 let money_posix_newtype_codecs = {|module Main exposing []
 
 import Tesl.Prelude exposing [Int, String]
@@ -1233,13 +1239,17 @@ let money_posix_newtype_decode_wraps () =
     (function
      | [main_p] ->
        check_ok "money/posix newtype codecs" main_p;
-       (match Compile.compile_go_file main_p with
-        | Compile.GoSuccess _ -> failf "moneyCodec unexpectedly became Go-emittable without behavior coverage"
-        | Compile.GoFailure diagnostics ->
-          let out = String.concat "\n"
-              (List.map (fun (d : Compile.diagnostic) -> d.message) diagnostics) in
-          assert_contains ~what:"documented moneyCodec Go gap"
-            "does not emit the `Tesl.Json` export `moneyCodec`" out)
+       let artifacts = go_artifacts "money/posix newtype codecs" main_p in
+       let emitted = artifacts
+         |> List.map (fun (a : Emit_go.artifact) -> a.contents)
+         |> String.concat "\n" in
+       assert_contains ~what:"Money decoder validates the currency"
+         "teslrt.CurrencyFromCode" emitted;
+       assert_contains ~what:"Money encoder writes minor units"
+         "\"minorUnits\": teslValue.MinorUnits" emitted;
+       assert_contains ~what:"Money newtype is wrapped after decode"
+         "Price{Value: teslFieldPrice}" emitted;
+       run_go_tests "money/posix newtype codecs" artifacts
      | _ -> assert false)
 
 (* ITEM 17 (asTool shadowing): a module declaring its own `fn asTool` — the

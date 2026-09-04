@@ -143,7 +143,7 @@ server TestServer2 for TestApi2 {
 (* ── P2: Large integer literals compile (A9/HM-1: Int is arbitrary-precision) ── *)
 (* Formerly these asserted a compile-time range error. Under A9/HM-1 the 63-bit
    fixnum range check is gone: a huge magnitude is carried through as an LBigInt
-   canonical string into the Racket bignum. These now must compile (and, of course,
+   canonical string into direct Go output. These now must compile (and, of course,
    still must not crash). *)
 
 let test_no_crash_on_large_literal () =

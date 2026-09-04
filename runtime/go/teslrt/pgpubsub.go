@@ -37,12 +37,15 @@ import (
 // channel meets `*Database` and pgx, and sse.go (always shipped) sees it only through the
 // `pubsubBackend` interface. A channel of a Memory-backed database never touches this file.
 //
-// STARTUP BASELINE. A process that starts (or reconnects after a long outage) does NOT replay
-// the outbox to its subscribers: the sweep begins at `max(id)` as of the moment the process
-// prepared the outbox. SSE has no backlog semantics — an event published before a browser
-// connected is gone on the Memory path too — and replaying an hour of history to every fresh
-// deploy would be a flood of stale events, not a feature. The outbox is a delivery buffer for
-// LIVE instances, retained one hour so a slow sweep or a brief disconnect misses nothing.
+// COMMIT-ORDERED DISPATCH. The row id is allocated by INSERT, not commit, so it is never used
+// as a lifetime delivery cursor. A sweep first assigns committed raw rows a dispatch_seq while
+// holding one transaction-scoped advisory lock for this outbox. Those assignment transactions
+// therefore commit in sequence order. A transaction that reserved a low row id and committed
+// late is assigned a later dispatch_seq and remains visible above every process's cursor.
+//
+// STARTUP BASELINE. A process does not replay old SSE events. Preparation dispatches every row
+// visible at startup, then captures max(dispatch_seq). Rows that commit later are still raw and
+// receive a sequence above that baseline on a later sweep.
 
 const (
 	pubsubNotifyChannel = "tesl_pubsub"
@@ -51,8 +54,13 @@ const (
 	// ring.
 	queueNotifyChannel = "tesl_queue"
 	pubsubOutboxTable  = "tesl_pubsub_outbox"
+	pubsubDispatchSeq  = "tesl_pubsub_dispatch_seq"
 	// pubsubSweepBatch bounds one sweep query; a sweep that fills the batch runs again at once.
-	pubsubSweepBatch = 500
+	pubsubSweepBatch      = 500
+	pubsubSweepMaxBatches = 4
+	// pubsubSeenLimit bounds low-latency notification deduplication. Above it, rows wait for
+	// the durable sweep instead of consuming more process memory.
+	pubsubSeenLimit = pubsubSweepBatch * pubsubSweepMaxBatches
 )
 
 // The intervals are variables so a test can shrink them; production never writes them.
@@ -68,16 +76,10 @@ var (
 	// pubsubOutboxRetention is how long a delivered row stays before a sweep prunes it.
 	pubsubOutboxRetention = time.Hour
 	pubsubPruneInterval   = time.Minute
-	// pubsubSeenRetention is how long an id delivered by one path is remembered so the other
-	// path (a sweep after a notification, or a notification after a sweep) does not deliver
-	// it twice. PostgreSQL hands a listener the notification for a row at the end of whatever
-	// command it is running when the row commits, so the notification for a row the sweep
-	// just read arrives right AFTER the sweep's own query — the id must outlive that moment.
-	pubsubSeenRetention = 30 * time.Second
 )
 
 // pgPubsub is one process's pub/sub state for one `Database` declaration: the channels
-// declared on it, the LISTEN goroutine, and the sweep cursor.
+// declared on it, the LISTEN goroutine, and retained-row deduplication.
 type pgPubsub struct {
 	database *Database
 
@@ -87,13 +89,13 @@ type pgPubsub struct {
 	channels map[string][]*SseChannel
 	// queues by declared name, woken on a `tesl_queue` notification naming them.
 	queues map[string][]*Queue
-	// ready is set once the outbox table exists and the sweep baseline is captured.
+	// ready is set once the outbox table exists and the dispatch baseline is captured.
 	ready bool
-	// lastDelivered is the sweep cursor: every committed row with a lower id has been
-	// delivered by the sweep, or was already there when this process started.
-	lastDelivered int64
-	// seen remembers ids delivered by either path, for pubsubSeenRetention.
-	seen map[int64]time.Time
+	// dispatchCursor is the highest commit-ordered dispatch sequence this process swept.
+	dispatchCursor int64
+	// seen contains up to pubsubSeenLimit notifications delivered before their row reached
+	// dispatchCursor. Once full, further notifications defer to the durable sweep.
+	seen map[int64]struct{}
 	// listener is the live LISTEN connection, or nil between connections.
 	listener *pgx.Conn
 
@@ -148,7 +150,7 @@ func pubsubFor(database *Database) *pgPubsub {
 		database: database,
 		channels: map[string][]*SseChannel{},
 		queues:   map[string][]*Queue{},
-		seen:     map[int64]time.Time{},
+		seen:     map[int64]struct{}{},
 		ctx:      ctx,
 		cancel:   cancel,
 		done:     make(chan struct{}),
@@ -167,9 +169,7 @@ func pubsubFor(database *Database) *pgPubsub {
 // ── The publish side ──────────────────────────────────────────────────────────
 
 // active answers whether the database is bound. It also PREPARES the outbox on the way, so
-// that the sweep baseline is captured before this process inserts its first row: a row this
-// process publishes must have an id above the baseline, or the sweep would never reach it
-// should its notification be lost.
+// this process's first publish cannot be mistaken for a pre-existing baseline row.
 func (runtime *pgPubsub) active() bool {
 	connection := runtime.database.bound()
 	if connection == nil {
@@ -210,7 +210,7 @@ func (runtime *pgPubsub) publish(channel, key string, encoded string) {
 	Counter("tesl.sse.pubsub.published", FromInt64(1), sseChannelAttribute(channel))
 }
 
-// prepare creates the outbox if it is absent and captures the sweep baseline, once per
+// prepare creates the outbox if it is absent and captures the dispatch baseline, once per
 // runtime. It runs on the POOL rather than the executor: a table created inside a caller's
 // transaction would vanish with a rollback, and the baseline is a fact about committed rows.
 func (runtime *pgPubsub) prepare(connection *PostgresDB) error {
@@ -224,40 +224,63 @@ func (runtime *pgPubsub) prepare(connection *PostgresDB) error {
 	if err := createPubsubOutbox(ctx, connection); err != nil {
 		return err
 	}
-	var baseline int64
-	if err := connection.pool.QueryRow(ctx,
-		`select coalesce(max("id"), 0) from `+connection.QualifiedTable(pubsubOutboxTable)).
-		Scan(&baseline); err != nil {
+	for {
+		dispatched, err := dispatchPubsubPending(ctx, connection.pool, connection)
+		if err != nil {
+			return err
+		}
+		if dispatched < pubsubSweepBatch {
+			break
+		}
+	}
+	if err := connection.pool.QueryRow(ctx, `select coalesce(max("dispatch_seq"), 0) from `+
+		connection.QualifiedTable(pubsubOutboxTable)).Scan(&runtime.dispatchCursor); err != nil {
 		return err
 	}
-	runtime.lastDelivered = baseline
 	runtime.ready = true
 	return nil
 }
 
-// createPubsubOutbox is `create table if not exists`, tolerating the one way that statement
-// can still fail: two processes creating the same absent table at the same instant, where the
-// loser sees a duplicate-key error on the catalogue rather than "already exists". The retry
-// then finds the table.
+// createPubsubOutbox owns only Tesl's runtime table, sequence, and indexes. The ALTERs are the
+// idempotent upgrade from the original allocation-ordered outbox; they are not application
+// schema migration machinery.
 func createPubsubOutbox(ctx context.Context, connection *PostgresDB) error {
-	statement := fmt.Sprintf(`create table if not exists %s (
+	table := connection.QualifiedTable(pubsubOutboxTable)
+	statements := []string{
+		`create sequence if not exists ` + connection.QualifiedTable(pubsubDispatchSeq),
+		fmt.Sprintf(`create table if not exists %s (
 	"id" bigserial primary key,
 	"channel" text not null,
 	"key" text not null,
 	"payload" jsonb not null,
-	"created_at" timestamptz not null default now()
-)`, connection.QualifiedTable(pubsubOutboxTable))
-	var err error
-	for attempt := 0; attempt < 2; attempt++ {
-		if _, err = connection.pool.Exec(ctx, statement); err == nil {
-			return nil
+	"created_at" timestamptz not null default now(),
+	"dispatch_seq" bigint,
+	"dispatched_at" timestamptz
+)`, table),
+		`alter table ` + table + ` add column if not exists "dispatch_seq" bigint`,
+		`alter table ` + table + ` add column if not exists "dispatched_at" timestamptz`,
+		`create unique index if not exists ` + quoteIdentifier(pubsubOutboxTable+"_dispatch_idx") +
+			` on ` + table + ` ("dispatch_seq") where "dispatch_seq" is not null`,
+		`create index if not exists ` + quoteIdentifier(pubsubOutboxTable+"_pending_idx") +
+			` on ` + table + ` ("id") where "dispatch_seq" is null`,
+		`create index if not exists ` + quoteIdentifier(pubsubOutboxTable+"_prune_idx") +
+			` on ` + table + ` ("dispatched_at") where "dispatched_at" is not null`,
+	}
+	for _, statement := range statements {
+		var err error
+		for attempt := 0; attempt < 2; attempt++ {
+			if _, err = connection.pool.Exec(ctx, statement); err == nil {
+				break
+			}
+			if !pgDuplicateObject(err) && !strings.Contains(err.Error(), "already exists") {
+				return err
+			}
 		}
-		message := err.Error()
-		if !strings.Contains(message, "duplicate key") && !strings.Contains(message, "already exists") {
+		if err != nil {
 			return err
 		}
 	}
-	return err
+	return nil
 }
 
 // ── The delivery side ─────────────────────────────────────────────────────────
@@ -280,37 +303,54 @@ func (runtime *pgPubsub) deliver(channel, key string, encoded string) {
 	}
 }
 
-// markSeen records an id as delivered, answering false when it already was.
+// markSeen records a notification-delivered id. False means either duplicate or full; in the
+// full case delivery is safely deferred to the durable sweep.
 func (runtime *pgPubsub) markSeen(id int64) bool {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
 	if _, already := runtime.seen[id]; already {
 		return false
 	}
-	runtime.seen[id] = time.Now()
+	if len(runtime.seen) >= pubsubSeenLimit {
+		return false
+	}
+	runtime.seen[id] = struct{}{}
 	return true
 }
 
-// advance moves the sweep cursor and forgets ids old enough that neither path can still
-// present them.
-func (runtime *pgPubsub) advance(id int64) {
+// takeSeen answers whether the notification path already delivered id and removes its
+// temporary entry. The dispatch cursor suppresses every later notification for the row.
+func (runtime *pgPubsub) takeSeen(id int64) bool {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
-	if id > runtime.lastDelivered {
-		runtime.lastDelivered = id
+	if _, seen := runtime.seen[id]; !seen {
+		return false
 	}
-	horizon := time.Now().Add(-pubsubSeenRetention)
-	for seen, at := range runtime.seen {
-		if seen <= runtime.lastDelivered && at.Before(horizon) {
-			delete(runtime.seen, seen)
-		}
-	}
+	delete(runtime.seen, id)
+	return true
 }
 
 func (runtime *pgPubsub) cursor() int64 {
 	runtime.mutex.Lock()
 	defer runtime.mutex.Unlock()
-	return runtime.lastDelivered
+	return runtime.dispatchCursor
+}
+
+func (runtime *pgPubsub) swept(dispatchSequence int64) bool {
+	runtime.mutex.Lock()
+	defer runtime.mutex.Unlock()
+	return dispatchSequence <= runtime.dispatchCursor
+}
+
+// advance records a commit-ordered row and forgets its temporary notification dedup entry.
+// Once the cursor covers the row, a delayed notification is rejected by dispatch sequence.
+func (runtime *pgPubsub) advance(id, dispatchSequence int64) {
+	runtime.mutex.Lock()
+	defer runtime.mutex.Unlock()
+	if dispatchSequence > runtime.dispatchCursor {
+		runtime.dispatchCursor = dispatchSequence
+	}
+	delete(runtime.seen, id)
 }
 
 // run is the listener goroutine: wait for the database to be bound, then hold a LISTEN
@@ -467,15 +507,19 @@ func (runtime *pgPubsub) deliverNotified(conn *pgx.Conn, connection *PostgresDB,
 	ctx, cancel := context.WithTimeout(runtime.ctx, pgLeaseTimeout())
 	defer cancel()
 	var channel, key, encoded string
-	err = conn.QueryRow(ctx, `select "channel", "key", "payload"::text from `+
+	var dispatchSequence *int64
+	err = conn.QueryRow(ctx, `select "channel", "key", "payload"::text, "dispatch_seq" from `+
 		connection.QualifiedTable(pubsubOutboxTable)+` where "id" = $1`, id).
-		Scan(&channel, &key, &encoded)
+		Scan(&channel, &key, &encoded, &dispatchSequence)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Pruned already, or a notification for a row this database never held.
 		return nil
 	}
 	if err != nil {
 		return err
+	}
+	if dispatchSequence != nil && runtime.swept(*dispatchSequence) {
+		return nil
 	}
 	if runtime.markSeen(id) {
 		runtime.deliver(channel, key, encoded)
@@ -491,48 +535,93 @@ func (runtime *pgPubsub) isSeen(id int64) bool {
 }
 
 type pubsubRow struct {
-	id           int64
-	channel, key string
-	encoded      string
+	id               int64
+	dispatchSequence int64
+	channel, key     string
+	encoded          string
 }
 
-// sweep delivers every committed row above the cursor, in id order, in batches. A row the
-// notification path already delivered is skipped by id; the cursor advances past it either
-// way.
-//
-// A row whose transaction commits LATE — its id was assigned before a higher id that has
-// already committed and been swept past — is below the cursor by the time it is visible, so
-// the sweep never sees it; its notification, sent at its commit, is what delivers it. Losing
-// both the notification and that ordering at once is the one case this does not recover.
-func (runtime *pgPubsub) sweep(conn *pgx.Conn, connection *PostgresDB) error {
-	for {
+// dispatchPubsubPending is one bounded dispatcher statement. The materialized lock CTE makes
+// every dispatcher wait for the previous assignment transaction to commit before drawing
+// sequence values. INSERT does not take this advisory lock and stays unblocked.
+func dispatchPubsubPending(ctx context.Context, executor pgExecutor, connection *PostgresDB) (int, error) {
+	table := connection.QualifiedTable(pubsubOutboxTable)
+	statement := `with lock_acquired as materialized (` +
+		`select pg_advisory_xact_lock(hashtextextended(current_database() || ':' || $1, 0))), ` +
+		`pending as materialized (` +
+		`select "id" from ` + table + `, lock_acquired where "dispatch_seq" is null ` +
+		`order by "id" limit $2) ` +
+		`update ` + table + ` as outbox set ` +
+		`"dispatch_seq" = nextval($3::regclass), "dispatched_at" = clock_timestamp() ` +
+		`from pending where outbox."id" = pending."id" and outbox."dispatch_seq" is null`
+	tag, err := executor.Exec(ctx, statement, table, int32(pubsubSweepBatch),
+		connection.QualifiedTable(pubsubDispatchSeq))
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
+}
+
+type pubsubSweepStats struct {
+	dispatchQueries int
+	fetchQueries    int
+	rowsRead        int
+}
+
+// sweepWithStats performs bounded work: each stage issues at most
+// pubsubSweepMaxBatches queries and each query handles at most pubsubSweepBatch rows.
+func (runtime *pgPubsub) sweepWithStats(conn *pgx.Conn, connection *PostgresDB) (pubsubSweepStats, error) {
+	stats := pubsubSweepStats{}
+	for range pubsubSweepMaxBatches {
 		ctx, cancel := context.WithTimeout(runtime.ctx, pgLeaseTimeout())
-		rows, err := conn.Query(ctx, `select "id", "channel", "key", "payload"::text from `+
-			connection.QualifiedTable(pubsubOutboxTable)+` where "id" > $1 order by "id" limit $2`,
+		dispatched, err := dispatchPubsubPending(ctx, conn, connection)
+		cancel()
+		stats.dispatchQueries++
+		if err != nil {
+			return stats, err
+		}
+		if dispatched < pubsubSweepBatch {
+			break
+		}
+	}
+	for range pubsubSweepMaxBatches {
+		ctx, cancel := context.WithTimeout(runtime.ctx, pgLeaseTimeout())
+		rows, err := conn.Query(ctx, `select "id", "channel", "key", "payload"::text, "dispatch_seq" from `+
+			connection.QualifiedTable(pubsubOutboxTable)+
+			` where "dispatch_seq" > $1 order by "dispatch_seq" limit $2`,
 			runtime.cursor(), pubsubSweepBatch)
+		stats.fetchQueries++
 		if err != nil {
 			cancel()
-			return err
+			return stats, err
 		}
 		batch, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (pubsubRow, error) {
 			var collected pubsubRow
-			err := row.Scan(&collected.id, &collected.channel, &collected.key, &collected.encoded)
+			err := row.Scan(&collected.id, &collected.channel, &collected.key, &collected.encoded,
+				&collected.dispatchSequence)
 			return collected, err
 		})
 		cancel()
 		if err != nil {
-			return err
+			return stats, err
 		}
+		stats.rowsRead += len(batch)
 		for _, row := range batch {
-			if runtime.markSeen(row.id) {
+			if !runtime.takeSeen(row.id) {
 				runtime.deliver(row.channel, row.key, row.encoded)
 			}
-			runtime.advance(row.id)
+			runtime.advance(row.id, row.dispatchSequence)
 		}
 		if len(batch) < pubsubSweepBatch {
-			return nil
+			break
 		}
 	}
+	return stats, nil
+}
+
+func (runtime *pgPubsub) sweep(conn *pgx.Conn, connection *PostgresDB) error {
+	_, err := runtime.sweepWithStats(conn, connection)
+	return err
 }
 
 // prune deletes rows past the retention. Every instance prunes; the statement is idempotent
@@ -541,7 +630,7 @@ func (runtime *pgPubsub) prune(conn *pgx.Conn, connection *PostgresDB) error {
 	ctx, cancel := context.WithTimeout(runtime.ctx, pgLeaseTimeout())
 	defer cancel()
 	_, err := conn.Exec(ctx, `delete from `+connection.QualifiedTable(pubsubOutboxTable)+
-		` where "created_at" < now() - make_interval(secs => $1)`,
+		` where "dispatched_at" < now() - make_interval(secs => $1)`,
 		pubsubOutboxRetention.Seconds())
 	return err
 }

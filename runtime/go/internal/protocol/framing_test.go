@@ -106,6 +106,35 @@ func TestWriterSerializesConcurrentFrames(t *testing.T) {
 	}
 }
 
+func TestLineTransportUsesBoundedNewlineDelimitedJSON(t *testing.T) {
+	var output bytes.Buffer
+	writer := NewLineWriter(&partialWriter{output: &output, chunk: 2})
+	if err := writer.WriteJSON(map[string]bool{"ok": true}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output.String(), "{\"ok\":true}\n"; got != want {
+		t.Fatalf("line frame = %q, want %q", got, want)
+	}
+	message, err := NewLineReader(&output).Read()
+	if err != nil || string(message) != `{"ok":true}` {
+		t.Fatalf("Read() = %q, %v", message, err)
+	}
+
+	oversized := NewLineReader(strings.NewReader("1234\nnext\n"))
+	if err := oversized.SetMaxMessageBytes(3); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := oversized.Read(); !errors.Is(err, ErrMessageTooLarge) {
+		t.Fatalf("oversized Read() error = %v", err)
+	}
+}
+
+func TestLineReaderRequiresTerminatingNewline(t *testing.T) {
+	if _, err := NewLineReader(strings.NewReader(`{"id":1}`)).Read(); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("Read() error = %v, want unexpected EOF", err)
+	}
+}
+
 func FuzzReaderAcceptsWriterFrames(f *testing.F) {
 	f.Add([]byte(`{"jsonrpc":"2.0","method":"x"}`))
 	f.Add([]byte{})

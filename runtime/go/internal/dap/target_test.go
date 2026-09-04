@@ -2,6 +2,9 @@ package dap
 
 import (
 	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -116,12 +119,22 @@ func TestLaunchEndpointTCPMintsTokenForChild(t *testing.T) {
 }
 
 func TestLaunchEndpointDefaultsToPrivateUnixSocket(t *testing.T) {
-	endpoint, err := launchEndpoint(processLaunchArguments{}, "/tmp/tesl-project")
+	longTemp := filepath.Join(t.TempDir(), strings.Repeat("deep-", 24))
+	if err := os.MkdirAll(longTemp, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", longTemp)
+	endpoint, err := launchEndpoint(processLaunchArguments{}, filepath.Join(longTemp, "workspace"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if endpoint.socket != "/tmp/tesl-project/.tesl-stuff/debug.sock" || endpoint.environment["TESL_DEBUG"] != "1" {
+	defer endpoint.cleanup()
+	if endpoint.socket == "" || len([]byte(endpoint.socket)) > 100 || strings.HasPrefix(endpoint.socket, longTemp) || endpoint.environment["TESL_DEBUG"] != "1" {
 		t.Fatalf("endpoint = %#v", endpoint)
+	}
+	info, err := os.Stat(filepath.Dir(endpoint.socket))
+	if err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("private endpoint directory = %v, %v", info, err)
 	}
 }
 
@@ -236,6 +249,107 @@ func TestProcessTargetLaunchesGeneratedGoTest(t *testing.T) {
 	}
 	if err := target.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestProcessTargetGeneratedServerHandlerBreakpointDoesNotWaitForMain(t *testing.T) {
+	repoRoot, compiler, _ := generatedGoTestFixture(t)
+	templatePath := filepath.Join(repoRoot, "example", "learn", "lesson17-telemetry.tesl")
+	contents, err := os.ReadFile(templatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	_ = listener.Close()
+	text := strings.Replace(string(contents), "port: 8086", fmt.Sprintf("port: %d", port), 1)
+	source := filepath.Join(t.TempDir(), "lesson17-telemetry.tesl")
+	if err := os.WriteFile(source, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	breakpointLine := 0
+	for index, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, "handler get healthCheck") {
+			breakpointLine = index + 1
+			break
+		}
+	}
+	if breakpointLine == 0 {
+		t.Fatal("live server fixture lost its health handler")
+	}
+
+	arguments, err := json.Marshal(processLaunchArguments{Program: source, Compiler: compiler, Cwd: repoRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := NewProcessTarget()
+	backend, err := target.LaunchBackend(arguments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = target.Close() }()
+	client := backend.(*ControlClient)
+	stopped := make(chan teslrt.DebugEvent, 1)
+	detach := client.Attach(func(event teslrt.DebugEvent) {
+		if event.Kind == "stopped" {
+			stopped <- event
+		}
+	})
+	defer detach()
+	if _, err := client.SetBreakpointSpecs([]teslrt.DebugBreakpointSpec{{ID: "health", File: source, Line: breakpointLine}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ConfigurationDone(); err != nil {
+		t.Fatal(err)
+	}
+
+	response := make(chan error, 1)
+	go func() {
+		httpClient := &http.Client{Timeout: 10 * time.Second}
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			result, requestErr := httpClient.Get(fmt.Sprintf("http://127.0.0.1:%d/health", port))
+			if requestErr == nil {
+				_ = result.Body.Close()
+				if result.StatusCode != http.StatusOK {
+					requestErr = fmt.Errorf("health response status %d", result.StatusCode)
+				}
+				response <- requestErr
+				return
+			}
+			if time.Now().After(deadline) {
+				response <- requestErr
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
+	select {
+	case event := <-stopped:
+		if event.Frame.Function != "healthCheck" {
+			t.Fatalf("stopped in %q, want healthCheck", event.Frame.Function)
+		}
+	case err := <-response:
+		t.Fatalf("request completed before handler breakpoint: %v", err)
+	case <-time.After(8 * time.Second):
+		t.Fatal("live handler breakpoint waited for the quiescent main server scope")
+	}
+	if snapshot, err := client.SnapshotState(); err != nil || !snapshot.Paused {
+		t.Fatalf("live server snapshot = %#v, %v", snapshot, err)
+	}
+	if err := client.Continue(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-response:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("health request did not finish after continue")
 	}
 }
 

@@ -482,19 +482,49 @@ let line_directive loc =
   let line = max 1 (loc.Location.start.line + 1) in
   Printf.sprintf "//line %s:%d\n" (directive_file loc.Location.file) line
 
+let runtime_currency_type loc =
+  TRecord {
+    rec_tesl_name = "Currency";
+    rec_owner = "";
+    rec_go_name = "teslrt.Currency";
+    rec_fields = ["code", TString; "minorDigits", TInt];
+    rec_proof_fields = false;
+    rec_loc = loc;
+  }
+
+let runtime_money_type loc =
+  TRecord {
+    rec_tesl_name = "Money";
+    rec_owner = "";
+    rec_go_name = "teslrt.Money";
+    rec_fields = ["minorUnits", TInt; "currency", runtime_currency_type loc];
+    rec_proof_fields = false;
+    rec_loc = loc;
+  }
+
+let runtime_posix_type loc =
+  TNewtype {
+    tesl_name = "PosixMillis";
+    owner = "";
+    go_name = "teslrt.PosixMillis";
+    base = TInt;
+    secret = false;
+    loc;
+  }
+
 let primitive_type_of_type_expr = function
   | TName { name = "Int"; _ } -> TInt
   | TName { name = "Float"; _ } -> TFloat
   | TName { name = "String"; _ } -> TString
   | TName { name = "Bool"; _ } -> TBool
   | TName { name = "Unit"; _ } -> TUnit
+  | TName { name = "Money"; loc } -> runtime_money_type loc
+  | TName { name = "PosixMillis"; loc } -> runtime_posix_type loc
   | TName { name; loc } ->
     unsupported loc "Go backend newtype base `%s` is not a direct scalar type" name
-  (* Each of these says what it refuses IN THIS POSITION, and none says "yet": a newtype is a
-     nominal wrapper over ONE scalar carrier, so there is nothing to add later that would make
-     a function, a tuple or a type variable into one.  The old wording named the shape instead
-     of the position — "does not support function values yet" pointed at a feature that IS
-     supported and promised work that will never happen. *)
+  (* Money and PosixMillis are the two built-in nominal carriers above. Each arm below says
+     what it refuses IN THIS POSITION, and none says "yet": a function, tuple, or type variable
+     cannot provide a concrete carrier for a local newtype. *)
   | TVar { name; loc } -> unsupported loc
     "Go backend newtype base `%s` is a type variable: a newtype wraps one scalar carrier, so \
      there is nothing for it to stand for" name
@@ -10305,10 +10335,14 @@ let codec_alt_name type_name index =
 let newtype_base_codec name =
   match Option.bind !current_types (fun types -> Hashtbl.find_opt types.newtypes name) with
   | Some info ->
-    (match info.base with
+    let rec classify = function
      | TString -> Some `String | TInt -> Some `Int
      | TBool -> Some `Bool | TFloat -> Some `Float
-     | _ -> None)
+     | base when is_money base -> Some `Money
+     | TNewtype nested -> classify nested.base
+     | _ -> None
+    in
+    classify info.base
   | None -> None
 
 let primitive_codec = function
@@ -10320,6 +10354,7 @@ let primitive_codec = function
      agent-boundary enrichment (`{epochMillis, iso}`) is a different surface, and an HTTP body
      carries the bare number on both backends (`tesl-encode-prim-posix-millis`). *)
   | "posixMillisCodec" -> Some `PosixMillis
+  | "moneyCodec" -> Some `Money
   | _ -> None
 
 (* What a field's `with_codec` means: a primitive codec, or a newtype standing for its base. *)
@@ -10349,6 +10384,13 @@ let aligned_map_entries indent entries =
     Printf.sprintf "%s%s%s %s," indent key
       (String.make (max 0 (width - String.length key)) ' ') value) entries)
 
+let rec json_dict_key_encoder ty operand =
+  match ty with
+  | TString -> operand
+  | TNewtype { secret = false; base; _ } ->
+    json_dict_key_encoder base (operand ^ ".Value")
+  | _ -> invalid_arg "Go JSON encoding requires a Dict with String keys"
+
 let rec value_encoder ty =
   let encoded_field operand field_ty =
     Printf.sprintf "%s(%s)" (value_encoder field_ty) operand in
@@ -10370,6 +10412,10 @@ let rec value_encoder ty =
     remember_helper ~prefix:"teslEncode"
       ~signature:(Printf.sprintf "(teslValue %s) any" (go_type ty))
       ~body:(encoded_field "teslValue.Value" info.base)
+  | TRecord _ when is_money ty ->
+    remember_helper ~prefix:"teslEncode"
+      ~signature:"(teslValue teslrt.Money) any"
+      ~body:"map[string]any{\"minorUnits\": teslValue.MinorUnits, \"currency\": teslValue.Currency.Code}"
   | TRecord info when List.mem info.rec_tesl_name !current_codec_types
                       || codec_owner info.rec_tesl_name <> None ->
     codec_encode_ref info.rec_tesl_name
@@ -10409,7 +10455,19 @@ let rec value_encoder ty =
       ~body:(Printf.sprintf
         "func() any {\n\t\tteslOut := make([]any, len(teslValue))\n\t\tfor teslAt, teslItem := range teslValue {\n\t\t\tteslOut[teslAt] = %s(teslItem)\n\t\t}\n\t\treturn teslOut\n\t}()"
         (value_encoder element))
-  | TDict _ | TSet _ | TParam _ | TFunc _ | TJson | TStream | TCheck _ | TFailure
+  | TSet element ->
+    remember_helper ~prefix:"teslEncode"
+      ~signature:(Printf.sprintf "(teslValue %s) any" (go_type ty))
+      ~body:(Printf.sprintf
+        "func() any {\n\t\tteslOut := make([]any, len(teslValue.Elements))\n\t\tfor teslAt, teslItem := range teslValue.Elements {\n\t\t\tteslOut[teslAt] = %s(teslItem)\n\t\t}\n\t\treturn teslOut\n\t}()"
+        (value_encoder element))
+  | TDict (key, value) ->
+    remember_helper ~prefix:"teslEncode"
+      ~signature:(Printf.sprintf "(teslValue %s) any" (go_type ty))
+      ~body:(Printf.sprintf
+        "func() any {\n\t\tteslOut := make(map[string]any, len(teslValue.Entries))\n\t\tfor _, teslEntry := range teslValue.Entries {\n\t\t\tteslOut[%s] = %s(teslEntry.Value)\n\t\t}\n\t\treturn teslOut\n\t}()"
+        (json_dict_key_encoder key "teslEntry.Key") (value_encoder value))
+  | TParam _ | TFunc _ | TJson | TStream | TCheck _ | TFailure
   | TAnon ->
     invalid_arg "Go response encoding for this type is rejected before emission"
 
@@ -10467,6 +10525,20 @@ let rec json_value_decoder ~package ~loc ~what ty =
     Printf.sprintf
       "func(teslRaw any) ([]%s, error) {\n\t\treturn teslrt.DecodeListValue(teslRaw, %s)\n\t}"
       (go_type element) (json_value_decoder ~package ~loc ~what element)
+  | TSet element ->
+    Printf.sprintf
+      "func(teslRaw any) (%s, error) {\n\t\tteslItems, teslErr := teslrt.DecodeListValue(teslRaw, %s)\n\t\tif teslErr != nil {\n\t\t\treturn %s{}, teslErr\n\t\t}\n\t\treturn teslrt.SetFromList(teslItems, %s), nil\n\t}"
+      (go_type ty) (json_value_decoder ~package ~loc ~what element) (go_type ty)
+      (element_less_func element)
+  | TDict (key, value) ->
+    Printf.sprintf
+      "func(teslRaw any) (%s, error) {\n\t\tteslFields, teslOK := teslRaw.(map[string]any)\n\t\tif !teslOK {\n\t\t\treturn %s{}, errors.New(\"expected JSON object for Dict\")\n\t\t}\n\t\tteslPairs := make([]teslrt.Tuple2[%s, %s], 0, len(teslFields))\n\t\tfor teslRawKey, teslRawValue := range teslFields {\n\t\t\tteslKey, teslKeyErr := %s(teslRawKey)\n\t\t\tif teslKeyErr != nil {\n\t\t\t\treturn %s{}, teslKeyErr\n\t\t\t}\n\t\t\tteslValue, teslValueErr := %s(teslRawValue)\n\t\t\tif teslValueErr != nil {\n\t\t\t\treturn %s{}, teslValueErr\n\t\t\t}\n\t\t\tteslPairs = append(teslPairs, teslrt.Tuple2[%s, %s]{Tuple2First: teslKey, Tuple2Second: teslValue})\n\t\t}\n\t\treturn teslrt.DictFromList(teslPairs, %s), nil\n\t}"
+      (go_type ty) (go_type ty) (go_type key) (go_type value)
+      (json_value_decoder ~package ~loc ~what key) (go_type ty)
+      (json_value_decoder ~package ~loc ~what value) (go_type ty)
+      (go_type key) (go_type value) (element_less_func key)
+  | TRecord _ when is_money ty ->
+    "func(teslRaw any) (teslrt.Money, error) {\n\t\tteslMinorUnits, teslUnitsErr := teslrt.DecodeIntField(teslRaw, \"minorUnits\")\n\t\tif teslUnitsErr != nil {\n\t\t\treturn teslrt.Money{}, teslUnitsErr\n\t\t}\n\t\tteslCode, teslCodeErr := teslrt.DecodeStringField(teslRaw, \"currency\")\n\t\tif teslCodeErr != nil {\n\t\t\treturn teslrt.Money{}, teslCodeErr\n\t\t}\n\t\tteslCurrency, teslKnown := teslrt.CurrencyFromCode(teslCode).Value()\n\t\tif !teslKnown {\n\t\t\treturn teslrt.Money{}, errors.New(\"unknown ISO 4217 currency code for Money: \" + teslCode)\n\t\t}\n\t\treturn teslrt.MoneyFromMinorUnits(teslCurrency, teslMinorUnits), nil\n\t}"
   | TRecord nested when nested.rec_owner = package
                         || List.mem nested.rec_tesl_name !current_codec_types
                         || codec_owner nested.rec_tesl_name <> None ->
@@ -10959,7 +11031,11 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
               | _ -> rendered
             in
             (entry.json_key, match field_codec_kind entry.codec with
+              | Some `Money -> Printf.sprintf "%s(%s)"
+                  (value_encoder (field_type entry.field_name)) value
               | Some _ -> unwrapped (field_type entry.field_name) value
+              | None when List.mem entry.codec ["listCodec"; "setCodec"; "dictCodec"] ->
+                Printf.sprintf "%s(%s)" (value_encoder (field_type entry.field_name)) value
               | None -> Printf.sprintf "%s(%s)" (codec_encode_ref entry.codec) value))
             entries));
        Buffer.add_string body "\n\t}\n}\n");
@@ -10996,6 +11072,16 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
              let suffix = go_ident ~exported:true field_name in
              let binder = "teslField" ^ suffix in
              (match field_codec_kind field_codec with
+              | Some `Money ->
+                Printf.bprintf body
+                  "\tteslRaw%s, teslErr%s := teslrt.JSONFieldValue(teslJSON, %s)\n\tif teslErr%s != nil {\n\t\treturn teslrt.RejectShape[%s](teslErr%s.Error())\n\t}\n\t%s, teslDecodeErr%s := %s(teslRaw%s)\n\tif teslDecodeErr%s != nil {\n\t\treturn teslrt.RejectShape[%s](teslDecodeErr%s.Error())\n\t}\n"
+                  suffix suffix (go_quote json_key) suffix go_type_name suffix
+                  binder suffix
+                  (json_value_decoder ~package ~loc:codec.loc
+                     ~what:(Printf.sprintf "%s.%s" type_name field_name)
+                     (let rec base = function TNewtype info -> base info.base | ty -> ty in
+                      base (field_type field_name)))
+                  suffix suffix go_type_name suffix
               | Some kind ->
                 let decoder = match kind with
                   | `String -> "DecodeStringField" | `Int -> "DecodeIntField"
@@ -11009,6 +11095,7 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
                      `innerJoin` against a real server.  The divergence is measured, not
                      inherited. *)
                   | `PosixMillis -> "DecodeIntField"
+                  | `Money -> assert false
                 in
                 Printf.bprintf body
                   "\t%s, teslErr%s := teslrt.%s(teslJSON, %s)\n\tif teslErr%s != nil {\n\t\treturn teslrt.RejectShape[%s](teslErr%s.Error())\n\t}\n"
@@ -11080,11 +11167,17 @@ let module_source ?(debug=false) ?(imported_packages=[]) ?(unreachable=[]) ?(cod
             more than a String — and echo it into a client-facing 400.  `via` therefore runs on
             the raw value above, and only a successful check's value is wrapped. *)
          let wrapped field binder =
-           match field_type field with
-           | TNewtype info when info.secret ->
-             Printf.sprintf "%s{Value: teslrt.MakeSecret(%s)}" (go_type (TNewtype info)) binder
-           | TNewtype info -> Printf.sprintf "%s{Value: %s}" (go_type (TNewtype info)) binder
-           | _ -> binder
+           let rec wrap ty rendered =
+             match ty with
+             | TNewtype info when info.secret ->
+               Printf.sprintf "%s{Value: teslrt.MakeSecret(%s)}"
+                 (go_type (TNewtype info)) rendered
+             | TNewtype info ->
+               Printf.sprintf "%s{Value: %s}"
+                 (go_type (TNewtype info)) (wrap info.base rendered)
+             | _ -> rendered
+          in
+           wrap (field_type field) binder
          in
          Printf.bprintf body "\tteslDecoded := %s{" go_type_name;
          Buffer.add_string body
@@ -12745,7 +12838,7 @@ let compile_module ?(mode=Release) ?(dependencies=[]) ?project_path (m : module_
           | "posixMillisCodec" -> ()
           (* A CONTAINER codec names the shape; the field's declared type says how to read each
              element, which is what the decoder walks. *)
-          | "listCodec" -> ()
+          | "listCodec" | "setCodec" | "dictCodec" | "moneyCodec" -> ()
           | other -> unsupported import.loc
             "Go backend does not emit the `Tesl.Json` export `%s`: the module is wired, that \
              export is not — test_go_stdlib_export_seam.ml holds the whole inventory" other) exposed

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // The cross-instance path is under test here, so every live test stands up TWO `Database`
@@ -206,6 +208,194 @@ func TestPubsubSweepDeliversARowWhoseNotificationWasLost(t *testing.T) {
 	})
 }
 
+// Sequence ids are allocated before commit. A low-id transaction that commits after a higher
+// row was swept must still be recovered without its NOTIFY.
+func TestPubsubSweepRecoversALateCommittedLowID(t *testing.T) {
+	database := storeDatabase(t, "LateCommit")
+	WithDatabase(database, func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		runtime := &pgPubsub{
+			database: database,
+			channels: map[string][]*SseChannel{},
+			queues:   map[string][]*Queue{},
+			seen:     map[int64]struct{}{},
+			ctx:      ctx,
+		}
+		channelName := uniqueName("late_commit")
+		channel := NewSseChannel(channelName)
+		runtime.channels[channelName] = []*SseChannel{channel}
+		listener := channel.register("all")
+		defer channel.unregister("all", listener)
+		db := database.bound()
+		if err := runtime.prepare(db); err != nil {
+			t.Fatalf("prepare: %v", err)
+		}
+
+		conn, err := pgx.ConnectConfig(ctx, db.pool.Config().ConnConfig.Copy())
+		if err != nil {
+			t.Fatalf("connect sweep session: %v", err)
+		}
+		defer func() { _ = conn.Close(context.Background()) }()
+		tx, err := db.pool.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin late transaction: %v", err)
+		}
+		defer func() { _ = tx.Rollback(context.Background()) }()
+		table := db.QualifiedTable(pubsubOutboxTable)
+		var lowID int64
+		if err := tx.QueryRow(ctx, `insert into `+table+
+			` ("channel", "key", "payload") values ($1, 'all', '{"order":"low"}'::jsonb) returning "id"`,
+			channelName).Scan(&lowID); err != nil {
+			t.Fatalf("insert low row: %v", err)
+		}
+		var highID int64
+		if err := db.pool.QueryRow(ctx, `insert into `+table+
+			` ("channel", "key", "payload") values ($1, 'all', '{"order":"high"}'::jsonb) returning "id"`,
+			channelName).Scan(&highID); err != nil {
+			t.Fatalf("insert high row: %v", err)
+		}
+		if highID <= lowID {
+			t.Fatalf("test schedule did not allocate ids in order: low=%d high=%d", lowID, highID)
+		}
+		if err := runtime.sweep(conn, db); err != nil {
+			t.Fatalf("first sweep: %v", err)
+		}
+		if got := EncodeJSONValue(expectEvent(t, listener, time.Second)); got != `{"order":"high"}` {
+			t.Fatalf("first sweep delivered %s", got)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatalf("commit low row: %v", err)
+		}
+		if err := runtime.sweep(conn, db); err != nil {
+			t.Fatalf("recovery sweep: %v", err)
+		}
+		if got := EncodeJSONValue(expectEvent(t, listener, time.Second)); got != `{"order":"low"}` {
+			t.Fatalf("recovery sweep delivered %s", got)
+		}
+		expectNoEvent(t, listener, 100*time.Millisecond)
+		PgExec(db, `delete from `+table+` where "id" in ($1, $2)`, []any{lowID, highID})
+	})
+}
+
+// Retained history does not become periodic work. Catch-up is bounded per sweep, and once
+// 5,000 rows are behind the dispatch cursor an idle sweep executes exactly one bounded query
+// per stage, reads no payload rows, and retains no per-row ids in memory.
+func TestPubsubSweepWorkIsIndependentOfRetainedVolume(t *testing.T) {
+	database := storeDatabase(t, "SweepScale")
+	WithDatabase(database, func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		runtime := &pgPubsub{
+			database: database,
+			channels: map[string][]*SseChannel{},
+			queues:   map[string][]*Queue{},
+			seen:     map[int64]struct{}{},
+			ctx:      ctx,
+		}
+		db := database.bound()
+		if err := runtime.prepare(db); err != nil {
+			t.Fatalf("prepare: %v", err)
+		}
+		conn, err := pgx.ConnectConfig(ctx, db.pool.Config().ConnConfig.Copy())
+		if err != nil {
+			t.Fatalf("connect sweep session: %v", err)
+		}
+		defer func() { _ = conn.Close(context.Background()) }()
+		table := db.QualifiedTable(pubsubOutboxTable)
+		channelName := uniqueName("sweep_scale")
+		const retained = 10 * pubsubSweepBatch
+		PgExec(db, `insert into `+table+` ("channel", "key", "payload") `+
+			`select $1, 'all', '{"scale":true}'::jsonb from generate_series(1, $2)`,
+			[]any{channelName, int32(retained)})
+
+		for sweep := 0; sweep < 10; sweep++ {
+			stats, err := runtime.sweepWithStats(conn, db)
+			if err != nil {
+				t.Fatalf("catch-up sweep %d: %v", sweep+1, err)
+			}
+			if stats.dispatchQueries > pubsubSweepMaxBatches || stats.fetchQueries > pubsubSweepMaxBatches ||
+				stats.rowsRead > pubsubSweepBatch*pubsubSweepMaxBatches {
+				t.Fatalf("catch-up sweep exceeded its bound: %+v", stats)
+			}
+			pending, _ := PgCount(db, `select count(*) from `+table+
+				` where "channel" = $1 and "dispatch_seq" is null`, []any{channelName}).Int64()
+			ahead, _ := PgCount(db, `select count(*) from `+table+
+				` where "channel" = $1 and "dispatch_seq" > $2`,
+				[]any{channelName, runtime.cursor()}).Int64()
+			if pending == 0 && ahead == 0 {
+				break
+			}
+			if sweep == 9 {
+				t.Fatalf("catch-up did not finish: pending=%d ahead=%d", pending, ahead)
+			}
+		}
+
+		quiet, err := runtime.sweepWithStats(conn, db)
+		if err != nil {
+			t.Fatalf("quiet sweep: %v", err)
+		}
+		if quiet.dispatchQueries != 1 || quiet.fetchQueries != 1 || quiet.rowsRead != 0 {
+			t.Fatalf("quiet sweep over %d retained rows did %+v work", retained, quiet)
+		}
+		runtime.mutex.Lock()
+		remembered := len(runtime.seen)
+		runtime.mutex.Unlock()
+		if remembered != 0 {
+			t.Fatalf("runtime retained %d delivered row ids", remembered)
+		}
+
+		PgExec(db, `insert into `+table+
+			` ("channel", "key", "payload") values ($1, 'all', '{"scale":"new"}'::jsonb)`,
+			[]any{channelName})
+		one, err := runtime.sweepWithStats(conn, db)
+		if err != nil {
+			t.Fatalf("one-row sweep: %v", err)
+		}
+		if one.dispatchQueries != 1 || one.fetchQueries != 1 || one.rowsRead != 1 {
+			t.Fatalf("one new row over %d retained rows did %+v work", retained, one)
+		}
+		kept, _ := PgCount(db, `select count(*) from `+table+` where "channel" = $1`,
+			[]any{channelName}).Int64()
+		if kept != retained+1 {
+			t.Fatalf("scaling fixture retained %d rows, want %d", kept, retained+1)
+		}
+		PgExec(db, `delete from `+table+` where "channel" = $1`, []any{channelName})
+	})
+}
+
+func TestPubsubPreparationUpgradesTheRuntimeOutboxIdempotently(t *testing.T) {
+	config := liveCluster(t)
+	config.Schema = uniqueName("pubsub_upgrade")
+	db := OpenPostgres(config, nil)
+	table := db.QualifiedTable(pubsubOutboxTable)
+	PgExec(db, `create table `+table+` (`+
+		`"id" bigserial primary key, "channel" text not null, "key" text not null, `+
+		`"payload" jsonb not null, "created_at" timestamptz not null default now())`, nil)
+	PgExec(db, `insert into `+table+
+		` ("channel", "key", "payload") values ('Old', 'all', '{}'::jsonb)`, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runtime := &pgPubsub{
+		database: &Database{Name: "Upgrade", Config: config},
+		channels: map[string][]*SseChannel{},
+		queues:   map[string][]*Queue{},
+		seen:     map[int64]struct{}{},
+		ctx:      ctx,
+	}
+	if err := runtime.prepare(db); err != nil {
+		t.Fatalf("first prepare: %v", err)
+	}
+	if err := runtime.prepare(db); err != nil {
+		t.Fatalf("second prepare: %v", err)
+	}
+	ready, _ := PgCount(db, `select count(*) from `+table+
+		` where "dispatch_seq" is not null and "dispatched_at" is not null`, nil).Int64()
+	if ready != 1 || runtime.cursor() == 0 {
+		t.Fatalf("upgraded outbox: ready=%d cursor=%d", ready, runtime.cursor())
+	}
+}
+
 // (d) The LISTEN connection dies. The instance reconnects, and an event published while it
 // was down is delivered by the reconnect's catch-up sweep; one published afterwards arrives
 // through the new connection.
@@ -323,7 +513,25 @@ func TestPubsubChannelOnAnUnboundDatabaseDeliversLocally(t *testing.T) {
 	}
 	// The listener goroutine is idle, polling for a binding that never comes; it must not
 	// have touched anything.
-	if runtime := pubsubRuntimeOf(t, database); runtime.ListenerPID() != 0 || runtime.cursor() != 0 {
+	if runtime := pubsubRuntimeOf(t, database); runtime.ListenerPID() != 0 {
 		t.Fatal("an unbound database started a listener")
+	}
+}
+
+func TestPubsubNotificationDeduplicationIsHardBounded(t *testing.T) {
+	runtime := &pgPubsub{seen: map[int64]struct{}{}}
+	for id := int64(1); id <= pubsubSeenLimit; id++ {
+		if !runtime.markSeen(id) {
+			t.Fatalf("dedup refused id %d before its limit", id)
+		}
+	}
+	if runtime.markSeen(pubsubSeenLimit + 1) {
+		t.Fatal("dedup grew past its hard limit")
+	}
+	if !runtime.takeSeen(1) || !runtime.markSeen(pubsubSeenLimit+1) {
+		t.Fatal("dedup did not reuse capacity after the sweep consumed an id")
+	}
+	if len(runtime.seen) != pubsubSeenLimit {
+		t.Fatalf("dedup retained %d ids, limit %d", len(runtime.seen), pubsubSeenLimit)
 	}
 }

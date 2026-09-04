@@ -6,8 +6,10 @@ exposes the Tesl compiler's agent query surface as first-class, discoverable
 free — type-checking, diagnostics with fixes, type/signature/completion queries,
 go-to-definition, references, proof obligations, and a headless step-debugger.
 
-It is a thin JSON-RPC-over-stdio wrapper around the `tesl` compiler binary, built
-on the same bounded framing and compiler-query client as the Go Tesl LSP.
+It is a thin JSON-RPC-over-stdio wrapper around the `tesl` compiler binary. MCP
+2024-11-05 messages are bounded, newline-delimited JSON; LSP/DAP `Content-Length`
+framing is intentionally separate. The Go MCP and LSP share only the bounded
+compiler-query client.
 
 ## Tools
 
@@ -21,7 +23,7 @@ on the same bounded framing and compiler-query client as the Go Tesl LSP.
 | `tesl.definition` | `{file, line, col}` | `--definition-json` | 0-based line, 0-based col. |
 | `tesl.references` | `{file, line, col}` | `--occurrences-json` | 0-based line, 0-based col. Same-file occurrences. |
 | `tesl.proof_obligations` | `{file}` | `--agent-context-json` (sliced) | Just the `proof_obligations` array. |
-| `tesl.debug_inspect` | `{file, breakpoints \| break_at, mode?}` | `tesl debug-inspect` | Headless debugger — **you set the breakpoints**, incl. conditional & hit-count. |
+| `tesl.debug_inspect` | `{file, breakpoints \| break_at, mode?, timeout_ms?}` | `tesl debug-inspect` | Headless debugger — **you set the breakpoints**, incl. conditional & hit-count. |
 | `tesl.debug_attach` | `{project?, action?, break_at?, when?, hit?, timeout_ms?}` | `tesl debug-attach` | Live attach to a running `tesl run --debug` app — arm/re-arm with zero relaunches; the app keeps serving. Actions: `once` (default), `snapshot`, `ping`, `detach`. |
 
 Every tool's text response is the compiler's already-compact JSON, passed through
@@ -45,8 +47,14 @@ L1,L2,L3             comma-separated bare lines      e.g. 10,22,40
 
 Optional `mode` is `"program"` (default) or `"test"` (run inside the file's
 `test` blocks). It compiles the file with debug instrumentation, runs to the
-first breakpoint that fires (stop-the-world), and returns
+first breakpoint that fires, waits for every active instrumented Tesl execution
+to rendezvous at its next debug boundary, and returns one execution-isolated
+stack and SQL capture in
 `{stopped, source, locals, domain, sql, breakpoint}`.
+The long-lived `main` scope blocked in the HTTP server is quiescent: it does not
+delay a handler breakpoint and cannot resume through an established stop.
+`timeout_ms` defaults to 30000; the MCP subprocess deadline adds a small startup
+and shutdown margin to that requested debugger timeout.
 
 Example arguments:
 
@@ -63,17 +71,20 @@ counterpart of `tesl.debug_inspect` for long sessions: the app keeps serving,
 its accumulated state (queues, caches, sessions) stays intact, and you can
 re-arm different breakpoints on every call with zero relaunches.
 
-- `action: "once"` (default) — arm the `break_at` breakpoints (as
+- `action: "once"` (default; requires at least one `break_at`) — arm the `break_at` breakpoints (as
   `"FILE:LINE"` strings, file spelled as the compiler saw it), wait for the
   first stop (bounded by `timeout_ms`, default 30000), return it, resume, and
   detach.  Trigger the stop yourself — e.g. curl the app's endpoint — while
   the call waits.
-- `action: "snapshot"` — paused state + live domain/SQL right now.
+- `action: "snapshot"` — the current paused snapshot; while running it reports
+  `stopped: false` and does not expose an execution-scoped stack or SQL capture.
 - `action: "ping"` — is the attach endpoint alive?
 - `action: "detach"` — recovery hatch: disarm everything, resume.
 
-The endpoint is discovered under `<project>/.tesl-stuff/` (`project` defaults
-to the nearest `tesl.toml`).  The result is `{ok, events: […]}` — the NDJSON
+The endpoint is discovered under `<project>/.tesl-stuff/`. When `project` is
+omitted, the server walks upward from its working directory to the nearest
+`tesl.toml`; discovery fails explicitly if none exists. The result is `{ok,
+events: […]}` — the NDJSON
 stream from the channel; the `{event: "stopped", locals, domain, sql}` entry
 is the paused state.  Optional `when`/`hit` apply a condition / hit-count spec
 to every breakpoint.
@@ -93,7 +104,7 @@ The server needs the Tesl compiler binary. It is discovered (in order) via:
 
 1. `TESL_COMPILER` — absolute path to `main.exe`, or
 2. `TESL_REPO_ROOT` — repo root containing `compiler/_build/default/bin/main.exe`, or
-3. two directories up from this server (`editor/tesl-mcp/` → repo root).
+3. `tesl-compiler` or `tesl` on `PATH`.
 
 Build the compiler first:
 
@@ -158,7 +169,8 @@ Then restart Claude Code (MCP servers load at startup).
 go test ./runtime/go/cmd/tesl-mcp ./runtime/go/internal/protocol
 ```
 
-The smoke test spawns the server, drives a full JSON-RPC session over stdio, and
+The smoke test spawns the server, drives a raw newline-delimited JSON-RPC session
+over stdio without sharing the server's framing helper, and
 asserts: `initialize` → `serverInfo`; `tools/list` carries every tool with an
 `inputSchema`; `tesl.agent_context` on a real lesson parses as the agent-context
 JSON; `tesl.debug_inspect` with a conditional breakpoint on lesson61 stops with

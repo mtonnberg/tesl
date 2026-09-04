@@ -138,6 +138,25 @@ For editor usage:
 - on timeout or compiler-process failure, the editor may surface a warning diagnostic at line 0
 
 Malformed compiler responses should be treated as protocol failures, not as normal empty-diagnostic success.
+Consumers must validate required fields and their JSON types, diagnostic severity
+values, non-empty diagnostic identity/message fields, and non-negative ordered
+ranges. A version-only object such as `{ "version": 1 }` is not a successful
+empty response.
+Validation applies recursively to members used by tooling: agent-context
+diagnostics, symbols, and proof obligations must carry their documented
+identity, text, and position fields; semantic records, fields, ADTs, variants,
+functions, local bindings, and any supplied locations must have valid member
+types and ordered ranges.
+
+Whole-program checks may return diagnostics for imported files. LSP consumers
+must group push diagnostics by `file` and publish each group under that file's
+actual `file:` URI. The entry document still receives an empty publication when
+all errors belong to dependencies, so stale entry diagnostics are cleared. Pull
+diagnostic reports expose dependency groups through `relatedDocuments`.
+Until a project import index exists, text changes, saves, and watched-file
+notifications conservatively recheck every open document. This ensures an
+importer's owned dependency groups are replaced or cleared after an imported
+file changes instead of leaving stale diagnostics behind.
 
 ## Compatibility rules
 

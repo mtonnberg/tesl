@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path"
@@ -73,7 +75,13 @@ func Serve(server Server, options ServeOptions) struct{} {
 		announced = "localhost"
 	}
 	fmt.Fprintf(os.Stderr, "tesl: serving on http://%s:%d\n", announced, port)
-	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	// main's generated debug scope lives for the server lifetime. Mark the
+	// blocking lifecycle wait quiescent so a request breakpoint does not wait for
+	// main to reach a checkpoint that cannot occur until the server exits.
+	resumeDebugExecution := debugLifecycleQuiesce()
+	err := httpServer.ListenAndServe()
+	resumeDebugExecution()
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		panic("serve: " + err.Error())
 	}
 	return struct{}{}
@@ -513,43 +521,96 @@ func requestRefusal(request *http.Request) (Response, bool) {
 //
 // Two sources, in order of trust:
 //
-//   - `Sec-Fetch-Site`, when the browser sent one. `cross-site` is refused; `same-origin`,
-//     `same-site` and `none` are the browser vouching for the request and pass.
+//   - `Sec-Fetch-Site`, when the browser sent one. `same-origin` passes, `cross-site`
+//     is refused, `same-site` must also carry an exact matching Origin, and unknown
+//     values fail closed.
 //   - When it is ABSENT — an older browser (Safari before 16.4, Firefox before 90) or a
 //     non-browser client — the initiator the request names itself: `Origin`, else `Referer`.
-//     If one is present and its host is not the configured public origin's host, the request
-//     came from another site and is refused. `Origin: null` (a sandboxed frame, a redirect
-//     from another origin) has host "null" and is refused too.
+//     If one is present, its complete web origin must equal the configured public origin,
+//     or the request URL's origin when none is configured. `Origin: null` is refused too.
 //
 // A request naming NEITHER passes: curl, a service client and a same-origin fetch that stripped
 // the referrer all look like that, and refusing them would break every non-browser caller for no
-// protection a browser needs. And with NO public origin configured the initiator is ignored
-// rather than compared against the request's own `Host`: that header is only validated when a
-// public origin exists, so without one the comparison would be between two values the same
-// client chose — a check that passes for exactly the requests it is meant to refuse.
+// protection a browser needs. Comparing an initiator to the request Host is still useful when
+// no public origin is configured: a browser cannot choose the target request's Host independently.
 func crossSiteRefusal(request *http.Request) (Response, bool) {
 	site := strings.ToLower(strings.TrimSpace(request.Header.Get("Sec-Fetch-Site")))
-	if site == "cross-site" {
+	switch site {
+	case "cross-site":
 		return Fail(403, "cross-site request refused"), true
+	case "", "same-origin", "same-site", "none":
+	default:
+		return Fail(403, "request with unknown fetch metadata refused"), true
 	}
-	if site != "" {
-		return Response{}, false
-	}
-	initiator := strings.TrimSpace(request.Header.Get("Origin"))
+	originHeader := strings.TrimSpace(request.Header.Get("Origin"))
+	initiator := originHeader
+	isReferer := false
 	if initiator == "" {
 		initiator = strings.TrimSpace(request.Header.Get("Referer"))
+		isReferer = initiator != ""
+	}
+	if site == "same-site" && originHeader == "" {
+		return Fail(403, "same-site request without an exact Origin refused"), true
 	}
 	if initiator == "" {
 		return Response{}, false
 	}
-	origin := PublicOrigin()
-	if origin == "" {
-		return Response{}, false
+	expected, valid := requestPublicOrigin(request)
+	if !valid {
+		return Fail(403, "request origin is not configured or valid"), true
 	}
-	if hostOf(initiator) != hostOf(origin) {
+	actual, valid := canonicalWebOrigin(initiator, isReferer)
+	if !valid || actual != expected {
 		return Fail(403, "cross-site request refused"), true
 	}
 	return Response{}, false
+}
+
+func requestPublicOrigin(request *http.Request) (string, bool) {
+	// publicOrigin is the authenticated deployment statement for TLS terminated
+	// upstream. Never infer the external scheme or host from Forwarded or
+	// X-Forwarded-* headers: a direct client can supply those too.
+	if configured := strings.TrimSpace(PublicOrigin()); configured != "" {
+		return canonicalWebOrigin(configured, false)
+	}
+	scheme := strings.ToLower(request.URL.Scheme)
+	if scheme == "" {
+		if request.TLS != nil {
+			scheme = "https"
+		} else {
+			scheme = "http"
+		}
+	}
+	return canonicalWebOrigin(scheme+"://"+request.Host, false)
+}
+
+func canonicalWebOrigin(value string, allowPath bool) (string, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.User != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return "", false
+	}
+	if !allowPath && parsed.Path != "" && parsed.Path != "/" {
+		return "", false
+	}
+	if !allowPath && (parsed.RawQuery != "" || parsed.Fragment != "") {
+		return "", false
+	}
+	hostname := strings.ToLower(parsed.Hostname())
+	if hostname == "" {
+		return "", false
+	}
+	port := parsed.Port()
+	if (parsed.Scheme == "http" && port == "80") || (parsed.Scheme == "https" && port == "443") {
+		port = ""
+	}
+	host := hostname
+	if strings.Contains(hostname, ":") {
+		host = "[" + hostname + "]"
+	}
+	if port != "" {
+		host = net.JoinHostPort(hostname, port)
+	}
+	return strings.ToLower(parsed.Scheme) + "://" + host, true
 }
 
 // hostOf takes the host out of either a bare Host header or a full origin, without its port: a

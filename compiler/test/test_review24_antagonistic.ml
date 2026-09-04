@@ -216,9 +216,8 @@ fn mapPlain(xs: List Int ::: ForAll (Positive) xs) -> List Int =
 (* ── F03/F23: Property test *n bug ──────────────────────────────────────── *)
 
 let test_property_test_list_literal_var_compiles () =
-  (* BUG F03: `[n]` inside a property test body (where n is a prop param)
-     emits `(list *n)` in Racket, but `*n` is unbound because `n` is a plain
-     Racket `let` binding, not a GDP named value.
+  (* Historical BUG F03: the retired Racket emitter wrote `(list *n)` in a
+     property test body, but `*n` was unbound because `n` was a plain `let` binding.
      The test file adversarial-review-tests.tesl already triggers this. *)
   let src = prelude_list ^ {|
 fn sumList(xs: List Int) -> Int =
@@ -230,9 +229,7 @@ test "property: sum of singleton" with 20 runs {
   }
 }
 |} in
-  (* This compiles at tesl-check level but fails at Racket compile level.
-     At the OCaml check level it currently passes (no error[]) — the bug
-     only manifests when the Racket file is actually compiled/run. *)
+  (* This fixture now pins the frontend acceptance of the formerly failing shape. *)
   should_pass src
 
 let test_property_test_multi_elem_list_compiles () =
@@ -725,13 +722,13 @@ fn f() -> Int = 0
 |} in
   should_pass src
 
-(* ── F20: Int max is 62-bit (Racket fixnum), not 64-bit ──────────────────── *)
+(* ── F20: the retired 62-bit fixnum limit no longer applies ──────────────── *)
 
 let test_int_max_is_62bit () =
   (* A9/HM-1: Int is now arbitrary-precision. The former 63-bit fixnum range error
      is gone — the old max (2^62-1) AND the former out-of-range value (2^62) both
      compile. A huge magnitude beyond native int is carried through as LBigInt and
-     emitted verbatim into the Racket bignum. *)
+     emitted verbatim into Go. *)
   let max62 = "4611686018427387903" in
   let above  = "4611686018427387904" in
   let src_ok  = Printf.sprintf "%s\nbig = %s\n" prelude max62 in
@@ -1103,7 +1100,7 @@ let () = run "Review24-Antagonistic" [
       test_case "List.member String lookup (L8)"                   `Quick test_list_member_string;
     ];
     "integer-bounds", [
-      test_case "Int max is 62-bit Racket fixnum (F20)"         `Quick test_int_max_is_62bit;
+      test_case "Int is arbitrary-precision (F20)"              `Quick test_int_max_is_62bit;
     ];
     "parameterised-adts", [
       test_case "parameterised ADT Tree compiles and tests pass (F21)" `Quick test_parameterised_adt_tree_compiles;

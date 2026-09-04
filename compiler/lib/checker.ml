@@ -5539,8 +5539,15 @@ let check_stdlib_import_names (m : module_form) : type_error list =
                then String.sub raw_name 0 (n - 4)
                else raw_name
              in
-             if List.mem name exports then None
-             else Some { loc = imp.loc;
+              if List.mem name exports
+                 && not (Type_system.go_backend_export_available imp.module_name name)
+              then Some { loc = imp.loc;
+                          message = Printf.sprintf
+                            "the Go backend does not implement `%s` from `%s`; remove this import or use an available export"
+                            name imp.module_name;
+                          fix = None }
+              else if List.mem name exports then None
+              else Some { loc = imp.loc;
                          message = Printf.sprintf
                            "module `%s` does not export `%s`"
                            imp.module_name name;
@@ -6753,6 +6760,24 @@ let check_stdlib_fn_import_scope (m : module_form) : type_error list =
                   ~expose_name:qname }
   ) (collect_stdlib_fn_uses m)
 
+(** [ImportAll] has no explicit names for [check_stdlib_import_names] to
+    inspect. Reject an unavailable backend value when such an import actually
+    makes it reachable. Explicit exposing imports were already rejected above. *)
+let check_go_backend_import_all_uses (m : module_form) : type_error list =
+  collect_stdlib_fn_uses m
+  |> List.filter_map (fun (name, loc) ->
+       match Type_system.stdlib_home_module_of name with
+       | Some module_name
+         when not (Type_system.go_backend_export_available module_name name)
+              && List.exists (fun (imp : import_decl) ->
+                   imp.module_name = module_name && imp.names = ImportAll) m.imports ->
+         Some { loc;
+                message = Printf.sprintf
+                  "the Go backend does not implement `%s` from `%s`; use an available export"
+                  name module_name;
+                fix = None }
+       | _ -> None)
+
 (** Check that stdlib proof predicates used in annotations are explicitly imported.
     A plain `import Tesl.X` (no exposing) does NOT make predicates like IsTrimmed available. *)
 let check_proof_predicate_scope (m : module_form) : type_error list =
@@ -7369,6 +7394,7 @@ let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_
   let import_errors = import_errors @ check_proof_predicate_scope m in
   let import_errors = import_errors @ check_fact_name_distinctness m in
   let import_errors = import_errors @ check_stdlib_fn_import_scope m in
+  let import_errors = import_errors @ check_go_backend_import_all_uses m in
   let import_errors = import_errors @ check_units_name_collisions m in
   let initial_env = make_stdlib_env () in
   let ctx = make_ctx ~source_lines ~filename:m.source_file ~env:initial_env () in

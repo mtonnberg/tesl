@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -66,6 +67,16 @@ func TestDebuggerIsNoOpUntilAttached(t *testing.T) {
 	detach()
 	<-done
 	debugger.Checkpoint(DebugFrame{Version: DebugABIVersion, ID: "fn"})
+}
+
+func TestRunningDebuggerSnapshotDoesNotExposeExecutionState(t *testing.T) {
+	debugger := NewDebugger()
+	SetDebugSQLCapture(&DebugSQLCapture{SQL: "select request_secret"})
+	defer ClearDebugSQLCapture()
+	snapshot := debugger.SnapshotState()
+	if snapshot.Paused || snapshot.Frame.ID != "" || len(snapshot.Stack) != 0 || snapshot.Runtime.SQL != nil {
+		t.Fatalf("running snapshot exposed execution state: %#v", snapshot)
+	}
 }
 
 func TestDebugValueBoundsAndPanicRecovery(t *testing.T) {
@@ -240,10 +251,12 @@ func TestDebuggerSnapshotsNestedScopes(t *testing.T) {
 	seen := make(chan DebugEvent, 1)
 	debugger.Attach(func(event DebugEvent) { seen <- event })
 	debugger.SetBreakpoints([]DebugBreakpoint{{File: "main.tesl", Line: 9}})
-	outer := debugger.Enter(DebugFrame{ID: "outer", Function: "outer"})
-	inner := debugger.Enter(DebugFrame{ID: "inner", Function: "inner"})
 	done := make(chan struct{})
 	go func() {
+		outer := debugger.Enter(DebugFrame{ID: "outer", Function: "outer"})
+		defer outer.Leave()
+		inner := debugger.Enter(DebugFrame{ID: "inner", Function: "inner"})
+		defer inner.Leave()
 		debugger.Checkpoint(DebugFrame{ID: "inner", Function: "inner", Location: SourceLocation{File: "main.tesl", Line: 9}})
 		close(done)
 	}()
@@ -255,11 +268,129 @@ func TestDebuggerSnapshotsNestedScopes(t *testing.T) {
 		t.Fatalf("updated stack frame = %#v", event.Stack[1])
 	}
 	debugger.Continue()
-	inner.Leave()
-	outer.Leave()
 	<-done
 	if stack := debugger.StackSnapshot(); len(stack) != 0 {
 		t.Fatalf("stack after leave = %#v", stack)
+	}
+}
+
+func TestDebuggerStopBarrierAndStacksAreExecutionIsolated(t *testing.T) {
+	debugger := NewDebugger()
+	stopped := make(chan DebugEvent, 1)
+	debugger.Attach(func(event DebugEvent) { stopped <- event })
+	debugger.SetBreakpoints([]DebugBreakpoint{{File: "main.tesl", Line: 10}})
+
+	workerEntered := make(chan struct{})
+	workerBoundary := make(chan struct{})
+	workerDone := make(chan struct{})
+	var progress atomic.Int64
+	go func() {
+		scope := debugger.Enter(DebugFrame{ID: "worker", Function: "worker"})
+		defer scope.Leave()
+		SetDebugSQLCapture(&DebugSQLCapture{SQL: "select worker"})
+		close(workerEntered)
+		<-workerBoundary
+		progress.Add(1)
+		debugger.Checkpoint(DebugFrame{ID: "worker", Function: "worker", Location: SourceLocation{File: "worker.tesl", Line: 20}})
+		progress.Add(1)
+		close(workerDone)
+	}()
+	<-workerEntered
+
+	requestDone := make(chan struct{})
+	go func() {
+		scope := debugger.Enter(DebugFrame{ID: "request", Function: "request"})
+		defer scope.Leave()
+		SetDebugSQLCapture(&DebugSQLCapture{SQL: "select request"})
+		debugger.Checkpoint(DebugFrame{ID: "request", Function: "request", Location: SourceLocation{File: "main.tesl", Line: 10}})
+		close(requestDone)
+	}()
+
+	select {
+	case event := <-stopped:
+		t.Fatalf("stop published before active worker reached the barrier: %#v", event)
+	case <-time.After(80 * time.Millisecond):
+	}
+	close(workerBoundary)
+	var event DebugEvent
+	select {
+	case event = <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("stop was not published after every active execution reached a boundary")
+	}
+	if len(event.Stack) != 1 || event.Stack[0].ID != "request" {
+		t.Fatalf("stopped request stack contains another execution: %#v", event.Stack)
+	}
+	if snapshot := debugger.SnapshotState(); snapshot.Runtime.SQL == nil || snapshot.Runtime.SQL.SQL != "select request" {
+		t.Fatalf("stopped request snapshot contains another execution's SQL: %#v", snapshot.Runtime.SQL)
+	}
+	if progress.Load() != 1 {
+		t.Fatalf("worker progressed through its checkpoint while paused: %d", progress.Load())
+	}
+	select {
+	case <-workerDone:
+		t.Fatal("worker passed the cooperative barrier before Continue")
+	default:
+	}
+	debugger.Continue()
+	select {
+	case <-workerDone:
+	case <-time.After(time.Second):
+		t.Fatal("Continue did not release the worker execution")
+	}
+	<-requestDone
+	if progress.Load() != 2 {
+		t.Fatalf("worker did not resume after Continue: %d", progress.Load())
+	}
+}
+
+func TestDebuggerQuiescentLifecycleScopeDoesNotHoldStopBarrier(t *testing.T) {
+	debugger := NewDebugger()
+	stopped := make(chan DebugEvent, 1)
+	debugger.Attach(func(event DebugEvent) { stopped <- event })
+	debugger.SetBreakpoints([]DebugBreakpoint{{File: "handler.tesl", Line: 8}})
+
+	lifecycleReady := make(chan struct{})
+	lifecycleExit := make(chan struct{})
+	lifecycleDone := make(chan struct{})
+	go func() {
+		scope := debugger.Enter(DebugFrame{ID: "main", Function: "main"})
+		defer scope.Leave()
+		quiescent := debugger.Quiesce()
+		close(lifecycleReady)
+		<-lifecycleExit
+		quiescent.Resume()
+		close(lifecycleDone)
+	}()
+	<-lifecycleReady
+
+	handlerDone := make(chan struct{})
+	go func() {
+		scope := debugger.Enter(DebugFrame{ID: "handler", Function: "handler"})
+		defer scope.Leave()
+		debugger.Checkpoint(DebugFrame{ID: "handler", Function: "handler", Location: SourceLocation{File: "handler.tesl", Line: 8}})
+		close(handlerDone)
+	}()
+	select {
+	case event := <-stopped:
+		if event.Frame.ID != "handler" {
+			t.Fatalf("stopped event = %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("quiescent lifecycle scope held the handler stop barrier")
+	}
+	close(lifecycleExit)
+	select {
+	case <-lifecycleDone:
+		t.Fatal("quiescent lifecycle scope resumed through an established stop")
+	case <-time.After(50 * time.Millisecond):
+	}
+	debugger.Continue()
+	<-handlerDone
+	select {
+	case <-lifecycleDone:
+	case <-time.After(time.Second):
+		t.Fatal("quiescent lifecycle scope did not resume")
 	}
 }
 

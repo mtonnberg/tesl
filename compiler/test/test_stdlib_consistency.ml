@@ -11,10 +11,9 @@
                       │  stdlib_env                 – type-checker environment
                       │  stdlib_home_module         – A7 single-source name → module
                       │                               (drives check_stdlib_fn_import_scope)
+                      │  stdlib_adt_ctor_groups     – canonical stdlib ADT groups
       validation.ml   │  stdlib_adt_ctors           – ADT constructor sets
                       │                               needed by imported_plain_exposed_ctor_entries
-      emit_racket.ml  │  module_path_table          – Racket file paths
-                      │  adt_constructors           – ADT expansion for require generation
 
     When you add a new stdlib function:
       1. Add it to stdlib_env in type_system.ml
@@ -24,13 +23,14 @@
          always_available_stdlib_names)
 
     When you add a new stdlib ADT:
-      1. Add its constructors to stdlib_adt_ctors in validation.ml
-      2. Add it to adt_constructors in emit_racket.ml
-      3. Ensure its module is in tesl_module_exports
+      1. Add it to stdlib_adt_ctor_groups in type_system.ml
+      2. Ensure its type and constructors are in tesl_module_exports
+      3. Add constructor field types to builtin_ctor_info when needed
 
     When you add a new stdlib module:
-      1. Add it to module_path_table in emit_racket.ml
-      2. Add it to tesl_known_module_names in type_system.ml  *)
+      1. Add it to tesl_module_exports in type_system.ml
+      2. Add it to tesl_known_module_names in type_system.ml
+      3. Implement its supported exports in the direct Go emitter  *)
 
 open Alcotest
 
@@ -155,7 +155,7 @@ let test_every_stdlib_env_fn_is_in_exports () =
        so they can be validated by check_stdlib_fn_import_scope:\n  %s"
       (String.concat "\n  " missing))
 
-(* ── Test: emit_racket adt_constructors is a subset of stdlib_adt_ctors ──── *)
+(* ── Test: canonical ADT groups are covered by stdlib_adt_ctors ──────────── *)
 
 let test_adt_constructors_subset_of_stdlib_adt_ctors () =
   (* Every compiler-owned stdlib ADT group must have a corresponding derived

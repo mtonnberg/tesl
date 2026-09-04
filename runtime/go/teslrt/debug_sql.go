@@ -3,9 +3,11 @@ package teslrt
 import (
 	"strconv"
 	"strings"
+	"sync"
 )
 
 func DebugPgSql(plan PgPlan) PgPlan {
+	var captures sync.Map
 	wrapped := PgPlan{
 		SQL: plan.SQL,
 		Args: func() []any {
@@ -15,28 +17,26 @@ func DebugPgSql(plan PgPlan) PgPlan {
 				params[index] = debugValueOf(argument)
 			}
 			operation, table := debugSQLMetadata(plan.SQL)
-			SetDebugSQLCapture(&DebugSQLCapture{
+			execution := debugExecutionID()
+			captureID := setDebugSQLCapture(execution, &DebugSQLCapture{
 				Operation: operation, SQL: plan.SQL, Params: params, Table: table,
 				Preview: debugSQLPreview(plan.SQL, params),
 			})
+			captures.Store(execution, captureID)
 			return arguments
 		},
 	}
-	wrapped.Capture = func(rowCount int) { updateDebugSQLRowCount(rowCount) }
+	wrapped.Capture = func(rowCount int) {
+		execution := debugExecutionID()
+		if captureID, present := captures.Load(execution); present {
+			updateDebugSQLCapture(execution, captureID.(uint64), rowCount)
+		}
+	}
 	// The explaining probe rides along unchanged: it runs only on an empty result and is not
 	// the statement the capture describes.
 	wrapped.Probe, wrapped.ProbeArgs = plan.Probe, plan.ProbeArgs
 	return wrapped
 }
-
-func updateDebugSQLRowCount(rowCount int) {
-	debugState.Lock()
-	if debugState.sql != nil {
-		debugState.sql.RowCount = rowCount
-	}
-	debugState.Unlock()
-}
-
 func debugSQLMetadata(statement string) (string, string) {
 	words := strings.Fields(statement)
 	if len(words) == 0 {

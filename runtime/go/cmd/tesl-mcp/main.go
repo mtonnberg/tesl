@@ -11,12 +11,18 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"tesl.dev/runtime/go/internal/protocol"
 	"tesl.dev/runtime/go/internal/tooling"
 )
 
 const mcpProtocolVersion = "2024-11-05"
+
+const (
+	defaultDebugAttachTimeout = 30 * time.Second
+	debugProcessMargin        = 2 * time.Second
+)
 
 type server struct {
 	compiler tooling.Client
@@ -41,8 +47,8 @@ func main() {
 		os.Exit(1)
 	}
 	server := &server{compiler: tooling.Client{Executable: compiler}}
-	reader := protocol.NewReader(os.Stdin)
-	writer := protocol.NewWriter(os.Stdout)
+	reader := protocol.NewLineReader(os.Stdin)
+	writer := protocol.NewLineWriter(os.Stdout)
 	for {
 		payload, err := reader.Read()
 		if errors.Is(err, io.EOF) {
@@ -50,10 +56,14 @@ func main() {
 		}
 		if err != nil {
 			_ = writeError(writer, nil, -32700, err.Error())
-			continue
+			return
 		}
 		var request jsonRPCRequest
-		if err := json.Unmarshal(payload, &request); err != nil || request.JSONRPC != "2.0" || request.Method == "" {
+		if err := json.Unmarshal(payload, &request); err != nil {
+			_ = writeError(writer, nil, -32700, "parse error")
+			continue
+		}
+		if request.JSONRPC != "2.0" || request.Method == "" {
 			_ = writeError(writer, nil, -32600, "invalid request")
 			continue
 		}
@@ -114,6 +124,7 @@ func (server *server) callTool(ctx context.Context, name string, arguments map[s
 		}
 	}
 	var args []string
+	queryClient := server.compiler
 	switch name {
 	case "tesl.agent_context", "tesl.proof_obligations":
 		if file == "" {
@@ -139,12 +150,16 @@ func (server *server) callTool(ctx context.Context, name string, arguments map[s
 		if file == "" {
 			return nil, errors.New("file is required")
 		}
+		timeout, err := debugTimeout(arguments)
+		if err != nil {
+			return nil, err
+		}
 		if command := debugInspectCommand(); command != "" {
-			inspectArgs := append([]string{"--file", file}, debugInspectArgs(arguments)...)
+			inspectArgs := append([]string{"--file", file}, debugInspectArgs(arguments, timeout)...)
 			if server.compiler.Executable != "" {
 				inspectArgs = append(inspectArgs, "--compiler", server.compiler.Executable)
 			}
-			result, err := (tooling.Client{Executable: command}).Run(ctx, inspectArgs...)
+			result, err := (tooling.Client{Executable: command, Timeout: debugAttachProcessTimeout(timeout)}).Run(ctx, inspectArgs...)
 			if err != nil && len(result.Stdout) == 0 {
 				if len(strings.TrimSpace(string(result.Stderr))) > 0 {
 					return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(result.Stderr)))
@@ -153,17 +168,15 @@ func (server *server) callTool(ctx context.Context, name string, arguments map[s
 			}
 			return result.Stdout, nil
 		}
-		args = append([]string{"debug-inspect", file}, debugInspectArgs(arguments)...)
+		args = append([]string{"debug-inspect", file}, debugInspectArgs(arguments, timeout)...)
+		queryClient.Timeout = debugAttachProcessTimeout(timeout)
 	case "tesl.debug_attach":
 		return server.debugAttach(ctx, arguments)
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
-	payload, result, err := server.compiler.QueryJSON(ctx, args...)
+	payload, _, err := queryClient.QueryJSON(ctx, args...)
 	if err != nil {
-		if len(result.Stdout) > 0 {
-			return result.Stdout, nil
-		}
 		return nil, err
 	}
 	if name == "tesl.proof_obligations" {
@@ -179,6 +192,29 @@ func (server *server) callTool(ctx context.Context, name string, arguments map[s
 }
 
 func (server *server) debugAttach(ctx context.Context, arguments map[string]any) ([]byte, error) {
+	action := stringArgument(arguments, "action", "once")
+	if action != "once" && action != "snapshot" && action != "ping" && action != "detach" {
+		return nil, fmt.Errorf("unsupported debug attach action %q", action)
+	}
+	breakpoints := stringSlice(arguments["break_at"])
+	if action == "once" && len(breakpoints) == 0 {
+		return nil, errors.New("debug attach action once requires at least one break_at")
+	}
+	project := stringArgument(arguments, "project", "")
+	if project == "" {
+		workingDirectory, err := os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("discover debug project: %w", err)
+		}
+		project, err = nearestProject(workingDirectory)
+		if err != nil {
+			return nil, err
+		}
+	}
+	timeout, err := debugTimeout(arguments)
+	if err != nil {
+		return nil, err
+	}
 	command := os.Getenv("TESL_DEBUG_ATTACH")
 	if command == "" {
 		command = "tesl-debug-attach"
@@ -186,11 +222,8 @@ func (server *server) debugAttach(ctx context.Context, arguments map[string]any)
 	if _, err := exec.LookPath(command); err != nil {
 		return nil, fmt.Errorf("debug attach command unavailable: %w", err)
 	}
-	args := []string{"--operation", stringArgument(arguments, "action", "snapshot")}
-	if project := stringArgument(arguments, "project", ""); project != "" {
-		args = append(args, "--project", project)
-	}
-	for _, value := range stringSlice(arguments["break_at"]) {
+	args := []string{"--operation", action, "--project", project}
+	for _, value := range breakpoints {
 		args = append(args, "--break-at", value)
 	}
 	if when := stringArgument(arguments, "when", ""); when != "" {
@@ -199,21 +232,54 @@ func (server *server) debugAttach(ctx context.Context, arguments map[string]any)
 	if hit := stringArgument(arguments, "hit", ""); hit != "" {
 		args = append(args, "--hit", hit)
 	}
-	if timeout := numberArgument(arguments, "timeout_ms"); timeout > 0 {
-		args = append(args, "--timeout-ms", strconv.Itoa(timeout))
-	}
-	result, err := (tooling.Client{Executable: command}).Run(ctx, args...)
+	args = append(args, "--timeout-ms", strconv.FormatInt(timeout.Milliseconds(), 10))
+	result, err := (tooling.Client{Executable: command, Timeout: debugAttachProcessTimeout(timeout)}).Run(ctx, args...)
 	if err != nil && len(result.Stdout) == 0 {
 		return nil, err
 	}
 	return result.Stdout, nil
 }
 
+func debugAttachProcessTimeout(timeout time.Duration) time.Duration {
+	return timeout + debugProcessMargin
+}
+
+func debugTimeout(arguments map[string]any) (time.Duration, error) {
+	if _, present := arguments["timeout_ms"]; !present {
+		return defaultDebugAttachTimeout, nil
+	}
+	if !numberArgumentPresent(arguments, "timeout_ms") || numberArgument(arguments, "timeout_ms") <= 0 {
+		return 0, errors.New("timeout_ms must be a positive integer")
+	}
+	timeout := time.Duration(numberArgument(arguments, "timeout_ms")) * time.Millisecond
+	if timeout > 24*time.Hour {
+		return 0, errors.New("timeout_ms must not exceed 86400000")
+	}
+	return timeout, nil
+}
+
+func nearestProject(start string) (string, error) {
+	directory, err := filepath.Abs(start)
+	if err != nil {
+		return "", fmt.Errorf("discover debug project: %w", err)
+	}
+	for {
+		if info, statErr := os.Stat(filepath.Join(directory, "tesl.toml")); statErr == nil && !info.IsDir() {
+			return directory, nil
+		}
+		parent := filepath.Dir(directory)
+		if parent == directory {
+			return "", fmt.Errorf("discover debug project: no tesl.toml found from %s", start)
+		}
+		directory = parent
+	}
+}
+
 func sourceQueryArgs(flag, file string, line, col int) []string {
 	return []string{flag, file, strconv.Itoa(line), strconv.Itoa(col)}
 }
 
-func debugInspectArgs(arguments map[string]any) []string {
+func debugInspectArgs(arguments map[string]any, timeout time.Duration) []string {
 	args := []string{"--mode", stringArgument(arguments, "mode", "program")}
 	for _, value := range stringSlice(arguments["break_at"]) {
 		args = append(args, "--break-at", value)
@@ -234,6 +300,7 @@ func debugInspectArgs(arguments map[string]any) []string {
 	if enabled, ok := arguments["continue"].(bool); ok && enabled {
 		args = append(args, "--continue")
 	}
+	args = append(args, "--timeout-ms", strconv.FormatInt(timeout.Milliseconds(), 10))
 	return args
 }
 
@@ -260,18 +327,26 @@ func toolDefinitions() []map[string]any {
 			"breakpoints": map[string]any{"type": "array", "items": map[string]any{"type": "object", "required": []string{"line"}, "properties": map[string]any{"line": map[string]string{"type": "integer"}, "condition": map[string]string{"type": "string"}, "hit": map[string]string{"type": "string"}}}},
 			"mode":        map[string]any{"type": "string", "enum": []string{"program", "test"}},
 			"continue":    map[string]string{"type": "boolean"},
+			"timeout_ms":  map[string]any{"type": "integer", "minimum": 1, "maximum": 86400000, "default": 30000},
 		},
 	}
 	debugAttach := map[string]any{
 		"type":     "object",
 		"required": []string{},
+		"allOf": []map[string]any{{
+			"if": map[string]any{"anyOf": []map[string]any{
+				{"not": map[string]any{"required": []string{"action"}}},
+				{"properties": map[string]any{"action": map[string]any{"const": "once"}}, "required": []string{"action"}},
+			}},
+			"then": map[string]any{"required": []string{"break_at"}},
+		}},
 		"properties": map[string]any{
 			"project":    map[string]string{"type": "string"},
-			"action":     map[string]any{"type": "string", "enum": []string{"once", "snapshot", "ping", "detach"}},
-			"break_at":   map[string]any{"type": "array", "items": map[string]string{"type": "string"}},
+			"action":     map[string]any{"type": "string", "enum": []string{"once", "snapshot", "ping", "detach"}, "default": "once"},
+			"break_at":   map[string]any{"type": "array", "minItems": 1, "items": map[string]string{"type": "string"}},
 			"when":       map[string]string{"type": "string"},
 			"hit":        map[string]string{"type": "string"},
-			"timeout_ms": map[string]string{"type": "integer"},
+			"timeout_ms": map[string]any{"type": "integer", "minimum": 1, "maximum": 86400000, "default": 30000},
 		},
 	}
 	return []map[string]any{
@@ -353,6 +428,6 @@ func stringSlice(value any) []string {
 	return result
 }
 
-func writeError(writer *protocol.Writer, id json.RawMessage, code int, message string) error {
+func writeError(writer *protocol.LineWriter, id json.RawMessage, code int, message string) error {
 	return writer.WriteJSON(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": code, "message": message}})
 }

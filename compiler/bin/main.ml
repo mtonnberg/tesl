@@ -1123,12 +1123,11 @@ let () =
        (* Include linter findings so agent-context reports the SAME diagnostic
           set as --check-json (review 2026-07 TOOL-AGENTCTX). *)
        let lint_diags = Linter.lint_file ~logical_path:lpath filename in
-       let json = Compile.agent_context_source ~extra_diags:lint_diags lpath source in
-       print_string json;
+       let result =
+         Compile.agent_context_result_source ~extra_diags:lint_diags lpath source in
+       print_string result.json;
        print_newline ();
-       let diags = Compile.check_source lpath source in
-       let has_error = List.exists (fun (d : Compile.diagnostic) -> d.severity = "error") diags in
-       exit (if has_error then 1 else 0)
+       exit (if result.ok then 0 else 1)
      with Sys_error msg ->
        Printf.eprintf "error: %s\n" msg; exit 1)
 

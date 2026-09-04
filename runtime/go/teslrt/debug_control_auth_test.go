@@ -204,6 +204,62 @@ func TestDebugControlSessionSurvivesUnauthenticatedChurn(t *testing.T) {
 	<-done
 }
 
+func TestDebugControlTCPBoundsSilentHandshakesAndPendingConnections(t *testing.T) {
+	server, err := NewDebugger().StartDebugControlTCP(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = server.Close() }()
+	server.mutex.Lock()
+	server.handshakeTimeout = 80 * time.Millisecond
+	server.maxPendingTCP = 2
+	server.mutex.Unlock()
+
+	first, err := net.Dial("tcp4", server.Endpoint())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = first.Close() }()
+	second, err := net.Dial("tcp4", server.Endpoint())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = second.Close() }()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		server.mutex.Lock()
+		pending := len(server.pending)
+		server.mutex.Unlock()
+		if pending == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pending handshakes = %d, want 2", pending)
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	overflow, err := net.Dial("tcp4", server.Endpoint())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = overflow.Close() }()
+	_ = overflow.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := overflow.Read(make([]byte, 1)); err == nil {
+		t.Fatal("connection above pending handshake cap remained open")
+	} else if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+		t.Fatalf("connection above pending handshake cap was not closed: %v", err)
+	}
+
+	_ = first.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := first.Read(make([]byte, 1)); err == nil {
+		t.Fatal("silent unauthenticated connection survived handshake deadline")
+	} else if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+		t.Fatalf("server did not enforce its handshake deadline: %v", err)
+	}
+}
+
 func TestDebugControlDetachesOnlyWhenLastClientLeaves(t *testing.T) {
 	debugger := NewDebugger()
 	server, err := debugger.StartDebugControlTCP(0)

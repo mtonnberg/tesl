@@ -32,6 +32,25 @@ class CodeLens {
   constructor(range, command) { this.range = range; this.command = command; }
 }
 
+class ProcessExecution {
+  constructor(process, args, options) {
+    this.process = process;
+    this.args = args;
+    this.options = options;
+  }
+}
+
+class Task {
+  constructor(definition, scope, name, source, execution, problemMatchers) {
+    this.definition = definition;
+    this.scope = scope;
+    this.name = name;
+    this.source = source;
+    this.execution = execution;
+    this.problemMatchers = problemMatchers;
+  }
+}
+
 class TestItem {
   constructor(id, label, uri) {
     this.id = id;
@@ -88,16 +107,26 @@ class TestController {
   dispose() {}
 }
 
-function makeVscode(files, debugCalls, terminalCalls, workspacePath = repoRoot) {
+function makeVscode(files, debugCalls, taskCalls, workspacePath = repoRoot, options = {}) {
   const workspaceFolder = { uri: Uri.file(workspacePath) };
   const commands = new Map();
   const codeLensProviders = [];
   const controllers = [];
   const debugFactories = [];
+  const debugProviders = [];
+  const taskEndListeners = new Set();
+  const warningMessages = [];
+  const errorMessages = [];
+  const inputValues = [...(options.inputValues || [])];
   const vscode = {
     Uri,
     Range,
     CodeLens,
+    ProcessExecution,
+    Task,
+    TaskScope: { Workspace: 1 },
+    TaskRevealKind: { Always: 1 },
+    TaskPanelKind: { New: 3 },
     DebugAdapterExecutable: class {
       constructor(command, args, options) { this.command = command; this.args = args; this.options = options; }
     },
@@ -118,6 +147,7 @@ function makeVscode(files, debugCalls, terminalCalls, workspacePath = repoRoot) 
     },
     TestRunProfileKind: { Run: 1, Debug: 2 },
     workspace: {
+      isTrusted: options.isTrusted !== false,
       workspaceFolders: [workspaceFolder],
       textDocuments: [],
       getConfiguration: () => ({ get: () => "" }),
@@ -143,7 +173,7 @@ function makeVscode(files, debugCalls, terminalCalls, workspacePath = repoRoot) 
         return new Disposable();
       },
     },
-    tests: {
+    tests: options.enableTests === false ? undefined : {
       createTestController: (id, label) => {
         const controller = new TestController(id, label);
         controllers.push(controller);
@@ -153,13 +183,20 @@ function makeVscode(files, debugCalls, terminalCalls, workspacePath = repoRoot) 
     window: {
       activeTextEditor: null,
       createOutputChannel: () => ({ appendLine() {}, show() {}, dispose() {} }),
-      createTerminal: (options) => ({
-        show() {},
-        sendText(text) { if (terminalCalls) terminalCalls.push({ options, text }); },
-      }),
-      showWarningMessage() {},
-      showErrorMessage() {},
-      showInputBox: async () => undefined,
+      showWarningMessage(message) { warningMessages.push(message); },
+      showErrorMessage(message) { errorMessages.push(message); },
+      showInputBox: async () => inputValues.shift(),
+    },
+    tasks: {
+      executeTask: async (task) => {
+        const execution = { task };
+        taskCalls.push({ task, execution });
+        return execution;
+      },
+      onDidEndTask: (listener) => {
+        taskEndListeners.add(listener);
+        return { dispose: () => taskEndListeners.delete(listener) };
+      },
     },
     debug: {
       startDebugging: async (_folder, config) => { debugCalls.push(config); return true; },
@@ -167,10 +204,27 @@ function makeVscode(files, debugCalls, terminalCalls, workspacePath = repoRoot) 
         debugFactories.push(factory);
         return new Disposable();
       },
-      registerDebugConfigurationProvider: () => new Disposable(),
+      registerDebugConfigurationProvider: (_type, provider) => {
+        debugProviders.push(provider);
+        return new Disposable();
+      },
     },
   };
-  return { vscode, commands, codeLensProviders, controllers, debugFactories };
+  return {
+    vscode,
+    commands,
+    codeLensProviders,
+    controllers,
+    debugFactories,
+    debugProviders,
+    warningMessages,
+    errorMessages,
+    endTask(task, exitCode = 0) {
+      for (const listener of [...taskEndListeners]) {
+        listener({ execution: { task }, exitCode });
+      }
+    },
+  };
 }
 
 function loadExtension(vscode) {
@@ -197,11 +251,11 @@ function loadExtension(vscode) {
   }
 }
 
-async function activateWithFile(file, cleanup, workspacePath = repoRoot) {
+async function activateWithFile(file, cleanup, workspacePath = repoRoot, options = {}) {
   const uri = Uri.file(file);
   const debugCalls = [];
-  const terminalCalls = [];
-  const host = makeVscode([uri], debugCalls, terminalCalls, workspacePath);
+  const taskCalls = [];
+  const host = makeVscode([uri], debugCalls, taskCalls, workspacePath, options);
   const extension = loadExtension(host.vscode);
   const context = { extensionPath: __dirname, subscriptions: { push() {} } };
   extension.activate(context);
@@ -211,7 +265,7 @@ async function activateWithFile(file, cleanup, workspacePath = repoRoot) {
     file,
     uri,
     debugCalls,
-    terminalCalls,
+    taskCalls,
     cleanup: cleanup || (() => {}),
   };
 }
@@ -385,10 +439,12 @@ async function testFullApplicationRunAndDebugUsesProgramMode() {
     try {
       assert.match(fs.readFileSync(fixture.file, "utf8"), feature);
       fixture.vscode.window.activeTextEditor = { document: { fileName: fixture.file } };
-      fixture.commands.get("tesl.runDebugMode")();
-      assert.strictEqual(fixture.terminalCalls.length, 1);
-      assert.match(fixture.terminalCalls[0].text, /run --debug/);
-      assert.match(fixture.terminalCalls[0].text, new RegExp(path.basename(fixture.file).replace(".", "\\.")));
+      await fixture.commands.get("tesl.runDebugMode")();
+      assert.strictEqual(fixture.taskCalls.length, 1);
+      assert.deepStrictEqual(
+        fixture.taskCalls[0].task.execution.args.slice(-3),
+        ["run", "--debug", fixture.file]
+      );
 
       await fixture.commands.get("tesl.debugProgram")(fixture.uri);
       assert.strictEqual(fixture.debugCalls.length, 1);
@@ -599,6 +655,140 @@ async function testNestedWorkspaceUsesCheckoutTools() {
   }
 }
 
+async function testTerminalCommandsUseArgumentVectors() {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "tesl-extension-argv-"));
+  const file = path.join(
+    directory,
+    'fixture $(touch injected-file) `tick` "double" \'single\' spaces.tesl'
+  );
+  fs.writeFileSync(file, "module Fixture exposing []\n", "utf8");
+  const fixture = await activateWithFile(
+    file,
+    () => fs.rmSync(directory, { recursive: true, force: true }),
+    directory,
+    { enableTests: false }
+  );
+  const testName = 'name $(touch injected-test) `tick` "double" \'single\' whitespace';
+  const windowsFile = 'C:\\workspace with spaces\\$(calc)\\`tick`\\"quoted".tesl';
+  try {
+    await fixture.commands.get("tesl.runSingleTest")(file, testName, "api-test");
+    await fixture.commands.get("tesl.runTests")(fixture.uri);
+    fixture.vscode.window.activeTextEditor = { document: { fileName: file } };
+    await fixture.commands.get("tesl.runDebugMode")();
+    await fixture.commands.get("tesl.runSingleTest")(windowsFile, testName, "test");
+
+    const executions = fixture.taskCalls.map(({ task }) => task.execution);
+    assert.ok(executions.every((execution) => execution instanceof ProcessExecution));
+    assert.deepStrictEqual(
+      executions[0].args,
+      ["test", "--test-name", testName, "--test-kind", "api-test", file]
+    );
+    assert.deepStrictEqual(executions[1].args, ["test", file]);
+    assert.deepStrictEqual(executions[2].args, ["run", "--debug", file]);
+    assert.deepStrictEqual(
+      executions[3].args,
+      ["test", "--test-name", testName, "--test-kind", "test", windowsFile]
+    );
+    assert.ok(executions.every((execution) => execution.options.cwd));
+    assert.ok(fixture.taskCalls.every(({ task }) => task.presentationOptions.reveal === 1));
+    assert.ok(fixture.taskCalls.every(({ task }) => task.presentationOptions.panel === 3));
+  } finally {
+    fixture.cleanup();
+  }
+}
+
+async function testFunctionInputUsesArgumentsAndFilesystemCleanup() {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "tesl-extension-function-"));
+  const file = path.join(directory, "function input with spaces.tesl");
+  const marker = path.join(directory, "injected-marker");
+  const callExpr = `identity "$(touch ${marker}) \`tick\` \\"quoted\\""`;
+  const expected = '"value with spaces, $(substitution), `ticks`, and \\"quotes\\""';
+  fs.writeFileSync(file, "module Fixture exposing []\n", "utf8");
+  const fixture = await activateWithFile(
+    file,
+    () => fs.rmSync(directory, { recursive: true, force: true }),
+    directory,
+    { enableTests: false, inputValues: [callExpr, expected] }
+  );
+  try {
+    await fixture.commands.get("tesl.runFunctionWithInput")(fixture.uri);
+    assert.strictEqual(fixture.taskCalls.length, 1);
+    const { task } = fixture.taskCalls[0];
+    const driver = task.execution.args.at(-1);
+    assert.ok(task.execution instanceof ProcessExecution);
+    assert.deepStrictEqual(
+      task.execution.args,
+      ["test", "--backend", "go", "--test-name", `repl: ${callExpr}`, driver]
+    );
+    assert.ok(fs.existsSync(driver));
+    assert.match(fs.readFileSync(driver, "utf8"), /expect \(identity/);
+    assert.strictEqual(fs.existsSync(marker), false);
+
+    fixture.endTask(task);
+    assert.strictEqual(fs.existsSync(path.dirname(driver)), false);
+    assert.strictEqual(fs.existsSync(marker), false);
+  } finally {
+    fixture.cleanup();
+  }
+}
+
+async function testUntrustedWorkspaceCannotExecute() {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "tesl-extension-untrusted-"));
+  const file = path.join(directory, "fixture.tesl");
+  fs.writeFileSync(file, 'module Fixture exposing []\n\ntest "safe" {\n  expect 1 == 1\n}\n', "utf8");
+  const fixture = await activateWithFile(
+    file,
+    () => fs.rmSync(directory, { recursive: true, force: true }),
+    directory,
+    { isTrusted: false, inputValues: ["dangerous", "0"] }
+  );
+  try {
+    fixture.vscode.window.activeTextEditor = { document: { fileName: file } };
+    await fixture.commands.get("tesl.runSingleTest")(file, "safe", "test");
+    await fixture.commands.get("tesl.runTests")(fixture.uri);
+    await fixture.commands.get("tesl.runFunctionWithInput")(fixture.uri);
+    await fixture.commands.get("tesl.runDebugMode")();
+    await fixture.commands.get("tesl.debugSingleTest")(file, "safe", "test");
+    await fixture.commands.get("tesl.debugTests")(fixture.uri);
+    await fixture.commands.get("tesl.debugProgram")(fixture.uri);
+    await fixture.commands.get("tesl.attachRunning")();
+
+    assert.deepStrictEqual(fixture.taskCalls, []);
+    assert.deepStrictEqual(fixture.debugCalls, []);
+    assert.strictEqual(
+      fixture.debugFactories[0].createDebugAdapterDescriptor({ configuration: { program: file } }),
+      null
+    );
+    assert.strictEqual(
+      fixture.debugProviders[0].resolveDebugConfiguration(undefined, {
+        request: "launch",
+        program: file,
+      }),
+      undefined
+    );
+    const document = { fileName: file, uri: fixture.uri, getText: () => fs.readFileSync(file, "utf8") };
+    assert.deepStrictEqual(fixture.codeLensProviders[0].provideCodeLenses(document), []);
+    assert.ok(fixture.warningMessages.every((message) => /trust this workspace/.test(message)));
+  } finally {
+    fixture.cleanup();
+  }
+}
+
+function testManifestRequiresTrustForExecution() {
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8"));
+  assert.deepStrictEqual(manifest.capabilities.untrustedWorkspaces, {
+    supported: "limited",
+    description: "Language features remain available, but running tests, programs, and debuggers requires Workspace Trust.",
+    restrictedConfigurations: ["tesl.lspBinary", "tesl.dapBinary"],
+  });
+  assert.ok(
+    manifest.contributes.commands.every((command) => command.enablement === "isWorkspaceTrusted")
+  );
+  for (const items of Object.values(manifest.contributes.menus)) {
+    assert.ok(items.every((item) => item.when.includes("isWorkspaceTrusted")));
+  }
+}
+
 test("CodeLens exposes file and test actions", testCodeLensCommands);
 test("CodeLens run reports failure in Test Results", testCodeLensRunReportsTestResult);
 test("file-level run and debug use file actions", testFileLevelRunAndDebug);
@@ -612,3 +802,7 @@ test("DAP API response locals expose JSON fields", testDapApiResponseExposesJson
 test("DAP program breakpoint hits full application main", testDapProgramBreakpointHitsLessonMain);
 test("DAP API breakpoint hits from nested workspace cwd", testDapApiBreakpointHitsFromNestedWorkspaceCwd);
 test("nested workspaces use checkout debugger and compiler", testNestedWorkspaceUsesCheckoutTools);
+test("terminal commands pass adversarial POSIX and Windows values as argv", testTerminalCommandsUseArgumentVectors);
+test("function input is an argv value and temporary cleanup does not use a shell", testFunctionInputUsesArgumentsAndFilesystemCleanup);
+test("untrusted workspaces cannot execute Tesl tasks or debug sessions", testUntrustedWorkspaceCannotExecute);
+test("manifest requires Workspace Trust for execution commands", testManifestRequiresTrustForExecution);

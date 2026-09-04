@@ -98,12 +98,6 @@ let should_pass src =
     let code, out = run_compiler ["--check"; path] in
     if code <> 0 then failf "expected compilation success, got:\n%s" out)
 
-let[@warning "-32"] known_gap ~what src =
-  with_temp_file src (fun path ->
-    let code, _ = run_compiler ["--check"; path] in
-    if code <> 0 then
-      failf "KNOWN GAP CLOSED — `%s` is now rejected; promote to should_fail." what)
-
 (* ── Shared TESL fragments ───────────────────────────────────────────────── *)
 
 let hdr modname = Printf.sprintf
@@ -264,12 +258,9 @@ let raw_extra_cases =
     raw_with_validated_local 2 ~packed:"raw";
     raw_with_validated_local 3 ~packed:"s"; ]
 
-(* GAP-PACKLOCAL — CLOSED.
-   The "not demonstrably attached" check was widened: it now flags a raw
-   LET-BOUND local with no proof (the result of a non-proof-producing call), not
-   only a literal function parameter.  Packing such a local where the return spec
-   declares a non-trivial proof is correctly rejected. *)
-let pack_local_gap () =
+(* A raw let-bound local, like a raw parameter, cannot satisfy the proof on an
+   existential package. *)
+let pack_raw_local_rejected () =
   (* Review 2.1: message widened to the shared raw_re family
      ("must carry the proof" / "does not…satisfy"). *)
   should_fail raw_re
@@ -281,8 +272,8 @@ fn bad() -> exists t: String => String ::: IsTok t
     x
 |})
 
-let pack_local_gap_cases =
-  [ ("RAW-GAP-01 pack raw let-bound local (KNOWN GAP)", pack_local_gap) ]
+let pack_local_cases =
+  [ ("RAW-13 pack raw let-bound local", pack_raw_local_rejected) ]
 
 (* ══════════════════════════════════════════════════════════════════════════
    CONS — feeding an existential result to a proof-requiring consumer.
@@ -548,7 +539,7 @@ let to_cases lst = List.map (fun (name, fn) -> test_case name `Quick fn) lst
 let () =
   run "ProofSuite-H" [
     "NOEX-no-exists-body", to_cases noex_cases;
-    "RAW-unattached-pack", to_cases (raw_cases @ raw_extra_cases @ pack_local_gap_cases);
+    "RAW-unattached-pack", to_cases (raw_cases @ raw_extra_cases @ pack_local_cases);
     "CONS-existential-to-consumer", to_cases (cons_cases @ cons_extra_cases);
     "POS-companions", [
       test_case "POS check-validated pack" `Quick pos_check_pack;

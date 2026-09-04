@@ -6,13 +6,11 @@
    (`Database`, `Postgres`, `Memory`, `Queue`, `Job`, `App`, `SmtpConfig`,
    `SseChannel`, the TimeZone zone constructors, the Currency constructors, …)
    typechecked in EVERY type position — fn param, return, record field,
-   entity field, endpoint body, endpoint return — and then emitted as an
-   UNBOUND Racket identifier: normalize-type-identifier keys it to the
-   emitting file, minting a meaningless per-file nominal type (same-file) or
-   trapping at define-server with a type-ref mismatch (cross-module).  The
-   sibling expression hole: the config_stdlib_seed constructors (`Memory`,
-   `Exponential`, …) resolved as values in ordinary expressions and crashed
-   the generated module at load.
+   entity field, endpoint body, endpoint return. In the retired Racket backend
+   this emitted an unbound identifier or a meaningless per-file nominal type;
+   the same frontend hole is invalid for direct Go emission. The sibling
+   expression hole let config_stdlib_seed constructors (`Memory`,
+   `Exponential`, …) resolve as values in ordinary expressions.
 
    The fix ({!Stdlib_config_names} + Checker.check_type_names_in_scope +
    Checker.check_config_ctor_expr_positions) rejects at check time.  This
@@ -24,7 +22,7 @@
      - ACCEPT local shadows (`type Email = String`, `record Fixed { … }`) —
        locally-bound names always win;
      - ACCEPT the constructors inside real config blocks;
-   and pins {!Emit_racket.config_only_import_names} set-identity with the
+   and pins {!Stdlib_config_names.require_suppressed} set-identity with the
    pre-refactor literal (test_stdlib_runtime_binding.ml consumes the list). *)
 
 let parse src = Parser.parse_module "<test>" src
@@ -228,7 +226,7 @@ test "config ctor in a test body" {
 (* Item 18 (review 2026-07-09): the expr-position rejection also walks
    api-test/load-test seed statements and bodies (and agent config exprs) —
    `let b = Memory` in an api-test body typechecked via the module-wide seed
-   env yet emitted an unbound Racket identifier. *)
+   env yet reached code generation as an invalid runtime value. *)
 let expr_memory_api_test_src = {|module Probe exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Database exposing [Database, Memory]
@@ -313,7 +311,7 @@ let test_expr_positions () =
 
 module SS = Set.Make (String)
 
-(* The exact literal that lived in emit_racket.ml before the refactor to
+(* The exact literal that lived in the retired emit_racket.ml before the refactor to
    {!Stdlib_config_names} (2026-07-09).  test_stdlib_runtime_binding.ml keys
    the runtime provide-existence seam off this set, so the refactored value
    must stay set-identical. *)
@@ -343,7 +341,7 @@ let test_require_suppressed_identity () =
   let missing = SS.diff expected actual and extra = SS.diff actual expected in
   if not (SS.is_empty missing && SS.is_empty extra) then
     Alcotest.failf
-      "config_only_import_names drifted from the pre-refactor literal.\n\
+      "require_suppressed drifted from the pre-refactor literal.\n\
        missing: %s\nextra: %s"
       (String.concat ", " (SS.elements missing))
       (String.concat ", " (SS.elements extra))

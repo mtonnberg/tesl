@@ -229,12 +229,9 @@ fn attack(x: Int, y: Int) -> Int =
   requiresPositive <| y ::: pf
 |})
 
-(* R57_CS02: decompose-reattach with wrong predicate — NOW STATICALLY REJECTED.
-   Closed by GAP-CONJPROJ: conjunction decomposition now projects each binder to its
-   specific conjunct, so reattaching `tp` (ValidTag) where ValidScore is required no
-   longer type-checks.  (Was a documented static-checker gap caught only at runtime;
-   the proofsuite found it independently as GAP-CONJPROJ.) *)
-let r57_cs02_wrong_pred_via_conj_decompose_static_gap () =
+(* R57_CS02: conjunction decomposition projects each binder to its specific
+   predicate, so a wrong-predicate reattachment is statically rejected. *)
+let r57_cs02_wrong_pred_via_conj_decompose_rejected () =
   should_fail "does not statically satisfy" (
     base_header ^ {|
 fact ValidScore (n: Int)
@@ -1077,7 +1074,7 @@ let () =
     ];
     "cross-subject-soundness", [
       test_case "R57_CS01 cross-subject attach rejected" `Quick r57_cs01_cross_subject_rejected;
-      test_case "R57_CS02 wrong-pred via conj-decompose static gap" `Quick r57_cs02_wrong_pred_via_conj_decompose_static_gap;
+      test_case "R57_CS02 wrong-pred via conj-decompose rejected" `Quick r57_cs02_wrong_pred_via_conj_decompose_rejected;
       test_case "R57_CS03 same-pred diff-subject rejected" `Quick r57_cs03_same_pred_diff_subject_rejected;
     ];
     "deep-proof-chains", [

@@ -237,6 +237,41 @@ func TestDebugControlEnvironmentDiscovery(t *testing.T) {
 	}
 }
 
+func TestDebugControlEnvironmentFallsBackToAuthenticatedTCPForLongSocketPath(t *testing.T) {
+	root := t.TempDir()
+	for len([]byte(filepath.Join(root, ".tesl-stuff", "debug.sock"))) <= debugMaxUnixPathBytes {
+		root = filepath.Join(root, "workspace-segment")
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TESL_DEBUG", "1")
+	t.Setenv("TESL_DEBUG_SOCKET", "")
+	t.Setenv("TESL_DEBUG_PORT", "")
+	t.Setenv("TESL_DEBUG_ROOT", root)
+	server, err := StartDebugControlFromEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server == nil {
+		t.Fatal("enabled long-path debug environment returned no server")
+	}
+	if server.Port() == 0 || server.Token() == "" {
+		t.Fatalf("long path endpoint = %s token=%q", server.Endpoint(), server.Token())
+	}
+	if _, err := os.Stat(filepath.Join(root, ".tesl-stuff", "debug.sock")); !os.IsNotExist(err) {
+		t.Fatalf("unsafe long Unix socket was created: %v", err)
+	}
+	for _, name := range []string{DebugPortFile, DebugTokenFile} {
+		if _, err := os.Stat(filepath.Join(root, ".tesl-stuff", name)); err != nil {
+			t.Fatalf("missing %s: %v", name, err)
+		}
+	}
+	if err := server.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDebugConditionReadsLocalsAndLogicalOperators(t *testing.T) {
 	condition, err := compileDebugCondition(`n == 2 && function == "work"`)
 	if err != nil {

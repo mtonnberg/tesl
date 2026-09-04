@@ -10,9 +10,8 @@
     from code).
 
     Hardening: [should_fail] additionally fails if the compiler output contains
-    any runtime-leak marker (`raise-user-error`, `check-fail`, a Racket
-    backtrace).  Rejection of these programs must be STATIC — they must never
-    reach the emitted Racket where a runtime guard would catch them.
+    any historical runtime-leak marker (`raise-user-error`, `check-fail`, a
+    retired Racket backtrace). Rejection of these programs must be STATIC.
 
     Modeled on test_library_negative.ml / test_review20_antagonistic.ml.
 
@@ -82,8 +81,8 @@ let with_temp_file content f =
     ~finally:(fun () -> (try Sys.remove path with _ -> ()); (try Unix.rmdir dir with _ -> ()))
     (fun () -> f path)
 
-(* Runtime-leak markers: presence means the program reached emitted Racket and
-   relied on a dynamic guard, i.e. the static checker FAILED to reject it. *)
+(* Historical runtime-leak markers: presence means static rejection regressed
+   to the retired backend's dynamic-guard behavior. *)
 let leak_markers = [
   "raise-user-error"; "check-fail"; "context...:"; "context ...:";
   ".rkt:"; "racket/"; "/collects/"; "errortrace"; "uncaught exception";

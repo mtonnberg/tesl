@@ -128,29 +128,36 @@ Tesl currently has three relevant layers.
 ### 4.1 Surface `.tesl` layer
 This is the intended authoring surface. Users write modules, imports, records, entities, functions, captures, APIs, servers, and `main` blocks here.
 
-### 4.2 Elaborated Racket DSL layer
-The `.tesl` compiler lowers surface forms into Racket DSL forms such as `define/pow`, `define-checker`, `define-auther`, `define-handler`, `define-trusted`, `define-record`, `define-entity`, `define-api`, and `define-server`.
+### 4.2 OCaml frontend and Go emission layer
 
-### 4.3 Runtime evidence layer (erased by default; retained under `--debug`)
+The OCaml compiler parses the surface language, resolves the module graph, performs structural type checking and proof/capability validation, and emits a Go module. Each Tesl module becomes a Go package under the generated module; a module containing `main` also gets `cmd/app/main.go`, and Tesl test forms become Go `_test.go` functions.
 
-Proof-relevant information *can* be carried at runtime through evidence-bearing values:
+Emission is directly from the checked Tesl module representation. The generated project includes `go.mod`, generated application packages, and the runtime sources required by the program. Optional external Go dependencies are version-pinned in the generated module.
 
-- named values (`named-value` struct: name, raw value, fact list, bindings);
-- successful check results (`check-ok`);
-- detached proofs (`detached-proof`);
-- existential packages.
+**Historical architecture:** Tesl formerly lowered surface forms to a Racket macro DSL with forms such as `define/pow`, `define-checker`, `define-auther`, and `define-handler`. That Racket emitter/runtime architecture has been retired; references to those forms describe historical behavior, not the current compilation path.
 
-**This layer is erased.** For standard `check`/`fn`/`handler` paths the param-binding machinery (struct wrapping, `validate-runtime-argument`, the proof-environment `parameterize`) is dropped during macro expansion, so a build allocates nothing for proof tracking. Proof verification is a purely compile-time guarantee; there is no runtime proof-checking layer behind it to toggle back on.
+### 4.3 Go runtime and erased evidence layer
 
-**Retained pieces ("(almost)"):** free-floating proofs (`detached-proof`, via `detachFact`/`attachFact`) and cross-boundary proof transport keep their carriers; a proof-annotated parameter keeps one allocation so decomposition still works; `establish`/trusted facts, existential packages, newtype nominal wrappers, and `FromDb` proofs retain their representation.
+The compiler vendors the required embedded `teslrt` Go sources into `internal/teslrt/` in the generated module. Runtime files for features such as HTTP, PostgreSQL, debugging, agents, regexes, and time zones are selected only when the generated program needs them. The checked-in runtime source and the compiler's embedded snapshot are kept in sync by compiler tests and CI.
 
-**Erased under `--debug` too.** For a sound checker the runtime structs are redundant — a binding's proof is compile-time information. So `--debug` also erases; the debugger shows the raw runtime value and overlays proof/type from compile-time type info, and breakpoints (`thsl-src!` checkpoints, emitted separately by the OCaml emitter) are unaffected. There is no toggle that restores a runtime evidence layer — proof verification lives entirely in the compiler.
+Proofs, facts, existential witnesses, and capability declarations are compile-time information and have no evidence-bearing runtime representation in generated Go:
+
+- proof attachment, detachment, decomposition, and `Fact` values erase;
+- proof-annotated values, fields, collection elements, and function returns use their ordinary Go value representation;
+- existential quantifiers erase to the representation of their body value;
+- `requires [...]` declarations leave no runtime capability row or grant check.
+
+A `check` or `auth` still returns `teslrt.Check[T]` because success/failure and its status/message are observable runtime control flow. That value does not contain a proof identity. Nominal newtypes and ordinary ADTs/records retain representations because they are value types, not proof evidence.
+
+**Erased under `--debug` too.** Debug builds add source checkpoints, metadata, and the required debug runtime files, but they do not restore proof objects. The debugger displays runtime values alongside compiler-provided source/type information; proof verification remains entirely in the frontend.
 
 ### 4.4 Public interface
 
-The only level that should be seen as "front facing" is the tesl-files. What is possible to do in the racket-files with manual changes is not interesting - if the language can prove its stated guarantees if a api web developer only works with the tesl files that is good enough. The compile layer should catch all errors except inherent runtime problems, such as database not available etc and they should only exist at the bounderies.
+The `.tesl` files are the only supported authoring interface. Generated Go is deliberately readable and can be inspected or processed with ordinary Go tooling, but manually changing it is outside the language guarantee and those changes are overwritten by the next emission.
 
-Replacing the Racket substrate with a Rust/Zig (or other) layer is an **aspiration, not a current property**. There is no lowering-IR or backend seam today: `emit_racket.ml` writes Racket forms directly, and the emitters re-derive lowering from the surface AST rather than from a shared normalized IR. (`ir.ml` is a parse-driven JSON tooling export, not a codegen/lowering stage — see `dev-docs/11-frontend-ir.md`.) A runtime swap would therefore require rewriting the emitter and reimplementing the runtime with exact behavior parity, including its trusted semantics. The enabling roadmap item lives in `roadmap/discarded/swappable-runtime-backend.md`.
+The OCaml frontend and Go emitter are the compile-time authority for syntax, types, proofs, capabilities, and backend-supported forms. The generated `teslrt` code owns runtime boundary behavior such as request decoding, check rejection, database access, and response encoding. Inherent environmental failures, such as an unavailable database, remain runtime failures at those boundaries.
+
+Go is the sole current execution backend. The retired Racket files and DSL forms are relevant only to explicitly historical comparisons; they are not an alternate public interface or a runtime fallback.
 
 ## 5. Effect model and operational stance
 This section is normative for the public language design.
@@ -4769,13 +4776,26 @@ The `editor/vscode-tesl` extension contributes a `debuggers` entry in `package.j
 `tesl run --debug <file.tesl>` starts the app with live checkpoints (the same
 emitted code — the `thsl-src!` gate is read at Racket expansion time) and a
 loopback-only control channel under `<project>/.tesl-stuff/` (`debug.sock`, or
-`debug.port` plus an owner-only `debug.token` for the TCP fallback — loopback is
-shared by every local user, so a TCP client's first message must be a
-`handshake` carrying that per-launch token or the connection is closed).
+`debug.port` plus an owner-only `debug.token` for the TCP fallback). When a
+project path cannot fit in a Unix socket address, the runtime selects the
+authenticated TCP form; inspector-launched targets instead use an isolated,
+owner-only short runtime directory. Loopback is shared by every local user, so
+a TCP client's first message must be a `handshake` carrying that per-launch
+token. Silent handshakes have a five-second deadline and at most 16 may be
+pending; excess or unauthenticated connections are closed.
 Debuggers then attach to the RUNNING process — the app keeps serving across
 attach/detach, several clients may share one session (the debugger detaches
 only when the last one leaves), and breakpoints can be re-armed without a
 relaunch:
+
+Before a stopped event and snapshot are published, every active instrumented
+Tesl execution must rendezvous at its next function-entry/checkpoint boundary
+or exit. Stacks and SQL captures are keyed by execution, and a query completion
+can update only the capture identity created for that query. This is a
+cooperative stop-the-world guarantee for generated Tesl execution; arbitrary
+Go runtime goroutines and external systems are not suspended. A lifecycle scope
+blocked inside `Serve` is explicitly quiescent: it is excluded from the finite
+stop participant set, but must wait behind the stop before returning to Tesl.
 
 - **VSCode/VSCodium**: the `Attach to running app (tesl run --debug)` launch
   configuration (`request: "attach"`, `project: "${workspaceFolder}"`).

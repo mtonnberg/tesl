@@ -406,7 +406,7 @@ let test_g21_fn_binding_return_proof_not_statically_checked () =
 (*                                                                               *)
 (* Record update `{ p | bio = newBio }` where bio has `IsTrimmed bio`          *)
 (* now requires newBio to carry IsTrimmed. The soundness gap is fixed.         *)
-let test_g22_record_update_soundness_gap () =
+let test_g22_record_update_proof_enforced () =
   let src = prelude ^
     "import Tesl.String exposing [String.length]\n" ^
     "fact IsTrimmed (s: String)\n" ^
@@ -544,7 +544,7 @@ let () =
     "G19", [ test_case "LSP type-at returns null for many positions (coverage gap)" `Quick test_g19_lsp_type_at_returns_null ];
     "G20", [ test_case "ADT interpolation in string now rejected" `Quick test_g20_adt_interpolation_compiles ];
     "G21", [ test_case "fn binding return proof now statically validated" `Quick test_g21_fn_binding_return_proof_not_statically_checked ];
-    "G22", [ test_case "record update proof annotation now enforced" `Quick test_g22_record_update_soundness_gap ];
+    "G22", [ test_case "record update proof annotation now enforced" `Quick test_g22_record_update_proof_enforced ];
     "G23", [ test_case "duplicate fact declaration rejected" `Quick test_g23_duplicate_fact_rejected ];
     "G24", [ test_case "import after definition rejected" `Quick test_g24_import_after_definition_rejected ];
     "G25", [ test_case "undefined function gives clear error" `Quick test_g25_undefined_function_clear_error ];

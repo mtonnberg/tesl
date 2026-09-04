@@ -34,6 +34,7 @@
       W094  queue/sseChannel declared but never activated in main's App
       W095  two api endpoints share one handler signature (positional-bind ambiguity)
       W096  route string already carries the App's mountPath prefix (applied twice)
+      W097  unused ADT type parameter
 *)
 
 (* A lint diagnostic uses the same type as Compile.diagnostic so it can
@@ -1918,6 +1919,37 @@ let lint_security filename (source : string) (out : lint_diag list ref) =
     sec003_hardcoded_secret filename m out;
     sec004_timing_unsafe_mac filename m out
 
+(** W097: a declared ADT parameter must affect at least one constructor field.
+    Otherwise distinct applications such as [Tree Int] and [Tree String] imply
+    a distinction the representation never carries. *)
+let lint_unused_type_parameters filename (source : string) (out : lint_diag list ref) =
+  let rec vars acc = function
+    | Ast.TVar { name; _ } -> name :: acc
+    | Ast.TName _ -> acc
+    | Ast.TApp { head; arg; _ } -> vars (vars acc head) arg
+    | Ast.TFun { dom; cod; _ } -> vars (vars acc dom) cod
+    | Ast.TTuple { elems; _ } -> List.fold_left vars acc elems
+  in
+  match Parser.parse_module filename source with
+  | Err _ -> ()
+  | Ok m ->
+    List.iter (function
+      | Ast.DType (Ast.TypeAdt { name; params; variants; loc }) ->
+        let used =
+          List.fold_left (fun acc (variant : Ast.adt_variant) ->
+            List.fold_left (fun acc (field : Ast.field_def) ->
+              vars acc field.type_expr) acc variant.fields) [] variants in
+        List.iter (fun param ->
+          if not (List.mem param used)
+             && not (String.length param > 0 && param.[0] = '_') then
+            out := { file = filename; line = loc.start.line; col = loc.start.col;
+                     severity = "warning"; code = "W097";
+                     message = Printf.sprintf
+                       "unused type parameter `%s` on `%s`: no constructor field carries it"
+                       param name;
+                     fix = None } :: !out) params
+      | _ -> ()) m.decls
+
 (* ── Public API ──────────────────────────────────────────────────────────── *)
 
 (** Run all lint checks and return diagnostics as [Compile.diagnostic] values
@@ -1947,23 +1979,24 @@ let lint_file ?logical_path (filename : string) : Compile.diagnostic list =
      runs once an earlier pass raises on a lexer-fatal buffer — which for a
      SECURITY finding is the wrong failure mode.  Running first with a private
      guard means neither direction can suppress the other. *)
-  (try lint_security filename src out with Failure _ -> ());
+  (try lint_security parse_path src out with Failure _ -> ());
   (try
-    lint_file_structure    filename lines out;
-    lint_whitespace        filename lines out;
-    lint_naming            filename lines out;
-    lint_deprecated_syntax filename lines out;
-    lint_adt_footgun             filename lines out;
-    lint_lambda_in_arg_position  filename lines out;
-    lint_unused_imports          filename src out;
-    lint_unused_locals_and_dead_code filename src out;
-    lint_missing_email_worker    filename src out;
-    lint_unactivated_runtime_decls filename src out;
-    lint_ambiguous_handler_signatures filename src out;
-    lint_mount_path_double_prefix    filename src out;
-    lint_unexported_signature_names filename src out;
-    lint_int_at_wire                filename src out;
-    lint_database_indexes           filename parse_path src out
+    lint_file_structure    parse_path lines out;
+    lint_whitespace        parse_path lines out;
+    lint_naming            parse_path lines out;
+    lint_deprecated_syntax parse_path lines out;
+    lint_adt_footgun             parse_path lines out;
+    lint_lambda_in_arg_position  parse_path lines out;
+    lint_unused_imports          parse_path src out;
+    lint_unused_locals_and_dead_code parse_path src out;
+    lint_unused_type_parameters  parse_path src out;
+    lint_missing_email_worker    parse_path src out;
+    lint_unactivated_runtime_decls parse_path src out;
+    lint_ambiguous_handler_signatures parse_path src out;
+    lint_mount_path_double_prefix    parse_path src out;
+    lint_unexported_signature_names parse_path src out;
+    lint_int_at_wire                parse_path src out;
+    lint_database_indexes           parse_path parse_path src out
    with Failure _ -> ());
   (* Sort by line then col *)
   let sorted = List.sort (fun a b ->
