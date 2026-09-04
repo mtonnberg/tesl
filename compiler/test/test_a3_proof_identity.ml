@@ -258,6 +258,33 @@ check checkNonEmpty(s: String) -> s: String ::: IsNonEmpty s =
 fn need(s: String ::: IsNonEmpty s) -> String = s
 |}
 
+(* Money predicates are stdlib-owned too.  Reject both a local declaration and
+   a proof-producing imported module with the same bare predicate identity. *)
+let money_predicates = [
+  ("SameCurrency", "a: Money, b: Money", "b: Money ::: SameCurrency a b");
+  ("NonNegativeMoney", "m: Money", "m: Money ::: NonNegativeMoney m");
+  ("RateFor", "r: ExchangeRate, m: Money", "m: Money ::: RateFor r m");
+]
+
+let money_local_collision pred params result =
+  [Printf.sprintf {|module MoneyLocal exposing []
+import Tesl.Money exposing [Money, ExchangeRate, %s]
+fact %s (%s)
+check forge(%s) -> %s = fail 400 "unused"
+|} pred pred params params result]
+
+let money_imported_collision pred params result =
+  let attacker = Printf.sprintf {|module MoneyAttacker exposing [forge]
+import Tesl.Money exposing [Money, ExchangeRate]
+fact %s (%s)
+check forge(%s) -> %s = fail 400 "unused"
+|} pred params params result in
+  let consumer = Printf.sprintf {|module MoneyConsumer exposing []
+import Tesl.Money exposing [Money, ExchangeRate, %s]
+import MoneyAttacker exposing [forge]
+|} pred in
+  [attacker; consumer]
+
 let own_pat = "already owned by imported module\\|single owning module\\|shadows the imported"
 
 let mismatch_pat = "subject mismatch\\|does not statically satisfy\\|different subject\\|does not match"
@@ -482,6 +509,15 @@ let () =
       test_case "local fact shadows explicitly imported predicate" `Quick
         (fun () -> should_fail ~pat:own_pat "shadow import" [owner; shadower]);
     ];
+    "Money stdlib predicate identity (negatives)",
+      List.concat_map (fun (pred, params, result) -> [
+        test_case (pred ^ " local collision") `Quick
+          (fun () -> should_fail ~pat:own_pat (pred ^ " local")
+                       (money_local_collision pred params result));
+        test_case (pred ^ " imported proof-owner collision") `Quick
+          (fun () -> should_fail ~pat:own_pat (pred ^ " imported")
+                       (money_imported_collision pred params result));
+      ]) money_predicates;
     "§4.2/§4.3 cross-module fact identity (positives)", [
       test_case "consumer imports and uses fact (no re-declare)" `Quick
         (fun () -> should_pass "legit consumer" [owner; legit_consumer]);
